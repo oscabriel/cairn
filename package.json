@@ -1,0 +1,39 @@
+{
+  "name": "cairn",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "effect-tsgo patch --oxlint && lefthook install",
+    "fmt": "oxfmt",
+    "lint": "oxlint",
+    "typecheck": "tsc --noEmit -p . && pnpm -r --if-present typecheck",
+    "test": "vitest run --passWithNoTests",
+    "check": "oxfmt --check && oxlint && pnpm typecheck && pnpm test",
+    "fix": "oxlint --fix && oxfmt",
+    "deploy": "alchemy deploy",
+    "plan": "alchemy plan",
+    "destroy": "alchemy destroy"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "alchemy": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "0.55.0",
+    "@effect/vitest": "catalog:",
+    "@oxlint/plugins": "1.89.0",
+    "@types/node": "26.6.5",
+    "lefthook": "2.2.2",
+    "oxfmt": "0.74.0",
+    "oxlint": "1.89.0",
+    "oxlint-tsgolint": "7.0.2004",
+    "typescript": "7.0.2",
+    "ultracite": "8.0.1",
+    "vitest": "5.0.5"
+  },
+  "engines": {
+    "node": ">=26.11.0"
+  },
+  "packageManager": "pnpm@10.30.3"
+}

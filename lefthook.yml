@@ -1,0 +1,11 @@
+pre-commit:
+  jobs:
+    - name: fix staged files
+      run: pnpm exec ultracite fix {staged_files}
+      glob: "*.{ts,tsx,js,mjs,json,jsonc,md,yml,yaml}"
+      stage_fixed: true
+
+pre-push:
+  jobs:
+    - name: check
+      run: pnpm check

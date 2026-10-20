@@ -1,0 +1,10 @@
+node_modules/
+.alchemy/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+spikes/*/runs/

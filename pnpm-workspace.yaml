@@ -1,0 +1,17 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Versions that must move together are pinned here once.
+catalog:
+  "@effect/platform-node": 4.0.5
+  "@effect/vitest": 4.0.5
+  alchemy: 2.0.0-beta.83
+  effect: 4.0.5
+
+overrides:
+  effect: 4.0.5
+
+onlyBuiltDependencies:
+  - lefthook
+  - workerd

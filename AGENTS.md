@@ -19,7 +19,7 @@ One person's agent harness control plane: a web app whose brain (pi-durable) run
 ## Code
 
 - `docs/coding-standards.md` is the standard. Effect's own conventions win every conflict (ADR 0004).
-- Code drawn from another repo is a port of intent: rewrite it to our standards, and start the file with a header naming the source repo, path and commit, plus the MIT notice when the source is MIT. t3code is pinned at `7e289ae1f77b9137580688aaccf00d48906984ad`; its sparse clone lives at `~/Developer/clones/github.com/pingdotgg/t3code` and missing paths come from `git show 7e289ae1:<path>`.
+- Code drawn from another repo is a port of intent: rewrite it to our standards, and start the file with a header naming the source repo, path and commit, plus the MIT notice when the source is MIT. t3code is pinned at `fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92`, the commit of the `t3code-nightly-bin` build installed on the Beelink, which parity is judged against (ADR 0015). Its sparse clone lives at `~/Developer/clones/github.com/pingdotgg/t3code`; missing paths come from `git show fe27e8e3:<path>`.
 - Versions that move together are pinned once, in the `pnpm-workspace.yaml` catalog: `effect` with every `@effect/*` package; oxlint, oxlint-tsgolint, `@oxlint/plugins`, TypeScript and `@effect/tsgo`; the `@earendil-works/*` packages; the Agent SDK with its bundled `claude`.
 - Decisions that are hard to reverse get a short ADR in `docs/decisions/`. Gated decisions stay `status: proposed` until their gate passes.
 
@@ -33,6 +33,7 @@ Throwaway code goes under `spikes/<n>-<name>/`, each with a `NOTES.md` of measur
 - Never print values from `auth.json`, `mcp-auth.json`, `~/.alchemy`, `~/.codex` or Executor's data volume. Check a credential's kind by its prefix only.
 - Docker is for Executor only (ADR 0005). Caddy runs in Docker at `~/caddy`; back up `~/caddy/conf/Caddyfile` before editing it. There is no sudo.
 - Thread stores live on the NVMe under `/home`, never the NAS.
+- Loopback ports: t3code nightly holds 3773 (`t3.gneiss.run`) and Executor holds 4400. Cairn uses 3774 to 3776.
 - Steps only the user can do (logins, browser consent) go into one `wizard` script per phase.
 
 ## Writing for the user

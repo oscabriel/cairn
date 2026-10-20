@@ -1,0 +1,25 @@
+# Executor 2.0: every MCP server and third-party credential Cairn's agents use (ADR 0003).
+# Installed by ops/executor/install.sh. Fixed docker arguments only; the image is pinned by digest.
+[Unit]
+Description=Executor 2.0 for Cairn
+After=network-online.target
+
+[Service]
+# Must match the origin the browser uses. The install script sets it to http://localhost:4400 for
+# first-run setup over an SSH tunnel, then to https://exec.gneiss.run once the owner exists.
+Environment=BETTER_AUTH_URL=https://exec.gneiss.run
+ExecStartPre=-/usr/bin/docker rm -f executor-v2
+ExecStart=/usr/bin/docker run --rm --name executor-v2 --init \
+  --publish 127.0.0.1:4400:4400 \
+  --volume executor-v2-data:/app/data \
+  --add-host host.docker.internal:host-gateway \
+  --env BETTER_AUTH_URL \
+  --env DO_NOT_TRACK=1 \
+  --env EXECUTOR_CATALOG_URL=https://catalog.executor.sh/index.json \
+  ghcr.io/usefulsoftwareco/executor-selfhost@sha256:5cb26b28e482a9b289e8e075648d42b443d29c5be6d09efe74566ef4ad7a48e9
+ExecStop=/usr/bin/docker stop executor-v2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

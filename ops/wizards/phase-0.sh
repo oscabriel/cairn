@@ -229,8 +229,9 @@ pause
 stage "Executor: sign in at its real address"
 open_url "https://exec.gneiss.run"
 step "Sign in with the owner account from stage 1 (on the MacBook or the phone)."
-step "Look at the address bar after sign-in: it reads https://exec.gneiss.run/org/<slug>/..."
-ask EXECUTOR_ORG "Type the organization slug from that address:"
+step "Look at the address bar after sign-in: https://exec.gneiss.run/org/${BOLD}<slug>${RESET}/apps"
+ask EXECUTOR_ORG "Type just the slug (the part between /org/ and the next /):"
+EXECUTOR_ORG=${EXECUTOR_ORG%%/*}
 write_env EXECUTOR_ORG "$EXECUTOR_ORG"
 pause
 
@@ -241,7 +242,7 @@ say "short-lived token, so you don't have to click through each one. Cairn's own
 say "agents never use this token; they get a scoped OAuth grant later."
 open_url "https://exec.gneiss.run/account/tokens"
 step "Avatar menu → Account settings → Tokens → Create token."
-step "Name: ${BOLD}cairn phase 0 setup${RESET}. Scope: the ${BOLD}$EXECUTOR_ORG${RESET} organization only. Expiry: 7 days."
+step "Name: ${BOLD}cairn phase 0 setup${RESET}. Scope: your one organization only (named Cairn, slug ${BOLD}$EXECUTOR_ORG${RESET}). Expiry: 7 days."
 step "Copy the token. It is shown only once."
 ask_secret EXECUTOR_SETUP_TOKEN "Paste the token (hidden):"
 write_env EXECUTOR_SETUP_TOKEN "$EXECUTOR_SETUP_TOKEN"

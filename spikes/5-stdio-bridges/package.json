@@ -1,0 +1,8 @@
+{
+  "name": "cairn-spike-5-stdio-bridges",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1"
+  }
+}

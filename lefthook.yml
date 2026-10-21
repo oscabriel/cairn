@@ -1,8 +1,16 @@
 pre-commit:
   jobs:
-    - name: fix staged files
-      run: pnpm exec ultracite fix {staged_files}
+    - name: format staged files
+      run: pnpm exec oxfmt {staged_files}
       glob: "*.{ts,tsx,js,mjs,json,jsonc,md,yml,yaml}"
+      stage_fixed: true
+    - name: lint staged code
+      run: pnpm exec oxlint --fix {staged_files}
+      glob: "*.{ts,tsx,js,mjs}"
+      # oxlint ignores these, and fails when every file it is given is ignored.
+      exclude:
+        - "spikes/**"
+        - "tools/oxlint/anti-slop/**"
       stage_fixed: true
 
 pre-push:

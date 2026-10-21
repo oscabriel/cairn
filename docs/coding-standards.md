@@ -5,7 +5,7 @@ Rules are numbered so reviews can cite them ("breaks S28"). Effect's own guidanc
 ## Ground rules
 
 - **S1.** Read the installed source before writing against an API: `node_modules/effect`, `node_modules/alchemy`, and the package's `AGENTS.md` or `ai-docs`. Effect v4 and Alchemy beta differ from training data and from web docs.
-- **S2.** Keep the lint gate strict. Fix the code, not the rule. Suppress only through the S21 protocol. Allow-list the unstable Effect modules we adopt once, in `allowedUnstableApis` in `tsconfig.base.json` (today `effect/http`, `effect/http-api`, `effect/observability`, `effect/rpc`, `effect/sql`), never per line.
+- **S2.** Keep the lint gate strict. Fix the code, not the rule. Suppress only through the S21 protocol. Allow-list the unstable Effect modules we adopt once, in `allowedUnstableApis` in `tsconfig.base.json` (today `@effect/platform-node`, `effect/FileSystem`, `effect/http`, `effect/http-api`, `effect/observability`, `effect/rpc`, `effect/sql`), never per line.
 - **S3.** Write erasable TypeScript only: no `enum`, `namespace` or parameter properties (tsconfig `erasableSyntaxOnly`). Model a closed set with `Schema.Literals`.
 
 ## Modules and imports

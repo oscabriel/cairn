@@ -18,6 +18,15 @@ The unit sets two settings for spike 5's stdio relay (ADR 0014, `spikes/5-stdio-
 
 The container reaches the host through ufw's rule `allow in on docker0 to 172.17.0.1 port 3776` (stage 8 of `ops/wizards/phase-0.sh`); without it requests time out.
 
+## Cairn's grant
+
+Cairn reaches Executor through one scoped connection named Cairn (GitHub and Cairn bridges, Executor's own app off), with one OAuth grant on it. Stage 9 of `ops/wizards/phase-0.sh` has the user create the connection in the UI (`mcp-connections` refuses the setup token) and runs `ops/executor/grant.ts`, which registers a public client by DCR, waits for consent on `127.0.0.1:3774/callback` and keeps the grant in `~/.config/cairn/executor-grant.json` (mode 600) until Cairn has a database.
+
+- Access tokens last an hour. A 401 makes the client refresh by itself, and every refresh rotates the refresh token, so only one process may hold the grant. Checked 2026-10-21 by spoiling the stored access token.
+- A refreshed-away access token still works until it expires: refreshing does not revoke it.
+- The revocation endpoint needs client authentication, which a public client lacks, so Cairn cannot revoke its own grant. Ending it from the UI is untested.
+- Search through the connection lists only the apps the connection allows (checked: Cairn bridges and GitHub, no Executor).
+
 ## Gotcha: quick add refuses keyed MCP servers
 
 `POST /apps/import` with `{source: {kind: "mcp", name, url}}` refuses a server that answers 401 with a bearer challenge and no OAuth metadata (`agent_setup_required`). Write the app by hand with `mcpRouter` and an API-key provider. An app's own account connects over the HTTP API without the browser: `POST /apps/{app}/accounts/app/{requirement}/connections` returns a `con_` id, then `POST /connections/{con}/submit` with `{method, label, fields}`. Send secrets this way, never as MCP tool arguments, which Executor's traces may record.

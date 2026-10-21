@@ -24,6 +24,8 @@
         "diagnostics": false,
         "barrelImportPackages": ["effect"],
         "allowedUnstableApis": [
+          "@effect/platform-node",
+          "effect/FileSystem",
           "effect/http",
           "effect/http-api",
           "effect/observability",

@@ -15,6 +15,7 @@
     "destroy": "alchemy destroy"
   },
   "dependencies": {
+    "@earendil-works/pi-mcp": "catalog:",
     "@effect/platform-node": "catalog:",
     "alchemy": "catalog:",
     "effect": "catalog:"

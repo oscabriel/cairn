@@ -187,7 +187,7 @@ finish() {
 # STAGES: Cairn phase 0. Run on the Beelink (in an SSH session is fine).
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=8
+TOTAL_STAGES=9
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
@@ -195,123 +195,167 @@ cd "$REPO"
 mkdir -p ~/.config/cairn && chmod 700 ~/.config/cairn
 ENV_FILE=~/.config/cairn/phase-0.env
 touch "$ENV_FILE" && chmod 600 "$ENV_FILE"
+# Re-run from a later stage with `ops/wizards/phase-0.sh <stage>`; earlier answers come from ENV_FILE.
+FROM_STAGE=${1:-1}
+want() { (( $1 >= FROM_STAGE )) || { _STAGE_INDEX=$((_STAGE_INDEX + 1)); return 1; }; }
+EXECUTOR_ORG=$(_existing EXECUTOR_ORG || true)
 
 banner "Cairn phase 0: Executor and GitHub Actions"
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
-stage "Executor: become its owner, over loopback"
-say "Executor is running on the Beelink at 127.0.0.1:4400 only, so nobody on the"
-say "tailnet can reach its first-run setup. The first person to finish setup owns it."
-say ""
-step "On the MacBook, in a new terminal, open a tunnel and leave it running:"
-say "    ${BOLD}ssh -N -L 4400:127.0.0.1:4400 beelink${RESET}"
-step "In the MacBook's browser, open http://localhost:4400"
-step "Create the first administrator: your email and a new password (save it in your password manager)."
-step "Name the organization ${BOLD}Cairn${RESET}."
-step "Close the tunnel (Ctrl-C) once you see the dashboard."
-note "Already done in an earlier run? Just press Enter."
-pause "Press Enter once the dashboard loaded"
+if want 1; then
+  stage "Executor: become its owner, over loopback"
+  say "Executor is running on the Beelink at 127.0.0.1:4400 only, so nobody on the"
+  say "tailnet can reach its first-run setup. The first person to finish setup owns it."
+  say ""
+  step "On the MacBook, in a new terminal, open a tunnel and leave it running:"
+  say "    ${BOLD}ssh -N -L 4400:127.0.0.1:4400 beelink${RESET}"
+  step "In the MacBook's browser, open http://localhost:4400"
+  step "Create the first administrator: your email and a new password (save it in your password manager)."
+  step "Name the organization ${BOLD}Cairn${RESET}."
+  step "Close the tunnel (Ctrl-C) once you see the dashboard."
+  note "Already done in an earlier run? Just press Enter."
+  pause "Press Enter once the dashboard loaded"
+fi
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
-stage "Executor: move it to https://exec.gneiss.run"
-say "Setup is closed now, so the public name is safe. This step:"
-step "restarts Executor with BETTER_AUTH_URL=https://exec.gneiss.run"
-step "backs up ~/caddy/conf/Caddyfile, adds the exec.gneiss.run route, validates and reloads Caddy"
-if confirm "Go ahead?"; then
-  ./ops/executor/install.sh serve
-  ./ops/executor/caddy-route.sh
-else
-  SKIPPED+=("stage 2: run ./ops/executor/install.sh serve && ./ops/executor/caddy-route.sh")
+if want 2; then
+  stage "Executor: move it to https://exec.gneiss.run"
+  say "Setup is closed now, so the public name is safe. This step:"
+  step "restarts Executor with BETTER_AUTH_URL=https://exec.gneiss.run"
+  step "backs up ~/caddy/conf/Caddyfile, adds the exec.gneiss.run route, validates and reloads Caddy"
+  if confirm "Go ahead?"; then
+    ./ops/executor/install.sh serve
+    ./ops/executor/caddy-route.sh
+  else
+    SKIPPED+=("stage 2: run ./ops/executor/install.sh serve && ./ops/executor/caddy-route.sh")
+  fi
+  pause
 fi
-pause
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
-stage "Executor: sign in at its real address"
-open_url "https://exec.gneiss.run"
-step "Sign in with the owner account from stage 1 (on the MacBook or the phone)."
-step "Look at the address bar after sign-in: https://exec.gneiss.run/org/${BOLD}<slug>${RESET}/apps"
-ask EXECUTOR_ORG "Type just the slug (the part between /org/ and the next /):"
-EXECUTOR_ORG=${EXECUTOR_ORG%%/*}
-write_env EXECUTOR_ORG "$EXECUTOR_ORG"
-pause
+if want 3; then
+  stage "Executor: sign in at its real address"
+  open_url "https://exec.gneiss.run"
+  step "Sign in with the owner account from stage 1 (on the MacBook or the phone)."
+  step "Look at the address bar after sign-in: https://exec.gneiss.run/org/${BOLD}<slug>${RESET}/apps"
+  ask EXECUTOR_ORG "Type just the slug (the part between /org/ and the next /):"
+  EXECUTOR_ORG=${EXECUTOR_ORG%%/*}
+  write_env EXECUTOR_ORG "$EXECUTOR_ORG"
+  pause
+fi
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Executor: a setup token for Claude"
-say "Claude imports your MCP servers and registers the stdio relay with a"
-say "short-lived token, so you don't have to click through each one. Cairn's own"
-say "agents never use this token; they get a scoped OAuth grant later."
-open_url "https://exec.gneiss.run/account/tokens"
-step "Avatar menu → Account settings → Tokens → Create token."
-step "Name: ${BOLD}cairn phase 0 setup${RESET}. Scope: your one organization only (named Cairn, slug ${BOLD}$EXECUTOR_ORG${RESET}). Expiry: 7 days."
-step "Copy the token. It is shown only once."
-ask_secret EXECUTOR_SETUP_TOKEN "Paste the token (hidden):"
-write_env EXECUTOR_SETUP_TOKEN "$EXECUTOR_SETUP_TOKEN"
-note "Stored in $ENV_FILE (mode 600). Revoke it at the end of phase 0."
-pause
+if want 4; then
+  stage "Executor: a setup token for Claude"
+  say "Claude imports your MCP servers and registers the stdio relay with a"
+  say "short-lived token, so you don't have to click through each one. Cairn's own"
+  say "agents never use this token; they get a scoped OAuth grant later."
+  open_url "https://exec.gneiss.run/account/tokens"
+  step "Avatar menu → Account settings → Tokens → Create token."
+  step "Name: ${BOLD}cairn phase 0 setup${RESET}. Scope: your one organization only (named Cairn, slug ${BOLD}$EXECUTOR_ORG${RESET}). Expiry: 7 days."
+  step "Copy the token. It is shown only once."
+  ask_secret EXECUTOR_SETUP_TOKEN "Paste the token (hidden):"
+  write_env EXECUTOR_SETUP_TOKEN "$EXECUTOR_SETUP_TOKEN"
+  note "Stored in $ENV_FILE (mode 600). Revoke it at the end of phase 0."
+  pause
+fi
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
-stage "Executor: connect GitHub"
-say "First make a fine-grained GitHub token, which is narrower than the OAuth sign-in."
-open_url "https://github.com/settings/personal-access-tokens/new"
-step "Name: ${BOLD}executor (beelink)${RESET}. Resource owner: you. Repository access: All repositories."
-step "Permissions: grant what you want agents to do (for example Contents, Issues,"
-say "    Pull requests and Actions: Read and write; Metadata: Read). Generate and copy it."
-open_url "https://exec.gneiss.run"
-step "In Executor: Add app → GitHub (the @executor.sh/github catalog app) → install."
-step "On the app's Accounts tab: Connect new account. The dialog opens on OAuth; switch"
-say "    the sign-in method to the token, paste it, and connect."
-note "In v1 (beta.23) the account's health check failed with a 403 because it sent no"
-note "User-Agent, but the account saved and its tools worked. Tell Claude if you see it."
-pause "Press Enter once GitHub shows as connected"
+if want 5; then
+  stage "Executor: connect GitHub"
+  say "First make a fine-grained GitHub token, which is narrower than the OAuth sign-in."
+  open_url "https://github.com/settings/personal-access-tokens/new"
+  step "Name: ${BOLD}executor (beelink)${RESET}. Resource owner: you. Repository access: All repositories."
+  step "Permissions: grant what you want agents to do (for example Contents, Issues,"
+  say "    Pull requests and Actions: Read and write; Metadata: Read). Generate and copy it."
+  open_url "https://exec.gneiss.run"
+  step "In Executor: Add app → GitHub (the @executor.sh/github catalog app) → install."
+  step "On the app's Accounts tab: Connect new account. The dialog opens on OAuth; switch"
+  say "    the sign-in method to the token, paste it, and connect."
+  note "In v1 (beta.23) the account's health check failed with a 403 because it sent no"
+  note "User-Agent, but the account saved and its tools worked. Tell Claude if you see it."
+  pause "Press Enter once GitHub shows as connected"
+fi
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
-stage "Alchemy: an admin profile that can mint CI tokens"
-say "GitHub Actions needs its own Cloudflare token. Alchemy mints it for you from"
-say "stacks/github.ts, but minting tokens needs a credential OAuth can't provide."
-say "This profile is root for your Cloudflare account: it's used only for that one stack."
-open_url "https://dash.cloudflare.com/profile/api-tokens"
-step "Under API Keys → Global API Key → View. Keep the page open."
-step "Next, Alchemy asks how to sign in to Cloudflare: choose ${BOLD}API Token or API Key${RESET},"
-say "    then the Global API Key, and paste the key and your Cloudflare email when asked."
-step "Then it adds GitHub: choose ${BOLD}GitHub CLI${RESET} (gh is already logged in)."
-pause "Press Enter to start Alchemy's prompts"
-pnpm exec alchemy profile create admin 2>/dev/null || note "profile admin already exists; editing it"
-pnpm exec alchemy profile edit --profile admin --add Cloudflare --add GitHub
-pause
+if want 6; then
+  stage "Alchemy: an admin profile that can mint CI tokens"
+  say "GitHub Actions needs its own Cloudflare token. Alchemy mints it for you from"
+  say "stacks/github.ts, but minting tokens needs a credential OAuth can't provide."
+  say "This profile is root for your Cloudflare account: it's used only for that one stack."
+  open_url "https://dash.cloudflare.com/profile/api-tokens"
+  step "Under API Keys → Global API Key → View. Keep the page open."
+  step "Next, Alchemy asks how to sign in to Cloudflare: choose ${BOLD}API Token or API Key${RESET},"
+  say "    then the Global API Key, and paste the key and your Cloudflare email when asked."
+  step "Then it adds GitHub: choose ${BOLD}GitHub CLI${RESET} (gh is already logged in)."
+  pause "Press Enter to start Alchemy's prompts"
+  pnpm exec alchemy profile create admin 2>/dev/null || note "profile admin already exists; editing it"
+  pnpm exec alchemy profile edit --profile admin --add Cloudflare --add GitHub
+  pause
+fi
 
 # ── 7 ─────────────────────────────────────────────────────────────────────
-stage "Alchemy: write the CI secrets to oscabriel/cairn"
-say "This deploys stacks/github.ts under the admin profile. It mints a Cloudflare"
-say "token named cairn-ci (Workers Containers, Workers Scripts, Secrets Store and"
-say "Account Settings write; nothing else) and saves it, with your account id, as"
-say "the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets on oscabriel/cairn."
-say "The token value never appears on screen. Alchemy shows its plan and asks first."
-if confirm "Deploy stacks/github.ts now?"; then
-  pnpm exec alchemy deploy --config stacks/github.ts --profile admin
-  gh secret list --repo oscabriel/cairn
-  # The profile holds the Global API Key and has no other job; recreate it with stage 6 if the
-  # CI token ever needs new permissions.
-  pnpm exec alchemy profile delete admin --yes
-else
-  SKIPPED+=("stage 7: pnpm exec alchemy deploy --config stacks/github.ts --profile admin")
+if want 7; then
+  stage "Alchemy: write the CI secrets to oscabriel/cairn"
+  say "This deploys stacks/github.ts under the admin profile. It mints a Cloudflare"
+  say "token named cairn-ci (Workers Containers, Workers Scripts, Secrets Store and"
+  say "Account Settings write; nothing else) and saves it, with your account id, as"
+  say "the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets on oscabriel/cairn."
+  say "The token value never appears on screen. Alchemy shows its plan and asks first."
+  if confirm "Deploy stacks/github.ts now?"; then
+    pnpm exec alchemy deploy --config stacks/github.ts --profile admin
+    gh secret list --repo oscabriel/cairn
+    # The profile holds the Global API Key and has no other job; recreate it with stage 6 if the
+    # CI token ever needs new permissions.
+    pnpm exec alchemy profile delete admin --yes
+  else
+    SKIPPED+=("stage 7: pnpm exec alchemy deploy --config stacks/github.ts --profile admin")
+  fi
+  pause
 fi
-pause
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
-stage "Firewall: let Executor reach the stdio relay"
-say "The stdio MCP servers (convex, playwright) run behind the stdio relay on the docker bridge,"
-say "172.17.0.1:3776. ufw drops incoming traffic by default, so the Executor container"
-say "can't reach them until one rule allows that port from docker0 only. It needs sudo."
-step "Run this, or let the wizard run it:"
-say "    ${BOLD}sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp comment 'Cairn stdio relay for Executor'${RESET}"
-if confirm "Run it now?"; then
-  sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp comment 'Cairn stdio relay for Executor'
-else
-  SKIPPED+=("stage 8: sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp")
+if want 8; then
+  stage "Firewall: let Executor reach the stdio relay"
+  say "The stdio MCP servers (convex, playwright) run behind the stdio relay on the docker bridge,"
+  say "172.17.0.1:3776. ufw drops incoming traffic by default, so the Executor container"
+  say "can't reach them until one rule allows that port from docker0 only. It needs sudo."
+  step "Run this, or let the wizard run it:"
+  say "    ${BOLD}sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp comment 'Cairn stdio relay for Executor'${RESET}"
+  if confirm "Run it now?"; then
+    sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp comment 'Cairn stdio relay for Executor'
+  else
+    SKIPPED+=("stage 8: sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp")
+  fi
+  pause
 fi
-pause
+
+# ── 9 ─────────────────────────────────────────────────────────────────────
+if want 9; then
+  stage "Executor: Cairn's own scoped connection and grant"
+  say "Cairn reaches Executor through one scoped connection and one OAuth grant that"
+  say "nothing else uses. Cairn narrows it per project itself, so this is the only time."
+  open_url "https://exec.gneiss.run/org/${EXECUTOR_ORG:-executor}/connect"
+  step "Create a scoped connection (or New scoped connection). Name it ${BOLD}Cairn${RESET}."
+  step "Turn on ${BOLD}GitHub${RESET} and ${BOLD}Cairn bridges${RESET}, each with All tools. Leave the"
+  say "    ${BOLD}Executor${RESET} app off: it manages Executor itself, and Cairn's agents never get it."
+  step "Save, then copy the connection's MCP URL under Connect your agent."
+  ask EXECUTOR_CONNECTION_URL "Paste the connection URL:"
+  EXECUTOR_CONNECTION=$(sed -n 's/.*[?&]connection=\([A-Za-z0-9_-]*\).*/\1/p' <<<"$EXECUTOR_CONNECTION_URL")
+  [[ -n "$EXECUTOR_CONNECTION" ]] || EXECUTOR_CONNECTION=$EXECUTOR_CONNECTION_URL
+  write_env EXECUTOR_CONNECTION "$EXECUTOR_CONNECTION"
+  say ""
+  say "Next, the consent. Executor sends your browser back to http://127.0.0.1:3774 on"
+  say "the Beelink. On the MacBook, first open a tunnel in another terminal and leave it:"
+  say "    ${BOLD}ssh -N -L 3774:127.0.0.1:3774 beelink${RESET}"
+  step "Open the link printed below, approve Cairn, and wait for the tool list here."
+  pause "Press Enter to start"
+  EXECUTOR_CONNECTION=$EXECUTOR_CONNECTION node ops/executor/grant.ts ||
+    SKIPPED+=("stage 9: EXECUTOR_CONNECTION=$EXECUTOR_CONNECTION node ops/executor/grant.ts")
+  pause
+fi
 
 finish
-say "Tell Claude the wizard is done. It takes it from here: the stdio servers in"
-say "Executor, then Cairn's own scoped grant (one more browser consent)."
+say "Tell Claude the wizard is done."
 printf '\n'

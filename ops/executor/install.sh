@@ -17,7 +17,7 @@ systemctl --user daemon-reload
 systemctl --user enable executor.service >/dev/null
 systemctl --user restart executor.service
 for _ in $(seq 1 60); do
-  curl -fsS -o /dev/null http://127.0.0.1:4400/health && { echo "executor healthy ($mode)"; exit 0; }
+  curl -fsS -o /dev/null http://127.0.0.1:4400/health 2>/dev/null && { echo "executor healthy ($mode)"; exit 0; }
   sleep 1
 done
 echo "executor did not become healthy; journalctl --user -u executor" >&2

@@ -1,10 +1,9 @@
 # Spike 2: Foldkit composer and sidebar
 
-Result so far: **Chromium half passed; waiting on the user.**
-- **Typing.** The composer dropped zero keystrokes in every Chromium run on the Beelink, throttled 4x and 6x included, and IME composition worked.
+Result: **passed.**
+- **Typing.** The composer dropped zero keystrokes in every run: Chromium on the Beelink (throttled 4x and 6x included) and WebKit at iPhone size on the MacBook. IME composition worked in Chromium and, by hand, on the iPhone.
 - **Parity.** The sidebar, draft hero and composer render pixel-identical to t3code at 1440 and 390 px.
-- **Reviewer.** GPT 6 Luna judged every checklist row "same as t3code".
-- **Still to come:** the user's WebKit run on the MacBook, the iPhone IME check and the user's own verdict (wizard stage 10).
+- **Judges.** GPT 6 Luna judged every checklist row "same as t3code", and so did the user.
 
 Run on 2026-10-21 on the Beelink: Foldkit 0.169.0 (`@foldkit/ui` 0.169.0, vite plugin 0.28.0), Effect 4.0.5 (Foldkit's exact `4.0.0` peer overridden), Tailwind 4.3.3 (t3code's version), Vite 8.3.5, Playwright 1.64.1 with Chromium 1248, against the t3code nightly at `fe27e8e3` served at `t3.gneiss.run`.
 
@@ -29,7 +28,7 @@ Run on 2026-10-21 on the Beelink: Foldkit 0.169.0 (`@foldkit/ui` 0.169.0, vite p
 | Chromium, 4x CPU throttle, 20/s | 1,200 | 1,200 | 1 (0 ms) | ok |
 | Chromium iPhone size, 4x throttle, 20/s | 1,200 | 1,200 | 1 (0 ms) | ok |
 | Chromium, 6x throttle, 30/s | 1,800 | 1,800 | 50 (29 ms) | ok |
-| WebKit on the MacBook, iPhone size | pending | | | (manual on the iPhone) |
+| WebKit on the MacBook, iPhone size, 20/s | 1,200 | 1,200 | 1 (0 ms) | ok, by hand on the iPhone |
 
 **The judge can fail.** `?busy=<ms>` adds work to every update, the load behind Foldkit's keystroke-loss bug (#1697, fixed in 0.169.0 on 2026-10-20). The same 20 s runs:
 
@@ -58,12 +57,13 @@ Control: with Cairn's phone sidebar wrongly open, the 390 view differs by 71.3%.
 
 The t3code side needs a session. The harness pairs read-only (`t3 pair --scope orchestration:read --label cairn-parity-harness`, a five-minute single-use token, used at once) and keeps the storage state in `runs/` (ignored). The pairing shows in t3code's connections list.
 
-## Decisions (pending the user)
+## Decisions
 
-- **Foldkit passes the composer and sidebar gate in Chromium.** ADR 0011 stays proposed until the WebKit run and the user's verdict.
+- **Foldkit passes the composer and sidebar gate.** ADR 0011 is accepted.
 - **Pin Foldkit 0.169.0 or later.** 0.168.0 drops keys and garbles IME under load.
 - **Parity baselines come from t3code's DOM.** Capturing a state and generating its markup gives exact parity for that state, and the harness proves it. Phase 1 keeps this for baselines, one state at a time. It writes the views by hand from them, with behaviour ported from t3code's logic files: generated views are not maintainable code.
 - **The brand.** The spike still says "T3 Code" with t3code's logo, because pixels were compared. Cairn's name and mark are the user's call in Phase 1.
+- **How close to t3code.** The user's verdict was "same", with the note that the copy is eerily exact and may not be what they want. Parity here proves Foldkit can render t3code's surfaces; how far Cairn's look departs from t3code is a Phase 1 question.
 
 ## Noticed
 

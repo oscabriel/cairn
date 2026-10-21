@@ -5,5 +5,5 @@
   },
   // Tool configs (oxlint, oxfmt) are validated by the tools that load them; ultracite's
   // preset types don't satisfy exactOptionalPropertyTypes.
-  "include": ["alchemy.run.ts", "ops", "stacks", "vitest.config.ts"]
+  "include": ["alchemy.run.ts", "judges", "ops", "stacks", "vitest.config.ts"]
 }

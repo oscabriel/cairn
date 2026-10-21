@@ -187,7 +187,7 @@ finish() {
 # STAGES: Cairn phase 0. Run on the Beelink (in an SSH session is fine).
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=9
+TOTAL_STAGES=10
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
@@ -355,6 +355,46 @@ if want 9; then
     SKIPPED+=("stage 9: EXECUTOR_CONNECTION=$EXECUTOR_CONNECTION node ops/executor/grant.ts")
   pause
 fi
+
+if want 10; then
+  stage "S2: the composer in WebKit, and your parity verdict"
+  S2=spikes/2-foldkit
+  if ! curl -fsS -o /dev/null http://127.0.0.1:3774/; then
+    say "The spike isn't running. Start it in another terminal on the Beelink and leave it:"
+    say "    ${BOLD}cd $S2 && CADDY_DEV_HOST=cairn-s2.gneiss.run npx vite${RESET}"
+    pause "Press Enter once it says ready"
+  fi
+  S2_KEY=$(cat "$S2/runs/page.key")
+  S2_URL="https://cairn-s2.gneiss.run/?key=$S2_KEY"
+  say "First the typing test in WebKit at iPhone size. On the ${BOLD}MacBook${RESET}, run:"
+  say ""
+  printf '    %s\n' "mkdir -p /tmp/cairn-typing && cd /tmp/cairn-typing && npm init -y >/dev/null \\"
+  printf '    %s\n' "  && npm i playwright@1.64.1 >/dev/null && npx playwright install webkit \\"
+  printf '    %s\n' "  && curl -fsSo typing.mts 'https://cairn-s2.gneiss.run/typing.ts?key=$S2_KEY' \\"
+  printf '    %s\n' "  && npx -y tsx typing.mts '$S2_URL' webkit"
+  say ""
+  say "It types for a minute, then prints one line of JSON."
+  ask S2_WEBKIT_RESULT "Paste that line:"
+  printf '%s\n' "$S2_WEBKIT_RESULT" >>"$S2/runs/typing-macbook.jsonl"
+  say ""
+  say "Next, IME on the iPhone: open this link there, switch to a Japanese (kana) or"
+  say "Chinese keyboard, and type a few composed words into the composer while the text"
+  say "above it streams. They should land whole, with nothing doubled or lost:"
+  say "    ${BOLD}https://cairn-s2.gneiss.run/?stream=1&key=$S2_KEY${RESET}"
+  if confirm "Did composed text land correctly on the iPhone"; then S2_IME=ok; else S2_IME=wrong; fi
+  say ""
+  say "Last, your parity verdict. The comparison page has both apps, the pixel diffs, the"
+  say "GPT reviewer's verdict and the typing numbers:"
+  open_url "https://plans.gneiss.run/cairn/v2/s2-parity/"
+  say "Also open the spike (${BOLD}$S2_URL${RESET}) beside t3code, on the MacBook and the phone."
+  say "Judge only the sidebar, the new-thread hero and the composer as they look; menus and"
+  say "hover actions are not built yet."
+  if confirm "Are the sidebar, hero and composer at parity with t3code at both sizes"; then S2_VERDICT=same; else S2_VERDICT=differs; fi
+  ask S2_NOTES "Anything you noticed (Enter for nothing):"
+  printf '%s\n' "$(date -Is) ime=$S2_IME verdict=$S2_VERDICT notes=$S2_NOTES" >>"$S2/runs/user-verdict.txt"
+  pause
+fi
+
 
 finish
 say "Tell Claude the wizard is done."

@@ -1,0 +1,18 @@
+# Spike 5: stdio MCP servers behind one supergateway on the docker bridge, for Executor (ADR 0014),
+# and the headless Chrome playwright attaches to.
+# systemd owns the cgroup, so stopping or killing the gateway also ends every child it started,
+# although supergateway gives each child its own process group.
+[Unit]
+Description=Cairn stdio MCP bridges (spike 5)
+
+[Service]
+WorkingDirectory=/home/oscargabriel/Developer/projects/cairn/spikes/5-stdio-bridges
+Environment=PATH=/usr/bin:/usr/bin:/bin
+ExecStart=/home/oscargabriel/Developer/projects/cairn/spikes/5-stdio-bridges/bridges/run.sh
+KillMode=control-group
+TimeoutStopSec=10
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

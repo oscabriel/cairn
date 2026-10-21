@@ -50,6 +50,10 @@ _Avoid_: Claude provider, proxy
 
 _Avoid_: MCP gateway, tool server
 
+**Stdio relay**: The supervised process on the Beelink that carries Cairn's stdio MCP servers to Executor over HTTP, one session's server process per call.
+
+_Avoid_: bridge (that is the Claude provider), MCP gateway
+
 ## Results
 
 **Artifact**: An HTML page or folder an agent publishes to a private `gneiss.run` URL.

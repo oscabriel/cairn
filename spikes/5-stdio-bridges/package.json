@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1"
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@playwright/mcp": "0.0.83",
+    "convex": "1.47.0",
+    "supergateway": "4.2.0"
   }
 }

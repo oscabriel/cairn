@@ -1,0 +1,13 @@
+{
+  "name": "cairn-bridges",
+  "description": "Cairn's stdio MCP servers, reached through the bridges Cairn runs on the Beelink.",
+  "private": true,
+  "type": "module",
+  "executor": {
+    "title": "Cairn bridges"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "apps": "0.0.1-beta.95"
+  }
+}

@@ -187,7 +187,7 @@ finish() {
 # STAGES: Cairn phase 0. Run on the Beelink (in an SSH session is fine).
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=7
+TOTAL_STAGES=8
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
@@ -237,7 +237,7 @@ pause
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
 stage "Executor: a setup token for Claude"
-say "Claude imports your MCP servers and registers the stdio bridges with a"
+say "Claude imports your MCP servers and registers the stdio relay with a"
 say "short-lived token, so you don't have to click through each one. Cairn's own"
 say "agents never use this token; they get a scoped OAuth grant later."
 open_url "https://exec.gneiss.run/account/tokens"
@@ -289,12 +289,29 @@ say "The token value never appears on screen. Alchemy shows its plan and asks fi
 if confirm "Deploy stacks/github.ts now?"; then
   pnpm exec alchemy deploy --config stacks/github.ts --profile admin
   gh secret list --repo oscabriel/cairn
+  # The profile holds the Global API Key and has no other job; recreate it with stage 6 if the
+  # CI token ever needs new permissions.
+  pnpm exec alchemy profile delete admin --yes
 else
   SKIPPED+=("stage 7: pnpm exec alchemy deploy --config stacks/github.ts --profile admin")
 fi
 pause
 
+# ── 8 ─────────────────────────────────────────────────────────────────────
+stage "Firewall: let Executor reach the stdio relay"
+say "The stdio MCP servers (convex, playwright) run behind the stdio relay on the docker bridge,"
+say "172.17.0.1:3776. ufw drops incoming traffic by default, so the Executor container"
+say "can't reach them until one rule allows that port from docker0 only. It needs sudo."
+step "Run this, or let the wizard run it:"
+say "    ${BOLD}sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp comment 'Cairn stdio relay for Executor'${RESET}"
+if confirm "Run it now?"; then
+  sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp comment 'Cairn stdio relay for Executor'
+else
+  SKIPPED+=("stage 8: sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp")
+fi
+pause
+
 finish
-say "Tell Claude the wizard is done. It takes it from here: myr and the stdio servers"
-say "in Executor, then Cairn's own scoped grant (one more browser consent)."
+say "Tell Claude the wizard is done. It takes it from here: the stdio servers in"
+say "Executor, then Cairn's own scoped grant (one more browser consent)."
 printf '\n'

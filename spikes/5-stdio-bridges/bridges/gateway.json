@@ -1,0 +1,32 @@
+{
+  "port": 3776,
+  "host": "172.17.0.1",
+  "logFormat": "json",
+  "healthEndpoint": [
+    "/healthz"
+  ],
+  "outputTransport": "streamableHttp",
+  "stateful": true,
+  "sessionTimeout": 600000,
+  "apiKeyFile": "/home/oscargabriel/.config/cairn/bridges.key",
+  "mcpServers": {
+    "playwright": {
+      "path": "/playwright",
+      "command": "/home/oscargabriel/Developer/projects/cairn/spikes/5-stdio-bridges/node_modules/.bin/playwright-mcp",
+      "args": [
+        "--cdp-endpoint",
+        "http://127.0.0.1:3775",
+        "--output-dir",
+        "/home/oscargabriel/.local/state/cairn/playwright"
+      ]
+    },
+    "convex": {
+      "path": "/convex",
+      "command": "/home/oscargabriel/Developer/projects/cairn/spikes/5-stdio-bridges/node_modules/.bin/convex",
+      "args": [
+        "mcp",
+        "start"
+      ]
+    }
+  }
+}

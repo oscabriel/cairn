@@ -7,3 +7,4 @@ MCP servers and third-party credentials live in a self-hosted Executor 2.0 on th
 - Cairn's grant is never shared with the pi CLI or Claude Code: Executor treats a reused rotated refresh token as theft.
 - Approvals use model elicitation mode with Cairn's queue. On boot, decline every orphaned approval; never auto-retry after an Executor restart.
 - Back up the data volume, key files included, before every upgrade.
+- Servers migrated from the user's setup: `convex` and `playwright` (both stdio, ADR 0014). `myr` is out of scope: the user is retiring it (2026-10-21), so the tools target covers `convex`, `playwright` and GitHub.

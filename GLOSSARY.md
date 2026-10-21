@@ -54,6 +54,16 @@ _Avoid_: MCP gateway, tool server
 
 _Avoid_: bridge (that is the Claude provider), MCP gateway
 
+## Asking the user
+
+**Approval**: A durable record in the brain that holds one gated tool call until the user answers it, from any device, or it expires. Executor's own approval prompts are answered by Cairn, never shown as a second question.
+
+_Avoid_: permission request, prompt (for the record)
+
+**Permission mode**: A thread's rule for which tool calls need an approval, after t3code's modes. Full access, the default, asks for none.
+
+_Avoid_: approval policy, trust level
+
 ## Results
 
 **Artifact**: An HTML page or folder an agent publishes to a private `gneiss.run` URL.

@@ -1,0 +1,52 @@
+# Builds the stone base image (images/stone) and pushes it to Cloudflare's registry, so the Beelink never runs Docker
+# for it. The stack deploys it by the digest this prints. Its token is cairn-ci (stacks/github.ts).
+name: stone image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [images/stone/**, .github/workflows/stone-image.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to Cloudflare's registry
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          response=$(curl -fsS -X POST \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+            -d '{"permissions":["push","pull"],"expiration_minutes":30}' \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/containers/registries/registry.cloudflare.com/credentials")
+          user=$(jq -r '.result.username // .result.user' <<<"$response")
+          password=$(jq -r '.result.password' <<<"$response")
+          echo "::add-mask::$password"
+          docker login registry.cloudflare.com --username "$user" --password-stdin <<<"$password"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          repo="registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/cairn-stone"
+          docker buildx build images/stone --platform linux/amd64 --provenance=false \
+            --tag "$repo:${GITHUB_SHA::12}" --push --metadata-file meta.json
+          digest=$(jq -r '."containerimage.digest"' meta.json)
+          echo "image: registry.cloudflare.com/cairn-stone@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "registry.cloudflare.com/cairn-stone@$digest" > stone-image.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stone-image
+          path: stone-image.txt

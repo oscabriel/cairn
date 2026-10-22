@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Judge for gate S5 (ADR 0014): no stdio MCP bridge process outlives the event that should end it.
+# Judge for gate S5 (ADR 0014): no stdio relay process outlives the event that should end it.
 #
-#   judges/bridge-orphans.sh <unit> <health-url> <warm-command> [<peer-unit>]
+#   judges/relay-orphans.sh <unit> <health-url> <warm-command> [<peer-unit>]
 #
 # Each case runs the warm command (which should leave sessions open, so children are running),
 # records every PID in the unit's cgroup, applies one event, waits for the unit to answer its
 # health URL again, and counts the recorded PIDs still alive outside the cgroup. Those are orphans.
-# Children left inside the cgroup are reported too: they belong to sessions the bridge still holds.
-# With a peer unit (the bridges' client, such as Executor), one more case restarts the peer.
+# Children left inside the cgroup are reported too: they belong to sessions the relay still holds.
+# With a peer unit (the relay's client, such as Executor), one more case restarts the peer.
 # Exit status is the number of failed cases.
 set -euo pipefail
 

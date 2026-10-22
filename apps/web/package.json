@@ -1,0 +1,27 @@
+{
+  "name": "@cairn/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@cairn/client-logic": "workspace:*",
+    "@cairn/protocol": "workspace:*",
+    "@effect/platform-browser": "catalog:",
+    "@foldkit/ui": "catalog:",
+    "effect": "catalog:",
+    "foldkit": "catalog:",
+    "lucide": "catalog:",
+    "shiki": "catalog:"
+  },
+  "devDependencies": {
+    "@foldkit/vite-plugin": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "happy-dom": "catalog:",
+    "tailwindcss": "catalog:",
+    "vite": "catalog:"
+  }
+}

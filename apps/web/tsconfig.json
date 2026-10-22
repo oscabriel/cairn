@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"]
+  },
+  // The Vite and Vitest configs run in Node; the root tsconfig checks them with Node's types.
+  "include": ["src", "vitest.setup.ts"]
+}

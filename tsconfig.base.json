@@ -24,12 +24,18 @@
         "diagnostics": false,
         "barrelImportPackages": ["effect"],
         "allowedUnstableApis": [
+          "@effect/platform-browser",
           "@effect/platform-node",
+          "@effect/sql-sqlite-node",
           "effect/FileSystem",
           "effect/http",
           "effect/http-api",
           "effect/observability",
+          "effect/persistence",
+          "effect/process",
           "effect/rpc",
+          "effect/schema",
+          "effect/socket",
           "effect/sql"
         ]
       }

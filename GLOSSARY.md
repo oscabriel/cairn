@@ -18,6 +18,8 @@ _Avoid_: sandbox, runner
 
 _Avoid_: workspace, repo (for the Cairn concept)
 
+**Scratch project**: The hidden project behind "no project": a fresh folder under Cairn's data directory, with no git repo, so its threads have no diffs. It can become a real project later.
+
 ## Conversations
 
 **Thread**: One conversation in the sidebar. Its arms are the project's checkout or its own git worktree on the Beelink.
@@ -50,6 +52,14 @@ _Avoid_: provider adapter, harness (alone)
 
 _Avoid_: Claude provider, proxy
 
+**Child**: A `claude` process the bridge spawns for one conversation. Children run in the thread's real folder with every Claude Code tool, hook and setting turned off; the bridge's tools reach them through an in-process MCP server.
+
+**Held query**: A child's open Claude query that the bridge keeps waiting across a tool call, so the tool result returns into the same query instead of a new turn.
+
+_Avoid_: parked query (Parked is a pi-durable task)
+
+**Stamp**: The record on a Claude reply's final assistant message (`cairn.claude`) naming the Claude Code session that answered, so the next turn resumes it. Committed with the reply, and never sent to clients.
+
 **Executor**: The self-hosted service on the Beelink that holds every MCP server and third-party credential. Agents reach tools through it.
 
 _Avoid_: MCP gateway, tool server
@@ -57,6 +67,26 @@ _Avoid_: MCP gateway, tool server
 **Stdio relay**: The supervised process on the Beelink that carries Cairn's stdio MCP servers to Executor over HTTP, one session's server process per call.
 
 _Avoid_: bridge (that is the Claude provider), MCP gateway
+
+**Extension (Cairn's)**: A pi-durable extension Cairn installs in the brain (coding tools, code mode, Executor's tools, the skills, context and Cairn sections, judge tools), in one fixed order.
+
+_Avoid_: plugin
+
+**Guard**: The brain's check on every request and socket: the right host, the owner's Tailscale login copied from Caddy, and the exact origin of Cairn's page.
+
+## Streams and the client
+
+**Shell stream**: The stream of Cairn's own state every client holds: projects and one row per thread, as a snapshot then whole-row updates, resumable from a sequence.
+
+**Thread stream**: The stream of one thread's conversation: a snapshot of its projected view, then the changes to it, with a fresh snapshot on every subscribe.
+
+**Projection**: The client's view of a thread: pi-durable's conversation with brain-only documents and Claude stamps removed, image data replaced by references and long strings cut.
+
+**Draft**: A message not yet sent, kept in the browser per thread (or per new-thread draft) so typing never waits on the network.
+
+**Outbox**: The browser's list of sends not yet acknowledged. It resends them after a reconnect, and the brain admits each one once.
+
+**Presence**: A device telling the brain whether Cairn is on screen and which thread it shows, so a push never fires for a thread the user is looking at.
 
 ## Asking the user
 
@@ -69,6 +99,8 @@ _Avoid_: permission request, prompt (for the record)
 **Permission mode**: A thread's rule for which tool calls need an approval, after t3code's modes. Full access, the default, asks for none.
 
 _Avoid_: approval policy, trust level
+
+**Plan window**: One rate-limit window of a subscription plan (five hours, seven days), with how much of it is used and when it resets. Unknown is shown as unknown, never as zero.
 
 ## Results
 
@@ -87,6 +119,12 @@ _Avoid_: e2e, test suite (for the recipe)
 **Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a verifier on another model family, or the user.
 
 _Avoid_: reviewer (alone), checker
+
+**Attachment**: A file the user adds to a message: an image, a document or text. The brain prepares it when it is uploaded, and the model gets it as content.
+
+**Upload URL**: The one-shot, signed address a client posts one attachment's bytes to. It expires after ten minutes.
+
+**Checkpoint**: A git ref the brain records for a thread's worktree at the end of each turn, so the diff of any turn, or of the whole thread, can be shown.
 
 ## Milestones
 

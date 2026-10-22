@@ -1,0 +1,27 @@
+{
+  "name": "@cairn/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@cairn/bridge": "workspace:*",
+    "@cairn/protocol": "workspace:*",
+    "@earendil-works/chord": "catalog:",
+    "@earendil-works/pi-ai": "catalog:",
+    "@earendil-works/pi-codemode": "catalog:",
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-durable": "catalog:",
+    "@earendil-works/pi-env": "catalog:",
+    "@earendil-works/pi-mcp": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
+    "effect": "catalog:",
+    "mammoth": "catalog:",
+    "unpdf": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5"
+  }
+}

@@ -47,7 +47,7 @@ The fix is a long-lived headless Chrome that every playwright child attaches to 
 | One open session's child, PSS | convex 106 MiB, playwright 93 MiB |
 | Abandoned session's child, still alive 630 s later (10 minute timeout) | 0 of 1 |
 
-The judge is `judges/bridge-orphans.sh` (kept code). Each case runs `warm.sh`, which leaves two direct sessions abandoned open and makes one call through Executor, then fails the case if any descendant of the main process has left the cgroup, records every PID in the cgroup plus any that left, applies the event, and counts recorded PIDs alive outside the cgroup. Last run:
+The judge is `judges/relay-orphans.sh` (kept code). Each case runs `warm.sh`, which leaves two direct sessions abandoned open and makes one call through Executor, then fails the case if any descendant of the main process has left the cgroup, records every PID in the cgroup plus any that left, applies the event, and counts recorded PIDs alive outside the cgroup. Last run:
 
 ```
 kill9-main         before 18 procs, healthy after   2611 ms, after 15 procs, orphans 0

@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "types": ["node"]
+  },
+  // The protocol's ids anchor the program so typecheck passes before the bridge has sources;
+  // drop the anchor once packages/bridge/src exists.
+  "include": ["src", "../protocol/src/Ids.ts"]
+}

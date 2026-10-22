@@ -1,0 +1,23 @@
+{
+  "name": "@cairn/bridge",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "@cairn/protocol": "workspace:*",
+    "@earendil-works/pi-ai": "catalog:",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "effect": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-durable": "catalog:",
+    "@types/node": "26.6.5"
+  }
+}

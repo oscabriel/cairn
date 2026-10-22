@@ -9,4 +9,4 @@ Executor v2 can't start local processes, so each stdio MCP server (`convex`, `pl
 
 Executor reaches the relay only with `EXECUTOR_APPS_ALLOW_PRIVATE_FETCH=true`, which lets every app on the instance reach private addresses, plus an allowed HTTP origin and a ufw rule for `docker0`.
 
-Gate S5: an agent in a thread calls `convex` and `playwright` through Executor, and a Cairn or Executor restart leaves no orphaned relay process. Measured in `spikes/5-stdio-bridges/NOTES.md`, judged by `judges/bridge-orphans.sh`.
+Gate S5: an agent in a thread calls `convex` and `playwright` through Executor, and a Cairn or Executor restart leaves no orphaned relay process. Measured in `spikes/5-stdio-bridges/NOTES.md`, judged by `judges/relay-orphans.sh`.

@@ -1,0 +1,274 @@
+{
+  "capturedAtMs": 1792669068177,
+  "active": [
+    {
+      "title": "SSH Multiplayer Product Research",
+      "project": "supervillain",
+      "status": "",
+      "time": "4h",
+      "branch": "main",
+      "claude": true
+    },
+    {
+      "title": "Executor MCP Stdio Bridges",
+      "project": "cairn",
+      "status": "Waiting",
+      "time": "1h 5m",
+      "branch": "main",
+      "claude": true
+    }
+  ],
+  "settledCount": 146,
+  "settled": [
+    {
+      "title": "Codebase status overview",
+      "project": "supervillain",
+      "status": "",
+      "time": "12h",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "Cairn v2 KICKOFF.md plan",
+      "project": "cairn",
+      "status": "",
+      "time": "1d",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "Tear down v1 and rename to cairn-v1",
+      "project": "cairn",
+      "status": "",
+      "time": "1d",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "<command-name>/clear</command-name>",
+      "project": "cairn",
+      "status": "",
+      "time": "1d",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "Cairn orchestration, T3 Code parity",
+      "project": "cairn",
+      "status": "",
+      "time": "1d",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "Commit changes",
+      "project": "cairn",
+      "status": "",
+      "time": "2d",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "Help me connect Pi to Executor over MCP at https://exec.gneiss.run/mcp?connection=18e85f39-f072-420b",
+      "project": "cairn",
+      "status": "",
+      "time": "2d",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "Help me connect Pi to Executor over MCP at https://exec.gneiss.run/mcp?connection=18e85f39-f072-420b",
+      "project": "cairn",
+      "status": "",
+      "time": "2d",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "Cairn tech stack novelties",
+      "project": "cairn",
+      "status": "",
+      "time": "2d",
+      "branch": "",
+      "claude": false
+    },
+    {
+      "title": "hello",
+      "project": "cairn",
+      "status": "",
+      "time": "3d",
+      "branch": "",
+      "claude": false
+    }
+  ],
+  "search": [
+    {
+      "title": "Executor MCP Stdio Bridges",
+      "project": "cairn",
+      "age": "1h",
+      "settled": false,
+      "role": "user",
+      "excerpt": "pihole rule deleted ~ ❯ sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp comment 'Cairn MCP bridges for Executor' [sudo] password for oscargabriel: Rule added"
+    },
+    {
+      "title": "Codebase status overview",
+      "project": "supervillain",
+      "age": "12h",
+      "settled": true,
+      "role": "user",
+      "excerpt": "…lid 0.1.x | Effect runtime runs outside Solid. A `SpanStore` service is bridged to Solid with `createSolidBridge` (`src/runtime.ts`). | | Minor | 0–2 stars | Effect 3 with Ink or early OpenTUI | `PaulJPhilp/effect-cli-tui` (Ink, 29 star…"
+    },
+    {
+      "title": "Cairn v2 KICKOFF.md plan",
+      "project": "cairn",
+      "age": "1d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "… `followUp`. - Q6 model catalog naming (`claude-opus-5-5` under `claude-bridge` or `anthropic`): **open**. Resolve by inspecting `ModelRuntime.getAvailable()`. - Q7 how to register the bridge: **settled** (K: try registering the package…"
+    },
+    {
+      "title": "Cairn orchestration, T3 Code parity",
+      "project": "cairn",
+      "age": "1d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "…e Cairn user's uid (never root), and `HOME=/tmp`. - Network: the fenced bridge, or `none` (`:121`). The fence blocks the host, LAN and tailnet but lets npm and GitHub through. 2. **Host threads.** read/write/edit resolve paths in `decid…"
+    },
+    {
+      "title": "Commit changes",
+      "project": "cairn",
+      "age": "2d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "…only, including model-info, pi-herdr-btw and pi-skill-stacks; pi-claude-bridge is listed as skipped. - Context files added: `cairn/AGENTS.md` and `~/.pi/agent/APPEND_SYSTEM.md`. The MCP section lists convex as \"not loaded yet\". - Hello …"
+    },
+    {
+      "title": "Cairn tech stack novelties",
+      "project": "cairn",
+      "age": "3d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "…eal `claude` binary.** It runs via the Agent SDK on a port of pi-claude-bridge, and the token is never touched. The usage meter reads an SDK call literally named `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET`, which is why …"
+    },
+    {
+      "title": "Current project state",
+      "project": "cairn",
+      "age": "4d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "… the protocol and approvals; - Executor connected; - models, the Claude bridge and the usage meter; - skills and extension tools; - the PWA, with t3's composer and the file store; - children (subagent threads) on the host, and the `arti…"
+    },
+    {
+      "title": "V7 plan docs and phase 0",
+      "project": "cairn",
+      "age": "6d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "Spike 4 passes, but the port needs one bridge change and two extension host changes. The results are committed (`db81afc`) and folded into the plan. I also recorded spike 2 as assumed to work: the plan marks it that way, Codex usage win…"
+    },
+    {
+      "title": "Project planning state in plans.gneiss.run v5",
+      "project": "cairn",
+      "age": "6d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "…six repos worth reading. Three of them hold the main techniques: the pi bridge, its dot314 fork, and Meridian. Where I say \"code\" below I read the source at the commit named; \"README\" or \"issue\" means the claim is the author's and I did…"
+    },
+    {
+      "title": "<skill name=\"pickup\" location=\"/home/oscargabriel/.agents/skills/pickup/SKILL.md\">",
+      "project": "cairn",
+      "age": "7d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "hm, oh, I didn't realize a lot of that about pi-claude-bridge. It strips the pi system prompt, and everything is going to(through?) a real hidden CC session, too? Are we using double usage of our subscription doing this?"
+    },
+    {
+      "title": "<skill name=\"pickup\" location=\"/home/oscargabriel/.agents/skills/pickup/SKILL.md\">",
+      "project": "cairn",
+      "age": "7d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "hm, oh, I didn't realize a lot of that about pi-claude-bridge. It strips the pi system prompt, and everything is going to(through?) a real hidden CC session, too? Are we using double usage of our subscription doing this?"
+    },
+    {
+      "title": "<skill name=\"pickup\" location=\"/home/oscargabriel/.agents/skills/pickup/SKILL.md\">",
+      "project": "cairn",
+      "age": "7d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "hm, oh, I didn't realize a lot of that about pi-claude-bridge. It strips the pi system prompt, and everything is going to(through?) a real hidden CC session, too? Are we using double usage of our subscription doing this?"
+    },
+    {
+      "title": "<skill name=\"anatomy\" location=\"/home/oscargabriel/.agents/skills/anatomy/SKILL.md\">",
+      "project": "myr",
+      "age": "8d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "…is the claim. A strip of pins (the answer) rides a carriage under seven bridges, one per stage. The held-back stage is a sealed box with a bell. Each stage has a tray in front for refusals, the press is the only thing that pins the cyli…"
+    },
+    {
+      "title": "Sentry usage in codebase",
+      "project": "myr",
+      "age": "8d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "… Add @repo/telemetry: a Worker's JSON logger, its defect reporter and a bridge from Effect's spans onto workerd's tracing, with a recording tracing for tests\",\"c5db84d Log JSON, report defects and trace on the platform: its routers, eac…"
+    },
+    {
+      "title": "Help me understand this project's terms. \"claim\" \"ask\" \"landing\" \"ref\" \"vouch\" \"decider\" what do the",
+      "project": "myr",
+      "age": "9d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "…ns it red first to prove the test fails on `main` (ADR 0018). This step bridges \"random person with an idea\" and \"typed ask\", because the proposer doesn't have to write the check. 2. **Redraft.** `ask draft` takes a `note` of up to 2,00…"
+    },
+    {
+      "title": "Help me understand this project's terms. \"claim\" \"ask\" \"landing\" \"ref\" \"vouch\" \"decider\" what do the",
+      "project": "myr",
+      "age": "9d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "…ns it red first to prove the test fails on `main` (ADR 0018). This step bridges \"random person with an idea\" and \"typed ask\", because the proposer doesn't have to write the check. 2. **Redraft.** `ask draft` takes a `note` of up to 2,00…"
+    },
+    {
+      "title": "Blog post data storage and CMS architecture",
+      "project": "oscargabriel-dev",
+      "age": "15d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "…ub.com/tinacms/tinacms/blob/main/packages/@tinacms/graphql/src/database/bridge/filesystem.ts The self-hosted GitHub provider fetches the sha right before PUT, so the last write wins. https://github.com/tinacms/tinacms/blob/main/packages…"
+    },
+    {
+      "title": "Codebase documentation audit and rebuild plan",
+      "project": "supervillain",
+      "age": "24d",
+      "settled": true,
+      "role": "user",
+      "excerpt": "…d**. `patches/@opentui%2Fssh@0.4.3.patch` destroys a connection's shell bridges on `end`/`close`, working around upstream #83, where renderers leak per abrupt disconnect. - **The Host-pipe WebSocket broker**: `transport-ws` server plus …"
+    },
+    {
+      "title": "Web analytics and design updates",
+      "project": "oscargabriel-dev",
+      "age": "20d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "All three packages are needed: `alchemy/Cloudflare` loads `WorkerBridge`, which statically imports `@effect/platform-node`. Now the DESIGN.md fix and the leaf border."
+    },
+    {
+      "title": "effect/platform-bun and effect/platform-node dependencies",
+      "project": "oscargabriel-dev",
+      "age": "25d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "…Cloudflare code also imports it directly: `src/Cloudflare/Workers/WorkerBridge.ts` imports `NodeServices`, and `src/Platform.ts` uses its types. Because they're optional peers, the package manager won't install them automatically. If on…"
+    },
+    {
+      "title": "Webmcp support integration",
+      "project": "nouveau",
+      "age": "29d",
+      "settled": true,
+      "role": "assistant",
+      "excerpt": "…mise/avoid-new` is off for `scripts/**`, since a DevTools driver has to bridge socket events to promises. **Verified in Chromium 153 against the dev deployment** | Call | Result | | --- | --- | | list on the home page | three tools with…"
+    }
+  ]
+}

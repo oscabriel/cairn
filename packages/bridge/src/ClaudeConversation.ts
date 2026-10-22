@@ -1,0 +1,1051 @@
+// Ported from elidickinson/pi-claude-bridge, src/index.ts `streamClaudeAgentSdk` (lines 1766-2214),
+// with `deliverToolResults`, `buildMcpServers` and the orphaned-result path (lines 1035-1089,
+// 1631-1721), at 874fa7c2678456336f23b64e784e2057e608d83e, by way of cairn-v1
+// apps/server/src/claude/conversation.ts at 1a5cd4a56e84bfb187940428d144b584d2e084b0. Behaviour kept:
+// a held query takes the tool results it is waiting for (a steer written first, so Claude Code drains
+// it at the tool boundary); results and handlers meet in two maps whichever arrives first; only a real
+// abort kills a held query; a kill resolves every waiting handler, fails the input, interrupts and
+// closes. Changed: one conversation per pi provider session id with no module state; an Effect state
+// machine whose mutations run under one lock; the resume decision table (`ClaudeResume`) replaces
+// v1's native resume, fork and rebuild; a finished child stays alive and takes the next prompt; a
+// generating child holds a `ClaudeSlots` permit; a stall watchdog fails a silent turn.
+//
+// MIT License
+//
+// Copyright (c) 2026 Eli Dickinson
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+import type { Api, Message, Model, ThinkingLevel } from "@earendil-works/pi-ai";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Scope,
+  Semaphore,
+  Stream,
+} from "effect";
+
+import type { ClaudeEvent, RateLimitInfo } from "./ClaudeEvents.ts";
+import type {
+  AbortKind,
+  ChildOptions,
+  ChildSession,
+  Effort,
+} from "./ClaudeGuards.ts";
+import {
+  abortKind,
+  CHILD_ENDED_TEXT,
+  childEnv,
+  INIT_REFUSED_TEXT,
+  PROMPT_REFUSED_TEXT,
+  refuseInit,
+  STREAM_STALLED_TEXT,
+  unsendableFindings,
+} from "./ClaudeGuards.ts";
+import type { HeldState, InstructionState } from "./ClaudeInstructions.ts";
+import {
+  heldOf,
+  instructionState,
+  priorTexts,
+  reminderFor,
+  renderInstructions,
+} from "./ClaudeInstructions.ts";
+import { MCP_SERVER_NAME, toolDeclaration } from "./ClaudeMcp.ts";
+import { effortFor, servedModel } from "./ClaudeModels.ts";
+import type { PromptBlock } from "./ClaudePrompt.ts";
+import {
+  CONTINUE_AFTER_RESUME_PROMPT,
+  seedPrompt,
+  toolResultsPrompt,
+  userTurnBlocks,
+} from "./ClaudePrompt.ts";
+import type { ResumeDecision } from "./ClaudeResume.ts";
+import { decideResume } from "./ClaudeResume.ts";
+import type { ClaudeQuery, ToolHandler } from "./ClaudeSdk.ts";
+import { ClaudeSdk } from "./ClaudeSdk.ts";
+import { ClaudeSettings } from "./ClaudeSettings.ts";
+import { ClaudeSlots } from "./ClaudeSlots.ts";
+import type { FoundStamp } from "./ClaudeStamp.ts";
+import { historyDigest, stampMessage } from "./ClaudeStamp.ts";
+import type { EventEffect, TurnEnd, TurnSink } from "./ClaudeStream.ts";
+import { ClaudeStream } from "./ClaudeStream.ts";
+import type { ClaudeToolResult } from "./ClaudeToolResults.ts";
+import { extractToolResults } from "./ClaudeToolResults.ts";
+import type { ConversationMessage } from "./ClaudeTranscript.ts";
+import { toBridgeContext } from "./ClaudeTranscript.ts";
+
+/** One provider call routed to a conversation. */
+export interface ConversationCall {
+  readonly model: Model<Api>;
+  /** pi's transcript as it sent it, system messages included. */
+  readonly messages: ReadonlyArray<Message>;
+  readonly reasoning: Option.Option<ThinkingLevel>;
+  readonly signal: Option.Option<AbortSignal>;
+  readonly sink: TurnSink;
+}
+
+/** Where a conversation's children run, as the brain noted it. */
+export interface ConversationPlace {
+  /** The realpath of the conversation's working directory. */
+  readonly cwd: string;
+}
+
+/** Why a child is being killed. `closing` (shutdown) leaves its session resumable as it is. */
+export type KillKind = "abort" | "closing" | "failed";
+
+/** What a conversation needs from the bridge that owns it. */
+export interface ConversationDeps {
+  readonly piSessionId: string;
+  /** The conversation's place, read at each call. */
+  readonly place: Effect.Effect<ConversationPlace>;
+  /** Whether shutdown has begun, so an `AbortError` means `closing`. */
+  readonly closing: Effect.Effect<boolean>;
+  /** Every plan-window reading a child reports. */
+  onRateLimit(info: RateLimitInfo): Effect.Effect<void>;
+  /** Runs an Effect from a platform callback (an abort signal's listener). */
+  runCallback(effect: Effect.Effect<void>): void;
+}
+
+/** One pi conversation's side of Claude Code. */
+export interface ClaudeConversation {
+  /**
+   * Runs one provider call into its sink, which it always ends. When the turn ends on a tool call,
+   * it also waits until the held query is answered or dies, so the conversation stays alive.
+   */
+  call(call: ConversationCall): Effect.Effect<void>;
+  /** Kills the conversation's child, if it has one. */
+  kill(kind: Exclude<KillKind, "failed">): Effect.Effect<void>;
+  /** Whether a child is alive now. */
+  readonly alive: Effect.Effect<boolean>;
+}
+
+type TurnOutcome = "tool-use" | "done" | "failed";
+
+/** A child's state; every field is read and written under the conversation's lock. */
+interface Child {
+  readonly scope: Scope.Closeable;
+  readonly query: ClaudeQuery;
+  readonly stream: ClaudeStream;
+  readonly cwd: string;
+  readonly cliModel: string;
+  readonly effort: Option.Option<Effort>;
+  readonly thinking: "adaptive" | "disabled";
+  readonly pendingCalls: Map<string, Deferred.Deferred<ClaudeToolResult>>;
+  readonly pendingResults: Map<string, ClaudeToolResult>;
+  ccSessionId: Option.Option<string>;
+  /** The instructions the session holds once its last prompt was written. */
+  held: HeldState;
+  /** pi's conversation messages before the reply being produced: the stamp's history. */
+  prior: ReadonlyArray<ConversationMessage>;
+  killed: Option.Option<KillKind>;
+  idle: boolean;
+  permit: boolean;
+  turn: Option.Option<Deferred.Deferred<TurnOutcome>>;
+  heldWait: Option.Option<Deferred.Deferred<true>>;
+  lastActivity: number;
+  quietUntil: number;
+}
+
+/** The child a tool handler answers for, set once the child exists. */
+interface ChildHolder {
+  child: Option.Option<Child>;
+}
+
+/** What a routed call waits on. */
+interface Routed {
+  readonly turn: Deferred.Deferred<TurnOutcome>;
+  readonly child: Child;
+}
+
+const errorMessage = (model: Model<Api>, text: string, timestamp: number) => ({
+  role: "assistant" as const,
+  content: [],
+  api: model.api,
+  provider: model.provider,
+  model: model.id,
+  usage: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+  stopReason: "error" as const,
+  errorMessage: text,
+  timestamp,
+});
+
+const failSink = (
+  sink: TurnSink,
+  model: Model<Api>,
+  text: string,
+  timestamp: number
+) => {
+  sink.push({
+    type: "error",
+    reason: "error",
+    error: errorMessage(model, text, timestamp),
+  });
+  sink.end();
+};
+
+const emptyReply = (sink: TurnSink, model: Model<Api>, timestamp: number) => {
+  const { errorMessage: _unused, ...failed } = errorMessage(
+    model,
+    "",
+    timestamp
+  );
+
+  const message = { ...failed, stopReason: "stop" as const };
+
+  const events = [
+    { type: "start", partial: message },
+    { type: "done", reason: "stop", message },
+  ] as const;
+
+  for (const event of events) {
+    sink.push(event);
+  }
+
+  sink.end();
+};
+
+const releasedResult = (text: string): ClaudeToolResult => ({
+  toolCallId: "",
+  content: [{ type: "text", text }],
+  isError: true,
+});
+
+const isRealAbort = (signal: Option.Option<AbortSignal>): boolean =>
+  Option.match(signal, {
+    onNone: () => false,
+    onSome: (value) => value.aborted && abortKind(value, false) !== "ended",
+  });
+
+/** The tool results in the tail after the reply at `index`. */
+const resultsAfter = (
+  messages: ReadonlyArray<ConversationMessage>,
+  index: number
+): ReadonlyArray<string> =>
+  messages
+    .slice(index + 1)
+    .flatMap((message) =>
+      message.role === "toolResult" ? [message.toolCallId] : []
+    );
+
+/**
+ * Opens a conversation for `deps.piSessionId`. Closing the scope kills its child as `closing`, which
+ * leaves the session resumable.
+ */
+export const openConversation = Effect.fnUntraced(function* (
+  deps: ConversationDeps
+) {
+  const sdk = yield* ClaudeSdk;
+  const slots = yield* ClaudeSlots;
+  const settings = yield* ClaudeSettings;
+  const clock = yield* Clock.Clock;
+  const lock = yield* Semaphore.make(1);
+
+  const locked = <A, E>(effect: Effect.Effect<A, E>) =>
+    Semaphore.withPermit(lock, effect);
+
+  const now = () => clock.currentTimeMillisUnsafe();
+  const stallMs = Duration.toMillis(settings.stallAfter);
+
+  let current: Option.Option<Child> = Option.none();
+  const uncertain = new Set<string>();
+
+  const releasePermit = (child: Child) =>
+    Effect.gen(function* () {
+      if (child.permit) {
+        child.permit = false;
+        yield* slots.release(deps.piSessionId);
+      }
+    });
+
+  const settleTurn = (child: Child, outcome: TurnOutcome) =>
+    Effect.gen(function* () {
+      const { turn } = child;
+
+      child.turn = Option.none();
+
+      if (Option.isSome(turn)) {
+        yield* Deferred.succeed(turn.value, outcome);
+      }
+    });
+
+  const releaseHeld = (child: Child) =>
+    Effect.gen(function* () {
+      const waiter = child.heldWait;
+
+      child.heldWait = Option.none();
+
+      if (Option.isSome(waiter)) {
+        yield* Deferred.succeed(waiter.value, true);
+      }
+    });
+
+  /** Kills `child`: settles everything that waits on it, then closes it on another fiber. */
+  const killChild = (child: Child, kind: KillKind, text: string) =>
+    Effect.gen(function* () {
+      if (Option.isSome(child.killed)) {
+        return;
+      }
+
+      child.killed = Option.some(kind);
+      child.idle = false;
+      child.stream.fail(kind === "failed" ? "error" : "aborted", text);
+
+      for (const waiting of child.pendingCalls.values()) {
+        yield* Deferred.succeed(waiting, releasedResult("Operation aborted"));
+      }
+
+      child.pendingCalls.clear();
+      child.pendingResults.clear();
+
+      yield* child.query.input.fail("Claude Code child closed.");
+      yield* settleTurn(child, "failed");
+      yield* releaseHeld(child);
+      yield* releasePermit(child);
+
+      if (kind !== "closing" && Option.isSome(child.ccSessionId)) {
+        uncertain.add(child.ccSessionId.value);
+      }
+
+      if (Option.isSome(current) && current.value === child) {
+        current = Option.none();
+      }
+
+      yield* Effect.logInfo("claude child killed").pipe(
+        Effect.annotateLogs({ sessionId: deps.piSessionId, kind })
+      );
+      yield* Effect.forkDetach(
+        Effect.andThen(
+          child.query.interrupt,
+          Scope.close(child.scope, Exit.void)
+        )
+      );
+    });
+
+  const endTurn = (child: Child, end: TurnEnd) =>
+    Effect.gen(function* () {
+      yield* releasePermit(child);
+
+      if (end.kind === "tool-use") {
+        child.heldWait = Option.some(yield* Deferred.make<true>());
+        yield* settleTurn(child, "tool-use");
+      } else if (end.kind === "done") {
+        child.idle = true;
+        yield* settleTurn(child, "done");
+      } else {
+        yield* settleTurn(child, "failed");
+        yield* killChild(child, "failed", CHILD_ENDED_TEXT);
+      }
+    });
+
+  const applyEffect = (child: Child, effect: EventEffect) =>
+    Effect.gen(function* () {
+      if (effect.kind === "init") {
+        child.ccSessionId = Option.some(effect.sessionId);
+      } else if (effect.kind === "rate-limit") {
+        yield* deps.onRateLimit(effect.info);
+      } else if (effect.kind === "api-retry") {
+        child.quietUntil = now() + effect.delayMs;
+      } else if (effect.kind === "ended") {
+        yield* endTurn(child, effect.end);
+      }
+    });
+
+  const onEvent = (child: Child, event: ClaudeEvent) =>
+    locked(
+      Effect.gen(function* () {
+        if (Option.isSome(child.killed)) {
+          return;
+        }
+
+        child.lastActivity = now();
+
+        if (event.type === "system" && "apiKeySource" in event) {
+          const refused = refuseInit(
+            {
+              apiKeySource: event.apiKeySource,
+              tools: event.tools,
+              mcpServers: event.mcp_servers.map((server) => server.name),
+            },
+            MCP_SERVER_NAME
+          );
+
+          if (Option.isSome(refused)) {
+            yield* Effect.logWarning("claude child refused at init").pipe(
+              Effect.annotateLogs({
+                sessionId: deps.piSessionId,
+                refusal: refused.value.kind,
+              })
+            );
+            yield* killChild(child, "failed", INIT_REFUSED_TEXT);
+
+            return;
+          }
+        }
+
+        yield* applyEffect(child, child.stream.handle(event));
+      })
+    );
+
+  const onEnded = (child: Child) =>
+    locked(
+      Effect.gen(function* () {
+        if (Option.isNone(child.killed)) {
+          yield* killChild(child, "failed", CHILD_ENDED_TEXT);
+        }
+      })
+    );
+
+  const toolHandler =
+    (holder: ChildHolder): ToolHandler =>
+    (request) =>
+      Effect.gen(function* () {
+        const waiting = yield* locked(
+          Effect.gen(function* () {
+            const child = Option.getOrUndefined(holder.child);
+
+            // A call to a child that is gone, or going, is answered at once: nothing will deliver it.
+            if (child === undefined || Option.isSome(child.killed)) {
+              return Option.none<Deferred.Deferred<ClaudeToolResult>>();
+            }
+
+            child.lastActivity = now();
+            yield* applyEffect(child, child.stream.toolCallArrived());
+
+            const queued = child.pendingResults.get(request.toolUseId);
+            const deferred = yield* Deferred.make<ClaudeToolResult>();
+
+            if (queued === undefined) {
+              child.pendingCalls.set(request.toolUseId, deferred);
+            } else {
+              child.pendingResults.delete(request.toolUseId);
+              yield* Deferred.succeed(deferred, queued);
+            }
+
+            return Option.some(deferred);
+          })
+        );
+
+        return yield* Option.match(waiting, {
+          onNone: () => Effect.succeed(releasedResult("Operation aborted")),
+          onSome: (deferred) => Deferred.await(deferred),
+        });
+      });
+
+  const watchdog = (child: Child) =>
+    Effect.gen(function* () {
+      while (Option.isNone(child.killed)) {
+        yield* Effect.sleep(Duration.seconds(5));
+        yield* locked(
+          Effect.gen(function* () {
+            const at = now();
+
+            const stalled =
+              Option.isNone(child.killed) &&
+              child.stream.open &&
+              child.pendingCalls.size === 0 &&
+              at - child.lastActivity > stallMs &&
+              at >= child.quietUntil;
+
+            if (stalled) {
+              yield* Effect.logWarning("claude child stalled").pipe(
+                Effect.annotateLogs({ sessionId: deps.piSessionId })
+              );
+              yield* killChild(child, "failed", STREAM_STALLED_TEXT);
+            }
+          })
+        );
+      }
+    });
+
+  const stampReply = (
+    child: Child,
+    reply: Parameters<typeof stampMessage>[0]
+  ) => {
+    const ccSessionId = Option.orElse(
+      child.ccSessionId,
+      () => child.stream.sessionId
+    );
+
+    if (Option.isNone(ccSessionId) || Option.isNone(child.stream.lastUuid)) {
+      return;
+    }
+
+    stampMessage(
+      reply,
+      {
+        ccSessionId: ccSessionId.value,
+        ccUuid: child.stream.lastUuid.value,
+        piSessionId: deps.piSessionId,
+        historyDigest: historyDigest([...child.prior, reply]),
+        held: child.held,
+        cliModel: child.cliModel,
+        cwd: child.cwd,
+      },
+      now()
+    );
+  };
+
+  const killCurrent = (kind: KillKind) =>
+    Effect.gen(function* () {
+      if (Option.isSome(current)) {
+        yield* killChild(current.value, kind, "Operation aborted");
+      }
+    });
+
+  const bindSignal = (signal: Option.Option<AbortSignal>) => {
+    if (Option.isNone(signal)) {
+      return;
+    }
+
+    const onAbort = () => {
+      deps.runCallback(
+        Effect.gen(function* () {
+          const closing = yield* deps.closing;
+          const kind: AbortKind = abortKind(signal.value, closing);
+
+          if (kind !== "ended") {
+            yield* locked(killCurrent(kind));
+          }
+        })
+      );
+    };
+
+    if (signal.value.aborted) {
+      onAbort();
+    } else {
+      signal.value.addEventListener("abort", onAbort, { once: true });
+    }
+  };
+
+  /** Starts a child; under the lock. */
+  const startChild = (
+    call: ConversationCall,
+    options: ChildOptions,
+    held: HeldState
+  ) =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const holder: ChildHolder = { child: Option.none() };
+
+      const query = yield* sdk.open(options, toolHandler(holder)).pipe(
+        Scope.provide(scope),
+        Effect.onError(() => Scope.close(scope, Exit.void))
+      );
+
+      const child: Child = {
+        scope,
+        query,
+        stream: new ClaudeStream(call.model, options.tools, (message) => {
+          stampReply(child, message);
+        }),
+        cwd: options.cwd,
+        cliModel: options.model,
+        effort: options.effort,
+        thinking: options.thinking,
+        pendingCalls: new Map(),
+        pendingResults: new Map(),
+        ccSessionId:
+          options.session.kind === "resume" && !options.session.fork
+            ? Option.some(options.session.sessionId)
+            : Option.none(),
+        held,
+        prior: [],
+        killed: Option.none(),
+        idle: false,
+        permit: false,
+        turn: Option.none(),
+        heldWait: Option.none(),
+        lastActivity: now(),
+        quietUntil: 0,
+      };
+
+      holder.child = Option.some(child);
+      current = Option.some(child);
+
+      yield* Effect.forkIn(
+        Effect.andThen(
+          Stream.runForEach(query.events, (event) =>
+            onEvent(child, event)
+          ).pipe(Effect.ignore),
+          onEnded(child)
+        ),
+        scope
+      );
+      yield* Effect.forkIn(watchdog(child), scope);
+
+      return child;
+    });
+
+  /** Attaches `call` to `child` and returns what the call waits on; under the lock. */
+  const attach = (
+    child: Child,
+    call: ConversationCall,
+    prior: ReadonlyArray<ConversationMessage>
+  ) =>
+    Effect.gen(function* () {
+      const turn = yield* Deferred.make<TurnOutcome>();
+
+      child.turn = Option.some(turn);
+      child.prior = prior;
+      child.idle = false;
+      child.permit = true;
+      child.lastActivity = now();
+      child.stream.begin(call.sink, now());
+      bindSignal(call.signal);
+
+      return { turn, child } satisfies Routed;
+    });
+
+  /** The prompt blocks of a resumed session and where it cuts. */
+  const resumePlan = (
+    found: FoundStamp,
+    messages: ReadonlyArray<ConversationMessage>,
+    cwd: string
+  ) =>
+    Effect.gen(function* () {
+      const entries = yield* sdk
+        .entries(found.stamp.ccSessionId, cwd)
+        .pipe(Effect.orElseSucceed(() => []));
+
+      const at = entries.findIndex(
+        (entry) => entry.uuid === found.stamp.ccUuid
+      );
+
+      if (at === -1) {
+        return Option.none<{
+          readonly cut: string;
+          readonly blocks: ReadonlyArray<PromptBlock>;
+        }>();
+      }
+
+      const pending = resultsAfter(messages, found.index);
+
+      // Claude Code may already hold the results it got over MCP before the kill (E2): cut after
+      // its own tool_result entry and only ask it to go on.
+      const answered = entries
+        .slice(at + 1)
+        .find(
+          (entry) =>
+            entry.role === "user" &&
+            pending.length > 0 &&
+            pending.every((id) => entry.toolResultIds.includes(id))
+        );
+
+      const carried =
+        answered === undefined
+          ? extractToolResults(messages.slice(found.index + 1))
+          : [];
+
+      return Option.some({
+        cut: answered === undefined ? found.stamp.ccUuid : answered.uuid,
+        blocks: [...toolResultsPrompt(carried), ...userTurnBlocks(messages)],
+      });
+    });
+
+  /** Opens a child for a decision other than deliver and reuse; under the lock. */
+  const openFor = (
+    call: ConversationCall,
+    decision: Exclude<ResumeDecision, { readonly kind: "deliver" | "reuse" }>,
+    base: Omit<ChildOptions, "session" | "append">,
+    state: InstructionState,
+    messages: ReadonlyArray<ConversationMessage>,
+    prior: ReadonlyArray<Message>
+  ) =>
+    Effect.gen(function* () {
+      const current_ = heldOf(state);
+
+      const fresh = (seed: boolean, preferred: Option.Option<string>) =>
+        Effect.gen(function* () {
+          const taken = yield* Option.match(preferred, {
+            onNone: () => Effect.succeed(false),
+            onSome: (id) =>
+              sdk.entries(id, base.cwd).pipe(
+                Effect.map((entries) => entries.length > 0),
+                Effect.orElseSucceed(() => true)
+              ),
+          });
+
+          const session: ChildSession = {
+            kind: "new",
+            sessionId: taken ? Option.none() : preferred,
+          };
+
+          const turnBlocks = userTurnBlocks(messages);
+
+          return {
+            session,
+            append: renderInstructions(state),
+            reminder: Option.none<string>(),
+            held: current_,
+            blocks: seed ? seedPrompt(messages, turnBlocks) : turnBlocks,
+          };
+        });
+
+      if (decision.kind === "fresh") {
+        yield* Effect.logInfo("claude fresh session").pipe(
+          Effect.annotateLogs({
+            sessionId: deps.piSessionId,
+            reason: decision.reason,
+          })
+        );
+
+        return yield* fresh(decision.seed, decision.preferredId);
+      }
+
+      const stampHeld = decision.found.stamp.held;
+      const reminder = reminderFor(stampHeld, state, priorTexts(prior));
+
+      if (decision.kind === "fork-stamped") {
+        const forked = yield* sdk
+          .fork(
+            decision.found.stamp.ccSessionId,
+            Option.some(decision.found.stamp.ccUuid),
+            base.cwd
+          )
+          .pipe(Effect.option);
+
+        if (Option.isNone(forked)) {
+          return yield* fresh(true, Option.none());
+        }
+
+        const carried = extractToolResults(
+          messages.slice(decision.found.index + 1)
+        );
+
+        const session: ChildSession = {
+          kind: "resume",
+          sessionId: forked.value,
+          at: Option.none(),
+          fork: false,
+        };
+
+        return {
+          session,
+          append: Option.none<string>(),
+          reminder,
+          held: current_,
+          blocks: [...toolResultsPrompt(carried), ...userTurnBlocks(messages)],
+        };
+      }
+
+      const plan = yield* resumePlan(decision.found, messages, base.cwd);
+
+      if (Option.isNone(plan)) {
+        yield* Effect.logInfo("claude fresh session").pipe(
+          Effect.annotateLogs({
+            sessionId: deps.piSessionId,
+            reason: "transcript-missing",
+          })
+        );
+
+        return yield* fresh(true, Option.none());
+      }
+
+      const session: ChildSession = {
+        kind: "resume",
+        sessionId: decision.found.stamp.ccSessionId,
+        at: Option.some(plan.value.cut),
+        fork: decision.fork,
+      };
+
+      return {
+        session,
+        append: Option.none<string>(),
+        reminder,
+        held: current_,
+        blocks: plan.value.blocks,
+      };
+    });
+
+  /** Delivers this turn's tool results to the held query, a steer first; under the lock. */
+  const deliverTo = (
+    child: Child,
+    call: ConversationCall,
+    messages: ReadonlyArray<ConversationMessage>,
+    results: ReadonlyArray<ClaudeToolResult>
+  ) =>
+    Effect.gen(function* () {
+      const routed = yield* attach(child, call, messages);
+
+      const steer =
+        messages.at(-1)?.role === "user" ? userTurnBlocks(messages) : [];
+
+      yield* releaseHeld(child);
+
+      if (steer.length > 0) {
+        // The steer and the results share Claude Code's stdin; writing the steer first makes
+        // Claude Code drain it at this tool boundary.
+        yield* child.query.input
+          .push({ blocks: steer, priority: Option.some("next") })
+          .pipe(Effect.ignore);
+      }
+
+      for (const result of results) {
+        const waiting = child.pendingCalls.get(result.toolCallId);
+
+        if (waiting === undefined) {
+          child.pendingResults.set(result.toolCallId, result);
+        } else {
+          child.pendingCalls.delete(result.toolCallId);
+          yield* Deferred.succeed(waiting, result);
+        }
+      }
+
+      return routed;
+    });
+
+  /** Writes the new user turn to the idle child; under the lock. */
+  const reuseChild = (
+    child: Child,
+    call: ConversationCall,
+    messages: ReadonlyArray<ConversationMessage>,
+    state: InstructionState
+  ) =>
+    Effect.gen(function* () {
+      const reminder = reminderFor(
+        child.held,
+        state,
+        priorTexts(call.messages)
+      );
+
+      if (
+        Option.isSome(reminder) &&
+        unsendableFindings(reminder.value).length > 0
+      ) {
+        failSink(call.sink, call.model, PROMPT_REFUSED_TEXT, now());
+
+        return Option.none<Routed>();
+      }
+
+      const routed = yield* attach(child, call, messages);
+
+      child.held = heldOf(state);
+      yield* child.query.input
+        .push({
+          blocks: [
+            ...Option.toArray(reminder).map((text): PromptBlock => ({
+              type: "text",
+              text,
+            })),
+            ...userTurnBlocks(messages),
+          ],
+          priority: Option.none(),
+        })
+        .pipe(Effect.ignore);
+
+      return Option.some(routed);
+    });
+
+  /** Routes one call; under the lock. None when the call was answered or failed here. */
+  const route = (call: ConversationCall) =>
+    Effect.gen(function* () {
+      const place = yield* deps.place;
+      const bridge = toBridgeContext(call.messages);
+      const served = servedModel(call.model.id, settings.longContext);
+      const effort = effortFor(call.model, call.reasoning);
+      const thinking = Option.isSome(call.reasoning) ? "adaptive" : "disabled";
+      const state = instructionState(call.messages);
+
+      const live = Option.filter(current, (child) =>
+        Option.isNone(child.killed)
+      );
+
+      const results = Option.isSome(live)
+        ? extractToolResults(bridge.messages)
+        : [];
+
+      const owns = Option.match(live, {
+        onNone: () => false,
+        onSome: (child) =>
+          results.some(
+            (result) =>
+              child.pendingCalls.has(result.toolCallId) ||
+              child.pendingResults.has(result.toolCallId) ||
+              child.stream.toolCallIds.includes(result.toolCallId)
+          ),
+      });
+
+      const decision = decideResume({
+        piSessionId: deps.piSessionId,
+        messages: bridge.messages,
+        cwd: place.cwd,
+        cliModel: served.cliModel,
+        effort,
+        thinking,
+        memory: {
+          heldOwnsResults: owns,
+          idle: Option.flatMap(live, (child) =>
+            child.idle && Option.isSome(child.ccSessionId)
+              ? Option.some({
+                  ccSessionId: child.ccSessionId.value,
+                  cwd: child.cwd,
+                  cliModel: child.cliModel,
+                  effort: child.effort,
+                  thinking: child.thinking,
+                })
+              : Option.none()
+          ),
+          uncertain,
+        },
+      });
+
+      if (decision.kind === "deliver" && Option.isSome(live)) {
+        return Option.some(
+          yield* deliverTo(live.value, call, bridge.messages, results)
+        );
+      }
+
+      if (decision.kind === "reuse" && Option.isSome(live)) {
+        return yield* reuseChild(live.value, call, bridge.messages, state);
+      }
+
+      // One child per conversation: a live one that cannot take this call goes.
+      if (Option.isSome(live)) {
+        yield* killChild(live.value, "abort", "Operation aborted");
+      }
+
+      if (
+        bridge.messages.at(-1)?.role === "toolResult" &&
+        isRealAbort(call.signal)
+      ) {
+        // An orphaned tool result after an abort: end the turn with no output.
+        emptyReply(call.sink, call.model, now());
+
+        return Option.none<Routed>();
+      }
+
+      if (decision.kind === "deliver" || decision.kind === "reuse") {
+        failSink(call.sink, call.model, CHILD_ENDED_TEXT, now());
+
+        return Option.none<Routed>();
+      }
+
+      const base = {
+        cwd: place.cwd,
+        env: childEnv(settings.env, true),
+        model: served.cliModel,
+        builtinTools: [],
+        effort,
+        thinking,
+        tools: bridge.tools.flatMap((tool) =>
+          Option.toArray(toolDeclaration(tool))
+        ),
+        persistSession: true,
+        maxTurns: Option.none(),
+        executable: settings.executable,
+      } satisfies Omit<ChildOptions, "session" | "append">;
+
+      const opened = yield* openFor(
+        call,
+        decision,
+        base,
+        state,
+        bridge.messages,
+        call.messages
+      );
+
+      const unsendable = [
+        ...Option.toArray(opened.append),
+        ...Option.toArray(opened.reminder),
+      ].some((text) => unsendableFindings(text).length > 0);
+
+      if (unsendable) {
+        failSink(call.sink, call.model, PROMPT_REFUSED_TEXT, now());
+
+        return Option.none<Routed>();
+      }
+
+      const started = yield* startChild(
+        call,
+        { ...base, session: opened.session, append: opened.append },
+        opened.held
+      ).pipe(Effect.option);
+
+      if (Option.isNone(started)) {
+        failSink(call.sink, call.model, CHILD_ENDED_TEXT, now());
+
+        return Option.none<Routed>();
+      }
+
+      const routed = yield* attach(started.value, call, bridge.messages);
+
+      const blocks: ReadonlyArray<PromptBlock> = [
+        ...Option.toArray(opened.reminder).map((text): PromptBlock => ({
+          type: "text",
+          text,
+        })),
+        ...(opened.blocks.length > 0
+          ? opened.blocks
+          : [{ type: "text" as const, text: CONTINUE_AFTER_RESUME_PROMPT }]),
+      ];
+
+      yield* started.value.query.input
+        .push({ blocks, priority: Option.none() })
+        .pipe(Effect.ignore);
+
+      return Option.some(routed);
+    });
+
+  const call = Effect.fn("ClaudeConversation.call")(function* (
+    request: ConversationCall
+  ) {
+    yield* slots.acquire(deps.piSessionId);
+
+    const routed = yield* locked(route(request)).pipe(
+      Effect.onInterrupt(() => slots.release(deps.piSessionId))
+    );
+
+    if (Option.isNone(routed)) {
+      yield* slots.release(deps.piSessionId);
+
+      return;
+    }
+
+    const outcome = yield* Deferred.await(routed.value.turn);
+
+    if (outcome === "tool-use") {
+      const waiter = yield* locked(
+        Effect.sync(() => routed.value.child.heldWait)
+      );
+
+      if (Option.isSome(waiter)) {
+        yield* Deferred.await(waiter.value);
+      }
+    }
+  });
+
+  yield* Effect.addFinalizer(() => locked(killCurrent("closing")));
+
+  return {
+    call,
+    kill: (kind) => locked(killCurrent(kind)),
+    alive: locked(Effect.sync(() => Option.isSome(current))),
+  } satisfies ClaudeConversation;
+});

@@ -327,3 +327,82 @@ Judges rerun after the fixes:
 | `pnpm check` | pass | 115 files, 1,045 tests |
 | `judges/paste-client.ts --real` | pass | five cases ok, paste to request 42 ms, five uploads through the brain's own routes on the in-memory key |
 | `judges/dev-smoke.ts` | pass | live 2,381 ms, no page errors |
+
+## Wave 4
+
+Integrated on 2026-10-22 on `main` and deployed to `https://code.gneiss.run` (`e338445`, then this note's commit). The deployed brain now inlines boot data and logs load reports, windows long threads, records checkpoints and shows changed-files cards with a diff panel, has a settings page, a hold banner and a usage meter, and keeps the cache when a held bridge tool call is killed.
+
+### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| 4B Load and paste to model | `phase1/4-4B` | `67391a6` | partial (entry budget, below) |
+| 4C Thread stream windowing and wire budget | `phase1/4-4C` | `1da4128` | done |
+| 4D Checkpoints and diffs | `phase1/4-4D` | `fd6e702` | done |
+| 4E Settings, providers, usage and parked tasks UI | `phase1/4-4E` | `102c736` | done |
+| 4F Parity harness and checklist | `phase1/4-4F` | `07adc81` | done |
+| 4J2 J2 held-tool cache after a kill (extra, not in the plan) | `phase1/4-4J2` | `ce8379d` | done |
+
+The six branches merged with `--no-ff` (J2, C, D, E, F, B) and every hand-off was applied in `e338445`, which was deployed. That integrator run was cut off by an auth failure after the deploy; this run verified `e338445` (`pnpm check` green), deleted the six package branches and the six workflow worktree branches, pruned worktrees, ran the judges below and wrote this note. No dependency changed. The old `upload-signing.key` was deleted once before the `e338445` deploy, so the deployed brain made its own (the wave 3 gap).
+
+### Integration judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | oxfmt clean, oxlint 0, typecheck clean, vitest 127 files and 1,126 tests. |
+| `apps/web/src/Budget.test.ts` | pass | entry JS 270,240 B gzip (ceiling 294,912, target 200,000, decision below); entry CSS 33,155 B against 35,000; lazy chunks `src/diff/View.ts` and `src/settings/View.ts`, both out of the entry's static imports. |
+| `node judges/load.ts` (Chromium, deployed brain through Caddy) | pass | lan p50 176 / p95 201 ms (max 288); 4g (60 ms, 10 Mbps) p50 532 / p95 535 ms; 5 requests before interactive; 320,668 bytes transferred; boot JSON 1,937 chars. Control (`index.html` held 1,500 ms) p50 1,680 ms, failed as designed. |
+| `node judges/paste.ts` (automated tier) | pass | lan paste to chip p50 70 / p95 76 ms, send to `turn.submitted` max 8 ms, sha256 20/20; throttled p50 169 / p95 172 ms, max 6 ms, 20/20; paste and send at once max 65 ms; 51 MiB PDF refused. Real models: bridge and opencode-go image nonces, 3/3 PDF page nonces, scanned 'no text layer', DOCX nonce. |
+| `node judges/wire-budget.ts` | pass | 2,017 active entries, 20 images. Snapshot 41,325 bytes (4,176 deflated), 72 entries, `entriesOffset` 1,945. First frame loopback p50 15 / max 22 ms; modelled tailnet p50 258 / p95 265 ms. No base64; 20/20 images by reference; history complete in 4 pages. (4C's projection-only run: 1,133,675 bytes, over budget, which is why the window exists.) |
+| `judges/claude-kill.sh` (J2, J9; quiet machine, load average under 1) | pass, 3 of 3 | streaming 42,064 read / 0 written, children gone 57 ms, snapshot 14 ms. parked (held tool, after 4J2) 42,079 / 336, 55 ms, 11 ms. answer 42,050 / 223, 56 ms, 6 ms. Marker once, interrupted result, 0 orphans after kill, restart and stop in each. |
+| `node judges/durability.ts --bridge` | pass on the second run | Run 1: bridge-streaming printed no result (the known flake), bridge-tool-parked pass (42,079 / 335). Run 2: both pass (42,064 / 0 and 42,079 / 339). |
+| `node judges/durability.ts` | pass | 8 of 8 windows; kill-six kill to up 1,179 to 1,281 ms, up to converged 5 to 6 ms; sigterm-six 3,059 to 3,067 ms. |
+| `node judges/live-chat.ts` | pass | hello 23 ms, launch 12 ms, reply 1,424 ms; 29 models; opencode-go and claude-bridge ready, anthropic refused, openai-codex missing. |
+| `judges/gate.sh` | pass | 0 failed of 43 cases. |
+| `node judges/tools.ts` (deployed brain) | pass | Executor connected. convex 14,078 ms, playwright 8,050 ms, github 7,043 ms, open turn 15,081 ms; each answer quoted the tool result. |
+| `node judges/capture.ts cairn`, `judges/parity.ts` | report complete | 29 states, 8 within budget (all 8 sidebar at 0 %); hero 1.40 to 12.31 %, thread 4.81 to 17.29 %; 1 missing (streaming, no t3code baseline); control 73.1 % differing. |
+| `node judges/parity-structure.ts` | report complete | 21 hero and thread states, 0 pass (wave 5's work); self and sabotage controls behave. |
+| `node judges/behaviour.ts` | 18 of 21 | Fails: footer-820 (t3code folds mode to icon-only at 516 px, Cairn stays full at 524 px), footer-390 (t3code hides traits and mode behind an overflow, Cairn shows them icon-only), drafts-reload (hero draft not restored). |
+| `judges/parity-review.sh` (opencode-go/gpt-6-luna) | report complete | 7 batches (sidebar 2, hero 3, thread 2), joined in `review.md`. |
+
+**Parity report:** `~/Developer/agent-artifacts/cairn/v2/phase-1-parity/` (`report.json`, `index.html`, `structure.json`, `behaviour.json`, `review.md`), served at `https://plans.gneiss.run/cairn/v2/phase-1-parity/`. Wave 5 starts from it.
+
+Run order for the parity report: `node judges/capture.ts cairn`, `node judges/parity.ts`, `node judges/parity-structure.ts`, `node judges/behaviour.ts`, `judges/parity-review.sh`. Each exits 0 when its report is complete and its controls behave; `--strict` (every state passing) is wave 5's bar. The pixel comparison lives in `judges/parity.ts` now (`capture.ts` only captures), reversing wave 2's deviation note.
+
+### Decisions taken at integration
+
+- **Entry JS budget: the target is relaxed, no further splits.** The entry is 270,240 B gzip against D46's 200 KB. Effect, foldkit and its UI package are about 100 KB gzip before any Cairn code. Splitting the transcript and markdown would save about 30 KB, not enough for 200 KB, and would add a round trip to every cold load of a thread page, the cost D46 actually budgets. The load judge passes against the deployed brain with this entry (lan p95 201 ms, 4g p95 535 ms against 1,500 ms). `Budget.test.ts` enforces 288 KiB and reports 200 KB as the target; ADR 0021 is amended with these numbers and stays proposed until the phone stages of the wizard.
+- **The diff and settings views load on demand** through `page/thread/DiffPanel.ts` and `SettingsPage.ts`: the update asks for the `import()`, the module is held outside the Model, and a `Loaded*` message makes the page render it. Their Model, Message and update stay in the entry, because the usage meter reads settings state on every route and the transcript opens the diff panel.
+- **Checkpoint entries are written in production:** `HarnessSeam.write` (pi-durable `submit({type: "write"})`, and an idempotent append in `ScriptedHarness`) backs `CheckpointEntries`; `CheckpointCapture` is built before Boot so it subscribes before resume; its repair runs as a boot repair.
+- **4J2's fix** (`ClaudeResume.resumeAppend`: a resume or fork-stamped child gets the current instructions as its append when the stamped state had one) is the J2 held-case remedy. The dangling tool_use repair was not the cause; the missing append changed Claude Code's agent line.
+- **4F's hand-off taken:** the `t3-mobile-*` view-transition names became `cairn-mobile-*` and the known-leftovers entry left `judges/brand.test.ts`.
+- **Glossary:** every offered term was taken (Window, Boot data, Load report, Client settings, Hold, Parity baseline, Landmark) and Checkpoint was rewritten.
+- **ADRs.** 0017, 0019 and 0020 are accepted with the numbers above appended. 0021 stays proposed (phone stages).
+
+### Fixes to package code (minimal, at integration)
+
+- **`judges/lib/Events.ts` (1E):** `size` stats once and maps NotFound to 0 instead of exists-then-stat, which raced a replaced log. This was the "reads a replaced, shorter log" flake three packages reported.
+- **`apps/web/src/diff/Update.ts` (4D):** the close step is exported as `close` so the thread page can close the panel on a thread switch.
+- **`apps/web/src/timeline/Rows.ts` (3C):** a height estimate for the new `changed-files` row.
+- **`packages/client-logic/src/DiffTree.ts` (4D):** `checkpointSummaryOf` takes `Entry["data"]` (typecheck after the TimelineEntries hand-off); a stray doc comment removed in this run.
+- **`ShellProjector.test.ts`, `ClaudeSignals.test.ts`:** their fake seams gained `write`.
+
+### Gaps
+
+- **Entry JS** is 270 KB gzip, not 200 KB (decision above).
+- **The streaming bridge window still flakes:** it printed no result on the first `durability.ts --bridge` run (and failed twice in 4J2's session), then passed. It needs its own investigation in 5A's matrix (the fresh-session-after-kill path or Claude Code's request fingerprint).
+- **Phone halves** of load and paste (wizard stages 3 and 4) are untested: `node judges/load.ts --collect` and `node judges/phone-report.ts load|paste` are ready.
+- **Client settings** other than appearance (send shortcut, follow-up behaviour, timestamp format, confirm delete, composer collapse, diff layout) are stored but not read by the composer, sidebar, timeline or diff panel. A light-theme flash is possible on load because `index.html` starts dark.
+- **Two `cairn-boot` script elements** on a served page (the injected one in the head and `index.html`'s `null` placeholder); the head one is found first.
+- **4D:** no turn-0 baseline for a thread whose first `RunStarted` was missed; an ignored workspace folder is refused; no streaming cap on git output; no revert, restore or ref deletion on thread delete.
+- **4E:** no live Executor status event; the skills prompt size is an estimate.
+- **4C:** a later snapshot drops paged history; the tailnet first frame is modelled, not measured.
+- **Parity:** structure 0 of 21, behaviour 3 fails, pixel hero and thread over budget, streaming state without a baseline; all wave 5's.
+
+### Deviations from the plan
+
+- **4J2** was an extra package outside the plan, assigned to close wave 3's J2 gap.
+- **The entry JS budget** is 288 KiB enforced, 200 KB reported (decision above); D46's transcript and markdown splits were not made.
+- **`judges/load.ts`'s slow control** holds `index.html` through Playwright routing instead of a `?slow=1500` flag.
+- **DERP detection** reads `tailscale status --json`, not `tailscale ping`.
+- **4C's window** diffs each revision's window against the previous one instead of rewriting op paths; equivalent and correct by construction.

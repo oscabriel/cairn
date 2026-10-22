@@ -27,8 +27,6 @@
 import type { Entry } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";
 
-/** The data an entry carries, as the wire decoded it. */
-
 /** Lines a file or a directory gained and lost. */
 export interface DiffStat {
   readonly additions: number;

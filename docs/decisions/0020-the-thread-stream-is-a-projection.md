@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: ThreadWire convergence tests and the wire budget judge
 ---
 
@@ -16,3 +16,5 @@ Gate: the `ThreadWire` convergence tests (random op streams through the projecti
 The window (`ThreadWindow.ts`) holds at most 10 user turns, 75 entries and 1 MiB, and starts at a turn's user message when the cut falls inside a turn whose message is in the newer half of the window. Op indices are not rewritten: each revision's window is diffed against the previous one, so ops count from the window's start by construction. The window is fixed for a subscription's life (appends grow it); when the entries before it change (a compaction, a reset, a shorter view), the brain sends a fresh in-stream snapshot with a new window.
 
 With the window, the same thread's first snapshot was 41,319 bytes (4,163 deflated): 72 entries, `entriesOffset` 1,945, `hasMoreHistory` true. The first frame took 17 ms (p50) on loopback; modelled on the tailnet (4 round trips of 60 ms plus the deflated frame at 10 Mbps) it is 289 ms at p95, under the 1,000 ms budget. No frame carried base64, all 20 images returned their bytes by reference (pasted ones byte for byte), and `thread.history` paged the other 1,945 entries back in 4 pages.
+
+Accepted at the wave 4 integration (2026-10-22), with the window live in `PiDurableHarness`: `judges/wire-budget.ts` passes. 2,017 active entries, 20 images. First snapshot 41,325 bytes (4,176 deflated), 72 entries, `entriesOffset` 1,945; first frame loopback p50 15 ms, max 22 ms; modelled tailnet p95 265 ms. No base64; 20/20 images by reference; history complete in 4 pages. `ThreadWindow.test.ts` convergence passes in `pnpm check`.

@@ -24,10 +24,8 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 import {
-  deriveProjectIdentity,
   hasUnseenCompletion,
   isThreadWoke,
-  monogramGlyphCount,
   resolveSidebarRowAccessibility,
   resolveSidebarThreadStatus,
   resolveSidebarTopStatus,
@@ -50,6 +48,7 @@ import type { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
 import { Array, DateTime, Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { projectMark } from "../ui/ProjectMark.ts";
 import {
   ROW_SURFACE_CLASS,
   SLIM_ACTION_CLASS,
@@ -68,57 +67,6 @@ export const cx = (...parts: ReadonlyArray<string | false>): string =>
   parts
     .filter((part): part is string => part !== false && part !== "")
     .join(" ");
-
-/**
- * A project's monogram tile, as t3code draws a project with no favicon: two letters in the
- * project's colour on a tint of it.
- */
-export const projectMark = (
-  h: H,
-  projectTitle: string,
-  className: string
-): Html => {
-  const identity = deriveProjectIdentity(projectTitle);
-
-  return h.span(
-    [h.AriaHidden(true), h.Class(className)],
-    [
-      h.svg(
-        [
-          h.Attribute("viewBox", "0 0 16 16"),
-          h.Attribute(
-            "class",
-            `size-full overflow-hidden rounded-[25%] font-mono select-none ${identity.colorClassName}`
-          ),
-          h.Style({
-            "background-color":
-              "color-mix(in srgb, currentColor 14%, transparent)",
-          }),
-        ],
-        [
-          h.text(
-            [
-              h.Attribute("x", "8"),
-              h.Attribute("y", "10.8"),
-              h.Attribute("text-anchor", "middle"),
-              h.Attribute("fill", "currentColor"),
-              h.Attribute("class", "font-mono"),
-              h.Attribute("font-size", "8.25"),
-              h.Attribute("font-weight", "700"),
-              h.Attribute(
-                "textLength",
-                monogramGlyphCount(identity.monogram) === 1 ? "6" : "12"
-              ),
-              h.Attribute("lengthAdjust", "spacingAndGlyphs"),
-              h.Attribute("text-rendering", "geometricPrecision"),
-            ],
-            [identity.monogram]
-          ),
-        ]
-      ),
-    ]
-  );
-};
 
 /** What a row needs beyond its thread. */
 export interface RowInputs {

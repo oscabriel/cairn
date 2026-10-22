@@ -1,0 +1,376 @@
+import {
+  ProjectCreate,
+  ProjectDelete,
+  ThreadArchive,
+  ThreadMarkUnread,
+  ThreadPin,
+  ThreadSettle,
+  ThreadSnooze,
+  ThreadUnarchive,
+  ThreadVisit,
+} from "@cairn/protocol/ShellCommands";
+import { assert, describe, it } from "@effect/vitest";
+import { DateTime, Duration, Effect, Option } from "effect";
+import type { Scope, Layer } from "effect";
+import { TestClock } from "effect/testing";
+
+import { EventSink } from "./EventSink.ts";
+import { EventStore, SHELL_EVENT_RETENTION } from "./EventStore.ts";
+import {
+  emptyActivityPatch,
+  ThreadActivityUpdate,
+  ThreadAutoSettle,
+} from "./ShellCommands.ts";
+import type { ServerShellCommand } from "./ShellCommands.ts";
+import { ShellSnapshot } from "./ShellSnapshot.ts";
+import {
+  createProject,
+  createThread,
+  ShellTestLayer,
+  testCommandId,
+  testThreadId,
+} from "./ShellTestKit.ts";
+import { ThreadRows } from "./ThreadRows.ts";
+
+const run = <A, E>(
+  body: Effect.Effect<A, E, Layer.Success<typeof ShellTestLayer> | Scope.Scope>
+) => body.pipe(Effect.scoped, Effect.provide(ShellTestLayer));
+
+let commandCount = 0;
+
+const nextCommandId = () => {
+  commandCount += 1;
+
+  return testCommandId(commandCount);
+};
+
+const commit = Effect.fnUntraced(function* (command: ServerShellCommand) {
+  const sink = yield* EventSink;
+
+  return yield* sink.commitCommand(command);
+});
+
+const refusal = (command: ServerShellCommand) =>
+  Effect.flip(commit(command)).pipe(Effect.map((error) => error._tag));
+
+const thread = Effect.fnUntraced(function* (n: number) {
+  const row = yield* (yield* ThreadRows).get(testThreadId(n));
+
+  assert.isTrue(Option.isSome(row));
+
+  return Option.getOrThrow(row).shell;
+});
+
+/** One project with thread 1 in it. */
+const seed = Effect.gen(function* () {
+  const { projectId, command } = createProject(1);
+
+  yield* commit(command);
+  yield* commit(createThread(projectId, 1));
+
+  return projectId;
+});
+
+const threadId = testThreadId(1);
+
+describe("project commands", () => {
+  it.effect(
+    "keeps one live project per folder and names it after the folder",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* commit(
+            ProjectCreate.make({
+              commandId: nextCommandId(),
+              workspaceRoot: "/srv/projects/cairn/",
+              title: Option.none(),
+            })
+          );
+
+          const snapshot = yield* (yield* ShellSnapshot).load;
+
+          assert.deepStrictEqual(
+            snapshot.projects.map((project) => [
+              project.title,
+              project.workspaceRoot,
+            ]),
+            [["cairn", "/srv/projects/cairn"]]
+          );
+          assert.strictEqual(
+            yield* refusal(
+              ProjectCreate.make({
+                commandId: nextCommandId(),
+                workspaceRoot: "/srv/projects/cairn",
+                title: Option.some("Again"),
+              })
+            ),
+            "ProjectWorkspaceConflictError"
+          );
+          assert.strictEqual(
+            yield* refusal(
+              ProjectCreate.make({
+                commandId: nextCommandId(),
+                workspaceRoot: "projects/../etc",
+                title: Option.none(),
+              })
+            ),
+            "ShellCommandInvalid"
+          );
+        })
+      )
+  );
+
+  it.effect("deletes a project with its threads, in one commit", () =>
+    run(
+      Effect.gen(function* () {
+        const projectId = yield* seed;
+        yield* commit(createThread(projectId, 2));
+
+        const result = yield* commit(
+          ProjectDelete.make({ commandId: nextCommandId(), projectId })
+        );
+
+        const snapshot = yield* (yield* ShellSnapshot).load;
+
+        assert.strictEqual(result.sequence, 6);
+        assert.deepStrictEqual(snapshot.projects, []);
+        assert.deepStrictEqual(snapshot.threads, []);
+        assert.strictEqual(
+          yield* refusal(createThread(projectId, 3)),
+          "ShellTargetNotFound"
+        );
+      })
+    )
+  );
+});
+
+describe("thread inbox commands", () => {
+  it.effect(
+    "refuses to settle a running thread, and settling clears pin and snooze",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+          yield* commit(
+            ThreadActivityUpdate.make({
+              commandId: nextCommandId(),
+              threadId,
+              patch: {
+                ...emptyActivityPatch,
+                activity: Option.some("running"),
+              },
+            })
+          );
+
+          assert.strictEqual(
+            yield* refusal(
+              ThreadSettle.make({ commandId: nextCommandId(), threadId })
+            ),
+            "ShellCommandConflict"
+          );
+
+          yield* commit(
+            ThreadActivityUpdate.make({
+              commandId: nextCommandId(),
+              threadId,
+              patch: { ...emptyActivityPatch, activity: Option.some("idle") },
+            })
+          );
+          yield* commit(
+            ThreadPin.make({ commandId: nextCommandId(), threadId })
+          );
+          yield* commit(
+            ThreadSnooze.make({
+              commandId: nextCommandId(),
+              threadId,
+              until: DateTime.makeUnsafe(60_000),
+            })
+          );
+          yield* commit(
+            ThreadSettle.make({ commandId: nextCommandId(), threadId })
+          );
+
+          const settled = yield* thread(1);
+
+          assert.deepStrictEqual(
+            settled.settledOverride,
+            Option.some("settled")
+          );
+          assert.isTrue(Option.isNone(settled.pinnedAt));
+          assert.isTrue(Option.isNone(settled.snoozedUntil));
+
+          yield* commit(
+            ThreadPin.make({ commandId: nextCommandId(), threadId })
+          );
+
+          const pinned = yield* thread(1);
+
+          assert.deepStrictEqual(pinned.settledOverride, Option.some("active"));
+          assert.isTrue(Option.isSome(pinned.pinnedAt));
+        })
+      )
+  );
+
+  it.effect(
+    "moves the visit time only forward, without touching updatedAt",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+          const created = yield* thread(1);
+
+          yield* TestClock.adjust(Duration.seconds(10));
+          yield* commit(
+            ThreadVisit.make({
+              commandId: nextCommandId(),
+              threadId,
+              at: DateTime.makeUnsafe(5000),
+            })
+          );
+          yield* commit(
+            ThreadVisit.make({
+              commandId: nextCommandId(),
+              threadId,
+              at: DateTime.makeUnsafe(1000),
+            })
+          );
+
+          const visited = yield* thread(1);
+
+          assert.deepStrictEqual(
+            visited.lastVisitedAt,
+            Option.some(DateTime.makeUnsafe(5000))
+          );
+          assert.deepStrictEqual(visited.updatedAt, created.updatedAt);
+        })
+      )
+  );
+
+  it.effect(
+    "marks a finished run unread, and refuses with no finished run",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+
+          assert.strictEqual(
+            yield* refusal(
+              ThreadMarkUnread.make({ commandId: nextCommandId(), threadId })
+            ),
+            "ShellCommandConflict"
+          );
+
+          yield* commit(
+            ThreadActivityUpdate.make({
+              commandId: nextCommandId(),
+              threadId,
+              patch: {
+                ...emptyActivityPatch,
+                latestRunCompletedAt: Option.some(
+                  Option.some(DateTime.makeUnsafe(9000))
+                ),
+              },
+            })
+          );
+          yield* commit(
+            ThreadMarkUnread.make({ commandId: nextCommandId(), threadId })
+          );
+
+          assert.deepStrictEqual(
+            (yield* thread(1)).lastVisitedAt,
+            Option.some(DateTime.makeUnsafe(8999))
+          );
+        })
+      )
+  );
+
+  it.effect("takes an archived thread out of the shell and back", () =>
+    run(
+      Effect.gen(function* () {
+        yield* seed;
+        const snapshots = yield* ShellSnapshot;
+
+        yield* commit(
+          ThreadArchive.make({ commandId: nextCommandId(), threadId })
+        );
+        assert.deepStrictEqual((yield* snapshots.load).threads, []);
+        assert.strictEqual(
+          yield* refusal(
+            ThreadSettle.make({ commandId: nextCommandId(), threadId })
+          ),
+          "ShellCommandConflict"
+        );
+
+        yield* commit(
+          ThreadUnarchive.make({ commandId: nextCommandId(), threadId })
+        );
+        assert.strictEqual((yield* snapshots.load).threads.length, 1);
+      })
+    )
+  );
+
+  it.effect(
+    "refuses an automatic settle when the row changed after the sweep read it",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+          const read = yield* thread(1);
+
+          yield* TestClock.adjust(Duration.seconds(1));
+          yield* commit(
+            ThreadActivityUpdate.make({
+              commandId: nextCommandId(),
+              threadId,
+              patch: { ...emptyActivityPatch, queueLength: Option.some(1) },
+            })
+          );
+
+          assert.strictEqual(
+            yield* refusal(
+              ThreadAutoSettle.make({
+                commandId: nextCommandId(),
+                threadId,
+                snapshotAt: read.updatedAt,
+                settledAt: read.createdAt,
+              })
+            ),
+            "ShellCommandConflict"
+          );
+        })
+      )
+  );
+});
+
+describe("the event log", () => {
+  it.effect(
+    "keeps the newest 5,000 events and the receipts they cover",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+          const events = yield* EventStore;
+
+          for (let n = 1; n <= SHELL_EVENT_RETENTION + 10; n += 1) {
+            yield* commit(
+              ThreadVisit.make({
+                commandId: nextCommandId(),
+                threadId,
+                at: DateTime.makeUnsafe(n),
+              })
+            );
+          }
+
+          const latest = yield* events.latestSequence;
+          const floor = yield* events.earliestRetainedSequence;
+
+          assert.strictEqual(latest, SHELL_EVENT_RETENTION + 12);
+          assert.deepStrictEqual(
+            floor,
+            Option.some(latest - SHELL_EVENT_RETENTION + 1)
+          );
+        })
+      ),
+    { timeout: 60_000 }
+  );
+});

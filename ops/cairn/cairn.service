@@ -1,0 +1,34 @@
+# Cairn's brain as a user unit (ADR 0022). Linked into ~/.config/systemd/user by ops/cairn/install.sh;
+# ops/cairn/deploy.sh checks a commit out into the live worktree and restarts it.
+#
+# KillMode=mixed sends SIGTERM to the brain alone, which closes the pi-durable Harness before it exits;
+# only then does systemd SIGKILL what is left in the cgroup (claude children, tool commands). With
+# control-group, SIGTERM would reach the children first and their turns would fail mid-close.
+# StartLimitIntervalSec=0 keeps kill judges and crash loops from parking the unit; the stepped
+# RestartSec is the back-off for a brain that cannot boot, and pi-durable's own guard parks tasks.
+# Node exits 130 on SIGTERM (NodeRuntime.runMain), which is a clean stop.
+[Unit]
+Description=Cairn brain
+After=network-online.target executor.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+WorkingDirectory=%h/Developer/projects/cairn-live
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+Environment=NODE_COMPILE_CACHE=%h/.cache/cairn/node
+EnvironmentFile=-%h/.config/cairn/brain.env
+ExecStartPre=/usr/bin/mkdir -p %h/.cache/cairn/node %h/.local/share/cairn %h/.local/state/cairn
+ExecStart=/usr/bin/node apps/server/src/main.ts
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+SuccessExitStatus=130
+Restart=always
+RestartSec=250ms
+RestartSteps=4
+RestartMaxDelaySec=8
+OOMPolicy=continue
+
+[Install]
+WantedBy=default.target

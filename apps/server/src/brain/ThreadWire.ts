@@ -14,7 +14,8 @@
 // immutable, so their projections are cached by identity) and diffed against the previous
 // projection with chord's `diffRevisions`. A client applying the ops therefore converges on the
 // projection of the newest revision by construction, root replacements included, and a slow
-// client simply receives one larger diff.
+// client simply receives one larger diff. `ThreadWindow.ts` projects only the newest entries of a
+// long thread the same way (`projectViewJson` with an offset, `entryWireBytes` for its budget).
 //
 // Ported in part from cairn-v1, apps/server/src/visible.ts at 1a5cd4a (the document whitelist);
 // the truncation marker and limits follow t3code's apps/server/src/orchestration-v2/WireProjection.ts
@@ -66,7 +67,7 @@ const HIDDEN_DIAGNOSTIC = "cairn.claude";
 const VISIBLE: ReadonlySet<string> = new Set(VISIBLE_DOCUMENTS);
 
 /** A JSON object as chord and pi-durable hold it. */
-interface JsonRecord {
+export interface JsonRecord {
   [key: string]: JsonValue;
 }
 
@@ -393,12 +394,38 @@ const projectConversation = (record: PiConversationView["conversation"]) => {
   return conversation;
 };
 
-/** The projected view as plain JSON, the tree ops address. */
-const projectViewJson = (view: PiConversationView): JsonRecord => ({
+/**
+ * The projected view as plain JSON, the tree ops address. With `offset`, only the active entries
+ * from that index on (a window, `ThreadWindow.ts`); the documents are always whole.
+ */
+export const projectViewJson = (
+  view: PiConversationView,
+  offset = 0
+): JsonRecord => ({
   conversation: projectConversation(view.conversation),
-  entries: view.entries.map(projectEntryCached),
+  entries: (offset === 0 ? view.entries : view.entries.slice(offset)).map(
+    projectEntryCached
+  ),
   docs: projectDocs(view.docs),
 });
+
+/** Encoded sizes of stream projections, by identity like the projections themselves. */
+const sizeCache = new WeakMap<EntryRecord, number>();
+
+/** The bytes of an entry's stream projection as JSON, which the window budgets. */
+export const entryWireBytes = (entry: EntryRecord): number => {
+  const cached = sizeCache.get(entry);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const size = encoder.encode(JSON.stringify(projectEntryCached(entry))).length;
+
+  sizeCache.set(entry, size);
+
+  return size;
+};
 
 const decodeView = Schema.decodeUnknownResult(ConversationView);
 
@@ -410,6 +437,19 @@ const wireError = (what: string) => (cause: Schema.SchemaError) =>
   new ThreadWireError({
     message: `The thread projection built ${what} the protocol refuses: ${cause.message}`,
   });
+
+/** A projected JSON view checked against the protocol's `ConversationView`. */
+export const decodeProjectedView = (
+  json: JsonRecord
+): Result.Result<ConversationView, ThreadWireError> =>
+  Result.mapError(decodeView(json), wireError("a view"));
+
+/** Chord ops between two projected JSON views, checked against the protocol's `Op`. */
+export const diffProjected = (
+  previous: JsonRecord,
+  next: JsonRecord
+): Result.Result<ReadonlyArray<Op>, ThreadWireError> =>
+  Result.mapError(decodeOps(diffRevisions(previous, next)), wireError("ops"));
 
 /** The projected view of a pi-durable conversation view. */
 export const projectView = (
@@ -453,15 +493,15 @@ export const wireProjector = (): WireProjector => {
     snapshot: (view) => {
       previous = projectViewJson(view);
 
-      return Result.mapError(decodeView(previous), wireError("a view"));
+      return decodeProjectedView(previous);
     },
     advance: (view) => {
       const next = projectViewJson(view);
-      const ops = diffRevisions(previous, next);
+      const ops = diffProjected(previous, next);
 
       previous = next;
 
-      return Result.mapError(decodeOps(ops), wireError("ops"));
+      return ops;
     },
   };
 };

@@ -72,6 +72,12 @@ export const CheckpointEntryData = Schema.Struct({
   ),
   /** Files changed beyond the `MAX_ENTRY_FILES` listed. */
   moreFiles: Schema.Int,
+  /**
+   * The newest user entry the run answered, so the card lands in that turn even when the next
+   * turn started before the capture finished. Absent when the brain did not see it (boot repair,
+   * entries written before it was recorded): the card then goes to the newest turn.
+   */
+  userEntryId: Schema.optionalKey(Schema.Int),
 });
 
 export type CheckpointEntryData = typeof CheckpointEntryData.Type;
@@ -140,13 +146,18 @@ export const planEndTurn = (
 };
 
 /**
- * Whether boot should capture a run end the brain missed: the thread's last run completed after
- * its newest end checkpoint (commit times are whole seconds).
+ * Whether boot should capture a run end the brain missed: the thread already has checkpoints and
+ * its last run completed after its newest end checkpoint (commit times are whole seconds). A
+ * thread with none predates checkpoints, so boot leaves it alone: its first run takes turn 0.
  */
 export const missedRunEnd = (
   captured: ReadonlyArray<CheckpointCommit>,
   completedAtMillis: number
 ) => {
+  if (captured.length === 0) {
+    return false;
+  }
+
   const newest = Math.max(
     Number.NEGATIVE_INFINITY,
     ...captured.flatMap((found) =>
@@ -180,10 +191,14 @@ export class CheckpointCapture extends Context.Service<
       threadId: ThreadId,
       runId: string
     ): Effect.Effect<Option.Option<CheckpointCommit>>;
-    /** Captures the run's end as the next turn (or returns its existing one) and writes its entry. */
+    /**
+     * Captures the run's end as the next turn (or returns its existing one) and writes its entry,
+     * placed after `userEntryId` (the newest user entry the run answered) when known.
+     */
     runEnded(
       threadId: ThreadId,
-      runId: string
+      runId: string,
+      userEntryId?: Option.Option<number>
     ): Effect.Effect<Option.Option<CheckpointCommit>>;
     /**
      * The boot repair: sweeps scratch indexes a kill left in each live thread's repository, then
@@ -262,7 +277,8 @@ export class CheckpointCapture extends Context.Service<
         cwd: string,
         threadId: ThreadId,
         captured: ReadonlyArray<CheckpointCommit>,
-        checkpoint: CheckpointCommit
+        checkpoint: CheckpointCommit,
+        userEntryId: Option.Option<number>
       ) {
         const previous = captured.findLast(
           (found) => found.turn < checkpoint.turn
@@ -287,6 +303,10 @@ export class CheckpointCapture extends Context.Service<
               deletions: file.deletions,
             })),
             moreFiles: Math.max(0, files.length - MAX_ENTRY_FILES),
+            ...Option.match(userEntryId, {
+              onNone: () => ({}),
+              onSome: (id) => ({ userEntryId: id }),
+            }),
           }
         );
       });
@@ -320,7 +340,8 @@ export class CheckpointCapture extends Context.Service<
 
       const endUnlocked = Effect.fnUntraced(function* (
         threadId: ThreadId,
-        runId: string
+        runId: string,
+        userEntryId: Option.Option<number>
       ) {
         const cwd = yield* folderOf(threadId);
 
@@ -342,14 +363,24 @@ export class CheckpointCapture extends Context.Service<
 
         // Written on every pass: the request id makes a repeat a no-op, and a write lost to a kill
         // between the ref and the entry lands on the next pass.
-        yield* writeEntry(cwd.value, threadId, captured, checkpoint);
+        yield* writeEntry(
+          cwd.value,
+          threadId,
+          captured,
+          checkpoint,
+          userEntryId
+        );
 
         return Option.some(checkpoint);
       });
 
       const runEnded = Effect.fn("CheckpointCapture.runEnded")(
-        function* (threadId: ThreadId, runId: string) {
-          return yield* endUnlocked(threadId, runId);
+        function* (
+          threadId: ThreadId,
+          runId: string,
+          userEntryId: Option.Option<number> = Option.none()
+        ) {
+          return yield* endUnlocked(threadId, runId, userEntryId);
         },
         (effect, threadId) =>
           lockOf(threadId)
@@ -436,19 +467,38 @@ export class CheckpointCapture extends Context.Service<
       const capture = yield* CheckpointCapture;
       const scope = yield* Effect.scope;
 
+      // The newest user entry of each thread, read when its run ends: events arrive in commit
+      // order, so the next turn's user entry has not been seen yet even if it lands before the
+      // capture finishes.
+      const lastUser = new Map<string, number>();
+
+      // `startImmediately` takes the thread's lock before the next event is read, so a run's
+      // `runStarted` always holds it before that run's `runEnded`.
+      const fork = (effect: Effect.Effect<unknown>) =>
+        Effect.forkIn(effect, scope, { startImmediately: true }).pipe(
+          Effect.asVoid
+        );
+
       const onEvent = (event: HarnessEvent) =>
         Match.value(event).pipe(
+          Match.tag("MessageCommitted", (committed) =>
+            Effect.sync(() => {
+              if (committed.role === "user") {
+                lastUser.set(committed.threadId, committed.entryId);
+              }
+            })
+          ),
           Match.tag("RunStarted", (started) =>
-            Effect.forkIn(
-              capture.runStarted(started.threadId, String(started.runId)),
-              scope
-            ).pipe(Effect.asVoid)
+            fork(capture.runStarted(started.threadId, String(started.runId)))
           ),
           Match.tag("RunTerminal", (ended) =>
-            Effect.forkIn(
-              capture.runEnded(ended.threadId, String(ended.runId)),
-              scope
-            ).pipe(Effect.asVoid)
+            fork(
+              capture.runEnded(
+                ended.threadId,
+                String(ended.runId),
+                Option.fromNullishOr(lastUser.get(ended.threadId))
+              )
+            )
           ),
           Match.orElse(() => Effect.void)
         );

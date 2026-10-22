@@ -4,7 +4,11 @@ import { Option } from "effect";
 
 import { heldOf, instructionState } from "./ClaudeInstructions.ts";
 import type { IdleChild, ResumeInput } from "./ClaudeResume.ts";
-import { decideResume, resumeAppend } from "./ClaudeResume.ts";
+import {
+  decideResume,
+  HELD_APPEND_PLACEHOLDER,
+  resumeAppend,
+} from "./ClaudeResume.ts";
 import { historyDigest, stampMessage } from "./ClaudeStamp.ts";
 import { emptyUsage } from "./ClaudeTokens.ts";
 import type { ConversationMessage } from "./ClaudeTranscript.ts";
@@ -215,7 +219,7 @@ describe("the append a resumed child is launched with", () => {
 
   const none = instructionState([]);
 
-  it("passes the current instructions exactly when the stamped session had an append", () => {
+  it("passes an append exactly when the stamped session had one, a placeholder when the instructions now render empty", () => {
     expect([
       resumeAppend(heldOf(withInstructions), withInstructions),
       resumeAppend(heldOf(none), withInstructions),
@@ -227,7 +231,7 @@ describe("the append a resumed child is launched with", () => {
     ]).toStrictEqual([
       Option.some("Be brief."),
       Option.none(),
-      Option.none(),
+      Option.some(HELD_APPEND_PLACEHOLDER),
       Option.none(),
     ]);
   });

@@ -451,7 +451,7 @@ describe("turn diffs and the capture service", () => {
           yield* fs.writeFileString(path.join(repo, "a.txt"), "one\ntwo\n");
           yield* fs.writeFileString(path.join(repo, "b.txt"), "bee\n");
 
-          const one = yield* capture.runEnded(threadId, "7");
+          const one = yield* capture.runEnded(threadId, "7", Option.some(42));
           const again = yield* capture.runEnded(threadId, "7");
 
           assert.deepStrictEqual(
@@ -527,6 +527,8 @@ describe("turn diffs and the capture service", () => {
             { path: "b.txt", additions: 1, deletions: 0 },
           ]);
           assert.strictEqual(entries[0]?.data.turn, 1);
+          // The user entry the run answered places the card in its turn.
+          assert.strictEqual(entries[0]?.data.userEntryId, 42);
 
           const missing = yield* diffs
             .turn({
@@ -681,6 +683,18 @@ describe("turn diffs and the capture service", () => {
 
         yield* fs.writeFileString(stale, "x");
 
+        // A thread with no checkpoints predates them: the sweep runs, the capture does not.
+        yield* capture.repair;
+        assert.deepStrictEqual(yield* scratchFiles(repo), []);
+        assert.deepStrictEqual(
+          yield* checkpoints.list(repo, checkpointRefsOf(threadId)),
+          []
+        );
+        assert.deepStrictEqual(yield* Ref.get(written), []);
+
+        // Once the thread has its baseline, a missed run end is captured once.
+        yield* capture.runStarted(threadId, "1");
+        yield* fs.writeFileString(stale, "x");
         yield* capture.repair;
         yield* capture.repair;
 
@@ -691,7 +705,10 @@ describe("turn diffs and the capture service", () => {
 
         assert.deepStrictEqual(
           listed.map((found) => [found.turn, found.point]),
-          [[1, Option.some("end")]]
+          [
+            [0, Option.some("start")],
+            [1, Option.some("end")],
+          ]
         );
         assert.deepStrictEqual(yield* scratchFiles(repo), []);
         assert.deepStrictEqual(
@@ -740,6 +757,8 @@ describe("checkpoint helpers", () => {
     assert.isFalse(missedRunEnd(captured, 20_999));
     assert.isTrue(missedRunEnd(captured, 21_000));
     assert.isTrue(missedRunEnd([commitAt(0, 10, "start", "1")], 5000));
+    // A thread with no checkpoints predates the feature: boot never repairs it.
+    assert.isFalse(missedRunEnd([], 5000));
   });
 
   it("reads a for-each-ref line", () => {

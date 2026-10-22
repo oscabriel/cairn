@@ -406,3 +406,26 @@ Run order for the parity report: `node judges/capture.ts cairn`, `node judges/pa
 - **`judges/load.ts`'s slow control** holds `index.html` through Playwright routing instead of a `?slow=1500` flag.
 - **DERP detection** reads `tailscale status --json`, not `tailscale ping`.
 - **4C's window** diffs each revision's window against the previous one instead of rewriting op paths; equivalent and correct by construction.
+- **4F's fixture route** was not built: the plan's `?fixture=` route served by `dev-main` (seeding the real Model through `update`) became a real in-process judge brain seeded through the protocol (`judges/fixtures/parity/CairnApp.ts`, `judges/capture.ts`), which exercises more of the real path.
+
+### Review
+
+A review of wave 4 reported six confirmed findings and six unverified concerns. All six findings were confirmed and fixed; of the concerns, two were real and fixed, one was not real, and three are recorded. `pnpm check` is green afterwards (127 files, 1,127 tests). `node judges/durability.ts` (8 of 8 windows) and `node judges/claude-kill.ts --case parked` (pass, first reply after restart read 42,079 and wrote 397) were rerun. Not deployed yet.
+
+Confirmed findings:
+
+1. **A changed-files card landed in the next turn when that turn started before the capture finished.** Confirmed. `CheckpointCapture.layer` now tracks each thread's newest user entry from `MessageCommitted` and reads it synchronously on `RunTerminal`, before the next turn's user entry can arrive (events come in commit order). `runEnded` takes it and the `cairn.checkpoint` data records it as optional `userEntryId`; `TimelineEntries` places the card in that entry's turn and falls back to the newest turn when it is absent (older entries, boot repair). New `TimelineEntries.test.ts` case (a checkpoint after the next prompt goes to the turn its run answered) and a `Checkpoints.test.ts` assertion that the id is written.
+2. **Boot repair captured `turn/1` and wrote an entry for every pre-existing git thread.** Confirmed. `missedRunEnd` answers false when the thread has no checkpoints, so boot repairs only threads this feature already checkpointed; a thread that predates it takes turn 0 on its next run. The repair test now checks that a thread without checkpoints is swept but not captured, and that one with a baseline gets its missed end once.
+3. **A boot sweep could delete a scratch index mid-capture.** Confirmed. When `seedFromRealIndex` answers false, `Checkpoints.capture` now removes only the scratch files (`removeScratchFiles`) and keeps the path in `active` until the capture's own `ensuring` cleanup, so `sweepScratch` never takes the index `read-tree HEAD` recreates. No new test: the race needs a skip-worktree index at boot.
+4. **`resumeAppend` dropped the append when the instructions now render empty.** Confirmed. A session stamped with an append resumes with the current instructions or, when they render empty, `HELD_APPEND_PLACEHOLDER` (Claude Code never sends the text while it holds the session's recorded prompt), so the agent line stays the same. The `ClaudeResume.test.ts` case now expects the placeholder.
+5. **Two lint suppressions had no reason.** Confirmed. `judges/capture.ts` carries `-- runs in the page` on both.
+6. **The `?fixture=` route deviation was undocumented.** Confirmed; listed in the deviations above.
+
+Unverified concerns:
+
+- **`catchCause` in `CheckpointCapture.logged` swallowing interruption:** not real. Checked on Effect 4: a fiber interrupted from outside (scope close at shutdown) does not run the `catchCause` handler; only a self-interrupt inside the effect would, and the capture has none. No change.
+- **Event ordering between `runStarted` and `runEnded`:** real in principle. The layer now forks each capture with `startImmediately: true`, so a run's `runStarted` takes the thread's lock before the next event is read and before its `runEnded` exists.
+- **Diff panel scroll before render:** real. foldkit renders in `requestAnimationFrame` and forks commands at once, so the scroll on `LoadedDiff` queried before the patch was in the DOM. `ScrollToFile` now uses foldkit's `Dom.scrollIntoView`, which waits for `Render.afterCommit`, and ignores a missing element.
+- **4C memory under a slow consumer:** recorded, not judged. The one-tick sliding queue is bounded by construction (wave 3's design), and `ThreadWindow.test.ts` proves convergence from one frame; no memory measurement was added.
+- **The phone load verdict counting warm loads:** recorded. A report is sent once per full page load (in-app navigation never reports), but a reload and a cold load look the same; wizard stage 3's instructions carry the difference.
+- **`StaleBuild` and `readBootData` relying on the injected `<head>` element preceding the placeholder:** recorded (already a wave 4 gap); holds today; no change.

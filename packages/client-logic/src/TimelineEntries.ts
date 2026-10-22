@@ -582,6 +582,7 @@ type EntryReading = Data.TaggedEnum<{
     readonly turn: number;
     readonly files: ReadonlyArray<TurnDiffFile>;
     readonly moreFiles: number;
+    readonly userEntryId: Option.Option<number>;
   };
   /** An entry the transcript does not show, by its kind. */
   Skip: { readonly kind: string };
@@ -651,6 +652,7 @@ const readEntryUncached = (entry: Entry): EntryReading => {
             turn: data.turn,
             files: data.files,
             moreFiles: data.moreFiles,
+            userEntryId: data.userEntryId,
           }),
       });
     }
@@ -1051,7 +1053,18 @@ const readCommitted = (
     },
 
     Checkpoint: (found) => {
-      const owner = currentTurn(0);
+      // The turn of the user entry the run answered: the next turn may already have started when
+      // the capture lands. Older entries without it go to the newest turn.
+      const owner = Option.getOrElse(
+        Option.flatMap(found.userEntryId, (userEntryId) =>
+          Option.fromUndefinedOr(
+            turns.findLast((candidate) =>
+              Option.contains(candidate.userEntryId, userEntryId)
+            )
+          )
+        ),
+        () => currentTurn(0)
+      );
 
       entries.push({
         kind: "checkpoint",

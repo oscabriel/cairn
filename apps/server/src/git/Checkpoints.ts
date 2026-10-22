@@ -479,11 +479,16 @@ export class Checkpoints extends Context.Service<
 
         const env = { ...AUTHOR_ENV, GIT_INDEX_FILE: scratch };
 
-        const removeScratch = Effect.forEach(
+        // Removes the files only: the scratch path stays in `active` so a concurrent boot sweep
+        // never deletes an index `read-tree` is about to recreate (git reads a missing index as
+        // empty and the capture would commit an empty tree).
+        const removeScratchFiles = Effect.forEach(
           [scratch, `${scratch}.lock`],
           (file) => fs.remove(file, { force: true }).pipe(Effect.ignore),
           { discard: true }
-        ).pipe(
+        );
+
+        const removeScratch = removeScratchFiles.pipe(
           Effect.andThen(
             Effect.sync(() => {
               active.delete(scratch);
@@ -520,7 +525,7 @@ export class Checkpoints extends Context.Service<
             );
 
             if (!seeded) {
-              yield* removeScratch;
+              yield* removeScratchFiles;
               yield* stdout(
                 operation,
                 cwd,

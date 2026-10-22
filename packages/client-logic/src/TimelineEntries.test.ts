@@ -507,4 +507,42 @@ describe("entries the recorder cannot provoke", () => {
     );
     assert.strictEqual(script?.nestedCalls.length, 1);
   });
+
+  const checkpointEntry = (id: number, data: Json) => ({
+    id,
+    conversationId,
+    kind: "cairn.checkpoint",
+    data,
+  });
+
+  it("puts a checkpoint that lands after the next prompt in the turn its run answered", () => {
+    const data = {
+      turn: 1,
+      ref: "refs/cairn/checkpoints/t/turn/1",
+      headOid: null,
+      capturedAt: 1000,
+      files: [{ path: "a.ts", additions: 1, deletions: 0 }],
+      moreFiles: 0,
+    };
+
+    const timeline = entriesFromPi(
+      view([
+        user(1, "first", 1000),
+        user(2, "second", 2000),
+        checkpointEntry(3, { ...data, userEntryId: 1 }),
+        checkpointEntry(4, { ...data, turn: 2 }),
+      ])
+    );
+
+    const cards = timeline.entries.filter(
+      (entry) => entry.kind === "checkpoint"
+    );
+
+    const [first, second] = timeline.turns;
+
+    assert.deepStrictEqual(
+      cards.map((card) => card.turnId),
+      [first?.id, second?.id]
+    );
+  });
 });

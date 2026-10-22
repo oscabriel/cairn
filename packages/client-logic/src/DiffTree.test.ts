@@ -312,6 +312,7 @@ describe(checkpointSummaryOf, () => {
         ref: "refs/cairn/checkpoints/x/turn/2",
         files: [{ path: "a.txt", additions: 1, deletions: 0 }],
         moreFiles: 0,
+        userEntryId: Option.none(),
       })
     );
     assert.isTrue(

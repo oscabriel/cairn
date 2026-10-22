@@ -74,6 +74,7 @@ const CheckpointEntryData = Schema.Struct({
     })
   ),
   moreFiles: Schema.Int,
+  userEntryId: Schema.optionalKey(Schema.Int),
 });
 
 /** A checkpoint as the changed-files card shows it. */
@@ -83,6 +84,8 @@ export interface CheckpointSummary {
   readonly files: ReadonlyArray<TurnDiffFile>;
   /** Files changed beyond the ones listed. */
   readonly moreFiles: number;
+  /** The newest user entry the run answered: the card belongs to that turn. */
+  readonly userEntryId: Option.Option<number>;
 }
 
 const decodeEntryData = Schema.decodeUnknownOption(CheckpointEntryData);
@@ -96,6 +99,7 @@ export const checkpointSummaryOf = (
     ref: decoded.ref,
     files: decoded.files,
     moreFiles: decoded.moreFiles,
+    userEntryId: Option.fromUndefinedOr(decoded.userEntryId),
   }));
 
 const COLLATOR = new Intl.Collator(undefined, {

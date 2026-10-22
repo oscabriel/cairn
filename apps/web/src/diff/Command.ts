@@ -3,7 +3,7 @@
 // (the same lazy shiki chunks the transcript's code blocks use).
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Effect, Predicate, Schema } from "effect";
-import { Command } from "foldkit";
+import { Command, Dom } from "foldkit";
 import * as Mount from "foldkit/mount";
 
 import { CairnConnection } from "../connection/Connection.ts";
@@ -54,18 +54,17 @@ export const FetchDiff = Command.define("FetchDiff", {
     ),
 });
 
-/** Scrolls the file's diff into view. */
+/**
+ * Scrolls the file's diff into view once the render that follows the message commits: the message
+ * that loads the patch dispatches this too, before the file is in the DOM.
+ */
 export const ScrollToFile = Command.define("ScrollToFile", {
   args: { path: Schema.String },
   messages: [Message.ScrolledToFile],
   execute: ({ path }) =>
-    Effect.sync(() => {
-      document
-        .querySelector(`#${CSS.escape(fileElementId(path))}`)
-        ?.scrollIntoView({ block: "start" });
-
-      return Message.ScrolledToFile();
-    }),
+    Dom.scrollIntoView(`#${CSS.escape(fileElementId(path))}`, {
+      block: "start",
+    }).pipe(Effect.ignore, Effect.as(Message.ScrolledToFile())),
 });
 
 const markHighlight = (element: Element, state: string): void => {

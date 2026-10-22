@@ -507,13 +507,13 @@ const readFixture = async (page: Page, view: View): Promise<FixtureRead> =>
     await page.evaluate(
       ([sidebarSelector]) => {
         // These helpers run in the page, so they must live inside the evaluated function.
-        // oxlint-disable-next-line unicorn/consistent-function-scoping
+        // oxlint-disable-next-line unicorn/consistent-function-scoping -- runs in the page
         const text = (element: Element | null | undefined) =>
           element?.textContent?.trim() ?? "";
 
         const scope = document.querySelector(sidebarSelector) ?? document;
 
-        // oxlint-disable-next-line unicorn/consistent-function-scoping
+        // oxlint-disable-next-line unicorn/consistent-function-scoping -- runs in the page
         const lastLabelPart = (element: Element) =>
           (element.getAttribute("aria-label") ?? "").split(", ").at(-1) ?? "";
 

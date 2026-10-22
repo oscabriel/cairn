@@ -97,6 +97,12 @@ const effortKey = (effort: Option.Option<Effort>): string =>
 
 const EMPTY_TEXT_HASH = heldOf({ base: "", sections: new Map() }).base;
 
+/**
+ * The append a resume passes when the stamped session had one but the thread's instructions now
+ * render empty: any non-empty text keeps the agent line, and Claude Code never sends it.
+ */
+export const HELD_APPEND_PLACEHOLDER = "(no thread instructions)";
+
 /** Whether the instructions a session was stamped with rendered a non-empty append. */
 const heldHadAppend = (held: HeldState): boolean =>
   held.base !== EMPTY_TEXT_HASH ||
@@ -110,13 +116,18 @@ const heldHadAppend = (held: HeldState): boolean =>
  * from whether the resuming launch has an append, and a different line rewrites the whole prompt
  * cache (`spikes/7-bridge-held-resume/NOTES.md`). So a resume passes an append exactly when the
  * stamped session had one: the current instructions, which Claude Code ignores while it holds its
- * record.
+ * record, or `HELD_APPEND_PLACEHOLDER` when they now render empty.
  */
 export const resumeAppend = (
   held: HeldState,
   state: InstructionState
 ): Option.Option<string> =>
-  heldHadAppend(held) ? renderInstructions(state) : Option.none();
+  heldHadAppend(held)
+    ? Option.orElseSome(
+        renderInstructions(state),
+        () => HELD_APPEND_PLACEHOLDER
+      )
+    : Option.none();
 
 const fresh = (reason: FreshReason): ResumeDecision => ({
   kind: "fresh",

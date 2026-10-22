@@ -60,6 +60,8 @@ export interface ServerSettings {
   readonly dataDir: string;
   /** The directory holding `cairn.json`, signing keys and `brain.env`. */
   readonly configDir: string;
+  /** The user's state directory (`$XDG_STATE_HOME`, else `~/.local/state`): the Executor lock. */
+  readonly stateDir: string;
   /** The built web client (`apps/web/dist`), served as static files. */
   readonly webRoot: string;
   /** tailscaled's socket, for LocalAPI `whois`. */
@@ -109,6 +111,29 @@ const local: Defaults = {
 };
 
 const optionalString = (name: string) => Config.option(Config.String(name));
+
+/** The user's home directory: `HOME` when set and not empty, else the platform's answer. */
+export const homeDirectory: Effect.Effect<string> = Effect.gen(function* () {
+  const fromEnv = yield* optionalString("HOME");
+
+  return Option.getOrElse(
+    Option.filter(fromEnv, (dir) => dir !== ""),
+    () => home
+  );
+}).pipe(Effect.orElseSucceed(() => home));
+
+/** `$XDG_STATE_HOME` when set and not empty, else `~/.local/state`. */
+const stateDirectory = Effect.gen(function* () {
+  const fromEnv = (yield* optionalString("XDG_STATE_HOME")).pipe(
+    Option.filter((dir) => dir !== "")
+  );
+
+  if (Option.isSome(fromEnv)) {
+    return fromEnv.value;
+  }
+
+  return path.join(yield* homeDirectory, ".local", "state");
+});
 
 const readCairnFile = Effect.fn("ServerConfig.readCairnFile")(function* (
   file: string
@@ -227,6 +252,7 @@ const readSettings = Effect.fn("ServerConfig.readSettings")(
         () => file.dataDir ?? defaults.dataDir
       ),
       configDir,
+      stateDir: yield* stateDirectory,
       webRoot: Option.getOrElse(
         yield* optionalString("CAIRN_WEB_ROOT"),
         () => defaultWebRoot
@@ -277,6 +303,7 @@ export class ServerConfig extends Context.Service<
         port: 0,
         dataDir: path.join(os.tmpdir(), "cairn-test"),
         configDir: path.join(os.tmpdir(), "cairn-test-config"),
+        stateDir: path.join(os.tmpdir(), "cairn-test-state"),
         webRoot: defaultWebRoot,
         tailscaleSocket: "/var/run/tailscale/tailscaled.sock",
         tailscaleCli: "tailscale",

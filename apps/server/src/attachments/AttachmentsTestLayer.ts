@@ -20,6 +20,7 @@ import { PhotonInWorker } from "./ImagePrepare.ts";
 import type { ImagePrepare } from "./ImagePrepare.ts";
 import type { TextExtract } from "./TextExtract.ts";
 import { UploadRoute } from "./UploadRoute.ts";
+import { UploadKeyFromFile } from "./UploadTokens.ts";
 import type { UploadTokens } from "./UploadTokens.ts";
 
 /** The migrations `cairn.sqlite` has once this package is wired, in their order. */
@@ -44,10 +45,12 @@ export const attachmentServices = AttachmentsLayer.pipe(
 
 /**
  * The upload stack over `dir` (data under `dir/data`, the signing key under `dir/config`), with an
- * in-memory database. Photon runs on the calling thread.
+ * in-memory database. Photon runs on the calling thread. The key is file-backed, as the deployed
+ * brain's is: `dir` is a temporary directory.
  */
 export const attachmentsTestLayer = (dir: string) =>
   attachmentServices.pipe(
+    Layer.provide(UploadKeyFromFile),
     Layer.provideMerge(Database.layerTest(attachmentMigrations)),
     Layer.provideMerge(
       ServerConfig.layerWith({

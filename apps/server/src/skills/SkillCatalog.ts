@@ -40,13 +40,13 @@
 // without a runtime. A view is cached per cwd; `refresh` stats the files and directories it read
 // and rebuilds only when one changed, so the warm path costs a few hundred `stat` calls.
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 
 import type * as PiCodingAgent from "@earendil-works/pi-coding-agent";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
 import { errorText } from "../brain/Durable.ts";
+import { homeDirectory } from "../Config.ts";
 import { PiConfig } from "../models/PiConfig.ts";
 import type { PiSnapshot } from "../models/PiConfig.ts";
 import { isRefused } from "./PromptSafety.ts";
@@ -573,7 +573,7 @@ export class SkillCatalog extends Context.Reference<SkillViews>(
           refresh: Effect.asVoid(pi.refresh),
           reload: Effect.asVoid(pi.reload),
         },
-        process.env.HOME ?? homedir()
+        yield* homeDirectory
       );
     })
   );

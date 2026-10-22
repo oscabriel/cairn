@@ -6,6 +6,7 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
 import { AppLayer, DatabaseLive, PiDurableBrain } from "./AppLayer.ts";
+import { UploadKeyFromFile } from "./attachments/UploadTokens.ts";
 import { ServerConfig } from "./Config.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
@@ -29,7 +30,8 @@ const Models = PiModelSource.layer.pipe(
 const Harness = PiDurableBrain({ models: Models });
 
 // The one holder of the Executor grant, over the same `cairn.sqlite` the app opens (one layer
-// reference, so one connection).
+// reference, so one connection). A grant that cannot be opened leaves Executor `disabled`; it never
+// stops the brain from booting.
 const Executor = ExecutorLink.layer.pipe(Layer.provide(DatabaseLive));
 
 const MainLayer = AppLayer.pipe(
@@ -37,6 +39,7 @@ const MainLayer = AppLayer.pipe(
   Layer.provide(BridgeProvider.layer),
   Layer.provide(Executor),
   Layer.provide(VapidKeyFromFile),
+  Layer.provide(UploadKeyFromFile),
   Layer.provide(Identity.layer),
   Layer.provide(ServerConfig.layer),
   Layer.provide(NodeServices.layer),

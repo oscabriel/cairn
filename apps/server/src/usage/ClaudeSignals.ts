@@ -144,16 +144,20 @@ export const ClaudeSignals = Layer.effect(
 
     const limitSignals = harness.events.pipe(
       Stream.filter(isUsageLimited),
-      Stream.mapEffect((event) =>
-        Effect.map(resetAt, (reset) =>
-          Option.map(reset, (at): ProjectorSignal => ({
-            threadId: event.threadId,
-            patch: {
-              waitingFor: Option.none(),
-              usageLimitResetAt: Option.some(Option.some(at)),
-            },
-          }))
-        )
+      // Concurrent: a run waiting on the probe must not hold up the next run's signal. Concurrent
+      // waits join one probe (`ClaudeUsage.probe`), so this never starts more than one child.
+      Stream.mapEffect(
+        (event) =>
+          Effect.map(resetAt, (reset) =>
+            Option.map(reset, (at): ProjectorSignal => ({
+              threadId: event.threadId,
+              patch: {
+                waitingFor: Option.none(),
+                usageLimitResetAt: Option.some(Option.some(at)),
+              },
+            }))
+          ),
+        { concurrency: 16, unordered: true }
       ),
       Stream.filter(Option.isSome),
       Stream.map((signal) => signal.value)

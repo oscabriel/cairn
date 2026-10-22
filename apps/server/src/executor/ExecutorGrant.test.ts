@@ -7,10 +7,12 @@ import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Context, Effect, Layer, Option } from "effect";
 
+import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { Executor0004 } from "../db/migrations/0004Executor.ts";
 import { ExecutorGrant } from "./ExecutorGrant.ts";
+import { ExecutorLink } from "./ExecutorLink.ts";
 
 const Sql = Database.layerTest({
   ...migrations,
@@ -109,5 +111,78 @@ describe("the Executor grant", () => {
       Effect.scoped,
       Effect.provide(Layer.mergeAll(Sql, NodeServices.layer))
     )
+  );
+
+  it.live("leaves a new grant file alone when a grant is already stored", () =>
+    Effect.gen(function* () {
+      const where = paths();
+
+      writeFileSync(where.grantFile, JSON.stringify(grant));
+      yield* Effect.scoped(Layer.build(ExecutorGrant.layerWith(where)));
+
+      writeFileSync(
+        where.grantFile,
+        JSON.stringify({
+          ...grant,
+          tokens: { ...grant.tokens, access_token: "at_new" },
+        })
+      );
+
+      const holder = Context.get(
+        yield* Layer.build(ExecutorGrant.layerWith(where)),
+        ExecutorGrant
+      );
+
+      assert.isTrue(existsSync(where.grantFile));
+      assert.strictEqual(
+        Option.getOrThrow(yield* holder.load).tokens?.access_token,
+        "at_one"
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(Sql, NodeServices.layer))
+    )
+  );
+
+  it.live(
+    "leaves Executor disabled, never the brain down, on a bad grant file",
+    () =>
+      Effect.gen(function* () {
+        const directory = mkdtempSync(path.join(tmpdir(), "cairn-grant-bad-"));
+
+        writeFileSync(
+          path.join(directory, "executor-grant.json"),
+          "{ not json"
+        );
+
+        const link = Context.get(
+          yield* Layer.build(
+            ExecutorLink.layer.pipe(
+              Layer.provide(
+                ServerConfig.layerWith({
+                  configDir: directory,
+                  stateDir: path.join(directory, "state"),
+                })
+              )
+            )
+          ),
+          ExecutorLink
+        );
+
+        const status = yield* link.status;
+
+        assert.strictEqual(status.state, "disabled");
+        assert.include(
+          Option.getOrElse(status.detail, () => ""),
+          "is not a grant"
+        );
+
+        const refused = yield* link.call("search", {}).pipe(Effect.flip);
+
+        assert.isFalse(refused.sent);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(Sql, NodeServices.layer))
+      )
   );
 });

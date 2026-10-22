@@ -7,13 +7,17 @@
 // - Sessions. Executor keeps MCP sessions and pending requests in memory. A session it no longer
 //   knows (404, `McpSessionExpiredError`) means it restarted: Executor refused that request before
 //   doing anything, so it is the only failure resent, once, on a new session. Any other failure
-//   of a sent request leaves its outcome unknown.
+//   of a sent request leaves its outcome unknown. A request's own failure retires its session
+//   (the next call opens another) without failing its siblings: each sibling's own reply says
+//   whether it ran.
 // - Pings. While a call is in flight the link pings Executor every 15 s, so a restart that loses a
 //   long call's session shows without waiting for the request timeout: the call fails as lost, and
 //   it may have run.
-// - Status. `connected`, `needs-sign-in` (the grant was refused; the transition is recorded once
-//   through `ExecutorGrant.needsSignIn` for the notifier), `unreachable`, or `disabled` (no grant,
-//   or another process holds it).
+// - Status. `connected`, `needs-sign-in` (the grant was refused; `push/ExecutorSignInPush.ts`
+//   follows `statusChanges` and tells the user once per lapse), `unreachable`, or `disabled` (no
+//   grant, a grant that cannot be read, or another process holds it). A grant layer that fails
+//   (a bad grant file, no `flock`, an unwritable state directory) leaves the link `disabled` with
+//   the error as its detail: Executor is an arm the brain can lose, never a reason not to boot.
 // - Sign-in. `signIn` starts an OAuth authorization from Cairn's own callback
 //   (`/oauth/executor/callback`) when the grant no longer works, and `callback` finishes it.
 //
@@ -222,6 +226,35 @@ const disabledParts = (detail: string) => ({
     ),
 });
 
+/** A link that refuses everything with `detail`: no grant, or none this brain may use. */
+const disabledLink = (detail: string) =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+
+    const status = yield* SubscriptionRef.make<ExecutorStatus>({
+      state: "disabled",
+      detail: Option.some(detail.slice(0, 4096)),
+      checkedAt: Option.some(now),
+    });
+
+    return {
+      ...disabledParts(detail),
+      status: SubscriptionRef.get(status),
+      statusChanges: SubscriptionRef.changes(status),
+    };
+  });
+
+/** Why a link with no usable grant is `disabled`. */
+const disabledDetail = (held: boolean, unreadable: boolean) => {
+  if (!held) {
+    return "Another process holds Cairn's Executor grant, so this brain does not use Executor.";
+  }
+
+  return unreadable
+    ? "Cairn's stored Executor grant could not be read. Delete the executor_grant row in cairn.sqlite, run the phase 1 wizard's Executor step, then restart the brain."
+    : "Cairn has no Executor grant. Run the phase 1 wizard's Executor step, then restart the brain.";
+};
+
 /** pi-mcp's redirect hook: the consent page URL is kept by `CairnOAuthProvider` instead. */
 const ignoreRedirect = async () => {
   await Promise.resolve();
@@ -269,8 +302,16 @@ export class ExecutorLink extends Context.Service<
       const layerScope = yield* Effect.scope;
       const redirectUrl = `${config.origin}${CALLBACK_PATH}`;
 
-      const initial = yield* grant.load.pipe(
-        Effect.orElseSucceed(() => Option.none<McpOAuthState>())
+      const loaded = yield* grant.load.pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("the stored Executor grant could not be read").pipe(
+            Effect.annotateLogs({
+              event: "executor_grant_unreadable",
+              cause: error.message,
+            })
+          )
+        ),
+        Effect.result
       );
 
       const status = yield* SubscriptionRef.make<ExecutorStatus>({
@@ -296,16 +337,15 @@ export class ExecutorLink extends Context.Service<
           yield* Effect.logWarning("Executor needs sign-in").pipe(
             Effect.annotateLogs({ event: "executor_needs_sign_in" })
           );
-          yield* grant
-            .needsSignIn(Option.getOrElse(detail, () => SIGN_IN_TEXT))
-            .pipe(Effect.ignore);
         }
       });
 
-      if (!grant.held || Option.isNone(initial)) {
-        const detail = grant.held
-          ? "Cairn has no Executor grant. Run the phase 1 wizard's Executor step, then restart the brain."
-          : "Another process holds Cairn's Executor grant, so this brain does not use Executor.";
+      const initial = Result.isSuccess(loaded)
+        ? loaded.success
+        : Option.none<McpOAuthState>();
+
+      if (Option.isNone(initial)) {
+        const detail = disabledDetail(grant.held, Result.isFailure(loaded));
 
         yield* setStatus("disabled", Option.some(detail));
 
@@ -352,16 +392,36 @@ export class ExecutorLink extends Context.Service<
       const closeClient = (client: McpClient) =>
         closeQuietly(client).pipe(Effect.forkIn(layerScope), Effect.asVoid);
 
-      /** Forgets `session` (if it is still current) and tells whoever waits on it. */
-      const lose = Effect.fnUntraced(function* (session: Session) {
+      /** Stops handing `session` to new calls, if it is still current. */
+      const forget = Effect.fnUntraced(function* (session: Session) {
         const now = yield* Ref.get(current);
 
         if (Option.isSome(now) && now.value === session) {
           yield* Ref.set(current, Option.none());
         }
+      });
 
+      /**
+       * Executor lost `session` with requests in it (the ping saw it, or a sign-in resets it):
+       * forgets it, fails every request still waiting on it as lost, and closes it.
+       */
+      const lose = Effect.fnUntraced(function* (session: Session) {
+        yield* forget(session);
         yield* Deferred.succeed(session.lost, true);
         yield* closeClient(session.client);
+      });
+
+      /**
+       * One request on `session` failed: new calls get a new session, and the client is closed
+       * once its siblings had their request timeout to finish. Their own replies classify them,
+       * so a refused sibling is resent rather than reported as possibly run.
+       */
+      const retire = Effect.fnUntraced(function* (session: Session) {
+        yield* forget(session);
+        yield* closeQuietly(session.client).pipe(
+          Effect.delay(Duration.millis(REQUEST_TIMEOUT_MS)),
+          Effect.forkIn(layerScope)
+        );
       });
 
       const open = opening.withPermits(1)(
@@ -481,7 +541,7 @@ export class ExecutorLink extends Context.Service<
         }
 
         if (cause instanceof McpSessionExpiredError) {
-          yield* lose(session);
+          yield* retire(session);
 
           return new ExecutorCallError({
             message: `Executor no longer knows Cairn's session (it restarted), and refused ${tool} before running it.`,
@@ -494,7 +554,7 @@ export class ExecutorLink extends Context.Service<
 
         if (cause instanceof McpOAuthAuthorizationRequiredError) {
           // The session's grant is refused: drop it, so the next call or a sign-in starts clean.
-          yield* lose(session);
+          yield* retire(session);
           yield* setStatus("needs-sign-in", Option.some(SIGN_IN_TEXT));
 
           return new ExecutorCallError({
@@ -517,7 +577,7 @@ export class ExecutorLink extends Context.Service<
         }
 
         // The transport broke after the request left: drop the session, the next call opens one.
-        yield* lose(session);
+        yield* retire(session);
 
         return new ExecutorCallError({
           message: `Executor ${tool} failed after it was sent: ${errorText(cause)}.`,
@@ -839,21 +899,9 @@ export class ExecutorLink extends Context.Service<
    */
   static readonly layerDisabled = Layer.effect(
     ExecutorLink,
-    Effect.gen(function* () {
-      const detail = "This brain has no Executor link.";
-
-      const status = yield* SubscriptionRef.make<ExecutorStatus>({
-        state: "disabled",
-        detail: Option.some(detail),
-        checkedAt: Option.none(),
-      });
-
-      return ExecutorLink.of({
-        ...disabledParts(detail),
-        status: SubscriptionRef.get(status),
-        statusChanges: SubscriptionRef.changes(status),
-      });
-    })
+    Effect.map(disabledLink("This brain has no Executor link."), (parts) =>
+      ExecutorLink.of(parts)
+    )
   );
 
   /**
@@ -861,7 +909,26 @@ export class ExecutorLink extends Context.Service<
    * `main.ts` composes it. Needs `SqlClient`, `ServerConfig` and the Node platform services.
    */
   static readonly layer = this.layerNoDeps.pipe(
-    Layer.provide(ExecutorGrant.layer)
+    Layer.provide(ExecutorGrant.layer),
+    // A grant that cannot be opened leaves Executor off, never the brain down.
+    Layer.catchTag("ExecutorGrantError", (grantError) =>
+      Layer.effect(
+        ExecutorLink,
+        Effect.gen(function* () {
+          yield* Effect.logWarning(
+            "the Executor grant could not be opened; Executor is off"
+          ).pipe(
+            Effect.annotateLogs({
+              event: "executor_grant_failed",
+              operation: grantError.operation,
+              cause: grantError.message,
+            })
+          );
+
+          return ExecutorLink.of(yield* disabledLink(grantError.message));
+        })
+      )
+    )
   );
 
   /**

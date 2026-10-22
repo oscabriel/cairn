@@ -283,7 +283,7 @@ Not rerun: `judges/claude-ttft.ts` (J13, 60 turns; 3F's numbers stand, and integ
 - **The streaming bridge case printed no result twice** when it ran first in a sequence while browser judges ran beside it; it passed both times it ran alone. Treat bridge judges as needing a quiet machine.
 - **Throttled typing beside other load** streamed 14 rows in 60 s instead of about 490 (keys were all on time). Wave 4's load and wire budget work should measure the transcript's cost per streamed row.
 - **Boot got slower**: the judge brain's kill to first socket rose from about 0.8 to 0.9 s to about 1.2 to 1.3 s and a clean restart from 2.6 to 3.0 s, mostly the skill catalog's cold resolve (3E measured 408 to 570 ms against 600).
-- **`upload-signing.key` already existed** in `~/.config/cairn` before the deploy (made by a dev or judge brain); the deployed brain uses it. Only VAPID is kept from non-deployed brains (`VapidKeySource`).
+- **`upload-signing.key` already existed** in `~/.config/cairn` before the deploy (made by a dev or judge brain); the deployed brain uses it. Fixed in the review below (`UploadKeySource`); the key should be deleted once before a deploy.
 - **Carried from the packages:** no drag-over highlight on the composer (3B); user image attachments show as chips, not thumbnails, and t3code's new-turn anchoring, minimap and day-aware timestamps are not built (3C); `ExecutorSweep` sees only conversations with live tasks (3D); `TitleModel.completeOn` sends no session id, so an opencode-go Claude title model would fail (3E); `autoSettleDays` and `bridgeGenerationCap` still drive nothing (3F); headless push subscribe was not exercised end to end (3G).
 
 ### Deviations from the plan
@@ -294,3 +294,36 @@ Not rerun: `judges/claude-ttft.ts` (J13, 60 turns; 3F's numbers stand, and integ
 - **3D's composition test** lives at `executor/Composition.test.ts`, not `main.test.ts`; it now runs its "main.ts composes the real link" case.
 - **Bridge durability windows** are run by `claude-kill.ts` through `durability.ts --bridge`, not by `durability.ts`'s own driver.
 - **Extra judges and modes:** `live-chat.ts --project` for J7 on the deployed brain, `paste-client.ts --real`, `claude-live.ts --case restart`, and `ExecutorSignInPush.test.ts`.
+
+### Review
+
+A review of wave 3 reported eight confirmed findings and seven unverified concerns. Each was checked against the code; all eight findings were confirmed and fixed, and four concerns were real and fixed. `pnpm check` is green afterwards (115 files, 1,045 tests). None of this is deployed yet: the deployed brain picks it up at the next deploy, which also runs migration `0006_ExecutorSignal`.
+
+Confirmed findings:
+
+1. **A bad grant file or a missing `flock` stopped the deployed brain from booting.** Confirmed: every `ExecutorGrantError` from the grant layer failed `Layer.launch(MainLayer)`. `ExecutorLink.layer` now catches `ExecutorGrantError`, logs `executor_grant_failed` at warning, and builds a `disabled` link whose detail is the error's message (`disabledLink`, shared with `layerDisabled`). New `ExecutorGrant.test.ts` case: a malformed `executor-grant.json` gives a `disabled` link whose calls are refused unsent.
+2. **An unreadable grant row read as "no grant, run the wizard".** Confirmed. The boot load logs `executor_grant_unreadable` with the cause, and the `disabled` detail says the stored grant could not be read, to delete the `executor_grant` row, then run the wizard.
+3. **The needs-sign-in table had no reader.** Confirmed. The signal reaches the user through the link's status: `ExecutorSignInPush` pushes once per lapse and `executor.status` answers the client. `ExecutorGrant.needsSignIn` is gone and migration `0006_ExecutorSignal` drops `executor_sign_in_needed`. A shell event (`executor.status-changed`) is left to 4E's settings page if it wants one; `statusChanges` is the seam for it.
+4. **Dev and judge brains made and read the deployed `upload-signing.key`.** Confirmed. `UploadKeySource` mirrors `VapidKeySource`: a random key in memory by default, the file only when the entry point provides `UploadKeyFromFile` (only `main.ts`; the attachment test layer also does, over its temporary directory). New `UploadTokens.test.ts` case: the default makes no file. The key now in `~/.config/cairn` was made by a dev or judge brain; delete it before a deploy so the deployed brain makes its own (only upload URLs younger than 10 minutes are lost).
+5. **Concurrent calls on a forgotten session came back "may have run".** Confirmed: the first `McpSessionExpiredError` completed `session.lost` and failed its siblings as lost and sent. A request's own failure now retires its session (`retire`: no new calls get it, the client closes after the request timeout), and only the ping and a sign-in reset complete `session.lost`, so each sibling's own 404 classifies it as unsent and it is resent once. New `ExecutorTools.test.ts` case (three concurrent calls after a restart, all answered, each run once); it fails on the old code.
+6. **A new grant file was renamed away when a row existed.** Confirmed. The file is renamed only after an import; beside a stored row it is left alone and `executor_grant_file_ignored` says to sign in again from settings or delete the row. New `ExecutorGrant.test.ts` case.
+7. **Environment read inside service layers.** Confirmed. `ServerConfig` has `stateDir` (`XDG_STATE_HOME`, else `~/.local/state`), which `ExecutorGrant.layer` uses for the lock; `Config.ts` exports `homeDirectory` (`HOME` through `Config`, else `os.homedir()`), which `SkillCatalog.layerNoDeps`, `Skills.local` and `PiConfig.layer` use. No `process.env.HOME` or `XDG_STATE_HOME` read is left in service layers.
+8. **`BridgeCwd` kept every session id since boot.** Confirmed. `rememberSession` keeps the last 8 sessions per thread and the 256 most recently used threads, so the map and the stop hook's abort list stay bounded. New `BridgeCwdExtension.test.ts` case.
+
+Unverified concerns:
+
+- **J2's held case.** Real, not fixed here: it needs a different resume approach, and ADR 0017 stays proposed (see Gaps). The streaming case's flakiness under load is recorded there too.
+- **Boot ordering race on uploads.** Real in principle: the listener serves before boot, and a token issued before a restart stays good for 10 minutes, so an upload could stream into `attachments/.tmp` while the boot sweep removes it. The upload route now answers 503 (`unavailable`, retryable) until `Health` is ready, as `/ws` does.
+- **`ExecutorSweep` sees only conversations with live tasks.** Real, kept as a gap: pi-durable's `inspect` lists live work only, and listing every conversation needs a thread-to-conversation read that the shell store does not keep. Executor expires an unanswered request after its 10 minute window, and nothing in Cairn accepts one whose task is gone.
+- **`ClaudeSignals.limitSignals` was sequential.** Real: each limited run could wait 15 s on the probe before the next run's signal. It is now `mapEffect` with `concurrency: 16, unordered: true`; concurrent waits join one probe (`ClaudeUsage.probe` shares the one in flight), so it starts no extra `claude` child.
+- **Hard-link refusal in `ProjectContext`.** Checked, kept: a hard link can alias a file outside the workspace, so refusing `nlink > 1` is the safe reading, and `skills.list`'s report names the skipped file.
+- **`Composition.test.ts` did not scan `ops/`.** Real; it now does.
+- **Judges not rerun by the reviewer.** The deployed-brain and real-Claude judges were not rerun here either: the fixes are not deployed, and the changed code is covered by the unit tests above and the judges below.
+
+Judges rerun after the fixes:
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | 115 files, 1,045 tests |
+| `judges/paste-client.ts --real` | pass | five cases ok, paste to request 42 ms, five uploads through the brain's own routes on the in-memory key |
+| `judges/dev-smoke.ts` | pass | live 2,381 ms, no page errors |

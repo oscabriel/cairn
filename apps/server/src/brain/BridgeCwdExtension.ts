@@ -76,6 +76,49 @@ const placeOf = async (
   });
 };
 
+/** How many provider sessions a thread keeps: a compaction or a fork starts a new one. */
+export const SESSIONS_PER_THREAD = 8;
+
+/** How many threads keep their sessions; the least recently used is dropped first. */
+export const THREADS_KEPT = 256;
+
+/**
+ * Records `sessionId` as `threadId`'s most recent session, bounded on both axes, so a brain that
+ * runs for months does not grow the map or the stop hook's abort list.
+ */
+export const rememberSession = (
+  all: ReadonlyMap<ThreadId, ReadonlyArray<string>>,
+  threadId: ThreadId,
+  sessionId: string
+): ReadonlyMap<ThreadId, ReadonlyArray<string>> => {
+  const known = all.get(threadId) ?? [];
+
+  if (known.at(-1) === sessionId) {
+    return all;
+  }
+
+  const next = new Map(all);
+
+  // Deleted and set again, so the map's order is least recently used first.
+  next.delete(threadId);
+  next.set(
+    threadId,
+    [...known.filter((id) => id !== sessionId), sessionId].slice(
+      -SESSIONS_PER_THREAD
+    )
+  );
+
+  for (const oldest of next.keys()) {
+    if (next.size <= THREADS_KEPT) {
+      break;
+    }
+
+    next.delete(oldest);
+  }
+
+  return next;
+};
+
 /** The `bridge-cwd` extension and the sessions it has seen. */
 export class BridgeCwd extends Context.Service<
   BridgeCwd,
@@ -84,7 +127,10 @@ export class BridgeCwd extends Context.Service<
     readonly extension: CairnExtension;
     /** Records `place` with the bridge: what the hook does before each bridge request. */
     note(place: BridgePlace): Effect.Effect<void>;
-    /** The provider session ids `threadId` ran bridge requests under since boot. */
+    /**
+     * The provider session ids `threadId` ran bridge requests under since boot, oldest first: the
+     * last `SESSIONS_PER_THREAD`, for the last `THREADS_KEPT` threads that used the bridge.
+     */
     sessionsOf(threadId: ThreadId): Effect.Effect<ReadonlyArray<string>>;
   }
 >()("cairn/server/brain/BridgeCwdExtension/BridgeCwd") {
@@ -107,13 +153,9 @@ export class BridgeCwd extends Context.Service<
         if (Option.isSome(place.threadId)) {
           const threadId = place.threadId.value;
 
-          yield* Ref.update(sessions, (all) => {
-            const known = all.get(threadId) ?? [];
-
-            return known.includes(place.sessionId)
-              ? all
-              : new Map(all).set(threadId, [...known, place.sessionId]);
-          });
+          yield* Ref.update(sessions, (all) =>
+            rememberSession(all, threadId, place.sessionId)
+          );
         }
 
         yield* bridge.claude.value.noteConversation(place.sessionId, {

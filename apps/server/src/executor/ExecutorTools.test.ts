@@ -231,6 +231,32 @@ describe("the link", () => {
       )
   );
 
+  it.live(
+    "resends every concurrent call Executor refused after a restart",
+    () =>
+      withFake((fake) =>
+        Effect.gen(function* () {
+          const link = yield* ExecutorLink;
+
+          yield* link.call("search", { query: "warm" });
+          fake.restart();
+
+          const replies = yield* Effect.all(
+            [
+              link.call("search", { query: "one" }),
+              link.call("search", { query: "two" }),
+              link.call("skills", {}),
+            ],
+            { concurrency: "unbounded" }
+          );
+
+          assert.strictEqual(replies.length, 3);
+          assert.strictEqual(fake.calls("search").length, 3);
+          assert.strictEqual(fake.calls("skills").length, 1);
+        })
+      )
+  );
+
   it.live("shares one refresh between concurrent calls", () =>
     withFake((fake) =>
       Effect.gen(function* () {

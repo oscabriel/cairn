@@ -12,6 +12,7 @@ import { DateTime, Duration, Effect, FileSystem, Layer, Schema } from "effect";
 import type { Scope } from "effect";
 import { TestClock } from "effect/testing";
 
+import { ServerConfig } from "../Config.ts";
 import {
   attachmentsTestLayer,
   postUpload,
@@ -97,6 +98,28 @@ describe("upload tokens", () => {
         assert.strictEqual(info.mode % 0o1000, 0o600);
       })
     )
+  );
+
+  it.effect(
+    "keeps its key in memory unless the entry point asks for the file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+
+        const dir = yield* fs.makeTempDirectoryScoped({
+          directory: os.tmpdir(),
+          prefix: "cairn-upload-key-",
+        });
+
+        const tokens = UploadTokens.layerNoDeps.pipe(
+          Layer.provide(ServerConfig.layerWith({ configDir: dir }))
+        );
+
+        const issued = yield* issueText().pipe(Effect.provide(tokens));
+
+        assert.isTrue(issued.uploadPath.length > 0);
+        assert.isFalse(yield* fs.exists(path.join(dir, SIGNING_KEY_FILE)));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   );
 
   it.effect("refuses a tampered token", () =>

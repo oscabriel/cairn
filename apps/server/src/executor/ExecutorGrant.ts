@@ -4,7 +4,9 @@
 //   The first brain that holds the lock and finds no row imports it into `executor_grant` in one
 //   transaction, then renames the file `executor-grant.json.imported`; the renamed file is deleted
 //   after the first tokens the brain saves itself (a refresh or a sign-in), so a grant that never
-//   worked here can still be found by hand.
+//   worked here can still be found by hand. A file found beside a stored row is left alone and
+//   logged (`executor_grant_file_ignored`): the stored grant wins, and the user is told how to
+//   replace it.
 // - One holder. Executor rotates the refresh token on every refresh and treats a reused one as
 //   theft, so only one process may refresh. The holder keeps an exclusive `flock` on
 //   `~/.local/state/cairn/executor.lock` for its whole life, through a `flock` child whose stdin is
@@ -105,19 +107,14 @@ export interface ExecutorGrantPaths {
   readonly lockFile: string;
 }
 
-/** The default paths: the config directory's grant file and the user's state directory's lock. */
-export const defaultGrantPaths = (configDir: string): ExecutorGrantPaths => {
-  const stateHome =
-    process.env.XDG_STATE_HOME !== undefined &&
-    process.env.XDG_STATE_HOME !== ""
-      ? process.env.XDG_STATE_HOME
-      : path.join(process.env.HOME ?? "/", ".local", "state");
-
-  return {
-    grantFile: path.join(configDir, "executor-grant.json"),
-    lockFile: path.join(stateHome, "cairn", "executor.lock"),
-  };
-};
+/** The default paths: the config directory's grant file and the state directory's lock. */
+export const defaultGrantPaths = (
+  configDir: string,
+  stateDir: string
+): ExecutorGrantPaths => ({
+  grantFile: path.join(configDir, "executor-grant.json"),
+  lockFile: path.join(stateDir, "cairn", "executor.lock"),
+});
 
 const failure =
   (operation: string, what: string) =>
@@ -203,8 +200,6 @@ export class ExecutorGrant extends Context.Service<
     takeSignIn(oauthState: string): Effect.Effect<boolean, ExecutorGrantError>;
     /** Records a finished sign-in. */
     readonly signedIn: Effect.Effect<void, ExecutorGrantError>;
-    /** Records that the grant fell into needs-sign-in, for a notifier to tell the user once. */
-    needsSignIn(detail: string): Effect.Effect<void, ExecutorGrantError>;
   }
 >()("cairn/server/executor/ExecutorGrant") {
   /**
@@ -282,7 +277,15 @@ export class ExecutorGrant extends Context.Service<
             );
           }
 
-          if (fileThere) {
+          if (Option.isSome(row) && fileThere) {
+            yield* Effect.logWarning(
+              `${paths.grantFile} was ignored: a grant is already stored. To replace it, sign in again from Cairn's settings, or delete the executor_grant row in cairn.sqlite and restart.`
+            ).pipe(
+              Effect.annotateLogs({ event: "executor_grant_file_ignored" })
+            );
+          }
+
+          if (Option.isNone(row) && fileThere) {
             yield* fs
               .rename(paths.grantFile, importedFile)
               .pipe(
@@ -438,18 +441,6 @@ export class ExecutorGrant extends Context.Service<
           )
         );
 
-        const needsSignIn = Effect.fn("ExecutorGrant.needsSignIn")(function* (
-          detail: string
-        ) {
-          yield* sql`
-            INSERT INTO executor_sign_in_needed (at, detail) VALUES (${now()}, ${detail})
-          `.pipe(
-            Effect.mapError(
-              failure("signal", "the sign-in signal could not be written")
-            )
-          );
-        });
-
         return ExecutorGrant.of({
           held,
           load,
@@ -459,17 +450,18 @@ export class ExecutorGrant extends Context.Service<
           beginSignIn,
           takeSignIn,
           signedIn,
-          needsSignIn,
         });
       })
     );
 
-  /** The deployed grant: `cairn.json`'s config directory and the user's state directory. */
+  /** The deployed grant: the config directory's grant file and the state directory's lock. */
   static readonly layer = Layer.unwrap(
     Effect.gen(function* () {
       const config = yield* ServerConfig;
 
-      return ExecutorGrant.layerWith(defaultGrantPaths(config.configDir));
+      return ExecutorGrant.layerWith(
+        defaultGrantPaths(config.configDir, config.stateDir)
+      );
     })
   );
 
@@ -511,10 +503,6 @@ export class ExecutorGrant extends Context.Service<
               )
             ),
           signedIn: Effect.void,
-          needsSignIn: (detail) =>
-            Effect.logWarning("Executor needs sign-in").pipe(
-              Effect.annotateLogs({ event: "executor_needs_sign_in", detail })
-            ),
         });
       })
     );

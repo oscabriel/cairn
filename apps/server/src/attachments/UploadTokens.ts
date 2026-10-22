@@ -2,8 +2,8 @@
 // (`issueAttachmentUploadUrl`, `validateAttachmentUploadToken`) and apps/server/src/auth/utils.ts
 // (`signPayload`, `timingSafeEqualBase64Url`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92.
 // Changed: claims are Cairn's `UploadClaims` (no `type`; the server decides the kind from the
-// bytes), the key is a 32-byte file in the config directory created once with `wx` and mode 0600,
-// time comes from `Clock`, a refused token says why, and an upload Cairn would refuse anyway (a
+// bytes), the deployed brain's key is a 32-byte file in the config directory created once with
+// `wx` and mode 0600 (every other brain keeps a random key in memory, `UploadKeySource`), time comes from `Clock`, a refused token says why, and an upload Cairn would refuse anyway (a
 // HEIC photo, an image over 10 MiB) is refused before a URL is issued.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
@@ -55,6 +55,22 @@ export const SIGNING_KEY_FILE = "upload-signing.key";
 
 const KEY_BYTES = 32;
 
+/**
+ * Where the signing key comes from. In memory unless the entry point says `file`: dev brains,
+ * judges and tests share the deployed brain's config directory and must never make or read
+ * `upload-signing.key`, or a dev brain's upload URL would verify on the deployed one.
+ */
+export const UploadKeySource = Context.Reference<{
+  readonly kind: "file" | "ephemeral";
+}>("cairn/server/attachments/UploadTokens/UploadKeySource", {
+  defaultValue: () => ({ kind: "ephemeral" }),
+});
+
+/** The deployed brain's choice: `upload-signing.key` under the config directory. */
+export const UploadKeyFromFile = Layer.succeed(UploadKeySource, {
+  kind: "file",
+});
+
 /** Image types a model cannot take, refused before a URL is issued. */
 const REFUSED_IMAGE_TYPES: ReadonlySet<string> = new Set([
   "image/heic",
@@ -103,6 +119,46 @@ const encodeClaims = Schema.encodeEffect(ClaimsJson);
 
 const decodeClaims = Schema.decodeEffect(ClaimsJson);
 
+/** The key in `<configDir>/upload-signing.key`, made there (`wx`, 0600) when it does not exist. */
+const keyFromFile = Effect.fn("UploadTokens.keyFromFile")(function* () {
+  const config = yield* ServerConfig;
+  const fs = yield* FileSystem.FileSystem;
+  const file = path.join(config.configDir, SIGNING_KEY_FILE);
+
+  const keyError = (cause: unknown) =>
+    new SigningKeyError({
+      message: `UploadTokens could not read or create the upload signing key ${file}. Check the config directory's permissions; remove a key that is not ${String(KEY_BYTES)} bytes so a new one is made.`,
+      cause,
+    });
+
+  const exists = yield* fs.exists(file).pipe(Effect.mapError(keyError));
+
+  if (!exists) {
+    yield* fs
+      .makeDirectory(config.configDir, { recursive: true, mode: 0o700 })
+      .pipe(Effect.mapError(keyError));
+
+    // `wx`: two brains starting at once must not each write a key; the loser reads the winner's.
+    yield* fs
+      .writeFile(file, randomBytes(KEY_BYTES), { flag: "wx", mode: 0o600 })
+      .pipe(
+        Effect.catchIf(
+          (error) => Predicate.isTagged(error.reason, "AlreadyExists"),
+          () => Effect.void
+        ),
+        Effect.mapError(keyError)
+      );
+  }
+
+  const key = yield* fs.readFile(file).pipe(Effect.mapError(keyError));
+
+  if (key.length !== KEY_BYTES) {
+    return yield* keyError(`the key is ${String(key.length)} bytes`);
+  }
+
+  return key;
+});
+
 const sign = (payload: string, key: Uint8Array) =>
   createHmac("sha256", key).update(payload).digest("base64url");
 
@@ -141,47 +197,20 @@ export class UploadTokens extends Context.Service<
   }
 >()("cairn/server/attachments/UploadTokens") {
   /**
-   * Signs with the key in `<configDir>/upload-signing.key`, creating it (32 random bytes, `wx`,
-   * mode 0600) on first use. Fails with `SigningKeyError` when the key cannot be read or created,
-   * or is not 32 bytes.
+   * Signs with a random key in memory, or, when `UploadKeySource` says `file` (only `main.ts`),
+   * with the key in `<configDir>/upload-signing.key`, creating it (32 random bytes, `wx`, mode
+   * 0600) on first use. Fails with `SigningKeyError` when that file cannot be read or created, or
+   * is not 32 bytes.
    */
   static readonly layerNoDeps = Layer.effect(
     UploadTokens,
     Effect.gen(function* () {
-      const config = yield* ServerConfig;
-      const fs = yield* FileSystem.FileSystem;
-      const file = path.join(config.configDir, SIGNING_KEY_FILE);
+      const source = yield* UploadKeySource;
 
-      const keyError = (cause: unknown) =>
-        new SigningKeyError({
-          message: `UploadTokens could not read or create the upload signing key ${file}. Check the config directory's permissions; remove a key that is not ${String(KEY_BYTES)} bytes so a new one is made.`,
-          cause,
-        });
-
-      const exists = yield* fs.exists(file).pipe(Effect.mapError(keyError));
-
-      if (!exists) {
-        yield* fs
-          .makeDirectory(config.configDir, { recursive: true, mode: 0o700 })
-          .pipe(Effect.mapError(keyError));
-
-        // `wx`: two brains starting at once must not each write a key; the loser reads the winner's.
-        yield* fs
-          .writeFile(file, randomBytes(KEY_BYTES), { flag: "wx", mode: 0o600 })
-          .pipe(
-            Effect.catchIf(
-              (error) => Predicate.isTagged(error.reason, "AlreadyExists"),
-              () => Effect.void
-            ),
-            Effect.mapError(keyError)
-          );
-      }
-
-      const key = yield* fs.readFile(file).pipe(Effect.mapError(keyError));
-
-      if (key.length !== KEY_BYTES) {
-        return yield* keyError(`the key is ${String(key.length)} bytes`);
-      }
+      const key =
+        source.kind === "file"
+          ? yield* keyFromFile()
+          : Uint8Array.from(randomBytes(KEY_BYTES));
 
       const issue = Effect.fn("UploadTokens.issue")(function* (
         input: CreateUploadUrlInput

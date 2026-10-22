@@ -43,7 +43,12 @@ import { Effect, Layer, Option, Ref, Schedule } from "effect";
 import { BridgeProvider } from "../models/BridgeProvider.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import { bridgeStopHook } from "../threads/BridgeStopHook.ts";
-import { BridgeCwd } from "./BridgeCwdExtension.ts";
+import {
+  BridgeCwd,
+  rememberSession,
+  SESSIONS_PER_THREAD,
+  THREADS_KEPT,
+} from "./BridgeCwdExtension.ts";
 import { ThreadMeta } from "./CairnDocs.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -308,4 +313,31 @@ describe("the bridge-cwd extension", () => {
       );
     }).pipe(Effect.scoped, Effect.provide(bridgeOn([callsHold])))
   );
+});
+
+describe("the sessions bridge-cwd remembers", () => {
+  it("keeps the last sessions per thread and the most recent threads", () => {
+    let all: ReadonlyMap<ThreadId, ReadonlyArray<string>> = new Map();
+    const thread = testThreadId(1);
+
+    for (let index = 0; index < SESSIONS_PER_THREAD + 5; index += 1) {
+      all = rememberSession(all, thread, `s${String(index)}`);
+    }
+
+    all = rememberSession(all, thread, "s6");
+
+    const kept = all.get(thread) ?? [];
+
+    assert.strictEqual(kept.length, SESSIONS_PER_THREAD);
+    assert.strictEqual(kept.at(-1), "s6");
+    assert.notInclude(kept, "s0");
+
+    for (let index = 2; index <= THREADS_KEPT + 1; index += 1) {
+      all = rememberSession(all, testThreadId(index), "x");
+    }
+
+    assert.strictEqual(all.size, THREADS_KEPT);
+    assert.isFalse(all.has(thread));
+    assert.isTrue(all.has(testThreadId(THREADS_KEPT + 1)));
+  });
 });

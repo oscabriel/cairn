@@ -30,7 +30,6 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 
 import type { ThinkingLevel } from "@cairn/protocol/Models";
@@ -48,7 +47,7 @@ import {
 } from "effect";
 
 import { errorText } from "../brain/Durable.ts";
-import { ServerConfig } from "../Config.ts";
+import { homeDirectory, ServerConfig } from "../Config.ts";
 
 /** pi-coding-agent could not be loaded. Boot stops; reinstall the brain's dependencies. */
 export class PiConfigError extends Schema.TaggedError<PiConfigError>()(
@@ -662,7 +661,7 @@ export class PiConfig extends Context.Service<
       return PiConfig.layerWith({
         agentDir: path.resolve(pi.getAgentDir()),
         cwd,
-        home: process.env.HOME ?? homedir(),
+        home: yield* homeDirectory,
       });
     })
   );

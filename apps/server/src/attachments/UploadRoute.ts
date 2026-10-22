@@ -28,6 +28,7 @@ import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { Effect, Option, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
+import { Health } from "../http/Health.ts";
 import { AttachmentIntake } from "./AttachmentIntake.ts";
 import { UPLOAD_ROUTE_PREFIX, UploadTokens } from "./UploadTokens.ts";
 
@@ -74,10 +75,25 @@ const REJECTED_STATUS = {
 /** The upload handler over the services it was built with. */
 const receiveUpload = (
   tokens: UploadTokens["Service"],
-  intake: AttachmentIntake["Service"]
+  intake: AttachmentIntake["Service"],
+  health: Option.Option<Health["Service"]>
 ) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+
+    // Boot sweeps `attachments/.tmp`; an upload streaming into it meanwhile would lose its file.
+    const ready = yield* Option.match(health, {
+      onNone: () => Effect.succeed(true),
+      onSome: (service) => service.isReady,
+    });
+
+    if (!ready) {
+      return problem(
+        503,
+        "unavailable",
+        "Cairn is still starting, so the upload was not received. Try it again in a moment."
+      );
+    }
 
     const params = yield* HttpRouter.schemaPathParams(Params).pipe(
       Effect.option
@@ -142,7 +158,12 @@ export const UploadRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const tokens = yield* UploadTokens;
     const intake = yield* AttachmentIntake;
+    const health = yield* Effect.serviceOption(Health);
 
-    yield* router.add("POST", UPLOAD_PATH, receiveUpload(tokens, intake));
+    yield* router.add(
+      "POST",
+      UPLOAD_PATH,
+      receiveUpload(tokens, intake, health)
+    );
   })
 );

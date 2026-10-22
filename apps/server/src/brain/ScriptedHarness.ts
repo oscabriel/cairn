@@ -79,6 +79,7 @@ import type {
   HarnessTurnInput,
   InputEntry,
   LiveThreadState,
+  PassiveEntry,
   ThreadAgentChange,
   ThreadFrame,
 } from "./HarnessSeam.ts";
@@ -218,6 +219,8 @@ interface ScriptedThread {
   head: number;
   readonly queue: Array<QueuedInput>;
   readonly byRequest: Map<string, Submission>;
+  /** Request ids of passive entries already written. */
+  readonly writes: Set<string>;
   readonly byId: Map<number, Submission>;
   run: Option.Option<Run>;
   readonly approvals: Map<string, ApprovalRecord>;
@@ -769,6 +772,7 @@ const layerNoDeps = Layer.effectContext(
             head: 0,
             queue: [],
             byRequest: new Map(),
+            writes: new Set(),
             byId: new Map(),
             run: Option.none(),
             approvals: new Map(),
@@ -1014,6 +1018,23 @@ const layerNoDeps = Layer.effectContext(
       );
     });
 
+    const write = Effect.fn("ScriptedHarness.write")(function* (
+      threadId: ThreadId,
+      entry: PassiveEntry
+    ) {
+      const thread = yield* find(threadId);
+
+      return yield* line.withPermits(1)(
+        Effect.gen(function* () {
+          if (!thread.writes.has(entry.requestId)) {
+            thread.writes.add(entry.requestId);
+            appendEntry(thread, entry.kind, { data: entry.data });
+            yield* publish(thread, []);
+          }
+        })
+      );
+    });
+
     const compact = Effect.fn("ScriptedHarness.compact")(function* (
       threadId: ThreadId,
       _instructions: Option.Option<string>
@@ -1234,6 +1255,7 @@ const layerNoDeps = Layer.effectContext(
       stop,
       withdraw,
       respond,
+      write,
       compact,
       watch,
       history,

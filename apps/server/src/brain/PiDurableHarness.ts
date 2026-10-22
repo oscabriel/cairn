@@ -63,6 +63,7 @@ import type {
   HarnessTurnInput,
   HistoryQuery,
   LiveThreadState,
+  PassiveEntry,
   StopOptions,
   ThreadAgentChange,
   ThreadFrame,
@@ -74,7 +75,9 @@ import {
   piSubmissionId,
   piTaskId,
 } from "./PiIds.ts";
-import { projectEntry, wireProjector } from "./ThreadWire.ts";
+import { WindowFrame, windowedProjector } from "./ThreadWindow.ts";
+import type { WindowedView } from "./ThreadWindow.ts";
+import { projectEntry } from "./ThreadWire.ts";
 import type { ThreadWireError } from "./ThreadWire.ts";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
@@ -539,6 +542,25 @@ const layerNoDeps = Layer.effect(
       });
     });
 
+    const write = Effect.fn("PiDurableHarness.write")(function* (
+      threadId: ThreadId,
+      entry: PassiveEntry
+    ) {
+      const session = yield* open(Option.some(threadId));
+      const conversation = yield* conversationOf(session, threadId);
+
+      yield* call(Option.some(threadId), "write", async (context) => {
+        await conversation.submit(
+          {
+            type: "write",
+            requestId: entry.requestId,
+            entry: { kind: entry.kind, data: entry.data },
+          },
+          context
+        );
+      });
+    });
+
     /** The thread stream within one Session; ends when that Session's watch ends. */
     const watchIn = (
       session: BrainSession,
@@ -579,7 +601,7 @@ const layerNoDeps = Layer.effect(
               })
           );
 
-          const projector = wireProjector();
+          const projector = windowedProjector();
 
           let latest = watch.value;
           let latestApprovals = approvals?.value ?? null;
@@ -592,25 +614,30 @@ const layerNoDeps = Layer.effect(
                   docs: { ...latest.docs, [APPROVALS_KIND]: latestApprovals },
                 };
 
-          const view = yield* Effect.fromResult(
+          // A window (ThreadWindow.ts) leaves older entries out; with none left out, pi-durable
+          // may still hold entries before the view (a compaction moved its start).
+          const snapshotItem = (
+            windowed: WindowedView,
+            current: PiConversationView
+          ) =>
+            Effect.gen(function* () {
+              const hasMoreHistory =
+                windowed.entriesOffset > 0 ||
+                (yield* hasOlder(threadId, conversation, current));
+
+              return ThreadSnapshotItem.make({
+                seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
+                view: windowed.view,
+                entriesOffset: windowed.entriesOffset,
+                hasMoreHistory,
+              });
+            });
+
+          const first = yield* Effect.fromResult(
             projector.snapshot(withApprovals())
           ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
 
-          const hasMoreHistory = yield* hasOlder(
-            threadId,
-            conversation,
-            watch.value
-          );
-
-          yield* Queue.offer(
-            queue,
-            ThreadSnapshotItem.make({
-              seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
-              view,
-              entriesOffset: 0,
-              hasMoreHistory,
-            })
-          );
+          yield* Queue.offer(queue, yield* snapshotItem(first, watch.value));
 
           // The listeners only record the newest revision and ring; a slow subscriber gets one
           // larger diff instead of a backlog.
@@ -633,19 +660,29 @@ const layerNoDeps = Layer.effect(
           yield* Queue.take(ticks).pipe(
             Effect.flatMap(() =>
               Effect.gen(function* () {
-                const ops = yield* Effect.fromResult(
-                  projector.advance(withApprovals())
+                const current = withApprovals();
+
+                const frame = yield* Effect.fromResult(
+                  projector.advance(current)
                 ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
 
-                if (ops.length > 0) {
-                  yield* Queue.offer(
-                    queue,
-                    ThreadOpsItem.make({
-                      seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
-                      ops,
-                    })
-                  );
-                }
+                yield* WindowFrame.$match(frame, {
+                  Snapshot: (windowed) =>
+                    Effect.flatMap(snapshotItem(windowed, current), (item) =>
+                      Queue.offer(queue, item)
+                    ),
+                  Ops: ({ ops }) =>
+                    ops.length === 0
+                      ? Effect.void
+                      : Effect.flatMap(
+                          Ref.getAndUpdate(seq, (n) => n + 1),
+                          (next) =>
+                            Queue.offer(
+                              queue,
+                              ThreadOpsItem.make({ seq: next, ops })
+                            )
+                        ),
+                });
               })
             ),
             Effect.forever,
@@ -943,6 +980,7 @@ const layerNoDeps = Layer.effect(
       stop,
       withdraw,
       respond,
+      write,
       compact,
       watch: watchThread,
       history,

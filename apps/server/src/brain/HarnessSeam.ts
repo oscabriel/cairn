@@ -100,6 +100,11 @@ export interface InputEntry {
   readonly data: JsonValue;
 }
 
+/** A passive entry: it never starts a run, and is written once per `requestId`. */
+export interface PassiveEntry extends InputEntry {
+  readonly requestId: string;
+}
+
 /** One turn of input as the model sees it, after Cairn's turn-content stages ran. */
 export interface HarnessTurnInput {
   /** Minted by the client; the same id on the same thread is admitted once, also across restarts. */
@@ -288,6 +293,11 @@ export class HarnessSeam extends Context.Service<
       threadId: ThreadId,
       approvalId: ApprovalId,
       decision: ApprovalDecision
+    ): Effect.Effect<void, HarnessError>;
+    /** Appends a passive entry that never starts a run, idempotent by `requestId`. */
+    write(
+      threadId: ThreadId,
+      entry: PassiveEntry
     ): Effect.Effect<void, HarnessError>;
     /** Summarizes the thread's older context now. */
     compact(

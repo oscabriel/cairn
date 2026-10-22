@@ -161,6 +161,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       model,
       outMessage: OutMessage.RequestedSend({ item }),
     }),
+    ClickedOpenDiff: ({ path, turn }) => ({
+      model,
+      outMessage: OutMessage.RequestedDiff({ turn, path }),
+    }),
     ClickedCopy: ({ rowId, text }) => copy(model, rowId, text),
     CompletedCopy: ({ rowId, version }) => completedCopy(model, rowId, version),
     ExpiredCopied: ({ version }) =>

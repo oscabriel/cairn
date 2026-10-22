@@ -136,6 +136,7 @@ export const contextFor = (
   }),
   view,
   defaults: Option.some(catalog.defaults),
+  usage: Option.none(),
 });
 
 /** A composer on `target` with the catalog, skills and drafts loaded. */

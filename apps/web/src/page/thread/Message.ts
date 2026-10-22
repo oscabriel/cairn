@@ -5,6 +5,7 @@ import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
 import { OutboxItem } from "../../connection/Outbox.ts";
+import { Message as DiffMessage } from "../../diff/Message.ts";
 import { Message as TimelineMessage } from "../../timeline/Message.ts";
 
 /** Everything the thread page reacts to. */
@@ -24,6 +25,12 @@ export const Message = defineMessageUnion({
   },
   /** A Message of the transcript. */
   GotTimelineMessage: { message: TimelineMessage },
+  /** A Message of the diff panel. */
+  GotDiffMessage: { message: DiffMessage },
+  /** The diff panel's view chunk loaded. */
+  LoadedDiffPanel: {},
+  /** The diff panel's view chunk could not be fetched. */
+  FailedDiffPanel: {},
 });
 
 export type Message = typeof Message.Type;

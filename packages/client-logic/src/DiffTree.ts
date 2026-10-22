@@ -28,7 +28,6 @@ import type { Entry } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";
 
 /** The data an entry carries, as the wire decoded it. */
-type EntryData = NonNullable<Entry["data"]>;
 
 /** Lines a file or a directory gained and lost. */
 export interface DiffStat {
@@ -92,7 +91,7 @@ const decodeEntryData = Schema.decodeUnknownOption(CheckpointEntryData);
 
 /** Reads a `cairn.checkpoint` entry's data; none for data of another shape. */
 export const checkpointSummaryOf = (
-  data: EntryData
+  data: Entry["data"]
 ): Option.Option<CheckpointSummary> =>
   Option.map(decodeEntryData(data), (decoded) => ({
     turn: decoded.turn,

@@ -6,6 +6,7 @@ import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ModelDefaults } from "@cairn/protocol/Models";
 import type { ProjectShell, ShellSnapshot } from "@cairn/protocol/Shell";
 import type { ConversationView } from "@cairn/protocol/Thread";
+import type { UsageSnapshot } from "@cairn/protocol/Usage";
 import { Array, Option } from "effect";
 
 import { AppRoute } from "../Route.ts";
@@ -26,6 +27,7 @@ export interface ComposerContextInput {
   /** The thread page's view of the routed thread. */
   readonly threadView: Option.Option<ConversationView>;
   readonly defaults: Option.Option<ModelDefaults>;
+  readonly usage: Option.Option<UsageSnapshot>;
 }
 
 /** The composer's target for a route: the hero at `/` and `/new/<id>`, a thread at `/t/<id>`. */
@@ -64,4 +66,5 @@ export const composerContext = (
   ),
   view: Option.isSome(input.threadId) ? input.threadView : Option.none(),
   defaults: input.defaults,
+  usage: input.usage,
 });

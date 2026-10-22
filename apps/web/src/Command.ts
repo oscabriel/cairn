@@ -13,6 +13,7 @@ import type {
 } from "./connection/Connection.ts";
 import { OutboxItem, outboxKey, saveOutbox } from "./connection/Outbox.ts";
 import { backoffDelayMs } from "./connection/Reconnect.ts";
+import { reloadIfStale } from "./load/StaleBuild.ts";
 import { Message } from "./Message.ts";
 
 /** Every service a root Command or Subscription may read. */
@@ -76,6 +77,7 @@ export const SayHello = Command.define("SayHello", {
 
       return yield* client["session.hello"]();
     }).pipe(
+      Effect.tap((hello) => reloadIfStale(hello.build)),
       Effect.match({
         onSuccess: (hello) => Message.SucceededHello({ epoch, hello }),
         onFailure: (failure) =>

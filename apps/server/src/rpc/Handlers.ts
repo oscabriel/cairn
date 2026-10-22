@@ -7,6 +7,7 @@ import { Effect, Layer } from "effect";
 
 import { UsageFeed } from "../usage/UsageFeed.ts";
 import { AttachmentHandlers } from "./AttachmentHandlers.ts";
+import { DiffHandlers } from "./DiffHandlers.ts";
 import { ExecutorHandlers } from "./ExecutorHandlers.ts";
 import { ModelHandlers } from "./ModelHandlers.ts";
 import { ProjectHandlers } from "./ProjectHandlers.ts";
@@ -47,5 +48,6 @@ export const HandlersLayer = Layer.mergeAll(
   ExecutorHandlers,
   SkillHandlers.layer,
   UsageHandlers.pipe(Layer.provide(UsageFeed.layer)),
-  PushHandlers
+  PushHandlers,
+  DiffHandlers.layer
 );

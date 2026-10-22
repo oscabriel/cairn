@@ -21,6 +21,7 @@ import { BranchesResult, SearchEntry } from "@cairn/protocol/Projects";
 import { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
 import { SkillSummary } from "@cairn/protocol/Skills";
 import { ConversationView } from "@cairn/protocol/Thread";
+import { UsageSnapshot } from "@cairn/protocol/Usage";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
@@ -53,6 +54,8 @@ export const ComposerContext = Schema.Struct({
   view: Schema.Option(ConversationView),
   /** The server's default model and thinking level, from `session.hello`. */
   defaults: Schema.Option(ModelDefaults),
+  /** The newest plan windows, for the usage meter. */
+  usage: Schema.Option(UsageSnapshot),
 });
 
 export type ComposerContext = typeof ComposerContext.Type;
@@ -67,6 +70,7 @@ export const emptyContext: ComposerContext = {
   thread: Option.none(),
   view: Option.none(),
   defaults: Option.none(),
+  usage: Option.none(),
 };
 
 /**

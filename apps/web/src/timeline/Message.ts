@@ -34,6 +34,8 @@ export const Message = defineMessageUnion({
   MountedTimer: {},
   /** The end-follow Mount started. */
   MountedFollowEnd: {},
+  /** A changed-files card asked for its turn's diff, at a file or at the top. */
+  ClickedOpenDiff: { turn: Schema.Int, path: Schema.Option(Schema.String) },
 });
 
 export type Message = typeof Message.Type;
@@ -44,6 +46,8 @@ export const OutMessage = defineMessageUnion({
   ReceivedHistory: { page: HistoryPage },
   /** A turn to queue in the outbox (Retry). */
   RequestedSend: { item: OutboxItem },
+  /** The diff panel, opened on a turn (and a file in it). */
+  RequestedDiff: { turn: Schema.Int, path: Schema.Option(Schema.String) },
 });
 
 export type OutMessage = typeof OutMessage.Type;

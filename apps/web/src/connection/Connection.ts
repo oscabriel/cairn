@@ -14,6 +14,8 @@ import type { RpcClientError } from "effect/rpc";
 import { Socket } from "effect/socket";
 import { ManagedResource } from "foldkit";
 
+import { layerEarlyWebSocketConstructor } from "../load/EarlySocket.ts";
+
 /** The typed client for every Cairn RPC. Transport failures arrive as `RpcClientError`. */
 export type CairnClient = RpcClient.FromGroup<
   typeof CairnRpcs,
@@ -47,7 +49,7 @@ const ProtocolLive = RpcClient.layerProtocolSocket({
   Layer.provide(
     Socket.layerWebSocket(Effect.sync(() => socketUrl(location.origin)))
   ),
-  Layer.provide(Socket.layerWebSocketConstructorGlobal),
+  Layer.provide(layerEarlyWebSocketConstructor),
   Layer.provide(RpcSerialization.layerJson)
 );
 

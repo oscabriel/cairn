@@ -11,7 +11,7 @@
 // when it did not change, and the 8 line or 600 character collapse of a user message. Changed: rows
 // come from Cairn's timeline (`TimelineEntries.ts`), whose run id is the turn; a failed turn's error
 // is its own `error` row (t3code draws failure items as work rows) that offers Retry on the newest
-// turn; checkpoint entries make no row (the changed-files card renders them). Removed: worktree
+// turn; a checkpoint entry becomes a `changed-files` row at the end of its turn. Removed: worktree
 // setup, superseded attempts, subagents, plans, HTML renders, MCP apps, created-thread summaries,
 // turn diffs and rollback, citations, the minimap and the streaming-only fast path (stable rows
 // keep settled rows' identity instead).
@@ -34,6 +34,7 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 import { Equal, Option } from "effect";
 
+import type { TurnDiffFile } from "./DiffTree.ts";
 import type {
   Timeline,
   TimelineEntry,
@@ -142,6 +143,15 @@ type RowContent =
       readonly showAssistantMeta: boolean;
       readonly showAssistantCopyButton: boolean;
       readonly assistantCopyStreaming: boolean;
+    }
+  | {
+      /** A turn's changed-files card, after the turn's last row. */
+      readonly kind: "changed-files";
+      readonly id: string;
+      readonly createdAt: number;
+      readonly turn: number;
+      readonly files: ReadonlyArray<TurnDiffFile>;
+      readonly moreFiles: number;
     }
   | {
       readonly kind: "assistant-meta";
@@ -816,6 +826,75 @@ const entryRows = (
   return { rows: before, next: index + 1 };
 };
 
+/** Each turn's changed-files rows, keyed by turn id; a checkpoint that lists nothing makes none. */
+const changedFilesByTurn = (
+  timeline: TimelineRowsInput["timeline"]
+): Map<string, Array<Row>> => {
+  const byTurn = new Map<string, Array<Row>>();
+
+  for (const entry of timeline.entries) {
+    if (
+      entry.kind !== "checkpoint" ||
+      (entry.files.length === 0 && entry.moreFiles === 0)
+    ) {
+      continue;
+    }
+
+    const rows = byTurn.get(entry.turnId) ?? [];
+
+    rows.push({
+      kind: "changed-files",
+      id: entry.id,
+      createdAt: entry.createdAt,
+      turn: entry.turn,
+      files: entry.files,
+      moreFiles: entry.moreFiles,
+    });
+    byTurn.set(entry.turnId, rows);
+  }
+
+  return byTurn;
+};
+
+/**
+ * Places each changed-files row at the end of its turn: before the first user message of a later
+ * turn, or at the end of the transcript.
+ */
+const placeChangedFiles = (
+  timeline: TimelineRowsInput["timeline"],
+  rows: ReadonlyArray<Row>
+): ReadonlyArray<Row> => {
+  const pending = changedFilesByTurn(timeline);
+
+  if (pending.size === 0) {
+    return rows;
+  }
+
+  const order = new Map(timeline.turns.map((turn, index) => [turn.id, index]));
+  const result: Array<Row> = [];
+
+  const flushBefore = (turnIndex: number) => {
+    for (const [turnId, cards] of pending) {
+      if ((order.get(turnId) ?? -1) < turnIndex) {
+        result.push(...cards);
+        pending.delete(turnId);
+      }
+    }
+  };
+
+  for (const row of rows) {
+    if (row.kind === "message" && row.message.role === "user") {
+      flushBefore(order.get(row.message.turnId) ?? Number.POSITIVE_INFINITY);
+    }
+
+    result.push(row);
+  }
+
+  flushBefore(Number.POSITIVE_INFINITY);
+
+  return result;
+};
+
 /** The transcript's rows: messages, folds, grouped work, the live row and the working header. */
 export const deriveTimelineRows = (
   input: TimelineRowsInput
@@ -848,7 +927,10 @@ export const deriveTimelineRows = (
     rows.push(...thinkingRows(context));
   }
 
-  const result = moveMetaBelowTrailingWork(rows);
+  const result = placeChangedFiles(
+    input.timeline,
+    moveMetaBelowTrailingWork(rows)
+  );
 
   return result.map((row, rowIndex) => ({
     ...row,

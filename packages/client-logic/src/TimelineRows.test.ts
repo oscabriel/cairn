@@ -1010,3 +1010,68 @@ describe(shouldCollapseUserMessage, () => {
     assert.isFalse(shouldCollapseUserMessage(text));
   });
 });
+
+const checkpoint = (
+  entryId: string,
+  turnId: string,
+  files: number
+): TimelineEntry => ({
+  kind: "checkpoint",
+  id: `checkpoint:${entryId}`,
+  createdAt: at("05"),
+  turnId,
+  ref: `refs/cairn/checkpoints/t/turn/1`,
+  turn: 1,
+  files: Array.from({ length: files }, (_, index) => ({
+    path: `src/file-${String(index)}.ts`,
+    additions: 1,
+    deletions: 0,
+  })),
+  moreFiles: 0,
+});
+
+describe("changed-files rows", () => {
+  it("places a turn's card after its answer and before the next turn's prompt", () => {
+    const rows = rowsOf(
+      timelineOf(
+        [
+          message("u1", "user", "First", { turnId: "turn-a", createdAt: "00" }),
+          message("a1", "assistant", "Done", {
+            turnId: "turn-a",
+            createdAt: "02",
+          }),
+          message("u2", "user", "Second", {
+            turnId: "turn-b",
+            createdAt: "10",
+          }),
+          checkpoint("9", "turn-a", 2),
+        ],
+        {
+          turns: [
+            turn("turn-a", "00", "02", "completed"),
+            turn("turn-b", "10", "12", "completed"),
+          ],
+        }
+      )
+    );
+
+    const order = ids(rows);
+
+    assert.isAbove(order.indexOf("checkpoint:9"), order.indexOf("a1"));
+    assert.isBelow(order.indexOf("checkpoint:9"), order.indexOf("u2"));
+  });
+
+  it("makes no row for a checkpoint that lists nothing", () => {
+    const rows = rowsOf(
+      timelineOf(
+        [
+          message("u1", "user", "First", { turnId: "turn-a", createdAt: "00" }),
+          checkpoint("9", "turn-a", 0),
+        ],
+        { turns: [turn("turn-a", "00", "02", "completed")] }
+      )
+    );
+
+    assert.notInclude(ids(rows), "checkpoint:9");
+  });
+});

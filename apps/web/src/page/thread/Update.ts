@@ -11,9 +11,12 @@ import { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import type { CairnConnectionService } from "../../connection/Connection.ts";
+import type { Message as DiffMessage } from "../../diff/Message.ts";
+import * as DiffUpdate from "../../diff/Update.ts";
 import { OutMessage as TimelineOutMessage } from "../../timeline/Message.ts";
 import type { Message as TimelineMessage } from "../../timeline/Message.ts";
 import * as Timeline from "../../timeline/Update.ts";
+import { LoadDiffPanel } from "./DiffPanel.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import { ThreadStatus } from "./Model.ts";
@@ -34,6 +37,36 @@ const writeTimeline = (model: Model, timeline: Model["timeline"]): Model =>
 
 const toGotTimelineMessage = (message: TimelineMessage): Message =>
   Message.GotTimelineMessage({ message });
+
+const readDiff = (model: Model) => Option.some(model.diff);
+
+const writeDiff = (model: Model, diff: Model["diff"]): Model =>
+  modifyFields(model, { diff: () => diff });
+
+const toGotDiffMessage = (message: DiffMessage): Message =>
+  Message.GotDiffMessage({ message });
+
+/** Runs one of the diff panel's own calls (`open`, `close`) as a step of the page. */
+const diffStep = (
+  step: (
+    diff: Model["diff"]
+  ) => Update.Return<Model["diff"], DiffMessage, CairnConnectionService>
+) =>
+  Update.foldChildStep({
+    update: step,
+    read: readDiff,
+    write: writeDiff,
+    toParentMessage: toGotDiffMessage,
+  });
+
+/** Asks for the panel's view chunk the first time the panel opens. */
+const loadDiffPanel = (model: Model): InformReturn =>
+  model.diffPanel === "idle"
+    ? {
+        model: modifyFields(model, { diffPanel: () => "loading" as const }),
+        commands: [LoadDiffPanel()],
+      }
+    : { model };
 
 /** Runs one of the transcript's own calls (`switchThread`, `afterView`) as a step of the page. */
 const timelineStep = (
@@ -61,7 +94,7 @@ export interface PageContext {
  */
 export const inform = (model: Model, context: PageContext): InformReturn => {
   if (!Equal.equals(model.threadId, context.threadId)) {
-    return timelineStep((timeline) =>
+    const switched = timelineStep((timeline) =>
       Timeline.switchThread(timeline, Option.map(context.threadId, String))
     )(
       modifyFields(model, {
@@ -72,6 +105,13 @@ export const inform = (model: Model, context: PageContext): InformReturn => {
         view: () => Option.none(),
       })
     );
+
+    const closed = diffStep(DiffUpdate.close)(switched.model);
+
+    return {
+      model: closed.model,
+      commands: [...(switched.commands ?? []), ...(closed.commands ?? [])],
+    };
   }
 
   if (model.epoch !== context.epoch || model.hasClient !== context.hasClient) {
@@ -161,6 +201,32 @@ export const update = (model: Model, message: Message): UpdateReturn =>
                 model: next,
                 outMessage: OutMessage.RequestedSend({ item }),
               }),
+            RequestedDiff:
+              ({ path, turn }) =>
+              (next: Model): UpdateReturn =>
+                Option.match(next.threadId, {
+                  onNone: () => ({ model: next }),
+                  onSome: (threadId) =>
+                    Update.combine(next, [
+                      diffStep((diff) =>
+                        DiffUpdate.open(diff, threadId, turn, path)
+                      ),
+                      loadDiffPanel,
+                    ]),
+                }),
           }),
       })(model, child),
+    GotDiffMessage: ({ message: child }) =>
+      Update.foldChild({
+        update: DiffUpdate.update,
+        read: readDiff,
+        write: writeDiff,
+        toParentMessage: toGotDiffMessage,
+      })(model, child),
+    LoadedDiffPanel: () => ({
+      model: modifyFields(model, { diffPanel: () => "loaded" as const }),
+    }),
+    FailedDiffPanel: () => ({
+      model: modifyFields(model, { diffPanel: () => "failed" as const }),
+    }),
   });

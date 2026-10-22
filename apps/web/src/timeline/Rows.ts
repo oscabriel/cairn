@@ -185,7 +185,7 @@ const messageHeight = (message: TimelineMessage, expanded: boolean): number => {
 };
 
 const FIXED_HEIGHTS: Readonly<
-  Record<Exclude<ListItem["kind"], "message">, number>
+  Record<Exclude<ListItem["kind"], "message" | "changed-files">, number>
 > = {
   history: 44,
   working: 32,
@@ -206,6 +206,10 @@ export const estimatedHeightOf = (
 ): number => {
   if (item.kind === "message") {
     return messageHeight(item.message, expandedUserMessages.has(item.id));
+  }
+
+  if (item.kind === "changed-files") {
+    return 56 + 28 * Math.min(item.files.length, 12);
   }
 
   if (item.kind === "work" && item.isExpandedToolGroup) {

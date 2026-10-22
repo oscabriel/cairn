@@ -54,18 +54,21 @@ export const open = (
     })
   );
 
+/** Closes the panel, keeping the whitespace switch and the loaded grammars. */
+export const close = (model: Model): Return => ({
+  model: modifyFields(initial, {
+    ignoreWhitespace: () => model.ignoreWhitespace,
+    version: () => model.version + 1,
+    highlightedLanguages: () => model.highlightedLanguages,
+  }),
+});
+
 /** The diff panel's update. */
 export const update = (model: Model, message: Message): Return =>
   Message.match<Return>(message, {
     RequestedOpen: ({ path, threadId, turn }) =>
       open(model, threadId, turn, path),
-    ClickedClose: () => ({
-      model: modifyFields(initial, {
-        ignoreWhitespace: () => model.ignoreWhitespace,
-        version: () => model.version + 1,
-        highlightedLanguages: () => model.highlightedLanguages,
-      }),
-    }),
+    ClickedClose: () => close(model),
     ClickedScope: ({ scope }) =>
       scope === model.scope
         ? { model }

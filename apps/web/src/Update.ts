@@ -3,7 +3,7 @@
 // stream follows both without the root reaching into the page's state.
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import { ThreadId } from "@cairn/protocol/Ids";
-import { Equal, Option, Record, Schema } from "effect";
+import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import { Update, Url } from "foldkit";
 import type { Runtime } from "foldkit";
 import { UrlRequest } from "foldkit/navigation";
@@ -55,6 +55,20 @@ import {
   update as updatePush,
 } from "./push/Update.ts";
 import { AppRoute, urlToAppRoute } from "./Route.ts";
+import { sameSettingsContext, settingsContextOf } from "./settings/Context.ts";
+import type { Message as SettingsMessage } from "./settings/Message.ts";
+import { initial as initialSettings } from "./settings/Model.ts";
+import type {
+  Model as SettingsModel,
+  SettingsContext,
+} from "./settings/Model.ts";
+import {
+  init as initSettings,
+  inform as informSettingsModel,
+  update as updateSettings,
+} from "./settings/Update.ts";
+import { LoadSettingsPage } from "./SettingsPage.ts";
+import * as Parked from "./shell/Parked.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
 import { OutMessage as SidebarOutMessage } from "./sidebar/Message.ts";
 import type { Message as SidebarMessage } from "./sidebar/Message.ts";
@@ -380,6 +394,103 @@ const syncPush: Step = (model) => {
     : informPush(model, context);
 };
 
+const toGotSettingsMessage = (message: SettingsMessage): Message =>
+  Message.GotSettingsMessage({ message });
+
+const readSettings = (model: Model): Option.Option<SettingsModel> =>
+  Option.some(model.settings);
+
+const writeSettings = (model: Model, settings: SettingsModel): Model =>
+  modifyFields(model, { settings: () => settings });
+
+const foldSettingsMessage = Update.foldChild({
+  update: updateSettings,
+  read: readSettings,
+  write: writeSettings,
+  toParentMessage: toGotSettingsMessage,
+});
+
+const informSettings = Update.foldChild({
+  update: informSettingsModel,
+  read: readSettings,
+  write: writeSettings,
+  toParentMessage: toGotSettingsMessage,
+});
+
+const startSettings = Update.foldChildStep({
+  update: () => initSettings(),
+  read: readSettings,
+  write: writeSettings,
+  toParentMessage: toGotSettingsMessage,
+});
+
+/** Asks for the settings page's view chunk the first time the settings route opens. */
+const loadSettingsPage: Step = (model) =>
+  model.settingsPage === "idle" && Predicate.isTagged(model.route, "Settings")
+    ? {
+        model: modifyFields(model, { settingsPage: () => "loading" as const }),
+        commands: [LoadSettingsPage()],
+      }
+    : { model };
+
+/** Tells the settings page the epoch, whether it is open and the shell, when they changed. */
+const syncSettings: Step = (model) => {
+  const context: SettingsContext = settingsContextOf({
+    epoch: model.connection.epoch,
+    hasClient: hasClient(model.connection),
+    isOpen: Predicate.isTagged(model.route, "Settings"),
+    shell: model.shell,
+  });
+
+  return sameSettingsContext(model.settings.context, context)
+    ? { model }
+    : informSettings(model, context);
+};
+
+const toGotParkedMessage = (message: Parked.Message): Message =>
+  Message.GotParkedMessage({ message });
+
+const readParked = (model: Model): Option.Option<Parked.Model> =>
+  Option.some(model.parked);
+
+const writeParked = (model: Model, parked: Parked.Model): Model =>
+  modifyFields(model, { parked: () => parked });
+
+const foldParkedMessage = Update.foldChild({
+  update: Parked.update,
+  read: readParked,
+  write: writeParked,
+  toParentMessage: toGotParkedMessage,
+});
+
+const informParked = Update.foldChild({
+  update: Parked.inform,
+  read: readParked,
+  write: writeParked,
+  toParentMessage: toGotParkedMessage,
+});
+
+const sameRow = Option.makeEquivalence<object>((left, right) => left === right);
+
+/** Tells the hold banner the open thread's shell row and the connection, when they changed. */
+const syncParked: Step = (model) => {
+  const thread = Option.flatMap(routedThreadId(model.route), (id) =>
+    Option.flatMap(model.shell, (shell) =>
+      Array.findFirst(shell.threads, (row) => row.id === id)
+    )
+  );
+
+  const connected = hasClient(model.connection);
+
+  const unchanged =
+    model.parked.hasClient === connected &&
+    sameRow(model.parked.thread, thread);
+
+  return unchanged
+    ? { model }
+    : informParked(model, { thread, hasClient: connected });
+};
+
 /** Tells the sidebar the shell, the open page, the connection and the drafts, when they changed. */
 const syncSidebar: Step = (model) => {
   const current = model.sidebar.context;
@@ -453,6 +564,7 @@ const syncComposer: Step = (model) => {
     shell: model.shell,
     threadView: Option.map(model.thread.view, (state) => state.view),
     defaults: Option.map(model.hello, (hello) => hello.defaults),
+    usage: model.settings.usage,
   });
 
   return Composer.contextChanged(model.composer, context)
@@ -616,6 +728,20 @@ const step = (received: Message): Step =>
       ({ message: pushMessage }) =>
       (model) =>
         foldPushMessage(model, pushMessage),
+    GotSettingsMessage:
+      ({ message: settingsMessage }) =>
+      (model) =>
+        foldSettingsMessage(model, settingsMessage),
+    GotParkedMessage:
+      ({ message: parkedMessage }) =>
+      (model) =>
+        foldParkedMessage(model, parkedMessage),
+    LoadedSettingsPage: () => (model) => ({
+      model: modifyFields(model, { settingsPage: () => "loaded" as const }),
+    }),
+    FailedSettingsPage: () => (model) => ({
+      model: modifyFields(model, { settingsPage: () => "failed" as const }),
+    }),
   });
 
 /** The root update. */
@@ -628,6 +754,9 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncComposer,
     syncSidebar,
     syncPush,
+    syncSettings,
+    syncParked,
+    loadSettingsPage,
   ]);
 };
 
@@ -652,6 +781,9 @@ export const init: Runtime.RoutingApplicationInit<
       sidebar: initialSidebar,
       composer,
       push: initialPush,
+      settings: initialSettings,
+      parked: Parked.initial,
+      settingsPage: "idle",
     }),
     toParentMessage: toGotComposerMessage,
   });
@@ -663,6 +795,10 @@ export const init: Runtime.RoutingApplicationInit<
     syncSidebar,
     startPush,
     syncPush,
+    startSettings,
+    syncSettings,
+    syncParked,
+    loadSettingsPage,
   ]);
 
   return {

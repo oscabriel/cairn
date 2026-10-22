@@ -24,13 +24,8 @@ const LEFTOVERS: ReadonlyArray<string> = [
   '"t3/',
 ];
 
-/**
- * Leftovers waiting on their owner, by file: the view-transition names in styles.css are 5C's
- * (wave 5 tokens and primitives), handed off by 4F.
- */
-const KNOWN = {
-  "apps/web/src/styles.css": ["t3-mobile"],
-};
+/** Leftovers waiting on their owner, by file. None remain. */
+const KNOWN: Readonly<Record<string, ReadonlyArray<string>>> = {};
 
 const SCANNED = /\.(?:ts|tsx|js|mjs|css|html|json|webmanifest)$/u;
 

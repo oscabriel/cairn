@@ -5,12 +5,16 @@ import { Effect } from "effect";
 import { Runtime } from "foldkit";
 
 import { loadOutbox } from "./connection/Outbox.ts";
+import { openEarlySocket } from "./load/EarlySocket.ts";
+import { markInteractive } from "./load/LoadMark.ts";
 import { Message } from "./Message.ts";
 import { Flags, Model } from "./Model.ts";
 import { readBootData } from "./shell/ShellStore.ts";
 import { managedResources, subscriptions } from "./Subscription.ts";
 import { init, update } from "./Update.ts";
 import { view } from "./View.ts";
+
+openEarlySocket();
 
 const flags = Effect.gen(function* () {
   const boot = yield* readBootData;
@@ -40,3 +44,5 @@ const application = Runtime.makeApplication({
 });
 
 Runtime.run(application, { flags });
+
+Effect.runFork(markInteractive);

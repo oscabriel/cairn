@@ -17,6 +17,7 @@ import { BrainConfig } from "./brain/BrainConfig.ts";
 import { BridgeCwd } from "./brain/BridgeCwdExtension.ts";
 import type { CairnExtension } from "./brain/Extensions.ts";
 import { ExtensionSet } from "./brain/ExtensionSet.ts";
+import { HarnessSeam } from "./brain/HarnessSeam.ts";
 import { ModelSource } from "./brain/ModelSource.ts";
 import { PiDurableHarness } from "./brain/PiDurableHarness.ts";
 import { ScriptedHarness } from "./brain/ScriptedHarness.ts";
@@ -24,10 +25,18 @@ import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
 import { ExecutorSweep } from "./executor/ExecutorSweep.ts";
+import {
+  CHECKPOINT_ENTRY_KIND,
+  CheckpointCapture,
+  CheckpointEntries,
+  CheckpointEntryError,
+} from "./git/CheckpointCapture.ts";
+import { Diffs } from "./git/Diffs.ts";
 import { Git } from "./git/Git.ts";
 import { Health } from "./http/Health.ts";
 import { HttpLive } from "./http/Http.ts";
-import { BootJson } from "./http/Static.ts";
+import { BootData } from "./load/BootData.ts";
+import { PeerPath } from "./load/PeerPath.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { FileSearch } from "./projects/FileSearch.ts";
@@ -195,6 +204,32 @@ export const ScriptedBrain = Layer.succeed(
   )
 );
 
+/** Checkpoint entries written through the harness as passive `cairn.checkpoint` entries. */
+const CheckpointEntriesLive = Layer.effect(
+  CheckpointEntries,
+  HarnessSeam.useSync((harness) =>
+    CheckpointEntries.of({
+      write: (threadId, requestId, data) =>
+        harness
+          .write(threadId, {
+            requestId,
+            kind: CHECKPOINT_ENTRY_KIND,
+            data: { ...data, files: data.files.map((file) => ({ ...file })) },
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new CheckpointEntryError({
+                  message: cause.message,
+                  threadId,
+                  cause,
+                })
+            )
+          ),
+    })
+  )
+);
+
 /**
  * Everything but the entry point's choices. Needs `ServerConfig`, `Identity`, the platform's
  * `FileSystem`, a harness (`HarnessSeam` and `HarnessBoot`) and its models (`ModelSource` and the
@@ -202,6 +237,7 @@ export const ScriptedBrain = Layer.succeed(
  */
 export const AppLayer = Layer.mergeAll(HttpLive, Boot, ExecutorSignInPush).pipe(
   Layer.provide(HandlersLayer),
+  Layer.provide(BootData),
   Layer.provide(
     SessionHelloWithPush.pipe(
       Layer.provide(
@@ -209,10 +245,14 @@ export const AppLayer = Layer.mergeAll(HttpLive, Boot, ExecutorSignInPush).pipe(
       )
     )
   ),
-  Layer.provide(BootJson.layerNone),
+  Layer.provide(PeerPath.layer),
   Layer.provide(ExecutorSweep.layerNoDeps),
   Layer.provide(Shutdown.layerFrom(shutdownHooks)),
   Layer.provide(Health.layer),
+  Layer.provide(Diffs.layer),
+  Layer.provideMerge(
+    CheckpointCapture.layer.pipe(Layer.provide(CheckpointEntriesLive))
+  ),
   Layer.provide(ShellProjector.layer.pipe(Layer.provide(ClaudeSignals))),
   Layer.provideMerge(ThreadsLive),
   Layer.provideMerge(PushLayer),

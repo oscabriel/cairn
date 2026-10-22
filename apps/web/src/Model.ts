@@ -10,6 +10,8 @@ import { Connection } from "./connection/Reconnect.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Model as PushModel } from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
+import { Model as SettingsModel } from "./settings/Model.ts";
+import { Model as ParkedModel } from "./shell/Parked.ts";
 import { BootData } from "./shell/ShellStore.ts";
 import { Model as SidebarModel } from "./sidebar/Model.ts";
 
@@ -31,6 +33,10 @@ export const Model = Schema.Struct({
   sidebar: SidebarModel,
   composer: Composer.Model,
   push: PushModel,
+  settings: SettingsModel,
+  parked: ParkedModel,
+  /** Where the settings page's lazily loaded view is (`SettingsPage.ts`). */
+  settingsPage: Schema.Literals(["idle", "loading", "loaded", "failed"]),
 });
 
 export type Model = typeof Model.Type;

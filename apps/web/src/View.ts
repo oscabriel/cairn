@@ -8,7 +8,10 @@ import * as Composer from "./composer/View.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
+import { view as pushView } from "./push/View.ts";
 import { AppRoute } from "./Route.ts";
+import { loadedSettingsView, settingsPlaceholder } from "./SettingsPage.ts";
+import { view as parkedView } from "./shell/Parked.ts";
 import { view as sidebarView } from "./sidebar/View.ts";
 
 const placeholder = (h: HtmlBuilder<Message>, text: string): Html =>
@@ -65,6 +68,12 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.div(
         [h.Class("relative flex min-h-0 flex-1 flex-col")],
         [
+          h.submodel({
+            slotId: "thread-hold",
+            model: model.parked,
+            view: parkedView,
+            toParentMessage: (message) => Message.GotParkedMessage({ message }),
+          }),
           // The transcript scrolls itself, so this wrapper must not.
           h.div(
             [h.Class("flex min-h-0 flex-1 flex-col")],
@@ -87,13 +96,27 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
       ),
     Draft: () => composer(model, h),
     Settings: () =>
-      h.section(
-        [
-          h.DataAttribute("testid", "settings-page"),
-          h.Class("mx-auto w-full max-w-2xl p-6"),
-        ],
-        [h.h1([h.Class("font-medium text-lg")], ["Settings"])]
-      ),
+      Option.match(loadedSettingsView(), {
+        onNone: () => settingsPlaceholder(h, model.settingsPage === "failed"),
+        onSome: (settingsView) =>
+          h.submodel({
+            slotId: "settings",
+            model: model.settings,
+            view: settingsView,
+            viewInputs: {
+              notifications: () =>
+                h.submodel({
+                  slotId: "push-toggle",
+                  model: model.push,
+                  view: pushView,
+                  toParentMessage: (message) =>
+                    Message.GotPushMessage({ message }),
+                }),
+            },
+            toParentMessage: (message) =>
+              Message.GotSettingsMessage({ message }),
+          }),
+      }),
     NotFound: ({ path }) => placeholder(h, `Nothing lives at ${path}.`),
   });
 

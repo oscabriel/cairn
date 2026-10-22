@@ -118,13 +118,11 @@ export const size = Effect.fnUntraced(
   function* (path: string) {
     const fs = yield* FileSystem.FileSystem;
 
-    if (!(yield* fs.exists(path))) {
-      return 0;
-    }
-
-    const info = yield* fs.stat(path);
-
-    return Number(info.size);
+    // One stat, not exists-then-stat: the log can be removed between the two (a replaced log).
+    return yield* fs.stat(path).pipe(
+      Effect.map((info) => Number(info.size)),
+      Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(0))
+    );
   },
   (effect, path) =>
     Effect.mapError(

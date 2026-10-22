@@ -144,6 +144,16 @@ _Avoid_: plugin
 
 **Thread stream**: The stream of one thread's conversation: a snapshot of its projected view, then the changes to it, with a fresh snapshot on every subscribe.
 
+**Window**: The newest part of a long thread that a thread stream subscription starts with (at most 10 user turns, 75 entries, 1 MiB). `entriesOffset` counts the active entries before it, and `thread.history` pages them in.
+
+**Boot data**: The JSON the brain inlines in `index.html` (shell snapshot, protocol, build id, push key) so the sidebar paints before the socket opens.
+
+**Load report**: The page's own account of one load (time to interactive, requests before it, standalone), logged by the brain as one `load.report` line with the peer's direct or DERP path.
+
+**Client settings**: The settings that belong to one device (send shortcut, follow-up behaviour, timestamp format, confirm delete, composer collapse, theme, font sizes, chat width, diff layout), saved in localStorage under `cairn:client-settings:v1`. Server settings are the ones the brain keeps for every device.
+
+**Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a spent plan window (Limited).
+
 **Projection**: The client's view of a thread: pi-durable's conversation with brain-only documents and Claude stamps removed, image data replaced by references and long strings cut.
 
 **Draft**: A message not yet sent, kept in the browser per thread (or per new-thread draft) so typing never waits on the network.
@@ -186,6 +196,10 @@ _Avoid_: preview, tunnel
 
 _Avoid_: e2e, test suite (for the recipe)
 
+**Parity baseline**: t3code's captured states (screenshots, page HTML, landmark files, `states.json` with masks, `version.json`) committed under `judges/fixtures/parity/t3@fe27e8e3/<group>/`, written only by `judges/capture.ts t3` when the installed nightly matches ADR 0015 (D56).
+
+**Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens; the structure judge compares landmarks by key. _Avoid_: anchor.
+
 **Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a verifier on another model family, or the user.
 
 _Avoid_: reviewer (alone), checker
@@ -196,7 +210,7 @@ _Avoid_: reviewer (alone), checker
 
 **Prepared image**: An uploaded image fitted to 1,568 px at upload time (`<id>.prepared`): the bytes the model receives.
 
-**Checkpoint**: A git ref the brain records for a thread's worktree at the end of each turn, so the diff of any turn, or of the whole thread, can be shown.
+**Checkpoint**: A git ref (`refs/cairn/checkpoints/<thread>/turn/<n>`) the brain records for a thread's working folder before its first run (turn 0) and at the end of each run, so the diff of any turn, or of the whole thread, can be shown. Scratch threads have none.
 
 ## Milestones
 

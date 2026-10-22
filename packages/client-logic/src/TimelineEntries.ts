@@ -35,6 +35,9 @@ import type { ConversationView, Entry } from "@cairn/protocol/Thread";
 import { ProjectedImage } from "@cairn/protocol/Thread";
 import { Array, Data, Function, Option, Predicate, Schema } from "effect";
 
+import { checkpointSummaryOf } from "./DiffTree.ts";
+import type { TurnDiffFile } from "./DiffTree.ts";
+
 // ---------------------------------------------------------------------------------------------
 // Types
 
@@ -134,6 +137,8 @@ export type TimelineEntry =
       readonly turnId: string;
       readonly ref: string;
       readonly turn: number;
+      readonly files: ReadonlyArray<TurnDiffFile>;
+      readonly moreFiles: number;
     };
 
 /** How a turn ended, or that it is still running. */
@@ -252,13 +257,6 @@ const Diagnostics = Schema.Struct({
 });
 
 const decodeDiagnostics = Schema.decodeUnknownOption(Diagnostics);
-
-const CheckpointData = Schema.Struct({
-  ref: Schema.String,
-  turn: Schema.Finite,
-});
-
-const decodeCheckpoint = Schema.decodeUnknownOption(CheckpointData);
 
 const ToolSlot = Schema.Struct({
   callId: Schema.String,
@@ -582,6 +580,8 @@ type EntryReading = Data.TaggedEnum<{
     readonly entry: Entry;
     readonly ref: string;
     readonly turn: number;
+    readonly files: ReadonlyArray<TurnDiffFile>;
+    readonly moreFiles: number;
   };
   /** An entry the transcript does not show, by its kind. */
   Skip: { readonly kind: string };
@@ -642,13 +642,15 @@ const readEntryUncached = (entry: Entry): EntryReading => {
     }
 
     case "cairn.checkpoint": {
-      return Option.match(decodeCheckpoint(entry.data), {
+      return Option.match(checkpointSummaryOf(entry.data), {
         onNone: () => EntryReading.Skip({ kind: entry.kind }),
         onSome: (data) =>
           EntryReading.Checkpoint({
             entry,
             ref: data.ref,
             turn: data.turn,
+            files: data.files,
+            moreFiles: data.moreFiles,
           }),
       });
     }
@@ -1058,6 +1060,8 @@ const readCommitted = (
         turnId: owner.id,
         ref: found.ref,
         turn: found.turn,
+        files: found.files,
+        moreFiles: found.moreFiles,
       });
     },
 

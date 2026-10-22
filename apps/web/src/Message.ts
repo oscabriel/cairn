@@ -11,6 +11,8 @@ import { Message as ComposerMessage } from "./composer/Message.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Message as PushMessage } from "./push/Message.ts";
+import { Message as SettingsMessage } from "./settings/Message.ts";
+import { Message as ParkedMessage } from "./shell/Parked.ts";
 import { Message as SidebarMessage } from "./sidebar/Message.ts";
 
 /** Everything the root reacts to. */
@@ -53,6 +55,12 @@ export const Message = defineMessageUnion({
   GotSidebarMessage: { message: SidebarMessage },
   GotComposerMessage: { message: ComposerMessage },
   GotPushMessage: { message: PushMessage },
+  GotSettingsMessage: { message: SettingsMessage },
+  GotParkedMessage: { message: ParkedMessage },
+  /** The settings page's view chunk loaded. */
+  LoadedSettingsPage: {},
+  /** The settings page's view chunk could not be fetched. */
+  FailedSettingsPage: {},
 });
 
 export type Message = typeof Message.Type;

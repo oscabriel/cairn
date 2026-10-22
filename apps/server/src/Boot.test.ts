@@ -44,10 +44,12 @@ import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
+import { Diffs } from "./git/Diffs.ts";
 import { Health } from "./http/Health.ts";
 import { HttpLive } from "./http/Http.ts";
 import { Identity, IdentityRefused, USER_HEADER } from "./http/Identity.ts";
 import { BootJson } from "./http/Static.ts";
+import { PeerPath } from "./load/PeerPath.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { PushLayer } from "./push/PushLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
@@ -84,6 +86,7 @@ const fakeHarness = (
     stop: () => unsupported("stop"),
     withdraw: () => unsupported("withdraw"),
     respond: () => unsupported("respond"),
+    write: () => unsupported("write"),
     compact: () => unsupported("compact"),
     watch: () => Stream.die("the fake harness does not watch"),
     history: () => unsupported("page history"),
@@ -228,8 +231,10 @@ const GatedApp = Layer.mergeAll(
   )
 ).pipe(
   Layer.provide(HandlersLayer),
+  Layer.provide(Diffs.layer),
   Layer.provide(SessionHello.layer),
   Layer.provide(BootJson.layerNone),
+  Layer.provide(PeerPath.fixed(new Map())),
   Layer.provide(Shutdown.layerFrom(shutdownHooks)),
   Layer.provide(Health.layer),
   Layer.provide(ShellProjector.layer),

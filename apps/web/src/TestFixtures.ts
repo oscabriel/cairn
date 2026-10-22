@@ -12,6 +12,8 @@ import type { Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import * as Push from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
+import * as Settings from "./settings/Model.ts";
+import * as Parked from "./shell/Parked.ts";
 import { initial as initialSidebar } from "./sidebar/Model.ts";
 
 /** An empty shell at sequence 0. */
@@ -34,6 +36,9 @@ export const connectingModel: Model = {
   sidebar: initialSidebar,
   composer: Composer.initial,
   push: Push.initial,
+  settings: Settings.initial,
+  parked: Parked.initial,
+  settingsPage: "idle",
 };
 
 /** The same page once the shell is current on epoch `epoch`. */

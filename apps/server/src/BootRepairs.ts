@@ -11,6 +11,7 @@ import { retryParkedApprovalWaits } from "./Boot.ts";
 import type { HarnessSeam } from "./brain/HarnessSeam.ts";
 import { sweepUnfinishedExecutorRequests } from "./executor/ExecutorSweep.ts";
 import type { ExecutorSweep } from "./executor/ExecutorSweep.ts";
+import { CheckpointCapture } from "./git/CheckpointCapture.ts";
 import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
 
 /** One repair: a name for the log and the effect. */
@@ -43,7 +44,13 @@ export const bootRepair = <E, R>(
 
 /** Every boot repair, in order. */
 export const bootRepairs: ReadonlyArray<
-  BootRepair<AttachmentStore | ExecutorSweep | HarnessSeam | ThreadLaunch>
+  BootRepair<
+    | AttachmentStore
+    | CheckpointCapture
+    | ExecutorSweep
+    | HarnessSeam
+    | ThreadLaunch
+  >
 > = [
   sweepAttachmentUploads,
   bootRepair("executor-sweep", sweepUnfinishedExecutorRequests),
@@ -51,6 +58,10 @@ export const bootRepairs: ReadonlyArray<
   bootRepair(
     "resume interrupted launches",
     ThreadLaunch.use((launcher) => launcher.resumePending)
+  ),
+  bootRepair(
+    "checkpoint repair",
+    CheckpointCapture.use((capture) => capture.repair)
   ),
 ];
 

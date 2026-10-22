@@ -7,6 +7,7 @@ import { AttachmentRoute } from "../attachments/AttachmentRoute.ts";
 import { UploadRoute } from "../attachments/UploadRoute.ts";
 import { EntryImageRoute } from "../brain/EntryImageRoute.ts";
 import { ExecutorCallbackRoute } from "../executor/ExecutorCallbackRoute.ts";
+import { LoadRoute } from "../load/LoadRoute.ts";
 import { ShellSnapshotRoute } from "../shell/ShellSnapshotRoute.ts";
 import { Guard } from "./Guard.ts";
 import { HealthRoute } from "./Health.ts";
@@ -25,5 +26,6 @@ export const Routes = Layer.mergeAll(
   UploadRoute,
   AttachmentRoute,
   ExecutorCallbackRoute,
+  LoadRoute,
   StaticRoutes
 );

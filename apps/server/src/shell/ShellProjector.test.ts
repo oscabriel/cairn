@@ -91,6 +91,7 @@ const FakeLayer = Layer.effectContext(
       stop: () => unsupported("stop"),
       withdraw: () => unsupported("withdraw"),
       respond: () => unsupported("respond"),
+      write: () => unsupported("write"),
       compact: () => unsupported("compact"),
       watch: (threadId) =>
         Stream.unwrap(

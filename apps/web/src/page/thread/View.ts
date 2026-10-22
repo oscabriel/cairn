@@ -4,7 +4,9 @@ import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { isOpen } from "../../diff/Model.ts";
 import * as Timeline from "../../timeline/View.ts";
+import { diffPanelPlaceholder, loadedDiffView } from "./DiffPanel.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import { ThreadStatus } from "./Model.ts";
@@ -44,6 +46,21 @@ const statusLine = (model: Model, h: HtmlBuilder<Message>): Html =>
       ),
   });
 
+/** The diff panel while it is open: its view once the chunk has loaded, a placeholder before. */
+const diffPanel = (model: Model, h: HtmlBuilder<Message>): Html =>
+  isOpen(model.diff)
+    ? Option.match(loadedDiffView(), {
+        onNone: () => diffPanelPlaceholder(h, model.diffPanel === "failed"),
+        onSome: (view) =>
+          h.submodel({
+            slotId: "diff",
+            model: model.diff,
+            view,
+            toParentMessage: (message) => Message.GotDiffMessage({ message }),
+          }),
+      })
+    : h.empty;
+
 /** The thread page. */
 export const view = Submodel.defineView<Model, Message, ViewInputs>(
   (model, { title, workspaceRoot }, h) =>
@@ -70,6 +87,7 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
           viewInputs: { state: model.view, workspaceRoot },
           toParentMessage: (message) => Message.GotTimelineMessage({ message }),
         }),
+        diffPanel(model, h),
       ]
     )
 );

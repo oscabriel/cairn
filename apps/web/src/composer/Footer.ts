@@ -74,11 +74,13 @@ import { Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
   modelLabel,
+  resolvedModel,
   resolvedThinking,
   thinkingLabel,
   thinkingLevels,
 } from "./Models.ts";
 import { isThreadRunning } from "./Update.ts";
+import { usageMeterView } from "./UsageMeter.ts";
 
 const RUNTIME_ICONS: Readonly<Record<RuntimeModeIcon, IconNode>> = {
   lock: Lock,
@@ -629,6 +631,13 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
           h.Class(ACTIONS_CLASS),
         ],
         [
+          usageMeterView(h, {
+            usage: model.context.usage,
+            provider: Option.match(resolvedModel(model), {
+              onNone: () => "",
+              onSome: (ref) => ref.provider,
+            }),
+          }),
           attachButton(
             (message) => Message.GotAttachmentsMessage({ message }),
             h

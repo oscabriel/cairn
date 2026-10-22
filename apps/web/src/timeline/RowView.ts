@@ -71,6 +71,7 @@ import {
 
 import { icon } from "../composer/Icon.ts";
 import type { IconNode } from "../composer/Icon.ts";
+import { changedFilesCard } from "../diff/Card.ts";
 import { markdownView } from "./markdown/View.ts";
 import { Message } from "./Message.ts";
 import type { HistoryState } from "./Model.ts";
@@ -754,5 +755,14 @@ export const rowView = (h: H, item: ListItem, context: RowContext): Html =>
       "turn-fold": (row) => foldView(h, row),
       "context-compaction": (row) => compactionView(h, row),
       error: (row) => errorView(h, row, context),
+      "changed-files": (row) =>
+        frame(h, "changed-files", "pb-4", [
+          changedFilesCard(h, {
+            turn: row.turn,
+            files: row.files,
+            moreFiles: row.moreFiles,
+            onOpen: (path) => Message.ClickedOpenDiff({ turn: row.turn, path }),
+          }),
+        ]),
     })
   );

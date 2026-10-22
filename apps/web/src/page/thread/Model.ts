@@ -5,6 +5,7 @@ import { ConversationView, Entry } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
+import * as Diff from "../../diff/Model.ts";
 import * as Timeline from "../../timeline/Model.ts";
 
 /** The client's copy of one thread's view; the Model form of client-logic's `ThreadViewState`. */
@@ -46,6 +47,10 @@ export const Model = Schema.Struct({
   view: Schema.Option(ThreadViewModel),
   /** The transcript: its list, open folds and per-thread scroll memory. */
   timeline: Timeline.Model,
+  /** The diff panel (closed until a changed-files card opens it). */
+  diff: Diff.Model,
+  /** Where the panel's lazily loaded view is (`DiffPanel.ts`). */
+  diffPanel: Schema.Literals(["idle", "loading", "loaded", "failed"]),
 });
 
 export type Model = typeof Model.Type;
@@ -59,4 +64,6 @@ export const initial: Model = {
   status: ThreadStatus.Loading(),
   view: Option.none(),
   timeline: Timeline.initial,
+  diff: Diff.initial,
+  diffPanel: "idle",
 };

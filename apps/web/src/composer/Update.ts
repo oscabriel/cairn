@@ -148,7 +148,8 @@ export const contextChanged = (
       current.view,
       next.view
     ) ||
-    !Equal.equals(current.defaults, next.defaults)
+    !Equal.equals(current.defaults, next.defaults) ||
+    current.usage !== next.usage
   );
 };
 

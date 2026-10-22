@@ -16,6 +16,7 @@ import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { subscriptions as pushSubscriptions } from "./push/Subscription.ts";
+import { subscriptions as settingsSubscriptions } from "./settings/Subscription.ts";
 import { subscribeShell } from "./shell/ShellStore.ts";
 import { subscriptions as sidebarSubscriptions } from "./sidebar/Subscription.ts";
 
@@ -150,13 +151,22 @@ const liftedPushSubscriptions = Subscription.lift(pushSubscriptions)<
   toParentMessage: (message) => Message.GotPushMessage({ message }),
 });
 
+const liftedSettingsSubscriptions = Subscription.lift(settingsSubscriptions)<
+  Model,
+  Message
+>({
+  read: (model) => Option.some(model.settings),
+  toParentMessage: (message) => Message.GotSettingsMessage({ message }),
+});
+
 /** Every root subscription. */
 export const subscriptions = Subscription.aggregate(
   rootSubscriptions,
   threadSubscriptions,
   composerSubscriptions,
   liftedSidebarSubscriptions,
-  liftedPushSubscriptions
+  liftedPushSubscriptions,
+  liftedSettingsSubscriptions
 );
 
 /** The connection resource, one client per epoch. */

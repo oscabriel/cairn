@@ -1,0 +1,300 @@
+[
+  {
+    "group": "hero",
+    "view": "1440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "hero",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900
+    },
+    "capturedAtMs": 1792693805555,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows"
+      }
+    ]
+  },
+  {
+    "group": "hero",
+    "view": "1440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "project-popover",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900
+    },
+    "capturedAtMs": 1792693811119,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows"
+      }
+    ]
+  },
+  {
+    "group": "hero",
+    "view": "1440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "slash-menu",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900
+    },
+    "capturedAtMs": 1792693816890,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows"
+      }
+    ]
+  },
+  {
+    "group": "hero",
+    "view": "1440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "at-menu",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900
+    },
+    "capturedAtMs": 1792693823657,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows"
+      }
+    ]
+  },
+  {
+    "group": "hero",
+    "view": "1440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "attachments",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900
+    },
+    "capturedAtMs": 1792693830394,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows"
+      }
+    ]
+  },
+  {
+    "group": "hero",
+    "view": "390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mobile": true,
+    "state": "hero",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "capturedAtMs": 1792693834976,
+    "masks": []
+  },
+  {
+    "group": "hero",
+    "view": "390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mobile": true,
+    "state": "project-popover",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "capturedAtMs": 1792693839633,
+    "masks": []
+  },
+  {
+    "group": "hero",
+    "view": "390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mobile": true,
+    "state": "slash-menu",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "capturedAtMs": 1792693844447,
+    "masks": []
+  },
+  {
+    "group": "hero",
+    "view": "390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mobile": true,
+    "state": "at-menu",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "capturedAtMs": 1792693850316,
+    "masks": []
+  },
+  {
+    "group": "hero",
+    "view": "390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mobile": true,
+    "state": "attachments",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "capturedAtMs": 1792693856084,
+    "masks": []
+  },
+  {
+    "group": "hero",
+    "view": "1180",
+    "viewport": {
+      "width": 1180,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "footer",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1180,
+      "height": 900
+    },
+    "capturedAtMs": 1792693860940,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows"
+      }
+    ]
+  },
+  {
+    "group": "hero",
+    "view": "980",
+    "viewport": {
+      "width": 980,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "footer",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 980,
+      "height": 900
+    },
+    "capturedAtMs": 1792693865880,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows"
+      }
+    ]
+  },
+  {
+    "group": "hero",
+    "view": "820",
+    "viewport": {
+      "width": 820,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "footer",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 820,
+      "height": 900
+    },
+    "capturedAtMs": 1792693870731,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 208,
+        "height": 900,
+        "reason": "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows"
+      }
+    ]
+  }
+]

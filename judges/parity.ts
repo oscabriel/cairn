@@ -1,245 +1,114 @@
 /// <reference lib="dom" />
-/* oxlint-disable no-await-in-loop -- a judge drives one browser step after another, on purpose */
-// The parity screenshot harness: one headless Chromium renders t3code and Cairn the same way and saves the pairs.
-//   node judges/parity.ts --cairn <url> --session <t3 storage state> --out <dir> [--t3 https://t3.gneiss.run/]
+/* oxlint-disable no-await-in-loop -- a judge compares one pair after another, on purpose */
+// The parity pixel judge (plan 4F, D56): compares Cairn's captures with t3code's committed baseline,
+// state by state, and writes the pairs, the diffs and a report for the user.
 //
-// The t3code session comes from a read-only pairing (`t3 pair --scope orchestration:read`). The thread rows and
-// draft project t3code shows are copied into Cairn's URL as `#fixture=`, so both apps show the same data. Views: the
-// new-thread page at 1440x900, at 390x844, and at 390x844 with the sidebar open. Writes <out>/<view>-{t3,cairn,diff}.png,
-// fixture.json, and diff.json with the share of pixels that differ per view.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+//   node judges/capture.ts cairn              # first: Cairn's half, into <out>/cairn/
+//   node judges/parity.ts [--out <dir>] [--strict]
+//
+// For every state in judges/fixtures/parity/t3@fe27e8e3/<group>/states.json it loads t3code's PNG
+// and Cairn's, blacks out the state's masks (declared differences, each with its reason) on both,
+// and counts the pixels whose colour differs by more than 24 (the sum over red, green and blue) at
+// `deviceScaleFactor: 2`. Budget: 0 percent, or 0.05 percent for a state that shows ticking labels.
+// A state with no Cairn capture, or one the baseline cannot have (the streaming assistant: the
+// read-only pairing cannot start a turn), is listed as missing.
+//
+// The control must fail as designed: Cairn's phone hero with the sidebar wrongly open
+// (`hero/390-control-sidebar-open.png`) against t3code's closed one, unmasked, must differ by more
+// than 50 percent, or the judge is blind and exits 1.
+//
+// Writes <out>/<group>/<view>-<state>-{t3,cairn,diff}.png, <out>/report.json and <out>/index.html.
+// Exits 0 when the report is complete and the control failed; `--strict` also requires every state
+// within budget, which is wave 5's bar.
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
+import { Schema } from "effect";
 import { chromium } from "playwright";
-import type { BrowserContext, BrowserContextOptions, Page } from "playwright";
+import type { Page } from "playwright";
 
-interface View {
-  readonly name: string;
-  readonly viewport: { readonly width: number; readonly height: number };
-  readonly mobile: boolean;
-  readonly sidebar: boolean;
-}
+import { Rect } from "./fixtures/parity/Landmarks.ts";
 
-// One sidebar row as Cairn's spike renders it.
-interface FixtureRow {
-  project: string;
-  monogram: string;
-  tone: string;
-  title: string;
-  status: string;
-  age: string;
-  branch?: string;
-}
+const root = path.join(import.meta.dirname, "..");
 
-interface Fixture {
-  readonly rows: ReadonlyArray<FixtureRow>;
-  readonly settled: number;
-  readonly draft: Record<string, string>;
-}
+const BASELINE = path.join(root, "judges/fixtures/parity/t3@fe27e8e3");
 
-const { values } = parseArgs({
-  options: {
-    t3: { type: "string", default: "https://t3.gneiss.run/" },
-    cairn: { type: "string" },
-    session: { type: "string" },
-    out: { type: "string" },
-  },
-});
+const GROUPS = ["sidebar", "hero", "thread"] as const;
 
-const { t3, cairn, session, out } = values;
-
-if (cairn === undefined || session === undefined || out === undefined) {
-  throw new Error(
-    "usage: parity.ts --cairn <url> --session <file> --out <dir> [--t3 <url>]"
-  );
-}
-
-mkdirSync(out, { recursive: true });
-
-const views: ReadonlyArray<View> = [
+/** States the baseline cannot hold, with why; reported as missing, not failed silently. */
+const UNCAPTURABLE: ReadonlyArray<{
+  readonly state: string;
+  readonly reason: string;
+}> = [
   {
-    name: "1440",
-    viewport: { width: 1440, height: 900 },
-    mobile: false,
-    sidebar: false,
-  },
-  {
-    name: "390",
-    viewport: { width: 390, height: 844 },
-    mobile: true,
-    sidebar: false,
-  },
-  {
-    name: "390-sidebar",
-    viewport: { width: 390, height: 844 },
-    mobile: true,
-    sidebar: true,
+    state: "thread/streaming",
+    reason:
+      "t3code's read-only pairing cannot start a turn, so a streaming assistant has no baseline",
   },
 ];
 
-const browser = await chromium.launch();
+const CONTROL_MIN_PERCENT = 50;
 
-const open = async (
-  view: View,
-  url: string,
-  storageState?: string
-): Promise<{ context: BrowserContext; page: Page }> => {
-  const options: BrowserContextOptions = {
-    viewport: view.viewport,
-    deviceScaleFactor: 2,
-    isMobile: view.mobile,
-    hasTouch: view.mobile,
-    colorScheme: "dark",
-  };
+const TICKING_BUDGET = 0.05;
 
-  if (storageState !== undefined) {
-    options.storageState = storageState;
-  }
+const { values } = parseArgs({
+  options: {
+    out: {
+      type: "string",
+      default: path.join(
+        homedir(),
+        "Developer/agent-artifacts/cairn/v2/phase-1-parity"
+      ),
+    },
+    cairn: { type: "string" },
+    strict: { type: "boolean", default: false },
+  },
+});
 
-  const context = await browser.newContext(options);
+const { out } = values;
 
-  const page = await context.newPage();
+const cairnDir = values.cairn ?? path.join(out, "cairn");
 
-  await page.goto(url, { waitUntil: "networkidle" });
-  await page.waitForTimeout(2000);
+/** The fields every group's state record shares. */
+const StateRecord = Schema.Struct({
+  view: Schema.String,
+  state: Schema.String,
+  clip: Rect,
+  masks: Schema.Array(Schema.Struct({ ...Rect.fields, reason: Schema.String })),
+});
 
-  return { context, page };
-};
+type StateRecord = typeof StateRecord.Type;
 
-// t3code's rows and draft project as Cairn's fixture, read from the desktop page.
-const readFixture = async (page: Page): Promise<Fixture> =>
-  await page.evaluate(() => {
-    // These helpers run in the page, so they must live inside the evaluated function.
-    // oxlint-disable-next-line unicorn/consistent-function-scoping
-    const tone = (svg: Element | null | undefined) =>
-      /text-\w+-600 dark:text-\w+-400/u.exec(
-        svg?.getAttribute("class") ?? ""
-      )?.[0] ?? "text-gray-600 dark:text-gray-400";
-
-    // oxlint-disable-next-line unicorn/consistent-function-scoping
-    const text = (element: Element | null | undefined) =>
-      element?.textContent?.trim() ?? "";
-
-    const rows = [
-      ...document.querySelectorAll('[data-testid="sidebar-row-card"]'),
-    ].map((card) => {
-      const working = text(card.querySelector('[role="status"]')) === "Working";
-      const slot = card.querySelector(String.raw`.group\/sidebar-status-slot`);
-
-      const age = working
-        ? text(card.querySelector(".tabular-nums"))
-        : text(slot?.firstElementChild);
-
-      const branch = text(card.querySelector(String.raw`.mt-0\.5 .truncate`));
-
-      const row: FixtureRow = {
-        project: text(card.querySelector(".text-secondary-label.text-xs")),
-        monogram: text(card.querySelector("svg text")),
-        tone: tone(card.querySelector("svg")),
-        title: text(card.querySelector(".mt-1 span")),
-        status: working ? "working" : "idle",
-        age: age.replace(/^\s*Working\s*/u, "").trim(),
-      };
-
-      if (branch !== "") {
-        row.branch = branch;
-      }
-
-      return row;
-    });
-
-    const settled = Number(
-      /\((?<count>\d+)\)/u.exec(
-        text(document.querySelector('[data-testid="sidebar-settled-header"]'))
-      )?.groups?.count ?? 0
-    );
-
-    const crumb = document.querySelector(
-      'nav[aria-label="Thread breadcrumb"] button'
-    );
-
-    const draft = {
-      project:
-        crumb?.getAttribute("aria-label")?.replace(/^New thread in /u, "") ??
-        "",
-      monogram: text(crumb?.querySelector("svg text")),
-      tone: tone(crumb?.querySelector("svg")),
-    };
-
-    return { rows, settled, draft };
-  });
-
-const dismissNotices = async (page: Page) => {
-  const dismiss = page.getByRole("button", { name: "Dismiss" });
-
-  if ((await dismiss.count()) > 0) {
-    await dismiss.first().click();
-  }
-
-  // The thread details panel is outside the surfaces compared here; Cairn's page leaves it out.
-  if ((await page.locator('aside[aria-label="Thread details"]').count()) > 0) {
-    await page
-      .getByRole("button", { name: "Toggle thread details panel" })
-      .click();
-  }
-
-  await page.waitForTimeout(400);
-};
-
-let fixture: Fixture | undefined;
-
-for (const view of views) {
-  const left = await open(view, t3, session);
-
-  await dismissNotices(left.page);
-  fixture ??= await readFixture(left.page);
-
-  if (view.sidebar) {
-    await left.page
-      .getByRole("button", { name: "Toggle main sidebar" })
-      .click();
-    await left.page.waitForTimeout(800);
-  }
-
-  await left.page.screenshot({ path: path.join(out, `${view.name}-t3.png`) });
-  await left.context.close();
-
-  const hash = `#fixture=${encodeURIComponent(Buffer.from(JSON.stringify(fixture)).toString("base64"))}`;
-  const cairnUrl = new URL(cairn);
-
-  if (view.sidebar) {
-    cairnUrl.searchParams.set("sidebar", "1");
-  }
-
-  const right = await open(view, cairnUrl.href + hash);
-
-  await right.page.screenshot({
-    path: path.join(out, `${view.name}-cairn.png`),
-  });
-  await right.context.close();
-  console.log(`${view.name}: ${view.name}-t3.png ${view.name}-cairn.png`);
-}
-
-writeFileSync(
-  path.join(out, "fixture.json"),
-  `${JSON.stringify(fixture, null, 2)}\n`
+const decodeStates = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Array(StateRecord))
 );
 
-// Pixel comparison per view: the share of pixels whose colour differs by more than a small tolerance, and an image
-// with the differing pixels in magenta over a dimmed copy of t3code's.
-const comparer = await browser.newPage();
+interface Comparison {
+  readonly differingPercent: number;
+  readonly diff: string;
+}
 
-const report: Record<string, number> = {};
+const dataUrl = (file: string) =>
+  `data:image/png;base64,${readFileSync(file).toString("base64")}`;
 
-for (const view of views) {
-  const load = (side: string) =>
-    `data:image/png;base64,${readFileSync(path.join(out, `${view.name}-${side}.png`)).toString("base64")}`;
-
-  const result = await comparer.evaluate(
-    async ([a, b]) => {
-      // Runs in the page, like readFixture's helpers.
-      // oxlint-disable-next-line unicorn/consistent-function-scoping
+/** Compares two PNGs outside the masks: the share of pixels differing by more than 24. */
+const compare = async (
+  page: Page,
+  left: string,
+  right: string,
+  masks: StateRecord["masks"]
+): Promise<Comparison> =>
+  await page.evaluate(
+    async ([a, b, rects]) => {
+      // oxlint-disable-next-line unicorn/consistent-function-scoping -- runs in the page
       const image = async (src: string) => {
         const element = new Image();
 
@@ -249,10 +118,12 @@ for (const view of views) {
         return element;
       };
 
-      const left = await image(a);
-      const right = await image(b);
-      const { width, height } = left;
+      const leftImage = await image(a);
+      const rightImage = await image(b);
+      const width = Math.max(leftImage.width, rightImage.width);
+      const height = Math.max(leftImage.height, rightImage.height);
 
+      // Sizes that differ count as differing pixels: the missing area is transparent on one side.
       const pixels = (source: HTMLImageElement) => {
         const canvas = document.createElement("canvas");
 
@@ -266,12 +137,22 @@ for (const view of views) {
         }
 
         context.drawImage(source, 0, 0);
+        context.fillStyle = "#000";
+
+        for (const rect of rects) {
+          context.fillRect(
+            rect.x * 2,
+            rect.y * 2,
+            rect.width * 2,
+            rect.height * 2
+          );
+        }
 
         return context.getImageData(0, 0, width, height).data;
       };
 
-      const pa = pixels(left);
-      const pb = pixels(right);
+      const pa = pixels(leftImage);
+      const pb = pixels(rightImage);
       const diff = new ImageData(width, height);
       let differing = 0;
 
@@ -279,7 +160,8 @@ for (const view of views) {
         const delta =
           Math.abs((pa[index] ?? 0) - (pb[index] ?? 0)) +
           Math.abs((pa[index + 1] ?? 0) - (pb[index + 1] ?? 0)) +
-          Math.abs((pa[index + 2] ?? 0) - (pb[index + 2] ?? 0));
+          Math.abs((pa[index + 2] ?? 0) - (pb[index + 2] ?? 0)) +
+          Math.abs((pa[index + 3] ?? 0) - (pb[index + 3] ?? 0));
 
         const differs = delta > 24;
 
@@ -306,21 +188,183 @@ for (const view of views) {
         diff: canvas.toDataURL("image/png"),
       };
     },
-    [load("t3"), load("cairn")] as const
+    [left, right, masks] as const
   );
 
-  writeFileSync(
-    path.join(out, `${view.name}-diff.png`),
-    Buffer.from(result.diff.split(",")[1] ?? "", "base64")
-  );
-  report[view.name] = result.differingPercent;
+const writeDataUrl = (file: string, url: string) => {
+  writeFileSync(file, Buffer.from(url.split(",")[1] ?? "", "base64"));
+};
+
+/** One compared state, as the report lists it. */
+interface StateResult {
+  readonly group: string;
+  readonly name: string;
+  readonly differingPercent: number;
+  readonly budget: number;
+  readonly pass: boolean;
+  readonly masks: ReadonlyArray<string>;
 }
 
+const results: Array<StateResult> = [];
+
+const missing: Array<{ readonly state: string; readonly reason: string }> = [
+  ...UNCAPTURABLE,
+];
+
+const browser = await chromium.launch();
+
+const page = await browser.newPage();
+
+let control = { differingPercent: 0, pass: false };
+
+try {
+  for (const group of GROUPS) {
+    const statesFile = path.join(BASELINE, group, "states.json");
+
+    if (!existsSync(statesFile)) {
+      missing.push({ state: group, reason: "no baseline for the group" });
+      continue;
+    }
+
+    const groupOut = path.join(out, group);
+
+    mkdirSync(groupOut, { recursive: true });
+
+    for (const record of decodeStates(readFileSync(statesFile, "utf-8"))) {
+      const name = `${record.view}-${record.state}`;
+      const t3 = path.join(BASELINE, group, `${name}.png`);
+      const cairn = path.join(cairnDir, group, `${name}.png`);
+
+      if (!existsSync(cairn)) {
+        missing.push({
+          state: `${group}/${name}`,
+          reason: "no Cairn capture: run judges/capture.ts cairn",
+        });
+        continue;
+      }
+
+      const result = await compare(
+        page,
+        dataUrl(t3),
+        dataUrl(cairn),
+        record.masks
+      );
+
+      copyFileSync(t3, path.join(groupOut, `${name}-t3.png`));
+      copyFileSync(cairn, path.join(groupOut, `${name}-cairn.png`));
+      writeDataUrl(path.join(groupOut, `${name}-diff.png`), result.diff);
+
+      const ticking = record.masks.some((mask) =>
+        mask.reason.startsWith("ticking label")
+      );
+
+      const budget = ticking ? TICKING_BUDGET : 0;
+
+      results.push({
+        group,
+        name,
+        differingPercent: result.differingPercent,
+        budget,
+        pass: result.differingPercent <= budget,
+        masks: [...new Set(record.masks.map((mask) => mask.reason))],
+      });
+      console.log(`${group} ${name}: ${result.differingPercent}%`);
+    }
+  }
+
+  const controlFile = path.join(cairnDir, "hero/390-control-sidebar-open.png");
+
+  if (existsSync(controlFile)) {
+    const result = await compare(
+      page,
+      dataUrl(path.join(BASELINE, "hero/390-hero.png")),
+      dataUrl(controlFile),
+      []
+    );
+
+    writeDataUrl(path.join(out, "hero/390-control-diff.png"), result.diff);
+    control = {
+      differingPercent: result.differingPercent,
+      pass: result.differingPercent > CONTROL_MIN_PERCENT,
+    };
+    console.log(
+      `control (sidebar wrongly open): ${result.differingPercent}% (must exceed ${CONTROL_MIN_PERCENT}%)`
+    );
+  }
+} finally {
+  await browser.close();
+}
+
+const passing = results.filter((result) => result.pass).length;
+
+const report = {
+  judge: "parity",
+  baseline: "t3@fe27e8e3",
+  states: results.length,
+  passing,
+  control,
+  missing,
+  results,
+};
+
 writeFileSync(
-  path.join(out, "diff.json"),
+  path.join(out, "report.json"),
   `${JSON.stringify(report, null, 2)}\n`
 );
 
-console.log("differing pixels (%):", JSON.stringify(report));
+const escape = (text: string) =>
+  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
-await browser.close();
+const rows = results
+  .map(
+    (result) => `<section>
+  <h2>${escape(`${result.group} ${result.name}`)}: ${result.differingPercent}% (budget ${result.budget}%) ${result.pass ? "pass" : "differs"}</h2>
+  <p>Masked: ${escape(result.masks.join("; ") || "nothing")}</p>
+  <div class="pair">
+    <figure><img src="${result.group}/${result.name}-t3.png" alt="t3code" /><figcaption>t3code</figcaption></figure>
+    <figure><img src="${result.group}/${result.name}-cairn.png" alt="Cairn" /><figcaption>Cairn</figcaption></figure>
+    <figure><img src="${result.group}/${result.name}-diff.png" alt="Difference" /><figcaption>Difference (magenta)</figcaption></figure>
+  </div>
+</section>`
+  )
+  .join("\n");
+
+writeFileSync(
+  path.join(out, "index.html"),
+  `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Phase 1 parity report</title>
+<style>
+body { background: #0b0b0b; color: #e5e5e5; font: 14px system-ui, sans-serif; margin: 24px; }
+.pair { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+img { width: 100%; border: 1px solid #333; }
+h2 { font-size: 15px; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Phase 1 parity report</h1>
+<p>${passing} of ${results.length} states within budget. Control (sidebar wrongly open): ${control.differingPercent}%, ${control.pass ? "failed as designed" : "did not fail: the judge is blind"}.</p>
+<p>Missing: ${escape(missing.map((entry) => `${entry.state} (${entry.reason})`).join("; ") || "none")}</p>
+${rows}
+</body>
+</html>
+`
+);
+
+console.log(
+  JSON.stringify({
+    judge: "parity",
+    states: results.length,
+    passing,
+    control,
+    missing: missing.length,
+    out,
+  })
+);
+
+const complete = control.pass && results.length > 0;
+
+process.exitCode =
+  complete && (!values.strict || passing === results.length) ? 0 : 1;

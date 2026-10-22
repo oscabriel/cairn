@@ -1,22 +1,39 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one browser state after another, on purpose */
-// The parity capture judge for the sidebar: captures named sidebar states from the installed t3code
-// nightly once, into a committed baseline, and compares Cairn's sidebar in the same states against it.
+// The parity capture judge (plans 2D and 4F): captures named states from the installed t3code
+// nightly once, into a committed baseline, and the same states from Cairn, for judges/parity.ts
+// (pixels) and judges/parity-structure.ts (landmarks) to compare.
 //
-//   node judges/capture.ts t3 [--session <storage state>] [--t3 https://t3.gneiss.run/]
-//   node judges/capture.ts cairn [--out <dir>]
+//   node judges/capture.ts t3 [--group all|sidebar|hero|thread] [--session <storage state>] [--t3 <url>]
+//   node judges/capture.ts cairn [--group ...] [--out <dir>]
 //
-// `t3` refuses to write unless the installed `t3code-nightly-bin` is the version ADR 0015 records,
-// and writes judges/fixtures/parity/t3@fe27e8e3/sidebar/: one PNG and one sidebar HTML per state and
-// width, `states.json` (the clip and masks of each capture), `fixture.json` (the rows t3code showed,
-// read from its DOM) and `version.json`. `cairn` starts `pnpm dev` on throwaway ports, serves the
-// fixture to the page as boot data with the clock fixed at the capture time and the socket refused,
-// drives the same states, and writes Cairn's PNGs, diff PNGs and `report.json` (the share of pixels
-// that differ outside the masks, per state) to `--out`. States: the shelves, the settled shelf open,
-// a search, a hovered row and an open row menu at 1440x900; the shelves, the settled shelf and a
-// search in the sheet at 390x844. Masks: the brand band (the top 80px, t3code's starfield and
-// wordmark), the footer (t3code's pull requests and update pill), and per state the parts the
-// read-only pairing changes (listed in `states.json`). Exits 0 when every state reads 0 percent.
+// `t3` refuses to write unless the installed `t3code-nightly-bin` is the version ADR 0015 records
+// (D56), and writes judges/fixtures/parity/t3@fe27e8e3/<group>/: one PNG, one HTML and one landmark
+// file per state and view, `states.json` (each capture's view, clip and masks) and `version.json`.
+// `cairn` drives the same states in Cairn and writes the same files to `--out/<group>/`.
+//
+// Groups:
+// - sidebar (2D): the shelves, the settled shelf open, a search, a hovered row and an open row menu
+//   at 1440x900; the shelves, the settled shelf and a search in the sheet at 390x844. Cairn's half
+//   is `pnpm dev` with the fixture t3code showed served as boot data, the clock fixed at the capture
+//   time and the socket refused. Masks: the brand band (t3code's starfield and wordmark), the footer
+//   (t3code's pull requests and update pill), and per state the parts the read-only pairing changes.
+// - hero (4F): the new-thread hero, its project popover, the `/` and `@` menus, the composer with an
+//   attachment, at 1440x900 and 390x844; and the hero at three widths (1180, 980, 820) where the
+//   composer footer folds. The sidebar is masked at desktop widths: the sidebar group judges it.
+// - thread (4F): t3code's thread "Executor MCP Stdio Bridges" (an idle thread whose last turn
+//   changed files, with a failed run among its last three), at its end (assistant message,
+//   changed-files card), with its last turn in view (user message, "Worked for"), with that fold
+//   open ("Ran N commands"), and with the newest changed-files card centred. The t3 half also
+//   exports the thread's last three runs from t3code's projection (read-only, from
+//   `~/.t3/userdata/statev2.sqlite`) to `thread.json`; the Cairn half imports them with T3Import
+//   into an in-process brain, so both apps render the same conversation.
+// Cairn's hero and thread halves run the real client over a real in-process brain
+// (judges/fixtures/parity/CairnApp.ts). The Cairn half also writes the controls: the 390 hero with
+// the sidebar wrongly open (`390-control-sidebar-open.png`) and the 1440 hero's landmarks after a
+// sabotaged class string (`1440-hero.sabotaged.landmarks.json`).
+// A streaming assistant has no t3code baseline: the read-only pairing cannot start a turn, so it is
+// listed as missing in the report rather than captured.
 import { execFileSync, spawn } from "node:child_process";
 import {
   mkdirSync,
@@ -28,18 +45,27 @@ import {
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 
-import { DateTime, Option, Schema } from "effect";
+import { DateTime, Effect, Option, Predicate, Schema } from "effect";
 import { chromium } from "playwright";
 import type { Browser, BrowserContextOptions, Page } from "playwright";
 
+import {
+  formatT3ThreadExport,
+  importT3Thread,
+  parseT3ThreadExport,
+} from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
+import type { T3ThreadExport } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { EntryId, ProjectId, ThreadId } from "../packages/protocol/src/Ids.ts";
 import {
   ProjectShell,
   ShellSnapshot,
   ThreadShell,
 } from "../packages/protocol/src/Shell.ts";
+import { startCairn } from "./fixtures/parity/CairnApp.ts";
+import { Rect, readLandmarks } from "./fixtures/parity/Landmarks.ts";
 
 const root = path.join(import.meta.dirname, "..");
 
@@ -64,8 +90,14 @@ const { positionals, values } = parseArgs({
       type: "string",
       default: path.join(
         homedir(),
-        "Developer/agent-artifacts/cairn/v2/parity-2d"
+        "Developer/agent-artifacts/cairn/v2/phase-1-parity/cairn"
       ),
+    },
+    group: { type: "string", default: "all" },
+    /** t3code's environment id, the first segment of its thread URLs. */
+    "t3-env": {
+      type: "string",
+      default: "56d5ca97-94e9-4c66-9582-d89356b56e14",
     },
   },
 });
@@ -74,9 +106,15 @@ const [side] = positionals;
 
 if (side !== "t3" && side !== "cairn") {
   throw new Error(
-    "usage: capture.ts t3|cairn [--session <file>] [--t3 <url>] [--out <dir>]"
+    "usage: capture.ts t3|cairn [--group all|sidebar|hero|thread] [--session <file>] [--t3 <url>] [--out <dir>]"
   );
 }
+
+const GROUPS = ["sidebar", "hero", "thread"] as const;
+
+const groups = GROUPS.filter(
+  (group) => values.group === "all" || values.group === group
+);
 
 /** One width the states are captured at. */
 interface View {
@@ -104,14 +142,6 @@ const STATES: Readonly<Record<View["name"], ReadonlyArray<StateName>>> = {
   "1440": ["sections", "settled-open", "search", "row-hovered", "menu-open"],
   "390": ["sections", "settled-open", "search"],
 };
-
-/** A rectangle in CSS pixels of the viewport. */
-const Rect = Schema.Struct({
-  x: Schema.Finite,
-  y: Schema.Finite,
-  width: Schema.Finite,
-  height: Schema.Finite,
-});
 
 type Rect = typeof Rect.Type;
 
@@ -601,7 +631,7 @@ const mergeFixture = (
   search: state === "search" ? read.search : (fixture?.search ?? []),
 });
 
-const captureT3 = async (browser: Browser) => {
+const captureSidebarT3 = async (browser: Browser) => {
   const version = installedVersion();
   const recorded = recordedVersion();
 
@@ -1055,105 +1085,8 @@ const startDev = async (): Promise<{
   throw new Error("tools/dev.ts ended before it printed its address.");
 };
 
-interface Comparison {
-  readonly differingPercent: number;
-  readonly diff: string;
-}
-
-/** Compares two same-sized PNGs outside the masks: the share of pixels differing by more than 24. */
-const compare = async (
-  page: Page,
-  left: string,
-  right: string,
-  masks: StateRecord["masks"]
-): Promise<Comparison> =>
-  await page.evaluate(
-    async ([a, b, rects]) => {
-      // oxlint-disable-next-line unicorn/consistent-function-scoping
-      const image = async (src: string) => {
-        const element = new Image();
-
-        element.src = src;
-        await element.decode();
-
-        return element;
-      };
-
-      const leftImage = await image(a);
-      const rightImage = await image(b);
-      const width = Math.min(leftImage.width, rightImage.width);
-      const height = Math.min(leftImage.height, rightImage.height);
-
-      const pixels = (source: HTMLImageElement) => {
-        const canvas = document.createElement("canvas");
-
-        canvas.width = width;
-        canvas.height = height;
-
-        const context = canvas.getContext("2d");
-
-        if (context === null) {
-          throw new Error("no 2d context");
-        }
-
-        context.drawImage(source, 0, 0);
-        context.fillStyle = "#000";
-
-        for (const rect of rects) {
-          context.fillRect(
-            rect.x * 2,
-            rect.y * 2,
-            rect.width * 2,
-            rect.height * 2
-          );
-        }
-
-        return context.getImageData(0, 0, width, height).data;
-      };
-
-      const pa = pixels(leftImage);
-      const pb = pixels(rightImage);
-      const diff = new ImageData(width, height);
-      let differing = 0;
-
-      for (let index = 0; index < pa.length; index += 4) {
-        const delta =
-          Math.abs((pa[index] ?? 0) - (pb[index] ?? 0)) +
-          Math.abs((pa[index + 1] ?? 0) - (pb[index + 1] ?? 0)) +
-          Math.abs((pa[index + 2] ?? 0) - (pb[index + 2] ?? 0));
-
-        const differs = delta > 24;
-
-        if (differs) {
-          differing += 1;
-        }
-
-        diff.data[index] = differs ? 255 : (pa[index] ?? 0) / 3;
-        diff.data[index + 1] = differs ? 0 : (pa[index + 1] ?? 0) / 3;
-        diff.data[index + 2] = differs ? 255 : (pa[index + 2] ?? 0) / 3;
-        diff.data[index + 3] = 255;
-      }
-
-      const canvas = document.createElement("canvas");
-
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext("2d")?.putImageData(diff, 0, 0);
-
-      return {
-        differingPercent: Number(
-          ((differing / (width * height)) * 100).toFixed(3)
-        ),
-        diff: canvas.toDataURL("image/png"),
-      };
-    },
-    [left, right, masks] as const
-  );
-
-const dataUrl = (file: string) =>
-  `data:image/png;base64,${readFileSync(file).toString("base64")}`;
-
-const captureCairn = async (browser: Browser) => {
+/** The sidebar group, Cairn's half: the same states from `pnpm dev` with the fixture as boot data. */
+const captureSidebarCairn = async (browser: Browser) => {
   const states = decodeStates(
     readFileSync(path.join(BASELINE, "states.json"), "utf-8")
   );
@@ -1162,9 +1095,8 @@ const captureCairn = async (browser: Browser) => {
     readFileSync(path.join(BASELINE, "fixture.json"), "utf-8")
   );
 
-  const { out } = values;
+  const out = path.join(values.out, "sidebar");
   const dev = await startDev();
-  const report: Record<string, number> = {};
 
   mkdirSync(out, { recursive: true });
 
@@ -1204,53 +1136,729 @@ const captureCairn = async (browser: Browser) => {
       await page.waitForTimeout(2500);
       await enterState(page, view, record.state);
 
-      const file = path.join(out, `${record.view}-${record.state}-cairn.png`);
-
-      await shot(page, record.clip, file);
+      await shot(
+        page,
+        record.clip,
+        path.join(out, `${record.view}-${record.state}.png`)
+      );
       writeFileSync(
-        path.join(out, `${record.view}-${record.state}-cairn.html`),
+        path.join(out, `${record.view}-${record.state}.html`),
         `${await sidebarHtml(page, view)}\n`
       );
-
-      const result = await compare(
-        page,
-        dataUrl(path.join(BASELINE, `${record.view}-${record.state}.png`)),
-        dataUrl(file),
-        record.masks
-      );
-
-      writeFileSync(
-        path.join(out, `${record.view}-${record.state}-diff.png`),
-        Buffer.from(result.diff.split(",")[1] ?? "", "base64")
-      );
-      report[`${record.view}-${record.state}`] = result.differingPercent;
       await context.close();
-      console.log(
-        `cairn ${record.view} ${record.state}: ${result.differingPercent}%`
-      );
+      console.log(`cairn sidebar ${record.view} ${record.state}`);
     }
   } finally {
     dev.stop();
     rmSync(dev.dataDir, { recursive: true, force: true });
   }
+};
+
+// ---------------------------------------------------------------------------------------------
+// The hero and thread groups (4F).
+
+const BASELINE_ROOT = path.join(root, "judges/fixtures/parity/t3@fe27e8e3");
+
+/**
+ * The thread both apps show. A thread that is running while the baseline is captured would give a
+ * half-finished turn, so this is an idle one whose last turn has a changed-files card.
+ */
+const T3_THREAD_ID = "906d5d18-6060-4eae-81a2-033a850a4983";
+
+/**
+ * How many of the thread's newest runs are exported and imported at least; the export reaches
+ * back further, to the newest run that changed files, so the changed-files card is in it.
+ */
+const EXPORTED_RUNS = 3;
+
+/** Tool output kept per item in the export: enough to render, small enough to commit. */
+const OUTPUT_LIMIT = 2000;
+
+/** One viewport a hero or thread state is captured at. */
+interface PageView {
+  readonly name: string;
+  readonly width: number;
+  readonly height: number;
+  readonly mobile: boolean;
+}
+
+const desktop = (width: number): PageView => ({
+  name: String(width),
+  width,
+  height: 900,
+  mobile: false,
+});
+
+const PHONE: PageView = { name: "390", width: 390, height: 844, mobile: true };
+
+const HeroState = Schema.Literals([
+  "hero",
+  "project-popover",
+  "slash-menu",
+  "at-menu",
+  "attachments",
+  "footer",
+]);
+
+type HeroState = typeof HeroState.Type;
+
+const ThreadState = Schema.Literals([
+  "thread-end",
+  "thread-turn",
+  "thread-fold-open",
+  "thread-changed-files",
+]);
+
+type ThreadState = typeof ThreadState.Type;
+
+const isThreadState = Schema.is(ThreadState);
+
+type PageGroup = "hero" | "thread";
+
+interface PageCapture {
+  readonly view: PageView;
+  readonly state: HeroState | ThreadState;
+}
+
+const PAGE_STATES: Readonly<Record<PageGroup, ReadonlyArray<PageCapture>>> = {
+  hero: [
+    ...[desktop(1440), PHONE].flatMap((view) =>
+      (
+        [
+          "hero",
+          "project-popover",
+          "slash-menu",
+          "at-menu",
+          "attachments",
+        ] as const
+      ).map((state) => ({ view, state }))
+    ),
+    // The composer footer folds by width (t3code's composerFooterLayout).
+    ...[1180, 980, 820].map((width) => ({
+      view: desktop(width),
+      state: "footer" as const,
+    })),
+  ],
+  thread: [desktop(1440), PHONE].flatMap((view) =>
+    (
+      [
+        "thread-end",
+        "thread-turn",
+        "thread-fold-open",
+        "thread-changed-files",
+      ] as const
+    ).map((state) => ({ view, state }))
+  ),
+};
+
+/** What a baseline capture recorded about one hero or thread state. */
+const PageRecord = Schema.Struct({
+  group: Schema.Literals(["hero", "thread"]),
+  view: Schema.String,
+  viewport: Schema.Struct({ width: Schema.Finite, height: Schema.Finite }),
+  mobile: Schema.Boolean,
+  state: Schema.Union([HeroState, ThreadState]),
+  clip: Rect,
+  capturedAtMs: Schema.Finite,
+  masks: Schema.Array(Schema.Struct({ ...Rect.fields, reason: Schema.String })),
+});
+
+type PageRecord = typeof PageRecord.Type;
+
+const pageContextOptions = (view: PageView): BrowserContextOptions => ({
+  viewport: { width: view.width, height: view.height },
+  deviceScaleFactor: 2,
+  isMobile: view.mobile,
+  hasTouch: view.mobile,
+  colorScheme: "dark",
+  reducedMotion: "reduce",
+});
+
+/** A small, fixed PNG for the attachment state: the same bytes in both apps. */
+const attachmentPng = async (browser: Browser): Promise<Buffer> => {
+  const page = await browser.newPage({
+    viewport: { width: 160, height: 100 },
+  });
+
+  await page.setContent(
+    '<body style="margin:0"><div style="width:160px;height:100px;background:linear-gradient(135deg,#3b82f6,#f59e0b)"></div></body>'
+  );
+
+  const png = await page.screenshot();
+
+  await page.close();
+
+  return png;
+};
+
+/** Hides what floats over both apps and is not part of a state: toasts and the caret. */
+const prepare = async (page: Page) => {
+  await page.addStyleTag({ content: HIDE_TOASTS });
+
+  // t3code's thread details panel is outside the surfaces compared; Cairn has none.
+  if ((await page.locator('aside[aria-label="Thread details"]').count()) > 0) {
+    await page
+      .getByRole("button", { name: "Toggle thread details panel" })
+      .first()
+      .click();
+    await page.waitForTimeout(600);
+  }
+};
+
+const editor = (page: Page) =>
+  page.locator('[data-testid="composer-editor"]').first();
+
+/**
+ * Opens a hero or thread page and waits for its composer (attached: a phone thread page folds it
+ * away). Vite may reload the page once while it optimizes a dependency it met late, so a page that
+ * does not settle gets one more load.
+ */
+const open = async (page: Page, url: string) => {
+  await page.goto(url, { waitUntil: "networkidle" });
+  await editor(page)
+    .waitFor({ state: "attached", timeout: 15_000 })
+    .catch(async () => {
+      await page.goto(url, { waitUntil: "networkidle" });
+      await editor(page).waitFor({ state: "attached", timeout: 15_000 });
+    });
+};
+
+/** Brings a hero page into `state`; both apps share these steps. */
+const enterHeroState = async (
+  page: Page,
+  state: HeroState,
+  png: Buffer
+): Promise<void> => {
+  await editor(page).waitFor({ state: "visible", timeout: 15_000 });
+
+  if (state === "project-popover") {
+    await page.locator("h1 button").first().click();
+  }
+
+  if (state === "slash-menu") {
+    await editor(page).click();
+    await page.keyboard.type("/");
+  }
+
+  if (state === "at-menu") {
+    await editor(page).click();
+    await page.keyboard.type("@src");
+    await page.waitForTimeout(1200);
+  }
+
+  if (state === "attachments") {
+    await page.locator('input[type="file"]').first().setInputFiles({
+      name: "screenshot.png",
+      mimeType: "image/png",
+      buffer: png,
+    });
+    await page.waitForTimeout(1200);
+  }
+
+  await page.waitForTimeout(800);
+};
+
+/** Brings a thread page into `state`. */
+const enterThreadState = async (page: Page, state: ThreadState) => {
+  const folds = page.locator('[data-timeline-row-kind="turn-fold"]');
+
+  await page
+    .locator("[data-timeline-row-kind]")
+    .last()
+    .waitFor({ state: "attached", timeout: 20_000 });
+  await page.waitForTimeout(1500);
+
+  // An app without fold rows is captured as it stands; the structure judge lists the rows missing.
+  if ((await folds.count()) === 0) {
+    console.log(`  no turn-fold row for ${state}`);
+    await page.waitForTimeout(800);
+
+    return;
+  }
+
+  if (state === "thread-turn" || state === "thread-fold-open") {
+    await folds.last().scrollIntoViewIfNeeded();
+    await folds.last().evaluate((element) => {
+      element.scrollIntoView({ block: "start" });
+    });
+    await page.waitForTimeout(600);
+  }
+
+  if (state === "thread-changed-files") {
+    // The card may sit in a turn the list has not rendered yet: scroll up until it appears.
+    const card = page.locator("[data-changed-files-state]");
+
+    for (let step = 0; step < 40 && (await card.count()) === 0; step += 1) {
+      await folds.first().evaluate((element) => {
+        let scroller = element.parentElement;
+
+        while (
+          scroller !== null &&
+          scroller.scrollHeight <= scroller.clientHeight + 1
+        ) {
+          scroller = scroller.parentElement;
+        }
+
+        scroller?.scrollBy({ top: -600 });
+      });
+      await page.waitForTimeout(250);
+    }
+
+    if ((await card.count()) > 0) {
+      await card.last().evaluate((element) => {
+        element.scrollIntoView({ block: "center" });
+      });
+    }
+
+    await page.waitForTimeout(600);
+  }
+
+  if (state === "thread-fold-open") {
+    await folds.last().locator("button").first().click();
+    await page.waitForTimeout(800);
+    await folds.last().evaluate((element) => {
+      element.scrollIntoView({ block: "start" });
+    });
+  }
+
+  await page.mouse.move(2, 2);
+  await page.waitForTimeout(800);
+};
+
+/** The declared differences of a hero or thread state, relative to the full-page clip. */
+const pageMasks = async (
+  page: Page,
+  view: PageView
+): Promise<PageRecord["masks"]> => {
+  if (view.mobile) {
+    return [];
+  }
+
+  const sidebar = await boxOf(page, '[data-slot="sidebar-container"]');
+
+  return Option.match(sidebar, {
+    onNone: () => [],
+    onSome: (box) => [
+      {
+        ...round(box),
+        reason:
+          "sidebar: judged by the sidebar group, whose fixture rebuilds t3code's rows",
+      },
+    ],
+  });
+};
+
+/** One page state of one app: the screenshot, the page HTML and the landmarks. */
+const captureState = async (
+  page: Page,
+  dir: string,
+  capture: PageCapture
+): Promise<Rect> => {
+  const clip = {
+    x: 0,
+    y: 0,
+    width: capture.view.width,
+    height: capture.view.height,
+  };
+
+  const base = path.join(dir, `${capture.view.name}-${capture.state}`);
+
+  await shot(page, clip, `${base}.png`);
+  writeFileSync(`${base}.html`, `${await page.content()}\n`);
+  writeFileSync(
+    `${base}.landmarks.json`,
+    `${JSON.stringify(await readLandmarks(page), null, 2)}\n`
+  );
+
+  return clip;
+};
+
+/** A t3code turn item row, as t3code's projection stores it. */
+const T3ItemRow = Schema.Struct({
+  run_ordinal: Schema.Finite,
+  type: Schema.String,
+  status: Schema.String,
+  payload_json: Schema.String,
+});
+
+const T3RunRow = Schema.Struct({
+  ordinal: Schema.Finite,
+  requested_at: Schema.String,
+  completed_at: Schema.NullOr(Schema.String),
+  model: Schema.NullOr(Schema.String),
+});
+
+const T3ThreadRow = Schema.Struct({
+  title: Schema.String,
+  project: Schema.String,
+});
+
+const T3Payload = Schema.Struct({
+  startedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  completedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  text: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  title: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  toolName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  input: Schema.optionalKey(
+    Schema.Union([
+      Schema.String,
+      Schema.Record(Schema.String, Schema.Json),
+      Schema.Null,
+    ])
+  ),
+  output: Schema.optionalKey(Schema.Json),
+  fileName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  diffStr: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+
+const decodeItemRows = Schema.decodeUnknownSync(Schema.Array(T3ItemRow));
+
+const decodeRunRows = Schema.decodeUnknownSync(Schema.Array(T3RunRow));
+
+const decodeThreadRow = Schema.decodeUnknownSync(T3ThreadRow);
+
+const decodePayload = Schema.decodeUnknownSync(
+  Schema.fromJsonString(T3Payload)
+);
+
+const millis = (iso: string | null | undefined): Option.Option<number> =>
+  iso === null || iso === undefined
+    ? Option.none()
+    : Option.some(Date.parse(iso));
+
+const cut = (text: string) =>
+  text.length > OUTPUT_LIMIT ? `${text.slice(0, OUTPUT_LIMIT)}\n…` : text;
+
+const outputText = (output: Schema.Json | undefined): Option.Option<string> => {
+  if (output === undefined || output === null) {
+    return Option.none();
+  }
+
+  return Option.some(
+    cut(Predicate.isString(output) ? output : JSON.stringify(output))
+  );
+};
+
+/**
+ * Exports t3code's thread from its own database, read-only: the thread's title and project, and
+ * its newest runs with their turn items in t3code's order.
+ */
+const exportT3Thread = (): T3ThreadExport => {
+  const database = new DatabaseSync(
+    path.join(homedir(), ".t3/userdata/statev2.sqlite"),
+    { readOnly: true }
+  );
+
+  try {
+    const thread = decodeThreadRow(
+      database
+        .prepare(
+          `select t.title as title, coalesce(p.title, '') as project
+             from orchestration_v2_projection_threads t
+             left join projection_projects p on p.project_id = t.project_id
+            where t.thread_id = ?`
+        )
+        .get(T3_THREAD_ID)
+    );
+
+    const runs = decodeRunRows(
+      database
+        .prepare(
+          `select ordinal, requested_at, completed_at,
+                  json_extract(payload_json, '$.modelSelection.model') as model
+             from orchestration_v2_projection_runs
+            where thread_id = ? order by ordinal desc`
+        )
+        .all(T3_THREAD_ID)
+    );
+
+    const changedRow = database
+      .prepare(
+        `select max(r.ordinal) as ordinal
+           from orchestration_v2_projection_turn_items i
+           join orchestration_v2_projection_runs r on r.run_id = i.run_id
+          where i.thread_id = ? and i.type = 'checkpoint'
+            and json_array_length(json_extract(i.payload_json, '$.files')) > 0`
+      )
+      .get(T3_THREAD_ID);
+
+    const changed = Schema.decodeUnknownSync(
+      Schema.Struct({ ordinal: Schema.NullOr(Schema.Finite) })
+    )(changedRow).ordinal;
+
+    const newest = runs.slice(0, EXPORTED_RUNS).at(-1)?.ordinal ?? 0;
+    const from = Math.min(newest, changed ?? newest);
+    const exported = runs.filter((run) => run.ordinal >= from).toReversed();
+
+    const items = decodeItemRows(
+      database
+        .prepare(
+          `select r.ordinal as run_ordinal, i.type, i.status, i.payload_json
+             from orchestration_v2_projection_turn_items i
+             join orchestration_v2_turn_item_positions p on p.turn_item_id = i.turn_item_id
+             join orchestration_v2_projection_runs r on r.run_id = i.run_id
+            where i.thread_id = ? and r.ordinal >= ?
+            order by p.ordinal`
+        )
+        .all(T3_THREAD_ID, from)
+    );
+
+    return {
+      threadId: T3_THREAD_ID,
+      title: thread.title,
+      projectTitle: thread.project,
+      model: exported.at(-1)?.model ?? "claude",
+      runs: exported.map((run) => ({
+        ordinal: run.ordinal,
+        requestedAtMs: Date.parse(run.requested_at),
+        completedAtMs: millis(run.completed_at),
+        items: items
+          .filter((row) => row.run_ordinal === run.ordinal)
+          .map((row) => {
+            const payload = decodePayload(row.payload_json);
+
+            const startedAtMs = Option.getOrElse(
+              millis(payload.startedAt),
+              () => Date.parse(run.requested_at)
+            );
+
+            return {
+              type: row.type,
+              startedAtMs,
+              completedAtMs: millis(payload.completedAt),
+              text: Option.fromNullishOr(payload.text),
+              toolName: Option.fromNullishOr(payload.toolName),
+              title: Option.fromNullishOr(payload.title),
+              input: Predicate.isString(payload.input)
+                ? Option.some(payload.input)
+                : Option.none(),
+              arguments: Predicate.isObject(payload.input)
+                ? Option.some(payload.input)
+                : Option.none(),
+              output: outputText(payload.output),
+              path: Option.fromNullishOr(payload.fileName),
+              created: payload.diffStr?.includes('"type":"create"') ?? false,
+              isError: row.status === "failed",
+            };
+          }),
+      })),
+    };
+  } finally {
+    database.close();
+  }
+};
+
+/** The URL each app shows a group at. */
+const t3GroupUrl = (group: PageGroup) =>
+  group === "hero"
+    ? values.t3
+    : new URL(`${values["t3-env"]}/${T3_THREAD_ID}`, values.t3).toString();
+
+/** The hero and thread groups, t3code's half: screenshots, HTML, landmarks, masks, the export. */
+const capturePagesT3 = async (browser: Browser, group: PageGroup) => {
+  const dir = path.join(BASELINE_ROOT, group);
+  const png = await attachmentPng(browser);
+  const records: Array<PageRecord> = [];
+
+  mkdirSync(dir, { recursive: true });
+
+  if (group === "thread") {
+    writeFileSync(
+      path.join(dir, "thread.json"),
+      `${formatT3ThreadExport(exportT3Thread())}\n`
+    );
+  }
+
+  for (const capture of PAGE_STATES[group]) {
+    const context = await browser.newContext({
+      ...pageContextOptions(capture.view),
+      storageState: values.session,
+    });
+
+    const page = await context.newPage();
+
+    await open(page, t3GroupUrl(group));
+    await page.waitForTimeout(2500);
+    await prepare(page);
+    await (isThreadState(capture.state)
+      ? enterThreadState(page, capture.state)
+      : enterHeroState(page, capture.state, png));
+
+    const clip = await captureState(page, dir, capture);
+
+    records.push({
+      group,
+      view: capture.view.name,
+      viewport: { width: capture.view.width, height: capture.view.height },
+      mobile: capture.view.mobile,
+      state: capture.state,
+      clip,
+      capturedAtMs: await page.evaluate(() => Date.now()),
+      masks: await pageMasks(page, capture.view),
+    });
+    await context.close();
+    console.log(`t3 ${group} ${capture.view.name} ${capture.state}`);
+  }
 
   writeFileSync(
-    path.join(out, "report.json"),
-    `${JSON.stringify(report, null, 2)}\n`
+    path.join(dir, "states.json"),
+    `${JSON.stringify(records, null, 2)}\n`
+  );
+  writeFileSync(
+    path.join(dir, "version.json"),
+    `${JSON.stringify(
+      {
+        package: "t3code-nightly-bin",
+        version: installedVersion(),
+        commit: T3_COMMIT,
+        capturedAt: new Date(records[0]?.capturedAtMs ?? 0).toISOString(),
+      },
+      null,
+      2
+    )}\n`
+  );
+};
+
+/** The hero and thread groups, Cairn's half, over one seeded in-process brain. */
+const capturePagesCairn = async (
+  browser: Browser,
+  pageGroups: ReadonlyArray<PageGroup>
+) => {
+  const exported = await Effect.runPromise(
+    parseT3ThreadExport(
+      readFileSync(path.join(BASELINE_ROOT, "thread/thread.json"), "utf-8")
+    )
   );
 
-  const pass = Object.values(report).every((percent) => percent === 0);
+  const imported = importT3Thread(exported);
 
-  console.log(
-    JSON.stringify({ judge: "capture", side: "cairn", pass, report })
-  );
-  process.exitCode = pass ? 0 : 1;
+  // The hero names the project t3code's draft showed; its h1 text ends with the project.
+  const heroProject =
+    /in (?<project>.+)\?$/u.exec(
+      /<h1[^>]*>(?<inner>[\s\S]*?)<\/h1>/u
+        .exec(
+          readFileSync(path.join(BASELINE_ROOT, "hero/1440-hero.html"), "utf-8")
+        )
+        ?.groups?.inner?.replaceAll(/<[^>]+>/gu, "")
+        .trim() ?? ""
+    )?.groups?.project ?? exported.projectTitle;
+
+  const app = await startCairn({
+    projectTitle: heroProject,
+    threadTitle: exported.title,
+    entries: imported.entries,
+  });
+
+  const png = await attachmentPng(browser);
+
+  try {
+    for (const group of pageGroups) {
+      const dir = path.join(values.out, group);
+
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "import.json"),
+        `${JSON.stringify({ entries: imported.entries.length, skipped: imported.skipped }, null, 2)}\n`
+      );
+
+      for (const capture of PAGE_STATES[group]) {
+        const context = await browser.newContext(
+          pageContextOptions(capture.view)
+        );
+
+        const page = await context.newPage();
+        const url = group === "hero" ? `${app.origin}/` : app.threadUrl;
+
+        await open(page, url);
+        await page.waitForTimeout(2500);
+        await prepare(page);
+        await (isThreadState(capture.state)
+          ? enterThreadState(page, capture.state)
+          : enterHeroState(page, capture.state, png));
+        await captureState(page, dir, capture);
+
+        // The structure control: the same page after one class string is sabotaged.
+        if (capture.state === "hero" && capture.view.name === "1440") {
+          await editor(page).evaluate((element) => {
+            element.setAttribute(
+              "class",
+              `${element.getAttribute("class") ?? ""} text-2xl px-8`
+            );
+          });
+          writeFileSync(
+            path.join(dir, "1440-hero.sabotaged.landmarks.json"),
+            `${JSON.stringify(await readLandmarks(page), null, 2)}\n`
+          );
+        }
+
+        // The pixel control: the phone hero with the sidebar wrongly open.
+        if (capture.state === "hero" && capture.view.mobile) {
+          await page
+            .getByRole("button", { name: "Toggle main sidebar" })
+            .first()
+            .click();
+          await page.waitForTimeout(900);
+          await shot(
+            page,
+            {
+              x: 0,
+              y: 0,
+              width: capture.view.width,
+              height: capture.view.height,
+            },
+            path.join(dir, "390-control-sidebar-open.png")
+          );
+        }
+
+        await context.close();
+        console.log(`cairn ${group} ${capture.view.name} ${capture.state}`);
+      }
+    }
+  } finally {
+    await app.stop();
+  }
 };
 
 const browser = await chromium.launch();
 
 try {
-  await (side === "t3" ? captureT3(browser) : captureCairn(browser));
+  if (side === "t3") {
+    const version = installedVersion();
+    const recorded = recordedVersion();
+
+    if (version !== recorded) {
+      throw new Error(
+        `The installed t3code-nightly-bin is ${version}, but ADR 0015 records ${recorded}. Move the pin first.`
+      );
+    }
+
+    for (const group of groups) {
+      await (group === "sidebar"
+        ? captureSidebarT3(browser)
+        : capturePagesT3(browser, group));
+    }
+  } else {
+    if (groups.includes("sidebar")) {
+      await captureSidebarCairn(browser);
+    }
+
+    const pageGroups = groups.filter(
+      (group): group is PageGroup => group !== "sidebar"
+    );
+
+    if (pageGroups.length > 0) {
+      await capturePagesCairn(browser, pageGroups);
+    }
+
+    console.log(
+      JSON.stringify({
+        judge: "capture",
+        side: "cairn",
+        groups,
+        out: values.out,
+      })
+    );
+  }
 } finally {
   await browser.close();
 }

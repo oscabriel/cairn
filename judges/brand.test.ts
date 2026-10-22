@@ -1,6 +1,11 @@
 // Brand judge (plan D24): Cairn copies t3code's layout and class strings but none of its brand.
-// Fails on t3code names, storage keys and git refs anywhere in the apps and packages, except in a
-// file's leading comment block, where port headers name their source.
+// Fails on t3code names, storage keys, CSS names and git refs anywhere in the code of the apps and
+// packages. Comments may name t3code (port headers and notes say where code came from), so they
+// are stripped before the scan, and tests are skipped: they do not ship.
+//
+// Known leftovers that another package owns are listed with their owner instead of failing the
+// gate; the list must match what the scan finds exactly, so a fixed leftover has to leave the list
+// and a new one fails.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -8,17 +13,29 @@ import { assert, describe, it } from "@effect/vitest";
 
 const root = path.join(import.meta.dirname, "..");
 
-/** Brand leftovers: product names, the wordmark component, storage key and context prefixes, refs. */
+/** Brand leftovers: product names, the wordmark component, storage keys, CSS names, refs. */
 const LEFTOVERS: ReadonlyArray<string> = [
   "T3 Code",
-  "t3code:",
+  "t3code",
   "T3Wordmark",
   "t3-context",
+  "t3-mobile",
   "refs/t3",
   '"t3/',
 ];
 
+/**
+ * Leftovers waiting on their owner, by file: the view-transition names in styles.css are 5C's
+ * (wave 5 tokens and primitives), handed off by 4F.
+ */
+const KNOWN = {
+  "apps/web/src/styles.css": ["t3-mobile"],
+};
+
 const SCANNED = /\.(?:ts|tsx|js|mjs|css|html|json|webmanifest)$/u;
+
+/** Tests do not ship; their names cite t3code's behaviour on purpose. */
+const TESTS = /\.test\.tsx?$/u;
 
 const SKIPPED_DIRECTORIES = new Set([
   "node_modules",
@@ -35,43 +52,27 @@ const files = (directory: string): ReadonlyArray<string> =>
       return SKIPPED_DIRECTORIES.has(entry.name) ? [] : files(entryPath);
     }
 
-    return SCANNED.test(entry.name) ? [entryPath] : [];
+    return SCANNED.test(entry.name) && !TESTS.test(entry.name)
+      ? [entryPath]
+      : [];
   });
 
-/** The file's text after its leading comment block (line comments, block comments, blank lines). */
-const bodyAfterHeader = (text: string): string => {
-  const lines = text.split("\n");
-  let inBlock = false;
-  let index = 0;
+/** The file's text without comments: block comments, HTML comments and line comments. */
+const withoutComments = (text: string): string =>
+  text
+    .replaceAll(/\/\*[\s\S]*?\*\//gu, "")
+    .replaceAll(/<!--[\s\S]*?-->/gu, "")
+    .replaceAll(/(?<before>^|[^:"'`\\])\/\/.*$/gmu, "$<before>");
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    if (inBlock) {
-      inBlock = !trimmed.includes("*/");
-    } else if (trimmed.startsWith("/*") || trimmed.startsWith("<!--")) {
-      inBlock = !trimmed.includes("*/") && !trimmed.includes("-->");
-    } else if (
-      !(trimmed === "" || trimmed.startsWith("//") || trimmed.startsWith("#!"))
-    ) {
-      break;
-    }
-
-    index += 1;
-  }
-
-  return lines.slice(index).join("\n");
-};
-
-/** The leftovers found in a file's body. */
+/** The leftovers found in a file's code. */
 const leftoversIn = (text: string): ReadonlyArray<string> => {
-  const body = bodyAfterHeader(text);
+  const code = withoutComments(text);
 
-  return LEFTOVERS.filter((leftover) => body.includes(leftover));
+  return LEFTOVERS.filter((leftover) => code.includes(leftover));
 };
 
 describe("brand leftovers", () => {
-  it("finds a leftover in code and ignores the same words in a port header", () => {
+  it("finds a leftover in code and ignores the same words in comments", () => {
     const header =
       "// Ported from github.com/pingdotgg/t3code (T3 Code), keys were t3code:drafts\n";
 
@@ -81,23 +82,37 @@ describe("brand leftovers", () => {
     );
     assert.deepStrictEqual(
       leftoversIn(`${header}export const key = "t3code:drafts";\n`),
-      ["t3code:"]
+      ["t3code"]
     );
     assert.deepStrictEqual(
       leftoversIn('/*\n * T3 Code\n */\nconst ref = "refs/t3/x";\n'),
       ["refs/t3"]
     );
+    assert.deepStrictEqual(
+      leftoversIn(
+        "const a = 1; // as t3code does\n.x { view-transition-name: t3-mobile-a; }\n"
+      ),
+      ["t3-mobile"]
+    );
+    assert.deepStrictEqual(
+      leftoversIn('const url = "https://example.com/t3code";\n'),
+      ["t3code"]
+    );
   });
 
-  it("finds none in apps and packages", () => {
-    const found = ["apps", "packages"].flatMap((top) =>
-      files(path.join(root, top)).flatMap((file) =>
-        leftoversIn(readFileSync(file, "utf-8")).map(
-          (leftover) => `${path.relative(root, file)}: ${leftover}`
-        )
+  it("finds none in apps and packages beyond the known ones", () => {
+    const found = Object.fromEntries(
+      ["apps", "packages"].flatMap((top) =>
+        files(path.join(root, top)).flatMap((file) => {
+          const leftovers = leftoversIn(readFileSync(file, "utf-8"));
+
+          return leftovers.length === 0
+            ? []
+            : [[path.relative(root, file), leftovers]];
+        })
       )
     );
 
-    assert.deepStrictEqual(found, []);
+    assert.deepStrictEqual(found, KNOWN);
   });
 });

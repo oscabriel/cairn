@@ -1,0 +1,10 @@
+{"type":"transcript_start","scenario":"whenbusy_reject","version":1}
+{"type":"model","label":"m1","hold":true,"text":"only answer"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"one"}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"input","step":"message","requestId":"r2","text":"not now","whenBusy":"reject","expect":{"error":"thread_busy"}}
+{"type":"expect_view","path":["queueLength"],"equals":0}
+{"type":"release","label":"m1"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"one","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"only answer","images":0,"toolCalls":[],"toolName":null,"isError":null}]}

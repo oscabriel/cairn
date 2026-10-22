@@ -1,0 +1,11 @@
+{"type":"transcript_start","scenario":"multi_turn","version":1}
+{"type":"model","label":"m1","text":"first answer"}
+{"type":"model","label":"m2","text":"second answer"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"one"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"input","step":"message","requestId":"r2","text":"two"}
+{"type":"expect_event","event":{"_tag":"MessageCommitted","role":"user","text":"two"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"one","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"first answer","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"two","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"second answer","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_event_count","event":{"_tag":"RunTerminal"},"count":2}

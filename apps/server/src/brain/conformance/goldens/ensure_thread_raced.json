@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "event": "ThreadEnsured"
+    }
+  ],
+  "view": {
+    "transcript": [],
+    "transcriptLength": 0,
+    "queue": [],
+    "queueLength": 0,
+    "running": false,
+    "approvals": [],
+    "pendingApprovals": 0,
+    "model": {
+      "provider": "faux",
+      "modelId": "scripted"
+    }
+  }
+}

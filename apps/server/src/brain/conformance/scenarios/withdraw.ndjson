@@ -1,0 +1,13 @@
+{"type":"transcript_start","scenario":"withdraw","version":1}
+{"type":"model","label":"m1","hold":true,"text":"answer"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"one"}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"input","step":"follow_up","requestId":"r2","text":"two"}
+{"type":"expect_view","path":["queueLength"],"equals":1}
+{"type":"input","step":"withdraw","requestId":"r2","expect":{"withdrawn":true}}
+{"type":"expect_view","path":["queueLength"],"equals":0}
+{"type":"input","step":"withdraw","requestId":"r1","expect":{"withdrawn":false}}
+{"type":"release","label":"m1"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"one","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"answer","images":0,"toolCalls":[],"toolName":null,"isError":null}]}

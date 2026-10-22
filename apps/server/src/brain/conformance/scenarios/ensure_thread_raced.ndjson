@@ -1,0 +1,7 @@
+{"type":"transcript_start","scenario":"ensure_thread_raced","version":1}
+{"type":"input","step":"ensure_race","expect":{"sameConversation":true}}
+{"type":"input","step":"ensure"}
+{"type":"expect_event","event":{"_tag":"ThreadEnsured"}}
+{"type":"settle","ms":200}
+{"type":"expect_event_count","event":{"_tag":"ThreadEnsured"},"count":1}
+{"type":"expect_view","path":["transcriptLength"],"equals":0}

@@ -1,0 +1,57 @@
+{
+  "events": [
+    {
+      "event": "ThreadEnsured"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "what is this"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "a single pixel"
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    }
+  ],
+  "view": {
+    "transcript": [
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "what is this",
+        "images": 1,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "a single pixel",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      }
+    ],
+    "transcriptLength": 2,
+    "queue": [],
+    "queueLength": 0,
+    "running": false,
+    "approvals": [],
+    "pendingApprovals": 0,
+    "model": {
+      "provider": "faux",
+      "modelId": "scripted"
+    }
+  }
+}

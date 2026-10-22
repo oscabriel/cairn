@@ -1,0 +1,7 @@
+{"type":"transcript_start","scenario":"provider_error_usage_limit","version":1}
+{"type":"model","label":"m1","stopReason":"error","errorMessage":"Claude plan quota exceeded: the five hour window resets at 14:00.","text":""}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"one more"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"failed","failure":{"class":"usage_limit","retryable":false}}}
+{"type":"expect_view","path":["running"],"equals":false}
+{"type":"expect_view","path":["transcript",0],"equals":{"kind":"pi.user","role":"user","text":"one more","images":0,"toolCalls":[],"toolName":null,"isError":null}}

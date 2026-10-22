@@ -21,6 +21,7 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
@@ -78,6 +79,7 @@ const brainLayer = (dataDir: string, failNext: { value: boolean }) => {
     ),
     Layer.provideMerge(Parked.layer),
     Layer.provide(ExtensionSet.layer),
+    Layer.provide(ExecutorLink.layerDisabled),
     Layer.provideMerge(
       ModelSource.layerFaux({
         tokensPerSecond: 2000,

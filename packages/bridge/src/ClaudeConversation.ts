@@ -640,7 +640,7 @@ export const openConversation = Effect.fnUntraced(function* (
 
       if (at === -1) {
         return Option.none<{
-          readonly cut: string;
+          readonly cut: Option.Option<string>;
           readonly blocks: ReadonlyArray<PromptBlock>;
         }>();
       }
@@ -663,8 +663,16 @@ export const openConversation = Effect.fnUntraced(function* (
           ? extractToolResults(messages.slice(found.index + 1))
           : [];
 
+      const cut = answered === undefined ? found.stamp.ccUuid : answered.uuid;
+
+      // `resumeSessionAt` makes Claude Code resend the history without the prompt cache's
+      // breakpoints (measured: a 22K-token prefix rewritten on every resume), so it is passed only
+      // when there is something after the cut to drop.
       return Option.some({
-        cut: answered === undefined ? found.stamp.ccUuid : answered.uuid,
+        cut:
+          entries.at(-1)?.uuid === cut
+            ? Option.none<string>()
+            : Option.some(cut),
         blocks: [...toolResultsPrompt(carried), ...userTurnBlocks(messages)],
       });
     });
@@ -771,7 +779,7 @@ export const openConversation = Effect.fnUntraced(function* (
       const session: ChildSession = {
         kind: "resume",
         sessionId: decision.found.stamp.ccSessionId,
-        at: Option.some(plan.value.cut),
+        at: plan.value.cut,
         fork: decision.fork,
       };
 

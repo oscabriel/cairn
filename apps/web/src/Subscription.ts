@@ -15,6 +15,7 @@ import { hasClient, isBackingOff } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
+import { subscriptions as pushSubscriptions } from "./push/Subscription.ts";
 import { subscribeShell } from "./shell/ShellStore.ts";
 import { subscriptions as sidebarSubscriptions } from "./sidebar/Subscription.ts";
 
@@ -141,12 +142,21 @@ const liftedSidebarSubscriptions = Subscription.lift(sidebarSubscriptions)<
   toParentMessage: (message) => Message.GotSidebarMessage({ message }),
 });
 
+const liftedPushSubscriptions = Subscription.lift(pushSubscriptions)<
+  Model,
+  Message
+>({
+  read: (model) => Option.some(model.push),
+  toParentMessage: (message) => Message.GotPushMessage({ message }),
+});
+
 /** Every root subscription. */
 export const subscriptions = Subscription.aggregate(
   rootSubscriptions,
   threadSubscriptions,
   composerSubscriptions,
-  liftedSidebarSubscriptions
+  liftedSidebarSubscriptions,
+  liftedPushSubscriptions
 );
 
 /** The connection resource, one client per epoch. */

@@ -12,6 +12,7 @@ import { createRegistry } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Option, Predicate, Stream } from "effect";
 
+import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { setsOwnDeadline, TIMEOUT_REFUSAL } from "./CodeMode.ts";
 import { Extensions } from "./Extensions.ts";
@@ -22,7 +23,9 @@ import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 
 const harness = PiDurableHarness.layer.pipe(
-  Layer.provideMerge(ExtensionSet.layer),
+  Layer.provideMerge(
+    ExtensionSet.layer.pipe(Layer.provide(ExecutorLink.layerDisabled))
+  ),
   Layer.provideMerge(
     ModelSource.layerFaux({
       tokensPerSecond: 4000,
@@ -142,9 +145,22 @@ describe("coding tools", () => {
         );
         assert.deepStrictEqual(
           installed.map((extension) => extension.name),
-          ["coding-tools", "codemode"]
+          [
+            "coding-tools",
+            "cairn",
+            "skills",
+            "context",
+            "codemode",
+            "cairn-executor",
+            "cairn.bridge-cwd",
+            "cairn-provider-request-log",
+          ]
         );
-      }).pipe(Effect.provide(ExtensionSet.layer))
+      }).pipe(
+        Effect.provide(
+          ExtensionSet.layer.pipe(Layer.provide(ExecutorLink.layerDisabled))
+        )
+      )
   );
 
   it("refuses code mode scripts that set their own deadline, and only those", () => {

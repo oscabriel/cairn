@@ -26,7 +26,8 @@ import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { X } from "lucide";
 
-import { attachmentTrayView } from "./AttachmentTray.ts";
+import type { Message as TrayMessage } from "../attachments/Message.ts";
+import { attachmentFormAttributes, attachmentTray } from "./AttachmentTray.ts";
 import {
   BANNER_SLOT_CLASS,
   BANNER_STACK_CLASS,
@@ -36,7 +37,7 @@ import {
   SHELL_CLASS,
   SURFACE_CLASS,
 } from "./Classes.ts";
-import { activeDraft, isDraftTarget } from "./Drafts.ts";
+import { activeDraft, draftKey, isDraftTarget } from "./Drafts.ts";
 import { editorView } from "./Editor.ts";
 import { footerView } from "./Footer.ts";
 import { icon } from "./Icon.ts";
@@ -55,6 +56,9 @@ import { isThreadRunning } from "./Update.ts";
 
 const DRAWER_CLASS =
   "relative isolate flex min-h-0 w-full flex-col overflow-hidden pb-[calc(1rem+1px)] before:rounded-t-2xl before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:border before:border-(--chat-composer-outline) before:bg-(--chat-composer-glass-surface) before:shadow-composer";
+
+const toTray = (message: TrayMessage): Message =>
+  Message.GotAttachmentsMessage({ message });
 
 const queuedRow = (input: QueuedInput, h: HtmlBuilder<Message>): Html =>
   h.li(
@@ -177,6 +181,7 @@ export const cardView = (
                     "mx-auto w-full min-w-0 max-w-(--chat-content-max-width)"
                   ),
                   h.DataAttribute("chat-composer-form", "true"),
+                  ...attachmentFormAttributes(toTray, h),
                 ],
                 [
                   h.div(
@@ -255,7 +260,12 @@ export const cardView = (
                                   ),
                                 ]
                               ),
-                              attachmentTrayView(model, h),
+                              attachmentTray(
+                                model.attachments,
+                                draftKey(model),
+                                toTray,
+                                h
+                              ),
                               noticeView(model, h),
                               footerView(model, h),
                             ]

@@ -48,6 +48,7 @@ import {
 } from "../../../apps/server/src/AppLayer.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
+import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
 
 const { values } = parseArgs({
@@ -394,6 +395,7 @@ const Brain = PiDurableBrain({
     Layer.provide(ServerConfig.layerWith({ dataDir }))
   ),
 }).pipe(
+  Layer.provide(ExecutorLink.layerDisabled),
   Layer.provide(ServerConfig.layerWith({ dataDir })),
   Layer.provide(NodeServices.layer),
   Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error"))

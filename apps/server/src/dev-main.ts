@@ -12,6 +12,7 @@ import { Layer } from "effect";
 import { AppLayer, PiDurableBrain, ScriptedBrain } from "./AppLayer.ts";
 import { ServerConfig } from "./Config.ts";
 import { DevDemo } from "./DevDemo.ts";
+import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
@@ -39,6 +40,7 @@ const App =
       );
 
 const DevLayer = App.pipe(
+  Layer.provide(ExecutorLink.layerFake),
   Layer.provide(Identity.layerLoopbackOwner),
   Layer.provide(ServerConfig.layerLocal),
   Layer.provide(NodeServices.layer),

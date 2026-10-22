@@ -20,9 +20,13 @@ import {
 import { resolveRestingComposerControlsLayout } from "@cairn/client-logic/FooterLayout";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
+import { Command } from "foldkit";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
+import { OutMessage as TrayOutMessage } from "../attachments/Message.ts";
+import type { Message as TrayMessage } from "../attachments/Message.ts";
+import * as Tray from "../attachments/Update.ts";
 import type { Services } from "../Command.ts";
 import {
   ConfigureThread,
@@ -50,8 +54,8 @@ import {
 import { FocusEditor, SetEditorValue } from "./Editor.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { SubmitIntent } from "./Message.ts";
-import { initial, Popover } from "./Model.ts";
-import type { ComposerContext, Model, ComposerTarget } from "./Model.ts";
+import { emptyDraft, initial, Popover } from "./Model.ts";
+import type { ComposerContext, Draft, Model, ComposerTarget } from "./Model.ts";
 import {
   clampThinking,
   findListing,
@@ -72,6 +76,9 @@ type Step = Update.Step<Model, Message, Services>;
 
 const keep = (model: Model): UpdateReturn => ({ model });
 
+const toTray = (message: TrayMessage): Message =>
+  Message.GotAttachmentsMessage({ message });
+
 /** The composer's first Model and the reads it starts with. */
 /**
  * Drops the unsent draft `/new/<draftId>` (the sidebar's Discard), and the home hero's id when it
@@ -80,17 +87,28 @@ const keep = (model: Model): UpdateReturn => ({ model });
 export const discardDraft = (
   model: Model,
   draftId: string
-): Update.Return<Model, Message, Services> => ({
-  model: modifyFields(model, {
-    drafts: (drafts) => Record.remove(drafts, `draft:${draftId}`),
-    draftsVersion: (version) => version + 1,
-    homeDraftId: (id) => (Option.contains(id, draftId) ? Option.none() : id),
-  }),
-});
+): Update.Return<Model, Message, Services> => {
+  const tray = Tray.discardDraft(model.attachments, `draft:${draftId}`);
+
+  return {
+    model: modifyFields(model, {
+      drafts: (drafts) => Record.remove(drafts, `draft:${draftId}`),
+      draftsVersion: (version) => version + 1,
+      homeDraftId: (id) => (Option.contains(id, draftId) ? Option.none() : id),
+      attachments: () => tray.model,
+    }),
+    commands: Command.mapMessages(tray.commands, toTray),
+  };
+};
 
 export const init = (): Update.Return<Model, Message, Services> => ({
   model: initial,
-  commands: [DetectPlatform(), LoadDrafts(), LoadSettings()],
+  commands: [
+    DetectPlatform(),
+    LoadDrafts(),
+    LoadSettings(),
+    ...Command.mapMessages(Tray.init().commands, toTray),
+  ],
 });
 
 /** True while the open thread has a run the composer can stop or steer into. */
@@ -316,7 +334,7 @@ const notice = (model: Model, text: string): UpdateReturn => ({
 });
 
 /** Hands a validated turn to the Command that mints its ids, emptying the draft at once. */
-const dispatch = (
+const dispatchTurn = (
   model: Model,
   intent: SubmitIntent,
   text: string
@@ -325,7 +343,11 @@ const dispatch = (
 
   const content = {
     text,
-    attachments: draft.attachments,
+    // The tray is what the user sees; the draft's ids follow it.
+    attachments: Option.match(draftKey(model), {
+      onNone: () => draft.attachments,
+      onSome: (key) => Tray.readyIds(model.attachments, key),
+    }),
     skillRefs: skillRefs(model, text),
   };
 
@@ -405,21 +427,161 @@ const dispatch = (
   );
 };
 
-/** Sends the draft when it validates; a refusal keeps it and says why. */
+/** Changes the ready attachment ids of the draft at `key`, open or not. */
+const changeDraftAttachments = (
+  model: Model,
+  key: string,
+  change: (ids: Draft["attachments"]) => Draft["attachments"]
+): Model =>
+  modifyFields(model, {
+    drafts: (drafts) => {
+      const current = Option.getOrElse(
+        Record.get(drafts, key),
+        () => emptyDraft
+      );
+
+      return Record.set(drafts, key, {
+        ...current,
+        attachments: change(current.attachments),
+      });
+    },
+    draftsVersion: (version) => version + 1,
+  });
+
+/** A tray result applied to the composer, and the send it asks for, if any. */
+interface TrayApplied {
+  readonly model: Model;
+  readonly commands: ReadonlyArray<Command.Command<Message, never, Services>>;
+  readonly ready: Option.Option<{
+    readonly key: string;
+    readonly intent: SubmitIntent;
+  }>;
+}
+
+/**
+ * The composer after a change in its attachment tray: the tray's Commands lifted, the draft's ready
+ * ids kept in step, and a send the tray released handed back to the caller.
+ */
+const applyTray = (model: Model, result: Tray.UpdateReturn): TrayApplied => {
+  const next = modifyFields(model, { attachments: () => result.model });
+  const commands = Command.mapMessages(result.commands ?? [], toTray);
+  const none: TrayApplied["ready"] = Option.none();
+
+  return Option.match(Option.fromUndefinedOr(result.outMessage), {
+    onNone: () => ({ model: next, commands, ready: none }),
+    onSome: (outMessage) =>
+      TrayOutMessage.match<TrayApplied>(outMessage, {
+        Attached: ({ attachmentId, draftKey: key }) => ({
+          model: changeDraftAttachments(next, key, (ids) =>
+            ids.includes(attachmentId) ? ids : [...ids, attachmentId]
+          ),
+          commands,
+          ready: none,
+        }),
+        Detached: ({ attachmentId, draftKey: key }) => ({
+          model: changeDraftAttachments(next, key, (ids) =>
+            Array.filter(ids, (id) => id !== attachmentId)
+          ),
+          commands,
+          ready: none,
+        }),
+        ReadyToSend: ({ draftKey: key, intent }) => ({
+          model: next,
+          commands,
+          ready: Option.some({ key, intent }),
+        }),
+      }),
+  });
+};
+
+/** Sends the turn, and lets the tray forget the attachments it carried. */
+const dispatch = (
+  model: Model,
+  intent: SubmitIntent,
+  text: string
+): UpdateReturn => {
+  const key = draftKey(model);
+  const sent = dispatchTurn(model, intent, text);
+
+  return Option.match(
+    Option.filter(key, () => (sent.commands ?? []).length > 0),
+    {
+      onNone: () => sent,
+      onSome: (sentKey) => {
+        const cleared = applyTray(
+          sent.model,
+          Tray.clearSent(sent.model.attachments, sentKey)
+        );
+
+        return {
+          ...sent,
+          model: cleared.model,
+          commands: [...(sent.commands ?? []), ...cleared.commands],
+        };
+      },
+    }
+  );
+};
+
+/**
+ * Sends the draft when it validates; a refusal keeps it and says why. A draft whose attachments
+ * are still uploading (or failed) waits in the tray, which releases the send once they answer.
+ */
 const submit = (model: Model, intent: SubmitIntent): UpdateReturn => {
   const draft = activeDraft(model);
+  const key = draftKey(model);
 
   const submission = submitComposerDraft(
     draft.text,
     "turn",
-    draft.attachments.length > 0
+    draft.attachments.length > 0 ||
+      Option.exists(key, (current) =>
+        Tray.hasAttachments(model.attachments, current)
+      )
   );
 
   return ComposerSubmission.match(submission, {
     Empty: () => keep(model),
     Refuse: ({ message }) => notice(model, message),
-    Dispatch: ({ text }) => dispatch(model, intent, text),
+    Dispatch: ({ text }) =>
+      Option.match(
+        Option.filter(key, (current) =>
+          Tray.mustWait(model.attachments, current)
+        ),
+        {
+          onNone: () => dispatch(model, intent, text),
+          onSome: (current) => {
+            // A send that must wait never comes straight back ready: something is in flight.
+            const waiting = applyTray(
+              model,
+              Tray.requestSend(model.attachments, current, intent)
+            );
+
+            return { model: waiting.model, commands: waiting.commands };
+          },
+        }
+      ),
   });
+};
+
+/** A tray Message through the tray, then the send it released, if its draft is still open. */
+const withTray = (model: Model, result: Tray.UpdateReturn): UpdateReturn => {
+  const applied = applyTray(model, result);
+
+  const released = Option.match(
+    Option.filter(applied.ready, ({ key }) =>
+      Option.contains(draftKey(applied.model), key)
+    ),
+    {
+      onNone: () => keep(applied.model),
+      onSome: ({ intent }) => submit(applied.model, intent),
+    }
+  );
+
+  return {
+    ...released,
+    commands: [...applied.commands, ...(released.commands ?? [])],
+  };
 };
 
 /** Switches the model: a draft remembers it, an open thread is reconfigured. */
@@ -1011,6 +1173,13 @@ const step = (model: Model, message: Message): UpdateReturn =>
     },
     CompletedRequest: () => keep(model),
     CompletedEditorCommand: () => keep(model),
+    GotAttachmentsMessage: ({ message: trayMessage }) =>
+      withTray(
+        model,
+        Tray.update(model.attachments, trayMessage, {
+          draftKey: draftKey(model),
+        })
+      ),
   });
 
 /** The composer's update. */

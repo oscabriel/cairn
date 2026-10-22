@@ -5,13 +5,19 @@
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer } from "effect";
 
+import { UsageFeed } from "../usage/UsageFeed.ts";
+import { AttachmentHandlers } from "./AttachmentHandlers.ts";
+import { ExecutorHandlers } from "./ExecutorHandlers.ts";
 import { ModelHandlers } from "./ModelHandlers.ts";
 import { ProjectHandlers } from "./ProjectHandlers.ts";
+import { PushHandlers } from "./PushHandlers.ts";
 import { sessionHandlers } from "./SessionHandlers.ts";
 import { ShellHandlers } from "./ShellHandlers.ts";
+import { SkillHandlers } from "./SkillHandlers.ts";
 import { stubHandlers } from "./StubHandlers.ts";
 import { ThreadCommandHandlers } from "./ThreadCommandHandlers.ts";
 import { ThreadStreamHandlers } from "./ThreadStreamHandlers.ts";
+import { UsageHandlers } from "./UsageHandlers.ts";
 
 /** The stubs with the session handlers over them. */
 const BaseHandlers = CairnRpcs.toLayer(
@@ -36,5 +42,10 @@ export const HandlersLayer = Layer.mergeAll(
   ThreadStreamHandlers.layer,
   ModelHandlers,
   ProjectHandlers.layer,
-  ThreadCommandHandlers.layer
+  ThreadCommandHandlers.layer,
+  AttachmentHandlers,
+  ExecutorHandlers,
+  SkillHandlers.layer,
+  UsageHandlers.pipe(Layer.provide(UsageFeed.layer)),
+  PushHandlers
 );

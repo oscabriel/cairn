@@ -11,6 +11,7 @@ import { SkillList } from "@cairn/protocol/Skills";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
+import { Message as AttachmentsMessage } from "../attachments/Message.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { EnvMode } from "../hero/ContextStrip.ts";
 import { ComposerSettings, Draft, Popover } from "./Model.ts";
@@ -109,6 +110,7 @@ export const Message = defineMessageUnion({
   },
   CompletedRequest: {},
   CompletedEditorCommand: {},
+  GotAttachmentsMessage: { message: AttachmentsMessage },
 });
 
 export type Message = typeof Message.Type;

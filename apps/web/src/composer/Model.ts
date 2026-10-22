@@ -24,6 +24,7 @@ import { ConversationView } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
+import * as Attachments from "../attachments/Model.ts";
 import { EnvMode } from "../hero/ContextStrip.ts";
 
 /** What the composer writes into: nothing, the home draft, a named draft, or an open thread. */
@@ -202,6 +203,8 @@ export const Model = Schema.Struct({
   headlineInline: Schema.Boolean,
   /** Why the last send did not go, or another note for the user. */
   notice: Schema.Option(Schema.String),
+  /** Every draft's attachment tray (pasted, dropped and picked files, and their uploads). */
+  attachments: Attachments.Model,
 });
 
 export type Model = typeof Model.Type;
@@ -239,4 +242,5 @@ export const initial: Model = {
   },
   headlineInline: true,
   notice: Option.none(),
+  attachments: Attachments.initial,
 };

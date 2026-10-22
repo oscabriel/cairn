@@ -5,15 +5,22 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
-import { AppLayer, PiDurableBrain } from "./AppLayer.ts";
+import { AppLayer, DatabaseLive, PiDurableBrain } from "./AppLayer.ts";
 import { ServerConfig } from "./Config.ts";
+import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
+import {
+  BridgeExtraProviders,
+  BridgeProvider,
+} from "./models/BridgeProvider.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
+import { VapidKeyFromFile } from "./push/Vapid.ts";
 
 // The user's API models through pi's model runtime, read-only over `~/.pi/agent`. One reference,
 // so the harness, the picker and the title model share one runtime.
 const Models = PiModelSource.layer.pipe(
+  Layer.provide(BridgeExtraProviders),
   Layer.provide(ServerConfig.layer),
   Layer.provide(NodeServices.layer),
   Layer.orDie
@@ -21,8 +28,15 @@ const Models = PiModelSource.layer.pipe(
 
 const Harness = PiDurableBrain({ models: Models });
 
+// The one holder of the Executor grant, over the same `cairn.sqlite` the app opens (one layer
+// reference, so one connection).
+const Executor = ExecutorLink.layer.pipe(Layer.provide(DatabaseLive));
+
 const MainLayer = AppLayer.pipe(
   Layer.provide(Harness),
+  Layer.provide(BridgeProvider.layer),
+  Layer.provide(Executor),
+  Layer.provide(VapidKeyFromFile),
   Layer.provide(Identity.layer),
   Layer.provide(ServerConfig.layer),
   Layer.provide(NodeServices.layer),

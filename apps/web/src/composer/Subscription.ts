@@ -11,6 +11,7 @@ import {
 } from "foldkit/dom";
 
 import type { CairnConnectionService } from "../connection/Connection.ts";
+import { attachmentSubscriptions } from "./AttachmentTray.ts";
 import {
   fetchBranches,
   fetchModels,
@@ -88,6 +89,11 @@ const branchProject = (model: Model) =>
     isDraftTarget(model) ? draftProject(model) : Option.none(),
     (project) => project.kind === "folder"
   );
+
+const trayLifted = attachmentSubscriptions<Model, Message>({
+  read: (model) => Option.some(model.attachments),
+  toParentMessage: (message) => Message.GotAttachmentsMessage({ message }),
+});
 
 /**
  * The composer's subscriptions. The brain's lists (models, skills, branches) load from here, keyed
@@ -187,6 +193,8 @@ export const subscriptions = Subscription.make<
   ),
   pageHide: Subscription.persistentEntry(pageHides),
   typeToFocus: Subscription.persistentEntry(typeToFocus),
+  attachmentProgress: trayLifted.uploadProgress,
+  attachmentPaste: trayLifted.documentPaste,
   draftSave: entry(
     { version: Schema.Int, saved: Schema.Int },
     {

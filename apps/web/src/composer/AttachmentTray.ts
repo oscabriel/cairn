@@ -11,8 +11,6 @@ import type { Message as TrayMessage } from "../attachments/Message.ts";
 import type { Model as TrayModel } from "../attachments/Model.ts";
 import { subscriptions as traySubscriptions } from "../attachments/Subscription.ts";
 import { trayView } from "../attachments/View.ts";
-import type { Message } from "./Message.ts";
-import type { Model } from "./Model.ts";
 
 /** The footer's Attach button, and the drop and paste handling of the composer's form. */
 export {
@@ -44,12 +42,3 @@ export const attachmentSubscriptions = <ParentModel, ParentMessage>(config: {
     read: config.read,
     toParentMessage: config.toParentMessage,
   });
-
-/**
- * The placeholder the card calls until the composer holds the tray's Model. The composer wiring
- * (`attachments/composer-wiring.patch`) replaces the call with `attachmentTray` and deletes this.
- */
-export const attachmentTrayView = (
-  _model: Model,
-  h: HtmlBuilder<Message>
-): Html => h.empty;

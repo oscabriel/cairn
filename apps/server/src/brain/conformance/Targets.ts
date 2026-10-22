@@ -13,6 +13,7 @@ import path from "node:path";
 
 import { Context, Effect, Exit, Layer, Option, Ref, Scope } from "effect";
 
+import { ExecutorLink } from "../../executor/ExecutorLink.ts";
 import { Brain } from "../Brain.ts";
 import { BrainConfig } from "../BrainConfig.ts";
 import { ExtensionSet } from "../ExtensionSet.ts";
@@ -89,7 +90,11 @@ export const piDurableTarget: MakeTarget = (script) =>
     const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-conformance-"));
 
     const layer = PiDurableHarness.layer.pipe(
-      Layer.provide(ExtensionSet.withExtra([conformanceTools])),
+      Layer.provide(
+        ExtensionSet.withExtra([conformanceTools]).pipe(
+          Layer.provide(ExecutorLink.layerDisabled)
+        )
+      ),
       Layer.provideMerge(
         ModelSource.layerFaux({
           tokensPerSecond: 2000,

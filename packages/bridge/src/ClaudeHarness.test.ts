@@ -218,7 +218,7 @@ describe("the bridge under pi-durable", () => {
             {
               kind: "resume",
               sessionId: SCRIPT_SESSION,
-              at: Option.some("u0"),
+              at: Option.none(),
               fork: false,
             },
           ],

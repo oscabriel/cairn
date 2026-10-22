@@ -34,6 +34,7 @@ import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
+import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ShellLayer } from "../shell/ShellLayer.ts";
 import { TurnContent, textStage } from "../threads/TurnContent.ts";
 import { attachmentStage } from "./AttachmentStage.ts";
@@ -106,7 +107,7 @@ const stack = (dir: string) => {
       return PiDurableBrain({
         models: ModelSource.layerFaux({ tokensPerSecond: 5000, settings: {} }),
         extraExtensions: [log],
-      });
+      }).pipe(Layer.provide(ExecutorLink.layerDisabled));
     })
   );
 

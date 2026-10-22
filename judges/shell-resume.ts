@@ -52,6 +52,7 @@ import { RpcClient, RpcSerialization } from "effect/rpc";
 
 import { AppLayer, ScriptedBrain } from "../apps/server/src/AppLayer.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
+import { ExecutorLink } from "../apps/server/src/executor/ExecutorLink.ts";
 import { Identity, USER_HEADER } from "../apps/server/src/http/Identity.ts";
 import { Tailscale } from "../apps/server/src/http/Tailscale.ts";
 import { EventSink } from "../apps/server/src/shell/EventSink.ts";
@@ -192,6 +193,7 @@ const ServerLayer = Layer.unwrap(
 
     return AppLayer.pipe(
       Layer.provide(ScriptedBrain),
+      Layer.provide(ExecutorLink.layerDisabled),
       Layer.provide(Identity.layerNoDeps),
       Layer.provide(
         Tailscale.fixed(

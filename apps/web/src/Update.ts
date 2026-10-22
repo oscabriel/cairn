@@ -44,6 +44,16 @@ import {
 import { Message } from "./Message.ts";
 import type { Flags, Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
+import { pushContextOf, samePushContext } from "./push/Context.ts";
+import { OutMessage as PushOutMessage } from "./push/Message.ts";
+import type { Message as PushMessage } from "./push/Message.ts";
+import { initial as initialPush } from "./push/Model.ts";
+import type { Model as PushModel, PushContext } from "./push/Model.ts";
+import {
+  init as initPush,
+  inform as informPushModel,
+  update as updatePush,
+} from "./push/Update.ts";
 import { AppRoute, urlToAppRoute } from "./Route.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
 import { OutMessage as SidebarOutMessage } from "./sidebar/Message.ts";
@@ -301,6 +311,62 @@ const startSidebar = Update.foldChildStep({
   foldOutMessage: foldSidebarOutMessage,
 });
 
+const toGotPushMessage = (message: PushMessage): Message =>
+  Message.GotPushMessage({ message });
+
+const readPush = (model: Model): Option.Option<PushModel> =>
+  Option.some(model.push);
+
+const writePush = (model: Model, push: PushModel): Model =>
+  modifyFields(model, { push: () => push });
+
+/** What the push toggle hands up: a tapped notification's same-origin path to open. */
+const foldPushOutMessage = (outMessage: PushOutMessage): Step =>
+  PushOutMessage.match<Step>(outMessage, {
+    RequestedNavigate:
+      ({ path }) =>
+      (model) => ({ model, commands: [NavigateInternal({ url: path })] }),
+  });
+
+const foldPushMessage = Update.foldChild({
+  update: updatePush,
+  read: readPush,
+  write: writePush,
+  toParentMessage: toGotPushMessage,
+  foldOutMessage: foldPushOutMessage,
+});
+
+const informPush = Update.foldChild({
+  update: informPushModel,
+  read: readPush,
+  write: writePush,
+  toParentMessage: toGotPushMessage,
+  foldOutMessage: foldPushOutMessage,
+});
+
+const startPush = Update.foldChildStep({
+  update: () => initPush(),
+  read: readPush,
+  write: writePush,
+  toParentMessage: toGotPushMessage,
+  foldOutMessage: foldPushOutMessage,
+});
+
+/** Tells the push toggle the epoch, the VAPID key, the open thread and the badge, when they changed. */
+const syncPush: Step = (model) => {
+  const context: PushContext = pushContextOf({
+    epoch: model.connection.epoch,
+    hasClient: hasClient(model.connection),
+    hello: model.hello,
+    shell: model.shell,
+    openThreadId: routedThreadId(model.route),
+  });
+
+  return samePushContext(model.push.context, context)
+    ? { model }
+    : informPush(model, context);
+};
+
 /** Tells the sidebar the shell, the open page, the connection and the drafts, when they changed. */
 const syncSidebar: Step = (model) => {
   const current = model.sidebar.context;
@@ -533,6 +599,10 @@ const step = (received: Message): Step =>
       ({ message: sidebarMessage }) =>
       (model) =>
         foldSidebarMessage(model, sidebarMessage),
+    GotPushMessage:
+      ({ message: pushMessage }) =>
+      (model) =>
+        foldPushMessage(model, pushMessage),
   });
 
 /** The root update. */
@@ -544,6 +614,7 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncThread,
     syncComposer,
     syncSidebar,
+    syncPush,
   ]);
 };
 
@@ -567,6 +638,7 @@ export const init: Runtime.RoutingApplicationInit<
       thread: Thread.Model.initial,
       sidebar: initialSidebar,
       composer,
+      push: initialPush,
     }),
     toParentMessage: toGotComposerMessage,
   });
@@ -576,6 +648,8 @@ export const init: Runtime.RoutingApplicationInit<
     syncComposer,
     startSidebar,
     syncSidebar,
+    startPush,
+    syncPush,
   ]);
 
   return {

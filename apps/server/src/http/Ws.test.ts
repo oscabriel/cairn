@@ -5,7 +5,7 @@ import { mkdtempSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 
-import { Internal, Unavailable } from "@cairn/protocol/Errors";
+import { Internal, NotFound, Unavailable } from "@cairn/protocol/Errors";
 import { ProjectId } from "@cairn/protocol/Ids";
 import { CairnRpcs, PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import { NodeServices, NodeSocket } from "@effect/platform-node";
@@ -25,6 +25,7 @@ import { RpcClient, RpcSerialization } from "effect/rpc";
 
 import { AppLayer, ScriptedBrain } from "../AppLayer.ts";
 import { ServerConfig } from "../Config.ts";
+import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import {
   Identity,
   IdentityRefused,
@@ -66,6 +67,7 @@ const TestIdentity = Layer.succeed(
 
 const TestServer = AppLayer.pipe(
   Layer.provide(ScriptedBrain),
+  Layer.provide(ExecutorLink.layerDisabled),
   Layer.provide(TestIdentity),
   Layer.provide(
     ServerConfig.layerWith({
@@ -227,7 +229,7 @@ layer(TestServer, { excludeTestServices: true })("the /ws socket", (it) => {
       assert.strictEqual(hello.protocol, PROTOCOL_VERSION);
       assert.strictEqual(hello.viewer, OWNER);
       assert.strictEqual(hello.build, "dev");
-      assert.isTrue(Option.isNone(hello.vapidPublicKey));
+      assert.isTrue(Option.isSome(hello.vapidPublicKey));
     })
   );
 
@@ -235,15 +237,14 @@ layer(TestServer, { excludeTestServices: true })("the /ws socket", (it) => {
     Effect.gen(function* () {
       const client = yield* connect(caddyHeaders);
 
-      // `skills.list` is still a stub (wave 3), which answers Unavailable.
+      // `skills.list` for a project that does not exist answers NotFound.
       const error = yield* Effect.flip(
         client["skills.list"]({ projectId: ProjectId.make("prj_test") })
       );
 
-      assert.instanceOf(error, Unavailable);
-      assert.strictEqual(error.code, "unavailable");
-      assert.isTrue(error.retryable);
-      assert.include(error.message, "skills.list");
+      assert.instanceOf(error, NotFound);
+      assert.include(error.message, "prj_test");
+      assert.notInstanceOf(error, Unavailable);
       assert.notInstanceOf(error, Internal);
     })
   );

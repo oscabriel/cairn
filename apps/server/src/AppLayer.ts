@@ -9,10 +9,12 @@ import path from "node:path";
 import { NodeServices } from "@effect/platform-node";
 import { Context, Effect, Layer } from "effect";
 
+import { AttachmentsLayer } from "./attachments/AttachmentsLayer.ts";
 import { BootLayer } from "./Boot.ts";
 import { runBootRepairs } from "./BootRepairs.ts";
 import { Brain } from "./brain/Brain.ts";
 import { BrainConfig } from "./brain/BrainConfig.ts";
+import { BridgeCwd } from "./brain/BridgeCwdExtension.ts";
 import type { CairnExtension } from "./brain/Extensions.ts";
 import { ExtensionSet } from "./brain/ExtensionSet.ts";
 import { ModelSource } from "./brain/ModelSource.ts";
@@ -21,6 +23,7 @@ import { ScriptedHarness } from "./brain/ScriptedHarness.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
+import { ExecutorSweep } from "./executor/ExecutorSweep.ts";
 import { Git } from "./git/Git.ts";
 import { Health } from "./http/Health.ts";
 import { HttpLive } from "./http/Http.ts";
@@ -31,14 +34,18 @@ import { FileSearch } from "./projects/FileSearch.ts";
 import { FolderRules } from "./projects/FolderRules.ts";
 import { ScratchProject } from "./projects/ScratchProject.ts";
 import { Worktrees } from "./projects/Worktrees.ts";
+import { PushLayer } from "./push/PushLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHelloWithModels } from "./rpc/ModelHandlers.ts";
+import { SessionHelloWithPush } from "./rpc/PushHandlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { ShellLayer } from "./shell/ShellLayer.ts";
 import { ShellProjector } from "./shell/ShellProjector.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
+import { Skills } from "./skills/SkillsLayer.ts";
 import { BranchNames } from "./threads/BranchNames.ts";
+import { bridgeStopHook } from "./threads/BridgeStopHook.ts";
 import { LaunchStore } from "./threads/LaunchStore.ts";
 import { StopHooks } from "./threads/StopHooks.ts";
 import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
@@ -46,6 +53,7 @@ import { Threads } from "./threads/Threads.ts";
 import { ThreadTitles } from "./threads/ThreadTitles.ts";
 import { TitleModel } from "./threads/TitleModel.ts";
 import { TurnContentLive } from "./threads/TurnContentStages.ts";
+import { ClaudeSignals } from "./usage/ClaudeSignals.ts";
 
 /**
  * How boot hands the harness its work after the repairs. pi-durable does not resume on open, so
@@ -63,8 +71,11 @@ const Boot = BootLayer({
   resume: HarnessBoot.use((boot) => boot.resume),
 });
 
-/** `cairn.sqlite` under the configured data directory, migrated (with a backup first). */
-const DatabaseLive = Layer.unwrap(
+/**
+ * `cairn.sqlite` under the configured data directory, migrated (with a backup first). Exported so
+ * `main.ts` gives the Executor link this same reference, and the memo map opens one connection.
+ */
+export const DatabaseLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
 
@@ -101,11 +112,14 @@ export const ThreadsLive = Layer.mergeAll(
     Layer.mergeAll(
       LaunchStore.layerNoDeps,
       TurnContentLive,
-      StopHooks.layerNone,
+      StopHooks.layerFrom([bridgeStopHook]).pipe(
+        Layer.provide(BridgeCwd.layer)
+      ),
       ThreadTitles.layerNoDeps,
       BranchNames.layerNoDeps
     ).pipe(Layer.provide(TitleModel.layerFromSettings))
   ),
+  Layer.provideMerge(AttachmentsLayer),
   Layer.provideMerge(ProjectsLive)
 );
 
@@ -159,6 +173,7 @@ export const PiDurableBrain = <Models = never>(options: {
         ? ExtensionSet.layer
         : ExtensionSet.withExtra(options.extraExtensions)
     ),
+    Layer.provideMerge(Skills.live),
     Layer.provideMerge(options.models),
     Layer.provide(BrainConfigLive)
   );
@@ -173,6 +188,7 @@ export const ScriptedBrain = Layer.succeed(
   HarnessBoot.of({ resume: Effect.void })
 ).pipe(
   Layer.provideMerge(ScriptedHarness.layer),
+  Layer.provideMerge(Skills.local),
   Layer.provideMerge(
     withCatalog(ModelSource.layerFaux({ tokensPerSecond: 50, settings: {} }))
   )
@@ -185,12 +201,20 @@ export const ScriptedBrain = Layer.succeed(
  */
 export const AppLayer = Layer.mergeAll(HttpLive, Boot).pipe(
   Layer.provide(HandlersLayer),
-  Layer.provide(SessionHelloWithModels.pipe(Layer.provide(SessionHello.layer))),
+  Layer.provide(
+    SessionHelloWithPush.pipe(
+      Layer.provide(
+        SessionHelloWithModels.pipe(Layer.provide(SessionHello.layer))
+      )
+    )
+  ),
   Layer.provide(BootJson.layerNone),
+  Layer.provide(ExecutorSweep.layerNoDeps),
   Layer.provide(Shutdown.layerFrom(shutdownHooks)),
   Layer.provide(Health.layer),
-  Layer.provide(ShellProjector.layer),
+  Layer.provide(ShellProjector.layer.pipe(Layer.provide(ClaudeSignals))),
   Layer.provideMerge(ThreadsLive),
+  Layer.provideMerge(PushLayer),
   Layer.provide(SettingsStore.layerNoDeps),
   Layer.provideMerge(ShellLive)
 );

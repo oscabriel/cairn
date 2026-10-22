@@ -128,6 +128,54 @@ export class Claude extends Context.Service<
         capacity: settings.liveChildren,
       });
 
+      // Calls in flight per conversation, and when each was last used. The map's capacity counts
+      // idle entries too (a conversation keeps its child for `idleTimeToLive`), so a new
+      // conversation at the cap evicts the least recently used idle one instead of failing, as
+      // the idle time to live would have later. A held tool call keeps its call in flight, so it
+      // is never evicted.
+      const usage = yield* Ref.make(
+        new Map<string, { readonly inFlight: number; readonly at: number }>()
+      );
+
+      const touch = (sessionId: string, delta: number) =>
+        Ref.update(usage, (all) => {
+          const next = new Map(all);
+          const inFlight = (all.get(sessionId)?.inFlight ?? 0) + delta;
+
+          next.set(sessionId, {
+            inFlight,
+            at: clock.currentTimeMillisUnsafe(),
+          });
+
+          return next;
+        });
+
+      const evictIdle = Effect.gen(function* () {
+        const all = yield* Ref.get(usage);
+        const keys = [...(yield* RcMap.keys(conversations))];
+
+        const idle = keys
+          .filter((key) => (all.get(key)?.inFlight ?? 0) === 0)
+          .toSorted((a, b) => (all.get(a)?.at ?? 0) - (all.get(b)?.at ?? 0));
+
+        const oldest = idle.at(0);
+
+        if (oldest === undefined) {
+          return false;
+        }
+
+        yield* RcMap.invalidate(conversations, oldest);
+        yield* Ref.update(usage, (current) => {
+          const next = new Map(current);
+
+          next.delete(oldest);
+
+          return next;
+        });
+
+        return true;
+      });
+
       const failSink = (
         sink: Parameters<ClaudeCall>[3],
         model: Parameters<ClaudeCall>[0],
@@ -181,19 +229,34 @@ export class Claude extends Context.Service<
             return;
           }
 
-          yield* Effect.scoped(
-            Effect.gen(function* () {
-              const conversation = yield* RcMap.get(conversations, sessionId);
+          const converse = Effect.acquireUseRelease(
+            touch(sessionId, 1),
+            () =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const conversation = yield* RcMap.get(
+                    conversations,
+                    sessionId
+                  );
 
-              yield* conversation.call({
-                model,
-                messages,
-                reasoning,
-                signal,
-                sink,
-              });
-            })
-          ).pipe(
+                  yield* conversation.call({
+                    model,
+                    messages,
+                    reasoning,
+                    signal,
+                    sink,
+                  });
+                })
+              ),
+            () => touch(sessionId, -1)
+          );
+
+          yield* converse.pipe(
+            Effect.catchIf(Cause.isExceededCapacityError, (error) =>
+              Effect.flatMap(evictIdle, (freed) =>
+                freed ? converse : Effect.fail(error)
+              )
+            ),
             Effect.catchIf(Cause.isExceededCapacityError, () =>
               failSink(sink, model, CAPACITY_TEXT)
             )

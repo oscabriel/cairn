@@ -3,7 +3,10 @@
 // so the order is decided in one place. Planned order: the bridge's `Claude.beginClosing()`, watches
 // and task-graph watches, then `harness.close(context)` with its 5 s timeout. SQLite closes after
 // these, as its own layer ends.
+import { bridgeClosingHook } from "./models/BridgeProvider.ts";
 import type { ShutdownHook } from "./Shutdown.ts";
 
 /** Every close hook, in order. */
-export const shutdownHooks: ReadonlyArray<ShutdownHook<never>> = [];
+export const shutdownHooks: ReadonlyArray<ShutdownHook<never>> = [
+  bridgeClosingHook,
+];

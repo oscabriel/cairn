@@ -10,6 +10,7 @@ import { UrlRequest } from "foldkit/navigation";
 import { Message as ComposerMessage } from "./composer/Message.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import * as Thread from "./page/thread/index.ts";
+import { Message as PushMessage } from "./push/Message.ts";
 import { Message as SidebarMessage } from "./sidebar/Message.ts";
 
 /** Everything the root reacts to. */
@@ -51,6 +52,7 @@ export const Message = defineMessageUnion({
   GotThreadMessage: { message: Thread.Message },
   GotSidebarMessage: { message: SidebarMessage },
   GotComposerMessage: { message: ComposerMessage },
+  GotPushMessage: { message: PushMessage },
 });
 
 export type Message = typeof Message.Type;

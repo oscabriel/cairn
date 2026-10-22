@@ -5,8 +5,12 @@
 // launches from `thread_launches`.
 import { Effect } from "effect";
 
+import { sweepAttachmentUploads } from "./attachments/AttachmentStore.ts";
+import type { AttachmentStore } from "./attachments/AttachmentStore.ts";
 import { retryParkedApprovalWaits } from "./Boot.ts";
 import type { HarnessSeam } from "./brain/HarnessSeam.ts";
+import { sweepUnfinishedExecutorRequests } from "./executor/ExecutorSweep.ts";
+import type { ExecutorSweep } from "./executor/ExecutorSweep.ts";
 import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
 
 /** One repair: a name for the log and the effect. */
@@ -39,8 +43,10 @@ export const bootRepair = <E, R>(
 
 /** Every boot repair, in order. */
 export const bootRepairs: ReadonlyArray<
-  BootRepair<HarnessSeam | ThreadLaunch>
+  BootRepair<AttachmentStore | ExecutorSweep | HarnessSeam | ThreadLaunch>
 > = [
+  sweepAttachmentUploads,
+  bootRepair("executor-sweep", sweepUnfinishedExecutorRequests),
   retryParkedApprovalWaits,
   bootRepair(
     "resume interrupted launches",

@@ -13,6 +13,8 @@ import { ProjectCreate } from "@cairn/protocol/ShellCommands";
 import { NodeServices } from "@effect/platform-node";
 import { Clock, Context, Effect, Latch, Layer, Option, Ref } from "effect";
 
+import { AttachmentsLayer } from "../attachments/AttachmentsLayer.ts";
+import type { AttachmentStore } from "../attachments/AttachmentStore.ts";
 import {
   scriptedAnswer,
   ScriptedHarness,
@@ -24,6 +26,7 @@ import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { Shell0001 } from "../db/migrations/0001Shell.ts";
 import { Launches0002 } from "../db/migrations/0002Launches.ts";
+import { Attachments0003 } from "../db/migrations/0003Attachments.ts";
 import { Git } from "../git/Git.ts";
 import { FileSearch } from "../projects/FileSearch.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
@@ -135,7 +138,7 @@ export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
   /** Provides `ScriptedModel`, and whatever handle the test holds it with. */
   readonly model: Layer.Layer<M, E2, R2>;
   /** Defaults to the production stage order. */
-  readonly turnContent?: Layer.Layer<TurnContent>;
+  readonly turnContent?: Layer.Layer<TurnContent, never, AttachmentStore>;
   /** Defaults to no hooks. */
   readonly stopHooks?: Layer.Layer<StopHooks>;
 }) => {
@@ -144,6 +147,7 @@ export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
       Database.layerTest({
         "0001_Shell": Shell0001,
         "0002_Launches": Launches0002,
+        "0003_Attachments": Attachments0003,
       })
     )
   );
@@ -178,6 +182,7 @@ export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
         harness
       )
     ),
+    Layer.provideMerge(AttachmentsLayer),
     Layer.provideMerge(shell),
     Layer.provideMerge(ServerConfig.layerWith({ dataDir: options.dataDir })),
     Layer.provideMerge(NodeServices.layer)

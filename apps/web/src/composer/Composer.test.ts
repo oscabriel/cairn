@@ -2,9 +2,12 @@ import { RequestId, SubmissionId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option } from "effect";
 import { KeyValueStore } from "effect/persistence";
+import { Mount } from "foldkit";
 import * as Scene from "foldkit/scene";
 import * as Story from "foldkit/story";
 
+import { Message as AttachmentsMessage } from "../attachments/Message.ts";
+import { AttachmentPaste } from "../attachments/Paste.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import {
   PrepareLaunch,
@@ -40,6 +43,14 @@ const onThread = composerOn(ComposerTarget.Thread({ threadId }));
 /** The view's Mounts, acknowledged as the browser would run them. */
 const acknowledgeMounts = [
   Scene.Mount.resolve(ComposerInput, Message.FocusedEditor()),
+  Scene.Mount.resolve(
+    Mount.mapMessage(AttachmentPaste(), (message: AttachmentsMessage) =>
+      Message.GotAttachmentsMessage({ message })
+    ),
+    Message.GotAttachmentsMessage({
+      message: AttachmentsMessage.ClickedDismissNotice(),
+    })
+  ),
   Scene.Mount.resolve(
     MeasureFooter,
     Message.MeasuredFooter({

@@ -58,6 +58,7 @@ import {
   scriptedAnswer,
 } from "../apps/server/src/brain/ScriptedHarness.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
+import { ExecutorLink } from "../apps/server/src/executor/ExecutorLink.ts";
 import { Identity } from "../apps/server/src/http/Identity.ts";
 import { EventSink } from "../apps/server/src/shell/EventSink.ts";
 import {
@@ -188,6 +189,7 @@ const startApp = async (): Promise<{
   const App = Seed.pipe(
     Layer.provideMerge(AppLayer),
     Layer.provideMerge(Harness),
+    Layer.provide(ExecutorLink.layerDisabled),
     Layer.provide(Identity.layerLoopbackOwner),
     Layer.provide(
       ServerConfig.layerWith({

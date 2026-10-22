@@ -34,6 +34,7 @@ import {
 } from "./ClaudeScriptKit.ts";
 import type { FakeScript, SessionEntry } from "./ClaudeSdk.ts";
 import { ClaudeSdk, ClaudeSdkScripts } from "./ClaudeSdk.ts";
+import { ClaudeSettings } from "./ClaudeSettings.ts";
 import { ClaudeSlots } from "./ClaudeSlots.ts";
 import { historyDigest, stampMessage, stampOf } from "./ClaudeStamp.ts";
 import { emptyUsage } from "./ClaudeTokens.ts";
@@ -566,7 +567,7 @@ describe("aborts", () => {
         expect(all[1]?.options.session).toStrictEqual({
           kind: "resume",
           sessionId: SCRIPT_SESSION,
-          at: Option.some("u1"),
+          at: Option.none(),
           fork: true,
         });
         expect([
@@ -636,7 +637,7 @@ describe("aborts", () => {
           {
             kind: "resume",
             sessionId: SCRIPT_SESSION,
-            at: Option.some("u0"),
+            at: Option.none(),
             fork: false,
           },
         ]);
@@ -740,7 +741,7 @@ describe("resume", () => {
           {
             kind: "resume",
             sessionId: SCRIPT_SESSION,
-            at: Option.some("u1"),
+            at: Option.none(),
             fork: false,
           },
           true,
@@ -1072,5 +1073,29 @@ describe("generation permits (J8)", () => {
           yield* Ref.get(waits),
         ]).toStrictEqual([["e"], [], ["b", "c", "d", "e"], [true, false]]);
       }).pipe(Effect.provide(ClaudeSlots.layer))
+  );
+});
+
+describe("the live-child cap", () => {
+  it.effect(
+    "evict the least recently used idle conversation for a new one instead of refusing it",
+    () =>
+      Effect.gen(function* () {
+        const first = yield* call([system, user("one")], {}, "conv-1");
+        const second = yield* call([system, user("two")], {}, "conv-2");
+
+        expect([first.stopReason, second.stopReason]).toStrictEqual([
+          "stop",
+          "stop",
+        ]);
+        expect(second.errorMessage).toBeUndefined();
+        expect(yield* runs).toHaveLength(2);
+      }).pipe(
+        Effect.provide(bridge([answersHi, answersHi])),
+        Effect.provideService(ClaudeSettings, {
+          ...ClaudeSettings.defaultValue(),
+          liveChildren: 1,
+        })
+      )
   );
 });

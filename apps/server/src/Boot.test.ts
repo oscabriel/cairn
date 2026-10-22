@@ -43,11 +43,13 @@ import { FAUX_MODEL, ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
+import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Health } from "./http/Health.ts";
 import { HttpLive } from "./http/Http.ts";
 import { Identity, IdentityRefused, USER_HEADER } from "./http/Identity.ts";
 import { BootJson } from "./http/Static.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
+import { PushLayer } from "./push/PushLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { EventSink } from "./shell/EventSink.ts";
@@ -232,6 +234,7 @@ const GatedApp = Layer.mergeAll(
   Layer.provide(Health.layer),
   Layer.provide(ShellProjector.layer),
   Layer.provideMerge(ThreadsLive),
+  Layer.provideMerge(PushLayer),
   Layer.provide(SettingsStore.layerNoDeps),
   Layer.provideMerge(
     ShellLayer.pipe(
@@ -244,6 +247,7 @@ const GatedApp = Layer.mergeAll(
     )
   ),
   Layer.provide(ScriptedBrain),
+  Layer.provide(ExecutorLink.layerDisabled),
   Layer.provide(TestIdentity),
   Layer.provide(
     ServerConfig.layerWith({
@@ -365,6 +369,7 @@ const brainFor = (dataDir: string) =>
   PiDurableBrain({
     models: ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} }),
   }).pipe(
+    Layer.provideMerge(ExecutorLink.layerDisabled),
     Layer.provideMerge(
       ShellLayer.pipe(
         Layer.provideMerge(

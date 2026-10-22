@@ -48,14 +48,14 @@ import {
   ListPlus,
   Lock,
   LockOpen,
-  Paperclip,
   PenLine,
   Sparkles,
 } from "lucide";
 
+import { hasAttachments } from "../attachments/Update.ts";
+import { attachButton } from "./AttachmentTray.ts";
 import {
   ACTIONS_CLASS,
-  ATTACH_CLASS,
   BLOCK_CLASS,
   CONTROL_BASE_CLASS,
   CONTROLS_CLASS,
@@ -66,7 +66,7 @@ import {
   SEPARATOR_CLASS,
   STOP_CLASS,
 } from "./Classes.ts";
-import { activeDraft, isDraftTarget } from "./Drafts.ts";
+import { activeDraft, draftKey, isDraftTarget } from "./Drafts.ts";
 import { icon } from "./Icon.ts";
 import type { IconNode } from "./Icon.ts";
 import { Message } from "./Message.ts";
@@ -580,7 +580,11 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const draft = activeDraft(model);
 
   const hasContent =
-    draft.text.trim().length > 0 || draft.attachments.length > 0;
+    draft.text.trim().length > 0 ||
+    draft.attachments.length > 0 ||
+    Option.exists(draftKey(model), (key) =>
+      hasAttachments(model.attachments, key)
+    );
 
   const running = isThreadRunning(model);
   const compact = shouldUseCompactComposerFooter(width, running);
@@ -625,15 +629,9 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
           h.Class(ACTIONS_CLASS),
         ],
         [
-          h.button(
-            [
-              h.Type("button"),
-              h.AriaLabel("Attach files"),
-              h.AriaDisabled(true),
-              h.Title("Attachments arrive with the attachment tray."),
-              h.Class(ATTACH_CLASS),
-            ],
-            [icon(h, Paperclip, "paperclip", "")]
+          attachButton(
+            (message) => Message.GotAttachmentsMessage({ message }),
+            h
           ),
           running && !hasContent
             ? stopButton(h)

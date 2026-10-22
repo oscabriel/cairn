@@ -213,6 +213,8 @@ const zones: ReadonlyArray<{
   { files: [server("skills/**")], allowed: ["codingAgent"] },
   { files: [server("brain/**")], allowed: ["durable", "piAi"] },
   { files: [server("**/*Extension.ts")], allowed: ["durable", "piAi"] },
+  // Upload-time image fitting runs pi-durable's Photon processor (plan section 1, "Attachments").
+  { files: [server("attachments/ImagePrepare.ts")], allowed: ["durable"] },
   {
     files: [server("skills/**/*Extension.ts")],
     allowed: ["durable", "piAi", "codingAgent"],

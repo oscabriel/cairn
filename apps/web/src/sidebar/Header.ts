@@ -28,6 +28,7 @@ import { Option } from "effect";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 
 import { COMBOBOX_ITEM_CLASS, COMBOBOX_POPUP_CLASS } from "../ui/Combobox.ts";
+import { projectMark } from "../ui/ProjectMark.ts";
 import {
   CLEAR_SEARCH_CLASS,
   HEADER_ICON_BUTTON_CLASS,
@@ -46,7 +47,7 @@ import { icon } from "./Icons.ts";
 import type { IconName } from "./Icons.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
-import { cx, projectMark } from "./Row.ts";
+import { cx } from "./Row.ts";
 
 type H = HtmlBuilder<Message>;
 

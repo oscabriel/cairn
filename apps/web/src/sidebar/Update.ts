@@ -780,6 +780,10 @@ const step = (model: Model, message: Message): UpdateReturn =>
     ClickedToggleSheet: () => ({
       model: modifyFields(model, { isSheetOpen: (open) => !open }),
     }),
+    ClickedSidebarControl: () => pressShortcut(model, "sidebar.toggle"),
+    ClickedRail: () => ({
+      model: modifyFields(model, { isOpen: (open) => !open }),
+    }),
     ClickedSheetBackdrop: () => ({
       model: modifyFields(model, { isSheetOpen: () => false }),
     }),

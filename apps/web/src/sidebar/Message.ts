@@ -48,6 +48,10 @@ export const Message = defineMessageUnion({
   /** A new draft id was minted for "New thread". */
   MintedDraftId: { draftId: Schema.String },
   ClickedToggleSheet: {},
+  /** The sidebar control at the top left: the sheet on a phone, the column on a desktop. */
+  ClickedSidebarControl: {},
+  /** A click on the column's edge rail, which collapses or restores the column. */
+  ClickedRail: {},
   ClickedSheetBackdrop: {},
 
   ClickedRow: { threadId: ThreadId },

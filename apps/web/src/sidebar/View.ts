@@ -83,8 +83,15 @@ import { ScrollFade } from "./ScrollFade.ts";
 
 type H = HtmlBuilder<Message>;
 
-/** The sidebar's width on a desktop. */
-export const SIDEBAR_WIDTH = "256px";
+/**
+ * The sidebar's width on a desktop: t3code's default 16rem, narrowed to keep 40rem for the page
+ * and never under 13rem (`threadSidebarWidth.ts`, without the drag-resize).
+ */
+export const SIDEBAR_WIDTH = "max(208px, min(256px, calc(100vw - 640px)))";
+
+/** Whether the column shows, as the app frame's `data-sidebar-state` reads it. */
+export const sidebarState = (model: Model): "expanded" | "collapsed" =>
+  model.isOpen && !model.isMobile ? "expanded" : "collapsed";
 
 const marker = (h: H, name: string, className: string): Html =>
   h.li(
@@ -464,6 +471,7 @@ const footer = (h: H, model: Model): Html =>
                   h.AriaLabel("Settings"),
                   h.Class(FOOTER_ICON_BUTTON_CLASS),
                   h.DataAttribute("sidebar", "menu-button"),
+                  h.DataAttribute("slot", "tooltip-trigger"),
                 ],
                 [icon(h, "settings")]
               ),
@@ -481,13 +489,18 @@ const footer = (h: H, model: Model): Html =>
                   h.AriaLabel("Usage"),
                   h.Class(FOOTER_ICON_BUTTON_CLASS),
                   h.DataAttribute("sidebar", "menu-button"),
+                  h.DataAttribute("slot", "tooltip-trigger"),
                 ],
                 [icon(h, "chart-no-axes-column")]
               ),
             ]
           ),
           h.li(
-            [h.Class("group/menu-item relative ml-auto shrink-0")],
+            [
+              h.Class("group/menu-item relative ml-auto shrink-0"),
+              h.DataAttribute("sidebar", "menu-item"),
+              h.DataAttribute("slot", "sidebar-menu-item"),
+            ],
             [
               h.span(
                 [
@@ -588,6 +601,64 @@ const sheetTrigger = (h: H, isPressed: boolean): Html =>
       icon(h, "panel-left", "size-4"),
       h.span([h.Class("sr-only")], ["Toggle Sidebar"]),
     ]
+  );
+
+/** The sidebar control over a page on a phone, where it sits in the page header's band. */
+const PAGE_CONTROL_CLASS =
+  "[&_svg]:-mx-0.5 relative inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-[var(--control-radius)] border font-medium text-base outline-none transition-[box-shadow,scale] [&:not([aria-haspopup]):not(:disabled):not([aria-disabled=true])]:will-change-[scale] [&:active:not([aria-haspopup])]:scale-[0.97] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--control-radius)-1px)] pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 aria-disabled:cursor-not-allowed aria-disabled:opacity-64 sm:text-sm [&_svg:not([class*='text-'])]:text-[var(--control-icon-color)] [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 size-9 sm:size-8 [--control-icon-color:var(--contrast-muted-foreground)] border-transparent text-foreground data-pressed:bg-accent [:hover,[data-pressed]]:bg-accent size-[var(--workspace-titlebar-control-size)]! [-webkit-app-region:no-drag] pointer-events-auto";
+
+/**
+ * t3code's `SidebarControl`: one toggle fixed at the top left of every page, which opens the sheet
+ * on a phone and collapses or restores the column on a desktop.
+ */
+const sidebarControl = (h: H, model: Model): Html =>
+  h.div(
+    [
+      h.DataAttribute("testid", "sidebar-sheet-toggle"),
+      h.DataAttribute("sidebar-control", ""),
+      h.Class(
+        "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center"
+      ),
+    ],
+    [
+      h.button(
+        [
+          h.Type("button"),
+          h.Class(
+            model.isMobile
+              ? PAGE_CONTROL_CLASS
+              : `${SHEET_TRIGGER_CLASS} pointer-events-auto`
+          ),
+          h.DataAttribute("slot", "tooltip-trigger"),
+          h.DataAttribute("sidebar", "trigger"),
+          h.AriaPressed(sidebarState(model) === "expanded" ? "true" : "false"),
+          h.AriaLabel("Toggle main sidebar"),
+          h.OnClick(Message.ClickedSidebarControl()),
+        ],
+        [
+          icon(h, "panel-left", "size-4"),
+          h.span([h.Class("sr-only")], ["Toggle Sidebar"]),
+        ]
+      ),
+    ]
+  );
+
+const RAIL_CLASS =
+  "-translate-x-1/2 group-data-[side=left]:-right-4 absolute inset-y-0 z-20 hidden w-4 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] hover:after:bg-sidebar-border group-data-[side=right]:left-0 sm:flex [[data-collapsible=offcanvas][data-state=collapsed]_&]:pointer-events-none [[data-panel-animations=true]_&]:transition-all [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize [[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize group-data-[collapsible=offcanvas]:translate-x-0 hover:group-data-[collapsible=offcanvas]:bg-sidebar group-data-[collapsible=offcanvas]:after:left-full [[data-side=left][data-collapsible=offcanvas]_&]:-right-2 [[data-side=right][data-collapsible=offcanvas]_&]:-left-2";
+
+/** t3code's `SidebarRail`: the column's edge, which collapses it on a click (no drag-resize). */
+const rail = (h: H): Html =>
+  h.button(
+    [
+      h.Type("button"),
+      h.AriaLabel("Toggle Sidebar"),
+      h.Class(RAIL_CLASS),
+      h.DataAttribute("sidebar", "rail"),
+      h.DataAttribute("slot", "sidebar-rail"),
+      h.Tabindex(-1),
+      h.OnClick(Message.ClickedRail()),
+    ],
+    []
   );
 
 /** The sidebar's column: brand band, header, list or results, undo notice and footer. */
@@ -799,23 +870,13 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
                   h.DataAttribute("sidebar", "sidebar"),
                   h.DataAttribute("slot", "sidebar-inner"),
                 ],
-                column(h, model)
+                [...column(h, model), rail(h)]
               ),
             ]
           ),
         ]
       ),
-      model.isSheetOpen
-        ? h.empty
-        : h.div(
-            [
-              h.DataAttribute("testid", "sidebar-sheet-toggle"),
-              h.Class(
-                "fixed top-[calc((var(--workspace-topbar-height)-var(--workspace-titlebar-control-size))/2)] left-[var(--workspace-controls-left)] z-20 flex md:hidden"
-              ),
-            ],
-            [sheetTrigger(h, false)]
-          ),
+      model.isSheetOpen ? h.empty : sidebarControl(h, model),
       sheet(h, model),
       menu(h, model),
       Option.match(model.addProject, {

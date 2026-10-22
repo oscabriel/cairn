@@ -1,15 +1,58 @@
+import { once } from "node:events";
 /* oxlint-disable no-await-in-loop -- the typist sends one key after another, on purpose */
-// The composer typing test: type into the composer at a fixed rate while the transcript streams, then compare.
-//   node judges/typing.ts <url> [chromium|webkit] [--seconds 60] [--cps 20] [--throttle 4] [--mobile] [--busy <ms>]
+// The composer typing judge (ADR 0023's gate): type into the real client's composer at a fixed rate
+// while a thread with a long history streams under it, then compare what arrived with what was sent.
 //
-// The page must render `[data-testid=composer-editor]` and, with `?stream=1`, a streaming
-// `[data-testid=stream][data-paragraphs]`; `?busy=<ms>` adds work to every update. Each key goes out on its own
-// schedule, so a slow frame can't make the typist wait for the app. Chromium also composes a word through IME events.
-// Prints one JSON line and exits 0 when nothing was dropped or reordered and composition worked.
+//   node judges/typing.ts [chromium|webkit] [--seconds 60] [--cps 20] [--throttle 4] [--busy 10]
+//                         [--mobile] [--history 500] [--url <thread page url>]
+//
+// Without --url the judge starts everything itself, on ephemeral loopback ports: a brain from the
+// app's own layers with the scripted harness (a thread seeded with --history entries, then a new
+// exchange every 250 ms for the length of the run), and the web client's Vite server proxying to it.
+// Each key goes out on its own schedule, so a slow frame cannot make the typist wait for the app.
+// Then three more checks on the same page: IME composition of 日本 (Chromium, through CDP), and the
+// menu case (typing `@`, `/` and `$` opens the composer's menus without losing a character).
+// Prints one JSON line and exits 0 when nothing was dropped or reordered, IME and the menu case are
+// intact, and the page logged no error.
+import { mkdtempSync, rmSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
+import { CommandId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
+import { NodeServices } from "@effect/platform-node";
+import {
+  Clock,
+  Duration,
+  Effect,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Predicate,
+  References,
+  Schedule,
+} from "effect";
 import { chromium, devices, webkit } from "playwright";
+import { createServer as createViteServer } from "vite";
+
+import { AppLayer, HarnessBoot } from "../apps/server/src/AppLayer.ts";
+import { HarnessSeam } from "../apps/server/src/brain/HarnessSeam.ts";
+import {
+  ScriptedHarness,
+  ScriptedModel,
+  ScriptedStore,
+  ScriptedTools,
+  scriptedAnswer,
+} from "../apps/server/src/brain/ScriptedHarness.ts";
+import { ServerConfig } from "../apps/server/src/Config.ts";
+import { Identity } from "../apps/server/src/http/Identity.ts";
+import { EventSink } from "../apps/server/src/shell/EventSink.ts";
+import {
+  ProjectRegister,
+  ThreadCreate,
+} from "../apps/server/src/shell/ShellCommands.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -18,21 +61,15 @@ const { values, positionals } = parseArgs({
     cps: { type: "string", default: "20" },
     throttle: { type: "string", default: "1" },
     busy: { type: "string", default: "0" },
+    history: { type: "string", default: "500" },
     mobile: { type: "boolean", default: false },
+    url: { type: "string" },
   },
 });
 
-const [url, browserName = "chromium"] = positionals;
-
-if (url === undefined) {
-  throw new Error(
-    "usage: typing.ts <url> [chromium|webkit] [--seconds 60] [--cps 20] [--throttle 4] [--mobile]"
-  );
-}
+const [browserName = "chromium"] = positionals;
 
 const isWebkit = browserName === "webkit";
-
-const engine = isWebkit ? webkit : chromium;
 
 const seconds = Number(values.seconds);
 
@@ -42,7 +79,187 @@ const throttle = Number(values.throttle);
 
 const busy = Number(values.busy);
 
+const historyEntries = Number(values.history);
+
 const mobile = values.mobile || isWebkit;
+
+const root = path.join(import.meta.dirname, "..");
+
+const LOOPBACK = "127.0.0.1";
+
+const THREAD_ID = ThreadId.make("019a0000-0000-7000-8000-0000000071e5");
+
+const PROJECT_ID = ProjectId.make("prj_typing_judge");
+
+/** One streamed exchange every this many milliseconds while the typist types. */
+const STREAM_INTERVAL = Duration.millis(250);
+
+/** A long-ish answer, so each exchange adds real markup to the page. */
+const ANSWER =
+  "The workflow resumed from its journal after the restart, and the scan's result came back without the scan running again. ".repeat(
+    6
+  );
+
+const freePort = async (): Promise<number> => {
+  const server = createNetServer().listen(0, LOOPBACK);
+
+  await once(server, "listening");
+
+  const address = server.address();
+
+  server.close();
+  await once(server, "close");
+
+  if (address === null || Predicate.isString(address)) {
+    throw new Error("judges/typing.ts: the kernel gave no loopback port.");
+  }
+
+  return address.port;
+};
+
+/** The scripted model, fast: answers at once, so seeding a long history takes seconds. */
+const FastModel = Layer.succeed(
+  ScriptedModel,
+  ScriptedModel.of({
+    answer: () =>
+      Effect.map(Clock.currentTimeMillis, (now) => scriptedAnswer(ANSWER, now)),
+  })
+);
+
+const Harness = Layer.succeed(
+  HarnessBoot,
+  HarnessBoot.of({ resume: Effect.void })
+).pipe(
+  Layer.provideMerge(ScriptedHarness.layerNoDeps),
+  Layer.provide(ScriptedStore.layer),
+  Layer.provide(FastModel),
+  Layer.provide(ScriptedTools.layerEcho)
+);
+
+const submit = (text: string) =>
+  Effect.gen(function* () {
+    const seam = yield* HarnessSeam;
+    const now = yield* Clock.currentTimeMillis;
+
+    yield* seam.submit(THREAD_ID, {
+      requestId: `typing-${now}-${Math.round(Math.random() * 1e9)}`,
+      content: [{ type: "text", text }],
+      entry: Option.none(),
+      whenBusy: "followUp",
+    });
+  });
+
+/** The judge's thread: a project, a thread with `historyEntries` entries, then a steady stream. */
+const Seed = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sink = yield* EventSink;
+    const seam = yield* HarnessSeam;
+
+    yield* sink.commitCommand(
+      ProjectRegister.make({
+        commandId: CommandId.make("019a0000-0000-7000-8000-0000000071e6"),
+        projectId: PROJECT_ID,
+        kind: "scratch",
+        title: "Typing judge",
+        workspaceRoot: os.tmpdir(),
+        repository: Option.none(),
+      })
+    );
+    yield* sink.commitCommand(
+      ThreadCreate.make({
+        commandId: CommandId.make("019a0000-0000-7000-8000-0000000071e7"),
+        threadId: THREAD_ID,
+        projectId: PROJECT_ID,
+        title: "Typing judge",
+        provider: "scripted",
+        modelId: "echo",
+        thinkingLevel: "medium",
+        runtimeMode: "full-access",
+        branch: Option.none(),
+        worktreePath: Option.none(),
+      })
+    );
+    yield* seam.ensureThread({
+      threadId: THREAD_ID,
+      projectId: PROJECT_ID,
+      model: { provider: "scripted", modelId: "echo" },
+      thinkingLevel: "medium",
+      cwd: os.tmpdir(),
+      instructions: Option.none(),
+    });
+
+    for (let index = 0; index < historyEntries / 2; index += 1) {
+      yield* submit(`history message ${index}`);
+    }
+
+    // The transcript keeps growing for as long as the judge runs.
+    let streamed = 0;
+
+    yield* Effect.suspend(() => {
+      streamed += 1;
+
+      return submit(`streamed message ${streamed}`);
+    }).pipe(
+      Effect.ignoreCause,
+      Effect.repeat(Schedule.spaced(STREAM_INTERVAL)),
+      Effect.forkScoped
+    );
+  })
+);
+
+/** Starts the brain and Vite; resolves with the thread page's URL and a stop function. */
+const startApp = async (): Promise<{
+  readonly url: string;
+  readonly stop: () => Promise<void>;
+}> => {
+  const vitePort = await freePort();
+  const brainPort = await freePort();
+  const origin = `http://${LOOPBACK}:${vitePort}`;
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "cairn-typing-"));
+
+  const App = Seed.pipe(
+    Layer.provideMerge(AppLayer),
+    Layer.provideMerge(Harness),
+    Layer.provide(Identity.layerLoopbackOwner),
+    Layer.provide(
+      ServerConfig.layerWith({
+        host: `${LOOPBACK}:${vitePort}`,
+        origin,
+        owner: "typing-judge",
+        listenHost: LOOPBACK,
+        port: brainPort,
+        dataDir,
+        webRoot: path.join(dataDir, "no-web"),
+      })
+    ),
+    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error"))
+  );
+
+  const runtime = ManagedRuntime.make(App);
+
+  await runtime.runPromise(Effect.void);
+
+  process.env.CAIRN_DEV_BRAIN = `http://${LOOPBACK}:${brainPort}`;
+
+  const vite = await createViteServer({
+    configFile: path.join(root, "apps/web/vite.config.ts"),
+    root: path.join(root, "apps/web"),
+    logLevel: "error",
+    server: { host: LOOPBACK, port: vitePort, strictPort: true },
+  });
+
+  await vite.listen();
+
+  return {
+    url: `${origin}/t/${THREAD_ID}`,
+    stop: async () => {
+      await vite.close();
+      await runtime.dispose();
+      rmSync(dataDir, { recursive: true, force: true });
+    },
+  };
+};
 
 // Printable text with spaces and punctuation, deterministic, long enough for the run.
 const alphabet =
@@ -58,7 +275,19 @@ const nextCharacter = () => {
 
 const text = Array.from({ length: seconds * cps }, nextCharacter).join("");
 
-const browser = await engine.launch();
+const MENU_TEXT = "look at @src/app.ts then /model or $review and @docs done";
+
+/** With --url the page's own brain is not the judge's to stop. */
+const stopNothing = async (): Promise<void> => {
+  // Nothing to stop.
+};
+
+const app =
+  values.url === undefined
+    ? await startApp()
+    : { url: values.url, stop: stopNothing };
+
+const browser = await (isWebkit ? webkit : chromium).launch();
 
 const { defaultBrowserType: _ignored, ...phone } = devices["iPhone 15"] ?? {};
 
@@ -74,15 +303,25 @@ page.on("pageerror", (error) => {
   errors.push(String(error));
 });
 
-const target = new URL(url);
-
-target.searchParams.set("stream", "1");
+const target = new URL(app.url);
 
 if (busy > 0) {
   target.searchParams.set("busy", String(busy));
 }
 
 await page.goto(target.href, { waitUntil: "networkidle" });
+
+const entries = page.locator('[data-testid="thread-entries"] > li');
+
+await page.waitForFunction(
+  (expected) =>
+    document.querySelectorAll('[data-testid="thread-entries"] > li').length >=
+    expected,
+  historyEntries,
+  { timeout: 60_000 }
+);
+
+const historyRows = await entries.count();
 
 if (throttle > 1 && !isWebkit) {
   const cdp = await context.newCDPSession(page);
@@ -92,29 +331,33 @@ if (throttle > 1 && !isWebkit) {
 
 const composer = page.getByTestId("composer-editor");
 
-const paragraphs = async () =>
-  Number(await page.getByTestId("stream").getAttribute("data-paragraphs"));
-
 await composer.click();
 
-const streamedBefore = await paragraphs();
+/** Types `value` at `cps`, each key on its own schedule; returns how late the late keys were. */
+const typeAt = async (value: string): Promise<ReadonlyArray<number>> => {
+  const started = Date.now();
+  const late: Array<number> = [];
+
+  for (let index = 0; index < value.length; index += 1) {
+    const wait = started + (index * 1000) / cps - Date.now();
+
+    if (wait > 0) {
+      await sleep(wait);
+    } else {
+      late.push(-wait);
+    }
+
+    await page.keyboard.type(value.charAt(index));
+  }
+
+  return late;
+};
+
+const rowsBefore = await entries.count();
 
 const started = Date.now();
 
-const late: Array<number> = [];
-
-for (let index = 0; index < text.length; index += 1) {
-  const character = text.charAt(index);
-  const wait = started + (index * 1000) / cps - Date.now();
-
-  if (wait > 0) {
-    await sleep(wait);
-  } else {
-    late.push(-wait);
-  }
-
-  await page.keyboard.type(character);
-}
+const late = await typeAt(text);
 
 const elapsed = (Date.now() - started) / 1000;
 
@@ -122,7 +365,16 @@ await page.waitForTimeout(1000);
 
 const typed = await composer.inputValue();
 
-const streamedAfter = await paragraphs();
+const rowsAfter = await entries.count();
+
+let firstDiff = -1;
+
+for (let index = 0; index < Math.max(text.length, typed.length); index += 1) {
+  if (text.charAt(index) !== typed.charAt(index)) {
+    firstDiff = index;
+    break;
+  }
+}
 
 // IME: compose a word through the browser's composition events, between plain keys.
 let ime = "skipped";
@@ -152,14 +404,49 @@ if (!isWebkit) {
   ime = value === "ab日本cd" ? "ok" : `wrong: ${JSON.stringify(value)}`;
 }
 
-let firstDiff = -1;
+// The menu case: `@`, `/` and `$` open menus, and typing on through them loses nothing.
+await composer.fill("");
 
-for (let index = 0; index < Math.max(text.length, typed.length); index += 1) {
-  if (text.charAt(index) !== typed.charAt(index)) {
-    firstDiff = index;
-    break;
-  }
-}
+await page.waitForTimeout(200);
+
+// The page records every menu kind that opens while the menu text is typed, on <body>.
+await page.evaluate(() => {
+  new MutationObserver(() => {
+    const kind = document.querySelector<HTMLElement>(
+      '[data-testid="composer-menu"]'
+    )?.dataset.trigger;
+
+    const seen = new Set(
+      (document.body.dataset.menusSeen ?? "").split(",").filter(Boolean)
+    );
+
+    if (kind !== undefined && !seen.has(kind)) {
+      seen.add(kind);
+      document.body.dataset.menusSeen = [...seen].join(",");
+    }
+  }).observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+  });
+});
+
+await typeAt(MENU_TEXT);
+
+const menusSeenText = await page.evaluate(
+  () => document.body.dataset.menusSeen ?? ""
+);
+
+const menusSeen: ReadonlyArray<string> = menusSeenText
+  .split(",")
+  .filter((kind) => kind.length > 0);
+
+await page.waitForTimeout(500);
+
+const menuValue = await composer.inputValue();
+
+const menu =
+  menuValue === MENU_TEXT ? "ok" : `wrong: ${JSON.stringify(menuValue)}`;
 
 const result = {
   engine: browserName,
@@ -167,6 +454,7 @@ const result = {
   throttle,
   busy,
   cps,
+  historyRows,
   sent: text.length,
   received: typed.length,
   match: typed === text,
@@ -174,8 +462,10 @@ const result = {
   elapsedSeconds: Number(elapsed.toFixed(1)),
   lateKeys: late.length,
   maxLateMs: Math.round(Math.max(0, ...late)),
-  paragraphsStreamed: streamedAfter - streamedBefore,
+  rowsStreamed: rowsAfter - rowsBefore,
   ime,
+  menu,
+  menusSeen: menusSeen.toSorted(),
   errors,
 };
 
@@ -183,7 +473,12 @@ console.log(JSON.stringify(result));
 
 await browser.close();
 
+await app.stop();
+
 process.exitCode =
-  result.match && (ime === "ok" || ime === "skipped") && errors.length === 0
+  result.match &&
+  (ime === "ok" || ime === "skipped") &&
+  menu === "ok" &&
+  errors.length === 0
     ? 0
     : 1;

@@ -1,0 +1,8 @@
+{
+  "defaultProvider": "faux",
+  "skills": [
+    "!skills/pstack/architect/SKILL.md",
+    "!skills/pstack/swarm/SKILL.md"
+  ],
+  "packages": ["../../pkgs/demo-pack"]
+}

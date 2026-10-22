@@ -1,0 +1,767 @@
+[
+  {
+    "_tag": "Snapshot",
+    "seq": 0,
+    "view": {
+      "conversation": {
+        "id": 3
+      },
+      "entries": [
+        {
+          "id": 11,
+          "conversationId": 3,
+          "kind": "pi.user",
+          "model": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Run `ls` with the bash tool, then read README.md with the read tool, then answer in one sentence."
+                }
+              ],
+              "timestamp": 1792674345101
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "conversationId": 3,
+          "kind": "cairn.hidden"
+        }
+      ],
+      "docs": {
+        "pi.agent": {
+          "model": {
+            "provider": "opencode-go",
+            "modelId": "claude-haiku-5-5"
+          },
+          "thinkingLevel": "off",
+          "cwd": "/work/demo"
+        },
+        "pi.live": {
+          "run": {
+            "taskId": 13,
+            "inputs": [12]
+          },
+          "generation": {
+            "attempt": 1
+          }
+        },
+        "pi.inbox": {
+          "items": []
+        },
+        "pi.usage": {
+          "models": {},
+          "tools": {}
+        },
+        "cairn.approvals": {
+          "items": {}
+        }
+      }
+    },
+    "entriesOffset": 0,
+    "hasMoreHistory": false
+  },
+  {
+    "_tag": "Ops",
+    "seq": 1,
+    "ops": [
+      [
+        "s",
+        ["docs", "pi.live", "generation", "message"],
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "I'll start by running `ls` with",
+              "index": 0
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 4,
+            "cacheRead": 3714,
+            "cacheWrite": 105,
+            "totalTokens": 3827,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.000002,
+              "cacheRead": 0.00003714,
+              "cacheWrite": 0.000013125,
+              "total": 0.000052665
+            },
+            "cacheWrite1h": 0
+          },
+          "stopReason": "pending",
+          "timestamp": 1792674345134,
+          "responseId": "msg_011CgHKnfUHLpkzZwfBUkw3d"
+        }
+      ]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 2,
+    "ops": [
+      [
+        "p",
+        ["docs", "pi.live", "generation", "message", "content"],
+        0,
+        1,
+        [
+          {
+            "type": "text",
+            "text": "I'll start by running `ls` with bash."
+          },
+          {
+            "type": "toolCall",
+            "id": "toolu_01PfNqBGvBYbkD87UgbLPQgc",
+            "name": "bash",
+            "arguments": {
+              "command": "ls"
+            },
+            "partialJson": "{\"command\": \"ls",
+            "index": 1
+          }
+        ]
+      ]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 3,
+    "ops": [
+      [
+        "p",
+        ["entries"],
+        2,
+        0,
+        [
+          {
+            "model": [
+              {
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "I'll start by running `ls` with bash."
+                  },
+                  {
+                    "type": "toolCall",
+                    "id": "toolu_01PfNqBGvBYbkD87UgbLPQgc",
+                    "name": "bash",
+                    "arguments": {
+                      "command": "ls"
+                    }
+                  }
+                ],
+                "api": "anthropic-messages",
+                "provider": "opencode-go",
+                "model": "claude-haiku-5-5",
+                "usage": {
+                  "input": 4,
+                  "output": 62,
+                  "cacheRead": 3714,
+                  "cacheWrite": 105,
+                  "totalTokens": 3885,
+                  "cost": {
+                    "input": 4.0000000000000003e-7,
+                    "output": 0.000031,
+                    "cacheRead": 0.00003714,
+                    "cacheWrite": 0.000013125,
+                    "total": 0.000081665
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                },
+                "stopReason": "toolUse",
+                "timestamp": 1792674345134,
+                "responseId": "msg_011CgHKnfUHLpkzZwfBUkw3d",
+                "rawStopReason": "tool_use",
+                "durationMs": 1508
+              }
+            ],
+            "kind": "pi.assistant",
+            "id": 15,
+            "conversationId": 3,
+            "byTaskId": 13
+          }
+        ]
+      ],
+      [
+        "s",
+        ["docs", "pi.live", "tools"],
+        [
+          {
+            "callId": "toolu_01PfNqBGvBYbkD87UgbLPQgc",
+            "name": "bash",
+            "taskId": 16,
+            "status": "running"
+          }
+        ]
+      ],
+      ["d", ["docs", "pi.live", "generation"]],
+      [
+        "s",
+        ["docs", "pi.usage", "models", "opencode-go/claude-haiku-5-5"],
+        {
+          "input": 4,
+          "output": 62,
+          "cacheRead": 3714,
+          "cacheWrite": 105,
+          "totalTokens": 3885,
+          "cost": {
+            "input": 4.0000000000000003e-7,
+            "output": 0.000031,
+            "cacheRead": 0.00003714,
+            "cacheWrite": 0.000013125,
+            "total": 0.000081665
+          },
+          "cacheWrite1h": 0,
+          "reasoning": 0
+        }
+      ]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 4,
+    "ops": [
+      ["s", ["docs", "pi.live", "tools", 0, "output"], "notes.txt\nREADME.md\n"]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 5,
+    "ops": [
+      [
+        "p",
+        ["entries"],
+        3,
+        0,
+        [
+          {
+            "model": [
+              {
+                "role": "toolResult",
+                "toolCallId": "toolu_01PfNqBGvBYbkD87UgbLPQgc",
+                "toolName": "bash",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "notes.txt\nREADME.md\n"
+                  }
+                ],
+                "isError": false,
+                "durationMs": 7,
+                "timestamp": 1792674346653
+              }
+            ],
+            "data": {
+              "diagnostics": []
+            },
+            "kind": "pi.tool-result",
+            "id": 17,
+            "conversationId": 3,
+            "byTaskId": 16
+          }
+        ]
+      ],
+      ["s", ["docs", "pi.live", "run", "taskId"], 18],
+      [
+        "s",
+        ["docs", "pi.live", "generation"],
+        {
+          "attempt": 1
+        }
+      ],
+      ["d", ["docs", "pi.live", "tools"]]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 6,
+    "ops": [
+      [
+        "s",
+        ["docs", "pi.live", "generation", "message"],
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "The `ls` output shows two files, so I'll read README",
+              "index": 0
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 2,
+            "output": 7,
+            "cacheRead": 3819,
+            "cacheWrite": 79,
+            "totalTokens": 3907,
+            "cost": {
+              "input": 2.0000000000000002e-7,
+              "output": 0.0000035,
+              "cacheRead": 0.00003819,
+              "cacheWrite": 0.000009875,
+              "total": 0.000051765
+            },
+            "cacheWrite1h": 0
+          },
+          "stopReason": "pending",
+          "timestamp": 1792674346657,
+          "responseId": "msg_011CgHKnn7e2pKCsngugrc6x"
+        }
+      ]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 7,
+    "ops": [
+      [
+        "p",
+        ["entries"],
+        4,
+        0,
+        [
+          {
+            "model": [
+              {
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "The `ls` output shows two files, so I'll read README.md next."
+                  },
+                  {
+                    "type": "toolCall",
+                    "id": "toolu_01VLTm6EtoUAxjLCsDjpGgXb",
+                    "name": "read",
+                    "arguments": {
+                      "path": "README.md"
+                    }
+                  }
+                ],
+                "api": "anthropic-messages",
+                "provider": "opencode-go",
+                "model": "claude-haiku-5-5",
+                "usage": {
+                  "input": 2,
+                  "output": 69,
+                  "cacheRead": 3819,
+                  "cacheWrite": 79,
+                  "totalTokens": 3969,
+                  "cost": {
+                    "input": 2.0000000000000002e-7,
+                    "output": 0.0000345,
+                    "cacheRead": 0.00003819,
+                    "cacheWrite": 0.000009875,
+                    "total": 0.00008276499999999998
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                },
+                "stopReason": "toolUse",
+                "timestamp": 1792674346657,
+                "responseId": "msg_011CgHKnn7e2pKCsngugrc6x",
+                "rawStopReason": "tool_use",
+                "durationMs": 1252
+              }
+            ],
+            "kind": "pi.assistant",
+            "id": 19,
+            "conversationId": 3,
+            "byTaskId": 18
+          }
+        ]
+      ],
+      [
+        "s",
+        ["docs", "pi.live", "tools"],
+        [
+          {
+            "callId": "toolu_01VLTm6EtoUAxjLCsDjpGgXb",
+            "name": "read",
+            "taskId": 20,
+            "status": "running"
+          }
+        ]
+      ],
+      ["d", ["docs", "pi.live", "generation"]],
+      [
+        "s",
+        ["docs", "pi.usage", "models", "opencode-go/claude-haiku-5-5", "input"],
+        6
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "output"
+        ],
+        131
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cacheRead"
+        ],
+        7533
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cacheWrite"
+        ],
+        184
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "totalTokens"
+        ],
+        7854
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "input"
+        ],
+        6.000000000000001e-7
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "output"
+        ],
+        0.00006549999999999999
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "cacheRead"
+        ],
+        0.00007533
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "cacheWrite"
+        ],
+        0.000023
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "total"
+        ],
+        0.00016442999999999997
+      ]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 8,
+    "ops": [
+      [
+        "p",
+        ["entries"],
+        5,
+        0,
+        [
+          {
+            "model": [
+              {
+                "role": "toolResult",
+                "toolCallId": "toolu_01VLTm6EtoUAxjLCsDjpGgXb",
+                "toolName": "read",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "# demo\n\nA tiny folder the cairn transcript recorder works in.\n"
+                  }
+                ],
+                "isError": false,
+                "durationMs": 3,
+                "timestamp": 1792674347915
+              }
+            ],
+            "data": {
+              "diagnostics": []
+            },
+            "kind": "pi.tool-result",
+            "id": 21,
+            "conversationId": 3,
+            "byTaskId": 20
+          }
+        ]
+      ],
+      ["s", ["docs", "pi.live", "run", "taskId"], 22],
+      [
+        "s",
+        ["docs", "pi.live", "generation"],
+        {
+          "attempt": 1
+        }
+      ],
+      ["d", ["docs", "pi.live", "tools"]]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 9,
+    "ops": [
+      [
+        "s",
+        ["docs", "pi.live", "generation", "message"],
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "The directory contains `notes.txt` and `README.md`, and the README describes it as \"a tiny folder the c",
+              "index": 0
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 2,
+            "output": 8,
+            "cacheRead": 3898,
+            "cacheWrite": 98,
+            "totalTokens": 4006,
+            "cost": {
+              "input": 2.0000000000000002e-7,
+              "output": 0.000004,
+              "cacheRead": 0.00003898,
+              "cacheWrite": 0.00001225,
+              "total": 0.00005543
+            },
+            "cacheWrite1h": 0
+          },
+          "stopReason": "pending",
+          "timestamp": 1792674347918,
+          "responseId": "msg_011CgHKnsNeDCVqJcFeWKvSP"
+        }
+      ]
+    ]
+  },
+  {
+    "_tag": "Ops",
+    "seq": 10,
+    "ops": [
+      [
+        "p",
+        ["entries"],
+        6,
+        0,
+        [
+          {
+            "model": [
+              {
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "The directory contains `notes.txt` and `README.md`, and the README describes it as \"a tiny folder the cairn transcript recorder works in.\""
+                  }
+                ],
+                "api": "anthropic-messages",
+                "provider": "opencode-go",
+                "model": "claude-haiku-5-5",
+                "usage": {
+                  "input": 2,
+                  "output": 48,
+                  "cacheRead": 3898,
+                  "cacheWrite": 98,
+                  "totalTokens": 4046,
+                  "cost": {
+                    "input": 2.0000000000000002e-7,
+                    "output": 0.000024,
+                    "cacheRead": 0.00003898,
+                    "cacheWrite": 0.00001225,
+                    "total": 0.00007543
+                  },
+                  "cacheWrite1h": 0,
+                  "reasoning": 0
+                },
+                "stopReason": "stop",
+                "timestamp": 1792674347918,
+                "responseId": "msg_011CgHKnsNeDCVqJcFeWKvSP",
+                "rawStopReason": "end_turn",
+                "durationMs": 1243
+              }
+            ],
+            "kind": "pi.assistant",
+            "id": 23,
+            "conversationId": 3,
+            "byTaskId": 22
+          }
+        ]
+      ],
+      ["d", ["docs", "pi.live", "run"]],
+      ["d", ["docs", "pi.live", "generation"]],
+      [
+        "s",
+        ["docs", "pi.usage", "models", "opencode-go/claude-haiku-5-5", "input"],
+        8
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "output"
+        ],
+        179
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cacheRead"
+        ],
+        11431
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cacheWrite"
+        ],
+        282
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "totalTokens"
+        ],
+        11900
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "input"
+        ],
+        8.000000000000001e-7
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "output"
+        ],
+        0.0000895
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "cacheRead"
+        ],
+        0.00011431000000000001
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "cacheWrite"
+        ],
+        0.00003525
+      ],
+      [
+        "s",
+        [
+          "docs",
+          "pi.usage",
+          "models",
+          "opencode-go/claude-haiku-5-5",
+          "cost",
+          "total"
+        ],
+        0.00023985999999999997
+      ]
+    ]
+  }
+]

@@ -1,0 +1,200 @@
+{
+  "conversation": {
+    "id": 3
+  },
+  "entries": [
+    {
+      "id": 11,
+      "conversationId": 3,
+      "kind": "pi.user",
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Run `sleep 20 && echo finished` with the bash tool, then tell me what it printed."
+            }
+          ],
+          "timestamp": 1792674339850
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "conversationId": 3,
+      "kind": "cairn.hidden"
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "toolu_01J88fEJiTQhRw5Fy2LwwjVm",
+              "name": "bash",
+              "arguments": {
+                "command": "sleep 20 && echo finished"
+              }
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 56,
+            "cacheRead": 0,
+            "cacheWrite": 3817,
+            "totalTokens": 3877,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.000028,
+              "cacheRead": 0,
+              "cacheWrite": 0.000477125,
+              "total": 0.000505525
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "toolUse",
+          "timestamp": 1792674339881,
+          "responseId": "msg_011CgHKnH6skav8dWXfsEA3u",
+          "rawStopReason": "tool_use",
+          "durationMs": 1170
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 15,
+      "conversationId": 3,
+      "byTaskId": 13
+    },
+    {
+      "model": [
+        {
+          "role": "toolResult",
+          "toolCallId": "toolu_01J88fEJiTQhRw5Fy2LwwjVm",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<harness>\n[error] Tool bash was aborted\n</harness>"
+            }
+          ],
+          "isError": true,
+          "timestamp": 1792674341871
+        }
+      ],
+      "data": {
+        "diagnostics": [
+          {
+            "severity": "error",
+            "code": "aborted",
+            "message": "Tool bash was aborted"
+          }
+        ]
+      },
+      "kind": "pi.tool-result",
+      "id": 17,
+      "conversationId": 3,
+      "byTaskId": 16
+    },
+    {
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Never mind that. Reply with the single word: ok."
+            }
+          ],
+          "timestamp": 1792674342271
+        }
+      ],
+      "kind": "pi.user",
+      "id": 18,
+      "conversationId": 3
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "ok"
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 4,
+            "cacheRead": 3817,
+            "cacheWrite": 108,
+            "totalTokens": 3933,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.000002,
+              "cacheRead": 0.00003817,
+              "cacheWrite": 0.0000135,
+              "total": 0.00005407
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "stop",
+          "timestamp": 1792674342275,
+          "responseId": "msg_011CgHKnU4gr46DMWiLKpSGT",
+          "rawStopReason": "end_turn",
+          "durationMs": 1105
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 21,
+      "conversationId": 3,
+      "byTaskId": 20
+    }
+  ],
+  "docs": {
+    "pi.agent": {
+      "model": {
+        "provider": "opencode-go",
+        "modelId": "claude-haiku-5-5"
+      },
+      "thinkingLevel": "off",
+      "cwd": "/work/demo"
+    },
+    "pi.live": {},
+    "pi.inbox": {
+      "items": []
+    },
+    "pi.usage": {
+      "models": {
+        "opencode-go/claude-haiku-5-5": {
+          "input": 8,
+          "output": 60,
+          "cacheRead": 3817,
+          "cacheWrite": 3925,
+          "totalTokens": 7810,
+          "cost": {
+            "input": 8.000000000000001e-7,
+            "output": 0.00003,
+            "cacheRead": 0.00003817,
+            "cacheWrite": 0.000490625,
+            "total": 0.0005595950000000001
+          },
+          "cacheWrite1h": 0,
+          "reasoning": 0
+        }
+      },
+      "tools": {}
+    },
+    "cairn.approvals": {
+      "items": {}
+    }
+  }
+}

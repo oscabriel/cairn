@@ -1,0 +1,111 @@
+{
+  "conversation": {
+    "id": 3
+  },
+  "entries": [
+    {
+      "id": 11,
+      "conversationId": 3,
+      "kind": "pi.user",
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "What is 17 times 23? Think it through, then answer with one short sentence."
+            }
+          ],
+          "timestamp": 1792673902296
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "conversationId": 3,
+      "kind": "cairn.hidden"
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "391",
+              "thinkingSignature": "reasoning_content"
+            },
+            {
+              "type": "text",
+              "text": "17 × 23 = 17 × 20 + 17 × 3 = 340 + 51 = 391. So, 17 times 23 is **391**."
+            }
+          ],
+          "api": "openai-completions",
+          "provider": "opencode-go",
+          "model": "glm-5.3-flash",
+          "usage": {
+            "input": 2483,
+            "output": 44,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": 2527,
+            "cost": {
+              "input": 0.00037245,
+              "output": 0.000022,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0.00039444999999999997
+            }
+          },
+          "stopReason": "stop",
+          "timestamp": 1792673902339,
+          "responseId": "625db838-d33f-459c-8eb4-7a8c33c92147",
+          "rawStopReason": "stop",
+          "durationMs": 1944
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 15,
+      "conversationId": 3,
+      "byTaskId": 13
+    }
+  ],
+  "docs": {
+    "pi.agent": {
+      "model": {
+        "provider": "opencode-go",
+        "modelId": "glm-5.3-flash"
+      },
+      "thinkingLevel": "low",
+      "cwd": "/work/demo"
+    },
+    "pi.live": {},
+    "pi.inbox": {
+      "items": []
+    },
+    "pi.usage": {
+      "models": {
+        "opencode-go/glm-5.3-flash": {
+          "input": 2483,
+          "output": 44,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "reasoning": 0,
+          "totalTokens": 2527,
+          "cost": {
+            "input": 0.00037245,
+            "output": 0.000022,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.00039444999999999997
+          }
+        }
+      },
+      "tools": {}
+    },
+    "cairn.approvals": {
+      "items": {}
+    }
+  }
+}

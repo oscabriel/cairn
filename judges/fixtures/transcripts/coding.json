@@ -1,0 +1,768 @@
+{
+  "conversation": {
+    "id": 3
+  },
+  "entries": [
+    {
+      "id": 11,
+      "conversationId": 3,
+      "kind": "pi.user",
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "In a few sentences, tell me what a README is for. Format the answer with a level-two heading, a bullet list of three items, one fenced bash code block, and a small two-column markdown table. Use no tools."
+            }
+          ],
+          "timestamp": 1792673850157
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "conversationId": 3,
+      "kind": "cairn.hidden"
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "## What a README Is For\n\nA README is the first document someone reads about a project. It explains what the project does and how to get started with it, without requiring the reader to dig through the source code.\n\n- **Orientation:** describes the project's purpose and key features\n- **Setup:** lists requirements and installation steps\n- **Usage:** shows how to run or use the project, with examples\n\nExample of a typical install-and-run section:\n\n```bash\ngit clone https://github.com/example/project.git\ncd project\nnpm install && npm start\n```\n\n| Section | Purpose |\n|---------|---------|\n| Description | What the project is |\n| Installation | How to set it up |"
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 200,
+            "cacheRead": 0,
+            "cacheWrite": 3850,
+            "totalTokens": 4054,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.00009999999999999999,
+              "cacheRead": 0,
+              "cacheWrite": 0.00048125,
+              "total": 0.00058165
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "stop",
+          "timestamp": 1792673850212,
+          "responseId": "msg_011CgHKABHPUcLMYxnZVnTDX",
+          "rawStopReason": "end_turn",
+          "durationMs": 2213
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 15,
+      "conversationId": 3,
+      "byTaskId": 13
+    },
+    {
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Read notes.txt with the read tool. Fix its one spelling mistake with the edit tool. Then create summary.txt containing one line that describes the project, using the write tool. Then run `ls` and `wc -l notes.txt` with the bash tool. Finish with one sentence."
+            }
+          ],
+          "timestamp": 1792673852786
+        }
+      ],
+      "kind": "pi.user",
+      "id": 16,
+      "conversationId": 3
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "I'll start by reading notes.txt."
+            },
+            {
+              "type": "toolCall",
+              "id": "toolu_01ECHv9qGcEUjc1MQvmkjtiX",
+              "name": "read",
+              "arguments": {
+                "path": "notes.txt"
+              }
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 63,
+            "cacheRead": 3850,
+            "cacheWrite": 294,
+            "totalTokens": 4211,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.0000315,
+              "cacheRead": 0.0000385,
+              "cacheWrite": 0.00003675,
+              "total": 0.00010715
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "toolUse",
+          "timestamp": 1792673852789,
+          "responseId": "msg_011CgHKAMx5m5UbHXK6BuePU",
+          "rawStopReason": "tool_use",
+          "durationMs": 1066
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 19,
+      "conversationId": 3,
+      "byTaskId": 18
+    },
+    {
+      "model": [
+        {
+          "role": "toolResult",
+          "toolCallId": "toolu_01ECHv9qGcEUjc1MQvmkjtiX",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "This project is a small exmaple for the transcript recorder.\nIt has two lines.\n"
+            }
+          ],
+          "isError": false,
+          "durationMs": 3,
+          "timestamp": 1792673853862
+        }
+      ],
+      "data": {
+        "diagnostics": []
+      },
+      "kind": "pi.tool-result",
+      "id": 21,
+      "conversationId": 3,
+      "byTaskId": 20
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "The misspelled word is \"exmaple\", which should be \"example\"."
+            },
+            {
+              "type": "toolCall",
+              "id": "toolu_01S22CQRfT4HohCU76sX71Pp",
+              "name": "edit",
+              "arguments": {
+                "path": "notes.txt",
+                "edits": [
+                  {
+                    "oldText": "exmaple",
+                    "newText": "example"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "toolu_01JpTzNi7HhgCxrX9hYdda5N",
+              "name": "write",
+              "arguments": {
+                "path": "summary.txt",
+                "content": "A small example project that demonstrates the transcript recorder.\n"
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "toolu_013RU8Q9NiW9Wvzn5NN5JRQi",
+              "name": "bash",
+              "arguments": {
+                "command": "ls && wc -l notes.txt"
+              }
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 2,
+            "output": 252,
+            "cacheRead": 4144,
+            "cacheWrite": 96,
+            "totalTokens": 4494,
+            "cost": {
+              "input": 2.0000000000000002e-7,
+              "output": 0.000126,
+              "cacheRead": 0.00004144,
+              "cacheWrite": 0.000012,
+              "total": 0.00017964
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "toolUse",
+          "timestamp": 1792673853866,
+          "responseId": "msg_011CgHKASxCh8hp88ft2iFZr",
+          "rawStopReason": "tool_use",
+          "durationMs": 2057
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 23,
+      "conversationId": 3,
+      "byTaskId": 22
+    },
+    {
+      "model": [
+        {
+          "role": "toolResult",
+          "toolCallId": "toolu_01JpTzNi7HhgCxrX9hYdda5N",
+          "toolName": "write",
+          "content": [
+            {
+              "type": "text",
+              "text": "Successfully wrote to summary.txt"
+            }
+          ],
+          "isError": false,
+          "durationMs": 7,
+          "timestamp": 1792673855934
+        }
+      ],
+      "data": {
+        "diagnostics": []
+      },
+      "kind": "pi.tool-result",
+      "id": 27,
+      "conversationId": 3,
+      "byTaskId": 25
+    },
+    {
+      "model": [
+        {
+          "role": "toolResult",
+          "toolCallId": "toolu_01S22CQRfT4HohCU76sX71Pp",
+          "toolName": "edit",
+          "content": [
+            {
+              "type": "text",
+              "text": "Successfully replaced 1 block(s) in notes.txt."
+            }
+          ],
+          "details": {
+            "diff": "-1 This project is a small exmaple for the transcript recorder.\n+1 This project is a small example for the transcript recorder.\n 2 It has two lines.",
+            "patch": "--- notes.txt\n+++ notes.txt\n@@ -1,2 +1,2 @@\n-This project is a small exmaple for the transcript recorder.\n+This project is a small example for the transcript recorder.\n It has two lines.\n",
+            "firstChangedLine": 1
+          },
+          "isError": false,
+          "durationMs": 10,
+          "timestamp": 1792673855937
+        }
+      ],
+      "data": {
+        "diagnostics": []
+      },
+      "kind": "pi.tool-result",
+      "id": 28,
+      "conversationId": 3,
+      "byTaskId": 24
+    },
+    {
+      "model": [
+        {
+          "role": "toolResult",
+          "toolCallId": "toolu_013RU8Q9NiW9Wvzn5NN5JRQi",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "notes.txt\nREADME.md\n2 notes.txt\n"
+            }
+          ],
+          "isError": false,
+          "durationMs": 10,
+          "timestamp": 1792673855938
+        }
+      ],
+      "data": {
+        "diagnostics": []
+      },
+      "kind": "pi.tool-result",
+      "id": 29,
+      "conversationId": 3,
+      "byTaskId": 26
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "I fixed \"exmaple\" to \"example\" in notes.txt, created summary.txt with a one-line project description, and the directory listing shows notes.txt and README.md, with notes.txt containing 2 lines."
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 2,
+            "output": 69,
+            "cacheRead": 4240,
+            "cacheWrite": 381,
+            "totalTokens": 4692,
+            "cost": {
+              "input": 2.0000000000000002e-7,
+              "output": 0.0000345,
+              "cacheRead": 0.0000424,
+              "cacheWrite": 0.000047625,
+              "total": 0.000124725
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "stop",
+          "timestamp": 1792673855941,
+          "responseId": "msg_011CgHKAbVv86s2ktuypjSaR",
+          "rawStopReason": "end_turn",
+          "durationMs": 1190
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 31,
+      "conversationId": 3,
+      "byTaskId": 30
+    },
+    {
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Run `cat does-not-exist.txt` with the bash tool and tell me in one sentence what happened."
+            }
+          ],
+          "timestamp": 1792673857526
+        }
+      ],
+      "kind": "pi.user",
+      "id": 32,
+      "conversationId": 3
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "toolu_01P8fDkDXS2hPaoADQbzjNqg",
+              "name": "bash",
+              "arguments": {
+                "command": "cat does-not-exist.txt"
+              }
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 56,
+            "cacheRead": 4621,
+            "cacheWrite": 105,
+            "totalTokens": 4786,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.000028,
+              "cacheRead": 0.00004621,
+              "cacheWrite": 0.000013125,
+              "total": 0.000087735
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "toolUse",
+          "timestamp": 1792673857529,
+          "responseId": "msg_011CgHKAjpTrSgnAv26W6hhj",
+          "rawStopReason": "tool_use",
+          "durationMs": 2111
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 35,
+      "conversationId": 3,
+      "byTaskId": 34
+    },
+    {
+      "model": [
+        {
+          "role": "toolResult",
+          "toolCallId": "toolu_01P8fDkDXS2hPaoADQbzjNqg",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "cat: does-not-exist.txt: No such file or directory\n"
+            },
+            {
+              "type": "text",
+              "text": "<harness>\n[error] Command exited with code 1\n</harness>"
+            }
+          ],
+          "isError": true,
+          "durationMs": 5,
+          "timestamp": 1792673859647
+        }
+      ],
+      "data": {
+        "diagnostics": [
+          {
+            "severity": "error",
+            "code": "exit_code",
+            "message": "Command exited with code 1"
+          }
+        ]
+      },
+      "kind": "pi.tool-result",
+      "id": 37,
+      "conversationId": 3,
+      "byTaskId": 36
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "The command failed because `does-not-exist.txt` doesn't exist, so `cat` returned \"No such file or directory\" and exited with code 1."
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 2,
+            "output": 48,
+            "cacheRead": 4726,
+            "cacheWrite": 109,
+            "totalTokens": 4885,
+            "cost": {
+              "input": 2.0000000000000002e-7,
+              "output": 0.000024,
+              "cacheRead": 0.00004726,
+              "cacheWrite": 0.000013625,
+              "total": 0.000085085
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "stop",
+          "timestamp": 1792673859650,
+          "responseId": "msg_011CgHKAsETqbZSb2hvnrJRu",
+          "rawStopReason": "end_turn",
+          "durationMs": 1600
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 39,
+      "conversationId": 3,
+      "byTaskId": 38
+    },
+    {
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Use the grep tool to find the word cairn in this folder, and the find tool to list the .txt files. Answer in one sentence."
+            }
+          ],
+          "timestamp": 1792673861566
+        }
+      ],
+      "kind": "pi.user",
+      "id": 40,
+      "conversationId": 3
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "toolu_01Naa7jjxkxy7i9zGWYeQ7Zw",
+              "name": "grep",
+              "arguments": {
+                "pattern": "cairn",
+                "path": "."
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "toolu_01JtkJip38K9Dv68kxqotVeM",
+              "name": "find",
+              "arguments": {
+                "pattern": "\\.txt$",
+                "type": "file"
+              }
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 140,
+            "cacheRead": 4835,
+            "cacheWrite": 91,
+            "totalTokens": 5070,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.00007,
+              "cacheRead": 0.00004835,
+              "cacheWrite": 0.000011375,
+              "total": 0.00013012499999999998
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "toolUse",
+          "timestamp": 1792673861569,
+          "responseId": "msg_011CgHKB1S5Jn5dE3GwaGe8N",
+          "rawStopReason": "tool_use",
+          "durationMs": 1269
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 43,
+      "conversationId": 3,
+      "byTaskId": 42
+    },
+    {
+      "model": [
+        {
+          "role": "toolResult",
+          "toolCallId": "toolu_01Naa7jjxkxy7i9zGWYeQ7Zw",
+          "toolName": "grep",
+          "content": [
+            {
+              "type": "text",
+              "text": "./README.md:3:A tiny folder the cairn transcript recorder works in.\n"
+            }
+          ],
+          "isError": false,
+          "durationMs": 12,
+          "timestamp": 1792673862854
+        }
+      ],
+      "data": {
+        "diagnostics": []
+      },
+      "kind": "pi.tool-result",
+      "id": 46,
+      "conversationId": 3,
+      "byTaskId": 44
+    },
+    {
+      "model": [
+        {
+          "role": "toolResult",
+          "toolCallId": "toolu_01JtkJip38K9Dv68kxqotVeM",
+          "toolName": "find",
+          "content": [
+            {
+              "type": "text",
+              "text": "./notes.txt\n./summary.txt\n"
+            }
+          ],
+          "isError": false,
+          "durationMs": 19,
+          "timestamp": 1792673862862
+        }
+      ],
+      "data": {
+        "diagnostics": []
+      },
+      "kind": "pi.tool-result",
+      "id": 47,
+      "conversationId": 3,
+      "byTaskId": 45
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "The word \"cairn\" appears in README.md on line 3, and the .txt files in this folder are notes.txt and summary.txt."
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 2,
+            "output": 43,
+            "cacheRead": 4926,
+            "cacheWrite": 236,
+            "totalTokens": 5207,
+            "cost": {
+              "input": 2.0000000000000002e-7,
+              "output": 0.000021499999999999997,
+              "cacheRead": 0.00004926,
+              "cacheWrite": 0.0000295,
+              "total": 0.00010046
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "stop",
+          "timestamp": 1792673862864,
+          "responseId": "msg_011CgHKB7EajtGpLtjt3gqFd",
+          "rawStopReason": "end_turn",
+          "durationMs": 1011
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 49,
+      "conversationId": 3,
+      "byTaskId": 48
+    },
+    {
+      "kind": "cairn.user",
+      "data": {
+        "from": "owner@loopback",
+        "attachments": [
+          {
+            "id": "att_0123456789abcdef0123456789abcdef",
+            "name": "release-notes.pdf",
+            "mimeType": "application/pdf",
+            "sizeBytes": 48213,
+            "kind": "pdf",
+            "sha256": "3f0c1d4b2e8a9f7c6b5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b"
+          }
+        ]
+      },
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Here is a file I attached. Just reply with: got it."
+            },
+            {
+              "type": "text",
+              "text": "<attachment name=\"release-notes.pdf\" type=\"application/pdf\" path=\"/work/demo/.attachments/att_0123456789abcdef0123456789abcdef.txt\">\nRelease notes. Version 2 adds durable threads.\n</attachment>"
+            }
+          ],
+          "timestamp": 1792673864191
+        }
+      ],
+      "id": 50,
+      "conversationId": 3
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "got it."
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 5,
+            "cacheRead": 5162,
+            "cacheWrite": 145,
+            "totalTokens": 5316,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.0000024999999999999998,
+              "cacheRead": 0.000051620000000000004,
+              "cacheWrite": 0.000018125,
+              "total": 0.000072645
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "stop",
+          "timestamp": 1792673864194,
+          "responseId": "msg_011CgHKBE9oCU644m7E6kmRF",
+          "rawStopReason": "end_turn",
+          "durationMs": 1209
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 53,
+      "conversationId": 3,
+      "byTaskId": 52
+    }
+  ],
+  "docs": {
+    "pi.agent": {
+      "model": {
+        "provider": "opencode-go",
+        "modelId": "claude-haiku-5-5"
+      },
+      "thinkingLevel": "off",
+      "cwd": "/work/demo"
+    },
+    "pi.live": {},
+    "pi.inbox": {
+      "items": []
+    },
+    "pi.usage": {
+      "models": {
+        "opencode-go/claude-haiku-5-5": {
+          "input": 28,
+          "output": 876,
+          "cacheRead": 36504,
+          "cacheWrite": 5307,
+          "totalTokens": 42715,
+          "cost": {
+            "input": 0.0000028000000000000003,
+            "output": 0.00043799999999999997,
+            "cacheRead": 0.00036504,
+            "cacheWrite": 0.000663375,
+            "total": 0.0014692149999999998
+          },
+          "cacheWrite1h": 0,
+          "reasoning": 0
+        }
+      },
+      "tools": {}
+    },
+    "cairn.approvals": {
+      "items": {}
+    }
+  }
+}

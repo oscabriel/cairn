@@ -20,9 +20,7 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
       h.div(
         [
           h.DataAttribute("chat-composer-docked", "true"),
-          h.Class(
-            "chat-composer-lane relative z-20 w-full shrink-0 px-3 pt-2 sm:px-5"
-          ),
+          h.Class("chat-composer-lane relative z-20 w-full shrink-0 pt-2"),
         ],
         [
           h.div(

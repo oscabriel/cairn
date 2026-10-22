@@ -1,5 +1,5 @@
-// The thread page: the thread's title, the stream's status, then the transcript (apps/web/src/
-// timeline), which scrolls itself.
+// The thread page: the stream's status, then the transcript (apps/web/src/timeline), which scrolls
+// itself. The page header (ui/ChatHeader.ts) is drawn by the root view above the hold banner.
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -11,9 +11,8 @@ import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import { ThreadStatus } from "./Model.ts";
 
-/** What the root passes the page: the thread's title and working directory, from the shell. */
+/** What the root passes the page: the thread's working directory, from the shell. */
 export interface ViewInputs {
-  readonly title: Option.Option<string>;
   readonly workspaceRoot: Option.Option<string>;
 }
 
@@ -23,7 +22,9 @@ const statusLine = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.p(
         [
           h.DataAttribute("testid", "thread-status"),
-          h.Class("text-muted-foreground text-sm"),
+          h.Class(
+            "mx-auto w-full max-w-3xl px-6 pt-4 text-muted-foreground text-sm"
+          ),
         ],
         ["Loading the thread..."]
       ),
@@ -32,7 +33,9 @@ const statusLine = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.p(
         [
           h.DataAttribute("testid", "thread-status"),
-          h.Class("text-muted-foreground text-sm"),
+          h.Class(
+            "mx-auto w-full max-w-3xl px-6 pt-4 text-muted-foreground text-sm"
+          ),
         ],
         ["This thread does not exist."]
       ),
@@ -40,7 +43,9 @@ const statusLine = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.p(
         [
           h.DataAttribute("testid", "thread-status"),
-          h.Class("text-destructive-foreground text-sm"),
+          h.Class(
+            "mx-auto w-full max-w-3xl px-6 pt-4 text-destructive-foreground text-sm"
+          ),
         ],
         [message]
       ),
@@ -63,23 +68,14 @@ const diffPanel = (model: Model, h: HtmlBuilder<Message>): Html =>
 
 /** The thread page. */
 export const view = Submodel.defineView<Model, Message, ViewInputs>(
-  (model, { title, workspaceRoot }, h) =>
+  (model, { workspaceRoot }, h) =>
     h.section(
       [
         h.DataAttribute("testid", "thread-page"),
         h.Class("flex min-h-0 flex-1 flex-col"),
       ],
       [
-        h.header(
-          [h.Class("mx-auto w-full max-w-3xl px-6 pt-4")],
-          [
-            h.h1(
-              [h.Class("truncate font-medium text-sm")],
-              [Option.getOrElse(title, () => "Thread")]
-            ),
-            statusLine(model, h),
-          ]
-        ),
+        statusLine(model, h),
         h.submodel({
           slotId: "timeline",
           model: model.timeline,

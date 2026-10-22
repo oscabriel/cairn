@@ -12,7 +12,8 @@ import { view as pushView } from "./push/View.ts";
 import { AppRoute } from "./Route.ts";
 import { loadedSettingsView, settingsPlaceholder } from "./SettingsPage.ts";
 import { view as parkedView } from "./shell/Parked.ts";
-import { view as sidebarView } from "./sidebar/View.ts";
+import { sidebarState, view as sidebarView } from "./sidebar/View.ts";
+import { CHAT_COLUMN_CLASS, chatHeader } from "./ui/ChatHeader.ts";
 
 const placeholder = (h: HtmlBuilder<Message>, text: string): Html =>
   h.div(
@@ -53,6 +54,24 @@ const threadWorkspaceRoot = (
     )
   );
 
+const threadProjectTitle = (
+  model: Model,
+  threadId: string
+): Option.Option<string> =>
+  Option.flatMap(model.shell, (shell) =>
+    Option.flatMap(
+      Array.findFirst(shell.threads, (thread) => thread.id === threadId),
+      (thread) =>
+        Option.map(
+          Array.findFirst(
+            shell.projects,
+            (project) => project.id === thread.projectId
+          ),
+          (project) => project.title
+        )
+    )
+  );
+
 const composer = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.submodel({
     slotId: "composer",
@@ -66,8 +85,27 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
     Inbox: () => composer(model, h),
     Thread: ({ threadId }) =>
       h.div(
-        [h.Class("relative flex min-h-0 flex-1 flex-col")],
         [
+          h.DataAttribute("chat-column-maximized-away", "false"),
+          h.DataAttribute("chat-column", "true"),
+          h.Class(`relative ${CHAT_COLUMN_CLASS}`),
+        ],
+        [
+          chatHeader(h, {
+            project: Option.map(
+              threadProjectTitle(model, threadId),
+              (title) => ({
+                title,
+                ariaLabel: `New thread in ${title}`,
+                onClick: Option.none(),
+              })
+            ),
+            title: Option.getOrElse(
+              threadTitle(model, threadId),
+              () => "Thread"
+            ),
+            controls: [],
+          }),
           h.submodel({
             slotId: "thread-hold",
             model: model.parked,
@@ -83,7 +121,6 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
                 model: model.thread,
                 view: Thread.view,
                 viewInputs: {
-                  title: threadTitle(model, threadId),
                   workspaceRoot: threadWorkspaceRoot(model, threadId),
                 },
                 toParentMessage: (message) =>
@@ -140,6 +177,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
   body: h.div(
     [
       h.DataAttribute("slot", "sidebar-wrapper"),
+      h.DataAttribute("sidebar-state", sidebarState(model.sidebar)),
       h.Class(
         "group/sidebar-wrapper flex min-h-svh w-full max-sm:[--workspace-titlebar-control-size:--spacing(8)] h-dvh! min-h-0!"
       ),
@@ -153,8 +191,9 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
       }),
       h.main(
         [
+          h.DataAttribute("slot", "sidebar-inset"),
           h.Class(
-            "flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"
+            "relative flex min-w-0 w-full flex-1 flex-col bg-background text-foreground surface-grain h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
           ),
         ],
         [noticeBar(model, h), page(model, h)]

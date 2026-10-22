@@ -187,7 +187,7 @@ finish() {
 # STAGES: Cairn phase 0. Run on the Beelink (in an SSH session is fine).
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=10
+TOTAL_STAGES=11
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
@@ -395,6 +395,34 @@ if want 10; then
   pause
 fi
 
+if want 11; then
+  stage "End of phase 0: revoke the setup token"
+  say "Claude's 7-day Executor setup token (stage 4) is no longer needed: Cairn reaches"
+  say "Executor through its own scoped grant (stage 9). A token can't revoke itself, and"
+  say "Executor's key management takes only a signed-in browser, so this one is yours."
+  open_url "https://exec.gneiss.run/account/tokens"
+  step "Avatar menu → Account settings → Tokens. Delete ${BOLD}cairn phase 0 setup${RESET}."
+  pause "Press Enter once it's deleted"
+  EXECUTOR_SETUP_TOKEN=$(_existing EXECUTOR_SETUP_TOKEN || true)
+  EXECUTOR_ORG=$(_existing EXECUTOR_ORG || true)
+  if [[ -n "$EXECUTOR_SETUP_TOKEN" ]]; then
+    # The token goes in a header file, never an argument, and only the status code is printed.
+    header=$(umask 077 && mktemp)
+    printf 'Authorization: Bearer %s\n' "$EXECUTOR_SETUP_TOKEN" >"$header"
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H @"$header" "http://127.0.0.1:4400/api/organizations/$EXECUTOR_ORG/apps")
+    rm -f "$header"
+    if [[ $code == 401 || $code == 403 ]]; then
+      tmp=$(mktemp) && grep -v '^EXECUTOR_SETUP_TOKEN=' "$ENV_FILE" >"$tmp" && mv "$tmp" "$ENV_FILE" && chmod 600 "$ENV_FILE"
+      printf '  %s✓ revoked%s Executor answers %s, and the token is gone from %s\n' "$GREEN" "$RESET" "$code" "$ENV_FILE"
+    else
+      warn "Executor still accepts the token (HTTP $code). Check the Tokens page and run stage 11 again."
+      SKIPPED+=("stage 11: revoke the Executor setup token (ops/wizards/phase-0.sh 11)")
+    fi
+  else
+    note "No setup token in $ENV_FILE: nothing left to check."
+  fi
+  pause
+fi
 
 finish
 say "Tell Claude the wizard is done."

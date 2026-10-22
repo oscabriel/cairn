@@ -13,6 +13,13 @@
 // `thread.retryTask` finishes the turn), sigterm-six (six clean restarts while `slow` runs park
 // nothing).
 //
+// `--bridge` adds the bridge windows (wave 3): bridge-streaming (`kill -9` while a Claude reply
+// streams) and bridge-tool-parked (while a `bash` call is held in the bridge). Each runs
+// `judges/claude-kill.ts` (the judge brain with the real Claude bridge, `judge-main.ts --models
+// real`) for that case and reports its line here; its checks are J2's and J9's (once-only marker,
+// interrupted result for the parked call, no `claude` child left, prompt cache kept, snapshot within
+// 2 s). They cost a few cents of plan usage and are never run by default.
+//
 // Per window it asserts: every entry committed before the kill is still there; each `mark` label
 // ran exactly once, or zero times with a result saying it "may have run"; the restarted brain's
 // first thread snapshot reaches a reconnected client within 2 s of its socket opening; after the
@@ -88,9 +95,24 @@ const WINDOWS = [
  */
 const CONTROL_WINDOWS = ["stubborn-control"] as const;
 
-type WindowName = (typeof WINDOWS)[number] | (typeof CONTROL_WINDOWS)[number];
+/** The bridge windows, run by `judges/claude-kill.ts` with the real Claude bridge. */
+const BRIDGE_WINDOWS = {
+  "bridge-streaming": "streaming",
+  "bridge-tool-parked": "parked",
+} as const;
+
+type BridgeWindow = keyof typeof BRIDGE_WINDOWS;
+
+/** A window this file runs itself. */
+type KillWindow = (typeof WINDOWS)[number] | (typeof CONTROL_WINDOWS)[number];
+
+type WindowName = KillWindow | BridgeWindow;
+
+const isBridgeWindow = (name: string): name is BridgeWindow =>
+  Object.hasOwn(BRIDGE_WINDOWS, name);
 
 const isWindow = (name: string): name is WindowName =>
+  isBridgeWindow(name) ||
   [...WINDOWS, ...CONTROL_WINDOWS].some((window) => window === name);
 
 const { values } = parseArgs({
@@ -98,10 +120,14 @@ const { values } = parseArgs({
     window: { type: "string", multiple: true },
     sabotage: { type: "string" },
     keep: { type: "boolean", default: false },
+    bridge: { type: "boolean", default: false },
   },
 });
 
-const chosen = (values.window ?? [...WINDOWS]).filter(isWindow);
+const chosen = [
+  ...(values.window ?? (values.bridge ? [] : [...WINDOWS])),
+  ...(values.bridge ? Object.keys(BRIDGE_WINDOWS) : []),
+].filter(isWindow);
 
 const sabotage = values.sabotage === "skip-snapshot";
 
@@ -793,7 +819,7 @@ const killWhen =
       return { port, committed };
     });
 
-const plans: Readonly<Record<WindowName, Plan>> = {
+const plans: Readonly<Record<KillWindow, Plan>> = {
   streaming: {
     script: "text 600",
     expect: { marks: [], userEntries: 1 },
@@ -1158,7 +1184,7 @@ const initRepo = (folder: string) => {
   );
 };
 
-const runWindow = (window: WindowName) => {
+const runWindow = (window: KillWindow) => {
   // Kept outside the effect, so a failed window still reports its unit, directory and timings.
   const where = { unit: "", dir: "" };
   const measures: Measures = { killToUp: [], upToConverged: [], notes: [] };
@@ -1285,11 +1311,48 @@ const runWindow = (window: WindowName) => {
   );
 };
 
+/** One bridge window: `judges/claude-kill.ts` for its case, its JSON line reported as the window's. */
+const runBridgeWindow = (window: BridgeWindow) =>
+  Effect.sync(() => {
+    const args = [
+      path.join(REPO, "judges", "claude-kill.ts"),
+      "--case",
+      BRIDGE_WINDOWS[window],
+      ...(values.keep ? ["--keep"] : []),
+    ];
+
+    const output = (() => {
+      try {
+        return execFileSync("node", args, {
+          cwd: REPO,
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "inherit"],
+        });
+      } catch (error) {
+        const stdout: unknown = Predicate.hasProperty(error, "stdout")
+          ? error.stdout
+          : "";
+
+        return Predicate.isString(stdout) ? stdout : "";
+      }
+    })();
+
+    const line = output.split("\n").findLast((text) => text.startsWith("{"));
+
+    const parsed: unknown = line === undefined ? {} : JSON.parse(line);
+
+    const pass = Predicate.hasProperty(parsed, "pass") && parsed.pass === true;
+
+    return { window, pass, killer: "judges/claude-kill.ts", result: parsed };
+  });
+
 const main = Effect.gen(function* () {
   let passed = 0;
 
   for (const window of chosen) {
-    const result = yield* runWindow(window);
+    const result = isBridgeWindow(window)
+      ? yield* runBridgeWindow(window)
+      : yield* runWindow(window);
 
     passed += result.pass ? 1 : 0;
     process.stdout.write(`${JSON.stringify(result)}\n`);

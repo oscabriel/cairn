@@ -1,0 +1,23 @@
+# The stdio relay (ADR 0014; moved out of spikes/5-stdio-bridges): one supergateway on 172.17.0.1:3776
+# serving every stdio MCP server Executor reaches, and the headless Chrome (CDP on 127.0.0.1:3775) that
+# playwright attaches to. Linked into ~/.config/systemd/user by ops/relay/install.sh. The unit keeps
+# the spike's name, which Executor's app and the judges use.
+#
+# systemd owns the cgroup, so stopping or killing the unit also ends every child the gateway started,
+# although supergateway gives each child its own process group (KillMode=control-group, judged by
+# judges/relay-orphans.sh). The unit runs from the main checkout, as the spike did: the relay does not
+# change with brain deploys.
+[Unit]
+Description=Cairn stdio relay
+
+[Service]
+WorkingDirectory=%h/Developer/projects/cairn/ops/relay
+Environment=PATH=/usr/bin:/bin
+ExecStart=%h/Developer/projects/cairn/ops/relay/run.sh
+KillMode=control-group
+TimeoutStopSec=10
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

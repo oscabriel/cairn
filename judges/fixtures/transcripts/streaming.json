@@ -1,0 +1,108 @@
+{
+  "conversation": {
+    "id": 89
+  },
+  "entries": [
+    {
+      "id": 97,
+      "conversationId": 89,
+      "kind": "pi.user",
+      "model": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Write about 250 words on why durable agent transcripts matter. Use two level-two headings, one bullet list, and one short fenced TypeScript code block. Use no tools."
+            }
+          ],
+          "timestamp": 1792673871282
+        }
+      ]
+    },
+    {
+      "id": 100,
+      "conversationId": 89,
+      "kind": "cairn.hidden"
+    },
+    {
+      "model": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "## Why Durable Agent Transcripts Matter\n\nAgents that take multi-step actions, call tools, and make decisions over long horizons produce a record of their work. A durable transcript preserves that record so it survives crashes, restarts, and handoffs. Without it, a failed run leaves no trace of what was attempted, what succeeded, or why a particular choice was made.\n\n## Core Benefits\n\nDurable transcripts support several practical needs:\n\n- **Debugging:** Engineers can replay the exact sequence of prompts, tool calls, and results that led to a failure.\n- **Auditing:** Organizations can verify what an agent did, which matters for compliance and accountability.\n- **Recovery:** A run interrupted midway can resume from its last recorded state rather than starting over and repeating side effects.\n- **Evaluation:** Stored transcripts become datasets for measuring quality and comparing model or prompt changes.\n\nDurability also requires that writes be ordered and complete. A transcript that silently drops the final tool result can mislead both humans and the agent itself on restart. A minimal append-only record makes this concrete:\n\n```typescript\ntype Entry = { step: number; role: \"agent\" | \"tool\"; content: string };\n\nconst log: Entry[] = [];\nfunction append(entry: Entry): void {\n  log.push(Object.freeze({ ...entry }));\n}\n```\n\n## Conclusion\n\nTreating transcripts as durable infrastructure rather than disposable logs turns agent behavior from an opaque process into something inspectable, recoverable, and trustworthy."
+            }
+          ],
+          "api": "anthropic-messages",
+          "provider": "opencode-go",
+          "model": "claude-haiku-5-5",
+          "usage": {
+            "input": 4,
+            "output": 506,
+            "cacheRead": 3714,
+            "cacheWrite": 127,
+            "totalTokens": 4351,
+            "cost": {
+              "input": 4.0000000000000003e-7,
+              "output": 0.00025299999999999997,
+              "cacheRead": 0.00003714,
+              "cacheWrite": 0.000015875,
+              "total": 0.000306415
+            },
+            "cacheWrite1h": 0,
+            "reasoning": 0
+          },
+          "stopReason": "stop",
+          "timestamp": 1792673871285,
+          "responseId": "msg_011CgHKBj6bW2pZGxvWqhSdM",
+          "rawStopReason": "end_turn",
+          "durationMs": 3213
+        }
+      ],
+      "kind": "pi.assistant",
+      "id": 101,
+      "conversationId": 89,
+      "byTaskId": 99
+    }
+  ],
+  "docs": {
+    "pi.agent": {
+      "model": {
+        "provider": "opencode-go",
+        "modelId": "claude-haiku-5-5"
+      },
+      "thinkingLevel": "off",
+      "cwd": "/work/demo"
+    },
+    "pi.live": {},
+    "pi.inbox": {
+      "items": []
+    },
+    "pi.usage": {
+      "models": {
+        "opencode-go/claude-haiku-5-5": {
+          "input": 4,
+          "output": 506,
+          "cacheRead": 3714,
+          "cacheWrite": 127,
+          "totalTokens": 4351,
+          "cost": {
+            "input": 4.0000000000000003e-7,
+            "output": 0.00025299999999999997,
+            "cacheRead": 0.00003714,
+            "cacheWrite": 0.000015875,
+            "total": 0.000306415
+          },
+          "cacheWrite1h": 0,
+          "reasoning": 0
+        }
+      },
+      "tools": {}
+    },
+    "cairn.approvals": {
+      "items": {}
+    }
+  }
+}

@@ -1,7 +1,3 @@
-import type {
-  SearchEntriesResult,
-  SearchEntry,
-} from "@cairn/protocol/Projects";
 // The composer's `@` search: files and folders under a project root whose path matches what the
 // user typed. A git checkout lists its tracked and untracked, not ignored, files with
 // `git ls-files`; any other folder falls back to `fd`, which honours `.gitignore` files and skips
@@ -29,6 +25,10 @@ import type {
 // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+import type {
+  SearchEntriesResult,
+  SearchEntry,
+} from "@cairn/protocol/Projects";
 import { NodeServices } from "@effect/platform-node";
 import {
   Context,

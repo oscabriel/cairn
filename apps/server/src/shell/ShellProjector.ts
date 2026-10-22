@@ -10,8 +10,9 @@
 // - At most one commit per thread per 50 ms window (the first change in a quiet thread commits at
 //   once, later ones wait for the window to close), and only when the patch differs from the row.
 // - A thread's state is loaded from its row when an event first touches it and dropped after the
-//   flush, so a field another writer changed (a launch marking `preparing` or `failed`) is never
-//   overwritten from a stale cache.
+//   flush. The projection remembers which fields its events set; a flush rebases those on the row
+//   as it stands then and recomputes `activity` over the result, so a field another writer changed
+//   in the meantime (a launch marking `idle` or `failed`) is never overwritten from a stale copy.
 //
 // The field mapping follows notes/server.md, "Shell store and the projector".
 //
@@ -94,6 +95,8 @@ export type RunOutcome = "completed" | "interrupted" | "failed";
 export interface ThreadProjection {
   /** The derived fields; `activity` is the row's until `activityOf` recomputes it. */
   readonly fields: DerivedFields;
+  /** The fields events set since the projection was loaded; a flush writes only these. */
+  readonly changed: Partial<DerivedFields>;
   /** How the newest run ended, when one ended since the projection was loaded. */
   readonly outcome: Option.Option<RunOutcome>;
   /** Every pending approval, oldest first; the row shows the first. */
@@ -138,6 +141,7 @@ export const projectionOf = (
     latestUserMessageAt: shell.latestUserMessageAt,
     parkedTaskIds: shell.parkedTaskIds,
   },
+  changed: {},
   outcome: Option.none(),
   approvals: Option.getOrElse(approvals, () =>
     Option.toArray(shell.pendingRuntimeRequest)
@@ -174,6 +178,7 @@ const withFields = (
   const next = {
     ...projection,
     fields: { ...projection.fields, ...changes },
+    changed: { ...projection.changed, ...changes },
   };
 
   return { ...next, fields: { ...next.fields, activity: activityOf(next) } };
@@ -401,6 +406,31 @@ const diff = <A>(
   after: A
 ): Option.Option<A> =>
   equivalent(before, after) ? Option.none() : Option.some(after);
+
+/**
+ * The projection rebased on `row` as it stands now: the fields its events set laid over the row's,
+ * and `activity` recomputed over them. A projection that set nothing is the row unchanged.
+ */
+export const rebase = (
+  row: ThreadShell,
+  projection: ThreadProjection
+): ThreadProjection => {
+  const fresh = projectionOf(row, Option.some(projection.approvals));
+
+  if (Object.keys(projection.changed).length === 0) {
+    return fresh;
+  }
+
+  const rebased: ThreadProjection = {
+    ...projection,
+    fields: { ...fresh.fields, ...projection.changed, activity: row.activity },
+  };
+
+  return {
+    ...rebased,
+    fields: { ...rebased.fields, activity: activityOf(rebased) },
+  };
+};
 
 /** The patch that brings `row` to the projection's fields; none when nothing differs. */
 export const patchFor = (
@@ -684,7 +714,10 @@ export class ShellProjector extends Context.Service<
           return false;
         }
 
-        const patch = patchFor(row.value.shell, projection);
+        const patch = patchFor(
+          row.value.shell,
+          rebase(row.value.shell, projection)
+        );
 
         if (Option.isNone(patch)) {
           return false;

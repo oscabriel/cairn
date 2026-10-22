@@ -162,15 +162,49 @@ Each branch started at `4b74744` and merged with `--no-ff` in the order A to F. 
 - **The bridge is not wired** (3F): Claude through the subscription is not offered, `ClaudeUsage.layerBridge` is not provided, and `usage.subscribe` is still a stub. The deployed picker shows the user's `opencode-go` models only.
 - **`autoSettleDays` does not drive Settlement yet** (2A's note: `SettlementConfig` is still 1B's fixed 3 days), and `bridgeGenerationCap` is stored only.
 - **The add-project dialog does not close on Escape** (seen in the browser check; Cancel closes it). Left to 2D's owner or 5C's parity pass.
-- **`judges/typing.ts` reported fewer menus seen under throttle** (none on desktop, path only on mobile) while still reporting the menu case ok and losing no keys. The menus open later than the judge samples under 4x throttle; the unthrottled run saw all three.
+- **`judges/typing.ts` reported fewer menus seen under throttle** (none on desktop, path only on mobile) while still reporting the menu case ok and losing no keys. Closed by the review below: the menu case now waits for each menu, and all three open under 4x throttle on desktop and mobile.
 - **No regenerated titles, no project setup script, no worktree cleanup on archive or delete** (2B's gaps), the protocol's `ProviderUsage` has no plan or reason (2F), and the hover card, drag reorder and custom snooze are not built (2D). All carried.
 - **J7 used a stand-in system prompt** (2F); rerun `judges/claude-eligibility.ts` once 3E's sections exist.
 - **The WebKit tier of the typing judge** is wave 5.
 
 ### Deviations from the plan
 
-- **`thread_launches` is written before `thread.created`, not in one transaction with it** (2B): `EventSink` publishes inside its own transaction, so an outer one could hand clients events a rollback removes. Boot repairs a launch row with no thread row.
+- **`thread_launches` is written before `thread.created`, not in one transaction with it** (2B): `EventSink` publishes inside its own transaction, so an outer one could hand clients events a rollback removes. Boot drops a launch row with no thread row (added by the review below; before it, nothing checked).
 - **The pixel comparison lives in `judges/capture.ts cairn`**, not `judges/parity.ts`, which is 4F's (2D).
 - **The migration file is `db/migrations/0002Launches.ts`** (key `0002_Launches`), following `Migrations.ts`'s convention rather than the plan's `0002_Launches.ts`.
 - **The typing judge runs an in-process brain** (AppLayer, scripted harness, echo model) with Vite, rather than `dev-main.ts` itself (2E); `--url` points it at a running page instead.
 - **One extra integration judge**, `judges/live-chat.ts`, and one deployed-page browser check, beyond the plan's list.
+
+### Review
+
+A review of `4b74744..main` reported five confirmed findings and five unverified concerns. Each was checked against the code; all five findings were confirmed and fixed, and four of the concerns were real and fixed. `pnpm check` is green afterwards (85 files, 803 tests).
+
+Confirmed findings:
+
+1. **A projector flush wrote back a stale `activity`** (`ShellProjector.ts`). Confirmed: a projection copied the whole row when its first event arrived (`ThreadEnsured` changes nothing), and the flush diffed every field against the row as it stood up to 50 ms later, so a launch's `idle` or `failed` (and its `lastError`) could be overwritten with the copy. A projection now records the fields its events set (`changed`), and `write` rebases them on the fresh row (`rebase`): the row's own fields stand, the set ones lay over them, and `activity` is recomputed over the result; a projection that set nothing writes nothing. The module header's rule 3 says so. New test: `ThreadEnsured` inside an open window, then an outside `ThreadActivityUpdate` to `failed` with a `lastError` before the flush; the row stays `failed` with its error, and a later `QueueChanged` keeps both. It fails on the old code (`idle`).
+2. **The stall test still raced the wall clock** (`ClaudeConversation.test.ts`). Confirmed. `advanceUntilDone` and its live sleeps are gone: the test polls with `Effect.yieldNow` until the fake SDK has recorded the child's run (the realpath is the only off-clock work, and it comes first), gives the scheduler 50 turns, then makes one `TestClock.adjust("100 seconds")`, past the 90 second limit; `adjust` wakes the watchdog's 5 second ticks in order. 24 runs of the file under six parallel runners all passed.
+3. **The menu case passed with no menu open** (`judges/typing.ts`). Confirmed. The text is typed in four pieces, each ending on a trigger character, and the judge waits (5 s) for `[data-testid="composer-menu"][data-trigger=<kind>]` before typing on; `menu` is `ok` only when the text is intact and the path, slash-command and skill menus all opened (else `menus did not open: <kinds>`). Rerun below: all three open in every tier, so the wave's gap is closed. The old `MutationObserver` sampling was what missed them.
+4. **A launch row with no thread row was "resumed"** (`ThreadLaunch.ts`). Confirmed: nothing checked the thread row, so a Root launch could ensure a pi-durable conversation for a thread that does not exist, and a scratch launch claimed a folder it never removed. `prepare` now checks the thread row first; with none, `discardOrphan` removes a worktree the launch made (`cleanUp`), the scratch folder when `cwd` is set (new `ScratchProject.releaseFolder`, which only removes a folder directly under the scratch root), and the launch row, and logs `launch_orphan_discarded`, without ensuring or committing anything. The same check closed an in-process race: a resent launch that finds the launch row but no thread row (the first launch is between its two inserts) no longer starts the fiber, which would have dropped the launch; the first launch starts it. Three new `ThreadLaunch.test.ts` cases (a Root orphan, a scratch orphan with a claimed folder, a resend between the inserts); the last two fail on the old code.
+5. **File headers below the first import** (`FileSearch.ts`, `composer/Command.ts`, `composer/Model.ts`). Confirmed, and the same defect was in seven more files (`http/Ws.ts`, `smoke.test.ts`, `connection/Outbox.ts`, `judges/claude-eligibility.ts`, `judges/claude-reminder.ts`, `judges/typing.ts`, `ClaudeHarness.test.ts`). Every header now starts its file; oxfmt keeps them there.
+
+Unverified concerns:
+
+- **Git stderr in logs.** Real: `GitError` carries the end of git's stderr into the log and into a failed launch's `lastError`, which the client shows, and a remote URL there can embed a token. `Git.ts` now passes the tail through `redactUrls`, which replaces the user info of every URL with `***` (`https://***@host/...`). New `Git.test.ts`: the pure case, and a real `git ls-remote` against a closed port whose error never repeats the token.
+- **Launch resume runs before `resume` and `reconcile`.** Checked, kept. pi-durable's README says submitting starts the task scheduler as `resume()` does, so a launch fiber's `ensureThread` or `submit` before the explicit resume is legal, and every other repair has run by then (launch resume is the last). The reconcile cannot undo a launch's activity any more: it goes through the same `rebase` as finding 1. The plan's boot order stays; the pi-durable path of "ensured, then submitted before resume" is still not exercised by a judge.
+- **`ClaudeSdk.realProbe` retry loop.** Real in part: the SDK documents `rate_limits_available: false` for API key, Bedrock and Vertex logins, but also for a missing profile scope, and a false from a claude.ai login replaced the known windows. `readProbe` now reads an answer that names a subscription (`subscription_type` set) yet says no plan limits as unknown, so `applyReading` keeps the windows, and the probe retries that answer like a null `rate_limits`. A new `ClaudeUsage.test.ts` case checks it; the API key case is still unavailable.
+- **`Threads.send` returned `Unavailable` for `ThreadNotReady`.** Real, and worse than a toast: the outbox keeps a retryable failure at its head until the next connection, so a turn sent while the thread was preparing (the composer allows it) held every later outbox item until a reconnect. `Threads.send` now waits for the thread's launch to finish (polling `LaunchStore` every 100 ms, up to `LaunchWait`, a `Context.Reference` defaulting to 60 s) and then submits, so the turn lands after the first message; only a launch that outlasts the wait is refused with `ThreadNotReady`, still mapped to `Unavailable`. `Threads.test.ts` has both cases.
+- **`PiConfig` logged settings parse errors unbounded.** Real: V8's JSON errors quote a fragment of the text. `settingsErrorText` drops everything between the first and last double quote and cuts the rest to 200 characters; `PiConfig.test.ts` checks a parse error over a made-up secret.
+
+Judges rerun after the fixes:
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | 85 files, 803 tests; oxfmt and oxlint clean. |
+| `node judges/typing.ts` | pass | 1200/1200 match, lateKeys 1, maxLateMs 0, 486 rows streamed, IME ok, menu ok, menus seen: path, skill, slash-command, 0 errors. |
+| `node judges/typing.ts --throttle 4 --busy 10` | pass | 1200/1200 match, lateKeys 2, maxLateMs 8, IME ok, menu ok with all three menus seen, 0 errors. |
+| `node judges/typing.ts --mobile --throttle 4 --busy 10` | pass | 1200/1200 match, lateKeys 12, maxLateMs 28, IME ok, menu ok with all three menus seen, 0 errors. |
+| `node judges/durability.ts` | pass | 8 of 8; kill to first socket 779 to 936 ms, socket to converged 5 to 8 ms; during-launch 827/8; sigterm-six 2,601 to 2,650 ms. |
+| `node judges/durability.ts --sabotage skip-snapshot` (control) | pass | 0 of 8, as required. |
+| `judges/pi-readonly.sh --no-turn` | pass | 62,091 entries identical, 0 children, 76 skills, 0 problems. |
+
+The deployed brain on 3774 still runs the wave 2 build; these fixes reach it at the next `ops/cairn/deploy.sh`.

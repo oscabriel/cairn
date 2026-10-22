@@ -33,6 +33,7 @@ import type { ClaudeUsageReading, UsageWindow } from "./ClaudeUsage.ts";
 import {
   accountLogin,
   applyEvent,
+  applyReading,
   ClaudeUsage,
   eventWindows,
   INITIAL_READING,
@@ -395,6 +396,27 @@ describe("the probe's answer", () => {
       { kind: "none" },
       "unavailable",
       Option.some("the claude CLI is not logged in"),
+    ]);
+  });
+
+  it("keeps known windows when a subscription's answer says it has no plan limits", () => {
+    const known = applyReading(
+      INITIAL_READING,
+      readProbe(raw(account, probeUsage(fullLimits)), T),
+      T
+    );
+
+    const early = readProbe(
+      raw(account, probeUsage(null, { available: false })),
+      T + 1000
+    );
+
+    const after = applyReading(known, early, T + 1000);
+
+    expect([early.state, after.state, after.windows.length > 0]).toStrictEqual([
+      "unknown",
+      known.state,
+      true,
     ]);
   });
 

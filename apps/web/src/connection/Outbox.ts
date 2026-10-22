@@ -1,5 +1,3 @@
-import { ThreadLaunchInput } from "@cairn/protocol/Launch";
-import { ShellCommand } from "@cairn/protocol/ShellCommands";
 // Ported in idea from cairn-v1, apps/web/src/flags.ts and its outbox handling in update.ts at
 // 1a5cd4a. Kept: mutations wait in a FIFO saved to localStorage, so a send survives a reconnect or
 // a reload, and the transport never replays anything itself. Changed: items are Cairn's v2 inputs,
@@ -9,6 +7,8 @@ import { ShellCommand } from "@cairn/protocol/ShellCommands";
 // The outbox runs only while the connection is `Live`, one item at a time and in order: the head is
 // sent, an acknowledgement drops it and sends the next. A retryable failure leaves it at the head
 // for the next connection; any other failure drops it, because sending it again cannot succeed.
+import { ThreadLaunchInput } from "@cairn/protocol/Launch";
+import { ShellCommand } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
 import { Array, Effect, Option, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";

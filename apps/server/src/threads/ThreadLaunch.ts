@@ -457,6 +457,42 @@ export class ThreadLaunch extends Context.Service<
         );
       });
 
+      // A launch row whose thread row was never committed: the brain stopped between the two
+      // inserts. Nothing reached the harness, so the launch is dropped with whatever it made.
+      const discardOrphan = Effect.fnUntraced(function* (row: LaunchRow) {
+        const { input } = row;
+        const project = yield* projects.get(input.projectId);
+
+        if (Option.isSome(project)) {
+          yield* cleanUp(row, project.value.shell);
+
+          if (
+            project.value.shell.kind === "scratch" &&
+            Option.isSome(row.cwd)
+          ) {
+            yield* scratch.releaseFolder(row.cwd.value).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("launch cleanup failed").pipe(
+                  Effect.annotateLogs({
+                    event: "launch_cleanup_failed",
+                    threadId: input.threadId,
+                    cause: String(cause),
+                  })
+                )
+              )
+            );
+          }
+        }
+
+        yield* launches.remove(input.commandId);
+        yield* Effect.logWarning("orphan launch discarded").pipe(
+          Effect.annotateLogs({
+            event: "launch_orphan_discarded",
+            threadId: input.threadId,
+          })
+        );
+      });
+
       const prepare = Effect.fnUntraced(function* (commandId: CommandId) {
         const found = yield* launches.get(commandId);
 
@@ -466,6 +502,12 @@ export class ThreadLaunch extends Context.Service<
 
         let row = found.value;
         const { input } = row;
+
+        if (Option.isNone(yield* threadRows.get(input.threadId))) {
+          yield* discardOrphan(row);
+
+          return;
+        }
 
         const project = yield* projects.get(input.projectId);
 
@@ -638,7 +680,16 @@ export class ThreadLaunch extends Context.Service<
           .pipe(Effect.mapError(unavailable));
 
         if (Option.isSome(pending)) {
-          yield* start(input.commandId, input.threadId);
+          const thread = yield* threadRows
+            .get(input.threadId)
+            .pipe(Effect.mapError(unavailable));
+
+          // With no thread row yet, the first launch is between its two inserts and starts the
+          // launch itself (or removes the row when its thread is refused); starting here would
+          // find no thread and drop the launch.
+          if (Option.isSome(thread)) {
+            yield* start(input.commandId, input.threadId);
+          }
 
           return { threadId: input.threadId, resumed: true };
         }

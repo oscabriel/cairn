@@ -1,5 +1,3 @@
-import { once } from "node:events";
-/* oxlint-disable no-await-in-loop -- the typist sends one key after another, on purpose */
 // The composer typing judge (ADR 0023's gate): type into the real client's composer at a fixed rate
 // while a thread with a long history streams under it, then compare what arrived with what was sent.
 //
@@ -11,9 +9,12 @@ import { once } from "node:events";
 // exchange every 250 ms for the length of the run), and the web client's Vite server proxying to it.
 // Each key goes out on its own schedule, so a slow frame cannot make the typist wait for the app.
 // Then three more checks on the same page: IME composition of 日本 (Chromium, through CDP), and the
-// menu case (typing `@`, `/` and `$` opens the composer's menus without losing a character).
+// menu case (typing `@`, `/` and `$` opens each of the composer's menus, which the judge waits for,
+// and typing on through them loses no character).
 // Prints one JSON line and exits 0 when nothing was dropped or reordered, IME and the menu case are
 // intact, and the page logged no error.
+/* oxlint-disable no-await-in-loop -- the typist sends one key after another, on purpose */
+import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import os from "node:os";
@@ -283,7 +284,21 @@ const nextCharacter = () => {
 
 const text = Array.from({ length: seconds * cps }, nextCharacter).join("");
 
-const MENU_TEXT = "look at @src/app.ts then /model or $review and @docs done";
+/**
+ * The menu case's text, cut after each trigger character: the judge waits for that trigger's menu
+ * to open before it types the next piece.
+ */
+const MENU_PIECES: ReadonlyArray<readonly [string, string | undefined]> = [
+  ["look at @", "path"],
+  ["src/app.ts then /", "slash-command"],
+  ["model or $", "skill"],
+  ["review and @docs done", undefined],
+];
+
+const MENU_TEXT = MENU_PIECES.map(([piece]) => piece).join("");
+
+/** How long the menu case waits for one menu to open. */
+const MENU_WAIT_MS = 5000;
 
 /** With --url the page's own brain is not the judge's to stop. */
 const stopNothing = async (): Promise<void> => {
@@ -412,49 +427,45 @@ if (!isWebkit) {
   ime = value === "ab日本cd" ? "ok" : `wrong: ${JSON.stringify(value)}`;
 }
 
-// The menu case: `@`, `/` and `$` open menus, and typing on through them loses nothing.
+// The menu case: `@`, `/` and `$` each open their menu (the judge waits for it), and typing on
+// through them loses nothing.
 await composer.fill("");
 
 await page.waitForTimeout(200);
 
-// The page records every menu kind that opens while the menu text is typed, on <body>.
-await page.evaluate(() => {
-  new MutationObserver(() => {
-    const kind = document.querySelector<HTMLElement>(
-      '[data-testid="composer-menu"]'
-    )?.dataset.trigger;
+const menusSeen: Array<string> = [];
 
-    const seen = new Set(
-      (document.body.dataset.menusSeen ?? "").split(",").filter(Boolean)
-    );
+const menusMissed: Array<string> = [];
 
-    if (kind !== undefined && !seen.has(kind)) {
-      seen.add(kind);
-      document.body.dataset.menusSeen = [...seen].join(",");
-    }
-  }).observe(document.body, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-  });
-});
+for (const [piece, kind] of MENU_PIECES) {
+  await typeAt(piece);
 
-await typeAt(MENU_TEXT);
+  if (kind !== undefined) {
+    const opened = await page
+      .waitForSelector(
+        `[data-testid="composer-menu"][data-trigger="${kind}"]`,
+        { timeout: MENU_WAIT_MS }
+      )
+      .then(
+        () => true,
+        () => false
+      );
 
-const menusSeenText = await page.evaluate(
-  () => document.body.dataset.menusSeen ?? ""
-);
-
-const menusSeen: ReadonlyArray<string> = menusSeenText
-  .split(",")
-  .filter((kind) => kind.length > 0);
+    (opened ? menusSeen : menusMissed).push(kind);
+  }
+}
 
 await page.waitForTimeout(500);
 
 const menuValue = await composer.inputValue();
 
-const menu =
-  menuValue === MENU_TEXT ? "ok" : `wrong: ${JSON.stringify(menuValue)}`;
+let menu = "ok";
+
+if (menuValue !== MENU_TEXT) {
+  menu = `wrong: ${JSON.stringify(menuValue)}`;
+} else if (menusMissed.length > 0) {
+  menu = `menus did not open: ${menusMissed.join(", ")}`;
+}
 
 const result = {
   engine: browserName,

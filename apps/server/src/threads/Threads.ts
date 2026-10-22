@@ -12,7 +12,15 @@ import type {
   WithdrawInput,
   WithdrawResult,
 } from "@cairn/protocol/Thread";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import {
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+} from "effect";
 
 import type { HarnessError } from "../brain/HarnessSeam.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
@@ -36,14 +44,29 @@ export class ThreadNotReady extends Schema.TaggedError<ThreadNotReady>()(
   }
 ) {}
 
+/**
+ * How long a turn sent to a thread that is still launching waits for the launch to finish before
+ * it is refused with `ThreadNotReady`. The client's outbox would otherwise hold the turn (and
+ * everything behind it) until its next connection.
+ */
+export const LaunchWait = Context.Reference<Duration.Duration>(
+  "cairn/server/threads/Threads/LaunchWait",
+  { defaultValue: () => Duration.seconds(60) }
+);
+
+/** How often a waiting turn checks whether its thread's launch finished. */
+const LAUNCH_POLL = Duration.millis(100);
+
 /** Sends turns to threads and steers their runs. */
 export class Threads extends Context.Service<
   Threads,
   {
     /**
      * Builds the turn's content and admits it. Idempotent by the input's request id: a resend
-     * returns the first submission. Fails with `TurnContentError` (nothing submitted),
-     * `ThreadNotReady` while the thread launches, or the seam's `HarnessError`.
+     * returns the first submission. A turn for a thread that is still launching waits for the
+     * launch (up to `LaunchWait`), so it lands after the first message. Fails with
+     * `TurnContentError` (nothing submitted), `ThreadNotReady` when the launch outlasts the wait,
+     * or the seam's `HarnessError`.
      */
     send(
       input: SendInput,
@@ -76,9 +99,18 @@ export class Threads extends Context.Service<
         input: SendInput,
         from: string
       ) {
-        const launching = yield* launches.byThread(input.threadId);
+        const wait = yield* LaunchWait;
 
-        if (Option.isSome(launching)) {
+        // Some once no launch is in flight for the thread; none when the wait ran out first.
+        const launched = yield* launches.byThread(input.threadId).pipe(
+          Effect.repeat({
+            until: Option.isNone,
+            schedule: Schedule.spaced(LAUNCH_POLL),
+          }),
+          Effect.timeoutOption(wait)
+        );
+
+        if (Option.isNone(launched)) {
           return yield* new ThreadNotReady({
             message: `Thread ${input.threadId} is still being prepared. Send again once it shows its first message.`,
             threadId: input.threadId,

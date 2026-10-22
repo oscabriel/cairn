@@ -78,8 +78,17 @@ const subcommandOf = (args: ReadonlyArray<string>) => {
   return "git";
 };
 
+/** The user info of every URL (`https://user:token@host`), which can hold a credential. */
+const URL_USER_INFO = /\b(?<scheme>[a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]+@/giu;
+
+/** Hides the credential a remote URL in git's output can carry. */
+export const redactUrls = (text: string) =>
+  text.replaceAll(URL_USER_INFO, "$<scheme>***@");
+
 const tail = (text: string) =>
-  text.length <= STDERR_TAIL_CHARS ? text : text.slice(-STDERR_TAIL_CHARS);
+  redactUrls(
+    text.length <= STDERR_TAIL_CHARS ? text : text.slice(-STDERR_TAIL_CHARS)
+  );
 
 /** The environment a child sees: the brain's own, less every `CAIRN_*` variable, plus `extra`. */
 const childEnv = (extra: Readonly<Record<string, string>>) => ({

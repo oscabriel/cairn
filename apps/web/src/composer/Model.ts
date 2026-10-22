@@ -1,12 +1,12 @@
+// The composer's state. One composer serves every route that takes input: a draft (the new-thread
+// hero, at `/` and `/new/<draftId>`) and an open thread (docked under its transcript). What it needs
+// from the rest of the app arrives as `ComposerContext`, which the root hands it after every update
+// (`Update.ts`, `inform`); everything else here is the composer's own.
 import {
   FollowUpBehavior,
   SendShortcut,
 } from "@cairn/client-logic/ComposerLogic";
 import { ComposerPromptHistoryPosition } from "@cairn/client-logic/ComposerPromptHistory";
-// The composer's state. One composer serves every route that takes input: a draft (the new-thread
-// hero, at `/` and `/new/<draftId>`) and an open thread (docked under its transcript). What it needs
-// from the rest of the app arrives as `ComposerContext`, which the root hands it after every update
-// (`Update.ts`, `inform`); everything else here is the composer's own.
 import { ComposerTrigger } from "@cairn/client-logic/ComposerTrigger";
 import { ControlsLayout } from "@cairn/client-logic/FooterLayout";
 import { AttachmentId, ProjectId, ThreadId } from "@cairn/protocol/Ids";

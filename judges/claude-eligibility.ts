@@ -1,19 +1,3 @@
-import { mkdtempSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import path from "node:path";
-import { parseArgs } from "node:util";
-
-import { Claude } from "@cairn/bridge/Claude";
-import { ClaudeAccount } from "@cairn/bridge/ClaudeAccount";
-import type { RateLimitInfo } from "@cairn/bridge/ClaudeEvents";
-import { childEnv, unsendableFindings } from "@cairn/bridge/ClaudeGuards";
-import { claudeModel, DEFAULT_LONG_CONTEXT } from "@cairn/bridge/ClaudeModels";
-import { providerContext } from "@cairn/bridge/ClaudeProvider";
-import { ClaudeSdk } from "@cairn/bridge/ClaudeSdk";
-import { ClaudeSettings } from "@cairn/bridge/ClaudeSettings";
-import { ClaudeSlots } from "@cairn/bridge/ClaudeSlots";
-import { ClaudeSummary } from "@cairn/bridge/ClaudeSummary";
-import { readProbe } from "@cairn/bridge/ClaudeUsage";
 // J6 and J7, live, against the `claude` binary's own login on this machine.
 //   node judges/claude-eligibility.ts [--part all|probe|eligibility] [--model claude-haiku-5-5]
 //
@@ -30,6 +14,22 @@ import { readProbe } from "@cairn/bridge/ClaudeUsage";
 //
 // Prints one JSON log line with the numbers. Exit 0 when every check holds. Never prints a credential:
 // the dummy API key below is not a key, and the probe's account is reduced to its login kind.
+import { mkdtempSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
+import { parseArgs } from "node:util";
+
+import { Claude } from "@cairn/bridge/Claude";
+import { ClaudeAccount } from "@cairn/bridge/ClaudeAccount";
+import type { RateLimitInfo } from "@cairn/bridge/ClaudeEvents";
+import { childEnv, unsendableFindings } from "@cairn/bridge/ClaudeGuards";
+import { claudeModel, DEFAULT_LONG_CONTEXT } from "@cairn/bridge/ClaudeModels";
+import { providerContext } from "@cairn/bridge/ClaudeProvider";
+import { ClaudeSdk } from "@cairn/bridge/ClaudeSdk";
+import { ClaudeSettings } from "@cairn/bridge/ClaudeSettings";
+import { ClaudeSlots } from "@cairn/bridge/ClaudeSlots";
+import { ClaudeSummary } from "@cairn/bridge/ClaudeSummary";
+import { readProbe } from "@cairn/bridge/ClaudeUsage";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { NodeRuntime } from "@effect/platform-node";
 import { Clock, Effect, Layer, Option, Ref, Schema, Stream } from "effect";

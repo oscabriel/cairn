@@ -4,14 +4,22 @@ import { RootWorkspace } from "@cairn/protocol/Launch";
 import type { SendInput } from "@cairn/protocol/Thread";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import { Duration, Effect, FileSystem, Option, Ref, Schedule } from "effect";
+import {
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Ref,
+  Schedule,
+} from "effect";
 import type { Layer } from "effect";
 
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import { StopHooks } from "./StopHooks.ts";
-import { Threads } from "./Threads.ts";
+import { LaunchWait, Threads } from "./Threads.ts";
 import {
   addProject,
   HeldModel,
@@ -233,24 +241,61 @@ describe("thread commands", () => {
     )
   );
 
-  it.live("a thread still launching refuses a turn without submitting it", () =>
-    withThread((threadId, projectId) =>
-      Effect.gen(function* () {
-        const launches = yield* LaunchStore;
+  it.live(
+    "a turn sent while the thread launches waits for the launch, then lands",
+    () =>
+      withThread((threadId, projectId) =>
+        Effect.gen(function* () {
+          const launches = yield* LaunchStore;
 
-        const input = yield* launchInput(
-          projectId,
-          RootWorkspace.make({ branch: Option.none() }),
-          "still launching"
-        );
+          const input = yield* launchInput(
+            projectId,
+            RootWorkspace.make({ branch: Option.none() }),
+            "still launching"
+          );
 
-        yield* launches.insert({ ...input, threadId }, "owner@test");
+          yield* launches.insert({ ...input, threadId }, "owner@test");
 
-        const refused = yield* Effect.flip(send(threadId, "r1", "followUp"));
+          const sending = yield* Effect.forkChild(
+            send(threadId, "r1", "followUp")
+          );
 
-        assert.strictEqual(refused._tag, "ThreadNotReady");
-        assert.strictEqual(yield* userEntryCount(threadId), 0);
-      })
-    )
+          yield* Effect.sleep(Duration.millis(300));
+          assert.strictEqual(yield* userEntryCount(threadId), 0);
+
+          // The launch finishes.
+          yield* launches.remove(input.commandId);
+
+          yield* Fiber.join(sending);
+          assert.strictEqual(yield* userEntryCount(threadId), 1);
+        })
+      )
+  );
+
+  it.live(
+    "a thread whose launch outlasts the wait refuses a turn without submitting it",
+    () =>
+      withThread((threadId, projectId) =>
+        Effect.gen(function* () {
+          const launches = yield* LaunchStore;
+
+          const input = yield* launchInput(
+            projectId,
+            RootWorkspace.make({ branch: Option.none() }),
+            "still launching"
+          );
+
+          yield* launches.insert({ ...input, threadId }, "owner@test");
+
+          const refused = yield* Effect.flip(
+            send(threadId, "r1", "followUp").pipe(
+              Effect.provideService(LaunchWait, Duration.millis(250))
+            )
+          );
+
+          assert.strictEqual(refused._tag, "ThreadNotReady");
+          assert.strictEqual(yield* userEntryCount(threadId), 0);
+        })
+      )
   );
 });

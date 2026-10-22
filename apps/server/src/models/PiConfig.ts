@@ -439,6 +439,17 @@ const loadPi = Effect.tryPromise({
     }),
 });
 
+/** The longest settings parse error a log line or the UI repeats. */
+const SETTINGS_ERROR_LIMIT = 200;
+
+/**
+ * A settings parse error without the fragment of `settings.json` a JSON parser quotes (V8 writes
+ * `Unexpected token ..., "<the text>" is not valid JSON`): everything from the first double quote
+ * to the last goes, and the rest is cut to `SETTINGS_ERROR_LIMIT`.
+ */
+export const settingsErrorText = (message: string) =>
+  message.replaceAll(/".*"/gsu, '"..."').slice(0, SETTINGS_ERROR_LIMIT);
+
 /** One resolve of the agent dir through pi's `SettingsManager` and `DefaultPackageManager`. */
 const resolvePiConfig = Effect.fn("PiConfig.resolve")(function* (
   pi: typeof PiCodingAgent,
@@ -459,7 +470,7 @@ const resolvePiConfig = Effect.fn("PiConfig.resolve")(function* (
     .filter((error) => error.scope === "global");
 
   for (const error of settingsErrors) {
-    errors.push(`${settingsPath}: ${error.error.message}`);
+    errors.push(`${settingsPath}: ${settingsErrorText(error.error.message)}`);
   }
 
   // Never run settings.json's own npm command, even to look a package up.

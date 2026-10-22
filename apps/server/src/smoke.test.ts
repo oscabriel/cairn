@@ -1,3 +1,6 @@
+// Dependency smoke test: every library name a later package relies on, checked against the
+// installed packages rather than a clone or a spike's node_modules. A pi or Effect bump that
+// renames or moves one of these fails here first, with the name in the test title.
 import { applyImmutable } from "@earendil-works/chord/delta";
 import {
   createProvider,
@@ -29,9 +32,6 @@ import { registerEnvConformance } from "@earendil-works/pi-durable/testing";
 import { McpClient, StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import { adaptOAuthProvider } from "@earendil-works/pi-mcp/oauth";
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node";
-// Dependency smoke test: every library name a later package relies on, checked against the
-// installed packages rather than a clone or a spike's node_modules. A pi or Effect bump that
-// renames or moves one of these fails here first, with the name in the test title.
 import { assert, describe, it } from "@effect/vitest";
 
 const names = {

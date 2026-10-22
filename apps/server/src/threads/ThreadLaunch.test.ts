@@ -571,6 +571,96 @@ describe("launching threads", () => {
     )
   );
 
+  it.live(
+    "a launch row with no thread row is dropped at boot, without ensuring a thread",
+    () =>
+      withRepo({ held: false }, ({ repo }) =>
+        Effect.gen(function* () {
+          const projectId = yield* addProject(repo);
+          const launcher = yield* ThreadLaunch;
+          const launches = yield* LaunchStore;
+
+          const input = yield* launchInput(projectId, rootWorkspace, "Orphan");
+
+          // What a launch leaves when the brain stops between its two inserts.
+          assert.isTrue(yield* launches.insert(input, "owner@test"));
+
+          yield* launcher.resumePending;
+          yield* launcher.settled(input.threadId);
+
+          assert.strictEqual((yield* launches.listPending).length, 0);
+          assert.isTrue(
+            Option.isNone(yield* (yield* ThreadRows).get(input.threadId))
+          );
+          assert.isUndefined(
+            (yield* ScriptedStore).threads.get(input.threadId)
+          );
+        })
+      )
+  );
+
+  it.live("an orphan launch's scratch folder is removed at boot", () =>
+    withRepo({ held: false }, () =>
+      Effect.gen(function* () {
+        const scratchProject = yield* ScratchProject;
+        const scratch = yield* scratchProject.ensure;
+        const launcher = yield* ThreadLaunch;
+        const launches = yield* LaunchStore;
+        const fs = yield* FileSystem.FileSystem;
+
+        const input = yield* launchInput(scratch.id, rootWorkspace, "Lost");
+
+        assert.isTrue(yield* launches.insert(input, "owner@test"));
+
+        const folder = yield* scratchProject.folderForThread(
+          input.threadId,
+          "Lost"
+        );
+
+        const recorded = Option.getOrThrow(
+          yield* launches.get(input.commandId)
+        );
+
+        yield* launches.update({
+          ...recorded,
+          phase: "workspace",
+          cwd: Option.some(folder),
+        });
+
+        yield* launcher.resumePending;
+        yield* launcher.settled(input.threadId);
+
+        assert.isFalse(yield* fs.exists(folder));
+        assert.isTrue(yield* fs.exists(scratchProject.root));
+        assert.strictEqual((yield* launches.listPending).length, 0);
+        assert.isUndefined((yield* ScriptedStore).threads.get(input.threadId));
+      })
+    )
+  );
+
+  it.live(
+    "a resent launch while the first has no thread row yet starts nothing",
+    () =>
+      withRepo({ held: false }, ({ repo }) =>
+        Effect.gen(function* () {
+          const projectId = yield* addProject(repo);
+          const launcher = yield* ThreadLaunch;
+          const launches = yield* LaunchStore;
+
+          const input = yield* launchInput(projectId, rootWorkspace, "Twice");
+
+          assert.isTrue(yield* launches.insert(input, "owner@test"));
+
+          const answer = yield* launcher.launch(input, "owner@test");
+
+          yield* launcher.settled(input.threadId);
+
+          assert.isTrue(answer.resumed);
+          assert.strictEqual((yield* launches.listPending).length, 1);
+        })
+      )
+  );
+
   it.live("a thread with no project runs in its own scratch folder", () =>
     withRepo({ held: false }, ({ dataDir }) =>
       Effect.gen(function* () {

@@ -189,23 +189,11 @@ const runs = Effect.gen(function* () {
 
 const settle = Effect.repeat(Effect.yieldNow, { times: 50 });
 
-/**
- * Moves the test clock in the watchdog's 5 second ticks until `fiber` ends, giving the bridge a
- * real millisecond between ticks for the work it does off the clock (the cwd's realpath, the child
- * start). A single large jump fired only the sleeps already registered, so under a loaded suite it
- * could pass before the watchdog slept and leave the turn waiting forever. Stops after 600 virtual
- * seconds, far past the 90 second stall limit, so a broken watchdog fails the test instead of
- * hanging it.
- */
-const advanceUntilDone = <A, E>(fiber: Fiber.Fiber<A, E>) =>
+/** Gives the scheduler turns until `done` holds; the bridge's off-clock work (the realpath) ends. */
+const until = (done: Effect.Effect<boolean, never, ClaudeSdkScripts>) =>
   Effect.gen(function* () {
-    for (let tick = 0; tick < 120; tick += 1) {
-      if (fiber.pollUnsafe() !== undefined) {
-        return;
-      }
-
-      yield* TestClock.adjust("5 seconds");
-      yield* TestClock.withLive(Effect.sleep("1 millis"));
+    while (!(yield* done)) {
+      yield* Effect.yieldNow;
     }
   });
 
@@ -889,7 +877,12 @@ describe("refusals and failures", () => {
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(call([system, user("hi")]));
 
-      yield* advanceUntilDone(fiber);
+      // The child has started once the fake records its run; from there everything runs on the
+      // test clock. One jump past the 90 second stall limit wakes the watchdog's 5 second ticks
+      // in order and ends the turn.
+      yield* until(Effect.map(runs, (started) => started.length === 1));
+      yield* settle;
+      yield* TestClock.adjust("100 seconds");
 
       const reply = yield* Fiber.join(fiber);
 

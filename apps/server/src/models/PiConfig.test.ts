@@ -21,7 +21,7 @@ import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
 import { Effect, Option } from "effect";
 
 import type { PiSnapshot } from "./PiConfig.ts";
-import { PiConfig } from "./PiConfig.ts";
+import { PiConfig, settingsErrorText } from "./PiConfig.ts";
 
 /** The fixture's directories, fresh for each case. */
 const dirs = { home: "", agent: "", cwd: "", savedHome: Option.none<string>() };
@@ -261,4 +261,21 @@ describe("pi's setup, read-only", () => {
         )
       )
   );
+});
+
+describe("a settings parse error", () => {
+  it("never repeats the text of settings.json, and stays short", () => {
+    let message = "";
+
+    try {
+      JSON.parse('{"token": "sk-secret-value" oops}');
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    const shown = settingsErrorText(message);
+
+    assert.notInclude(shown, "sk-secret-value");
+    assert.isAtMost(settingsErrorText("x".repeat(5000)).length, 200);
+  });
 });

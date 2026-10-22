@@ -1,9 +1,9 @@
-import { ProjectId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
 // The composer's Commands: device storage (drafts, settings), the brain's queries (models, skills,
 // file search, branches, the scratch project), the thread controls that are not turn input (stop,
 // withdraw, configure), and the two that turn a draft into a turn: each mints the ids the brain
 // dedupes on, so a resend after a reconnect lands once. Turn input itself goes through the root's
 // outbox, never straight to the socket.
+import { ProjectId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { ThreadLaunchInput as ThreadLaunchInputSchema } from "@cairn/protocol/Launch";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";

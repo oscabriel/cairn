@@ -1,3 +1,13 @@
+// J11, live: a section changed between turns reaches a running Claude Code session as one
+// `<system-reminder>` naming it, at a small cache write; and after a restart the bridge resumes the
+// stamped session natively and sends the next change the same way.
+//   node judges/claude-reminder.ts [--model claude-haiku-5-5] [--max-write 4000]
+//
+// Runs the real bridge (`Claude` over the Agent SDK and the `claude` binary's own login) on a
+// scratch directory, three turns: (1) a new session, (2) the same live child after the `skills`
+// section changed, (3) a new bridge, as after a restart, after the `cairn` section changed. It
+// records what the bridge writes to each child's input and how each child was opened, and prints
+// one JSON line with the numbers. Exit 0 when every check holds. Costs a few cents of plan usage.
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,16 +23,6 @@ import { providerContext } from "@cairn/bridge/ClaudeProvider";
 import { ClaudeSdk } from "@cairn/bridge/ClaudeSdk";
 import { ClaudeSlots } from "@cairn/bridge/ClaudeSlots";
 import { stampOf } from "@cairn/bridge/ClaudeStamp";
-// J11, live: a section changed between turns reaches a running Claude Code session as one
-// `<system-reminder>` naming it, at a small cache write; and after a restart the bridge resumes the
-// stamped session natively and sends the next change the same way.
-//   node judges/claude-reminder.ts [--model claude-haiku-5-5] [--max-write 4000]
-//
-// Runs the real bridge (`Claude` over the Agent SDK and the `claude` binary's own login) on a
-// scratch directory, three turns: (1) a new session, (2) the same live child after the `skills`
-// section changed, (3) a new bridge, as after a restart, after the `cairn` section changed. It
-// records what the bridge writes to each child's input and how each child was opened, and prints
-// one JSON line with the numbers. Exit 0 when every check holds. Costs a few cents of plan usage.
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer, Option, Ref, Schema } from "effect";

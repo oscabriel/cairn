@@ -512,7 +512,8 @@ const realProbe = Effect.fn("ClaudeSdk.probe")(function* (
         for (
           let retry = 0;
           retry < PROBE_RETRIES &&
-          answer.rate_limits_available &&
+          (answer.rate_limits_available ||
+            Predicate.isString(answer.subscription_type)) &&
           answer.rate_limits === null;
           retry += 1
         ) {

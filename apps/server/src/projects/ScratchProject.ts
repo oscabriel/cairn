@@ -107,6 +107,11 @@ export class ScratchProject extends Context.Service<
       threadId: ThreadId,
       text: string
     ): Effect.Effect<string, ScratchError>;
+    /**
+     * Removes a folder `folderForThread` claimed for a thread that never came to be. Only a folder
+     * directly under the scratch root is removed; any other path, or one already gone, is left.
+     */
+    releaseFolder(folder: string): Effect.Effect<void, ScratchError>;
   }
 >()("cairn/server/projects/ScratchProject") {
   /** Needs `ServerConfig`, `FileSystem`, `Projects` and `EventSink`. */
@@ -247,7 +252,26 @@ export class ScratchProject extends Context.Service<
         }
       );
 
-      return ScratchProject.of({ root, ensure, folderForThread });
+      const releaseFolder = Effect.fn("ScratchProject.releaseFolder")(
+        function* (folder: string) {
+          const resolved = path.resolve(folder);
+
+          if (path.dirname(resolved) !== path.resolve(root)) {
+            return;
+          }
+
+          yield* fs
+            .remove(resolved, { recursive: true, force: true })
+            .pipe(Effect.mapError(folderFailure(resolved)));
+        }
+      );
+
+      return ScratchProject.of({
+        root,
+        ensure,
+        folderForThread,
+        releaseFolder,
+      });
     })
   );
 }

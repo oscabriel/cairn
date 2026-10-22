@@ -1,4 +1,3 @@
-import { Unauthorized } from "@cairn/protocol/Errors";
 // `GET /ws?protocol=1`: one WebSocket, one RPC server per socket (ADR 0007, plan D45). The guard has
 // already checked host, identity and Origin. Here: an unknown protocol gets HTTP 426, a brain that
 // is booting or closing gets 503, and otherwise the upgrade becomes a socket whose RPC server runs
@@ -22,6 +21,7 @@ import { Unauthorized } from "@cairn/protocol/Errors";
 // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+import { Unauthorized } from "@cairn/protocol/Errors";
 import {
   CairnRpcs,
   PROTOCOL_QUERY_PARAM,

@@ -581,6 +581,18 @@ export const readProbe = (raw: RawProbe, observedAt: number): ProbeReading => {
     () => accountPlan
   );
 
+  // A claude.ai subscription has plan windows; an answer that names one and still says none is a
+  // CLI that has not read its profile yet, so the windows already known stand.
+  if (
+    !usage.rate_limits_available &&
+    Predicate.isString(usage.subscription_type)
+  ) {
+    return unknown(
+      `the CLI reported no plan rate limits for a ${usage.subscription_type} subscription`,
+      plan
+    );
+  }
+
   if (!usage.rate_limits_available) {
     return {
       ...base,

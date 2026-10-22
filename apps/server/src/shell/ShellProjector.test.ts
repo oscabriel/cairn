@@ -35,6 +35,7 @@ import {
   RunTerminal,
   RuntimeRequestUpdated,
   TaskParked,
+  ThreadEnsured,
   UsageUpdated,
 } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent, LiveThreadState } from "../brain/HarnessSeam.ts";
@@ -576,6 +577,83 @@ describe("the shell projector", () => {
         assert.strictEqual((yield* shellOf(THREAD)).waitingFor, "none");
       })
     )
+  );
+
+  it.effect(
+    "a flush never writes back a field another writer changed after the event loaded the row",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThreads();
+
+          const fake = yield* FakeHarness;
+          const sink = yield* EventSink;
+
+          // A first commit opens the window, so the next flush waits for it to close.
+          yield* PubSub.publish(
+            fake.events,
+            MessageCommitted.make({
+              threadId: THREAD,
+              entryId: EntryId.make(1),
+              role: "user",
+              text: "go",
+              at: at(1),
+            })
+          );
+
+          for (let turn = 0; turn < 5; turn += 1) {
+            yield* Effect.yieldNow;
+          }
+
+          // The launch ensures the thread: the projector loads the row as it stands now.
+          yield* PubSub.publish(
+            fake.events,
+            ThreadEnsured.make({
+              threadId: THREAD,
+              conversationId: ConversationId.make(1),
+            })
+          );
+
+          for (let turn = 0; turn < 5; turn += 1) {
+            yield* Effect.yieldNow;
+          }
+
+          // Then the launch fails the thread before the window closes.
+          yield* sink.commitCommand(
+            ThreadActivityUpdate.make({
+              commandId: testCommandId(901),
+              threadId: THREAD,
+              patch: {
+                ...emptyActivityPatch,
+                activity: Option.some("failed"),
+                lastError: Option.some(Option.some("the first send failed")),
+              },
+            })
+          );
+
+          yield* settle;
+
+          const failed = yield* shellOf(THREAD);
+
+          assert.strictEqual(failed.activity, "failed");
+          assert.deepStrictEqual(
+            failed.lastError,
+            Option.some("the first send failed")
+          );
+
+          // An event that sets other fields keeps the failure as well.
+          yield* emit([QueueChanged.make({ threadId: THREAD, length: 1 })]);
+
+          const queued = yield* shellOf(THREAD);
+
+          assert.strictEqual(queued.activity, "failed");
+          assert.strictEqual(queued.queueLength, 1);
+          assert.deepStrictEqual(
+            queued.lastError,
+            Option.some("the first send failed")
+          );
+        })
+      )
   );
 
   it.effect(

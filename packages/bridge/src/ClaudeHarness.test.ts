@@ -1,12 +1,12 @@
+// The bridge under a bare pi-durable Harness (no server): a reply's stamp commits with the assistant
+// entry, survives closing and reopening the store, and drives a native resume in a new process (J4).
+// pi-durable is a dev dependency of this package for exactly this judge; it is imported nowhere in
+// the bridge's own modules.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-// The bridge under a bare pi-durable Harness (no server): a reply's stamp commits with the assistant
-// entry, survives closing and reopening the store, and drives a native resume in a new process (J4).
-// pi-durable is a dev dependency of this package for exactly this judge; it is imported nowhere in
-// the bridge's own modules.
 import type { Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai";
 // The bridge is tested against a bare Harness here; only this judge imports pi-durable.

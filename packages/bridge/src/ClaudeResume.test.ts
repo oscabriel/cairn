@@ -2,8 +2,9 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import { Option } from "effect";
 
+import { heldOf, instructionState } from "./ClaudeInstructions.ts";
 import type { IdleChild, ResumeInput } from "./ClaudeResume.ts";
-import { decideResume } from "./ClaudeResume.ts";
+import { decideResume, resumeAppend } from "./ClaudeResume.ts";
 import { historyDigest, stampMessage } from "./ClaudeStamp.ts";
 import { emptyUsage } from "./ClaudeTokens.ts";
 import type { ConversationMessage } from "./ClaudeTranscript.ts";
@@ -204,5 +205,30 @@ describe("the resume decision table", () => {
       kind: "fresh",
       reason: "model-changed",
     });
+  });
+});
+
+describe("the append a resumed child is launched with", () => {
+  const withInstructions = instructionState([
+    { role: "system", content: "Be brief.", timestamp: 1 },
+  ]);
+
+  const none = instructionState([]);
+
+  it("passes the current instructions exactly when the stamped session had an append", () => {
+    expect([
+      resumeAppend(heldOf(withInstructions), withInstructions),
+      resumeAppend(heldOf(none), withInstructions),
+      resumeAppend(heldOf(withInstructions), none),
+      resumeAppend(
+        heldOf({ base: "", sections: new Map([["cairn", ""]]) }),
+        withInstructions
+      ),
+    ]).toStrictEqual([
+      Option.some("Be brief."),
+      Option.none(),
+      Option.none(),
+      Option.none(),
+    ]);
   });
 });

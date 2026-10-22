@@ -751,6 +751,29 @@ describe("resume", () => {
   );
 
   it.effect(
+    "launches the resume with an append when the stamped session had one, so Claude Code names the same agent",
+    () => {
+      const { layer } = afterRestart([
+        entry("u0", "assistant"),
+        entry("u1", "assistant", { uses: ["toolu_1"] }),
+      ]);
+
+      return Effect.gen(function* () {
+        yield* call([
+          system,
+          ...goPrior,
+          heldReply(),
+          toolResult("toolu_1", "marked"),
+        ]);
+
+        expect((yield* runs)[0]?.options.append).toStrictEqual(
+          Option.some("You are in a test.\n\n<cairn>test</cairn>")
+        );
+      }).pipe(Effect.provide(layer));
+    }
+  );
+
+  it.effect(
     "forks the session of the conversation a pi fork came from, then resumes the copy",
     () => {
       const { prompts, layer } = afterRestart([

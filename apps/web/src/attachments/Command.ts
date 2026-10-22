@@ -60,6 +60,10 @@ export const UploadAttachment = Command.define("UploadAttachment", {
         name,
         mimeType,
         sizeBytes: file.size,
+        ...Option.match(pasteToRequestMs, {
+          onNone: () => ({}),
+          onSome: (ms) => ({ pasteToRequestMs: Math.round(ms) }),
+        }),
       }).pipe(Effect.mapError(rpcFailure));
 
       const ref = yield* sendBytes({

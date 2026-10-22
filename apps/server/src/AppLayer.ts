@@ -34,6 +34,7 @@ import { FileSearch } from "./projects/FileSearch.ts";
 import { FolderRules } from "./projects/FolderRules.ts";
 import { ScratchProject } from "./projects/ScratchProject.ts";
 import { Worktrees } from "./projects/Worktrees.ts";
+import { ExecutorSignInPush } from "./push/ExecutorSignInPush.ts";
 import { PushLayer } from "./push/PushLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHelloWithModels } from "./rpc/ModelHandlers.ts";
@@ -199,7 +200,7 @@ export const ScriptedBrain = Layer.succeed(
  * `FileSystem`, a harness (`HarnessSeam` and `HarnessBoot`) and its models (`ModelSource` and the
  * picker's `PiModelSource`): `PiDurableBrain` and `ScriptedBrain` provide all four.
  */
-export const AppLayer = Layer.mergeAll(HttpLive, Boot).pipe(
+export const AppLayer = Layer.mergeAll(HttpLive, Boot, ExecutorSignInPush).pipe(
   Layer.provide(HandlersLayer),
   Layer.provide(
     SessionHelloWithPush.pipe(

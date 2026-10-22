@@ -77,6 +77,10 @@ export const CreateUploadUrlInput = Schema.Struct({
   name: AttachmentName,
   mimeType: MimeType,
   sizeBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_FILE_BYTES)),
+  /** Milliseconds from the paste to this request, measured on the page; telemetry only. */
+  pasteToRequestMs: Schema.optionalKey(
+    Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+  ),
 });
 
 export type CreateUploadUrlInput = typeof CreateUploadUrlInput.Type;

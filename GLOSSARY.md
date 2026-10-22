@@ -32,6 +32,10 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Thread**: One conversation in the sidebar. Its arms are the project's checkout or its own git worktree on the Beelink.
 
+**Turn**: One user message and everything the model did in answer to it, up to the next user message: its thoughts, tool calls and replies. The transcript folds a settled turn's work behind one row.
+
+**Fold**: The "Worked for <duration>" (or "You stopped after <duration>") row that stands in for a settled turn's intermediate work, leaving its final answer visible.
+
 _Avoid_: session, chat
 
 **Run**: One stretch of a thread's agent loop, from the input that starts it until the answer is final and nothing is queued for it; steers and follow-ups placed along the way join it. pi-durable shows it as `pi.live.run`; RunStarted and RunTerminal bracket it.
@@ -94,6 +98,10 @@ _Avoid_: Claude seat, Claude lane
 
 **Executor**: The self-hosted service on the Beelink that holds every MCP server and third-party credential. Agents reach tools through it.
 
+**Executor grant**: Cairn's one OAuth grant to its Executor connection, kept in `cairn.sqlite` and held by one brain at a time under a lock. When Executor refuses it, Cairn shows that Executor needs sign-in and pushes once.
+
+**Boot sweep**: The boot repair that declines at Executor every Executor approval request the brain recorded and never finished before a restart, so a late accept can never run it.
+
 _Avoid_: MCP gateway, tool server
 
 **Stdio relay**: The supervised process on the Beelink that carries Cairn's stdio MCP servers to Executor over HTTP, one session's server process per call.
@@ -101,6 +109,14 @@ _Avoid_: MCP gateway, tool server
 _Avoid_: bridge (that is the Claude provider), MCP gateway
 
 **Extension (Cairn's)**: A pi-durable extension Cairn installs in the brain (coding tools, code mode, Executor's tools, the skills, context and Cairn sections, judge tools), in one fixed order.
+
+**Skill catalog**: The skills a thread can use, per working directory: the project's `.agents/skills` up to the git root first, then the user's skills as pi resolves them.
+
+**Skill expansion**: The turn content stage that turns `/skill:name args` and `$name` references into pi's own `<skill>` block, ahead of the typed text.
+
+**Run pin**: A system prompt section's text held fixed for one run, so a turn's prompt never changes mid-run.
+
+**Context sections**: `addendum` (`APPEND_SYSTEM.md`) and `project_context` (the `AGENTS.md` files), as pi names them.
 
 _Avoid_: plugin
 
@@ -133,6 +149,8 @@ _Avoid_: plugin
 **Draft**: A message not yet sent, kept in the browser per thread (or per new-thread draft) so typing never waits on the network.
 
 **Composer**: Where the user writes a turn: the editor, its `/`, `@` and `$` menus, and the footer's model, thinking and mode controls. Docked under an open thread, or inside the hero for a draft.
+
+**Attachment tray**: The composer's row of a draft's attachments (image thumbnails, file rows, upload progress, retry and remove). A send pressed while uploads are in flight waits and fires when the last one answers.
 
 **Hero**: The new-thread page: "What should we build in <project>?" above the composer, with the project picker and the workspace strip.
 
@@ -175,6 +193,8 @@ _Avoid_: reviewer (alone), checker
 **Attachment**: A file the user adds to a message: an image, a document or text. The brain prepares it when it is uploaded, and the model gets it as content.
 
 **Upload URL**: The one-shot, signed address a client posts one attachment's bytes to. It expires after ten minutes.
+
+**Prepared image**: An uploaded image fitted to 1,568 px at upload time (`<id>.prepared`): the bytes the model receives.
 
 **Checkpoint**: A git ref the brain records for a thread's worktree at the end of each turn, so the diff of any turn, or of the whole thread, can be shown.
 

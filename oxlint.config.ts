@@ -220,6 +220,8 @@ const zones: ReadonlyArray<{
     allowed: ["durable", "piAi", "codingAgent"],
   },
   { files: ["judges/fixtures/**"], allowed: ["durable", "piAi"] },
+  // The bridge judge drives a bare pi-durable Harness with the real bridge (3F).
+  { files: ["judges/claude-live.ts"], allowed: ["durable", "piAi"] },
   // The dependency smoke test checks the installed names of every library.
   {
     files: [server("smoke.test.ts")],

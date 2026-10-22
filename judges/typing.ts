@@ -336,12 +336,19 @@ if (busy > 0) {
 
 await page.goto(target.href, { waitUntil: "networkidle" });
 
-const entries = page.locator('[data-testid="thread-entries"] > li');
+// The transcript virtualizes its rows, so the judge reads its row count, not the DOM's rows.
+const timeline = page.getByTestId("timeline");
+
+const entries = {
+  count: async () => Number((await timeline.getAttribute("data-rows")) ?? 0),
+};
 
 await page.waitForFunction(
   (expected) =>
-    document.querySelectorAll('[data-testid="thread-entries"] > li').length >=
-    expected,
+    Number(
+      document.querySelector<HTMLElement>('[data-testid="timeline"]')?.dataset
+        .rows ?? 0
+    ) >= expected,
   historyEntries,
   { timeout: 60_000 }
 );

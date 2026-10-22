@@ -231,6 +231,7 @@ export class UploadTokens extends Context.Service<
             attachmentId,
             mimeType: input.mimeType,
             sizeBytes: input.sizeBytes,
+            pasteToRequestMs: input.pasteToRequestMs ?? "none",
           })
         );
 

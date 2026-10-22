@@ -1,6 +1,6 @@
 export * as Model from "./Model.ts";
 
-export { Message } from "./Message.ts";
+export { Message, OutMessage } from "./Message.ts";
 
 export { inform, update } from "./Update.ts";
 

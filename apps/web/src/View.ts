@@ -29,6 +29,27 @@ const threadTitle = (model: Model, threadId: string): Option.Option<string> =>
     )
   );
 
+/** The thread's working directory: its worktree, else its project's workspace root. */
+const threadWorkspaceRoot = (
+  model: Model,
+  threadId: string
+): Option.Option<string> =>
+  Option.flatMap(model.shell, (shell) =>
+    Option.flatMap(
+      Array.findFirst(shell.threads, (thread) => thread.id === threadId),
+      (thread) =>
+        Option.orElse(thread.worktreePath, () =>
+          Option.map(
+            Array.findFirst(
+              shell.projects,
+              (project) => project.id === thread.projectId
+            ),
+            (project) => project.workspaceRoot
+          )
+        )
+    )
+  );
+
 const composer = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.submodel({
     slotId: "composer",
@@ -44,14 +65,18 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.div(
         [h.Class("relative flex min-h-0 flex-1 flex-col")],
         [
+          // The transcript scrolls itself, so this wrapper must not.
           h.div(
-            [h.Class("min-h-0 flex-1 overflow-y-auto")],
+            [h.Class("flex min-h-0 flex-1 flex-col")],
             [
               h.submodel({
                 slotId: "thread",
                 model: model.thread,
                 view: Thread.view,
-                viewInputs: { title: threadTitle(model, threadId) },
+                viewInputs: {
+                  title: threadTitle(model, threadId),
+                  workspaceRoot: threadWorkspaceRoot(model, threadId),
+                },
                 toParentMessage: (message) =>
                   Message.GotThreadMessage({ message }),
               }),

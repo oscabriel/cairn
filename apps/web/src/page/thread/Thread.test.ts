@@ -4,7 +4,6 @@ import { Option, Schema } from "effect";
 import { given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
-import { entryLines } from "./EntryText.ts";
 import { Message } from "./Message.ts";
 import { initial } from "./Model.ts";
 import { inform, update } from "./Update.ts";
@@ -57,34 +56,26 @@ const page = inform(initial, {
 }).model;
 
 describe("the thread page", () => {
-  it("applies a snapshot, then ops, and reads the entries as text", () => {
-    story(
-      update,
-      given(page),
-      message(
-        Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: snapshot })
-      ),
-      message(
-        Message.ReceivedThreadItem({
-          epoch: 2,
-          watch: 0,
-          item: appendAssistant,
-        })
-      ),
-      model((current) => {
-        expect(current.status._tag).toBe("Ready");
+  // Direct update calls: the transcript re-anchors its list (a scroll Command) on a new view, which
+  // the thread page's own tests need not resolve.
+  it("applies a snapshot, then ops, and holds both entries", () => {
+    const ready = update(
+      page,
+      Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: snapshot })
+    ).model;
 
-        const { entries } = Option.getOrThrow(current.view).view;
+    const current = update(
+      ready,
+      Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: appendAssistant })
+    ).model;
 
-        expect(entries.flatMap(entryLines)).toStrictEqual([
-          { role: "user", text: "hello" },
-          {
-            role: "assistant",
-            text: "(thinking) short\nhi there\n[tool call: read]",
-          },
-        ]);
-      })
-    );
+    expect(current.status._tag).toBe("Ready");
+
+    const { entries } = Option.getOrThrow(current.view).view;
+
+    expect(entries).toHaveLength(2);
+    expect(JSON.stringify(entries[0]?.model)).toContain("hello");
+    expect(JSON.stringify(entries[1]?.model)).toContain("hi there");
   });
 
   it("asks for a fresh subscription when an op cannot be applied", () => {
@@ -92,21 +83,19 @@ describe("the thread page", () => {
       '{"_tag":"Ops","seq":1,"ops":[["p",["entries"],5,1,[]]]}'
     );
 
-    story(
-      update,
-      given(page),
-      message(
-        Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: snapshot })
-      ),
-      message(
-        Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: pastTheEnd })
-      ),
-      model((current) => {
-        expect(current.watch).toBe(1);
-        expect(current.status._tag).toBe("Loading");
-        expect(Option.getOrThrow(current.view).view.entries).toHaveLength(1);
-      })
-    );
+    const ready = update(
+      page,
+      Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: snapshot })
+    ).model;
+
+    const current = update(
+      ready,
+      Message.ReceivedThreadItem({ epoch: 2, watch: 0, item: pastTheEnd })
+    ).model;
+
+    expect(current.watch).toBe(1);
+    expect(current.status._tag).toBe("Loading");
+    expect(Option.getOrThrow(current.view).view.entries).toHaveLength(1);
   });
 
   it("drops items from a closed subscription and says when the thread is missing", () => {

@@ -96,13 +96,6 @@ const readThread = (model: Model): Option.Option<Thread.Model.Model> =>
 const writeThread = (model: Model, thread: Thread.Model.Model): Model =>
   modifyFields(model, { thread: () => thread });
 
-const foldThreadMessage = Update.foldChild({
-  update: Thread.update,
-  read: readThread,
-  write: writeThread,
-  toParentMessage: toGotThreadMessage,
-});
-
 const informThread = Update.foldChild({
   update: Thread.inform,
   read: readThread,
@@ -146,6 +139,26 @@ const sendNext: Step = (model) =>
       }),
     }
   );
+
+/** The thread page's Messages; a Retry from the transcript joins the outbox. */
+const foldThreadMessage = Update.foldChild({
+  update: Thread.update,
+  read: readThread,
+  write: writeThread,
+  toParentMessage: toGotThreadMessage,
+  foldOutMessage: (out: Thread.OutMessage) =>
+    Thread.OutMessage.match<Step>(out, {
+      RequestedSend:
+        ({ item }) =>
+        (model) =>
+          Update.combine(
+            modifyFields(model, {
+              outbox: (outbox) => enqueue(outbox, item),
+            }),
+            [persist, sendNext]
+          ),
+    }),
+});
 
 /** The current epoch failed: back off, and forget what was in flight on it. */
 const enterBackoff: Step = (model) => {

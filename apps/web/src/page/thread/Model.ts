@@ -5,6 +5,8 @@ import { ConversationView, Entry } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
+import * as Timeline from "../../timeline/Model.ts";
+
 /** The client's copy of one thread's view; the Model form of client-logic's `ThreadViewState`. */
 export const ThreadViewModel = Schema.Struct({
   seq: Schema.Int,
@@ -42,6 +44,8 @@ export const Model = Schema.Struct({
   watch: Schema.Int,
   status: ThreadStatus,
   view: Schema.Option(ThreadViewModel),
+  /** The transcript: its list, open folds and per-thread scroll memory. */
+  timeline: Timeline.Model,
 });
 
 export type Model = typeof Model.Type;
@@ -54,4 +58,5 @@ export const initial: Model = {
   watch: 0,
   status: ThreadStatus.Loading(),
   view: Option.none(),
+  timeline: Timeline.initial,
 };

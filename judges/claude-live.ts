@@ -43,23 +43,18 @@ import { stampOf } from "@cairn/bridge/ClaudeStamp";
 import { ClaudeUsage } from "@cairn/bridge/ClaudeUsage";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-// oxlint-disable-next-line no-restricted-imports -- a bare Harness judge, see the header
 import { createModels, Type } from "@earendil-works/pi-ai";
-// oxlint-disable-next-line no-restricted-imports -- a bare Harness judge, see the header
 import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai/providers/faux";
-// oxlint-disable-next-line no-restricted-imports -- a bare Harness judge, see the header
 import type { Extension } from "@earendil-works/pi-durable";
-// oxlint-disable-next-line no-restricted-imports -- a bare Harness judge, see the header
 import {
   createRegistry,
   defineExtension,
   defineTool,
   Harness,
 } from "@earendil-works/pi-durable";
-// oxlint-disable-next-line no-restricted-imports -- a bare Harness judge, see the header
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { NodeRuntime } from "@effect/platform-node";
 import type { Scope } from "effect";

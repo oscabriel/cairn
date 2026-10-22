@@ -148,6 +148,8 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
     return h.div(
       [
         h.DataAttribute("testid", "timeline"),
+        // The transcript's row count, virtualized rows included, for the judges.
+        h.DataAttribute("rows", String(transcript.items.length)),
         h.DataAttribute("following", isFollowingEnd(model) ? "true" : "false"),
         h.OnMount(FollowEnd()),
         h.Class("relative flex min-h-0 flex-1 flex-col"),

@@ -107,14 +107,21 @@ await page.waitForSelector(row, { timeout: 10_000 });
 
 await page.goto(`${origin}/t/${DEV_DEMO_THREAD_ID}`);
 
-await page.waitForSelector('[data-testid="thread-entries"] li', {
-  timeout: 15_000,
-});
+// The transcript virtualizes its rows, so the judge reads its row count, not the DOM's rows.
+const timeline = '[data-testid="timeline"]';
+
+await page.waitForFunction(
+  (selector) =>
+    Number(document.querySelector<HTMLElement>(selector)?.dataset.rows ?? 0) >
+    0,
+  timeline,
+  { timeout: 15_000 }
+);
 
 const entryCount = async () => {
-  const count = await page.locator('[data-testid="thread-entries"] li').count();
+  const rows = await page.locator(timeline).getAttribute("data-rows");
 
-  return count;
+  return Number(rows ?? 0);
 };
 
 const samples: Array<number> = [await entryCount()];
@@ -133,7 +140,7 @@ for (let index = 1; index < samples.length; index += 1) {
 }
 
 const lastText = await page
-  .locator('[data-testid="thread-entries"] li')
+  .locator('[data-testid="timeline-scroll"] [data-virtual-list-item-index]')
   .last()
   .textContent();
 

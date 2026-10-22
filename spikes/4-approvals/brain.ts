@@ -213,6 +213,15 @@ for (const item of Object.values(boot?.items ?? {})) {
 		await client.close();
 	}
 }
+// pi-durable 1.4.0 parks a task cut off by 5 restarts in a row without a new state. A tool waiting on a person commits
+// none while it waits, so a long wait across restarts would be parked although the wait never crashed anything. Its
+// approval record says it is waiting, so only those tasks run again; a crash after the answer stays parked.
+for (const item of Object.values(boot?.items ?? {})) {
+	if (item.status === "pending") {
+		await harness.retryTask(item.toolTaskId as never, context);
+		say("retried_waiting", { approvalId: item.id, task: item.toolTaskId });
+	}
+}
 harness.resume();
 
 const page = (items: Approval[]) => `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Cairn approvals</title>

@@ -77,3 +77,16 @@ abort                PASS  job unit after abort: inactive, stopped events 1
 - `gate.sh`: the 16 minute run with two kills.
 - `judge.sh`: the kill cases. `./judge.sh [case...]`.
 - `runs/` (ignored): stores, events, effects and memory samples.
+
+## Rerun on pi-durable 1.4.0 (2026-10-22)
+
+All seven cases pass again. 1.4.0 adds a crash-loop guard: a task cut off by 5 crashes in a row without committing a new state is parked until `retryTask()`. A workflow's waits are replay-safe tools that commit no new state while they wait, so two cases were added:
+
+| Case | Result |
+| --- | --- |
+| `kill-six`: five `kill -9`s during the long job | The sixth start found 4 tasks parked: the code-mode script, two agent nodes and the long node's job wait. A host retry (`POST /retry`, what a "retry" button would do) ran them again, and the workflow finished with every effect once. |
+| `restart-six`: six clean stops (SIGTERM) during the long job | Nothing parked: the brain closes the Harness on SIGTERM, a close writes its tasks back without counting a restart, and the workflow finished with every effect once. |
+
+The clean stop first crashed on an unhandled "Harness is closed" rejection from the brain's own `waitForIdle()`, so the close never finished and the restart was counted. Every promise the host holds on the Harness must handle that rejection.
+
+**Decisions:** the brain closes the Harness on SIGTERM, so deploys and systemd restarts never count toward the limit; only crashes do. The UI shows parked tasks with a retry. The limit stays at its default of 5.

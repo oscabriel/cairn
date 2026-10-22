@@ -62,3 +62,12 @@ The phone run: the approval was parked, the brain killed with `kill -9` and rest
 - `judge.sh`: the crash windows. `./judge.sh [case...]`.
 - `executor.ts`: an MCP client on Cairn's grant. `node executor.ts <tool> '<json>'`.
 - `runs/` (ignored): each run's store, events and hits.
+
+## Rerun on pi-durable 1.4.0 (2026-10-22)
+
+All ten cases pass, after two changes:
+
+- **`kill-six-times` was parked at first.** The approval's tool task waits without committing a new state, so 1.4.0's crash-loop guard parked it after 5 crashes ("cut off 5 times without progress"), although the wait never crashed anything. The brain now calls `retryTask()` at boot for each task whose approval record is still `pending`. A crash after the answer stays parked, so the guard still catches a call that crashes the brain.
+- **`double-answer` assumed the first accept wins.** Three answers sent at once race, and on 1.4.0 the decline landed first. The judge now checks the invariant: exactly one answer takes effect, and the call follows it. Three runs went accept, decline, decline, all correct.
+
+1.4.0 also adds durable sleep (`sleepUntil`) and `api.now()`. The approval's expiry could become a sleeping task, but a sleep can't be woken early by an answer, so the wait stays in the tool.

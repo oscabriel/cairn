@@ -117,7 +117,12 @@ case_double_answer() { # two devices answer at once
 	local id; id=$(approval)
 	answer "$id" accept & answer "$id" decline & answer "$id" accept & wait
 	await "$d" idle; stop
-	verdict double-answer "$d" 1 '"isError":false' "$(grep -c '"changed":true' "$d/events.log") answer took effect"
+	# Any of the three may land first. Exactly one must take effect, and the call must follow that one.
+	local won; won=$(grep '"changed":true' "$d/events.log" | grep -o '"decision":"[a-z]*"' | cut -d'"' -f4)
+	local took; took=$(grep -c '"changed":true' "$d/events.log")
+	if [[ $took == 1 && $won == accept ]]; then verdict double-answer "$d" 1 '"isError":false' "1 answer took effect (accept)"
+	elif [[ $took == 1 ]]; then verdict double-answer "$d" 0 'declined' "1 answer took effect (decline)"
+	else verdict double-answer "$d" x x "$took answers took effect"; fi
 }
 
 case_full_access() { # no Cairn ask; Executor's own prompt answered by Cairn

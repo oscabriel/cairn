@@ -64,6 +64,8 @@ _Avoid_: bridge (that is the Claude provider), MCP gateway
 
 _Avoid_: permission request, prompt (for the record)
 
+**Parked**: A task pi-durable stopped running after the brain crashed 5 times in a row while it ran without progress. It shows in the UI with a retry; a task waiting on a pending approval is retried at boot by itself.
+
 **Permission mode**: A thread's rule for which tool calls need an approval, after t3code's modes. Full access, the default, asks for none.
 
 _Avoid_: approval policy, trust level

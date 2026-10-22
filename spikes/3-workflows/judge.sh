@@ -47,6 +47,21 @@ case_kill_thrice() { local d; fresh kill-thrice
 	up "$d"; await "$d" idle 1 90; stop
 	verdict kill-thrice "$d" "1 1 1 1" 'Script completed'; }
 
+case_kill_six() { local d; fresh kill-six  # five crashes, then the sixth start finds the tasks parked
+	SPIKE_JOB_SECONDS=60 up "$d" submit k6; await "$d" job_started; kill9
+	for n in 1 2 3 4; do SPIKE_JOB_SECONDS=60 up "$d"; await "$d" job_reattached "$n" 30; kill9; done
+	# Six crashes in a row park the waiting tasks (1.4.0's restart limit); a host retry runs them again.
+	SPIKE_JOB_SECONDS=60 up "$d"; await "$d" report 1 30; curl -s -X POST localhost:3774/retry >/dev/null
+	answer accept; await "$d" idle 1 120; stop
+	verdict kill-six "$d" "1 1 1 1" 'Script completed'
+	echo "    parked $(grep -c task_parked "$d/events.log"), retried $(grep '"retried"' "$d/events.log" | grep -o '"data":[0-9]*' | cut -d: -f2)"; }
+
+case_restart_six() { local d; fresh restart-six
+	SPIKE_JOB_SECONDS=60 up "$d" submit r6; await "$d" job_started; stop
+	for n in 1 2 3 4 5; do SPIKE_JOB_SECONDS=60 up "$d"; await "$d" job_reattached "$n" 30; stop; done
+	SPIKE_JOB_SECONDS=60 up "$d"; answer accept; await "$d" idle 1 120; stop
+	verdict restart-six "$d" "1 1 1 1" 'Script completed'; }
+
 case_kill_in_integrate() { local d; fresh kill-integrate
 	SPIKE_HOLD_NODE=integrate SPIKE_HOLD_WORK_MS=3000 up "$d" submit ki; await "$d" approval_waiting; answer accept; await "$d" holding 1 90; kill9
 	up "$d"; await "$d" idle 1 90; stop
@@ -63,5 +78,5 @@ case_abort() { local d; fresh abort
 	printf '%-20s %s  job unit after abort: %s, stopped events %s\n' abort "$([[ $state != active ]] && echo PASS || echo FAIL)" "$state" "$(seen "$d" job_stopped)"; }
 
 cases=("$@")
-(( ${#cases[@]} )) || cases=(plain kill_fanout kill_before_nodes kill_thrice kill_in_integrate decline abort)
+(( ${#cases[@]} )) || cases=(plain kill_fanout kill_before_nodes kill_thrice kill_six restart_six kill_in_integrate decline abort)
 for c in "${cases[@]}"; do "case_$c"; done

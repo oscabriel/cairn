@@ -219,6 +219,13 @@ const root = await harness.root(context, { agent: { model: { provider: "faux", m
 await root.configure({ modelTools: [codemode] }, context);
 say("open", { jobSeconds, rss: process.memoryUsage().rss });
 harness.resume();
+// A clean stop closes the Harness, which writes the tasks it stopped back as pending without counting a restart, so
+// only crashes count toward 1.4.0's restart limit.
+process.once("SIGTERM", () => {
+	say("closing");
+	const t = Date.now();
+	void harness.close(context).then(() => say("closed", Date.now() - t), (error) => say("close_failed", String(error))).finally(() => process.exit(0));
+});
 
 createServer(async (request, response) => {
 	const url = new URL(request.url ?? "/", "http://localhost");
@@ -234,6 +241,14 @@ createServer(async (request, response) => {
 		}, context);
 		say("answered", { id, decision, changed });
 		response.end(String(changed));
+		return;
+	}
+	if (url.pathname === "/retry" && request.method === "POST") {
+		// What a "retry" button does: run every task the restart limit parked again.
+		const parked = (await harness.inspect(context)).tasks.filter((t: any) => t.state.kind === "blocked" && t.state.reason === "restart_limit");
+		for (const t of parked as any[]) await harness.retryTask(t.record.id, context);
+		say("retried", parked.length);
+		response.end(String(parked.length));
 		return;
 	}
 	if (url.pathname === "/abort" && request.method === "POST") {
@@ -256,4 +271,4 @@ void root.waitForIdle(context).then(async () => {
 	const final = messages.filter((m) => m.role === "assistant").pop();
 	say("final", final?.content?.map((c: any) => c.text ?? c.type).join("").slice(0, 2000));
 	say("idle");
-});
+}).catch((error) => say("wait_ended", String(error)));

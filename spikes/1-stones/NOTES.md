@@ -98,3 +98,15 @@ So computer has no deployable shell to be a stone's arms. Its stable filesystem,
 - `conformance.test.ts`, `bench.ts`, `coldstart.ts`, `computer-bench.ts`, `brain.ts`, `judge.ts`: the measurements.
 - `runs/` (ignored): `stone-image.txt`, deploy logs, `conformance.log`, `bench.json`, `computer-bench.json`, and each judge run's `verdicts.json` and events.
 - Kept: `images/stone/Dockerfile` and `.github/workflows/stone-image.yml`.
+
+## Rerun on pi 1.4.0 (2026-10-22)
+
+pi-durable, pi-env, chord and pi-ai 1.4.0, and a stone image rebuilt in Actions with pi-env 1.4.0's daemon (a new sha256, `46dde0e2...`, although its changelog is empty). The stack was deployed, measured and destroyed again.
+
+| Measure | 1.3.0 | 1.4.0 |
+| --- | --- | --- |
+| Conformance | 29 of 29 | 29 of 29 |
+| `exec(["true"])` p50 | 36.8 ms (via PDX) | 22.6 ms (via SEA) |
+| Eviction judge | 3 cases pass, 3 runs | 3 cases pass; turn done 0.54 s after an eviction mid-command |
+
+The edge changed between runs, so the latency difference is the route, not pi.

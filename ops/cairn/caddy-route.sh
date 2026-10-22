@@ -40,7 +40,9 @@ main() {
 	}
 
 	local candidate=$conf/Caddyfile.cairn-candidate
-	trap 'rm -f "$candidate"' EXIT
+	# Expanded now: the EXIT trap runs after main returns, when the local is gone.
+	# shellcheck disable=SC2064
+	trap "rm -f '$candidate'" EXIT
 	awk -v marker="$marker" '
 	  index($0, marker) == 1 && !done {
 	    print "\t# Cairn brain (local to Beelink; ops/cairn in the cairn repo)"

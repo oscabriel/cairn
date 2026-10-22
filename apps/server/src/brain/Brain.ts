@@ -6,6 +6,8 @@
 // - Supervisor: a storage error fails the Session, which closes itself (`closed` resolves
 //   `failed`) and ends every watch with `session_failed`. The supervisor reopens from storage with
 //   backoff, and every client stream restarts from a fresh snapshot of the new Harness.
+// - Commits: `subscribeCommits` listeners are attached to each Session as it opens, before anything
+//   resumes it, so no commit of a resumed task is missed across a reopen.
 // - Reports: `onReport` only enqueues; a fiber logs each report, and `task_parked` reports feed
 //   `Parked`. pi-durable drops a throwing report callback, so nothing here may throw.
 // - Close: on scope close, `harness.close` with a 5 s timeout. A task that ignores its signal keeps
@@ -15,7 +17,11 @@
 // retry come from spikes/3-workflows/brain.ts and spikes/4-approvals/brain.ts in this repo.
 
 import { ConversationId, TaskId } from "@cairn/protocol/Ids";
-import type { ReportInfo, Storage } from "@earendil-works/pi-durable";
+import type {
+  CommitPublication,
+  ReportInfo,
+  Storage,
+} from "@earendil-works/pi-durable";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import {
   Clock,
@@ -31,6 +37,7 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
+import type { Scope } from "effect";
 
 import { Arms } from "./Arms.ts";
 import { BrainStore } from "./BrainStore.ts";
@@ -59,6 +66,15 @@ export interface BrainSession {
   /** Counts opens in this process: 1 for the first, then one more per reopen. */
   readonly generation: number;
 }
+
+/**
+ * Hears every commit of every Session. pi-durable calls it synchronously after each commit, so it
+ * must only enqueue: no blocking and no calls back into the Harness.
+ */
+export type CommitListener = (
+  session: BrainSession,
+  publication: CommitPublication
+) => void;
 
 /** A report pi-durable made, as the brain logs it. */
 interface Report {
@@ -89,6 +105,13 @@ export class Brain extends Context.Service<
     readonly session: Effect.Effect<BrainSession, BrainUnavailable>;
     /** Each session as it opens: the first, then one per reopen. */
     readonly sessions: Stream.Stream<BrainSession>;
+    /**
+     * Attaches a commit listener to the open Session and to every later one, each before it is
+     * resumed. Detached when the scope closes.
+     */
+    readonly subscribeCommits: (
+      listener: CommitListener
+    ) => Effect.Effect<void, never, Scope.Scope>;
     /** Lets the Harness schedule work. Boot calls it after its repairs. */
     readonly resume: Effect.Effect<void, BrainUnavailable>;
     /** The Harness clock, epoch milliseconds. */
@@ -142,6 +165,22 @@ export class Brain extends Context.Service<
 
       let generation = 0;
 
+      // Plain mutable state on purpose: attaching to a new Session and registering a listener are
+      // each one synchronous step, so neither can slip between the other's read and write.
+      const listeners = new Set<CommitListener>();
+      const detach = new Map<CommitListener, () => void>();
+
+      const attach = (session: BrainSession, listener: CommitListener) => {
+        detach.set(
+          listener,
+          session.harness.subscribeCommits((publication) => {
+            listener(session, publication);
+          })
+        );
+      };
+
+      let latest: BrainSession | undefined;
+
       const openSession = Effect.gen(function* () {
         const storage = yield* store.open;
 
@@ -165,9 +204,20 @@ export class Brain extends Context.Service<
             )
         );
 
-        generation += 1;
+        return yield* Effect.sync(() => {
+          generation += 1;
 
-        return { harness, storage, generation } satisfies BrainSession;
+          const session: BrainSession = { harness, storage, generation };
+
+          // The old Session's listeners went with it; a closed Harness publishes nothing more.
+          latest = session;
+
+          for (const listener of listeners) {
+            attach(session, listener);
+          }
+
+          return session;
+        });
       });
 
       const first = yield* openSession.pipe(Effect.orDie);
@@ -246,8 +296,26 @@ export class Brain extends Context.Service<
         });
       });
 
+      const subscribeCommits = (listener: CommitListener) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            listeners.add(listener);
+
+            if (latest !== undefined) {
+              attach(latest, listener);
+            }
+          }),
+          () =>
+            Effect.sync(() => {
+              listeners.delete(listener);
+              detach.get(listener)?.();
+              detach.delete(listener);
+            })
+        );
+
       return Brain.of({
         session,
+        subscribeCommits,
         sessions: SubscriptionRef.changes(current).pipe(
           Stream.filter(Option.isSome),
           Stream.map((open) => open.value),

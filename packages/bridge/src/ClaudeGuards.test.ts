@@ -8,6 +8,7 @@ import { Option } from "effect";
 
 import {
   abortKind,
+  BRIDGE_FAILED_TEXT,
   CAPACITY_TEXT,
   CHILD_ENDED_TEXT,
   childEnv,
@@ -163,6 +164,7 @@ describe("error texts (J12)", () => {
   const retryable = [CHILD_ENDED_TEXT, STREAM_STALLED_TEXT, CAPACITY_TEXT];
 
   const final = [
+    BRIDGE_FAILED_TEXT,
     INIT_REFUSED_TEXT,
     PROMPT_REFUSED_TEXT,
     EMPTY_PROMPT_TEXT,

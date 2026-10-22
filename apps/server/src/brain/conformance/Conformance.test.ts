@@ -1,7 +1,9 @@
 // The harness seam's outside judge (ADR 0024): every scenario's hand-written expectations against
 // both harnesses, the drift goldens on the pi-durable side, and the mutation check, which wraps
 // each harness in a broken seam and requires the suite to fail at least five scenarios on each
-// side. Set CAIRN_UPDATE_GOLDENS=1 to rewrite the goldens after reviewing a behaviour change.
+// side, both with every mutation at once and with each mutation alone. The mutation check runs at
+// a shorter timeout than the suite, so it first runs the unmutated control at that timeout and
+// requires zero failures: a timeout alone must not count as a caught mutation. Set CAIRN_UPDATE_GOLDENS=1 to rewrite the goldens after reviewing a behaviour change.
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -97,6 +99,12 @@ describe("harness conformance drift", () => {
   );
 });
 
+/** The mutation check's per-scenario timeout; the unmutated control runs at it too. */
+const MUTATION_TIMEOUT = Duration.millis(1500);
+
+/** Scenarios each broken side must fail, all mutations together and each alone (ADR 0024). */
+const GATE = 5;
+
 const failures = (
   target: typeof piDurableTarget,
   mutations: ReadonlySet<Mutation>
@@ -106,7 +114,7 @@ const failures = (
     (scenario) =>
       Effect.map(
         runScenario(scenario, target, {
-          timeout: Duration.millis(1500),
+          timeout: MUTATION_TIMEOUT,
           mutations,
         }),
         (outcome) => (Option.isSome(outcome.failure) ? [scenario.name] : [])
@@ -123,6 +131,14 @@ describe("harness conformance mutation check", () => {
       `a broken ${side} harness fails at least five scenarios`,
       () =>
         Effect.gen(function* () {
+          const control = yield* failures(target, new Set());
+
+          assert.deepStrictEqual(
+            control,
+            [],
+            "the unmutated harness fails at the mutation check's timeout, so its counts mean nothing"
+          );
+
           const broken = yield* failures(target, new Set(MUTATIONS));
           const perMutation: Record<string, number> = {};
 
@@ -134,16 +150,21 @@ describe("harness conformance mutation check", () => {
           }
 
           console.log(
-            JSON.stringify({ side, failedWithAll: broken.length, perMutation })
+            JSON.stringify({
+              side,
+              control: control.length,
+              failedWithAll: broken.length,
+              perMutation,
+            })
           );
 
-          assert.isAtLeast(broken.length, 5);
+          assert.isAtLeast(broken.length, GATE);
 
           for (const mutation of MUTATIONS) {
             assert.isAtLeast(
               perMutation[mutation] ?? 0,
-              1,
-              `${mutation} was not caught`
+              GATE,
+              `${mutation} failed fewer than ${GATE} scenarios`
             );
           }
         }),

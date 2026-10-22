@@ -9,3 +9,5 @@ coverage/
 .DS_Store
 spikes/*/runs/
 .claude/worktrees/
+# Probes judges/lint-boundaries.test.ts writes; a killed run can leave one behind.
+**/LintProbe*.ts

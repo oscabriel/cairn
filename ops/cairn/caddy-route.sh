@@ -7,6 +7,9 @@
 # stops after validation and leaves the live file untouched. Idempotent on `@cairn host code.gneiss.run`.
 # Caddy runs in Docker (`docker exec caddy`), which mounts ~/caddy/conf at /etc/caddy. No sudo.
 #
+# The proxied request drops any X-Cairn-Peer the client sent: only forward_auth's subrequest names the
+# peer, so an admitted device cannot ask /_cairn/auth whether some other address is the owner's.
+#
 # The lb_try_* lines make Caddy retry the connection for up to 3 s instead of answering 502, which hides
 # a brain restart (about a second) from page loads, uploads and the auth subrequest.
 set -euo pipefail
@@ -51,6 +54,7 @@ main() {
 	    print "\t\t\tlb_try_interval 250ms"
 	    print "\t\t}"
 	    print "\t\treverse_proxy 127.0.0.1:3774 {"
+	    print "\t\t\theader_up -X-Cairn-Peer"
 	    print "\t\t\tlb_try_duration 3s"
 	    print "\t\t\tlb_try_interval 250ms"
 	    print "\t\t}"

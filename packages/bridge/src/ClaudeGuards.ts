@@ -344,6 +344,10 @@ export const EMPTY_PROMPT_TEXT =
 export const ONE_SHOT_UNAVAILABLE_TEXT =
   "Claude bridge has no one-shot path for this request in this build.";
 
+/** A call the bridge itself failed on before Claude Code answered (a defect). Not retryable. */
+export const BRIDGE_FAILED_TEXT =
+  "Claude bridge failed on this turn before Claude Code answered. The brain's log has the cause.";
+
 /** Claude Code's own failure text, or a default when it gave none. */
 export const claudeFailureText = (text: Option.Option<string>): string =>
   Option.match(

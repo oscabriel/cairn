@@ -54,7 +54,7 @@ import {
 } from "./CairnDocs.ts";
 import type { ApprovalsState } from "./CairnDocs.ts";
 import { CommitFeed, RUN_TASK } from "./CommitFeed.ts";
-import { durable, handOff } from "./Durable.ts";
+import { durable, errorText, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
 import { HarnessError, HarnessSeam, TaskParked } from "./HarnessSeam.ts";
 import type {
@@ -125,6 +125,10 @@ const fromDurable =
       cause: error.cause,
     });
   };
+
+/** pi-durable's rejection of `retryTask` for a task it does not have (scheduler.js, `retry`). */
+const isMissingTask = (cause: unknown) =>
+  /^Task \S+ does not exist$/u.test(errorText(cause));
 
 const fromUnavailable =
   (threadId: Option.Option<ThreadId>) => (error: BrainUnavailable) =>
@@ -911,14 +915,22 @@ const layerNoDeps = Layer.effect(
       yield* durable("retry-task", async (context) => {
         await session.harness.retryTask(piTaskId(taskId), context);
       }).pipe(
+        // pi-durable rejects an unknown task with "Task <id> does not exist" and does nothing for one
+        // that is not parked; every other rejection keeps its own classification and cause.
         Effect.mapError((error) =>
-          error.closed
-            ? fromDurable(Option.none())(error)
-            : failure(
+          !error.closed && isMissingTask(error.cause)
+            ? failure(
                 "task_not_found",
                 Option.none(),
                 `Task ${taskId} is not in the brain. Refresh the thread.`
               )
+            : fromDurable(Option.none())(error)
+        ),
+        // A task the brain no longer has cannot stay parked either.
+        Effect.tapError((error) =>
+          error.reason === "task_not_found"
+            ? parked.remove(taskId)
+            : Effect.void
         )
       );
       yield* parked.remove(taskId);

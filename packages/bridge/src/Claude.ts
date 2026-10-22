@@ -30,7 +30,7 @@ import {
 import { ClaudeAccount } from "./ClaudeAccount.ts";
 import { openConversation } from "./ClaudeConversation.ts";
 import type { RateLimitInfo } from "./ClaudeEvents.ts";
-import { CAPACITY_TEXT } from "./ClaudeGuards.ts";
+import { BRIDGE_FAILED_TEXT, CAPACITY_TEXT } from "./ClaudeGuards.ts";
 import { claudeModels } from "./ClaudeModels.ts";
 import { ClaudeOneShot } from "./ClaudeOneShot.ts";
 import type { ClaudeCall } from "./ClaudeProvider.ts";
@@ -201,8 +201,24 @@ export class Claude extends Context.Service<
           );
         });
 
+      // Nobody joins the call's fiber, so whatever ends it early (a defect before a child is
+      // attached, or the bridge closing) must still end pi's stream, or the generation waits
+      // forever with no child for the stall watchdog to watch. An ended stream ignores the push.
       const call: ClaudeCall = (model, context, options, sink) => {
-        run(handle(model, context, options, sink));
+        run(
+          handle(model, context, options, sink).pipe(
+            Effect.onError((cause) =>
+              Effect.andThen(
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.void
+                  : Effect.logError("claude call failed").pipe(
+                      Effect.annotateLogs({ cause: Cause.pretty(cause) })
+                    ),
+                failSink(sink, model, BRIDGE_FAILED_TEXT)
+              )
+            )
+          )
+        );
       };
 
       const noteConversation = Effect.fn("Claude.noteConversation")(function* (

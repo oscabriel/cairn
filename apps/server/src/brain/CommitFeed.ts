@@ -13,8 +13,11 @@
 // - `cairn.approvals` changes: RuntimeRequestUpdated for each record whose status changed.
 // - `pi.usage` changes: UsageUpdated with the conversation's token totals.
 //
-// Conversations that are not threads (subagents later) produce no events. After a reopen the feed
-// subscribes to the new Session; events never replay, so the shell projector reconciles at boot.
+// Conversations that are not threads (subagents later) produce no events. The listener is attached
+// through `Brain.subscribeCommits` while this layer builds, so before boot resumes the Harness, and
+// the brain attaches it to a reopened Session before resuming that one: no commit of a resumed task
+// goes unseen. Events never replay across a process restart, so the shell projector reconciles at
+// boot.
 
 import {
   ApprovalId,
@@ -597,17 +600,10 @@ export class CommitFeed extends Context.Service<
         Effect.forkScoped
       );
 
-      // One listener per Session; a reopened Session gets a new one.
-      yield* brain.sessions.pipe(
-        Stream.runForEach((session) =>
-          Effect.sync(() => {
-            session.harness.subscribeCommits((publication) => {
-              Queue.offerUnsafe(inbox, { session, publication });
-            });
-          })
-        ),
-        Effect.forkScoped
-      );
+      // Attached now, and to each reopened Session before it resumes.
+      yield* brain.subscribeCommits((session, publication) => {
+        Queue.offerUnsafe(inbox, { session, publication });
+      });
 
       return CommitFeed.of({ events: Stream.fromPubSub(hub) });
     })

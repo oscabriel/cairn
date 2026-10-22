@@ -35,6 +35,7 @@ import {
   Deferred,
   Effect,
   Fiber,
+  FiberSet,
   Layer,
   Option,
   Predicate,
@@ -282,10 +283,17 @@ const sdkOptions = (
 const thrownText = (cause: unknown): string =>
   cause instanceof Error ? cause.message : "unknown failure";
 
+/**
+ * Runs an Effect from a callback the SDK owns, in the runtime of the fiber that opened the child
+ * (S43): its logger, log level and tracer, and interrupted when the child's scope closes.
+ */
+type Runner = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
+
 /** Serves `options.tools` to Claude Code; every call runs `onToolCall` through `run`. */
 const toolServer = (
   options: ChildOptions,
-  onToolCall: ToolHandler
+  onToolCall: ToolHandler,
+  run: Runner
 ): Option.Option<McpServer> => {
   if (options.tools.length === 0) {
     return Option.none();
@@ -327,7 +335,7 @@ const toolServer = (
       };
     }
 
-    const result = await Effect.runPromise(onToolCall({ toolUseId, name }));
+    const result = await run(onToolCall({ toolUseId, name }));
 
     return {
       content: result.content.map((block) => ({ ...block })),
@@ -339,11 +347,12 @@ const toolServer = (
 };
 
 const promptIterable = (
-  input: PromptStream
+  input: PromptStream,
+  run: Runner
 ): AsyncIterable<SDKUserMessage> => ({
   [Symbol.asyncIterator]: () => ({
     next: async () =>
-      await Effect.runPromise(
+      await run(
         Effect.map(input.take, (next) =>
           Option.match(next, {
             onNone: (): IteratorResult<SDKUserMessage, undefined> => ({
@@ -485,12 +494,13 @@ export class ClaudeSdk extends Context.Service<
       }
 
       const input = yield* openPromptStream;
-      const mcp = toolServer(options, onToolCall);
+      const run: Runner = yield* FiberSet.makeRuntimePromise();
+      const mcp = toolServer(options, onToolCall, run);
 
       const child = yield* Effect.try({
         try: (): Query =>
           query({
-            prompt: promptIterable(input),
+            prompt: promptIterable(input, run),
             options: sdkOptions(options, mcp),
           }),
         catch: (cause) =>

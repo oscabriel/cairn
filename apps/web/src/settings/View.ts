@@ -43,7 +43,7 @@ const none = Option.none<string>();
 // A control inside a row: the row's title already names it, so the widget's own label is for
 // screen readers only.
 const quietLabel = (h: H, control: Html): Html =>
-  h.div([h.Class("[&_label]:sr-only")], [control]);
+  h.div([h.Class("[&_label]:sr-only [&_input]:hidden")], [control]);
 
 const choice = (
   h: H,
@@ -584,7 +584,7 @@ const modelList = (h: H, catalog: ModelCatalog): Html =>
       id: "models",
       title: "Models",
       description: Option.some(
-        `${catalog.models.length} models from pi's configuration. New threads start on ${catalog.defaults.model.provider}/${catalog.defaults.model.modelId}.`
+        `${catalog.models.length} ${catalog.models.length === 1 ? "model" : "models"} from pi's configuration. New threads start on ${catalog.defaults.model.provider}/${catalog.defaults.model.modelId}.`
       ),
       status: Option.none(),
       control: Option.none(),

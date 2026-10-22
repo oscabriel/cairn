@@ -1,5 +1,7 @@
 // `shell.subscribe` and `shell.dispatch`: thin calls into the shell store that translate its
-// failures into the protocol's public errors, carrying the RPC request id.
+// failures into the protocol's public errors, carrying the RPC request id. A `ProjectCreate` first
+// passes `FolderRules` (the deny list, dot folders, links escaping the home) and is committed with
+// the folder's real path.
 import {
   Conflict,
   InvalidInput,
@@ -8,8 +10,10 @@ import {
   Unavailable,
 } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
-import { Effect, Layer, Option, Stream } from "effect";
+import type { ShellCommand } from "@cairn/protocol/ShellCommands";
+import { Effect, Layer, Option, Predicate, Stream } from "effect";
 
+import { FolderRules } from "../projects/FolderRules.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import type { ShellStoreError } from "../shell/ShellStoreError.ts";
 import { ShellStream } from "../shell/ShellStream.ts";
@@ -48,11 +52,34 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
   "shell.dispatch",
   Effect.gen(function* () {
     const sink = yield* EventSink;
+    const folders = yield* FolderRules;
+
+    /** The command as it is committed: a new project's folder checked and made real. */
+    const admitted = (
+      command: ShellCommand,
+      id: Option.Option<string>
+    ): Effect.Effect<ShellCommand, NotFound> =>
+      Predicate.isTagged(command, "ProjectCreate")
+        ? folders.check(command.workspaceRoot, "add").pipe(
+            Effect.map((workspaceRoot) => ({ ...command, workspaceRoot })),
+            Effect.catchTag("FolderRefused", (refused) =>
+              Effect.fail(
+                new NotFound({
+                  message: refused.message,
+                  resource: "folder",
+                  id: refused.path,
+                  requestId: id,
+                })
+              )
+            )
+          )
+        : Effect.succeed(command);
 
     return (command, { requestId }) => {
       const id = Option.some(String(requestId));
 
-      return sink.commitCommand(command).pipe(
+      return admitted(command, id).pipe(
+        Effect.flatMap((checked) => sink.commitCommand(checked)),
         Effect.catchTags({
           ShellStoreError: (failure) =>
             Effect.fail(unavailable(String(requestId))(failure)),
@@ -95,7 +122,7 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
   })
 );
 
-/** Both shell handlers. Needs `ShellStream` and `EventSink`. */
+/** Both shell handlers. Needs `ShellStream`, `EventSink` and `FolderRules`. */
 export const ShellHandlers = Layer.mergeAll(
   ShellSubscribeHandler,
   ShellDispatchHandler

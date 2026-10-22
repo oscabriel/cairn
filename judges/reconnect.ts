@@ -104,6 +104,8 @@ const startBrain = async (): Promise<Brain> => {
       cwd: root,
       env: {
         ...process.env,
+        // The projects are temporary folders; FolderRules admits only folders under the home.
+        HOME: tmpdir(),
         CAIRN_LISTEN_HOST: LOOPBACK,
         CAIRN_PORT: String(brainPort),
         CAIRN_ORIGIN: origin,

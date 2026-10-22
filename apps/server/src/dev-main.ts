@@ -2,18 +2,18 @@
 // one, `CAIRN_*` settings only (never the deployed brain's `cairn.json`), and the loopback-owner
 // identity, so the page Vite serves needs no Caddy and no copied header. `CAIRN_ORIGIN` must be the
 // Vite origin (the guard checks Origin and Host against it). Pretty log lines. The harness is the
-// scripted one with a demo thread (`DevDemo.ts`), or with `--models real` pi-durable (over the faux
-// model until 2A provides pi's model runtime).
+// scripted one with a demo thread (`DevDemo.ts`), or with `--models real` pi-durable over the user's
+// API models (pi's model runtime, read-only over `~/.pi/agent`).
 import { parseArgs } from "node:util";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
 import { AppLayer, PiDurableBrain, ScriptedBrain } from "./AppLayer.ts";
-import { ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { DevDemo } from "./DevDemo.ts";
 import { Identity } from "./http/Identity.ts";
+import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
 
 const { values } = parseArgs({
@@ -25,10 +25,11 @@ const App =
     ? AppLayer.pipe(
         Layer.provide(
           PiDurableBrain({
-            models: ModelSource.layerFaux({
-              tokensPerSecond: 50,
-              settings: {},
-            }),
+            models: PiModelSource.layer.pipe(
+              Layer.provide(ServerConfig.layerLocal),
+              Layer.provide(NodeServices.layer),
+              Layer.orDie
+            ),
           })
         )
       )

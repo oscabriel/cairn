@@ -10,6 +10,8 @@ export default defineConfig({
     ".claude/**",
     // The phase plan and its notes are prose kept as written; oxfmt rewrites markdown inline code.
     "docs/phase-1/**",
+    // t3code's captured parity baseline is kept byte for byte as captured.
+    "judges/fixtures/parity/**",
     "spikes/**",
     "tools/oxlint/anti-slop/**",
     "pnpm-lock.yaml",

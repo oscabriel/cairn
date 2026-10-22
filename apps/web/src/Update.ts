@@ -3,7 +3,7 @@
 // stream follows both without the root reaching into the page's state.
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import { ThreadId } from "@cairn/protocol/Ids";
-import { Equal, Option, Schema } from "effect";
+import { Equal, Option, Record, Schema } from "effect";
 import { Update, Url } from "foldkit";
 import type { Runtime } from "foldkit";
 import { UrlRequest } from "foldkit/navigation";
@@ -18,7 +18,19 @@ import {
   WaitForBackoff,
 } from "./Command.ts";
 import type { Services } from "./Command.ts";
-import { enqueue, nextToSend, outboxKey, remove } from "./connection/Outbox.ts";
+import { burnBusyBudget } from "./composer/Busy.ts";
+import { composerContext } from "./composer/Context.ts";
+import { OutMessage as ComposerOutMessage } from "./composer/Message.ts";
+import type { Message as ComposerMessage } from "./composer/Message.ts";
+import type { Draft as ComposerDraft } from "./composer/Model.ts";
+import * as Composer from "./composer/Update.ts";
+import {
+  enqueue,
+  nextToSend,
+  OutboxItem,
+  outboxKey,
+  remove,
+} from "./connection/Outbox.ts";
 import {
   acquired,
   elapsed,
@@ -34,6 +46,20 @@ import type { Flags, Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { AppRoute, urlToAppRoute } from "./Route.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
+import { OutMessage as SidebarOutMessage } from "./sidebar/Message.ts";
+import type { Message as SidebarMessage } from "./sidebar/Message.ts";
+import { initial as initialSidebar } from "./sidebar/Model.ts";
+import type {
+  DraftSummary,
+  Model as SidebarModel,
+  SidebarContext,
+} from "./sidebar/Model.ts";
+import {
+  inform as informSidebarModel,
+  init as initSidebar,
+  openAddProject,
+  update as updateSidebar,
+} from "./sidebar/Update.ts";
 
 type UpdateReturn = Update.Return<Model, Message, Services>;
 
@@ -126,6 +152,233 @@ const enterBackoff: Step = (model) => {
       onSome: (wait) => [WaitForBackoff(wait)],
     }),
   };
+};
+
+const toGotComposerMessage = (message: ComposerMessage): Message =>
+  Message.GotComposerMessage({ message });
+
+const readComposer = (model: Model) => Option.some(model.composer);
+
+const writeComposer = (model: Model, composer: Model["composer"]): Model =>
+  modifyFields(model, { composer: () => composer });
+
+/** Drops one unsent draft from the composer (the sidebar's Discard). */
+const discardComposerDraft = Update.foldChild({
+  update: Composer.discardDraft,
+  read: readComposer,
+  write: writeComposer,
+  toParentMessage: toGotComposerMessage,
+});
+
+/** Queues each item in order. */
+const enqueueAll = (
+  outbox: Model["outbox"],
+  items: ReadonlyArray<OutboxItem>
+): Model["outbox"] => {
+  let next = outbox;
+
+  for (const item of items) {
+    next = enqueue(next, item);
+  }
+
+  return next;
+};
+
+const toGotSidebarMessage = (message: SidebarMessage): Message =>
+  Message.GotSidebarMessage({ message });
+
+const readSidebar = (model: Model): Option.Option<SidebarModel> =>
+  Option.some(model.sidebar);
+
+const writeSidebar = (model: Model, sidebar: SidebarModel): Model =>
+  modifyFields(model, { sidebar: () => sidebar });
+
+/** The draft the route names, when it names one. */
+const routedDraftId = (route: AppRoute): Option.Option<string> =>
+  AppRoute.match(route, {
+    Inbox: () => Option.none(),
+    Thread: () => Option.none(),
+    Draft: ({ draftId }) => Option.some(draftId),
+    Settings: () => Option.none(),
+    NotFound: () => Option.none(),
+  });
+
+const DRAFT_KEY_PREFIX = "draft:";
+
+/** A draft's sidebar preview: its first line, or how many attachments it holds. */
+const draftPreview = (draft: ComposerDraft): string => {
+  const firstLine = draft.text.trim().split("\n", 1)[0] ?? "";
+
+  if (firstLine !== "") {
+    return firstLine;
+  }
+
+  return draft.attachments.length === 1
+    ? "1 attachment"
+    : `${draft.attachments.length} attachments`;
+};
+
+/** The composer's unsent drafts (not threads' drafts), as the sidebar's draft rows show them. */
+const draftSummaries = (
+  drafts: Model["composer"]["drafts"]
+): ReadonlyArray<DraftSummary> =>
+  Record.toEntries(drafts).flatMap(([key, draft]) =>
+    key.startsWith(DRAFT_KEY_PREFIX)
+      ? [
+          {
+            draftId: key.slice(DRAFT_KEY_PREFIX.length),
+            projectId: draft.projectId,
+            preview: draftPreview(draft),
+          },
+        ]
+      : []
+  );
+
+const sameDrafts = (
+  left: ReadonlyArray<DraftSummary>,
+  right: ReadonlyArray<DraftSummary>
+): boolean =>
+  left.length === right.length &&
+  left.every((draft, index) => {
+    const other = right[index];
+
+    return (
+      other !== undefined &&
+      draft.draftId === other.draftId &&
+      draft.preview === other.preview &&
+      Equal.equals(draft.projectId, other.projectId)
+    );
+  });
+
+/** What the sidebar hands up: shell commands for the outbox, or a draft to discard. */
+const foldSidebarOutMessage = (outMessage: SidebarOutMessage): Step =>
+  SidebarOutMessage.match<Step>(outMessage, {
+    RequestedDispatch:
+      ({ commands }) =>
+      (model) =>
+        Update.combine(
+          modifyFields(model, {
+            outbox: (outbox) =>
+              enqueueAll(
+                outbox,
+                commands.map((command) => OutboxItem.Dispatch({ command }))
+              ),
+          }),
+          [persist, sendNext]
+        ),
+    RequestedDiscardDraft: ({ draftId }) => discardComposerDraft(draftId),
+  });
+
+const foldSidebarMessage = Update.foldChild({
+  update: updateSidebar,
+  read: readSidebar,
+  write: writeSidebar,
+  toParentMessage: toGotSidebarMessage,
+  foldOutMessage: foldSidebarOutMessage,
+});
+
+const informSidebar = Update.foldChild({
+  update: informSidebarModel,
+  read: readSidebar,
+  write: writeSidebar,
+  toParentMessage: toGotSidebarMessage,
+  foldOutMessage: foldSidebarOutMessage,
+});
+
+const openSidebarAddProject = Update.foldChildStep({
+  update: openAddProject,
+  read: readSidebar,
+  write: writeSidebar,
+  toParentMessage: toGotSidebarMessage,
+  foldOutMessage: foldSidebarOutMessage,
+});
+
+const startSidebar = Update.foldChildStep({
+  update: () => initSidebar(),
+  read: readSidebar,
+  write: writeSidebar,
+  toParentMessage: toGotSidebarMessage,
+  foldOutMessage: foldSidebarOutMessage,
+});
+
+/** Tells the sidebar the shell, the open page, the connection and the drafts, when they changed. */
+const syncSidebar: Step = (model) => {
+  const current = model.sidebar.context;
+  const drafts = draftSummaries(model.composer.drafts);
+
+  const context: SidebarContext = {
+    shell: model.shell,
+    openThreadId: routedThreadId(model.route),
+    openDraftId: routedDraftId(model.route),
+    connection: model.connection.state._tag,
+    drafts: sameDrafts(current.drafts, drafts) ? current.drafts : drafts,
+  };
+
+  const unchanged =
+    current.shell === context.shell &&
+    Equal.equals(current.openThreadId, context.openThreadId) &&
+    Equal.equals(current.openDraftId, context.openDraftId) &&
+    current.connection === context.connection &&
+    current.drafts === context.drafts;
+
+  return unchanged ? { model } : informSidebar(model, context);
+};
+
+/** What the composer hands up: a turn for the outbox (and where to go), or a request for the folder dialog. */
+const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
+  ComposerOutMessage.match<Step>(outMessage, {
+    Submitted:
+      ({ item, navigateTo }) =>
+      (model) =>
+        Update.combine(
+          modifyFields(model, { outbox: (outbox) => enqueue(outbox, item) }),
+          [
+            persist,
+            sendNext,
+            (next) => ({
+              model: next,
+              commands: Option.match(navigateTo, {
+                onNone: () => [],
+                onSome: (url) => [NavigateInternal({ url })],
+              }),
+            }),
+          ]
+        ),
+    // The sidebar owns the folder dialog.
+    RequestedAddProject: () => openSidebarAddProject,
+  });
+
+const foldComposerMessage = Update.foldChild({
+  update: Composer.update,
+  read: readComposer,
+  write: writeComposer,
+  toParentMessage: toGotComposerMessage,
+  foldOutMessage: foldComposerOutMessage,
+});
+
+const informComposer = Update.foldChild({
+  update: Composer.inform,
+  read: readComposer,
+  write: writeComposer,
+  toParentMessage: toGotComposerMessage,
+});
+
+/** Tells the composer the route, the connection, the shell and the thread's view, when they changed. */
+const syncComposer: Step = (model) => {
+  const context = composerContext({
+    route: model.route,
+    threadId: routedThreadId(model.route),
+    epoch: model.connection.epoch,
+    hasClient: hasClient(model.connection),
+    live: isLive(model.connection),
+    shell: model.shell,
+    threadView: Option.map(model.thread.view, (state) => state.view),
+    defaults: Option.map(model.hello, (hello) => hello.defaults),
+  });
+
+  return Composer.contextChanged(model.composer, context)
+    ? informComposer(model, context)
+    : { model };
 };
 
 const isCurrentEpoch = (model: Model, epoch: number): boolean =>
@@ -272,11 +525,27 @@ const step = (received: Message): Step =>
       ({ message: threadMessage }) =>
       (model) =>
         foldThreadMessage(model, threadMessage),
+    GotComposerMessage:
+      ({ message: composerMessage }) =>
+      (model) =>
+        foldComposerMessage(model, composerMessage),
+    GotSidebarMessage:
+      ({ message: sidebarMessage }) =>
+      (model) =>
+        foldSidebarMessage(model, sidebarMessage),
   });
 
 /** The root update. */
-export const update = (model: Model, message: Message): UpdateReturn =>
-  Update.combine(model, [step(message), syncThread]);
+export const update = (model: Model, message: Message): UpdateReturn => {
+  burnBusyBudget();
+
+  return Update.combine(model, [
+    step(message),
+    syncThread,
+    syncComposer,
+    syncSidebar,
+  ]);
+};
 
 /** The first Model: the route, the boot shell and the saved outbox; the connection starts now. */
 export const init: Runtime.RoutingApplicationInit<
@@ -285,14 +554,32 @@ export const init: Runtime.RoutingApplicationInit<
   Flags,
   never,
   Services
-> = (flags, url) =>
-  syncThread({
-    route: urlToAppRoute(url),
-    connection: initialConnection,
-    hello: Option.none(),
-    shell: Option.map(flags.boot, (boot) => boot.shell),
-    outbox: flags.outbox,
-    outboxInFlight: Option.none(),
-    notice: Option.none(),
-    thread: Thread.Model.initial,
+> = (flags, url) => {
+  const started = Update.foldChildInit(Composer.init(), {
+    toParentModel: (composer): Model => ({
+      route: urlToAppRoute(url),
+      connection: initialConnection,
+      hello: Option.none(),
+      shell: Option.map(flags.boot, (boot) => boot.shell),
+      outbox: flags.outbox,
+      outboxInFlight: Option.none(),
+      notice: Option.none(),
+      thread: Thread.Model.initial,
+      sidebar: initialSidebar,
+      composer,
+    }),
+    toParentMessage: toGotComposerMessage,
   });
+
+  const synced = Update.combine(started.model, [
+    syncThread,
+    syncComposer,
+    startSidebar,
+    syncSidebar,
+  ]);
+
+  return {
+    model: synced.model,
+    commands: [...(started.commands ?? []), ...(synced.commands ?? [])],
+  };
+};

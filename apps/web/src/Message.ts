@@ -7,8 +7,10 @@ import { Url } from "foldkit";
 import { defineMessageUnion } from "foldkit/message";
 import { UrlRequest } from "foldkit/navigation";
 
+import { Message as ComposerMessage } from "./composer/Message.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import * as Thread from "./page/thread/index.ts";
+import { Message as SidebarMessage } from "./sidebar/Message.ts";
 
 /** Everything the root reacts to. */
 export const Message = defineMessageUnion({
@@ -47,6 +49,8 @@ export const Message = defineMessageUnion({
   CompletedSaveOutbox: { saved: Schema.Boolean },
 
   GotThreadMessage: { message: Thread.Message },
+  GotSidebarMessage: { message: SidebarMessage },
+  GotComposerMessage: { message: ComposerMessage },
 });
 
 export type Message = typeof Message.Type;

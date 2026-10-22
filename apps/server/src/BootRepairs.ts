@@ -5,6 +5,10 @@
 // launches from `thread_launches`.
 import { Effect } from "effect";
 
+import { retryParkedApprovalWaits } from "./Boot.ts";
+import type { HarnessSeam } from "./brain/HarnessSeam.ts";
+import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
+
 /** One repair: a name for the log and the effect. */
 export interface BootRepair<R> {
   readonly name: string;
@@ -34,7 +38,15 @@ export const bootRepair = <E, R>(
 });
 
 /** Every boot repair, in order. */
-export const bootRepairs: ReadonlyArray<BootRepair<never>> = [];
+export const bootRepairs: ReadonlyArray<
+  BootRepair<HarnessSeam | ThreadLaunch>
+> = [
+  retryParkedApprovalWaits,
+  bootRepair(
+    "resume interrupted launches",
+    ThreadLaunch.use((launcher) => launcher.resumePending)
+  ),
+];
 
 /** Runs every repair in order, logging each one by name. */
 export const runBootRepairs = Effect.forEach(

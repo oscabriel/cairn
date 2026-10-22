@@ -24,6 +24,7 @@ import type { Scope } from "effect";
 import { RpcTest } from "effect/rpc";
 import { SqlClient } from "effect/sql";
 
+import { FolderRules } from "../projects/FolderRules.ts";
 import { ShellHandlers } from "../rpc/ShellHandlers.ts";
 import { EventSink } from "./EventSink.ts";
 import { EventStore } from "./EventStore.ts";
@@ -40,7 +41,14 @@ import {
   ViewerTest,
 } from "./ShellTestKit.ts";
 
+// Test projects name folders that do not exist; the folder rules are judged in FolderRules.test.ts.
+const AllowAllFolders = Layer.mock(FolderRules)({
+  config: { home: "/", deny: [] },
+  check: (input) => Effect.succeed(input),
+});
+
 const TestLayer = ShellHandlers.pipe(
+  Layer.provide(AllowAllFolders),
   Layer.provideMerge(ShellTestLayer),
   Layer.provideMerge(ViewerTest)
 );

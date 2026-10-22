@@ -224,7 +224,8 @@ const startBrain = (
       cwd: REPO,
       properties: { ...Unit.brainProperties, ...properties },
       env: {
-        HOME: os.homedir(),
+        // The brain's home is the run's folder, so FolderRules admits the project beside it.
+        HOME: dir,
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         CAIRN_PORT: "0",
         CAIRN_ORIGIN: ORIGIN,

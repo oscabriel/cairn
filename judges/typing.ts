@@ -37,8 +37,13 @@ import {
 import { chromium, devices, webkit } from "playwright";
 import { createServer as createViteServer } from "vite";
 
-import { AppLayer, HarnessBoot } from "../apps/server/src/AppLayer.ts";
+import {
+  AppLayer,
+  HarnessBoot,
+  withCatalog,
+} from "../apps/server/src/AppLayer.ts";
 import { HarnessSeam } from "../apps/server/src/brain/HarnessSeam.ts";
+import { ModelSource } from "../apps/server/src/brain/ModelSource.ts";
 import {
   ScriptedHarness,
   ScriptedModel,
@@ -133,7 +138,10 @@ const Harness = Layer.succeed(
   Layer.provideMerge(ScriptedHarness.layerNoDeps),
   Layer.provide(ScriptedStore.layer),
   Layer.provide(FastModel),
-  Layer.provide(ScriptedTools.layerEcho)
+  Layer.provide(ScriptedTools.layerEcho),
+  Layer.provideMerge(
+    withCatalog(ModelSource.layerFaux({ tokensPerSecond: 200, settings: {} }))
+  )
 );
 
 const submit = (text: string) =>

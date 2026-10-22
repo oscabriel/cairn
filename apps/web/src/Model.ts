@@ -4,11 +4,13 @@ import { Hello } from "@cairn/protocol/Rpc";
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { Schema } from "effect";
 
+import * as Composer from "./composer/Model.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import { Connection } from "./connection/Reconnect.ts";
 import * as Thread from "./page/thread/index.ts";
 import { AppRoute } from "./Route.ts";
 import { BootData } from "./shell/ShellStore.ts";
+import { Model as SidebarModel } from "./sidebar/Model.ts";
 
 /** The root Model. */
 export const Model = Schema.Struct({
@@ -25,6 +27,8 @@ export const Model = Schema.Struct({
   /** A message for the user about something that did not work. */
   notice: Schema.Option(Schema.String),
   thread: Thread.Model.Model,
+  sidebar: SidebarModel,
+  composer: Composer.Model,
 });
 
 export type Model = typeof Model.Type;

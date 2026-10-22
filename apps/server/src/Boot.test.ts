@@ -30,7 +30,12 @@ import {
 } from "effect";
 import { HttpServer } from "effect/http";
 
-import { HarnessBoot, PiDurableBrain, ScriptedBrain } from "./AppLayer.ts";
+import {
+  HarnessBoot,
+  PiDurableBrain,
+  ScriptedBrain,
+  ThreadsLive,
+} from "./AppLayer.ts";
 import { retryParkedApprovalWaits, runBoot } from "./Boot.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
 import type { LiveThreadState } from "./brain/HarnessSeam.ts";
@@ -42,6 +47,7 @@ import { Health } from "./http/Health.ts";
 import { HttpLive } from "./http/Http.ts";
 import { Identity, IdentityRefused, USER_HEADER } from "./http/Identity.ts";
 import { BootJson } from "./http/Static.ts";
+import { SettingsStore } from "./models/SettingsStore.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { EventSink } from "./shell/EventSink.ts";
@@ -225,6 +231,8 @@ const GatedApp = Layer.mergeAll(
   Layer.provide(Shutdown.layerFrom(shutdownHooks)),
   Layer.provide(Health.layer),
   Layer.provide(ShellProjector.layer),
+  Layer.provideMerge(ThreadsLive),
+  Layer.provide(SettingsStore.layerNoDeps),
   Layer.provideMerge(
     ShellLayer.pipe(
       Layer.provideMerge(

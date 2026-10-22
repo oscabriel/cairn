@@ -6,27 +6,46 @@
 // run, then the stores and the Harness close.
 import path from "node:path";
 
+import { NodeServices } from "@effect/platform-node";
 import { Context, Effect, Layer } from "effect";
 
+import { BootLayer } from "./Boot.ts";
 import { runBootRepairs } from "./BootRepairs.ts";
 import { Brain } from "./brain/Brain.ts";
 import { BrainConfig } from "./brain/BrainConfig.ts";
 import type { CairnExtension } from "./brain/Extensions.ts";
 import { ExtensionSet } from "./brain/ExtensionSet.ts";
-import type { ModelSource } from "./brain/ModelSource.ts";
+import { ModelSource } from "./brain/ModelSource.ts";
 import { PiDurableHarness } from "./brain/PiDurableHarness.ts";
 import { ScriptedHarness } from "./brain/ScriptedHarness.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
+import { Git } from "./git/Git.ts";
 import { Health } from "./http/Health.ts";
 import { HttpLive } from "./http/Http.ts";
 import { BootJson } from "./http/Static.ts";
+import { PiModelSource } from "./models/PiModelSource.ts";
+import { SettingsStore } from "./models/SettingsStore.ts";
+import { FileSearch } from "./projects/FileSearch.ts";
+import { FolderRules } from "./projects/FolderRules.ts";
+import { ScratchProject } from "./projects/ScratchProject.ts";
+import { Worktrees } from "./projects/Worktrees.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
+import { SessionHelloWithModels } from "./rpc/ModelHandlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { ShellLayer } from "./shell/ShellLayer.ts";
+import { ShellProjector } from "./shell/ShellProjector.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
+import { BranchNames } from "./threads/BranchNames.ts";
+import { LaunchStore } from "./threads/LaunchStore.ts";
+import { StopHooks } from "./threads/StopHooks.ts";
+import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
+import { Threads } from "./threads/Threads.ts";
+import { ThreadTitles } from "./threads/ThreadTitles.ts";
+import { TitleModel } from "./threads/TitleModel.ts";
+import { TurnContentLive } from "./threads/TurnContentStages.ts";
 
 /**
  * How boot hands the harness its work after the repairs. pi-durable does not resume on open, so
@@ -37,21 +56,12 @@ export class HarnessBoot extends Context.Service<
   { readonly resume: Effect.Effect<void> }
 >()("cairn/server/AppLayer/HarnessBoot") {}
 
-// Boot, until the boot package (2C) owns it: the repairs in order, the harness resumed, then
-// ready. The listener serves static files meanwhile and answers `/ws` with 503 until `markReady`.
-const Boot = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const health = yield* Health;
-    const harness = yield* HarnessBoot;
-
-    yield* runBootRepairs;
-    yield* harness.resume;
-    yield* health.markReady;
-    yield* Effect.logInfo("ready").pipe(
-      Effect.annotateLogs({ event: "ready" })
-    );
-  })
-);
+// Boot (`Boot.ts`): the repairs in order, the harness resumed, every thread row reconciled, then
+// ready. The listener serves static files meanwhile and answers `/ws` with 503 until then.
+const Boot = BootLayer({
+  repairs: runBootRepairs,
+  resume: HarnessBoot.use((boot) => boot.resume),
+});
 
 /** `cairn.sqlite` under the configured data directory, migrated (with a backup first). */
 const DatabaseLive = Layer.unwrap(
@@ -68,6 +78,37 @@ const DatabaseLive = Layer.unwrap(
 /** The shell store with settlement and the default projector signals, over the database. */
 const ShellLive = ShellLayer.pipe(Layer.provideMerge(DatabaseLive));
 
+/** Folders, the scratch project, worktrees and file search, over git. */
+const ProjectsLive = Layer.mergeAll(
+  FolderRules.layer,
+  ScratchProject.layerNoDeps,
+  FileSearch.layerNoDeps
+).pipe(
+  Layer.provideMerge(Worktrees.layerNoDeps),
+  Layer.provideMerge(Git.layer),
+  Layer.provide(NodeServices.layer)
+);
+
+/**
+ * Thread launch and thread commands, with their stages, stop hooks and the title model that the
+ * `titleModel` server setting names.
+ */
+export const ThreadsLive = Layer.mergeAll(
+  ThreadLaunch.layerNoDeps,
+  Threads.layerNoDeps
+).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      LaunchStore.layerNoDeps,
+      TurnContentLive,
+      StopHooks.layerNone,
+      ThreadTitles.layerNoDeps,
+      BranchNames.layerNoDeps
+    ).pipe(Layer.provide(TitleModel.layerFromSettings))
+  ),
+  Layer.provideMerge(ProjectsLive)
+);
+
 /** The brain's directory, from the server's config. */
 const BrainConfigLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -78,11 +119,19 @@ const BrainConfigLive = Layer.unwrap(
 );
 
 /**
- * pi-durable behind the harness seam, with the given models and extension set (the production
- * set unless a judge adds its tools). Boot resumes it after the repairs.
+ * A model source with the picker's catalog over it (`PiModelSource.layerFromModelSource`), for
+ * brains that do not run pi's model runtime: the faux and scripted ones.
  */
-export const PiDurableBrain = (options: {
-  readonly models: Layer.Layer<ModelSource>;
+export const withCatalog = <E, R>(models: Layer.Layer<ModelSource, E, R>) =>
+  PiModelSource.layerFromModelSource.pipe(Layer.provideMerge(models));
+
+/**
+ * pi-durable behind the harness seam, with the given models and extension set (the production
+ * set unless a judge adds its tools). Boot resumes it after the repairs. The models layer is also
+ * exposed, so the app's catalog and title model read the same runtime the harness does.
+ */
+export const PiDurableBrain = <Models = never>(options: {
+  readonly models: Layer.Layer<ModelSource | Models>;
   readonly extraExtensions?: ReadonlyArray<CairnExtension>;
 }) => {
   const resume = Layer.effect(
@@ -110,26 +159,38 @@ export const PiDurableBrain = (options: {
         ? ExtensionSet.layer
         : ExtensionSet.withExtra(options.extraExtensions)
     ),
-    Layer.provide(options.models),
+    Layer.provideMerge(options.models),
     Layer.provide(BrainConfigLive)
   );
 };
 
-/** The scripted harness (echoing model, in-memory store) behind the seam: the dev default. */
+/**
+ * The scripted harness (echoing model, in-memory store) behind the seam: the dev default. The
+ * picker's catalog and the title model see the faux model.
+ */
 export const ScriptedBrain = Layer.succeed(
   HarnessBoot,
   HarnessBoot.of({ resume: Effect.void })
-).pipe(Layer.provideMerge(ScriptedHarness.layer));
+).pipe(
+  Layer.provideMerge(ScriptedHarness.layer),
+  Layer.provideMerge(
+    withCatalog(ModelSource.layerFaux({ tokensPerSecond: 50, settings: {} }))
+  )
+);
 
 /**
  * Everything but the entry point's choices. Needs `ServerConfig`, `Identity`, the platform's
- * `FileSystem`, and a harness (`HarnessSeam` and `HarnessBoot`).
+ * `FileSystem`, a harness (`HarnessSeam` and `HarnessBoot`) and its models (`ModelSource` and the
+ * picker's `PiModelSource`): `PiDurableBrain` and `ScriptedBrain` provide all four.
  */
 export const AppLayer = Layer.mergeAll(HttpLive, Boot).pipe(
   Layer.provide(HandlersLayer),
-  Layer.provide(SessionHello.layer),
+  Layer.provide(SessionHelloWithModels.pipe(Layer.provide(SessionHello.layer))),
   Layer.provide(BootJson.layerNone),
   Layer.provide(Shutdown.layerFrom(shutdownHooks)),
   Layer.provide(Health.layer),
+  Layer.provide(ShellProjector.layer),
+  Layer.provideMerge(ThreadsLive),
+  Layer.provide(SettingsStore.layerNoDeps),
   Layer.provideMerge(ShellLive)
 );

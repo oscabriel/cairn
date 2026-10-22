@@ -15,6 +15,7 @@ import {
 } from "effect";
 
 import { ModelSource } from "../brain/ModelSource.ts";
+import { SettingsStore } from "../models/SettingsStore.ts";
 
 /** How long one naming request may take before the caller falls back. */
 export const TITLE_MODEL_TIMEOUT = Duration.seconds(20);
@@ -48,6 +49,52 @@ export const decodeJsonAnswer = <S extends Schema.Codec<unknown, unknown>>(
   );
 };
 
+/** Asks `model` one question through `models`, with the timeout; none on any failure. */
+const completeOn = Effect.fn("TitleModel.complete")(function* (
+  models: (typeof ModelSource)["Service"],
+  model: ModelRef,
+  prompt: string
+) {
+  if (model.provider === BRIDGE_PROVIDER) {
+    return Option.none<string>();
+  }
+
+  const timestamp = yield* Clock.currentTimeMillis;
+
+  const answer = yield* models
+    .completeSimple(
+      model,
+      { messages: [{ role: "user", content: prompt, timestamp }] },
+      {}
+    )
+    .pipe(
+      Effect.timeout(TITLE_MODEL_TIMEOUT),
+      Effect.tapError((cause) =>
+        Effect.logWarning("title model request failed").pipe(
+          Effect.annotateLogs({
+            event: "title_model_failed",
+            provider: model.provider,
+            modelId: model.modelId,
+            cause: cause.message,
+          })
+        )
+      ),
+      Effect.option
+    );
+
+  return Option.filter(
+    Option.map(
+      Option.filter(
+        answer,
+        (message) =>
+          message.stopReason !== "error" && message.stopReason !== "aborted"
+      ),
+      answerText
+    ),
+    (text) => text !== ""
+  );
+});
+
 /** Asks the configured cheap model one question. */
 export class TitleModel extends Context.Service<
   TitleModel,
@@ -69,54 +116,40 @@ export class TitleModel extends Context.Service<
   static readonly layerFixed = (model: ModelRef) =>
     Layer.effect(
       TitleModel,
-      Effect.gen(function* () {
-        const models = yield* ModelSource;
-
-        const complete = Effect.fn("TitleModel.complete")(function* (
-          prompt: string
-        ) {
-          if (model.provider === BRIDGE_PROVIDER) {
-            return Option.none<string>();
-          }
-
-          const timestamp = yield* Clock.currentTimeMillis;
-
-          const answer = yield* models
-            .completeSimple(
-              model,
-              { messages: [{ role: "user", content: prompt, timestamp }] },
-              {}
-            )
-            .pipe(
-              Effect.timeout(TITLE_MODEL_TIMEOUT),
-              Effect.tapError((cause) =>
-                Effect.logWarning("title model request failed").pipe(
-                  Effect.annotateLogs({
-                    event: "title_model_failed",
-                    provider: model.provider,
-                    modelId: model.modelId,
-                    cause: cause.message,
-                  })
-                )
-              ),
-              Effect.option
-            );
-
-          return Option.filter(
-            Option.map(
-              Option.filter(
-                answer,
-                (message) =>
-                  message.stopReason !== "error" &&
-                  message.stopReason !== "aborted"
-              ),
-              answerText
-            ),
-            (text) => text !== ""
-          );
-        });
-
-        return TitleModel.of({ complete });
-      })
+      ModelSource.useSync((models) =>
+        TitleModel.of({
+          complete: (prompt) => completeOn(models, model, prompt),
+        })
+      )
     );
+
+  /**
+   * The model named by the `titleModel` server setting, read at each request, so a change applies
+   * to the next title without a restart. No setting, or a settings read that fails, uses the
+   * fallback. Needs `ModelSource` and `SettingsStore`.
+   */
+  static readonly layerFromSettings = Layer.effect(
+    TitleModel,
+    Effect.gen(function* () {
+      const models = yield* ModelSource;
+      const settings = yield* SettingsStore;
+
+      const complete = Effect.fn("TitleModel.completeFromSettings")(function* (
+        prompt: string
+      ) {
+        const chosen = yield* settings.get.pipe(
+          Effect.map((current) => current.titleModel),
+          Effect.catchTag("SettingsStoreError", () => Effect.succeedNone)
+        );
+
+        if (Option.isNone(chosen)) {
+          return Option.none<string>();
+        }
+
+        return yield* completeOn(models, chosen.value, prompt);
+      });
+
+      return TitleModel.of({ complete });
+    })
+  );
 }

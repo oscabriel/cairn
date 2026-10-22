@@ -24,6 +24,10 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Live worktree**: `~/Developer/projects/cairn-live`, the detached checkout `cairn.service` runs from. Only `ops/cairn/deploy.sh` moves it.
 
+**Agent dir**: pi's own configuration folder (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`): settings, skills, packages and `auth.json`. The brain reads it through pi's own classes and never writes it, which `judges/pi-readonly.sh` judges.
+
+**Server settings**: The settings the brain owns and every device shares (auto-settle days, the title model, whether Claude is offered through the bridge, the bridge's generation cap), kept in `cairn.sqlite`.
+
 ## Conversations
 
 **Thread**: One conversation in the sidebar. Its arms are the project's checkout or its own git worktree on the Beelink.
@@ -35,6 +39,12 @@ _Avoid_: session, chat
 **Settle**: To move a thread off the active shelf: by hand, or automatically after `autoSettleDays` of quiet (3 by default; 0 turns it off). A manual settle state wins over the automatic one until cleared.
 
 **Snooze**: To hide a thread until a wake time. The server ends the snooze on time. A failed run or a pending request wakes the thread early.
+
+**Launch**: Creating a thread: its sidebar row appears at once (preparing), then the brain prepares its workspace, opens its conversation and sends its first message, each step recorded so a restart resumes it.
+
+**Temporary branch**: The `cairn/<8 hex>` branch (or `cairn-<8 hex>` when a plain `cairn` branch exists) a new worktree starts on, renamed from the first message by the title model.
+
+**Title model**: The cheap model that names threads and branches, never the bridge; without one, a thread keeps its first line as its title and a branch takes a slug of the message.
 
 **Stone**: A thread whose arms run entirely on Cloudflare, on its own branch, started from a prepared base. Still a thread: same transcript, sidebar row and composer.
 
@@ -76,6 +86,10 @@ _Avoid_: parked query (Parked is a pi-durable task)
 
 **Claude slot**: One of the bridge's generation permits (four by default). A child holds one only while it generates, never across a tool call; a thread waiting for one shows "waiting for a Claude slot".
 
+**Usage probe**: A Claude Code child the bridge starts with no prompt, to read the login and the plan windows. It costs nothing and runs at boot, when a client starts watching usage, every five minutes while usage is watched or Claude turns run, and once after a rejection.
+
+**One-shot**: A request to the bridge that joins no conversation (compaction and other summaries, or a call without a session id). It runs in its own child, keeps no session and serves no tools.
+
 _Avoid_: Claude seat, Claude lane
 
 **Executor**: The self-hosted service on the Beelink that holds every MCP server and third-party credential. Agents reach tools through it.
@@ -94,6 +108,14 @@ _Avoid_: plugin
 
 **Boot repair**: A step the brain runs after the Harness opens and before it accepts sockets, in the fixed order listed in `apps/server/src/BootRepairs.ts`.
 
+**Stop hook**: A step that runs after a thread is stopped, in the order given to `StopHooks`; the bridge's explicit abort will be one.
+
+**Turn content stage**: One step that turns a user turn into model content and its `cairn.user` entry, in the order listed in `apps/server/src/threads/TurnContentStages.ts`.
+
+**Shell projector**: The brain fiber that keeps each thread row's derived fields (activity, run times, queue, last error, waiting, approval, preview, parked tasks) equal to what pi-durable holds, committing at most once per thread per 50 ms window. It is recomputed, never replayed.
+
+**Boot reconcile**: The shell projector's pass at boot, after the harness resumes, that rebuilds every thread row from `inspect()` and the rows themselves, so an event lost to a crash cannot leave a row wrong. _Avoid_: replay.
+
 **Close hook**: A step SIGTERM runs after every socket has closed and before the stores close, in the fixed order listed in `apps/server/src/ShutdownHooks.ts`, each with its own timeout.
 
 **Command receipt**: The shell store's record of a command id's first answer (the sequence it committed at, or its rejection), so a resent command lands once.
@@ -109,6 +131,10 @@ _Avoid_: plugin
 **Projection**: The client's view of a thread: pi-durable's conversation with brain-only documents and Claude stamps removed, image data replaced by references and long strings cut.
 
 **Draft**: A message not yet sent, kept in the browser per thread (or per new-thread draft) so typing never waits on the network.
+
+**Composer**: Where the user writes a turn: the editor, its `/`, `@` and `$` menus, and the footer's model, thinking and mode controls. Docked under an open thread, or inside the hero for a draft.
+
+**Hero**: The new-thread page: "What should we build in <project>?" above the composer, with the project picker and the workspace strip.
 
 **Outbox**: The browser's list of sends not yet acknowledged. It resends them after a reconnect, and the brain admits each one once.
 

@@ -5,11 +5,13 @@ import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { SendInput } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";
 
+import * as Composer from "./composer/Model.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import { ConnectionState } from "./connection/Reconnect.ts";
 import type { Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { AppRoute } from "./Route.ts";
+import { initial as initialSidebar } from "./sidebar/Model.ts";
 
 /** An empty shell at sequence 0. */
 export const emptySnapshot: ShellSnapshot = Schema.decodeSync(ShellSnapshot)({
@@ -28,6 +30,8 @@ export const connectingModel: Model = {
   outboxInFlight: Option.none(),
   notice: Option.none(),
   thread: Thread.Model.initial,
+  sidebar: initialSidebar,
+  composer: Composer.initial,
 };
 
 /** The same page once the shell is current on epoch `epoch`. */

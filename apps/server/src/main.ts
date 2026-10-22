@@ -6,15 +6,20 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
 import { AppLayer, PiDurableBrain } from "./AppLayer.ts";
-import { ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { Identity } from "./http/Identity.ts";
+import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
 
-// The faux model until 2A's PiModelSource-backed layer replaces it.
-const Harness = PiDurableBrain({
-  models: ModelSource.layerFaux({ tokensPerSecond: 200, settings: {} }),
-});
+// The user's API models through pi's model runtime, read-only over `~/.pi/agent`. One reference,
+// so the harness, the picker and the title model share one runtime.
+const Models = PiModelSource.layer.pipe(
+  Layer.provide(ServerConfig.layer),
+  Layer.provide(NodeServices.layer),
+  Layer.orDie
+);
+
+const Harness = PiDurableBrain({ models: Models });
 
 const MainLayer = AppLayer.pipe(
   Layer.provide(Harness),

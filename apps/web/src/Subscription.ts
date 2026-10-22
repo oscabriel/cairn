@@ -8,6 +8,7 @@ import { ManagedResource, Subscription } from "foldkit";
 import { streamFromEventFilterMap } from "foldkit/dom";
 
 import type { Services } from "./Command.ts";
+import * as Composer from "./composer/Subscription.ts";
 import { acquireClient, CairnConnection } from "./connection/Connection.ts";
 import type { CairnConnectionService } from "./connection/Connection.ts";
 import { hasClient, isBackingOff } from "./connection/Reconnect.ts";
@@ -15,6 +16,7 @@ import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { subscribeShell } from "./shell/ShellStore.ts";
+import { subscriptions as sidebarSubscriptions } from "./sidebar/Subscription.ts";
 
 const describe = (cause: Cause.Cause<unknown>): string =>
   Option.match(Cause.findErrorOption(cause), {
@@ -123,10 +125,28 @@ const threadSubscriptions = Subscription.lift(Thread.subscriptions)<
   when: ({ route }) => Predicate.isTagged(route, "Thread"),
 });
 
+const composerSubscriptions = Subscription.lift(Composer.subscriptions)<
+  Model,
+  Message
+>({
+  read: (model) => Option.some(model.composer),
+  toParentMessage: (message) => Message.GotComposerMessage({ message }),
+});
+
+const liftedSidebarSubscriptions = Subscription.lift(sidebarSubscriptions)<
+  Model,
+  Message
+>({
+  read: (model) => Option.some(model.sidebar),
+  toParentMessage: (message) => Message.GotSidebarMessage({ message }),
+});
+
 /** Every root subscription. */
 export const subscriptions = Subscription.aggregate(
   rootSubscriptions,
-  threadSubscriptions
+  threadSubscriptions,
+  composerSubscriptions,
+  liftedSidebarSubscriptions
 );
 
 /** The connection resource, one client per epoch. */

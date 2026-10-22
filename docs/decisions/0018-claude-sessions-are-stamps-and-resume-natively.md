@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: J3 and J4
 ---
 
@@ -9,4 +9,4 @@ The bridge records which Claude Code session answered as a stamp on the final as
 
 Gate: J3 across Haiku, Sonnet and Opus (same or forked session id, cache read at least 10 times the write, the tool runs once), and J4 including its compaction and provider-switch cases.
 
-Gate evidence so far: J3 passed on 2026-10-22 for Haiku, Sonnet and Opus (`spikes/6-bridge-resume/NOTES.md`). J4's stamp round trip passes in `packages/bridge/src/ClaudeHarness.test.ts`. J4's compaction and provider-switch cases remain for 3F, so this decision stays proposed.
+Gate evidence so far: J3 passed on 2026-10-22 for Haiku, Sonnet and Opus (`spikes/6-bridge-resume/NOTES.md`). J4's stamp round trip passes in `packages/bridge/src/ClaudeHarness.test.ts`. J4's divergence cases passed live on Haiku at the wave 3 integration (2026-10-22, `judges/claude-live.ts`): a forced compaction opened a fresh session that used the fact from before it (cache read 1,941, write 967), a provider switch answered with both turns' facts, and a deleted transcript fell back to a fresh session without error. The native resume keeps the cache only without `resumeSessionAt` when the cut is the transcript's last entry (fixed in `ClaudeConversation.ts` at integration): a clean restart then read 29,933 cached tokens and wrote 375. Accepted. A kill during a held tool call still rewrites the prefix on resume (ADR 0017's open J2 case).

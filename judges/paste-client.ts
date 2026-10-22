@@ -344,6 +344,23 @@ const answerUpload = async (route: Route): Promise<void> => {
   });
 };
 
+/** The `--real` run's upload hook: records the bytes, holds them when the send case does, then lets them through to the brain. */
+const observeUpload = async (route: Route): Promise<void> => {
+  const body = route.request().postDataBuffer() ?? Buffer.alloc(0);
+
+  observed.uploads.push({
+    mimeType: route.request().headers()["content-type"] ?? "",
+    bytes: body.length,
+    size: imageSize(body),
+  });
+
+  if (Option.isSome(held)) {
+    await held.value.release;
+  }
+
+  await route.continue();
+};
+
 /** A client request on the protocol socket (Effect RPC's JSON encoding). */
 const RpcRequest = Schema.TaggedStruct("Request", {
   id: Schema.Union([Schema.String, Schema.Finite]),
@@ -461,13 +478,31 @@ const routeSocket = (ws: WebSocketRoute): void => {
   });
 };
 
-/** Watches thread RPCs without answering anything (the `--real` run). */
+/** The attachment RPCs the page sent, without answering them (the `--real` run). */
+const recordAttachmentRequest = (request: RpcRequest): void => {
+  if (request.tag === "attachments.createUploadUrl") {
+    Option.map(decodeUrlInput(request.payload), (input) =>
+      observed.urlRequests.push({ name: input.name, at: performance.now() })
+    );
+  }
+
+  if (request.tag === "attachments.discard") {
+    Option.map(decodeDiscardInput(request.payload), (input) =>
+      observed.discards.push(input.attachmentId)
+    );
+  }
+};
+
+/** Watches thread and attachment RPCs without answering anything (the `--real` run). */
 const watchSocket = (ws: WebSocketRoute): void => {
   const server = ws.connectToServer();
 
   ws.onMessage((raw) => {
     for (const message of framesOf(raw)) {
-      Option.map(decodeRequest(message), recordThreadRequest);
+      Option.map(decodeRequest(message), (request) => {
+        recordThreadRequest(request);
+        recordAttachmentRequest(request);
+      });
     }
 
     server.send(raw);
@@ -499,9 +534,10 @@ await page.routeWebSocket(
   values.real ? watchSocket : routeSocket
 );
 
-if (!values.real) {
-  await page.route("**/api/attachments/upload/**", answerUpload);
-}
+await page.route(
+  "**/api/attachments/upload/**",
+  values.real ? observeUpload : answerUpload
+);
 
 await page.goto(app.url, { waitUntil: "networkidle" });
 
@@ -855,7 +891,12 @@ let sendAfterReleaseMs = 0;
 
   sendAfterReleaseMs = Math.round((send?.at ?? releasedAt) - releasedAt);
 
-  const carried = (send?.body.match(/att_\d{4}/gu) ?? []).length;
+  // The ids in the send's `attachments` list: the stub's `att_NNNN`, or the brain's own in `--real`.
+  const attachmentList =
+    /"attachments":\[(?<list>[^\]]*)\]/u.exec(send?.body ?? "")?.groups?.list ??
+    "";
+
+  const carried = (attachmentList.match(/"[^"]+"/gu) ?? []).length;
 
   const trayEmpty = await waitUntil(
     "the tray to empty",

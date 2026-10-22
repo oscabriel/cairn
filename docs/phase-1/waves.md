@@ -208,3 +208,89 @@ Judges rerun after the fixes:
 | `judges/pi-readonly.sh --no-turn` | pass | 62,091 entries identical, 0 children, 76 skills, 0 problems. |
 
 The deployed brain on 3774 still runs the wave 2 build; these fixes reach it at the next `ops/cairn/deploy.sh`.
+
+## Wave 3
+
+Integrated on 2026-10-22 on `main` and deployed to `https://code.gneiss.run` (`54696bc`, then this note's commit). The deployed brain now takes attachments, shows the real transcript, reaches Executor's tools with the imported grant, offers Claude through the bridge, loads the user's skills and project context, and makes its VAPID key.
+
+### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| 3A Attachments, server side | `phase1/3-3A` | `d38eec9` | done |
+| 3B Attachments and paste, client side | `phase1/3-3B` | `1322475` | done |
+| 3C Transcript | `phase1/3-3C` | `69f7691` | done |
+| 3D Executor tools | `phase1/3-3D` | `0b48afd` | done |
+| 3E Skills, context and expansion | `phase1/3-3E` | `48c4971` | done |
+| 3F Bridge wiring | `phase1/3-3F` | `b79d64c` | partial (J2 held case, below) |
+| 3G Push and PWA | `phase1/3-3G` | `0531c91` (and `c385cd8` on `phase1/3-3G-handoff`) | done |
+
+Every package started from `e06edf6` after an interrupted first attempt; each branch holds one clean commit. The seven worktrees were removed and pruned before `pnpm check`, then the branches merged with `--no-ff` in the order A to G without a conflict. 3G's hand-off commit was cherry-picked; 3A's `integration.patch` and 3E's `wave3-handoff.patch` applied with `git apply -3` (two conflicts in `Migrations.ts` and `Handlers.ts`, resolved by keeping every entry); 3B's `composer-wiring.patch` applied cleanly. The three patch files were deleted. No dependency changed.
+
+### Integration judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | oxfmt clean, oxlint 0 findings, typecheck clean in root and every workspace, vitest 115 files and 1,040 tests. `judges/lib/Events.test.ts` "reads a replaced, shorter log" failed once under load and passed on the rerun (the flake 3D and 3G reported). |
+| `apps/server/src/threads/TurnContent.integration.test.ts` (new) | pass | One turn with `$shared` and a 3-page PDF on a real pi-durable brain over the faux model, through the production stages: the model's user message is pi's `<skill name="shared" ...>` block ending in the typed text, then the attachment block with all three page nonces and `--- Page 3 of 3 ---`; exactly 1 `cairn.user` entry. |
+| `ops/cairn/deploy.sh` | pass | listening 1,551 ms, hello 1,578 ms. Boot log: Executor grant imported, VAPID key pair made, attachments swept, pi config read, claude bridge ready, 0 orphaned claude processes, 7 boot repairs. |
+| `node judges/tools.ts` (deployed brain, `opencode-go/claude-haiku-5-5`) | pass | Executor connected. convex 12,558 ms (`tools["cairn-bridges"].convex.status`), playwright 8,563 ms (`...playwright.browser_navigate`), github 7,542 ms (`tools.github.repos.get`), open turn 13,068 ms (search before call, then playwright). Each answer quoted a value from the tool result. |
+| `node judges/live-chat.ts` | pass | hello 24 ms, launch 8 ms, reply 1,820 ms; providers opencode-go ready, claude-bridge ready, anthropic refused, openai-codex missing. |
+| J7 live: `node judges/live-chat.ts --model claude-bridge/claude-haiku-5-5 --project ~/Developer/projects/cairn` | pass | The deployed brain's real sections (Cairn section, the user's skills, this repo's context) through the bridge: reply in 3,627 ms, row idle, no refusal. |
+| `node judges/claude-eligibility.ts` (J6, J7) | pass | J6: probe 462 ms (209 to 462), max plan, five-hour 30 %, weekly 44 %, API key stripped, empty home not logged in. J7: 129 skills, 55,554 instruction characters, sendable, success, no third-party refusal, `isUsingOverage` false; cache read 23,086, write 345. |
+| `judges/gate.sh` | pass | 0 failed of 43 cases. |
+| `judges/relay-orphans.sh cairn-bridges ... executor` | pass | 5 cases, 0 orphans; healthy after kill9-main 2,819 ms, kill9-child 1,016, restart-unit 1,048, stop-start-unit 1,054, restart-peer 3,120. |
+| `judges/claude-kill.sh` (J2, J9; judge brain with `--models real`) | 2 of 3 | streaming pass (run alone twice): cache read 42,067, write 0; children gone 55 ms; snapshot 5 ms. answer pass: 42,056 / 347; 56 ms; 13 ms. parked fails only `cacheKept`: 3,235 / 39,171 (marker once, interrupted result committed, children gone 57 ms, snapshot 9 ms). J9 in every case: 0 claude processes outside the unit after kill, restart and stop. |
+| `node judges/durability.ts --bridge` (new windows) | 1 of 2 | bridge-streaming pass (42,064 / 0, snapshot 15 ms); bridge-tool-parked fails as the parked case above (3,235 / 39,161). |
+| `node judges/claude-live.ts --case tools,paste,compaction,switch,deleted,restart` (J5, paste, J4) | pass | tools: 31 in `system:init`, no ToolSearch, `synthetic_17` called directly. paste: nonce MARLIN5309 from a 17,862 B PNG. compaction: fresh session, fact used, 1,941 / 967. switch: both facts, 1,941 / 669. deleted: fresh session, no error, 1,941 / 640. restart: native resume with no `resumeSessionAt`, 29,933 / 375 (was 8,206 / 22,095 before the fix below). |
+| `node judges/durability.ts` (8 windows) | pass | 8 of 8 on the second run; kill to first socket 1,133 to 1,340 ms, socket to converged 5 to 17 ms; sigterm-six 3,004 to 3,018 ms. The first run passed 7 of 8: sigterm-six "did not converge" at the end, then passed alone and in the full rerun. |
+| `node judges/typing.ts` (real transcript renderer) | pass | 1,200/1,200, lateKeys 1, maxLate 0 ms, 514 history rows, 486 rows streamed, IME ok, menus path, skill, slash-command, 0 errors. |
+| `node judges/typing.ts --throttle 4 --busy 10` | pass | 1,200/1,200, lateKeys 4, maxLate 42 ms, 488 rows streamed. A run beside other judges streamed only 14 rows (keys still all arrived, maxLate 48 ms). |
+| `node judges/typing.ts --mobile --throttle 4 --busy 10` | pass | 1,200/1,200, lateKeys 1, maxLate 0 ms, 486 rows streamed. |
+| `node judges/dev-smoke.ts` | pass | live 2,757 ms, 3 increases, 0 page errors (reads the transcript's row count now). |
+| `node judges/transcript-scroll.ts` | pass | 2,100 rows; follow 360 frames, max 1 px; scroll-up 0 moves; expand 0 moves; pill 0 px; switch offset delta 0 px; 0 long tasks; load 2,401 ms. |
+| `node judges/paste-client.ts` and `--real` | pass | All five cases in both modes. 3000x1500 PNG uploaded as 1568x784 (27,441 B); 40,000 B text folded; pasteToRequestMs 42 to 44; send held 1,561 ms, fired 19 ms after release with all five ids; with `--real` the brain's own routes answered. |
+| `node judges/push.ts --pwa` (3G PWA check) | pass | registered by the page at scope `/`, active `/sw.js`, manifest linked, 4 icons 200, no fetch listener, 0 errors. |
+| `judges/pi-readonly.sh --no-turn` | pass | 62,091 entries identical, 0 children. |
+
+Not rerun: `judges/claude-ttft.ts` (J13, 60 turns; 3F's numbers stand, and integration changed nothing on that path) and `judges/skills.ts` (3E's run stands; J7 and the integration test cover the wired path).
+
+### Decisions taken at integration
+
+- **Order of everything wired.** Turn content: text, skill expansion, attachments. Boot repairs: the attachment upload sweep, the Executor sweep, the parked approval retry, then interrupted launches. Close hooks: the bridge's `beginClosing` first. Extensions (by order key): coding tools, the Cairn, skills and context sections, code mode, the Executor proxies, bridge-cwd, the provider request log.
+- **Composition.** `main.ts` alone provides `ExecutorLink.layer` (over the exported `DatabaseLive`, so one connection), `BridgeProvider.layer`, `BridgeExtraProviders` and `VapidKeyFromFile`. `dev-main.ts` and `judge-main.ts` use `ExecutorLink.layerFake`; tests and the hand-built judges use `ExecutorLink.layerDisabled`. `judge-main.ts` gained `--models real` (3F).
+- **Executor sign-in pushes** (3D to 3G, which neither package could see): a new `push/ExecutorSignInPush.ts` layer in `AppLayer` follows `ExecutorLink.statusChanges` and calls `Notifier.executorNeedsSignIn` on a move into needs-sign-in and `executorSignedIn` on a move back to connected, with a test.
+- **The transcript is mounted** (3C's hand-offs). The thread page keeps its title in a small header above the transcript instead of dropping it, until the page header arrives in parity work. `EntryText.ts` was deleted. The timeline root carries `data-rows` (its row count, virtualized rows included), and `dev-smoke.ts` and `typing.ts` read it instead of counting DOM rows, which the virtual list no longer renders all of.
+- **`pasteToRequestMs`** is an optional field of `CreateUploadUrlInput` (3B's hand-off), sent by the tray and logged on `attachment.url_issued`.
+- **`durability.ts --bridge`** runs the bridge windows through `judges/claude-kill.ts` (bridge-streaming is its streaming case, bridge-tool-parked its parked case) rather than a second copy of that driver.
+- **J7 with the real sections** runs two ways: `claude-eligibility.ts` (its own render of every skill and this repo's context, checked for overage) and a turn through the deployed brain on `claude-bridge/claude-haiku-5-5` in this repo's project (`live-chat.ts` gained `--project` and accepts any available `--model`).
+- **ADRs.** 0016, 0018 and 0024 are accepted (gate evidence appended to each). 0017 stays proposed: J2's held case does not keep the cache.
+- **Optional hand-offs taken:** the `judges/claude-live.ts` lint zone (its five disable comments removed), the apple-touch-icon link, every glossary term offered (Turn, Fold, Executor grant, Boot sweep, Skill catalog, Skill expansion, Run pin, Context sections, Attachment tray, Prepared image). **Not taken:** `Skills.local` in `judges/typing.ts` (the menus open without it).
+
+### Fixes to package code (minimal, at integration)
+
+- **`packages/bridge/src/ClaudeConversation.ts` (1F), from 3F's finding:** `resumeSessionAt` is passed only when the cut is not the transcript's last entry, because with it Claude Code resends the history without cache breakpoints. Four expected `at` values in `ClaudeConversation.test.ts` and `ClaudeHarness.test.ts` became `None`.
+- **`packages/bridge/src/Claude.ts` (1F), from 3F's finding:** the conversations `RcMap` counted idle entries against the 12-child cap, so a 13th conversation within 10 minutes was refused. A conversation at the cap now evicts the least recently used idle conversation (no call in flight; a held tool call keeps its call in flight) and retries once, as the idle time to live would have later. Not taken: invalidating on `abortConversation`, which broke the fork-after-abort memory. New test: "evict the least recently used idle conversation for a new one instead of refusing it" (fails without the change).
+- **`judges/tools.ts` (3D):** the call-path regex stopped at the first quote inside a bracketed path, and a server name was read only from the first segment. Executor serves the stdio servers under one source (`tools["cairn-bridges"].convex.status`), so the judge now reads the first two segments, and it also finds the project by folder when its row has no repository yet (this repo's project was registered before repository identity).
+- **`judges/paste-client.ts` (3B):** `--real` observed neither the upload route nor `attachments.createUploadUrl`, and counted only the stub's `att_NNNN` ids. It now records both without answering and counts the send's `attachments` list.
+- **`apps/web/src/page/thread/Thread.test.ts` (1D):** two story tests drive `update` directly, because the transcript's re-anchoring Command is the virtual list's, not the page's.
+- **`CodingTools.test.ts`, `Ws.test.ts`, `Boot.test.ts`, `Brain.test.ts`, `conformance/Targets.ts`, `AttachmentFlow.test.ts` and four judges** follow the new extension set and `ExecutorLink` requirement.
+
+### Gaps
+
+- **J2's held case** (bridge-tool-parked): after a `kill -9` during a held `bash` call, Claude Code repairs the dangling tool_use on resume and the first reply rewrites the prefix (3,235 read, 39,171 written). 3F's suggested remedy (resume at the entry before the tool_use) would need `resumeSessionAt`, which loses the cache by itself, so it needs another approach. ADR 0017 stays proposed.
+- **Wizard items** (5F's `ops/wizards/phase-1.sh`): `node judges/push.ts --send --wait 300` needs the installed PWA, and the push toggle is mounted only by 4E's settings page; until then the push submodel runs headless (worker, re-check, presence, taps, badge). The Executor re-sign-in step stays as planned (the grant imported, so it is not needed now).
+- **The streaming bridge case printed no result twice** when it ran first in a sequence while browser judges ran beside it; it passed both times it ran alone. Treat bridge judges as needing a quiet machine.
+- **Throttled typing beside other load** streamed 14 rows in 60 s instead of about 490 (keys were all on time). Wave 4's load and wire budget work should measure the transcript's cost per streamed row.
+- **Boot got slower**: the judge brain's kill to first socket rose from about 0.8 to 0.9 s to about 1.2 to 1.3 s and a clean restart from 2.6 to 3.0 s, mostly the skill catalog's cold resolve (3E measured 408 to 570 ms against 600).
+- **`upload-signing.key` already existed** in `~/.config/cairn` before the deploy (made by a dev or judge brain); the deployed brain uses it. Only VAPID is kept from non-deployed brains (`VapidKeySource`).
+- **Carried from the packages:** no drag-over highlight on the composer (3B); user image attachments show as chips, not thumbnails, and t3code's new-turn anchoring, minimap and day-aware timestamps are not built (3C); `ExecutorSweep` sees only conversations with live tasks (3D); `TitleModel.completeOn` sends no session id, so an opencode-go Claude title model would fail (3E); `autoSettleDays` and `bridgeGenerationCap` still drive nothing (3F); headless push subscribe was not exercised end to end (3G).
+
+### Deviations from the plan
+
+- **Migration files** are `0003Attachments.ts`, `0004Executor.ts` and `0005Push.ts` (keys `0003_Attachments` and so on), following `Migrations.ts`'s convention.
+- **The upload route is `POST /api/attachments/upload/*`** (3A): find-my-way refuses path parameters over 100 characters and a signed token is about 260.
+- **The markdown parse is written in-house** (3C), not D30's remark port, because remark and unified are not in the catalog.
+- **3D's composition test** lives at `executor/Composition.test.ts`, not `main.test.ts`; it now runs its "main.ts composes the real link" case.
+- **Bridge durability windows** are run by `claude-kill.ts` through `durability.ts --bridge`, not by `durability.ts`'s own driver.
+- **Extra judges and modes:** `live-chat.ts --project` for J7 on the deployed brain, `paste-client.ts --real`, `claude-live.ts --case restart`, and `ExecutorSignInPush.test.ts`.

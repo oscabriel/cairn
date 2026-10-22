@@ -10,6 +10,11 @@
 // the first available one); then the shell stream until the thread's row is idle with an assistant
 // preview. The thread is deleted afterwards unless `--keep`. One turn costs cents.
 //
+// J7 live (wave 3): `--model claude-bridge/claude-haiku-5-5 --project ~/Developer/projects/cairn`
+// runs the turn through the Claude bridge in a real project, so the request carries Cairn's real
+// sections (the Cairn section, every skill, the project's context); a "Third-party apps" refusal
+// fails the turn. `--model` may name any available provider; without it the judge picks opencode-go.
+//
 // Prints one JSON line: {pass, helloMs, models, anthropic, providers, model, launchMs, replyMs,
 // activity, notes}. Prints no credential and no reply text.
 import { parseArgs } from "node:util";
@@ -39,6 +44,7 @@ const { values } = parseArgs({
   options: {
     base: { type: "string", default: "https://code.gneiss.run" },
     model: { type: "string" },
+    project: { type: "string" },
     keep: { type: "boolean", default: false },
   },
 });
@@ -93,7 +99,7 @@ const chooseModel = (
   models: ReadonlyArray<ModelListing>,
   defaults: ModelRef
 ): Option.Option<ModelListing> => {
-  const available = models.filter(
+  const fallback = models.find(
     (listing) => listing.available && listing.provider === "opencode-go"
   );
 
@@ -105,13 +111,14 @@ const chooseModel = (
         : Option.none()
   );
 
+  // A model named with `--model` may be any available provider's (the bridge's, for J7).
   return Option.orElse(
     Option.flatMap(wanted, (model) =>
       Option.fromUndefinedOr(
-        available.find((listing) => sameModel(listing, model))
+        models.find((listing) => listing.available && sameModel(listing, model))
       )
     ),
-    () => Option.fromUndefinedOr(available[0])
+    () => Option.fromUndefinedOr(fallback)
   );
 };
 
@@ -168,7 +175,6 @@ const program = Effect.gen(function* () {
   }
 
   const model = chosen.value;
-  const scratch = yield* client["projects.ensureScratch"]();
   const threadId = ThreadId.make(yield* uuid7);
   const shell = yield* Ref.make(Option.none<ShellSnapshot>());
 
@@ -182,6 +188,45 @@ const program = Effect.gen(function* () {
     Effect.ignore,
     Effect.forkScoped
   );
+
+  // `--project`: the registered project at that folder, else the scratch project.
+  const named = yield* Option.match(Option.fromUndefinedOr(values.project), {
+    onNone: () => Effect.succeedNone,
+    onSome: (root) =>
+      Ref.get(shell).pipe(
+        Effect.map((state) =>
+          Option.flatMap(state, (snapshot) =>
+            Option.fromUndefinedOr(
+              snapshot.projects.find(
+                (project) => project.workspaceRoot === root
+              )
+            )
+          )
+        ),
+        Effect.repeat({
+          schedule: Schedule.spaced("200 millis"),
+          until: Option.isSome,
+        }),
+        Effect.timeoutOption(Duration.seconds(10)),
+        Effect.map(Option.flatten)
+      ),
+  });
+
+  if (values.project !== undefined && Option.isNone(named)) {
+    return {
+      pass: false,
+      helloMs,
+      models: opencode,
+      anthropic,
+      model: `${model.provider}/${model.modelId}`,
+      notes: [`no project at ${values.project}`],
+    };
+  }
+
+  const scratch = yield* Option.match(named, {
+    onNone: () => client["projects.ensureScratch"](),
+    onSome: Effect.succeed,
+  });
 
   const launchedAt = yield* Clock.currentTimeMillis;
 

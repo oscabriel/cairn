@@ -203,16 +203,24 @@ const quotable = (messages: ReadonlyArray<Message>) =>
 const callIndex = (scripts: ReadonlyArray<string>, tool: string) =>
   scripts.join("\n").indexOf(`tools.${tool}(`);
 
+// The path's own quote closes it: a path may hold the other quotes (`tools["convex-mcp"].status`).
 const CALL_PATH =
-  /tools\.executor_call\(\s*\{[^}]*path:\s*["'`](?<path>[^"'`]+)/gu;
+  /tools\.executor_call\(\s*\{[^}]*?path:\s*(?<quote>["'`])(?<path>(?:(?!\k<quote>).)+)\k<quote>/gu;
 
 const calledPaths = (scripts: ReadonlyArray<string>) =>
   [...scripts.join("\n").matchAll(CALL_PATH)].map(
     (match) => match.groups?.path ?? ""
   );
 
-const appOf = (toolPath: string) =>
-  toolPath.replace(/^tools\./u, "").split(".")[0] ?? "";
+/**
+ * The names along a tool path, dotted (`tools.github.repos.get`) or bracketed
+ * (`tools["cairn-bridges"].convex.status`). Executor serves the stdio servers under one source
+ * (`cairn-bridges`, the stdio relay), so a server's name may be the second segment, not the first.
+ */
+const segmentsOf = (toolPath: string) =>
+  toolPath
+    .split(/[\s"'`[\].]+/u)
+    .filter((part) => part !== "" && part !== "tools");
 
 const isSettled = (row: ThreadShell) =>
   Option.isNone(row.activeRunId) &&
@@ -268,10 +276,12 @@ const program = Effect.gen(function* () {
           snapshot.projects.find(
             (project) =>
               project.kind === "folder" &&
-              Option.exists(
+              // A project registered before its repository was known matches by its folder.
+              (Option.exists(
                 project.repository,
                 (repository) => repository.toLowerCase() === values.repo
-              )
+              ) ||
+                project.workspaceRoot === values.project)
           )
         )
       )
@@ -395,7 +405,8 @@ const program = Effect.gen(function* () {
 
         return search !== -1 && call !== -1 && search < call;
       },
-      onSome: (app) => paths.some((found) => appOf(found) === app),
+      onSome: (app) =>
+        paths.some((found) => segmentsOf(found).slice(0, 2).includes(app)),
     });
 
     if (!reached) {

@@ -104,7 +104,7 @@ const startBrain = async (): Promise<Brain> => {
       cwd: root,
       env: {
         ...process.env,
-        CAIRN_HOST: LOOPBACK,
+        CAIRN_LISTEN_HOST: LOOPBACK,
         CAIRN_PORT: String(brainPort),
         CAIRN_ORIGIN: origin,
         CAIRN_DATA_DIR: dataDir,
@@ -147,14 +147,15 @@ const killBrain = async (brain: Brain): Promise<void> => {
   await exited;
 };
 
-// The judge's own protocol client, straight to the brain with the page's Origin.
+// The judge's own protocol client, straight to the brain with the page's Origin and Host (the guard
+// answers any other Host with 421, as it would behind the Vite proxy, which keeps the page's Host).
 const ProtocolLive = RpcClient.layerProtocolSocket({
   retryPolicy: Schedule.recurs(0),
 }).pipe(
   Layer.provide(
     NodeSocket.layerWebSocket(
       `ws://${LOOPBACK}:${brainPort}/ws?protocol=${PROTOCOL_VERSION}`,
-      { headers: { origin } }
+      { headers: { origin, host: new URL(origin).host } }
     )
   ),
   Layer.provide(RpcSerialization.layerJson)
@@ -238,6 +239,11 @@ const brainShell = async () => {
 };
 
 let brain = await startBrain();
+
+// A judge that throws must not leave its brain running: kill whichever brain is current on exit.
+process.once("exit", () => {
+  brain.process.kill("SIGKILL");
+});
 
 await addProject("first");
 

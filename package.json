@@ -16,6 +16,7 @@
     "dev": "node tools/dev.ts"
   },
   "dependencies": {
+    "@cairn/bridge": "workspace:*",
     "@cairn/client-logic": "workspace:*",
     "@cairn/protocol": "workspace:*",
     "@earendil-works/chord": "catalog:",

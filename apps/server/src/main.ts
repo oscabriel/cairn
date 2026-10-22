@@ -5,12 +5,19 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
-import { AppLayer } from "./AppLayer.ts";
+import { AppLayer, PiDurableBrain } from "./AppLayer.ts";
+import { ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { Identity } from "./http/Identity.ts";
 import { observabilityLayer } from "./Observability.ts";
 
+// The faux model until 2A's PiModelSource-backed layer replaces it.
+const Harness = PiDurableBrain({
+  models: ModelSource.layerFaux({ tokensPerSecond: 200, settings: {} }),
+});
+
 const MainLayer = AppLayer.pipe(
+  Layer.provide(Harness),
   Layer.provide(Identity.layer),
   Layer.provide(ServerConfig.layer),
   Layer.provide(NodeServices.layer),

@@ -10,9 +10,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai";
 // The bridge is tested against a bare Harness here; only this judge imports pi-durable.
-// oxlint-disable-next-line no-restricted-imports
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-// oxlint-disable-next-line no-restricted-imports
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Option, Ref } from "effect";

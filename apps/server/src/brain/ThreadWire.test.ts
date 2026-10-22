@@ -5,6 +5,8 @@
 // snapshot, the client must hold exactly the projection of the newest revision, and no frame may
 // carry image bytes, the provider document, prompt deltas or the bridge's stamp.
 
+import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
+import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { ConversationId, EntryId } from "@cairn/protocol/Ids";
 import {
   ConversationView,
@@ -18,8 +20,6 @@ import type {
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Result, Schema } from "effect";
 
-import { applyThreadStreamItem } from "../../../../packages/client-logic/src/ThreadView.ts";
-import type { ThreadViewState } from "../../../../packages/client-logic/src/ThreadView.ts";
 import { piConversationId, piEntryId } from "./PiIds.ts";
 import {
   HIDDEN_ENTRY_KIND,

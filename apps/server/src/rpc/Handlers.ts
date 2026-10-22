@@ -1,14 +1,17 @@
 // Every RPC handler in one layer (a seam: the integrator adds each domain's handlers here). Later
-// entries win, so a domain's handlers listed after `stubHandlers` replace its stubs. Handlers stay
-// thin: they call services and return protocol values.
+// entries win: `Layer.mergeAll` keeps the last handler for a tag, so each domain's handler layer,
+// listed after the stubs, replaces its stubs. Handlers stay thin: they call services and return
+// protocol values.
 import { CairnRpcs } from "@cairn/protocol/Rpc";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
 import { sessionHandlers } from "./SessionHandlers.ts";
+import { ShellHandlers } from "./ShellHandlers.ts";
 import { stubHandlers } from "./StubHandlers.ts";
+import { ThreadStreamHandlers } from "./ThreadStreamHandlers.ts";
 
-/** The handlers of `CairnRpcs`, as the layer each socket's RPC server reads. */
-export const HandlersLayer = CairnRpcs.toLayer(
+/** The stubs with the session handlers over them. */
+const BaseHandlers = CairnRpcs.toLayer(
   Effect.gen(function* () {
     const session = yield* sessionHandlers;
 
@@ -17,4 +20,14 @@ export const HandlersLayer = CairnRpcs.toLayer(
       ...session,
     });
   })
+);
+
+/**
+ * The handlers of `CairnRpcs`, as the layer each socket's RPC server reads. Needs `SessionHello`,
+ * the shell store (`ShellStream`, `EventSink`) and the `HarnessSeam`.
+ */
+export const HandlersLayer = Layer.mergeAll(
+  BaseHandlers,
+  ShellHandlers,
+  ThreadStreamHandlers.layer
 );

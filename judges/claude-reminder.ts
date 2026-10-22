@@ -3,6 +3,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
+import { Claude } from "@cairn/bridge/Claude";
+import { ClaudeAccount } from "@cairn/bridge/ClaudeAccount";
+import type { ChildSession } from "@cairn/bridge/ClaudeGuards";
+import { claudeModel, DEFAULT_LONG_CONTEXT } from "@cairn/bridge/ClaudeModels";
+import { ClaudeOneShot } from "@cairn/bridge/ClaudeOneShot";
+import { blocksText } from "@cairn/bridge/ClaudePrompt";
+import { providerContext } from "@cairn/bridge/ClaudeProvider";
+import { ClaudeSdk } from "@cairn/bridge/ClaudeSdk";
+import { ClaudeSlots } from "@cairn/bridge/ClaudeSlots";
+import { stampOf } from "@cairn/bridge/ClaudeStamp";
 // J11, live: a section changed between turns reaches a running Claude Code session as one
 // `<system-reminder>` naming it, at a small cache write; and after a restart the bridge resumes the
 // stamped session natively and sends the next change the same way.
@@ -16,20 +26,6 @@ import { parseArgs } from "node:util";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer, Option, Ref, Schema } from "effect";
-
-import { Claude } from "../packages/bridge/src/Claude.ts";
-import { ClaudeAccount } from "../packages/bridge/src/ClaudeAccount.ts";
-import type { ChildSession } from "../packages/bridge/src/ClaudeGuards.ts";
-import {
-  claudeModel,
-  DEFAULT_LONG_CONTEXT,
-} from "../packages/bridge/src/ClaudeModels.ts";
-import { ClaudeOneShot } from "../packages/bridge/src/ClaudeOneShot.ts";
-import { blocksText } from "../packages/bridge/src/ClaudePrompt.ts";
-import { providerContext } from "../packages/bridge/src/ClaudeProvider.ts";
-import { ClaudeSdk } from "../packages/bridge/src/ClaudeSdk.ts";
-import { ClaudeSlots } from "../packages/bridge/src/ClaudeSlots.ts";
-import { stampOf } from "../packages/bridge/src/ClaudeStamp.ts";
 
 const { values } = parseArgs({
   options: {

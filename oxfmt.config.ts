@@ -8,6 +8,8 @@ export default defineConfig({
     ...(ultracite.ignorePatterns ?? []),
     ".agents/**",
     ".claude/**",
+    // The phase plan and its notes are prose kept as written; oxfmt rewrites markdown inline code.
+    "docs/phase-1/**",
     "spikes/**",
     "tools/oxlint/anti-slop/**",
     "pnpm-lock.yaml",

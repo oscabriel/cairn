@@ -120,7 +120,7 @@ const brain = spawn(
     cwd: root,
     env: {
       ...process.env,
-      CAIRN_HOST: LOOPBACK,
+      CAIRN_LISTEN_HOST: LOOPBACK,
       CAIRN_PORT: "0",
       CAIRN_ORIGIN: origin,
       CAIRN_DATA_DIR: dataDir,

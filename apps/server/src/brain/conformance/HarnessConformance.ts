@@ -9,6 +9,8 @@
 // the log or the client's normalized view to show what the line says, so the suite judges what a
 // client would see, not internal state.
 
+import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
+import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { ApprovalId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { SubmissionId } from "@cairn/protocol/Ids";
 import type { ThreadStreamItem } from "@cairn/protocol/Thread";
@@ -27,8 +29,6 @@ import {
 import type { Scope } from "effect";
 import type { describe, it } from "vitest";
 
-import { applyThreadStreamItem } from "../../../../../packages/client-logic/src/ThreadView.ts";
-import type { ThreadViewState } from "../../../../../packages/client-logic/src/ThreadView.ts";
 import { HarnessEvent } from "../HarnessSeam.ts";
 import type {
   HarnessError,

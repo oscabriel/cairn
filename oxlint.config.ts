@@ -195,6 +195,8 @@ const zones: ReadonlyArray<{
 }> = [
   { files: ["**/*.ts", "**/*.mts", "**/*.js", "**/*.mjs"], allowed: [] },
   { files: ["packages/bridge/**"], allowed: ["piAi"] },
+  // The bridge's tests run the provider against a bare pi-durable Harness.
+  { files: ["packages/bridge/src/**/*.test.ts"], allowed: ["piAi", "durable"] },
   {
     files: ["packages/bridge/src/ClaudeSdk.ts"],
     allowed: ["piAi", "agentSdk"],

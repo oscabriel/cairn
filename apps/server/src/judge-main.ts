@@ -8,7 +8,9 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 
-import { AppLayer } from "./AppLayer.ts";
+import { JudgeTools } from "../../../judges/fixtures/JudgeTools.ts";
+import { AppLayer, PiDurableBrain } from "./AppLayer.ts";
+import { ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { Identity } from "./http/Identity.ts";
 import { Tailscale } from "./http/Tailscale.ts";
@@ -36,7 +38,14 @@ const JudgeTailnet = Layer.unwrap(
   })
 );
 
+// pi-durable over the faux model (until 2A), with the judge tools installed through the seam.
+const Harness = PiDurableBrain({
+  models: ModelSource.layerFaux({ tokensPerSecond: 200, settings: {} }),
+  extraExtensions: [JudgeTools],
+});
+
 const JudgeLayer = AppLayer.pipe(
+  Layer.provide(Harness),
   Layer.provide(Identity.layerNoDeps),
   Layer.provide(JudgeTailnet),
   Layer.provide(ServerConfig.layerLocal),

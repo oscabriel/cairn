@@ -1,17 +1,28 @@
 // The whole HTTP stack on a real socket: the app layer on an ephemeral loopback port, a Node RPC
 // client sending Caddy's headers and Cairn's Origin, raw upgrade requests for the refusals, and an
 // identity that the test revokes to watch the socket close.
+import { mkdtempSync } from "node:fs";
 import http from "node:http";
+import os from "node:os";
 
 import { Internal, Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs, PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import { NodeServices, NodeSocket } from "@effect/platform-node";
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
+import {
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Ref,
+  Schedule,
+  Schema,
+} from "effect";
 import { HttpServer } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 
-import { AppLayer } from "../AppLayer.ts";
+import { AppLayer, ScriptedBrain } from "../AppLayer.ts";
 import { ServerConfig } from "../Config.ts";
 import {
   Identity,
@@ -53,6 +64,7 @@ const TestIdentity = Layer.succeed(
 );
 
 const TestServer = AppLayer.pipe(
+  Layer.provide(ScriptedBrain),
   Layer.provide(TestIdentity),
   Layer.provide(
     ServerConfig.layerWith({
@@ -60,6 +72,7 @@ const TestServer = AppLayer.pipe(
       origin: ORIGIN,
       owner: OWNER,
       webRoot: "/nonexistent/cairn-web",
+      dataDir: mkdtempSync(`${os.tmpdir()}/cairn-ws-test-`),
     })
   ),
   Layer.provide(NodeServices.layer),
@@ -87,7 +100,12 @@ const connect = Effect.fnUntraced(function* (headers: Record<string, string>) {
   const port = yield* boundPort;
 
   const context = yield* Layer.build(
-    RpcClient.layerProtocolSocket({ retryTransientErrors: false }).pipe(
+    // No reconnect: a reconnect still opening when the test's scope closes makes `ws` throw
+    // "closed before the connection was established" outside any fiber.
+    RpcClient.layerProtocolSocket({
+      retryTransientErrors: false,
+      retryPolicy: Schedule.recurs(0),
+    }).pipe(
       Layer.provide(
         NodeSocket.layerWebSocket(
           `ws://127.0.0.1:${port}/ws?protocol=${PROTOCOL_VERSION}`,

@@ -3,6 +3,8 @@
 // routes win over the static `GET /*`, whatever their order in this list.
 import { Layer } from "effect";
 
+import { EntryImageRoute } from "../brain/EntryImageRoute.ts";
+import { ShellSnapshotRoute } from "../shell/ShellSnapshotRoute.ts";
 import { Guard } from "./Guard.ts";
 import { HealthRoute } from "./Health.ts";
 import { AuthRoute } from "./Identity.ts";
@@ -15,5 +17,7 @@ export const Routes = Layer.mergeAll(
   AuthRoute,
   HealthRoute,
   WsRoute,
+  ShellSnapshotRoute,
+  EntryImageRoute,
   StaticRoutes
 );

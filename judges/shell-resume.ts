@@ -1,8 +1,8 @@
-import { createServer } from "node:http";
-// The shell resume judge: a real brain-side shell store behind a real WebSocket, reached through a
-// TCP proxy that cuts every connection at random points while commands commit. A client that
-// applies the stream with @cairn/client-logic's ShellReducer, and resubscribes from its cursor after
-// each cut, must hold exactly the database's snapshot within 2 s of every cut.
+// The shell resume judge: the integrated brain's shell store behind its real /ws (guard, identity,
+// per-socket RPC server), reached through a TCP proxy that cuts every connection at random points
+// while commands commit. A client that applies the stream with @cairn/client-logic's ShellReducer,
+// and resubscribes from its cursor after each cut, must hold exactly the database's snapshot within
+// 2 s of every cut.
 //   node judges/shell-resume.ts [--rounds 24] [--seed <n>]
 //
 // Rounds alternate plain cuts (the resume replays a short gap) with long outages that commit more
@@ -18,6 +18,7 @@ import {
   shellCursor,
 } from "@cairn/client-logic/ShellReducer";
 import type { ProjectId } from "@cairn/protocol/Ids";
+import { CairnRpcs, PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
 import type { ShellSnapshot as ShellSnapshotValue } from "@cairn/protocol/Shell";
 import {
@@ -30,12 +31,7 @@ import {
   ThreadUnsettle,
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
-import {
-  NodeHttpServer,
-  NodeRuntime,
-  NodeServices,
-  NodeSocket,
-} from "@effect/platform-node";
+import { NodeRuntime, NodeServices, NodeSocket } from "@effect/platform-node";
 import {
   Clock,
   DateTime,
@@ -51,27 +47,24 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { HttpRouter, HttpServer } from "effect/http";
-import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
+import { HttpServer } from "effect/http";
+import { RpcClient, RpcSerialization } from "effect/rpc";
 
-import { Database } from "../apps/server/src/db/Database.ts";
-import { ShellHandlers } from "../apps/server/src/rpc/ShellHandlers.ts";
+import { AppLayer, ScriptedBrain } from "../apps/server/src/AppLayer.ts";
+import { ServerConfig } from "../apps/server/src/Config.ts";
+import { Identity, USER_HEADER } from "../apps/server/src/http/Identity.ts";
+import { Tailscale } from "../apps/server/src/http/Tailscale.ts";
 import { EventSink } from "../apps/server/src/shell/EventSink.ts";
 import {
   emptyActivityPatch,
   ThreadActivityUpdate,
 } from "../apps/server/src/shell/ShellCommands.ts";
 import type { ServerShellCommand } from "../apps/server/src/shell/ShellCommands.ts";
-import { ShellStoreLayer } from "../apps/server/src/shell/ShellLayer.ts";
 import { ShellSnapshot } from "../apps/server/src/shell/ShellSnapshot.ts";
-import { ShellSnapshotRoute } from "../apps/server/src/shell/ShellSnapshotRoute.ts";
 import {
   createProject,
   createThread,
-  shellMigrations,
-  ShellRpcs,
   testThreadId,
-  ViewerTest,
 } from "../apps/server/src/shell/ShellTestKit.ts";
 
 const { values } = parseArgs({
@@ -166,7 +159,27 @@ const makeProxy = (targetPort: number) =>
       })
   );
 
-// The server: the shell store on a temporary file, the two shell RPCs on /ws and GET /api/shell.
+// The server: the integrated brain (AppLayer: the guard, per-socket RPC servers with the real
+// ViewerMiddleware, the shell store on a temporary file, GET /api/shell) over the scripted harness,
+// with judge-main's identity rules (a fixed tailnet in which loopback is the owner's node).
+
+const OWNER = "owner@loopback";
+
+const ORIGIN = "http://127.0.0.1";
+
+/** The headers Caddy would send, which the guard and the socket's identity check read. */
+const CADDY_HEADERS = {
+  host: "127.0.0.1",
+  origin: ORIGIN,
+  [USER_HEADER]: OWNER,
+};
+
+const judgeNode = {
+  stableId: "judge",
+  loginName: OWNER,
+  tags: [],
+  nodeName: "judge.loopback",
+};
 
 const ServerLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -177,31 +190,25 @@ const ServerLayer = Layer.unwrap(
       prefix: "cairn-shell-resume-",
     });
 
-    return HttpRouter.serve(
-      Layer.mergeAll(
-        RpcServer.layerHttp({
-          group: ShellRpcs,
-          path: "/ws",
-          protocol: "websocket",
-          disableTracing: true,
-          disableFatalDefects: true,
-        }),
-        ShellSnapshotRoute
+    return AppLayer.pipe(
+      Layer.provide(ScriptedBrain),
+      Layer.provide(Identity.layerNoDeps),
+      Layer.provide(
+        Tailscale.fixed(
+          new Map([
+            ["127.0.0.1", judgeNode],
+            ["::ffff:127.0.0.1", judgeNode],
+          ])
+        )
       ),
-      { disableLogger: true }
-    ).pipe(
-      Layer.provide(ShellHandlers),
-      Layer.provide(ViewerTest),
-      Layer.provide(RpcSerialization.layerJson),
-      Layer.provideMerge(ShellStoreLayer),
-      Layer.provideMerge(
-        Database.layer({
-          filename: path.join(directory, "cairn.sqlite"),
-          migrations: shellMigrations,
+      Layer.provide(
+        ServerConfig.layerWith({
+          host: "127.0.0.1",
+          origin: ORIGIN,
+          owner: OWNER,
+          dataDir: directory,
+          webRoot: path.join(directory, "no-web"),
         })
-      ),
-      Layer.provideMerge(
-        NodeHttpServer.layer(createServer, { host: "127.0.0.1", port: 0 })
       )
     );
   })
@@ -229,13 +236,16 @@ const runClient = (
         pingTimeout: "8 seconds",
       }).pipe(
         Layer.provide(
-          NodeSocket.layerWebSocket(`ws://127.0.0.1:${proxyPort}/ws`)
+          NodeSocket.layerWebSocket(
+            `ws://127.0.0.1:${proxyPort}/ws?protocol=${PROTOCOL_VERSION}`,
+            { headers: CADDY_HEADERS }
+          )
         ),
         Layer.provide(RpcSerialization.layerJson)
       )
     );
 
-    const client = yield* RpcClient.make(ShellRpcs).pipe(
+    const client = yield* RpcClient.make(CairnRpcs).pipe(
       Effect.provide(protocol)
     );
 

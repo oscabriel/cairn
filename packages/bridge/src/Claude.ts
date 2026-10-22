@@ -9,7 +9,6 @@
 // Cairn never reads, copies or proxies Claude Code's OAuth token: the login is whatever the `claude`
 // binary has in `~/.claude`.
 
-import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 
 import type { Message, Provider } from "@earendil-works/pi-ai";
@@ -161,8 +160,11 @@ export class Claude extends Context.Service<
           const reasoning = Option.fromNullishOr(options?.reasoning);
           const signal = Option.fromNullishOr(options?.signal);
 
-          if (options?.cacheRetention === "none") {
-            const place = yield* placeOf(options.sessionId ?? "");
+          const sessionId = options?.sessionId;
+
+          // Summarizer calls, and calls with no session to join, are one-shots in their own child.
+          if (options?.cacheRetention === "none" || sessionId === undefined) {
+            const place = yield* placeOf(sessionId ?? "");
 
             yield* oneShot.run(
               {
@@ -178,9 +180,6 @@ export class Claude extends Context.Service<
 
             return;
           }
-
-          // pi-durable always sends a session id; a call without one gets a conversation of its own.
-          const sessionId = options?.sessionId ?? randomUUID();
 
           yield* Effect.scoped(
             Effect.gen(function* () {

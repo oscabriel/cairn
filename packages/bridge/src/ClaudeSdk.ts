@@ -6,6 +6,11 @@
 // (MIT, Copyright (c) 2026 Eli Dickinson; notice in `ClaudeMcp.ts`): handlers go on the protocol
 // server, not through the zod-only `registerTool`, so pi's JSON Schema is served verbatim.
 //
+// `probe` is the usage probe (2F): a child that never receives a prompt, asked for its login and the
+// plan's windows. Generalized in cairn-v1 apps/server/src/claude/probe.ts at
+// 1a5cd4a56e84bfb187940428d144b584d2e084b0 (Cairn's own code) from v1 spike 1; rewritten as an Effect
+// that closes the child when it ends or is interrupted. Decoding what it reads is `ClaudeUsage`'s.
+//
 // `layerTest` is a scripted Claude Code, ported in intent from cairn-v1 apps/server/test/fake-claude.ts
 // at 1a5cd4a56e84bfb187940428d144b584d2e084b0: scripts read the prompts, call served tools the way
 // Claude Code does, and emit events; every child's options and controls are recorded.
@@ -52,6 +57,7 @@ import type { ChildOptions } from "./ClaudeGuards.ts";
 import {
   CLAUDE_MD_EXCLUDES,
   CLEANUP_PERIOD_DAYS,
+  QUIET_ENV,
   refuseBuiltinTools,
   TOOL_TIMEOUT_MS,
 } from "./ClaudeGuards.ts";
@@ -90,6 +96,39 @@ export class ClaudeSessionError extends Schema.TaggedError<ClaudeSessionError>()
     cause: Schema.optional(Schema.Defect()),
   }
 ) {}
+
+/** The usage probe could not read the login: the child did not start or did not initialize. */
+export class ClaudeProbeError extends Schema.TaggedError<ClaudeProbeError>()(
+  "ClaudeProbeError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  }
+) {}
+
+/** Where and how a probe child runs. */
+export interface ProbeOptions {
+  readonly cwd: string;
+  /** The child's environment; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is removed from it. */
+  readonly env: Readonly<Record<string, string>>;
+  readonly executable: Option.Option<string>;
+}
+
+/** What one probe read, raw and unchecked: the usage request's name says it will change. */
+export interface RawProbe {
+  /** The init answer's `account`, as Claude Code sent it. */
+  readonly account: unknown;
+  /** The usage answer; none when the request failed (the login is still known). */
+  readonly usage: Option.Option<unknown>;
+  /** Why the usage request failed, when it did. */
+  readonly usageError: Option.Option<string>;
+}
+
+/** The first usage answer can come before the CLI fetched the windows; ask again this often. */
+const PROBE_RETRY_DELAY = "500 millis";
+
+/** And at most this many times. */
+const PROBE_RETRIES = 10;
 
 /** A served tool Claude Code called, by its id and pi name. */
 export interface ToolCallRequest {
@@ -369,6 +408,137 @@ const promptIterable = (
   }),
 });
 
+/** A probe child's options: no tools, no settings files, no saved session, nonessential traffic on. */
+const probeSdkOptions = (options: ProbeOptions): Options => {
+  const env = Object.fromEntries(
+    Object.entries(options.env).filter(([key]) => key !== QUIET_ENV)
+  );
+
+  const sdk: Options = {
+    cwd: options.cwd,
+    env,
+    tools: [],
+    settingSources: [],
+    strictMcpConfig: true,
+    persistSession: false,
+    settings: {
+      disableAllHooks: true,
+      autoMemoryEnabled: false,
+      includeGitInstructions: false,
+      claudeMdExcludes: [...CLAUDE_MD_EXCLUDES],
+      cleanupPeriodDays: CLEANUP_PERIOD_DAYS,
+    },
+  };
+
+  if (Option.isSome(options.executable)) {
+    sdk.pathToClaudeCodeExecutable = options.executable.value;
+  }
+
+  return sdk;
+};
+
+/**
+ * One probe over the real Agent SDK. Its prompt stream is never written, so nothing reaches the
+ * API; the child is closed when the probe ends, fails or is interrupted.
+ */
+const realProbe = Effect.fn("ClaudeSdk.probe")(function* (
+  options: ProbeOptions
+) {
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const input = yield* openPromptStream;
+      const run: Runner = yield* FiberSet.makeRuntimePromise();
+
+      const child = yield* Effect.acquireRelease(
+        Effect.try({
+          try: (): Query =>
+            query({
+              prompt: promptIterable(input, run),
+              options: probeSdkOptions(options),
+            }),
+          catch: (cause) =>
+            new ClaudeProbeError({
+              message: `Claude Code did not start: ${thrownText(cause)}`,
+              cause,
+            }),
+        }),
+        (started) =>
+          Effect.andThen(
+            input.fail("Usage probe ended."),
+            Effect.sync(() => {
+              started.close();
+            })
+          )
+      );
+
+      // Drain the child's messages so its output never backs up; a probe expects none.
+      yield* Effect.forkScoped(
+        Effect.ignore(
+          Stream.runDrain(
+            Stream.fromAsyncIterable(
+              child,
+              (cause) =>
+                new ClaudeQueryError({
+                  message: `Claude Code probe child failed: ${thrownText(cause)}`,
+                  cause,
+                })
+            )
+          )
+        )
+      );
+
+      const init = yield* Effect.tryPromise({
+        try: async () => await child.initializationResult(),
+        catch: (cause) =>
+          new ClaudeProbeError({
+            message: `Claude Code did not initialize: ${thrownText(cause)}`,
+            cause,
+          }),
+      });
+
+      const account: unknown = init.account;
+
+      const ask = Effect.tryPromise({
+        try: async () =>
+          await child.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(
+            { skipBehaviors: true }
+          ),
+        catch: thrownText,
+      });
+
+      return yield* Effect.gen(function* () {
+        let answer = yield* ask;
+
+        for (
+          let retry = 0;
+          retry < PROBE_RETRIES &&
+          answer.rate_limits_available &&
+          answer.rate_limits === null;
+          retry += 1
+        ) {
+          yield* Effect.sleep(PROBE_RETRY_DELAY);
+          answer = yield* ask;
+        }
+
+        return answer;
+      }).pipe(
+        Effect.match({
+          onFailure: (failure): RawProbe => ({
+            account,
+            usage: Option.none(),
+            usageError: Option.some(failure),
+          }),
+          onSuccess: (answer): RawProbe => ({
+            account,
+            usage: Option.some(answer),
+            usageError: Option.none(),
+          }),
+        })
+      );
+    })
+  );
+});
+
 const sessionEntry = (message: SessionMessage): SessionEntry => {
   const blocks = blocksOf(message.message);
 
@@ -417,6 +587,9 @@ export interface FakeFork {
   readonly upTo: Option.Option<string>;
 }
 
+/** One scripted usage probe: what the child answers, or how it fails or hangs. */
+export type FakeProbe = Effect.Effect<RawProbe, ClaudeProbeError>;
+
 /** The scripts and records behind `ClaudeSdk.layerTest`. */
 export class ClaudeSdkScripts extends Context.Service<
   ClaudeSdkScripts,
@@ -431,11 +604,16 @@ export class ClaudeSdkScripts extends Context.Service<
     >;
     /** Every `fork` call: the source session and the cut. */
     readonly forks: Ref.Ref<ReadonlyArray<FakeFork>>;
+    /** One answer per usage probe, in order; the last repeats, and none means the probe fails. */
+    readonly probes: ReadonlyArray<FakeProbe>;
+    /** Every probe started, with its options. */
+    readonly probed: Ref.Ref<ReadonlyArray<ProbeOptions>>;
   }
 >()("cairn/bridge/ClaudeSdk/ClaudeSdkScripts") {
   /** Scripts with empty records. */
   static readonly make = (
-    scripts: ReadonlyArray<FakeScript>
+    scripts: ReadonlyArray<FakeScript>,
+    probes: ReadonlyArray<FakeProbe> = []
   ): Effect.Effect<ClaudeSdkScripts["Service"]> =>
     Effect.gen(function* () {
       const runs = yield* Ref.make<ReadonlyArray<FakeRun>>([]);
@@ -446,7 +624,16 @@ export class ClaudeSdkScripts extends Context.Service<
 
       const forks = yield* Ref.make<ReadonlyArray<FakeFork>>([]);
 
-      return ClaudeSdkScripts.of({ scripts, runs, sessions, forks });
+      const probed = yield* Ref.make<ReadonlyArray<ProbeOptions>>([]);
+
+      return ClaudeSdkScripts.of({
+        scripts,
+        runs,
+        sessions,
+        forks,
+        probes,
+        probed,
+      });
     });
 }
 
@@ -473,6 +660,11 @@ export class ClaudeSdk extends Context.Service<
       sessionId: string,
       cwd: string
     ): Effect.Effect<ReadonlyArray<SessionEntry>, ClaudeSessionError>;
+    /**
+     * Starts a child that is sent no prompt, reads its login and the plan's windows, and closes it.
+     * No timeout of its own: interrupting it closes the child.
+     */
+    probe(options: ProbeOptions): Effect.Effect<RawProbe, ClaudeProbeError>;
     /** The pinned Agent SDK's version. */
     readonly sdkVersion: string;
   }
@@ -586,7 +778,13 @@ export class ClaudeSdk extends Context.Service<
       return messages.map(sessionEntry);
     });
 
-    return ClaudeSdk.of({ open, fork, entries, sdkVersion: sdkVersion() });
+    return ClaudeSdk.of({
+      open,
+      fork,
+      entries,
+      probe: realProbe,
+      sdkVersion: sdkVersion(),
+    });
   });
 
   /** A scripted Claude Code; needs `ClaudeSdkScripts`. */
@@ -745,7 +943,30 @@ export class ClaudeSdk extends Context.Service<
         return sessions.get(sessionId) ?? [];
       });
 
-      return ClaudeSdk.of({ open, fork, entries, sdkVersion: "scripted" });
+      const probe = Effect.fn("ClaudeSdk.probe")(function* (
+        options: ProbeOptions
+      ) {
+        const index = yield* Ref.getAndUpdate(fake.probed, (all) => [
+          ...all,
+          options,
+        ]).pipe(Effect.map((all) => all.length));
+
+        const answer =
+          fake.probes[Math.min(index, fake.probes.length - 1)] ??
+          Effect.fail(
+            new ClaudeProbeError({ message: "No scripted usage probe." })
+          );
+
+        return yield* answer;
+      });
+
+      return ClaudeSdk.of({
+        open,
+        fork,
+        entries,
+        probe,
+        sdkVersion: "scripted",
+      });
     })
   );
 }

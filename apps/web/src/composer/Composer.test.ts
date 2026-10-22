@@ -1,0 +1,596 @@
+import { RequestId, SubmissionId } from "@cairn/protocol/Ids";
+import { assert, describe, it } from "@effect/vitest";
+import { Effect, Option } from "effect";
+import { KeyValueStore } from "effect/persistence";
+import * as Scene from "foldkit/scene";
+import * as Story from "foldkit/story";
+
+import { OutboxItem } from "../connection/Outbox.ts";
+import {
+  PrepareLaunch,
+  PrepareSend,
+  SaveDrafts,
+  SearchEntries,
+  WithdrawQueued,
+} from "./Command.ts";
+import {
+  catalog,
+  composerOn,
+  contextFor,
+  otherThreadId,
+  project,
+  threadId,
+} from "./ComposerFixtures.ts";
+import { activeDraft, loadDrafts, saveDrafts } from "./Drafts.ts";
+import { ComposerInput } from "./Editor.ts";
+import { MeasureFooter } from "./Footer.ts";
+import { MeasureHeadline } from "./MeasureHeadline.ts";
+import { Message, OutMessage } from "./Message.ts";
+import { ComposerTarget, initial } from "./Model.ts";
+import type { Model } from "./Model.ts";
+import { inform, update } from "./Update.ts";
+import { view } from "./View.ts";
+
+const editor = Scene.testId("composer-editor");
+
+const menu = Scene.testId("composer-menu");
+
+const onThread = composerOn(ComposerTarget.Thread({ threadId }));
+
+/** The view's Mounts, acknowledged as the browser would run them. */
+const acknowledgeMounts = [
+  Scene.Mount.resolve(ComposerInput, Message.FocusedEditor()),
+  Scene.Mount.resolve(
+    MeasureFooter,
+    Message.MeasuredFooter({
+      width: 900,
+      hostWidth: 634,
+      measurement: {
+        gap: 4,
+        naturalFixedWidth: 169.17,
+        minimumFixedWidth: 52,
+        blockWidths: [124.39, 139.78],
+        iconOnlyBlockWidths: Option.some([63, 63]),
+        overflowWidth: 38,
+      },
+    })
+  ),
+];
+
+/** Typing `value` with the caret after it, as the editor's input and selection events report it. */
+const typeWithCaret = (value: string) => [
+  Scene.type(editor, value),
+  Scene.Subscription.emit(
+    Message.ChangedSelection({ start: value.length, end: value.length })
+  ),
+];
+
+describe("composer triggers", () => {
+  it("opens the command menu for a slash at the start of a line", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(onThread),
+      ...acknowledgeMounts,
+      ...typeWithCaret("/"),
+      Scene.expect(menu).toHaveAttr("data-trigger", "slash-command"),
+      Scene.expect(Scene.text("/model")).toExist(),
+      Scene.expect(Scene.text("/skill:review")).toExist(),
+      Scene.expect(editor).toHaveAttr("aria-expanded", "true"),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+
+  it("keeps a path like /tmp/x out of the menu", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(onThread),
+      ...acknowledgeMounts,
+      ...typeWithCaret("/tmp/x"),
+      Scene.expect(menu).toBeAbsent(),
+      Scene.expect(editor).toHaveAttr("aria-expanded", "false"),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+
+  it("searches the project's files for @src after the debounce and lists the results", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(onThread),
+      ...acknowledgeMounts,
+      ...typeWithCaret("see @src"),
+      Scene.expect(menu).toHaveAttr("data-trigger", "path"),
+      Scene.expect(Scene.text("Searching workspace files...")).toExist(),
+      Scene.Subscription.emit(
+        Message.ElapsedPathSearchDebounce({
+          projectId: project.id,
+          query: "src",
+        })
+      ),
+      Scene.Command.resolve(
+        SearchEntries,
+        Message.SucceededPathSearch({
+          projectId: project.id,
+          query: "src",
+          result: {
+            entries: [
+              { path: "src/main.ts", kind: "file" },
+              { path: "src/lib", kind: "directory" },
+            ],
+            truncated: false,
+          },
+        })
+      ),
+      Scene.expect(Scene.text("src/main.ts")).toExist(),
+      Scene.expect(Scene.text("src/lib")).toExist(),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+
+  it("inserts the picked file as a markdown link", () => {
+    const searched = update(
+      update(
+        update(onThread, Message.ChangedDraft({ value: "see @src" })).model,
+        Message.ChangedSelection({ start: 8, end: 8 })
+      ).model,
+      Message.SucceededPathSearch({
+        projectId: project.id,
+        query: "src",
+        result: {
+          entries: [{ path: "src/main.ts", kind: "file" }],
+          truncated: false,
+        },
+      })
+    ).model;
+
+    const picked = update(
+      searched,
+      Message.PressedMenuKey({ key: "Enter" })
+    ).model;
+
+    assert.strictEqual(activeDraft(picked).text, "see [main.ts](src/main.ts) ");
+    assert.isTrue(Option.isNone(picked.triggerMenu));
+  });
+
+  it("lists skills under $", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(onThread),
+      ...acknowledgeMounts,
+      ...typeWithCaret("use $"),
+      Scene.expect(menu).toHaveAttr("data-trigger", "skill"),
+      Scene.expect(Scene.text("$review")).toExist(),
+      Scene.expect(Scene.text("$deploy")).toExist(),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+
+  it("closes a menu on Escape until the caret leaves the trigger", () => {
+    const opened = update(
+      update(onThread, Message.ChangedDraft({ value: "/" })).model,
+      Message.ChangedSelection({ start: 1, end: 1 })
+    ).model;
+
+    const dismissed = update(
+      opened,
+      Message.PressedMenuKey({ key: "Escape" })
+    ).model;
+
+    const typedOn = update(
+      update(dismissed, Message.ChangedDraft({ value: "/m" })).model,
+      Message.ChangedSelection({ start: 2, end: 2 })
+    ).model;
+
+    assert.isTrue(Option.isSome(opened.triggerMenu));
+    assert.isTrue(Option.isNone(dismissed.triggerMenu));
+    assert.isTrue(Option.isNone(typedOn.triggerMenu));
+  });
+});
+
+/**
+ * t3code's footer at each composer width, recorded from the installed nightly
+ * (t3code-nightly-bin 0.1.1_nightly.20261020.3438, commit fe27e8e3) on 2026-10-22 by forcing
+ * `[data-slot=composer-shell]` to the width and reading its attributes. The measurement is t3code's
+ * own at that build: the model picker 169.17 px, the traits block 124.39 px and the mode block
+ * 139.78 px wide (63 px each icon-only), a 4 px gap, and the controls' host 18 px narrower than the
+ * cluster (its padding). Cairn's folding must give the same states for the same widths.
+ */
+const t3FooterStates: ReadonlyArray<{
+  readonly width: number;
+  readonly host: number;
+  readonly compact: boolean;
+  readonly traits: "full" | "icon" | "hidden";
+  readonly mode: "full" | "icon" | "hidden";
+  readonly overflow: boolean;
+}> = [
+  {
+    width: 900,
+    host: 634,
+    compact: false,
+    traits: "full",
+    mode: "full",
+    overflow: false,
+  },
+  {
+    width: 780,
+    host: 634,
+    compact: false,
+    traits: "full",
+    mode: "full",
+    overflow: false,
+  },
+  {
+    width: 700,
+    host: 598,
+    compact: false,
+    traits: "full",
+    mode: "full",
+    overflow: false,
+  },
+  {
+    width: 620,
+    host: 518,
+    compact: false,
+    traits: "full",
+    mode: "full",
+    overflow: false,
+  },
+  {
+    width: 560,
+    host: 452,
+    compact: true,
+    traits: "full",
+    mode: "full",
+    overflow: false,
+  },
+  {
+    width: 520,
+    host: 412,
+    compact: true,
+    traits: "full",
+    mode: "icon",
+    overflow: false,
+  },
+  {
+    width: 480,
+    host: 372,
+    compact: true,
+    traits: "full",
+    mode: "icon",
+    overflow: false,
+  },
+  {
+    width: 440,
+    host: 332,
+    compact: true,
+    traits: "icon",
+    mode: "icon",
+    overflow: false,
+  },
+  {
+    width: 400,
+    host: 292,
+    compact: true,
+    traits: "icon",
+    mode: "hidden",
+    overflow: true,
+  },
+  {
+    width: 360,
+    host: 252,
+    compact: true,
+    traits: "hidden",
+    mode: "hidden",
+    overflow: true,
+  },
+];
+
+const block = (name: string) =>
+  Scene.selector(`[data-resting-block="${name}"]`);
+
+const expectBlock = (name: string, state: "full" | "icon" | "hidden") => [
+  Scene.expect(block(name)).toHaveAttr(
+    "data-composer-block-icon-only",
+    String(state !== "full")
+  ),
+  Scene.expect(block(name)).toHaveAttr(
+    "data-composer-block-hidden",
+    String(state === "hidden")
+  ),
+];
+
+describe("composer footer folding", () => {
+  it.each(t3FooterStates)(
+    "matches t3code's footer at $width px",
+    ({ compact, host, mode, overflow, traits, width }) => {
+      Scene.scene(
+        { update, view },
+        Scene.given(onThread),
+        ...acknowledgeMounts,
+        Scene.Subscription.emit(
+          Message.MeasuredFooter({
+            width,
+            hostWidth: host,
+            measurement: {
+              gap: 4,
+              naturalFixedWidth: 169.17,
+              minimumFixedWidth: 52,
+              blockWidths: [124.39, 139.78],
+              iconOnlyBlockWidths: Option.some([63, 63]),
+              overflowWidth: 38,
+            },
+          })
+        ),
+        Scene.expect(Scene.testId("composer-footer")).toHaveAttr(
+          "data-chat-composer-footer-compact",
+          String(compact)
+        ),
+        ...expectBlock("traits", traits),
+        ...expectBlock("mode", mode),
+        overflow
+          ? Scene.expect(
+              Scene.selector("[data-resting-controls-overflow]")
+            ).not.toHaveAttr("aria-hidden")
+          : Scene.expect(
+              Scene.selector("[data-resting-controls-overflow]")
+            ).toHaveAttr("aria-hidden", "true"),
+        Scene.tap((simulation) => {
+          assert.lengthOf(simulation.commands, 0);
+        })
+      );
+    }
+  );
+});
+
+describe("composer drafts", () => {
+  it("keeps each thread's draft apart and restores it after a reload", async () => {
+    const typed = update(
+      onThread,
+      Message.ChangedDraft({ value: "half a thought" })
+    ).model;
+
+    const elsewhere = inform(
+      typed,
+      contextFor(ComposerTarget.Thread({ threadId: otherThreadId }))
+    ).model;
+
+    const typedElsewhere = update(
+      elsewhere,
+      Message.ChangedDraft({ value: "another" })
+    ).model;
+
+    const back = inform(
+      typedElsewhere,
+      contextFor(ComposerTarget.Thread({ threadId }))
+    ).model;
+
+    assert.strictEqual(activeDraft(elsewhere).text, "");
+    assert.strictEqual(activeDraft(back).text, "half a thought");
+
+    // The saver writes after the pause; a new page reads it back.
+    const saved = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* saveDrafts(back.drafts);
+
+        return yield* loadDrafts;
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    const reloaded = update(
+      inform(initial, contextFor(ComposerTarget.Thread({ threadId }))).model,
+      Message.LoadedDrafts({ drafts: saved })
+    ).model;
+
+    assert.strictEqual(activeDraft(reloaded).text, "half a thought");
+    assert.strictEqual(
+      activeDraft(
+        inform(
+          reloaded,
+          contextFor(ComposerTarget.Thread({ threadId: otherThreadId }))
+        ).model
+      ).text,
+      "another"
+    );
+  });
+
+  it("saves drafts once typing pauses", () => {
+    Story.story(
+      update,
+      Story.given(onThread),
+      Story.message(Message.ChangedDraft({ value: "a" })),
+      Story.message(Message.ChangedDraft({ value: "ab" })),
+      Story.message(Message.ElapsedDraftDebounce({ version: 1 })),
+      Story.Command.expectNone(),
+      Story.message(Message.ElapsedDraftDebounce({ version: 2 })),
+      Story.Command.expectHas(SaveDrafts),
+      Story.Command.resolve(
+        SaveDrafts,
+        Message.CompletedSaveDrafts({ version: 2, saved: true })
+      ),
+      Story.model((model: Model) => {
+        assert.strictEqual(model.savedVersion, 2);
+      })
+    );
+  });
+
+  it("shows the restored draft in the editor", () => {
+    const withDraft = update(
+      onThread,
+      Message.ChangedDraft({ value: "restored text" })
+    ).model;
+
+    Scene.scene(
+      { update, view },
+      Scene.given(withDraft),
+      ...acknowledgeMounts,
+      Scene.expect(editor).toHaveValue("restored text"),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+});
+
+describe("composer sends", () => {
+  it("sends a thread turn through the outbox and empties the composer", () => {
+    Story.story(
+      update,
+      Story.given(onThread),
+      Story.message(
+        Message.ChangedDraft({ value: "  run the tests $review  " })
+      ),
+      Story.message(Message.PressedSubmitKey({ intent: "foreground" })),
+      Story.model((model: Model) => {
+        assert.strictEqual(activeDraft(model).text, "");
+      }),
+      Story.Command.expectHas(PrepareSend),
+      Story.Command.resolve(
+        PrepareSend,
+        Message.PreparedTurn({
+          item: OutboxItem.Send({
+            input: {
+              threadId,
+              input: {
+                requestId: RequestId.make("req-1"),
+                text: "run the tests $review",
+                attachments: [],
+                skillRefs: ["review"],
+              },
+              whenBusy: "followUp",
+            },
+          }),
+          navigateTo: Option.none(),
+        })
+      ),
+      Story.expectOutMessage(
+        OutMessage.Submitted({
+          item: OutboxItem.Send({
+            input: {
+              threadId,
+              input: {
+                requestId: RequestId.make("req-1"),
+                text: "run the tests $review",
+                attachments: [],
+                skillRefs: ["review"],
+              },
+              whenBusy: "followUp",
+            },
+          }),
+          navigateTo: Option.none(),
+        })
+      )
+    );
+  });
+
+  it("refuses an oversized draft and keeps it", () => {
+    const long = "x".repeat(120_001);
+
+    const refused = update(
+      update(onThread, Message.ChangedDraft({ value: long })).model,
+      Message.PressedSubmitKey({ intent: "foreground" })
+    );
+
+    assert.strictEqual(activeDraft(refused.model).text, long);
+    assert.isTrue(Option.isSome(refused.model.notice));
+    assert.deepStrictEqual(refused.commands ?? [], []);
+  });
+
+  it("launches a draft with the server's default model", () => {
+    const draft = composerOn(
+      ComposerTarget.Draft({ draftId: "019a0000-0000-7000-8000-000000000b01" })
+    );
+
+    Story.story(
+      update,
+      Story.given(draft),
+      Story.message(Message.ChangedDraft({ value: "start here" })),
+      Story.message(Message.ClickedSend({ alternate: false })),
+      Story.Command.expectHas(PrepareLaunch),
+      Story.model((model: Model) => {
+        assert.deepStrictEqual(model.drafts, {});
+      }),
+      Story.Command.resolve(
+        PrepareLaunch,
+        Message.FailedPrepareTurn({ text: "start here", message: "no" })
+      ),
+      Story.model((model: Model) => {
+        assert.strictEqual(activeDraft(model).text, "start here");
+        assert.deepStrictEqual(catalog.defaults.model.modelId, "kimi-k3");
+      })
+    );
+  });
+
+  it("withdraws a queued input", () => {
+    Story.story(
+      update,
+      Story.given(onThread),
+      Story.message(
+        Message.ClickedWithdraw({ submissionId: SubmissionId.make(4) })
+      ),
+      Story.Command.expectHas(WithdrawQueued),
+      Story.Command.resolve(WithdrawQueued, Message.CompletedRequest()),
+      Story.model((model: Model) => {
+        assert.isTrue(Option.isNone(model.notice));
+      })
+    );
+  });
+});
+
+describe("the new-thread hero", () => {
+  const draftId = "019a0000-0000-7000-8000-000000000b02";
+
+  it("asks what to build in the project and offers the project picker", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
+      ...acknowledgeMounts,
+      Scene.Mount.resolve(
+        MeasureHeadline,
+        Message.MeasuredHeadline({ inline: true })
+      ),
+      Scene.expect(Scene.testId("hero-headline")).toContainText(
+        "What should we build"
+      ),
+      Scene.expect(Scene.testId("hero-project-trigger")).toHaveText("cairn"),
+      Scene.expect(Scene.testId("hero-start-without-project")).toExist(),
+      Scene.expect(Scene.testId("composer-context-strip")).toContainText(
+        "Current checkout"
+      ),
+      Scene.click(Scene.testId("hero-project-trigger")),
+      Scene.expect(Scene.testId("hero-project-list")).toContainText(
+        "Add project"
+      ),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+
+  it("asks for a project first when there is none", () => {
+    const empty = inform(initial, {
+      ...contextFor(ComposerTarget.Draft({ draftId })),
+      projects: [],
+    }).model;
+
+    Scene.scene(
+      { update, view },
+      Scene.given(empty),
+      Scene.expect(Scene.testId("hero-no-projects")).toContainText(
+        "What should we work on?"
+      ),
+      Scene.expect(editor).toBeAbsent(),
+      Scene.click(Scene.testId("hero-add-project")),
+      Scene.expectOutMessage(OutMessage.RequestedAddProject()),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+});

@@ -1,0 +1,6 @@
+{"type":"transcript_start","scenario":"image_content","version":1}
+{"type":"model","label":"m1","text":"a single pixel"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"what is this","image":true}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"what is this","images":1,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"a single pixel","images":0,"toolCalls":[],"toolName":null,"isError":null}]}

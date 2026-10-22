@@ -1,0 +1,218 @@
+// The `coding-tools` extension (plan D18): pi-durable's four coding tools plus `grep`, `find` and
+// `ls`, the search tools the user's pi TUI offers, so a model never shells out through `bash` to
+// search. Replay policy is the point of this module:
+//
+// - `read`, `grep`, `find` and `ls` only read, so a rerun after a crash is harmless: `safe`.
+// - `write`, `edit` and `bash` change the world: `unsafe`, so a crash mid-call comes back
+//   `interrupted` to the model instead of running twice.
+//
+// `bash` gets the brain's environment without `CAIRN_*`: pi-durable's default execution inherits
+// `process.env` whole, so `prepare` turns inheritance off and passes the filtered copy instead.
+// The search tools run `rg` and `fd` as argv arrays, with no shell between the model and the process.
+import type { Context as ChordContext } from "@earendil-works/chord/context";
+import { Type } from "@earendil-works/pi-ai";
+import type {
+  ToolExecutionApi,
+  ToolExecutionResult,
+} from "@earendil-works/pi-durable";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
+import {
+  createBashTool,
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+} from "@earendil-works/pi-durable/tools";
+import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
+import { Context, Effect, Layer } from "effect";
+
+import { threadProcessEnv } from "./Arms.ts";
+import { ExtensionOrder } from "./Extensions.ts";
+import type { CairnExtension } from "./Extensions.ts";
+
+/** The name of the extension, as pi-durable selects it. */
+export const CODING_TOOLS = "coding-tools";
+
+/** Runs one search command in the call's env, streaming its output to the model's result. */
+const runSearch = async (
+  api: ToolExecutionApi,
+  argv: ReadonlyArray<string>,
+  context: ChordContext,
+  empty: string
+): Promise<ToolExecutionResult> => {
+  const { env } = api;
+
+  if (env === undefined) {
+    throw new Error(
+      `${argv[0] ?? "search"} has no working directory for this thread; it cannot run.`
+    );
+  }
+
+  const options = {
+    env: threadProcessEnv(process.env),
+    inheritEnv: false,
+    onOutput: (text: string) => {
+      api.output(text);
+    },
+  };
+
+  const result = await env.exec(argv, options, context);
+
+  if (!result.ok) {
+    throw new Error(
+      `${argv[0] ?? "search"} could not start: ${result.error.message}`
+    );
+  }
+
+  // rg and fd exit 1 when nothing matched; that is an answer, not an error.
+  if (result.value.exitCode === 1 && api.retainedOutput().text === "") {
+    return { output: [{ type: "text", text: empty }] };
+  }
+
+  if (result.value.exitCode !== 0) {
+    return { isError: true };
+  }
+
+  return api.retainedOutput().text === ""
+    ? { output: [{ type: "text", text: empty }] }
+    : {};
+};
+
+const optionalPath = Type.Optional(
+  Type.String({
+    description:
+      "File or directory to search, relative to the working directory. Default: the working directory.",
+  })
+);
+
+const grep = defineTool({
+  name: "grep",
+  description:
+    "Search file contents with ripgrep. Returns matching lines as path:line:text. Respects .gitignore.",
+  parameters: Type.Object({
+    pattern: Type.String({ description: "A Rust regular expression." }),
+    path: optionalPath,
+    glob: Type.Optional(
+      Type.String({
+        description: "Only search files matching this glob, such as *.ts.",
+      })
+    ),
+    ignoreCase: Type.Optional(Type.Boolean()),
+  }),
+  replay: "safe",
+  execute: async (args, api, context) =>
+    await runSearch(
+      api,
+      [
+        "rg",
+        "--line-number",
+        "--no-heading",
+        "--color=never",
+        ...(args.ignoreCase === true ? ["--ignore-case"] : []),
+        ...(args.glob === undefined ? [] : ["--glob", args.glob]),
+        "--",
+        args.pattern,
+        args.path ?? ".",
+      ],
+      context,
+      "No matches."
+    ),
+});
+
+const find = defineTool({
+  name: "find",
+  description:
+    "Find files and directories by name with fd. Returns one path per line. Respects .gitignore.",
+  parameters: Type.Object({
+    pattern: Type.Optional(
+      Type.String({
+        description:
+          "A regular expression matched against names. Default: every entry.",
+      })
+    ),
+    path: optionalPath,
+    type: Type.Optional(
+      Type.Union([Type.Literal("file"), Type.Literal("directory")])
+    ),
+  }),
+  replay: "safe",
+  execute: async (args, api, context) =>
+    await runSearch(
+      api,
+      [
+        "fd",
+        "--color=never",
+        ...(args.type === undefined
+          ? []
+          : ["--type", args.type === "file" ? "f" : "d"]),
+        "--",
+        args.pattern ?? ".",
+        args.path ?? ".",
+      ],
+      context,
+      "Nothing found."
+    ),
+});
+
+const ls = defineTool({
+  name: "ls",
+  description:
+    "List a directory, hidden entries included, with sizes and kinds.",
+  parameters: Type.Object({ path: optionalPath }),
+  replay: "safe",
+  execute: async (args, api, context) =>
+    await runSearch(
+      api,
+      ["ls", "-lA", "--", args.path ?? "."],
+      context,
+      "The directory is empty."
+    ),
+});
+
+/** The coding tools, with `read` replay-safe and `bash` given a Cairn-free environment. */
+const codingTools = (images: ImageProcessor) => {
+  const read = createReadTool({ images });
+
+  return defineExtension({
+    name: CODING_TOOLS,
+    tools: [
+      { ...read, replay: "safe" as const },
+      createWriteTool(),
+      createEditTool(),
+      createBashTool({
+        prepare: (execution) => {
+          execution.env = {
+            ...threadProcessEnv(process.env),
+            ...execution.env,
+          };
+          execution.inheritEnv = false;
+        },
+      }),
+      grep,
+      find,
+      ls,
+    ],
+  });
+};
+
+/** The coding tools extension, with the Photon image processor `read` uses for pictures. */
+export class CodingTools extends Context.Service<
+  CodingTools,
+  { readonly extension: CairnExtension }
+>()("cairn/server/brain/CodingTools") {
+  static readonly layer = Layer.effect(
+    CodingTools,
+    Effect.gen(function* () {
+      const images = yield* Effect.promise(
+        async () => await createNodePhotonImages()
+      );
+
+      return CodingTools.of({
+        extension: {
+          order: ExtensionOrder.codingTools,
+          extension: codingTools(images),
+        },
+      });
+    })
+  );
+}

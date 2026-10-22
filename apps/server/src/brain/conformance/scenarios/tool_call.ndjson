@@ -1,0 +1,11 @@
+{"type":"transcript_start","scenario":"tool_call","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"echo","arguments":{"text":"pong"}}]}
+{"type":"model","label":"m2","text":"the tool said pong"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"ping it"}
+{"type":"expect_event","event":{"_tag":"RunStarted"}}
+{"type":"expect_event","event":{"_tag":"MessageCommitted","role":"assistant","text":""}}
+{"type":"expect_event","event":{"_tag":"MessageCommitted","role":"assistant","text":"the tool said pong"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"ping it","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["echo"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"pong","images":0,"toolCalls":[],"toolName":"echo","isError":false},{"kind":"pi.assistant","role":"assistant","text":"the tool said pong","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_event_count","event":{"_tag":"RunTerminal"},"count":1}

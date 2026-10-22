@@ -1,0 +1,12 @@
+{"type":"transcript_start","scenario":"stop_keeps_queue","version":1}
+{"type":"model","label":"m1","hold":true,"text":"never seen"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"one"}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"input","step":"follow_up","requestId":"r2","text":"two"}
+{"type":"expect_view","path":["queueLength"],"equals":1}
+{"type":"input","step":"stop"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"interrupted"}}
+{"type":"expect_view","path":["running"],"equals":false}
+{"type":"expect_view","path":["queue"],"equals":[{"mode":"followUp","text":"two"}]}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"one","images":0,"toolCalls":[],"toolName":null,"isError":null}]}

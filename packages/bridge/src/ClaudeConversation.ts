@@ -80,7 +80,7 @@ import {
   userTurnBlocks,
 } from "./ClaudePrompt.ts";
 import type { ResumeDecision } from "./ClaudeResume.ts";
-import { decideResume } from "./ClaudeResume.ts";
+import { decideResume, resumeAppend } from "./ClaudeResume.ts";
 import type { ClaudeQuery, ToolHandler } from "./ClaudeSdk.ts";
 import { ClaudeSdk } from "./ClaudeSdk.ts";
 import { ClaudeSettings } from "./ClaudeSettings.ts";
@@ -756,7 +756,7 @@ export const openConversation = Effect.fnUntraced(function* (
 
         return {
           session,
-          append: Option.none<string>(),
+          append: resumeAppend(stampHeld, state),
           reminder,
           held: current_,
           blocks: [...toolResultsPrompt(carried), ...userTurnBlocks(messages)],
@@ -785,7 +785,7 @@ export const openConversation = Effect.fnUntraced(function* (
 
       return {
         session,
-        append: Option.none<string>(),
+        append: resumeAppend(stampHeld, state),
         reminder,
         held: current_,
         blocks: plan.value.blocks,

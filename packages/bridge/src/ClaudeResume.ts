@@ -7,6 +7,8 @@
 import { Option } from "effect";
 
 import type { Effort } from "./ClaudeGuards.ts";
+import type { HeldState, InstructionState } from "./ClaudeInstructions.ts";
+import { heldOf, renderInstructions } from "./ClaudeInstructions.ts";
 import type { FoundStamp } from "./ClaudeStamp.ts";
 import { latestStamp, stampMatches } from "./ClaudeStamp.ts";
 import type { ConversationMessage } from "./ClaudeTranscript.ts";
@@ -92,6 +94,29 @@ const onlyInputsAfter = (
 
 const effortKey = (effort: Option.Option<Effort>): string =>
   Option.getOrElse(effort, () => "default");
+
+const EMPTY_TEXT_HASH = heldOf({ base: "", sections: new Map() }).base;
+
+/** Whether the instructions a session was stamped with rendered a non-empty append. */
+const heldHadAppend = (held: HeldState): boolean =>
+  held.base !== EMPTY_TEXT_HASH ||
+  Object.values(held.sections).some((hash) => hash !== EMPTY_TEXT_HASH);
+
+/**
+ * The append a resumed (or forked) child is launched with. Claude Code sends the system prompt it
+ * recorded at the session's first request whatever a later launch passes, so the text is never
+ * rendered again; but the line naming the agent ahead of it is recorded only once the first reply
+ * finishes. A session killed before then (a tool call held in its first turn) picks that line again
+ * from whether the resuming launch has an append, and a different line rewrites the whole prompt
+ * cache (`spikes/7-bridge-held-resume/NOTES.md`). So a resume passes an append exactly when the
+ * stamped session had one: the current instructions, which Claude Code ignores while it holds its
+ * record.
+ */
+export const resumeAppend = (
+  held: HeldState,
+  state: InstructionState
+): Option.Option<string> =>
+  heldHadAppend(held) ? renderInstructions(state) : Option.none();
 
 const fresh = (reason: FreshReason): ResumeDecision => ({
   kind: "fresh",

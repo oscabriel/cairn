@@ -608,3 +608,58 @@ Unverified concerns:
 Decisions:
 
 - The sidebar's relative times now first update one interval after a row starts or stops running instead of at once; the times are minute-grained, so nothing visible changes.
+
+### Step 3 (5F)
+
+Built on 2026-10-22 on `main` (`7a43c85`, then this note's commit) and deployed to `https://code.gneiss.run`. 5F ran alone, so it touched a few judges outside its block (deviations below). The gate page is at `https://plans.gneiss.run/cairn/v2/phase-1-gate/` (`~/Developer/agent-artifacts/cairn/v2/phase-1-gate/index.html`).
+
+#### What landed
+
+- **`ops/wizards/phase-1.sh`**, written with the `wizard` skill: plan section 4's eight stages (PWA install, notifications with `judges/push.ts --send`, three cold loads with `tailscale ping` and `judges/phone-report.ts load`, the phone paste with `judges/paste.ts --page`, the MacBook WebKit runs only if Claude has not recorded them, the Executor re-sign-in only if Settings does not read Connected, the parity look, the daily-driver day). Each stage appends its verdict to the gate page's `runs/wizard.txt` and judge output to `runs/<name>.jsonl`; `ops/wizards/phase-1.sh <n>` reruns from a stage. It captures no secret.
+- **`judges/deployed-unit.ts` and `judges/lib/DeployedUnit.ts`**: the deployed-unit durability checks (review response 14). `judges/shutdown.sh --unit cairn.service` runs `restarts`, `judges/durability.ts --unit cairn.service --window streaming` runs `streaming`. Both talk to port 3774 with Caddy's headers as `deploy-check.ts` does and delete their thread afterwards.
+- **`judges/load.ts --browser webkit`** (5D's command did not exist): WebKit has no CDP, so only the `lan` profile runs and the line names skipped profiles.
+- **`ops/cairn/cairn-nightly.{service,timer}`**, linked and enabled by `ops/cairn/install.sh` (step 4): `judges/fixtures/durability/nightly.sh` from the live worktree at 03:30 (10 min random delay, not persistent). Installed and started once by hand to prove the unit.
+- **ADR 0022 accepted** with the deployed unit's numbers.
+
+#### Judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | oxfmt clean, oxlint 0, typecheck clean, vitest 127 files and 1,135 tests. |
+| `ops/cairn/deploy.sh` | pass | listening 1,044 ms, hello 1,092 ms, build `084a9ce6326c`, invocation `4301366d…`. |
+| `judges/shutdown.sh --unit cairn.service` | pass | six restarts during `bash sleep 20` on `opencode-go/claude-haiku-5-5`: `closed` 2,009 / 2,006 / 2,008 / 2,007 / 2,006 / 2,004 ms, no `shutdown_slow`, `systemctl restart` 2,074 to 2,083 ms, first snapshot 7 to 13 ms after each socket, `NRestarts` 0 and 0, nothing parked, 6 `bash` calls, no follow-up needed, equal to a fresh client 61 ms after quiet. The first attempt timed out before restart 6 (the model ended its turn after an interrupted `bash`); the judge now sends one follow-up message when the turn ends early. |
+| `judges/durability.ts --unit cairn.service --window streaming` | pass | `kill -9` 90 characters into a `claude-bridge/claude-haiku-5-5` reply: 2 committed entries kept, 1 `claude` child before and 0 outside the cgroup after 2 s, up 1,813 ms after the kill, first snapshot 8 ms after the socket, equal to a fresh client 60 ms after quiet, unit active, `NRestarts` 0 to 1. |
+| `judges/gate.sh` | pass | 43 cases, 0 failed. |
+| `judges/load.ts` (deployed, Chromium) | pass | lan p50 177 / p95 254 / max 258 ms, 4g p50 541 / p95 545 ms, 5 requests, 327,377 bytes, boot JSON 1,937 chars; control p50 1,687 (failed as designed). |
+| `judges/tools.ts` | pass on rerun | First run 3 of 4: the model wrote the convex path as `"tools[\"cairn-bridges\"].convex.status"` and the judge's path pattern stopped at the escaped quote. Fixed (escaped quotes and backslashes in `CALL_PATH` and `segmentsOf`); rerun 4 of 4: convex 14,088 ms, playwright 8,553, github 8,047, open 12,572 (search before call). Executor connected. |
+| `judges/relay-orphans.sh cairn-bridges http://172.17.0.1:3776/healthz ops/relay/warm.sh executor` | pass | 5 cases, 0 orphans; healthy after kill9-main 2,715 ms, kill9-child 1,015, restart-unit 1,053, stop-start-unit 1,055, restart-peer 3,593. |
+| `judges/live-chat.ts` | pass | hello 25 ms, launch 37 ms, reply 1,248 ms; 29 models; opencode-go and claude-bridge ready, anthropic refused, openai-codex missing. |
+| `judges/phone-report.ts load` and `paste` | incomplete | 0 phone runs in the journal (exit 2); wizard stages 3 and 4. |
+| WebKit tier on `mbp-14` | not run | SSH answered once at the start of the step, then timed out for the rest of it (the MacBook sleeps; Tailscale shows it offline). Stays wizard stage 5; ADR 0023 stays proposed. |
+| Gate page renders | pass | `https://plans.gneiss.run/cairn/v2/phase-1-gate/` 200, all 66 parity images load. |
+
+#### Parity classification
+
+The gate page classifies every structure difference in the step 2 report (unchanged since: no client code moved in this step) by rule over `structure.json`, per state: seven declared reasons (header toggle offsets; fixture text, counted as differences in width or height only plus the extra fixture rows; Cairn-only hooks; importer-skipped transcript rows; different settings; the virtual-list scroller; the unbranded mark and send colour) and ten open items for the user's look: the thread page's composer banner drawer, its filled surface and compact 390 resting layout, the minimap, the workspace drop target, thread-page icon buttons and the "Open diff" label, the selected row highlight on the thread page, composer labels at 390, the sidebar draft row, the project popover's anchor at 1440, and settings select line-height. No state has an unclassified landmark.
+
+#### Decisions
+
+- **The deployed-unit checks live in a new judge**, not inside `durability.ts`'s window table and `shutdown.sh`'s body: those drive transient judge brains with judge tools, and production has neither the tools nor the faux model. The plan's command lines work as written through thin `--unit` dispatches.
+- **Models for the deployed checks:** restarts on `opencode-go/claude-haiku-5-5` (cheap, no Claude child to confuse the stop timing); streaming on `claude-bridge/claude-haiku-5-5`, so "no `claude` child outside the cgroup" is judged on a real child.
+- **The `bash sleep 20` prompt asks the model to rerun an interrupted call**, because `bash` is `unsafe` and comes back `interrupted` after a restart; one follow-up message covers a model that stops instead.
+- **`relay-orphans.sh` against the deployed relay unit** (`cairn-bridges` with Executor as the peer), as every earlier wave ran it; the brain's own `claude` children are judged by the streaming check.
+- **The nightly timer is installed** (reversing step 1's decision, as the step's brief asked), at 03:30 with no catch-up, from the live worktree so it judges the deployed commit.
+- **Parity differences are classified on the gate page, not in fixtures**, because the structure judge has no gap mechanism (step 2's gap); the rules are in the page's numbers and in this note.
+- **Wizard verdicts go to `phase-1-gate/runs/`** rather than an env file, so the next agent can read them and update the page.
+
+#### Gaps
+
+- The phone halves (wizard stages 2 to 4), WebKit (stage 5), the parity look (stage 7) and the daily-driver day (stage 8) are the user's. ADR 0021 waits on stages 3 and 4, ADR 0023 on stage 5.
+- The nightly run started by hand was still running when this note was written; its verdict is in `~/cairn-judges/durability-2026-10-22.jsonl`.
+- Phase 0 wizard stage 11 (revoking Claude's Executor setup token) is left to the user, as they asked.
+- The ten parity open items are not fixed; they are the user's call in stage 7.
+
+#### Deviations from the plan
+
+- 5F's block owns `ops/**` and the gate page; it also changed `judges/shutdown.sh`, `judges/durability.ts` (a `--unit` dispatch each), `judges/load.ts` (`--browser webkit`), `judges/tools.ts` (path parsing) and added `judges/deployed-unit.ts` and `judges/lib/DeployedUnit.ts`. Step 5.3 ran alone, so nothing else owned them.
+- The deployed-unit restarts use `bash sleep 20`, not `slow` and `mark` (review response 14 said so already).

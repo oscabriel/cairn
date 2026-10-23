@@ -34,6 +34,7 @@ import {
   EnsureScratch,
   LoadDrafts,
   LoadSettings,
+  MoveHeroToDraftUrl,
   PrepareLaunch,
   PrepareSend,
   SaveDrafts,
@@ -163,6 +164,15 @@ const resetTransient = (model: Model): Model =>
     notice: () => Option.none(),
   });
 
+/** At `/` with the hero's draft id known, the command that moves the URL to `/new/<id>`. */
+const moveHeroToDraftUrl = (model: Model) =>
+  Predicate.isTagged(model.context.target, "Home")
+    ? Option.match(model.homeDraftId, {
+        onNone: () => [],
+        onSome: (draftId) => [MoveHeroToDraftUrl({ draftId })],
+      })
+    : [];
+
 /**
  * Brings the composer in line with the app: the route's target, the connection, the shell and the
  * open thread's view. A new target closes every menu and puts the caret at the end of its draft.
@@ -180,6 +190,7 @@ export const inform = (
     model: retargeted
       ? modifyFields(next, { selection: () => ({ start: end, end }) })
       : next,
+    commands: retargeted ? moveHeroToDraftUrl(next) : [],
   };
 };
 
@@ -401,7 +412,10 @@ const dispatchTurn = (
                 onSome: (key) => Record.remove(drafts, key),
               }),
             homeDraftId: (id) =>
-              Predicate.isTagged(model.context.target, "Home")
+              Predicate.isTagged(model.context.target, "Home") ||
+              Option.exists(id, (home) =>
+                Option.contains(draftThreadId(model), home)
+              )
                 ? Option.none()
                 : id,
           }),
@@ -1059,9 +1073,14 @@ const step = (model: Model, message: Message): UpdateReturn =>
     LoadedSettings: ({ settings }) => ({
       model: modifyFields(model, { settings: () => settings }),
     }),
-    MintedHomeDraft: ({ draftId }) => ({
-      model: modifyFields(model, { homeDraftId: () => Option.some(draftId) }),
-    }),
+    MintedHomeDraft: ({ draftId }) => {
+      const next = modifyFields(model, {
+        homeDraftId: () => Option.some(draftId),
+      });
+
+      return { model: next, commands: moveHeroToDraftUrl(next) };
+    },
+    MovedHeroToDraftUrl: () => keep(model),
     ElapsedDraftDebounce: ({ version }) =>
       version === model.draftsVersion && version > model.savedVersion
         ? { model, commands: [SaveDrafts({ version, drafts: model.drafts })] }

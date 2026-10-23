@@ -300,6 +300,8 @@ const EDITOR_CLASS =
 /** What the editor shows and the flags its Mount reads. */
 export interface EditorInputs {
   readonly text: string;
+  /** Whether an empty prompt shows the placeholder; t3code hides it once the draft has images. */
+  readonly placeholder: boolean;
   readonly flags: EditorFlags;
   /** The id of the open menu's list, for `aria-controls`. */
   readonly menuListId: Option.Option<string>;
@@ -343,7 +345,7 @@ export const editorView = (
         h.OnInput((value) => Message.ChangedDraft({ value })),
         h.OnMount(ComposerInput()),
       ]),
-      inputs.text === ""
+      inputs.text === "" && inputs.placeholder
         ? h.div(
             [
               h.Attribute("aria-hidden", "true"),

@@ -1,4 +1,4 @@
-import { RequestId, SubmissionId } from "@cairn/protocol/Ids";
+import { RequestId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option } from "effect";
 import { KeyValueStore } from "effect/persistence";
@@ -10,6 +10,7 @@ import { Message as AttachmentsMessage } from "../attachments/Message.ts";
 import { AttachmentPaste } from "../attachments/Paste.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import {
+  MoveHeroToDraftUrl,
   PrepareLaunch,
   PrepareSend,
   SaveDrafts,
@@ -339,7 +340,7 @@ describe("composer footer folding", () => {
             },
           })
         ),
-        Scene.expect(Scene.testId("composer-footer")).toHaveAttr(
+        Scene.expect(Scene.selector("[data-chat-composer-footer]")).toHaveAttr(
           "data-chat-composer-footer-compact",
           String(compact)
         ),
@@ -511,6 +512,53 @@ describe("composer sends", () => {
     assert.strictEqual(activeDraft(refused.model).text, long);
     assert.isTrue(Option.isSome(refused.model.notice));
     assert.deepStrictEqual(refused.commands ?? [], []);
+  });
+
+  it("moves the hero to its draft's URL once the draft has an id, so a reload restores it", () => {
+    const draftId = ThreadId.make("019a0000-0000-7000-8000-000000000b02");
+
+    Story.story(
+      update,
+      Story.given(composerOn(ComposerTarget.Home())),
+      Story.message(Message.MintedHomeDraft({ draftId })),
+      Story.Command.expectHas(MoveHeroToDraftUrl),
+      Story.Command.resolve(MoveHeroToDraftUrl, Message.MovedHeroToDraftUrl()),
+      Story.model((model: Model) => {
+        assert.isTrue(Option.contains(model.homeDraftId, draftId));
+      })
+    );
+
+    const moved = inform(
+      {
+        ...composerOn(ComposerTarget.Home()),
+        homeDraftId: Option.some(draftId),
+      },
+      contextFor(ComposerTarget.Draft({ draftId }))
+    );
+
+    assert.deepStrictEqual(moved.commands ?? [], []);
+  });
+
+  it("forgets the hero's draft id once that draft launches from its own URL", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b03";
+
+    Story.story(
+      update,
+      Story.given({
+        ...composerOn(ComposerTarget.Draft({ draftId })),
+        homeDraftId: Option.some(draftId),
+      }),
+      Story.message(Message.ChangedDraft({ value: "start here" })),
+      Story.message(Message.ClickedSend({ alternate: false })),
+      Story.Command.expectHas(PrepareLaunch),
+      Story.model((model: Model) => {
+        assert.isTrue(Option.isNone(model.homeDraftId));
+      }),
+      Story.Command.resolve(
+        PrepareLaunch,
+        Message.FailedPrepareTurn({ text: "start here", message: "no" })
+      )
+    );
   });
 
   it("launches a draft with the server's default model", () => {

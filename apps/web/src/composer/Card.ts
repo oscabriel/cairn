@@ -27,6 +27,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { X } from "lucide";
 
 import type { Message as TrayMessage } from "../attachments/Message.ts";
+import { hasAttachments } from "../attachments/Update.ts";
 import { attachmentFormAttributes, attachmentTray } from "./AttachmentTray.ts";
 import {
   BANNER_SLOT_CLASS,
@@ -56,6 +57,13 @@ import { isThreadRunning } from "./Update.ts";
 
 const DRAWER_CLASS =
   "relative isolate flex min-h-0 w-full flex-col overflow-hidden pb-[calc(1rem+1px)] before:rounded-t-2xl before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:border before:border-(--chat-composer-outline) before:bg-(--chat-composer-glass-surface) before:shadow-composer";
+
+/** True when the open draft holds attachments, saved or still in the tray. */
+const draftHasAttachments = (model: Model): boolean =>
+  activeDraft(model).attachments.length > 0 ||
+  Option.exists(draftKey(model), (key) =>
+    hasAttachments(model.attachments, key)
+  );
 
 const toTray = (message: TrayMessage): Message =>
   Message.GotAttachmentsMessage({ message });
@@ -161,7 +169,6 @@ export const cardView = (
   return h.div(
     [
       h.DataAttribute("slot", "composer-shell"),
-      h.DataAttribute("testid", "composer"),
       ...(Option.isSome(contextStrip)
         ? [h.DataAttribute("with-context", "true")]
         : []),
@@ -169,6 +176,7 @@ export const cardView = (
     ],
     [
       popoverView(model, h),
+      triggerMenuView(model, h),
       h.div(
         [h.DataAttribute("slot", "composer-host"), h.Class(HOST_CLASS)],
         [
@@ -192,7 +200,7 @@ export const cardView = (
                     [
                       h.div(
                         [h.Class(BANNER_STACK_CLASS)],
-                        [triggerMenuView(model, h), queueView(model, h)]
+                        [queueView(model, h)]
                       ),
                     ]
                   ),
@@ -226,12 +234,22 @@ export const cardView = (
                                     h.Attribute("aria-atomic", "true"),
                                     h.Class("sr-only"),
                                   ]),
+                                  // t3code draws the draft's images inside the body, above the
+                                  // prompt.
+                                  attachmentTray(
+                                    model.attachments,
+                                    draftKey(model),
+                                    toTray,
+                                    h
+                                  ),
                                   h.div(
                                     [h.Class("relative")],
                                     [
                                       editorView(
                                         {
                                           text: activeDraft(model).text,
+                                          placeholder:
+                                            !draftHasAttachments(model),
                                           flags: {
                                             menuOpen: Option.isSome(menu),
                                             isDraft: isDraftTarget(model),
@@ -259,12 +277,6 @@ export const cardView = (
                                     ]
                                   ),
                                 ]
-                              ),
-                              attachmentTray(
-                                model.attachments,
-                                draftKey(model),
-                                toTray,
-                                h
                               ),
                               noticeView(model, h),
                               footerView(model, h),

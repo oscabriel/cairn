@@ -47,17 +47,20 @@ const child = <Message>(
 
 /**
  * The icon as an inline SVG. `name` is its lucide name (`chevron-down`), used for t3code's
- * `lucide lucide-<name>` classes; `className` is added after them.
+ * `lucide lucide-<name>` classes; `className` is added after them. `hook` names a `data-<hook>`
+ * attribute set to `true`, for t3code's `data-composer-control-icon` and chevron hooks.
  */
 export const icon = <Message>(
   h: HtmlBuilder<Message>,
   node: IconNode,
   name: string,
   className: string,
-  strokeWidth = 2
+  strokeWidth = 2,
+  hook?: string
 ): Html =>
   h.svg(
     [
+      ...(hook === undefined ? [] : [h.DataAttribute(hook, "true")]),
       h.Attribute("xmlns", "http://www.w3.org/2000/svg"),
       h.Attribute("width", "24"),
       h.Attribute("height", "24"),

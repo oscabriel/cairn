@@ -11,11 +11,12 @@ import { RuntimeMode } from "@cairn/protocol/Policy";
 import { SendInput, TurnInput, WhenBusy } from "@cairn/protocol/Thread";
 import { Effect, Option, Predicate, Schema } from "effect";
 import { Command } from "foldkit";
+import { replaceUrl } from "foldkit/navigation";
 
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { workspaceStrategy, EnvMode } from "../hero/ContextStrip.ts";
-import { threadRouter } from "../Route.ts";
+import { draftRouter, threadRouter } from "../Route.ts";
 import {
   loadDrafts,
   loadSettings,
@@ -91,6 +92,19 @@ export const SaveSettings = Command.define("SaveSettings", {
 export const mintHomeDraft = Effect.map(mintThreadId, (draftId) =>
   Message.MintedHomeDraft({ draftId })
 );
+
+/**
+ * Replaces `/` with the hero draft's own URL, `/new/<draftId>`, as t3code's index route does, so
+ * a reload of the page restores the draft instead of minting a fresh one.
+ */
+export const MoveHeroToDraftUrl = Command.define("MoveHeroToDraftUrl", {
+  args: { draftId: Schema.String },
+  messages: [Message.MovedHeroToDraftUrl],
+  execute: ({ draftId }) =>
+    replaceUrl(draftRouter({ draftId })).pipe(
+      Effect.as(Message.MovedHeroToDraftUrl())
+    ),
+});
 
 const onClient = <A, E>(
   use: (

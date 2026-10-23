@@ -235,6 +235,13 @@ const emptyText = (contents: MenuContents): string => {
 const DRAWER_CLASS =
   "[--chat-composer-attached-surface:var(--chat-composer-glass-surface,var(--card))] dark:[--chat-composer-attached-surface:var(--chat-composer-glass-surface,var(--surface-raised))] relative isolate border-0 bg-transparent shadow-none [--chat-composer-attached-tint:transparent] [--chat-composer-attached-outline:var(--chat-composer-outline,color-mix(in_srgb,var(--contrast-foreground)_8%,transparent))] dark:[--chat-composer-attached-outline:var(--chat-composer-outline,color-mix(in_srgb,var(--color-white)_5%,transparent))] [--chat-composer-attachment-overlap:calc(1rem+1px)] before:rounded-t-2xl before:mask-t-from-transparent before:mask-t-from-4 before:mask-t-to-black before:mask-t-to-4 before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:border before:border-(--chat-composer-attached-outline) before:bg-(--chat-composer-attached-surface)/(--glass-opacity) before:bg-linear-to-b before:from-(--chat-composer-attached-tint) before:to-(--chat-composer-attached-tint) before:backdrop-blur-(--glass-blur) before:backdrop-saturate-(--glass-saturation) before:shadow-composer dark:before:shadow-composer-dark dark:supports-[(backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px))]:before:bg-composer-seam-above not-supports-[((backdrop-filter:blur(1px))_or_(-webkit-backdrop-filter:blur(1px)))]:before:bg-(--chat-composer-attached-surface) flex min-h-0 w-full flex-col overflow-hidden pb-(--chat-composer-attachment-overlap) **:data-[slot=command-item]:rounded-lg";
 
+/**
+ * Where t3code's portaled drawer layer sits: above the card, inset like the banner drawers, its
+ * bottom tucked 1rem + 1px under the card's top edge.
+ */
+const DRAWER_LAYER_CLASS =
+  "pointer-events-auto absolute inset-x-(--chat-composer-drawer-inset) bottom-[calc(100%-1rem-1px)] z-40 flex flex-col";
+
 const ITEM_CLASS =
   "flex min-h-8 select-none items-center gap-2 rounded-sm px-2 text-base outline-none data-disabled:pointer-events-none data-disabled:opacity-64 sm:min-h-7 sm:text-sm [&_svg:not([class*='text-'])]:text-muted-foreground py-1.5 cursor-pointer hover:bg-transparent hover:text-inherit";
 
@@ -285,6 +292,33 @@ const itemRow = (
     ]
   );
 
+/** The open menu's list, or what it says when nothing matches. */
+const menuBody = (contents: MenuContents, h: HtmlBuilder<Message>): Html =>
+  contents.items.length > 0
+    ? h.div(
+        [
+          h.Id(MENU_LIST_ID),
+          h.Role("listbox"),
+          h.AriaLabel(LISTBOX_LABEL[contents.trigger.kind]),
+          h.DataAttribute("slot", "command-list"),
+          h.Class(
+            "not-empty:scroll-py-2 not-empty:p-2 max-h-72 min-h-0 overflow-y-auto scroll-pb-6"
+          ),
+        ],
+        [
+          h.div(
+            [h.Role("group"), h.DataAttribute("slot", "command-group")],
+            contents.items.map((item) =>
+              itemRow(item, Option.contains(contents.activeId, item.id), h)
+            )
+          ),
+        ]
+      )
+    : h.div(
+        [h.Class("px-5 pt-3.5 pb-7")],
+        [h.p([h.Class("text-secondary-label text-xs")], [emptyText(contents)])]
+      );
+
 /** The drawer above the composer card while a `/`, `@` or `$` menu is open. */
 export const triggerMenuView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Option.match(menuContents(model), {
@@ -292,37 +326,30 @@ export const triggerMenuView = (model: Model, h: HtmlBuilder<Message>): Html =>
     onSome: (contents) =>
       h.div(
         [
-          h.DataAttribute("composer-banner-surface", "attached"),
-          h.DataAttribute("composer-command-drawer", "true"),
-          h.DataAttribute("testid", "composer-menu"),
-          h.DataAttribute("trigger", contents.trigger.kind),
-          h.Class(DRAWER_CLASS),
+          h.DataAttribute("composer-drawer-layer", "true"),
+          h.Class(DRAWER_LAYER_CLASS),
         ],
         [
-          contents.items.length > 0
-            ? h.div(
+          h.div(
+            [
+              // t3code portals this drawer out of the composer, so the shell's
+              // `has-[data-composer-banner-surface=attached]` styles never see it; here it stays
+              // inside the shell, so its value is not `attached`.
+              h.DataAttribute("composer-banner-surface", "floating"),
+              h.DataAttribute("composer-command-drawer", "true"),
+              h.Class(DRAWER_CLASS),
+            ],
+            [
+              h.div(
                 [
-                  h.Id(MENU_LIST_ID),
-                  h.Role("listbox"),
-                  h.AriaLabel(LISTBOX_LABEL[contents.trigger.kind]),
-                  h.DataAttribute("slot", "command-list"),
-                  h.Class(
-                    "not-empty:scroll-py-2 not-empty:p-2 max-h-72 min-h-0 overflow-y-auto scroll-pb-6"
-                  ),
+                  h.DataAttribute("testid", "composer-menu"),
+                  h.DataAttribute("trigger", contents.trigger.kind),
+                  h.Class("flex min-h-0 flex-col"),
                 ],
-                contents.items.map((item) =>
-                  itemRow(item, Option.contains(contents.activeId, item.id), h)
-                )
-              )
-            : h.div(
-                [h.Class("px-5 pt-3.5 pb-7")],
-                [
-                  h.p(
-                    [h.Class("text-secondary-label text-xs")],
-                    [emptyText(contents)]
-                  ),
-                ]
+                [menuBody(contents, h)]
               ),
+            ]
+          ),
         ]
       ),
   });

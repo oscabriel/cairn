@@ -26,11 +26,16 @@
 import { modelPickerModelKey } from "@cairn/client-logic/ModelSearch";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ModelListing } from "@cairn/protocol/Models";
-import { Array, Option } from "effect";
+import { Array, Option, Predicate } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
-import { Search, Star } from "lucide";
+import { Folder, FolderPlus, Search, Star } from "lucide";
 
 import { filterBranches, resolveEnvModeLabel } from "../hero/ContextStrip.ts";
+import {
+  COMBOBOX_ITEM_CLASS,
+  COMBOBOX_LIST_CLASS,
+  COMBOBOX_POPUP_CLASS,
+} from "../ui/Combobox.ts";
 import { MENU_ITEM_CLASS, POPUP_CLASS } from "./Classes.ts";
 import { activeDraft, isDraftTarget, pickableProjects } from "./Drafts.ts";
 import { modeItems, overflowItems, thinkingItems } from "./Footer.ts";
@@ -403,6 +408,130 @@ const projectKeyMessage = (
     : Option.none();
 };
 
+const COMBOBOX_INPUT_CLASS =
+  "w-full min-w-0 rounded-[inherit] outline-none placeholder:text-placeholder [transition:background-color_5000000s_ease-in-out_0s] h-7.5 px-[calc(--spacing(2.5)-1px)] leading-7.5 sm:h-6.5 sm:leading-6.5";
+
+/** One project row, t3code's combobox item: a folder mark and the title on up to two lines. */
+const projectItem = (
+  h: HtmlBuilder<Message>,
+  key: string,
+  onClick: Message,
+  title: string,
+  mark: Html,
+  highlighted: boolean
+): Html =>
+  h.div(
+    [
+      h.Key(key),
+      h.Role("option"),
+      h.AriaSelected(highlighted),
+      // Enter picks the first row, so it is the highlighted one, as in t3code.
+      ...(highlighted ? [h.DataAttribute("highlighted", "")] : []),
+      h.DataAttribute("slot", "combobox-item"),
+      h.Class(COMBOBOX_ITEM_CLASS),
+      h.OnClick(onClick),
+    ],
+    [
+      h.div(
+        [
+          h.DataAttribute("slot", "combobox-item-content"),
+          h.Class(
+            "flex min-w-0 flex-1 items-center gap-2 [&_svg:not([class*='text-'])]:text-muted-foreground"
+          ),
+        ],
+        [
+          h.span(
+            [
+              h.AriaHidden(true),
+              h.Class(
+                "inline-flex items-center justify-center size-4 shrink-0"
+              ),
+            ],
+            [mark]
+          ),
+          h.span(
+            [
+              h.DataAttribute("slot", "tooltip-trigger"),
+              h.Class("min-w-0 flex-1 text-sm"),
+            ],
+            [
+              h.span(
+                [
+                  h.Class(
+                    "min-w-0 line-clamp-2 whitespace-normal [overflow-wrap:anywhere]"
+                  ),
+                ],
+                [title]
+              ),
+            ]
+          ),
+        ]
+      ),
+    ]
+  );
+
+const projectSearch = (
+  h: HtmlBuilder<Message>,
+  query: string,
+  onKey: (key: string) => Option.Option<Message>
+): Html =>
+  h.div(
+    [h.Class("min-w-0 shrink-0 px-3 pt-2.5")],
+    [
+      h.div(
+        [
+          h.Class(
+            "relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring"
+          ),
+        ],
+        [
+          icon(
+            h,
+            Search,
+            "search",
+            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55"
+          ),
+          h.div(
+            [h.Class("relative w-full text-foreground")],
+            [
+              h.span(
+                [
+                  h.DataAttribute("slot", "input-control"),
+                  h.Class(
+                    "rounded-none bg-transparent text-sm [&_input]:h-6.5 [&_input]:ps-5 [&_input]:font-sans [&_input]:leading-6.5"
+                  ),
+                ],
+                [
+                  h.input([
+                    h.Type("text"),
+                    h.Role("combobox"),
+                    h.AriaExpanded(true),
+                    h.Placeholder("Search projects..."),
+                    h.AriaLabel("Search projects"),
+                    h.Autocomplete("off"),
+                    h.Spellcheck(false),
+                    h.Autofocus(true),
+                    h.DataAttribute("slot", "combobox-input"),
+                    h.Value(query),
+                    h.Class(COMBOBOX_INPUT_CLASS),
+                    h.OnInput((value) =>
+                      Message.ChangedPopoverQuery({ query: value })
+                    ),
+                    h.OnKeyDownPreventDefault((key) => onKey(key)),
+                  ]),
+                ]
+              ),
+            ]
+          ),
+        ]
+      ),
+    ]
+  );
+
+/**
+ * The hero's project picker, drawn as t3code's project combobox: a search field over a scrolling
+ * list of projects, then "Add project".
+ */
 const projectPicker = (
   model: Model,
   query: string,
@@ -416,37 +545,75 @@ const projectPicker = (
       needle.length === 0 || project.title.toLowerCase().includes(needle)
   );
 
+  const rows = [
+    ...projects.map((project, index) =>
+      projectItem(
+        h,
+        project.id,
+        Message.PickedProject({ projectId: project.id }),
+        project.title,
+        icon(h, Folder, "folder", ""),
+        index === 0
+      )
+    ),
+    ...(needle.length === 0
+      ? [
+          projectItem(
+            h,
+            "add-project",
+            Message.ClickedAddProject(),
+            "Add project",
+            icon(h, FolderPlus, "folder-plus", ""),
+            false
+          ),
+        ]
+      : []),
+  ];
+
   return h.div(
     [
-      h.DataAttribute("testid", "hero-project-list"),
-      h.Class("flex w-72 max-w-[calc(100vw-2rem)] flex-col"),
+      h.Role("dialog"),
+      h.DataAttribute("slot", "combobox-popup"),
+      h.Class(COMBOBOX_LIST_CLASS),
     ],
     [
-      searchField(h, query, "Search projects...", (key) =>
-        projectKeyMessage(projects, key)
-      ),
+      projectSearch(h, query, (key) => projectKeyMessage(projects, key)),
+      h.div([
+        h.Role("status"),
+        h.DataAttribute("slot", "combobox-empty"),
+        h.Class(
+          "not-empty:p-2 text-center text-base text-muted-foreground sm:text-sm"
+        ),
+      ]),
       h.div(
         [
-          h.Role("listbox"),
-          h.AriaLabel("Projects"),
-          h.Class("flex max-h-72 flex-col overflow-y-auto p-1"),
+          h.DataAttribute("testid", "hero-project-list"),
+          h.Class(
+            "relative size-full min-h-0 overflow-hidden rounded-[inherit]"
+          ),
         ],
         [
-          ...projects.map((project) =>
-            plainRow(
-              h,
-              project.id,
-              Message.PickedProject({ projectId: project.id }),
-              [h.span([h.Class("min-w-0 truncate")], [project.title])]
-            )
+          h.div(
+            [
+              h.DataAttribute("slot", "scroll-area-viewport"),
+              h.Class(
+                "h-full max-h-[inherit] overflow-auto overscroll-contain rounded-[inherit] outline-none"
+              ),
+            ],
+            [
+              h.div(
+                [
+                  h.Role("listbox"),
+                  h.AriaLabel("Projects"),
+                  h.DataAttribute("slot", "combobox-list"),
+                  h.Class(
+                    "not-empty:scroll-py-1 not-empty:px-1 not-empty:py-1"
+                  ),
+                ],
+                rows
+              ),
+            ]
           ),
-          ...(needle.length === 0
-            ? [
-                plainRow(h, "add-project", Message.ClickedAddProject(), [
-                  h.span([], ["Add project"]),
-                ]),
-              ]
-            : []),
         ]
       ),
     ]
@@ -563,31 +730,48 @@ export const popoverView = (model: Model, h: HtmlBuilder<Message>): Html =>
             h.Class("fixed inset-0 z-40 cursor-default bg-transparent"),
             h.OnClick(Message.ClosedPopover()),
           ]),
-          h.div(
-            [
-              h.Role("dialog"),
-              h.DataAttribute("slot", "popover-popup"),
-              h.DataAttribute("side", side),
-              h.DataAttribute("testid", `composer-popover-${popover._tag}`),
-              h.Class(
-                `${POPUP_CLASS.replace("relative ", "")} absolute z-50 ${anchored} ${side === "top" ? "bottom-full mb-2" : "top-full mt-2"}`
-              ),
-              h.OnKeyDownPreventDefault((key) =>
-                key === "Escape"
-                  ? Option.some(Message.ClosedPopover())
-                  : Option.none()
-              ),
-            ],
-            [
-              h.div(
+          Predicate.isTagged(popover, "Project")
+            ? h.div(
                 [
-                  h.DataAttribute("slot", "popover-viewport"),
-                  h.Class("relative size-full overflow-clip"),
+                  h.Role("presentation"),
+                  h.DataAttribute("slot", "combobox-positioner"),
+                  h.DataAttribute("side", side),
+                  // t3code opens it 4 px under the headline's project button, which sits 44 px
+                  // above the card (the hero's pb-4, then the "or start without a project" line).
+                  h.Class(`absolute z-50 select-none ${anchored} -top-11`),
                 ],
-                [content]
+                [
+                  h.span(
+                    [h.Class(`${COMBOBOX_POPUP_CLASS} w-72 overflow-hidden`)],
+                    [content]
+                  ),
+                ]
+              )
+            : h.div(
+                [
+                  h.Role("dialog"),
+                  h.DataAttribute("slot", "popover-popup"),
+                  h.DataAttribute("side", side),
+                  h.DataAttribute("testid", `composer-popover-${popover._tag}`),
+                  h.Class(
+                    `${POPUP_CLASS.replace("relative ", "")} absolute z-50 ${anchored} ${side === "top" ? "bottom-full mb-2" : "top-full mt-2"}`
+                  ),
+                  h.OnKeyDownPreventDefault((key) =>
+                    key === "Escape"
+                      ? Option.some(Message.ClosedPopover())
+                      : Option.none()
+                  ),
+                ],
+                [
+                  h.div(
+                    [
+                      h.DataAttribute("slot", "popover-viewport"),
+                      h.Class("relative size-full overflow-clip"),
+                    ],
+                    [content]
+                  ),
+                ]
               ),
-            ]
-          ),
         ]
       );
     },

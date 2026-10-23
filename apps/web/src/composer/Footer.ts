@@ -40,6 +40,7 @@ import { Effect, Option, Queue, Stream } from "effect";
 import { Mount } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {
+  Bot,
   Brain,
   Check,
   ChevronDown,
@@ -272,7 +273,8 @@ const chevron = (h: HtmlBuilder<Message>): Html =>
         ChevronDown,
         "chevron-down",
         "shrink-0 size-3.5 text-icon-muted",
-        2.25
+        2.25,
+        "composer-control-chevron"
       ),
     ]
   );
@@ -281,11 +283,7 @@ const controlIcon = (
   h: HtmlBuilder<Message>,
   node: IconNode,
   name: string
-): Html =>
-  h.span(
-    [h.DataAttribute("composer-control-icon", "true"), h.Class("inline-flex")],
-    [icon(h, node, name, "shrink-0 size-4")]
-  );
+): Html => icon(h, node, name, "shrink-0 size-4", 2, "composer-control-icon");
 
 const controlLabel = (
   h: HtmlBuilder<Message>,
@@ -348,13 +346,19 @@ const runtimeModeOf = (model: Model): RuntimeMode =>
         onSome: (thread) => thread.runtimeMode,
       });
 
+/**
+ * The provider mark's box, t3code's class string. Every provider gets the same neutral glyph until
+ * the branding pass; t3code draws each provider's logo here.
+ */
+const PROVIDER_MARK_CLASS =
+  "relative isolate z-30 inline-flex shrink-0 items-center justify-center overflow-visible size-4";
+
 const pickerButton = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.button(
     [
       h.Type("button"),
       h.DataAttribute("chat-provider-model-picker", "true"),
       h.DataAttribute("slot", "popover-trigger"),
-      h.DataAttribute("testid", "composer-model-picker"),
       h.AriaHasPopup("dialog"),
       h.AriaExpanded(isOpen(model, "ModelPicker")),
       h.Class(
@@ -374,8 +378,13 @@ const pickerButton = (model: Model, h: HtmlBuilder<Message>): Html =>
         [h.Class("flex min-w-0 flex-1 items-center gap-1.5")],
         [
           h.span(
+            [h.Class(PROVIDER_MARK_CLASS)],
+            [icon(h, Bot, "bot", "shrink-0 size-4")]
+          ),
+          h.span(
             [
               h.DataAttribute("chat-provider-model-picker-label", "true"),
+              h.DataAttribute("slot", "tooltip-trigger"),
               h.Class("min-w-0 flex-1 overflow-hidden truncate"),
             ],
             [modelLabel(model)]
@@ -404,7 +413,8 @@ const traitsBlock = (
         h.AriaLabel(label),
         h.AriaHasPopup("menu"),
         h.AriaExpanded(isOpen(model, "Thinking")),
-        h.DataAttribute("testid", "composer-thinking"),
+        h.DataAttribute("composer-shortcut", "composer.effort"),
+        h.DataAttribute("slot", "tooltip-trigger"),
         h.Class(
           `${CONTROL_BASE_CLASS} ${FOOTER_CONTROL_CLASS} justify-center shrink-0 whitespace-nowrap`
         ),
@@ -436,7 +446,8 @@ const modeBlock = (
         h.AriaHasPopup("listbox"),
         h.AriaExpanded(isOpen(model, "RuntimeMode")),
         h.AriaLabel("Runtime mode"),
-        h.DataAttribute("testid", "composer-runtime-mode"),
+        h.DataAttribute("composer-shortcut", "composer.mode"),
+        h.DataAttribute("slot", "tooltip-trigger"),
         h.Class(
           `${CONTROL_BASE_CLASS} ${FOOTER_CONTROL_CLASS} shrink-0 justify-center whitespace-nowrap`
         ),
@@ -471,8 +482,8 @@ const overflowHolder = (model: Model, h: HtmlBuilder<Message>): Html => {
           h.AriaLabel("More composer controls"),
           h.AriaHasPopup("menu"),
           h.AriaExpanded(isOpen(model, "Overflow")),
+          h.DataAttribute("composer-shortcut", "composer.mode"),
           h.DataAttribute("slot", "menu-trigger"),
-          h.DataAttribute("testid", "composer-overflow"),
           h.Class(
             `${CONTROL_BASE_CLASS} ${FOOTER_CONTROL_CLASS} justify-center whitespace-nowrap shrink-0`
           ),
@@ -597,7 +608,6 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
     [
       h.DataAttribute("chat-composer-footer", "true"),
       h.DataAttribute("chat-composer-footer-compact", String(compact)),
-      h.DataAttribute("testid", "composer-footer"),
       h.Class(FOOTER_CLASS),
       h.OnMount(MeasureFooter()),
     ],
@@ -642,9 +652,17 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
             (message) => Message.GotAttachmentsMessage({ message }),
             h
           ),
-          running && !hasContent
-            ? stopButton(h)
-            : sendButton(model, hasContent, h),
+          h.span(
+            [
+              h.DataAttribute("slot", "tooltip-trigger"),
+              h.Class("inline-flex"),
+            ],
+            [
+              running && !hasContent
+                ? stopButton(h)
+                : sendButton(model, hasContent, h),
+            ]
+          ),
         ]
       ),
     ]

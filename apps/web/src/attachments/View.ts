@@ -162,33 +162,44 @@ const thumbnailSource = (item: Item): Option.Option<string> =>
       : Option.none()
   );
 
+const thumbnail = (item: Item, h: HtmlBuilder<Message>): Html =>
+  Option.match(thumbnailSource(item), {
+    onNone: () =>
+      h.div(
+        [
+          h.Class(
+            "flex h-full w-full items-center justify-center px-1 text-center text-3xs text-secondary-label"
+          ),
+        ],
+        [item.name]
+      ),
+    onSome: (src) =>
+      h.img([
+        h.Src(src),
+        h.Alt(item.name),
+        h.Attribute("draggable", "false"),
+        h.Class("h-full w-full object-cover"),
+      ]),
+  });
+
+/**
+ * An image's tile: t3code's expanded-image tile, with the chip's judge attributes on the picture
+ * inside it (where t3code has its preview button), so the tile keeps t3code's landmark.
+ */
 const imageChip = (item: Item, h: HtmlBuilder<Message>): Html =>
   h.div(
     [
-      ...chipData(item, h),
+      h.Key(item.localId),
+      h.DataAttribute("chat-composer-expanded-image", "true"),
       h.Class(
-        "group/attachment relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-background"
+        "group/attachment shrink-0 snap-start bg-background relative h-16 w-16 overflow-hidden rounded-lg border border-border/80"
       ),
     ],
     [
-      Option.match(thumbnailSource(item), {
-        onNone: () =>
-          h.div(
-            [
-              h.Class(
-                "flex h-full w-full items-center justify-center px-1 text-center text-3xs text-secondary-label"
-              ),
-            ],
-            [item.name]
-          ),
-        onSome: (src) =>
-          h.img([
-            h.Src(src),
-            h.Alt(item.name),
-            h.Attribute("draggable", "false"),
-            h.Class("h-full w-full object-cover"),
-          ]),
-      }),
+      h.div(
+        [...chipData(item, h), h.Class("h-full w-full")],
+        [thumbnail(item, h)]
+      ),
       Option.match(progressOf(item), {
         onNone: () => h.empty,
         onSome: (progress) =>
@@ -327,10 +338,7 @@ export const trayView = Submodel.defineView<Model, Message, TrayInputs>(
         }
 
         return h.div(
-          [
-            h.DataAttribute("testid", "attachment-tray"),
-            h.Class("px-3 sm:px-4"),
-          ],
+          [h.DataAttribute("testid", "attachment-tray")],
           [
             images.length === 0
               ? h.empty
@@ -362,7 +370,7 @@ export const attachButtonView = <ParentMessage>(
 ): Html =>
   h.label(
     [
-      h.DataAttribute("testid", "attach-files"),
+      h.DataAttribute("slot", "tooltip-trigger"),
       h.Title("Attach files"),
       h.Class(ATTACH_LABEL),
     ],
@@ -373,7 +381,6 @@ export const attachButtonView = <ParentMessage>(
         h.Multiple(true),
         h.Accept(ATTACH_ACCEPT),
         h.AriaLabel("Attach files"),
-        h.DataAttribute("testid", "attach-input"),
         h.Class("sr-only"),
         h.OnFileChange((files) =>
           toParentMessage(Message.PickedFiles({ files }))

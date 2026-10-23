@@ -82,6 +82,8 @@ export const Message = defineMessageUnion({
   LoadedDrafts: { drafts: Schema.Record(Schema.String, Draft) },
   LoadedSettings: { settings: ComposerSettings },
   MintedHomeDraft: { draftId: ThreadId },
+  /** The hero's URL now names its draft (`/new/<draftId>`), so a reload restores it. */
+  MovedHeroToDraftUrl: {},
   ElapsedDraftDebounce: { version: Schema.Int },
   HidPage: {},
   CompletedSaveDrafts: { version: Schema.Int, saved: Schema.Boolean },

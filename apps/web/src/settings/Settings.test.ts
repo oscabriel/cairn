@@ -254,9 +254,9 @@ describe("the settings page", () => {
       Scene.expect(Scene.testId("plan-window-seven_day")).toContainText(
         "unknown used"
       ),
-      Scene.expect(Scene.testId("settings-row-skills-count")).toContainText(
-        "2 skills, 1 in the model's prompt"
-      ),
+      Scene.expect(
+        Scene.selector('[data-settings-row="skills-count"]')
+      ).toContainText("2 skills, 1 in the model's prompt"),
       Scene.expect(Scene.testId("executor-state")).toHaveText("Needs sign-in"),
       Scene.expect(Scene.testId("settings-model-list")).toContainText(
         "claude-bridge/claude-haiku-5-5"

@@ -25,7 +25,12 @@ import type {
   ChoiceSettingKey,
   ClientSettings,
 } from "./ClientSettings.ts";
-import { settingsPage, settingsRow, settingsSection } from "./Layout.ts";
+import {
+  settingsHeader,
+  settingsPage,
+  settingsRow,
+  settingsSection,
+} from "./Layout.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import { formatDayTime, formatUsed } from "./Time.ts";
@@ -852,6 +857,7 @@ export const view = Submodel.defineView<Model, Message, SettingsViewInputs>(
         h.Class("flex min-h-0 min-w-0 flex-1 flex-col"),
       ],
       [
+        settingsHeader(h),
         settingsPage(h, [
           h.h1([h.Class("sr-only")], ["Settings"]),
           noticeView(model, h),

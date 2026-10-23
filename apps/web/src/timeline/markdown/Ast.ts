@@ -68,6 +68,8 @@ export type Block =
       readonly kind: "list";
       readonly ordered: boolean;
       readonly start: Option.Option<number>;
+      /** No blank line between or inside its items: paragraphs render without `<p>`. */
+      readonly tight: boolean;
       readonly items: ReadonlyArray<ListItem>;
     }
   | {

@@ -2,11 +2,12 @@
 // judges/transcript-scroll.ts, over the same submodel.
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { EntryId } from "@cairn/protocol/Ids";
-import { ConversationView } from "@cairn/protocol/Thread";
+import { ConversationView, Entry } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema } from "effect";
 
 import coding from "../../../../judges/fixtures/transcripts/coding.json" with { type: "json" };
+import { latestCheckpointTurn } from "../diff/Toggle.ts";
 import { growReply, startReply, syntheticThread } from "./harness/Fixture.ts";
 import { Message } from "./Message.ts";
 import { initial, isFollowingEnd } from "./Model.ts";
@@ -206,5 +207,64 @@ describe("rows", () => {
 
     assert.strictEqual(streamed.model, anchored.model);
     assert.isFalse(isFollowingEnd(initial));
+  });
+});
+
+describe("the changed-files card", () => {
+  const checkpoint = Schema.decodeSync(Entry)({
+    id: 54,
+    conversationId: 3,
+    kind: "cairn.checkpoint",
+    data: {
+      turn: 1,
+      ref: "refs/cairn/checkpoints/x/turn/1",
+      headOid: null,
+      capturedAt: 1,
+      files: [{ path: "src/a.ts", additions: 2, deletions: 1 }],
+      moreFiles: 0,
+      userEntryId: 50,
+    },
+  });
+
+  const withCheckpoint: ThreadViewState = {
+    ...codingState,
+    view: {
+      ...codingState.view,
+      entries: [...codingState.view.entries, checkpoint],
+    },
+  };
+
+  it("rides inside the answer that ends its turn, as t3code draws it", () => {
+    const transcript = transcriptOf(
+      "checkpointed",
+      Option.some(withCheckpoint),
+      shown("checkpointed").ui,
+      Option.none()
+    );
+
+    const last = transcript.items.at(-1);
+
+    assert.isFalse(
+      transcript.items.some((item) => item.kind === "changed-files")
+    );
+    assert.strictEqual(last?.kind, "message");
+    assert.isTrue(
+      last?.kind === "message" &&
+        Option.match(last.changedFiles, {
+          onNone: () => false,
+          onSome: (card) => card.files[0]?.path === "src/a.ts",
+        })
+    );
+  });
+
+  it("gives the header toggle the newest checkpointed turn", () => {
+    assert.deepStrictEqual(
+      latestCheckpointTurn(withCheckpoint.view.entries),
+      Option.some(1)
+    );
+    assert.deepStrictEqual(
+      latestCheckpointTurn(codingState.view.entries),
+      Option.none()
+    );
   });
 });

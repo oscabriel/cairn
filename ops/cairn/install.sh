@@ -8,6 +8,8 @@
 #   3. Creates the live worktree ~/Developer/projects/cairn-live (detached at this checkout's HEAD) if it
 #      is missing, links its ops/cairn/cairn.service into ~/.config/systemd/user, and enables the unit.
 #      The unit then ships with each deploy. Starting it is ops/cairn/deploy.sh's job.
+#   4. Links the live worktree's cairn-nightly.service and cairn-nightly.timer (the durability matrix
+#      at 03:30, judges/fixtures/durability/nightly.sh) and enables and starts the timer.
 #
 # --check changes nothing: it prints what it would do and verifies the unit. Nothing here reads a secret;
 # the owner login and host are not secrets. No sudo (lingering is already on).
@@ -89,6 +91,30 @@ main() {
 	else
 		say "enable cairn.service (not started; ops/cairn/deploy.sh starts it)"
 		[[ $check -eq 1 ]] || systemctl --user enable cairn.service >/dev/null
+	fi
+
+	# 4. The nightly durability timer.
+	local name source link
+	for name in cairn-nightly.service cairn-nightly.timer; do
+		source=$live/ops/cairn/$name
+		[[ -f $source ]] || source=$here/$name
+		link=$HOME/.config/systemd/user/$name
+		if [[ $(readlink "$link" 2>/dev/null || true) == "$live/ops/cairn/$name" ]]; then
+			echo "ok: $link links the live worktree's $name"
+		else
+			say "link $link -> $live/ops/cairn/$name"
+			[[ $check -eq 1 ]] || ln -sfn "$live/ops/cairn/$name" "$link"
+		fi
+	done
+	systemd-analyze --user verify "$here/cairn-nightly.service" "$here/cairn-nightly.timer"
+	if systemctl --user is-enabled --quiet cairn-nightly.timer 2>/dev/null; then
+		echo "ok: cairn-nightly.timer is enabled"
+	else
+		say "enable and start cairn-nightly.timer (03:30 nightly)"
+		if [[ $check -eq 0 ]]; then
+			systemctl --user daemon-reload
+			systemctl --user enable --now cairn-nightly.timer >/dev/null
+		fi
 	fi
 
 	[[ $check -eq 1 ]] && echo "check done; nothing changed" || echo "installed; next: ops/cairn/caddy-route.sh, then ops/cairn/deploy.sh"

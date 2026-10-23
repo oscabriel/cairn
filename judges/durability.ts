@@ -4,6 +4,10 @@
 // turn, then checks what survived.
 //   node judges/durability.ts [--window <name>]... [--bridge] [--slow] [--runs N]
 //                             [--sabotage skip-snapshot] [--no-page] [--model claude-haiku-5-5] [--keep]
+//   node judges/durability.ts --unit cairn.service --window streaming
+//
+// `--unit` judges the deployed unit instead (plan 5F): one `kill -9` of its main pid while a reply
+// streams, on the bridge's Haiku (production has no faux model), through `lib/DeployedUnit.ts`.
 //
 // Faux windows (the scripted faux model, the default set): streaming (after the 5th partial of a
 // long reply), mid-tool (while `slow` runs), between-tool-and-result (right after `mark` wrote its
@@ -110,6 +114,7 @@ import * as Page from "./fixtures/durability/Page.ts";
 import * as Proxy from "./fixtures/durability/Proxy.ts";
 import * as Upload from "./fixtures/durability/Upload.ts";
 import { SCRIPT_PREFIX } from "./fixtures/JudgeModel.ts";
+import * as DeployedUnit from "./lib/DeployedUnit.ts";
 import * as Events from "./lib/Events.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
 import * as Unit from "./lib/Unit.ts";
@@ -171,6 +176,7 @@ const { values } = parseArgs({
     runs: { type: "string", default: "1" },
     page: { type: "boolean", default: true },
     model: { type: "string", default: "claude-haiku-5-5" },
+    unit: { type: "string" },
   },
 });
 
@@ -2387,7 +2393,36 @@ const shared = Effect.gen(function* () {
   } satisfies Shared;
 });
 
+const deployed = (unit: string) =>
+  Effect.gen(function* () {
+    if (chosen.length !== 1 || chosen[0] !== "streaming") {
+      process.stderr.write("--unit runs only --window streaming.\n");
+      process.exitCode = 2;
+
+      return;
+    }
+
+    const result = yield* DeployedUnit.streaming({
+      unit,
+      model: `claude-bridge/${values.model}`,
+      keep: values.keep,
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.succeed({ pass: false, notes: [error.message] })
+      )
+    );
+
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exitCode = result.pass ? 0 : 1;
+  });
+
 const main = Effect.gen(function* () {
+  if (values.unit !== undefined) {
+    yield* deployed(values.unit);
+
+    return;
+  }
+
   if (unknownWindows.length > 0) {
     process.stderr.write(
       `Unknown windows: ${unknownWindows.join(", ")}. Known: ${ALL_WINDOWS.join(", ")}.\n`

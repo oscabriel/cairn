@@ -1,0 +1,20 @@
+# The durability matrix, nightly (plan 5A's `judges/fixtures/durability/nightly.sh`, scheduled by 5F).
+# Started by cairn-nightly.timer; linked into ~/.config/systemd/user by ops/cairn/install.sh.
+#
+# It runs from the live worktree, so it judges the deployed commit, and every brain it starts is a
+# transient judge unit on its own loopback ports and scratch data under ~/cairn-judges: it never
+# touches cairn.service, port 3774 or the Executor grant. The bridge steps spend a few cents of
+# Claude plan usage on Haiku; the whole run takes about an hour. The log is
+# ~/cairn-judges/durability-<date>.jsonl, and `systemctl --user status cairn-nightly` shows the verdict.
+[Unit]
+Description=Cairn durability matrix (nightly)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Developer/projects/cairn-live
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+Environment=NODE_COMPILE_CACHE=%h/.cache/cairn/node
+ExecStart=/usr/bin/bash judges/fixtures/durability/nightly.sh
+Nice=10
+TimeoutStartSec=3h

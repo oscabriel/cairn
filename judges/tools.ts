@@ -203,9 +203,10 @@ const quotable = (messages: ReadonlyArray<Message>) =>
 const callIndex = (scripts: ReadonlyArray<string>, tool: string) =>
   scripts.join("\n").indexOf(`tools.${tool}(`);
 
-// The path's own quote closes it: a path may hold the other quotes (`tools["convex-mcp"].status`).
+// The path's own quote closes it: a path may hold the other quotes (`tools["convex-mcp"].status`),
+// or its own quote escaped (`"tools[\"convex-mcp\"].status"`).
 const CALL_PATH =
-  /tools\.executor_call\(\s*\{[^}]*?path:\s*(?<quote>["'`])(?<path>(?:(?!\k<quote>).)+)\k<quote>/gu;
+  /tools\.executor_call\(\s*\{[^}]*?path:\s*(?<quote>["'`])(?<path>(?:\\.|(?!\k<quote>).)+)\k<quote>/gu;
 
 const calledPaths = (scripts: ReadonlyArray<string>) =>
   [...scripts.join("\n").matchAll(CALL_PATH)].map(
@@ -219,7 +220,7 @@ const calledPaths = (scripts: ReadonlyArray<string>) =>
  */
 const segmentsOf = (toolPath: string) =>
   toolPath
-    .split(/[\s"'`[\].]+/u)
+    .split(/[\s"'`[\].\\]+/u)
     .filter((part) => part !== "" && part !== "tools");
 
 const isSettled = (row: ThreadShell) =>

@@ -15,12 +15,21 @@
 #    not show that, the 5 s check above proves nothing and the judge fails.
 #
 #   judges/shutdown.sh
+#   judges/shutdown.sh --unit cairn.service
+#
+# `--unit` judges the deployed unit instead (plan 5F): production loads no judge tools, so
+# `judges/deployed-unit.ts restarts` makes six restarts during a `bash sleep 20` turn on a cheap
+# real model and checks `closed <ms>` under 5,000, NRestarts unchanged and nothing parked.
 #
 # Prints one line per check and exits 0 when all hold. Uses only `systemctl --user`, `journalctl
 # --user` and node; no sudo, no secrets.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+if [[ ${1:-} == --unit ]]; then
+	exec node judges/deployed-unit.ts restarts --unit "${2:?--unit needs a unit name}" "${@:3}"
+fi
 
 limit_ms=5000
 failures=0

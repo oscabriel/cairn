@@ -1,0 +1,11 @@
+# Runs cairn-nightly.service at 03:30 local time, when the Beelink is quiet (bridge windows have
+# missed their aim beside other load). Not Persistent: a missed night is skipped, not run at boot.
+[Unit]
+Description=Cairn durability matrix, every night at 03:30
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

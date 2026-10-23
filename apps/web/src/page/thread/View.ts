@@ -5,6 +5,7 @@ import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { isOpen } from "../../diff/Model.ts";
+import { toggleView as diffToggleView } from "../../diff/Toggle.ts";
 import * as Timeline from "../../timeline/View.ts";
 import { diffPanelPlaceholder, loadedDiffView } from "./DiffPanel.ts";
 import { Message } from "./Message.ts";
@@ -86,4 +87,21 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
         diffPanel(model, h),
       ]
     )
+);
+
+/** The thread page's controls in the root's chat header: the diff panel toggle. */
+export const headerControls = Submodel.defineView<Model, Message>((model, h) =>
+  h.submodel({
+    slotId: "diff-toggle",
+    model: model.diff,
+    view: diffToggleView,
+    viewInputs: {
+      threadId: model.threadId,
+      entries: Option.match(model.view, {
+        onNone: () => [],
+        onSome: (state) => [...state.older, ...state.view.entries],
+      }),
+    },
+    toParentMessage: (message) => Message.GotDiffMessage({ message }),
+  })
 );

@@ -104,7 +104,15 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
               threadTitle(model, threadId),
               () => "Thread"
             ),
-            controls: [],
+            controls: [
+              h.submodel({
+                slotId: "thread-header-controls",
+                model: model.thread,
+                view: Thread.headerControls,
+                toParentMessage: (message) =>
+                  Message.GotThreadMessage({ message }),
+              }),
+            ],
           }),
           h.submodel({
             slotId: "thread-hold",

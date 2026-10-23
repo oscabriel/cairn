@@ -15,7 +15,7 @@ set -euo pipefail
 
 dir=${1:-$HOME/Developer/agent-artifacts/cairn/v2/phase-1-parity}
 shift || true
-groups=("${@:-sidebar hero thread}")
+groups=("${@:-sidebar hero thread settings}")
 read -r -a groups <<<"${groups[*]}"
 model=${REVIEW_MODEL:-opencode-go/gpt-6-luna}
 batch=6
@@ -27,15 +27,17 @@ declare -A checklist=(
 	[transcript]="Transcript: tool runs fold into one \"Ran 3 commands, read 2 files\" row. Turns fold to \"Worked for 42s\". Hover timestamps. Virtualized, with per-thread scroll memory. A changed-files card per turn."
 	[look]="Look: semantic tokens, status tints at 8%, glass, a neutral-950 dark theme with white/6% borders, compact tactile buttons, stepped pulses, a 6px scrollbar."
 	[shell]="Shell: resizable, persisted panels. Command palette and shortcuts. A 2 s grace before reconnect warnings. Settings for theme and font size. Shiki diffs with a file tree."
+	[settings]="Settings: grouped cards of rows (title, description, control on the right, stacked when narrow) under section headings, at the readable width, under a settings breadcrumb header."
 )
 
 declare -A rows_for=(
 	[sidebar]="sidebar look"
 	[hero]="new-thread composer look shell"
 	[thread]="transcript composer look shell"
+	[settings]="settings look"
 )
 
-gaps="Declared gaps, which you must list but which do not make a row differ: the brand header (t3code's starfield and \"T3 Code\" wordmark; Cairn shows the text \"Cairn\"), project favicons (Cairn draws monograms), drag reorder of rows, the sweep gesture on rows, t3code's pull request and update pill in the sidebar footer, t3code's thread details panel, and differences that come only from the data each app holds (thread titles, ages, model names, branch names)."
+gaps="Declared gaps, which you must list but which do not make a row differ: the brand header (t3code's starfield and \"T3 Code\" wordmark; Cairn shows the text \"Cairn\"), project favicons (Cairn draws monograms), drag reorder of rows, the sweep gesture on rows, t3code's pull request and update pill in the sidebar footer, t3code's thread details panel, and differences that come only from the data each app holds (thread titles, ages, model names, branch names), t3code's settings navigation column, its scope line (Applying settings for All projects across All environments) and Restore device defaults (Cairn has one settings page and one scope), and settings that exist in only one app."
 
 : >"$dir/review.md"
 

@@ -12,6 +12,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import type { FauxModelDefinition } from "@earendil-works/pi-ai/providers/faux";
 import type { HarnessSettings } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer, Schema } from "effect";
 
@@ -63,19 +64,25 @@ export class ModelSource extends Context.Service<
   static readonly layerFaux = (options: {
     readonly tokensPerSecond: number;
     readonly settings: HarnessSettings;
+    /** The model's display name; pi-ai shows the id when it is absent. */
+    readonly name?: string;
   }) =>
     Layer.effectContext(
       Effect.sync(() => {
+        const definition: FauxModelDefinition = {
+          id: FAUX_MODEL.modelId,
+          input: ["text", "image"],
+          contextWindow: 200_000,
+          reasoning: true,
+        };
+
+        if (options.name !== undefined) {
+          definition.name = options.name;
+        }
+
         const faux = fauxProvider({
           provider: FAUX_MODEL.provider,
-          models: [
-            {
-              id: FAUX_MODEL.modelId,
-              input: ["text", "image"],
-              contextWindow: 200_000,
-              reasoning: true,
-            },
-          ],
+          models: [definition],
           tokensPerSecond: options.tokensPerSecond,
         });
 

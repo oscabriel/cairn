@@ -55,6 +55,8 @@ export interface SelectConfig<Message> {
   readonly options: ReadonlyArray<SelectOption>;
   readonly isDisabled: boolean;
   readonly onChange: (value: string) => Message;
+  /** "sm" is t3code's compact trigger (28 px at sm+, 32 px on phones), as its settings rows use. */
+  readonly size?: "default" | "sm";
 }
 
 /** A labelled, t3code-styled native select. */
@@ -81,7 +83,9 @@ export const selectView = <Message>(
                   classNames(
                     SELECT_TRIGGER_BASE_CLASS,
                     SELECT_TRIGGER_DEFAULT_CLASS,
-                    "h-9 px-[calc(--spacing(3)-1px)] sm:h-8"
+                    config.size === "sm"
+                      ? "min-h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] leading-6 sm:min-h-7 sm:leading-5"
+                      : "h-9 px-[calc(--spacing(3)-1px)] sm:h-8"
                   )
                 ),
               ],

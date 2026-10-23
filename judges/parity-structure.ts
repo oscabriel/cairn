@@ -31,7 +31,7 @@ const root = path.join(import.meta.dirname, "..");
 
 const BASELINE = path.join(root, "judges/fixtures/parity/t3@fe27e8e3");
 
-const GROUPS = ["hero", "thread"] as const;
+const GROUPS = ["hero", "thread", "settings"] as const;
 
 const BOX_TOLERANCE = 1;
 

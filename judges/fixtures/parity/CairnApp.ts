@@ -229,7 +229,14 @@ export const startCairn = async (seed: CairnSeed): Promise<CairnApp> => {
     Layer.provide(QuickModel),
     Layer.provide(ScriptedTools.layerEcho),
     Layer.provideMerge(
-      withCatalog(ModelSource.layerFaux({ tokensPerSecond: 200, settings: {} }))
+      withCatalog(
+        ModelSource.layerFaux({
+          tokensPerSecond: 200,
+          settings: {},
+          // The model t3code's baseline shows, so the footer folds at the same widths.
+          name: "Claude Fable 5.1",
+        })
+      )
     )
   );
 

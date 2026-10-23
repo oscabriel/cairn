@@ -61,7 +61,15 @@ const choice = (
 ): Html =>
   quietLabel(
     h,
-    selectView(h, { id, label, value, options, isDisabled, onChange })
+    selectView(h, {
+      id,
+      label,
+      value,
+      options,
+      isDisabled,
+      onChange,
+      size: "sm",
+    })
   );
 
 const toggle = (

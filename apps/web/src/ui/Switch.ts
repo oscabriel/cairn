@@ -68,6 +68,9 @@ export const switchView = <Message>(
                 ...attributes.button,
                 h.DataAttribute("slot", "switch"),
                 h.DataAttribute("size", config.size),
+                // @foldkit/ui sets only data-checked; Base UI also marks the unchecked track, which
+                // its `data-unchecked:bg-input` keys on.
+                ...(config.isChecked ? [] : [h.DataAttribute("unchecked", "")]),
                 h.Class(classNames(TRACK_CLASS, SIZE[config.size])),
               ],
               [

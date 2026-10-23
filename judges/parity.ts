@@ -41,7 +41,7 @@ const root = path.join(import.meta.dirname, "..");
 
 const BASELINE = path.join(root, "judges/fixtures/parity/t3@fe27e8e3");
 
-const GROUPS = ["sidebar", "hero", "thread"] as const;
+const GROUPS = ["sidebar", "hero", "thread", "settings"] as const;
 
 /** States the baseline cannot hold, with why; reported as missing, not failed silently. */
 const UNCAPTURABLE: ReadonlyArray<{

@@ -8,6 +8,6 @@ export type { PageContext } from "./Update.ts";
 
 export { subscriptions } from "./Subscription.ts";
 
-export { view } from "./View.ts";
+export { headerControls, view } from "./View.ts";
 
 export type { ViewInputs } from "./View.ts";

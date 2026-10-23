@@ -4,7 +4,7 @@
 // nightly once, into a committed baseline, and the same states from Cairn, for judges/parity.ts
 // (pixels) and judges/parity-structure.ts (landmarks) to compare.
 //
-//   node judges/capture.ts t3 [--group all|sidebar|hero|thread] [--session <storage state>] [--t3 <url>]
+//   node judges/capture.ts t3 [--group all|sidebar|hero|thread|settings] [--session <storage state>] [--t3 <url>]
 //   node judges/capture.ts cairn [--group ...] [--out <dir>]
 //
 // `t3` refuses to write unless the installed `t3code-nightly-bin` is the version ADR 0015 records
@@ -28,6 +28,8 @@
 //   exports the thread's last three runs from t3code's projection (read-only, from
 //   `~/.t3/userdata/statev2.sqlite`) to `thread.json`; the Cairn half imports them with T3Import
 //   into an in-process brain, so both apps render the same conversation.
+// - settings (5E): the general and appearance settings at 1440x900 and 390x844
+//   (judges/fixtures/parity/states/settings/Settings.ts).
 // Cairn's hero and thread halves run the real client over a real in-process brain
 // (judges/fixtures/parity/CairnApp.ts). The Cairn half also writes the controls: the 390 hero with
 // the sidebar wrongly open (`390-control-sidebar-open.png`) and the 1440 hero's landmarks after a
@@ -66,6 +68,10 @@ import {
 } from "../packages/protocol/src/Shell.ts";
 import { startCairn } from "./fixtures/parity/CairnApp.ts";
 import { Rect, readLandmarks } from "./fixtures/parity/Landmarks.ts";
+import {
+  captureSettingsCairn,
+  captureSettingsT3,
+} from "./fixtures/parity/states/settings/Settings.ts";
 
 const root = path.join(import.meta.dirname, "..");
 
@@ -106,11 +112,11 @@ const [side] = positionals;
 
 if (side !== "t3" && side !== "cairn") {
   throw new Error(
-    "usage: capture.ts t3|cairn [--group all|sidebar|hero|thread] [--session <file>] [--t3 <url>] [--out <dir>]"
+    "usage: capture.ts t3|cairn [--group all|sidebar|hero|thread|settings] [--session <file>] [--t3 <url>] [--out <dir>]"
   );
 }
 
-const GROUPS = ["sidebar", "hero", "thread"] as const;
+const GROUPS = ["sidebar", "hero", "thread", "settings"] as const;
 
 const groups = GROUPS.filter(
   (group) => values.group === "all" || values.group === group
@@ -1833,17 +1839,31 @@ try {
     }
 
     for (const group of groups) {
-      await (group === "sidebar"
-        ? captureSidebarT3(browser)
-        : capturePagesT3(browser, group));
+      if (group === "sidebar") {
+        await captureSidebarT3(browser);
+      } else if (group === "settings") {
+        await captureSettingsT3(browser, {
+          t3: values.t3,
+          session: values.session,
+        });
+      } else {
+        await capturePagesT3(browser, group);
+      }
     }
   } else {
     if (groups.includes("sidebar")) {
       await captureSidebarCairn(browser);
     }
 
+    if (groups.includes("settings")) {
+      await captureSettingsCairn(browser, {
+        out: values.out,
+        projectTitle: "cairn",
+      });
+    }
+
     const pageGroups = groups.filter(
-      (group): group is PageGroup => group !== "sidebar"
+      (group): group is PageGroup => group === "hero" || group === "thread"
     );
 
     if (pageGroups.length > 0) {

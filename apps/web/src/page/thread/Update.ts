@@ -12,6 +12,7 @@ import { modifyFields } from "foldkit/struct";
 
 import type { CairnConnectionService } from "../../connection/Connection.ts";
 import type { Message as DiffMessage } from "../../diff/Message.ts";
+import { isOpen as isDiffOpen } from "../../diff/Model.ts";
 import * as DiffUpdate from "../../diff/Update.ts";
 import { OutMessage as TimelineOutMessage } from "../../timeline/Message.ts";
 import type { Message as TimelineMessage } from "../../timeline/Message.ts";
@@ -217,12 +218,18 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           }),
       })(model, child),
     GotDiffMessage: ({ message: child }) =>
-      Update.foldChild({
-        update: DiffUpdate.update,
-        read: readDiff,
-        write: writeDiff,
-        toParentMessage: toGotDiffMessage,
-      })(model, child),
+      Update.combine(model, [
+        (next: Model) =>
+          Update.foldChild({
+            update: DiffUpdate.update,
+            read: readDiff,
+            write: writeDiff,
+            toParentMessage: toGotDiffMessage,
+          })(next, child),
+        // The header's toggle opens the panel from here, so its chunk may not be loaded yet.
+        (next: Model) =>
+          isDiffOpen(next.diff) ? loadDiffPanel(next) : { model: next },
+      ]),
     LoadedDiffPanel: () => ({
       model: modifyFields(model, { diffPanel: () => "loaded" as const }),
     }),

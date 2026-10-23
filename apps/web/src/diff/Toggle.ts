@@ -22,13 +22,18 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 import { checkpointSummaryOf } from "@cairn/client-logic/DiffTree";
+import type { ThreadId } from "@cairn/protocol/Ids";
 import type { Entry } from "@cairn/protocol/Thread";
 import { Array, Option } from "effect";
+import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { PanelRight } from "lucide";
 
 import { icon } from "../composer/Icon.ts";
 import { TITLEBAR_BUTTON_CLASS } from "../ui/ChatHeader.ts";
+import { Message } from "./Message.ts";
+import { isOpen } from "./Model.ts";
+import type { Model } from "./Model.ts";
 
 /**
  * The newest turn a `cairn.checkpoint` entry recorded among `entries` (a thread view's entries and
@@ -93,3 +98,27 @@ export const diffToggle = <Message>(
       ),
     ]
   );
+
+/** What the diff panel's own toggle view reads from its thread page. */
+export interface ToggleViewInputs {
+  readonly threadId: Option.Option<ThreadId>;
+  /** The thread view's entries and the older ones paged in. */
+  readonly entries: ReadonlyArray<Entry>;
+}
+
+/**
+ * The diff toggle as the diff panel's own view, so the panel builds its `ClickedToggle`: it opens
+ * the thread's whole diff up to the newest checkpoint turn.
+ */
+export const toggleView = Submodel.defineView<Model, Message, ToggleViewInputs>(
+  (model, { threadId, entries }, h) =>
+    diffToggle(h, {
+      open: isOpen(model),
+      onToggle: Option.zipWith(
+        threadId,
+        latestCheckpointTurn(entries),
+        (pageThreadId, latestTurn) =>
+          Message.ClickedToggle({ threadId: pageThreadId, latestTurn })
+      ),
+    })
+);

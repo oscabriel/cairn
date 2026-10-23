@@ -429,3 +429,67 @@ Unverified concerns:
 - **4C memory under a slow consumer:** recorded, not judged. The one-tick sliding queue is bounded by construction (wave 3's design), and `ThreadWindow.test.ts` proves convergence from one frame; no memory measurement was added.
 - **The phone load verdict counting warm loads:** recorded. A report is sent once per full page load (in-app navigation never reports), but a reload and a cold load look the same; wizard stage 3's instructions carry the difference.
 - **`StaleBuild` and `readBootData` relying on the injected `<head>` element preceding the placeholder:** recorded (already a wave 4 gap); holds today; no change.
+
+## Wave 5
+
+### Step 1 (5A, 5C)
+
+Integrated on 2026-10-22 on `main` and deployed to `https://code.gneiss.run` (`fa467b0`, then this note's commit). The durability judge now runs the full matrix with a Chromium page beside the Node client, an approval parked across a kill, an upload cut mid-stream, a bridge approval window and J14's 20 minute held approval. The sidebar frame and the new-thread hero carry t3code's page header, sidebar inset, rail and sidebar control; the thread page now uses the same header.
+
+#### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| 5A Durability full matrix | `phase1/5-5A` | `b30d830` | done (J14 and the bridge `--runs 3` run were unmeasured in the package run; both pass below) |
+| 5C Tokens, primitives, sidebar and hero parity | `phase1/5-5C` | `a4a9e0e` | partial (hero structure, three behaviour checks; gaps below) |
+
+Both branches merged with `--no-ff` without conflicts; no dependency changed. Worktrees were removed and the `phase1/5-*` and workflow worktree branches deleted before `pnpm check`.
+
+#### Hand-offs applied
+
+- **`apps/web/src/View.ts`:** 5C's patch exactly: `data-sidebar-state` from `sidebarState` on the sidebar wrapper, and `<main>` as `data-slot="sidebar-inset"` with t3code's inset classes.
+- **Thread page header (integrator or 5E):** the Thread route in `View.ts` is now a chat column (`data-chat-column`, `data-chat-column-maximized-away="false"`, `CHAT_COLUMN_CLASS`) whose first child is `ui/ChatHeader.ts`'s `chatHeader` with the project crumb (non-interactive, as on the hero) and the thread title. The thread page's own `h1` header was removed (`page/thread/View.ts` takes only `workspaceRoot` now; its status line keeps the old padding). The diff panel toggle was not added: the panel opens only from a changed-files card today and has no page-level toggle message, so `controls` is empty. That toggle is 5E's (diff is its folder).
+- **`apps/web/src/composer/View.ts` (5D's):** the docked composer lane dropped `px-3 sm:px-5`, so `.chat-composer-lane`'s padding applies as on the hero. Taken now because it is one class string and 5D builds on it.
+- **`Composer.test.ts`:** no change needed, as 5C said.
+
+#### Integration judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | oxfmt clean, oxlint 0, typecheck clean, vitest 127 files and 1,127 tests (`Budget.test.ts` and `brand.test.ts` included). |
+| `ops/cairn/deploy.sh` | pass | listening 1,297 ms, hello 1,322 ms, build `b21c3c6afc81`. |
+| `node judges/live-chat.ts` | pass | hello 69 ms, launch 31 ms, reply 4,864 ms (opencode-go/claude-haiku-5-5); 29 models; opencode-go and claude-bridge ready, anthropic refused, openai-codex missing. |
+| `judges/gate.sh` | pass | 0 failed. |
+| `nightly.sh`: `node judges/durability.ts --runs 3` (faux, Chromium page) | pass | 30 of 30. Kill to up / up to converged in ms, ranges over 3 runs: streaming 1,235 to 1,387 / 6 to 8; mid-tool 1,131 to 1,383 / 5 to 6; between-tool-and-result 1,180 to 1,332 / 8 to 9; approval-parked 1,182 to 1,331 / 5 to 6; mid-commit 1,179 to 1,335 / 6; send-in-flight 1,182 to 1,335 / 9; mid-upload 1,180 to 1,230 / 8 to 9; during-launch 1,233 to 1,437 / 17; kill-six 1,131 to 1,388 / 5 to 6; sigterm-six 3,057 to 3,069 / 5 to 6. Page kill to Live 1,388 to 1,760 ms (sigterm 3,322 to 3,750). |
+| `nightly.sh`: `node judges/durability.ts --bridge --runs 3` (quiet machine, load average under 1) | pass | 9 of 9; the streaming flake did not recur. bridge-streaming kill to up 1,755 to 2,044 ms, converged 9 to 39 ms; bridge-tool-parked 1,767 to 1,880 / 11 to 17; bridge-approval-parked 1,811 to 2,015 / 10 to 17, gate accepted once and `gated` once in each. Every run: claude children gone, no orphans, marker once, cache kept, page converged 3 to 6 ms. |
+| `--sabotage skip-snapshot` (control) | pass | 0 of 10 windows passed, as required. |
+| `--sabotage page-text` (page control) | pass | 0 of 10 windows passed, as required. |
+| J14: `node judges/durability.ts --slow` (bridge-approval-slow) | pass | Gate held 1,200,015 ms (20 min) with 1 claude child alive, 0 watchdog fires, then accepted once; `gated` ran once and the answer continued after the gate; page converged 6 ms. |
+| `nightly.sh` as a whole | pass | exit 0, 0 failed steps (log `/tmp/w5-nightly.jsonl`). |
+| `node judges/capture.ts cairn`, `judges/parity.ts` | report complete | 29 states, 8 within budget (all 8 sidebar at 0 %); control 72.9 %; 1 missing (streaming). Hero, wave 4 then now: 1440-hero 1.665 to 0.831; 390-hero 4.6 to 1.38; 820-footer 2.641 to 0.68; 980-footer 2.175 to 0.602; 1180-footer 1.98 to 0.962; 1440-attachments 2.117 to 1.496; 390-attachments 6.23 to 4.018; 1440-project-popover 2.674 to 1.88; 390-project-popover 8.244 to 6.607; 1440-at-menu 1.396 to 1.811; 390-at-menu 3.765 to 4.733; 1440-slash-menu 5.85 to 6.603; 390-slash-menu 12.31 to 13.949. Thread 1440 4.66 to 6.49, 390 11.50 to 17.20 (5E's). |
+| `node judges/parity-structure.ts` | report complete | 0 of 21 states pass; controls behave. Hero matched landmarks rose (1440-hero 45 match, 17 differ, 24 only in t3code, was 36 and 42; 390-hero 17 / 11 / 14; 820-footer 43 / 18 / 23; 980-footer 45 / 17 / 23). Thread 1440 31 match, 18 differ, about 90 only in t3code; 390 6 / 14 / 80. |
+| `node judges/behaviour.ts` | 18 of 21 | Composer width now equals t3code's at every width (1440 736, 980 628, 820 516, 390 366). Fails, all 5D's: footer-820 (mode full, t3code icon-only), footer-390 (traits and mode icon-only, t3code moves them behind an overflow), drafts-reload (hero draft empty after reload). |
+| `judges/parity-review.sh` (opencode-go/gpt-6-luna) | report complete | 7 batches. Sidebar "differs" only on declared gaps (starfield, footer pills, trimmed menu items) plus the red Delete item and the hovered row's clock icon. Hero and thread "differ": composer internals, popovers, panel toggles, transcript. |
+
+**Parity report:** `~/Developer/agent-artifacts/cairn/v2/phase-1-parity/` (`report.json`, `index.html`, `structure.json`, `behaviour.json`, `review.md`), served at `https://plans.gneiss.run/cairn/v2/phase-1-parity/`. It replaces wave 4's report; step 2 starts from it.
+
+#### Decisions
+
+- 5A's and 5C's own decisions stand as reported (5A: faux windows on faux and bridge windows on the bridge; bridge windows inside `durability.ts`; the streaming aim needs 80 streamed characters and a live child; the stronger skip-snapshot sabotage and the new page control; a fixed loopback port behind `judges/fixtures/durability/Proxy.ts`. 5C: `ui/ChatHeader.ts` and `ui/ProjectMark.ts` as shared primitives; t3code's sidebar width clamp without drag-resize; one sidebar control for both widths; the hero's non-interactive project crumb and no panel toggles).
+- **The thread header is drawn by the root view**, above the hold banner, because the root already knows the thread's project and title from the shell; the thread page lost its `title` input.
+- **The thread header has no panel toggle yet** (no page-level diff toggle exists); 5E adds it with a message on its diff panel.
+- **No systemd timer for `nightly.sh`**: an hour of mostly idle CPU with bridge usage every night is the user's call, so 5F's gate page lists the command instead of installing a timer.
+
+#### Gaps
+
+- Parity is not "same as t3code" yet: hero structure 0 of 13, thread 0 of 8, behaviour footer-820, footer-390 and drafts-reload (5D), thread rows (5E), hero popovers and slash menu pixels slightly worse than wave 4 (5D owns the popovers).
+- Declared by 5C: the header's thread details, terminal and right panel toggles (Cairn has none), which offsets later `tooltip-trigger` keys; the hero test ids that mask t3code's keys (5D's tests use them); the sidebar footer's pull requests button and update pill; the sidebar control rendered before the page.
+- Fixture data differs (t3code's project "supervillain" and model "Claude Fable 5.1" against Cairn's "cairn" and "scripted").
+- The skip-snapshot control was not run on the bridge windows (only on the faux windows; the mechanism is the same blind reconnect).
+- The vite build prints a CSS warning for a `highlight` pseudo-element in `apps/web` styles; harmless.
+
+#### Deviations from the plan
+
+- The composer lane class, a 5D path, was changed at integration from 5C's hand-off.
+- The thread header hand-off was applied by the integrator without its diff toggle.
+- J14 and the bridge `--runs 3` run were measured by the integrator through `nightly.sh`, not by 5A.

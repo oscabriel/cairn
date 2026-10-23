@@ -493,3 +493,24 @@ Both branches merged with `--no-ff` without conflicts; no dependency changed. Wo
 - The composer lane class, a 5D path, was changed at integration from 5C's hand-off.
 - The thread header hand-off was applied by the integrator without its diff toggle.
 - J14 and the bridge `--runs 3` run were measured by the integrator through `nightly.sh`, not by 5A.
+
+#### Review
+
+A review of wave 5 step 1 reported five confirmed findings, all in `judges/durability.ts`, and six unverified concerns. All five findings were confirmed and fixed; of the concerns, two were real and fixed, and four are recorded. `pnpm check` is green afterwards (127 files, 1,127 tests). Rerun: `node judges/durability.ts` (10 of 10 windows with the Chromium page; page `convergedMs` now counted from quiet, 4 to 122 ms), `--sabotage page-text --window streaming` (fails as required, "did not equal a fresh page within 2000 ms of quiet"), and `--bridge` (3 of 3: first reply after the restart read 42,082 / 0, 42,103 / 344 and 42,045 / 233; children gone 57 ms). Not rerun: `--slow` (J14, a 20 minute hold); its change is only the verdict's ordering check.
+
+Confirmed findings:
+
+1. **The page's 2 s budget was not judged.** Confirmed. `judgeOutcome` now completes a `Deferred` with the instant the follower sees the turn end; `capturePage`, forked in the window's scope beside it, reads the live page every 100 ms from that instant until `CONVERGE_MS` have passed (scribbling before each read under `--sabotage page-text`). `judgePage` then opens and settles the oracle and passes only if one of those reads, finished within 2 s of quiet, equals it; `convergedMs` is the time from quiet to that read.
+2. **"The approval to wait again after the restart" was a no-op wait.** Confirmed. `accept` now connects a new client, follows the thread with a fresh watcher (as `kill-six` does) and reads the pending approval from that client's own shell snapshot, so the approval is established on the brain that is up now before `thread.respond`.
+3. **`cacheKept` could pick a pre-kill reply when the follower lagged.** Confirmed. `Plan.verdict` now also receives what `run` answered as committed before the kill, and the first reply after the restart is the first reply whose id is not among them. `repliesBefore` stays as a reported number.
+4. **J14's `answerContinued` could not fail on its own.** Confirmed. The `stop` entry must now come after the gate's `pi.tool-result` (the entry carrying `accepted`, `declined` or `expired`, shared as `GATE_RESULTS` with `gateAccepted`).
+5. **`connect` said 10 s but could retry for up to 800 s.** Confirmed. The loop is bounded by elapsed time (`CONNECT_DEADLINE_MS`, 10 s, read from `Clock`; one try can add its 4 s of timeouts) and the failure reports the ms actually waited.
+
+Unverified concerns:
+
+- `Upload.post` had no deadline: real. The request now has a 30 s socket-silence timeout that destroys it, which reads as a broken upload (status 0) instead of hanging the window.
+- The page comparison would pass a client that reloaded on every reconnect: real gap in the judge. `Page.openThread` now records every full `load` after the first, and `judgePage` fails if the live page reloaded.
+- Skip-snapshot control not run on the bridge windows: recorded, unchanged (cost only; the mechanism is the same blind reconnect the faux windows prove).
+- `claude-kill.ts` and the bridge windows duplicate aims and checks: recorded. `claude-kill.ts` keeps J2's `answer` case and the restart and stop cgroup moves, which the bridge windows do not cover; folding it into `durability.ts` is left for a later wave; until then a change to one judge's bridge aims or J2/J9 checks must be mirrored in the other.
+- The bridge brain runs with the real `HOME`: not re-checked here; wave 3's check that `~/.pi/agent` stays read-only under it stands.
+- 5C's hero and thread structure rows (0 of 13, 0 of 8): recorded; 5D and 5E own them in step 2, as the gaps above say.

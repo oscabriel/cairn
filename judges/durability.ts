@@ -36,13 +36,14 @@
 // the turn ends, the reconnected client's thread view and shell rows equal a fresh client's
 // (exactly, by schema equivalence), and the shell row is idle; the expected number of user entries
 // exists. Beside the Node client a Chromium page (`fixtures/durability/Page.ts`) follows the
-// thread through every kill; once the brain is quiet its timeline and thread rows must equal a
-// fresh page's within 2 s (the same renderer, the same build). `--no-page` leaves the page out.
+// thread through every kill; it is read every 100 ms from the instant the brain goes quiet, and
+// one of those reads within 2 s must equal a fresh page's timeline and thread rows (the same
+// renderer, the same build), with no reload on the way. `--no-page` leaves the page out.
 //
 // `--sabotage skip-snapshot` makes the reconnecting Node client ignore the snapshot of each new
 // subscription (and so the ops it cannot apply without one) and keep its pre-kill view, which is what a server that skipped the snapshot
 // would leave it with; the page is left out. `--sabotage page-text` is the page's control: a stray
-// word goes into the surviving page's timeline before the comparison. Either way every window must
+// word goes into the surviving page's timeline before each read after quiet. Either way every window must
 // then fail; the judge exits 0 only if they all did.
 //
 // `--runs N` runs each chosen window N times; `fixtures/durability/nightly.sh` runs the matrix so.
@@ -85,6 +86,7 @@ import type { FileSystem } from "effect";
 import {
   Cause,
   Clock,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -195,6 +197,9 @@ const REPO = path.resolve(import.meta.dirname, "..");
 const OWNER = "owner@loopback";
 
 const CONVERGE_MS = 2000;
+
+/** How long `connect` keeps trying a brain that is coming up. */
+const CONNECT_DEADLINE_MS = 10_000;
 
 const QUIET_TIMEOUT = Duration.seconds(120);
 
@@ -451,7 +456,10 @@ const cleanRestart = (brain: Brain) =>
 /** A protocol client in the caller's scope, retried until the brain accepts the socket. */
 const connect = (brain: Brain) =>
   Effect.gen(function* () {
-    for (let count = 0; count < 200; count += 1) {
+    const startedAt = yield* Clock.currentTimeMillis;
+
+    // Bounded by elapsed time, not tries: one try can take its open and hello timeouts (4 s).
+    while ((yield* Clock.currentTimeMillis) - startedAt < CONNECT_DEADLINE_MS) {
       const scope = yield* Scope.make();
 
       const opened = yield* ProtocolClient.cairn({
@@ -477,8 +485,10 @@ const connect = (brain: Brain) =>
       yield* Effect.sleep("50 millis");
     }
 
+    const waited = (yield* Clock.currentTimeMillis) - startedAt;
+
     return yield* fail(
-      `no socket to the brain on port ${brain.port} after 10 s`
+      `no socket to the brain on port ${brain.port} after ${waited} ms`
     );
   });
 
@@ -882,7 +892,8 @@ const judgeOutcome = (
   threadId: ThreadId,
   follower: Follower,
   committedBefore: ReadonlyArray<Entry>,
-  plan: Plan
+  plan: Plan,
+  quiet: Deferred.Deferred<number>
 ) =>
   Effect.gen(function* () {
     const client = yield* connect(brain);
@@ -894,6 +905,8 @@ const judgeOutcome = (
       Effect.map(rowOf(follower, threadId), isQuiet),
       plan.bridge === true ? BRIDGE_QUIET_TIMEOUT : QUIET_TIMEOUT
     );
+    // The instant the brain went quiet; the page's 2 s are counted from here (`capturePage`).
+    yield* Deferred.succeed(quiet, yield* Clock.currentTimeMillis);
     yield* Effect.sleep("300 millis");
 
     // The oracle: a fresh client's first thread snapshot and shell snapshot.
@@ -983,15 +996,64 @@ const judgeOutcome = (
     return { effects: Object.fromEntries(counts), entries };
   }).pipe(Effect.scoped);
 
+/** What the live page showed from the instant the brain went quiet. */
+interface PageCapture {
+  readonly quietAt: number;
+  /** Each read and the instant it finished, 100 ms apart, until `CONVERGE_MS` after quiet. */
+  readonly reads: ReadonlyArray<{
+    readonly at: number;
+    readonly text: Page.PageText;
+  }>;
+}
+
 /**
- * The page's verdict once the brain is quiet: a fresh page is the oracle; the page that lived
- * through the kills must show the same timeline and rows within `CONVERGE_MS`. Answers the ms.
+ * Waits for `judgeOutcome` to say the brain is quiet, then reads the live page every 100 ms until
+ * `CONVERGE_MS` have passed, so the page is judged against the moment the brain went quiet rather
+ * than whenever the oracle page settled. Forked in the window's scope beside `judgeOutcome`.
+ */
+const capturePage = (
+  page: Ref.Ref<Option.Option<Page.ThreadPage>>,
+  quiet: Deferred.Deferred<number>
+) =>
+  Effect.gen(function* () {
+    const quietAt = yield* Deferred.await(quiet);
+    const live = yield* Ref.get(page);
+    const reads: Array<PageCapture["reads"][number]> = [];
+
+    if (Option.isNone(live)) {
+      return { quietAt, reads };
+    }
+
+    while ((yield* Clock.currentTimeMillis) - quietAt < CONVERGE_MS) {
+      if (sabotagePage) {
+        yield* attempt("writing into the page", async () => {
+          await Page.scribble(live.value);
+        });
+      }
+
+      const text = yield* attempt(
+        "reading the page",
+        async () => await Page.read(live.value)
+      );
+
+      reads.push({ at: yield* Clock.currentTimeMillis, text });
+      yield* Effect.sleep("100 millis");
+    }
+
+    return { quietAt, reads };
+  });
+
+/**
+ * The page's verdict: a fresh page opened once the brain is quiet is the oracle, and the page that
+ * lived through the kills must have shown the same timeline and rows within `CONVERGE_MS` of the
+ * brain going quiet, without reloading. Answers the ms from quiet to the first equal read.
  */
 const judgePage = (
   browser: Browser,
   brain: Brain,
   threadId: ThreadId,
-  live: Page.ThreadPage
+  live: Page.ThreadPage,
+  capture: PageCapture
 ) =>
   Effect.gen(function* () {
     const fresh = yield* attempt(
@@ -1026,32 +1088,24 @@ const judgePage = (
       oracle = next;
     }
 
-    if (sabotagePage) {
-      yield* attempt("writing into the page", async () => {
-        await Page.scribble(live);
-      });
-    }
-
-    const start = yield* Clock.currentTimeMillis;
-
-    let shown = yield* attempt(
-      "reading the page",
-      async () => await Page.read(live)
+    const equal = capture.reads.find(
+      ({ at, text }) =>
+        at - capture.quietAt <= CONVERGE_MS && Page.same(text, oracle)
     );
 
-    while (!Page.same(shown, oracle)) {
-      const now = yield* Clock.currentTimeMillis;
+    if (equal === undefined) {
+      const last = capture.reads.at(-1);
 
-      if (now - start > CONVERGE_MS) {
-        return yield* fail(
-          `the page did not equal a fresh page: ${Page.firstDifference(shown, oracle)}`
-        );
-      }
+      return yield* fail(
+        last === undefined
+          ? "the page was never read after the brain went quiet"
+          : `the page did not equal a fresh page within ${CONVERGE_MS} ms of quiet: ${Page.firstDifference(last.text, oracle)}`
+      );
+    }
 
-      yield* Effect.sleep("100 millis");
-      shown = yield* attempt(
-        "reading the page",
-        async () => await Page.read(live)
+    if (live.reloads.length > 0) {
+      return yield* fail(
+        `the page reloaded ${live.reloads.length} times instead of reconnecting`
       );
     }
 
@@ -1060,7 +1114,7 @@ const judgePage = (
     }
 
     return {
-      ms: (yield* Clock.currentTimeMillis) - start,
+      ms: equal.at - capture.quietAt,
       timelineChars: oracle.timeline.length,
       rows: oracle.rows.length,
     };
@@ -1174,10 +1228,14 @@ interface Plan {
     RunError,
     RunNeeds
   >;
-  /** More checks once the turn is quiet, over the oracle's entries; recorded in `measures`. */
+  /**
+   * More checks once the turn is quiet, over the oracle's entries and what `run` said was committed
+   * before the kill; recorded in `measures`.
+   */
   readonly verdict?: (
     context: RunContext,
-    entries: ReadonlyArray<Entry>
+    entries: ReadonlyArray<Entry>,
+    committed: ReadonlyArray<Entry>
   ) => Effect.Effect<void, RunError, RunNeeds>;
 }
 
@@ -1199,29 +1257,36 @@ const killWhen =
       return { committed };
     });
 
-/** A `thread.respond` accept on a new client, mapped to the window's failure. */
+/** The texts a `gate` result can carry. */
+const GATE_RESULTS: ReadonlySet<string> = new Set([
+  "accepted",
+  "declined",
+  "expired",
+]);
+
+/**
+ * A `thread.respond` accept on a new client. The approval is read from that client's own first
+ * shell snapshot, never the follower's view: after a restart the follower still holds the pre-kill
+ * row, so only a fresh snapshot shows the approval waiting on the brain that is up now.
+ */
 const accept = (context: RunContext) =>
   Effect.scoped(
     Effect.gen(function* () {
+      const client = yield* connect(context.brain);
+      const watcher = yield* makeFollower;
+
+      yield* follow(client, context.threadId, watcher, false);
       yield* until(
-        "the approval to wait again after the restart",
-        Effect.map(
-          pendingApproval(context.follower, context.threadId),
-          Option.isSome
-        ),
+        "the approval to wait in a fresh client's shell",
+        Effect.map(pendingApproval(watcher, context.threadId), Option.isSome),
         "60 seconds"
       );
 
-      const approval = yield* pendingApproval(
-        context.follower,
-        context.threadId
-      );
+      const approval = yield* pendingApproval(watcher, context.threadId);
 
       if (Option.isNone(approval)) {
         return yield* fail("no approval to answer");
       }
-
-      const client = yield* connect(context.brain);
 
       return yield* client["thread.respond"]({
         threadId: context.threadId,
@@ -1241,9 +1306,7 @@ const accept = (context: RunContext) =>
 /** The gate's result must read `accepted`, exactly once. */
 const gateAccepted = (context: RunContext, entries: ReadonlyArray<Entry>) =>
   Effect.gen(function* () {
-    const gates = resultTexts(entries).filter((text) =>
-      ["accepted", "declined", "expired"].includes(text)
-    );
+    const gates = resultTexts(entries).filter((text) => GATE_RESULTS.has(text));
 
     context.measures.checks.gateAcceptedOnce =
       gates.length === 1 && gates[0] === "accepted";
@@ -1297,14 +1360,23 @@ const bridgeCrash = (context: RunContext) =>
     return { committed };
   });
 
-/** J2: the first reply after the restart kept the prompt cache. */
-const cacheKept = (context: RunContext, entries: ReadonlyArray<Entry>) =>
+/**
+ * J2: the first reply after the restart kept the prompt cache. That reply is the first one whose id
+ * was not committed before the kill, so a follower that lagged the store cannot point it at a
+ * pre-kill reply.
+ */
+const cacheKept = (
+  context: RunContext,
+  entries: ReadonlyArray<Entry>,
+  committed: ReadonlyArray<Entry>
+) =>
   Effect.sync(() => {
-    const before = context.measures.extra.repliesBefore;
-    const index = Predicate.isNumber(before) ? before : 0;
+    const before = new Set(committed.map((entry) => entry.id));
 
     const usage = Option.flatMap(
-      Option.fromUndefinedOr(entries.filter(isReply)[index]),
+      Option.fromUndefinedOr(
+        entries.find((entry) => isReply(entry) && !before.has(entry.id))
+      ),
       (entry) =>
         Option.flatMap(modelOf(entry), (message) =>
           Option.fromUndefinedOr(message.usage)
@@ -1883,10 +1955,10 @@ const plans: Readonly<Record<WindowName, Plan>> = {
 
         return yield* bridgeCrash(context);
       }),
-    verdict: (context, entries) =>
+    verdict: (context, entries, committed) =>
       Effect.gen(function* () {
         yield* markerOnce(context);
-        yield* cacheKept(context, entries);
+        yield* cacheKept(context, entries, committed);
       }),
   },
   "bridge-tool-parked": {
@@ -1914,10 +1986,10 @@ const plans: Readonly<Record<WindowName, Plan>> = {
 
         return yield* bridgeCrash(context);
       }),
-    verdict: (context, entries) =>
+    verdict: (context, entries, committed) =>
       Effect.gen(function* () {
         yield* markerOnce(context);
-        yield* cacheKept(context, entries);
+        yield* cacheKept(context, entries, committed);
         context.measures.checks.interruptedResult = resultTexts(entries).some(
           (text) => /interrupted/iu.test(text)
         );
@@ -1945,10 +2017,10 @@ const plans: Readonly<Record<WindowName, Plan>> = {
 
         return result;
       }),
-    verdict: (context, entries) =>
+    verdict: (context, entries, committed) =>
       Effect.gen(function* () {
         yield* gateAccepted(context, entries);
-        yield* cacheKept(context, entries);
+        yield* cacheKept(context, entries, committed);
         context.measures.checks.markOnce =
           (effectCounts(context.brain).get("gated") ?? 0) === 1;
       }),
@@ -1990,9 +2062,17 @@ const plans: Readonly<Record<WindowName, Plan>> = {
         context.measures.checks.markOnce =
           (effectCounts(context.brain).get("gated") ?? 0) === 1;
 
+        // Claude's answer came after the gate's result, not before it.
+        const gateAt = entries.findIndex(
+          (entry) =>
+            entry.kind === "pi.tool-result" &&
+            partsOf(entry).some((part) => GATE_RESULTS.has(part.text ?? ""))
+        );
+
         const answered = entries.some(
           (entry, index) =>
-            index > 0 &&
+            gateAt !== -1 &&
+            index > gateAt &&
             entry.kind === "pi.assistant" &&
             Option.exists(
               modelOf(entry),
@@ -2166,16 +2246,20 @@ const runWindow = (window: WindowName, run: number, shared: Shared) => {
       yield* openPage(shared, brain, proxyPort, before.context.threadId, page);
     }
 
+    const quiet = yield* Deferred.make<number>();
+    const captured = yield* capturePage(page, quiet).pipe(Effect.forkScoped);
+
     const verdict = yield* judgeOutcome(
       brain,
       before.context.threadId,
       follower,
       before.committed,
-      plan
+      plan,
+      quiet
     );
 
     if (plan.verdict !== undefined) {
-      yield* plan.verdict(before.context, verdict.entries);
+      yield* plan.verdict(before.context, verdict.entries, before.committed);
     }
 
     const failedChecks = Object.entries(measures.checks)
@@ -2193,7 +2277,8 @@ const runWindow = (window: WindowName, run: number, shared: Shared) => {
         shared.browser.value,
         brain,
         before.context.threadId,
-        livePage.value
+        livePage.value,
+        yield* Fiber.join(captured)
       );
 
       pageResult.convergedMs = Option.some(shown.ms);

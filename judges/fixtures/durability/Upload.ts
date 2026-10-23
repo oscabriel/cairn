@@ -22,6 +22,9 @@ export interface UploadAnswer {
   readonly body: string;
 }
 
+/** How long the socket may stay silent, either way, before the upload counts as broken. */
+const ANSWER_TIMEOUT_MS = 30_000;
+
 /** What one upload has heard so far. */
 interface UploadState {
   response: IncomingMessage | undefined;
@@ -63,6 +66,12 @@ export const post = async (
 
   request.on("response", onResponse);
   request.on("error", onBroken);
+  // A half-open socket (no RST) breaks the upload instead of hanging the window.
+  request.setTimeout(ANSWER_TIMEOUT_MS, () => {
+    request.destroy(
+      new Error(`no answer within ${ANSWER_TIMEOUT_MS / 1000} s of silence`)
+    );
+  });
 
   for (let offset = 0; offset < bytes.byteLength; offset += pacing.chunk) {
     if (state.broken !== undefined || request.destroyed) {

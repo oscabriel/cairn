@@ -17,6 +17,8 @@ export interface ThreadPage {
   readonly page: Page;
   /** Messages the page logged as errors, and uncaught exceptions. */
   readonly errors: Array<string>;
+  /** The URL of each full load after the first: a reconnect must never reload the page. */
+  readonly reloads: Array<string>;
 }
 
 /** Opens `/t/<threadId>` in a fresh context and waits until the timeline shows. */
@@ -37,7 +39,11 @@ export const openThread = async (
   await page.goto(`${origin}/t/${threadId}`, { waitUntil: "load" });
   await page.waitForSelector(TIMELINE, { timeout: 30_000 });
 
-  return { context, page, errors };
+  const reloads: Array<string> = [];
+
+  page.on("load", () => reloads.push(page.url()));
+
+  return { context, page, errors, reloads };
 };
 
 export const close = async (thread: ThreadPage) => {

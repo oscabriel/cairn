@@ -210,8 +210,9 @@ describe("rows", () => {
   });
 });
 
-describe("the changed-files card", () => {
-  const checkpoint = Schema.decodeSync(Entry)({
+/** A turn-1 checkpoint entry whose turn began at `userEntryId`. */
+const checkpointOf = (userEntryId: number) =>
+  Schema.decodeSync(Entry)({
     id: 54,
     conversationId: 3,
     kind: "cairn.checkpoint",
@@ -222,9 +223,31 @@ describe("the changed-files card", () => {
       capturedAt: 1,
       files: [{ path: "src/a.ts", additions: 2, deletions: 1 }],
       moreFiles: 0,
-      userEntryId: 50,
+      userEntryId,
     },
   });
+
+/** The fixture's entry 43, which only calls tools, with a line of text first: an answer, then tools. */
+const answerThenTools = ((): Entry => {
+  const raw = coding.entries.find((entry) => entry.id === 43);
+  const message = raw?.model?.[0];
+
+  return Schema.decodeUnknownSync(Entry)({
+    ...raw,
+    model: [
+      {
+        ...message,
+        content: [
+          { type: "text", text: "Searching the folder." },
+          ...(message?.content ?? []),
+        ],
+      },
+    ],
+  });
+})();
+
+describe("the changed-files card", () => {
+  const checkpoint = checkpointOf(50);
 
   const withCheckpoint: ThreadViewState = {
     ...codingState,
@@ -254,6 +277,37 @@ describe("the changed-files card", () => {
           onNone: () => false,
           onSome: (card) => card.files[0]?.path === "src/a.ts",
         })
+    );
+  });
+
+  it("rides inside its turn's answer when tool rows end the turn", () => {
+    const endsOnTools: ThreadViewState = {
+      ...codingState,
+      view: {
+        ...codingState.view,
+        entries: [
+          ...codingState.view.entries
+            .filter((entry) => entry.id <= 47)
+            .map((entry) => (entry.id === 43 ? answerThenTools : entry)),
+          checkpointOf(40),
+        ],
+      },
+    };
+
+    const transcript = transcriptOf(
+      "ends-on-tools",
+      Option.some(endsOnTools),
+      shown("ends-on-tools").ui,
+      Option.none()
+    );
+
+    assert.isFalse(
+      transcript.items.some((item) => item.kind === "changed-files")
+    );
+    assert.isTrue(
+      transcript.items.some(
+        (item) => item.kind === "message" && Option.isSome(item.changedFiles)
+      )
     );
   });
 

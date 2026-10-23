@@ -47,7 +47,8 @@ export type LandmarkFile = typeof LandmarkFile.Type;
 /**
  * Reads every landmark on the page. A landmark is an element carrying a shared hook: `data-testid`,
  * `data-timeline-row-kind` (with `data-message-role` when present), a `data-chat-*`,
- * `data-composer-*` or `data-changed-files-*` attribute, or `data-slot`; an `h1` counts too.
+ * `data-composer-*` or `data-changed-files-*` attribute, or `data-slot`; an `h1` and a labelled
+ * `nav` (`nav=Settings breadcrumb`) count too.
  * Keys repeat with an index; transcript rows count from the end (`row:message#-1` is the last),
  * because the two lists virtualize different amounts of history above the view.
  */
@@ -118,6 +119,16 @@ export const readLandmarks = async (page: Page): Promise<LandmarkFile> =>
 
         if (slot !== undefined && !slot.startsWith("toast")) {
           return `slot=${slot}`;
+        }
+
+        // Breadcrumbs carry no data hook in t3code, so a labelled nav counts by its label.
+        const navLabel =
+          element.tagName === "NAV"
+            ? (element.getAttribute("aria-label") ?? undefined)
+            : undefined;
+
+        if (navLabel !== undefined) {
+          return `nav=${navLabel}`;
         }
 
         return element.tagName === "H1" ? "h1" : null;

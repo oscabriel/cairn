@@ -57,6 +57,42 @@ export const latestCheckpointTurn = (
       : latest
   );
 
+/** Each entry list's newest checkpoint turn, by list: lists are immutable, so a seen one is reused. */
+const latestByList = new WeakMap<ReadonlyArray<Entry>, Option.Option<number>>();
+
+const latestOfList = (entries: ReadonlyArray<Entry>): Option.Option<number> => {
+  const seen = latestByList.get(entries);
+
+  if (seen !== undefined) {
+    return seen;
+  }
+
+  const latest = latestCheckpointTurn(entries);
+
+  latestByList.set(entries, latest);
+
+  return latest;
+};
+
+/**
+ * The newest checkpoint turn across a thread view's entries and the older ones paged in, without
+ * walking a list the header already read: every streamed delta re-renders the header.
+ */
+const latestAcross = (
+  older: ReadonlyArray<Entry>,
+  entries: ReadonlyArray<Entry>
+): Option.Option<number> =>
+  Option.match(latestOfList(entries), {
+    onNone: () => latestOfList(older),
+    onSome: (turn) =>
+      Option.some(
+        Math.max(
+          turn,
+          Option.getOrElse(latestOfList(older), () => turn)
+        )
+      ),
+  });
+
 /** What the header's diff toggle shows and sends. */
 export interface DiffToggleInput<Message> {
   /** True while the diff panel is open. */
@@ -102,7 +138,9 @@ export const diffToggle = <Message>(
 /** What the diff panel's own toggle view reads from its thread page. */
 export interface ToggleViewInputs {
   readonly threadId: Option.Option<ThreadId>;
-  /** The thread view's entries and the older ones paged in. */
+  /** The older entries paged in above the thread view. */
+  readonly older: ReadonlyArray<Entry>;
+  /** The thread view's entries. */
   readonly entries: ReadonlyArray<Entry>;
 }
 
@@ -111,12 +149,12 @@ export interface ToggleViewInputs {
  * the thread's whole diff up to the newest checkpoint turn.
  */
 export const toggleView = Submodel.defineView<Model, Message, ToggleViewInputs>(
-  (model, { threadId, entries }, h) =>
+  (model, { threadId, older, entries }, h) =>
     diffToggle(h, {
       open: isOpen(model),
       onToggle: Option.zipWith(
         threadId,
-        latestCheckpointTurn(entries),
+        latestAcross(older, entries),
         (pageThreadId, latestTurn) =>
           Message.ClickedToggle({ threadId: pageThreadId, latestTurn })
       ),

@@ -14,7 +14,7 @@
       "width": 1440,
       "height": 900
     },
-    "capturedAtMs": 1792715944399,
+    "capturedAtMs": 1792721314605,
     "masks": [
       {
         "x": 0,
@@ -24,11 +24,11 @@
         "reason": "left column: t3code's settings navigation, Cairn's main sidebar (one settings page, judged by the sidebar group)"
       },
       {
-        "x": 256,
-        "y": 0,
-        "width": 1184,
-        "height": 52,
-        "reason": "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none"
+        "x": 1256,
+        "y": 14,
+        "width": 164,
+        "height": 24,
+        "reason": "t3code's Restore device defaults button in the settings header; Cairn's single settings page has no device defaults to restore"
       }
     ]
   },
@@ -47,7 +47,7 @@
       "width": 1440,
       "height": 900
     },
-    "capturedAtMs": 1792715949517,
+    "capturedAtMs": 1792721319672,
     "masks": [
       {
         "x": 0,
@@ -55,13 +55,6 @@
         "width": 256,
         "height": 900,
         "reason": "left column: t3code's settings navigation, Cairn's main sidebar (one settings page, judged by the sidebar group)"
-      },
-      {
-        "x": 256,
-        "y": 0,
-        "width": 1184,
-        "height": 52,
-        "reason": "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none"
       }
     ]
   },
@@ -80,14 +73,14 @@
       "width": 390,
       "height": 844
     },
-    "capturedAtMs": 1792715954146,
+    "capturedAtMs": 1792721324315,
     "masks": [
       {
-        "x": 0,
-        "y": 0,
-        "width": 390,
-        "height": 52,
-        "reason": "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none"
+        "x": 192,
+        "y": 12,
+        "width": 186,
+        "height": 28,
+        "reason": "t3code's Restore device defaults button in the settings header; Cairn's single settings page has no device defaults to restore"
       }
     ]
   },
@@ -106,15 +99,7 @@
       "width": 390,
       "height": 844
     },
-    "capturedAtMs": 1792715958851,
-    "masks": [
-      {
-        "x": 0,
-        "y": 0,
-        "width": 390,
-        "height": 52,
-        "reason": "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none"
-      }
-    ]
+    "capturedAtMs": 1792721329041,
+    "masks": []
   }
 ]

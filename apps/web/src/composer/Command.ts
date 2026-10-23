@@ -95,13 +95,19 @@ export const mintHomeDraft = Effect.map(mintThreadId, (draftId) =>
 
 /**
  * Replaces `/` with the hero draft's own URL, `/new/<draftId>`, as t3code's index route does, so
- * a reload of the page restores the draft instead of minting a fresh one.
+ * a reload of the page restores the draft instead of minting a fresh one. The query and hash carry
+ * over, so a switch such as `?busy=` outlives the move.
  */
 export const MoveHeroToDraftUrl = Command.define("MoveHeroToDraftUrl", {
   args: { draftId: Schema.String },
   messages: [Message.MovedHeroToDraftUrl],
   execute: ({ draftId }) =>
-    replaceUrl(draftRouter({ draftId })).pipe(
+    Effect.sync(
+      () => `${globalThis.location.search}${globalThis.location.hash}`
+    ).pipe(
+      Effect.flatMap((suffix) =>
+        replaceUrl(`${draftRouter({ draftId })}${suffix}`)
+      ),
       Effect.as(Message.MovedHeroToDraftUrl())
     ),
 });

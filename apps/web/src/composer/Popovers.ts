@@ -6,6 +6,12 @@
 // and it is the composer's own state (Base UI's popovers portal and anchor themselves; this one
 // opens beside the composer card); the provider rail is a heading per provider; keyboard moves
 // through the rows from the search field.
+// The hero's project combobox is ported from apps/web/src/components/chat/DraftHeroHeadline.tsx
+// (the "Search projects..." field, folder marks and "Add project" with FolderPlus) and
+// apps/web/src/components/ui/combobox.tsx (the positioner and popup). Kept: the popup and row
+// class strings and the row order. Changed: the popup is positioned by hand, `-top-11` against
+// the composer card where Base UI anchors it to the headline's project button; the first row is
+// always the highlighted one, so Enter picks it (Base UI highlights on keyboard or hover only).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //

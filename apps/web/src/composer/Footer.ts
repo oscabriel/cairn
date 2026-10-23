@@ -464,6 +464,15 @@ const modeBlock = (
 
 const overflowHolder = (model: Model, h: HtmlBuilder<Message>): Html => {
   const needed = model.footer.layout.hiddenCount > 0;
+  const blocks = footerBlocks(model);
+
+  // t3code's compact trigger carries the shortcut of every block folded into it
+  // (CompactComposerControlsMenu.tsx): the mode always, the effort too once the traits fold in.
+  const shortcut = blocks
+    .slice(blocks.length - model.footer.layout.hiddenCount)
+    .includes("traits")
+    ? "composer.mode composer.effort"
+    : "composer.mode";
 
   return h.div(
     [
@@ -482,7 +491,7 @@ const overflowHolder = (model: Model, h: HtmlBuilder<Message>): Html => {
           h.AriaLabel("More composer controls"),
           h.AriaHasPopup("menu"),
           h.AriaExpanded(isOpen(model, "Overflow")),
-          h.DataAttribute("composer-shortcut", "composer.mode"),
+          h.DataAttribute("composer-shortcut", shortcut),
           h.DataAttribute("slot", "menu-trigger"),
           h.Class(
             `${CONTROL_BASE_CLASS} ${FOOTER_CONTROL_CLASS} justify-center whitespace-nowrap shrink-0`

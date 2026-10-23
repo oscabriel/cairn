@@ -46,8 +46,11 @@ const keyBindings: ReadonlyArray<KeyBinding<Message>> =
     mapEvent: () => Message.PressedShortcut({ command: rule.command }),
   }));
 
+// `Stream.tick` emits at once; the first tick is dropped because the stream restarts whenever a
+// row starts or stops running, and a streaming thread does that several times a second.
 const clock = (fast: boolean): Stream.Stream<Message> =>
   Stream.tick(Duration.seconds(fast ? 1 : 15)).pipe(
+    Stream.drop(1),
     Stream.mapEffect(() =>
       Effect.map(Clock.currentTimeMillis, (nowMs) => Message.Ticked({ nowMs }))
     )

@@ -1,5 +1,6 @@
 // The thread page: the stream's status, then the transcript (apps/web/src/timeline), which scrolls
 // itself. The page header (ui/ChatHeader.ts) is drawn by the root view above the hold banner.
+import type { Entry } from "@cairn/protocol/Thread";
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -89,6 +90,8 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
     )
 );
 
+const NO_ENTRIES: ReadonlyArray<Entry> = [];
+
 /** The thread page's controls in the root's chat header: the diff panel toggle. */
 export const headerControls = Submodel.defineView<Model, Message>((model, h) =>
   h.submodel({
@@ -97,9 +100,13 @@ export const headerControls = Submodel.defineView<Model, Message>((model, h) =>
     view: diffToggleView,
     viewInputs: {
       threadId: model.threadId,
+      older: Option.match(model.view, {
+        onNone: () => NO_ENTRIES,
+        onSome: (state) => state.older,
+      }),
       entries: Option.match(model.view, {
-        onNone: () => [],
-        onSome: (state) => [...state.older, ...state.view.entries],
+        onNone: () => NO_ENTRIES,
+        onSome: (state) => state.view.entries,
       }),
     },
     toParentMessage: (message) => Message.GotDiffMessage({ message }),

@@ -111,19 +111,46 @@ const messageItem = (
   return item;
 };
 
-/** Moves each changed-files row into the answer right before it, as t3code draws the card. */
+/**
+ * The answer a changed-files row belongs to: the last assistant message of its turn, found walking
+ * back from the card and stopping at the turn's user message. t3code keys the card by its turn's
+ * assistant message, so tool rows between that answer and the card do not separate them.
+ */
+const answerIndexOf = (
+  rows: ReadonlyArray<TimelineRow>,
+  cardIndex: number
+): Option.Option<number> => {
+  for (let index = cardIndex - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+
+    if (row?.kind === "message") {
+      return row.message.role === "assistant"
+        ? Option.some(index)
+        : Option.none();
+    }
+  }
+
+  return Option.none();
+};
+
+/** Moves each changed-files row into its turn's answer, as t3code draws the card. */
 const attachCards = (
   rows: ReadonlyArray<TimelineRow>
-): ReadonlyArray<ListItem> =>
-  rows.flatMap((row, index): ReadonlyArray<ListItem> => {
-    const previous = rows[index - 1];
-    const next = rows[index + 1];
+): ReadonlyArray<ListItem> => {
+  const cardByAnswer = new Map<number, ChangedFilesRow>();
 
-    if (
-      row.kind === "changed-files" &&
-      previous?.kind === "message" &&
-      previous.message.role === "assistant"
-    ) {
+  for (const [index, row] of rows.entries()) {
+    if (row.kind === "changed-files") {
+      Option.map(answerIndexOf(rows, index), (answer) =>
+        cardByAnswer.set(answer, row)
+      );
+    }
+  }
+
+  const attached = new Set(cardByAnswer.values());
+
+  return rows.flatMap((row, index): ReadonlyArray<ListItem> => {
+    if (row.kind === "changed-files" && attached.has(row)) {
       return [];
     }
 
@@ -131,15 +158,9 @@ const attachCards = (
       return [row];
     }
 
-    return [
-      messageItem(
-        row,
-        next?.kind === "changed-files" && row.message.role === "assistant"
-          ? Option.some(next)
-          : Option.none()
-      ),
-    ];
+    return [messageItem(row, Option.fromUndefinedOr(cardByAnswer.get(index)))];
   });
+};
 
 /** The last derivation, so a view whose inputs did not change reuses it. */
 const memo = new Map<"last", Memo>();

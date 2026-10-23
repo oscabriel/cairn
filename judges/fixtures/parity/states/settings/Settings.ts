@@ -13,8 +13,9 @@
 // refuses unless the installed `t3code-nightly-bin` is the version ADR 0015 records (D56). The Cairn
 // half runs the real client over the in-process brain (CairnApp.ts) and writes `<out>/settings/`.
 // Masks: at desktop widths the left column (t3code's settings navigation, Cairn's main sidebar),
-// and t3code's page header (its "Restore device defaults" and settings breadcrumb, which Cairn's
-// single settings page has no counterpart for). Toasts are hidden in both apps.
+// and t3code's "Restore device defaults" button in the page header, which Cairn's single settings
+// page has no counterpart for. The header and its breadcrumb stay in, on both images and as the
+// `nav=Settings breadcrumb` landmark. Toasts are hidden in both apps.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -112,8 +113,10 @@ const masksOf = async (
     ? Option.none<Rect>()
     : await boxOf(page, '[data-slot="sidebar-container"]');
 
-  const header =
-    side === "t3" ? await boxOf(page, "header") : Option.none<Rect>();
+  const restore =
+    side === "t3"
+      ? await boxOf(page, 'header button:has-text("Restore device defaults")')
+      : Option.none<Rect>();
 
   return [
     ...Option.match(sidebar, {
@@ -126,13 +129,13 @@ const masksOf = async (
         },
       ],
     }),
-    ...Option.match(header, {
+    ...Option.match(restore, {
       onNone: () => [],
       onSome: (box) => [
         {
           ...round(box),
           reason:
-            "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none",
+            "t3code's Restore device defaults button in the settings header; Cairn's single settings page has no device defaults to restore",
         },
       ],
     }),

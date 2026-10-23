@@ -12,7 +12,8 @@
 // menu case (typing `@`, `/` and `$` opens each of the composer's menus, which the judge waits for,
 // and typing on through them loses no character).
 // Prints one JSON line and exits 0 when nothing was dropped or reordered, IME and the menu case are
-// intact, and the page logged no error.
+// intact, the transcript streamed (at least half the judge's own exchanges landed, `stream: ok`),
+// and the page logged no error.
 /* oxlint-disable no-await-in-loop -- the typist sends one key after another, on purpose */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -25,6 +26,7 @@ import { parseArgs } from "node:util";
 import { CommandId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { NodeServices } from "@effect/platform-node";
 import {
+  Cause,
   Clock,
   Duration,
   Effect,
@@ -100,6 +102,12 @@ const PROJECT_ID = ProjectId.make("prj_typing_judge");
 
 /** One streamed exchange every this many milliseconds while the typist types. */
 const STREAM_INTERVAL = Duration.millis(250);
+
+/** A streamed submit that takes longer than this counts as failed. */
+const STREAM_SUBMIT_TIMEOUT = Duration.seconds(5);
+
+/** The stream's failed submits, for the result line. */
+const streamFailures = { count: 0, last: "" };
 
 /** A long-ish answer, so each exchange adds real markup to the page. */
 const ANSWER =
@@ -202,7 +210,8 @@ const Seed = Layer.effectDiscard(
       yield* submit(`history message ${index}`);
     }
 
-    // The transcript keeps growing for as long as the judge runs.
+    // The transcript keeps growing for as long as the judge runs. A failed or stuck submit is
+    // counted and reported, not hidden, and the stream goes on with the next one.
     let streamed = 0;
 
     yield* Effect.suspend(() => {
@@ -210,7 +219,13 @@ const Seed = Layer.effectDiscard(
 
       return submit(`streamed message ${streamed}`);
     }).pipe(
-      Effect.ignoreCause,
+      Effect.timeout(STREAM_SUBMIT_TIMEOUT),
+      Effect.catchCause((cause) =>
+        Effect.sync(() => {
+          streamFailures.count += 1;
+          streamFailures.last = Cause.pretty(cause).split("\n")[0] ?? "";
+        })
+      ),
       Effect.repeat(Schedule.spaced(STREAM_INTERVAL)),
       Effect.forkScoped
     );
@@ -399,6 +414,23 @@ const typed = await composer.inputValue();
 
 const rowsAfter = await entries.count();
 
+/**
+ * The judge's own stream lands one exchange (two rows) every 250 ms; a run that saw fewer than half
+ * of them typed against a transcript that was not streaming, so it proves nothing. A `--url` page
+ * streams whatever its brain streams, so the floor is not checked there.
+ */
+const STREAM_FLOOR = seconds * 4;
+
+const streamOf = (): "ok" | "dead" | "skipped" => {
+  if (values.url !== undefined) {
+    return "skipped";
+  }
+
+  return rowsAfter - rowsBefore >= STREAM_FLOOR ? "ok" : "dead";
+};
+
+const stream = streamOf();
+
 let firstDiff = -1;
 
 for (let index = 0; index < Math.max(text.length, typed.length); index += 1) {
@@ -491,6 +523,9 @@ const result = {
   lateKeys: late.length,
   maxLateMs: Math.round(Math.max(0, ...late)),
   rowsStreamed: rowsAfter - rowsBefore,
+  stream,
+  streamFailures: streamFailures.count,
+  lastStreamFailure: streamFailures.last,
   ime,
   menu,
   menusSeen: menusSeen.toSorted(),
@@ -507,6 +542,7 @@ process.exitCode =
   result.match &&
   (ime === "ok" || ime === "skipped") &&
   menu === "ok" &&
+  stream !== "dead" &&
   errors.length === 0
     ? 0
     : 1;

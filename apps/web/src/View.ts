@@ -184,6 +184,9 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
   title: "Cairn",
   body: h.div(
     [
+      // Foldkit replaces the mount node with this element unless the two match, so it keeps
+      // index.html's id and with it the #root rules in styles.css (the safe-area top inset).
+      h.Id("root"),
       h.DataAttribute("slot", "sidebar-wrapper"),
       h.DataAttribute("sidebar-state", sidebarState(model.sidebar)),
       h.Class(

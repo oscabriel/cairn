@@ -445,9 +445,16 @@ const coldLoad = async (
       const at = performance.getEntriesByName(mark)[0]?.startTime ?? 0;
       const [navigation] = performance.getEntriesByType("navigation");
 
+      // The service worker's script and the page's own load report start as the app comes up,
+      // never ahead of it; WebKit stamps them a few ms before the mark where Chromium does not.
       const resources = performance
         .getEntriesByType("resource")
-        .filter((entry) => entry.startTime <= at);
+        .filter((entry) => entry.startTime <= at)
+        .filter((entry) => {
+          const { pathname } = new URL(entry.name);
+
+          return pathname !== "/sw.js" && pathname !== "/api/load-report";
+        });
 
       const bytes = resources.reduce(
         (sum, entry) =>

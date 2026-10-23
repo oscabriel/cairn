@@ -1568,6 +1568,16 @@ const plans: Readonly<Record<WindowName, Plan>> = {
           })
         );
 
+        // The first turn's quiet row must not be read as the resent turn's end.
+        yield* until(
+          "the resent message to reach the follower",
+          Effect.map(
+            viewOf(context.follower),
+            (view) => userEntries(entriesOf(view)) >= 2
+          ),
+          QUIET_TIMEOUT
+        );
+
         return { committed };
       }),
   },

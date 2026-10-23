@@ -514,3 +514,73 @@ Unverified concerns:
 - `claude-kill.ts` and the bridge windows duplicate aims and checks: recorded. `claude-kill.ts` keeps J2's `answer` case and the restart and stop cgroup moves, which the bridge windows do not cover; folding it into `durability.ts` is left for a later wave; until then a change to one judge's bridge aims or J2/J9 checks must be mirrored in the other.
 - The bridge brain runs with the real `HOME`: not re-checked here; wave 3's check that `~/.pi/agent` stays read-only under it stands.
 - 5C's hero and thread structure rows (0 of 13, 0 of 8): recorded; 5D and 5E own them in step 2, as the gaps above say.
+
+### Step 2 (5D, 5E)
+
+Integrated on 2026-10-22 on `main` (`19629b8`, then this note's commit) and deployed to `https://code.gneiss.run`. The composer now carries t3code's landmarks (drawer menus above the card, attachments inside the body, the combobox project picker, footer folding that matches t3code's widths), and a hero draft survives a reload. Transcript rows use t3code's three-level frame, the changed-files card sits inside its answer, tight lists render without paragraphs, and the thread header has a diff panel toggle. Settings rows use t3code's grid and the settings pages are a parity group.
+
+#### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| 5D Composer parity and the WebKit tier | `phase1/5-5D` | `7934134` | partial (WebKit tier not run; hero structure still 0 of 13) |
+| 5E Transcript, diff and settings parity | `phase1/5-5E` | `870cd8c` | partial (transcript and settings rows differ on data; gaps below) |
+
+Both branches merged with `--no-ff` without conflicts; no dependency changed. Worktrees were removed and the `phase1/5-*` and workflow worktree branches deleted before `pnpm check`.
+
+#### Hand-offs applied
+
+- **5D, `ModelSource.layerFaux` and `judges/fixtures/parity/CairnApp.ts`:** the faux model takes an optional display name and the parity fixture names it "Claude Fable 5.1", t3code's baseline model. Applied from 5D's diff, except that the name is set on a `FauxModelDefinition` built first rather than through a conditional spread, which the `anti-slop` lint refuses.
+- **5D, `ContextStripView.ts` (optional, 5C's folder):** not applied. The 390 context-strip width is one structure row and the hero is not reopened in this step.
+- **5D, wizard stage 5:** left for 5F (the WebKit tier on the MacBook).
+- **5E, the diff toggle in `View.ts`:** applied in a different shape. 5E's patch built `Thread.Message.GotDiffMessage(Diff.Message.ClickedToggle(...))` in the root view, which foldkit's `no-child-message-construction-in-root` lint refuses. The toggle is now the diff panel's own view (`diff/Toggle.ts` `toggleView`, a `Submodel.defineView` with the thread id and entries as view inputs), mounted by the thread page's `headerControls` view (`page/thread/View.ts`), which the root mounts in `chatHeader`'s `controls` through `h.submodel`. The markup and messages are 5E's.
+- **5E, `page/thread/Update.ts`:** exactly as handed off: `GotDiffMessage` loads the lazy diff chunk when the panel is open after the child update.
+- **5E, `judges/capture.ts`, `parity.ts`, `parity-structure.ts`, `parity-review.sh`:** the settings group is captured, compared and reviewed. The t3 capture loop is an `if` chain rather than the nested ternary handed off (lint).
+- **5E, `ui/Select.ts` and `settings/View.ts`:** `size: "sm"` with t3code's compact trigger classes; the settings page uses it.
+- **5E, `ui/Switch.ts`:** the classes already equalled t3code's. The cause was `@foldkit/ui`'s switch, which sets `data-checked` but never `data-unchecked`, so `data-unchecked:bg-input` never applied. The track now carries `data-unchecked` when off.
+- **5E, `T3Import` and the t3 export (optional):** not applied. Importing notifications and checkpoint file lists is a conformance fixture change beyond this step.
+- **5E, `scrollbar-gutter-both` (optional):** not added; the arbitrary class works.
+
+#### Integration judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | oxfmt clean, oxlint 0, typecheck clean, vitest 127 files and 1,134 tests (`Budget.test.ts` and `brand.test.ts` included). |
+| `ops/cairn/deploy.sh` | pass | listening 1,297 ms, hello 1,334 ms, build `afadef8f33d6`. |
+| `judges/gate.sh` | pass | 0 failed. |
+| `node judges/live-chat.ts` | pass | hello 56 ms, launch 39 ms, reply 1,451 ms (opencode-go/claude-haiku-5-5); 29 models; opencode-go and claude-bridge ready, anthropic refused, openai-codex missing. |
+| `node judges/load.ts` (deployed, Chromium) | pass | lan p50 177 / p95 183 / max 220 ms, 4g p50 540 / p95 543 ms, 5 requests, 327,169 bytes, boot JSON 1,937 chars; control failed as designed (p50 1,687). |
+| `node judges/paste.ts --skip-real` | pass | lan paste to chip p50 67 / p95 82 ms, send to submitted max 9 ms, sha 20/20; throttled p50 170 / p95 173, max 5, 20/20; paste and send at once max 56 ms; 51 MiB PDF refused. |
+| `node judges/durability.ts` (faux, Chromium page, once) | pass after a judge fix | First run 9 of 10: `send-in-flight` failed "the reconnected client did not converge" (Node client, not the page), and a rerun failed 1 of 3. See fixes below. After the fix: `--window send-in-flight --runs 6` 6 of 6, and the full matrix 10 of 10. Kill to up 1,129 to 1,344 ms (sigterm-six 3,058 to 3,069), up to converged 4 to 14 ms, page kill to Live 1,396 to 1,763 ms (sigterm 3,429 to 3,652), page converged 4 to 132 ms. |
+| WebKit tier: `node judges/typing.ts webkit --mobile`, `node judges/load.ts --browser webkit` | not run | Playwright WebKit cannot start on this host (missing system libraries, no sudo) and `mbp-14` was offline on the tailnet. Moves to wizard stage 5 (5F); ADR 0023 stays proposed. |
+| `node judges/capture.ts cairn`, `judges/parity.ts` | report complete | 33 states (4 settings states new), 8 within budget (all 8 sidebar at 0 %); control 72.938 %; 1 missing (streaming). Hero, step 1 then now: 1440-hero 0.831 to 0.679; 1440-project-popover 1.88 to 1.854; 1440-slash-menu 6.603 to 5.711; 1440-at-menu 1.811 to 0.56; 1440-attachments 1.496 to 0.685; 390-hero 1.38 to 1.11; 390-project-popover 6.607 to 2.639; 390-slash-menu 13.949 to 11.98; 390-at-menu 4.733 to 1.055; 390-attachments 4.018 to 1.138; 1180-footer 0.962 to 0.776; 980-footer 0.602 to 0.378; 820-footer 0.68 to 0.452. Thread 1440 end 4.586, turn 6.529, fold-open 6.423, changed-files 5.56; 390 12.027, 16.143, 16.138, 14.464. Settings 1440-general 4.769, 1440-appearance 10.174, 390-general 10.125, 390-appearance 17.139. |
+| `node judges/parity-structure.ts` | report complete | 0 of 25 states strict; controls behave. Hero 1440-hero 58 match / 14 differ / 14 only in t3code (step 1: 45 / 17 / 24); 390-hero 24 / 11 / 7; footers 56 to 58 / 14 to 15 / 13 to 14; slash menus 59 / 18 / 338 and 25 / 19 / 331 (t3code lists 194 Claude skills). Thread 1440 37 to 41 / 24 to 25 / 77 to 78 (step 1: 31 / 18 / about 90); 390 9 to 13 / 22 to 23 / 68 to 69 (step 1: 6 / 14 / 80). Settings 1440-general 16 / 48 / 160, 1440-appearance 14 / 33 / 66, 390-general 7 / 39 / 139, 390-appearance 5 / 24 / 45. |
+| `node judges/behaviour.ts` | pass | 21 of 21 (step 1: 18). footer-820 and footer-390 now equal t3code; drafts-reload restores the hero draft; soft-keyboard on Chromium's iPhone emulation. |
+| `judges/parity-review.sh` (opencode-go/gpt-6-luna) | report complete | 8 batches with settings. New thread: "same as t3code" at 390; "differs" at 1440 on the project popover's anchor and on the fixture project name. Composer "differs" only on the provider mark (robot against starburst) and the send button colour, both deliberately unbranded. Shell "differs" on t3code's three panel toggles (Cairn has one, the diff toggle). Thread "differs" on transcript content and scroll position (the importer's skipped rows), the changed-files card's "Open diff" label against t3code's icon, and a session-limit notice in Cairn's fixture. Settings "differs" on content (t3code's breadcrumb, colour-scheme previews and theme grid) and slightly lighter Cairn surfaces and brighter select chevrons. |
+
+**Parity report:** `~/Developer/agent-artifacts/cairn/v2/phase-1-parity/` (`report.json`, `index.html`, `structure.json`, `behaviour.json`, `review.md`), served at `https://plans.gneiss.run/cairn/v2/phase-1-parity/`. It replaces step 1's report.
+
+#### Decisions
+
+- 5D's and 5E's own decisions stand as reported (5D: the hero rewrites `/` to `/new/<draftId>` so a reload restores the draft; footer folding fixed at the fixture model's name, not the folding logic; a neutral provider mark; composer test ids that masked t3code's keys removed; the `/`, `@`, `$` menu as t3code's drawer layer; attachments inside the composer body; the project picker as t3code's combobox slots. 5E: t3code's three-level row frame; the frame carries the timeline inset because the virtual list zeroes the scroller's padding; the changed-files card folded into its answer; tight lists; assistant meta as copy then time; the diff toggle opens the whole thread diff up to the newest checkpoint and is disabled until one exists; the settings states and row keys).
+- **The diff toggle is the diff panel's own view.** foldkit's lint forbids the root building a child's messages, so the toggle is mounted through two `h.submodel` levels (root, thread page, diff) and the diff panel builds its own `ClickedToggle`.
+- **The switch's unchecked state is set by Cairn's primitive**, because `@foldkit/ui` marks only the checked state.
+- **The two optional hand-offs were left** (the context strip width in the hero, notifications and checkpoint files in the t3 import).
+
+#### Fixes to package code (minimal, at integration)
+
+- `diff/Toggle.ts` (5E) gained `toggleView` and `page/thread/View.ts` gained `headerControls`, for the lint above.
+- `judges/durability.ts` (5A): `send-in-flight` now waits until the resent message reaches the follower before the judge waits for quiet. Without it the first turn's quiet row could be read as the resent turn's end, so the oracle snapshot was taken mid-turn and the follower moved past it (1 failure in 4 runs here; none in step 1's 3). Not a step 2 regression: the window's client is the Node client, which nothing in this step touches.
+
+#### Gaps
+
+- **WebKit tier not run** (host libraries, MacBook offline). ADR 0023 stays proposed until wizard stage 5 passes it.
+- **Structure 0 of 25 strict, pixels above the 0 % budget outside the sidebar.** The composer's own landmarks match. What remains: 5C's declared tooltip-trigger offsets (Cairn has one header toggle, t3code three), fixture text (project, branch, 194 Claude skills against Cairn's 1 command, 5 projects against 1), the deliberately unbranded send button and provider mark, the project popover anchored over the composer rather than on the headline's button at 1440, transcript rows the importer skips (notification, system notice, subagent, checkpoint file lists, so no changed-files card at 1440's end and about 77 t3code-only landmarks), and settings that differ by content (t3code's navigation column, scope line, appearance previews and theme grid). The structure judge has no gap mechanism and the pixel masks live in the committed t3 baseline, so these are recorded here rather than declared in fixtures.
+- **The reviewer saw a session-limit notice in Cairn's thread fixture** that t3code does not show; it comes from the imported runs and is fixture content, not checked further this step.
+- The 390 context-strip width hand-off (5C's folder) and the T3Import extension are open for a later pass.
+
+#### Deviations from the plan
+
+- 5D's judge "the composer target on Chromium and WebKit" and "Accept ADR 0023" are not met: WebKit moves to wizard stage 5.
+- The diff toggle hand-off was applied as a child view instead of the root patch handed off (lint).
+- The integrator changed 5A's judge (`durability.ts`) to remove a race.

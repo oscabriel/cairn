@@ -94,19 +94,31 @@ main() {
 	fi
 
 	# 4. The nightly durability timer.
-	local name source link
+	# The links point into the live worktree, so it must carry the units: a link to a file the worktree
+	# lacks would dangle. A worktree older than the units needs a deploy first. --check, which changes
+	# nothing, verifies this checkout's copies instead.
+	local name source link sources=()
 	for name in cairn-nightly.service cairn-nightly.timer; do
 		source=$live/ops/cairn/$name
-		[[ -f $source ]] || source=$here/$name
+		if [[ ! -f $source ]]; then
+			if [[ $check -eq 0 ]]; then
+				echo "error: $source is missing; deploy a commit that carries it (ops/cairn/deploy.sh), then rerun" >&2
+				exit 1
+			fi
+			echo "note: $source is missing; a deploy must ship it before install.sh can link it"
+			source=$here/$name
+		fi
+		sources+=("$source")
 		link=$HOME/.config/systemd/user/$name
-		if [[ $(readlink "$link" 2>/dev/null || true) == "$live/ops/cairn/$name" ]]; then
+		if [[ $(readlink "$link" 2>/dev/null || true) == "$source" ]]; then
 			echo "ok: $link links the live worktree's $name"
 		else
-			say "link $link -> $live/ops/cairn/$name"
-			[[ $check -eq 1 ]] || ln -sfn "$live/ops/cairn/$name" "$link"
+			say "link $link -> $source"
+			[[ $check -eq 1 ]] || ln -sfn "$source" "$link"
 		fi
 	done
-	systemd-analyze --user verify "$here/cairn-nightly.service" "$here/cairn-nightly.timer"
+	systemd-analyze --user verify "${sources[@]}"
+	echo "ok: systemd-analyze --user verify ${sources[*]}"
 	if systemctl --user is-enabled --quiet cairn-nightly.timer 2>/dev/null; then
 		echo "ok: cairn-nightly.timer is enabled"
 	else

@@ -305,12 +305,24 @@ if want 4; then
   say "    (Claude through the bridge is fine), paste the screenshot into the composer,"
   say "    wait for the chip, then send: ${BOLD}What word is on this image?${RESET}"
   pause "Press Enter to start the judge"
-  if judge phone-paste node judges/paste.ts --page --wait 600; then
-    record 4 "paste=pass"
-  else
+  while true; do
+    status=0
+    judge phone-paste node judges/paste.ts --page --wait 600 || status=$?
+    if (( status == 0 )); then
+      record 4 "paste=pass"
+      break
+    fi
+    if (( status == 2 )) && confirm "No paste reached the model in ten minutes. Run the judge again"; then
+      continue
+    fi
     record 4 "paste=fail"
-    SKIPPED+=("stage 4: phone paste over 2,000 ms or the nonce was missing (see $RUNS/phone-paste.jsonl)")
-  fi
+    if (( status == 2 )); then
+      SKIPPED+=("stage 4: no phone paste reached the model (see $RUNS/phone-paste.jsonl)")
+    else
+      SKIPPED+=("stage 4: phone paste over 2,000 ms or the nonce was missing (see $RUNS/phone-paste.jsonl)")
+    fi
+    break
+  done
   pause
 fi
 

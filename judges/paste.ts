@@ -898,7 +898,8 @@ const phonePage = async (waitSeconds: number) => {
     })}\n`
   );
 
-  const since = new Date().toISOString().replace("T", " ").slice(0, 19);
+  // journalctl reads a bare timestamp in the machine's zone; say UTC outright.
+  const since = `${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC`;
   const deadline = Date.now() + waitSeconds * 1000;
 
   while (Date.now() < deadline) {

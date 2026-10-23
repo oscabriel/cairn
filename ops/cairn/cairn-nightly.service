@@ -8,7 +8,6 @@
 # ~/cairn-judges/durability-<date>.jsonl, and `systemctl --user status cairn-nightly` shows the verdict.
 [Unit]
 Description=Cairn durability matrix (nightly)
-After=network-online.target
 
 [Service]
 Type=oneshot

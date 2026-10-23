@@ -143,6 +143,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(cairn-mo
   --desktop-window-right-resize-inset: 0px;
   --workspace-topbar-height: 52px;
   --workspace-controls-top: 0px;
+  /* The top inset the app keeps clear. iOS blurs a band under the status bar of an installed
+     app that reaches past the safe area, so standalone adds a little more. */
+  --app-safe-top: max(env(safe-area-inset-top), 0px);
+
+  @media (display-mode: standalone) {
+    --app-safe-top: calc(max(env(safe-area-inset-top), 0px) + 0.75rem);
+  }
   --workspace-controls-left: calc(env(safe-area-inset-left) + 0.75rem);
   --workspace-controls-right: calc(env(safe-area-inset-right) + 0.75rem);
   --workspace-native-controls-inset: 0px;
@@ -938,7 +945,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(cairn-mo
    Insets resolve to 0 when the browser already constrains the layout viewport
    to the safe area. */
 @utility pt-safe {
-  padding-top: max(env(safe-area-inset-top), 0px);
+  padding-top: var(--app-safe-top);
 }
 @utility pb-safe {
   padding-bottom: max(env(safe-area-inset-bottom), 0px);
@@ -1620,7 +1627,7 @@ body {
   overflow-x: clip;
   overflow-y: hidden;
   overscroll-behavior-y: none;
-  padding-top: max(env(safe-area-inset-top), 0px);
+  padding-top: var(--app-safe-top);
   padding-right: var(--desktop-window-right-resize-inset);
 }
 

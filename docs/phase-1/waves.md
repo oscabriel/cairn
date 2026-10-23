@@ -635,7 +635,8 @@ Built on 2026-10-22 on `main` (`7a43c85`, then this note's commit) and deployed 
 | `judges/relay-orphans.sh cairn-bridges http://172.17.0.1:3776/healthz ops/relay/warm.sh executor` | pass | 5 cases, 0 orphans; healthy after kill9-main 2,715 ms, kill9-child 1,015, restart-unit 1,053, stop-start-unit 1,055, restart-peer 3,593. |
 | `judges/live-chat.ts` | pass | hello 25 ms, launch 37 ms, reply 1,248 ms; 29 models; opencode-go and claude-bridge ready, anthropic refused, openai-codex missing. |
 | `judges/phone-report.ts load` and `paste` | incomplete | 0 phone runs in the journal (exit 2); wizard stages 3 and 4. |
-| WebKit tier on `mbp-14` | not run | SSH answered once at the start of the step, then timed out for the rest of it (the MacBook sleeps; Tailscale shows it offline). Stays wizard stage 5; ADR 0023 stays proposed. |
+| WebKit tier on `mbp-14` | not run | SSH answered once at the start of the step and once more about 40 minutes later (seen by a poll), and timed out at every attempt to use it (the MacBook sleeps; Tailscale shows it offline). Stays wizard stage 5; ADR 0023 stays proposed. |
+| `cairn-nightly.service` (started once by hand) | pass | `Result=success`, exit 0: faux matrix 30 of 30, bridge 9 of 9, skip-snapshot 0 of 10 and page-text 0 of 10 (both controls fail every window, as required), J14 gate held 1,200,011 ms with 2 claude children and 0 watchdog fires, then accepted once and `gated` once. Log `~/cairn-judges/durability-2026-10-22.jsonl`. |
 | Gate page renders | pass | `https://plans.gneiss.run/cairn/v2/phase-1-gate/` 200, all 66 parity images load. |
 
 #### Parity classification
@@ -655,7 +656,6 @@ The gate page classifies every structure difference in the step 2 report (unchan
 #### Gaps
 
 - The phone halves (wizard stages 2 to 4), WebKit (stage 5), the parity look (stage 7) and the daily-driver day (stage 8) are the user's. ADR 0021 waits on stages 3 and 4, ADR 0023 on stage 5.
-- The nightly run started by hand was still running when this note was written; its verdict is in `~/cairn-judges/durability-2026-10-22.jsonl`.
 - Phase 0 wizard stage 11 (revoking Claude's Executor setup token) is left to the user, as they asked.
 - The ten parity open items are not fixed; they are the user's call in stage 7.
 

@@ -663,3 +663,37 @@ The gate page classifies every structure difference in the step 2 report (unchan
 
 - 5F's block owns `ops/**` and the gate page; it also changed `judges/shutdown.sh`, `judges/durability.ts` (a `--unit` dispatch each), `judges/load.ts` (`--browser webkit`), `judges/tools.ts` (path parsing) and added `judges/deployed-unit.ts` and `judges/lib/DeployedUnit.ts`. Step 5.3 ran alone, so nothing else owned them.
 - The deployed-unit restarts use `bash sleep 20`, not `slow` and `mark` (review response 14 said so already).
+
+### Integration (step 3)
+
+Integrated on 2026-10-22 on `main` at `c8e9efb`. 5F worked on `main`, so there were no package branches to merge and no hand-offs to apply. The live worktree runs `7a43c85`; the only change since is this file.
+
+#### Packages
+
+- 5F (partial): the phase 1 wizard, the deployed-unit judges, the nightly timer, ADR 0022 accepted and the gate page. Its own judges are in the step 3 note above.
+
+#### Judges rerun at integration
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | vitest 127 files, 1,135 tests, 52.5 s; format, lint and typecheck clean. |
+| Deployed unit | pass | `cairn.service` and `cairn-bridges.service` active, `cairn.service` up since 19:39:36 with `NRestarts` 0, live worktree at `7a43c85`; `https://code.gneiss.run/` 200. |
+| `cairn-nightly.timer` | pass | enabled, next run Fri 2026-10-23 03:32:16 PDT. |
+| `judges/gate.sh` | pass | 43 cases, 0 failed. |
+| `judges/live-chat.ts` | pass | hello 24 ms, launch 6 ms, reply 1,623 ms on `opencode-go/claude-haiku-5-5`; 29 models, 0 `anthropic`. |
+| Gate page | pass | `https://plans.gneiss.run/cairn/v2/phase-1-gate/` 200; 66 of 66 parity images 200. |
+
+The parity report, the deployed-unit durability runs, `tools.ts`, `load.ts` and `relay-orphans.sh` were not rerun: nothing deployed has changed since 5F measured them.
+
+#### Decisions
+
+- None beyond 5F's. The step 3 note stands as the record.
+
+#### Gaps
+
+- Carried from 5F: wizard stages 2 to 5, 7 and 8 are the user's (ADR 0021 waits on stages 3 and 4, ADR 0023 on stage 5); the ten parity open items wait on stage 7; Phase 0 wizard stage 11 is the user's.
+- The pre-commit hook still fails when only ignored markdown is staged; this commit also used `LEFTHOOK=0`.
+
+#### Deviations from the plan
+
+- None at integration.

@@ -403,6 +403,8 @@ const sameListKind = (a: string, b: string): boolean => {
 interface ParsedItem {
   readonly item: ListItem;
   readonly next: number;
+  /** A blank line between two of the item's blocks, which makes its list loose. */
+  readonly blankInside: boolean;
 }
 
 const listItemAt = (
@@ -458,6 +460,7 @@ const listItemAt = (
       ),
     },
     next: index,
+    blankInside: body.some((line) => isBlank(line)),
   };
 };
 
@@ -470,12 +473,14 @@ const listAt = (
     const items: Array<ListItem> = [];
     let index = at;
     let current = Option.some(first);
+    let tight = true;
 
     while (Option.isSome(current)) {
       const parsed = listItemAt(lines, index, current.value, parse);
 
       items.push(parsed.item);
       index = parsed.next;
+      tight &&= !parsed.blankInside;
 
       let lookahead = index;
 
@@ -491,6 +496,7 @@ const listAt = (
       );
 
       if (Option.isSome(next)) {
+        tight &&= lookahead === index;
         index = lookahead;
       }
 
@@ -506,6 +512,7 @@ const listAt = (
         start: ordered
           ? Option.some(Math.trunc(Number(first.marker.slice(0, -1))))
           : Option.none(),
+        tight,
         items,
       },
       next: index,

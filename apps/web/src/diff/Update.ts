@@ -9,7 +9,7 @@ import { modifyFields } from "foldkit/struct";
 import type { CairnConnectionService } from "../connection/Connection.ts";
 import { FetchDiff, ScrollToFile } from "./Command.ts";
 import { Message } from "./Message.ts";
-import { DiffLoad, initial } from "./Model.ts";
+import { DiffLoad, initial, isOpen } from "./Model.ts";
 import type { Model } from "./Model.ts";
 
 type Return = Update.Return<Model, Message, CairnConnectionService>;
@@ -69,6 +69,16 @@ export const update = (model: Model, message: Message): Return =>
     RequestedOpen: ({ path, threadId, turn }) =>
       open(model, threadId, turn, path),
     ClickedClose: () => close(model),
+    ClickedToggle: ({ latestTurn, threadId }) =>
+      isOpen(model)
+        ? close(model)
+        : refetch(
+            modifyFields(model, {
+              target: () => Option.some({ threadId, turn: latestTurn }),
+              scope: () => "full" as const,
+              selectedPath: () => Option.none(),
+            })
+          ),
     ClickedScope: ({ scope }) =>
       scope === model.scope
         ? { model }

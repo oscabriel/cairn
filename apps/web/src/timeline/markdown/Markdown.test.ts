@@ -8,6 +8,11 @@ import { markdownFor, parseDocument } from "./Markdown.ts";
 const blocks = (source: string): ReadonlyArray<Block> =>
   parseDocument(source).blocks.map((placed) => placed.block);
 
+const tightness = (source: string): ReadonlyArray<boolean> =>
+  blocks(source).flatMap((block) =>
+    block.kind === "list" ? [block.tight] : []
+  );
+
 const text = (value: string): Inline => ({ kind: "text", value });
 
 const SAMPLE = [
@@ -169,6 +174,7 @@ describe("block markdown", () => {
         kind: "list",
         ordered: false,
         start: Option.none(),
+        tight: false,
         items: [
           {
             checked: Option.none(),
@@ -180,6 +186,12 @@ describe("block markdown", () => {
         ],
       },
     ]);
+  });
+
+  it("tells a tight list from a loose one", () => {
+    assert.deepStrictEqual(tightness("- one\n- two\n- three"), [true]);
+    assert.deepStrictEqual(tightness("- one\n\n- two"), [false]);
+    assert.deepStrictEqual(tightness("- one\n\n  more\n- two"), [false]);
   });
 
   it("runs an unclosed fence to the end", () => {

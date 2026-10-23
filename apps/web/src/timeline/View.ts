@@ -151,6 +151,9 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
         // The transcript's row count, virtualized rows included, for the judges.
         h.DataAttribute("rows", String(transcript.items.length)),
         h.DataAttribute("following", isFollowingEnd(model) ? "true" : "false"),
+        // t3code's chat canvas: its lane insets pad the scroller (styles.css).
+        h.DataAttribute("chat-canvas", "true"),
+        h.Style({ "--chat-timeline-gutter": "6px" }),
         h.OnMount(FollowEnd()),
         h.Class("relative flex min-h-0 flex-1 flex-col"),
       ],
@@ -169,7 +172,8 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
               estimatedHeightOf(item, expandedUsers),
             overscan: 6,
             rowElement: "div",
-            containerClassName: "min-h-0 flex-1 pt-4 [overflow-anchor:none]",
+            containerClassName:
+              "messages-timeline-scroll min-h-0 [scrollbar-gutter:stable_both-edges] flex-1 overflow-x-hidden overscroll-y-contain pt-4 [overflow-anchor:none]",
             containerAttributes: childAttributes([
               h.DataAttribute("testid", "timeline-scroll"),
             ]),

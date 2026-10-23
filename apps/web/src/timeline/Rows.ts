@@ -29,8 +29,25 @@ export interface HistoryItem {
   readonly id: "history-control";
 }
 
+/** A turn's changed-files row. */
+export type ChangedFilesRow = Extract<
+  TimelineRow,
+  { readonly kind: "changed-files" }
+>;
+
+/**
+ * A message row; an answer that ends its turn carries the turn's changed-files card, which t3code
+ * draws inside the answer's row rather than as a row of its own.
+ */
+export type MessageItem = Extract<TimelineRow, { readonly kind: "message" }> & {
+  readonly changedFiles: Option.Option<ChangedFilesRow>;
+};
+
 /** One item of the scroll list. */
-export type ListItem = TimelineRow | HistoryItem;
+export type ListItem =
+  | Exclude<TimelineRow, { readonly kind: "message" }>
+  | MessageItem
+  | HistoryItem;
 
 /** The derived transcript: the list and the timeline it came from. */
 export interface Transcript {
@@ -65,6 +82,64 @@ interface Memo {
   readonly workspaceRoot: Option.Option<string>;
   readonly transcript: Transcript;
 }
+
+/** The merged items, by message row and then by card row, so a stable row keeps its item. */
+const mergedRows = new WeakMap<TimelineRow, WeakMap<object, MessageItem>>();
+
+/** Stands for "no card" in `mergedRows`. */
+const NO_CARD = {};
+
+const messageItem = (
+  row: Extract<TimelineRow, { readonly kind: "message" }>,
+  card: Option.Option<ChangedFilesRow>
+): MessageItem => {
+  const byCard = mergedRows.get(row) ?? new WeakMap<object, MessageItem>();
+
+  mergedRows.set(row, byCard);
+
+  const key: object = Option.getOrElse(card, () => NO_CARD);
+  const known = byCard.get(key);
+
+  if (known !== undefined) {
+    return known;
+  }
+
+  const item: MessageItem = { ...row, changedFiles: card };
+
+  byCard.set(key, item);
+
+  return item;
+};
+
+/** Moves each changed-files row into the answer right before it, as t3code draws the card. */
+const attachCards = (
+  rows: ReadonlyArray<TimelineRow>
+): ReadonlyArray<ListItem> =>
+  rows.flatMap((row, index): ReadonlyArray<ListItem> => {
+    const previous = rows[index - 1];
+    const next = rows[index + 1];
+
+    if (
+      row.kind === "changed-files" &&
+      previous?.kind === "message" &&
+      previous.message.role === "assistant"
+    ) {
+      return [];
+    }
+
+    if (row.kind !== "message") {
+      return [row];
+    }
+
+    return [
+      messageItem(
+        row,
+        next?.kind === "changed-files" && row.message.role === "assistant"
+          ? Option.some(next)
+          : Option.none()
+      ),
+    ];
+  });
 
 /** The last derivation, so a view whose inputs did not change reuses it. */
 const memo = new Map<"last", Memo>();
@@ -134,8 +209,8 @@ export const transcriptOf = (
 
   const transcript: Transcript = {
     items: state.value.hasMoreHistory
-      ? [HISTORY_ITEM, ...stable.result]
-      : stable.result,
+      ? [HISTORY_ITEM, ...attachCards(stable.result)]
+      : attachCards(stable.result),
     timeline,
     prompts: promptsOf(timeline),
   };
@@ -174,6 +249,9 @@ const textLines = (text: string): number =>
       0
     );
 
+const cardHeight = (card: ChangedFilesRow): number =>
+  56 + 28 * Math.min(card.files.length, 12);
+
 const messageHeight = (message: TimelineMessage, expanded: boolean): number => {
   const lines = bucketLines(textLines(message.text));
 
@@ -205,11 +283,17 @@ export const estimatedHeightOf = (
   expandedUserMessages: ReadonlySet<string>
 ): number => {
   if (item.kind === "message") {
-    return messageHeight(item.message, expandedUserMessages.has(item.id));
+    return (
+      messageHeight(item.message, expandedUserMessages.has(item.id)) +
+      Option.match(item.changedFiles, {
+        onNone: () => 0,
+        onSome: (card) => 16 + cardHeight(card),
+      })
+    );
   }
 
   if (item.kind === "changed-files") {
-    return 56 + 28 * Math.min(item.files.length, 12);
+    return cardHeight(item);
   }
 
   if (item.kind === "work" && item.isExpandedToolGroup) {

@@ -15,6 +15,11 @@ export const Message = defineMessageUnion({
     path: Schema.Option(Schema.String),
   },
   ClickedClose: {},
+  /**
+   * The header's toggle: closes an open panel, or opens the thread's whole diff (baseline to its
+   * newest checkpointed turn).
+   */
+  ClickedToggle: { threadId: ThreadId, latestTurn: Schema.Int },
   ClickedScope: { scope: DiffScope },
   ToggledWhitespace: {},
   ClickedFile: { path: Schema.String },

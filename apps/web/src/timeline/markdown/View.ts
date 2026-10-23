@@ -348,7 +348,13 @@ const listView = (
   const { h } = context;
 
   const items = block.items.map((item, index) => {
-    const children = render(item.blocks, `${path}.${index}`);
+    const children = block.tight
+      ? item.blocks.flatMap((child, at) =>
+          child.kind === "paragraph"
+            ? inlines(h, child.content)
+            : render([child], `${path}.${index}.${at}`)
+        )
+      : render(item.blocks, `${path}.${index}`);
 
     return Option.match(item.checked, {
       onNone: () => h.li([], children),
@@ -437,7 +443,7 @@ export const markdownView = (
       h.div(
         [
           h.Class(
-            "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80 wrap-break-word"
+            "chat-markdown w-full min-w-0 [overflow-wrap:anywhere] [word-break:break-word] text-sm leading-relaxed text-foreground/[calc(80%+var(--appearance-contrast-boost))]"
           ),
           ...(streaming ? [h.DataAttribute("streaming", "")] : []),
         ],

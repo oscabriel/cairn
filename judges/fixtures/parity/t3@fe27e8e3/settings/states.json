@@ -1,0 +1,120 @@
+[
+  {
+    "group": "settings",
+    "view": "1440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "settings-general",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900
+    },
+    "capturedAtMs": 1792715944399,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "left column: t3code's settings navigation, Cairn's main sidebar (one settings page, judged by the sidebar group)"
+      },
+      {
+        "x": 256,
+        "y": 0,
+        "width": 1184,
+        "height": 52,
+        "reason": "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none"
+      }
+    ]
+  },
+  {
+    "group": "settings",
+    "view": "1440",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "mobile": false,
+    "state": "settings-appearance",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 900
+    },
+    "capturedAtMs": 1792715949517,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 900,
+        "reason": "left column: t3code's settings navigation, Cairn's main sidebar (one settings page, judged by the sidebar group)"
+      },
+      {
+        "x": 256,
+        "y": 0,
+        "width": 1184,
+        "height": 52,
+        "reason": "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none"
+      }
+    ]
+  },
+  {
+    "group": "settings",
+    "view": "390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mobile": true,
+    "state": "settings-general",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "capturedAtMs": 1792715954146,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 52,
+        "reason": "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none"
+      }
+    ]
+  },
+  {
+    "group": "settings",
+    "view": "390",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mobile": true,
+    "state": "settings-appearance",
+    "clip": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "capturedAtMs": 1792715958851,
+    "masks": [
+      {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 52,
+        "reason": "t3code's settings header (breadcrumb and Restore device defaults); Cairn's single settings page has none"
+      }
+    ]
+  }
+]

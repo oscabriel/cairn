@@ -1,11 +1,14 @@
 // Ported from github.com/pingdotgg/t3code at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92:
 // apps/web/src/components/settings/settingsLayout.tsx (SettingsSection, SettingsRow,
 // SettingsPageContainer), apps/web/src/components/settings/SettingsGroup.tsx and
-// apps/web/src/components/WorkspacePageContainer.tsx (the readable width), the classes the
-// settings panels in SettingsPanels.tsx are built from. Kept: every class string of the section
-// header, the grouped card, the row's container-query grid and the page's scroll and width.
-// Changed: Foldkit views; the search-target scrolling, scope inheritance, override badges and
-// reset buttons are left out, because Cairn has one scope and no settings search.
+// apps/web/src/components/WorkspacePageContainer.tsx (the readable width),
+// apps/web/src/components/settings/SettingsBreadcrumb.tsx (the page header), the classes the
+// settings panels in SettingsPanels.tsx are built from. Kept: every class string of the page
+// header and breadcrumb, the section header, the grouped card, the row's container-query grid and
+// the page's scroll and width. Changed: Foldkit views; the breadcrumb is the one crumb "Settings"
+// (Cairn has one settings page); the search-target scrolling, scope line, scope inheritance,
+// override badges, reset buttons and "Restore device defaults" are left out, because Cairn has one
+// scope and no settings search.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -31,11 +34,11 @@ import { classNames } from "../ui/ClassNames.ts";
 
 /** The page's scroll area. */
 export const PAGE_SCROLL_CLASS =
-  "topbar-scroll-fade scrollbar-gutter-both flex-1 overflow-y-auto";
+  "topbar-scroll-fade [scrollbar-gutter:stable_both-edges] flex-1 overflow-y-auto";
 
 /** The page's column: `WorkspacePageContainer` at the readable width, with the settings gap. */
 export const PAGE_COLUMN_CLASS =
-  "mx-auto flex w-full flex-col gap-6 px-5 pt-6 pb-12 sm:px-6 max-w-4xl gap-8";
+  "mx-auto flex w-full flex-col px-5 pt-6 pb-12 sm:px-6 max-w-4xl gap-8";
 
 const SECTION_HEADER_CLASS =
   "flex min-h-7 items-start justify-between gap-4 px-3 sm:px-4";
@@ -48,10 +51,49 @@ export const GROUP_CLASS =
   "relative overflow-visible text-foreground rounded-xl border border-border/60 bg-card/40 shadow-xs/5 [&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none";
 
 const ROW_GRID_CLASS =
-  "flex flex-col gap-3 @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-8";
+  "flex flex-col gap-3 @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] @min-[32rem]/settings-row:items-center";
 
 const ROW_CONTROL_CLASS =
   "flex w-full min-w-0 shrink-0 items-center gap-2 @min-[32rem]/settings-row:w-auto @min-[32rem]/settings-row:justify-end";
+
+const HEADER_CLASS =
+  "flex h-[var(--workspace-topbar-height)]! min-h-[var(--workspace-topbar-height)]! max-h-[var(--workspace-topbar-height)]! shrink-0 items-center gap-3 pl-(--workspace-gutter-start) pr-(--workspace-gutter-end) [[data-panel-animations=true]_&]:motion-safe:transition-[padding-left,padding-right] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out [[data-sidebar-state=collapsed]_&]:pl-[var(--workspace-titlebar-content-left)] max-md:[[data-sidebar-state=expanded]_&]:pl-[var(--workspace-titlebar-content-left)]";
+
+/** The page header: t3code's settings breadcrumb, with Cairn's one settings page as its crumb. */
+export const settingsHeader = <Message>(h: HtmlBuilder<Message>): Html =>
+  h.header(
+    [h.Class(HEADER_CLASS)],
+    [
+      h.div(
+        [h.Class("flex w-full items-center gap-3")],
+        [
+          h.nav(
+            [h.AriaLabel("Settings breadcrumb"), h.Class("min-w-0")],
+            [
+              h.ol(
+                [
+                  h.Class(
+                    "m-0 flex min-w-0 list-none items-center gap-2 p-0 text-sm sm:gap-3"
+                  ),
+                ],
+                [
+                  h.li(
+                    [
+                      h.AriaCurrent("page"),
+                      h.Class(
+                        "flex min-w-0 items-center font-medium text-foreground truncate"
+                      ),
+                    ],
+                    ["Settings"]
+                  ),
+                ]
+              ),
+            ]
+          ),
+        ]
+      ),
+    ]
+  );
 
 /** The scrolling page and its column. */
 export const settingsPage = <Message>(
@@ -59,8 +101,16 @@ export const settingsPage = <Message>(
   children: ReadonlyArray<Child>
 ): Html =>
   h.div(
-    [h.DataAttribute("settings-page-scroll", ""), h.Class(PAGE_SCROLL_CLASS)],
-    [h.div([h.Class(PAGE_COLUMN_CLASS)], children)]
+    [h.Class("min-h-0 flex flex-1 flex-col")],
+    [
+      h.div(
+        [
+          h.DataAttribute("settings-page-scroll", ""),
+          h.Class(PAGE_SCROLL_CLASS),
+        ],
+        [h.div([h.Class(PAGE_COLUMN_CLASS)], children)]
+      ),
+    ]
   );
 
 /** A titled section whose rows share one card. */
@@ -118,7 +168,7 @@ export const settingsRow = <Message>(
   h.div(
     [
       h.DataAttribute("slot", "settings-row"),
-      h.DataAttribute("testid", `settings-row-${config.id}`),
+      h.DataAttribute("settings-row", config.id),
       h.Class(
         classNames(
           "@container/settings-row rounded-xl px-3 sm:px-4 aria-disabled:opacity-64 aria-disabled:[&_*]:text-muted-foreground",

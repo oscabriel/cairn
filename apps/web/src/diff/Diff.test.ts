@@ -10,8 +10,9 @@ import { describe, expect, it } from "vitest";
 import { changedFilesCard, formatCompactCount } from "./Card.ts";
 import { FetchDiff, ScrollToFile } from "./Command.ts";
 import { Message } from "./Message.ts";
-import { initial } from "./Model.ts";
+import { initial, isOpen } from "./Model.ts";
 import type { Model } from "./Model.ts";
+import { diffToggle } from "./Toggle.ts";
 import { update } from "./Update.ts";
 import { languageOfPath, view as panelView } from "./View.ts";
 
@@ -150,6 +151,65 @@ describe("the changed-files card", () => {
       ),
       Scene.click(Scene.role("button", { name: "Close diff" })),
       Scene.expect(Scene.selector('[data-testid="diff-panel"]')).toBeAbsent(),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
+
+  it("opens the whole diff from the header toggle and closes it again", () => {
+    const toggle = Message.ClickedToggle({ threadId, latestTurn: 2 });
+
+    const toggleView = (model: Model, h: HtmlBuilder<Message>): Html =>
+      h.div(
+        [],
+        [
+          diffToggle(h, { open: isOpen(model), onToggle: Option.some(toggle) }),
+          h.submodel({
+            slotId: "diff",
+            model,
+            view: panelView,
+            toParentMessage: (message: Message) => message,
+          }),
+        ]
+      );
+
+    Scene.scene(
+      { update, view: toggleView },
+      Scene.given(initial),
+      Scene.expect(
+        Scene.role("button", { name: "Toggle diff panel" })
+      ).toHaveAttr("aria-pressed", "false"),
+      Scene.click(Scene.role("button", { name: "Toggle diff panel" })),
+      Scene.Command.resolve(
+        fetchFor(1, "full"),
+        Message.LoadedDiff({ version: 1, patch })
+      ),
+      Scene.expect(
+        Scene.role("button", { name: "Toggle diff panel" })
+      ).toHaveAttr("aria-pressed", "true"),
+      Scene.expect(
+        Scene.selector('[data-diff-file="notes/a.txt"] [data-kind="added"]')
+      ).toContainText("deux"),
+      Scene.click(Scene.role("button", { name: "Toggle diff panel" })),
+      Scene.expect(Scene.selector('[data-testid="diff-panel"]')).toBeAbsent(),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
+
+  it("disables the toggle while the thread has nothing to show", () => {
+    Scene.scene(
+      {
+        update,
+        view: (_model: Model, h: HtmlBuilder<Message>) =>
+          diffToggle(h, { open: false, onToggle: Option.none() }),
+      },
+      Scene.given(initial),
+      Scene.expect(
+        Scene.role("button", { name: "Toggle diff panel" })
+      ).toBeDisabled(),
       Scene.tap(({ commands }) => {
         expect(commands).toHaveLength(0);
       })

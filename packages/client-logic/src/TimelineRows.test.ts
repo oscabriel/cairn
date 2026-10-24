@@ -1,3 +1,4 @@
+import { ConversationView, ThreadStreamItem } from "@cairn/protocol/Thread";
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/MessagesTimeline.logic.test.ts
 // at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the cases for the rows Cairn keeps (folds and
 // their labels, trailing work after the answer, the working header and the live activity row, single
@@ -24,8 +25,17 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 import { assert, describe, it } from "@effect/vitest";
-import { DateTime, Option } from "effect";
+import { DateTime, Option, Result, Schema } from "effect";
 
+import coding from "../../../judges/fixtures/transcripts/coding.json" with { type: "json" };
+import interruptedFrames from "../../../judges/fixtures/transcripts/interrupted.frames.json" with { type: "json" };
+import interrupted from "../../../judges/fixtures/transcripts/interrupted.json" with { type: "json" };
+import streamingToolsFrames from "../../../judges/fixtures/transcripts/streaming-tools.frames.json" with { type: "json" };
+import streamingFrames from "../../../judges/fixtures/transcripts/streaming.frames.json" with { type: "json" };
+import thinking from "../../../judges/fixtures/transcripts/thinking.json" with { type: "json" };
+import { applyThreadStreamItem } from "./ThreadView.ts";
+import type { ThreadViewState } from "./ThreadView.ts";
+import { entriesFromPi } from "./TimelineEntries.ts";
 import type {
   Timeline,
   TimelineEntry,
@@ -41,11 +51,18 @@ import {
 import {
   computeStableTimelineRows,
   deriveTimelineRows,
+  deriveTimelineRowsCached,
+  EMPTY_TURN_ROWS,
   EMPTY_STABLE_ROWS,
   resolveAssistantMessageCopyState,
   shouldCollapseUserMessage,
+  workGroupId,
 } from "./TimelineRows.ts";
-import type { TimelineRow, TimelineRowsInput } from "./TimelineRows.ts";
+import type {
+  TimelineRow,
+  TimelineRowsInput,
+  TurnRowsCache,
+} from "./TimelineRows.ts";
 
 const at = (time: string) =>
   DateTime.toEpochMillis(DateTime.makeUnsafe(`2026-01-01T00:00:${time}Z`));
@@ -153,16 +170,27 @@ const timelineOf = (
       : Option.none(),
 });
 
+/** The rows of `timeline`, checked against the per-turn cached derivation on the way. */
 const rowsOf = (
   timeline: Timeline,
   options: Partial<Omit<TimelineRowsInput, "timeline">> = {}
-): ReadonlyArray<TimelineRow> =>
-  deriveTimelineRows({
+): ReadonlyArray<TimelineRow> => {
+  const input = {
     timeline,
-    expandedTurnIds: options.expandedTurnIds ?? new Set(),
-    expandedWorkGroupIds: options.expandedWorkGroupIds ?? new Set(),
+    expandedTurnIds: options.expandedTurnIds ?? new Set<string>(),
+    expandedWorkGroupIds: options.expandedWorkGroupIds ?? new Set<string>(),
     workspaceRoot: options.workspaceRoot ?? Option.none(),
-  });
+  };
+
+  const rows = deriveTimelineRows(input);
+
+  assert.deepStrictEqual(
+    deriveTimelineRowsCached(input, EMPTY_TURN_ROWS).rows,
+    rows
+  );
+
+  return rows;
+};
 
 const ids = (rows: ReadonlyArray<TimelineRow>) => rows.map((row) => row.id);
 
@@ -1073,5 +1101,102 @@ describe("changed-files rows", () => {
     );
 
     assert.notInclude(ids(rows), "checkpoint:9");
+  });
+});
+
+describe(deriveTimelineRowsCached, () => {
+  const decodeFrames = Schema.decodeUnknownSync(Schema.Array(ThreadStreamItem));
+
+  const decodeView = Schema.decodeUnknownSync(ConversationView);
+
+  /** Every recorded run as the client sees it, one view per frame; whole transcripts are one frame. */
+  const recorded: ReadonlyArray<ReadonlyArray<ThreadViewState["view"]>> = [
+    ...[streamingFrames, streamingToolsFrames, interruptedFrames].map(
+      (frames) => {
+        let state = Option.none<ThreadViewState>();
+
+        return decodeFrames(frames).flatMap((item) => {
+          const next = applyThreadStreamItem(state, item);
+
+          if (Result.isFailure(next)) {
+            return [];
+          }
+
+          state = Option.some(next.success);
+
+          return [next.success.view];
+        });
+      }
+    ),
+    [decodeView(coding)],
+    [decodeView(thinking)],
+    [decodeView(interrupted)],
+  ];
+
+  it("derives the same rows as the whole derivation on every recorded frame, folded or opened", () => {
+    for (const views of recorded) {
+      for (const open of [false, true]) {
+        let cache = EMPTY_TURN_ROWS;
+
+        for (const view of views) {
+          const timeline = entriesFromPi(view);
+
+          const input = {
+            timeline,
+            expandedTurnIds: new Set(
+              open ? timeline.turns.map(({ id }) => id) : []
+            ),
+            expandedWorkGroupIds: new Set(
+              open ? timeline.entries.map((entry) => workGroupId(entry.id)) : []
+            ),
+            workspaceRoot: Option.some("/home/owner/project"),
+          };
+
+          const derived = deriveTimelineRowsCached(input, cache);
+
+          ({ cache } = derived);
+          assert.deepStrictEqual(derived.rows, deriveTimelineRows(input));
+        }
+      }
+    }
+  });
+
+  it("hands back a settled turn's rows unchanged while only the last turn streams", () => {
+    const [views = []] = recorded;
+    const first = views.at(0);
+    const last = views.at(-1);
+
+    assert.isDefined(first);
+    assert.isDefined(last);
+
+    // Two turns of history in front: the recorded transcript, then the streaming run's frames.
+    const older = decodeView(coding).entries;
+
+    // The caller keeps the toggles' sets while they do not change, as the web app's memo does.
+    const closed = new Set<string>();
+
+    const derive = (view: ThreadViewState["view"], cache: TurnRowsCache) =>
+      deriveTimelineRowsCached(
+        {
+          timeline: entriesFromPi(view, older),
+          expandedTurnIds: closed,
+          expandedWorkGroupIds: closed,
+          workspaceRoot: Option.none(),
+        },
+        cache
+      );
+
+    const before = derive(first ?? decodeView(coding), EMPTY_TURN_ROWS);
+    const after = derive(last ?? decodeView(coding), before.cache);
+
+    const settled = [...before.cache.keys()];
+
+    assert.isAbove(settled.length, 0);
+    assert.isTrue(
+      settled.every(
+        (turnId) =>
+          before.cache.get(turnId)?.rows === after.cache.get(turnId)?.rows
+      )
+    );
   });
 });

@@ -23,7 +23,7 @@ import {
 import { Message, OutMessage } from "./Message.ts";
 import type { Model, ThreadUi } from "./Model.ts";
 import { freshUi, SAVED_THREAD_LIMIT } from "./Model.ts";
-import { itemKeys, transcriptOf } from "./Rows.ts";
+import { itemKeys, transcriptForKeys } from "./Rows.ts";
 
 type UpdateReturn = Update.ReturnWithOutMessage<
   Model,
@@ -257,7 +257,7 @@ export const afterView = (
   }
 
   const keys = itemKeys(
-    transcriptOf(model.threadId.value, after, model.ui, Option.none())
+    transcriptForKeys(model.threadId.value, after, model.ui)
   );
 
   return informList(keys)(model);

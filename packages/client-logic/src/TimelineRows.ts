@@ -938,6 +938,142 @@ export const deriveTimelineRows = (
   }));
 };
 
+const turnIdOfEntry = (entry: TimelineEntry): string => {
+  if (entry.kind === "message") {
+    return entry.message.turnId;
+  }
+
+  return entry.kind === "work" ? entry.entry.turnId : entry.turnId;
+};
+
+/** One settled turn's rows, and what they were derived from. */
+interface CachedTurnRows {
+  readonly entries: ReadonlyArray<TimelineEntry>;
+  readonly turn: TimelineTurn;
+  readonly input: TimelineRowsInput;
+  readonly rows: ReadonlyArray<TimelineRow>;
+}
+
+/** The rows of each settled turn from the previous derivation, by turn id. */
+export type TurnRowsCache = ReadonlyMap<string, CachedTurnRows>;
+
+/** No turn derived yet. */
+export const EMPTY_TURN_ROWS: TurnRowsCache = new Map();
+
+/** A derivation's rows, and the turn cache the next derivation reuses. */
+export interface CachedRows {
+  readonly rows: ReadonlyArray<TimelineRow>;
+  readonly cache: TurnRowsCache;
+}
+
+const sameTurn = (left: TimelineTurn, right: TimelineTurn): boolean =>
+  left.id === right.id &&
+  left.status === right.status &&
+  left.startedAt === right.startedAt &&
+  Option.getOrUndefined(left.endedAt) ===
+    Option.getOrUndefined(right.endedAt) &&
+  Option.getOrUndefined(left.error) === Option.getOrUndefined(right.error);
+
+const sameEntries = (
+  left: ReadonlyArray<TimelineEntry>,
+  right: ReadonlyArray<TimelineEntry>
+): boolean =>
+  left.length === right.length &&
+  left.every((entry, index) => entry === right[index]);
+
+/**
+ * A cached turn still answers when its entries, its turn and the toggles match. Which turn is the
+ * latest does not matter: a settled turn's error row only checks that it is not the latest one.
+ */
+const stillValid = (
+  cached: CachedTurnRows,
+  input: TimelineRowsInput,
+  entries: ReadonlyArray<TimelineEntry>,
+  turn: TimelineTurn
+): boolean =>
+  cached.input.expandedTurnIds === input.expandedTurnIds &&
+  cached.input.expandedWorkGroupIds === input.expandedWorkGroupIds &&
+  Option.getOrUndefined(cached.input.workspaceRoot) ===
+    Option.getOrUndefined(input.workspaceRoot) &&
+  sameTurn(cached.turn, turn) &&
+  sameEntries(cached.entries, entries);
+
+/**
+ * The transcript's rows with each settled turn's rows reused from `cache` while nothing they read
+ * changed. Rows never cross a turn (groups, folds, the meta row and changed-files cards all stay in
+ * theirs), so each settled turn is derived alone, beside the latest turn its error row compares with;
+ * the last turn, where the live rows are, is derived every time. The same rows as
+ * `deriveTimelineRows`, which TimelineRows.test checks frame by frame.
+ */
+export const deriveTimelineRowsCached = (
+  input: TimelineRowsInput,
+  cache: TurnRowsCache
+): CachedRows => {
+  const { timeline } = input;
+  const byTurn = new Map<string, Array<TimelineEntry>>();
+
+  for (const entry of timeline.entries) {
+    const turnId = turnIdOfEntry(entry);
+    const group = byTurn.get(turnId);
+
+    if (group === undefined) {
+      byTurn.set(turnId, [entry]);
+    } else {
+      group.push(entry);
+    }
+  }
+
+  const known = new Set(timeline.turns.map((turn) => turn.id));
+
+  if ([...byTurn.keys()].some((turnId) => !known.has(turnId))) {
+    return { rows: deriveTimelineRows(input), cache: EMPTY_TURN_ROWS };
+  }
+
+  const latest = Option.fromUndefinedOr(timeline.turns.at(-1));
+  const next = new Map<string, CachedTurnRows>();
+  const segments: Array<ReadonlyArray<TimelineRow>> = [];
+
+  for (const [index, turn] of timeline.turns.entries()) {
+    const entries = byTurn.get(turn.id) ?? [];
+    const isLast = index === timeline.turns.length - 1;
+
+    if (isLast) {
+      segments.push(
+        deriveTimelineRows({
+          ...input,
+          timeline: { ...timeline, entries, turns: [turn] },
+        })
+      );
+      continue;
+    }
+
+    const cached = cache.get(turn.id);
+
+    if (cached !== undefined && stillValid(cached, input, entries, turn)) {
+      next.set(turn.id, cached);
+      segments.push(cached.rows);
+      continue;
+    }
+
+    const rows = deriveTimelineRows({
+      ...input,
+      timeline: {
+        entries,
+        turns: [turn, ...Option.toArray(latest)],
+        // Only the last turn works; an earlier one's error row reads the latest turn, not this.
+        isWorking: false,
+        activeTurnId: Option.none(),
+        activeTurnStartedAt: Option.none(),
+      },
+    });
+
+    next.set(turn.id, { entries, turn, input, rows });
+    segments.push(rows);
+  }
+
+  return { rows: segments.flat(), cache: next };
+};
+
 /** The previous derivation's rows by id, so unchanged rows keep their identity. */
 export interface StableTimelineRows {
   readonly byId: ReadonlyMap<string, TimelineRow>;
@@ -952,10 +1088,12 @@ export const EMPTY_STABLE_ROWS: StableTimelineRows = {
 
 /**
  * True when two rows with one id render the same. Rows are plain immutable data, so Effect's
- * structural equality compares them field by field, entries and options included.
+ * structural equality compares them field by field, entries and options included; a fresh row built
+ * from the same entries holds the same objects (the committed reading keeps them), so it stops at
+ * the first reference that matches instead of walking each entry.
  */
 export const isRowUnchanged = (a: TimelineRow, b: TimelineRow): boolean =>
-  Equal.equals(a, b);
+  a === b || Equal.equals(a, b);
 
 /**
  * Rows that did not change keep the previous object, and an unchanged list keeps the previous

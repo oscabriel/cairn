@@ -13,11 +13,13 @@ import { entriesFromPi } from "@cairn/client-logic/TimelineEntries";
 import type {
   StableTimelineRows,
   TimelineRow,
+  TurnRowsCache,
 } from "@cairn/client-logic/TimelineRows";
 import {
   computeStableTimelineRows,
-  deriveTimelineRows,
+  deriveTimelineRowsCached,
   EMPTY_STABLE_ROWS,
+  EMPTY_TURN_ROWS,
 } from "@cairn/client-logic/TimelineRows";
 import { Option } from "effect";
 
@@ -167,6 +169,29 @@ const memo = new Map<"last", Memo>();
 
 const stableByThread = new Map<string, StableTimelineRows>();
 
+/** Each thread's settled turns' rows, reused while a turn's entries and toggles are unchanged. */
+const turnRowsByThread = new Map<string, TurnRowsCache>();
+
+/** The working directory each thread's transcript was last derived with (see `transcriptKeys`). */
+const rootByThread = new Map<string, Option.Option<string>>();
+
+/** One set per toggle list, so an unchanged list keeps its set and the turn cache keeps its rows. */
+const toggleSets = new WeakMap<ReadonlyArray<string>, ReadonlySet<string>>();
+
+const toggleSet = (ids: ReadonlyArray<string>): ReadonlySet<string> => {
+  const known = toggleSets.get(ids);
+
+  if (known !== undefined) {
+    return known;
+  }
+
+  const set = new Set(ids);
+
+  toggleSets.set(ids, set);
+
+  return set;
+};
+
 const promptsOf = (timeline: Timeline): ReadonlyMap<string, TimelineMessage> =>
   new Map(
     timeline.entries.flatMap((entry) =>
@@ -214,12 +239,20 @@ export const transcriptOf = (
 
   const timeline = entriesFromPi(state.value.view, state.value.older);
 
-  const rows = deriveTimelineRows({
-    timeline,
-    expandedTurnIds: new Set(ui.expandedTurnIds),
-    expandedWorkGroupIds: new Set(ui.expandedWorkGroupIds),
-    workspaceRoot,
-  });
+  const derived = deriveTimelineRowsCached(
+    {
+      timeline,
+      expandedTurnIds: toggleSet(ui.expandedTurnIds),
+      expandedWorkGroupIds: toggleSet(ui.expandedWorkGroupIds),
+      workspaceRoot,
+    },
+    turnRowsByThread.get(threadId) ?? EMPTY_TURN_ROWS
+  );
+
+  turnRowsByThread.set(threadId, derived.cache);
+  rootByThread.set(threadId, workspaceRoot);
+
+  const { rows } = derived;
 
   const stable = computeStableTimelineRows(
     rows,
@@ -253,6 +286,23 @@ export const transcriptOf = (
 export const itemKeys = (transcript: Transcript): ReadonlyArray<string> =>
   transcript.items.map((item) => item.id);
 
+/**
+ * The transcript of `state` as `ui` opens it, for the list's keys outside the view. Keys do not
+ * depend on the working directory, so this derives with the one the thread's view last used: the
+ * view then finds the transcript memoized instead of deriving it a second time with its own.
+ */
+export const transcriptForKeys = (
+  threadId: string,
+  state: Option.Option<ThreadViewState>,
+  ui: ThreadUi
+): Transcript =>
+  transcriptOf(
+    threadId,
+    state,
+    ui,
+    rootByThread.get(threadId) ?? Option.none()
+  );
+
 const LINE_PX = 22;
 
 const CHARS_PER_LINE = 90;
@@ -261,8 +311,17 @@ const CHARS_PER_LINE = 90;
 const bucketLines = (lines: number): number =>
   2 ** Math.ceil(Math.log2(Math.max(1, lines)));
 
-const textLines = (text: string): number =>
-  text
+/** Each message's wrapped line count; a stable message is counted once, not every render. */
+const lineCounts = new WeakMap<TimelineMessage, number>();
+
+const textLines = (message: TimelineMessage): number => {
+  const known = lineCounts.get(message);
+
+  if (known !== undefined) {
+    return known;
+  }
+
+  const lines = message.text
     .split("\n")
     .reduce(
       (total, line) =>
@@ -270,11 +329,16 @@ const textLines = (text: string): number =>
       0
     );
 
+  lineCounts.set(message, lines);
+
+  return lines;
+};
+
 const cardHeight = (card: ChangedFilesRow): number =>
   56 + 28 * Math.min(card.files.length, 12);
 
 const messageHeight = (message: TimelineMessage, expanded: boolean): number => {
-  const lines = bucketLines(textLines(message.text));
+  const lines = bucketLines(textLines(message));
 
   if (message.role === "user") {
     return 64 + LINE_PX * (expanded ? lines : Math.min(lines, 8));

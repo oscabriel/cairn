@@ -767,6 +767,14 @@ const extendEnd = (turn: TurnBuilder, at: number) => {
   );
 };
 
+/** A committed answer decides whether its turn failed: the last one's stop reason wins. */
+const settleTurnError = (turn: TurnBuilder, message: AssistantMessage) => {
+  turn.error =
+    message.stopReason === "error"
+      ? Option.some(message.errorMessage ?? "The model request failed.")
+      : Option.none();
+};
+
 /** Turns an assistant message (committed or live) into its timeline entries. */
 const assistantEntries = (
   message: AssistantMessage,
@@ -874,10 +882,7 @@ const assistantEntries = (
   }
 
   if (!streaming) {
-    turn.error =
-      message.stopReason === "error"
-        ? Option.some(message.errorMessage ?? "The model request failed.")
-        : Option.none();
+    settleTurnError(turn, message);
   }
 
   if (message.stopReason === "error" && !streaming) {
@@ -939,6 +944,26 @@ interface CommittedReading {
 
 const NO_SLOTS: LiveReading["slots"] = new Map();
 
+// The entries built from each committed reading, kept while what they read is unchanged, so a
+// commit (which re-reads every entry) hands back the same objects for every settled entry and
+// the rows built on them compare by reference. Readings are cached per entry (`readEntry`).
+const userEntries = new WeakMap<EntryReading, TimelineEntry>();
+
+const answerEntries = new WeakMap<
+  EntryReading,
+  {
+    readonly inputs: ReadonlyArray<unknown>;
+    readonly entries: ReadonlyArray<TimelineEntry>;
+  }
+>();
+
+const sameInputs = (
+  left: ReadonlyArray<unknown>,
+  right: ReadonlyArray<unknown>
+): boolean =>
+  left.length === right.length &&
+  left.every((value, index) => value === right[index]);
+
 // One shared empty page, so a view with no older pages hits the memo by identity.
 const NO_OLDER: ReadonlyArray<Entry> = [];
 
@@ -956,10 +981,8 @@ const readCommitted = (
 
   for (const reading of decoded) {
     if (EntryReading.$is("ToolResult")(reading)) {
-      results.set(reading.result.toolCallId, {
-        result: reading.result,
-        aborted: reading.aborted,
-      });
+      // The reading itself, cached per entry, so a call's result keeps its identity across reads.
+      results.set(reading.result.toolCallId, reading);
     }
   }
 
@@ -1001,8 +1024,15 @@ const readCommitted = (
       turns.push(turn);
 
       const key = `user:${found.entry.id}`;
+      const known = userEntries.get(found);
 
-      entries.push({
+      if (known !== undefined) {
+        entries.push(known);
+
+        return;
+      }
+
+      const built: TimelineEntry = {
         kind: "message",
         id: key,
         createdAt: found.message.timestamp,
@@ -1032,7 +1062,10 @@ const readCommitted = (
           }),
           skills: found.reading.skills,
         },
-      });
+      };
+
+      userEntries.set(found, built);
+      entries.push(built);
     },
 
     Assistant: (found) => {
@@ -1041,17 +1074,42 @@ const readCommitted = (
 
       extendEnd(owner, assistantEnd(found.message));
       owner.interrupted ||= found.message.stopReason === "aborted";
-      entries.push(
-        ...assistantEntries(
-          found.message,
-          owner,
-          Option.some(found.entry.id),
-          false,
-          results,
-          slots,
-          interrupted || !running
-        )
+
+      // What the entries read besides the message: their turn and place in it, each call's
+      // result, and (only while a call has none) whether that call shows stopped.
+      const callResults = Array.getSomes(
+        found.message.content.map((part) => decodeToolCall(part))
+      ).map((call) => results.get(call.id));
+
+      const inputs = [
+        owner.id,
+        owner.assistantCount,
+        callResults.includes(undefined) ? interrupted || !running : null,
+        ...callResults,
+      ];
+
+      const known = answerEntries.get(found);
+
+      if (known !== undefined && sameInputs(known.inputs, inputs)) {
+        owner.assistantCount += 1;
+        settleTurnError(owner, found.message);
+        entries.push(...known.entries);
+
+        return;
+      }
+
+      const built = assistantEntries(
+        found.message,
+        owner,
+        Option.some(found.entry.id),
+        false,
+        results,
+        slots,
+        interrupted || !running
       );
+
+      answerEntries.set(found, { inputs, entries: built });
+      entries.push(...built);
     },
 
     ToolResult: (found) => {

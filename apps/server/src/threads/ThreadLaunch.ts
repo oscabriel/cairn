@@ -73,7 +73,7 @@ import { BranchNames } from "./BranchNames.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import type { LaunchRow } from "./LaunchStore.ts";
 import { placeholderTitle, ThreadTitles } from "./ThreadTitles.ts";
-import { TurnContent } from "./TurnContent.ts";
+import { logTurnSubmitted, TurnContent } from "./TurnContent.ts";
 import type { TurnContentError } from "./TurnContent.ts";
 
 /** `thread.launch` was refused before anything was committed (or answered as a duplicate). */
@@ -601,7 +601,7 @@ export class ThreadLaunch extends Context.Service<
             .build(input.threadId, row.from, input.initialMessage)
             .pipe(Effect.mapError(stepFailed("message")));
 
-          yield* seam
+          const submission = yield* seam
             .submit(input.threadId, {
               requestId: input.initialMessage.requestId,
               content: built.content,
@@ -610,6 +610,12 @@ export class ThreadLaunch extends Context.Service<
             })
             .pipe(Effect.mapError(stepFailed("message")));
 
+          yield* logTurnSubmitted(
+            input.threadId,
+            input.initialMessage,
+            built,
+            submission
+          );
           yield* launches.remove(commandId);
           yield* Effect.logInfo("thread launched").pipe(
             Effect.annotateLogs({
@@ -757,8 +763,9 @@ export class ThreadLaunch extends Context.Service<
           });
         }
 
-        // The first message is checked now, so a turn it cannot send never makes a thread.
-        yield* turns.build(input.threadId, from, input.initialMessage);
+        // The first message is checked now, so a turn it cannot send never makes a thread; it is
+        // built once, in the launch fiber, after the thread exists.
+        yield* turns.check(input.threadId, from, input.initialMessage);
 
         const inserted = yield* launches
           .insert(input, from)

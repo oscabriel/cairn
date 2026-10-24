@@ -32,7 +32,7 @@ import {
 import { LaunchStore } from "./LaunchStore.ts";
 import type { LaunchStoreError } from "./LaunchStore.ts";
 import { StopHooks } from "./StopHooks.ts";
-import { TurnContent } from "./TurnContent.ts";
+import { logTurnSubmitted, TurnContent } from "./TurnContent.ts";
 import type { TurnContentError } from "./TurnContent.ts";
 
 /** The thread is still being launched; its first message has not reached the brain yet. */
@@ -125,6 +125,8 @@ export class Threads extends Context.Service<
           entry: built.entry,
           whenBusy: input.whenBusy,
         });
+
+        yield* logTurnSubmitted(input.threadId, input.input, built, submission);
 
         return { submissionId: submission.submissionId };
       });

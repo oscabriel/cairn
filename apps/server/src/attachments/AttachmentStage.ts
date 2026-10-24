@@ -10,8 +10,9 @@
 // - XLSX and PPTX files are a line with the path and a note to open them with a tool.
 //
 // Claims are `INSERT OR IGNORE`, so a send retried with the same request id claims nothing new and
-// builds the same content. The `turn.submitted` log line is written here, as the last stage, when
-// the turn's content is ready for the harness.
+// builds the same content. A check (a launch's, before its thread exists) only looks the
+// attachments up: it reads no file and claims nothing. `turn.submitted` is logged by the caller,
+// after the submit (`logTurnSubmitted`).
 //
 // The path line (`attachmentPathLine` in @cairn/protocol, after t3code's
 // `providerMessageTextWithAttachmentPaths`) is its own text part, so the transcript can drop it;
@@ -254,6 +255,12 @@ export const attachmentStage: TurnContentStage<AttachmentStore> = {
       )
     );
 
+    const refs = found.map((stored) => stored.ref);
+
+    if (draft.check) {
+      return { ...draft, attachments: [...draft.attachments, ...refs] };
+    }
+
     const content: Array<TextContent | ImageContent> = [];
     let budget = MAX_INLINE_CHARS_PER_TURN;
 
@@ -268,20 +275,10 @@ export const attachmentStage: TurnContentStage<AttachmentStore> = {
       .claim(ids, draft.threadId, draft.input.requestId)
       .pipe(Effect.mapError(unavailable));
 
-    yield* Effect.logInfo("turn submitted").pipe(
-      Effect.annotateLogs({
-        event: "turn.submitted",
-        threadId: draft.threadId,
-        requestId: draft.input.requestId,
-        attachments: ids.length,
-        images: found.filter((stored) => stored.ref.kind === "image").length,
-      })
-    );
-
     return {
       ...draft,
       content: [...draft.content, ...content],
-      attachments: [...draft.attachments, ...found.map((stored) => stored.ref)],
+      attachments: [...draft.attachments, ...refs],
     };
   }),
 };

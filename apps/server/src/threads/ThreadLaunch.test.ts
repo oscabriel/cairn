@@ -8,7 +8,16 @@ import {
 } from "@cairn/protocol/Launch";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import { Duration, Effect, FileSystem, Option, Ref, Schedule } from "effect";
+import {
+  Duration,
+  Effect,
+  FileSystem,
+  Logger,
+  Option,
+  Ref,
+  References,
+  Schedule,
+} from "effect";
 import type { Layer } from "effect";
 
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
@@ -134,7 +143,81 @@ const userEntries = Effect.fn("test.userEntries")(function* (
     : thread.entries.filter((entry) => entry.kind === "cairn.user");
 });
 
+/** The annotations of one log line, as `Logger` hands them over. */
+type Annotations = ReturnType<
+  typeof References.CurrentLogAnnotations.defaultValue
+>;
+
 describe("launching threads", () => {
+  it.live(
+    "a launch checks its first message, builds it once, and logs turn.submitted once, after the submit",
+    () => {
+      const counted = Effect.gen(function* () {
+        const runs = yield* Ref.make<ReadonlyArray<"check" | "build">>([]);
+
+        const turnContent = TurnContent.layerFrom([
+          textStage,
+          {
+            name: "counting",
+            run: (draft) =>
+              Ref.update(runs, (all) => [
+                ...all,
+                draft.check ? ("check" as const) : ("build" as const),
+              ]).pipe(Effect.as(draft)),
+          },
+        ]);
+
+        return { runs, turnContent };
+      });
+
+      return Effect.flatMap(counted, ({ runs, turnContent }) =>
+        withRepo({ held: false, turnContent }, ({ repo }) =>
+          Effect.gen(function* () {
+            const logged: Array<Annotations> = [];
+
+            const capture = Logger.make((options) => {
+              logged.push(
+                options.fiber.getRef(References.CurrentLogAnnotations)
+              );
+            });
+
+            const projectId = yield* addProject(repo);
+            const launcher = yield* ThreadLaunch;
+
+            const input = yield* launchInput(
+              projectId,
+              rootWorkspace,
+              "Count my builds"
+            );
+
+            yield* launcher
+              .launch(input, "owner@test")
+              .pipe(
+                Effect.provide(
+                  Logger.layer([capture], { mergeWithExisting: true })
+                )
+              );
+            yield* launcher.settled(input.threadId);
+
+            assert.deepStrictEqual(yield* Ref.get(runs), ["check", "build"]);
+
+            const submitted = logged.filter(
+              (annotations) => annotations.event === "turn.submitted"
+            );
+
+            assert.strictEqual(submitted.length, 1);
+            assert.strictEqual(
+              submitted[0]?.requestId,
+              input.initialMessage.requestId
+            );
+            assert.isDefined(submitted[0]?.submissionId);
+            assert.strictEqual((yield* userEntries(input.threadId)).length, 1);
+          })
+        )
+      );
+    }
+  );
+
   it.live(
     "launches in the project root on its branch, sends the first message and names the thread",
     () =>

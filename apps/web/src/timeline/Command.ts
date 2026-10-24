@@ -10,7 +10,7 @@ import * as Mount from "foldkit/mount";
 import { mintRequestId } from "../composer/Ids.ts";
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
-import { loadLanguage, sliceTokens } from "./markdown/Highlight.ts";
+import { highlightStages } from "./markdown/Highlight.ts";
 import { Message } from "./Message.ts";
 
 /** How many entries one "Load earlier turns" asks for. */
@@ -102,11 +102,6 @@ const markHighlight = (element: Element, state: string): void => {
   }
 };
 
-type HighlightingMessage =
-  | typeof Message.LoadedLanguage.Type
-  | typeof Message.HighlightedCode.Type
-  | typeof Message.FailedLanguage.Type;
-
 /**
  * Loads a code block's grammar when the block mounts (already loaded answers at once). `code` is
  * the settled text of a block too long to tokenize while rendering; it is tokenized into the
@@ -121,37 +116,28 @@ export const LoadHighlighting = Mount.defineStream("LoadHighlighting", {
     Message.FailedLanguage,
   ],
   execute: ({ code, element, language }) =>
-    Stream.unwrap(
-      Effect.gen(function* () {
-        markHighlight(element, "loading");
-
-        yield* loadLanguage(language);
-
-        const slices = Option.match(code, {
-          onNone: () => Stream.empty,
-          onSome: (text) =>
-            Stream.map(sliceTokens(text, language), () =>
-              Message.HighlightedCode({ language })
-            ),
-        });
-
-        const messages: Stream.Stream<HighlightingMessage> = Stream.make(
-          Message.LoadedLanguage({ language })
-        ).pipe(Stream.concat(slices));
-
-        return messages.pipe(
-          Stream.onEnd(
-            Effect.sync(() => {
-              markHighlight(element, "ready");
-            })
-          )
-        );
-      }).pipe(
-        Effect.catchTag("HighlightLoadError", () =>
-          Effect.sync((): Stream.Stream<HighlightingMessage> => {
+    highlightStages(language, code).pipe(
+      Stream.map((stage) =>
+        stage === "loaded"
+          ? Message.LoadedLanguage({ language })
+          : Message.HighlightedCode({ language })
+      ),
+      Stream.onStart(
+        Effect.sync(() => {
+          markHighlight(element, "loading");
+        })
+      ),
+      Stream.onEnd(
+        Effect.sync(() => {
+          markHighlight(element, "ready");
+        })
+      ),
+      Stream.catchTag("HighlightLoadError", () =>
+        Stream.fromEffect(
+          Effect.sync(() => {
             markHighlight(element, "failed");
 
-            return Stream.make(Message.FailedLanguage({ language }));
+            return Message.FailedLanguage({ language });
           })
         )
       )

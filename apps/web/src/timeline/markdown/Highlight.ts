@@ -239,11 +239,16 @@ const TOKEN_CACHE_BYTES = 50 * 1024 * 1024;
 const TOKEN_OVERHEAD_BYTES = 96;
 
 interface Cached {
+  readonly language: string;
   readonly lines: TokenLines;
   readonly bytes: number;
 }
 
-/** Least recently used first: a hit moves its entry to the end. `bytes` sums the entries' sizes. */
+/**
+ * Tokens by the code they color, least recently used first: a hit moves its entry to the end.
+ * Keyed by the code string itself, which views hold from one render to the next, so a lookup
+ * hashes no new string. `bytes` sums the entries' sizes.
+ */
 const tokenCache = { entries: new Map<string, Cached>(), bytes: 0 };
 
 const approximateBytes = (lines: TokenLines): number => {
@@ -258,24 +263,30 @@ const approximateBytes = (lines: TokenLines): number => {
   return bytes;
 };
 
-const recall = (key: string): Option.Option<TokenLines> => {
-  const cached = tokenCache.entries.get(key);
+const recall = (code: string, language: string): Option.Option<TokenLines> => {
+  const cached = tokenCache.entries.get(code);
 
-  if (cached === undefined) {
+  if (cached?.language !== language) {
     return Option.none();
   }
 
-  tokenCache.entries.delete(key);
-  tokenCache.entries.set(key, cached);
+  tokenCache.entries.delete(code);
+  tokenCache.entries.set(code, cached);
 
   return Option.some(cached.lines);
 };
 
-const remember = (key: string, lines: TokenLines): void => {
+const remember = (code: string, language: string, lines: TokenLines): void => {
   const bytes = approximateBytes(lines);
+  const replaced = tokenCache.entries.get(code);
 
   if (bytes > TOKEN_CACHE_BYTES) {
     return;
+  }
+
+  if (replaced !== undefined) {
+    tokenCache.entries.delete(code);
+    tokenCache.bytes -= replaced.bytes;
   }
 
   for (const [oldest, cached] of tokenCache.entries) {
@@ -290,7 +301,7 @@ const remember = (key: string, lines: TokenLines): void => {
     tokenCache.bytes -= cached.bytes;
   }
 
-  tokenCache.entries.set(key, { lines, bytes });
+  tokenCache.entries.set(code, { language, lines, bytes });
   tokenCache.bytes += bytes;
 };
 
@@ -305,7 +316,7 @@ type GrammarState = NonNullable<
  */
 export const SLICE_CHARS = 1000;
 
-/** The pause between slices: a timer, so the page paints and takes input (a zero sleep only yields to other fibers). */
+/** The pause before each slice: a timer, so the page paints and takes input (a zero sleep only yields to other fibers). */
 const SLICE_PAUSE = Duration.millis(1);
 
 /** Tokenized lines and the grammar state after the last of them, to go on from. */
@@ -363,25 +374,31 @@ const sliceEnd = (lines: ReadonlyArray<string>, start: number): number => {
   return end;
 };
 
-const keyOf = (code: string, language: string): string =>
-  `${language}\u0000${code}`;
-
 const loadedHighlighter = (language: string): Option.Option<Highlighter> =>
   Option.filter(Option.fromUndefinedOr(ready.get("core")), (highlighter) =>
     highlighter.getLoadedLanguages().includes(language)
   );
 
-/** Code part way through its slices. */
-type Progress = Slice;
+/** Code part way through its slices, and its language. */
+interface Progress extends Slice {
+  readonly language: string;
+}
 
 /** A block whose slices stop when its element unmounts goes on from here when it mounts again. */
 const PROGRESS_ENTRIES = 32;
 
+/** Keyed by code, as the cache is. */
 const inProgress = new Map<string, Progress>();
 
-const keepProgress = (key: string, progress: Progress): void => {
-  inProgress.delete(key);
-  inProgress.set(key, progress);
+const progressOf = (code: string, language: string): Option.Option<Progress> =>
+  Option.filter(
+    Option.fromUndefinedOr(inProgress.get(code)),
+    (progress) => progress.language === language
+  );
+
+const keepProgress = (code: string, progress: Progress): void => {
+  inProgress.delete(code);
+  inProgress.set(code, progress);
 
   const oldest = inProgress.keys().next();
 
@@ -395,19 +412,18 @@ const keepProgress = (key: string, progress: Progress): void => {
  * the last slice puts its tokens in the cache; none when there was nothing to do.
  */
 const nextSlice = (code: string, language: string): Option.Option<number> => {
-  const key = keyOf(code, language);
-
-  if (tokenCache.entries.has(key)) {
+  if (Option.isSome(recall(code, language))) {
     return Option.none();
   }
 
   return Option.flatMap(loadedHighlighter(language), (highlighter) => {
     const lines = code.split("\n");
 
-    const progress = inProgress.get(key) ?? {
+    const progress = Option.getOrElse(progressOf(code, language), () => ({
+      language,
       lines: [],
       state: Option.none(),
-    };
+    }));
 
     const start = progress.lines.length;
     const end = sliceEnd(lines, start);
@@ -423,10 +439,10 @@ const nextSlice = (code: string, language: string): Option.Option<number> => {
         const done = [...progress.lines, ...slice.lines];
 
         if (end < lines.length) {
-          keepProgress(key, { lines: done, state: slice.state });
+          keepProgress(code, { language, lines: done, state: slice.state });
         } else {
-          inProgress.delete(key);
-          remember(key, done);
+          inProgress.delete(code);
+          remember(code, language, done);
         }
 
         return end;
@@ -436,76 +452,75 @@ const nextSlice = (code: string, language: string): Option.Option<number> => {
 };
 
 /**
- * Highlighted lines of `code` once `language` has loaded: from the cache, tokenized now when the
- * code fits one slice, or the first lines of longer code while `sliceTokens` works through it (the
- * rest stays plain). The transcript and the diff panel share one LRU of results, so call this only
- * for text that has stopped changing: every new text is a tokenization and an entry.
+ * Highlighted lines of `code` from the cache, or its first lines while `sliceTokens` works
+ * through it (the rest stays plain). Never tokenizes, so a view drawing many blocks at once stays
+ * cheap; the same array comes back until the tokens change.
+ */
+export const cachedTokensOf = (
+  code: string,
+  language: string
+): Option.Option<TokenLines> =>
+  Option.orElse(recall(code, language), () =>
+    Option.map(progressOf(code, language), (progress) => progress.lines)
+  );
+
+/**
+ * Highlighted lines of `code` once `language` has loaded: as `cachedTokensOf`, or tokenized now
+ * when the code fits one slice. The transcript and the diff panel share one LRU of results, so call
+ * this only for text that has stopped changing: every new text is a tokenization and an entry.
  */
 export const readyTokensOf = (
   code: string,
   language: string
-): Option.Option<TokenLines> => {
-  const key = keyOf(code, language);
-
-  return Option.orElse(recall(key), () => {
-    if (code.length > SLICE_CHARS) {
-      return Option.map(
-        Option.fromUndefinedOr(inProgress.get(key)),
-        (progress) => progress.lines
-      );
-    }
-
-    return Option.map(nextSlice(code, language), () =>
-      Option.getOrElse(recall(key), () => [])
-    );
-  });
-};
-
-/** Highlighted lines of `code` once `language` has loaded, from the cache or tokenized now in one go. */
-export const tokensOf = (
-  code: string,
-  language: string
-): Option.Option<TokenLines> => {
-  const key = keyOf(code, language);
-
-  return Option.orElse(recall(key), () =>
-    Option.flatMap(loadedHighlighter(language), (highlighter) => {
-      const tokens = Option.map(
-        tokenizeSlice(highlighter, code, language, Option.none()),
-        (slice) => slice.lines
-      );
-
-      if (Option.isSome(tokens)) {
-        remember(key, tokens.value);
-      }
-
-      return tokens;
-    })
+): Option.Option<TokenLines> =>
+  Option.orElse(cachedTokensOf(code, language), () =>
+    code.length > SLICE_CHARS
+      ? Option.none()
+      : Option.flatMap(nextSlice(code, language), () => recall(code, language))
   );
-};
 
 /**
- * Tokenizes `code` into the cache a slice at a time, pausing between slices so the page paints and
- * takes input; code of any length highlights without a long task. Emits the lines highlighted so
- * far after each slice, and nothing when the tokens are cached already or `language` has not
+ * Tokenizes `code` into the cache a slice at a time, pausing before each slice so the page paints
+ * and takes input; code of any length highlights without a long task. Emits the lines highlighted
+ * so far after each slice, and nothing when the tokens are cached already or `language` has not
  * loaded. Interrupted, it leaves its progress for the next call to go on from.
  */
 export const sliceTokens = (
   code: string,
   language: string
 ): Stream.Stream<number> =>
-  Stream.unfold(true, (first) =>
+  Stream.unfold(undefined, () =>
     Effect.gen(function* () {
-      if (!first) {
-        yield* Effect.sleep(SLICE_PAUSE);
-      }
+      yield* Effect.sleep(SLICE_PAUSE);
 
       // Ends the stream with nothing left to tokenize.
       return Option.getOrUndefined(
         Option.map(
           nextSlice(code, language),
-          (lines) => [lines, false] as const
+          (lines) => [lines, undefined] as const
         )
       );
     })
+  );
+
+/** How far a block's highlighting has gone: its grammar loaded, then each slice of its code. */
+export type HighlightStage = "loaded" | "sliced";
+
+/**
+ * Loads `language`'s grammar, then, for `code` (the settled text of a block too long to tokenize
+ * while rendering), tokenizes it a slice at a time: "loaded" once, then "sliced" after each slice.
+ * Fails with `HighlightLoadError` when the grammar does not load.
+ */
+export const highlightStages = (
+  language: string,
+  code: Option.Option<string>
+): Stream.Stream<HighlightStage, HighlightLoadError> =>
+  Stream.fromEffect(Effect.as(loadLanguage(language), "loaded" as const)).pipe(
+    Stream.concat(
+      Option.match(code, {
+        onNone: () => Stream.empty,
+        onSome: (text) =>
+          Stream.map(sliceTokens(text, language), () => "sliced" as const),
+      })
+    )
   );

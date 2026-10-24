@@ -60,6 +60,7 @@ export const close = (model: Model): Return => ({
     ignoreWhitespace: () => model.ignoreWhitespace,
     version: () => model.version + 1,
     highlightedLanguages: () => model.highlightedLanguages,
+    highlightedCode: () => model.highlightedCode,
   }),
 });
 
@@ -131,5 +132,12 @@ export const update = (model: Model, message: Message): Return =>
               ],
             }),
           },
+    HighlightedCode: ({ language }) => ({
+      model: modifyFields(model, {
+        highlightedLanguages: (languages) =>
+          languages.includes(language) ? languages : [...languages, language],
+        highlightedCode: (count) => count + 1,
+      }),
+    }),
     FailedLanguage: () => ({ model }),
   });

@@ -2,10 +2,14 @@
 // thread's) changes as a unified diff, its files listed as a tree beside it on wide screens and
 // above it on narrow ones. The patch comes from the brain's checkpoint refs and is parsed here
 // (client-logic's `parsePatch`, ported from cairn-v1's apps/web/src/patch.ts at 1a5cd4a); each
-// file's lines are colored by the transcript's lazy shiki grammars once they load, per hunk.
+// file's lines are colored by the transcript's lazy shiki grammars once they load.
 // Layout follows t3code's DiffPanel (github.com/pingdotgg/t3code,
 // apps/web/src/components/DiffPanel.tsx at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92) in spirit only:
-// a header with the scope and whitespace switches and a close button; no split view (D31).
+// a header with the scope and whitespace switches and a close button; no split view (D31). A patch
+// is parsed once, outside the Model; each file is a keyed lazy view that redraws only when its own
+// lines, tokens or selection change; a file's shown lines are tokenized together into the
+// transcript's token cache by the file's Mount, a slice at a time, never by a render; and the panel
+// shows at most `MAX_TOTAL_LINES` lines across its files.
 import { buildTurnDiffTree, parsePatch } from "@cairn/client-logic/DiffTree";
 import type {
   DiffTreeNode,
@@ -15,11 +19,12 @@ import type {
 } from "@cairn/client-logic/DiffTree";
 import { Option } from "effect";
 import { Submodel } from "foldkit";
+import { createKeyedLazy, createLazy } from "foldkit/html";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { X } from "lucide";
 
 import { icon } from "../composer/Icon.ts";
-import { languageOf, tokensOf } from "../timeline/markdown/Highlight.ts";
+import { cachedTokensOf, languageOf } from "../timeline/markdown/Highlight.ts";
 import type { TokenLines } from "../timeline/markdown/Highlight.ts";
 import { button, buttonDefaults } from "../ui/Button.ts";
 import { diffStatLabel, hasNonZeroStat } from "./Card.ts";
@@ -32,6 +37,12 @@ type H = HtmlBuilder<Message>;
 
 /** The most lines one file renders; the rest is summarized, so a huge file cannot stall the page. */
 export const MAX_RENDERED_LINES = 2000;
+
+/**
+ * The most lines the panel renders across its files, two files at their limit; files past it show
+ * their header and a count, so a patch of many files cannot stall the page either.
+ */
+export const MAX_TOTAL_LINES = 4000;
 
 const BASENAMES: ReadonlyMap<string, string> = new Map([
   ["dockerfile", "dockerfile"],
@@ -111,22 +122,102 @@ const tokenContent = (
     }
   );
 
+/** A hunk as shown: its lines within the budget, and where its code lines start in the file's code. */
+interface ShownHunk {
+  readonly hunk: PatchHunk;
+  readonly lines: ReadonlyArray<PatchLine>;
+  readonly codeStart: number;
+}
+
+/** A file as the panel shows it, derived once per patch. */
+interface ShownFile {
+  readonly file: PatchFile;
+  readonly language: Option.Option<string>;
+  readonly hunks: ReadonlyArray<ShownHunk>;
+  /** The shown lines that are code (not `\ No newline` notes), one string tokenized together. */
+  readonly code: string;
+  /** Lines in the file's hunks, shown or not. */
+  readonly total: number;
+  readonly shown: number;
+}
+
+const showFile = (file: PatchFile, budget: number): ShownFile => {
+  const hunks: Array<ShownHunk> = [];
+  const code: Array<string> = [];
+  let left = budget;
+
+  for (const hunk of file.hunks) {
+    const lines = hunk.lines.slice(0, Math.max(0, left));
+
+    hunks.push({ hunk, lines, codeStart: code.length });
+    code.push(
+      ...lines.flatMap((line) => (line.kind === "note" ? [] : [line.text]))
+    );
+    left -= hunk.lines.length;
+  }
+
+  const total = file.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);
+
+  return {
+    file,
+    language: languageOfPath(file.path),
+    hunks,
+    code: code.join("\n"),
+    total,
+    shown: Math.min(total, Math.max(0, budget)),
+  };
+};
+
+/** A patch parsed for the panel: its files as shown within the budgets, and their tree. */
+interface ParsedPatch {
+  readonly patch: string;
+  /** Bumped for every new patch: file elements are keyed by it, so their Mounts run again. */
+  readonly generation: number;
+  readonly files: ReadonlyArray<ShownFile>;
+  readonly tree: ReadonlyArray<DiffTreeNode>;
+}
+
+/** The last patch parsed; the view parses once per patch, not once per render. */
+const parsed = new Map<"last", ParsedPatch>();
+
+const parsedPatch = (patch: string): ParsedPatch => {
+  const last = parsed.get("last");
+
+  if (last?.patch === patch) {
+    return last;
+  }
+
+  const files = parsePatch(patch);
+  let left = MAX_TOTAL_LINES;
+
+  const shown = files.map((file) => {
+    const view = showFile(file, Math.min(MAX_RENDERED_LINES, left));
+
+    left -= view.shown;
+
+    return view;
+  });
+
+  const next = {
+    patch,
+    generation: (last?.generation ?? 0) + 1,
+    files: shown,
+    tree: buildTurnDiffTree(
+      files.map((file) => ({ path: file.path, ...file.stat }))
+    ),
+  };
+
+  parsed.set("last", next);
+
+  return next;
+};
+
 const hunkView = (
   h: H,
-  hunk: PatchHunk,
-  language: Option.Option<string>,
-  highlighted: ReadonlyArray<string>,
-  budget: number
+  shown: ShownHunk,
+  tokens: Option.Option<TokenLines>
 ): Html => {
-  const lines = hunk.lines.slice(0, Math.max(0, budget));
-  const code = lines.filter((line) => line.kind !== "note");
-
-  const tokens = Option.flatMap(
-    Option.filter(language, (name) => highlighted.includes(name)),
-    (name) => tokensOf(code.map((line) => line.text).join("\n"), name)
-  );
-
-  let codeIndex = -1;
+  let codeIndex = shown.codeStart - 1;
 
   return h.div(
     [h.DataAttribute("slot", "diff-hunk")],
@@ -137,9 +228,9 @@ const hunkView = (
             "bg-muted/40 px-3 py-1 font-mono text-muted-foreground text-xs"
           ),
         ],
-        [hunk.header]
+        [shown.hunk.header]
       ),
-      ...lines.map((line) => {
+      ...shown.lines.map((line) => {
         codeIndex += line.kind === "note" ? 0 : 1;
 
         return h.div(
@@ -185,27 +276,38 @@ const STATUS_LABEL: Readonly<Record<PatchFile["status"], string>> = {
   modified: "Modified",
 };
 
+/** Stands for no tokens yet as a lazy argument, which compares by reference. */
+const NO_TOKENS: TokenLines = [];
+
 const fileView = (
   h: H,
-  file: PatchFile,
+  shown: ShownFile,
+  generation: number,
   selected: boolean,
-  highlighted: ReadonlyArray<string>
+  tokens: TokenLines
 ): Html => {
-  const language = languageOfPath(file.path);
-  const total = file.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);
-  let budget = MAX_RENDERED_LINES;
+  const { file } = shown;
 
   return h.section(
     [
+      // A Mount runs only when its element is created: a new patch gives new file elements.
+      h.Key(`${String(generation)}:${file.path}`),
       h.Id(fileElementId(file.path)),
       h.DataAttribute("diff-file", file.path),
       h.AriaLabel(file.path),
       h.Class(
         `overflow-hidden rounded-lg border ${selected ? "border-ring" : "border-border"}`
       ),
-      ...Option.match(language, {
+      ...Option.match(shown.language, {
         onNone: () => [],
-        onSome: (name) => [h.OnMount(LoadDiffHighlighting({ language: name }))],
+        onSome: (name) => [
+          h.OnMount(
+            LoadDiffHighlighting({
+              language: name,
+              code: shown.code === "" ? Option.none() : Option.some(shown.code),
+            })
+          ),
+        ],
       }),
     ],
     [
@@ -242,18 +344,18 @@ const fileView = (
         file.binary
           ? [h.p([h.Class("px-3 py-2 text-muted-foreground")], ["Binary file"])]
           : [
-              ...file.hunks.map((hunk) => {
-                const view = hunkView(h, hunk, language, highlighted, budget);
-
-                budget -= hunk.lines.length;
-
-                return view;
-              }),
-              total > MAX_RENDERED_LINES
+              ...shown.hunks.map((hunk) =>
+                hunkView(
+                  h,
+                  hunk,
+                  tokens === NO_TOKENS ? Option.none() : Option.some(tokens)
+                )
+              ),
+              shown.total > shown.shown
                 ? h.p(
                     [h.Class("px-3 py-2 text-muted-foreground")],
                     [
-                      `${String(total - MAX_RENDERED_LINES)} more lines not shown`,
+                      `${String(shown.total - shown.shown)} more lines not shown`,
                     ]
                   )
                 : h.empty,
@@ -262,6 +364,10 @@ const fileView = (
     ]
   );
 };
+
+const fileLazy = createKeyedLazy();
+
+const treeLazy = createLazy();
 
 const treeRows = (
   h: H,
@@ -313,6 +419,25 @@ const treeRows = (
       ),
     ];
   });
+
+const treeView = (
+  h: H,
+  tree: ReadonlyArray<DiffTreeNode>,
+  selected: Option.Option<string>
+): Html => h.div([], treeRows(h, tree, 0, selected));
+
+/** A file's tokens so far, the same array while they do not change; `NO_TOKENS` before any. */
+const tokensOf = (
+  shown: ShownFile,
+  highlighted: ReadonlyArray<string>
+): TokenLines =>
+  Option.getOrElse(
+    Option.flatMap(
+      Option.filter(shown.language, (name) => highlighted.includes(name)),
+      (name) => cachedTokensOf(shown.code, name)
+    ),
+    () => NO_TOKENS
+  );
 
 const scopeButton = (
   h: H,
@@ -366,7 +491,7 @@ const body = (h: H, model: Model): Html =>
         ]
       ),
     Loaded: ({ patch }) => {
-      const files = parsePatch(patch);
+      const { files, generation, tree } = parsedPatch(patch);
 
       if (files.length === 0) {
         return h.p(
@@ -382,10 +507,6 @@ const body = (h: H, model: Model): Html =>
         );
       }
 
-      const tree = buildTurnDiffTree(
-        files.map((file) => ({ path: file.path, ...file.stat }))
-      );
-
       return h.div(
         [h.Class("flex min-h-0 flex-1 flex-col md:flex-row")],
         [
@@ -396,20 +517,22 @@ const body = (h: H, model: Model): Html =>
                 "max-h-48 shrink-0 overflow-y-auto border-b p-2 md:max-h-none md:w-64 md:border-r md:border-b-0"
               ),
             ],
-            treeRows(h, tree, 0, model.selectedPath)
+            [treeLazy(treeView, [h, tree, model.selectedPath]) ?? h.empty]
           ),
           h.div(
             [
               h.DataAttribute("testid", "diff-files"),
               h.Class("flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-3"),
             ],
-            files.map((file) =>
-              fileView(
-                h,
-                file,
-                Option.contains(model.selectedPath, file.path),
-                model.highlightedLanguages
-              )
+            files.map(
+              (shown) =>
+                fileLazy(shown.file.path, fileView, [
+                  h,
+                  shown,
+                  generation,
+                  Option.contains(model.selectedPath, shown.file.path),
+                  tokensOf(shown, model.highlightedLanguages),
+                ]) ?? h.empty
             )
           ),
         ]

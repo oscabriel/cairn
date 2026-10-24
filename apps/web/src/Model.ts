@@ -27,6 +27,8 @@ export const Model = Schema.Struct({
   outbox: Schema.Array(OutboxItem),
   /** The key of the outbox item sent on the current epoch and not yet answered. */
   outboxInFlight: Schema.Option(Schema.String),
+  /** Retryable failures of the outbox's head in a row; the next resend waits by this attempt. */
+  outboxAttempt: Schema.Int,
   /** A message for the user about something that did not work. */
   notice: Schema.Option(Schema.String),
   thread: Thread.Model.Model,

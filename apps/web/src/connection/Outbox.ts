@@ -5,12 +5,13 @@
 // a resend after an unknown outcome harmless.
 //
 // The outbox runs only while the connection is `Live`, one item at a time and in order: the head is
-// sent, an acknowledgement drops it and sends the next. A retryable failure leaves it at the head
-// for the next connection; any other failure drops it, because sending it again cannot succeed.
+// sent, an acknowledgement drops it and sends the next. A retryable failure leaves it at the head,
+// sent again after a backoff or by the next connection; any other failure drops it, because sending
+// it again cannot succeed.
 import { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { ShellCommand } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
-import { Array, Effect, Option, Schema } from "effect";
+import { Array, Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { defineTaggedUnion } from "foldkit/schema";
 
@@ -45,6 +46,40 @@ export const enqueue = (
   Array.some(outbox, (waiting) => outboxKey(waiting) === outboxKey(item))
     ? outbox
     : [...outbox, item];
+
+/** The thread a queued `thread.visit` marks, when `item` is one. */
+const visitedThread = (item: OutboxItem): Option.Option<string> =>
+  Predicate.isTagged(item, "Dispatch") &&
+  Predicate.isTagged(item.command, "ThreadVisit")
+    ? Option.some(item.command.threadId)
+    : Option.none();
+
+/**
+ * Adds a shell command at the end. A visit replaces the visits to the same thread still waiting
+ * behind it: only the latest one matters, and an offline page must not pile them up. The item in
+ * flight stays, because the brain may already be applying it.
+ */
+export const enqueueDispatch = (
+  outbox: ReadonlyArray<OutboxItem>,
+  command: ShellCommand,
+  inFlight: Option.Option<string>
+): ReadonlyArray<OutboxItem> => {
+  const item = OutboxItem.Dispatch({ command });
+
+  return Option.match(visitedThread(item), {
+    onNone: () => enqueue(outbox, item),
+    onSome: (threadId) =>
+      enqueue(
+        Array.filter(
+          outbox,
+          (waiting) =>
+            Option.contains(inFlight, outboxKey(waiting)) ||
+            !Option.contains(visitedThread(waiting), threadId)
+        ),
+        item
+      ),
+  });
+};
 
 /** Removes the item with `key`: it was acknowledged, or it can never succeed. */
 export const remove = (

@@ -34,7 +34,7 @@ import {
 } from "@cairn/client-logic/ThreadSettled";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
-import { Array, DateTime, Equal, Option } from "effect";
+import { Array, DateTime, Equal, Option, Predicate } from "effect";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
@@ -632,13 +632,28 @@ const settleDerived = (model: Model): UpdateReturn => {
 
   const now = nowOf(model);
 
-  const planned = planVisit(
-    withPending.visits,
-    Option.flatMap(withPending.context.openThreadId, (threadId) =>
-      Array.findFirst(threads, (thread) => thread.id === threadId)
-    ),
-    now
+  // A visit is planned only while live and while none for the open thread is waiting to show:
+  // otherwise every tick past the throttle queues another one behind the user's next message.
+  const visitWaiting = Option.exists(
+    withPending.context.openThreadId,
+    (threadId) =>
+      pending.some(
+        (change) =>
+          Predicate.isTagged(change.intent, "Visit") &&
+          change.intent.threadId === threadId
+      )
   );
+
+  const planned =
+    withPending.context.connection === "Live" && !visitWaiting
+      ? planVisit(
+          withPending.visits,
+          Option.flatMap(withPending.context.openThreadId, (threadId) =>
+            Array.findFirst(threads, (thread) => thread.id === threadId)
+          ),
+          now
+        )
+      : { state: withPending.visits, visit: Option.none() };
 
   const count = badgeCount(
     threads,

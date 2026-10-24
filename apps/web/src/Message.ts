@@ -42,13 +42,19 @@ export const Message = defineMessageUnion({
   QueuedOutboxItem: { item: OutboxItem },
   /** The brain acknowledged the outbox item with `key`. */
   AcknowledgedOutboxItem: { epoch: Schema.Int, key: Schema.String },
-  /** Sending the outbox item with `key` failed. */
+  /**
+   * Sending the outbox item with `key` failed. `transport` is a failure of the socket, not an
+   * answer: the connection reports the loss, and the next one sends the item again.
+   */
   FailedOutboxItem: {
     epoch: Schema.Int,
     key: Schema.String,
     retryable: Schema.Boolean,
+    transport: Schema.Boolean,
     message: Schema.String,
   },
+  /** The wait before sending the outbox item with `key` again, after a retryable failure, is over. */
+  ElapsedResend: { epoch: Schema.Int, key: Schema.String },
   CompletedSaveOutbox: { saved: Schema.Boolean },
 
   GotThreadMessage: { message: Thread.Message },

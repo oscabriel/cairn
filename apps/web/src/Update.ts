@@ -3,6 +3,7 @@
 // stream follows both without the root reaching into the page's state.
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import { ThreadId } from "@cairn/protocol/Ids";
+import type { ShellCommand } from "@cairn/protocol/ShellCommands";
 import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import { Update, Url } from "foldkit";
 import type { Runtime } from "foldkit";
@@ -16,6 +17,7 @@ import {
   SayHello,
   SendOutboxItem,
   WaitForBackoff,
+  WaitToResend,
 } from "./Command.ts";
 import type { Services } from "./Command.ts";
 import { burnBusyBudget } from "./composer/Busy.ts";
@@ -26,8 +28,8 @@ import type { Draft as ComposerDraft } from "./composer/Model.ts";
 import * as Composer from "./composer/Update.ts";
 import {
   enqueue,
+  enqueueDispatch,
   nextToSend,
-  OutboxItem,
   outboxKey,
   remove,
 } from "./connection/Outbox.ts";
@@ -223,15 +225,15 @@ const discardComposerDraft = Update.foldChild({
   toParentMessage: toGotComposerMessage,
 });
 
-/** Queues each item in order. */
+/** Queues each shell command in order. */
 const enqueueAll = (
-  outbox: Model["outbox"],
-  items: ReadonlyArray<OutboxItem>
+  model: Model,
+  commands: ReadonlyArray<ShellCommand>
 ): Model["outbox"] => {
-  let next = outbox;
+  let next = model.outbox;
 
-  for (const item of items) {
-    next = enqueue(next, item);
+  for (const command of commands) {
+    next = enqueueDispatch(next, command, model.outboxInFlight);
   }
 
   return next;
@@ -310,13 +312,7 @@ const foldSidebarOutMessage = (outMessage: SidebarOutMessage): Step =>
       ({ commands }) =>
       (model) =>
         Update.combine(
-          modifyFields(model, {
-            outbox: (outbox) =>
-              enqueueAll(
-                outbox,
-                commands.map((command) => OutboxItem.Dispatch({ command }))
-              ),
-          }),
+          modifyFields(model, { outbox: () => enqueueAll(model, commands) }),
           [persist, sendNext]
         ),
     RequestedDiscardDraft: ({ draftId }) => discardComposerDraft(draftId),
@@ -689,20 +685,35 @@ const step = (received: Message): Step =>
               isCurrentEpoch(model, epoch) && Option.contains(inFlight, key)
                 ? Option.none()
                 : inFlight,
+            outboxAttempt: () => 0,
           }),
           [persist, sendNext]
         ),
     FailedOutboxItem:
-      ({ epoch, key, message, retryable }) =>
+      ({ epoch, key, message, retryable, transport }) =>
       (model) => {
         if (!isCurrentEpoch(model, epoch)) {
           return { model };
         }
 
-        if (retryable) {
-          // Left at the head; the next live connection sends it again.
+        if (retryable && transport) {
+          // Left at the head; the connection reports the loss and the next live one sends it.
           return {
             model: modifyFields(model, { outboxInFlight: () => Option.none() }),
+          };
+        }
+
+        if (retryable) {
+          // The brain answered "not now" on a socket that stays up: sent again after a backoff
+          // (or by the next connection, if this one drops first).
+          const attempt = model.outboxAttempt + 1;
+
+          return {
+            model: modifyFields(model, {
+              outboxInFlight: () => Option.none(),
+              outboxAttempt: () => attempt,
+            }),
+            commands: [WaitToResend({ epoch, key, attempt })],
           };
         }
 
@@ -710,11 +721,24 @@ const step = (received: Message): Step =>
           modifyFields(model, {
             outbox: (outbox) => remove(outbox, key),
             outboxInFlight: () => Option.none(),
+            outboxAttempt: () => 0,
             notice: () => Option.some(message),
           }),
           [persist, sendNext]
         );
       },
+    ElapsedResend:
+      ({ epoch, key }) =>
+      (model) =>
+        // A timer from an earlier epoch, or for an item already answered, sends nothing: the head
+        // must still be this item, and sendNext refuses while another send is in flight.
+        isCurrentEpoch(model, epoch) &&
+        Option.exists(
+          Array.head(model.outbox),
+          (head) => outboxKey(head) === key
+        )
+          ? sendNext(model)
+          : { model },
     CompletedSaveOutbox:
       ({ saved }) =>
       (model) => ({
@@ -792,6 +816,7 @@ export const init: Runtime.RoutingApplicationInit<
       shell: Option.map(flags.boot, (boot) => boot.shell),
       outbox: flags.outbox,
       outboxInFlight: Option.none(),
+      outboxAttempt: 0,
       notice: Option.none(),
       thread: Thread.Model.initial,
       sidebar: initialSidebar,

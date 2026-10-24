@@ -49,6 +49,50 @@ export const WaitForBackoff = Command.define("WaitForBackoff", {
     }),
 });
 
+/** Waits before sending the outbox's head again after a retryable failure, with jitter drawn here. */
+export const WaitToResend = Command.define("WaitToResend", {
+  args: { epoch: Schema.Int, key: Schema.String, attempt: Schema.Int },
+  messages: [Message.ElapsedResend],
+  execute: ({ attempt, epoch, key }) =>
+    Effect.gen(function* () {
+      const random = yield* Random.next;
+
+      yield* Effect.sleep(Duration.millis(backoffDelayMs(attempt, random)));
+
+      return Message.ElapsedResend({ epoch, key });
+    }),
+});
+
+/**
+ * How long one outbox send may go unanswered before it counts as a retryable failure. Above the
+ * brain's own longest wait (a send that follows a launch), so a slow answer is not cut short; the
+ * items are idempotent by key, so a resend after it is harmless.
+ */
+export const OUTBOX_SEND_TIMEOUT = Duration.seconds(90);
+
+/** An outbox send the brain did not answer within `OUTBOX_SEND_TIMEOUT`; safe to send again. */
+export class OutboxSendTimeout extends Schema.TaggedError<OutboxSendTimeout>()(
+  "OutboxSendTimeout",
+  { message: Schema.String, retryable: Schema.Literal(true) }
+) {}
+
+/** `send`, failing with a retryable `OutboxSendTimeout` once it has waited the timeout. */
+export const answeredInTime = <A, E, R>(
+  send: Effect.Effect<A, E, R>
+): Effect.Effect<A, E | OutboxSendTimeout, R> =>
+  send.pipe(
+    Effect.timeoutOrElse({
+      duration: OUTBOX_SEND_TIMEOUT,
+      orElse: () =>
+        Effect.fail(
+          new OutboxSendTimeout({
+            message: "The brain did not answer in time. Sending again.",
+            retryable: true,
+          })
+        ),
+    })
+  );
+
 /** A failed call: one of the protocol's errors, which say whether a retry is safe, or the transport's. */
 interface CallFailure {
   readonly _tag: string;
@@ -60,7 +104,14 @@ const failureText = (failure: CallFailure): string =>
     ? failure.message
     : `The request failed (${failure._tag}).`;
 
-/** A failure the brain marked retryable, or one of the transport (nothing known ran). */
+/** True for a failure that carries no `retryable` verdict: the transport's, where nothing known ran. */
+const isTransport = (failure: CallFailure): boolean =>
+  !(
+    Predicate.hasProperty(failure, "retryable") &&
+    Predicate.isBoolean(failure.retryable)
+  );
+
+/** A failure the brain marked retryable, or one of the transport. */
 const isRetryable = (failure: CallFailure): boolean =>
   Predicate.hasProperty(failure, "retryable") &&
   Predicate.isBoolean(failure.retryable)
@@ -103,6 +154,7 @@ export const SendOutboxItem = Command.define("SendOutboxItem", {
 
       yield* sendItem(client, item);
     }).pipe(
+      answeredInTime,
       Effect.match({
         onSuccess: () =>
           Message.AcknowledgedOutboxItem({ epoch, key: outboxKey(item) }),
@@ -111,6 +163,7 @@ export const SendOutboxItem = Command.define("SendOutboxItem", {
             epoch,
             key: outboxKey(item),
             retryable: isRetryable(failure),
+            transport: isTransport(failure),
             message: failureText(failure),
           }),
       })

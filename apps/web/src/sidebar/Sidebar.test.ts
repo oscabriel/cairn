@@ -322,3 +322,70 @@ describe("the sidebar", () => {
     );
   });
 });
+
+/** How many IssueCommands the sidebar asks for over `ticks` clock ticks four seconds apart. */
+const visitsOver = (start: Model, after: number, ticks: number) => {
+  let current = start;
+  let issuedCount = 0;
+
+  for (let tick = after + 1; tick <= after + ticks; tick += 1) {
+    const { model, commands } = update(
+      current,
+      Message.Ticked({ nowMs: NOW_MS + tick * 4000 })
+    );
+
+    current = model;
+    issuedCount += (commands ?? []).filter(
+      (command) => command.name === "IssueCommands"
+    ).length;
+  }
+
+  return { model: current, issuedCount };
+};
+
+describe("visits to the open thread", () => {
+  const completed = ThreadShell.make({
+    ...bridges,
+    latestRunCompletedAt: Option.some(time("2026-10-22T11:30:00Z")),
+    lastVisitedAt: Option.some(time("2026-10-22T11:00:00Z")),
+  });
+
+  const opened = (connection: string): Model => {
+    const base = sidebarWith(Option.some(completed));
+
+    return {
+      ...base,
+      // The open thread was visited before, so only a completion after that visit asks for one.
+      visits: Option.some({
+        threadId: completed.id,
+        sentAtMs: NOW_MS - 60_000,
+      }),
+      context: {
+        ...base.context,
+        shell: Option.some(
+          ShellSnapshot.make({
+            snapshotSequence: 7,
+            projects: [project],
+            threads: [completed, research, kickoff],
+          })
+        ),
+        connection,
+      },
+    };
+  };
+
+  it("are not queued while the connection is down, and one is sent once it is live", () => {
+    const offline = visitsOver(opened("Backoff"), 0, 3);
+
+    const live = visitsOver(
+      {
+        ...offline.model,
+        context: { ...offline.model.context, connection: "Live" },
+      },
+      3,
+      3
+    );
+
+    expect([offline.issuedCount, live.issuedCount]).toStrictEqual([0, 1]);
+  });
+});

@@ -1,5 +1,7 @@
+import { CommandId, ThreadId } from "@cairn/protocol/Ids";
 import { ShellSynchronizedItem } from "@cairn/protocol/Shell";
-import { Effect, Option } from "effect";
+import { ThreadVisit } from "@cairn/protocol/ShellCommands";
+import { DateTime, Effect, Option } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vitest";
@@ -9,6 +11,7 @@ import {
   SayHello,
   SendOutboxItem,
   WaitForBackoff,
+  WaitToResend,
 } from "../Command.ts";
 import { Message } from "../Message.ts";
 import {
@@ -20,6 +23,7 @@ import {
 import { update } from "../Update.ts";
 import {
   enqueue,
+  enqueueDispatch,
   loadOutbox,
   OUTBOX_STORAGE_KEY,
   outboxKey,
@@ -31,6 +35,13 @@ const first = sendItem("request-1");
 const second = sendItem("request-2");
 
 const synchronizedItem = ShellSynchronizedItem.make({});
+
+const visit = (commandId: string, at: string) =>
+  ThreadVisit.make({
+    commandId: CommandId.make(commandId),
+    threadId: ThreadId.make("01890a5d-ac96-774b-bcce-b302099a8057"),
+    at: DateTime.makeUnsafe(at),
+  });
 
 describe("the outbox", () => {
   it("sends a queued item while live, and drops it when the brain acknowledges it", () => {
@@ -117,6 +128,7 @@ describe("the outbox", () => {
           epoch: 0,
           key: "request-1",
           retryable: true,
+          transport: true,
           message: "The socket closed.",
         })
       ),
@@ -145,7 +157,7 @@ describe("the outbox", () => {
     );
   });
 
-  it("drops an item the brain refused for good and says why; keeps one it may retry", () => {
+  it("drops an item the brain refused for good and says why; keeps one it may retry and sends it again after a wait", () => {
     story(
       update,
       given({
@@ -158,6 +170,7 @@ describe("the outbox", () => {
           epoch: 0,
           key: "request-1",
           retryable: false,
+          transport: false,
           message: "The thread does not exist.",
         })
       ),
@@ -178,14 +191,79 @@ describe("the outbox", () => {
           epoch: 0,
           key: "request-2",
           retryable: true,
+          transport: false,
           message: "The brain is starting.",
         })
       ),
       model((current) => {
         expect(current.outbox).toStrictEqual([second]);
         expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+      }),
+      // Nothing else is queued and the socket stays up: the item is sent again on its own.
+      Command.expectExact(
+        WaitToResend({ epoch: 0, key: "request-2", attempt: 1 })
+      ),
+      Command.resolve(
+        WaitToResend,
+        Message.ElapsedResend({ epoch: 0, key: "request-2" })
+      ),
+      Command.expectExact(SendOutboxItem({ epoch: 0, item: second })),
+      Command.resolve(
+        SendOutboxItem,
+        Message.AcknowledgedOutboxItem({ epoch: 0, key: "request-2" })
+      ),
+      model((current) => {
+        expect([current.outbox, current.outboxAttempt]).toStrictEqual([[], 0]);
+      }),
+      Command.resolve(SaveOutbox, Message.CompletedSaveOutbox({ saved: true }))
+    );
+  });
+
+  it("sends nothing when a resend timer fires for an item already answered", () => {
+    story(
+      update,
+      given({
+        ...liveModel(0),
+        outbox: [second],
+        outboxInFlight: Option.some("request-2"),
+      }),
+      message(Message.ElapsedResend({ epoch: 0, key: "request-1" })),
+      Command.expectNone(),
+      message(Message.ElapsedResend({ epoch: 0, key: "request-2" })),
+      Command.expectNone(),
+      model((current) => {
+        expect(current.outboxInFlight).toStrictEqual(Option.some("request-2"));
       })
     );
+  });
+
+  it("keeps only the latest queued visit to a thread, and never the one in flight", () => {
+    const sent = visit(
+      "01890a5d-ac96-774b-bcce-b302099a0000",
+      "2026-10-24T10:00:00Z"
+    );
+
+    const stale = visit(
+      "01890a5d-ac96-774b-bcce-b302099a0004",
+      "2026-10-24T10:00:04Z"
+    );
+
+    const latest = visit(
+      "01890a5d-ac96-774b-bcce-b302099a0008",
+      "2026-10-24T10:00:08Z"
+    );
+
+    const inFlight = Option.some<string>(sent.commandId);
+
+    const queued = enqueueDispatch(
+      enqueueDispatch([first], sent, Option.none()),
+      stale,
+      inFlight
+    );
+
+    expect(
+      enqueueDispatch(queued, latest, inFlight).map(outboxKey)
+    ).toStrictEqual(["request-1", sent.commandId, latest.commandId]);
   });
 
   it("acknowledges an item answered on an earlier epoch", () => {

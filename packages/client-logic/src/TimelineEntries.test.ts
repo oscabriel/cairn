@@ -737,3 +737,72 @@ describe("a cairn.user turn with attachments, as the brain stores it", () => {
     assert.strictEqual(chipSources(message), 1);
   });
 });
+
+/** True when every entry the two readings share by id is the same object. */
+const sameObjects = (left: Timeline, right: Timeline) => {
+  const byId = new Map(right.entries.map((entry) => [entry.id, entry]));
+
+  return left.entries.every((entry) => byId.get(entry.id) === entry);
+};
+
+describe("the committed reading's identity", () => {
+  const view = decodeView(coding);
+
+  const half = Math.floor(view.entries.length / 2);
+  const older = view.entries.slice(0, half);
+  const newer = { ...view, entries: view.entries.slice(half) };
+
+  it("keeps every settled entry when only pi.live changes, with and without older pages", () => {
+    const quiet = { ...newer, docs: { ...newer.docs, "pi.live": {} } };
+    const busy = { ...newer, docs: { ...newer.docs, "pi.live": { run: {} } } };
+    const settled = { ...busy, docs: { ...busy.docs, "pi.live": {} } };
+
+    assert.deepStrictEqual(
+      [
+        sameObjects(entriesFromPi(quiet, older), entriesFromPi(settled, older)),
+        sameObjects(entriesFromPi(quiet), entriesFromPi(settled)),
+      ],
+      [true, true]
+    );
+  });
+
+  it("keeps every entry but the running call when only its live output grows", () => {
+    const resultAt = view.entries.findIndex(
+      (entry) => entry.kind === "pi.tool-result"
+    );
+
+    const result = view.entries[resultAt]?.model?.[0];
+
+    const callId = Predicate.hasProperty(result, "toolCallId")
+      ? String(result.toolCallId)
+      : "";
+
+    const waiting = { ...view, entries: view.entries.slice(0, resultAt) };
+
+    const withOutput = (output: string) => ({
+      ...waiting,
+      docs: {
+        ...waiting.docs,
+        "pi.live": {
+          run: {},
+          tools: [{ callId, name: "bash", status: "running", output }],
+        },
+      },
+    });
+
+    const before = entriesFromPi(withOutput("one"));
+    const after = entriesFromPi(withOutput("one two"));
+
+    const changed = after.entries.filter(
+      (entry) => before.entries.find((other) => other.id === entry.id) !== entry
+    );
+
+    assert.deepStrictEqual(
+      changed.map((entry) => [
+        entry.id,
+        entry.kind === "work" ? entry.entry.output : Option.none(),
+      ]),
+      [[`tool:${callId}`, Option.some("one two")]]
+    );
+  });
+});

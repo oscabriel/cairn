@@ -928,19 +928,29 @@ const newTurn = (
 interface CommittedReading {
   readonly entries: ReadonlyArray<TimelineEntry>;
   readonly turns: ReadonlyArray<TurnBuilder>;
-  /** Tool calls of the newest assistant message that have no result yet. */
+  /** The result of every answered tool call, by call id. */
   readonly results: ReadonlyMap<string, ToolResultInput>;
+  /** Where in `entries` the tool calls with no result sit: live output is laid over these only. */
+  readonly unanswered: ReadonlyArray<{
+    readonly index: number;
+    readonly callId: string;
+  }>;
 }
 
+const NO_SLOTS: LiveReading["slots"] = new Map();
+
+// One shared empty page, so a view with no older pages hits the memo by identity.
+const NO_OLDER: ReadonlyArray<Entry> = [];
+
 /**
- * Reads the committed entries. `slots` and `running` only decide how an unanswered tool call
- * shows (live output, or stopped once the run is over), so they are part of the cache key.
+ * Reads the committed entries. `running` decides how an unanswered tool call shows (stopped once
+ * the run is over), so it is part of the cache key; its live output is laid over afterwards.
  */
 const readCommitted = (
   source: ReadonlyArray<Entry>,
-  slots: LiveReading["slots"],
   running: boolean
 ): CommittedReading => {
+  const slots = NO_SLOTS;
   const decoded = source.map(readEntry);
   const results = new Map<string, ToolResultInput>();
 
@@ -1155,46 +1165,76 @@ const readCommitted = (
     read(reading);
   }
 
-  return { entries, turns, results };
+  const unanswered = entries.flatMap((entry, index) => {
+    if (entry.kind !== "work" || entry.entry.kind !== "tool") {
+      return [];
+    }
+
+    const callId = entry.id.slice("tool:".length);
+
+    return results.has(callId) ? [] : [{ index, callId }];
+  });
+
+  return { entries, turns, results, unanswered };
 };
 
-// One-slot memo of the committed reading: streaming changes only `pi.live`, so most views share
-// the previous view's entries array.
+// One-slot memo of the committed reading, keyed on the two pages' identities rather than their
+// concatenation (a new array every call) and not on the live tool output: streaming and tool
+// output change only `pi.live`, so most views share the previous view's entries.
 let lastCommitted:
   | {
-      readonly source: ReadonlyArray<Entry>;
-      readonly slotsKey: string;
+      readonly older: ReadonlyArray<Entry>;
+      readonly entries: ReadonlyArray<Entry>;
       readonly running: boolean;
       readonly reading: CommittedReading;
     }
   | undefined;
 
-const slotsKeyOf = (slots: LiveReading["slots"]): string =>
-  [...slots.values()]
-    .map((slot) => `${slot.callId}:${slot.status}:${slot.output?.length ?? 0}`)
-    .join("|");
-
 const committedReading = (
-  source: ReadonlyArray<Entry>,
-  slots: LiveReading["slots"],
+  older: ReadonlyArray<Entry>,
+  entries: ReadonlyArray<Entry>,
   running: boolean
 ): CommittedReading => {
-  const slotsKey = slotsKeyOf(slots);
-
   if (
     lastCommitted !== undefined &&
-    lastCommitted.source === source &&
-    lastCommitted.slotsKey === slotsKey &&
+    lastCommitted.older === older &&
+    lastCommitted.entries === entries &&
     lastCommitted.running === running
   ) {
     return lastCommitted.reading;
   }
 
-  const reading = readCommitted(source, slots, running);
+  const source = older.length === 0 ? entries : [...older, ...entries];
+  const reading = readCommitted(source, running);
 
-  lastCommitted = { source, slotsKey, running, reading };
+  lastCommitted = { older, entries, running, reading };
 
   return reading;
+};
+
+/**
+ * The committed entries with each unanswered tool call's live output laid over it. Only those
+ * calls get new objects, so every settled entry keeps its identity from view to view.
+ */
+const withLiveOutput = (
+  committed: CommittedReading,
+  slots: LiveReading["slots"]
+): Array<TimelineEntry> => {
+  const entries = [...committed.entries];
+
+  for (const { callId, index } of committed.unanswered) {
+    const output = slots.get(callId)?.output;
+    const found = entries[index];
+
+    if (output !== undefined && found?.kind === "work") {
+      entries[index] = {
+        ...found,
+        entry: { ...found.entry, output: Option.some(output) },
+      };
+    }
+  }
+
+  return entries;
 };
 
 const freezeTurn = (turn: TurnBuilder, status: TurnStatus): TimelineTurn => ({
@@ -1212,16 +1252,12 @@ const freezeTurn = (turn: TurnBuilder, status: TurnStatus): TimelineTurn => ({
  */
 export const entriesFromPi = (
   view: Pick<ConversationView, "entries" | "docs">,
-  older: ReadonlyArray<Entry> = []
+  older: ReadonlyArray<Entry> = NO_OLDER
 ): Timeline => {
   const live = readLive(view.docs);
-
-  const source =
-    older.length === 0 ? view.entries : [...older, ...view.entries];
-
-  const committed = committedReading(source, live.slots, live.running);
+  const committed = committedReading(older, view.entries, live.running);
   const lastBuilder = committed.turns.at(-1);
-  const entries: Array<TimelineEntry> = [...committed.entries];
+  const entries = withLiveOutput(committed, live.slots);
   let liveTurnEnd: Option.Option<number> = Option.none();
 
   if (

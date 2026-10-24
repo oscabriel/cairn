@@ -38,6 +38,7 @@ const renderRow = (
   threadId: string,
   workspaceRoot: string,
   highlightedLanguages: ReadonlyArray<string>,
+  highlightedCode: number,
   copiedRowId: Option.Option<string>,
   expanded: boolean,
   retryPrompt: RowContext["retryPrompt"],
@@ -49,6 +50,7 @@ const renderRow = (
     workspaceRoot:
       workspaceRoot === "" ? Option.none() : Option.some(workspaceRoot),
     highlightedLanguages,
+    highlightedCode,
     copiedRowId,
     expanded,
     retryPrompt,
@@ -96,6 +98,7 @@ const itemView = (
       threadId,
       Option.getOrElse(inputs.workspaceRoot, () => ""),
       model.highlightedLanguages,
+      model.highlightedCode,
       Option.isSome(copied) ? copied : NO_COPY,
       model.ui.expandedUserMessageIds.includes(item.id),
       prompt,

@@ -29,6 +29,8 @@ export const Message = defineMessageUnion({
   CompletedCopy: { rowId: Schema.String, version: Schema.Int },
   ExpiredCopied: { version: Schema.Int },
   LoadedLanguage: { language: Schema.String },
+  /** A long code block's tokens are in the shared cache: its grammar is loaded and rows redraw. */
+  HighlightedCode: { language: Schema.String },
   FailedLanguage: { language: Schema.String },
   /** The working timer's Mount started; it writes its own text. */
   MountedTimer: {},

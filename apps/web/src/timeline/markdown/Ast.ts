@@ -63,6 +63,8 @@ export type Block =
       readonly language: Option.Option<string>;
       readonly meta: Option.Option<string>;
       readonly value: string;
+      /** A fence with no closing line yet, so it runs to the end of the text and may still grow. */
+      readonly open: boolean;
     }
   | {
       readonly kind: "list";

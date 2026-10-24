@@ -102,6 +102,7 @@ const config = (item: ListItem) => ({
       threadId: THREAD_ID,
       workspaceRoot: Option.none(),
       highlightedLanguages: [],
+      highlightedCode: 0,
       copiedRowId: Option.none(),
       expanded: false,
       retryPrompt: Option.none(),

@@ -4,8 +4,28 @@
 // reads tokens synchronously and only for a language the Model lists as loaded, so a block shows
 // plain text first and the same text, colored, after, without a layout shift; colors are checked
 // to be plain hex; a failed load is forgotten so a later block tries again. Changed: async
-// functions and a typed failure instead of promise chains, and a smaller grammar list.
-import { Effect, Option, Schema } from "effect";
+// functions and a typed failure instead of promise chains, and a smaller grammar list. The token
+// cache is an LRU refreshed on a hit and bounded by entries and approximate bytes, with the sizes of
+// t3code's highlight cache (github.com/pingdotgg/t3code, apps/web/src/lib/lruCache.ts and
+// apps/web/src/components/ChatMarkdown.tsx at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92).
+//
+// MIT License. Copyright (c) 2026 T3 Tools Inc.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or
+// substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+// NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+import { Duration, Effect, Option, Schema, Stream } from "effect";
 import type { HighlighterCore, LanguageRegistration } from "shiki/core";
 
 interface GrammarModule {
@@ -88,10 +108,21 @@ const LIGHT_THEME = "github-light-default";
 
 const DARK_THEME = "github-dark-default";
 
+/** What the views read of shiki's highlighter: which grammars are loaded, and a synchronous tokenizer. */
+export type Highlighter = Pick<
+  HighlighterCore,
+  "codeToTokens" | "getLoadedLanguages"
+>;
+
 /** The highlighter once loaded, and the loads in flight; one page-wide cache, like the grammars. */
 const cores = new Map<"core", Promise<HighlighterCore>>();
 
-const ready = new Map<"core", HighlighterCore>();
+const ready = new Map<"core", Highlighter>();
+
+/** Makes `highlighter` the one the views tokenize with; tests pass a stub that counts its calls. */
+export const setHighlighter = (highlighter: Highlighter): void => {
+  ready.set("core", highlighter);
+};
 
 const grammarLoads = new Map<Language, Promise<void>>();
 
@@ -198,67 +229,283 @@ const COLOR = /^#[0-9a-fA-F]{3,8}$/u;
 const colorOf = (value: string | undefined): Option.Option<string> =>
   value !== undefined && COLOR.test(value) ? Option.some(value) : Option.none();
 
-const TOKEN_CACHE_LIMIT = 200;
+/** The most highlighted blocks kept; t3code keeps the same number. */
+const TOKEN_CACHE_ENTRIES = 500;
 
-const tokenCache = new Map<string, TokenLines>();
+/** The most bytes of tokens kept, by `approximateBytes`; t3code's figure. */
+const TOKEN_CACHE_BYTES = 50 * 1024 * 1024;
 
-const tokenize = (
-  core: HighlighterCore,
+/** A token's own object, its two Options and its string header, beside the characters. */
+const TOKEN_OVERHEAD_BYTES = 96;
+
+interface Cached {
+  readonly lines: TokenLines;
+  readonly bytes: number;
+}
+
+/** Least recently used first: a hit moves its entry to the end. `bytes` sums the entries' sizes. */
+const tokenCache = { entries: new Map<string, Cached>(), bytes: 0 };
+
+const approximateBytes = (lines: TokenLines): number => {
+  let bytes = 0;
+
+  for (const line of lines) {
+    for (const token of line) {
+      bytes += TOKEN_OVERHEAD_BYTES + token.content.length * 2;
+    }
+  }
+
+  return bytes;
+};
+
+const recall = (key: string): Option.Option<TokenLines> => {
+  const cached = tokenCache.entries.get(key);
+
+  if (cached === undefined) {
+    return Option.none();
+  }
+
+  tokenCache.entries.delete(key);
+  tokenCache.entries.set(key, cached);
+
+  return Option.some(cached.lines);
+};
+
+const remember = (key: string, lines: TokenLines): void => {
+  const bytes = approximateBytes(lines);
+
+  if (bytes > TOKEN_CACHE_BYTES) {
+    return;
+  }
+
+  for (const [oldest, cached] of tokenCache.entries) {
+    if (
+      tokenCache.entries.size < TOKEN_CACHE_ENTRIES &&
+      tokenCache.bytes + bytes <= TOKEN_CACHE_BYTES
+    ) {
+      break;
+    }
+
+    tokenCache.entries.delete(oldest);
+    tokenCache.bytes -= cached.bytes;
+  }
+
+  tokenCache.entries.set(key, { lines, bytes });
+  tokenCache.bytes += bytes;
+};
+
+type GrammarState = NonNullable<
+  ReturnType<Highlighter["codeToTokens"]>["grammarState"]
+>;
+
+/**
+ * The most characters tokenized, and drawn, in one go. In Chromium a slice this size of dense
+ * TypeScript takes 3 to 5 ms warm (25 ms when it first meets rules the grammar has not compiled);
+ * a 300-line, 15 KB module at once takes 45 ms to tokenize and as long again to draw.
+ */
+export const SLICE_CHARS = 1000;
+
+/** The pause between slices: a timer, so the page paints and takes input (a zero sleep only yields to other fibers). */
+const SLICE_PAUSE = Duration.millis(1);
+
+/** Tokenized lines and the grammar state after the last of them, to go on from. */
+interface Slice {
+  readonly lines: TokenLines;
+  readonly state: Option.Option<GrammarState>;
+}
+
+const tokenizeSlice = (
+  highlighter: Highlighter,
   code: string,
-  language: string
-): Option.Option<TokenLines> =>
-  Option.liftThrowable(() =>
-    core
-      .codeToTokens(code, {
-        lang: language,
-        themes: { light: LIGHT_THEME, dark: DARK_THEME },
-        defaultColor: false,
+  language: string,
+  state: Option.Option<GrammarState>
+): Option.Option<Slice> =>
+  Option.liftThrowable(() => {
+    const options = {
+      lang: language,
+      themes: { light: LIGHT_THEME, dark: DARK_THEME },
+      defaultColor: false as const,
+    };
+
+    const result = highlighter.codeToTokens(
+      code,
+      Option.match(state, {
+        onNone: () => options,
+        onSome: (grammarState) => ({ ...options, grammarState }),
       })
-      .tokens.map((line) =>
+    );
+
+    return {
+      state: Option.fromUndefinedOr(result.grammarState),
+      lines: result.tokens.map((line) =>
         line.map((token) => ({
           content: token.content,
           light: colorOf(token.htmlStyle?.["--shiki-light"]),
           dark: colorOf(token.htmlStyle?.["--shiki-dark"]),
         }))
-      )
-  )();
+      ),
+    };
+  })();
 
-const remember = (key: string, lines: TokenLines): void => {
-  tokenCache.set(key, lines);
+/** Where the slice of `lines` from `start` ends: at least one line, else at most `SLICE_CHARS`. */
+const sliceEnd = (lines: ReadonlyArray<string>, start: number): number => {
+  let end = start + 1;
+  let chars = (lines[start] ?? "").length;
 
-  const oldest = tokenCache.keys().next();
+  while (
+    end < lines.length &&
+    chars + (lines[end] ?? "").length < SLICE_CHARS
+  ) {
+    chars += (lines[end] ?? "").length + 1;
+    end += 1;
+  }
 
-  if (tokenCache.size > TOKEN_CACHE_LIMIT && oldest.done !== true) {
-    tokenCache.delete(oldest.value);
+  return end;
+};
+
+const keyOf = (code: string, language: string): string =>
+  `${language}\u0000${code}`;
+
+const loadedHighlighter = (language: string): Option.Option<Highlighter> =>
+  Option.filter(Option.fromUndefinedOr(ready.get("core")), (highlighter) =>
+    highlighter.getLoadedLanguages().includes(language)
+  );
+
+/** Code part way through its slices. */
+type Progress = Slice;
+
+/** A block whose slices stop when its element unmounts goes on from here when it mounts again. */
+const PROGRESS_ENTRIES = 32;
+
+const inProgress = new Map<string, Progress>();
+
+const keepProgress = (key: string, progress: Progress): void => {
+  inProgress.delete(key);
+  inProgress.set(key, progress);
+
+  const oldest = inProgress.keys().next();
+
+  if (inProgress.size > PROGRESS_ENTRIES && oldest.done !== true) {
+    inProgress.delete(oldest.value);
   }
 };
 
-/** Highlighted lines of `code`, once `language` has loaded. */
+/**
+ * Tokenizes the next slice of `code`: some with the lines highlighted so far, the whole code once
+ * the last slice puts its tokens in the cache; none when there was nothing to do.
+ */
+const nextSlice = (code: string, language: string): Option.Option<number> => {
+  const key = keyOf(code, language);
+
+  if (tokenCache.entries.has(key)) {
+    return Option.none();
+  }
+
+  return Option.flatMap(loadedHighlighter(language), (highlighter) => {
+    const lines = code.split("\n");
+
+    const progress = inProgress.get(key) ?? {
+      lines: [],
+      state: Option.none(),
+    };
+
+    const start = progress.lines.length;
+    const end = sliceEnd(lines, start);
+
+    return Option.map(
+      tokenizeSlice(
+        highlighter,
+        lines.slice(start, end).join("\n"),
+        language,
+        progress.state
+      ),
+      (slice) => {
+        const done = [...progress.lines, ...slice.lines];
+
+        if (end < lines.length) {
+          keepProgress(key, { lines: done, state: slice.state });
+        } else {
+          inProgress.delete(key);
+          remember(key, done);
+        }
+
+        return end;
+      }
+    );
+  });
+};
+
+/**
+ * Highlighted lines of `code` once `language` has loaded: from the cache, tokenized now when the
+ * code fits one slice, or the first lines of longer code while `sliceTokens` works through it (the
+ * rest stays plain). The transcript and the diff panel share one LRU of results, so call this only
+ * for text that has stopped changing: every new text is a tokenization and an entry.
+ */
+export const readyTokensOf = (
+  code: string,
+  language: string
+): Option.Option<TokenLines> => {
+  const key = keyOf(code, language);
+
+  return Option.orElse(recall(key), () => {
+    if (code.length > SLICE_CHARS) {
+      return Option.map(
+        Option.fromUndefinedOr(inProgress.get(key)),
+        (progress) => progress.lines
+      );
+    }
+
+    return Option.map(nextSlice(code, language), () =>
+      Option.getOrElse(recall(key), () => [])
+    );
+  });
+};
+
+/** Highlighted lines of `code` once `language` has loaded, from the cache or tokenized now in one go. */
 export const tokensOf = (
   code: string,
   language: string
 ): Option.Option<TokenLines> => {
-  const highlighter = ready.get("core");
+  const key = keyOf(code, language);
 
-  if (
-    highlighter === undefined ||
-    !highlighter.getLoadedLanguages().includes(language)
-  ) {
-    return Option.none();
-  }
+  return Option.orElse(recall(key), () =>
+    Option.flatMap(loadedHighlighter(language), (highlighter) => {
+      const tokens = Option.map(
+        tokenizeSlice(highlighter, code, language, Option.none()),
+        (slice) => slice.lines
+      );
 
-  const key = `${language}\u0000${code}`;
-  const cached = tokenCache.get(key);
+      if (Option.isSome(tokens)) {
+        remember(key, tokens.value);
+      }
 
-  if (cached !== undefined) {
-    return Option.some(cached);
-  }
-
-  const tokens = tokenize(highlighter, code, language);
-
-  if (Option.isSome(tokens)) {
-    remember(key, tokens.value);
-  }
-
-  return tokens;
+      return tokens;
+    })
+  );
 };
+
+/**
+ * Tokenizes `code` into the cache a slice at a time, pausing between slices so the page paints and
+ * takes input; code of any length highlights without a long task. Emits the lines highlighted so
+ * far after each slice, and nothing when the tokens are cached already or `language` has not
+ * loaded. Interrupted, it leaves its progress for the next call to go on from.
+ */
+export const sliceTokens = (
+  code: string,
+  language: string
+): Stream.Stream<number> =>
+  Stream.unfold(true, (first) =>
+    Effect.gen(function* () {
+      if (!first) {
+        yield* Effect.sleep(SLICE_PAUSE);
+      }
+
+      // Ends the stream with nothing left to tokenize.
+      return Option.getOrUndefined(
+        Option.map(
+          nextSlice(code, language),
+          (lines) => [lines, false] as const
+        )
+      );
+    })
+  );

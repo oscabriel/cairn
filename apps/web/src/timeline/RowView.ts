@@ -91,6 +91,8 @@ export interface RowContext {
   readonly threadId: string;
   readonly workspaceRoot: Option.Option<string>;
   readonly highlightedLanguages: ReadonlyArray<string>;
+  /** Changes when a long code block's tokens are ready, so the row redraws with them. */
+  readonly highlightedCode: number;
   readonly copiedRowId: Option.Option<string>;
   readonly expanded: boolean;
   /** For an error row: the prompt Retry sends again. */

@@ -291,8 +291,16 @@ export const startLocalApp = async (options: {
       proxy.close();
       child.kill("SIGTERM");
 
+      // A brain that ignores SIGTERM for 10 s is killed, so the judge never waits on it forever.
       if (child.exitCode === null) {
-        await once(child, "exit");
+        const exited = once(child, "exit");
+
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+        }, 10_000);
+
+        await exited;
+        clearTimeout(timer);
       }
 
       rmSync(dir, { recursive: true, force: true });

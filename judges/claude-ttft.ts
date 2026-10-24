@@ -277,4 +277,15 @@ const main = Effect.gen(function* () {
   );
 });
 
-NodeRuntime.runMain(Effect.scoped(main));
+// A turn that never ends fails the judge at the deadline instead of hanging it.
+NodeRuntime.runMain(
+  Effect.scoped(main).pipe(
+    Effect.timeoutOrElse({
+      duration: Duration.minutes(5),
+      orElse: () =>
+        Effect.fail(
+          new ClaudeTtftFailed({ message: "judge timed out after 5 minutes" })
+        ),
+    })
+  )
+);

@@ -25,7 +25,7 @@ import { ClaudeSlots } from "@cairn/bridge/ClaudeSlots";
 import { stampOf } from "@cairn/bridge/ClaudeStamp";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { NodeRuntime } from "@effect/platform-node";
-import { Effect, Layer, Option, Ref, Schema } from "effect";
+import { Duration, Effect, Layer, Option, Ref, Schema } from "effect";
 
 const { values } = parseArgs({
   options: {
@@ -262,4 +262,17 @@ const program = Effect.gen(function* () {
   return checks;
 });
 
-NodeRuntime.runMain(program);
+// A turn that never ends fails the judge at the deadline instead of hanging it.
+NodeRuntime.runMain(
+  program.pipe(
+    Effect.timeoutOrElse({
+      duration: Duration.minutes(5),
+      orElse: () =>
+        Effect.fail(
+          new ClaudeReminderFailed({
+            message: "judge timed out after 5 minutes",
+          })
+        ),
+    })
+  )
+);

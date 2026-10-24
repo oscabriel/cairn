@@ -2,7 +2,7 @@
 // deferred), a real paste (an image through the bridge), and J4's divergence cases (a compaction,
 // a provider switch, a deleted transcript), each opening a fresh Claude session that still answers
 // with the earlier context.
-//   node judges/claude-live.ts [--case tools,paste,compaction,switch,deleted]
+//   node judges/claude-live.ts [--case tools,parallel,paste,compaction,switch,deleted,restart]
 //                              [--model claude-haiku-5-5]
 //
 // Each case runs a bare pi-durable Harness on a scratch store, with the real bridge (`Claude` over
@@ -12,6 +12,11 @@
 //
 // - tools: 30 synthetic tools plus Cairn's code mode; every one is in `system:init`, there is no
 //   `ToolSearch`, and the model calls `synthetic_17` directly and reports its token.
+// - parallel: the same 30 tools; the model is asked for two of them in one response. Claude Code's
+//   own transcript must show one API message with both tool_use blocks (otherwise the run is
+//   inconclusive: the model serialised them), pi must get both calls in one reply, both results
+//   must be committed, and the answer must quote both tokens. Seed 1 of the full review: before
+//   the fix the second call never ran and the turn hung until stopped.
 // - paste: a PNG of a nonce word (ImageMagick) in the user message; the answer is the word.
 // - compaction: a fact, another turn, then `compact()` with a tiny kept tail; the summary replaces
 //   the stamped reply that held the fact, the next turn opens a new Claude session, and the answer
@@ -28,10 +33,22 @@
 // pi-durable and pi-ai are imported here directly (a bare Harness, the faux provider), which the
 // import boundaries (S42) allow only under `judges/fixtures/`; each import says so.
 //
+// Every case runs under a deadline (CASE_DEADLINE, 120 s for parallel): a case that hangs prints a
+// failed line with `timedOut`, its scratch folders and transcripts are removed, and the next case
+// still runs.
+//
 // Prints one JSON line per case with its checks, the sessions opened and the cache numbers. Exit 0
 // when every check holds. Costs a few cents of plan usage on Haiku.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -58,7 +75,16 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { NodeRuntime } from "@effect/platform-node";
 import type { Scope } from "effect";
-import { Effect, Layer, Option, Random, Ref, Schema, Stream } from "effect";
+import {
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Random,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 
 import { BridgeCwd } from "../apps/server/src/brain/BridgeCwdExtension.ts";
 import { CodeMode } from "../apps/server/src/brain/CodeMode.ts";
@@ -66,6 +92,7 @@ import { BridgeProvider } from "../apps/server/src/models/BridgeProvider.ts";
 
 const CASES = [
   "tools",
+  "parallel",
   "paste",
   "compaction",
   "switch",
@@ -257,9 +284,14 @@ const usageOf = (reply: Option.Option<AssistantMessage>) =>
 const answered = (reply: Option.Option<AssistantMessage>) =>
   Option.exists(reply, (message) => message.stopReason === "stop");
 
+/** Every scratch root made so far; a case's roots are removed after it, even when it timed out. */
+const scratchRoots: Array<string> = [];
+
 /** A fresh scratch directory (the thread's cwd) with a store beside it. */
 const scratch = (name: CaseName) => {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), `cairn-${name}-`)));
+
+  scratchRoots.push(root);
 
   return { root, file: path.join(root, "brain.sqlite") };
 };
@@ -357,6 +389,115 @@ const toolsCase = (log: Ref.Ref<ReadonlyArray<Opened>>) =>
       checks,
       initTools: initTools.length,
       calls,
+      reply: textOf(reply),
+      usage: usageOf(reply),
+      root,
+    };
+  });
+
+const TranscriptLine = Schema.Struct({
+  type: Schema.String,
+  message: Schema.Struct({
+    id: Schema.String,
+    content: Schema.Array(Schema.Struct({ type: Schema.String })),
+  }),
+});
+
+const decodeTranscriptLine = Schema.decodeOption(
+  Schema.fromJsonString(TranscriptLine)
+);
+
+/** The tool_use count of each API message in the Claude Code transcripts written for `cwd`. */
+const toolUsesPerMessage = (cwd: string): ReadonlyArray<number> => {
+  const folder = projectFolder(cwd);
+
+  if (!existsSync(folder)) {
+    return [];
+  }
+
+  const perMessage = new Map<string, number>();
+
+  for (const name of readdirSync(folder)) {
+    if (!name.endsWith(".jsonl")) {
+      continue;
+    }
+
+    for (const line of readFileSync(path.join(folder, name), "utf-8").split(
+      "\n"
+    )) {
+      const entry = decodeTranscriptLine(line);
+
+      if (Option.isNone(entry) || entry.value.type !== "assistant") {
+        continue;
+      }
+
+      const { id, content } = entry.value.message;
+      const uses = content.filter((block) => block.type === "tool_use").length;
+
+      perMessage.set(id, (perMessage.get(id) ?? 0) + uses);
+    }
+  }
+
+  return [...perMessage.values()];
+};
+
+const parallelCase = (log: Ref.Ref<ReadonlyArray<Opened>>) =>
+  Effect.gen(function* () {
+    const { root, file } = scratch("parallel");
+
+    const harness = yield* openHarness(file, [syntheticTools], Option.none());
+    const conversation = yield* newConversation(harness, root);
+
+    const reply = yield* Effect.promise(
+      async () =>
+        await send(
+          conversation,
+          "Call synthetic_03 with note 'a' and synthetic_21 with note 'b' in the same response, as two parallel tool calls in one message, not one after the other. Then reply with both tokens they returned and nothing else."
+        )
+    );
+
+    const messages = yield* Effect.promise(
+      async () => await messagesOf(conversation)
+    );
+
+    const callsPerReply = messages.flatMap((message) =>
+      message.role === "assistant"
+        ? [
+            message.content.flatMap((block) =>
+              block.type === "toolCall" ? [block.id] : []
+            ),
+          ]
+        : []
+    );
+
+    const delivered = callsPerReply.find((ids) => ids.length >= 2) ?? [];
+
+    const committed = new Set(
+      messages.flatMap((message) =>
+        message.role === "toolResult" ? [message.toolCallId] : []
+      )
+    );
+
+    const parallelInOneMessage = toolUsesPerMessage(root).some(
+      (uses) => uses >= 2
+    );
+
+    const checks = {
+      parallelInOneMessage,
+      bothCallsInOneReply: delivered.length >= 2,
+      bothResultsCommitted:
+        delivered.length >= 2 && delivered.every((id) => committed.has(id)),
+      answered:
+        answered(reply) &&
+        textOf(reply).includes("token-3-ok") &&
+        textOf(reply).includes("token-21-ok"),
+    };
+
+    return {
+      checks,
+      inconclusive: !parallelInOneMessage,
+      callsPerReply: callsPerReply.map((ids) => ids.length),
+      sessions: (yield* Ref.get(log)).map((opened) => opened.session),
       reply: textOf(reply),
       usage: usageOf(reply),
       root,
@@ -694,10 +835,41 @@ const restartCase = Effect.gen(function* () {
   };
 });
 
+/** How long a killed child gets to exit before its transcript folder is removed again. */
+const CHILD_EXIT_GRACE = Duration.seconds(3);
+
+/** How long one case may take before it is reported as failed. */
+const CASE_DEADLINE = Duration.minutes(5);
+
+const deadlineOf = (name: CaseName) =>
+  name === "parallel" ? Duration.minutes(2) : CASE_DEADLINE;
+
+/**
+ * Removes the scratch roots made since `from`, and the transcripts Claude Code wrote for them. A
+ * killed child is closed on another fiber and writes its transcript once more as it exits, so the
+ * folders are removed again after it has had time to.
+ */
+const removeScratch = (from: number) =>
+  Effect.gen(function* () {
+    const roots = scratchRoots.splice(from);
+
+    const remove = Effect.sync(() => {
+      for (const root of roots) {
+        rmSync(root, { recursive: true, force: true });
+        rmSync(projectFolder(root), { recursive: true, force: true });
+      }
+    });
+
+    yield* remove;
+    yield* Effect.sleep(CHILD_EXIT_GRACE);
+    yield* remove;
+  });
+
 /** Runs one case with its own bridge (except `deleted`, which makes two), and prints its line. */
 const runCase = (name: CaseName) =>
   Effect.gen(function* () {
     const log = yield* Ref.make<ReadonlyArray<Opened>>([]);
+    const firstRoot = scratchRoots.length;
 
     const withBridge = <A, E>(
       effect: Effect.Effect<A, E, Claude | BridgeCwd | CodeMode | Scope.Scope>
@@ -712,6 +884,7 @@ const runCase = (name: CaseName) =>
       Effect.Effect<{ readonly checks: object; readonly root: string }>
     > = {
       tools: withBridge(toolsCase(log)),
+      parallel: withBridge(parallelCase(log)),
       paste: withBridge(pasteCase),
       compaction: withBridge(compactionCase(log)),
       switch: withBridge(switchCase(log)),
@@ -719,23 +892,30 @@ const runCase = (name: CaseName) =>
       restart: restartCase,
     };
 
-    const result = yield* cases[name];
+    const result = yield* cases[name].pipe(
+      Effect.timeoutOption(deadlineOf(name)),
+      Effect.ensuring(removeScratch(firstRoot))
+    );
 
-    const pass = Object.values(result.checks).every(Boolean);
-
-    yield* Effect.sync(() => {
-      process.stdout.write(
-        `${JSON.stringify({ case: name, pass, ...result })}\n`
-      );
+    const line = Option.match(result, {
+      onNone: () => ({
+        case: name,
+        pass: false,
+        timedOut: true,
+        deadlineMs: Duration.toMillis(deadlineOf(name)),
+      }),
+      onSome: (value) => ({
+        case: name,
+        pass: Object.values(value.checks).every(Boolean),
+        ...value,
+      }),
     });
 
-    // The scratch folder, and the transcripts Claude Code wrote for it under `~/.claude/projects`.
     yield* Effect.sync(() => {
-      rmSync(result.root, { recursive: true, force: true });
-      rmSync(projectFolder(result.root), { recursive: true, force: true });
+      process.stdout.write(`${JSON.stringify(line)}\n`);
     });
 
-    return pass;
+    return line.pass;
   });
 
 const program = Effect.gen(function* () {

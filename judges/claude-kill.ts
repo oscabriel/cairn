@@ -196,6 +196,25 @@ const startBrain = Effect.gen(function* () {
     project,
   };
 
+  // Registered before the unit starts, so a start that fails still removes the scratch folders.
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      if (!values.keep) {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(
+          path.join(
+            os.homedir(),
+            ".claude",
+            "projects",
+            project.replaceAll(/[/.]/gu, "-")
+          ),
+          { recursive: true, force: true }
+        );
+        rmdirIfEmpty(cache);
+      }
+    })
+  );
+
   yield* Unit.start({
     name: brain.unit,
     command: [
@@ -217,24 +236,6 @@ const startBrain = Effect.gen(function* () {
       CAIRN_EVENTS_LOG: brain.events,
     },
   });
-
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      if (!values.keep) {
-        rmSync(dir, { recursive: true, force: true });
-        rmSync(
-          path.join(
-            os.homedir(),
-            ".claude",
-            "projects",
-            project.replaceAll(/[/.]/gu, "-")
-          ),
-          { recursive: true, force: true }
-        );
-        rmdirIfEmpty(cache);
-      }
-    })
-  );
 
   return { brain, port: yield* waitUp(brain, 0) };
 });

@@ -32,7 +32,16 @@ import { ClaudeSummary } from "@cairn/bridge/ClaudeSummary";
 import { readProbe } from "@cairn/bridge/ClaudeUsage";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { NodeRuntime } from "@effect/platform-node";
-import { Clock, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Clock,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 
 const { values } = parseArgs({
   options: {
@@ -446,4 +455,17 @@ const program = Effect.gen(function* () {
   return results;
 });
 
-NodeRuntime.runMain(program);
+// A turn that never ends fails the judge at the deadline instead of hanging it.
+NodeRuntime.runMain(
+  program.pipe(
+    Effect.timeoutOrElse({
+      duration: Duration.minutes(5),
+      orElse: () =>
+        Effect.fail(
+          new ClaudeEligibilityFailed({
+            message: "judge timed out after 5 minutes",
+          })
+        ),
+    })
+  )
+);

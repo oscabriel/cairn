@@ -828,3 +828,31 @@ Web lane in the main checkout, server lane on `fix/batch4-server` in a worktree 
 Differs from the task text: a restored turn is appended below text typed since, instead of offering a restore action; sent turns' attachment refs live in memory only, so after a reload a refused turn comes back without its attachments; the unsaved-outbox notice clears on the next good save, but a refusal notice clears only on Dismiss (clearing on the next acknowledgement would hide it at once).
 
 Not done: a browser check of Stop during `preparing` (the server no longer answers `thread_not_found`; covered by Threads.test); a live check of a launch failing in the background through the browser; crash orphans still answer `resumed: true` until the boot repair discards them; a send that follows a launch which then failed still submits; the thread subscribe still polls up to `LaunchWait` rather than following the launch.
+
+### Batch 5: performance (T43 to T48)
+
+Lane A (T43, T44, T47 and the lazy thread page) in the main checkout; lane B (T45, T46) on `fix/batch5-render` and lane C (T48) on `fix/batch5-memo`, in worktrees (Opus 5.5 high). Merged and deployed at `da5c899`.
+
+- `4e066c8`, `3968ee5` (T43): `MemoryWatch` logs `brain memory peak` when the cgroup's `memory.peak` passes the last logged peak by 64 MiB (sampled every 30 s, so a spike lands within one interval); `MemoryHigh=1.5G`, no `MemoryMax`; `deploy.sh --check` prints the invocation's current and peak memory.
+- `b39f1ef` (T44): the committed reading's memo is keyed on the older pages' and the window's identities and `running`; live tool output is laid over unanswered calls afterwards.
+- `c0c067c` (T47): user and answer entries are kept per reading while their inputs are unchanged; `deriveTimelineRowsCached` reuses each settled turn's rows; rows compare by reference first; toggle sets keep their identity; line counts are cached per message; the list's keys after a snapshot reuse the view's derivation.
+- `791b7da` (T45): a streaming message's open fence renders plain; a block is tokenized once at close or commit, a long one in 1,000-character slices; the token cache is an LRU of 500 entries and 50 MB; code blocks are keyed by language so a late language mounts its grammar; transcript-scroll fails on long tasks (none over 50 ms, 150 ms total over 6 s).
+- `ed392c4` (T46): the diff panel parses once per patch, files are keyed lazy views, tokens go through T45's cache, and 4,000 lines are drawn at most across files.
+- `aeafe57`, `1e57b46`, `282ea7a` (T48): the sidebar, composer and chat header are lazy views; the composer's context holds the queue document and prompts instead of the whole view; the sidebar partitions in one pass; an unchanged picker highlight keeps the Model; typing.ts reports Foldkit's slow views.
+- `6f00dbe`: the thread page is a lazy view with plain-string inputs, so a keystroke does not redraw the transcript.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| TimelineEntries.test identity tests (T44) | fail before, pass after | a `pi.live`-only change with older pages, and a slot-output-only change, keep settled entries by reference |
+| Cost.test (T47) | pass | 3,000 entries of history: 2.2 ms a streamed frame against 23 ms for a cold derivation (0.1); before 16.3 ms against 19.1 ms (0.85); budget 0.35 |
+| TimelineRows.test (T47) | pass | cached rows equal `deriveTimelineRows` on every recorded frame, folded and opened, and in all 31 rows fixtures; a settled turn's rows are the same array after the last turn streams |
+| CodeBlock.test, DiffCost.test (lane B) | fail before, pass after | 0 tokenizations over 200 frames of a 300-line fence, one pass at commit; a 300-hunk patch renders a second time with every file view reused and 0 tokenizations |
+| View.test, Composer.test (lane C and `6f00dbe`) | fail before, pass after | a streamed item draws neither the sidebar nor the composer; 5 keystrokes draw the composer 5 times and the thread page 0 times; an unchanged highlight keeps the Model |
+| `judges/transcript-scroll.ts` on merged main | pass, 3 of 3 | follow window 0 long tasks, 2 of 2 code blocks highlighted; before (4cef39f) 23 to 25 long tasks, up to 87 ms, 1 of 2 highlighted. Lane B saw one 53 ms task in 12 runs on its branch |
+| `judges/typing.ts --throttle 4 --busy 10` | pass | late keys 27 to 41 and max late 40 to 59 ms on merged main; 81 and 68 to 106 ms before batch 5; slow views at a median of 22 to 25 ms (47 before), all from the composer's view |
+| T43: a logged peak matched to an event | matched | at `da5c899`'s boot the cgroup peak rose from 516 to 795 MB within 30 s while the brain's RSS stayed at 257 MB; the only process started in that window is the Claude usage probe (`ClaudeSdk.probe`, a claude child). The peaks are claude children, not the brain; nothing to fix |
+| `ops/cairn/deploy.sh` of `da5c899`, `judges/live-chat.ts` | pass | 8 threads idle; listening 1,556 ms, hello 1,593 ms; reply 1,421 ms |
+
+Differs from the task text: T47's judge is a frame's share of a cold derivation, not a 3,000-against-100 ratio (both sides scale linearly, so that ratio stays near 30 and cannot show the change); a long code block is highlighted in slices rather than in one task; `shellIndex` stays ungated (three judges read it; it now rebuilds only with the sidebar).
+
+Not done: the first snapshot of a newly opened thread still derives its transcript twice (later snapshots and history pages derive once); lane B saw a long reply committing while scrolled up inside it move `scrollTop` by 1 px; an intermittent typing.ts run with no rows streamed (once in six runs, before and after T48); the thread page's rows still re-derive the last turn on every frame.

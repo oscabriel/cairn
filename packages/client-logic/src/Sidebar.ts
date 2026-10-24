@@ -86,18 +86,25 @@ export const partitionSidebarThreads = <T extends ThreadShell>(
   now: DateTime.Utc,
   projectFilter: Option.Option<ProjectId> = Option.none()
 ): SidebarPartition<T> => {
-  const visible = Array.filter(
-    threads,
-    (thread) =>
+  const shelves: Record<SidebarSection, Array<T>> = {
+    pinned: [],
+    active: [],
+    snoozed: [],
+    settled: [],
+  };
+
+  // One pass: each visible thread's shelf is resolved once.
+  for (const thread of threads) {
+    if (
       Option.isNone(thread.archivedAt) &&
       Option.match(projectFilter, {
         onNone: () => true,
         onSome: (projectId) => thread.projectId === projectId,
       })
-  );
-
-  const inSection = (section: SidebarSection) =>
-    Array.filter(visible, (thread) => sectionOf(thread, now) === section);
+    ) {
+      shelves[sectionOf(thread, now)].push(thread);
+    }
+  }
 
   const wakeMs = (thread: T) =>
     Option.match(thread.snoozedUntil, {
@@ -106,16 +113,16 @@ export const partitionSidebarThreads = <T extends ThreadShell>(
     });
 
   return {
-    pinned: sortPinnedThreadsByOrderKey(inSection("pinned")),
-    active: sortActiveThreadsByOrderKey(inSection("active")),
+    pinned: sortPinnedThreadsByOrderKey(shelves.pinned),
+    active: sortActiveThreadsByOrderKey(shelves.active),
     snoozed: Array.sort(
-      inSection("snoozed"),
+      shelves.snoozed,
       Order.combine(
         Order.mapInput(Order.Number, wakeMs),
         Order.mapInput(Order.String, (thread: T) => thread.id)
       )
     ),
-    settled: sortSettledThreads(inSection("settled")),
+    settled: sortSettledThreads(shelves.settled),
   };
 };
 
@@ -509,11 +516,11 @@ export const deriveProjectIdentity = (name: string): ProjectIdentity => ({
   colorClassName: projectColorClassName(name),
 });
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /** How many letters a monogram has, which sets the width its glyphs are fitted to. */
 export const monogramGlyphCount = (monogram: string): number =>
-  Array.fromIterable(
-    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(monogram)
-  ).length;
+  Array.fromIterable(graphemes.segment(monogram)).length;
 
 /** One run of search-result text, highlighted when it matched the query. */
 export interface HighlightPart {

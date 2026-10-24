@@ -64,9 +64,47 @@ export const findProject = (
 ): Option.Option<ProjectShell> =>
   Array.findFirst(projectsOf(model), (project) => project.id === projectId);
 
+interface PartitionMemo {
+  readonly shell: Model["context"]["shell"];
+  readonly pending: Model["pending"];
+  readonly nowMs: number;
+  readonly projectFilter: Model["projectFilter"];
+  readonly partition: SidebarPartition<ThreadShell>;
+}
+
+/** The last partition, so update and view, and a render whose rows did not change, share it. */
+const partitionMemo = new Map<"last", PartitionMemo>();
+
 /** The rows of each shelf, under the project filter. */
-export const partitionOf = (model: Model): SidebarPartition<ThreadShell> =>
-  partitionSidebarThreads(threadsOf(model), nowOf(model), model.projectFilter);
+export const partitionOf = (model: Model): SidebarPartition<ThreadShell> => {
+  const last = partitionMemo.get("last");
+
+  if (
+    last !== undefined &&
+    last.shell === model.context.shell &&
+    last.pending === model.pending &&
+    last.nowMs === model.nowMs &&
+    last.projectFilter === model.projectFilter
+  ) {
+    return last.partition;
+  }
+
+  const partition = partitionSidebarThreads(
+    threadsOf(model),
+    nowOf(model),
+    model.projectFilter
+  );
+
+  partitionMemo.set("last", {
+    shell: model.context.shell,
+    pending: model.pending,
+    nowMs: model.nowMs,
+    projectFilter: model.projectFilter,
+    partition,
+  });
+
+  return partition;
+};
 
 /** A thread's shelf now. */
 export const sectionOfThread = (

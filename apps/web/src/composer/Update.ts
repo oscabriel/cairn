@@ -4,11 +4,7 @@
 // composer's context current, and it is also where the composer asks the brain for what the
 // context newly needs (models, skills, branches).
 import { resolveComposerDispatchMode } from "@cairn/client-logic/ComposerLogic";
-import {
-  buildComposerPromptHistoryEntries,
-  stepComposerPromptHistory,
-} from "@cairn/client-logic/ComposerPromptHistory";
-import type { ComposerPromptHistoryMessage } from "@cairn/client-logic/ComposerPromptHistory";
+import { stepComposerPromptHistory } from "@cairn/client-logic/ComposerPromptHistory";
 import {
   ComposerSubmission,
   submitComposerDraft,
@@ -20,8 +16,8 @@ import {
 import { resolveRestingComposerControlsLayout } from "@cairn/client-logic/FooterLayout";
 import type { AttachmentRef } from "@cairn/protocol/Attachments";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
-import type { ConversationView } from "@cairn/protocol/Thread";
-import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
+import { Array, Equal, Option, Predicate, Record } from "effect";
+import type { Schema } from "effect";
 import { Command } from "foldkit";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
@@ -226,9 +222,26 @@ export const isThreadRunning = (model: Model): boolean =>
 const sameTarget = (left: ComposerTarget, right: ComposerTarget): boolean =>
   Equal.equals(left, right);
 
+const samePrompts = (
+  left: ComposerContext["prompts"],
+  right: ComposerContext["prompts"]
+): boolean =>
+  left === right ||
+  (left.length === right.length &&
+    left.every((entry, index) => {
+      const other = right[index];
+
+      return (
+        other !== undefined &&
+        entry.id === other.id &&
+        entry.prompt === other.prompt
+      );
+    }));
+
 /**
  * True when `next` differs from the context the composer holds. Large parts (the projects, the
- * thread row and view) compare by identity, so the root can call this after every update cheaply.
+ * thread row and inbox) compare by identity and the prompts by value, so the root can call this
+ * after every update cheaply.
  */
 export const contextChanged = (
   model: Model,
@@ -246,10 +259,11 @@ export const contextChanged = (
       current.thread,
       next.thread
     ) ||
-    !Option.makeEquivalence<object>((left, right) => left === right)(
-      current.view,
-      next.view
+    !Option.makeEquivalence<Schema.Json>((left, right) => left === right)(
+      current.inbox,
+      next.inbox
     ) ||
+    !samePrompts(current.prompts, next.prompts) ||
     !Equal.equals(current.defaults, next.defaults) ||
     current.usage !== next.usage
   );
@@ -364,48 +378,6 @@ const refreshTriggerMenu: Step = (model) => {
         }),
       };
 };
-
-const HistoryMessage = Schema.Struct({
-  role: Schema.String,
-  content: Schema.Union([Schema.String, Schema.Array(Schema.Json)]),
-});
-
-const decodeHistoryMessage = Schema.decodeUnknownOption(HistoryMessage);
-
-const decodeTextPart = Schema.decodeUnknownOption(
-  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })
-);
-
-const userTexts = (
-  message: Schema.Json
-): Option.Option<ComposerPromptHistoryMessage> => {
-  const decoded = decodeHistoryMessage(message);
-
-  return Option.map(decoded, (value) => ({
-    id: "",
-    role: value.role,
-    texts: Predicate.isString(value.content)
-      ? [value.content]
-      : Array.getSomes(value.content.map((part) => decodeTextPart(part))).map(
-          ({ text }) => text
-        ),
-  }));
-};
-
-/** The thread's messages as prompt history reads them, oldest first. */
-const historyMessages = (
-  view: Option.Option<ConversationView>
-): ReadonlyArray<ComposerPromptHistoryMessage> =>
-  Option.match(view, {
-    onNone: () => [],
-    onSome: (current) =>
-      Array.flatMap(current.entries, (entry) =>
-        Array.getSomes((entry.model ?? []).map(userTexts)).map((message) => ({
-          ...message,
-          id: String(entry.id),
-        }))
-      ),
-  });
 
 const SKILL_REFERENCE = /(?:^|\s)(?:\$|\/skill:)(?<name>[A-Za-z0-9][\w.-]*)/gu;
 
@@ -900,14 +872,10 @@ const recallHistory = (
     return keep(model);
   }
 
-  const entries = buildComposerPromptHistoryEntries(
-    historyMessages(model.context.view)
-  );
-
   return Option.match(
     stepComposerPromptHistory(
       direction,
-      entries,
+      model.context.prompts,
       model.history,
       activeDraft(model).text
     ),
@@ -977,6 +945,18 @@ const withHighlight = (popover: Popover, id: string): Popover =>
     EnvMode: () => popover,
   });
 
+/** True when `id` is the popover's highlighted row already. */
+const isHighlighted = (popover: Popover, id: string): boolean =>
+  Popover.match(popover, {
+    ModelPicker: ({ highlighted }) => Option.contains(highlighted, id),
+    Project: ({ highlighted }) => Option.contains(highlighted, id),
+    Branch: () => true,
+    Thinking: () => true,
+    RuntimeMode: () => true,
+    Overflow: () => true,
+    EnvMode: () => true,
+  });
+
 const closePopover = (model: Model): Model =>
   modifyFields(model, { popover: () => Option.none() });
 
@@ -1041,16 +1021,24 @@ const step = (model: Model, message: Message): UpdateReturn =>
         }),
       }),
 
-    HighlightedMenuItem: ({ id }) => ({
-      model: modifyFields(model, {
-        triggerMenu: (menu) =>
-          Option.map(menu, (open) => ({
-            ...open,
-            highlighted: Option.some(id),
-            highlightedKey: Option.some(menuSearchKey(open.trigger)),
-          })),
-      }),
-    }),
+    HighlightedMenuItem: ({ id }) =>
+      Option.exists(
+        model.triggerMenu,
+        (open) =>
+          Option.contains(open.highlighted, id) &&
+          Option.contains(open.highlightedKey, menuSearchKey(open.trigger))
+      )
+        ? keep(model)
+        : {
+            model: modifyFields(model, {
+              triggerMenu: (menu) =>
+                Option.map(menu, (open) => ({
+                  ...open,
+                  highlighted: Option.some(id),
+                  highlightedKey: Option.some(menuSearchKey(open.trigger)),
+                })),
+            }),
+          },
     PickedMenuItem: ({ id }) => pickMenuItem(model, id),
 
     OpenedPopover: ({ popover }) => {
@@ -1068,8 +1056,11 @@ const step = (model: Model, message: Message): UpdateReturn =>
     ClosedPopover: () => ({ model: closePopover(model) }),
     ChangedPopoverQuery: ({ query }) =>
       updatePopover(model, (popover) => withQuery(popover, query)),
+    // The pointer moves over a row many times a second; the same row keeps the same Model.
     MovedPopoverHighlight: ({ id }) =>
-      updatePopover(model, (popover) => withHighlight(popover, id)),
+      Option.exists(model.popover, (popover) => isHighlighted(popover, id))
+        ? keep(model)
+        : updatePopover(model, (popover) => withHighlight(popover, id)),
     PickedModel: ({ model: chosen }) => chooseModel(model, chosen),
     ToggledFavoriteModel: ({ key }) =>
       saveSettingsStep(

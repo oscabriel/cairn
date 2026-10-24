@@ -1,7 +1,11 @@
 // The app frame: the sidebar (projects, threads, search, shelves) and the routed page beside it, in
 // t3code's sidebar wrapper. The hero and composer serve the inbox and draft pages, and the composer
-// docks under an open thread. The judges' data attributes live in the sidebar's shell index.
-import { Array, Option } from "effect";
+// docks under an open thread. The judges' data attributes live in the sidebar's shell index. The
+// sidebar, the composer and the chat header are lazy views over their own slices of the Model, so a
+// streamed token rebuilds only the transcript and a keystroke only the composer.
+import type { Entry } from "@cairn/protocol/Thread";
+import { Array, Equal, Option } from "effect";
+import { createLazy } from "foldkit/html";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import { retryDraftId } from "./composer/Update.ts";
@@ -103,17 +107,107 @@ const threadProjectTitle = (
     )
   );
 
-const composer = (model: Model, h: HtmlBuilder<Message>): Html =>
+const sidebarLazy = createLazy();
+
+const headerLazy = createLazy();
+
+// One slot per place the composer is drawn: a cached view belongs to one position in the tree.
+const pageComposerLazy = createLazy();
+
+const dockedComposerLazy = createLazy();
+
+const sidebar = (
+  h: HtmlBuilder<Message>,
+  sidebarModel: Model["sidebar"]
+): Html =>
+  h.submodel({
+    slotId: "sidebar",
+    model: sidebarModel,
+    view: sidebarView,
+    toParentMessage: (message) => Message.GotSidebarMessage({ message }),
+  });
+
+const composerView = (
+  h: HtmlBuilder<Message>,
+  composerModel: Model["composer"]
+): Html =>
   h.submodel({
     slotId: "composer",
-    model: model.composer,
+    model: composerModel,
     view: Composer.view,
     toParentMessage: (message) => Message.GotComposerMessage({ message }),
   });
 
+const NO_ENTRIES: ReadonlyArray<Entry> = [];
+
+/** The last thread page Model the header's controls were drawn from. */
+const headerThread = new Map<"last", Thread.Model.Model>();
+
+const olderOf = (thread: Thread.Model.Model): ReadonlyArray<Entry> =>
+  Option.match(thread.view, {
+    onNone: () => NO_ENTRIES,
+    onSome: (state) => state.older,
+  });
+
+const windowOf = (thread: Thread.Model.Model): ReadonlyArray<Entry> =>
+  Option.match(thread.view, {
+    onNone: () => NO_ENTRIES,
+    onSome: (state) => state.view.entries,
+  });
+
+/**
+ * The thread page Model for the header's controls: the one they were last drawn from while the
+ * fields `Thread.headerControls` reads (the diff, the thread id, the older and window entries) are
+ * unchanged, so the header keeps its lazy view while the answer streams.
+ */
+const headerThreadOf = (thread: Thread.Model.Model): Thread.Model.Model => {
+  const last = headerThread.get("last");
+
+  if (
+    last !== undefined &&
+    last.diff === thread.diff &&
+    Equal.equals(last.threadId, thread.threadId) &&
+    olderOf(last) === olderOf(thread) &&
+    windowOf(last) === windowOf(thread)
+  ) {
+    return last;
+  }
+
+  headerThread.set("last", thread);
+
+  return thread;
+};
+
+/** The chat header over a thread: its project crumb (none when empty), its title and controls. */
+const threadHeader = (
+  h: HtmlBuilder<Message>,
+  projectTitle: string,
+  title: string,
+  thread: Thread.Model.Model
+): Html =>
+  chatHeader(h, {
+    project:
+      projectTitle === ""
+        ? Option.none()
+        : Option.some({
+            title: projectTitle,
+            ariaLabel: `New thread in ${projectTitle}`,
+            onClick: Option.none(),
+          }),
+    title,
+    controls: [
+      h.submodel({
+        slotId: "thread-header-controls",
+        model: thread,
+        view: Thread.headerControls,
+        toParentMessage: (message) => Message.GotThreadMessage({ message }),
+      }),
+    ],
+  });
+
 const page = (model: Model, h: HtmlBuilder<Message>): Html =>
   AppRoute.match(model.route, {
-    Inbox: () => composer(model, h),
+    Inbox: () => pageComposerLazy(composerView, [h, model.composer]),
     Thread: ({ threadId }) =>
       h.div(
         [
@@ -122,29 +216,12 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
           h.Class(`relative ${CHAT_COLUMN_CLASS}`),
         ],
         [
-          chatHeader(h, {
-            project: Option.map(
-              threadProjectTitle(model, threadId),
-              (title) => ({
-                title,
-                ariaLabel: `New thread in ${title}`,
-                onClick: Option.none(),
-              })
-            ),
-            title: Option.getOrElse(
-              threadTitle(model, threadId),
-              () => "Thread"
-            ),
-            controls: [
-              h.submodel({
-                slotId: "thread-header-controls",
-                model: model.thread,
-                view: Thread.headerControls,
-                toParentMessage: (message) =>
-                  Message.GotThreadMessage({ message }),
-              }),
-            ],
-          }),
+          headerLazy(threadHeader, [
+            h,
+            Option.getOrElse(threadProjectTitle(model, threadId), () => ""),
+            Option.getOrElse(threadTitle(model, threadId), () => "Thread"),
+            headerThreadOf(model.thread),
+          ]),
           h.submodel({
             slotId: "thread-hold",
             model: model.parked,
@@ -168,10 +245,10 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
               }),
             ]
           ),
-          composer(model, h),
+          dockedComposerLazy(composerView, [h, model.composer]),
         ]
       ),
-    Draft: () => composer(model, h),
+    Draft: () => pageComposerLazy(composerView, [h, model.composer]),
     Settings: () =>
       Option.match(loadedSettingsView(), {
         onNone: () => settingsPlaceholder(h, model.settingsPage === "failed"),
@@ -237,12 +314,8 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
       ),
     ],
     [
-      h.submodel({
-        slotId: "sidebar",
-        model: model.sidebar,
-        view: sidebarView,
-        toParentMessage: (message) => Message.GotSidebarMessage({ message }),
-      }),
+      // `sidebarState` above reads only `model.sidebar`, the lazy view's one input.
+      sidebarLazy(sidebar, [h, model.sidebar]),
       h.main(
         [
           h.DataAttribute("slot", "sidebar-inset"),

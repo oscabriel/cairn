@@ -11,6 +11,8 @@
 // Then three more checks on the same page: IME composition of 日本 (Chromium, through CDP), and the
 // menu case (typing `@`, `/` and `$` opens each of the composer's menus, which the judge waits for,
 // and typing on through them loses no character).
+// While the typist types, Foldkit's slow-view warnings (dev builds, views over 16 ms) are counted
+// and summed, with the Message tags that triggered them, as `slowViews`.
 // Prints one JSON line and exits 0 when nothing was dropped or reordered, IME and the menu case are
 // intact, the transcript streamed (at least half the judge's own exchanges landed, `stream: ok`),
 // and the page logged no error.
@@ -343,6 +345,29 @@ page.on("pageerror", (error) => {
   errors.push(String(error));
 });
 
+/** Foldkit's slow-view warnings while the typist types: how many, how long, and what caused them. */
+const slowViews = {
+  recording: false,
+  durations: new Array<number>(),
+  triggers: new Map<string, number>(),
+};
+
+const SLOW_VIEW =
+  /^\[foldkit\] Slow view: (?<ms>[\d.]+)ms .*triggered by (?<trigger>\w+)/u;
+
+page.on("console", (message) => {
+  const match = SLOW_VIEW.exec(message.text());
+
+  if (!slowViews.recording || match?.groups === undefined) {
+    return;
+  }
+
+  const trigger = match.groups.trigger ?? "unknown";
+
+  slowViews.durations.push(Number(match.groups.ms));
+  slowViews.triggers.set(trigger, (slowViews.triggers.get(trigger) ?? 0) + 1);
+});
+
 const target = new URL(app.url);
 
 if (busy > 0) {
@@ -404,7 +429,11 @@ const rowsBefore = await entries.count();
 
 const started = Date.now();
 
+slowViews.recording = true;
+
 const late = await typeAt(text);
+
+slowViews.recording = false;
 
 const elapsed = (Date.now() - started) / 1000;
 
@@ -508,6 +537,8 @@ if (menuValue !== MENU_TEXT) {
   menu = `menus did not open: ${menusMissed.join(", ")}`;
 }
 
+const slowSorted = slowViews.durations.toSorted((left, right) => left - right);
+
 const result = {
   engine: browserName,
   mobile,
@@ -526,6 +557,13 @@ const result = {
   stream,
   streamFailures: streamFailures.count,
   lastStreamFailure: streamFailures.last,
+  slowViews: {
+    count: slowSorted.length,
+    totalMs: Math.round(slowSorted.reduce((sum, ms) => sum + ms, 0)),
+    p50Ms: slowSorted[Math.floor(slowSorted.length / 2)] ?? 0,
+    maxMs: slowSorted.at(-1) ?? 0,
+    triggers: Object.fromEntries(slowViews.triggers),
+  },
   ime,
   menu,
   menusSeen: menusSeen.toSorted(),

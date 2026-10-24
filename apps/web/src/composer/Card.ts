@@ -100,7 +100,7 @@ const queuedRow = (input: QueuedInput, h: HtmlBuilder<Message>): Html =>
 
 /** The queued inputs as a drawer above the card, with "Clear queue". Empty when nothing waits. */
 const queueView = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const queued = queuedInputs(model.context.view);
+  const queued = queuedInputs(model.context.inbox);
 
   if (queued.length === 0) {
     return h.empty;

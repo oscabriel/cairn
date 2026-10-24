@@ -4,7 +4,6 @@ import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { ModelCatalog } from "@cairn/protocol/Models";
 import { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
 import type { SkillSummary } from "@cairn/protocol/Skills";
-import type { ConversationView } from "@cairn/protocol/Thread";
 import { DateTime, Option } from "effect";
 
 import { ComposerTarget, initial } from "./Model.ts";
@@ -119,10 +118,7 @@ export const skills: ReadonlyArray<SkillSummary> = [
 ];
 
 /** A context with the connection live, `project` and the thread row. */
-export const contextFor = (
-  target: ComposerTarget,
-  view: Option.Option<ConversationView> = Option.none()
-): ComposerContext => ({
+export const contextFor = (target: ComposerTarget): ComposerContext => ({
   target,
   epoch: 1,
   hasClient: true,
@@ -134,7 +130,8 @@ export const contextFor = (
     Draft: () => Option.none(),
     Thread: ({ threadId: id }) => Option.some(thread(id)),
   }),
-  view,
+  inbox: Option.none(),
+  prompts: [],
   defaults: Option.some(catalog.defaults),
   usage: Option.none(),
 });

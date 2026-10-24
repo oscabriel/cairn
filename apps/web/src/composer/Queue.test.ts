@@ -1,21 +1,18 @@
-import { ConversationView } from "@cairn/protocol/Thread";
-import { Option, Schema } from "effect";
+import { Option } from "effect";
+import type { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { queuedInputs } from "./Queue.ts";
 
-const viewWithInbox = (items: ReadonlyArray<Schema.Json>) =>
-  Schema.decodeSync(ConversationView)({
-    conversation: { id: 1 },
-    entries: [],
-    docs: { "pi.inbox": { items } },
-  });
+const inboxOf = (items: ReadonlyArray<Schema.Json>): Schema.Json => ({
+  items,
+});
 
 describe("the queued inputs", () => {
   it("list the user's words, not the lines the brain added for attachments", () => {
     const inputs = queuedInputs(
       Option.some(
-        viewWithInbox([
+        inboxOf([
           {
             id: 4,
             mode: "followUp",

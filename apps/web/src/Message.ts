@@ -56,6 +56,8 @@ export const Message = defineMessageUnion({
   /** The wait before sending the outbox item with `key` again, after a retryable failure, is over. */
   ElapsedResend: { epoch: Schema.Int, key: Schema.String },
   CompletedSaveOutbox: { saved: Schema.Boolean },
+  /** The user closed the notice bar. */
+  DismissedNotice: {},
 
   GotThreadMessage: { message: Thread.Message },
   GotSidebarMessage: { message: SidebarMessage },

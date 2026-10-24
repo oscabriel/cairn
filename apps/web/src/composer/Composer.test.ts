@@ -1,13 +1,21 @@
-import { RequestId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
+import {
+  AttachmentId,
+  RequestId,
+  SubmissionId,
+  ThreadId,
+} from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Option } from "effect";
+import { Effect, Option, Ref } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Mount } from "foldkit";
 import * as Scene from "foldkit/scene";
 import * as Story from "foldkit/story";
 
 import { Message as AttachmentsMessage } from "../attachments/Message.ts";
+import { AttachmentStatus } from "../attachments/Model.ts";
 import { AttachmentPaste } from "../attachments/Paste.ts";
+import { readyIds } from "../attachments/Update.ts";
+import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import {
   MoveHeroToDraftUrl,
@@ -30,7 +38,7 @@ import { ComposerInput } from "./Editor.ts";
 import { MeasureFooter } from "./Footer.ts";
 import { MeasureHeadline } from "./MeasureHeadline.ts";
 import { Message, OutMessage } from "./Message.ts";
-import { ComposerTarget, initial } from "./Model.ts";
+import { ComposerTarget, emptyDraft, initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { inform, update } from "./Update.ts";
 import { view } from "./View.ts";
@@ -479,6 +487,7 @@ describe("composer sends", () => {
             },
           }),
           navigateTo: Option.none(),
+          attachments: [],
         })
       ),
       Story.expectOutMessage(
@@ -496,6 +505,7 @@ describe("composer sends", () => {
             },
           }),
           navigateTo: Option.none(),
+          attachments: [],
         })
       )
     );
@@ -556,7 +566,12 @@ describe("composer sends", () => {
       }),
       Story.Command.resolve(
         PrepareLaunch,
-        Message.FailedPrepareTurn({ text: "start here", message: "no" })
+        Message.FailedPrepareTurn({
+          draftKey: `draft:${draftId}`,
+          draft: { ...emptyDraft, text: "start here" },
+          attachments: [],
+          message: "no",
+        })
       )
     );
   });
@@ -577,12 +592,180 @@ describe("composer sends", () => {
       }),
       Story.Command.resolve(
         PrepareLaunch,
-        Message.FailedPrepareTurn({ text: "start here", message: "no" })
+        Message.FailedPrepareTurn({
+          draftKey: "draft:019a0000-0000-7000-8000-000000000b01",
+          draft: { ...emptyDraft, text: "start here" },
+          attachments: [],
+          message: "no",
+        })
       ),
       Story.model((model: Model) => {
         assert.strictEqual(activeDraft(model).text, "start here");
         assert.deepStrictEqual(catalog.defaults.model.modelId, "kimi-k3");
       })
+    );
+  });
+
+  it.effect(
+    "puts back the text, both ready attachments and the picked model when a launch cannot start",
+    () =>
+      Effect.gen(function* () {
+        const draftId = "019a0000-0000-7000-8000-000000000b04";
+        const key = `draft:${draftId}`;
+        const picked = { provider: "opencode-go", modelId: "glm-5" };
+
+        const readyItem = (index: number) => ({
+          localId: `attachment-${index}`,
+          draftKey: key,
+          name: `doc-${index}.pdf`,
+          mimeType: "application/pdf",
+          sizeBytes: 12,
+          isImage: false,
+          file: Option.none(),
+          previewUrl: Option.none(),
+          pastedAt: Option.none(),
+          pasteToRequestMs: Option.none(),
+          attempts: 1,
+          status: AttachmentStatus.Ready({
+            ref: {
+              id: AttachmentId.make(`att_${index}`),
+              name: `doc-${index}.pdf`,
+              mimeType: "application/pdf",
+              sizeBytes: 12,
+              kind: "pdf",
+              sha256: "0".repeat(64),
+            },
+          }),
+        });
+
+        // No project: the launch first asks the brain for the scratch project, which fails.
+        const base = composerOn(ComposerTarget.Draft({ draftId }));
+
+        const ready: Model = {
+          ...base,
+          context: { ...base.context, projects: [] },
+          drafts: {
+            [key]: {
+              ...emptyDraft,
+              text: "start here",
+              model: Option.some(picked),
+              attachments: [
+                AttachmentId.make("att_1"),
+                AttachmentId.make("att_2"),
+              ],
+            },
+          },
+          attachments: {
+            ...base.attachments,
+            loaded: true,
+            items: [readyItem(1), readyItem(2)],
+            nextLocalId: 3,
+          },
+        };
+
+        const sent = update(ready, Message.ClickedSend({ alternate: false }));
+
+        const launch = (sent.commands ?? []).find(
+          (command) => command.name === PrepareLaunch.name
+        );
+
+        assert.isDefined(launch);
+
+        const disconnected = yield* Ref.make(Option.none());
+
+        const answer = yield* (launch?.effect ?? Effect.die("no launch")).pipe(
+          Effect.provideService(CairnConnection._tag, disconnected)
+        );
+
+        const restored = update(sent.model, answer).model;
+
+        assert.deepStrictEqual(
+          {
+            text: activeDraft(restored).text,
+            model: activeDraft(restored).model,
+            tray: readyIds(restored.attachments, key),
+            sentDraft: activeDraft(sent.model).text,
+            sentTray: readyIds(sent.model.attachments, key),
+          },
+          {
+            text: "start here",
+            model: Option.some(picked),
+            tray: [AttachmentId.make("att_1"), AttachmentId.make("att_2")],
+            sentDraft: "",
+            sentTray: [],
+          }
+        );
+      })
+  );
+
+  it("says a send is not sent when its uploads finish after the user moved to another draft", () => {
+    const key = `thread:${threadId}`;
+
+    const uploading: Model = {
+      ...onThread,
+      drafts: { [key]: { ...emptyDraft, text: "with a file" } },
+      attachments: {
+        ...onThread.attachments,
+        loaded: true,
+        nextLocalId: 2,
+        items: [
+          {
+            localId: "attachment-1",
+            draftKey: key,
+            name: "doc.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 12,
+            isImage: false,
+            file: Option.none(),
+            previewUrl: Option.none(),
+            pastedAt: Option.none(),
+            pasteToRequestMs: Option.none(),
+            attempts: 1,
+            status: AttachmentStatus.Uploading({ progress: 0.5 }),
+          },
+        ],
+      },
+    };
+
+    const waiting = update(
+      uploading,
+      Message.ClickedSend({ alternate: false })
+    ).model;
+
+    const moved = inform(
+      waiting,
+      contextFor(ComposerTarget.Thread({ threadId: otherThreadId }))
+    ).model;
+
+    const answered = update(
+      moved,
+      Message.GotAttachmentsMessage({
+        message: AttachmentsMessage.SucceededUpload({
+          localId: "attachment-1",
+          ref: {
+            id: AttachmentId.make("att_1"),
+            name: "doc.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 12,
+            kind: "pdf",
+            sha256: "0".repeat(64),
+          },
+          pasteToRequestMs: Option.none(),
+        }),
+      })
+    );
+
+    assert.deepStrictEqual(
+      {
+        prepared: (answered.commands ?? []).some(
+          (command) => command.name === PrepareSend.name
+        ),
+        notice: Option.map(answered.model.attachments.notice, (notice) => [
+          notice.draftKey,
+          notice.text.startsWith("Not sent"),
+        ]),
+      },
+      { prepared: false, notice: Option.some([key, true]) }
     );
   });
 

@@ -365,15 +365,20 @@ const requeue = (item: Item): Item =>
     ? { ...item, attempts: 0, status: AttachmentStatus.Queued() }
     : item;
 
-const restoreSaved = (model: Model, saved: SavedAttachments): Model => {
+/** Ready items for `refs` in `draftKey`, skipping refs the tray already holds. */
+const readyItemsFor = (
+  model: Model,
+  draftKey: string,
+  refs: ReadonlyArray<AttachmentRef>
+) => {
   const known = new Set(
     Array.getSomes(model.items.map(readyRef)).map(({ id }) => id)
   );
 
   let next = model.nextLocalId;
 
-  const restored = Record.toEntries(saved).flatMap(([draftKey, refs]) =>
-    Array.filter(refs, ({ id }) => !known.has(id)).map((ref): Item => {
+  const items = Array.filter(refs, ({ id }) => !known.has(id)).map(
+    (ref): Item => {
       const localId = `attachment-${next}`;
 
       next += 1;
@@ -392,12 +397,26 @@ const restoreSaved = (model: Model, saved: SavedAttachments): Model => {
         attempts: 0,
         status: AttachmentStatus.Ready({ ref }),
       };
-    })
+    }
   );
+
+  return { items, nextLocalId: next };
+};
+
+const restoreSaved = (model: Model, saved: SavedAttachments): Model => {
+  let { nextLocalId } = model;
+  const restored: Array<Item> = [];
+
+  for (const [draftKey, refs] of Record.toEntries(saved)) {
+    const made = readyItemsFor({ ...model, nextLocalId }, draftKey, refs);
+
+    restored.push(...made.items);
+    ({ nextLocalId } = made);
+  }
 
   return modifyFields(model, {
     items: (items) => [...restored, ...items],
-    nextLocalId: () => next,
+    nextLocalId: () => nextLocalId,
     loaded: () => true,
   });
 };
@@ -554,6 +573,42 @@ export const requestSend = (
     }),
     []
   );
+
+/** The ready refs of a draft's attachments, in the order they were attached. */
+export const readyRefs = (
+  model: Model,
+  draftKey: string
+): ReadonlyArray<AttachmentRef> =>
+  Array.getSomes(itemsOf(model, draftKey).map(readyRef));
+
+/**
+ * Puts the attachments of a turn the brain refused back into `draftKey`, as ready items: the brain
+ * still holds them, so nothing uploads again.
+ */
+export const restore = (
+  model: Model,
+  draftKey: string,
+  refs: ReadonlyArray<AttachmentRef>
+): Update.Return<Model, Message, Services> => {
+  const made = readyItemsFor(model, draftKey, refs);
+
+  const next = modifyFields(model, {
+    items: (items) => [...items, ...made.items],
+    nextLocalId: () => made.nextLocalId,
+  });
+
+  return { model: next, commands: saveCommands(next) };
+};
+
+/** Says in `draftKey`'s tray that its send was let go when the user moved to another draft. */
+export const noteNotSent = (model: Model, draftKey: string): Model =>
+  modifyFields(model, {
+    notice: () =>
+      Option.some({
+        draftKey,
+        text: "Not sent: its attachments finished after you moved away. Press Send again.",
+      }),
+  });
 
 /** Forgets a draft's attachments after its turn was sent: the brain has claimed them. */
 export const clearSent = (

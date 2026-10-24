@@ -18,6 +18,8 @@ import {
   replaceTextRange,
 } from "@cairn/client-logic/ComposerTrigger";
 import { resolveRestingComposerControlsLayout } from "@cairn/client-logic/FooterLayout";
+import type { AttachmentRef } from "@cairn/protocol/Attachments";
+import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import { Command } from "foldkit";
@@ -28,6 +30,7 @@ import { OutMessage as TrayOutMessage } from "../attachments/Message.ts";
 import type { Message as TrayMessage } from "../attachments/Message.ts";
 import * as Tray from "../attachments/Update.ts";
 import type { Services } from "../Command.ts";
+import { OutboxItem } from "../connection/Outbox.ts";
 import {
   ConfigureThread,
   DetectPlatform,
@@ -101,6 +104,104 @@ export const discardDraft = (
     commands: Command.mapMessages(tray.commands, toTray),
   };
 };
+
+/**
+ * Puts a turn that did not reach the brain back into the draft at `key`: its settings when the draft
+ * is empty, its text (below what the user has typed since, never over it) and its attachments.
+ */
+const restoreDraft = (
+  model: Model,
+  key: string,
+  sent: Draft,
+  attachments: ReadonlyArray<AttachmentRef>
+): Update.Return<Model, Message, Services> => {
+  const tray = Tray.restore(model.attachments, key, attachments);
+  const ids = attachments.map(({ id }) => id);
+
+  return {
+    model: modifyFields(model, {
+      drafts: (drafts) =>
+        Record.set(
+          drafts,
+          key,
+          Option.match(Record.get(drafts, key), {
+            onNone: () => sent,
+            onSome: (current) => ({
+              ...current,
+              text:
+                current.text.trim() === ""
+                  ? sent.text
+                  : `${current.text}\n\n${sent.text}`,
+              attachments: [
+                ...current.attachments,
+                ...Array.filter(ids, (id) => !current.attachments.includes(id)),
+              ],
+            }),
+          })
+        ),
+      draftsVersion: (version) => version + 1,
+      attachments: () => tray.model,
+    }),
+    commands: Command.mapMessages(tray.commands ?? [], toTray),
+  };
+};
+
+/** The draft id a refused launch of `threadId` comes back as; not a UUID, so it launches anew. */
+export const retryDraftId = (threadId: string): string => `retry-${threadId}`;
+
+/** The workspace choice of a draft that launched with `workspace`. */
+const envOf = (
+  workspace: ThreadLaunchInput["workspace"]
+): Pick<Draft, "envMode" | "baseBranch"> =>
+  Predicate.isTagged(workspace, "Worktree")
+    ? {
+        envMode: "worktree",
+        baseBranch:
+          workspace.baseRef === "HEAD"
+            ? Option.none()
+            : Option.some(workspace.baseRef),
+      }
+    : { envMode: "local", baseBranch: Option.none() };
+
+/**
+ * Puts a turn the brain refused, or a launch that failed, back where it was written: a send into its
+ * thread's draft, a launch into a new draft (`retryDraftId`) with the model and place it chose.
+ */
+export const restoreTurn = (
+  model: Model,
+  item: OutboxItem,
+  attachments: ReadonlyArray<AttachmentRef>
+): Update.Return<Model, Message, Services> =>
+  OutboxItem.match(item, {
+    Send: ({ input }) =>
+      restoreDraft(
+        model,
+        `thread:${input.threadId}`,
+        {
+          ...emptyDraft,
+          text: input.input.text,
+          attachments: input.input.attachments,
+        },
+        attachments
+      ),
+    Launch: ({ input }) =>
+      restoreDraft(
+        model,
+        `draft:${retryDraftId(input.threadId)}`,
+        {
+          ...emptyDraft,
+          ...envOf(input.workspace),
+          text: input.initialMessage.text,
+          attachments: input.initialMessage.attachments,
+          model: Option.some(input.model),
+          thinking: Option.some(input.thinkingLevel),
+          runtimeMode: input.runtimeMode,
+          projectId: Option.some(input.projectId),
+        },
+        attachments
+      ),
+    Dispatch: () => ({ model }),
+  });
 
 export const init = (): Update.Return<Model, Message, Services> => ({
   model: initial,
@@ -353,6 +454,11 @@ const dispatchTurn = (
 ): UpdateReturn => {
   const draft = activeDraft(model);
 
+  const attachments = Option.match(draftKey(model), {
+    onNone: () => [],
+    onSome: (key) => Tray.readyRefs(model.attachments, key),
+  });
+
   const content = {
     text,
     // The tray is what the user sees; the draft's ids follow it.
@@ -386,6 +492,7 @@ const dispatchTurn = (
                 threadId,
                 whenBusy: mode === "steer" ? "steer" : "followUp",
                 content,
+                attachments,
               }),
             ],
           };
@@ -434,6 +541,9 @@ const dispatchTurn = (
               ),
               content,
               stay,
+              draftKey: Option.getOrElse(draftKey(model), () => ""),
+              draft,
+              attachments,
             }),
           ],
         };
@@ -579,19 +689,24 @@ const submit = (model: Model, intent: SubmitIntent): UpdateReturn => {
   });
 };
 
-/** A tray Message through the tray, then the send it released, if its draft is still open. */
+/**
+ * A tray Message through the tray, then the send it released. A send whose draft is no longer open
+ * is not fired from another page; its draft says it was not sent.
+ */
 const withTray = (model: Model, result: Tray.UpdateReturn): UpdateReturn => {
   const applied = applyTray(model, result);
 
-  const released = Option.match(
-    Option.filter(applied.ready, ({ key }) =>
+  const released = Option.match(applied.ready, {
+    onNone: () => keep(applied.model),
+    onSome: ({ intent, key }) =>
       Option.contains(draftKey(applied.model), key)
-    ),
-    {
-      onNone: () => keep(applied.model),
-      onSome: ({ intent }) => submit(applied.model, intent),
-    }
-  );
+        ? submit(applied.model, intent)
+        : keep(
+            modifyFields(applied.model, {
+              attachments: (tray) => Tray.noteNotSent(tray, key),
+            })
+          ),
+  });
 
   return {
     ...released,
@@ -1150,15 +1265,24 @@ const step = (model: Model, message: Message): UpdateReturn =>
       })),
       commands: [FocusEditor()],
     }),
-    PreparedTurn: ({ item, navigateTo }) => ({
+    PreparedTurn: ({ attachments, item, navigateTo }) => ({
       model,
-      outMessage: OutMessage.Submitted({ item, navigateTo }),
+      outMessage: OutMessage.Submitted({ item, navigateTo, attachments }),
     }),
-    FailedPrepareTurn: ({ message: reason, text }) => {
-      const restored =
-        activeDraft(model).text.length === 0 ? setText(model, text) : model;
+    FailedPrepareTurn: ({
+      attachments,
+      draft,
+      draftKey: key,
+      message: reason,
+    }) => {
+      const restored = restoreDraft(model, key, draft, attachments);
 
-      return notice(restored, reason);
+      return {
+        model: modifyFields(restored.model, {
+          notice: () => Option.some(reason),
+        }),
+        commands: restored.commands ?? [],
+      };
     },
     FailedRequest: ({ message: reason }) => notice(model, reason),
     FailedLoad: ({ message: reason, projectId, what }) => {

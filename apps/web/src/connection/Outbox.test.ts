@@ -1,4 +1,4 @@
-import { CommandId, ThreadId } from "@cairn/protocol/Ids";
+import { AttachmentId, CommandId, ThreadId } from "@cairn/protocol/Ids";
 import { ShellSynchronizedItem } from "@cairn/protocol/Shell";
 import { ThreadVisit } from "@cairn/protocol/ShellCommands";
 import { DateTime, Effect, Option } from "effect";
@@ -6,6 +6,9 @@ import { KeyValueStore } from "effect/persistence";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
+import { SaveReady } from "../attachments/Command.ts";
+import { Message as AttachmentsMessage } from "../attachments/Message.ts";
+import { readyIds } from "../attachments/Update.ts";
 import {
   SaveOutbox,
   SayHello,
@@ -13,6 +16,7 @@ import {
   WaitForBackoff,
   WaitToResend,
 } from "../Command.ts";
+import { Message as ComposerMessage } from "../composer/Message.ts";
 import { Message } from "../Message.ts";
 import {
   connectingModel,
@@ -308,5 +312,66 @@ describe("the outbox", () => {
     expect(saved).toBeTruthy();
     expect(loaded).toStrictEqual([first, second]);
     expect(broken).toStrictEqual([]);
+  });
+});
+
+describe("a turn the brain refuses", () => {
+  const ref = {
+    id: AttachmentId.make("att_1"),
+    name: "notes.pdf",
+    mimeType: "application/pdf",
+    sizeBytes: 12,
+    kind: "pdf" as const,
+    sha256: "0".repeat(64),
+  };
+
+  it("goes back into its thread's draft with its attachment, and the notice can be dismissed", () => {
+    const threadKey = "thread:01890a5d-ac96-774b-bcce-b302099a8057";
+
+    story(
+      update,
+      given(liveModel(0)),
+      message(
+        Message.GotComposerMessage({
+          message: ComposerMessage.PreparedTurn({
+            item: first,
+            navigateTo: Option.none(),
+            attachments: [ref],
+          }),
+        })
+      ),
+      Command.resolve(SaveOutbox, Message.CompletedSaveOutbox({ saved: true })),
+      Command.resolve(
+        SendOutboxItem,
+        Message.FailedOutboxItem({
+          epoch: 0,
+          key: "request-1",
+          retryable: false,
+          transport: false,
+          message: "Thread 01890a5d does not exist.",
+        })
+      ),
+      Command.resolveAll(
+        [SaveOutbox, Message.CompletedSaveOutbox({ saved: true })],
+        [SaveReady, AttachmentsMessage.CompletedSave({ saved: true })]
+      ),
+      model((current) => {
+        expect({
+          text: current.composer.drafts[threadKey]?.text,
+          tray: readyIds(current.composer.attachments, threadKey),
+          sent: current.sentTurns,
+          notice: current.notice,
+        }).toStrictEqual({
+          text: "message request-1",
+          tray: [ref.id],
+          sent: {},
+          notice: Option.some("Thread 01890a5d does not exist."),
+        });
+      }),
+      message(Message.DismissedNotice()),
+      model((current) => {
+        expect(current.notice).toStrictEqual(Option.none());
+      })
+    );
   });
 });

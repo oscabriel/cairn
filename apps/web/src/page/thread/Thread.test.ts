@@ -1,18 +1,27 @@
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
-import { ThreadShell } from "@cairn/protocol/Shell";
+import { ThreadShell, ThreadUpdatedItem } from "@cairn/protocol/Shell";
 import { ThreadStreamItem } from "@cairn/protocol/Thread";
 import { DateTime, Option, Schema } from "effect";
+import type { Html, HtmlBuilder } from "foldkit/html";
+import * as Scene from "foldkit/scene";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
+import { Message as ComposerMessage } from "../../composer/Message.ts";
+import { retryDraftId } from "../../composer/Update.ts";
+import { outboxKey } from "../../connection/Outbox.ts";
 import { Message as RootMessage } from "../../Message.ts";
 import { AppRoute } from "../../Route.ts";
 import { emptySnapshot, launchItem, liveModel } from "../../TestFixtures.ts";
 import { update as rootUpdate } from "../../Update.ts";
+import { launchFailureOf } from "../../View.ts";
 import { WaitToResubscribe } from "./Command.ts";
 import { Message } from "./Message.ts";
 import { initial } from "./Model.ts";
+import type { Model } from "./Model.ts";
 import { inform, update } from "./Update.ts";
+import type { LaunchFailure } from "./View.ts";
+import { statusLine } from "./View.ts";
 
 const threadId = Schema.decodeSync(ThreadId)(
   "01890a5d-ac96-774b-bcce-b302099a8057"
@@ -321,57 +330,60 @@ describe("the thread page", () => {
   });
 });
 
+const created = DateTime.makeUnsafe("2026-10-22T11:00:00Z");
+
+const launchRow = (activity: ThreadShell["activity"]): ThreadShell =>
+  ThreadShell.make({
+    id: threadId,
+    projectId: ProjectId.make("project-1"),
+    title: "Start here",
+    provider: "opencode-go",
+    modelId: "small",
+    thinkingLevel: "medium",
+    runtimeMode: "full-access",
+    branch: Option.none(),
+    worktreePath: Option.none(),
+    activity,
+    activeRunId: Option.none(),
+    latestRunRequestedAt: Option.none(),
+    latestRunStartedAt: Option.none(),
+    latestRunCompletedAt: Option.none(),
+    queueLength: 0,
+    lastError: Option.none(),
+    lastErrorClass: Option.none(),
+    usageLimitResetAt: Option.none(),
+    waitingFor: "none",
+    pendingRuntimeRequest: Option.none(),
+    latestVisibleMessage: Option.none(),
+    latestUserMessageAt: Option.none(),
+    createdAt: created,
+    updatedAt: created,
+    archivedAt: Option.none(),
+    settledOverride: Option.none(),
+    settledAt: Option.none(),
+    unsettledAt: Option.none(),
+    snoozedUntil: Option.none(),
+    snoozedAt: Option.none(),
+    pinnedAt: Option.none(),
+    pinOrderKey: Option.none(),
+    activeOrderKey: Option.none(),
+    autoSettleDisabledAt: Option.none(),
+    lastVisitedAt: Option.none(),
+    parkedTaskIds: [],
+  });
+
 describe("the root tells the thread page", () => {
   const route = AppRoute.Thread({ threadId });
-
-  const created = DateTime.makeUnsafe("2026-10-22T11:00:00Z");
-
-  const row = (activity: ThreadShell["activity"]): ThreadShell =>
-    ThreadShell.make({
-      id: threadId,
-      projectId: ProjectId.make("project-1"),
-      title: "Start here",
-      provider: "opencode-go",
-      modelId: "small",
-      thinkingLevel: "medium",
-      runtimeMode: "full-access",
-      branch: Option.none(),
-      worktreePath: Option.none(),
-      activity,
-      activeRunId: Option.none(),
-      latestRunRequestedAt: Option.none(),
-      latestRunStartedAt: Option.none(),
-      latestRunCompletedAt: Option.none(),
-      queueLength: 0,
-      lastError: Option.none(),
-      lastErrorClass: Option.none(),
-      usageLimitResetAt: Option.none(),
-      waitingFor: "none",
-      pendingRuntimeRequest: Option.none(),
-      latestVisibleMessage: Option.none(),
-      latestUserMessageAt: Option.none(),
-      createdAt: created,
-      updatedAt: created,
-      archivedAt: Option.none(),
-      settledOverride: Option.none(),
-      settledAt: Option.none(),
-      unsettledAt: Option.none(),
-      snoozedUntil: Option.none(),
-      snoozedAt: Option.none(),
-      pinnedAt: Option.none(),
-      pinOrderKey: Option.none(),
-      activeOrderKey: Option.none(),
-      autoSettleDisabledAt: Option.none(),
-      lastVisitedAt: Option.none(),
-      parkedTaskIds: [],
-    });
 
   const withRow = (activity: ThreadShell["activity"]) =>
     rootUpdate(
       {
         ...liveModel(2),
         route,
-        shell: Option.some({ ...emptySnapshot, threads: [row(activity)] }),
+        shell: Option.some({
+          ...emptySnapshot,
+          threads: [launchRow(activity)],
+        }),
       },
       RootMessage.CompletedNavigateInternal()
     ).model;
@@ -400,5 +412,100 @@ describe("the root tells the thread page", () => {
     expect(withRow("preparing").thread.launching).toBeTruthy();
     expect(withRow("idle").thread.launching).toBeFalsy();
     expect(withRow("failed").thread.launching).toBeFalsy();
+  });
+});
+
+const failedRow = (lastError: Option.Option<string>): ThreadShell =>
+  ThreadShell.make({ ...launchRow("failed"), lastError });
+
+/** The status line the thread page draws above its transcript, with `launchFailure` from the shell. */
+const statusWith =
+  (launchFailure: Option.Option<LaunchFailure>) =>
+  (thread: Model, h: HtmlBuilder<Message>): Html =>
+    statusLine(thread, launchFailure, h);
+
+describe("a launch that failed in the background", () => {
+  const route = AppRoute.Thread({ threadId });
+
+  it("puts its first message in a new draft and the page says why, not that the thread does not exist", () => {
+    const launch = launchItem(threadId);
+
+    let launched = rootUpdate(
+      {
+        ...liveModel(2),
+        route,
+        shell: Option.some({
+          ...emptySnapshot,
+          threads: [launchRow("preparing")],
+        }),
+      },
+      RootMessage.CompletedNavigateInternal()
+    ).model;
+
+    for (const next of [
+      RootMessage.GotComposerMessage({
+        message: ComposerMessage.PreparedTurn({
+          item: launch,
+          navigateTo: Option.none(),
+          attachments: [],
+        }),
+      }),
+      RootMessage.AcknowledgedOutboxItem({
+        epoch: 2,
+        key: outboxKey(launch),
+      }),
+      RootMessage.ReceivedShellItem({
+        epoch: 2,
+        item: ThreadUpdatedItem.make({
+          sequence: 2,
+          thread: failedRow(Option.some("The worktree could not be made.")),
+        }),
+      }),
+      RootMessage.GotThreadMessage({
+        message: Message.EndedThreadStream({
+          epoch: 2,
+          watch: 0,
+          missing: true,
+          reason: "This thread does not exist.",
+        }),
+      }),
+    ]) {
+      launched = rootUpdate(launched, next).model;
+    }
+
+    const draftId = retryDraftId(threadId);
+
+    expect({
+      draft: Option.map(
+        Option.fromNullishOr(launched.composer.drafts[`draft:${draftId}`]),
+        (draft) => [draft.text, draft.model]
+      ),
+      sent: launched.sentTurns,
+      failure: launchFailureOf(launched, threadId),
+      status: launched.thread.status._tag,
+    }).toStrictEqual({
+      draft: Option.some([
+        "start here",
+        Option.some({ provider: "opencode-go", modelId: "small" }),
+      ]),
+      sent: {},
+      failure: Option.some({
+        message: "The worktree could not be made.",
+        retryUrl: Option.some(`/new/${draftId}`),
+      }),
+      status: "Missing",
+    });
+
+    Scene.scene(
+      { update, view: statusWith(launchFailureOf(launched, threadId)) },
+      Scene.given(launched.thread),
+      Scene.expect(Scene.testId("thread-status")).toContainText(
+        "This thread did not start. The worktree could not be made."
+      ),
+      Scene.expect(Scene.testId("thread-launch-retry")).toHaveAttr(
+        "href",
+        `/new/${draftId}`
+      )
+    );
   });
 });

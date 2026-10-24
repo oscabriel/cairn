@@ -4,12 +4,13 @@
 import { Array, Option } from "effect";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
+import { retryDraftId } from "./composer/Update.ts";
 import * as Composer from "./composer/View.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { view as pushView } from "./push/View.ts";
-import { AppRoute } from "./Route.ts";
+import { AppRoute, draftRouter } from "./Route.ts";
 import { loadedSettingsView, settingsPlaceholder } from "./SettingsPage.ts";
 import { view as parkedView } from "./shell/Parked.ts";
 import { sidebarState, view as sidebarView } from "./sidebar/View.ts";
@@ -51,6 +52,36 @@ const threadWorkspaceRoot = (
             (project) => project.workspaceRoot
           )
         )
+    )
+  );
+
+/**
+ * Why the thread's launch failed, from its shell row, and the draft its first message went back to
+ * when this page put it there.
+ */
+export const launchFailureOf = (
+  model: Model,
+  threadId: string
+): Option.Option<Thread.LaunchFailure> =>
+  Option.flatMap(model.shell, (shell) =>
+    Option.flatMap(
+      Array.findFirst(
+        shell.threads,
+        (thread) => thread.id === threadId && thread.activity === "failed"
+      ),
+      (thread) =>
+        Option.map(thread.lastError, (message) => {
+          const draftId = retryDraftId(threadId);
+
+          return {
+            message,
+            retryUrl: Option.some(draftRouter({ draftId })).pipe(
+              Option.filter(() =>
+                Object.hasOwn(model.composer.drafts, `draft:${draftId}`)
+              )
+            ),
+          };
+        })
     )
   );
 
@@ -130,6 +161,7 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
                 view: Thread.view,
                 viewInputs: {
                   workspaceRoot: threadWorkspaceRoot(model, threadId),
+                  launchFailure: launchFailureOf(model, threadId),
                 },
                 toParentMessage: (message) =>
                   Message.GotThreadMessage({ message }),
@@ -173,9 +205,20 @@ const noticeBar = (model: Model, h: HtmlBuilder<Message>): Html =>
         [
           h.DataAttribute("testid", "notice"),
           h.Role("status"),
-          h.Class("border-b px-4 py-2 text-sm"),
+          h.Class("flex items-start gap-2 border-b px-4 py-2 text-sm"),
         ],
-        [notice]
+        [
+          h.span([h.Class("min-w-0 flex-1")], [notice]),
+          h.button(
+            [
+              h.Type("button"),
+              h.AriaLabel("Dismiss"),
+              h.Class("shrink-0 underline-offset-4 hover:underline"),
+              h.OnClick(Message.DismissedNotice()),
+            ],
+            ["Dismiss"]
+          ),
+        ]
       ),
   });
 

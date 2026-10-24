@@ -1,7 +1,7 @@
 // The thread page: the stream's status, then the transcript (apps/web/src/timeline), which scrolls
 // itself. The page header (ui/ChatHeader.ts) is drawn by the root view above the hold banner.
 import type { Entry } from "@cairn/protocol/Thread";
-import { Option } from "effect";
+import { Option, Predicate } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
@@ -13,12 +13,49 @@ import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import { ThreadStatus } from "./Model.ts";
 
-/** What the root passes the page: the thread's working directory, from the shell. */
-export interface ViewInputs {
-  readonly workspaceRoot: Option.Option<string>;
+/** A launch that failed: why, from the shell row, and the draft its first message went back to. */
+export interface LaunchFailure {
+  readonly message: string;
+  readonly retryUrl: Option.Option<string>;
 }
 
-const statusLine = (model: Model, h: HtmlBuilder<Message>): Html =>
+/** What the root passes the page: the thread's working directory and a failed launch, from the shell. */
+export interface ViewInputs {
+  readonly workspaceRoot: Option.Option<string>;
+  readonly launchFailure: Option.Option<LaunchFailure>;
+}
+
+/** Why the launch failed, in place of "does not exist", with a link to its first message. */
+const launchFailureLine = (
+  failure: LaunchFailure,
+  h: HtmlBuilder<Message>
+): Html =>
+  h.div(
+    [
+      h.DataAttribute("testid", "thread-status"),
+      h.Role("status"),
+      h.Class(
+        "mx-auto flex w-full max-w-3xl flex-col gap-1 px-6 pt-4 text-destructive-foreground text-sm"
+      ),
+    ],
+    [
+      h.p([], [`This thread did not start. ${failure.message}`]),
+      Option.match(failure.retryUrl, {
+        onNone: () => h.empty,
+        onSome: (url) =>
+          h.a(
+            [
+              h.DataAttribute("testid", "thread-launch-retry"),
+              h.Href(url),
+              h.Class("text-foreground underline underline-offset-4"),
+            ],
+            ["Your first message is in a new draft. Edit it and send again."]
+          ),
+      }),
+    ]
+  );
+
+const statusOf = (model: Model, h: HtmlBuilder<Message>): Html =>
   ThreadStatus.match(model.status, {
     Loading: () =>
       h.p(
@@ -53,6 +90,16 @@ const statusLine = (model: Model, h: HtmlBuilder<Message>): Html =>
       ),
   });
 
+/** The line above the transcript: a failed launch's reason, else the stream's status. */
+export const statusLine = (
+  model: Model,
+  launchFailure: Option.Option<LaunchFailure>,
+  h: HtmlBuilder<Message>
+): Html =>
+  Option.isSome(launchFailure) && !Predicate.isTagged(model.status, "Ready")
+    ? launchFailureLine(launchFailure.value, h)
+    : statusOf(model, h);
+
 /** The diff panel while it is open: its view once the chunk has loaded, a placeholder before. */
 const diffPanel = (model: Model, h: HtmlBuilder<Message>): Html =>
   isOpen(model.diff)
@@ -70,14 +117,14 @@ const diffPanel = (model: Model, h: HtmlBuilder<Message>): Html =>
 
 /** The thread page. */
 export const view = Submodel.defineView<Model, Message, ViewInputs>(
-  (model, { workspaceRoot }, h) =>
+  (model, { launchFailure, workspaceRoot }, h) =>
     h.section(
       [
         h.DataAttribute("testid", "thread-page"),
         h.Class("flex min-h-0 flex-1 flex-col"),
       ],
       [
-        statusLine(model, h),
+        statusLine(model, launchFailure, h),
         h.submodel({
           slotId: "timeline",
           model: model.timeline,

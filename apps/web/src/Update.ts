@@ -44,7 +44,7 @@ import {
   woke,
 } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
-import type { Flags, Model } from "./Model.ts";
+import type { Flags, Model, SentTurn } from "./Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { pushContextOf, samePushContext } from "./push/Context.ts";
 import { OutMessage as PushOutMessage } from "./push/Message.ts";
@@ -56,7 +56,7 @@ import {
   inform as informPushModel,
   update as updatePush,
 } from "./push/Update.ts";
-import { AppRoute, urlToAppRoute } from "./Route.ts";
+import { AppRoute, draftRouter, urlToAppRoute } from "./Route.ts";
 import { sameSettingsContext, settingsContextOf } from "./settings/Context.ts";
 import type { Message as SettingsMessage } from "./settings/Message.ts";
 import { initial as initialSettings } from "./settings/Model.ts";
@@ -530,10 +530,20 @@ const syncSidebar: Step = (model) => {
 const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
   ComposerOutMessage.match<Step>(outMessage, {
     Submitted:
-      ({ item, navigateTo }) =>
+      ({ attachments, item, navigateTo }) =>
       (model) =>
         Update.combine(
-          modifyFields(model, { outbox: (outbox) => enqueue(outbox, item) }),
+          modifyFields(model, {
+            outbox: (outbox) => enqueue(outbox, item),
+            sentTurns: (sent) =>
+              Predicate.isTagged(item, "Dispatch")
+                ? sent
+                : Record.set(sent, outboxKey(item), {
+                    item,
+                    attachments,
+                    acknowledged: false,
+                  }),
+          }),
           [
             persist,
             sendNext,
@@ -586,6 +596,106 @@ const syncComposer: Step = (model) => {
 
 const isCurrentEpoch = (model: Model, epoch: number): boolean =>
   model.connection.epoch === epoch;
+
+/** Puts a turn the brain refused, or a launch that failed, back in the composer. */
+const restoreComposerTurn = Update.foldChild({
+  update: (composer: Model["composer"], sent: SentTurn) =>
+    Composer.restoreTurn(composer, sent.item, sent.attachments),
+  read: readComposer,
+  write: writeComposer,
+  toParentMessage: toGotComposerMessage,
+});
+
+/** The thread a sent launch makes, when `sent` is a launch. */
+const launchedThread = (sent: SentTurn): Option.Option<ThreadId> =>
+  Predicate.isTagged(sent.item, "Launch")
+    ? Option.some(sent.item.input.threadId)
+    : Option.none();
+
+/** The text of the notice raised when the outbox cannot be saved; it clears once a save works. */
+const UNSAVED_NOTICE =
+  "Unsent changes could not be saved on this device. Keep this page open until they are sent.";
+
+/**
+ * Restores the turn `key` names and forgets it. A refused launch the user is waiting on, on its
+ * thread's page, opens its draft again.
+ */
+const restoreSent =
+  (key: string): Step =>
+  (model) =>
+    Option.match(Record.get(model.sentTurns, key), {
+      onNone: () => ({ model }),
+      onSome: (sent) => {
+        const forgotten = modifyFields(model, {
+          sentTurns: (turns) => Record.remove(turns, key),
+        });
+
+        const reopen = Option.filter(launchedThread(sent), (threadId) =>
+          Option.contains(routedThreadId(model.route), threadId)
+        );
+
+        return Update.combine(forgotten, [
+          restoreComposerTurn(sent),
+          (next) => ({
+            model: next,
+            commands: Option.match(reopen, {
+              onNone: () => [],
+              onSome: (threadId) => [
+                NavigateInternal({
+                  url: draftRouter({
+                    draftId: Composer.retryDraftId(threadId),
+                  }),
+                }),
+              ],
+            }),
+          }),
+        ]);
+      },
+    });
+
+/**
+ * Follows acknowledged launches in the shell: a thread that started forgets its launch, and one
+ * whose row failed puts its first message back in a new draft (the thread page links to it).
+ */
+const followLaunches: Step = (model) =>
+  Option.match(model.shell, {
+    onNone: () => ({ model }),
+    onSome: (shell) => {
+      const settled = Record.toEntries(model.sentTurns).flatMap(
+        ([key, sent]) => {
+          if (!sent.acknowledged) {
+            return [];
+          }
+
+          return Option.match(
+            Option.flatMap(launchedThread(sent), (threadId) =>
+              Array.findFirst(shell.threads, (row) => row.id === threadId)
+            ),
+            {
+              onNone: () => [],
+              onSome: (row) =>
+                row.activity === "preparing"
+                  ? []
+                  : [{ key, failed: row.activity === "failed" }],
+            }
+          );
+        }
+      );
+
+      return Update.combine(
+        model,
+        settled.map(({ failed, key }): Step =>
+          failed
+            ? restoreSent(key)
+            : (current) => ({
+                model: modifyFields(current, {
+                  sentTurns: (turns) => Record.remove(turns, key),
+                }),
+              })
+        )
+      );
+    },
+  });
 
 const step = (received: Message): Step =>
   Message.match<Step>(received, {
@@ -664,7 +774,7 @@ const step = (received: Message): Step =>
               : connection,
         });
 
-        return sendNext(next);
+        return Update.combine(next, [sendNext, followLaunches]);
       },
 
     QueuedOutboxItem:
@@ -686,8 +796,16 @@ const step = (received: Message): Step =>
                 ? Option.none()
                 : inFlight,
             outboxAttempt: () => 0,
+            sentTurns: (turns) =>
+              Option.match(Record.get(turns, key), {
+                onNone: () => turns,
+                onSome: (sent) =>
+                  Option.isSome(launchedThread(sent))
+                    ? Record.set(turns, key, { ...sent, acknowledged: true })
+                    : Record.remove(turns, key),
+              }),
           }),
-          [persist, sendNext]
+          [persist, sendNext, followLaunches]
         ),
     FailedOutboxItem:
       ({ epoch, key, message, retryable, transport }) =>
@@ -724,7 +842,7 @@ const step = (received: Message): Step =>
             outboxAttempt: () => 0,
             notice: () => Option.some(message),
           }),
-          [persist, sendNext]
+          [restoreSent(key), persist, sendNext]
         );
       },
     ElapsedResend:
@@ -742,15 +860,16 @@ const step = (received: Message): Step =>
     CompletedSaveOutbox:
       ({ saved }) =>
       (model) => ({
-        model: saved
-          ? model
-          : modifyFields(model, {
-              notice: () =>
-                Option.some(
-                  "Unsent changes could not be saved on this device. Keep this page open until they are sent."
-                ),
-            }),
+        model: modifyFields(model, {
+          notice: (notice) =>
+            saved
+              ? Option.filter(notice, (text) => text !== UNSAVED_NOTICE)
+              : Option.some(UNSAVED_NOTICE),
+        }),
       }),
+    DismissedNotice: () => (model) => ({
+      model: modifyFields(model, { notice: () => Option.none() }),
+    }),
 
     GotThreadMessage:
       ({ message: threadMessage }) =>
@@ -817,6 +936,7 @@ export const init: Runtime.RoutingApplicationInit<
       outbox: flags.outbox,
       outboxInFlight: Option.none(),
       outboxAttempt: 0,
+      sentTurns: {},
       notice: Option.none(),
       thread: Thread.Model.initial,
       sidebar: initialSidebar,

@@ -2,6 +2,7 @@
 // `ComposerInput` Mount (Editor.ts), measurements from the footer and headline Mounts, results from
 // the composer's Commands, and the rest from clicks in its view.
 import { ControlsMeasurement } from "@cairn/client-logic/FooterLayout";
+import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { ProjectId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelCatalog, ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { RuntimeMode } from "@cairn/protocol/Policy";
@@ -100,9 +101,19 @@ export const Message = defineMessageUnion({
   SucceededBranches: { projectId: ProjectId, result: BranchesResult },
   SucceededScratch: { project: ProjectShell },
   /** A turn is ready to go: ids minted (and the scratch project made, for a projectless launch). */
-  PreparedTurn: { item: OutboxItem, navigateTo: Schema.Option(Schema.String) },
-  /** Sending could not start; the text goes back into the composer. */
-  FailedPrepareTurn: { text: Schema.String, message: Schema.String },
+  /** The turn's ids are minted; `attachments` are the refs it carries, kept to restore it if refused. */
+  PreparedTurn: {
+    item: OutboxItem,
+    navigateTo: Schema.Option(Schema.String),
+    attachments: Schema.Array(AttachmentRef),
+  },
+  /** Sending could not start; the draft at `draftKey` and its attachments go back as they were. */
+  FailedPrepareTurn: {
+    draftKey: Schema.String,
+    draft: Draft,
+    attachments: Schema.Array(AttachmentRef),
+    message: Schema.String,
+  },
   FailedRequest: { message: Schema.String },
   /** A list the composer loads in the background could not be read; the surface that needs it says so. */
   FailedLoad: {
@@ -119,8 +130,15 @@ export type Message = typeof Message.Type;
 
 /** What the composer asks the root to do. */
 export const OutMessage = defineMessageUnion({
-  /** Queue this mutation in the outbox, then go to `navigateTo` when there is one. */
-  Submitted: { item: OutboxItem, navigateTo: Schema.Option(Schema.String) },
+  /**
+   * Queue this mutation in the outbox, then go to `navigateTo` when there is one. `attachments` are
+   * the refs the turn carries, which the root keeps until the brain has the turn.
+   */
+  Submitted: {
+    item: OutboxItem,
+    navigateTo: Schema.Option(Schema.String),
+    attachments: Schema.Array(AttachmentRef),
+  },
   /** The hero's "Add project" was chosen; the sidebar owns the folder dialog. */
   RequestedAddProject: {},
 });

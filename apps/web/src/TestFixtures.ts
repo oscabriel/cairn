@@ -33,6 +33,7 @@ export const connectingModel: Model = {
   outbox: [],
   outboxInFlight: Option.none(),
   outboxAttempt: 0,
+  sentTurns: {},
   notice: Option.none(),
   thread: Thread.Model.initial,
   sidebar: initialSidebar,

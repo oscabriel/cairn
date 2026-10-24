@@ -3,6 +3,7 @@
 // withdraw, configure), and the two that turn a draft into a turn: each mints the ids the brain
 // dedupes on, so a resend after a reconnect lands once. Turn input itself goes through the root's
 // outbox, never straight to the socket.
+import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { ProjectId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { ThreadLaunchInput as ThreadLaunchInputSchema } from "@cairn/protocol/Launch";
@@ -245,9 +246,14 @@ const TurnContent = Schema.Struct({
 
 /** Mints a request id and hands back the `thread.send` for the outbox. */
 export const PrepareSend = Command.define("PrepareSend", {
-  args: { threadId: ThreadId, whenBusy: WhenBusy, content: TurnContent },
+  args: {
+    threadId: ThreadId,
+    whenBusy: WhenBusy,
+    content: TurnContent,
+    attachments: Schema.Array(AttachmentRef),
+  },
   messages: [Message.PreparedTurn],
-  execute: ({ content, threadId, whenBusy }) =>
+  execute: ({ attachments, content, threadId, whenBusy }) =>
     Effect.map(mintRequestId, (requestId) =>
       Message.PreparedTurn({
         item: OutboxItem.Send({
@@ -258,6 +264,7 @@ export const PrepareSend = Command.define("PrepareSend", {
           }),
         }),
         navigateTo: Option.none(),
+        attachments,
       })
     ),
 });
@@ -279,6 +286,10 @@ export const PrepareLaunch = Command.define("PrepareLaunch", {
     currentBranch: Schema.Option(Schema.String),
     content: TurnContent,
     stay: Schema.Boolean,
+    /** The draft as it was sent and its attachments, handed back when the launch cannot start. */
+    draftKey: Schema.String,
+    draft: Draft,
+    attachments: Schema.Array(AttachmentRef),
   },
   messages: [Message.PreparedTurn, Message.FailedPrepareTurn],
   execute: (plan) =>
@@ -323,13 +334,16 @@ export const PrepareLaunch = Command.define("PrepareLaunch", {
         navigateTo: plan.stay
           ? Option.none()
           : Option.some(threadRouter({ threadId })),
+        attachments: plan.attachments,
       });
     }).pipe(
       Effect.match({
         onSuccess: (prepared) => prepared,
         onFailure: (failure) =>
           Message.FailedPrepareTurn({
-            text: plan.content.text,
+            draftKey: plan.draftKey,
+            draft: plan.draft,
+            attachments: plan.attachments,
             message: `The thread did not start: ${failureText(failure)} Your message is back in the composer.`,
           }),
       })

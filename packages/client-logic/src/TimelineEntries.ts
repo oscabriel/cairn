@@ -37,7 +37,11 @@ import {
 } from "@cairn/protocol/Attachments";
 import type { EntryId } from "@cairn/protocol/Ids";
 import type { ConversationView, Entry } from "@cairn/protocol/Thread";
-import { ProjectedImage } from "@cairn/protocol/Thread";
+import {
+  NOTICE_ENTRY_KIND,
+  NoticeEntryData,
+  ProjectedImage,
+} from "@cairn/protocol/Thread";
 import { Array, Data, Function, Option, Predicate, Schema } from "effect";
 
 import { checkpointSummaryOf } from "./DiffTree.ts";
@@ -210,6 +214,8 @@ const decodeThinking = Schema.decodeUnknownOption(ThinkingPart);
 const decodeToolCall = Schema.decodeUnknownOption(ToolCallPart);
 
 const decodeImage = Schema.decodeUnknownOption(ProjectedImage);
+
+const decodeNotice = Schema.decodeUnknownOption(NoticeEntryData);
 
 const decodeAttachments = Schema.decodeUnknownOption(
   Schema.Struct({ attachments: Schema.Array(AttachmentRefSchema) })
@@ -600,6 +606,8 @@ type EntryReading = Data.TaggedEnum<{
     readonly moreFiles: number;
     readonly userEntryId: Option.Option<number>;
   };
+  /** Display-only text the brain wrote into the transcript, such as why a launch failed. */
+  Notice: { readonly entry: Entry; readonly text: string };
   /** An entry the transcript does not show, by its kind. */
   Skip: { readonly kind: string };
 }>;
@@ -670,6 +678,13 @@ const readEntryUncached = (entry: Entry): EntryReading => {
             moreFiles: data.moreFiles,
             userEntryId: data.userEntryId,
           }),
+      });
+    }
+
+    case NOTICE_ENTRY_KIND: {
+      return Option.match(decodeNotice(entry.data), {
+        onNone: () => EntryReading.Skip({ kind: entry.kind }),
+        onSome: ({ text }) => EntryReading.Notice({ entry, text }),
       });
     }
 
@@ -1100,6 +1115,36 @@ const readCommitted = (
         turn: found.turn,
         files: found.files,
         moreFiles: found.moreFiles,
+      });
+    },
+
+    Notice: (found) => {
+      // A notice has no time of its own: it follows the newest turn, as a failed row.
+      const owner = currentTurn(0);
+      const at = Option.getOrElse(owner.endedAt, () => owner.startedAt);
+      const id = `notice:${found.entry.id}`;
+
+      entries.push({
+        kind: "work",
+        id,
+        createdAt: at,
+        entry: {
+          id,
+          kind: "error",
+          turnId: owner.id,
+          createdAt: at,
+          completedAt: Option.some(at),
+          status: "failed",
+          toolName: Option.none(),
+          action: "other",
+          command: Option.none(),
+          changedFiles: [],
+          readPaths: [],
+          detail: Option.some(found.text),
+          output: Option.none(),
+          source: Option.none(),
+          nestedCalls: [],
+        },
       });
     },
 

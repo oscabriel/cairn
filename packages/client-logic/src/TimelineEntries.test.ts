@@ -166,6 +166,40 @@ describe("entriesFromPi on recorded transcripts", () => {
     assert.deepStrictEqual(user?.attachmentNames, []);
   });
 
+  it("shows a launch notice from the brain as a failed row in the newest turn", () => {
+    const view = decodeView(coding);
+
+    const [last] = view.entries.slice(-1);
+
+    const withNotice = entriesFromPi({
+      ...view,
+      entries: [
+        ...view.entries,
+        {
+          id: EntryId.make(9999),
+          conversationId: last?.conversationId ?? ConversationId.make(1),
+          kind: "cairn.notice",
+          data: {
+            reason: "launch_failed",
+            text: "The worktree could not be made.",
+          },
+        },
+      ],
+    });
+
+    const notice = work(withNotice).find((entry) => entry.id === "notice:9999");
+
+    assert.deepStrictEqual(
+      [notice?.kind, notice?.status, notice?.detail, notice?.turnId],
+      [
+        "error",
+        "failed",
+        Option.some("The worktree could not be made."),
+        withNotice.turns.at(-1)?.id,
+      ]
+    );
+  });
+
   it("measures a turn from its prompt to the end of its last answer", () => {
     const [first] = timeline.turns;
     const answer = coding.entries.find((entry) => entry.id === 15)?.model?.[0];

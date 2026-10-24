@@ -65,10 +65,10 @@ export const WaitToResend = Command.define("WaitToResend", {
 
 /**
  * How long one outbox send may go unanswered before it counts as a retryable failure. Above the
- * brain's own longest wait (a send that follows a launch), so a slow answer is not cut short; the
- * items are idempotent by key, so a resend after it is harmless.
+ * brain's own longest wait (a send follows a launch for up to 15 minutes, its `LaunchFollowLimit`),
+ * so a slow answer is not cut short; the items are idempotent by key, so a resend is harmless.
  */
-export const OUTBOX_SEND_TIMEOUT = Duration.seconds(90);
+export const OUTBOX_SEND_TIMEOUT = Duration.minutes(16);
 
 /** An outbox send the brain did not answer within `OUTBOX_SEND_TIMEOUT`; safe to send again. */
 export class OutboxSendTimeout extends Schema.TaggedError<OutboxSendTimeout>()(

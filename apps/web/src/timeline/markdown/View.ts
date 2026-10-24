@@ -5,14 +5,16 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 // block's label (title from its fence, else its language) and copy button, plain text until its
 // grammar loads and then the same text colored, text too long to format shown raw. Changed: the
 // node shapes of Cairn's parse (Ast.ts), GitHub alerts, the `.chat-markdown` classes of t3code's
-// styles, and the copy button routed through the transcript's Message.
+// styles, the copy button routed through the transcript's Message, a fence still growing in the
+// streaming message shown plain until it closes or commits, as t3code does, and a block too long
+// to tokenize in one frame tokenized by its Mount a slice at a time.
 import { Check, Copy, Image } from "lucide";
 
 import { icon } from "../../composer/Icon.ts";
 import { LoadHighlighting } from "../Command.ts";
 import { Message } from "../Message.ts";
 import type { AlertKind, Alignment, Block, Inline } from "./Ast.ts";
-import { languageOf, tokensOf } from "./Highlight.ts";
+import { languageOf, readyTokensOf, SLICE_CHARS } from "./Highlight.ts";
 import type { TokenLines } from "./Highlight.ts";
 import { markdownFor } from "./Markdown.ts";
 
@@ -26,6 +28,11 @@ export interface MarkdownContext {
   readonly rowId: string;
   readonly highlightedLanguages: ReadonlyArray<string>;
   readonly copiedRowId: Option.Option<string>;
+}
+
+/** The markdown context and whether the message is the one still streaming. */
+interface BlockContext extends MarkdownContext {
+  readonly streaming: boolean;
 }
 
 const LINK_CLASS =
@@ -94,36 +101,39 @@ const titleOf = (meta: Option.Option<string>): Option.Option<string> =>
     );
   });
 
-const tokenSpans = (h: H, lines: TokenLines): Content =>
-  lines.flatMap((line, index) => [
-    ...line.map((token) =>
-      Option.isNone(token.light) && Option.isNone(token.dark)
-        ? token.content
-        : h.span(
-            [
-              h.Class("text-(--shiki-light) dark:text-(--shiki-dark)"),
-              h.Style({
-                ...Option.match(token.light, {
-                  onNone: () => ({}),
-                  onSome: (color) => ({ "--shiki-light": color }),
-                }),
-                ...Option.match(token.dark, {
-                  onNone: () => ({}),
-                  onSome: (color) => ({ "--shiki-dark": color }),
-                }),
-              }),
-            ],
-            [token.content]
-          )
-    ),
-    ...(index < lines.length - 1 ? ["\n"] : []),
-  ]);
+/** `source` with its first lines colored by `lines`; lines past them, still being tokenized, stay plain. */
+const tokenSpans = (h: H, lines: TokenLines, source: string): Content => {
+  const rest = source.split("\n").slice(lines.length);
 
-const copyButton = (
-  context: MarkdownContext,
-  key: string,
-  text: string
-): Html => {
+  return [
+    ...lines.flatMap((line, index) => [
+      ...line.map((token) =>
+        Option.isNone(token.light) && Option.isNone(token.dark)
+          ? token.content
+          : h.span(
+              [
+                h.Class("text-(--shiki-light) dark:text-(--shiki-dark)"),
+                h.Style({
+                  ...Option.match(token.light, {
+                    onNone: () => ({}),
+                    onSome: (color) => ({ "--shiki-light": color }),
+                  }),
+                  ...Option.match(token.dark, {
+                    onNone: () => ({}),
+                    onSome: (color) => ({ "--shiki-dark": color }),
+                  }),
+                }),
+              ],
+              [token.content]
+            )
+      ),
+      ...(index < lines.length - 1 || rest.length > 0 ? ["\n"] : []),
+    ]),
+    ...(rest.length > 0 ? [rest.join("\n")] : []),
+  ];
+};
+
+const copyButton = (context: BlockContext, key: string, text: string): Html => {
   const { h } = context;
   const copied = Option.contains(context.copiedRowId, key);
 
@@ -146,20 +156,27 @@ const copyButton = (
 };
 
 const codeBlockView = (
-  context: MarkdownContext,
+  context: BlockContext,
   block: Extract<Block, { readonly kind: "code" }>,
+  path: string,
   index: number
 ): Html => {
   const { h } = context;
   const language = Option.flatMap(block.language, languageOf);
 
+  // A fence still growing would be tokenized again, and cached, on every frame.
+  const settled = !(context.streaming && block.open);
+
   const loaded = Option.exists(language, (name) =>
     context.highlightedLanguages.includes(name)
   );
 
-  const tokens = loaded
-    ? Option.flatMap(language, (name) => tokensOf(block.value, name))
-    : Option.none();
+  const tokens =
+    settled && loaded
+      ? Option.flatMap(language, (name) => readyTokensOf(block.value, name))
+      : Option.none();
+
+  const sliced = settled && block.value.length > SLICE_CHARS;
 
   const label = Option.getOrElse(
     Option.orElse(titleOf(block.meta), () => block.language),
@@ -168,6 +185,11 @@ const codeBlockView = (
 
   return h.div(
     [
+      // A Mount runs only when its element is created, so a fence whose language streams in after
+      // its backticks, or a long one that just closed, needs a new element: the key changes then.
+      h.Key(
+        `code:${path}:${Option.getOrElse(language, () => "")}:${sliced ? "sliced" : ""}`
+      ),
       h.DataAttribute("slot", "code-block"),
       h.Class(
         "chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-lg border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
@@ -176,7 +198,14 @@ const codeBlockView = (
       // finds the grammar loaded and its Message changes nothing.
       ...Option.match(language, {
         onNone: () => [],
-        onSome: (name) => [h.OnMount(LoadHighlighting({ language: name }))],
+        onSome: (name) => [
+          h.OnMount(
+            LoadHighlighting({
+              language: name,
+              code: sliced ? Option.some(block.value) : Option.none(),
+            })
+          ),
+        ],
       }),
     ],
     [
@@ -209,12 +238,18 @@ const codeBlockView = (
             [
               h.DataAttribute(
                 "highlighted",
-                Option.isSome(tokens) ? "true" : "false"
+                Option.match(tokens, {
+                  onNone: () => "false",
+                  onSome: (lines) =>
+                    lines.length < block.value.split("\n").length
+                      ? "partly"
+                      : "true",
+                })
               ),
             ],
             Option.match(tokens, {
               onNone: () => [block.value],
-              onSome: (lines) => tokenSpans(h, lines),
+              onSome: (lines) => tokenSpans(h, lines, block.value),
             })
           ),
         ]
@@ -251,7 +286,7 @@ const ALERTS: Readonly<
 };
 
 const quoteView = (
-  context: MarkdownContext,
+  context: BlockContext,
   block: Extract<Block, { readonly kind: "quote" }>,
   children: Content
 ): Html => {
@@ -294,7 +329,7 @@ const headingView = (
   );
 
 const tableView = (
-  context: MarkdownContext,
+  context: BlockContext,
   block: Extract<Block, { readonly kind: "table" }>
 ): Html => {
   const { h } = context;
@@ -340,7 +375,7 @@ const tableView = (
 type RenderBlocks = (blocks: ReadonlyArray<Block>, path: string) => Content;
 
 const listView = (
-  context: MarkdownContext,
+  context: BlockContext,
   block: Extract<Block, { readonly kind: "list" }>,
   path: string,
   render: RenderBlocks
@@ -387,7 +422,7 @@ const listView = (
 };
 
 const blockView = (
-  context: MarkdownContext,
+  context: BlockContext,
   block: Block,
   path: string,
   index: number
@@ -404,7 +439,7 @@ const blockView = (
       heading: ({ content, level }) =>
         headingView(h, level, inlines(h, content)),
       paragraph: ({ content }) => h.p([], inlines(h, content)),
-      code: (code) => codeBlockView(context, code, index),
+      code: (code) => codeBlockView(context, code, path, index),
       list: (list) => listView(context, list, path, render),
       quote: (quote) => quoteView(context, quote, render(quote.blocks, path)),
       rule: () => h.hr([]),
@@ -414,8 +449,8 @@ const blockView = (
 };
 
 /**
- * A message's markdown. `streaming` marks the one growing message, which re-parses only its tail.
- * Text too long to format shows raw.
+ * A message's markdown. `streaming` marks the one growing message, which re-parses only its tail
+ * and leaves a fence that has not closed plain. Text too long to format shows raw.
  */
 export const markdownView = (
   context: MarkdownContext,
@@ -423,6 +458,7 @@ export const markdownView = (
   streaming: boolean
 ): Html => {
   const { h } = context;
+  const blockContext: BlockContext = { ...context, streaming };
 
   return Option.match(markdownFor(context.rowId, source), {
     onNone: () =>
@@ -448,7 +484,7 @@ export const markdownView = (
           ...(streaming ? [h.DataAttribute("streaming", "")] : []),
         ],
         document.blocks.map((placed, index) =>
-          blockView(context, placed.block, String(index), placed.startLine)
+          blockView(blockContext, placed.block, String(index), placed.startLine)
         )
       ),
   });

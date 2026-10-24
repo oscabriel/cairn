@@ -1,6 +1,7 @@
 // The diff panel's state: which thread and turn it shows (none while closed), whether it shows that
 // turn alone or everything up to it, the whitespace switch, the file the user picked, the patch as
-// the brain sent it, and the code grammars loaded so far. Parsed files are derived in the view.
+// the brain sent it, and the code grammars loaded so far. Parsed files are derived in the view,
+// once per patch.
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
@@ -40,6 +41,8 @@ export const Model = Schema.Struct({
   /** Bumped by every request; an answer for an older one is dropped. */
   version: Schema.Int,
   highlightedLanguages: Schema.Array(Schema.String),
+  /** Counts slices of long files tokenized off the render; file views compare it, so they redraw. */
+  highlightedCode: Schema.Int,
 });
 
 export type Model = typeof Model.Type;
@@ -53,6 +56,7 @@ export const initial: Model = {
   load: DiffLoad.Idle(),
   version: 0,
   highlightedLanguages: [],
+  highlightedCode: 0,
 };
 
 /** True while the panel is open. */

@@ -179,6 +179,13 @@ export const update = (model: Model, message: Message): UpdateReturn =>
               highlightedLanguages: (languages) => [...languages, language],
             }),
           },
+    HighlightedCode: ({ language }) => ({
+      model: modifyFields(model, {
+        highlightedLanguages: (languages) =>
+          languages.includes(language) ? languages : [...languages, language],
+        highlightedCode: (count) => count + 1,
+      }),
+    }),
     FailedLanguage: () => ({ model }),
     MountedTimer: () => ({ model }),
     MountedFollowEnd: () => ({ model }),

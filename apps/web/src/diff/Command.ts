@@ -1,13 +1,14 @@
 // The diff panel's effects: asking the brain for a patch (`diff.turn` for one turn, `diff.full`
 // for everything up to it), scrolling to a file, and loading a file's grammar when its diff mounts
-// (the same lazy shiki chunks the transcript's code blocks use).
+// (the same lazy shiki chunks the transcript's code blocks use), then tokenizing a long file a
+// slice at a time.
 import { ThreadId } from "@cairn/protocol/Ids";
-import { Effect, Predicate, Schema } from "effect";
+import { Effect, Predicate, Schema, Stream } from "effect";
 import { Command, Dom } from "foldkit";
 import * as Mount from "foldkit/mount";
 
 import { CairnConnection } from "../connection/Connection.ts";
-import { loadLanguage } from "../timeline/markdown/Highlight.ts";
+import { highlightStages } from "../timeline/markdown/Highlight.ts";
 import { Message } from "./Message.ts";
 import { DiffScope } from "./Model.ts";
 
@@ -73,23 +74,38 @@ const markHighlight = (element: Element, state: string): void => {
   }
 };
 
-/** Loads a file's grammar when its diff mounts, and marks the file `data-highlight` with the result. */
-export const LoadDiffHighlighting = Mount.define("LoadDiffHighlighting", {
-  args: { language: Schema.String },
-  messages: [Message.LoadedLanguage, Message.FailedLanguage],
-  execute: ({ element, language }) =>
-    loadLanguage(language).pipe(
-      Effect.match({
-        onSuccess: () => {
+/**
+ * Loads a file's grammar when its diff mounts, then tokenizes `code`, the file's shown lines when
+ * they are too long to tokenize while rendering, a slice at a time, each slice answered with
+ * `HighlightedCode`. Marks the file `data-highlight` with the result.
+ */
+export const LoadDiffHighlighting = Mount.defineStream("LoadDiffHighlighting", {
+  args: { language: Schema.String, code: Schema.Option(Schema.String) },
+  messages: [
+    Message.LoadedLanguage,
+    Message.HighlightedCode,
+    Message.FailedLanguage,
+  ],
+  execute: ({ code, element, language }) =>
+    highlightStages(language, code).pipe(
+      Stream.map((stage) =>
+        stage === "loaded"
+          ? Message.LoadedLanguage({ language })
+          : Message.HighlightedCode({ language })
+      ),
+      Stream.onEnd(
+        Effect.sync(() => {
           markHighlight(element, "ready");
+        })
+      ),
+      Stream.catchTag("HighlightLoadError", () =>
+        Stream.fromEffect(
+          Effect.sync(() => {
+            markHighlight(element, "failed");
 
-          return Message.LoadedLanguage({ language });
-        },
-        onFailure: () => {
-          markHighlight(element, "failed");
-
-          return Message.FailedLanguage({ language });
-        },
-      })
+            return Message.FailedLanguage({ language });
+          })
+        )
+      )
     ),
 });

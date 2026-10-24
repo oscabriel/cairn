@@ -1,6 +1,8 @@
 // Synthetic threads for the transcript's scroll judge and tests: pi transcripts shaped like the
 // recorded ones (judges/fixtures/transcripts), long enough to give thousands of rows, and a reply
 // that streams the way pi-durable's `pi.live` doc grows, then commits and gives way to the next.
+// The streamed reply carries a short fence whose language arrives a frame after its backticks, in
+// a language the history never uses, and a 300-line TypeScript fence.
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { ConversationView, Entry } from "@cairn/protocol/Thread";
 import { Schema } from "effect";
@@ -25,6 +27,88 @@ export const answerText = (turn: number): string =>
     { length: 1 + (turn % 4) },
     (_, index) => PARAGRAPHS[(turn + index) % PARAGRAPHS.length] ?? ""
   ).join("\n\n");
+
+/** How many characters of prose one streamed frame adds. */
+const PROSE_PER_FRAME = 24;
+
+/** The lines of the streamed reply's TypeScript fence. */
+export const FENCE_LINES = 300;
+
+/** How many fence lines one streamed frame adds. */
+const FENCE_LINES_PER_FRAME = 4;
+
+/**
+ * Prose after the TypeScript fence: about eight seconds of frames, so the reply commits after the
+ * judge's follow and scroll-up phases, which sample it while it streams.
+ */
+const OUTRO_CHARS = 4800;
+
+const fenceLine = (turn: number, line: number): string => {
+  const step = Math.floor(line / 5);
+
+  return (
+    [
+      `export const step${String(step)} = (input: ReadonlyArray<number>): number => {`,
+      `  const scaled = input.map((value) => value * ${String(step + turn)});`,
+      `  // Step ${String(step)}: add up the scaled values.`,
+      "  return scaled.reduce((sum, value) => sum + value, 0);",
+      "};",
+    ][line % 5] ?? ""
+  );
+};
+
+/** A streamed reply: its whole text and where each frame ends, as offsets into the text. */
+export interface StreamedReply {
+  readonly text: string;
+  readonly frameEnds: ReadonlyArray<number>;
+}
+
+/**
+ * The reply turn `turn` streams. Prose comes `PROSE_PER_FRAME` characters a frame; each fence's
+ * backticks come one frame before its language, and the TypeScript fence `FENCE_LINES_PER_FRAME`
+ * lines a frame.
+ */
+export const streamedReply = (turn: number): StreamedReply => {
+  const parts: Array<string> = [];
+
+  const prose = (text: string): void => {
+    for (let start = 0; start < text.length; start += PROSE_PER_FRAME) {
+      parts.push(text.slice(start, start + PROSE_PER_FRAME));
+    }
+  };
+
+  prose(answerText(turn));
+  parts.push("\n\n```", 'rust\nfn main() {\n    println!("step");\n}\n```');
+  prose("\n\nAnd the module itself:");
+  parts.push("\n\n```", "ts");
+
+  for (let line = 0; line < FENCE_LINES; line += FENCE_LINES_PER_FRAME) {
+    parts.push(
+      Array.from(
+        { length: Math.min(FENCE_LINES_PER_FRAME, FENCE_LINES - line) },
+        (_, offset) => `\n${fenceLine(turn, line + offset)}`
+      ).join("")
+    );
+  }
+
+  parts.push("\n```");
+
+  const outro = answerText(turn + 1);
+
+  prose(
+    `\n\n${Array.from({ length: Math.ceil(OUTRO_CHARS / outro.length) }, () => outro).join("\n\n")}`
+  );
+
+  const frameEnds: Array<number> = [];
+  let end = 0;
+
+  for (const part of parts) {
+    end += part.length;
+    frameEnds.push(end);
+  }
+
+  return { text: parts.join(""), frameEnds };
+};
 
 const at = (turn: number): number => START_MS + turn * 10_000;
 

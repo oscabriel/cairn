@@ -13,7 +13,6 @@
 //              `scrollTop` or the clicked control;
 //   pill       the pill brings the list back to its end, which it follows again;
 //   switch     thread A's first visible row and its offset come back after showing thread B.
-// The long tasks seen while streaming are recorded (count, total and longest, in ms).
 // Prints one JSON line and exits 0 when every check passed.
 /* oxlint-disable no-await-in-loop -- a judge drives one browser step after another, on purpose */
 import { once } from "node:events";
@@ -42,6 +41,16 @@ const root = path.resolve(import.meta.dirname, "..");
 
 const SCROLLER = '[data-testid="timeline-scroll"]';
 
+/** The longest main-thread task the follow phase allows, in ms: three frames at 60 Hz. */
+const LONG_TASK_MAX_MS = 50;
+
+/**
+ * The most long-task time the follow phase allows per six seconds, in ms. Highlighting the growing
+ * fence on every frame cost about 1,400; plain until it closes, then sliced, it costs 0 on a quiet
+ * machine, and this leaves room for three tasks at the limit.
+ */
+const LONG_TASK_TOTAL_MS = 150;
+
 // Runs in the page before the app: per-frame sampling, the long-task log, and probes. A string, so
 // the page's globals stay out of this file's types; what comes back is decoded below.
 const PAGE_SCRIPT = `
@@ -52,6 +61,10 @@ new PerformanceObserver((list) => {
 window.__takeLongTasks = () => window.__longTasks.splice(0);
 window.__pill = () =>
   document.querySelector('[data-testid="scroll-to-end"]')?.dataset.visible === "true";
+window.__streamedCode = () =>
+  [...document.querySelectorAll('[data-streaming] [data-slot="code-block"] code')].map(
+    (code) => code.dataset.highlighted === "true"
+  );
 window.__rows = () =>
   Number(document.querySelector(${JSON.stringify(SCROLLER)})?.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") ?? 0);
 window.__markVisible = (selector, name) => {
@@ -105,6 +118,8 @@ type Frame = typeof Frame.Type;
 const decodeFrames = Schema.decodeUnknownSync(Schema.Array(Frame));
 
 const decodeNumbers = Schema.decodeUnknownSync(Schema.Array(Schema.Finite));
+
+const decodeBooleans = Schema.decodeUnknownSync(Schema.Array(Schema.Boolean));
 
 const decodeBoolean = Schema.decodeUnknownSync(Schema.Boolean);
 
@@ -194,10 +209,16 @@ const followPhase = async (page: Page) => {
   const frames = await sampleFrames(page, SECONDS * 1000);
   const tasks = await takeLongTasks(page);
 
+  const streamedCode = decodeBooleans(
+    await page.evaluate("window.__streamedCode()")
+  );
+
   return {
     frames: frames.length,
     maxDistancePx: maxDistance(frames),
     framesOver1Px: frames.filter((frame) => frame.distance > 1).length,
+    codeBlocks: streamedCode.length,
+    codeBlocksHighlighted: streamedCode.filter(Boolean).length,
     longTasks: {
       count: tasks.length,
       totalMs: Math.round(tasks.reduce((sum, value) => sum + value, 0)),
@@ -231,9 +252,10 @@ const expandPhase = async (page: Page) => {
 
   let fold = await markVisible(page, '[data-testid="turn-fold"]', "fold");
 
-  // Scroll up until a fold sits wholly in view; the samples below start after the last wheel.
-  for (let tries = 0; !fold && tries < 12; tries += 1) {
-    await wheelUp(page, 300);
+  // Scroll up until a fold sits wholly in view, past the streamed reply's long fence; the samples
+  // below start after the last wheel.
+  for (let tries = 0; !fold && tries < 30; tries += 1) {
+    await wheelUp(page, 400);
     await sleep(300);
     fold = await markVisible(page, '[data-testid="turn-fold"]', "fold");
   }
@@ -372,6 +394,12 @@ const main = async () => {
 
   const checks = {
     follow: result.follow.maxDistancePx <= 1 && result.atEndOnLoad <= 1,
+    longTasks:
+      result.follow.longTasks.maxMs <= LONG_TASK_MAX_MS &&
+      result.follow.longTasks.totalMs <= (LONG_TASK_TOTAL_MS * SECONDS) / 6,
+    highlighted:
+      result.follow.codeBlocks === 2 &&
+      result.follow.codeBlocksHighlighted === 2,
     scrollUp:
       result.scrollUp.pill &&
       result.scrollUp.scrollTopChanges === 0 &&

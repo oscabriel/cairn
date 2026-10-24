@@ -191,6 +191,7 @@ const fenceAt = (
       language: language === "" ? Option.none() : Option.some(language),
       meta: meta.length === 0 ? Option.none() : Option.some(meta.join(" ")),
       value: body.join("\n"),
+      open: index >= lines.length,
     },
     next: Math.min(lines.length, index + 1),
   });
@@ -541,6 +542,7 @@ const indentedCodeAt = (lines: ReadonlyArray<string>, at: number): Parsed => {
       language: Option.none(),
       meta: Option.none(),
       value: body.join("\n"),
+      open: false,
     },
     next: index,
   };

@@ -28,6 +28,8 @@ export const Message = defineMessageUnion({
   FailedDiff: { version: Schema.Int, message: Schema.String },
   ScrolledToFile: {},
   LoadedLanguage: { language: Schema.String },
+  /** A long file's tokens are in the shared cache, a slice more of them: its grammar is loaded. */
+  HighlightedCode: { language: Schema.String },
   FailedLanguage: { language: Schema.String },
 });
 

@@ -147,6 +147,7 @@ describe("block markdown", () => {
       language: Option.some("bash"),
       meta: Option.none(),
       value: "npm install\n\nnpm test",
+      open: false,
     });
     assert.isTrue(table?.kind === "table");
     assert.deepStrictEqual(table?.kind === "table" ? table.alignments : [], [
@@ -194,15 +195,22 @@ describe("block markdown", () => {
     assert.deepStrictEqual(tightness("- one\n\n  more\n- two"), [false]);
   });
 
-  it("runs an unclosed fence to the end", () => {
+  it("runs an unclosed fence to the end and marks it open", () => {
     assert.deepStrictEqual(blocks("```ts\nconst a = 1"), [
       {
         kind: "code",
         language: Option.some("ts"),
         meta: Option.none(),
         value: "const a = 1",
+        open: true,
       },
     ]);
+    assert.deepStrictEqual(
+      blocks("```ts\nconst a = 1\n```").map(
+        (block) => block.kind === "code" && block.open
+      ),
+      [false]
+    );
   });
 });
 

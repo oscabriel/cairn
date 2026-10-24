@@ -1,15 +1,16 @@
 // The transcript's effects: paging in older turns through `thread.history`, preparing a Retry for
-// the outbox, the clipboard, and loading a code block's grammar when it mounts.
+// the outbox, the clipboard, and loading a code block's grammar when it mounts, then tokenizing a
+// long block a slice at a time.
 import { AttachmentId, EntryId, ThreadId } from "@cairn/protocol/Ids";
 import { SendInput } from "@cairn/protocol/Thread";
-import { Duration, Effect, Option, Schema } from "effect";
+import { Duration, Effect, Option, Schema, Stream } from "effect";
 import { Command } from "foldkit";
 import * as Mount from "foldkit/mount";
 
 import { mintRequestId } from "../composer/Ids.ts";
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
-import { loadLanguage } from "./markdown/Highlight.ts";
+import { highlightStages } from "./markdown/Highlight.ts";
 import { Message } from "./Message.ts";
 
 /** How many entries one "Load earlier turns" asks for. */
@@ -102,28 +103,43 @@ const markHighlight = (element: Element, state: string): void => {
 };
 
 /**
- * Loads a code block's grammar when the block mounts (already loaded answers at once), and marks
- * the block `data-highlight` "loading", then "ready" or "failed".
+ * Loads a code block's grammar when the block mounts (already loaded answers at once). `code` is
+ * the settled text of a block too long to tokenize while rendering; it is tokenized into the
+ * shared cache a slice at a time, each slice answered with `HighlightedCode` so the rows draw the
+ * lines done so far. Marks the block `data-highlight` "loading", then "ready" or "failed".
  */
-export const LoadHighlighting = Mount.define("LoadHighlighting", {
-  args: { language: Schema.String },
-  messages: [Message.LoadedLanguage, Message.FailedLanguage],
-  execute: ({ element, language }) =>
-    Effect.sync(() => {
-      markHighlight(element, "loading");
-    }).pipe(
-      Effect.andThen(loadLanguage(language)),
-      Effect.match({
-        onSuccess: () => {
+export const LoadHighlighting = Mount.defineStream("LoadHighlighting", {
+  args: { language: Schema.String, code: Schema.Option(Schema.String) },
+  messages: [
+    Message.LoadedLanguage,
+    Message.HighlightedCode,
+    Message.FailedLanguage,
+  ],
+  execute: ({ code, element, language }) =>
+    highlightStages(language, code).pipe(
+      Stream.map((stage) =>
+        stage === "loaded"
+          ? Message.LoadedLanguage({ language })
+          : Message.HighlightedCode({ language })
+      ),
+      Stream.onStart(
+        Effect.sync(() => {
+          markHighlight(element, "loading");
+        })
+      ),
+      Stream.onEnd(
+        Effect.sync(() => {
           markHighlight(element, "ready");
+        })
+      ),
+      Stream.catchTag("HighlightLoadError", () =>
+        Stream.fromEffect(
+          Effect.sync(() => {
+            markHighlight(element, "failed");
 
-          return Message.LoadedLanguage({ language });
-        },
-        onFailure: () => {
-          markHighlight(element, "failed");
-
-          return Message.FailedLanguage({ language });
-        },
-      })
+            return Message.FailedLanguage({ language });
+          })
+        )
+      )
     ),
 });

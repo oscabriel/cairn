@@ -21,12 +21,13 @@ import {
 } from "../Update.ts";
 import { view as timelineView } from "../View.ts";
 import {
-  answerText,
   commitReply,
   growReply,
   startReply,
+  streamedReply,
   syntheticThread,
 } from "./Fixture.ts";
+import type { StreamedReply } from "./Fixture.ts";
 
 const Model = Schema.Struct({
   timeline: TimelineModel,
@@ -35,7 +36,7 @@ const Model = Schema.Struct({
   b: ThreadViewModel,
   streaming: Schema.Boolean,
   turn: Schema.Int,
-  chars: Schema.Int,
+  frame: Schema.Int,
 });
 
 type Model = typeof Model.Type;
@@ -51,9 +52,25 @@ type Message = typeof Message.Type;
 
 const LONG_TURNS = 700;
 
-const CHARS_PER_TICK = 24;
-
 const TICK = Duration.millis(40);
+
+/** The reply of the turn streaming now, built once per turn rather than once per tick. */
+const replies = new Map<number, StreamedReply>();
+
+const replyOf = (turn: number): StreamedReply => {
+  const built = replies.get(turn);
+
+  if (built !== undefined) {
+    return built;
+  }
+
+  const reply = streamedReply(turn);
+
+  replies.clear();
+  replies.set(turn, reply);
+
+  return reply;
+};
 
 const stateOf = (model: Model) => (model.current === "a" ? model.a : model.b);
 
@@ -103,15 +120,15 @@ const show = (model: Model, id: "a" | "b"): Return =>
 type Return = Update.Return<Model, Message, CairnConnectionService>;
 
 const tick = (model: Model): Return => {
-  const reply = answerText(model.turn).repeat(6);
-  const chars = model.chars + CHARS_PER_TICK;
+  const reply = replyOf(model.turn);
+  const end = reply.frameEnds[model.frame];
 
-  if (chars < reply.length) {
+  if (end !== undefined && end < reply.text.length) {
     return {
       model: {
         ...model,
-        a: growReply(model.a, model.turn, reply.slice(0, chars)),
-        chars,
+        a: growReply(model.a, model.turn, reply.text.slice(0, end)),
+        frame: model.frame + 1,
       },
     };
   }
@@ -121,9 +138,9 @@ const tick = (model: Model): Return => {
   return {
     model: {
       ...model,
-      a: startReply(commitReply(model.a, model.turn, reply), turn),
+      a: startReply(commitReply(model.a, model.turn, reply.text), turn),
       turn,
-      chars: 0,
+      frame: 0,
     },
   };
 };
@@ -155,7 +172,7 @@ const init = (): Return =>
       b: syntheticThread(2, 40),
       streaming: false,
       turn: LONG_TURNS,
-      chars: 0,
+      frame: 0,
     },
     "a"
   );

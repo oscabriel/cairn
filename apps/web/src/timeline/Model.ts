@@ -33,6 +33,8 @@ export const Model = Schema.Struct({
   copiedRowId: Schema.Option(Schema.String),
   copyVersion: Schema.Int,
   highlightedLanguages: Schema.Array(Schema.String),
+  /** Counts long code blocks tokenized off the render; rows compare it, so they redraw with the tokens. */
+  highlightedCode: Schema.Int,
 });
 
 export type Model = typeof Model.Type;
@@ -70,6 +72,7 @@ export const initial: Model = {
   copiedRowId: Option.none(),
   copyVersion: 0,
   highlightedLanguages: [],
+  highlightedCode: 0,
 };
 
 /** True while the list follows its end (new rows scroll into view). */

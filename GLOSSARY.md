@@ -46,6 +46,8 @@ _Avoid_: session, chat
 
 **Launch**: Creating a thread: its sidebar row appears at once (preparing), then the brain prepares its workspace, opens its conversation and sends its first message, each step recorded so a restart resumes it.
 
+**Notice**: A display-only `cairn.notice` entry the brain writes into a thread's transcript about something that happened outside a run, such as why a launch failed after its conversation existed. It carries no model message, so the model never sees it.
+
 **Temporary branch**: The `cairn/<8 hex>` branch (or `cairn-<8 hex>` when a plain `cairn` branch exists) a new worktree starts on, renamed from the first message by the title model.
 
 **Title model**: The cheap model that names threads and branches, never the bridge; without one, a thread keeps its first line as its title and a branch takes a slug of the message.

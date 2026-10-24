@@ -38,6 +38,8 @@ import type {
 } from "@cairn/protocol/Launch";
 import type { ProjectShell } from "@cairn/protocol/Shell";
 import { ThreadRename } from "@cairn/protocol/ShellCommands";
+import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
+import type { NoticeEntryData } from "@cairn/protocol/Thread";
 import {
   Cause,
   Context,
@@ -265,6 +267,36 @@ export class ThreadLaunch extends Context.Service<
             })
           )
           .pipe(Effect.ignore);
+      });
+
+      // A launch that failed once its conversation existed also says why in the transcript, which
+      // is what the thread page shows; before that only the row can say it. Failures only log.
+      const noteFailure = Effect.fnUntraced(function* (
+        row: LaunchRow,
+        message: string
+      ) {
+        const data: NoticeEntryData = {
+          reason: "launch_failed",
+          text: message.slice(0, 4000),
+        };
+
+        yield* seam
+          .write(row.input.threadId, {
+            requestId: `cairn-launch-failed:${row.input.commandId}`,
+            kind: NOTICE_ENTRY_KIND,
+            data,
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("launch failure not written").pipe(
+                Effect.annotateLogs({
+                  event: "launch_notice_failed",
+                  threadId: row.input.threadId,
+                  cause: String(cause),
+                })
+              )
+            )
+          );
       });
 
       // Removes what the launch made. The branch is read from the worktree, because a rename may
@@ -713,6 +745,11 @@ export class ThreadLaunch extends Context.Service<
               yield* FiberMap.remove(naming, `branch:${input.threadId}`);
               yield* cleanUp(row, projectShell);
               yield* markFailed(row, message);
+
+              if (row.phase === "ensured") {
+                yield* noteFailure(row, message);
+              }
+
               yield* launches.remove(commandId);
             });
           })

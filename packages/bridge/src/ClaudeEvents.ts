@@ -190,6 +190,8 @@ export const ResultEvent = Schema.Struct({
   is_error: Schema.optional(Schema.Boolean),
   result: Schema.optional(Schema.String),
   errors: Schema.optional(Schema.Array(Schema.String)),
+  /** The query's totals; for a one-turn query, its one request's, output tokens included. */
+  usage: Schema.optional(Schema.NullOr(SdkUsage)),
   modelUsage: Schema.optional(
     Schema.Record(
       Schema.String,

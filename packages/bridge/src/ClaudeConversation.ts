@@ -53,13 +53,14 @@ import type {
   Effort,
 } from "./ClaudeGuards.ts";
 import {
-  abortKind,
   CHILD_ENDED_TEXT,
-  childEnv,
   INIT_REFUSED_TEXT,
+  PAID_CREDITS_TEXT,
   PROMPT_REFUSED_TEXT,
-  refuseInit,
   STREAM_STALLED_TEXT,
+  abortKind,
+  childEnv,
+  refuseInit,
   unsendableFindings,
 } from "./ClaudeGuards.ts";
 import type { HeldState, InstructionState } from "./ClaudeInstructions.ts";
@@ -170,6 +171,11 @@ interface Child {
 interface ChildHolder {
   child: Option.Option<Child>;
 }
+
+/** How long a fork waits for its stamped entry to reach the transcript: 10 tries, 200 ms apart. */
+const STAMP_WAIT_ATTEMPTS = 10;
+
+const STAMP_WAIT_INTERVAL = Duration.millis(200);
 
 /** A served tool call waiting for pi's result. */
 interface ParkedCall {
@@ -421,6 +427,14 @@ export const openConversation = Effect.fnUntraced(function* (
         child.ccSessionId = Option.some(effect.sessionId);
       } else if (effect.kind === "rate-limit") {
         yield* deps.onRateLimit(effect.info);
+
+        // A subscription turn never spills into paid credits: stop it at the first sign.
+        if (effect.info.isUsingOverage === true) {
+          yield* Effect.logWarning(
+            "claude turn drew on paid usage credits"
+          ).pipe(Effect.annotateLogs({ sessionId: deps.piSessionId }));
+          yield* killChild(child, "failed", PAID_CREDITS_TEXT);
+        }
       } else if (effect.kind === "api-retry") {
         child.quietUntil = now() + effect.delayMs;
       } else if (effect.kind === "ended") {
@@ -726,6 +740,22 @@ export const openConversation = Effect.fnUntraced(function* (
       return { turn, child } satisfies Routed;
     });
 
+  /** Waits, briefly, until `uuid` is in the transcript of `sessionId`; gives up quietly. */
+  const stampWritten = (sessionId: string, uuid: string, cwd: string) =>
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < STAMP_WAIT_ATTEMPTS; attempt += 1) {
+        const entries = yield* sdk
+          .entries(sessionId, cwd)
+          .pipe(Effect.orElseSucceed(() => []));
+
+        if (entries.some((entry) => entry.uuid === uuid)) {
+          return;
+        }
+
+        yield* Effect.sleep(STAMP_WAIT_INTERVAL);
+      }
+    });
+
   /** The prompt blocks of a resumed session and where it cuts. */
   const resumePlan = (
     found: FoundStamp,
@@ -834,13 +864,25 @@ export const openConversation = Effect.fnUntraced(function* (
       const reminder = reminderFor(stampHeld, state, priorTexts(prior));
 
       if (decision.kind === "fork-stamped") {
+        const { ccSessionId, ccUuid } = decision.found.stamp;
+
+        // A stamp made mid-turn can name an entry Claude Code has not written yet.
+        yield* stampWritten(ccSessionId, ccUuid, base.cwd);
+
         const forked = yield* sdk
-          .fork(
-            decision.found.stamp.ccSessionId,
-            Option.some(decision.found.stamp.ccUuid),
-            base.cwd
-          )
-          .pipe(Effect.option);
+          .fork(ccSessionId, Option.some(ccUuid), base.cwd)
+          .pipe(
+            Effect.tapError((error) =>
+              Effect.logWarning("claude fork failed").pipe(
+                Effect.annotateLogs({
+                  sessionId: deps.piSessionId,
+                  ccSessionId,
+                  reason: error.message,
+                })
+              )
+            ),
+            Effect.option
+          );
 
         if (Option.isNone(forked)) {
           return yield* fresh(true, Option.none());

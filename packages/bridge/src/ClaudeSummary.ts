@@ -45,14 +45,15 @@ import { Clock, Effect, Layer, Option, Stream } from "effect";
 import type { ClaudeEvent } from "./ClaudeEvents.ts";
 import type { ChildOptions } from "./ClaudeGuards.ts";
 import {
-  abortKind,
   CHILD_ENDED_TEXT,
-  childEnv,
-  claudeFailureText,
   EMPTY_PROMPT_TEXT,
   INIT_REFUSED_TEXT,
-  planQuotaExceededText,
+  PAID_CREDITS_TEXT,
   PROMPT_REFUSED_TEXT,
+  abortKind,
+  childEnv,
+  claudeFailureText,
+  planQuotaExceededText,
   refuseInit,
   unsendableFindings,
 } from "./ClaudeGuards.ts";
@@ -144,12 +145,23 @@ const readEvent = (progress: Progress, event: ClaudeEvent): void => {
             Option.fromNullishOr(event.rate_limit_info.rateLimitType)
           ),
         });
+      } else if (event.rate_limit_info.isUsingOverage === true) {
+        progress.outcome = Option.some({
+          kind: "error",
+          text: PAID_CREDITS_TEXT,
+        });
       }
 
       break;
     }
 
     case "result": {
+      // The assistant events carry the opening snapshot (output 1 to 6 tokens); the result has
+      // the request's final counts.
+      for (const usage of Option.toArray(Option.fromNullishOr(event.usage))) {
+        applyUsage(progress.usage, usage);
+      }
+
       if (event.is_error === true || event.subtype !== "success") {
         const said = Option.orElse(Option.fromNullishOr(event.result), () =>
           Option.map(Option.fromNullishOr(event.errors), (errors) =>

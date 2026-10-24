@@ -86,17 +86,19 @@ export const CHILD_ENV = {
 export const QUIET_ENV = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
 
 /**
- * Variables that would move a child off the subscription login. Removing them is not reading them:
- * Cairn never looks at their values.
+ * Variables a child must not inherit. `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN`/`_USE_*` would move
+ * it off the subscription login; `CLAUDECODE` and the other `CLAUDE_CODE_*` are a parent Claude Code
+ * session's (a bridge started from an agent shell, such as a judge), which would hand the child that
+ * session's id and messaging socket and add its reminders to the prompt. Removing them is not reading
+ * them: Cairn never looks at their values. `CHILD_ENV` and `QUIET_ENV` are set after the strip.
  */
-const STRIPPED_ENV: ReadonlySet<string> = new Set([
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "CLAUDE_CODE_USE_FOUNDRY",
-]);
+const STRIPPED_ENV: ReadonlySet<string> = new Set(["CLAUDECODE"]);
 
-const strippedPrefixes: ReadonlyArray<string> = ["ANTHROPIC_", "CAIRN_"];
+const strippedPrefixes: ReadonlyArray<string> = [
+  "ANTHROPIC_",
+  "CAIRN_",
+  "CLAUDE_CODE_",
+];
 
 const isStripped = (key: string): boolean =>
   STRIPPED_ENV.has(key) ||
@@ -315,6 +317,12 @@ export const planQuotaExceededText = (
       `${PLAN_QUOTA_PREFIX}: the ${window} window is spent. Send again after it resets.`,
   });
 };
+
+/**
+ * A subscription turn that started drawing on paid usage credits. Not retryable (it carries the plan
+ * quota prefix): paying for a turn is a purposeful choice of an `anthropic` provider model.
+ */
+export const PAID_CREDITS_TEXT = `${PLAN_QUOTA_PREFIX}: this turn started drawing on paid usage credits, which Claude subscription threads never use. Pick an anthropic provider model to pay for it, or send again after the plan window resets.`;
 
 /** A child that died before its turn finished. Retryable: the resumed attempt is cheap. */
 export const CHILD_ENDED_TEXT =

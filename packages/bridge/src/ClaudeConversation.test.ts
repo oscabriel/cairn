@@ -10,13 +10,14 @@ import type {
 } from "@earendil-works/pi-ai";
 import { normalizeContext, Type } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Option, Ref, Stream } from "effect";
+import { Duration, Effect, Fiber, Layer, Option, Ref, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import { Claude } from "./Claude.ts";
 import { ClaudeAccount } from "./ClaudeAccount.ts";
 import {
   INIT_REFUSED_TEXT,
+  PAID_CREDITS_TEXT,
   PLAN_QUOTA_PREFIX,
   STREAM_STALLED_TEXT,
 } from "./ClaudeGuards.ts";
@@ -683,6 +684,38 @@ const givesUpOnTheCall: FakeScript = (io) =>
     return yield* Effect.never;
   });
 
+describe("paid usage credits", () => {
+  it.effect(
+    "end a subscription turn that starts drawing on paid credits, and kill its child",
+    () =>
+      Effect.gen(function* () {
+        const claude = yield* Claude;
+        const reply = yield* call([system, user("hello")]);
+
+        expect([
+          reply.stopReason,
+          reply.errorMessage,
+          yield* claude.hasChild("conv-1"),
+        ]).toStrictEqual(["error", PAID_CREDITS_TEXT, false]);
+      }).pipe(
+        Effect.provide(
+          bridge([
+            (io) =>
+              Effect.gen(function* () {
+                yield* io.nextPrompt;
+                yield* io.emit(initEvent(SCRIPT_SESSION), {
+                  type: "rate_limit_event",
+                  rate_limit_info: { status: "allowed", isUsingOverage: true },
+                });
+
+                return yield* Effect.never;
+              }),
+          ])
+        )
+      )
+  );
+});
+
 describe("held rounds pi is not in", () => {
   it.effect(
     "kill a held child when a call lands that its turn went to pi without, and answer the call",
@@ -1080,6 +1113,49 @@ describe("resume", () => {
             '<tool-result id="toolu_1">\nmarked\n</tool-result>'
           )
         ).toBeTruthy();
+      }).pipe(Effect.provide(layer));
+    }
+  );
+
+  it.effect(
+    "waits for a stamped entry Claude Code has not written yet before forking it",
+    () => {
+      const { layer } = afterRestart([entry("u0", "assistant")]);
+
+      return Effect.gen(function* () {
+        const fake = yield* ClaudeSdkScripts;
+
+        const fiber = yield* Effect.forkChild(
+          call(
+            [system, ...goPrior, heldReply(), toolResult("toolu_1", "marked")],
+            {},
+            "conv-fork"
+          )
+        );
+
+        yield* settle;
+        yield* Ref.update(fake.sessions, (all) =>
+          new Map(all).set(SCRIPT_SESSION, [
+            entry("u0", "assistant"),
+            entry("u1", "assistant", { uses: ["toolu_1"] }),
+          ])
+        );
+
+        for (let tick = 0; tick < 5; tick += 1) {
+          yield* TestClock.adjust(Duration.millis(200));
+          yield* settle;
+        }
+
+        yield* Fiber.join(fiber);
+
+        const forked = (yield* Ref.get(fake.sessions)).get(
+          `fork-1-of-${SCRIPT_SESSION}`
+        );
+
+        expect(forked?.map((stored) => stored.uuid)).toStrictEqual([
+          "u0",
+          "u1",
+        ]);
       }).pipe(Effect.provide(layer));
     }
   );

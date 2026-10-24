@@ -16,6 +16,7 @@ import { ClaudeAccount } from "./ClaudeAccount.ts";
 import {
   CHILD_ENDED_TEXT,
   INIT_REFUSED_TEXT,
+  PAID_CREDITS_TEXT,
   PI_PACKAGES_LINE,
   PI_PREAMBLE,
   planQuotaExceededText,
@@ -120,6 +121,66 @@ const answers =
 const hangs: FakeScript = (io) => Effect.andThen(io.nextPrompt, Effect.never);
 
 describe("one-shot requests", () => {
+  it.effect(
+    "report the request's final usage from the result, not the opening snapshot",
+    () =>
+      Effect.gen(function* () {
+        const reply = yield* call([summarizer, user("text")]);
+
+        expect([reply.usage.output, reply.usage.cacheRead]).toStrictEqual([
+          412, 2040,
+        ]);
+      }).pipe(
+        Effect.provide(
+          bridge([
+            (io) =>
+              Effect.andThen(
+                io.nextPrompt,
+                io.emit(
+                  initEvent(SCRIPT_SESSION),
+                  ...textTurn("m1", "u1", "the summary").slice(0, -1),
+                  {
+                    type: "result",
+                    subtype: "success",
+                    is_error: false,
+                    result: "the summary",
+                    usage: {
+                      input_tokens: 3,
+                      output_tokens: 412,
+                      cache_read_input_tokens: 2040,
+                    },
+                  }
+                )
+              ),
+          ])
+        )
+      )
+  );
+
+  it.effect("stop a one-shot that starts drawing on paid usage credits", () =>
+    Effect.gen(function* () {
+      const reply = yield* call([summarizer, user("text")]);
+
+      expect([reply.stopReason, reply.errorMessage]).toStrictEqual([
+        "error",
+        PAID_CREDITS_TEXT,
+      ]);
+    }).pipe(
+      Effect.provide(
+        bridge([
+          (io) =>
+            Effect.andThen(
+              io.nextPrompt,
+              io.emit(initEvent(SCRIPT_SESSION), {
+                type: "rate_limit_event",
+                rate_limit_info: { status: "allowed", isUsingOverage: true },
+              })
+            ),
+        ])
+      )
+    )
+  );
+
   it.effect(
     "run a summarizer call in an isolated child: no saved session, no tools, one turn, the instructions appended",
     () => {

@@ -9,13 +9,15 @@ const mb = 1024 * 1024;
 
 const reading = (
   cgroup: Option.Option<number>,
-  rss = 200 * mb
+  rss = 200 * mb,
+  cgroupPeak: Option.Option<number> = Option.none()
 ): MemorySample => ({
   rss,
   heapUsed: 100 * mb,
   external: 10 * mb,
   arrayBuffers: 5 * mb,
   cgroup,
+  cgroupPeak,
 });
 
 describe("the memory watch", () => {
@@ -39,5 +41,16 @@ describe("the memory watch", () => {
     expect(
       nextPeak(Option.none(), reading(Option.none(), 250 * mb))
     ).toStrictEqual(Option.some(250 * mb));
+  });
+
+  it("logs the kernel's peak when a spike came and went between two samples", () => {
+    const first = nextPeak(Option.none(), reading(Option.some(300 * mb)));
+
+    expect(
+      nextPeak(
+        first,
+        reading(Option.some(300 * mb), 200 * mb, Option.some(650 * mb))
+      )
+    ).toStrictEqual(Option.some(650 * mb));
   });
 });

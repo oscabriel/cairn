@@ -721,3 +721,35 @@ Unverified concerns:
 Decisions:
 
 - The restarts judge asks for one more run after the last restart when the model stopped, rather than counting a stopped turn as a pass; the gate is "six restarts land during `bash sleep 20` and the work finishes".
+
+## Fix batches after the full review
+
+The user's first day on Cairn turned up hangs, a missing-thread page and doubled attachment chips. A full review (`docs/phase-1/notes/full-review.md`, 172 findings, 63 tasks, the user's decisions of 2026-10-24) orders the fixes into batches. Each batch lands on `main` with its judges; nothing here is deployed until the batch that says so.
+
+### Batch 1: the parallel tool call hang (T1, T2, T3, T12, T4)
+
+| Commit | Tasks |
+| --- | --- |
+| `8922c21` | T1, T2: the bridge ends a streamed tool-use turn on `message_stop`, never on the first served call; fallback messages gather their per-block events; orphaned calls, unattached results and cancelled calls are handled; the watchdog no longer skips a parked call; exact served names |
+| `5224ac0` | T12: no inherited `CLAUDECODE`/`CLAUDE_CODE_*`; one-shot usage from the `result`; a fork waits up to 2 s for its stamped entry and logs a failure; `isUsingOverage` ends the turn with `PAID_CREDITS_TEXT` (non-retryable) |
+| `ed57f82` | T3: claude-live `parallel` case; a deadline on every bridge judge; claude-live cleans up on the timeout path and again after a killed child exits; claude-kill cleans up after the unit stops; load.ts SIGKILLs a brain that ignores SIGTERM |
+| `5181c8e` | T4: `shell.dispatch` stops the runs a ThreadDelete, ThreadArchive or ProjectDelete removes, before committing |
+
+#### Judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| New bridge tests (three parallel-call shapes: call between blocks, second block still streaming, non-streaming fallback) | fail on `21577e0`, pass after | on `21577e0`: one call delivered, or the second with `{}` arguments |
+| New safety-net tests (orphan, unattached result, cancelled call), `ClaudeStream.test.ts` (5), T12 tests (env, result usage, paid credits for turns and one-shots, the late stamped entry) | pass | the late-entry test fails without the wait |
+| `rpc/ShellHandlers.test.ts` (T4) | pass | three of its four cases fail on `ed57f82` |
+| `node judges/claude-live.ts --case parallel` (Haiku) | fail before, pass after | `21577e0`'s bridge: `timedOut` at the 120 s deadline, child killed. `5224ac0`: pass in about 3 s; Claude Code's transcript shows both `tool_use` blocks in one API message; pi got both calls in one reply; cache read 5,791 against 235 written |
+| `node judges/durability.ts --bridge` (J2) | pass, 3 of 3 | bridge-streaming, bridge-tool-parked, bridge-approval-parked; first reply after the restart read 42,043 against 234 written |
+| `node judges/durability.ts` (J9 and the rest) | pass, 10 of 10 | |
+| `pnpm check` | green | 129 files, 1,154 tests |
+
+#### Gaps
+
+- T4's live half (a claude-live case that deletes a thread mid tool call, then no `claude` child survives) is not built; the unit test covers the dispatch.
+- The fallback path (no stream events) still loses a block Claude Code emits after the first call it dispatches; that call is treated as an orphan (the child is killed and the next turn resumes from the stamp). The per-block shape of the fallback is inferred, not observed.
+- About 107 transcript folders from earlier judge runs (`-tmp-cairn-*`, 27 of them spike 8's) remain in `~/.claude/projects`; the user is asked before they are removed. T56 covers the other judges' cleanup.
+- The plan's seven-day window read 92% during these runs.

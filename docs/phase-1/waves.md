@@ -753,3 +753,36 @@ The user's first day on Cairn turned up hangs, a missing-thread page and doubled
 - The fallback path (no stream events) still loses a block Claude Code emits after the first call it dispatches; that call is treated as an orphan (the child is killed and the next turn resumes from the stamp). The per-block shape of the fallback is inferred, not observed.
 - About 107 transcript folders from earlier judge runs (`-tmp-cairn-*`, 27 of them spike 8's) remain in `~/.claude/projects`; the user is asked before they are removed. T56 covers the other judges' cleanup.
 - The plan's seven-day window read 92% during these runs.
+
+### Batch 2: the launch race, the attachment chips and the single submit (T5, T27, T35)
+
+Built in a worktree on `21577e0` by a delegated agent (branch `fix/batch2-launch-attachments`, merged as `b51c773`).
+
+| Commit | Tasks |
+| --- | --- |
+| `adbca17` | T5: the seam gains `whenEnsured` (both harnesses, scenario `subscribe_before_ensure`); `thread.subscribe` waits while a launch row exists, bounded by `LaunchWait`; the thread page treats NotFound as "not yet" while the outbox holds the launch or the row is `preparing`, and retries a failed stream after 250 ms, 1 s, 5 s |
+| `e851dac` | T27: attachment path lines move to `@cairn/protocol` (`attachmentPathLine`, `parseAttachmentPathLine`, `isAddedUserPart`) and are dropped from the bubble, prompt recall, the queue card and the sidebar preview; an image shows only as its attachment chip, matched by attachment id |
+| `cf3cdfb` | T35: `TurnContent.check` replaces the launch's validation build (no file reads, no claims); `turn.submitted` is logged once, after `seam.submit`, with the submission id |
+| `5c2430e` | `judges/behaviour.ts --only hero-launch`: 20 hero sends with each `thread.launch` frame held 500 ms on the socket |
+
+#### Judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Conformance `subscribe_before_ensure` | pass on both harnesses | fails on both with the wait stubbed out |
+| Subscribe handler (3), thread page (6), reader, row view, queue, prompt recall, launch and attachment-check tests | pass | each failed before its fix (old code or the fix stubbed out) |
+| `node judges/behaviour.ts --only hero-launch` | pass | branch and merged `main`: 20/20 landed, Missing seen 0 times. `21577e0`: 0/20, Missing seen 4 times. Without the 500 ms hold the old code also passed (the in-process brain answers too fast), which is why the hold is in the judge |
+| Real pi-durable dev brain, 5 worktree launches with an immediate subscribe | pass | a Snapshot after 67 to 88 ms each time; one `turn.submitted` per request over 6 launches (the live journal shows two) |
+| `judges/live-chat.ts`, `judges/reconnect.ts` (dev brain) | pass | reply in 1,417 ms; 5 rounds, worst first frame 1,022 ms against 2,000 |
+| `pnpm check` on merged `main` | green | 131 files, 1,178 tests |
+
+#### Decisions and deviations
+
+- The image dedupe matches by attachment id, not by position: `ThreadWire.ts` already points a `cairn.user` image at its attachment, so the review's verifiers were wrong that a projected image carries only `{entryId, index}`.
+- The attachment claim stays in the build, after the thread exists; only `turn.submitted` moved after the submit. Claiming after the submit would let a crash in between leave a submitted turn's files unclaimed, so the day-old sweep could delete them.
+
+#### Gaps
+
+- Not done: a sweep rule for claims with no thread row (the live store has 0, and the check no longer creates them); the `judges/paste.ts` real-bridge assertion on the user row; a per-request `turn.submitted` count in the journal judge; a worktree-mode hero launch through the browser (covered by handler tests and the real-brain script).
+- Skill blocks still show in the queue card and sidebar preview (T31 records the typed text on the entry).
+- For T8: `PageContext.launching` is where a failed row's activity and `lastError` should come in; Missing is still the state a launch that fails in the background reaches.

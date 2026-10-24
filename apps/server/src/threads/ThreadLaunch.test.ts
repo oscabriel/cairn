@@ -11,7 +11,9 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   Duration,
   Effect,
+  Fiber,
   FileSystem,
+  Latch,
   Logger,
   Option,
   Ref,
@@ -19,6 +21,7 @@ import {
   Schedule,
 } from "effect";
 import type { Layer } from "effect";
+import type { SqlClient } from "effect/sql";
 
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { Git } from "../git/Git.ts";
@@ -33,6 +36,7 @@ import { ThreadLaunch } from "./ThreadLaunch.ts";
 import {
   addProject,
   HeldModel,
+  heldLaunchInserts,
   launchInput,
   makeRepository,
   ModelGate,
@@ -53,26 +57,24 @@ const newWorktree = NewWorktreeWorkspace.make({
 
 type Services = Layer.Success<ReturnType<typeof testLayer>>;
 
-const testLayer = (
-  dataDir: string,
-  options: {
-    readonly held: boolean;
-    readonly turnContent?: Layer.Layer<TurnContent>;
-  }
-) =>
+interface TestOptions {
+  readonly held: boolean;
+  readonly turnContent?: Layer.Layer<TurnContent>;
+  readonly launchStore?: Layer.Layer<LaunchStore, never, SqlClient.SqlClient>;
+}
+
+const testLayer = (dataDir: string, options: TestOptions) =>
   threadsTestLayer({
     dataDir,
     titleModel: TitleModelScripted({ held: options.held }),
     model: HeldModel,
     turnContent: options.turnContent ?? TurnContentLive,
+    launchStore: options.launchStore ?? LaunchStore.layerNoDeps,
   });
 
 /** Runs `body` over a fresh temporary folder holding `data/` and a repository at `repo/`. */
 const withRepo = <A, E>(
-  options: {
-    readonly held: boolean;
-    readonly turnContent?: Layer.Layer<TurnContent>;
-  },
+  options: TestOptions,
   body: (dirs: {
     readonly dataDir: string;
     readonly repo: string;
@@ -517,6 +519,55 @@ describe("launching threads", () => {
         assert.strictEqual((yield* userEntries(input.threadId)).length, 1);
       })
     )
+  );
+
+  it.live(
+    "a launch interrupted after its launch row, then resent, makes one thread and sends its first message once",
+    () => {
+      const inserted = Latch.makeUnsafe(false);
+      const release = Latch.makeUnsafe(false);
+
+      return withRepo(
+        { held: false, launchStore: heldLaunchInserts(inserted, release) },
+        ({ repo }) =>
+          Effect.gen(function* () {
+            const projectId = yield* addProject(repo);
+            const launcher = yield* ThreadLaunch;
+
+            const input = yield* launchInput(
+              projectId,
+              rootWorkspace,
+              "Cut me off"
+            );
+
+            const first = yield* Effect.forkChild(
+              launcher.launch(input, "owner@test")
+            );
+
+            // The launch row is written; the socket drops before the thread row.
+            yield* inserted.await;
+
+            const interrupting = yield* Effect.forkChild(
+              Fiber.interrupt(first)
+            );
+
+            yield* release.open;
+            yield* Fiber.join(interrupting);
+
+            yield* launcher.launch(input, "owner@test");
+            yield* launcher.settled(input.threadId);
+
+            const threads = yield* (yield* ThreadRows).listByProject(projectId);
+
+            assert.strictEqual(threads.length, 1);
+            assert.strictEqual((yield* userEntries(input.threadId)).length, 1);
+            assert.strictEqual(
+              (yield* (yield* LaunchStore).listPending).length,
+              0
+            );
+          })
+      );
+    }
   );
 
   it.live("a failure after the worktree is added removes it", () => {

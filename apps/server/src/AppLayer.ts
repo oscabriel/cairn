@@ -114,10 +114,8 @@ const ProjectsLive = Layer.mergeAll(
  * Thread launch and thread commands, with their stages, stop hooks and the title model that the
  * `titleModel` server setting names.
  */
-export const ThreadsLive = Layer.mergeAll(
-  ThreadLaunch.layerNoDeps,
-  Threads.layerNoDeps
-).pipe(
+export const ThreadsLive = Threads.layerNoDeps.pipe(
+  Layer.provideMerge(ThreadLaunch.layerNoDeps),
   Layer.provideMerge(
     Layer.mergeAll(
       LaunchStore.layerNoDeps,

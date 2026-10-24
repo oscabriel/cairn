@@ -161,7 +161,20 @@ export const threadCommandHandlers = Effect.gen(function* () {
             Effect.fail(
               new Unavailable({ message: failure.message, requestId })
             ),
+          ThreadLaunchLost: (failure) =>
+            Effect.fail(
+              new NotFound({
+                message: failure.message,
+                resource: "thread",
+                id: input.threadId,
+                requestId,
+              })
+            ),
           LaunchStoreError: (failure) =>
+            Effect.fail(
+              new Unavailable({ message: failure.message, requestId })
+            ),
+          ShellStoreError: (failure) =>
             Effect.fail(
               new Unavailable({ message: failure.message, requestId })
             ),

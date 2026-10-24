@@ -44,6 +44,7 @@ import {
   Effect,
   Fiber,
   FiberMap,
+  Latch,
   Layer,
   Match,
   Option,
@@ -164,6 +165,13 @@ export class ThreadLaunch extends Context.Service<
     readonly resumePending: Effect.Effect<void>;
     /** Waits until the thread's launch fiber (if any) and its forked naming work are done. */
     settled(threadId: ThreadId): Effect.Effect<void>;
+    /**
+     * Waits while a launch of `threadId` runs in this process: a `launch` call between its launch
+     * row and its fiber's start, then the fiber until the first message reached the brain or the
+     * launch failed. True when there was one to wait for; false at once when none runs here, as
+     * after a restart before `resumePending` started it.
+     */
+    follow(threadId: ThreadId): Effect.Effect<boolean>;
   }
 >()("cairn/server/threads/ThreadLaunch") {
   /** Needs the shell store, `LaunchStore`, the projects services, `HarnessSeam` and `TurnContent`. */
@@ -186,6 +194,43 @@ export class ThreadLaunch extends Context.Service<
       const worktreesDir = path.join(config.dataDir, "worktrees");
       const running = yield* FiberMap.make<ThreadId>();
       const naming = yield* FiberMap.make<string>();
+
+      // The `launch` calls between their launch-row insert and their fiber's start, by thread. A
+      // launch row with neither one of these nor a fiber is an orphan a restart left.
+      const admissions = new Map<ThreadId, Latch.Latch>();
+
+      const admitting = <A, E, R>(
+        threadId: ThreadId,
+        effect: Effect.Effect<A, E, R>
+      ) =>
+        Effect.gen(function* () {
+          if (admissions.has(threadId)) {
+            return yield* effect;
+          }
+
+          const done = yield* Latch.make(false);
+
+          admissions.set(threadId, done);
+
+          return yield* effect.pipe(
+            Effect.ensuring(
+              Effect.suspend(() => {
+                admissions.delete(threadId);
+
+                return done.open;
+              })
+            )
+          );
+        });
+
+      const awaitAdmission = (threadId: ThreadId) =>
+        Effect.suspend(() => {
+          const admission = admissions.get(threadId);
+
+          return admission === undefined
+            ? Effect.succeed(false)
+            : Effect.as(admission.await, true);
+        });
 
       const commit = (
         step: string,
@@ -686,13 +731,16 @@ export class ThreadLaunch extends Context.Service<
           .pipe(Effect.mapError(unavailable));
 
         if (Option.isSome(pending)) {
+          // A first launch still between its two inserts finishes them (or removes the row when
+          // its thread is refused) and starts the fiber itself.
+          yield* awaitAdmission(input.threadId);
+
           const thread = yield* threadRows
             .get(input.threadId)
             .pipe(Effect.mapError(unavailable));
 
-          // With no thread row yet, the first launch is between its two inserts and starts the
-          // launch itself (or removes the row when its thread is refused); starting here would
-          // find no thread and drop the launch.
+          // With no thread row, a restart cut the launch off between its inserts; starting here
+          // would find no thread and drop the launch, and boot discards the row.
           if (Option.isSome(thread)) {
             yield* start(input.commandId, input.threadId);
           }
@@ -767,96 +815,107 @@ export class ThreadLaunch extends Context.Service<
         // built once, in the launch fiber, after the thread exists.
         yield* turns.check(input.threadId, from, input.initialMessage);
 
-        const inserted = yield* launches
-          .insert(input, from)
-          .pipe(Effect.mapError(unavailable));
+        // From the launch row to the fiber's start, one step as far as interruption goes: a
+        // launch cut off in between would leave a row whose thread never exists, and a resend of
+        // it would answer `resumed` without making the thread.
+        const inserted = yield* admitting(
+          input.threadId,
+          Effect.gen(function* () {
+            const recorded = yield* launches
+              .insert(input, from)
+              .pipe(Effect.mapError(unavailable));
 
-        const title = Option.getOrElse(input.title, () =>
-          placeholderTitle(input.initialMessage.text)
-        );
-
-        yield* sink
-          .commitCommand(
-            ThreadCreate.make({
-              commandId: input.commandId,
-              threadId: input.threadId,
-              projectId: input.projectId,
-              title,
-              provider: input.model.provider,
-              modelId: input.model.modelId,
-              thinkingLevel: input.thinkingLevel,
-              runtimeMode: input.runtimeMode,
-              branch: Option.none(),
-              worktreePath: Option.none(),
-            })
-          )
-          .pipe(
-            Effect.catchTags({
-              ShellStoreError: (failure) => Effect.fail(unavailable(failure)),
-              ShellTargetNotFound: (failure) =>
-                Effect.fail(
-                  new LaunchError({
-                    message: failure.message,
-                    reason: "project_not_found",
-                    field: Option.some("projectId"),
-                  })
-                ),
-              ShellCommandConflict: (failure) =>
-                Effect.fail(
-                  new LaunchError({
-                    message: failure.message,
-                    reason: "thread_exists",
-                    field: Option.some("threadId"),
-                  })
-                ),
-              ShellCommandInvalid: (failure) =>
-                Effect.fail(
-                  new LaunchError({
-                    message: failure.message,
-                    reason: "invalid_input",
-                    field: failure.field,
-                  })
-                ),
-              ProjectWorkspaceConflictError: (failure) =>
-                Effect.fail(unavailable(failure)),
-            }),
-            Effect.tapError(() =>
-              inserted
-                ? launches.remove(input.commandId).pipe(Effect.ignore)
-                : Effect.void
-            )
-          );
-
-        yield* sink
-          .commitCommand(
-            ThreadActivityUpdate.make({
-              commandId: derivedCommandId(input.commandId, "preparing"),
-              threadId: input.threadId,
-              patch: {
-                ...emptyActivityPatch,
-                activity: Option.some("preparing"),
-              },
-            })
-          )
-          .pipe(Effect.mapError(unavailable));
-
-        if (
-          Option.isNone(input.title) &&
-          input.initialMessage.text.trim() !== ""
-        ) {
-          const row = yield* launches
-            .get(input.commandId)
-            .pipe(Effect.mapError(unavailable));
-
-          if (Option.isSome(row)) {
-            yield* forkNaming(
-              `title:${input.threadId}`,
-              nameThread(row.value, title)
+            const title = Option.getOrElse(input.title, () =>
+              placeholderTitle(input.initialMessage.text)
             );
-          }
-        }
 
-        yield* start(input.commandId, input.threadId);
+            yield* sink
+              .commitCommand(
+                ThreadCreate.make({
+                  commandId: input.commandId,
+                  threadId: input.threadId,
+                  projectId: input.projectId,
+                  title,
+                  provider: input.model.provider,
+                  modelId: input.model.modelId,
+                  thinkingLevel: input.thinkingLevel,
+                  runtimeMode: input.runtimeMode,
+                  branch: Option.none(),
+                  worktreePath: Option.none(),
+                })
+              )
+              .pipe(
+                Effect.catchTags({
+                  ShellStoreError: (failure) =>
+                    Effect.fail(unavailable(failure)),
+                  ShellTargetNotFound: (failure) =>
+                    Effect.fail(
+                      new LaunchError({
+                        message: failure.message,
+                        reason: "project_not_found",
+                        field: Option.some("projectId"),
+                      })
+                    ),
+                  ShellCommandConflict: (failure) =>
+                    Effect.fail(
+                      new LaunchError({
+                        message: failure.message,
+                        reason: "thread_exists",
+                        field: Option.some("threadId"),
+                      })
+                    ),
+                  ShellCommandInvalid: (failure) =>
+                    Effect.fail(
+                      new LaunchError({
+                        message: failure.message,
+                        reason: "invalid_input",
+                        field: failure.field,
+                      })
+                    ),
+                  ProjectWorkspaceConflictError: (failure) =>
+                    Effect.fail(unavailable(failure)),
+                }),
+                Effect.tapError(() =>
+                  recorded
+                    ? launches.remove(input.commandId).pipe(Effect.ignore)
+                    : Effect.void
+                )
+              );
+
+            yield* sink
+              .commitCommand(
+                ThreadActivityUpdate.make({
+                  commandId: derivedCommandId(input.commandId, "preparing"),
+                  threadId: input.threadId,
+                  patch: {
+                    ...emptyActivityPatch,
+                    activity: Option.some("preparing"),
+                  },
+                })
+              )
+              .pipe(Effect.mapError(unavailable));
+
+            if (
+              Option.isNone(input.title) &&
+              input.initialMessage.text.trim() !== ""
+            ) {
+              const row = yield* launches
+                .get(input.commandId)
+                .pipe(Effect.mapError(unavailable));
+
+              if (Option.isSome(row)) {
+                yield* forkNaming(
+                  `title:${input.threadId}`,
+                  nameThread(row.value, title)
+                );
+              }
+            }
+
+            yield* start(input.commandId, input.threadId);
+
+            return recorded;
+          })
+        ).pipe(Effect.uninterruptible);
 
         return { threadId: input.threadId, resumed: !inserted };
       });
@@ -895,7 +954,20 @@ export class ThreadLaunch extends Context.Service<
         yield* awaitKey(naming, `branch:${threadId}`);
       });
 
-      return ThreadLaunch.of({ launch, resumePending, settled });
+      const follow = Effect.fn("ThreadLaunch.follow")(function* (
+        threadId: ThreadId
+      ) {
+        const admitted = yield* awaitAdmission(threadId);
+        const fiber = yield* FiberMap.get(running, threadId);
+
+        if (Option.isSome(fiber)) {
+          yield* Fiber.await(fiber.value);
+        }
+
+        return admitted || Option.isSome(fiber);
+      });
+
+      return ThreadLaunch.of({ launch, resumePending, settled, follow });
     })
   );
 }

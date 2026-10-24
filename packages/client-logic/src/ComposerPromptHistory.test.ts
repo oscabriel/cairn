@@ -56,6 +56,16 @@ describe(recallableComposerPrompt, () => {
     );
   });
 
+  it("drops an attachment's path line, as stored rows carry it", () => {
+    assert.strictEqual(
+      recallableComposerPrompt([
+        "what word does this show?",
+        '[Attached image "IMG_0606.jpg" (image/jpeg, 85 KB) is saved at: /home/me/.local/share/cairn/attachments/EIyYlN6GUR-MCvmobE_-Rg]',
+      ]),
+      "what word does this show?"
+    );
+  });
+
   it("returns an empty string when only added parts were sent", () => {
     assert.strictEqual(recallableComposerPrompt(["   "]), "");
   });

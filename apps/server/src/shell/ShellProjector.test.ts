@@ -26,6 +26,7 @@ import {
 import type { Scope } from "effect";
 import { TestClock } from "effect/testing";
 
+import { messageText } from "../brain/CommitFeed.ts";
 import {
   HarnessError,
   HarnessSeam,
@@ -931,6 +932,38 @@ describe("the newest message of a view", () => {
     assert.deepStrictEqual(
       latestMessageOf({ ...finishedView, entries: [] }),
       Option.none()
+    );
+  });
+
+  it("previews a user turn with an image as the user's words, in the view and in the commit feed", () => {
+    const content = [
+      { type: "text" as const, text: "look" },
+      { type: "image" as const, data: "AAAA", mimeType: "image/png" },
+      {
+        type: "text" as const,
+        text: '[Attached image "dot.png" (image/png, 1 KB) is saved at: /data/attachments/a1/original]',
+      },
+    ];
+
+    const imageTurn: ConversationView = {
+      ...finishedView,
+      entries: [
+        {
+          id: EntryId.make(3),
+          conversationId: ConversationId.make(1),
+          kind: "cairn.user",
+          model: [{ role: "user", content, timestamp: 1_760_000_003_000 }],
+        },
+      ],
+    };
+
+    assert.strictEqual(
+      Option.getOrThrow(latestMessageOf(imageTurn)).text,
+      "look"
+    );
+    assert.strictEqual(
+      messageText({ role: "user", content, timestamp: 1_760_000_003_000 }),
+      "look"
     );
   });
 });

@@ -19,6 +19,7 @@
 // For the durability judge only: `CAIRN_JUDGE_HOLD_PROJECTOR_MS` makes the projector log
 // `projector_holding` and wait that long before committing a run's end, so a `kill -9` can land
 // after pi-durable committed the run and before the shell did. Unset, nothing waits.
+import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import type { ApprovalId, TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";
 import type {
@@ -550,15 +551,18 @@ export const latestMessageOf = (
       if (Option.isSome(message)) {
         const { content, role, timestamp } = message.value;
 
+        // A user turn's attachment parts are the brain's, not the user's words.
         const text = Schema.is(Schema.String)(content)
           ? content
           : content
               .flatMap((part) =>
-                part.type === "text" && part.text !== undefined
+                part.type === "text" &&
+                part.text !== undefined &&
+                !(role === "user" && isAddedUserPart(part.text))
                   ? [part.text]
                   : []
               )
-              .join("");
+              .join(role === "user" ? "\n\n" : "");
 
         return Option.some({
           entryId: entry.id,

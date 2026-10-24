@@ -1,9 +1,11 @@
 // Ported from github.com/pingdotgg/t3code, packages/contracts/src/{chatAttachment.ts, assets.ts}
 // at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (limits, the image types, the signed upload URL and its
-// ten-minute lifetime), and from cairn-v1, packages/protocol/src/attachment.ts at 1a5cd4a
-// (`attachmentText` and its parser). Changed: Cairn's limits (20 attachments, documents up to
-// 50 MiB, 40,000 inline characters), upload claims for the server's signed token, and the text block
-// names the file's full-text path.
+// ten-minute lifetime), from packages/provider-core/src/server/attachmentPrompt.ts at the same
+// commit (the path line, `providerMessageTextWithAttachmentPaths`), and from cairn-v1,
+// packages/protocol/src/attachment.ts at 1a5cd4a (`attachmentText` and its parser). Changed:
+// Cairn's limits (20 attachments, documents up to 50 MiB, 40,000 inline characters), upload claims
+// for the server's signed token, the text block names the file's full-text path, and the path line
+// has a parser, so the transcript can show the user's words without it.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -188,3 +190,60 @@ export const parseAttachmentText = (
     text: value.slice(header.length, value.length - FOOTER.length),
   });
 };
+
+/** What `attachmentPathLine` says: one attachment and where its original is saved. */
+export interface AttachmentPathLineParts {
+  /** `image` for images, `file` for every other attachment the line is written for. */
+  readonly kind: "image" | "file";
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly path: string;
+  /** Words after the path, inside the brackets, such as how to open the file; empty for none. */
+  readonly note: string;
+}
+
+/** What `parseAttachmentPathLine` recovers from a path line. */
+export interface AttachmentPathLineName {
+  readonly kind: "image" | "file";
+  readonly name: string;
+}
+
+const kibibytes = (bytes: number) =>
+  `${(bytes / 1024).toLocaleString("en-US", { maximumFractionDigits: 0 })} KB`;
+
+// Anchored on the opening `[Attached image|file "` and the closing `]`, so it also reads lines a
+// brain wrote before the template moved here (their path ends at the attachment's folder).
+const PATH_LINE =
+  /^\[Attached (?<kind>image|file) "(?<name>[^\n]*)" \([^\n]*\) is saved at: [^\n]*\]$/u;
+
+/**
+ * The line that tells the model where an attachment's original is, a text part of its own after
+ * the attachment's content. The transcript drops it with `parseAttachmentPathLine`.
+ */
+export const attachmentPathLine = (parts: AttachmentPathLineParts): string =>
+  `[Attached ${parts.kind} "${parts.name}" (${parts.mimeType}, ${kibibytes(parts.sizeBytes)}) is saved at: ${parts.path}${parts.note}]`;
+
+/** The attachment a path line names; none for any other text, including a line inside other words. */
+export const parseAttachmentPathLine = (
+  value: string
+): Option.Option<AttachmentPathLineName> => {
+  const groups = PATH_LINE.exec(value)?.groups;
+
+  if (groups === undefined) {
+    return Option.none();
+  }
+
+  return Option.some({
+    kind: groups.kind === "image" ? "image" : "file",
+    name: groups.name ?? "",
+  });
+};
+
+/**
+ * True for a text part the brain added to a user turn for its attachments: an `attachmentText`
+ * block or an `attachmentPathLine`. Whatever shows the user's own words drops these parts.
+ */
+export const isAddedUserPart = (text: string): boolean =>
+  Option.isSome(parseAttachmentText(text)) ||
+  Option.isSome(parseAttachmentPathLine(text));

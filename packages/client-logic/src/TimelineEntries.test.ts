@@ -1,14 +1,15 @@
 // The transcript adapter, judged on real pi transcripts: pi-durable over opencode-go models, recorded
 // by judges/fixtures/transcripts/record.ts (markdown, every coding tool, a failing tool, a stop
 // during a tool, a thought, and three streamed runs kept frame by frame).
-import { ConversationId, EntryId } from "@cairn/protocol/Ids";
+import { attachmentPathLine } from "@cairn/protocol/Attachments";
+import { AttachmentId, ConversationId, EntryId } from "@cairn/protocol/Ids";
 import {
   ConversationView,
   ProjectedImage,
   ThreadStreamItem,
 } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
-import { Option, Result, Schema } from "effect";
+import { Option, Predicate, Result, Schema } from "effect";
 
 import coding from "../../../judges/fixtures/transcripts/coding.json" with { type: "json" };
 import interruptedFrames from "../../../judges/fixtures/transcripts/interrupted.frames.json" with { type: "json" };
@@ -23,7 +24,7 @@ import type { Timeline, TimelineEntry, WorkEntry } from "./TimelineEntries.ts";
 
 type Json = Schema.Json;
 
-const [, EntryImageRef] = ProjectedImage.fields.ref.members;
+const [AttachmentImageRef, EntryImageRef] = ProjectedImage.fields.ref.members;
 
 const decodeView = Schema.decodeUnknownSync(ConversationView);
 
@@ -544,5 +545,161 @@ describe("entries the recorder cannot provoke", () => {
       cards.map((card) => card.turnId),
       [first?.id, second?.id]
     );
+  });
+});
+
+/** An image as the wire projects it: an attachment's points at the attachment. */
+const projectedImage = (ref: { readonly id: string } | number) => ({
+  type: "image",
+  mimeType: "image/jpeg",
+  bytes: 116_512,
+  ref: Schema.encodeSync(ProjectedImage.fields.ref)(
+    Predicate.isNumber(ref)
+      ? EntryImageRef.make({ entryId: EntryId.make(ref), index: 0 })
+      : AttachmentImageRef.make({ attachmentId: AttachmentId.make(ref.id) })
+  ),
+});
+
+describe("a cairn.user turn with attachments, as the brain stores it", () => {
+  const conversationId = ConversationId.make(1);
+
+  const imageRef = {
+    id: "EIyYlN6GUR-MCvmobE_-Rg",
+    name: "IMG_0606.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 87_384,
+    kind: "image",
+    sha256: "8759d29e20eaa904b78a2018e270ef8baead56d353642bf5394c4349db7e454f",
+  };
+
+  const cairnUser = (
+    id: number,
+    content: ReadonlyArray<Json>,
+    attachments: ReadonlyArray<Json>
+  ) => ({
+    id,
+    conversationId,
+    kind: "cairn.user",
+    model: [{ role: "user", content, timestamp: 1000 }],
+    data: { from: "owner@github", attachments },
+  });
+
+  const only = (entry: Json) => {
+    const [message] = messages(
+      entriesFromPi(
+        decodeView({
+          conversation: { id: conversationId },
+          entries: [entry],
+          docs: {},
+        })
+      )
+    );
+
+    assert.isDefined(message);
+
+    return message;
+  };
+
+  /** What the bubble draws a chip for: each attachment, each name, each image. */
+  const chipSources = (message: ReturnType<typeof only>) =>
+    message.attachments.length +
+    message.attachmentNames.length +
+    message.images.length;
+
+  it("shows entry 1563 as the typed words and one chip", () => {
+    const message = only(
+      cairnUser(
+        1563,
+        [
+          { type: "text", text: "what word does this show?" },
+          projectedImage(imageRef),
+          {
+            type: "text",
+            text: '[Attached image "IMG_0606.jpg" (image/jpeg, 85 KB) is saved at: /home/oscargabriel/.local/share/cairn/attachments/EIyYlN6GUR-MCvmobE_-Rg]',
+          },
+        ],
+        [imageRef]
+      )
+    );
+
+    assert.strictEqual(message.text, "what word does this show?");
+    assert.deepStrictEqual(
+      message.attachments.map((attachment) => attachment.name),
+      ["IMG_0606.jpg"]
+    );
+    assert.deepStrictEqual(message.images, []);
+    assert.strictEqual(chipSources(message), 1);
+  });
+
+  it("shows the attachment stage's exact output as the typed words and one chip per attachment", () => {
+    const pathLine = (ref: typeof imageRef, note: string) =>
+      attachmentPathLine({
+        kind: ref.kind === "image" ? "image" : "file",
+        name: ref.name,
+        mimeType: ref.mimeType,
+        sizeBytes: ref.sizeBytes,
+        path: `/home/me/.local/share/cairn/attachments/${ref.id}/original`,
+        note,
+      });
+
+    const sheet = {
+      ...imageRef,
+      id: "sheet-0000000000000000",
+      name: "budget.xlsx",
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      kind: "file",
+    };
+
+    const second = { ...imageRef, id: "second-000000000000000", name: "b.jpg" };
+
+    const message = only(
+      cairnUser(
+        7,
+        [
+          { type: "text", text: "compare these" },
+          projectedImage(imageRef),
+          { type: "text", text: pathLine(imageRef, "") },
+          {
+            type: "text",
+            text: pathLine(
+              sheet,
+              ". Its contents are not shown inline; open it with a tool"
+            ),
+          },
+          projectedImage(second),
+          { type: "text", text: pathLine(second, "") },
+        ],
+        [imageRef, sheet, second]
+      )
+    );
+
+    assert.strictEqual(message.text, "compare these");
+    assert.deepStrictEqual(
+      message.attachments.map((attachment) => attachment.name),
+      ["IMG_0606.jpg", "budget.xlsx", "b.jpg"]
+    );
+    assert.strictEqual(chipSources(message), 3);
+  });
+
+  it("keeps images a turn carries without attachment refs (imported threads)", () => {
+    const message = only(
+      cairnUser(
+        3,
+        [
+          { type: "text", text: "look" },
+          projectedImage(3),
+          {
+            type: "text",
+            text: '[Attached image "a.jpg" (image/jpeg, 1 KB) is saved at: /tmp/a]',
+          },
+        ],
+        []
+      )
+    );
+
+    assert.strictEqual(message.text, "look");
+    assert.strictEqual(message.images.length, 1);
+    assert.strictEqual(chipSources(message), 1);
   });
 });

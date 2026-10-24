@@ -19,6 +19,7 @@
 // goes unseen. Events never replay across a process restart, so the shell projector reconciles at
 // boot.
 
+import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import {
   ApprovalId,
   ConversationId,
@@ -83,7 +84,10 @@ const decodeApprovalStatus = Schema.decodeUnknownOption(ApprovalStatus);
 
 const decodeRequestKind = Schema.decodeUnknownOption(RuntimeRequestKind);
 
-/** The text a message shows: its text blocks, joined. Thinking and tool calls are left out. */
+/**
+ * The text a message shows: its text blocks, joined. Thinking and tool calls are left out, and so
+ * are the parts the brain added to a user turn for its attachments.
+ */
 export const messageText = (message: Message): string => {
   if (message.role === "user") {
     if (Predicate.isString(message.content)) {
@@ -91,8 +95,10 @@ export const messageText = (message: Message): string => {
     }
 
     return message.content
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
-      .join("");
+      .flatMap((part) =>
+        part.type === "text" && !isAddedUserPart(part.text) ? [part.text] : []
+      )
+      .join("\n\n");
   }
 
   if (message.role === "assistant") {

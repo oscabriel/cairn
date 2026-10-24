@@ -5,8 +5,7 @@
 // composer.
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import { SubmissionId } from "@cairn/protocol/Ids";
-import type { ConversationView } from "@cairn/protocol/Thread";
-import { Array, Option, Record, Schema } from "effect";
+import { Array, Option, Schema } from "effect";
 
 const TextPart = Schema.Struct({
   type: Schema.Literal("text"),
@@ -48,28 +47,20 @@ const contentText = (content: typeof UserContent.Type): string => {
     .join("\n");
 };
 
-/** The user inputs waiting in the view's `pi.inbox`, oldest first. */
+/** The user inputs waiting in a thread's `pi.inbox` document, oldest first. */
 export const queuedInputs = (
-  view: Option.Option<ConversationView>
+  inbox: Option.Option<Schema.Json>
 ): ReadonlyArray<QueuedInput> =>
-  Option.match(
-    Option.flatMap(
-      Option.flatMap(view, (current) => Record.get(current.docs, "pi.inbox")),
-      decodeInbox
-    ),
-    {
-      onNone: () => [],
-      onSome: (inbox) =>
-        Array.getSomes(inbox.items.map((item) => decodeItem(item))).map(
-          (item) => {
-            const text = contentText(item.content).trim();
+  Option.match(Option.flatMap(inbox, decodeInbox), {
+    onNone: () => [],
+    onSome: (doc) =>
+      Array.getSomes(doc.items.map((item) => decodeItem(item))).map((item) => {
+        const text = contentText(item.content).trim();
 
-            return {
-              submissionId: item.id,
-              mode: item.mode,
-              text: text.length === 0 ? "(attachments)" : text,
-            };
-          }
-        ),
-    }
-  );
+        return {
+          submissionId: item.id,
+          mode: item.mode,
+          text: text.length === 0 ? "(attachments)" : text,
+        };
+      }),
+  });

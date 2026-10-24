@@ -214,8 +214,11 @@ const toGotComposerMessage = (message: ComposerMessage): Message =>
 
 const readComposer = (model: Model) => Option.some(model.composer);
 
+// The same root Model when the composer kept its own, so the runtime skips the render.
 const writeComposer = (model: Model, composer: Model["composer"]): Model =>
-  modifyFields(model, { composer: () => composer });
+  composer === model.composer
+    ? model
+    : modifyFields(model, { composer: () => composer });
 
 /** Drops one unsent draft from the composer (the sidebar's Discard). */
 const discardComposerDraft = Update.foldChild({

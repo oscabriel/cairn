@@ -20,7 +20,6 @@ import { RuntimeMode } from "@cairn/protocol/Policy";
 import { BranchesResult, SearchEntry } from "@cairn/protocol/Projects";
 import { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
 import { SkillSummary } from "@cairn/protocol/Skills";
-import { ConversationView } from "@cairn/protocol/Thread";
 import { UsageSnapshot } from "@cairn/protocol/Usage";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
@@ -50,8 +49,15 @@ export const ComposerContext = Schema.Struct({
   projects: Schema.Array(ProjectShell),
   /** The open thread's shell row, when the target is a thread the shell knows. */
   thread: Schema.Option(ThreadShell),
-  /** The open thread's projected view, when its stream has a snapshot. */
-  view: Schema.Option(ConversationView),
+  /** The open thread's `pi.inbox` document, its queued inputs, when its stream has a snapshot. */
+  inbox: Schema.Option(Schema.Json),
+  /**
+   * The prompts the user sent in the open thread, oldest first, for the arrow-key history. Only
+   * these two parts of the thread's view, so a streamed token leaves the composer alone.
+   */
+  prompts: Schema.Array(
+    Schema.Struct({ id: Schema.String, prompt: Schema.String })
+  ),
   /** The server's default model and thinking level, from `session.hello`. */
   defaults: Schema.Option(ModelDefaults),
   /** The newest plan windows, for the usage meter. */
@@ -68,7 +74,8 @@ export const emptyContext: ComposerContext = {
   live: false,
   projects: [],
   thread: Option.none(),
-  view: Option.none(),
+  inbox: Option.none(),
+  prompts: [],
   defaults: Option.none(),
   usage: Option.none(),
 };

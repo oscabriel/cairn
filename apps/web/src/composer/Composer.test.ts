@@ -4,8 +4,9 @@ import {
   SubmissionId,
   ThreadId,
 } from "@cairn/protocol/Ids";
+import { ConversationView } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Option, Ref } from "effect";
+import { Effect, Option, Ref, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Mount } from "foldkit";
 import * as Scene from "foldkit/scene";
@@ -17,6 +18,7 @@ import { AttachmentPaste } from "../attachments/Paste.ts";
 import { readyIds } from "../attachments/Update.ts";
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
+import { AppRoute } from "../Route.ts";
 import {
   MoveHeroToDraftUrl,
   PrepareLaunch,
@@ -33,14 +35,15 @@ import {
   project,
   threadId,
 } from "./ComposerFixtures.ts";
+import { composerContext } from "./Context.ts";
 import { activeDraft, loadDrafts, saveDrafts } from "./Drafts.ts";
 import { ComposerInput } from "./Editor.ts";
 import { MeasureFooter } from "./Footer.ts";
 import { MeasureHeadline } from "./MeasureHeadline.ts";
 import { Message, OutMessage } from "./Message.ts";
-import { ComposerTarget, emptyDraft, initial } from "./Model.ts";
+import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import { inform, update } from "./Update.ts";
+import { contextChanged, inform, update } from "./Update.ts";
 import { view } from "./View.ts";
 
 const editor = Scene.testId("composer-editor");
@@ -325,6 +328,125 @@ const expectBlock = (name: string, state: "full" | "icon" | "hidden") => [
     String(state === "hidden")
   ),
 ];
+
+/** A thread's view: the user's prompt, the answer, and `live` streaming. */
+const viewWith = (live: string) =>
+  Schema.decodeSync(ConversationView)({
+    conversation: { id: 1 },
+    entries: [
+      {
+        id: 1,
+        conversationId: 1,
+        kind: "pi.user",
+        model: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "fix the tests" }],
+            timestamp: 1,
+          },
+        ],
+      },
+      {
+        id: 2,
+        conversationId: 1,
+        kind: "pi.assistant",
+        model: [
+          { role: "assistant", content: [{ type: "text", text: "Done." }] },
+        ],
+      },
+    ],
+    docs: { "pi.live": { generation: live } },
+  });
+
+const contextOf = (conversation: ConversationView) =>
+  composerContext({
+    route: AppRoute.Thread({ threadId }),
+    threadId: Option.some(threadId),
+    epoch: 1,
+    hasClient: true,
+    live: true,
+    shell: Option.none(),
+    threadView: Option.some(conversation),
+    defaults: Option.none(),
+    usage: Option.none(),
+  });
+
+describe("prompt history", () => {
+  it("recalls the user's prompt from the thread's view with the up arrow", () => {
+    const informed = inform(onThread, contextOf(viewWith(""))).model;
+
+    const recalled = update(
+      informed,
+      Message.PressedHistoryKey({ direction: "backward" })
+    ).model;
+
+    assert.strictEqual(activeDraft(recalled).text, "fix the tests");
+  });
+
+  it("ignores a streamed token, which changes the view but not the prompts or the queue", () => {
+    const before = viewWith("I'll");
+    const informed = inform(onThread, contextOf(before)).model;
+
+    const streamed = {
+      ...before,
+      docs: { ...before.docs, "pi.live": { generation: "I'll start" } },
+    };
+
+    assert.isFalse(contextChanged(informed, contextOf(streamed)));
+  });
+});
+
+describe("pointer highlights", () => {
+  it("keep the same Model while the pointer moves over the highlighted picker row", () => {
+    const opened = update(
+      onThread,
+      Message.OpenedPopover({
+        popover: Popover.ModelPicker({ query: "", highlighted: Option.none() }),
+      })
+    ).model;
+
+    const highlighted = update(
+      opened,
+      Message.MovedPopoverHighlight({ id: "opencode-go/small" })
+    ).model;
+
+    const sameRow = update(
+      highlighted,
+      Message.MovedPopoverHighlight({ id: "opencode-go/small" })
+    ).model;
+
+    const nextRow = update(
+      highlighted,
+      Message.MovedPopoverHighlight({ id: "opencode-go/large" })
+    ).model;
+
+    assert.isTrue(Option.isSome(opened.popover));
+    assert.notStrictEqual(highlighted, opened);
+    assert.strictEqual(sameRow, highlighted);
+    assert.notStrictEqual(nextRow, highlighted);
+  });
+
+  it("keep the same Model while the pointer moves over the highlighted menu item", () => {
+    const opened = update(
+      update(onThread, Message.ChangedDraft({ value: "/" })).model,
+      Message.ChangedSelection({ start: 1, end: 1 })
+    ).model;
+
+    const highlighted = update(
+      opened,
+      Message.HighlightedMenuItem({ id: "/model" })
+    ).model;
+
+    const sameItem = update(
+      highlighted,
+      Message.HighlightedMenuItem({ id: "/model" })
+    ).model;
+
+    assert.isTrue(Option.isSome(opened.triggerMenu));
+    assert.notStrictEqual(highlighted, opened);
+    assert.strictEqual(sameItem, highlighted);
+  });
+});
 
 describe("composer footer folding", () => {
   it.each(t3FooterStates)(

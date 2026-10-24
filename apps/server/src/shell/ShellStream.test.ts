@@ -26,6 +26,7 @@ import { SqlClient } from "effect/sql";
 
 import { FolderRules } from "../projects/FolderRules.ts";
 import { ShellHandlers } from "../rpc/ShellHandlers.ts";
+import { Threads } from "../threads/Threads.ts";
 import { EventSink } from "./EventSink.ts";
 import { EventStore } from "./EventStore.ts";
 import type { ServerShellCommand } from "./ShellCommands.ts";
@@ -47,8 +48,12 @@ const AllowAllFolders = Layer.mock(FolderRules)({
   check: (input) => Effect.succeed(input),
 });
 
+// Stopping runs before a delete is judged in rpc/ShellHandlers.test.ts.
+const NoRuns = Layer.mock(Threads)({ stop: () => Effect.void });
+
 const TestLayer = ShellHandlers.pipe(
   Layer.provide(AllowAllFolders),
+  Layer.provide(NoRuns),
   Layer.provideMerge(ShellTestLayer),
   Layer.provideMerge(ViewerTest)
 );

@@ -33,6 +33,9 @@ mkdir -p "$HOME/cairn-judges"
 log="${CAIRN_DURABILITY_LOG:-$HOME/cairn-judges/durability-$(date +%Y-%m-%d).jsonl}"
 failures=0
 
+# The commit under test, so a log line is never read against a later deploy's code.
+echo "{\"nightly\":\"start\",\"commit\":\"$(git rev-parse HEAD)\"}" | tee -a "$log"
+
 step() {
 	echo "{\"step\":\"$*\"}" | tee -a "$log"
 

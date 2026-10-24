@@ -181,13 +181,16 @@ export const threadCommandHandlers = Effect.gen(function* () {
         })
       ),
     stop: (input: StopInput, requestId: Option.Option<string>) =>
-      threads
-        .stop(input)
-        .pipe(
-          Effect.mapError((failure) =>
-            fromHarnessError(failure, input.threadId, requestId)
-          )
-        ),
+      threads.stop(input).pipe(
+        Effect.catchTags({
+          HarnessError: (failure) =>
+            Effect.fail(fromHarnessError(failure, input.threadId, requestId)),
+          LaunchStoreError: (failure) =>
+            Effect.fail(
+              new Unavailable({ message: failure.message, requestId })
+            ),
+        })
+      ),
     withdraw: (input: WithdrawInput, requestId: Option.Option<string>) =>
       threads
         .withdraw(input)

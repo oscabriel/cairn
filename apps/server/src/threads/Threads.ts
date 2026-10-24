@@ -2,7 +2,7 @@
 // change the model or thinking level, and answer an approval. Each is a thin call into the harness
 // seam, which keeps them idempotent (a turn by its request id) and durable. A turn sent while its
 // thread launches follows the launch to its end. Stop keeps queued inputs unless asked to clear
-// them (plan D16), then runs the stop hooks.
+// them (plan D16), then runs the stop hooks; a stop during the launch cancels the launch.
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type {
   ConfigureInput,
@@ -115,8 +115,13 @@ export class Threads extends Context.Service<
       | LaunchStoreError
       | ShellStoreError
     >;
-    /** Stops the run (keeping queued inputs unless `clearQueue`), then runs the stop hooks. */
-    stop(input: StopInput): Effect.Effect<void, HarnessError>;
+    /**
+     * Stops the run (keeping queued inputs unless `clearQueue`), then runs the stop hooks. A thread
+     * still launching has no run yet: its launch is cancelled instead and its row marked failed.
+     */
+    stop(
+      input: StopInput
+    ): Effect.Effect<void, HarnessError | LaunchStoreError>;
     /** Takes back one queued input; `withdrawn: false` when it had already been placed. */
     withdraw(input: WithdrawInput): Effect.Effect<WithdrawResult, HarnessError>;
     /** Changes the model or thinking level of later turns, and the sidebar row with them. */
@@ -202,6 +207,10 @@ export class Threads extends Context.Service<
       });
 
       const stop = Effect.fn("Threads.stop")(function* (input: StopInput) {
+        if (yield* launcher.cancel(input.threadId)) {
+          return;
+        }
+
         yield* seam.stop(input.threadId, { clearQueue: input.clearQueue });
         yield* stopHooks.run(input.threadId);
       });

@@ -15,18 +15,22 @@ import {
   FileSystem,
   Latch,
   Option,
+  Predicate,
   Ref,
   Schedule,
+  Stream,
 } from "effect";
 import type { Layer } from "effect";
 
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
+import { ThreadRows } from "../shell/ThreadRows.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import { StopHooks } from "./StopHooks.ts";
-import { ThreadLaunch } from "./ThreadLaunch.ts";
+import { STOPPED_BEFORE_START, ThreadLaunch } from "./ThreadLaunch.ts";
 import { LaunchWait, Threads } from "./Threads.ts";
 import {
   addProject,
@@ -437,6 +441,80 @@ describe("thread commands", () => {
           assert.strictEqual(refused._tag, "ThreadLaunchLost");
           assert.isBelow(took, 1000);
           assert.strictEqual(yield* userEntryCount(threadId), 0);
+        })
+      )
+  );
+
+  it.live(
+    "a stop during the workspace phase cancels the launch: no run starts and the row is failed",
+    () =>
+      withHeldWorkspace((projectId, gate) =>
+        Effect.gen(function* () {
+          const launcher = yield* ThreadLaunch;
+          const launches = yield* LaunchStore;
+          const events = yield* Ref.make<ReadonlyArray<HarnessEvent>>([]);
+
+          yield* Effect.forkChild(
+            (yield* HarnessSeam).events.pipe(
+              Stream.runForEach((event) =>
+                Ref.update(events, (all) => [...all, event])
+              )
+            )
+          );
+
+          const input = yield* launchInput(
+            projectId,
+            newWorktree,
+            "Never runs"
+          );
+
+          yield* launcher.launch(input, "owner@test");
+
+          // The worktree is planned and its creation held: the launch is in its workspace phase.
+          const planned = yield* eventually(
+            launches.get(input.commandId),
+            (found) =>
+              Option.exists(found, (row) => Option.isSome(row.worktreePath))
+          );
+
+          yield* (yield* Threads).stop({
+            threadId: input.threadId,
+            clearQueue: false,
+          });
+
+          // A launch that carried on would now make its worktree and start the run.
+          yield* gate.open;
+          yield* launcher.settled(input.threadId);
+          yield* Effect.sleep(Duration.millis(200));
+
+          const { shell } = Option.getOrThrow(
+            yield* (yield* ThreadRows).get(input.threadId)
+          );
+
+          assert.strictEqual(shell.activity, "failed");
+          assert.deepStrictEqual(
+            shell.lastError,
+            Option.some(STOPPED_BEFORE_START)
+          );
+          assert.isFalse(
+            (yield* Ref.get(events)).some(
+              (event) =>
+                Predicate.isTagged(event, "RunStarted") &&
+                event.threadId === input.threadId
+            )
+          );
+          assert.isUndefined(
+            (yield* ScriptedStore).threads.get(input.threadId)
+          );
+          assert.isTrue(Option.isNone(yield* launches.get(input.commandId)));
+
+          const worktreePath = Option.getOrThrow(
+            Option.flatMap(planned, (row) => row.worktreePath)
+          );
+
+          assert.isFalse(
+            yield* (yield* FileSystem.FileSystem).exists(worktreePath)
+          );
         })
       )
   );

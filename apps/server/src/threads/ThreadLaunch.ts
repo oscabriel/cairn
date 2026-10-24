@@ -72,7 +72,7 @@ import {
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { BranchNames } from "./BranchNames.ts";
 import { LaunchStore } from "./LaunchStore.ts";
-import type { LaunchRow } from "./LaunchStore.ts";
+import type { LaunchRow, LaunchStoreError } from "./LaunchStore.ts";
 import { placeholderTitle, ThreadTitles } from "./ThreadTitles.ts";
 import { logTurnSubmitted, TurnContent } from "./TurnContent.ts";
 import type { TurnContentError } from "./TurnContent.ts";
@@ -137,6 +137,9 @@ const unavailable = (cause: { readonly message: string }) =>
     field: Option.none(),
   });
 
+/** The `lastError` of a thread whose launch was stopped before its first message reached the brain. */
+export const STOPPED_BEFORE_START = "Stopped before the thread started.";
+
 const awaitKey = <K>(map: FiberMap.FiberMap<K>, key: K) =>
   FiberMap.get(map, key).pipe(
     Effect.flatMap(
@@ -172,6 +175,13 @@ export class ThreadLaunch extends Context.Service<
      * after a restart before `resumePending` started it.
      */
     follow(threadId: ThreadId): Effect.Effect<boolean>;
+    /**
+     * Stops the thread's launch before its first message reaches the brain: interrupts its fiber,
+     * removes the worktree or scratch folder it made, forgets the launch and marks the row failed
+     * with `STOPPED_BEFORE_START`. True when it stopped one; false when no launch of the thread is
+     * recorded, as once the first message was submitted (the run then stops as any run does).
+     */
+    cancel(threadId: ThreadId): Effect.Effect<boolean, LaunchStoreError>;
   }
 >()("cairn/server/threads/ThreadLaunch") {
   /** Needs the shell store, `LaunchStore`, the projects services, `HarnessSeam` and `TurnContent`. */
@@ -502,33 +512,37 @@ export class ThreadLaunch extends Context.Service<
         );
       });
 
+      // Removes the workspace the launch made: its worktree, or its scratch folder. Failures log.
+      const discardWorkspace = Effect.fnUntraced(function* (row: LaunchRow) {
+        const project = yield* projects.get(row.input.projectId);
+
+        if (Option.isNone(project)) {
+          return;
+        }
+
+        yield* cleanUp(row, project.value.shell);
+
+        if (project.value.shell.kind === "scratch" && Option.isSome(row.cwd)) {
+          yield* scratch.releaseFolder(row.cwd.value).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("launch cleanup failed").pipe(
+                Effect.annotateLogs({
+                  event: "launch_cleanup_failed",
+                  threadId: row.input.threadId,
+                  cause: String(cause),
+                })
+              )
+            )
+          );
+        }
+      });
+
       // A launch row whose thread row was never committed: the brain stopped between the two
       // inserts. Nothing reached the harness, so the launch is dropped with whatever it made.
       const discardOrphan = Effect.fnUntraced(function* (row: LaunchRow) {
         const { input } = row;
-        const project = yield* projects.get(input.projectId);
 
-        if (Option.isSome(project)) {
-          yield* cleanUp(row, project.value.shell);
-
-          if (
-            project.value.shell.kind === "scratch" &&
-            Option.isSome(row.cwd)
-          ) {
-            yield* scratch.releaseFolder(row.cwd.value).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("launch cleanup failed").pipe(
-                  Effect.annotateLogs({
-                    event: "launch_cleanup_failed",
-                    threadId: input.threadId,
-                    cause: String(cause),
-                  })
-                )
-              )
-            );
-          }
-        }
-
+        yield* discardWorkspace(row);
         yield* launches.remove(input.commandId);
         yield* Effect.logWarning("orphan launch discarded").pipe(
           Effect.annotateLogs({
@@ -646,22 +660,28 @@ export class ThreadLaunch extends Context.Service<
             .build(input.threadId, row.from, input.initialMessage)
             .pipe(Effect.mapError(stepFailed("message")));
 
-          const submission = yield* seam
-            .submit(input.threadId, {
-              requestId: input.initialMessage.requestId,
-              content: built.content,
-              entry: built.entry,
-              whenBusy: "followUp",
-            })
-            .pipe(Effect.mapError(stepFailed("message")));
+          // Submitted and forgotten as one step: a stop that interrupts the launch finds either a
+          // launch to cancel or a run to stop, never a submitted turn under a launch row.
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              const submission = yield* seam
+                .submit(input.threadId, {
+                  requestId: input.initialMessage.requestId,
+                  content: built.content,
+                  entry: built.entry,
+                  whenBusy: "followUp",
+                })
+                .pipe(Effect.mapError(stepFailed("message")));
 
-          yield* logTurnSubmitted(
-            input.threadId,
-            input.initialMessage,
-            built,
-            submission
+              yield* logTurnSubmitted(
+                input.threadId,
+                input.initialMessage,
+                built,
+                submission
+              );
+              yield* launches.remove(commandId);
+            })
           );
-          yield* launches.remove(commandId);
           yield* Effect.logInfo("thread launched").pipe(
             Effect.annotateLogs({
               event: "thread_launched",
@@ -967,7 +987,52 @@ export class ThreadLaunch extends Context.Service<
         return admitted || Option.isSome(fiber);
       });
 
-      return ThreadLaunch.of({ launch, resumePending, settled, follow });
+      const cancel = Effect.fn("ThreadLaunch.cancel")(function* (
+        threadId: ThreadId
+      ) {
+        yield* awaitAdmission(threadId);
+        yield* FiberMap.remove(running, threadId);
+
+        const found = yield* launches.byThread(threadId);
+
+        if (Option.isNone(found)) {
+          return false;
+        }
+
+        const row = found.value;
+
+        yield* FiberMap.remove(naming, `branch:${threadId}`);
+        yield* discardWorkspace(row).pipe(
+          Effect.catchTag("ShellStoreError", (failure) =>
+            Effect.logWarning("launch cleanup failed").pipe(
+              Effect.annotateLogs({
+                event: "launch_cleanup_failed",
+                threadId,
+                cause: failure.message,
+              })
+            )
+          )
+        );
+        yield* markFailed(row, STOPPED_BEFORE_START);
+        yield* launches.remove(row.input.commandId);
+        yield* Effect.logInfo("thread launch stopped").pipe(
+          Effect.annotateLogs({
+            event: "thread_launch_stopped",
+            threadId,
+            phase: row.phase,
+          })
+        );
+
+        return true;
+      });
+
+      return ThreadLaunch.of({
+        launch,
+        resumePending,
+        settled,
+        follow,
+        cancel,
+      });
     })
   );
 }

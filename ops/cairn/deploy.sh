@@ -70,6 +70,8 @@ main() {
 			echo "cairn-nightly.service is running; a deploy would refuse"
 		fi
 		echo "unit: $(systemctl --user is-enabled cairn.service 2>/dev/null || true), $(systemctl --user is-active cairn.service 2>/dev/null || true)"
+		# The peak since this invocation started; journalctl _SYSTEMD_INVOCATION_ID=<id> -g brain_memory_peak times it.
+		echo "memory: $(systemctl --user show cairn.service -p InvocationID -p MemoryCurrent -p MemoryPeak -p MemoryHigh --value 2>/dev/null | paste -sd ' ' || true) (invocation, current, peak, high; bytes)"
 		echo "check done; nothing changed"
 		exit 0
 	fi

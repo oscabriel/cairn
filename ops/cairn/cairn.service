@@ -7,6 +7,9 @@
 # StartLimitIntervalSec=0 keeps kill judges and crash loops from parking the unit; the stepped
 # RestartSec is the back-off for a brain that cannot boot, and pi-durable's own guard parks tasks.
 # Node exits 130 on SIGTERM (NodeRuntime.runMain), which is a clean stop.
+# MemoryHigh is a soft ceiling: past it the kernel reclaims harder and records pressure, nothing is
+# killed. There is no MemoryMax, because an OOM kill of the brain or a claude child mid-turn is a
+# worse hang than the memory. The brain logs `brain memory peak` (MemoryWatch.ts) to time a peak.
 [Unit]
 Description=Cairn brain
 After=network-online.target executor.service
@@ -29,6 +32,7 @@ RestartSec=250ms
 RestartSteps=4
 RestartMaxDelaySec=8
 OOMPolicy=continue
+MemoryHigh=1.5G
 
 [Install]
 WantedBy=default.target

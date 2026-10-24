@@ -37,6 +37,7 @@ import { Health } from "./http/Health.ts";
 import { HttpLive } from "./http/Http.ts";
 import { BootData } from "./load/BootData.ts";
 import { PeerPath } from "./load/PeerPath.ts";
+import { MemoryWatch } from "./MemoryWatch.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { FileSearch } from "./projects/FileSearch.ts";
@@ -233,7 +234,12 @@ const CheckpointEntriesLive = Layer.effect(
  * `FileSystem`, a harness (`HarnessSeam` and `HarnessBoot`) and its models (`ModelSource` and the
  * picker's `PiModelSource`): `PiDurableBrain` and `ScriptedBrain` provide all four.
  */
-export const AppLayer = Layer.mergeAll(HttpLive, Boot, ExecutorSignInPush).pipe(
+export const AppLayer = Layer.mergeAll(
+  HttpLive,
+  Boot,
+  ExecutorSignInPush,
+  MemoryWatch.pipe(Layer.provide(NodeServices.layer))
+).pipe(
   Layer.provide(HandlersLayer),
   Layer.provide(BootData),
   Layer.provide(

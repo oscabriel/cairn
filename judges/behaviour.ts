@@ -21,6 +21,11 @@
 //   drafts-reload    the hero's draft survives a reload of the page's URL (t3code moves the hero to
 //                    `/draft/<id>`, so its reload restores the draft);
 //   drafts-separate  a thread's draft stays with the thread and out of the hero;
+//   hero-launch      20 sends from the hero each land on `/t/<id>` and show the sent words in a
+//                    user row, and "This thread does not exist." never appears, not even for one
+//                    mutation (a DOM observer watches the whole time; the seed's flash was short).
+//                    The socket holds each `thread.launch` frame for 500 ms, so the page always
+//                    subscribes before the launch reaches the in-process brain, as on a slow link;
 //   settle-undo      Settle moves the row to Settled, Undo within 5 s brings it back;
 //   snooze           a snooze preset from the row menu takes the row out of the active list;
 //   search           search finds the thread by title and shows nothing for a miss;
@@ -38,7 +43,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { Effect, Schema } from "effect";
+import { Effect, Predicate, Schema } from "effect";
 import { chromium, devices, webkit } from "playwright";
 import type { Browser, BrowserContextOptions, Page } from "playwright";
 
@@ -441,6 +446,100 @@ try {
       return `after reload: ${JSON.stringify(await value(page))}`;
     },
     (detail) => detail === 'after reload: "a hero draft"'
+  );
+
+  await check(
+    chromiumBrowser,
+    "hero-launch",
+    desktop(1440),
+    hero,
+    async (page) => {
+      await page.routeWebSocket(/\/ws(?:\?|$)/u, (socket) => {
+        const server = socket.connectToServer();
+
+        socket.onMessage((message) => {
+          if (
+            Predicate.isString(message) &&
+            message.includes('"thread.launch"')
+          ) {
+            setTimeout(() => {
+              server.send(message);
+            }, 500);
+          } else {
+            server.send(message);
+          }
+        });
+      });
+      await page.reload({ waitUntil: "networkidle" });
+      await editor(page).waitFor({ state: "visible", timeout: 15_000 });
+      await page.evaluate(() => {
+        // The count lives on <html>, which the client never renders, so the judge reads it back.
+        const html = document.documentElement;
+        let missing = 0;
+
+        html.dataset.cairnJudgeMissing = "0";
+
+        new MutationObserver(() => {
+          const status = document.querySelector(
+            '[data-testid="thread-status"]'
+          );
+
+          if (
+            status?.textContent?.includes("This thread does not exist.") ===
+            true
+          ) {
+            missing += 1;
+            html.dataset.cairnJudgeMissing = String(missing);
+          }
+        }).observe(document.body, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
+      });
+
+      const launches = 20;
+      let landed = 0;
+
+      const missingSeen = async () =>
+        await page.locator("html").getAttribute("data-cairn-judge-missing");
+
+      for (let index = 0; index < launches; index += 1) {
+        const words = `hero launch ${index} ${Date.now()}`;
+
+        if (index > 0) {
+          // Back to the hero without a reload, so the observer keeps watching.
+          await page
+            .getByRole("button", { name: "New thread", exact: true })
+            .first()
+            .click();
+          await editor(page).waitFor({ state: "visible" });
+        }
+
+        await editor(page).click();
+        await page.keyboard.type(words);
+        await page.keyboard.press("Enter");
+        await page.waitForURL(/\/t\/[0-9a-f-]{36}$/u, { timeout: 10_000 });
+
+        const shown = await page
+          .locator('[data-message-role="user"]', { hasText: words })
+          .first()
+          .waitFor({ state: "visible", timeout: 10_000 })
+          .then(
+            () => true,
+            () => false
+          );
+
+        if (!shown) {
+          return `${landed}/${launches} landed (launch ${index} showed no user row in 10 s), missing seen ${await missingSeen()} times`;
+        }
+
+        landed += 1;
+      }
+
+      return `${landed}/${launches} landed, missing seen ${await missingSeen()} times`;
+    },
+    (detail) => detail === "20/20 landed, missing seen 0 times"
   );
 
   await check(

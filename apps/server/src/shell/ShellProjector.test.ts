@@ -116,6 +116,7 @@ const FakeLayer = Layer.effectContext(
             });
           })
         ),
+      whenEnsured: () => unsupported("wait for threads"),
       history: () => unsupported("page history"),
       entry: () => unsupported("read entries"),
       entryImage: () => unsupported("read images"),

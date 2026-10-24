@@ -1,0 +1,12 @@
+{"type":"transcript_start","scenario":"subscribe_before_ensure","version":1}
+{"type":"model","label":"m1","text":"hello"}
+{"type":"input","step":"subscribe"}
+{"type":"input","step":"ensure"}
+{"type":"expect_event","event":{"_tag":"ThreadEnsured"}}
+{"type":"expect_view","path":["transcriptLength"],"equals":0}
+{"type":"input","step":"message","requestId":"r1","text":"hi"}
+{"type":"expect_event","event":{"_tag":"RunStarted"}}
+{"type":"expect_event","event":{"_tag":"MessageCommitted","role":"assistant","text":"hello"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed","failure":null}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"hi","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"hello","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_view","path":["running"],"equals":false}

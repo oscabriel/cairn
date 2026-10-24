@@ -2,8 +2,14 @@
 // `thread.retryTask`. Each is a thin call into the harness seam; this module only translates the
 // seam's failures into the protocol's errors. Subagent conversations inside a thread arrive with
 // subagents; until then a `conversationId` is refused as not found.
+//
+// A subscribe to a thread whose launch is still in flight waits for the launch's ensure (or for the
+// launch to end, or `LaunchWait`) before it watches, because the client opens the thread page as
+// soon as it queues the launch. A thread with no launch row answers at once: it exists, it failed,
+// or its launch has not reached the brain yet, which only the client can tell apart.
 
 import { Internal, NotFound, Unavailable } from "@cairn/protocol/Errors";
+import type { ThreadId } from "@cairn/protocol/Ids";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import type {
   EntryInput,
@@ -11,10 +17,16 @@ import type {
   RetryTaskInput,
   SubscribeThreadInput,
 } from "@cairn/protocol/Thread";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Duration, Effect, Layer, Option, Schedule, Stream } from "effect";
 
 import type { HarnessError } from "../brain/HarnessSeam.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import { LaunchStore } from "../threads/LaunchStore.ts";
+import type { LaunchStoreError } from "../threads/LaunchStore.ts";
+import { LaunchWait } from "../threads/Threads.ts";
+
+/** How often a subscribe waiting on a launch checks whether the launch ended. */
+const LAUNCH_POLL = Duration.millis(100);
 
 /** The resource each seam "not found" names. */
 const MISSING: Partial<Record<HarnessError["reason"], NotFound["resource"]>> = {
@@ -52,21 +64,65 @@ const noSubagents = (threadId: string) =>
     id: threadId,
   });
 
+const launchesUnavailable = (failure: LaunchStoreError) =>
+  new Unavailable({
+    message: `The thread stream could not read the thread's launch: ${failure.message}`,
+  });
+
 /** The four handlers, for the handler group and for tests that call them directly. */
 export const threadStreamHandlers = Effect.gen(function* () {
   const seam = yield* HarnessSeam;
+  const launches = yield* LaunchStore;
+
+  // Returns once the thread's launch has ensured it, ended, or outlasted `LaunchWait`; at once
+  // when no launch is in flight. The watch after it answers for itself either way.
+  const untilLaunched = Effect.fn("ThreadStreamHandlers.untilLaunched")(
+    function* (threadId: ThreadId) {
+      const pending = yield* launches
+        .byThread(threadId)
+        .pipe(Effect.mapError(launchesUnavailable));
+
+      if (Option.isNone(pending)) {
+        return;
+      }
+
+      const wait = yield* LaunchWait;
+
+      const ended = launches.byThread(threadId).pipe(
+        Effect.repeat({
+          until: Option.isNone,
+          schedule: Schedule.spaced(LAUNCH_POLL),
+        }),
+        Effect.mapError(launchesUnavailable)
+      );
+
+      const ensured = seam
+        .whenEnsured(threadId)
+        .pipe(Effect.mapError((failure) => toLookupError(failure, threadId)));
+
+      yield* Effect.raceFirst(ensured, Effect.asVoid(ended)).pipe(
+        Effect.timeoutOption(wait)
+      );
+    }
+  );
 
   return {
     subscribe: (input: SubscribeThreadInput) =>
       Option.isSome(input.conversationId)
         ? Stream.fail(noSubagents(input.threadId))
-        : seam
-            .watch(input.threadId)
-            .pipe(
-              Stream.mapError((failure) =>
-                toLookupError(failure, input.threadId)
+        : Stream.unwrap(
+            untilLaunched(input.threadId).pipe(
+              Effect.as(
+                seam
+                  .watch(input.threadId)
+                  .pipe(
+                    Stream.mapError((failure) =>
+                      toLookupError(failure, input.threadId)
+                    )
+                  )
               )
-            ),
+            )
+          ),
     history: (input: HistoryInput) =>
       Option.isSome(input.conversationId)
         ? Effect.fail(noSubagents(input.threadId))

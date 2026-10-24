@@ -7,9 +7,11 @@
 // - `transcript_start {scenario, version}`: first line.
 // - `model {label, hold?, text?, toolCalls?, stopReason?, errorMessage?}`: the next model answer,
 //   consumed in order by whichever request comes next. `hold` keeps it until `release {label}`.
-// - `input {step, ...}`: `ensure`, `ensure_race`, `message` (with `whenBusy`), `steer`,
-//   `follow_up`, `stop`, `stop_clear`, `withdraw {requestId}`, `respond {decision}`, `compact`,
-//   `restart`. An input may carry `expect` on its own result (an error reason, `withdrawn`, the
+// - `input {step, ...}`: `ensure`, `ensure_race`, `subscribe`, `message` (with `whenBusy`),
+//   `steer`, `follow_up`, `stop`, `stop_clear`, `withdraw {requestId}`, `respond {decision}`,
+//   `compact`, `restart`. `subscribe` opens the client's one subscription now, before any ensure,
+//   as a page opened on a launch does: it waits on `whenEnsured`, then watches, and is never
+//   reopened. An input may carry `expect` on its own result (an error reason, `withdrawn`, the
 //   submission of an earlier request id, one conversation for a race).
 // - `crash`: close the harness and open a new one over the same store.
 // - `release {label}`, `settle {ms}`.
@@ -76,6 +78,7 @@ export const TranscriptLine = Schema.Union([
     step: Schema.Literals([
       "ensure",
       "ensure_race",
+      "subscribe",
       "message",
       "steer",
       "follow_up",

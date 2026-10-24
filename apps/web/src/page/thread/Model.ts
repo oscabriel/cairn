@@ -25,9 +25,9 @@ export const ThreadStatus = defineTaggedUnion({
   Loading: {},
   /** The view is current. */
   Ready: {},
-  /** The brain has no such thread. */
+  /** The brain has no such thread, and no launch of it is on its way. */
   Missing: {},
-  /** The stream failed for another reason; it is opened again with the next connection. */
+  /** The stream failed for another reason; it is opened again after a short wait. */
   Failed: { message: Schema.String },
 });
 
@@ -41,8 +41,15 @@ export const Model = Schema.Struct({
   epoch: Schema.Int,
   /** True while the root's client for `epoch` exists. */
   hasClient: Schema.Boolean,
+  /**
+   * True while the thread's launch is on its way: the outbox holds it, or the shell row is
+   * `preparing`. A NotFound then means "not yet", so the page keeps loading and subscribes again.
+   */
+  launching: Schema.Boolean,
   /** Bumped to open a fresh subscription (and so a fresh snapshot) on the same connection. */
   watch: Schema.Int,
+  /** Resubscribes since the last snapshot; picks the next wait (`Command.ts`). */
+  retries: Schema.Int,
   status: ThreadStatus,
   view: Schema.Option(ThreadViewModel),
   /** The transcript: its list, open folds and per-thread scroll memory. */
@@ -60,7 +67,9 @@ export const initial: Model = {
   threadId: Option.none(),
   epoch: 0,
   hasClient: false,
+  launching: false,
   watch: 0,
+  retries: 0,
   status: ThreadStatus.Loading(),
   view: Option.none(),
   timeline: Timeline.initial,

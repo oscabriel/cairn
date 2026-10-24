@@ -117,18 +117,34 @@ const informThread = Update.foldChild({
   toParentMessage: toGotThreadMessage,
 });
 
+/** Whether `threadId`'s launch is on its way: queued in the outbox, or its shell row is preparing. */
+const isLaunching = (model: Model, threadId: ThreadId): boolean =>
+  model.outbox.some(
+    (item) =>
+      Predicate.isTagged(item, "Launch") && item.input.threadId === threadId
+  ) ||
+  Option.exists(model.shell, (shell) =>
+    shell.threads.some(
+      (thread) => thread.id === threadId && thread.activity === "preparing"
+    )
+  );
+
 /** Tells the thread page the routed thread and the connection; a no-op when nothing changed. */
 const syncThread: Step = (model) => {
+  const threadId = routedThreadId(model.route);
+
   const context: Thread.PageContext = {
-    threadId: routedThreadId(model.route),
+    threadId,
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
+    launching: Option.exists(threadId, (id) => isLaunching(model, id)),
   };
 
   const unchanged =
     Equal.equals(model.thread.threadId, context.threadId) &&
     model.thread.epoch === context.epoch &&
-    model.thread.hasClient === context.hasClient;
+    model.thread.hasClient === context.hasClient &&
+    model.thread.launching === context.launching;
 
   return unchanged ? { model } : informThread(model, context);
 };

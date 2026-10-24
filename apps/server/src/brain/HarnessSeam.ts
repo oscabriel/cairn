@@ -304,8 +304,19 @@ export class HarnessSeam extends Context.Service<
       threadId: ThreadId,
       instructions: Option.Option<string>
     ): Effect.Effect<void, HarnessError>;
-    /** A fresh projected snapshot, then ops; a snapshot may come again at any time. */
+    /**
+     * A fresh projected snapshot, then ops; a snapshot may come again at any time. A thread that was
+     * never ensured fails `thread_not_found` at once; to subscribe before a launch's ensure lands,
+     * wait on `whenEnsured` first.
+     */
     watch(threadId: ThreadId): Stream.Stream<ThreadFrame, HarnessError>;
+    /**
+     * Waits until the thread's conversation exists: at once for an ensured thread, otherwise when an
+     * `ensureThread` for it commits. It never fails `thread_not_found` and has no deadline of its
+     * own, so the caller bounds the wait and decides when "not yet" means "never". It listens
+     * before it looks, so an ensure that lands while it starts is not missed.
+     */
+    whenEnsured(threadId: ThreadId): Effect.Effect<void, HarnessError>;
     /** Older entries, projected as the stream projects them. */
     history(
       threadId: ThreadId,

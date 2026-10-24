@@ -1,6 +1,7 @@
 // The thread stream's RPC handlers and the entry image route over the scripted harness: a fresh
-// snapshot first, history paging, full entries, image bytes by reference, and the protocol error
-// each seam failure becomes.
+// snapshot first, history paging, full entries, image bytes by reference, the protocol error each
+// seam failure becomes, and a subscribe that arrives while its thread is still launching.
+import path from "node:path";
 
 import {
   ConversationId,
@@ -10,20 +11,102 @@ import {
   TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
+import { NewWorktreeWorkspace } from "@cairn/protocol/Launch";
+import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit, Fiber, Layer, Option, Predicate, Stream } from "effect";
+import {
+  Duration,
+  Effect,
+  Exit,
+  FileSystem,
+  Fiber,
+  Latch,
+  Layer,
+  Option,
+  Predicate,
+  Stream,
+} from "effect";
 import { HttpRouter } from "effect/http";
 
 import { EntryImageRoute } from "../brain/EntryImageRoute.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { ScriptedHarness } from "../brain/ScriptedHarness.ts";
+import { Database } from "../db/Database.ts";
+import { Launches0002 } from "../db/migrations/0002Launches.ts";
+import { LaunchStore } from "../threads/LaunchStore.ts";
+import { ThreadLaunch } from "../threads/ThreadLaunch.ts";
+import { LaunchWait } from "../threads/Threads.ts";
+import {
+  addProject,
+  heldWorktrees,
+  HeldModel,
+  launchInput,
+  makeRepository,
+  ModelGate,
+  threadsTestLayer,
+  TitleModelScripted,
+} from "../threads/ThreadsTestKit.ts";
 import {
   ThreadStreamHandlers,
   threadStreamHandlers,
 } from "./ThreadStreamHandlers.ts";
 
 const isNotFound = Predicate.isTagged("NotFound");
+
+/** The scripted harness with an empty `thread_launches`: no thread is launching. */
+const HarnessNoLaunches = Layer.mergeAll(
+  ScriptedHarness.layer,
+  LaunchStore.layerNoDeps.pipe(
+    Layer.provide(Database.layerTest({ "0002_Launches": Launches0002 }))
+  )
+);
+
+const launchLayer = (dataDir: string, gate: Latch.Latch) =>
+  threadsTestLayer({
+    dataDir,
+    titleModel: TitleModelScripted({ held: false }),
+    model: HeldModel,
+    worktrees: heldWorktrees(gate),
+  });
+
+/**
+ * Runs `body` over the launch services and a repository at `repo/`, with worktree creation held
+ * until `gate` opens.
+ */
+const withHeldLaunches = <A, E>(
+  body: (repo: string, gate: Latch.Latch) => Effect.Effect<A, E, LaunchServices>
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+    const repo = path.join(root, "repo");
+    const gate = yield* Latch.make(false);
+
+    return yield* Effect.gen(function* () {
+      yield* makeRepository(repo);
+      yield* (yield* ModelGate).open;
+
+      return yield* body(repo, gate);
+    }).pipe(Effect.provide(launchLayer(path.join(root, "data"), gate)));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+type LaunchServices = Layer.Success<ReturnType<typeof launchLayer>>;
+
+const worktree = (baseRef: string) =>
+  NewWorktreeWorkspace.make({
+    baseRef,
+    branch: Option.none(),
+    startFromOrigin: false,
+  });
+
+/** Whether `fiber` is still running after a moment. */
+const stillWaiting = <A, E>(fiber: Fiber.Fiber<A, E>) =>
+  Effect.gen(function* () {
+    yield* Effect.sleep(Duration.millis(200));
+
+    return fiber.pollUnsafe() === undefined;
+  });
 
 const THREAD = ThreadId.make("0190f0c0-0000-7000-8000-0000000000a1");
 
@@ -147,7 +230,7 @@ describe("thread stream handlers", () => {
       );
 
       assert.isTrue(Exit.isSuccess(built));
-    }).pipe(Effect.scoped, Effect.provide(ScriptedHarness.layer))
+    }).pipe(Effect.scoped, Effect.provide(HarnessNoLaunches))
   );
 
   it.live("the entry image route returns the bytes an entry holds", () =>
@@ -213,5 +296,111 @@ describe("thread stream handlers", () => {
         await dispose();
       });
     }).pipe(Effect.provide(ScriptedHarness.layer))
+  );
+
+  it.live(
+    "a subscribe while the thread is launching waits for its ensure, then starts with a snapshot",
+    () =>
+      withHeldLaunches((repo, gate) =>
+        Effect.gen(function* () {
+          const projectId = yield* addProject(repo);
+
+          const input = yield* launchInput(
+            projectId,
+            worktree("main"),
+            "Wait for me"
+          );
+
+          yield* (yield* ThreadLaunch).launch(input, "owner@test");
+
+          const handlers = yield* threadStreamHandlers;
+
+          const first = yield* handlers
+            .subscribe({
+              threadId: input.threadId,
+              conversationId: Option.none(),
+            })
+            .pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
+
+          assert.isTrue(
+            yield* stillWaiting(first),
+            "the subscribe waits while the worktree is held"
+          );
+
+          yield* gate.open;
+
+          const [item] = yield* Fiber.join(first);
+
+          assert.strictEqual(item?._tag, "Snapshot");
+          yield* (yield* ThreadLaunch).settled(input.threadId);
+        })
+      )
+  );
+
+  it.live(
+    "a subscribe waiting on a launch that fails before its ensure ends NotFound",
+    () =>
+      withHeldLaunches((repo, gate) =>
+        Effect.gen(function* () {
+          const projectId = yield* addProject(repo);
+
+          const input = yield* launchInput(
+            projectId,
+            worktree("no-such-ref"),
+            "This launch fails"
+          );
+
+          yield* (yield* ThreadLaunch).launch(input, "owner@test");
+
+          const ended = yield* (yield* threadStreamHandlers)
+            .subscribe({
+              threadId: input.threadId,
+              conversationId: Option.none(),
+            })
+            .pipe(Stream.runCollect, Effect.flip, Effect.forkChild);
+
+          assert.isTrue(yield* stillWaiting(ended));
+
+          yield* gate.open;
+
+          const failure = yield* Fiber.join(ended);
+
+          assert.strictEqual(failure._tag, "NotFound");
+          yield* (yield* ThreadLaunch).settled(input.threadId);
+        })
+      )
+  );
+
+  it.live("a subscribe gives up on a launch after LaunchWait", () =>
+    withHeldLaunches((repo, gate) =>
+      Effect.gen(function* () {
+        const projectId = yield* addProject(repo);
+
+        const input = yield* launchInput(
+          projectId,
+          worktree("main"),
+          "Held for good"
+        );
+
+        yield* (yield* ThreadLaunch).launch(input, "owner@test");
+
+        const failure = yield* (yield* threadStreamHandlers)
+          .subscribe({
+            threadId: input.threadId,
+            conversationId: Option.none(),
+          })
+          .pipe(
+            Stream.runCollect,
+            Effect.flip,
+            Effect.provideService(LaunchWait, Duration.millis(300))
+          );
+
+        assert.strictEqual(failure._tag, "NotFound");
+
+        // Let the launch finish, so the test's scope closes over a quiet fiber.
+        yield* gate.open;
+        yield* (yield* ThreadLaunch).settled(input.threadId);
+      })
+    )
   );
 });

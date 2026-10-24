@@ -1,6 +1,7 @@
 // Fixtures for the thread and launch tests: the shell store and `thread_launches` over a fresh
 // in-memory database, the scripted harness with a model a test can hold, a title model a test
-// scripts, real `git` over a temporary data folder, and helpers that make a repository.
+// scripts, real `git` over a temporary data folder (with worktree creation a test can hold), and
+// helpers that make a repository.
 import path from "node:path";
 
 import { RequestId, ThreadId } from "@cairn/protocol/Ids";
@@ -12,6 +13,7 @@ import type {
 import { ProjectCreate } from "@cairn/protocol/ShellCommands";
 import { NodeServices } from "@effect/platform-node";
 import { Clock, Context, Effect, Latch, Layer, Option, Ref } from "effect";
+import type { FileSystem } from "effect";
 
 import { AttachmentsLayer } from "../attachments/AttachmentsLayer.ts";
 import type { AttachmentStore } from "../attachments/AttachmentStore.ts";
@@ -130,6 +132,20 @@ export const HeldModel = Layer.effectContext(
   })
 );
 
+/** Real worktrees whose `create` waits until `gate` opens, so a launch stays in its workspace phase. */
+export const heldWorktrees = (gate: Latch.Latch) =>
+  Layer.effect(
+    Worktrees,
+    Effect.gen(function* () {
+      const real = yield* Worktrees;
+
+      return Worktrees.of({
+        ...real,
+        create: (input) => Effect.andThen(gate.await, real.create(input)),
+      });
+    })
+  ).pipe(Layer.provide(Worktrees.layerNoDeps));
+
 /** Everything a thread test needs, over `dataDir`, the given title model and scripted model. */
 export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
   readonly dataDir: string;
@@ -141,6 +157,12 @@ export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
   readonly turnContent?: Layer.Layer<TurnContent, never, AttachmentStore>;
   /** Defaults to no hooks. */
   readonly stopHooks?: Layer.Layer<StopHooks>;
+  /** Defaults to real worktrees; `heldWorktrees` holds their creation. */
+  readonly worktrees?: Layer.Layer<
+    Worktrees,
+    never,
+    Git | FileSystem.FileSystem
+  >;
 }) => {
   const shell = ShellStoreLayer.pipe(
     Layer.provideMerge(
@@ -162,7 +184,7 @@ export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
     ScratchProject.layerNoDeps,
     FileSearch.layerNoDeps
   ).pipe(
-    Layer.provideMerge(Worktrees.layerNoDeps),
+    Layer.provideMerge(options.worktrees ?? Worktrees.layerNoDeps),
     Layer.provideMerge(Git.layerNoDeps)
   );
 

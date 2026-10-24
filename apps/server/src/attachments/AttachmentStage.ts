@@ -10,14 +10,15 @@
 // - XLSX and PPTX files are a line with the path and a note to open them with a tool.
 //
 // Claims are `INSERT OR IGNORE`, so a send retried with the same request id claims nothing new and
-// builds the same content. The `turn.submitted` log line is written here, as the last stage, when
-// the turn's content is ready for the harness.
+// builds the same content. A check (a launch's, before its thread exists) only looks the
+// attachments up: it reads no file and claims nothing. `turn.submitted` is logged by the caller,
+// after the submit (`logTurnSubmitted`).
 //
-// The path line follows github.com/pingdotgg/t3code,
-// packages/provider-core/src/server/attachmentPrompt.ts (`providerMessageTextWithAttachmentPaths`)
-// at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (MIT, T3 Tools Inc.); t3code sends documents as the
-// path only, and Cairn sends their text.
+// The path line (`attachmentPathLine` in @cairn/protocol, after t3code's
+// `providerMessageTextWithAttachmentPaths`) is its own text part, so the transcript can drop it;
+// t3code sends documents as the path only, and Cairn sends their text.
 import {
+  attachmentPathLine,
   attachmentText,
   MAX_INLINE_CHARS_PER_ATTACHMENT,
   MAX_INLINE_CHARS_PER_TURN,
@@ -65,13 +66,17 @@ const notReady = (what: string) =>
 
 const text = (value: string): TextContent => ({ type: "text", text: value });
 
-const kibibytes = (bytes: number) =>
-  `${(bytes / 1024).toLocaleString("en-US", { maximumFractionDigits: 0 })} KB`;
-
 /** The line that tells the agent where an attachment's original is. */
-export const pathHint = (ref: AttachmentRef, path: string, note = "") =>
+const pathHint = (ref: AttachmentRef, path: string, note: string) =>
   text(
-    `[Attached ${ref.kind === "image" ? "image" : "file"} "${ref.name}" (${ref.mimeType}, ${kibibytes(ref.sizeBytes)}) is saved at: ${path}${note}]`
+    attachmentPathLine({
+      kind: ref.kind === "image" ? "image" : "file",
+      name: ref.name,
+      mimeType: ref.mimeType,
+      sizeBytes: ref.sizeBytes,
+      path,
+      note,
+    })
   );
 
 /**
@@ -175,7 +180,7 @@ const buildOne = Effect.fnUntraced(function* (
             () => ref.mimeType
           ),
         },
-        pathHint(ref, original),
+        pathHint(ref, original, ""),
       ],
       inlineChars: 0,
     } satisfies Built;
@@ -250,6 +255,12 @@ export const attachmentStage: TurnContentStage<AttachmentStore> = {
       )
     );
 
+    const refs = found.map((stored) => stored.ref);
+
+    if (draft.check) {
+      return { ...draft, attachments: [...draft.attachments, ...refs] };
+    }
+
     const content: Array<TextContent | ImageContent> = [];
     let budget = MAX_INLINE_CHARS_PER_TURN;
 
@@ -264,20 +275,10 @@ export const attachmentStage: TurnContentStage<AttachmentStore> = {
       .claim(ids, draft.threadId, draft.input.requestId)
       .pipe(Effect.mapError(unavailable));
 
-    yield* Effect.logInfo("turn submitted").pipe(
-      Effect.annotateLogs({
-        event: "turn.submitted",
-        threadId: draft.threadId,
-        requestId: draft.input.requestId,
-        attachments: ids.length,
-        images: found.filter((stored) => stored.ref.kind === "image").length,
-      })
-    );
-
     return {
       ...draft,
       content: [...draft.content, ...content],
-      attachments: [...draft.attachments, ...found.map((stored) => stored.ref)],
+      attachments: [...draft.attachments, ...refs],
     };
   }),
 };

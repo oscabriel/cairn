@@ -166,8 +166,7 @@ const unavailable = (failure: { readonly message: string }) =>
   });
 
 /**
- * The thread's cwd as the shell knows it: its worktree, else its project's root. None before the
- * thread's row exists (a launch checks its first message before it writes the row), and where no
+ * The thread's cwd as the shell knows it: its worktree, else its project's root. None where no
  * shell store is composed (tests of other stages), when only the user's skills apply.
  */
 const cwdOfThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -223,6 +222,11 @@ const withText = (draft: TurnDraft, text: string): TurnDraft => {
 export const skillExpansionStage: TurnContentStage<never> = {
   name: "skillExpansion",
   run: Effect.fn("SkillExpansionStage.run")(function* (draft: TurnDraft) {
+    // A check runs before the thread's row exists, so its project skills cannot be found yet.
+    if (draft.check) {
+      return draft;
+    }
+
     const catalog = yield* SkillCatalog;
     const cwd = yield* cwdOfThread(draft.threadId);
     const view = yield* catalog.refreshForTurn(cwd);

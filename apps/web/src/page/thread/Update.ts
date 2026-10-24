@@ -1,12 +1,15 @@
 // The thread page's update. Items go through client-logic's `applyThreadStreamItem`, which checks
 // every op before applying it; a refused item opens a fresh subscription, whose first item is
-// always a snapshot.
+// always a snapshot. A stream that ends is opened again after a short, growing wait (`Command.ts`),
+// except a NotFound for a thread with no launch on its way, which is Missing until the shell learns
+// of the thread. The hero opens the page in the same update that queues the launch, so the first
+// subscribe can reach the brain before the launch does.
 import {
   applyThreadStreamItem,
   prependHistory,
 } from "@cairn/client-logic/ThreadView";
 import type { ThreadId } from "@cairn/protocol/Ids";
-import { Equal, Option, Result } from "effect";
+import { Equal, Option, Predicate, Result } from "effect";
 import { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
@@ -17,6 +20,7 @@ import * as DiffUpdate from "../../diff/Update.ts";
 import { OutMessage as TimelineOutMessage } from "../../timeline/Message.ts";
 import type { Message as TimelineMessage } from "../../timeline/Message.ts";
 import * as Timeline from "../../timeline/Update.ts";
+import { WaitToResubscribe } from "./Command.ts";
 import { LoadDiffPanel } from "./DiffPanel.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { Model } from "./Model.ts";
@@ -87,11 +91,14 @@ export interface PageContext {
   readonly threadId: Option.Option<ThreadId>;
   readonly epoch: number;
   readonly hasClient: boolean;
+  /** The routed thread's launch is on its way (queued in the outbox, or its row is `preparing`). */
+  readonly launching: boolean;
 }
 
 /**
  * Brings the page in line with the route and the connection. A different thread starts from
- * nothing; a new connection keeps the view on screen until its fresh snapshot replaces it.
+ * nothing; a new connection keeps the view on screen until its fresh snapshot replaces it. A thread
+ * shown as Missing is subscribed again once its launch is known to be on its way.
  */
 export const inform = (model: Model, context: PageContext): InformReturn => {
   if (!Equal.equals(model.threadId, context.threadId)) {
@@ -102,6 +109,8 @@ export const inform = (model: Model, context: PageContext): InformReturn => {
         threadId: () => context.threadId,
         epoch: () => context.epoch,
         hasClient: () => context.hasClient,
+        launching: () => context.launching,
+        retries: () => 0,
         status: () => ThreadStatus.Loading(),
         view: () => Option.none(),
       })
@@ -120,14 +129,46 @@ export const inform = (model: Model, context: PageContext): InformReturn => {
       model: modifyFields(model, {
         epoch: () => context.epoch,
         hasClient: () => context.hasClient,
+        launching: () => context.launching,
         status: (status) =>
           model.epoch === context.epoch ? status : ThreadStatus.Loading(),
       }),
     };
   }
 
+  if (model.launching !== context.launching) {
+    const known =
+      context.launching && Predicate.isTagged(model.status, "Missing");
+
+    return {
+      model: modifyFields(model, {
+        launching: () => context.launching,
+        watch: (watch) => (known ? watch + 1 : watch),
+        status: (status) => (known ? ThreadStatus.Loading() : status),
+      }),
+    };
+  }
+
   return { model };
 };
+
+/** Waits, then subscribes again; the wait grows with each attempt since the last snapshot. */
+const resubscribeLater = (
+  model: Model,
+  status: ThreadStatus
+): UpdateReturn => ({
+  model: modifyFields(model, {
+    status: () => status,
+    retries: (retries) => retries + 1,
+  }),
+  commands: [
+    WaitToResubscribe({
+      epoch: model.epoch,
+      watch: model.watch,
+      attempt: model.retries,
+    }),
+  ],
+});
 
 const isCurrent = (
   model: Model,
@@ -150,6 +191,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
             modifyFields(model, {
               view: () => Option.some(view),
               status: () => ThreadStatus.Ready(),
+              retries: (retries) =>
+                Predicate.isTagged(received.item, "Snapshot") ? 0 : retries,
             })
           ),
         // The item could not be applied: resubscribe for a fresh snapshot.
@@ -166,17 +209,37 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         return { model };
       }
 
+      if (!ended.missing) {
+        return resubscribeLater(
+          model,
+          ThreadStatus.Failed({ message: ended.reason })
+        );
+      }
+
+      // The launch may not have reached the brain yet: "not yet", not "never".
+      if (model.launching) {
+        return resubscribeLater(model, ThreadStatus.Loading());
+      }
+
       return {
-        model: ended.missing
-          ? modifyFields(model, {
-              status: () => ThreadStatus.Missing(),
-              view: () => Option.none(),
-            })
-          : modifyFields(model, {
-              status: () => ThreadStatus.Failed({ message: ended.reason }),
-            }),
+        model: modifyFields(model, {
+          status: () => ThreadStatus.Missing(),
+          view: () => Option.none(),
+        }),
       };
     },
+    ElapsedResubscribeWait: (elapsed) =>
+      isCurrent(model, elapsed)
+        ? {
+            model: modifyFields(model, {
+              watch: (watch) => watch + 1,
+              status: (status) =>
+                Predicate.isTagged(status, "Ready")
+                  ? status
+                  : ThreadStatus.Loading(),
+            }),
+          }
+        : { model },
     GotTimelineMessage: ({ message: child }) =>
       Update.foldChild({
         update: Timeline.update,

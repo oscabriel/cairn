@@ -2,13 +2,18 @@
 // records it (a `cairn.user` entry). It runs an ordered list of stages over a draft; the order
 // lives in `TurnContentStages.ts`, so later work adds a stage (skill expansion, attachments)
 // without editing this module. A failing stage fails the whole turn, and nothing is submitted.
+//
+// A check runs the same stages with `check` set, before the thread exists (a launch checks its
+// first message so a turn it cannot send never makes a thread): stages refuse what they would
+// refuse, but read no files, claim nothing and log nothing. The turn is built once, for the
+// submit, and `logTurnSubmitted` writes `turn.submitted` after the harness admitted it.
 import type { AttachmentRef } from "@cairn/protocol/Attachments";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { TurnInput } from "@cairn/protocol/Thread";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
-import type { InputEntry } from "../brain/HarnessSeam.ts";
+import type { InputEntry, SubmissionRef } from "../brain/HarnessSeam.ts";
 
 /** The entry kind a user turn is recorded as. */
 export const CAIRN_USER_ENTRY = "cairn.user";
@@ -19,6 +24,8 @@ export interface TurnDraft {
   /** Who sent the turn: the viewer's login. */
   readonly from: string;
   readonly input: TurnInput;
+  /** A check, not a build: refuse what a build would, without reading files, claiming or logging. */
+  readonly check: boolean;
   /** What the model sees, in order. */
   readonly content: ReadonlyArray<TextContent | ImageContent>;
   /** The attachments the entry records. */
@@ -78,6 +85,30 @@ export const textStage: TurnContentStage<never> = {
     ),
 };
 
+/**
+ * Logs `turn.submitted` for a turn the harness admitted, once per submit: the line the paste and
+ * phone judges measure a send against.
+ */
+export const logTurnSubmitted = Effect.fn("TurnContent.logTurnSubmitted")(
+  function* (
+    threadId: ThreadId,
+    input: TurnInput,
+    built: BuiltTurn,
+    submission: SubmissionRef
+  ) {
+    yield* Effect.logInfo("turn submitted").pipe(
+      Effect.annotateLogs({
+        event: "turn.submitted",
+        threadId,
+        requestId: input.requestId,
+        submissionId: submission.submissionId,
+        attachments: input.attachments.length,
+        images: built.content.filter((part) => part.type === "image").length,
+      })
+    );
+  }
+);
+
 /** Builds the model content and the transcript entry of a user turn. */
 export class TurnContent extends Context.Service<
   TurnContent,
@@ -91,6 +122,15 @@ export class TurnContent extends Context.Service<
       from: string,
       input: TurnInput
     ): Effect.Effect<BuiltTurn, TurnContentError>;
+    /**
+     * Runs every stage as a check: fails as `build` would for what the input names (an empty turn,
+     * a missing attachment), with no file reads, claims or logs. Skills are not expanded.
+     */
+    check(
+      threadId: ThreadId,
+      from: string,
+      input: TurnInput
+    ): Effect.Effect<void, TurnContentError>;
   }
 >()("cairn/server/threads/TurnContent") {
   /** Runs `stages` in the given order; their requirements are the layer's. */
@@ -100,15 +140,17 @@ export class TurnContent extends Context.Service<
       Effect.gen(function* () {
         const context = yield* Effect.context<R>();
 
-        const build = Effect.fn("TurnContent.build")(function* (
+        const draftOf = Effect.fnUntraced(function* (
           threadId: ThreadId,
           from: string,
-          input: TurnInput
+          input: TurnInput,
+          check: boolean
         ) {
           let draft: TurnDraft = {
             threadId,
             from,
             input,
+            check,
             content: [],
             attachments: [],
           };
@@ -122,7 +164,8 @@ export class TurnContent extends Context.Service<
             );
           }
 
-          if (draft.content.length === 0) {
+          // A check reads no attachment, so an attachment counts as content by its reference.
+          if (draft.content.length === 0 && draft.attachments.length === 0) {
             return yield* new TurnContentError({
               message:
                 "The turn has no text and no attachments, so there is nothing to send. Type a message or attach a file.",
@@ -131,6 +174,16 @@ export class TurnContent extends Context.Service<
               field: Option.some("text"),
             });
           }
+
+          return draft;
+        });
+
+        const build = Effect.fn("TurnContent.build")(function* (
+          threadId: ThreadId,
+          from: string,
+          input: TurnInput
+        ) {
+          const draft = yield* draftOf(threadId, from, input, false);
 
           return {
             content: draft.content,
@@ -144,7 +197,15 @@ export class TurnContent extends Context.Service<
           };
         });
 
-        return TurnContent.of({ build });
+        const check = Effect.fn("TurnContent.check")(function* (
+          threadId: ThreadId,
+          from: string,
+          input: TurnInput
+        ) {
+          yield* draftOf(threadId, from, input, true);
+        });
+
+        return TurnContent.of({ build, check });
       })
     );
 }

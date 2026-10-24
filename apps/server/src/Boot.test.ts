@@ -89,6 +89,7 @@ const fakeHarness = (
     write: () => unsupported("write"),
     compact: () => unsupported("compact"),
     watch: () => Stream.die("the fake harness does not watch"),
+    whenEnsured: () => unsupported("wait for threads"),
     history: () => unsupported("page history"),
     entry: () => unsupported("read entries"),
     entryImage: () => unsupported("read images"),

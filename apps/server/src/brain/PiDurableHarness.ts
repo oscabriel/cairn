@@ -7,6 +7,8 @@
 //   also withdraws queued inputs (plan D16).
 // - watch: a fresh projected snapshot, then ops; after a reopen of the Session the stream carries
 //   on with a new snapshot of the new Session, because a snapshot is legal at any point.
+// - whenEnsured: subscribes to this process's ensures, then reads the receipt, so an ensure that
+//   lands in between is not missed. Only `ensureThread` writes receipts, and only in this process.
 // - events: the commit feed, plus parked tasks from the Harness's reports.
 //
 // The submit, watch and abort wrappers follow cairn-v1, apps/server/src/Harnesses.ts at 1a5cd4a.
@@ -40,7 +42,16 @@ import {
   configure,
   LiveDoc,
 } from "@earendil-works/pi-durable";
-import { Effect, Layer, Option, Queue, Ref, Schema, Stream } from "effect";
+import {
+  Effect,
+  Layer,
+  Option,
+  PubSub,
+  Queue,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
@@ -237,6 +248,9 @@ const layerNoDeps = Layer.effect(
     // Receipts never change once written, so a thread's conversation is cached for good.
     const conversations = new Map<ThreadId, PiConversationId>();
 
+    // Every thread `ensureThread` committed, for `whenEnsured` to wake on.
+    const ensured = yield* PubSub.unbounded<ThreadId>();
+
     const open = (threadId: Option.Option<ThreadId>) =>
       brain.session.pipe(Effect.mapError(fromUnavailable(threadId)));
 
@@ -353,6 +367,7 @@ const layerNoDeps = Layer.effect(
       const conversationId = ConversationId.make(result.id);
 
       conversations.set(input.threadId, piConversationId(conversationId));
+      yield* PubSub.publish(ensured, input.threadId);
 
       return {
         threadId: input.threadId,
@@ -723,6 +738,30 @@ const layerNoDeps = Layer.effect(
         })
       );
 
+    const whenEnsured = Effect.fn("PiDurableHarness.whenEnsured")(function* (
+      threadId: ThreadId
+    ) {
+      // Subscribed before the receipt read, so an ensure committing in between still wakes it.
+      const wake = yield* PubSub.subscribe(ensured);
+      const session = yield* open(Option.some(threadId));
+
+      const known = yield* conversationIdOf(session, threadId).pipe(
+        Effect.as(true),
+        Effect.catchIf(
+          (error) => error.reason === "thread_not_found",
+          () => Effect.succeed(false)
+        )
+      );
+
+      if (known) {
+        return;
+      }
+
+      yield* PubSub.take(wake).pipe(
+        Effect.repeat({ until: (id) => id === threadId })
+      );
+    }, Effect.scoped);
+
     const history = Effect.fn("PiDurableHarness.history")(function* (
       threadId: ThreadId,
       query: HistoryQuery
@@ -983,6 +1022,7 @@ const layerNoDeps = Layer.effect(
       write,
       compact,
       watch: watchThread,
+      whenEnsured,
       history,
       entry,
       entryImage,

@@ -281,6 +281,36 @@ describe("the attachment stage", () => {
     )
   );
 
+  it.effect("checks a turn without reading its files or claiming them", () =>
+    withStack(
+      Effect.gen(function* () {
+        const store = yield* AttachmentStore;
+        const ref = yield* upload("dot.png", "image/png", PNG_1X1);
+        const fs = yield* FileSystem.FileSystem;
+
+        // A check that read the prepared file would fail once it is gone.
+        yield* fs.remove(store.path(ref.id, "prepared"));
+
+        yield* TurnContent.use((turns) =>
+          turns.check(threadId, "owner@test", input([ref]))
+        );
+
+        assert.strictEqual(yield* claimCount, 0);
+
+        const failure = yield* Effect.flip(
+          TurnContent.use((turns) =>
+            turns.check(threadId, "owner@test", {
+              ...input([]),
+              attachments: [AttachmentId.make("missing-attachment-id")],
+            })
+          )
+        );
+
+        assert.strictEqual(failure.reason, "attachment");
+      })
+    )
+  );
+
   it.effect("refuses an attachment that is not on the server", () =>
     withStack(
       Effect.gen(function* () {

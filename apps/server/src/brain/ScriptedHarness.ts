@@ -14,6 +14,8 @@
 // - A request id is admitted once per thread. Tools run in call order; a tool may ask for approval.
 // - State lives in `ScriptedStore`, which outlives a harness instance: a new instance over the same
 //   store is a restart, and resumes an interrupted run by asking the model again.
+// - `whenEnsured` subscribes to the events before it looks in the store, so an ensure that lands in
+//   between still wakes it.
 
 import {
   ApprovalId,
@@ -1141,6 +1143,24 @@ const layerNoDeps = Layer.effectContext(
         })
       );
 
+    const whenEnsured = Effect.fn("ScriptedHarness.whenEnsured")(function* (
+      threadId: ThreadId
+    ) {
+      const wake = yield* PubSub.subscribe(events);
+
+      if (store.threads.has(threadId)) {
+        return;
+      }
+
+      yield* PubSub.take(wake).pipe(
+        Effect.repeat({
+          until: (event) =>
+            Predicate.isTagged(event, "ThreadEnsured") &&
+            event.threadId === threadId,
+        })
+      );
+    }, Effect.scoped);
+
     const history = Effect.fn("ScriptedHarness.history")(function* (
       threadId: ThreadId,
       query: { readonly before: EntryId; readonly limit: number }
@@ -1258,6 +1278,7 @@ const layerNoDeps = Layer.effectContext(
       write,
       compact,
       watch,
+      whenEnsured,
       history,
       entry,
       entryImage,

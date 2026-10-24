@@ -23,6 +23,8 @@ export const Message = defineMessageUnion({
     missing: Schema.Boolean,
     reason: Schema.String,
   },
+  /** The wait after the stream with this stamp ended is over: subscribe again. */
+  ElapsedResubscribeWait: { epoch: Schema.Int, watch: Schema.Int },
   /** A Message of the transcript. */
   GotTimelineMessage: { message: TimelineMessage },
   /** A Message of the diff panel. */

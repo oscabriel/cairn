@@ -67,6 +67,9 @@ const PNG_BASE64 =
 
 const POLL = Duration.millis(20);
 
+/** How long a `subscribe` line gives its subscription to start waiting before the next line. */
+const SUBSCRIBE_SETTLE = Duration.millis(100);
+
 /** Why a scenario failed: the line and what was seen instead. */
 class ScenarioFailure extends Schema.TaggedError<ScenarioFailure>()(
   "ScenarioFailure",
@@ -200,7 +203,9 @@ export const runScenario = (
       const submissions = new Map<string, SubmissionId>();
       const feeds: Array<Fiber.Fiber<void>> = [];
       const mutationState: MutationState = { inputs: new Map() };
-      const progress = { cursor: 0, ensured: false };
+      // `subscribed`: a `subscribe` line opened the client's one subscription, so `follow` stands
+      // down and a subscription that fails is not quietly reopened.
+      const progress = { cursor: 0, ensured: false, subscribed: false };
 
       // One wrapper per open instance, so a mutation's counts hold across calls.
       let wrapped = Option.none<{
@@ -236,7 +241,7 @@ export const runScenario = (
       // A client following the thread: a refused frame or an ended stream means a fresh subscription.
       const follow = (seam: HarnessSeam["Service"]) =>
         Effect.gen(function* () {
-          if (progress.ensured) {
+          if (progress.ensured && !progress.subscribed) {
             yield* Ref.set(client, Option.none());
             yield* seam
               .watch(THREAD_ID)
@@ -429,6 +434,21 @@ export const runScenario = (
             }
 
             return yield* Effect.void;
+          }),
+        subscribe: () =>
+          Effect.gen(function* () {
+            const seam = yield* seamNow;
+
+            progress.subscribed = true;
+
+            yield* Stream.unwrap(
+              Effect.as(seam.whenEnsured(THREAD_ID), seam.watch(THREAD_ID))
+            ).pipe(
+              Stream.runForEach(applyFrame),
+              Effect.ignore,
+              Effect.forkScoped
+            );
+            yield* Effect.sleep(SUBSCRIBE_SETTLE);
           }),
         message: submitStep,
         steer: submitStep,

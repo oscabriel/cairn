@@ -3,9 +3,9 @@
 // what the user sent in this thread, ArrowDown walks forward and past the newest empties the
 // composer, an edited recall is a fresh draft, consecutive duplicates collapse onto the newest, and
 // the walk follows an entry by id when the list changes under it. Changed: a Cairn user message is
-// pi-ai text parts, so recall drops the parts the brain added (attachment text blocks and expanded
-// `<skill>` blocks) instead of t3code's terminal, review and citation blocks; positions are
-// `Option` values.
+// pi-ai text parts, so recall drops the parts the brain added (attachment text blocks, path lines
+// and expanded `<skill>` blocks) instead of t3code's terminal, review and citation blocks; positions
+// are `Option` values.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -23,7 +23,7 @@
 // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-import { parseAttachmentText } from "@cairn/protocol/Attachments";
+import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import { Array, Option, Schema } from "effect";
 
 /** One message of the thread, reduced to what recall reads: its id, role and text parts. */
@@ -56,9 +56,9 @@ export interface ComposerPromptHistoryStep {
 
 const SKILL_BLOCK = /^<skill name="[^"]*"/u;
 
-/** True for text parts the brain added to a turn: attachment blocks and expanded skills. */
+/** True for text parts the brain added to a turn: attachment parts and expanded skills. */
 const isAddedPart = (text: string): boolean =>
-  Option.isSome(parseAttachmentText(text)) || SKILL_BLOCK.test(text.trim());
+  isAddedUserPart(text) || SKILL_BLOCK.test(text.trim());
 
 /** What the user typed in a sent message, without the parts the brain added. */
 export const recallableComposerPrompt = (

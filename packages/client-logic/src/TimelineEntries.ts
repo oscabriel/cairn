@@ -18,6 +18,10 @@
 //   and the Executor proxies are dynamic tools labelled by their app.
 // - `cairn.user` carries the turn's attachments in `data.attachments`; `cairn.checkpoint` is a
 //   display entry; `cairn.hidden` (a `pi.system` entry the wire hides) is skipped.
+// - A user message shows the user's words: the parts the brain added for attachments (text blocks
+//   and path lines) become chips. An attachment shows once: the wire points an image attachment's
+//   content at its attachment id, so an image whose attachment `data.attachments` lists is left to
+//   that ref, and only other images (an imported thread's) are kept as images.
 // - Row keys are stable across streaming: the n-th assistant message of a turn is `msg:<turn>:<n>`
 //   whether it is the live partial in `pi.live` or the committed entry, a tool call is
 //   `tool:<callId>` from its first token to its result, and a thought is keyed by its message and
@@ -28,6 +32,7 @@
 import type { AttachmentRef } from "@cairn/protocol/Attachments";
 import {
   AttachmentRef as AttachmentRefSchema,
+  parseAttachmentPathLine,
   parseAttachmentText,
 } from "@cairn/protocol/Attachments";
 import type { EntryId } from "@cairn/protocol/Ids";
@@ -529,6 +534,17 @@ const readUserContent = (message: UserMessage): UserReading => {
       continue;
     }
 
+    const pathLine = parseAttachmentPathLine(text.value.text);
+
+    // An image's path line follows the image itself, which already shows.
+    if (Option.isSome(pathLine)) {
+      if (pathLine.value.kind === "file") {
+        attachmentNames.push(pathLine.value.name);
+      }
+
+      continue;
+    }
+
     const skill = SKILL_BLOCK.exec(text.value.text);
     const name = skill?.groups?.name;
 
@@ -979,7 +995,16 @@ const readCommitted = (
             (name) =>
               !found.attachments.some((attachment) => attachment.name === name)
           ),
-          images: found.reading.images,
+          images: found.reading.images.filter((image) => {
+            const { ref } = image;
+
+            return !(
+              Predicate.isTagged(ref, "Attachment") &&
+              found.attachments.some(
+                (attachment) => attachment.id === ref.attachmentId
+              )
+            );
+          }),
           skills: found.reading.skills,
         },
       });

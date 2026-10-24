@@ -1,7 +1,9 @@
 // The inputs waiting in a thread's queue, read from pi-durable's `pi.inbox` document in the
 // projected view. An item is a steer or a follow-up with the user's content; writes (display-only
-// entries) are not the user's and are not shown. Anything this build cannot read is skipped, so a
-// newer brain never breaks the composer.
+// entries) are not the user's and are not shown, nor are the parts the brain added for
+// attachments. Anything this build cannot read is skipped, so a newer brain never breaks the
+// composer.
+import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import { SubmissionId } from "@cairn/protocol/Ids";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { Array, Option, Record, Schema } from "effect";
@@ -42,6 +44,7 @@ const contentText = (content: typeof UserContent.Type): string => {
 
   return Array.getSomes(content.map((part) => decodeTextPart(part)))
     .map(({ text }) => text)
+    .filter((text) => !isAddedUserPart(text))
     .join("\n");
 };
 

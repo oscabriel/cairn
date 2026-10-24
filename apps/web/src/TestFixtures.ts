@@ -1,5 +1,6 @@
 // Values the client's Story tests share: a Model in each connection state, a hello, a snapshot and
 // outbox items. Only tests import this module.
+import { RootWorkspace, ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { Hello } from "@cairn/protocol/Rpc";
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { SendInput } from "@cairn/protocol/Thread";
@@ -81,5 +82,28 @@ export const sendItem = (requestId: string): OutboxItem =>
         skillRefs: [],
       },
       whenBusy: "followUp",
+    }),
+  });
+
+/** A `thread.launch` waiting in the outbox, for thread `threadId`. */
+export const launchItem = (threadId: string): OutboxItem =>
+  OutboxItem.Launch({
+    input: Schema.decodeSync(ThreadLaunchInput)({
+      commandId: "01890a5d-ac96-774b-bcce-b302099a80c1",
+      threadId,
+      projectId: "project-1",
+      title: null,
+      model: { provider: "opencode-go", modelId: "small" },
+      thinkingLevel: "medium",
+      runtimeMode: "full-access",
+      workspace: Schema.encodeSync(RootWorkspace)(
+        RootWorkspace.make({ branch: Option.none() })
+      ),
+      initialMessage: {
+        requestId: "launch-request-1",
+        text: "start here",
+        attachments: [],
+        skillRefs: [],
+      },
     }),
   });

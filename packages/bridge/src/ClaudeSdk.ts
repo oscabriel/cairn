@@ -134,6 +134,8 @@ const PROBE_RETRIES = 10;
 export interface ToolCallRequest {
   readonly toolUseId: string;
   readonly name: string;
+  /** Aborts when Claude Code cancels the call (`notifications/cancelled`, sent on its MCP timeout). */
+  readonly signal: Option.Option<AbortSignal>;
 }
 
 /** Answers one served tool call; resolves when pi delivers the result. Never fails: an error is a result. */
@@ -350,37 +352,42 @@ const toolServer = (
     tools: listed.map((tool) => ({ ...tool })),
   }));
 
-  server.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name } = request.params;
-    const toolUseId: unknown = request.params._meta?.[TOOL_USE_ID_META];
+  server.server.setRequestHandler(
+    CallToolRequestSchema,
+    async (request, extra) => {
+      const { name } = request.params;
+      const toolUseId: unknown = request.params._meta?.[TOOL_USE_ID_META];
 
-    if (!names.has(name)) {
+      if (!names.has(name)) {
+        return {
+          content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
+          isError: true,
+        };
+      }
+
+      // Without the id the result cannot be paired with its call; refusing is safer than guessing.
+      if (!Predicate.isString(toolUseId)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${name}: tools/call is missing _meta["${TOOL_USE_ID_META}"], so its result cannot be paired with the call.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const result = await run(
+        onToolCall({ toolUseId, name, signal: Option.some(extra.signal) })
+      );
+
       return {
-        content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
-        isError: true,
+        content: result.content.map((block) => ({ ...block })),
+        isError: result.isError,
       };
     }
-
-    // Without the id the result cannot be paired with its call; refusing is safer than guessing.
-    if (!Predicate.isString(toolUseId)) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `${name}: tools/call is missing _meta["${TOOL_USE_ID_META}"], so its result cannot be paired with the call.`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    const result = await run(onToolCall({ toolUseId, name }));
-
-    return {
-      content: result.content.map((block) => ({ ...block })),
-      isError: result.isError,
-    };
-  });
+  );
 
   return Option.some(server);
 };
@@ -564,8 +571,12 @@ export interface FakeIO {
   readonly nextPrompt: Effect.Effect<Option.Option<PromptMessage>>;
   /** Every message written to the child's input so far, in order, read or not. */
   readonly written: Effect.Effect<ReadonlyArray<PromptMessage>>;
-  /** Calls a served tool the way Claude Code does, waiting for pi's result. */
-  callTool(name: string, toolUseId: string): Effect.Effect<ClaudeToolResult>;
+  /** Calls a served tool the way Claude Code does, waiting for pi's result; `signal` cancels it. */
+  callTool(
+    name: string,
+    toolUseId: string,
+    signal?: AbortSignal
+  ): Effect.Effect<ClaudeToolResult>;
   /** Emits SDK messages, as decoded events. */
   emit(...events: ReadonlyArray<ClaudeEvent>): Effect.Effect<void>;
   /** Appends to the fake transcript of `sessionId`. */
@@ -871,7 +882,12 @@ export class ClaudeSdk extends Context.Service<
           options,
           nextPrompt: Effect.option(Queue.take(written)),
           written: Ref.get(writtenLog),
-          callTool: (name, toolUseId) => onToolCall({ toolUseId, name }),
+          callTool: (name, toolUseId, signal) =>
+            onToolCall({
+              toolUseId,
+              name,
+              signal: Option.fromNullishOr(signal),
+            }),
           emit: (...events) => Effect.asVoid(Queue.offerAll(out, events)),
           record,
         };

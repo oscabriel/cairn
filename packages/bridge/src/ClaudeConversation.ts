@@ -171,6 +171,12 @@ interface ChildHolder {
   child: Option.Option<Child>;
 }
 
+/** A served tool call waiting for pi's result. */
+interface ParkedCall {
+  readonly child: Child;
+  readonly deferred: Deferred.Deferred<ClaudeToolResult>;
+}
+
 /** What a routed call waits on. */
 interface Routed {
   readonly turn: Deferred.Deferred<TurnOutcome>;
@@ -236,6 +242,26 @@ const releasedResult = (text: string): ClaudeToolResult => ({
   content: [{ type: "text", text }],
   isError: true,
 });
+
+/** Succeeds once `signal` aborts; never, without one. */
+const abortOf = (signal: Option.Option<AbortSignal>): Effect.Effect<true> =>
+  Option.match(signal, {
+    onNone: () => Effect.never,
+    onSome: (value) =>
+      value.aborted
+        ? Effect.succeed(true as const)
+        : Effect.callback<true>((resume) => {
+            const onAbort = () => {
+              resume(Effect.succeed(true as const));
+            };
+
+            value.addEventListener("abort", onAbort, { once: true });
+
+            return Effect.sync(() => {
+              value.removeEventListener("abort", onAbort);
+            });
+          }),
+  });
 
 const isRealAbort = (signal: Option.Option<AbortSignal>): boolean =>
   Option.match(signal, {
@@ -348,6 +374,24 @@ export const openConversation = Effect.fnUntraced(function* (
       );
     });
 
+  /** Parked calls pi never received: Claude Code waits on them, and nothing will ever answer. */
+  const orphansOf = (child: Child) =>
+    [...child.pendingCalls.keys()].filter(
+      (id) => !child.stream.toolCallIds.includes(id)
+    );
+
+  /** Kills a held child with calls pi never received, so pi's next call resumes it from the stamp. */
+  const killOrphaned = (child: Child, orphans: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      yield* Effect.logWarning("claude tool call not delivered to pi").pipe(
+        Effect.annotateLogs({
+          sessionId: deps.piSessionId,
+          toolUseIds: orphans.join(","),
+        })
+      );
+      yield* killChild(child, "failed", CHILD_ENDED_TEXT);
+    });
+
   const endTurn = (child: Child, end: TurnEnd) =>
     Effect.gen(function* () {
       yield* releasePermit(child);
@@ -355,8 +399,15 @@ export const openConversation = Effect.fnUntraced(function* (
       if (end.kind === "tool-use") {
         child.heldWait = Option.some(yield* Deferred.make<true>());
         yield* settleTurn(child, "tool-use");
+
+        const orphans = orphansOf(child);
+
+        if (orphans.length > 0) {
+          yield* killOrphaned(child, orphans);
+        }
       } else if (end.kind === "done") {
         child.idle = true;
+        child.pendingResults.clear();
         yield* settleTurn(child, "done");
       } else {
         yield* settleTurn(child, "failed");
@@ -374,6 +425,16 @@ export const openConversation = Effect.fnUntraced(function* (
         child.quietUntil = now() + effect.delayMs;
       } else if (effect.kind === "ended") {
         yield* endTurn(child, effect.end);
+      } else if (
+        effect.kind === "unattached-result" &&
+        Option.isSome(child.heldWait)
+      ) {
+        // The held round finished without pi (a call Claude Code gave up on): nothing will deliver
+        // into it, so free the held generation and let pi's next call resume from the stamp.
+        yield* Effect.logWarning("claude held round ended without pi").pipe(
+          Effect.annotateLogs({ sessionId: deps.piSessionId })
+        );
+        yield* killChild(child, "failed", CHILD_ENDED_TEXT);
       }
     });
 
@@ -432,11 +493,10 @@ export const openConversation = Effect.fnUntraced(function* (
 
             // A call to a child that is gone, or going, is answered at once: nothing will deliver it.
             if (child === undefined || Option.isSome(child.killed)) {
-              return Option.none<Deferred.Deferred<ClaudeToolResult>>();
+              return Option.none<ParkedCall>();
             }
 
             child.lastActivity = now();
-            yield* applyEffect(child, child.stream.toolCallArrived());
 
             const queued = child.pendingResults.get(request.toolUseId);
             const deferred = yield* Deferred.make<ClaudeToolResult>();
@@ -448,14 +508,52 @@ export const openConversation = Effect.fnUntraced(function* (
               yield* Deferred.succeed(deferred, queued);
             }
 
-            return Option.some(deferred);
+            yield* applyEffect(
+              child,
+              child.stream.toolCallArrived(request.toolUseId)
+            );
+
+            // A call that lands after its turn went to pi without it: pi will never answer it.
+            if (
+              Option.isNone(child.killed) &&
+              Option.isSome(child.heldWait) &&
+              !child.stream.open
+            ) {
+              const orphans = orphansOf(child);
+
+              if (orphans.length > 0) {
+                yield* killOrphaned(child, orphans);
+              }
+            }
+
+            return Option.some<ParkedCall>({ child, deferred });
           })
         );
 
-        return yield* Option.match(waiting, {
-          onNone: () => Effect.succeed(releasedResult("Operation aborted")),
-          onSome: (deferred) => Deferred.await(deferred),
-        });
+        if (Option.isNone(waiting)) {
+          return releasedResult("Operation aborted");
+        }
+
+        const { child, deferred } = waiting.value;
+
+        // Claude Code cancels a call it stopped waiting for (its MCP timeout); forget it, so it
+        // neither silences the watchdog nor waits for a result nobody reads.
+        const cancelled = Effect.as(
+          abortOf(request.signal),
+          releasedResult("Tool call cancelled by Claude Code")
+        ).pipe(
+          Effect.tap(() =>
+            locked(
+              Effect.sync(() => {
+                if (child.pendingCalls.get(request.toolUseId) === deferred) {
+                  child.pendingCalls.delete(request.toolUseId);
+                }
+              })
+            )
+          )
+        );
+
+        return yield* Effect.raceFirst(Deferred.await(deferred), cancelled);
       });
 
   const watchdog = (child: Child) =>
@@ -466,16 +564,20 @@ export const openConversation = Effect.fnUntraced(function* (
           Effect.gen(function* () {
             const at = now();
 
+            // A parked call does not excuse silence while a provider call is open: pi is waiting
+            // on the stream, not running the tool.
             const stalled =
               Option.isNone(child.killed) &&
               child.stream.open &&
-              child.pendingCalls.size === 0 &&
               at - child.lastActivity > stallMs &&
               at >= child.quietUntil;
 
             if (stalled) {
               yield* Effect.logWarning("claude child stalled").pipe(
-                Effect.annotateLogs({ sessionId: deps.piSessionId })
+                Effect.annotateLogs({
+                  sessionId: deps.piSessionId,
+                  pendingToolUseIds: [...child.pendingCalls.keys()].join(","),
+                })
               );
               yield* killChild(child, "failed", STREAM_STALLED_TEXT);
             }
@@ -617,6 +719,7 @@ export const openConversation = Effect.fnUntraced(function* (
       child.idle = false;
       child.permit = true;
       child.lastActivity = now();
+      child.pendingResults.clear();
       child.stream.begin(call.sink, now());
       bindSignal(call.signal);
 

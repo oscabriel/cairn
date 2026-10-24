@@ -7,7 +7,9 @@
 // report, not output; Claude Code's non-streaming fallback is delivered; a rate-limit rejection
 // names the failure that follows it. Changed: it reads decoded `ClaudeEvent`s, not SDK types; it
 // records each assistant message's chain uuid (the stamp's resume point) and ends a tool-use turn
-// only once that uuid is known; `pending` and `deferred` stop reasons and `cacheWrite1h` are new in
+// only once that uuid is known; a streamed tool-use turn ends on `message_stop`, never on the
+// first served tool call, because Claude Code starts a call as its block closes while sibling
+// blocks are still streaming; `pending` and `deferred` stop reasons and `cacheWrite1h` are new in
 // pi-ai 1.4.0; there are no module singletons; the bash timeout default is gone (pi-durable owns it).
 //
 // MIT License
@@ -73,7 +75,9 @@ export type EventEffect =
   | { readonly kind: "init"; readonly sessionId: string }
   | { readonly kind: "rate-limit"; readonly info: RateLimitInfo }
   | { readonly kind: "api-retry"; readonly delayMs: number }
-  | { readonly kind: "ended"; readonly end: TurnEnd };
+  | { readonly kind: "ended"; readonly end: TurnEnd }
+  /** A successful `result` with no provider call open: the query finished a round pi was not in. */
+  | { readonly kind: "unattached-result" };
 
 const NONE: EventEffect = { kind: "none" };
 
@@ -193,6 +197,10 @@ export class ClaudeStream {
   #streamBlockStart = 0;
   #messageStopped = false;
   #toolUseSeen = new Set<string>();
+  /** The message id of a non-streaming fallback message being delivered block by block. */
+  #fallbackId: Option.Option<string> = Option.none();
+  /** Served tool calls Claude Code has made during this turn. */
+  #callsArrived = new Set<string>();
   #rejection: Option.Option<RateLimitInfo> = Option.none();
 
   constructor(
@@ -242,6 +250,8 @@ export class ClaudeStream {
     this.#streamBlockStart = 0;
     this.#messageStopped = false;
     this.#toolUseSeen = new Set();
+    this.#fallbackId = Option.none();
+    this.#callsArrived = new Set();
   }
 
   #push(event: Parameters<TurnSink["push"]>[0]): void {
@@ -299,18 +309,7 @@ export class ClaudeStream {
     this.#end();
   }
 
-  /** Ends a tool-use turn, once the chain uuid of the message holding its calls is known. */
-  #endToolUse(force: boolean): EventEffect {
-    const allSeen = this.toolCallIds.every((id) => this.#toolUseSeen.has(id));
-
-    if (
-      !this.#sawToolCall ||
-      !this.open ||
-      (!force && !(this.#messageStopped && allSeen))
-    ) {
-      return NONE;
-    }
-
+  #endedToolUse(): EventEffect {
     this.#done("toolUse");
 
     return {
@@ -319,9 +318,46 @@ export class ClaudeStream {
     };
   }
 
-  /** Claude Code called a served tool: its message is complete, so the turn ends now if it has not. */
-  toolCallArrived(): EventEffect {
-    return this.#endToolUse(true);
+  /**
+   * Ends a streamed tool-use turn once its message has stopped and every call's own `assistant` event
+   * (which carries the chain uuid the stamp cuts at) has arrived. Unfinished blocks were dropped at
+   * `message_stop`, so no call reaches pi with partial arguments.
+   */
+  #endToolUse(): EventEffect {
+    const allSeen = this.toolCallIds.every((id) => this.#toolUseSeen.has(id));
+
+    if (!this.#sawToolCall || !this.open || !this.#messageStopped || !allSeen) {
+      return NONE;
+    }
+
+    return this.#endedToolUse();
+  }
+
+  /**
+   * Ends a fallback tool-use turn. A fallback message has no `message_stop`, so the turn ends once
+   * Claude Code has called one of its delivered tools: it dispatches a call only after emitting the
+   * call's block. A block emitted after that call is lost to this turn; the conversation treats its
+   * call as an orphan.
+   */
+  #endFallback(): EventEffect {
+    if (
+      !this.open ||
+      !this.toolCallIds.some((id) => this.#callsArrived.has(id))
+    ) {
+      return NONE;
+    }
+
+    return this.#endedToolUse();
+  }
+
+  /**
+   * Claude Code called the served tool `toolUseId`. A streamed message keeps going (the call is
+   * parked until pi delivers its result); a fallback message ends here.
+   */
+  toolCallArrived(toolUseId: string): EventEffect {
+    this.#callsArrived.add(toolUseId);
+
+    return Option.isSome(this.#fallbackId) ? this.#endFallback() : NONE;
   }
 
   #dropUnfinished(): void {
@@ -373,6 +409,7 @@ export class ClaudeStream {
       }
 
       this.toolCallIds = [];
+      this.#fallbackId = Option.none();
       this.#streamMessageId = Option.fromNullishOr(event.message.id);
       this.#streamOpen = true;
       this.#messageStopped = false;
@@ -414,7 +451,7 @@ export class ClaudeStream {
       this.#streamOpen = false;
       this.#messageStopped = true;
 
-      return this.#endToolUse(false);
+      return this.#endToolUse();
     }
 
     return NONE;
@@ -613,7 +650,7 @@ export class ClaudeStream {
         id.value !== this.#streamMessageId.value;
 
       if (!fallback) {
-        return this.#endToolUse(false);
+        return this.#endToolUse();
       }
 
       if (this.#streamOpen) {
@@ -621,7 +658,18 @@ export class ClaudeStream {
       }
     }
 
-    this.toolCallIds = [];
+    // Claude Code emits one `assistant` event per block, so a message's calls arrive over several
+    // events that share its id.
+    const messageId = event.message.id ?? event.uuid;
+
+    if (
+      Option.isNone(this.#fallbackId) ||
+      this.#fallbackId.value !== messageId
+    ) {
+      this.toolCallIds = [];
+      this.#fallbackId = Option.some(messageId);
+    }
+
     this.#deliverBlocks(event.message.content);
 
     if (usage !== undefined && usage !== null) {
@@ -630,7 +678,7 @@ export class ClaudeStream {
 
     this.#messageStopped = true;
 
-    return this.#endToolUse(false);
+    return this.#endFallback();
   }
 
   #deliverBlocks(blocks: ReadonlyArray<AssistantBlock>): void {
@@ -752,7 +800,7 @@ export class ClaudeStream {
     }
 
     if (!this.open) {
-      return NONE;
+      return { kind: "unattached-result" };
     }
 
     if (

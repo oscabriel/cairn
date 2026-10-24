@@ -295,16 +295,9 @@ export const piToolName = (
     return Option.none();
   }
 
+  // Exact only: the served MCP server answers exact names, so a near match would hand pi a call
+  // Claude Code can never make.
   const bare = servedName.slice(MCP_TOOL_PREFIX.length);
-  const exact = tools.find((tool) => tool.name === bare);
 
-  if (exact !== undefined) {
-    return Option.some(exact.name);
-  }
-
-  const lower = bare.toLowerCase();
-
-  return Option.fromNullishOr(
-    tools.find((tool) => tool.name.toLowerCase() === lower)?.name
-  );
+  return Option.fromNullishOr(tools.find((tool) => tool.name === bare)?.name);
 };

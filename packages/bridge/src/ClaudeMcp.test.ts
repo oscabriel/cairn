@@ -117,15 +117,16 @@ describe("root combinators", () => {
 });
 
 describe("served names", () => {
-  it("maps only prefixed names back to pi's tools, never a builtin the model invented", () => {
+  it("maps only exact prefixed names back to pi's tools, never a builtin or a near match", () => {
     const tools = Option.toArray(edit);
 
     expect(piToolName("mcp__custom-tools__edit", tools)).toStrictEqual(
       Option.some("edit")
     );
-    expect(piToolName("mcp__custom-tools__Edit", tools)).toStrictEqual(
-      Option.some("edit")
-    );
+    // The served MCP server answers exact names only, so Claude Code never calls this one.
+    expect(
+      Option.isNone(piToolName("mcp__custom-tools__Edit", tools))
+    ).toBeTruthy();
     expect(Option.isNone(piToolName("edit", tools))).toBeTruthy();
     expect(Option.isNone(piToolName("Bash", tools))).toBeTruthy();
     expect(

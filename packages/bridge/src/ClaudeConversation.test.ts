@@ -25,11 +25,18 @@ import { claudeModels, DEFAULT_LONG_CONTEXT } from "./ClaudeModels.ts";
 import { ClaudeOneShot } from "./ClaudeOneShot.ts";
 import type { PromptMessage } from "./ClaudePrompt.ts";
 import { blocksText, CONTINUE_AFTER_RESUME_PROMPT } from "./ClaudePrompt.ts";
+import type { ToolBlock } from "./ClaudeScriptKit.ts";
 import {
   failedTurn,
+  fallbackToolBlocks,
   initEvent,
+  messageStart,
   SCRIPT_SESSION,
   textTurn,
+  toolBlock,
+  toolBlockClosing,
+  toolBlockOpening,
+  toolMessageStop,
   toolTurn,
 } from "./ClaudeScriptKit.ts";
 import type { FakeScript, SessionEntry } from "./ClaudeSdk.ts";
@@ -495,6 +502,272 @@ describe("tool calls", () => {
       }).pipe(Effect.provide(bridge([])));
     }
   );
+});
+
+const blockA: ToolBlock = {
+  toolUseId: "toolu_a",
+  tool: "mark",
+  args: { line: "first line" },
+  uuid: "u1a",
+};
+
+const blockB: ToolBlock = {
+  toolUseId: "toolu_b",
+  tool: "mark",
+  args: { line: "second line" },
+  uuid: "u1b",
+};
+
+/** pi's results for every call of `held`, in order. */
+const resultsFor = (held: AssistantMessage): ReadonlyArray<Message> =>
+  held.content.flatMap((block) =>
+    block.type === "toolCall" ? [toolResult(block.id, `r-${block.id}`)] : []
+  );
+
+/**
+ * Runs one turn of two parallel calls on `script`: pi's held reply, then its answer once both results
+ * are delivered, and what each MCP call received.
+ */
+const parallelTurn = (
+  script: (
+    io: Parameters<FakeScript>[0],
+    received: Array<ClaudeToolResult>
+  ) => Effect.Effect<void>
+) => {
+  const received: Array<ClaudeToolResult> = [];
+
+  return Effect.gen(function* () {
+    const held = yield* call([system, user("mark both")]);
+
+    expect(held.content).toStrictEqual([
+      {
+        type: "toolCall",
+        id: "toolu_a",
+        name: "mark",
+        arguments: { line: "first line" },
+      },
+      {
+        type: "toolCall",
+        id: "toolu_b",
+        name: "mark",
+        arguments: { line: "second line" },
+      },
+    ]);
+    expect(held.stopReason).toBe("toolUse");
+
+    const answer = yield* call([
+      system,
+      user("mark both"),
+      held,
+      ...resultsFor(held),
+    ]);
+
+    expect([
+      answer.stopReason,
+      answer.content,
+      received.map((result) => result.content),
+      Option.map(stampOf(held), (stamp) => stamp.ccUuid),
+      (yield* runs).map((run) => run.closed),
+    ]).toStrictEqual([
+      "stop",
+      [{ type: "text", text: "done" }],
+      [
+        [{ type: "text", text: "r-toolu_a" }],
+        [{ type: "text", text: "r-toolu_b" }],
+      ],
+      Option.some("u1b"),
+      [0],
+    ]);
+  }).pipe(
+    Effect.provide(
+      bridge([
+        (io) =>
+          Effect.gen(function* () {
+            yield* io.nextPrompt;
+            yield* io.emit(initEvent(SCRIPT_SESSION, ["mark"]));
+            yield* script(io, received);
+            yield* io.emit(...textTurn("m2", "u2", "done"));
+
+            return yield* Effect.never;
+          }),
+      ])
+    )
+  );
+};
+
+/** Calls both tools at once, as Claude Code does, and records what each received in call order. */
+const callBoth = (
+  io: Parameters<FakeScript>[0],
+  received: Array<ClaudeToolResult>,
+  first: Fiber.Fiber<ClaudeToolResult>
+) =>
+  Effect.gen(function* () {
+    const second = yield* Effect.forkChild(io.callTool("mark", "toolu_b"));
+
+    const firstResult = yield* Fiber.join(first);
+    const secondResult = yield* Fiber.join(second);
+
+    received.push(firstResult, secondResult);
+  });
+
+describe("parallel tool calls (seed 1)", () => {
+  it.effect(
+    "deliver both calls of one message when the first call lands between its blocks",
+    () =>
+      parallelTurn((io, received) =>
+        Effect.gen(function* () {
+          yield* io.emit(messageStart("m1"), ...toolBlock("m1", 0, blockA));
+          yield* settle;
+
+          // Claude Code starts the first call as its block closes, before the next block streams.
+          const first = yield* Effect.forkChild(io.callTool("mark", "toolu_a"));
+
+          yield* settle;
+          yield* io.emit(...toolBlock("m1", 1, blockB), ...toolMessageStop);
+          yield* callBoth(io, received, first);
+        })
+      )
+  );
+
+  it.effect(
+    "never hand pi a call whose arguments are still streaming when the first call lands",
+    () =>
+      parallelTurn((io, received) =>
+        Effect.gen(function* () {
+          yield* io.emit(
+            messageStart("m1"),
+            ...toolBlock("m1", 0, blockA),
+            ...toolBlockOpening(1, blockB, 6)
+          );
+          yield* settle;
+
+          const first = yield* Effect.forkChild(io.callTool("mark", "toolu_a"));
+
+          yield* settle;
+          yield* io.emit(
+            ...toolBlockClosing("m1", 1, blockB, 6),
+            ...toolMessageStop
+          );
+          yield* callBoth(io, received, first);
+        })
+      )
+  );
+
+  it.effect(
+    "deliver both calls of a non-streaming fallback message, one assistant event per block",
+    () =>
+      parallelTurn((io, received) =>
+        Effect.gen(function* () {
+          yield* io.emit(...fallbackToolBlocks("m1", [blockA, blockB]));
+          yield* settle;
+
+          const first = yield* Effect.forkChild(io.callTool("mark", "toolu_a"));
+
+          yield* callBoth(io, received, first);
+        })
+      )
+  );
+});
+
+/** Calls a tool, then gives up on it (Claude Code's MCP timeout) and answers without it. */
+const givesUpOnTheCall: FakeScript = (io) =>
+  Effect.gen(function* () {
+    yield* io.nextPrompt;
+    yield* io.emit(
+      initEvent(SCRIPT_SESSION, ["mark"]),
+      ...toolTurn("m1", "u1", "toolu_1", "mark")
+    );
+    yield* settle;
+    yield* io.emit(...textTurn("m2", "u2", "gave up"));
+
+    return yield* Effect.never;
+  });
+
+describe("held rounds pi is not in", () => {
+  it.effect(
+    "kill a held child when a call lands that its turn went to pi without, and answer the call",
+    () => {
+      const late: Array<ClaudeToolResult> = [];
+
+      const script: FakeScript = (io) =>
+        Effect.gen(function* () {
+          yield* io.nextPrompt;
+          yield* io.emit(
+            initEvent(SCRIPT_SESSION, ["mark"]),
+            ...fallbackToolBlocks("m1", [blockA])
+          );
+          yield* settle;
+          yield* Effect.forkChild(io.callTool("mark", "toolu_a"));
+          yield* settle;
+          // The second block only shows up after the first call ended the turn.
+          yield* io.emit(...fallbackToolBlocks("m1", [blockB]));
+          late.push(yield* io.callTool("mark", "toolu_b"));
+
+          return yield* Effect.never;
+        });
+
+      return Effect.gen(function* () {
+        const claude = yield* Claude;
+        const held = yield* call([system, user("mark both")]);
+
+        yield* until(Effect.sync(() => late.length > 0));
+
+        expect([
+          held.content.map((block) =>
+            block.type === "toolCall" ? block.id : block.type
+          ),
+          late.map((result) => result.isError),
+          yield* claude.hasChild("conv-1"),
+        ]).toStrictEqual([["toolu_a"], [true], false]);
+      }).pipe(Effect.provide(bridge([script])));
+    }
+  );
+
+  it.effect("kill a held child whose query finishes a round without pi", () =>
+    Effect.gen(function* () {
+      const claude = yield* Claude;
+      const held = yield* call([system, user("mark it")]);
+
+      yield* until(Effect.map(claude.hasChild("conv-1"), (alive) => !alive));
+
+      expect(held.stopReason).toBe("toolUse");
+    }).pipe(Effect.provide(bridge([givesUpOnTheCall])))
+  );
+
+  it.effect("forget a call Claude Code cancels", () => {
+    const cancelled: Array<ClaudeToolResult> = [];
+    const controller = new AbortController();
+
+    const script: FakeScript = (io) =>
+      Effect.gen(function* () {
+        yield* io.nextPrompt;
+        yield* io.emit(
+          initEvent(SCRIPT_SESSION, ["mark"]),
+          ...toolTurn("m1", "u1", "toolu_1", "mark")
+        );
+
+        const fiber = yield* Effect.forkChild(
+          io.callTool("mark", "toolu_1", controller.signal)
+        );
+
+        yield* settle;
+        controller.abort();
+        cancelled.push(yield* Fiber.join(fiber));
+
+        return yield* Effect.never;
+      });
+
+    return Effect.gen(function* () {
+      yield* call([system, user("mark it")]);
+      yield* until(Effect.sync(() => cancelled.length > 0));
+
+      expect(
+        cancelled.map((result) => [result.isError, result.content])
+      ).toStrictEqual([
+        [true, [{ type: "text", text: "Tool call cancelled by Claude Code" }]],
+      ]);
+    }).pipe(Effect.provide(bridge([script])));
+  });
 });
 
 describe("aborts", () => {

@@ -798,3 +798,33 @@ Built in a worktree on `21577e0` by a delegated agent (branch `fix/batch2-launch
 | `node judges/live-chat.ts` against the deployed brain | pass | hello 69 ms, launch 9 ms, reply 1,421 ms; claude-bridge ready |
 
 Not judged: the nightly refusal (starting the nightly by hand runs the hour-long matrix) and `judges/load.ts` in a loop during a deploy.
+
+### Batch 4: lost work at launch and in the outbox (T8, T9, T10, T11, T17)
+
+Web lane in the main checkout, server lane on `fix/batch4-server` in a worktree (Opus 5.5 high), merged as `a34b6f7`, deployed at `b3dca66`.
+
+- `d906b15` (T10): a retryable refusal on a live socket resends after a backoff (transport failures still wait for the reconnect); each send fails as retryable after `OUTBOX_SEND_TIMEOUT`; visits are planned only while live and while none for the open thread is waiting; a queued visit replaces older ones to the same thread.
+- `7bb4f10` (T9, T8 web half): the root keeps each sent turn until the brain settles it; a refused send goes back into its thread's draft with its attachments as ready items; a refused or failed launch goes back into a `/new/retry-<threadId>` draft with its model and workspace; a launch the composer could not prepare restores the whole draft; the thread page shows a failed launch's reason and a link to its draft; the notice bar has Dismiss; a waiting send let go on a draft switch says "Not sent".
+- `25f0bad` (T17): `Threads.send` follows a launch to its end, up to `LaunchFollowLimit` (15 minutes); a launch row with no fiber and no thread is refused at once (`ThreadLaunchLost`); insert, ThreadCreate and the fiber start are one uninterruptible step.
+- `09d4469` (T11): stop during a launch cancels it, cleans up and marks the row failed ("Stopped before the thread started."); stop re-reads `pi.live.run` after each abort and aborts a same-generation handover, at most 4 times.
+- `e586a25` (T8 server half): a launch that fails after ensure writes a `cairn.notice` entry; `b3dca66` shows it as a failed row and raises `OUTBOX_SEND_TIMEOUT` to 16 minutes, above `LaunchFollowLimit`.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Sidebar.test: offline ticks then live ticks | fail before, pass after | before: a visit per tick past the throttle; after: 0 offline, 1 once live |
+| Outbox.test: retryable refusal with nothing else queued | fail before, pass after | `WaitToResend` then a second `SendOutboxItem`; stale timers send nothing |
+| Command.test on TestClock | pass | an unanswered send fails `OutboxSendTimeout`, retryable |
+| Composer.test: launch prepare fails with two ready attachments and a picked model | pass (new message shape) | text, both attachments and the model come back; before, only the text did |
+| Composer.test: uploads finish after a draft switch | fail before, pass after | no PrepareSend; "Not sent" note on the waiting draft |
+| Outbox.test: refused send | pass | thread draft text and tray restored, notice dismissed |
+| Thread.test: launch acknowledged, row then failed | pass | retry draft with text and model; status line shows the reason and links `/new/retry-<id>` |
+| Threads.test, ThreadLaunch.test, PiDurableHarness.test (server lane) | fail before, pass after | send during a 400 ms launch with LaunchWait 250 ms lands; interrupted launch resent makes one thread; lost launch refused in under 1 s; stop in the workspace phase leaves no run and a failed row; scripted handover race ends `interrupted` (was `completed`); notice entry written once |
+| `node judges/behaviour.ts --only hero-launch` | pass | 20/20 landed, Missing seen 0 times |
+| `node judges/durability.ts` | pass, 10 of 10 | |
+| `node judges/durability.ts --bridge` (J2) | pass, 3 of 3 | first reply after restart read about 42,000 against at most 345 written |
+| `ops/cairn/deploy.sh` of `b3dca66` | pass | all 8 threads idle, no launch rows; listening 1,557 ms, hello 1,586 ms, build `2d7612368fae` |
+| `node judges/live-chat.ts` against the deployed brain | pass | hello 68 ms, launch 8 ms, reply 1,418 ms |
+
+Differs from the task text: a restored turn is appended below text typed since, instead of offering a restore action; sent turns' attachment refs live in memory only, so after a reload a refused turn comes back without its attachments; the unsaved-outbox notice clears on the next good save, but a refusal notice clears only on Dismiss (clearing on the next acknowledgement would hide it at once).
+
+Not done: a browser check of Stop during `preparing` (the server no longer answers `thread_not_found`; covered by Threads.test); a live check of a launch failing in the background through the browser; crash orphans still answer `resumed: true` until the boot repair discards them; a send that follows a launch which then failed still submits; the thread subscribe still polls up to `LaunchWait` rather than following the launch.

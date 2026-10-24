@@ -116,6 +116,38 @@ const pageComposerLazy = createLazy();
 
 const dockedComposerLazy = createLazy();
 
+const threadPageLazy = createLazy();
+
+/**
+ * The thread page. Its inputs arrive as plain strings ("" for none) so the lazy view compares them
+ * by value: the Options built from the shell are new on every render, and a keystroke in the
+ * composer would otherwise redraw the whole transcript.
+ */
+const threadPage = (
+  h: HtmlBuilder<Message>,
+  thread: Model["thread"],
+  workspaceRoot: string,
+  failureMessage: string,
+  retryUrl: string
+): Html =>
+  h.submodel({
+    slotId: "thread",
+    model: thread,
+    view: Thread.view,
+    viewInputs: {
+      workspaceRoot:
+        workspaceRoot === "" ? Option.none() : Option.some(workspaceRoot),
+      launchFailure:
+        failureMessage === ""
+          ? Option.none()
+          : Option.some({
+              message: failureMessage,
+              retryUrl: retryUrl === "" ? Option.none() : Option.some(retryUrl),
+            }),
+    },
+    toParentMessage: (message) => Message.GotThreadMessage({ message }),
+  });
+
 const sidebar = (
   h: HtmlBuilder<Message>,
   sidebarModel: Model["sidebar"]
@@ -208,8 +240,10 @@ const threadHeader = (
 const page = (model: Model, h: HtmlBuilder<Message>): Html =>
   AppRoute.match(model.route, {
     Inbox: () => pageComposerLazy(composerView, [h, model.composer]),
-    Thread: ({ threadId }) =>
-      h.div(
+    Thread: ({ threadId }) => {
+      const failure = launchFailureOf(model, threadId);
+
+      return h.div(
         [
           h.DataAttribute("chat-column-maximized-away", "false"),
           h.DataAttribute("chat-column", "true"),
@@ -232,22 +266,28 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
           h.div(
             [h.Class("flex min-h-0 flex-1 flex-col")],
             [
-              h.submodel({
-                slotId: "thread",
-                model: model.thread,
-                view: Thread.view,
-                viewInputs: {
-                  workspaceRoot: threadWorkspaceRoot(model, threadId),
-                  launchFailure: launchFailureOf(model, threadId),
-                },
-                toParentMessage: (message) =>
-                  Message.GotThreadMessage({ message }),
-              }),
+              threadPageLazy(threadPage, [
+                h,
+                model.thread,
+                Option.getOrElse(
+                  threadWorkspaceRoot(model, threadId),
+                  () => ""
+                ),
+                Option.match(failure, {
+                  onNone: () => "",
+                  onSome: ({ message }) => message,
+                }),
+                Option.getOrElse(
+                  Option.flatMap(failure, ({ retryUrl }) => retryUrl),
+                  () => ""
+                ),
+              ]),
             ]
           ),
           dockedComposerLazy(composerView, [h, model.composer]),
         ]
-      ),
+      );
+    },
     Draft: () => pageComposerLazy(composerView, [h, model.composer]),
     Settings: () =>
       Option.match(loadedSettingsView(), {

@@ -155,7 +155,8 @@ describe("the app frame", () => {
     let model = receive(opened, snapshot);
 
     // The first render fills the caches. On the thread page the unkeyed lazy views are the sidebar,
-    // the chat header and the docked composer, in that order; the transcript's rows are keyed.
+    // the chat header, the thread page and the docked composer, in that order; the transcript's
+    // rows are keyed.
     const unkeyed: Array<object> = [];
 
     render(model, (resolution) => {
@@ -164,7 +165,7 @@ describe("the app frame", () => {
       }
     });
 
-    const [sidebarSlot, headerSlot, composerSlot] = unkeyed;
+    const [sidebarSlot, headerSlot, , composerSlot] = unkeyed;
 
     const calls = { sidebar: 0, header: 0, composer: 0 };
 
@@ -200,11 +201,52 @@ describe("the app frame", () => {
       header: calls.header,
     }).toStrictEqual({
       seq: Option.some(10),
-      slots: 3,
+      slots: 4,
       sidebar: 0,
       composer: 0,
       header: 5,
     });
+  });
+
+  it("does not draw the thread page again for a keystroke in the composer", () => {
+    const [snapshot] = frames;
+
+    if (snapshot === undefined) {
+      throw new Error("The recorded stream has no snapshot.");
+    }
+
+    let model = receive(opened, snapshot);
+
+    const unkeyed: Array<object> = [];
+
+    render(model, (resolution) => {
+      if (resolution.key === undefined && !unkeyed.includes(resolution.slot)) {
+        unkeyed.push(resolution.slot);
+      }
+    });
+
+    const pageSlot = unkeyed.at(2);
+    const composerSlot = unkeyed.at(3);
+    const calls = { page: 0, composer: 0 };
+
+    for (const value of ["h", "he", "hel", "hell", "hello"]) {
+      model = composer(model, ComposerMessage.ChangedDraft({ value }));
+
+      render(model, (resolution) => {
+        if (resolution.missReason === undefined) {
+          return;
+        }
+
+        if (resolution.slot === pageSlot) {
+          calls.page += 1;
+        } else if (resolution.slot === composerSlot) {
+          calls.composer += 1;
+        }
+      });
+    }
+
+    // The composer redraws for each key, which proves the renders saw them; the transcript does not.
+    expect(calls).toStrictEqual({ page: 0, composer: 5 });
   });
 
   it("keeps the same Model, so nothing renders, while the pointer stays on a picker row", () => {

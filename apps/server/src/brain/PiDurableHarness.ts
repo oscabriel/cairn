@@ -4,7 +4,8 @@
 // - ensureThread: receipt, `createConversation`, `configure` and `cairn.thread-meta` in one
 //   commit that reads no table first, so concurrent calls for one thread land once.
 // - stop keeps the queue (`abortTask` on the run task); `clearQueue` aborts the conversation, which
-//   also withdraws queued inputs (plan D16).
+//   also withdraws queued inputs (plan D16). A run that handed over to its next generation between
+//   the read and the abort (a tool round ended) is followed to the successor, a few times at most.
 // - watch: a fresh projected snapshot, then ops; after a reopen of the Session the stream carries
 //   on with a new snapshot of the new Session, because a snapshot is legal at any point.
 // - whenEnsured: subscribes to this process's ensures, then reads the receipt, so an ensure that
@@ -36,6 +37,7 @@ import type {
   ConversationView as PiConversationView,
   EntryRecord,
   InputSubmissionDraft,
+  LiveState,
 } from "@earendil-works/pi-durable";
 import {
   ConversationBusy,
@@ -172,6 +174,25 @@ const entryImages = (entry: EntryRecord) => {
 
   return images;
 };
+
+/**
+ * How many generations a stop follows when the run hands over between its read and its abort. A
+ * handover takes a tool round or a continuation, so more than one in a stop's few milliseconds is
+ * already unlikely.
+ */
+const STOP_HANDOVERS = 4;
+
+/** `pi.live.run`: the task that owns a busy conversation's run, and the run's inputs. */
+type LiveRun = NonNullable<LiveState["run"]>;
+
+/**
+ * Whether `next` is `run` handed over to a later generation: a handover moves the run's inputs
+ * along (and may add steers), while a run started for queued inputs holds only those.
+ */
+const isHandover = (run: LiveRun, next: LiveRun) =>
+  next.taskId !== run.taskId &&
+  run.inputs.length > 0 &&
+  next.inputs[0] === run.inputs[0];
 
 /** Runs one pi-durable call, failing with the seam's error. */
 const call = <A>(
@@ -466,24 +487,41 @@ const layerNoDeps = Layer.effect(
       const conversation = yield* conversationOf(session, threadId);
 
       if (options.clearQueue) {
-        return yield* call(Option.some(threadId), "abort", async (context) => {
+        yield* call(Option.some(threadId), "abort", async (context) => {
           await conversation.abort(context);
         });
+
+        return;
       }
 
-      const run = yield* liveRun(session, threadId, conversation.id);
+      let run = yield* liveRun(session, threadId, conversation.id);
+      let followed = 0;
 
-      if (Option.isNone(run)) {
-        return yield* Effect.void;
+      while (Option.isSome(run) && followed < STOP_HANDOVERS) {
+        const current = run.value;
+
+        yield* call(Option.some(threadId), "abort-task", async (context) => {
+          await session.harness.abortTask(current.taskId, context);
+        });
+
+        // Anything but a handover (no run, the same task still ending, a run for queued inputs)
+        // ends the stop.
+        run = Option.filter(
+          yield* liveRun(session, threadId, conversation.id),
+          (next) => isHandover(current, next)
+        );
+        followed += 1;
       }
 
-      return yield* call(
-        Option.some(threadId),
-        "abort-task",
-        async (context) => {
-          await session.harness.abortTask(run.value.taskId, context);
-        }
-      );
+      if (Option.isSome(run)) {
+        yield* Effect.logWarning("run outran the stop").pipe(
+          Effect.annotateLogs({
+            event: "stop_outran",
+            threadId,
+            taskId: run.value.taskId,
+          })
+        );
+      }
     });
 
     const withdraw = Effect.fn("PiDurableHarness.withdraw")(function* (

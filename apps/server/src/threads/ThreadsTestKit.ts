@@ -1,7 +1,7 @@
 // Fixtures for the thread and launch tests: the shell store and `thread_launches` over a fresh
-// in-memory database, the scripted harness with a model a test can hold, a title model a test
-// scripts, real `git` over a temporary data folder (with worktree creation a test can hold), and
-// helpers that make a repository.
+// in-memory database (with launch-row inserts a test can hold), the scripted harness with a model a
+// test can hold, a title model a test scripts, real `git` over a temporary data folder (with
+// worktree creation a test can hold), and helpers that make a repository.
 import path from "node:path";
 
 import { RequestId, ThreadId } from "@cairn/protocol/Ids";
@@ -14,6 +14,7 @@ import { ProjectCreate } from "@cairn/protocol/ShellCommands";
 import { NodeServices } from "@effect/platform-node";
 import { Clock, Context, Effect, Latch, Layer, Option, Ref } from "effect";
 import type { FileSystem } from "effect";
+import type { SqlClient } from "effect/sql";
 
 import { AttachmentsLayer } from "../attachments/AttachmentsLayer.ts";
 import type { AttachmentStore } from "../attachments/AttachmentStore.ts";
@@ -146,6 +147,30 @@ export const heldWorktrees = (gate: Latch.Latch) =>
     })
   ).pipe(Layer.provide(Worktrees.layerNoDeps));
 
+/**
+ * The launch store, with each insert held after its row is written: it opens `inserted`, then
+ * waits until `release` opens, so a test can interrupt a launch between its two inserts.
+ */
+export const heldLaunchInserts = (
+  inserted: Latch.Latch,
+  release: Latch.Latch
+) =>
+  Layer.effect(
+    LaunchStore,
+    Effect.gen(function* () {
+      const real = yield* LaunchStore;
+
+      return LaunchStore.of({
+        ...real,
+        insert: (input, from) =>
+          real.insert(input, from).pipe(
+            Effect.tap(() => inserted.open),
+            Effect.tap(() => release.await)
+          ),
+      });
+    })
+  ).pipe(Layer.provide(LaunchStore.layerNoDeps));
+
 /** Everything a thread test needs, over `dataDir`, the given title model and scripted model. */
 export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
   readonly dataDir: string;
@@ -163,6 +188,8 @@ export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
     never,
     Git | FileSystem.FileSystem
   >;
+  /** Defaults to the real store; `heldLaunchInserts` holds its inserts. */
+  readonly launchStore?: Layer.Layer<LaunchStore, never, SqlClient.SqlClient>;
 }) => {
   const shell = ShellStoreLayer.pipe(
     Layer.provideMerge(
@@ -193,10 +220,11 @@ export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
     BranchNames.layerNoDeps
   ).pipe(Layer.provideMerge(options.titleModel));
 
-  return Layer.mergeAll(ThreadLaunch.layerNoDeps, Threads.layerNoDeps).pipe(
+  return Threads.layerNoDeps.pipe(
+    Layer.provideMerge(ThreadLaunch.layerNoDeps),
     Layer.provideMerge(
       Layer.mergeAll(
-        LaunchStore.layerNoDeps,
+        options.launchStore ?? LaunchStore.layerNoDeps,
         options.turnContent ?? TurnContentLive,
         options.stopHooks ?? StopHooks.layerNone,
         naming,

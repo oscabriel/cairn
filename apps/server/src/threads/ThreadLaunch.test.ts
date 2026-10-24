@@ -6,12 +6,15 @@ import {
   NewWorktreeWorkspace,
   RootWorkspace,
 } from "@cairn/protocol/Launch";
+import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Duration,
   Effect,
+  Fiber,
   FileSystem,
+  Latch,
   Logger,
   Option,
   Ref,
@@ -19,6 +22,7 @@ import {
   Schedule,
 } from "effect";
 import type { Layer } from "effect";
+import type { SqlClient } from "effect/sql";
 
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { Git } from "../git/Git.ts";
@@ -33,6 +37,7 @@ import { ThreadLaunch } from "./ThreadLaunch.ts";
 import {
   addProject,
   HeldModel,
+  heldLaunchInserts,
   launchInput,
   makeRepository,
   ModelGate,
@@ -53,26 +58,24 @@ const newWorktree = NewWorktreeWorkspace.make({
 
 type Services = Layer.Success<ReturnType<typeof testLayer>>;
 
-const testLayer = (
-  dataDir: string,
-  options: {
-    readonly held: boolean;
-    readonly turnContent?: Layer.Layer<TurnContent>;
-  }
-) =>
+interface TestOptions {
+  readonly held: boolean;
+  readonly turnContent?: Layer.Layer<TurnContent>;
+  readonly launchStore?: Layer.Layer<LaunchStore, never, SqlClient.SqlClient>;
+}
+
+const testLayer = (dataDir: string, options: TestOptions) =>
   threadsTestLayer({
     dataDir,
     titleModel: TitleModelScripted({ held: options.held }),
     model: HeldModel,
     turnContent: options.turnContent ?? TurnContentLive,
+    launchStore: options.launchStore ?? LaunchStore.layerNoDeps,
   });
 
 /** Runs `body` over a fresh temporary folder holding `data/` and a repository at `repo/`. */
 const withRepo = <A, E>(
-  options: {
-    readonly held: boolean;
-    readonly turnContent?: Layer.Layer<TurnContent>;
-  },
+  options: TestOptions,
   body: (dirs: {
     readonly dataDir: string;
     readonly repo: string;
@@ -519,6 +522,55 @@ describe("launching threads", () => {
     )
   );
 
+  it.live(
+    "a launch interrupted after its launch row, then resent, makes one thread and sends its first message once",
+    () => {
+      const inserted = Latch.makeUnsafe(false);
+      const release = Latch.makeUnsafe(false);
+
+      return withRepo(
+        { held: false, launchStore: heldLaunchInserts(inserted, release) },
+        ({ repo }) =>
+          Effect.gen(function* () {
+            const projectId = yield* addProject(repo);
+            const launcher = yield* ThreadLaunch;
+
+            const input = yield* launchInput(
+              projectId,
+              rootWorkspace,
+              "Cut me off"
+            );
+
+            const first = yield* Effect.forkChild(
+              launcher.launch(input, "owner@test")
+            );
+
+            // The launch row is written; the socket drops before the thread row.
+            yield* inserted.await;
+
+            const interrupting = yield* Effect.forkChild(
+              Fiber.interrupt(first)
+            );
+
+            yield* release.open;
+            yield* Fiber.join(interrupting);
+
+            yield* launcher.launch(input, "owner@test");
+            yield* launcher.settled(input.threadId);
+
+            const threads = yield* (yield* ThreadRows).listByProject(projectId);
+
+            assert.strictEqual(threads.length, 1);
+            assert.strictEqual((yield* userEntries(input.threadId)).length, 1);
+            assert.strictEqual(
+              (yield* (yield* LaunchStore).listPending).length,
+              0
+            );
+          })
+      );
+    }
+  );
+
   it.live("a failure after the worktree is added removes it", () => {
     // The first build (the launch's check) passes; the second (the first message) fails.
     const failSecond = Effect.gen(function* () {
@@ -583,6 +635,107 @@ describe("launching threads", () => {
       )
     );
   });
+
+  it.live(
+    "a launch whose worktree step fails leaves a failed row that says why, and no conversation",
+    () =>
+      withRepo({ held: false }, ({ repo }) =>
+        Effect.gen(function* () {
+          const projectId = yield* addProject(repo);
+          const launcher = yield* ThreadLaunch;
+
+          // `main` is checked out in the repository itself, so git refuses a second worktree on it.
+          const input = yield* launchInput(
+            projectId,
+            NewWorktreeWorkspace.make({
+              baseRef: "main",
+              branch: Option.some("main"),
+              startFromOrigin: false,
+            }),
+            "Collide"
+          );
+
+          yield* launcher.launch(input, "owner@test");
+          yield* launcher.settled(input.threadId);
+
+          const shell = yield* row(input.threadId);
+
+          assert.strictEqual(shell.activity, "failed");
+          assert.isTrue(
+            Option.exists(shell.lastError, (text) =>
+              text.includes("Worktrees.create failed")
+            ),
+            "the row says the worktree step failed"
+          );
+          assert.isUndefined(
+            (yield* ScriptedStore).threads.get(input.threadId)
+          );
+        })
+      )
+  );
+
+  it.live(
+    "a launch that fails after its conversation exists says why in the transcript",
+    () => {
+      // The first build (the launch's check) passes; the second (the first message) fails.
+      const failSecond = Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+
+        return TurnContent.layerFrom([
+          textStage,
+          {
+            name: "flaky",
+            run: (draft) =>
+              Effect.gen(function* () {
+                const count = yield* Ref.updateAndGet(calls, (n) => n + 1);
+
+                if (count > 1) {
+                  return yield* new TurnContentError({
+                    message: "The flaky stage refused the turn.",
+                    stage: "flaky",
+                    reason: "unavailable",
+                    field: Option.none(),
+                  });
+                }
+
+                return draft;
+              }),
+          },
+        ]);
+      });
+
+      return Effect.flatMap(failSecond, (turnContent) =>
+        withRepo({ held: false, turnContent }, ({ repo }) =>
+          Effect.gen(function* () {
+            const projectId = yield* addProject(repo);
+            const launcher = yield* ThreadLaunch;
+
+            const input = yield* launchInput(
+              projectId,
+              rootWorkspace,
+              "This will fail"
+            );
+
+            yield* launcher.launch(input, "owner@test");
+            yield* launcher.settled(input.threadId);
+
+            assert.strictEqual((yield* row(input.threadId)).activity, "failed");
+
+            const notices = (yield* scriptedThread(input.threadId))?.entries
+              .filter((entry) => entry.kind === NOTICE_ENTRY_KIND)
+              .map((entry) => entry.data);
+
+            assert.deepStrictEqual(notices, [
+              {
+                reason: "launch_failed",
+                text: "The flaky stage refused the turn.",
+              },
+            ]);
+          })
+        )
+      );
+    }
+  );
 
   it.live("an existing worktree of another repository is refused", () =>
     withRepo({ held: false }, ({ dataDir, repo }) =>

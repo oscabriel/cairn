@@ -1,7 +1,8 @@
 // The thread commands a client sends after launch: a turn (send), stop, withdraw a queued input,
 // change the model or thinking level, and answer an approval. Each is a thin call into the harness
-// seam, which keeps them idempotent (a turn by its request id) and durable. Stop keeps queued
-// inputs unless asked to clear them (plan D16), then runs the stop hooks.
+// seam, which keeps them idempotent (a turn by its request id) and durable. A turn sent while its
+// thread launches follows the launch to its end. Stop keeps queued inputs unless asked to clear
+// them (plan D16), then runs the stop hooks; a stop during the launch cancels the launch.
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type {
   ConfigureInput,
@@ -13,12 +14,12 @@ import type {
   WithdrawResult,
 } from "@cairn/protocol/Thread";
 import {
+  Clock,
   Context,
   Duration,
   Effect,
   Layer,
   Option,
-  Schedule,
   Schema,
 } from "effect";
 
@@ -29,9 +30,12 @@ import {
   emptyActivityPatch,
   ThreadActivityUpdate,
 } from "../shell/ShellCommands.ts";
+import type { ShellStoreError } from "../shell/ShellStoreError.ts";
+import { ThreadRows } from "../shell/ThreadRows.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import type { LaunchStoreError } from "./LaunchStore.ts";
 import { StopHooks } from "./StopHooks.ts";
+import { ThreadLaunch } from "./ThreadLaunch.ts";
 import { logTurnSubmitted, TurnContent } from "./TurnContent.ts";
 import type { TurnContentError } from "./TurnContent.ts";
 
@@ -45,17 +49,47 @@ export class ThreadNotReady extends Schema.TaggedError<ThreadNotReady>()(
 ) {}
 
 /**
- * How long a turn sent to a thread that is still launching waits for the launch to finish before
- * it is refused with `ThreadNotReady`. The client's outbox would otherwise hold the turn (and
- * everything behind it) until its next connection.
+ * The thread's launch row outlived its launch: no launch of it runs and its thread was never
+ * created, because a restart cut the launch off before the thread existed. Sending again cannot
+ * help; the thread has to be launched again.
+ */
+export class ThreadLaunchLost extends Schema.TaggedError<ThreadLaunchLost>()(
+  "ThreadLaunchLost",
+  {
+    message: Schema.String,
+    threadId: Schema.String,
+  }
+) {}
+
+/**
+ * How long a turn sent to a thread whose launch is recorded but not running in this process (after
+ * a restart, before boot resumes it) waits for the launch to start or end before it is refused with
+ * `ThreadNotReady`; a launch that runs here is followed instead, up to `LaunchFollowLimit`. A
+ * thread subscription also waits this long for a launch to ensure its thread.
  */
 export const LaunchWait = Context.Reference<Duration.Duration>(
   "cairn/server/threads/Threads/LaunchWait",
   { defaultValue: () => Duration.seconds(60) }
 );
 
-/** How often a waiting turn checks whether its thread's launch finished. */
+/**
+ * The longest a turn waits on its thread's launch before it is refused with `ThreadNotReady`. Above
+ * the slowest launch the workspace step allows (a fetch and a `git worktree add`, 12 minutes
+ * between them), so only a stuck launch reaches it.
+ */
+export const LaunchFollowLimit = Context.Reference<Duration.Duration>(
+  "cairn/server/threads/Threads/LaunchFollowLimit",
+  { defaultValue: () => Duration.minutes(15) }
+);
+
+/** How often a waiting turn checks on a launch that is recorded but not running here. */
 const LAUNCH_POLL = Duration.millis(100);
+
+const notReady = (threadId: ThreadId) =>
+  new ThreadNotReady({
+    message: `Thread ${threadId} is still being prepared. Send again once it shows its first message.`,
+    threadId,
+  });
 
 /** Sends turns to threads and steers their runs. */
 export class Threads extends Context.Service<
@@ -63,20 +97,31 @@ export class Threads extends Context.Service<
   {
     /**
      * Builds the turn's content and admits it. Idempotent by the input's request id: a resend
-     * returns the first submission. A turn for a thread that is still launching waits for the
-     * launch (up to `LaunchWait`), so it lands after the first message. Fails with
-     * `TurnContentError` (nothing submitted), `ThreadNotReady` when the launch outlasts the wait,
-     * or the seam's `HarnessError`.
+     * returns the first submission. A turn for a thread that is still launching follows the
+     * launch to its end, so it lands after the first message. Fails with `TurnContentError`
+     * (nothing submitted), `ThreadNotReady` when the launch outlasts `LaunchWait` without running
+     * here or `LaunchFollowLimit` in all, `ThreadLaunchLost` at once when the launch can no longer
+     * make the thread, or the seam's `HarnessError`.
      */
     send(
       input: SendInput,
       from: string
     ): Effect.Effect<
       SendResult,
-      HarnessError | TurnContentError | ThreadNotReady | LaunchStoreError
+      | HarnessError
+      | TurnContentError
+      | ThreadNotReady
+      | ThreadLaunchLost
+      | LaunchStoreError
+      | ShellStoreError
     >;
-    /** Stops the run (keeping queued inputs unless `clearQueue`), then runs the stop hooks. */
-    stop(input: StopInput): Effect.Effect<void, HarnessError>;
+    /**
+     * Stops the run (keeping queued inputs unless `clearQueue`), then runs the stop hooks. A thread
+     * still launching has no run yet: its launch is cancelled instead and its row marked failed.
+     */
+    stop(
+      input: StopInput
+    ): Effect.Effect<void, HarnessError | LaunchStoreError>;
     /** Takes back one queued input; `withdrawn: false` when it had already been placed. */
     withdraw(input: WithdrawInput): Effect.Effect<WithdrawResult, HarnessError>;
     /** Changes the model or thinking level of later turns, and the sidebar row with them. */
@@ -85,37 +130,67 @@ export class Threads extends Context.Service<
     respond(input: RespondInput): Effect.Effect<void, HarnessError>;
   }
 >()("cairn/server/threads/Threads") {
-  /** Needs `HarnessSeam`, `TurnContent`, `StopHooks`, `LaunchStore` and `EventSink`. */
+  /**
+   * Needs `HarnessSeam`, `TurnContent`, `StopHooks`, `ThreadLaunch`, `LaunchStore`, `ThreadRows`
+   * and `EventSink`.
+   */
   static readonly layerNoDeps = Layer.effect(
     Threads,
     Effect.gen(function* () {
       const seam = yield* HarnessSeam;
       const turns = yield* TurnContent;
       const stopHooks = yield* StopHooks;
+      const launcher = yield* ThreadLaunch;
       const launches = yield* LaunchStore;
+      const threadRows = yield* ThreadRows;
       const sink = yield* EventSink;
+
+      // Returns once no launch of the thread is recorded. A launch running here is followed to its
+      // end; one recorded but not running (a restart's, before boot resumes it) is polled.
+      const untilLaunched = Effect.fnUntraced(function* (threadId: ThreadId) {
+        const wait = Duration.toMillis(yield* LaunchWait);
+        let polledSince = Option.none<number>();
+
+        while (true) {
+          if (Option.isNone(yield* launches.byThread(threadId))) {
+            return yield* Effect.void;
+          }
+
+          if (yield* launcher.follow(threadId)) {
+            polledSince = Option.none();
+            continue;
+          }
+
+          if (Option.isNone(yield* threadRows.get(threadId))) {
+            return yield* new ThreadLaunchLost({
+              message: `Thread ${threadId} was never created: its launch stopped before the thread existed. Launch it again with the same message.`,
+              threadId,
+            });
+          }
+
+          const now = yield* Clock.currentTimeMillis;
+
+          if (now - Option.getOrElse(polledSince, () => now) >= wait) {
+            return yield* notReady(threadId);
+          }
+
+          polledSince = Option.orElse(polledSince, () => Option.some(now));
+          yield* Effect.sleep(LAUNCH_POLL);
+        }
+      });
 
       const send = Effect.fn("Threads.send")(function* (
         input: SendInput,
         from: string
       ) {
-        const wait = yield* LaunchWait;
+        const limit = yield* LaunchFollowLimit;
 
-        // Some once no launch is in flight for the thread; none when the wait ran out first.
-        const launched = yield* launches.byThread(input.threadId).pipe(
-          Effect.repeat({
-            until: Option.isNone,
-            schedule: Schedule.spaced(LAUNCH_POLL),
-          }),
-          Effect.timeoutOption(wait)
+        yield* untilLaunched(input.threadId).pipe(
+          Effect.timeoutOrElse({
+            duration: limit,
+            orElse: () => Effect.fail(notReady(input.threadId)),
+          })
         );
-
-        if (Option.isNone(launched)) {
-          return yield* new ThreadNotReady({
-            message: `Thread ${input.threadId} is still being prepared. Send again once it shows its first message.`,
-            threadId: input.threadId,
-          });
-        }
 
         const built = yield* turns.build(input.threadId, from, input.input);
 
@@ -132,6 +207,10 @@ export class Threads extends Context.Service<
       });
 
       const stop = Effect.fn("Threads.stop")(function* (input: StopInput) {
+        if (yield* launcher.cancel(input.threadId)) {
+          return;
+        }
+
         yield* seam.stop(input.threadId, { clearQueue: input.clearQueue });
         yield* stopHooks.run(input.threadId);
       });

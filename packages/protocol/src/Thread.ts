@@ -125,6 +125,22 @@ export const Entry = Schema.Struct({
 
 export type Entry = typeof Entry.Type;
 
+/**
+ * The kind of a notice entry: display-only text the brain writes into a thread's transcript about
+ * something that happened outside a run. It has no `model`, so the model never sees it.
+ */
+export const NOTICE_ENTRY_KIND = "cairn.notice";
+
+/** The `data` of a `cairn.notice` entry. */
+export const NoticeEntryData = Schema.Struct({
+  /** What the notice reports: a launch that failed after its conversation existed. */
+  reason: Schema.Literals(["launch_failed"]),
+  /** The text to show, as the thread row's `lastError` has it. */
+  text: Schema.String,
+});
+
+export type NoticeEntryData = typeof NoticeEntryData.Type;
+
 /** A conversation record: its fork source and its owner, when it has them. */
 export const ConversationRecord = Schema.Struct({
   id: ConversationId,

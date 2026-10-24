@@ -786,3 +786,15 @@ Built in a worktree on `21577e0` by a delegated agent (branch `fix/batch2-launch
 - Not done: a sweep rule for claims with no thread row (the live store has 0, and the check no longer creates them); the `judges/paste.ts` real-bridge assertion on the user row; a per-request `turn.submitted` count in the journal judge; a worktree-mode hero launch through the browser (covered by handler tests and the real-brain script).
 - Skill blocks still show in the queue card and sidebar preview (T31 records the typed text on the entry).
 - For T8: `PageContext.launching` is where a failed row's activity and `lastError` should come in; Missing is still the state a launch that fails in the background reaches.
+
+### T7 and the deploy of batches 1 and 2
+
+`3b007ed` (T7): `deploy.sh` puts the live worktree back on its previous commit and reinstalls when install or build fails before the restart; the web app is built into `dist.next` and swapped in with one `mv --exchange`; a deploy refuses while `cairn-nightly.service` runs; the deployed commit is recorded in `${XDG_STATE_HOME:-~/.local/state}/cairn/deployed` and `--check` compares it with the live worktree; `nightly.sh` logs its commit first.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Deploy of a commit whose web build fails, into a scratch live worktree (`CAIRN_LIVE_WORKTREE`) | pass | exit 1 after vite fails; worktree back on the previous commit; dist hashes the same; no `dist.next` left; `cairn.service` not restarted; `--check` says the worktree is not the deployed commit |
+| `ops/cairn/deploy.sh` of `3b007ed` | pass | all 7 threads idle beforehand; listening 1,562 ms, hello 1,590 ms, build `9a6a38bc871f`; `--check` afterwards: the live worktree is the deployed commit |
+| `node judges/live-chat.ts` against the deployed brain | pass | hello 69 ms, launch 9 ms, reply 1,421 ms; claude-bridge ready |
+
+Not judged: the nightly refusal (starting the nightly by hand runs the hour-long matrix) and `judges/load.ts` in a loop during a deploy.

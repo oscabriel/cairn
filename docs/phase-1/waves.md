@@ -926,3 +926,42 @@ One lane in the main checkout. Deployed in four steps, last at `381d907`.
 Differs from the task text: no per-thread code mode cap (the sandbox's `start` is not told the thread); the deadline guard keeps refusing scripts that set their own deadline; the T19 boundary is a helper at each call site, not a wrapped client (a dynamic proxy fails the lint rules), checked by a source test; T20's transient-refresh finding did not reproduce (a 502 on refresh already reads as unreachable), so it has a guard test and no change.
 
 Not done: T13's kill-answers-before-interrupt (an optimisation that changes what the resume's `answered` check sees) and its J8 and J9 reruns; the attach-over-open-turn leak did not reproduce (guard test kept); T18's planned scratch folder is not persisted before its mkdir, and no test drives a failure after submit; T20's sign-in verifier race and its split discovery and call timeouts; a browser check that Chrome resends a 425.
+
+### Batch 8: wrong state the user sees (group 3: T29, T30, T32 to T34, T36 to T42)
+
+One lane in the main checkout, deployed at `ceffbf7`. T31 and T35 were done in batch 2.
+
+- `77af773` (T29): sidebar init reads the clock (`ReadClock`), so ages and snooze presets are right before the first kept tick.
+- `7f0a01a` (T32): Settlement reads `SettingsStore` on every sweep (an unreadable store skips the sweep with a warning); the `SettlementConfig` default and `ShellLayer`'s default projector signals are gone, so missing wiring fails to build.
+- `c2c90f7` (T33): a refused clipboard write shows no check (`CompletedCopy.copied`); a code block's copy key is its block path, so blocks in two list items no longer share one.
+- `677ea08` (T34): a title answer that is not the JSON asked for keeps the placeholder; search highlighting and excerpts fold case only where that keeps offsets (so "İ" no longer shifts the highlight), and an excerpt never starts inside a surrogate pair.
+- `859a85e` (T42): the glossary's changed-files card covers the whole run, queued follow-ups included.
+- `bbee393`, `3ea5a4f` (T37): the badge is written once the device is checked whenever it differs from the last one this load wrote, so a badge the service worker left is cleared; the push device id and the push wish survive a storage that throws. `bbee393` wrote the badge on the first inform and broke 15 root tests (committed after a partial test run); `3ea5a4f` fixed it.
+- `77dd33b` (T39): `thread.retryTask` refreshes the row; `inspect` forgets parked ids pi-durable no longer reports; a failed sidebar Retry raises the root notice.
+- `96bec89` (T40): `normalizeWorkspaceRoot` checks segments (the old pattern took 3.8 s on a 26-character path with `//`); a failed thread metadata read in CommitFeed is logged.
+- `b3a6282` (T41): a history page carries the cursor it was asked from and is dropped when a snapshot has moved the window (`prependHistoryAt`); the next scroll asks again from the new cursor.
+- `65533ce` (T38): 400 `expired`, 404 and 409 upload answers are retryable; each saved attachment keeps its first save time, and one older than the brain's 24 h sweep is not restored.
+- `b4d13f9` (T36): a subscription whose keys are not a 65-byte P-256 point and a 16-byte secret is refused at upsert; a refused push's body read has its own 2 s timeout.
+- `ceffbf7` (T30): opening the model or branch picker focuses its search field; the keyboard's rows and `PickedModel` skip unavailable models.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Clock.test (sidebar) | pass | init issues `ReadClock`; presets within 8 days of the test clock; a failed retry hands up `RequestedNotice` |
+| Settlement.test: `autoSettleDays` 0 and 1 | fail before, pass after | 10 quiet days with 0: not settled; 2 with 1: settled |
+| Timeline.test, CopyKeys.test | pass; CopyKeys fails before | a refused copy shows no check; one copy, one "Copied" |
+| Sidebar.test (client-logic): "İzmir then Istanbul", emoji cut | fail before, pass after | highlight on "Istanbul"; excerpt does not start on a low surrogate |
+| ThreadTitles.test: a prose answer | pass | placeholder kept |
+| Pwa.test: badge and throwing storage | pass | no write before the device check, one after, none for the same count |
+| ThreadStreamHandlers.test: retry refresh | pass | row refreshed for the retried thread |
+| WorkspaceRoot.test | pass | `/` + 40 letters + `//` refused in under 10 ms |
+| ThreadView.test: page after a moved window | pass | dropped; cursor now 180 |
+| Saved.test (attachments) | pass | an attachment 26 h old not restored, a 2 h old one restored; 400 expired, 404, 409 retryable; 413, 415, size mismatch final |
+| Vapid.test: subscription keys | pass | a 10-byte point and a short secret refused |
+| Composer.test: picker focus, unavailable model | pass | `FocusPopoverSearch` on open; only `kimi-k3` listed; picking `glm-5` changes nothing |
+| `pnpm check` | pass | 1,275 tests |
+| `node judges/behaviour.ts` | 21 of 22 | `snooze` fails only after `hero-launch` in the same run (20 launched threads stay active); `--only snooze` passes |
+| `node judges/live-chat.ts` | pass | |
+
+Differs from the task text: T32 keeps `StubHandlers` and adds no handler wiring test; T34's working timer is unchanged until it is compared with t3code; T30 has no `judges/behaviour.ts` picker case and no document-level Escape (Escape works once the field has focus); the T33 judge is a Scene test, not WebKit with the clipboard denied.
+
+Not done: T36's pending-then-final push claims and the shutdown settle; T38's pruning of drafts for deleted threads and the tray tests for restore, discard and object URLs; T40's configure race; T41's paging from the smallest id and the thread id in the stream stamp; T56 should make `snooze` independent of `hero-launch`.

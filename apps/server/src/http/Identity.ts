@@ -217,6 +217,17 @@ const viaMainProxy = (request: HttpServerRequest.HttpServerRequest) =>
   (request.headers.via !== undefined ||
     request.headers[USER_HEADER] !== undefined);
 
+/**
+ * Caddy marks a request sent in TLS early data (QUIC 0-RTT) with `Early-Data: 1` and leaves
+ * `{remote_host}` empty for it, because the address cannot be trusted before the handshake ends.
+ * 425 asks the browser to send it again once the handshake is done (RFC 8470), where a 403 would
+ * refuse the owner's page load outright.
+ */
+const tooEarly = HttpServerResponse.text("Too early: send again.\n", {
+  status: 425,
+  headers: { "cache-control": "no-store" },
+});
+
 const notFound = HttpServerResponse.text("Not found.\n", {
   status: 404,
   headers: { "cache-control": "no-store" },
@@ -241,6 +252,14 @@ export const AuthRoute = HttpRouter.add(
     }
 
     const peer = request.headers[PEER_HEADER] ?? "";
+
+    if (peer === "" && request.headers["early-data"] === "1") {
+      yield* Effect.logInfo("auth request in early data").pipe(
+        Effect.annotateLogs({ event: "auth-too-early" })
+      );
+
+      return tooEarly;
+    }
 
     if (peer === "") {
       yield* Effect.logWarning("auth request without a peer").pipe(

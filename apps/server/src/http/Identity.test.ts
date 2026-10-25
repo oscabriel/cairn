@@ -341,6 +341,18 @@ describe("the auth route", () => {
     })
   );
 
+  it.effect("asks for a resend when the subrequest came in early data", () =>
+    Effect.gen(function* () {
+      // The shape of the 16 refused page loads logged in the week to 2026-10-25.
+      const answer = yield* askAuth({ ...subrequest(""), "early-data": "1" });
+
+      assert.deepStrictEqual(answer, {
+        status: 425,
+        logged: ["auth request in early data"],
+      });
+    })
+  );
+
   it.effect(
     "answers 404 and logs nothing when asked through the main proxy",
     () =>

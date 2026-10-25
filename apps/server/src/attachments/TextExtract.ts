@@ -72,8 +72,8 @@ const runWorker = (job: ExtractJob) =>
         new Worker(WORKER_URL, {
           workerData: job,
           resourceLimits: { maxOldGenerationSizeMb: WORKER_HEAP_MB },
-          stdout: true,
-          stderr: true,
+          // The worker's console goes to the brain's own output, the journal: piped streams
+          // nobody read would fill and hold memory (T53).
         })
     ),
     (worker) =>

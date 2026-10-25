@@ -333,7 +333,8 @@ export class AttachmentStore extends Context.Service<
             .pipe(failure("AttachmentStore.receive"));
 
           return {
-            bytes: new Uint8Array(Buffer.concat(chunks)),
+            // `Buffer.concat` is already a Uint8Array: wrapping it would copy the upload again (T53).
+            bytes: Buffer.concat(chunks, received),
             sha256: hash.digest("hex"),
             sizeBytes: received,
           };

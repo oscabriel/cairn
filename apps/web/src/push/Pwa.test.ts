@@ -113,25 +113,32 @@ describe("the push toggle", () => {
 });
 
 describe("the app badge at load", () => {
-  it("is written on the first inform, clearing one the service worker left", () => {
+  it("is written once the device is checked, clearing one the service worker left", () => {
+    const early = inform(init().model, { ...init().model.context, badge: 0 });
+
     const device = update(
-      init().model,
+      early.model,
       Message.CheckedDevice({
         deviceId: "device-0001",
         permission: "granted",
         support: "supported",
         wanted: true,
       })
-    ).model;
+    );
 
-    const first = inform(device, { ...device.context, badge: 0 });
-    const again = inform(first.model, { ...first.model.context, badge: 0 });
+    const again = inform(device.model, { ...device.model.context, badge: 0 });
+    const raised = inform(again.model, { ...again.model.context, badge: 2 });
 
+    assert.lengthOf(early.commands ?? [], 0);
     assert.deepStrictEqual(
-      first.commands?.map((command) => command.name),
+      device.commands?.map((command) => command.name),
       ["ShowBadge"]
     );
     assert.lengthOf(again.commands ?? [], 0);
+    assert.deepStrictEqual(
+      raised.commands?.map((command) => command.name),
+      ["ShowBadge"]
+    );
   });
 });
 

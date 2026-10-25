@@ -29,20 +29,21 @@ export const init = (): UpdateReturn => ({
 export const canPush = (model: Model): boolean =>
   Option.contains(model.support, "supported") && model.permission === "granted";
 
+/** Writes the context's badge when it differs from the last one written, once the device is known. */
+const syncBadge = (model: Model): UpdateReturn =>
+  Option.isNone(model.support) || model.context.badge === model.shownBadge
+    ? { model }
+    : {
+        model: modifyFields(model, { shownBadge: () => model.context.badge }),
+        commands: [ShowBadge({ count: model.context.badge })],
+      };
+
 /**
  * Takes the root's context; a badge count other than the one this load last wrote goes to the app
- * icon, so the first inform clears a badge the service worker left (T37).
+ * icon once the device was checked, so the first one clears a badge the service worker left (T37).
  */
-export const inform = (model: Model, context: PushContext): UpdateReturn => {
-  const next = modifyFields(model, { context: () => context });
-
-  return context.badge === model.shownBadge
-    ? { model: next }
-    : {
-        model: modifyFields(next, { shownBadge: () => context.badge }),
-        commands: [ShowBadge({ count: context.badge })],
-      };
-};
+export const inform = (model: Model, context: PushContext): UpdateReturn =>
+  syncBadge(modifyFields(model, { context: () => context }));
 
 /** The toggle's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
@@ -51,16 +52,16 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       const pushable =
         support === "supported" && permission === "granted" && wanted;
 
-      return {
-        model: modifyFields(model, {
+      return syncBadge(
+        modifyFields(model, {
           support: () => Option.some(support),
           permission: () => permission,
           deviceId: () => Option.some(deviceId),
           // Without push, the permission or the user's wish there is nothing to re-check.
           synced: () => !pushable,
           status: (status) => (pushable ? status : PushStatus.Off()),
-        }),
-      };
+        })
+      );
     },
 
     SyncedSubscription: ({ subscribed }) => ({

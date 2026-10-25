@@ -40,6 +40,10 @@ import { ClaudeSlots } from "./ClaudeSlots.ts";
 import { emptyUsage } from "./ClaudeTokens.ts";
 
 /** Where a conversation runs, and which thread it belongs to, as the brain noted it. */
+
+/** How many conversations' working folders are remembered; older notes are dropped first. */
+export const PLACES_KEPT = 500;
+
 export interface ConversationNote {
   /** The conversation's working directory; the bridge resolves it to its realpath. */
   readonly cwd: string;
@@ -137,17 +141,31 @@ export class Claude extends Context.Service<
         new Map<string, { readonly inFlight: number; readonly at: number }>()
       );
 
+      // An idle entry whose conversation the map already let go of is dropped, so the map holds
+      // live conversations only, not every session id ever seen (T52).
       const touch = (sessionId: string, delta: number) =>
-        Ref.update(usage, (all) => {
-          const next = new Map(all);
-          const inFlight = (all.get(sessionId)?.inFlight ?? 0) + delta;
+        Effect.gen(function* () {
+          const live = new Set(yield* RcMap.keys(conversations));
 
-          next.set(sessionId, {
-            inFlight,
-            at: clock.currentTimeMillisUnsafe(),
+          yield* Ref.update(usage, (all) => {
+            const next = new Map<
+              string,
+              { readonly inFlight: number; readonly at: number }
+            >();
+
+            for (const [key, entry] of all) {
+              if (entry.inFlight > 0 || live.has(key)) {
+                next.set(key, entry);
+              }
+            }
+
+            next.set(sessionId, {
+              inFlight: (all.get(sessionId)?.inFlight ?? 0) + delta,
+              at: clock.currentTimeMillisUnsafe(),
+            });
+
+            return next;
           });
-
-          return next;
         });
 
       const evictIdle = Effect.gen(function* () {
@@ -291,9 +309,23 @@ export class Claude extends Context.Service<
           async () => await realpath(note.cwd)
         ).pipe(Effect.orElseSucceed(() => note.cwd));
 
-        yield* Ref.update(places, (all) =>
-          new Map(all).set(sessionId, { cwd, threadId: note.threadId })
-        );
+        // The newest notes, at most `PLACES_KEPT`: a conversation is noted again before each call.
+        yield* Ref.update(places, (all) => {
+          const next = new Map(all);
+
+          next.delete(sessionId);
+          next.set(sessionId, { cwd, threadId: note.threadId });
+
+          for (const key of next.keys()) {
+            if (next.size <= PLACES_KEPT) {
+              break;
+            }
+
+            next.delete(key);
+          }
+
+          return next;
+        });
       });
 
       const abortConversation = Effect.fn("Claude.abortConversation")(

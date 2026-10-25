@@ -170,3 +170,44 @@ describe("a plan window rejection", () => {
     expect(stream.output.errorMessage).not.toContain(PLAN_QUOTA_PREFIX);
   });
 });
+
+describe("a large tool argument", () => {
+  it("streams in time linear in its size, and decodes once whole", () => {
+    const { stream, feed } = opened();
+    const big: ToolBlock = { ...blockA, args: { line: "x".repeat(60_000) } };
+    const json = JSON.stringify(big.args);
+    const deltas: Array<ClaudeEvent> = [];
+
+    for (let at = 0; at < json.length; at += 50) {
+      deltas.push({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "input_json_delta",
+            partial_json: json.slice(at, at + 50),
+          },
+        },
+      });
+    }
+
+    feed([messageStart("m1"), ...toolBlockOpening(0, big)]);
+
+    const started = performance.now();
+
+    feed(deltas);
+
+    const elapsed = performance.now() - started;
+
+    feed([
+      { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+    ]);
+
+    expect(elapsed).toBeLessThan(20);
+    expect(stream.output.content[0]).toMatchObject({
+      type: "toolCall",
+      arguments: big.args,
+    });
+  });
+});

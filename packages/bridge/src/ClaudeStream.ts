@@ -550,8 +550,9 @@ export class ClaudeStream {
         partial: this.#output,
       });
     } else if ("partial_json" in delta && block.type === "toolCall") {
+      // Parsed once, at the block's stop: the JSON only decodes whole, so parsing the growing
+      // text on every delta was quadratic and never yielded anything earlier (T52).
       open.partialJson += delta.partial_json;
-      block.arguments = parseArguments(open.partialJson, block.arguments);
       this.#push({
         type: "toolcall_delta",
         contentIndex,

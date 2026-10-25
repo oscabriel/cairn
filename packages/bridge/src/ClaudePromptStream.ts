@@ -52,6 +52,11 @@ interface Item {
 export interface PromptStream {
   /** Queues `message`; succeeds once Claude Code's stdin took it, fails if the stream closed first. */
   push(message: PromptMessage): Effect.Effect<true, PromptStreamClosed>;
+  /**
+   * Queues `message` in order without waiting for Claude Code to take it, for callers under a lock
+   * that a child which stopped reading stdin must not hold (T13). Fails if the stream is closed.
+   */
+  send(message: PromptMessage): Effect.Effect<void, PromptStreamClosed>;
   /** No more input: the consumer ends after what is queued, and the SDK closes Claude Code's stdin. */
   readonly end: Effect.Effect<void>;
   /**
@@ -78,9 +83,7 @@ export const openPromptStream: Effect.Effect<PromptStream> = Effect.gen(
       }
     });
 
-    const push = Effect.fn("PromptStream.push")(function* (
-      message: PromptMessage
-    ) {
+    const enqueue = Effect.fnUntraced(function* (message: PromptMessage) {
       const failed = yield* Ref.get(failure);
 
       if (Option.isSome(failed)) {
@@ -97,8 +100,16 @@ export const openPromptStream: Effect.Effect<PromptStream> = Effect.gen(
         });
       }
 
-      return yield* Deferred.await(written);
+      return written;
     });
+
+    const push = Effect.fn("PromptStream.push")(function* (
+      message: PromptMessage
+    ) {
+      return yield* Deferred.await(yield* enqueue(message));
+    });
+
+    const send = (message: PromptMessage) => Effect.asVoid(enqueue(message));
 
     const fail = Effect.fn("PromptStream.fail")(function* (reason: string) {
       const error = new PromptStreamClosed({ message: reason });
@@ -146,6 +157,7 @@ export const openPromptStream: Effect.Effect<PromptStream> = Effect.gen(
 
     return {
       push,
+      send,
       end: Effect.asVoid(Queue.end(queue)),
       fail,
       take,

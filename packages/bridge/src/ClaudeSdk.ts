@@ -583,6 +583,8 @@ export interface FakeIO {
   record(sessionId: string, entry: SessionEntry): Effect.Effect<void>;
   /** Ends the event stream with a failure, as a child that exits mid-run does. */
   die(message: string): Effect.Effect<void>;
+  /** Stops reading stdin, as a wedged Claude Code does: later writes are never taken. */
+  readonly stopReading: Effect.Effect<void>;
 }
 
 /** One scripted child. The run ends when the script returns. */
@@ -894,6 +896,7 @@ export class ClaudeSdk extends Context.Service<
           record,
           die: (message) =>
             Effect.asVoid(Queue.fail(out, new ClaudeQueryError({ message }))),
+          stopReading: Fiber.interrupt(pump),
         };
 
         const fiber = yield* Effect.forkDetach(

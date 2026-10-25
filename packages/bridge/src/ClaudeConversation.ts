@@ -183,6 +183,9 @@ const STAMP_WAIT_INTERVAL = Duration.millis(200);
  */
 export const INTERRUPT_GRACE = Duration.seconds(3);
 
+/** How long delivering a steer waits for Claude Code to take it from stdin, under the lock. */
+const STEER_WRITE_LIMIT = Duration.seconds(5);
+
 /** A served tool call waiting for pi's result. */
 interface ParkedCall {
   readonly child: Child;
@@ -999,10 +1002,12 @@ export const openConversation = Effect.fnUntraced(function* (
 
       if (steer.length > 0) {
         // The steer and the results share Claude Code's stdin; writing the steer first makes
-        // Claude Code drain it at this tool boundary.
+        // Claude Code drain it at this tool boundary, so this waits for Claude Code to take it.
+        // The wait is bounded, because it holds the lock a child that stopped reading stdin
+        // would otherwise hold forever (T13).
         yield* child.query.input
           .push({ blocks: steer, priority: Option.some("next") })
-          .pipe(Effect.ignore);
+          .pipe(Effect.timeout(STEER_WRITE_LIMIT), Effect.ignore);
       }
 
       for (const result of results) {
@@ -1046,7 +1051,7 @@ export const openConversation = Effect.fnUntraced(function* (
 
       child.held = heldOf(state);
       yield* child.query.input
-        .push({
+        .send({
           blocks: [
             ...Option.toArray(reminder).map((text): PromptBlock => ({
               type: "text",
@@ -1210,7 +1215,7 @@ export const openConversation = Effect.fnUntraced(function* (
       ];
 
       yield* started.value.query.input
-        .push({ blocks, priority: Option.none() })
+        .send({ blocks, priority: Option.none() })
         .pipe(Effect.ignore);
 
       return Option.some(routed);

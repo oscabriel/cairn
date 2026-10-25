@@ -1628,3 +1628,42 @@ describe("slot permits", () => {
     }).pipe(Effect.provide(bridge([marksThenDone])))
   );
 });
+
+/** Answers "hi", then stops reading its stdin. */
+const answersThenWedges: FakeScript = (io) =>
+  Effect.gen(function* () {
+    yield* io.nextPrompt;
+    yield* io.emit(initEvent(SCRIPT_SESSION), ...textTurn("m1", "u1", "hi"));
+    yield* io.stopReading;
+
+    return yield* Effect.never;
+  });
+
+describe("a child that stops reading its stdin", () => {
+  it.effect(
+    "cannot hold the conversation: the next turn stalls out and the child is killed",
+    () =>
+      Effect.gen(function* () {
+        const hi = yield* call([system, user("hi")]);
+
+        const next = yield* Effect.forkChild(
+          call([system, user("hi"), hi, user("more")])
+        );
+
+        // Steps, not one jump: the watchdog's sleep may not be registered yet under load.
+        for (
+          let step = 0;
+          step < 30 && next.pollUnsafe() === undefined;
+          step += 1
+        ) {
+          yield* settle;
+          yield* TestClock.adjust("10 seconds");
+        }
+
+        const reply = yield* Fiber.join(next);
+
+        expect(reply.stopReason).toBe("error");
+        expect(((yield* runs)[0]?.closed ?? 0) >= 1).toBeTruthy();
+      }).pipe(Effect.provide(bridge([answersThenWedges])))
+  );
+});

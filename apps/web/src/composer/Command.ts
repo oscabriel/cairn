@@ -153,7 +153,7 @@ export const PATH_SEARCH_LIMIT = 80;
 /** Searches a project's files and folders for the `@` menu. */
 export const SearchEntries = Command.define("SearchEntries", {
   args: { projectId: ProjectId, query: Schema.String },
-  messages: [Message.SucceededPathSearch, Message.FailedRequest],
+  messages: [Message.SucceededPathSearch, Message.FailedPathSearch],
   execute: ({ projectId, query }) =>
     onClient((client) =>
       client["projects.searchEntries"]({
@@ -165,7 +165,12 @@ export const SearchEntries = Command.define("SearchEntries", {
       Effect.match({
         onSuccess: (result) =>
           Message.SucceededPathSearch({ projectId, query, result }),
-        onFailure: failed,
+        onFailure: (failure) =>
+          Message.FailedPathSearch({
+            projectId,
+            query,
+            message: failureText(failure),
+          }),
       })
     ),
 });

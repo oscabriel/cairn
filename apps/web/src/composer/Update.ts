@@ -359,9 +359,11 @@ const refreshTriggerMenu: Step = (model) => {
   const query = current.query.trim();
   const project = targetProject(withMenu);
 
+  // A failed search is not an answer: typing again asks again.
   const answered =
     withMenu.pathSearch.query === query &&
     Option.isNone(withMenu.pathSearch.pending) &&
+    Option.isNone(withMenu.pathSearch.error) &&
     Option.exists(project, (candidate) =>
       Option.contains(withMenu.pathSearch.projectId, candidate.id)
     );
@@ -1240,6 +1242,21 @@ const step = (model: Model, message: Message): UpdateReturn =>
                 query,
                 pending: Option.none(),
                 entries: result.entries,
+                error: Option.none(),
+              }),
+            }),
+          }
+        : keep(model),
+    FailedPathSearch: ({ message: reason, projectId, query }) =>
+      Option.contains(model.pathSearch.pending, query)
+        ? {
+            model: modifyFields(model, {
+              pathSearch: () => ({
+                projectId: Option.some(projectId),
+                query,
+                pending: Option.none(),
+                entries: [],
+                error: Option.some(reason),
               }),
             }),
           }

@@ -193,7 +193,22 @@ const loadGrammar = async (language: Language): Promise<void> => {
   }
 };
 
-/** Loads the core and one grammar; a later call after a failure tries again. */
+/** How long a grammar (and the core, the first time) may take to load (T14). */
+export const GRAMMAR_LOAD_TIMEOUT = Duration.seconds(30);
+
+/**
+ * Forgets a load that never settled, so a later block asks again instead of waiting on it forever.
+ * The core is forgotten too unless it finished.
+ */
+const forgetLoad = (language: Language) => {
+  grammarLoads.delete(language);
+
+  if (!ready.has("core")) {
+    cores.delete("core");
+  }
+};
+
+/** Loads the core and one grammar; a later call after a failure or a timeout tries again. */
 export const loadLanguage = (
   language: string
 ): Effect.Effect<void, HighlightLoadError> =>
@@ -211,7 +226,24 @@ export const loadLanguage = (
           await loadGrammar(known);
         },
         catch: (cause) => new HighlightLoadError({ language, cause }),
-      }),
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: GRAMMAR_LOAD_TIMEOUT,
+          orElse: () =>
+            Effect.sync(() => {
+              forgetLoad(known);
+            }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new HighlightLoadError({
+                    language,
+                    cause: "The grammar did not load within 30 seconds.",
+                  })
+                )
+              )
+            ),
+        })
+      ),
   });
 
 /** One colored piece of a line. */

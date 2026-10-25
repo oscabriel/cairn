@@ -71,6 +71,8 @@ export interface MenuContents {
   readonly trigger: ComposerTrigger;
   readonly items: ReadonlyArray<MenuItem>;
   readonly loading: boolean;
+  /** Why the list could not be loaded, shown in place of the empty text. */
+  readonly error: Option.Option<string>;
   readonly activeId: Option.Option<string>;
 }
 
@@ -192,6 +194,12 @@ export const menuContents = (model: Model): Option.Option<MenuContents> =>
         menu.trigger.kind === "path"
           ? Option.isSome(model.pathSearch.pending)
           : menu.trigger.kind !== "slash-model" && skillsPending(model),
+      error:
+        menu.trigger.kind === "path" &&
+        Option.isNone(model.pathSearch.pending) &&
+        model.pathSearch.query === menu.trigger.query.trim()
+          ? model.pathSearch.error
+          : Option.none(),
       activeId: resolveComposerMenuActiveItemId(
         items.map((item) => item.id),
         menu.highlighted,
@@ -229,7 +237,10 @@ const emptyText = (contents: MenuContents): string => {
       : "Searching workspace skills...";
   }
 
-  return EMPTY_TEXT[contents.trigger.kind];
+  return Option.getOrElse(
+    contents.error,
+    () => EMPTY_TEXT[contents.trigger.kind]
+  );
 };
 
 const DRAWER_CLASS =

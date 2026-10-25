@@ -155,6 +155,38 @@ describe("composer triggers", () => {
     );
   });
 
+  it("stops searching when the search fails, says why, and asks again when typed again", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(onThread),
+      ...acknowledgeMounts,
+      ...typeWithCaret("see @src"),
+      Scene.Subscription.emit(
+        Message.ElapsedPathSearchDebounce({
+          projectId: project.id,
+          query: "src",
+        })
+      ),
+      Scene.Command.resolve(
+        SearchEntries,
+        Message.FailedPathSearch({
+          projectId: project.id,
+          query: "src",
+          message: "The workspace could not be searched.",
+        })
+      ),
+      Scene.expect(Scene.text("Searching workspace files...")).toBeAbsent(),
+      Scene.expect(
+        Scene.text("The workspace could not be searched.")
+      ).toExist(),
+      ...typeWithCaret("see @src"),
+      Scene.expect(Scene.text("Searching workspace files...")).toExist(),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+
   it("inserts the picked file as a markdown link", () => {
     const searched = update(
       update(

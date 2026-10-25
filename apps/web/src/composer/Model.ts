@@ -161,6 +161,8 @@ export const PathSearch = Schema.Struct({
   /** The query waiting for its debounce or its answer. */
   pending: Schema.Option(Schema.String),
   entries: Schema.Array(SearchEntry),
+  /** Why the search for `query` failed; the menu shows it instead of a spinner (T14). */
+  error: Schema.Option(Schema.String),
 });
 
 export type PathSearch = typeof PathSearch.Type;
@@ -240,6 +242,7 @@ export const initial: Model = {
     query: "",
     pending: Option.none(),
     entries: [],
+    error: Option.none(),
   },
   skills: Option.none(),
   catalog: Option.none(),

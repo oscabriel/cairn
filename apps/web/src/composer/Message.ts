@@ -98,6 +98,12 @@ export const Message = defineMessageUnion({
     query: Schema.String,
     result: SearchEntriesResult,
   },
+  /** The `@` search for `query` failed; the menu stops waiting and says why. */
+  FailedPathSearch: {
+    projectId: ProjectId,
+    query: Schema.String,
+    message: Schema.String,
+  },
   SucceededBranches: { projectId: ProjectId, result: BranchesResult },
   SucceededScratch: { project: ProjectShell },
   /** A turn is ready to go: ids minted (and the scratch project made, for a projectless launch). */

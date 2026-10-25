@@ -3,7 +3,7 @@
 // (the same lazy shiki chunks the transcript's code blocks use), then tokenizing a long file a
 // slice at a time.
 import { ThreadId } from "@cairn/protocol/Ids";
-import { Effect, Predicate, Schema, Stream } from "effect";
+import { Duration, Effect, Predicate, Schema, Stream } from "effect";
 import { Command, Dom } from "foldkit";
 import * as Mount from "foldkit/mount";
 
@@ -15,6 +15,29 @@ import { DiffScope } from "./Model.ts";
 /** The element id of a file's diff, from its path. */
 export const fileElementId = (path: string): string =>
   `diff-file-${encodeURIComponent(path).replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`;
+
+/** How long a patch may take before the panel stops waiting and offers Retry (T14). */
+export const DIFF_FETCH_TIMEOUT = Duration.seconds(30);
+
+/** A patch that did not arrive within `DIFF_FETCH_TIMEOUT`. */
+export class DiffTimedOut extends Schema.TaggedError<DiffTimedOut>()(
+  "DiffTimedOut",
+  { message: Schema.String }
+) {}
+
+/** `fetch`, failing with `DiffTimedOut` once `DIFF_FETCH_TIMEOUT` passes without an answer. */
+export const patchInTime = <A, E, R>(fetch: Effect.Effect<A, E, R>) =>
+  fetch.pipe(
+    Effect.timeoutOrElse({
+      duration: DIFF_FETCH_TIMEOUT,
+      orElse: () =>
+        Effect.fail(
+          new DiffTimedOut({
+            message: "The diff did not arrive within 30 seconds.",
+          })
+        ),
+    })
+  );
 
 /** Fetches the patch for one turn, or for the thread's baseline up to it. */
 export const FetchDiff = Command.define("FetchDiff", {
@@ -41,6 +64,7 @@ export const FetchDiff = Command.define("FetchDiff", {
             ignoreWhitespace,
           })
     ).pipe(
+      patchInTime,
       Effect.match({
         onSuccess: (result) =>
           Message.LoadedDiff({ version, patch: result.diff }),

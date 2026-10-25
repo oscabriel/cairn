@@ -217,6 +217,35 @@ export const commandOf = (pid: number) =>
     )
   );
 
+/** A PATH value's directories, in order, each once, without empty parts. */
+export const pathDirectories = (path: string): ReadonlyArray<string> => [
+  ...new Set(path.split(":").filter((part) => part !== "")),
+];
+
+/**
+ * The directories of a live process's PATH, read from `/proc`; none once it has exited. Only PATH
+ * is taken from the environment, which may hold secrets.
+ */
+export const pathOf = (pid: number) =>
+  readOrEmpty(`/proc/${pid}/environ`).pipe(
+    Effect.map(
+      Option.map((environ) =>
+        pathDirectories(
+          environ
+            .split("\0")
+            .find((variable) => variable.startsWith("PATH="))
+            ?.slice("PATH=".length) ?? ""
+        )
+      )
+    )
+  );
+
+/** The PATH the user's login shell builds (`$SHELL -lc`), the toolchains a thread should see. */
+export const loginPath = (shell: string) =>
+  run("login shell", "read PATH", shell, ["-lc", 'printf %s "$PATH"']).pipe(
+    Effect.map(pathDirectories)
+  );
+
 /** Every process in the unit's cgroup now, with its command line. */
 export const processes = (
   unit: string

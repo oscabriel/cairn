@@ -6,7 +6,8 @@
 // Only this invocation's journal lines count (by `InvocationID`), so a previous run's start-up cannot
 // pass for the new one. The hello goes straight to the brain's port with the headers Caddy would add
 // (Host, the copied `X-Cairn-User`) and Cairn's Origin, so the check does not depend on the Caddy route;
-// any process on the Beelink may do this (ADR 0008's accepted consequence). Prints one JSON line and
+// any process on the Beelink may do this (ADR 0008's accepted consequence). The line also carries the
+// brain's PATH directories, read from /proc without the rest of its environment. Prints one JSON line and
 // exits 0 on a pass, 1 otherwise. Reads ~/.config/cairn/cairn.json, which holds no secret.
 import { homedir } from "node:os";
 import { parseArgs } from "node:util";
@@ -123,6 +124,9 @@ const program = Effect.gen(function* () {
 
   const done = yield* Clock.currentTimeMillis;
 
+  // The PATH thread tools inherit (T28); judges/deployed-unit.ts path compares it with the login PATH.
+  const path = yield* Unit.pathOf(yield* Unit.mainPid(unit));
+
   return {
     pass: true,
     unit,
@@ -132,6 +136,7 @@ const program = Effect.gen(function* () {
     helloMs: done - started,
     protocol: hello.protocol,
     build: hello.build,
+    path: Option.getOrElse(path, () => []),
   };
 }).pipe(
   Effect.matchEffect({

@@ -10,6 +10,10 @@
 #      The unit then ships with each deploy. Starting it is ops/cairn/deploy.sh's job.
 #   4. Links the live worktree's cairn-nightly.service and cairn-nightly.timer (the durability matrix
 #      at 03:30, judges/fixtures/durability/nightly.sh) and enables and starts the timer.
+#   5. Writes the user's login PATH (`$SHELL -lc`, each directory once) as the PATH line of
+#      ~/.config/cairn/brain.env, which both units read after their own PATH, so thread tools and claude
+#      children find bun, cargo and the rest (T28). Other lines in the file are kept. Rerun after adding a
+#      toolchain, then restart the brain.
 #
 # --check changes nothing: it prints what it would do and verifies the unit. Nothing here reads a secret;
 # the owner login and host are not secrets. No sudo (lingering is already on).
@@ -126,6 +130,23 @@ main() {
 		if [[ $check -eq 0 ]]; then
 			systemctl --user daemon-reload
 			systemctl --user enable --now cairn-nightly.timer >/dev/null
+		fi
+	fi
+
+	# 5. The login PATH, for thread tools.
+	local env_file=$config_dir/brain.env login_path
+	login_path=$("${SHELL:-/bin/bash}" -lc 'printf %s "$PATH"' | awk -v RS=: -v ORS=: 'NF && !seen[$0]++' | sed 's/:$//')
+	if [[ -f $env_file ]] && grep -qxF "PATH=$login_path" "$env_file"; then
+		echo "ok: $env_file holds the login PATH"
+	else
+		say "write the login PATH ($(tr ':' '\n' <<<"$login_path" | wc -l) directories) to $env_file"
+		if [[ $check -eq 0 ]]; then
+			(
+				umask 077
+				{ [[ -f $env_file ]] && grep -v '^PATH=' "$env_file" || true; } >"$env_file.new"
+				printf 'PATH=%s\n' "$login_path" >>"$env_file.new"
+				mv "$env_file.new" "$env_file"
+			)
 		fi
 	fi
 

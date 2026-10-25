@@ -2,7 +2,10 @@
 //
 //   node judges/deployed-unit.ts restarts  [--unit cairn.service] [--model opencode-go/claude-haiku-5-5] [--keep]
 //   node judges/deployed-unit.ts streaming [--unit cairn.service] [--model claude-bridge/claude-haiku-5-5] [--keep]
+//   node judges/deployed-unit.ts path      [--unit cairn.service]
 //
+// `path` changes nothing: it passes when the running brain's PATH holds every directory of the user's
+// login PATH (T28), which thread tools inherit (`brain/Arms.ts`), and prints the missing ones.
 // `judges/shutdown.sh --unit cairn.service` runs `restarts`; `judges/durability.ts --unit
 // cairn.service --window streaming` runs `streaming`. The checks are `lib/DeployedUnit.ts`'s. This
 // restarts and kills the production brain, so every open client sees a short reconnect; one turn on a
@@ -11,9 +14,10 @@
 import { parseArgs } from "node:util";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Effect } from "effect";
+import { Console, Effect, Option } from "effect";
 
 import * as DeployedUnit from "./lib/DeployedUnit.ts";
+import * as Unit from "./lib/Unit.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -43,7 +47,31 @@ const program = Effect.gen(function* () {
     });
   }
 
-  return { pass: false, notes: ["usage: deployed-unit.ts restarts|streaming"] };
+  if (check === "path") {
+    const login = yield* Unit.loginPath(process.env.SHELL ?? "/bin/bash");
+    const pid = yield* Unit.mainPid(values.unit);
+
+    const brain = Option.getOrElse(
+      yield* Unit.pathOf(pid),
+      (): ReadonlyArray<string> => []
+    );
+
+    const missing = login.filter((directory) => !brain.includes(directory));
+
+    return {
+      check,
+      pass: pid !== 0 && missing.length === 0,
+      unit: values.unit,
+      brainPath: brain,
+      missing,
+      notes: pid === 0 ? [`${values.unit} is not running`] : [],
+    };
+  }
+
+  return {
+    pass: false,
+    notes: ["usage: deployed-unit.ts restarts|streaming|path"],
+  };
 }).pipe(
   Effect.matchEffect({
     onSuccess: (result) =>

@@ -6,6 +6,7 @@
 # touches cairn.service, port 3774 or the Executor grant. The bridge steps spend a few cents of
 # Claude plan usage on Haiku; the whole run takes about an hour. The log is
 # ~/cairn-judges/durability-<date>.jsonl, and `systemctl --user status cairn-nightly` shows the verdict.
+# PATH here is a floor; brain.env's PATH (the login PATH install.sh writes) replaces it, as in cairn.service.
 [Unit]
 Description=Cairn durability matrix (nightly)
 
@@ -14,6 +15,7 @@ Type=oneshot
 WorkingDirectory=%h/Developer/projects/cairn-live
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
 Environment=NODE_COMPILE_CACHE=%h/.cache/cairn/node
+EnvironmentFile=-%h/.config/cairn/brain.env
 ExecStart=/usr/bin/bash judges/fixtures/durability/nightly.sh
 Nice=10
 TimeoutStartSec=3h

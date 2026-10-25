@@ -10,6 +10,8 @@
 # MemoryHigh is a soft ceiling: past it the kernel reclaims harder and records pressure, nothing is
 # killed. There is no MemoryMax, because an OOM kill of the brain or a claude child mid-turn is a
 # worse hang than the memory. The brain logs `brain memory peak` (MemoryWatch.ts) to time a peak.
+# PATH here is a floor for a machine without brain.env: install.sh writes the user's login PATH there,
+# and EnvironmentFile comes after Environment, so thread tools see the user's toolchains (T28).
 [Unit]
 Description=Cairn brain
 After=network-online.target executor.service

@@ -1564,3 +1564,67 @@ describe("a tool result that arrives after a real abort", () => {
     }
   );
 });
+
+/** Calls `mark` once, then answers "done" once pi sends the result. */
+const marksThenDone: FakeScript = (io) =>
+  Effect.gen(function* () {
+    yield* io.nextPrompt;
+    yield* io.emit(initEvent(SCRIPT_SESSION, ["mark"]));
+    yield* io.emit(...toolTurn("m1", "u1", "toolu_1", "mark", { line: "a" }));
+    yield* io.callTool("mark", "toolu_1");
+    yield* io.emit(...textTurn("m2", "u2", "done"));
+
+    return yield* Effect.never;
+  });
+
+describe("slot permits", () => {
+  it.effect("Stop while waiting for a slot ends the turn at once", () => {
+    const stopped = new AbortController();
+
+    return Effect.gen(function* () {
+      const slots = yield* ClaudeSlots;
+
+      yield* slots.resize(1);
+
+      const first = yield* Effect.forkChild(call([system, user("hi")]));
+
+      yield* settle;
+
+      const second = yield* Effect.forkChild(
+        call([system, user("hi")], { signal: stopped.signal }, "conv-2")
+      );
+
+      yield* settle;
+      expect(yield* slots.waiting).toStrictEqual(["conv-2"]);
+
+      stopped.abort();
+
+      const reply = yield* Fiber.join(second);
+
+      expect([reply.stopReason, yield* slots.waiting]).toStrictEqual([
+        "aborted",
+        [],
+      ]);
+      expect((yield* runs)).toHaveLength(1);
+
+      yield* Fiber.interrupt(first);
+    }).pipe(Effect.provide(bridge([goesQuiet])));
+  });
+
+  it.effect("a tool round ends holding no permit", () =>
+    Effect.gen(function* () {
+      const slots = yield* ClaudeSlots;
+      const held = yield* call([system, user("mark it")]);
+
+      yield* call([
+        system,
+        user("mark it"),
+        held,
+        toolResult("toolu_1", "marked"),
+      ]);
+      yield* settle;
+
+      expect(yield* slots.generating).toStrictEqual([]);
+    }).pipe(Effect.provide(bridge([marksThenDone])))
+  );
+});

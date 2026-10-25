@@ -228,6 +228,19 @@ const failSink = (
   sink.end();
 };
 
+/** Ends a turn the user stopped before it started. */
+const abortedSink = (sink: TurnSink, model: Model<Api>, timestamp: number) => {
+  sink.push({
+    type: "error",
+    reason: "aborted",
+    error: {
+      ...errorMessage(model, "Operation aborted", timestamp),
+      stopReason: "aborted",
+    },
+  });
+  sink.end();
+};
+
 const emptyReply = (sink: TurnSink, model: Model<Api>, timestamp: number) => {
   const { errorMessage: _unused, ...failed } = errorMessage(
     model,
@@ -756,6 +769,13 @@ export const openConversation = Effect.fnUntraced(function* (
       child.turn = Option.some(turn);
       child.prior = prior;
       child.idle = false;
+
+      // The call took a permit to get here. A child that still holds one from its last turn keeps
+      // that one, so the call's goes back (T13).
+      if (child.permit) {
+        yield* slots.release(deps.piSessionId);
+      }
+
       child.permit = true;
       child.lastActivity = now();
       child.pendingResults.clear();
@@ -1199,15 +1219,33 @@ export const openConversation = Effect.fnUntraced(function* (
   const call = Effect.fn("ClaudeConversation.call")(function* (
     request: ConversationCall
   ) {
-    yield* slots.acquire(deps.piSessionId);
+    // Stop while waiting for a slot ends the turn at once (T13). A call that arrives already
+    // stopped goes on to `route`, which ends an orphaned tool result quietly.
+    const takePermit = slots.acquire(deps.piSessionId).pipe(Effect.as(true));
 
+    const acquired = isRealAbort(request.signal)
+      ? yield* takePermit
+      : yield* Effect.raceFirst(
+          takePermit,
+          abortOf(request.signal).pipe(Effect.as(false))
+        );
+
+    if (!acquired) {
+      abortedSink(request.sink, request.model, now());
+
+      return;
+    }
+
+    // The permit goes back however routing ends, unless a turn now holds it (T13).
     const routed = yield* locked(route(request)).pipe(
-      Effect.onInterrupt(() => slots.release(deps.piSessionId))
+      Effect.onExit((exit) =>
+        Exit.isSuccess(exit) && Option.isSome(exit.value)
+          ? Effect.void
+          : slots.release(deps.piSessionId)
+      )
     );
 
     if (Option.isNone(routed)) {
-      yield* slots.release(deps.piSessionId);
-
       return;
     }
 

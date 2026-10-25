@@ -62,14 +62,20 @@ export class ClaudeSlots extends Context.Service<
       ) {
         const immediate = yield* Semaphore.takeIfAvailable(semaphore, 1);
 
-        if (!immediate) {
-          yield* setWaiting(sessionId, true);
-          yield* Semaphore.take(semaphore, 1).pipe(
-            Effect.ensuring(setWaiting(sessionId, false))
-          );
-        }
+        // Interruptible only while it waits: a permit taken is always recorded, so a caller that
+        // races the wait against an abort cannot lose one (T13).
+        yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            if (!immediate) {
+              yield* setWaiting(sessionId, true);
+              yield* restore(Semaphore.take(semaphore, 1)).pipe(
+                Effect.ensuring(setWaiting(sessionId, false))
+              );
+            }
 
-        yield* Ref.update(holders, (list) => [...list, sessionId]);
+            yield* Ref.update(holders, (list) => [...list, sessionId]);
+          })
+        );
       });
 
       const release = Effect.fn("ClaudeSlots.release")(function* (

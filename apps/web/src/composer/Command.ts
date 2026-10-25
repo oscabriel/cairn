@@ -12,6 +12,7 @@ import { RuntimeMode } from "@cairn/protocol/Policy";
 import { SendInput, TurnInput, WhenBusy } from "@cairn/protocol/Thread";
 import { Effect, Option, Predicate, Schema } from "effect";
 import { Command } from "foldkit";
+import { focus } from "foldkit/dom";
 import { replaceUrl } from "foldkit/navigation";
 
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
@@ -42,6 +43,19 @@ const failureText = (failure: { readonly _tag: string }): string =>
 
 const failed = (failure: { readonly _tag: string }) =>
   Message.FailedRequest({ message: failureText(failure) });
+
+/**
+ * Puts the keyboard in an opened picker's search field (T30), so typing filters, Enter picks and
+ * Escape closes. On iOS a focus outside the tap does not raise the keyboard; the field still takes
+ * a hardware keyboard's keys.
+ */
+export const FocusPopoverSearch = Command.define("FocusPopoverSearch", {
+  messages: [Message.CompletedEditorCommand],
+  execute: focus('[data-testid="composer-popover-search"]').pipe(
+    Effect.ignore,
+    Effect.as(Message.CompletedEditorCommand())
+  ),
+});
 
 /** Reads whether this device is a Mac, for the platform's modifier key. */
 export const DetectPlatform = Command.define("DetectPlatform", {

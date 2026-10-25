@@ -43,6 +43,7 @@ import { MeasureHeadline } from "./MeasureHeadline.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
+import { pickerRows } from "./Popovers.ts";
 import { contextChanged, inform, update } from "./Update.ts";
 import { view } from "./View.ts";
 
@@ -988,5 +989,55 @@ describe("the new-thread hero", () => {
         assert.lengthOf(simulation.commands, 0);
       })
     );
+  });
+});
+
+describe("the model picker and the keyboard", () => {
+  // The catalog with GLM 5 unavailable (no key for its provider).
+  const withUnavailable = {
+    ...onThread,
+    catalog: Option.some({
+      ...catalog,
+      models: catalog.models.map((listing) =>
+        listing.modelId === "glm-5" ? { ...listing, available: false } : listing
+      ),
+    }),
+  };
+
+  it("puts the keyboard in the search field when a picker opens", () => {
+    const opened = update(
+      onThread,
+      Message.OpenedPopover({
+        popover: Popover.ModelPicker({ query: "", highlighted: Option.none() }),
+      })
+    );
+
+    assert.deepStrictEqual(
+      opened.commands?.map((command) => command.name),
+      ["FocusPopoverSearch"]
+    );
+  });
+
+  it("never lists or picks an unavailable model", () => {
+    const opened = update(
+      withUnavailable,
+      Message.OpenedPopover({
+        popover: Popover.ModelPicker({ query: "", highlighted: Option.none() }),
+      })
+    ).model;
+
+    assert.deepStrictEqual(
+      pickerRows(opened).map((listing) => listing.modelId),
+      ["kimi-k3"]
+    );
+
+    const picked = update(
+      opened,
+      Message.PickedModel({
+        model: { provider: "opencode-go", modelId: "glm-5" },
+      })
+    ).model;
+
+    assert.strictEqual(picked, opened);
   });
 });

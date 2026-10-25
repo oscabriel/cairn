@@ -31,6 +31,7 @@ import {
   ConfigureThread,
   DetectPlatform,
   EnsureScratch,
+  FocusPopoverSearch,
   LoadDrafts,
   LoadSettings,
   MoveHeroToDraftUrl,
@@ -1049,10 +1050,15 @@ const step = (model: Model, message: Message): UpdateReturn =>
         (open) => open._tag === popover._tag
       );
 
+      const searchable =
+        Predicate.isTagged(popover, "ModelPicker") ||
+        Predicate.isTagged(popover, "Branch");
+
       return isOpen
         ? { model: closePopover(model) }
         : {
             model: modifyFields(model, { popover: () => Option.some(popover) }),
+            commands: searchable ? [FocusPopoverSearch()] : [],
           };
     },
     ClosedPopover: () => ({ model: closePopover(model) }),
@@ -1063,7 +1069,11 @@ const step = (model: Model, message: Message): UpdateReturn =>
       Option.exists(model.popover, (popover) => isHighlighted(popover, id))
         ? keep(model)
         : updatePopover(model, (popover) => withHighlight(popover, id)),
-    PickedModel: ({ model: chosen }) => chooseModel(model, chosen),
+    // A model the catalog lists as unavailable (no key, no login) is not picked (T30).
+    PickedModel: ({ model: chosen }) =>
+      Option.exists(findListing(model, chosen), (listing) => !listing.available)
+        ? keep(model)
+        : chooseModel(model, chosen),
     ToggledFavoriteModel: ({ key }) =>
       saveSettingsStep(
         modifyFields(model, {

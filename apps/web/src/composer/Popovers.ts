@@ -66,9 +66,12 @@ export const pickerRows = (model: Model): ReadonlyArray<ModelListing> =>
     onNone: () => [],
     onSome: (popover) =>
       Popover.match(popover, {
+        // Only models that can run: the keyboard must not pick one with no key (T30).
         ModelPicker: ({ query }) =>
           Array.dedupeWith(
-            Array.flatMap(modelGroups(model, query), (group) => group.models),
+            Array.flatMap(modelGroups(model, query), (group) =>
+              group.models.filter((listing) => listing.available)
+            ),
             (left: ModelListing, right: ModelListing) =>
               left.provider === right.provider && left.modelId === right.modelId
           ),

@@ -886,3 +886,43 @@ One lane in the main checkout, deployed at `5cbc0cb`.
 Differs from the task text: the guard keeps its old refusal of any cross-site request to `/api`, page loads included, on top of the new rule; the T28 judge reads the brain's PATH instead of running `command -v bun cargo` through a thread's bash (thread processes take the brain's environment, `brain/Arms.ts`), so no model turn is spent; under the login PATH, `pnpm` and `npx` now resolve to the user's own copies (same pnpm version, 10.30.3).
 
 Found while doing T25: in the 7 days before, 16 real `forward_auth` subrequests reached the brain with an empty `X-Cairn-Peer`, every one marked `early-data: 1` (TLS 0-RTT). Caddy's `{remote_host}` was empty for them, so the owner's page load or manifest fetch was refused with 403. This is likely the first-load-after-Wi-Fi refusal cairn-v1 saw. Not fixed: the fix belongs in the Caddyfile (a placeholder that is set under early data, or refusing 0-RTT for this host), and needs a backup and a live check.
+
+### Batch 7: the rest of group 1 (T6, T13 to T16, T18 to T21), and the early-data refusal
+
+One lane in the main checkout. Deployed in four steps, last at `381d907`.
+
+- `d004ce1`: the auth route answers `425 Too Early` to a Caddy subrequest sent in TLS early data (`Early-Data: 1`, empty `X-Cairn-Peer`), so the browser sends it again after the handshake (RFC 8470) instead of getting 403. Caddy leaves `{remote_host}` empty under 0-RTT on purpose; the Caddyfile is unchanged.
+- `cd135f9` (T6): a corrupt `push.json` falls back to a key in memory with a `vapid_unavailable` warning instead of failing boot; `vapid_created` logs only after the write; a malformed `CAIRN_BRIDGE` turns the bridge off with `claude_bridge_flag_invalid`; a boot step still running after 30 s logs `boot_slow` with its name.
+- `fb1bf28` (T15): `flushAll` walks a copy of the pending threads, so a refusing store cannot make it spin, and only the retry loop owns `scheduled`, so each thread keeps one retry fiber.
+- `a4790cb` (T21): the identity recheck keeps a socket through one failed Tailscale lookup and closes it on two in a row or on a definite refusal.
+- `f7993f0` (T16): a code mode script past the four running waits for a slot (`WaitingSandbox`, slots on an Effect semaphore, freed when a result settles), and Stop ends the wait; `bash` without a timeout stops after 120 s, at most 600, said in the tool's description.
+- `02d8a9b` (T14): a failed `@` search clears the spinner and shows why, and typing again asks again; the diff fetch and a grammar load give up after 30 s (a grammar that hung is forgotten, so a later block retries); `/t/<malformed>` is NotFound.
+- `a2badd5`, `c3cc756`, `e300e0e`, `f064cb6` (T13): a plan window rejection labels only its own turn; a child's stream failure is logged (`claude_child_stream_failed`); a killed child gets 3 s to answer its interrupt; a tool result after a real abort kills the held child instead of being delivered; Stop while waiting for a slot ends the turn; a permit goes back however routing ends, and a child keeps one permit across attaches; a one-shot child silent for the stall limit fails; prompts written under the lock are queued without waiting for Claude Code to read them, and a steer waits 5 s at most (it still waits, because it must reach stdin before the results).
+- `19ac0f9` (T18): worktree folders are `<repo>-<8 hex of its path>`, and an older layout's worktree of the same branch is reused; `Worktrees.remove` deletes a folder only when git lists it for that repository; a launch marks a worktree or branch made only after `git worktree add` says so; nothing is cleaned up or marked failed once the first turn was submitted (the launch row's removal is retried); a scratch folder is released when the launch fails before `ensured`.
+- `ca3ab1e` (T19): every Command's client call goes through `withBoundary`, which turns a defect or an undecodable answer into a non-retryable `Internal` failure (a source check keeps new Commands in line; push's Commands catch every cause already); brain text in protocol errors is folded to one line and cut to 4,096 characters (`publicText`); `thread_not_found` from withdraw and respond names the thread; attachment store errors say a fixed sentence per operation and keep the cause in the log.
+- `381d907` (T20): a session connect gives up after 20 s (closing its client on interrupt), so a hung Executor no longer holds the one-session lock for 6 minutes; pi-mcp's store keeps the newest grant in memory and writes it behind, one write at a time with retries, so a refused save never breaks the provider or spends a rotated refresh token.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Identity.test: early-data subrequest | pass | 425, one `auth request in early data` line |
+| Vapid.test: corrupt `push.json` through `layerChosen` | fail before, pass after | keys from memory, `vapid_unavailable` logged |
+| BridgeProvider.test: `CAIRN_BRIDGE=of` | pass | no bridge provider, `claude_bridge_flag_invalid` |
+| Boot.test on TestClock: a resume held on a Deferred | pass | `boot_slow` at 30 s naming `resume`, nothing for the quick reconcile |
+| ShellProjector.test: a sink refusing every commit | fail before (spins), pass after | `flushAll` 2 commits for 2 threads; 1 s later 2 more |
+| Identity.test: lookups failing on a socket | pass | one failure keeps it, two close it, a stranger closes at once |
+| CodingTools.test: one slot, a stuck script, a waiting one, a stopped one | pass | the waiting script runs once the first is stopped; the stopped one ends aborted |
+| Composer.test: a failed `@` search | fail before (retyping), pass after | spinner gone, error shown, typing again searches |
+| Fetch.test, Route.test | pass | `DiffTimedOut` after 30 s; `/t/not-an-id` is NotFound |
+| ClaudeStream.test, ClaudeConversation.test, ClaudeSummary.test (T13) | each fails before, passes after, except the permit balance | stale rejection, aborted result delivered, stop in slot wait (hung), silent one-shot (hung), child not reading stdin (hung) |
+| Worktrees.test: two repos named `repo` | fail before, pass after | distinct folders; the second's remove leaves the first's worktree |
+| PublicText.test, Command.test, Boundary.test (T19) | pass | 10,000-character failure encodes; defect becomes `Internal`, not retryable |
+| ExecutorTools.test: hung `initialize`, refused saves | fail before, pass after | both calls `unreachable` within 300 ms; 2 refreshes, 0 invalid grants |
+| `pnpm check` | pass | 1,254 tests |
+| `node judges/durability.ts --bridge` (J2) at `f064cb6` | pass, 3 of 3 | first reply after restart read 41,820, wrote 233 |
+| `node judges/behaviour.ts --only hero-launch,trigger-at` at `ca3ab1e` | pass | 20/20 landed, Missing seen 0 times |
+| `node judges/tools.ts` at `381d907` | pass, 4 of 4 | Executor connected |
+| `node judges/live-chat.ts` after each deploy | pass | reply 1,425 to 1,834 ms |
+
+Differs from the task text: no per-thread code mode cap (the sandbox's `start` is not told the thread); the deadline guard keeps refusing scripts that set their own deadline; the T19 boundary is a helper at each call site, not a wrapped client (a dynamic proxy fails the lint rules), checked by a source test; T20's transient-refresh finding did not reproduce (a 502 on refresh already reads as unreachable), so it has a guard test and no change.
+
+Not done: T13's kill-answers-before-interrupt (an optimisation that changes what the resume's `answered` check sees) and its J8 and J9 reruns; the attach-over-open-turn leak did not reproduce (guard test kept); T18's planned scratch folder is not persisted before its mkdir, and no test drives a failure after submit; T20's sign-in verifier race and its split discovery and call timeouts; a browser check that Chrome resends a 425.

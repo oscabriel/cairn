@@ -52,6 +52,7 @@ import {
   projectionOf,
   ShellProjector,
 } from "./ShellProjector.ts";
+import { ShellStoreError } from "./ShellStoreError.ts";
 import {
   createProject,
   createThread,
@@ -145,6 +146,50 @@ const TestLayer = ShellProjector.layer.pipe(
 const run = <A, E>(
   body: Effect.Effect<A, E, Layer.Success<typeof TestLayer> | Scope.Scope>
 ) => body.pipe(Effect.scoped, Effect.provide(TestLayer));
+
+/** Whether the refusing sink refuses, and how many commits it was asked for since the last reset. */
+const refusal = { on: false, attempts: 0 };
+
+/** The real event sink, refusing every commit while `refusal.on` is set. */
+const RefusingSink = Layer.effect(
+  EventSink,
+  Effect.gen(function* () {
+    const real = yield* EventSink;
+
+    return EventSink.of({
+      ...real,
+      commitCommand: (command) =>
+        Effect.suspend(() => {
+          if (!refusal.on) {
+            return real.commitCommand(command);
+          }
+
+          refusal.attempts += 1;
+
+          // The spin this guards against never ends; stop it so the test fails instead of hanging.
+          if (refusal.attempts > 50) {
+            return Effect.die(
+              "the projector kept committing to a refusing store"
+            );
+          }
+
+          return Effect.fail(
+            new ShellStoreError({
+              message: "the store is refusing commits",
+              operation: "EventSink.commitCommand",
+              cause: undefined,
+            })
+          );
+        }),
+    });
+  })
+);
+
+const RefusingLayer = ShellProjector.layer.pipe(
+  Layer.provideMerge(FakeLayer),
+  Layer.provideMerge(RefusingSink),
+  Layer.provideMerge(ShellTestLayer)
+);
 
 const at = (seconds: number) =>
   DateTime.makeUnsafe(1_760_000_000_000 + seconds * 1000);
@@ -250,6 +295,49 @@ const finishedView: ConversationView = {
 };
 
 describe("the shell projector", () => {
+  it.effect(
+    "flushAll makes one pass while the store refuses, and each thread keeps one retry",
+    () =>
+      Effect.gen(function* () {
+        refusal.on = false;
+        refusal.attempts = 0;
+
+        yield* seedThreads(2);
+
+        refusal.on = true;
+
+        yield* emit([
+          RunStarted.make({ threadId: THREAD, runId: run7, at: at(1) }),
+          RunStarted.make({
+            threadId: testThreadId(2),
+            runId: RunId.make(8),
+            at: at(1),
+          }),
+        ]);
+
+        refusal.attempts = 0;
+        yield* (yield* ShellProjector).flushAll;
+
+        assert.strictEqual(
+          refusal.attempts,
+          2,
+          "one commit per pending thread"
+        );
+
+        refusal.attempts = 0;
+        yield* TestClock.adjust("1 second");
+        yield* Effect.yieldNow;
+
+        assert.strictEqual(refusal.attempts, 2, "one retry loop per thread");
+
+        refusal.on = false;
+        yield* TestClock.adjust("1 second");
+        yield* Effect.yieldNow;
+
+        assert.strictEqual((yield* shellOf(THREAD)).activity, "running");
+      }).pipe(Effect.scoped, Effect.provide(RefusingLayer))
+  );
+
   it.effect("projects a simple turn: running while it runs, idle after", () =>
     run(
       Effect.gen(function* () {

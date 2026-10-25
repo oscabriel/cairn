@@ -30,6 +30,7 @@ import type {
 } from "@cairn/protocol/Shell";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import {
+  Array as Arr,
   Clock,
   Config,
   Context,
@@ -748,9 +749,9 @@ export class ShellProjector extends Context.Service<
           })
         );
 
+      // Leaves `scheduled` alone: only the retry loop in `schedule` owns it, so a flush from
+      // `flushAll` cannot make `schedule` fork a second loop for the same thread (T15).
       const flushUnlocked = Effect.fnUntraced(function* (threadId: ThreadId) {
-        scheduled.delete(threadId);
-
         const held = pending.get(threadId);
 
         if (held === undefined) {
@@ -845,7 +846,13 @@ export class ShellProjector extends Context.Service<
                 yield* Effect.sleep(wait);
               }
 
-              const retry = yield* lock.withPermits(1)(flushUnlocked(threadId));
+              const retry = yield* lock.withPermits(1)(
+                Effect.suspend(() => {
+                  scheduled.delete(threadId);
+
+                  return flushUnlocked(threadId);
+                })
+              );
 
               if (!retry) {
                 return;
@@ -934,8 +941,11 @@ export class ShellProjector extends Context.Service<
           lock.withPermits(1)
         );
 
+      // One pass over the threads pending now: a failed flush puts its thread back in `pending`,
+      // and walking the live map would meet it again, forever while the store refuses (T15).
+      // `schedule` owns the retries.
       const flushAllUnlocked = Effect.gen(function* () {
-        for (const threadId of pending.keys()) {
+        for (const threadId of Arr.fromIterable(pending.keys())) {
           if (yield* flushUnlocked(threadId)) {
             yield* schedule(threadId, FLUSH_RETRY_DELAY);
           }

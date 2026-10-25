@@ -965,3 +965,29 @@ One lane in the main checkout, deployed at `ceffbf7`. T31 and T35 were done in b
 Differs from the task text: T32 keeps `StubHandlers` and adds no handler wiring test; T34's working timer is unchanged until it is compared with t3code; T30 has no `judges/behaviour.ts` picker case and no document-level Escape (Escape works once the field has focus); the T33 judge is a Scene test, not WebKit with the clipboard denied.
 
 Not done: T36's pending-then-final push claims and the shutdown settle; T38's pruning of drafts for deleted threads and the tray tests for restore, discard and object URLs; T40's configure race; T41's paging from the smallest id and the thread id in the stream stamp; T56 should make `snooze` independent of `hero-launch`.
+
+### Batch 9: the rest of group 4 (T49 to T54)
+
+One lane in the main checkout, deployed at `9b20aad`.
+
+- `ff8ed84` (T51): the inline parser pairs brackets once per parse with a stack (`bracketPairs`), replacing a scan to the end from each `[`.
+- `4582799` (T52): a tool's argument JSON is parsed once, at its block's stop (the strict decode never yielded anything on a partial text anyway); the usage map drops idle entries the conversation map let go of, and the places map keeps the 500 newest notes (a note comes before every request).
+- `bc94124` (T53, first cut): the received upload is returned as `Buffer.concat` without a second copy; the extract worker no longer opens stdout and stderr pipes nobody reads. Not done: transferring the bytes to the worker (a pooled `Buffer` cannot be transferred safely).
+- `cd82cd6` (T49): the thread stream's output buffers one frame (`Stream.callback` with `bufferSize: 1` and `suspend`, and `switchMap` with `bufferSize: 1`), so the producer waits for the subscriber and the sliding tick coalesces every revision into the next diff.
+- `062c52d` (T50): the per-thread row caches and the row lazies keep the 20 most recent threads (`setRecent`), one keyed lazy per thread (the foldkit lint rule is disabled on that line, with the reason).
+- `9b20aad` (T54, first step): tray image chips load lazily and decode asynchronously.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Markdown.test: 20,000 `[`, two parses | fail before, pass after | 1,254 ms before, under 40 after |
+| ClaudeStream.test: 60 KB argument in 50-byte deltas | fail before, pass after | 62 ms before, under 20 after; decoded whole at the stop |
+| WatchCoalesce.test: 100 spaced writes while the client reads nothing | fail before, pass after | 100 frames before, 5 after; lands on the fresh snapshot's newest entry |
+| Recent.test | pass | 25 threads keep 20; a reused one stays |
+| `pnpm check` | pass | 1,279 tests |
+| `node judges/durability.ts --bridge` (J2) at `9b20aad` | 2 of 3, then 3 of 3 | the first run's failing window was not captured (the streaming window is the known flaky one) |
+| `node judges/transcript-scroll.ts` | pass | 2,100 rows, follow 0 long tasks, max distance 1 px, 2 of 2 code blocks highlighted |
+| `node judges/typing.ts --throttle 4 --busy 10` | pass on the second run | late keys 22, max late 44 ms, slow views median 21.5 ms, 486 rows streamed; the first run ended in a Node error before its report (the intermittent typing run already recorded) |
+
+Differs from the task text: T49 is a bounded output buffer, not a pull-driven projector; the judge counts frames in a vitest, not RSS through `judges/wire-budget.ts`. T50 bounds the caches by thread count, not by the current transcript's keys, and has no CDP detached-node measurement. T53 has no RSS measurement.
+
+Not done: T54's server thumbnail variant, the bubble thumbnail, and the PDF check under the sandbox CSP; T50's view input thunks.

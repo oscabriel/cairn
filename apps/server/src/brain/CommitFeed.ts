@@ -578,6 +578,18 @@ export class CommitFeed extends Context.Service<
                   decodeThreadId(found.threadId)
                 )
               ),
+              // Logged, then treated as not a thread: the next commit asks again (T40).
+              Effect.tapError((error) =>
+                Effect.logWarning(
+                  "commit feed could not read thread metadata"
+                ).pipe(
+                  Effect.annotateLogs({
+                    event: "commit_feed_meta_failed",
+                    conversationId: String(id),
+                    error: String(error),
+                  })
+                )
+              ),
               Effect.orElseSucceed(() => Option.none<ThreadId>()),
               Effect.tap((threadId) =>
                 Effect.sync(() => {

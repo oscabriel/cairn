@@ -307,22 +307,30 @@ const commandType = (command: ServerShellCommand) => command._tag;
 export const projectIdFor = (commandId: CommandId) =>
   ProjectId.make(`prj_${commandId.replaceAll("-", "")}`);
 
-const workspaceRootPattern = /^\/(?:[^/]+\/?)*$/u;
-
 /**
  * Normalizes an absolute folder path: no trailing slash, no `.` or `..` segments, no empty
- * segments. Returns none for a relative or unsafe path.
+ * segments. Returns none for a relative or unsafe path. Checked segment by segment: the regular
+ * expression it replaces backtracked exponentially on a long path with an empty segment (T40).
  */
 export const normalizeWorkspaceRoot = (
   input: string
 ): Option.Option<string> => {
-  if (!workspaceRootPattern.test(input) && input !== "/") {
+  if (!input.startsWith("/")) {
     return Option.none();
   }
 
-  const segments = input.split("/").filter((segment) => segment.length > 0);
+  const segments = input.slice(1).split("/");
 
-  if (segments.some((segment) => segment === "." || segment === "..")) {
+  // One trailing slash is allowed; `/` itself is the root.
+  if (segments.at(-1) === "") {
+    segments.pop();
+  }
+
+  if (
+    segments.some(
+      (segment) => segment === "" || segment === "." || segment === ".."
+    )
+  ) {
     return Option.none();
   }
 

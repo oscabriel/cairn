@@ -2,12 +2,20 @@
 // after that, two brains racing to make it agree on one key, a loose file mode is narrowed, and only
 // a known push service's https endpoint is stored (upserted by endpoint, removed only while its keys
 // are the ones refused). Ported in part from cairn-v1 apps/server/test/push.test.ts at 1a5cd4a.
-import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Logger, References } from "effect";
 
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
@@ -17,7 +25,7 @@ import {
   PushEndpointRule,
   PushSubscriptions,
 } from "./PushSubscriptions.ts";
-import { Vapid, VAPID_FILE, VAPID_SUBJECT } from "./Vapid.ts";
+import { Vapid, VAPID_FILE, VAPID_SUBJECT, VapidKeyFromFile } from "./Vapid.ts";
 
 const tempDir = Effect.acquireRelease(
   Effect.promise(
@@ -37,6 +45,48 @@ const vapidIn = (configDir: string) =>
   );
 
 describe(Vapid, () => {
+  it.live(
+    "boots on a key in memory when push.json is corrupt, and says so",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* tempDir;
+
+        yield* Effect.promise(async () => {
+          await mkdir(dir, { recursive: true });
+          await writeFile(path.join(dir, VAPID_FILE), "{ not json", {
+            mode: 0o600,
+          });
+        });
+
+        const events: Array<unknown> = [];
+
+        const capture = Logger.make((options) => {
+          events.push(
+            options.fiber.getRef(References.CurrentLogAnnotations).event
+          );
+        });
+
+        const keys = yield* Vapid.use((vapid) =>
+          Effect.succeed(vapid.keys)
+        ).pipe(
+          Effect.provide(
+            Vapid.layerChosen.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  ServerConfig.layerWith({ configDir: dir }),
+                  VapidKeyFromFile,
+                  Logger.layer([capture], { mergeWithExisting: false })
+                )
+              )
+            )
+          )
+        );
+
+        assert.strictEqual(keys.subject, VAPID_SUBJECT);
+        assert.include(events, "vapid_unavailable");
+      }).pipe(Effect.scoped)
+  );
+
   it.live("makes the key pair once at 0600 and reads it back after that", () =>
     Effect.gen(function* () {
       const dir = yield* tempDir;

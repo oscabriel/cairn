@@ -7,7 +7,7 @@
 import path from "node:path";
 
 import { NodeServices } from "@effect/platform-node";
-import { Context, Effect, FileSystem, Layer, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Predicate, Schema } from "effect";
 
 import { ServerConfig } from "../Config.ts";
 
@@ -151,12 +151,23 @@ export class Vapid extends Context.Service<
       const json = `${JSON.stringify(pair, null, 2)}\n`;
 
       // `wx` refuses an existing file: a racing process's key wins and is read back below.
-      yield* fs
-        .writeFileString(file, json, { flag: "wx", mode: 0o600 })
-        .pipe(Effect.ignore);
-
-      yield* Effect.logInfo("made a VAPID key pair").pipe(
-        Effect.annotateLogs({ event: "vapid_created", file })
+      yield* fs.writeFileString(file, json, { flag: "wx", mode: 0o600 }).pipe(
+        Effect.andThen(
+          Effect.logInfo("made a VAPID key pair").pipe(
+            Effect.annotateLogs({ event: "vapid_created", file })
+          )
+        ),
+        Effect.catchTag("PlatformError", (error) =>
+          Predicate.isTagged(error.reason, "AlreadyExists")
+            ? Effect.void
+            : Effect.logWarning("could not write the VAPID key pair").pipe(
+                Effect.annotateLogs({
+                  event: "vapid_write_failed",
+                  file,
+                  detail: error.message,
+                })
+              )
+        )
       );
 
       return Vapid.of({ keys: yield* read });
@@ -193,7 +204,26 @@ export class Vapid extends Context.Service<
     Effect.gen(function* () {
       const source = yield* VapidKeySource;
 
-      return source.kind === "file" ? Vapid.layer : Vapid.layerEphemeral;
+      if (source.kind !== "file") {
+        return Vapid.layerEphemeral;
+      }
+
+      // A bad `push.json` must not stop boot: under `Restart=always` that is a crash loop, for a
+      // feature that can wait. Push runs on a key in memory until the file is fixed (T6).
+      return Vapid.layer.pipe(
+        Layer.catchTag("VapidError", (unreadable) =>
+          Layer.effectDiscard(
+            Effect.logWarning(
+              `${unreadable.message} Push runs on a key in memory until then, so devices subscribed to the file's key get 403 until they subscribe again.`
+            ).pipe(
+              Effect.annotateLogs({
+                event: "vapid_unavailable",
+                file: unreadable.file,
+              })
+            )
+          ).pipe(Layer.provideMerge(Vapid.layerEphemeral))
+        )
+      );
     })
   );
 }

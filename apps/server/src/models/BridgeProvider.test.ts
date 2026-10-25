@@ -8,7 +8,15 @@ import path from "node:path";
 
 import { ClaudeSdkScripts } from "@cairn/bridge/ClaudeSdk";
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
-import { Effect, Layer, Option, Stream } from "effect";
+import {
+  ConfigProvider,
+  Effect,
+  Layer,
+  Logger,
+  Option,
+  References,
+  Stream,
+} from "effect";
 
 import { ModelSource } from "../brain/ModelSource.ts";
 import { UsageFeed } from "../usage/UsageFeed.ts";
@@ -60,6 +68,39 @@ describe("the bridge's extra providers", () => {
 
       assert.deepStrictEqual(extra, []);
     }).pipe(Effect.provide(BridgeExtraProviders))
+  );
+
+  it.effect("are nothing when CAIRN_BRIDGE is malformed, with a warning", () =>
+    Effect.gen(function* () {
+      const events: Array<unknown> = [];
+
+      const capture = Logger.make((options) => {
+        events.push(
+          options.fiber.getRef(References.CurrentLogAnnotations).event
+        );
+      });
+
+      const extra = yield* ExtraProviders.useSync(
+        (providers) => providers
+      ).pipe(
+        Effect.provide(
+          BridgeExtraProviders.pipe(
+            Layer.provide(BridgeProvider.layer),
+            Layer.provide(
+              Layer.merge(
+                ConfigProvider.layer(
+                  ConfigProvider.fromEnvRecord({ CAIRN_BRIDGE: "of" })
+                ),
+                Logger.layer([capture], { mergeWithExisting: false })
+              )
+            )
+          )
+        )
+      );
+
+      assert.deepStrictEqual(extra, []);
+      assert.include(events, "claude_bridge_flag_invalid");
+    })
   );
 
   it.live("are the claude-bridge provider while it is on", () =>

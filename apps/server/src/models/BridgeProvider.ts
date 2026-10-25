@@ -5,7 +5,8 @@
 // reaches the bridge (the cwd hook, the stop hook, the shutdown hook, the shell's slot and plan
 // signals, `usage.subscribe`) reads it through this service.
 //
-// The kill switch is `CAIRN_BRIDGE` (default on). Off, no provider is registered, no `claude` child
+// The kill switch is `CAIRN_BRIDGE` (default on; `CAIRN_BRIDGE=false` turns it off, and a value that is
+// not a boolean turns it off with a warning). Off, no provider is registered, no `claude` child
 // ever starts (not even the usage probe), and every reader sees no bridge. The `bridgeEnabled`
 // server setting is the softer switch: it hides the bridge's models from the picker while the
 // provider stays registered, so threads already on Claude keep running.
@@ -254,9 +255,21 @@ export class BridgeProvider extends Context.Reference<BridgeServices>(
    */
   static readonly layer: Layer.Layer<never> = Layer.unwrap(
     Effect.gen(function* () {
+      // A value that is not a boolean turns the bridge off with a warning: a kill switch that
+      // misreads as on would spend the plan, and failing boot would crash-loop the unit (T6).
       const enabled = yield* Config.Boolean("CAIRN_BRIDGE").pipe(
         Config.withDefault(true),
-        Effect.orElseSucceed(() => true)
+        Effect.catch((error) =>
+          Effect.logWarning(
+            "CAIRN_BRIDGE is not a boolean (true/false, on/off, yes/no, 1/0); the claude bridge stays off"
+          ).pipe(
+            Effect.annotateLogs({
+              event: "claude_bridge_flag_invalid",
+              detail: error.message,
+            }),
+            Effect.as(false)
+          )
+        )
       );
 
       if (!enabled) {

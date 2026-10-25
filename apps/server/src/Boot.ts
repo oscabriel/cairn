@@ -10,9 +10,10 @@
 // 7. marks the brain ready: `/_cairn/health` says so and `/ws` stops answering 503.
 //
 // Each step is logged with its milliseconds (`boot_step`), and the last line is `ready` with the
-// total, which deploy scripts and judges wait for. The listener answers static files from the first
+// total, which deploy scripts and judges wait for. A step still running after `BOOT_SLOW_AFTER` logs
+// `boot_slow` naming it, so a boot that never ends says where it stopped (T6). The listener answers static files from the first
 // moment; only `/ws` waits for step 7.
-import { Clock, Effect, Layer } from "effect";
+import { Clock, Duration, Effect, Fiber, Layer } from "effect";
 
 import type { BootRepair } from "./BootRepairs.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
@@ -37,10 +38,27 @@ export interface BootReport {
   readonly reconcile: ReconcileReport;
 }
 
+/** How long a boot step runs before it is logged as slow. */
+export const BOOT_SLOW_AFTER = Duration.seconds(30);
+
 const timed = <A, E, R>(step: string, effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const started = yield* Clock.currentTimeMillis;
-    const value = yield* effect;
+
+    const watchdog = yield* Effect.logWarning(`boot ${step} is slow`).pipe(
+      Effect.annotateLogs({
+        event: "boot_slow",
+        step,
+        afterMs: Duration.toMillis(BOOT_SLOW_AFTER),
+      }),
+      Effect.delay(BOOT_SLOW_AFTER),
+      Effect.forkChild
+    );
+
+    const value = yield* effect.pipe(
+      Effect.ensuring(Fiber.interrupt(watchdog))
+    );
+
     const ms = (yield* Clock.currentTimeMillis) - started;
 
     yield* Effect.logInfo(`boot ${step} ${ms}`).pipe(

@@ -23,12 +23,15 @@ import {
   Effect,
   Fiber,
   Layer,
+  Logger,
   Option,
   Ref,
+  References,
   Schema,
   Stream,
 } from "effect";
 import { HttpServer } from "effect/http";
+import { TestClock } from "effect/testing";
 
 import {
   HarnessBoot,
@@ -151,6 +154,50 @@ describe("boot", () => {
           patched: 1,
         });
       }).pipe(Effect.provide(Health.layer))
+  );
+
+  it.effect("names a boot step still running after 30 s", () =>
+    Effect.gen(function* () {
+      const slow: Array<unknown> = [];
+
+      const capture = Logger.make((options) => {
+        const annotations = options.fiber.getRef(
+          References.CurrentLogAnnotations
+        );
+
+        if (annotations.event === "boot_slow") {
+          slow.push(annotations.step);
+        }
+      });
+
+      const gate = yield* Deferred.make<boolean>();
+
+      const projector = ShellProjector.of({
+        reconcile: Effect.succeed({ threads: 0, live: 0, patched: 0 }),
+        refresh: () => Effect.void,
+        flushAll: Effect.void,
+      });
+
+      const boot = yield* runBoot({
+        repairs: Effect.void,
+        resume: Effect.asVoid(Deferred.await(gate)),
+      }).pipe(
+        Effect.provideService(ShellProjector, projector),
+        Effect.provide(Logger.layer([capture], { mergeWithExisting: false })),
+        Effect.forkChild
+      );
+
+      yield* TestClock.adjust("29 seconds");
+      assert.deepStrictEqual(slow, []);
+
+      yield* TestClock.adjust("2 seconds");
+      assert.deepStrictEqual(slow, ["resume"]);
+
+      yield* Deferred.succeed(gate, true);
+      yield* Fiber.join(boot);
+      yield* TestClock.adjust("1 minute");
+      assert.deepStrictEqual(slow, ["resume"], "the reconcile was quick");
+    }).pipe(Effect.provide(Health.layer))
   );
 
   it.effect(

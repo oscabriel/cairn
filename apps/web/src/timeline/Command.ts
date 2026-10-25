@@ -39,7 +39,8 @@ export const LoadEarlier = Command.define("LoadEarlier", {
         ).pipe(
           withBoundary,
           Effect.match({
-            onSuccess: (page) => Message.LoadedEarlier({ threadId, page }),
+            onSuccess: (page) =>
+              Message.LoadedEarlier({ threadId, before, page }),
             onFailure: () => Message.FailedEarlier({ threadId }),
           })
         ),

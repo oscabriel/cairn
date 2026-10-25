@@ -74,14 +74,16 @@ describe("paging and Retry", () => {
 
     const loaded = update(
       asked.model,
-      Message.LoadedEarlier({ threadId: "a", page })
+      Message.LoadedEarlier({ threadId: "a", before, page })
     );
 
     assert.strictEqual(loaded.model.history, "idle");
     assert.deepStrictEqual(loaded.outMessage?._tag, "ReceivedHistory");
     assert.isUndefined(
-      update(asked.model, Message.LoadedEarlier({ threadId: "b", page }))
-        .outMessage
+      update(
+        asked.model,
+        Message.LoadedEarlier({ threadId: "b", before, page })
+      ).outMessage
     );
   });
 

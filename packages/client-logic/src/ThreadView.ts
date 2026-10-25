@@ -236,3 +236,17 @@ export const historyCursor = (
     Option.fromUndefinedOr(threadEntries(state)[0]),
     (entry) => entry.id
   );
+
+/**
+ * `page` prepended, when it was asked from the entry that is still the oldest the client holds;
+ * none when a snapshot moved the window since (T41): prepended there it would leave a silent hole
+ * between the page and the new window. The caller asks again from the new cursor.
+ */
+export const prependHistoryAt = (
+  state: ThreadViewState,
+  before: Entry["id"],
+  page: HistoryPage
+): Option.Option<ThreadViewState> =>
+  Option.contains(historyCursor(state), before)
+    ? Option.some(prependHistory(state, page))
+    : Option.none();

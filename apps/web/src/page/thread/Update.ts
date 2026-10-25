@@ -6,7 +6,7 @@
 // subscribe can reach the brain before the launch does.
 import {
   applyThreadStreamItem,
-  prependHistory,
+  prependHistoryAt,
 } from "@cairn/client-logic/ThreadView";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Equal, Option, Predicate, Result } from "effect";
@@ -249,10 +249,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         foldOutMessage: (out) =>
           TimelineOutMessage.match(out, {
             ReceivedHistory:
-              ({ page }) =>
+              ({ before, page }) =>
               (next: Model): UpdateReturn => {
+                // A page asked from a window a snapshot has since replaced is dropped (T41).
                 const after = Option.map(next.view, (state) =>
-                  prependHistory(state, page)
+                  Option.getOrElse(
+                    prependHistoryAt(state, before, page),
+                    () => state
+                  )
                 );
 
                 return timelineStep((timeline) =>

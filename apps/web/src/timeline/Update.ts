@@ -142,11 +142,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedScrollToEnd: () => scrollToEnd(model),
     ClickedLoadEarlier: ({ before, threadId }) =>
       loadEarlier(model, threadId, before),
-    LoadedEarlier: ({ page, threadId }) =>
+    LoadedEarlier: ({ before, page, threadId }) =>
       isCurrent(model, threadId)
         ? {
             model: modifyFields(model, { history: () => "idle" as const }),
-            outMessage: OutMessage.ReceivedHistory({ page }),
+            outMessage: OutMessage.ReceivedHistory({ before, page }),
           }
         : { model },
     FailedEarlier: ({ threadId }) =>

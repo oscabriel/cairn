@@ -8,6 +8,7 @@ import {
   applyThreadStreamItem,
   historyCursor,
   prependHistory,
+  prependHistoryAt,
   threadEntries,
 } from "./ThreadView.ts";
 import type { ThreadViewState } from "./ThreadView.ts";
@@ -168,6 +169,24 @@ describe(applyThreadStreamItem, () => {
 });
 
 describe("history", () => {
+  it("drops a page asked from a window a snapshot has since replaced", () => {
+    // Asked before 100; a snapshot then moved the window to start at 180.
+    const asked = start(snapshot(99, [100, 101]));
+    const moved = Result.getOrThrow(apply(asked, snapshot(179, [180, 181])));
+    const page = { entries: [entry(98, "a"), entry(99, "b")], hasMore: true };
+
+    assert.isTrue(
+      Option.isNone(prependHistoryAt(moved, EntryId.make(100), page))
+    );
+    assert.deepStrictEqual(
+      historyCursor(moved),
+      Option.some(EntryId.make(180))
+    );
+    assert.isTrue(
+      Option.isSome(prependHistoryAt(asked, EntryId.make(100), page))
+    );
+  });
+
   it("prepends older pages without moving the indices ops address", () => {
     const state = prependHistory(start(snapshot(4, [5, 6])), {
       entries: [entry(3, "three"), entry(4, "four")],

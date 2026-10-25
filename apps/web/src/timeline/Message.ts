@@ -15,7 +15,12 @@ export const Message = defineMessageUnion({
   ToggledUserMessage: { rowId: Schema.String },
   ClickedScrollToEnd: {},
   ClickedLoadEarlier: { threadId: Schema.String, before: EntryId },
-  LoadedEarlier: { threadId: Schema.String, page: HistoryPage },
+  /** A history page, with the cursor it was asked from. */
+  LoadedEarlier: {
+    threadId: Schema.String,
+    before: EntryId,
+    page: HistoryPage,
+  },
   FailedEarlier: { threadId: Schema.String },
   /** Retry on a failed turn's error: its prompt goes out again. */
   ClickedRetry: {
@@ -50,7 +55,7 @@ export type Message = typeof Message.Type;
 /** What the transcript asks of the thread page. */
 export const OutMessage = defineMessageUnion({
   /** An older page from `thread.history`, to put in front of the view (`prependHistory`). */
-  ReceivedHistory: { page: HistoryPage },
+  ReceivedHistory: { before: EntryId, page: HistoryPage },
   /** A turn to queue in the outbox (Retry). */
   RequestedSend: { item: OutboxItem },
   /** The diff panel, opened on a turn (and a file in it). */

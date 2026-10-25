@@ -2,12 +2,14 @@
 // pushes (ADR 0021: no `fetch` listener, so a deploy never leaves a stale shell), and the toggle's
 // rule that "off" stays off while the permission stays granted.
 import { assert, describe, it } from "@effect/vitest";
-import { Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
+import { vi } from "vitest";
 
 import manifestText from "../../public/manifest.webmanifest?raw";
 import worker from "../../public/sw.js?raw";
 import { Message } from "./Message.ts";
-import { canPush, init, update } from "./Update.ts";
+import { loadDeviceId, loadPushWanted } from "./PushDevice.ts";
+import { canPush, inform, init, update } from "./Update.ts";
 
 /** The files under `public/icons/`, as `/icons/<name>` paths. */
 const iconFiles = Object.keys(import.meta.glob("../../public/icons/*")).map(
@@ -108,4 +110,47 @@ describe("the push toggle", () => {
       Option.some("/t/abc")
     );
   });
+});
+
+describe("the app badge at load", () => {
+  it("is written on the first inform, clearing one the service worker left", () => {
+    const device = update(
+      init().model,
+      Message.CheckedDevice({
+        deviceId: "device-0001",
+        permission: "granted",
+        support: "supported",
+        wanted: true,
+      })
+    ).model;
+
+    const first = inform(device, { ...device.context, badge: 0 });
+    const again = inform(first.model, { ...first.model.context, badge: 0 });
+
+    assert.deepStrictEqual(
+      first.commands?.map((command) => command.name),
+      ["ShowBadge"]
+    );
+    assert.lengthOf(again.commands ?? [], 0);
+  });
+});
+
+describe("push device storage", () => {
+  it.effect("gives a device id when storage throws", () =>
+    Effect.gen(function* () {
+      const getItem = vi
+        .spyOn(Storage.prototype, "getItem")
+        .mockImplementation(() => {
+          throw new Error("SecurityError");
+        });
+
+      const id = yield* loadDeviceId;
+      const wanted = yield* loadPushWanted;
+
+      getItem.mockRestore();
+
+      assert.match(id, /^[A-Za-z0-9_-]{8,64}$/u);
+      assert.isFalse(wanted);
+    })
+  );
 });

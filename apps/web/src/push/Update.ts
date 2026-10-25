@@ -29,13 +29,19 @@ export const init = (): UpdateReturn => ({
 export const canPush = (model: Model): boolean =>
   Option.contains(model.support, "supported") && model.permission === "granted";
 
-/** Takes the root's context; a new badge count is written to the app icon. */
+/**
+ * Takes the root's context; a badge count other than the one this load last wrote goes to the app
+ * icon, so the first inform clears a badge the service worker left (T37).
+ */
 export const inform = (model: Model, context: PushContext): UpdateReturn => {
   const next = modifyFields(model, { context: () => context });
 
-  return context.badge === model.context.badge
+  return context.badge === model.shownBadge
     ? { model: next }
-    : { model: next, commands: [ShowBadge({ count: context.badge })] };
+    : {
+        model: modifyFields(next, { shownBadge: () => context.badge }),
+        commands: [ShowBadge({ count: context.badge })],
+      };
 };
 
 /** The toggle's update. */

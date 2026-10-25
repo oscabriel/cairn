@@ -262,19 +262,28 @@ const DeviceId = Schema.String.check(
 
 const isDeviceId = Schema.is(DeviceId);
 
-/** This device's presence id, made and kept in localStorage the first time it is asked for. */
-export const loadDeviceId = Effect.sync(() => {
-  const stored = localStorage.getItem(DEVICE_ID_KEY);
+/** A fresh id; kept in storage, or used for this load alone when storage refuses it. */
+const freshId = Effect.sync(() => crypto.randomUUID().replaceAll("-", ""));
 
-  if (stored !== null && isDeviceId(stored)) {
-    return stored;
-  }
+/**
+ * This device's presence id, made and kept in localStorage the first time it is asked for. A
+ * storage that throws (private mode, a full quota) gives this load's own id instead of a defect
+ * that would crash the page at load (T37).
+ */
+export const loadDeviceId = Effect.gen(function* () {
+  const made = yield* freshId;
 
-  const made = crypto.randomUUID().replaceAll("-", "");
+  return yield* Effect.try(() => {
+    const stored = localStorage.getItem(DEVICE_ID_KEY);
 
-  localStorage.setItem(DEVICE_ID_KEY, made);
+    if (stored !== null && isDeviceId(stored)) {
+      return stored;
+    }
 
-  return made;
+    localStorage.setItem(DEVICE_ID_KEY, made);
+
+    return made;
+  }).pipe(Effect.orElseSucceed(() => made));
 });
 
 /**
@@ -282,16 +291,16 @@ export const loadDeviceId = Effect.sync(() => {
  * makes a dropped subscription again only then, so "off" stays off while the permission stays
  * granted.
  */
-export const loadPushWanted = Effect.sync(
+export const loadPushWanted = Effect.try(
   () => localStorage.getItem(PUSH_WANTED_KEY) === "1"
-);
+).pipe(Effect.orElseSucceed(() => false));
 
 /** Remembers whether the user wants push on this device. */
 export const savePushWanted = (wanted: boolean) =>
-  Effect.sync(() => {
+  Effect.try(() => {
     if (wanted) {
       localStorage.setItem(PUSH_WANTED_KEY, "1");
     } else {
       localStorage.removeItem(PUSH_WANTED_KEY);
     }
-  });
+  }).pipe(Effect.ignore);

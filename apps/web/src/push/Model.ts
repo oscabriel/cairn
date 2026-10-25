@@ -47,7 +47,10 @@ export const Model = Schema.Struct({
   synced: Schema.Boolean,
   /** This device's presence id. */
   deviceId: Schema.Option(Schema.String),
-  /** The badge last written to the app icon. */
+  /**
+   * The badge last written to the app icon on this load; -1 before the first, since the service
+   * worker may have left one while the page was closed (T37).
+   */
   shownBadge: Schema.Int,
 });
 
@@ -68,5 +71,5 @@ export const initial: Model = {
   status: PushStatus.Unknown(),
   synced: false,
   deviceId: Option.none(),
-  shownBadge: 0,
+  shownBadge: -1,
 };

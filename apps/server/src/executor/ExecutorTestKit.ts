@@ -10,7 +10,11 @@ import type {
 } from "../brain/CairnDocs.ts";
 import { ServerConfig } from "../Config.ts";
 import { ExecutorGrant } from "./ExecutorGrant.ts";
-import { ExecutorLink, ExecutorLinkOptions } from "./ExecutorLink.ts";
+import {
+  CONNECT_TIMEOUT,
+  ExecutorLink,
+  ExecutorLinkOptions,
+} from "./ExecutorLink.ts";
 import type { FakeExecutorHandle } from "./FakeExecutor.ts";
 
 /** The origin the test link's sign-in redirect is built from. */
@@ -103,16 +107,26 @@ export const fakeLink = (
       ReturnType<FakeExecutorHandle["issueGrant"]>
     >;
     readonly pingInterval?: Duration.Duration;
+    readonly connectTimeout?: Duration.Duration;
+    /** Wraps the grant store, to make it fail. */
+    readonly grantStore?: (
+      memory: Layer.Layer<ExecutorGrant>
+    ) => Layer.Layer<ExecutorGrant>;
   } = {}
 ) =>
   ExecutorLink.layerNoDeps.pipe(
     Layer.provide(
-      ExecutorGrant.layerMemory(options.grant ?? Option.some(fake.issueGrant()))
+      (options.grantStore ?? ((memory) => memory))(
+        ExecutorGrant.layerMemory(
+          options.grant ?? Option.some(fake.issueGrant())
+        )
+      )
     ),
     Layer.provide(ServerConfig.layerWith({ origin: TEST_ORIGIN })),
     Layer.provide(
       Layer.succeed(ExecutorLinkOptions, {
         pingInterval: options.pingInterval ?? Duration.seconds(15),
+        connectTimeout: options.connectTimeout ?? CONNECT_TIMEOUT,
       })
     )
   );

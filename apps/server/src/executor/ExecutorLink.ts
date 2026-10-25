@@ -77,6 +77,12 @@ export const CALLBACK_PATH = "/oauth/executor/callback";
 /** Per MCP request. An approved call runs inside `resume`, and Executor allows a program 5 minutes. */
 const REQUEST_TIMEOUT_MS = 6 * 60_000;
 
+/**
+ * How long opening a session may take. The open holds the one-session lock every call waits on,
+ * so a connect that hangs must give up long before a call would (T20).
+ */
+export const CONNECT_TIMEOUT = Duration.seconds(20);
+
 /** A ping's own limit. */
 const PING_TIMEOUT_MS = 5000;
 
@@ -92,8 +98,13 @@ export type ExecutorTool =
 /** How the link behaves: how often it pings while calls are in flight. */
 export const ExecutorLinkOptions = Context.Reference<{
   readonly pingInterval: Duration.Duration;
+  /** How long opening a session may take. */
+  readonly connectTimeout: Duration.Duration;
 }>("cairn/server/executor/ExecutorLink/ExecutorLinkOptions", {
-  defaultValue: () => ({ pingInterval: Duration.seconds(15) }),
+  defaultValue: () => ({
+    pingInterval: Duration.seconds(15),
+    connectTimeout: CONNECT_TIMEOUT,
+  }),
 });
 
 /** One Executor call failed. `sent` is true when Executor may have received it (it may have run). */
@@ -298,6 +309,7 @@ export class ExecutorLink extends Context.Service<
       const grant = yield* ExecutorGrant;
       const config = yield* ServerConfig;
       const options = yield* ExecutorLinkOptions;
+      const { connectTimeout } = options;
       const run = yield* FiberSet.makeRuntimePromise();
       const layerScope = yield* Effect.scope;
       const redirectUrl = `${config.origin}${CALLBACK_PATH}`;
@@ -359,18 +371,53 @@ export class ExecutorLink extends Context.Service<
       const serverUrl = String(new URL(initial.value.serverUrl));
       const resourceMetadataUrl = resourceMetadataUrlOf(serverUrl);
 
+      // The newest state pi-mcp saved, whether or not the store took it.
+      let latest = Option.none<McpOAuthState>();
+      const persisting = yield* Semaphore.make(1);
+
+      const persistLatest = persisting
+        .withPermits(1)(
+          Effect.suspend(() =>
+            Option.match(latest, {
+              onNone: () => Effect.void,
+              onSome: (state) => grant.save(state),
+            })
+          ).pipe(
+            Effect.retry({ times: 3, schedule: Schedule.spaced("1 second") })
+          )
+        )
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("executor grant save failed").pipe(
+              Effect.annotateLogs({
+                event: "executor_grant_save_failed",
+                cause: String(cause),
+              })
+            )
+          ),
+          Effect.forkIn(layerScope),
+          Effect.asVoid
+        );
+
       // The store pi-mcp reads and writes; the grant's address is normalised as pi-mcp's own is.
       const store = {
         load: async () =>
           Option.getOrUndefined(
-            Option.map(await run(grant.load), (state) =>
-              String(new URL(state.serverUrl)) === serverUrl
-                ? { ...state, serverUrl }
-                : state
+            Option.map(
+              Option.isSome(latest) ? latest : await run(grant.load),
+              (state) =>
+                String(new URL(state.serverUrl)) === serverUrl
+                  ? { ...state, serverUrl }
+                  : state
             )
           ),
+        // Never rejects (T20): pi-mcp's provider breaks for the process's lifetime on one
+        // rejected save, and then spends the rotated refresh token. The newest state is kept in
+        // memory first, so the next load sees it whatever the store does, and written behind,
+        // one write at a time, each writing the newest state, with retries.
         save: async (state: McpOAuthState) => {
-          await run(grant.save(state));
+          latest = Option.some(state);
+          await run(persistLatest);
         },
       };
 
@@ -451,6 +498,19 @@ export class ExecutorLink extends Context.Service<
             },
             catch: (cause) => new RawFailure({ cause, lost: false }),
           }).pipe(
+            Effect.timeoutOrElse({
+              duration: connectTimeout,
+              orElse: () =>
+                Effect.fail(
+                  new RawFailure({
+                    cause: new Error(
+                      `no answer to initialize within ${Duration.format(connectTimeout)}`
+                    ),
+                    lost: false,
+                  })
+                ),
+            }),
+            Effect.onInterrupt(() => closeClient(client)),
             Effect.catchTag("RawFailure", ({ cause }) =>
               Effect.gen(function* () {
                 yield* closeClient(client);
@@ -673,7 +733,7 @@ export class ExecutorLink extends Context.Service<
 
       /** Drops the sign-in-only fields (`oauthState`, the verifier) from the stored grant. */
       const forgetSignIn = Effect.gen(function* () {
-        const stored = yield* grant.load;
+        const stored = Option.isSome(latest) ? latest : yield* grant.load;
 
         if (Option.isSome(stored)) {
           const {
@@ -682,6 +742,7 @@ export class ExecutorLink extends Context.Service<
             ...rest
           } = stored.value;
 
+          latest = Option.some(rest);
           yield* grant.save(rest);
         }
       });

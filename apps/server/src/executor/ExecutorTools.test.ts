@@ -3,8 +3,9 @@
 // cancelled, the boot sweep, one refresh shared by concurrent calls, and a sign-in after the grant
 // was revoked. Ported in part from cairn-v1, apps/server/test/executor.test.ts at 1a5cd4a.
 import { assert, describe, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, Option, Result } from "effect";
+import { Duration, Effect, Fiber, Layer, Option, Result } from "effect";
 
+import { ExecutorGrant, ExecutorGrantError } from "./ExecutorGrant.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";
 import { RERUN_AFTER_START } from "./ExecutorReply.ts";
 import type { JsonObject } from "./ExecutorReply.ts";
@@ -27,6 +28,7 @@ const withFake = <A, E>(
   options: {
     readonly pingInterval?: Duration.Duration;
     readonly setup?: (fake: FakeExecutorHandle) => void;
+    readonly link?: Parameters<typeof fakeLink>[1];
   } = {}
 ) =>
   Effect.scoped(
@@ -38,8 +40,8 @@ const withFake = <A, E>(
       const link = fakeLink(
         fake,
         options.pingInterval === undefined
-          ? {}
-          : { pingInterval: options.pingInterval }
+          ? (options.link ?? {})
+          : { ...options.link, pingInterval: options.pingInterval }
       );
 
       return yield* body(fake).pipe(Effect.provide(link));
@@ -329,6 +331,103 @@ describe("the link", () => {
         assert.isTrue(Option.isSome(reply.structured));
       })
     )
+  );
+});
+
+/** The memory grant store, refusing every save: a disk that is full or read-only. */
+const refusingSaves = (memory: Layer.Layer<ExecutorGrant>) =>
+  Layer.effect(
+    ExecutorGrant,
+    ExecutorGrant.useSync((stored) =>
+      ExecutorGrant.of({
+        ...stored,
+        save: () =>
+          Effect.fail(
+            new ExecutorGrantError({
+              message: "The grant store refused the write.",
+              operation: "save",
+            })
+          ),
+      })
+    )
+  ).pipe(Layer.provide(memory));
+
+describe("the link under a failing Executor or store", () => {
+  it.live(
+    "a connect that hangs fails every waiting call within the connect budget",
+    () =>
+      withFake(
+        () =>
+          Effect.gen(function* () {
+            const link = yield* ExecutorLink;
+
+            const [first, second] = yield* Effect.all(
+              [
+                Effect.flip(link.call("search", { query: "mark" })),
+                Effect.flip(link.call("search", { query: "mark" })),
+              ],
+              { concurrency: "unbounded" }
+            ).pipe(Effect.timeout(Duration.seconds(5)));
+
+            assert.strictEqual(first.reason, "unreachable");
+            assert.strictEqual(second.reason, "unreachable");
+            assert.isFalse(first.sent);
+          }),
+        {
+          setup: (fake) => {
+            fake.state.hangInitialize = true;
+          },
+          link: { connectTimeout: Duration.millis(300) },
+        }
+      )
+  );
+
+  it.live(
+    "a refresh the store cannot save is still the one the next refresh uses",
+    () =>
+      withFake(
+        (fake) =>
+          Effect.gen(function* () {
+            const link = yield* ExecutorLink;
+
+            fake.expireAccess();
+            yield* link.call("search", { query: "mark" });
+            fake.expireAccess();
+            yield* link.call("search", { query: "mark" });
+
+            assert.strictEqual(fake.state.refreshes, 2);
+            assert.strictEqual(fake.state.invalidGrants, 0);
+          }),
+        { link: { grantStore: refusingSaves } }
+      )
+  );
+});
+
+describe("a token endpoint hiccup", () => {
+  it.live(
+    "reads as unreachable, not as a sign-in, and the next call refreshes",
+    () =>
+      withFake((fake) =>
+        Effect.gen(function* () {
+          const link = yield* ExecutorLink;
+
+          yield* link.call("search", { query: "mark" });
+          fake.expireAccess();
+          fake.state.failTokenOnce = 502;
+
+          const failed = yield* Effect.flip(
+            link.call("search", { query: "mark" })
+          );
+
+          const status = yield* link.status;
+
+          yield* link.call("search", { query: "mark" });
+
+          assert.notStrictEqual(failed.reason, "sign_in_required");
+          assert.notStrictEqual(status.state, "needs-sign-in");
+          assert.strictEqual(fake.state.invalidGrants, 0);
+        })
+      )
   );
 });
 

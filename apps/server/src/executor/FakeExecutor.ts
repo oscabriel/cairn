@@ -63,6 +63,10 @@ export interface FakeExecutorHandle {
     refreshes: number;
     /** Refresh tokens refused (`invalid_grant`), which Executor treats as theft. */
     invalidGrants: number;
+    /** When set, the next refresh answers this HTTP status instead: a token endpoint hiccup. */
+    failTokenOnce: number | undefined;
+    /** When set, `initialize` requests are never answered: a connect that hangs. */
+    hangInitialize: boolean;
     /** `initialize` requests: one per MCP session opened. */
     sessionsOpened: number;
     /** Every tool call, in order. */
@@ -162,6 +166,8 @@ const build = (now: () => number) => {
     executorApp: false,
     refreshes: 0,
     invalidGrants: 0,
+    hangInitialize: false,
+    failTokenOnce: undefined,
     sessionsOpened: 0,
     log: [],
   };
@@ -491,6 +497,10 @@ const build = (now: () => number) => {
 
     const id = message.id ?? null;
 
+    if (message.method === "initialize" && state.hangInitialize) {
+      return;
+    }
+
     if (message.method === "initialize") {
       const session = randomUUID();
 
@@ -599,6 +609,15 @@ const build = (now: () => number) => {
       }
 
       json(response, 200, issueTokens());
+
+      return;
+    }
+
+    if (grantType === "refresh_token" && state.failTokenOnce !== undefined) {
+      const status = state.failTokenOnce;
+
+      state.failTokenOnce = undefined;
+      json(response, status, { error: "temporarily_unavailable" });
 
       return;
     }

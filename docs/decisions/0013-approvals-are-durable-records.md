@@ -13,6 +13,8 @@ The effect after an accept is an intent, effect, outcome sandwich: the record is
 
 Cairn's approval is the only question the user sees. When Executor asks for approval on a call Cairn already approved, or in full access, Cairn answers Executor's prompt in the same tool call, so Executor's 10 minute window never waits on a person. Its request ID is recorded first, and on boot Cairn declines every one whose call never finished, so a late accept can't run it. Executor's own approval policies stay for its other clients.
 
+The approval gates the model's Executor tools, not the machine. Thread tools run unconfined as the user, so a thread's `bash` could call Executor on loopback with Cairn's grant and skip the queue; like the per-project scope (ADR 0003), the approval is advisory until thread tools are sandboxed.
+
 Permission modes follow t3code's, defaulting to full access, which asks for nothing.
 
 Gate S4: an approval pending across a brain restart can still be answered from the phone and runs exactly once. Passed on 2026-10-21; measured in `spikes/4-approvals/NOTES.md`.

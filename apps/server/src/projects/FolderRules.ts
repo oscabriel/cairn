@@ -31,7 +31,10 @@ export const MAX_BROWSE_ENTRIES = 500;
 export interface FolderRulesConfig {
   /** The user's home directory; nothing outside it is listed. */
   readonly home: string;
-  /** Folders no project may be, be inside or hold: Cairn's own and those holding logins. */
+  /**
+   * Folders no project may be, be inside or hold: Cairn's own and those holding logins. This only
+   * keeps them out of the picker; a thread's tools run as the user and can still read them.
+   */
   readonly deny: ReadonlyArray<string>;
 }
 

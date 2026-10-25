@@ -4,6 +4,7 @@ MCP servers and third-party credentials live in a self-hosted Executor 2.0 on th
 
 ## Consequences
 
+- The per-project scope is advisory. It holds only for a model that calls Executor through Cairn's proxies: thread tools run unconfined as the user, so a thread's `bash` can read the grant from `cairn.sqlite` and call Executor on loopback directly. Making it hold means sandboxing thread tools (bubblewrap or a second uid, with Cairn's data and the logins masked), which is not done; it would need its own ADR (decided 2026-10-24, review task T22).
 - Cairn's grant is never shared with the pi CLI or Claude Code: Executor treats a reused rotated refresh token as theft.
 - Approvals use model elicitation mode with Cairn's queue. On boot, decline every orphaned approval; never auto-retry after an Executor restart.
 - Back up the data volume, key files included, before every upgrade.

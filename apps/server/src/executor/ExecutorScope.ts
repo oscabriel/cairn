@@ -14,6 +14,11 @@
 // There is no per-project setup (the user declined one): every other app on the connection is
 // allowed, and the project's repo comes from its checkout's git config (`RepoIdentity`).
 //
+// The scope is advisory (T22, ADRs 0003 and 0013): it holds only for a model that goes through
+// `executor_call`. Thread tools run unconfined as the user, so a thread's `bash` can read the grant
+// from `cairn.sqlite` and call Executor at 127.0.0.1:4400 itself. Holding it would take sandboxing
+// thread tools, which is not done.
+//
 // Ported from cairn-v1, apps/server/src/ExecutorTools.ts at 1a5cd4a (`canonicalPath`, `appOfPath`,
 // `gitHubRefusal`, `callRefusal`, `filterSearch`, `filterDescribe`, `filterSkills`,
 // `discoveryRefusal`, `executeRefusal`). Changed: the per-project `apps` list, the code mode

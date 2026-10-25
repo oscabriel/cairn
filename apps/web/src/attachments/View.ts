@@ -177,6 +177,10 @@ const thumbnail = (item: Item, h: HtmlBuilder<Message>): Html =>
       h.img([
         h.Src(src),
         h.Alt(item.name),
+        // A restored chip loads the whole original for a 64 px tile; at least not before it is
+        // shown, and not on the main thread (T54).
+        h.Loading("lazy"),
+        h.Decoding("async"),
         h.Attribute("draggable", "false"),
         h.Class("h-full w-full object-cover"),
       ]),

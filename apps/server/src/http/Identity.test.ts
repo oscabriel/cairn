@@ -212,6 +212,40 @@ describe("Identity whois cache", () => {
 });
 
 describe("Identity on requests", () => {
+  it.effect(
+    "keeps a socket through one failed lookup, and closes it on the second in a row",
+    () =>
+      Effect.gen(function* () {
+        const { identity, failing } = yield* countingTailnet;
+
+        const socket = requestFrom("127.0.0.1", {
+          "x-forwarded-for": "100.84.155.69",
+        });
+
+        yield* Ref.set(failing, true);
+        assert.isTrue(yield* identity.stillAdmitted(socket), "one hiccup");
+
+        yield* Ref.set(failing, false);
+        assert.isTrue(yield* identity.stillAdmitted(socket));
+
+        yield* TestClock.adjust("31 seconds");
+        yield* Ref.set(failing, true);
+        assert.isTrue(yield* identity.stillAdmitted(socket), "count reset");
+        assert.isFalse(yield* identity.stillAdmitted(socket), "two in a row");
+
+        yield* Ref.set(failing, false);
+
+        const stranger = requestFrom("127.0.0.1", {
+          "x-forwarded-for": "100.101.1.4",
+        });
+
+        assert.isFalse(
+          yield* identity.stillAdmitted(stranger),
+          "a definite refusal closes at once"
+        );
+      })
+  );
+
   it.effect("reads the copied header exactly", () =>
     Effect.gen(function* () {
       const identity = yield* Identity;

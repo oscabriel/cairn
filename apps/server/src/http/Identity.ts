@@ -37,6 +37,9 @@ export class IdentityRefused extends Schema.TaggedError<IdentityRefused>()(
   }
 ) {}
 
+/** How many failed lookups in a row close an open socket on its recheck. */
+export const LOOKUP_FAILURES_TO_CLOSE = 2;
+
 /** How long an admitted peer's whois answer is reused. */
 export const ADMITTED_TTL = "30 seconds";
 
@@ -153,6 +156,14 @@ export class Identity extends Context.Service<
           ? Option.some(config.owner)
           : Option.none();
 
+      // Lookup failures in a row, per socket (its upgrade request). A tailscaled hiccup keeps an
+      // admitted socket; a definite refusal, or `LOOKUP_FAILURES_TO_CLOSE` failures in a row,
+      // closes it (T21).
+      const lookupFailures = new WeakMap<
+        HttpServerRequest.HttpServerRequest,
+        number
+      >();
+
       const stillAdmitted = Effect.fn("Identity.stillAdmitted")(function* (
         request: HttpServerRequest.HttpServerRequest
       ) {
@@ -164,7 +175,24 @@ export class Identity extends Context.Service<
 
         return yield* admit(peer.value).pipe(
           Effect.as(true),
-          Effect.catchTag("IdentityRefused", () => Effect.succeed(false))
+          Effect.tap(() =>
+            Effect.sync(() => {
+              lookupFailures.delete(request);
+            })
+          ),
+          Effect.catchTag("IdentityRefused", (refused) =>
+            Effect.sync(() => {
+              if (refused.reason !== "lookup_failed") {
+                return false;
+              }
+
+              const failures = (lookupFailures.get(request) ?? 0) + 1;
+
+              lookupFailures.set(request, failures);
+
+              return failures < LOOKUP_FAILURES_TO_CLOSE;
+            })
+          )
         );
       });
 

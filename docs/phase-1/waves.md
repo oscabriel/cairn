@@ -856,3 +856,33 @@ Lane A (T43, T44, T47 and the lazy thread page) in the main checkout; lane B (T4
 Differs from the task text: T47's judge is a frame's share of a cold derivation, not a 3,000-against-100 ratio (both sides scale linearly, so that ratio stays near 30 and cannot show the change); a long code block is highlighted in slices rather than in one task; `shellIndex` stays ungated (three judges read it; it now rebuilds only with the sidebar).
 
 Not done: the first snapshot of a newly opened thread still derives its transcript twice (later snapshots and history pages derive once); lane B saw a long reply committing while scrolled up inside it move `scrollTop` by 1 px; an intermittent typing.ts run with no rows streamed (once in six runs, before and after T48); the thread page's rows still re-derive the last turn on every frame.
+
+### Batch 6: security (T22 to T26), with T28
+
+One lane in the main checkout, deployed at `5cbc0cb`.
+
+- `7bb05e7` (T22, option a): ExecutorScope's header and ADRs 0003 and 0013 say the per-project scope and the approval queue are advisory, because thread tools run unconfined as the user; FolderRules' deny list says it only keeps folders out of the picker. Sandboxing thread tools is not done.
+- `8557ae9` (T23): the guard reads `/api` as the router does (percent-decoded, repeated slashes collapsed, any case), refuses every cross-site request except a top-level page load (`navigate` and `document`), and sets `no-store` on `/api` only when the route set no cache policy, so attachment and entry image thumbnails keep their year-long private cache. Static's reserved prefixes use the same reading.
+- `9db7964` (T24): the entry image route serves png, jpeg, gif and webp inline and anything else as an `application/octet-stream` download, every answer under `default-src 'none'; sandbox`. `ThreadWire.entryImages` numbers images the way the projection does (the whole entry, `data.details` included), and both harnesses use it; before, they counted only model content, so an image in `details` shifted every ref.
+- `7375c5b` (T25): `/_cairn/auth` asked through the main proxy (no `X-Cairn-Peer`, with `Via` or `X-Cairn-User`) answers 404 and logs nothing. Caddy's subrequest always carries `X-Cairn-Peer`, so it is unaffected, and a subrequest with an empty peer still dumps its headers.
+- `ca706ce` (T26): stage 7 of the phase-0 wizard arms an EXIT trap that deletes the admin Alchemy profile however the deploy ends, or names it; declining stage 7 lists the deletion as still to do; stage 11 says it cannot check the revocation when `EXECUTOR_ORG` is empty and names the organization it probed. The stone image workflow pins its three actions by commit, with the tag beside each.
+- `5cbc0cb` (T28): install.sh writes the login PATH (`$SHELL -lc`, each directory once) as the PATH line of `~/.config/cairn/brain.env`, which both units read after their own PATH; deploy-check prints the brain's PATH directories; `judges/deployed-unit.ts path` compares the running brain's PATH with the login PATH, reading only PATH from `/proc`.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Guard.test: `/API`, `//api`, `/%61pi` cross-site; cross-site frame, image and script of the page; a route's `private, max-age` | fail before (3 tests), pass after | same-origin spellings carry `no-store` |
+| Static.test: the three spellings | pass | JSON 404 with `not_found` |
+| EntryImageRoute.test: stub harness serving `text/html`, then `image/png` | pass | octet-stream, `attachment`, sandbox CSP; png inline under the same CSP |
+| ThreadWire.test: an image in `details` and one in content | pass | projected refs `gif at 0`, `png at 1`, and `entryImages` serves the same |
+| Identity.test: the auth route on subrequest and main-proxy shapes | pass | subrequest admits and logs nothing; main proxy 404, nothing logged; empty peer still dumps |
+| Wizard stage 7 with a failing deploy (stubbed `pnpm`) | pass | the trap deletes the profile and says so; exit 1 |
+| `grep -E 'uses: .*@[0-9a-f]{40}' .github/workflows/stone-image.yml \| wc -l` | 3 | checkout v5.1.0, setup-buildx v3.12.0, upload-artifact v4.6.2 |
+| `node judges/deployed-unit.ts path` | fail before, pass after | brain PATH 3 directories before, 17 after, none of the login PATH missing |
+| `pnpm check` | pass | 1,225 tests |
+| `ops/cairn/deploy.sh` of `5cbc0cb` | pass | all 8 threads idle, no launch rows; listening 1,556 ms, hello 1,597 ms |
+| Live through Caddy | pass | `/` 200; `/_cairn/auth` 404 with no log line; cross-site fetch of `/%61pi/shell` 403; cross-site page load 200; `/API/shell` carries `no-store` |
+| `node judges/live-chat.ts` against the deployed brain | pass | hello 22 ms, launch 9 ms, reply 1,421 ms |
+
+Differs from the task text: the guard keeps its old refusal of any cross-site request to `/api`, page loads included, on top of the new rule; the T28 judge reads the brain's PATH instead of running `command -v bun cargo` through a thread's bash (thread processes take the brain's environment, `brain/Arms.ts`), so no model turn is spent; under the login PATH, `pnpm` and `npx` now resolve to the user's own copies (same pnpm version, 10.30.3).
+
+Found while doing T25: in the 7 days before, 16 real `forward_auth` subrequests reached the brain with an empty `X-Cairn-Peer`, every one marked `early-data: 1` (TLS 0-RTT). Caddy's `{remote_host}` was empty for them, so the owner's page load or manifest fetch was refused with 403. This is likely the first-load-after-Wi-Fi refusal cairn-v1 saw. Not fixed: the fix belongs in the Caddyfile (a placeholder that is set under early data, or refusing 0-RTT for this host), and needs a backup and a live check.

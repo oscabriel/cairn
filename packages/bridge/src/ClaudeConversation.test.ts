@@ -1594,7 +1594,15 @@ describe("slot permits", () => {
         call([system, user("hi")], { signal: stopped.signal }, "conv-2")
       );
 
-      yield* settle;
+      // The second call reaches the slot wait after off-clock work; wait for it, boundedly.
+      for (
+        let turn = 0;
+        turn < 10_000 && (yield* slots.waiting).length === 0;
+        turn += 1
+      ) {
+        yield* Effect.yieldNow;
+      }
+
       expect(yield* slots.waiting).toStrictEqual(["conv-2"]);
 
       stopped.abort();

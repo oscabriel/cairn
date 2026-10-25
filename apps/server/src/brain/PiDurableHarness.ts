@@ -598,145 +598,151 @@ const layerNoDeps = Layer.effect(
       threadId: ThreadId,
       seq: Ref.Ref<number>
     ) =>
-      Stream.callback<ThreadFrame, HarnessError>((queue) =>
-        Effect.gen(function* () {
-          const conversation = yield* conversationOf(session, threadId);
+      Stream.callback<ThreadFrame, HarnessError>(
+        (queue) =>
+          Effect.gen(function* () {
+            const conversation = yield* conversationOf(session, threadId);
 
-          const watch = yield* Effect.acquireRelease(
-            call(
-              Option.some(threadId),
-              "watch",
-              async (context) => await conversation.watch(context)
-            ),
-            (handle) =>
-              Effect.promise(async () => {
-                await handle.stop();
-              })
-          );
+            const watch = yield* Effect.acquireRelease(
+              call(
+                Option.some(threadId),
+                "watch",
+                async (context) => await conversation.watch(context)
+              ),
+              (handle) =>
+                Effect.promise(async () => {
+                  await handle.stop();
+                })
+            );
 
-          // `cairn.approvals` is not one of pi-durable's built-in view documents; the stream adds it.
-          const approvals = yield* Effect.acquireRelease(
-            call(
-              Option.some(threadId),
-              "watch-approvals",
-              async (context) =>
-                await session.harness.watchDoc(
-                  Approvals,
-                  conversation.id,
-                  context
-                )
-            ),
-            (handle) =>
-              Effect.promise(async () => {
-                await handle?.stop();
-              })
-          );
-
-          const projector = windowedProjector();
-
-          let latest = watch.value;
-          let latestApprovals = approvals?.value ?? null;
-
-          const withApprovals = (): PiConversationView =>
-            latestApprovals === null
-              ? latest
-              : {
-                  ...latest,
-                  docs: { ...latest.docs, [APPROVALS_KIND]: latestApprovals },
-                };
-
-          // A window (ThreadWindow.ts) leaves older entries out; with none left out, pi-durable
-          // may still hold entries before the view (a compaction moved its start).
-          const snapshotItem = (
-            windowed: WindowedView,
-            current: PiConversationView
-          ) =>
-            Effect.gen(function* () {
-              const hasMoreHistory =
-                windowed.entriesOffset > 0 ||
-                (yield* hasOlder(threadId, conversation, current));
-
-              return ThreadSnapshotItem.make({
-                seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
-                view: windowed.view,
-                entriesOffset: windowed.entriesOffset,
-                hasMoreHistory,
-              });
-            });
-
-          const first = yield* Effect.fromResult(
-            projector.snapshot(withApprovals())
-          ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
-
-          yield* Queue.offer(queue, yield* snapshotItem(first, watch.value));
-
-          // The listeners only record the newest revision and ring; a slow subscriber gets one
-          // larger diff instead of a backlog.
-          const ticks = yield* Queue.sliding<true>(1);
-
-          watch.start(
-            handOff((value: PiConversationView) => {
-              latest = value;
-              Queue.offerUnsafe(ticks, true);
-            })
-          );
-
-          approvals?.start(
-            handOff((value: Readonly<ApprovalsState> | null) => {
-              latestApprovals = value;
-              Queue.offerUnsafe(ticks, true);
-            })
-          );
-
-          yield* Queue.take(ticks).pipe(
-            Effect.flatMap(() =>
-              Effect.gen(function* () {
-                const current = withApprovals();
-
-                const frame = yield* Effect.fromResult(
-                  projector.advance(current)
-                ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
-
-                yield* WindowFrame.$match(frame, {
-                  Snapshot: (windowed) =>
-                    Effect.flatMap(snapshotItem(windowed, current), (item) =>
-                      Queue.offer(queue, item)
-                    ),
-                  Ops: ({ ops }) =>
-                    ops.length === 0
-                      ? Effect.void
-                      : Effect.flatMap(
-                          Ref.getAndUpdate(seq, (n) => n + 1),
-                          (next) =>
-                            Queue.offer(
-                              queue,
-                              ThreadOpsItem.make({ seq: next, ops })
-                            )
-                        ),
-                });
-              })
-            ),
-            Effect.forever,
-            Effect.catch((error) => Queue.fail(queue, error)),
-            Effect.forkScoped
-          );
-
-          yield* Effect.promise(async () => await watch.closed).pipe(
-            Effect.flatMap((end) =>
-              end.reason === "listener_error"
-                ? Queue.fail(
-                    queue,
-                    failure(
-                      "internal",
-                      Option.some(threadId),
-                      `The thread stream stopped: ${end.error.message}. Resubscribe.`
-                    )
+            // `cairn.approvals` is not one of pi-durable's built-in view documents; the stream adds it.
+            const approvals = yield* Effect.acquireRelease(
+              call(
+                Option.some(threadId),
+                "watch-approvals",
+                async (context) =>
+                  await session.harness.watchDoc(
+                    Approvals,
+                    conversation.id,
+                    context
                   )
-                : Queue.end(queue)
-            ),
-            Effect.forkScoped
-          );
-        })
+              ),
+              (handle) =>
+                Effect.promise(async () => {
+                  await handle?.stop();
+                })
+            );
+
+            const projector = windowedProjector();
+
+            let latest = watch.value;
+            let latestApprovals = approvals?.value ?? null;
+
+            const withApprovals = (): PiConversationView =>
+              latestApprovals === null
+                ? latest
+                : {
+                    ...latest,
+                    docs: { ...latest.docs, [APPROVALS_KIND]: latestApprovals },
+                  };
+
+            // A window (ThreadWindow.ts) leaves older entries out; with none left out, pi-durable
+            // may still hold entries before the view (a compaction moved its start).
+            const snapshotItem = (
+              windowed: WindowedView,
+              current: PiConversationView
+            ) =>
+              Effect.gen(function* () {
+                const hasMoreHistory =
+                  windowed.entriesOffset > 0 ||
+                  (yield* hasOlder(threadId, conversation, current));
+
+                return ThreadSnapshotItem.make({
+                  seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
+                  view: windowed.view,
+                  entriesOffset: windowed.entriesOffset,
+                  hasMoreHistory,
+                });
+              });
+
+            const first = yield* Effect.fromResult(
+              projector.snapshot(withApprovals())
+            ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
+
+            yield* Queue.offer(queue, yield* snapshotItem(first, watch.value));
+
+            // The listeners only record the newest revision and ring; with the one-frame output
+            // buffer below, a slow subscriber gets one larger diff instead of a backlog.
+            const ticks = yield* Queue.sliding<true>(1);
+
+            watch.start(
+              handOff((value: PiConversationView) => {
+                latest = value;
+                Queue.offerUnsafe(ticks, true);
+              })
+            );
+
+            approvals?.start(
+              handOff((value: Readonly<ApprovalsState> | null) => {
+                latestApprovals = value;
+                Queue.offerUnsafe(ticks, true);
+              })
+            );
+
+            yield* Queue.take(ticks).pipe(
+              Effect.flatMap(() =>
+                Effect.gen(function* () {
+                  const current = withApprovals();
+
+                  const frame = yield* Effect.fromResult(
+                    projector.advance(current)
+                  ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
+
+                  yield* WindowFrame.$match(frame, {
+                    Snapshot: (windowed) =>
+                      Effect.flatMap(snapshotItem(windowed, current), (item) =>
+                        Queue.offer(queue, item)
+                      ),
+                    Ops: ({ ops }) =>
+                      ops.length === 0
+                        ? Effect.void
+                        : Effect.flatMap(
+                            Ref.getAndUpdate(seq, (n) => n + 1),
+                            (next) =>
+                              Queue.offer(
+                                queue,
+                                ThreadOpsItem.make({ seq: next, ops })
+                              )
+                          ),
+                  });
+                })
+              ),
+              Effect.forever,
+              Effect.catch((error) => Queue.fail(queue, error)),
+              Effect.forkScoped
+            );
+
+            yield* Effect.promise(async () => await watch.closed).pipe(
+              Effect.flatMap((end) =>
+                end.reason === "listener_error"
+                  ? Queue.fail(
+                      queue,
+                      failure(
+                        "internal",
+                        Option.some(threadId),
+                        `The thread stream stopped: ${end.error.message}. Resubscribe.`
+                      )
+                    )
+                  : Queue.end(queue)
+              ),
+              Effect.forkScoped
+            );
+          }),
+        // One frame waits for the consumer at most: while it is behind, the producer suspends on
+        // the offer and the sliding tick keeps only that something changed, so the next frame is
+        // one diff over every revision since the last (T49). Frames are deltas, so dropping or
+        // sliding the frames themselves would corrupt the client's view.
+        { bufferSize: 1, strategy: "suspend" }
       );
 
     const watchThread = (threadId: ThreadId) =>
@@ -748,8 +754,11 @@ const layerNoDeps = Layer.effect(
           // An unknown thread fails the subscription at once.
           yield* conversationIdOf(session, threadId);
 
+          // One frame buffered here too, so the coalescing in `watchIn` reaches the subscriber.
           return brain.sessions.pipe(
-            Stream.switchMap((next) => watchIn(next, threadId, seq))
+            Stream.switchMap((next) => watchIn(next, threadId, seq), {
+              bufferSize: 1,
+            })
           );
         })
       );

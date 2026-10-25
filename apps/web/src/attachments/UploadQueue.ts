@@ -91,20 +91,30 @@ const RefJson = Schema.fromJsonString(Schema.toCodecJson(AttachmentRef));
 const decodeRef = Schema.decodeUnknownEffect(RefJson);
 
 const ErrorBody = Schema.fromJsonString(
-  Schema.Struct({ message: Schema.String })
+  Schema.Struct({
+    message: Schema.String,
+    reason: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  })
 );
 
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
 
 /**
- * Whether a status the upload route answered is worth a new URL: the token expired or was used
- * (401, 403, 410), the request timed out or was throttled, or the brain had trouble. A refusal of
- * the file itself (wrong size, too large, a type the brain will not take) is final.
+ * Whether an answer of the upload route is worth a new URL: the token expired, is unknown or was
+ * used (400 `expired`, 401, 403, 404, 409, 410; each attempt mints a new URL, T38), the request
+ * timed out or was throttled, or the brain had trouble. A refusal of the file itself (wrong size,
+ * too large, a type the brain will not take) is final.
  */
-const isRetryableStatus = (status: number): boolean =>
+export const isRetryableAnswer = (
+  status: number,
+  reason: Option.Option<string>
+) =>
+  (status === 400 && Option.contains(reason, "expired")) ||
   status === 401 ||
   status === 403 ||
+  status === 404 ||
   status === 408 ||
+  status === 409 ||
   status === 410 ||
   status === 429 ||
   status >= 500;
@@ -175,14 +185,19 @@ export const sendBytes = (input: {
     const answer = yield* post(input);
 
     if (answer.status !== 200) {
-      const reason = Option.match(decodeErrorBody(answer.body), {
+      const body = decodeErrorBody(answer.body);
+
+      const message = Option.match(body, {
         onNone: () => `The upload was refused (HTTP ${answer.status}).`,
-        onSome: ({ message }) => message,
+        onSome: (found) => found.message,
       });
 
       return yield* new UploadFailed({
-        message: reason,
-        retryable: isRetryableStatus(answer.status),
+        message,
+        retryable: isRetryableAnswer(
+          answer.status,
+          Option.flatMap(body, (found) => Option.fromNullishOr(found.reason))
+        ),
       });
     }
 

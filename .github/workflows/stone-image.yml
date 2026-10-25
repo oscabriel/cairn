@@ -1,5 +1,6 @@
 # Builds the stone base image (images/stone) and pushes it to Cloudflare's registry, so the Beelink never runs Docker
 # for it. The stack deploys it by the digest this prints. Its token is cairn-ci (stacks/github.ts).
+# Third-party actions are pinned by commit, with the tag beside it, because the job holds that token.
 name: stone image
 
 on:
@@ -15,7 +16,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Log in to Cloudflare's registry
         env:
@@ -32,7 +33,7 @@ jobs:
           echo "::add-mask::$password"
           docker login registry.cloudflare.com --username "$user" --password-stdin <<<"$password"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build and push
         env:
@@ -46,7 +47,7 @@ jobs:
           echo "image: registry.cloudflare.com/cairn-stone@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "registry.cloudflare.com/cairn-stone@$digest" > stone-image.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: stone-image
           path: stone-image.txt

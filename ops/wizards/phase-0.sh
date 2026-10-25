@@ -304,13 +304,18 @@ if want 7; then
   say "the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets on oscabriel/cairn."
   say "The token value never appears on screen. Alchemy shows its plan and asks first."
   if confirm "Deploy stacks/github.ts now?"; then
+    # The profile holds the Global API Key and has no other job; recreate it with stage 6 if the
+    # CI token ever needs new permissions. A failed deploy exits the wizard here (set -e), so the
+    # trap deletes the profile on any exit, or names it when that fails too.
+    trap 'pnpm exec alchemy profile delete admin --yes >/dev/null 2>&1 \
+      && warn "deleted the admin Alchemy profile (Global API Key) on the way out" \
+      || warn "the admin Alchemy profile may still hold the Global API Key: pnpm exec alchemy profile delete admin --yes"' EXIT
     pnpm exec alchemy deploy --config stacks/github.ts --profile admin
     gh secret list --repo oscabriel/cairn
-    # The profile holds the Global API Key and has no other job; recreate it with stage 6 if the
-    # CI token ever needs new permissions.
     pnpm exec alchemy profile delete admin --yes
+    trap - EXIT
   else
-    SKIPPED+=("stage 7: pnpm exec alchemy deploy --config stacks/github.ts --profile admin")
+    SKIPPED+=("stage 7: pnpm exec alchemy deploy --config stacks/github.ts --profile admin, then pnpm exec alchemy profile delete admin --yes (it holds the Global API Key)")
   fi
   pause
 fi
@@ -405,7 +410,12 @@ if want 11; then
   pause "Press Enter once it's deleted"
   EXECUTOR_SETUP_TOKEN=$(_existing EXECUTOR_SETUP_TOKEN || true)
   EXECUTOR_ORG=$(_existing EXECUTOR_ORG || true)
-  if [[ -n "$EXECUTOR_SETUP_TOKEN" ]]; then
+  if [[ -n "$EXECUTOR_SETUP_TOKEN" && -z "$EXECUTOR_ORG" ]]; then
+    # Without the organization slug the probe asks a path whose answer says nothing about the
+    # token, so it can neither confirm nor refute the revocation.
+    warn "EXECUTOR_ORG is not in $ENV_FILE, so the token's revocation cannot be checked."
+    SKIPPED+=("stage 11: check the Executor setup token is revoked (set EXECUTOR_ORG in $ENV_FILE, then ops/wizards/phase-0.sh 11)")
+  elif [[ -n "$EXECUTOR_SETUP_TOKEN" ]]; then
     # The token goes in a header file, never an argument, and only the status code is printed.
     header=$(umask 077 && mktemp)
     printf 'Authorization: Bearer %s\n' "$EXECUTOR_SETUP_TOKEN" >"$header"
@@ -415,7 +425,7 @@ if want 11; then
       tmp=$(mktemp) && grep -v '^EXECUTOR_SETUP_TOKEN=' "$ENV_FILE" >"$tmp" && mv "$tmp" "$ENV_FILE" && chmod 600 "$ENV_FILE"
       printf '  %s✓ revoked%s Executor answers %s, and the token is gone from %s\n' "$GREEN" "$RESET" "$code" "$ENV_FILE"
     else
-      warn "Executor still accepts the token (HTTP $code). Check the Tokens page and run stage 11 again."
+      warn "Executor still accepts the token (HTTP $code on organization $EXECUTOR_ORG). Check the Tokens page and run stage 11 again."
       SKIPPED+=("stage 11: revoke the Executor setup token (ops/wizards/phase-0.sh 11)")
     fi
   else

@@ -82,8 +82,12 @@ export const CopyText = Command.define("CopyText", {
     Effect.tryPromise(async () => {
       await navigator.clipboard.writeText(text);
     }).pipe(
-      Effect.ignore,
-      Effect.as(Message.CompletedCopy({ rowId, version }))
+      Effect.match({
+        onSuccess: () =>
+          Message.CompletedCopy({ rowId, version, copied: true }),
+        onFailure: () =>
+          Message.CompletedCopy({ rowId, version, copied: false }),
+      })
     ),
 });
 

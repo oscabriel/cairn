@@ -90,8 +90,14 @@ const copy = (model: Model, rowId: string, text: string): Return => {
   };
 };
 
-const completedCopy = (model: Model, rowId: string, version: number): Return =>
-  version === model.copyVersion
+// A refused clipboard write shows no check (T33).
+const completedCopy = (
+  model: Model,
+  rowId: string,
+  version: number,
+  copied: boolean
+): Return =>
+  copied && version === model.copyVersion
     ? {
         model: modifyFields(model, { copiedRowId: () => Option.some(rowId) }),
         commands: [ExpireCopied({ version })],
@@ -166,7 +172,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       outMessage: OutMessage.RequestedDiff({ turn, path }),
     }),
     ClickedCopy: ({ rowId, text }) => copy(model, rowId, text),
-    CompletedCopy: ({ rowId, version }) => completedCopy(model, rowId, version),
+    CompletedCopy: ({ copied, rowId, version }) =>
+      completedCopy(model, rowId, version, copied),
     ExpiredCopied: ({ version }) =>
       version === model.copyVersion
         ? { model: modifyFields(model, { copiedRowId: () => Option.none() }) }

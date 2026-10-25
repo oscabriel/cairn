@@ -111,6 +111,20 @@ describe("paging and Retry", () => {
     );
   });
 
+  it("shows no check when the browser refused the copy", () => {
+    const clicked = update(
+      shown("a"),
+      Message.ClickedCopy({ rowId: "r1", text: "x" })
+    ).model;
+
+    const refused = update(
+      clicked,
+      Message.CompletedCopy({ rowId: "r1", version: 1, copied: false })
+    ).model;
+
+    assert.isTrue(Option.isNone(refused.copiedRowId));
+  });
+
   it("shows a copy check only for the latest copy", () => {
     const first = update(
       shown("a"),
@@ -124,12 +138,12 @@ describe("paging and Retry", () => {
 
     const stale = update(
       second,
-      Message.CompletedCopy({ rowId: "r1", version: 1 })
+      Message.CompletedCopy({ rowId: "r1", version: 1, copied: true })
     ).model;
 
     const current = update(
       stale,
-      Message.CompletedCopy({ rowId: "r2", version: 2 })
+      Message.CompletedCopy({ rowId: "r2", version: 2, copied: true })
     ).model;
 
     assert.isTrue(Option.isNone(stale.copiedRowId));

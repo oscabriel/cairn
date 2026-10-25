@@ -26,7 +26,12 @@ export const Message = defineMessageUnion({
   },
   PreparedRetry: { item: OutboxItem },
   ClickedCopy: { rowId: Schema.String, text: Schema.String },
-  CompletedCopy: { rowId: Schema.String, version: Schema.Int },
+  /** A copy ended; `copied` is false when the browser refused the clipboard write. */
+  CompletedCopy: {
+    rowId: Schema.String,
+    version: Schema.Int,
+    copied: Schema.Boolean,
+  },
   ExpiredCopied: { version: Schema.Int },
   LoadedLanguage: { language: Schema.String },
   /** A long code block's tokens are in the shared cache: its grammar is loaded and rows redraw. */

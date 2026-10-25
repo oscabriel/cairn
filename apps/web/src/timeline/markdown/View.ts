@@ -158,8 +158,7 @@ const copyButton = (context: BlockContext, key: string, text: string): Html => {
 const codeBlockView = (
   context: BlockContext,
   block: Extract<Block, { readonly kind: "code" }>,
-  path: string,
-  index: number
+  path: string
 ): Html => {
   const { h } = context;
   const language = Option.flatMap(block.language, languageOf);
@@ -224,7 +223,8 @@ const codeBlockView = (
             ],
             [label]
           ),
-          copyButton(context, `${context.rowId}:code:${index}`, block.value),
+          // Keyed by the block's path: a position alone repeats across list items (T33).
+          copyButton(context, `${context.rowId}:code:${path}`, block.value),
         ]
       ),
       h.pre(
@@ -421,17 +421,12 @@ const listView = (
     : h.ul([], items);
 };
 
-const blockView = (
-  context: BlockContext,
-  block: Block,
-  path: string,
-  index: number
-): Html => {
+const blockView = (context: BlockContext, block: Block, path: string): Html => {
   const { h } = context;
 
   const render: RenderBlocks = (blocks, at) =>
     blocks.map((child, position) =>
-      blockView(context, child, `${at}.${position}`, position)
+      blockView(context, child, `${at}.${position}`)
     );
 
   return Match.value(block).pipe(
@@ -439,7 +434,7 @@ const blockView = (
       heading: ({ content, level }) =>
         headingView(h, level, inlines(h, content)),
       paragraph: ({ content }) => h.p([], inlines(h, content)),
-      code: (code) => codeBlockView(context, code, path, index),
+      code: (code) => codeBlockView(context, code, path),
       list: (list) => listView(context, list, path, render),
       quote: (quote) => quoteView(context, quote, render(quote.blocks, path)),
       rule: () => h.hr([]),
@@ -484,7 +479,7 @@ export const markdownView = (
           ...(streaming ? [h.DataAttribute("streaming", "")] : []),
         ],
         document.blocks.map((placed, index) =>
-          blockView(blockContext, placed.block, String(index), placed.startLine)
+          blockView(blockContext, placed.block, String(index))
         )
       ),
   });

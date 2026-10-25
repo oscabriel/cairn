@@ -36,6 +36,7 @@ import {
   Schedule,
 } from "effect";
 
+import { SettingsStore } from "../models/SettingsStore.ts";
 import { EventSink } from "./EventSink.ts";
 import { EventStore } from "./EventStore.ts";
 import {
@@ -197,14 +198,6 @@ export const resolveAutoSettlementAt = (input: {
     : Option.none();
 };
 
-/** The settlement window. Later, the settings service provides it from `ServerSettings`. */
-export class SettlementConfig extends Context.Reference<{
-  /** Days of quiet before a thread settles by itself; 0 turns auto-settle off. */
-  readonly autoSettleDays: number;
-}>("cairn/server/shell/SettlementConfig", {
-  defaultValue: () => ({ autoSettleDays: 3 }),
-}) {}
-
 /** Settles quiet threads and ends snoozes on time, on the server, so every device agrees. */
 export class Settlement extends Context.Service<
   Settlement,
@@ -224,6 +217,7 @@ export class Settlement extends Context.Service<
       const sink = yield* EventSink;
       const threads = yield* ThreadRows;
       const eventStore = yield* EventStore;
+      const settingsStore = yield* SettingsStore;
 
       const commitQuietly = (
         effect: Effect.Effect<
@@ -241,7 +235,25 @@ export class Settlement extends Context.Service<
         );
 
       const sweep = Effect.gen(function* () {
-        const { autoSettleDays } = yield* SettlementConfig;
+        // The setting the UI shows, read on every sweep (T32). Unreadable, the sweep waits for
+        // the next one rather than guessing a window.
+        const settings = yield* settingsStore.get.pipe(
+          Effect.tapError((error) =>
+            Effect.logWarning("auto-settle skipped: settings unreadable").pipe(
+              Effect.annotateLogs({
+                event: "settlement_settings_unreadable",
+                error: error.message,
+              })
+            )
+          ),
+          Effect.option
+        );
+
+        if (Option.isNone(settings)) {
+          return 0;
+        }
+
+        const { autoSettleDays } = settings.value;
         const rows = yield* threads.listLive;
         const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
         let settled = 0;

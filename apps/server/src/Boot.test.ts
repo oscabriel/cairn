@@ -58,6 +58,7 @@ import { PushLayer } from "./push/PushLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { EventSink } from "./shell/EventSink.ts";
+import { ProjectorSignals } from "./shell/ProjectorSignals.ts";
 import {
   emptyActivityPatch,
   ThreadActivityUpdate,
@@ -291,6 +292,7 @@ const GatedApp = Layer.mergeAll(
   Layer.provide(SettingsStore.layerNoDeps),
   Layer.provideMerge(
     ShellLayer.pipe(
+      Layer.provideMerge(ProjectorSignals.layer),
       Layer.provideMerge(
         Database.layer({
           filename: path.join(gateDataDir, "cairn.sqlite"),
@@ -425,6 +427,7 @@ const brainFor = (dataDir: string) =>
     Layer.provideMerge(ExecutorLink.layerDisabled),
     Layer.provideMerge(
       ShellLayer.pipe(
+        Layer.provideMerge(ProjectorSignals.layer),
         Layer.provideMerge(
           Database.layer({
             filename: path.join(dataDir, "cairn.sqlite"),

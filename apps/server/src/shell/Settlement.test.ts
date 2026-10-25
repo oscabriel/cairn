@@ -1,11 +1,15 @@
 import { ApprovalId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { ThreadSnooze, ThreadUnsettle } from "@cairn/protocol/ShellCommands";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import { DateTime, Duration, Effect, Layer, Option } from "effect";
 import type { Scope } from "effect";
 import { TestClock } from "effect/testing";
 
+import {
+  DEFAULT_SERVER_SETTINGS,
+  SettingsStore,
+} from "../models/SettingsStore.ts";
 import { EventSink } from "./EventSink.ts";
 import {
   isSnoozed,
@@ -195,21 +199,62 @@ describe(threadHasQueuedTurnStart, () => {
   });
 });
 
+/** The server settings with `autoSettleDays` set; the rest at their defaults. */
+const settingsWith = (autoSettleDays: number) =>
+  Layer.succeed(
+    SettingsStore,
+    SettingsStore.of({
+      get: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, autoSettleDays }),
+      update: () => Effect.die("settlement never writes settings"),
+    })
+  );
+
 const run = <A, E>(
   body: Effect.Effect<
     A,
     E,
     Layer.Success<typeof ShellTestLayer> | Settlement | Scope.Scope
-  >
+  >,
+  autoSettleDays = 3
 ) =>
   body.pipe(
     Effect.scoped,
     Effect.provide(
-      Settlement.layerNoDeps.pipe(Layer.provideMerge(ShellTestLayer))
+      Settlement.layerNoDeps.pipe(
+        Layer.provide(settingsWith(autoSettleDays)),
+        Layer.provideMerge(ShellTestLayer)
+      )
     )
   );
 
+/** Thread 1, created now, then `days` of quiet; whether the sweep settled it. */
+const settledAfterQuiet = (days: number) =>
+  Effect.gen(function* () {
+    const sink = yield* EventSink;
+    const threads = yield* ThreadRows;
+    const { projectId, command } = createProject(1);
+
+    yield* sink.commitCommand(command);
+    yield* sink.commitCommand(createThread(projectId, 1));
+    yield* TestClock.adjust(Duration.days(days));
+
+    const quiet = yield* threads.get(testThreadId(1));
+
+    return Option.exists(quiet, (found) =>
+      Option.contains(found.shell.settledOverride, "settled")
+    );
+  });
+
 describe("Settlement fibers", () => {
+  it.effect(
+    "reads the auto-settle setting: 0 never settles, 1 settles after a day",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* run(settledAfterQuiet(10), 0)).toBeFalsy();
+        expect(yield* run(settledAfterQuiet(2), 1)).toBeTruthy();
+      })
+  );
+
   it.effect("settles a quiet thread on the sweep after the window passes", () =>
     run(
       Effect.gen(function* () {

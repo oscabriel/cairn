@@ -22,6 +22,7 @@ import { Option, Result, Schema } from "effect";
 
 import { piConversationId, piEntryId } from "./PiIds.ts";
 import {
+  entryImages,
   HIDDEN_ENTRY_KIND,
   projectEntry,
   projectView,
@@ -356,5 +357,51 @@ describe("ThreadWire", () => {
 
     assert.include(projected, '"_tag":"Attachment"');
     assert.include(projected, '"attachmentId":"att_1"');
+  });
+
+  it("numbers an entry's images as the image route serves them", () => {
+    // A tool that returns a picture in `details` and another in its content: the walk meets
+    // `data` first, so the route must count the same way or a ref fetches the other image.
+    const GIF_BASE64 = `R0lGODlh${"B".repeat(40)}`;
+
+    const both = entry("pi.tool-result", {
+      data: {
+        details: {
+          image: { type: "image", data: GIF_BASE64, mimeType: "image/gif" },
+        },
+      },
+      model: [
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "screenshot",
+          content: [{ type: "image", data: PNG_BASE64, mimeType: "image/png" }],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    });
+
+    const projected = JSON.stringify(unwrap(projectEntry(both, "full")));
+
+    // Each projected image as "type at index", in whatever order the protocol's schema lays out.
+    const refs = [
+      ...projected.matchAll(
+        /"mimeType":"(?<type>image\/\w+)"[^}]*"_tag":"EntryImage"[^}]*"index":(?<index>\d+)/gu
+      ),
+    ]
+      .map((match) => `${match.groups?.type} at ${match.groups?.index}`)
+      .toSorted();
+
+    const served = entryImages(both).map(
+      (image, index) => `${image.mimeType} at ${index}`
+    );
+
+    assert.deepStrictEqual(refs, ["image/gif at 0", "image/png at 1"]);
+    assert.deepStrictEqual(served, refs);
+    assert.deepStrictEqual(
+      entryImages(both).map((image) => image.data),
+      [GIF_BASE64, PNG_BASE64]
+    );
   });
 });

@@ -35,7 +35,6 @@ import type {
   Conversation,
   ConversationId as PiConversationId,
   ConversationView as PiConversationView,
-  EntryRecord,
   InputSubmissionDraft,
   LiveState,
 } from "@earendil-works/pi-durable";
@@ -90,7 +89,7 @@ import {
 } from "./PiIds.ts";
 import { WindowFrame, windowedProjector } from "./ThreadWindow.ts";
 import type { WindowedView } from "./ThreadWindow.ts";
-import { projectEntry } from "./ThreadWire.ts";
+import { entryImages, projectEntry } from "./ThreadWire.ts";
 import type { ThreadWireError } from "./ThreadWire.ts";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
@@ -153,27 +152,6 @@ const fromUnavailable =
 const fromWire =
   (threadId: Option.Option<ThreadId>) => (error: ThreadWireError) =>
     failure("internal", threadId, error.message);
-
-/** The images of an entry in the order the projection numbers them. */
-const entryImages = (entry: EntryRecord) => {
-  const images: Array<{ readonly mimeType: string; readonly data: string }> =
-    [];
-
-  for (const message of entry.model ?? []) {
-    if (
-      (message.role === "user" || message.role === "toolResult") &&
-      Array.isArray(message.content)
-    ) {
-      for (const part of message.content) {
-        if (part.type === "image") {
-          images.push({ mimeType: part.mimeType, data: part.data });
-        }
-      }
-    }
-  }
-
-  return images;
-};
 
 /**
  * How many generations a stop follows when the run hands over between its read and its abort. A

@@ -283,6 +283,65 @@ const entryJson = (entry: EntryRecord): JsonValue =>
         kind: HIDDEN_ENTRY_KIND,
       };
 
+/** An image inside an entry: its media type and its base64 bytes. */
+export interface EntryImage {
+  readonly mimeType: string;
+  readonly data: string;
+}
+
+/** Collects images in the order `projectValue` meets them, skipping what it drops unwalked. */
+const collectImages = (value: JsonValue, images: Array<EntryImage>) => {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectImages(item, images);
+    }
+
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  const { data, mimeType, type } = value;
+
+  if (type === "image" && Predicate.isString(data)) {
+    images.push({
+      mimeType: Predicate.isString(mimeType)
+        ? mimeType
+        : "application/octet-stream",
+      data,
+    });
+
+    return;
+  }
+
+  for (const [key, field] of Object.entries(value)) {
+    if (
+      !(key === "diagnostics" && Array.isArray(field) && field.some(isStamp))
+    ) {
+      collectImages(field, images);
+    }
+  }
+};
+
+/**
+ * An entry's images, numbered as the projection numbers its `EntryImage` refs: every image part
+ * anywhere in the entry (its model messages, a tool's `data.details`), in the order the walk meets
+ * them. The entry image route serves `entryImages(entry)[index]` (T24).
+ */
+export const entryImages = (entry: EntryRecord): ReadonlyArray<EntryImage> => {
+  if (HIDDEN_KINDS.has(entry.kind)) {
+    return [];
+  }
+
+  const images: Array<EntryImage> = [];
+
+  collectImages(entryJson(entry), images);
+
+  return images;
+};
+
 const projectEntryJson = (entry: EntryRecord, mode: ProjectionMode) => {
   if (HIDDEN_KINDS.has(entry.kind)) {
     return {

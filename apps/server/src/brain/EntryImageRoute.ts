@@ -2,7 +2,9 @@
 // transcript entry (a screenshot a tool returned, a pasted picture), which the thread stream
 // replaces with a reference (ADR 0020). Entries never change, so a response is cached for good by
 // the browser that asked, and never by anything shared. The guard in front of `/api` admits only
-// the owner; there is no per-image signature.
+// the owner; there is no per-image signature. The media type comes from the transcript, which a
+// tool wrote, so only png, jpeg, gif and webp are served inline; anything else is a download, and
+// every answer carries a sandbox CSP (T24), as attachments do.
 
 import { EntryId, NonNegativeInt, ThreadId } from "@cairn/protocol/Ids";
 import { Effect, Option, Schema } from "effect";
@@ -19,6 +21,29 @@ const Params = Schema.Struct({
   entryId: Schema.FiniteFromString.pipe(Schema.decodeTo(EntryId)),
   index: Schema.FiniteFromString.pipe(Schema.decodeTo(NonNegativeInt)),
 });
+
+/** The image types served inline; the transcript's media type is whatever a tool wrote. */
+const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+/** The headers and type an entry image is served with. */
+export const entryImageHeaders = (mimeType: string) => {
+  const inline = INLINE_IMAGE_TYPES.has(mimeType.toLowerCase());
+
+  return {
+    contentType: inline ? mimeType : "application/octet-stream",
+    headers: {
+      "cache-control": "private, max-age=31536000, immutable",
+      "content-disposition": inline ? "inline" : "attachment",
+      "content-security-policy": "default-src 'none'; sandbox",
+      "x-content-type-options": "nosniff",
+    },
+  };
+};
 
 const problem = (status: number, code: string, message: string) =>
   HttpServerResponse.jsonUnsafe(
@@ -45,13 +70,10 @@ const entryImageResponse = (seam: HarnessSeam["Service"]) =>
 
     return yield* seam.entryImage(threadId, entryId, index).pipe(
       Effect.map((image) =>
-        HttpServerResponse.uint8Array(image.bytes, {
-          contentType: image.mimeType,
-          headers: {
-            "cache-control": "private, max-age=31536000, immutable",
-            "x-content-type-options": "nosniff",
-          },
-        })
+        HttpServerResponse.uint8Array(
+          image.bytes,
+          entryImageHeaders(image.mimeType)
+        )
       ),
       Effect.catchTag("HarnessError", (failure) => {
         if (failure.reason === "unavailable") {

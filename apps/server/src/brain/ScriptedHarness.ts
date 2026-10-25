@@ -87,7 +87,7 @@ import type {
 } from "./HarnessSeam.ts";
 import { piConversationId, piEntryId, piTaskId } from "./PiIds.ts";
 import { classifyRunFailure } from "./RunFailure.ts";
-import { projectEntry, wireProjector } from "./ThreadWire.ts";
+import { entryImages, projectEntry, wireProjector } from "./ThreadWire.ts";
 
 type RunStatus = (typeof RunTerminal.Type)["status"];
 
@@ -1217,15 +1217,7 @@ const layerNoDeps = Layer.effectContext(
     ) {
       const found = yield* findEntry(threadId, entryId);
 
-      const images = (found.model ?? []).flatMap((message) =>
-        message.role === "user" && Array.isArray(message.content)
-          ? message.content.flatMap((part) =>
-              part.type === "image" ? [part] : []
-            )
-          : []
-      );
-
-      const image = images[index];
+      const image = entryImages(found)[index];
 
       if (image === undefined) {
         return yield* failure(

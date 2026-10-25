@@ -24,6 +24,7 @@ import {
 import { Option } from "effect";
 
 import type { ThreadUi } from "./Model.ts";
+import { SAVED_THREAD_LIMIT } from "./Model.ts";
 
 /** The control at the top of a thread with older entries to page in. */
 export interface HistoryItem {
@@ -164,6 +165,29 @@ const attachCards = (
   });
 };
 
+/**
+ * Sets `threadId`'s value as the most recent, and forgets the least recently set threads beyond
+ * `SAVED_THREAD_LIMIT` (T50): a per-thread cache kept every thread opened for the page's life.
+ */
+export const setRecent = <V>(
+  map: Map<string, V>,
+  threadId: string,
+  value: V
+): V => {
+  map.delete(threadId);
+  map.set(threadId, value);
+
+  for (const key of map.keys()) {
+    if (map.size <= SAVED_THREAD_LIMIT) {
+      break;
+    }
+
+    map.delete(key);
+  }
+
+  return value;
+};
+
 /** The last derivation, so a view whose inputs did not change reuses it. */
 const memo = new Map<"last", Memo>();
 
@@ -249,8 +273,8 @@ export const transcriptOf = (
     turnRowsByThread.get(threadId) ?? EMPTY_TURN_ROWS
   );
 
-  turnRowsByThread.set(threadId, derived.cache);
-  rootByThread.set(threadId, workspaceRoot);
+  setRecent(turnRowsByThread, threadId, derived.cache);
+  setRecent(rootByThread, threadId, workspaceRoot);
 
   const { rows } = derived;
 
@@ -259,7 +283,7 @@ export const transcriptOf = (
     stableByThread.get(threadId) ?? EMPTY_STABLE_ROWS
   );
 
-  stableByThread.set(threadId, stable);
+  setRecent(stableByThread, threadId, stable);
 
   const transcript: Transcript = {
     items: state.value.hasMoreHistory

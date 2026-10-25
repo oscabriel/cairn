@@ -17,7 +17,7 @@ import { FollowEnd } from "./FollowEnd.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import { isFollowingEnd } from "./Model.ts";
-import { estimatedHeightOf, transcriptOf } from "./Rows.ts";
+import { estimatedHeightOf, setRecent, transcriptOf } from "./Rows.ts";
 import type { ListItem, Transcript } from "./Rows.ts";
 import { rowView } from "./RowView.ts";
 import type { RowContext } from "./RowView.ts";
@@ -28,7 +28,19 @@ export interface ViewInputs {
   readonly workspaceRoot: Option.Option<string>;
 }
 
-const rowLazy = createKeyedLazy();
+/**
+ * One keyed lazy per thread, for the most recent `SAVED_THREAD_LIMIT` threads: one for every
+ * thread kept each row ever drawn, with its detached DOM, for the page's life (T50).
+ */
+const rowLazies = new Map<string, ReturnType<typeof createKeyedLazy>>();
+
+const rowLazyFor = (threadId: string) =>
+  setRecent(
+    rowLazies,
+    threadId,
+    // oxlint-disable-next-line foldkit/lazy-view-stable-references -- made once per thread and kept in `rowLazies`, so its cache lives as long as the thread stays recent
+    rowLazies.get(threadId) ?? createKeyedLazy()
+  );
 
 const listView = VirtualList.view<ListItem>();
 
@@ -92,7 +104,7 @@ const itemView = (
       : NO_CURSOR;
 
   return (
-    rowLazy(item.id, renderRow, [
+    rowLazyFor(threadId)(item.id, renderRow, [
       h,
       item,
       threadId,

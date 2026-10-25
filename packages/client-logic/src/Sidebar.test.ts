@@ -632,6 +632,23 @@ describe(splitHighlights, () => {
       { text: "plain", highlighted: false },
     ]);
   });
+
+  it("keeps the highlight on the match after a letter whose lower case is longer", () => {
+    // "İ" lowers to two code units; the match after it must not drift.
+    assert.deepStrictEqual(splitHighlights("İzmir then Istanbul", "istanbul"), [
+      { text: "İzmir then ", highlighted: false },
+      { text: "Istanbul", highlighted: true },
+    ]);
+  });
+});
+
+describe("a search excerpt cut near an emoji", () => {
+  it("never starts inside a surrogate pair", () => {
+    const text = `${"a".repeat(159)}😀${"b".repeat(39)}needle`;
+    const excerpt = Option.getOrThrow(searchExcerpt(text, "needle"));
+
+    assert.isFalse(/^…[\uDC00-\uDFFF]/u.test(excerpt));
+  });
 });
 
 describe(searchExcerpt, () => {

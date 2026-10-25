@@ -139,14 +139,13 @@ export class ThreadTitles extends Context.Service<
 
         const answer = yield* model.complete(buildThreadTitlePrompt(message));
 
+        // An answer that is not the JSON asked for (a refusal, prose) gives no title, so the
+        // placeholder stays instead of the model's words becoming the title (T34).
         return Option.flatMap(answer, (text) =>
           Option.flatMap(
-            Option.orElse(
-              Option.map(
-                decodeJsonAnswer(TitleAnswer, text),
-                (decoded) => decoded.title
-              ),
-              () => Option.some(text)
+            Option.map(
+              decodeJsonAnswer(TitleAnswer, text),
+              (decoded) => decoded.title
             ),
             sanitizeThreadTitle
           )

@@ -522,6 +522,19 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 export const monogramGlyphCount = (monogram: string): number =>
   Array.fromIterable(graphemes.segment(monogram)).length;
 
+/**
+ * `text` lowered where that keeps its length, else with only ASCII letters lowered, so offsets
+ * into the result are offsets into `text`: `toLowerCase` turns "İ" into two code units and would
+ * shift every match after it (T34).
+ */
+const foldCase = (text: string): string => {
+  const lowered = text.toLowerCase();
+
+  return lowered.length === text.length
+    ? lowered
+    : text.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+};
+
 /** One run of search-result text, highlighted when it matched the query. */
 export interface HighlightPart {
   readonly text: string;
@@ -536,13 +549,13 @@ export const splitHighlights = (
   text: string,
   query: string
 ): ReadonlyArray<HighlightPart> => {
-  const needle = query.trim().toLowerCase();
+  const needle = foldCase(query.trim());
 
   if (needle.length === 0) {
     return [{ text, highlighted: false }];
   }
 
-  const haystack = text.toLowerCase();
+  const haystack = foldCase(text);
   const parts: Array<HighlightPart> = [];
   let cursor = 0;
 
@@ -580,8 +593,8 @@ export const searchExcerpt = (
   text: string,
   query: string
 ): Option.Option<string> => {
-  const needle = query.trim().toLowerCase();
-  const match = text.toLowerCase().indexOf(needle);
+  const needle = foldCase(query.trim());
+  const match = foldCase(text).indexOf(needle);
 
   if (needle.length === 0 || match === -1) {
     return Option.none();
@@ -591,5 +604,11 @@ export const searchExcerpt = (
     return Option.some(text);
   }
 
-  return Option.some(`…${text.slice(match - 40)}`);
+  // Never start inside a surrogate pair, which would show a broken glyph (T34).
+  const start = match - 40;
+  // At a pair's second half, `codePointAt` reads that half alone.
+  const low = text.codePointAt(start) ?? 0;
+  const inPair = low >= 0xdc_00 && low <= 0xdf_ff;
+
+  return Option.some(`…${text.slice(inPair ? start + 1 : start)}`);
 };

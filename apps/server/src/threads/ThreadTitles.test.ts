@@ -87,6 +87,12 @@ describe("ThreadTitles and BranchNames", () => {
           yield* (yield* BranchNames).generate("Add a dark mode toggle"),
           "add-a-dark-mode-toggle"
         );
+
+        // A title answer that is not the JSON asked for keeps the placeholder (T34).
+        yield* answer("I can't help name this thread.");
+        assert.isTrue(
+          Option.isNone(yield* (yield* ThreadTitles).generate("Anything"))
+        );
       }).pipe(
         Effect.andThen(
           Effect.gen(function* () {

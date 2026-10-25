@@ -48,6 +48,7 @@ import {
   FocusElement,
   IssueCommands,
   LoadShelves,
+  ReadClock,
   MintDraftId,
   NavigateTo,
   RetryTask,
@@ -704,7 +705,7 @@ export const openAddProject = (model: Model): UpdateReturn =>
 
 export const init = (): UpdateReturn => ({
   model: initial,
-  commands: [LoadShelves(), DetectPlatform()],
+  commands: [LoadShelves(), DetectPlatform(), ReadClock()],
 });
 
 const step = (model: Model, message: Message): UpdateReturn =>

@@ -2,7 +2,7 @@
 // pending changes, the saved shelves, the clipboard, the favicon badge, the folder browser and task
 // retry. Each answers with one Message.
 import { ThreadId, TaskId } from "@cairn/protocol/Ids";
-import { Effect, Option, Predicate, Schema } from "effect";
+import { Clock, Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
@@ -43,6 +43,17 @@ export const IssueCommands = Command.define("IssueCommands", {
 
       return Message.IssuedCommands({ commands });
     }),
+});
+
+/**
+ * Reads the clock once at start (T29): the clock subscription drops its first tick, so without
+ * this the sidebar reads 0 for up to 15 s, ages say "now" and snooze presets land in 1970.
+ */
+export const ReadClock = Command.define("ReadClock", {
+  messages: [Message.Ticked],
+  execute: Effect.map(Clock.currentTimeMillis, (nowMs) =>
+    Message.Ticked({ nowMs })
+  ),
 });
 
 /** Moves to a path inside the app. */

@@ -1,12 +1,12 @@
 // Identity's admission table (edges note, "Gate: identity and Origin"): the owner's nodes in, every
 // other kind of peer out, the login compared exactly, and the whois cache timed on `TestClock`.
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Option, Ref } from "effect";
-import { HttpServerRequest } from "effect/http";
+import { Effect, Layer, Logger, Option, Ref } from "effect";
+import { HttpRouter, HttpServerRequest } from "effect/http";
 import { TestClock } from "effect/testing";
 
 import { ServerConfig } from "../Config.ts";
-import { Identity } from "./Identity.ts";
+import { AuthRoute, Identity } from "./Identity.ts";
 import { Tailscale, TailscaleUnavailable } from "./Tailscale.ts";
 import type { Peer } from "./Tailscale.ts";
 
@@ -282,5 +282,84 @@ describe("Identity on requests", () => {
     }).pipe(
       Effect.provide(Identity.layerLoopbackOwner.pipe(Layer.provide(Config)))
     )
+  );
+});
+
+const logged: Array<string> = [];
+
+const capture = Logger.make((options) => {
+  logged.push(String(options.message));
+});
+
+/** Asks the real auth route, as Caddy would, and returns its status and what it logged. */
+const askAuth = Effect.fnUntraced(function* (headers: Record<string, string>) {
+  logged.length = 0;
+
+  const handler = yield* HttpRouter.toHttpEffect(AuthRoute);
+
+  const request = HttpServerRequest.fromWeb(
+    new Request("http://127.0.0.1:3774/_cairn/auth", { headers })
+  ).modify({ remoteAddress: Option.some("127.0.0.1") });
+
+  const response = yield* handler.pipe(
+    Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+    Effect.provide(
+      Layer.merge(
+        IdentityFixed,
+        Logger.layer([capture], { mergeWithExisting: false })
+      )
+    )
+  );
+
+  return { status: response.status, logged: [...logged] };
+});
+
+/** What Caddy's `forward_auth` sends, from a logged subrequest (2026-10-23). */
+const subrequest = (peer: string) => ({
+  "x-cairn-peer": peer,
+  via: "3.0 Caddy",
+  "x-forwarded-for": "100.84.155.69",
+  "x-forwarded-method": "GET",
+  "x-forwarded-uri": "/_cairn/auth",
+});
+
+describe("the auth route", () => {
+  it.effect("admits the owner's peer on Caddy's subrequest", () =>
+    Effect.gen(function* () {
+      const answer = yield* askAuth(subrequest("100.84.155.69"));
+
+      assert.deepStrictEqual(answer, { status: 200, logged: [] });
+    })
+  );
+
+  it.effect("still dumps the headers of a subrequest with no peer", () =>
+    Effect.gen(function* () {
+      const answer = yield* askAuth(subrequest(""));
+
+      assert.strictEqual(answer.status, 403);
+      assert.include(answer.logged, "auth request without a peer");
+    })
+  );
+
+  it.effect(
+    "answers 404 and logs nothing when asked through the main proxy",
+    () =>
+      Effect.gen(function* () {
+        const answer = yield* askAuth({
+          via: "3.0 Caddy",
+          "x-cairn-user": OWNER,
+          "x-forwarded-for": "100.84.155.69",
+        });
+
+        assert.deepStrictEqual(answer, { status: 404, logged: [] });
+      })
+  );
+
+  it.effect("refuses a direct call with no peer, as before", () =>
+    Effect.gen(function* () {
+      const answer = yield* askAuth({});
+
+      assert.strictEqual(answer.status, 403);
+    })
   );
 });

@@ -207,9 +207,27 @@ const UNLOGGED_HEADERS = new Set([
 ]);
 
 /**
+ * Whether a request reached the brain through Caddy's main proxy rather than as its auth
+ * subrequest. `forward_auth` always sets `X-Cairn-Peer` (empty when Caddy has no remote host), and
+ * the main proxy strips it and adds `Via` and the copied `X-Cairn-User`. A request with neither is a
+ * direct loopback call, which the route still answers.
+ */
+const viaMainProxy = (request: HttpServerRequest.HttpServerRequest) =>
+  request.headers[PEER_HEADER] === undefined &&
+  (request.headers.via !== undefined ||
+    request.headers[USER_HEADER] !== undefined);
+
+const notFound = HttpServerResponse.text("Not found.\n", {
+  status: 404,
+  headers: { "cache-control": "no-store" },
+});
+
+/**
  * `GET /_cairn/auth`, Caddy's `forward_auth` endpoint: 200 with `X-Cairn-User` for the owner's
  * nodes, otherwise a generic 403. The reason goes to the log only; an empty peer logs every
- * header (`event: no-peer`) to diagnose the first-load-after-Wi-Fi case cairn-v1 saw once.
+ * header (`event: no-peer`) to diagnose the first-load-after-Wi-Fi case cairn-v1 saw once. Asked
+ * through the main proxy (`code.gneiss.run/_cairn/auth`) it is a plain 404 with nothing logged
+ * (T25), so a page cannot fill the log with header dumps.
  */
 export const AuthRoute = HttpRouter.add(
   "GET",
@@ -217,6 +235,11 @@ export const AuthRoute = HttpRouter.add(
   Effect.gen(function* () {
     const identity = yield* Identity;
     const request = yield* HttpServerRequest.HttpServerRequest;
+
+    if (viaMainProxy(request)) {
+      return notFound;
+    }
+
     const peer = request.headers[PEER_HEADER] ?? "";
 
     if (peer === "") {

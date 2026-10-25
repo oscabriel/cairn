@@ -214,6 +214,8 @@ _Avoid_: reviewer (alone), checker
 
 **Checkpoint**: A git ref (`refs/cairn/checkpoints/<thread>/turn/<n>`) the brain records for a thread's working folder before its first run (turn 0) and at the end of each run, so the diff of any turn, or of the whole thread, can be shown. Scratch threads have none.
 
+**Changed-files card**: The card under a run's last reply listing the files the run changed, with their diff stats. It covers the whole run, from one checkpoint to the next: a queued follow-up that starts in the commit that ends the run belongs to the same run, so its edits share the card with the first turn's (decided 2026-10-24, review task T42). _Avoid_: per-turn diff.
+
 ## Milestones
 
 **Daily driver**: The state in which the user does a full day of real work in Cairn instead of herdr.

@@ -177,6 +177,12 @@ const STAMP_WAIT_ATTEMPTS = 10;
 
 const STAMP_WAIT_INTERVAL = Duration.millis(200);
 
+/**
+ * How long a killed child gets to answer its interrupt before it is closed anyway: a wedged child
+ * never answers, and its close must not wait on it forever (T13).
+ */
+export const INTERRUPT_GRACE = Duration.seconds(3);
+
 /** A served tool call waiting for pi's result. */
 interface ParkedCall {
   readonly child: Child;
@@ -374,7 +380,15 @@ export const openConversation = Effect.fnUntraced(function* (
       );
       yield* Effect.forkDetach(
         Effect.andThen(
-          child.query.interrupt,
+          child.query.interrupt.pipe(
+            Effect.timeoutOrElse({
+              duration: INTERRUPT_GRACE,
+              orElse: () =>
+                Effect.logWarning("claude child ignored its interrupt").pipe(
+                  Effect.annotateLogs({ sessionId: deps.piSessionId, kind })
+                ),
+            })
+          ),
           Scope.close(child.scope, Exit.void)
         )
       );
@@ -709,7 +723,18 @@ export const openConversation = Effect.fnUntraced(function* (
         Effect.andThen(
           Stream.runForEach(query.events, (event) =>
             onEvent(child, event)
-          ).pipe(Effect.ignore),
+          ).pipe(
+            // The child's own words for why it died; the turn still ends through `onEnded` (T13).
+            Effect.tapError((failure) =>
+              Effect.logWarning("claude child stream failed").pipe(
+                Effect.annotateLogs({
+                  event: "claude_child_stream_failed",
+                  error: failure.message,
+                })
+              )
+            ),
+            Effect.ignore
+          ),
           onEnded(child)
         ),
         scope
@@ -1069,6 +1094,21 @@ export const openConversation = Effect.fnUntraced(function* (
         },
       });
 
+      if (
+        bridge.messages.at(-1)?.role === "toolResult" &&
+        isRealAbort(call.signal)
+      ) {
+        // An orphaned tool result after an abort: end the turn with no output. Checked before
+        // delivering, or a held child would go on generating a turn the user stopped (T13).
+        if (Option.isSome(live)) {
+          yield* killChild(live.value, "abort", "Operation aborted");
+        }
+
+        emptyReply(call.sink, call.model, now());
+
+        return Option.none<Routed>();
+      }
+
       if (decision.kind === "deliver" && Option.isSome(live)) {
         return Option.some(
           yield* deliverTo(live.value, call, bridge.messages, results)
@@ -1082,16 +1122,6 @@ export const openConversation = Effect.fnUntraced(function* (
       // One child per conversation: a live one that cannot take this call goes.
       if (Option.isSome(live)) {
         yield* killChild(live.value, "abort", "Operation aborted");
-      }
-
-      if (
-        bridge.messages.at(-1)?.role === "toolResult" &&
-        isRealAbort(call.signal)
-      ) {
-        // An orphaned tool result after an abort: end the turn with no output.
-        emptyReply(call.sink, call.model, now());
-
-        return Option.none<Routed>();
       }
 
       if (decision.kind === "deliver" || decision.kind === "reuse") {

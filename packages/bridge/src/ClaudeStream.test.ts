@@ -5,10 +5,12 @@ import { describe, expect, it } from "@effect/vitest";
 import { Option } from "effect";
 
 import type { ClaudeEvent } from "./ClaudeEvents.ts";
+import { PLAN_QUOTA_PREFIX } from "./ClaudeGuards.ts";
 import { toolDeclaration } from "./ClaudeMcp.ts";
 import { claudeModels, DEFAULT_LONG_CONTEXT } from "./ClaudeModels.ts";
 import type { ToolBlock } from "./ClaudeScriptKit.ts";
 import {
+  failedTurn,
   fallbackToolBlocks,
   messageStart,
   textTurn,
@@ -138,5 +140,33 @@ describe("results", () => {
     expect(feed(textTurn("m2", "u2", "answered alone")).at(-1)).toBe(
       "unattached-result"
     );
+  });
+});
+
+describe("a plan window rejection", () => {
+  it("labels only the turn it arrived in", () => {
+    const { stream, feed } = opened();
+
+    const rejected: ClaudeEvent = {
+      type: "rate_limit_event",
+      rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
+    };
+
+    // The rejection came, but the turn still answered.
+    feed([rejected, ...textTurn("m1", "u1", "fine")]);
+
+    const sink = createAssistantMessageEventStream();
+
+    stream.begin(sink, 1);
+    feed(failedTurn("Overloaded."));
+
+    expect(stream.output.errorMessage).not.toContain(PLAN_QUOTA_PREFIX);
+
+    // A rejection fed to the stream between turns is dropped when the next one begins.
+    stream.handle(rejected);
+    stream.begin(createAssistantMessageEventStream(), 2);
+    feed(failedTurn("Overloaded."));
+
+    expect(stream.output.errorMessage).not.toContain(PLAN_QUOTA_PREFIX);
   });
 });

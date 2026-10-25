@@ -239,6 +239,9 @@ export class ClaudeStream {
 
   /** Starts a turn on `sink`; `timestamp` is epoch milliseconds from the caller's clock. */
   begin(sink: TurnSink, timestamp: number): void {
+    // A rejection belongs to the turn it arrived in: a stale one would label a later, unrelated
+    // failure a spent plan window (T13).
+    this.#rejection = Option.none();
     this.#sink = Option.some(sink);
     this.#output = this.#freshOutput(timestamp);
     this.#open = [];
@@ -798,6 +801,8 @@ export class ClaudeStream {
 
       return { kind: "ended", end: { kind: "failed", rejected } };
     }
+
+    this.#rejection = Option.none();
 
     if (!this.open) {
       return { kind: "unattached-result" };

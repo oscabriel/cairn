@@ -581,6 +581,8 @@ export interface FakeIO {
   emit(...events: ReadonlyArray<ClaudeEvent>): Effect.Effect<void>;
   /** Appends to the fake transcript of `sessionId`. */
   record(sessionId: string, entry: SessionEntry): Effect.Effect<void>;
+  /** Ends the event stream with a failure, as a child that exits mid-run does. */
+  die(message: string): Effect.Effect<void>;
 }
 
 /** One scripted child. The run ends when the script returns. */
@@ -890,6 +892,8 @@ export class ClaudeSdk extends Context.Service<
             }),
           emit: (...events) => Effect.asVoid(Queue.offerAll(out, events)),
           record,
+          die: (message) =>
+            Effect.asVoid(Queue.fail(out, new ClaudeQueryError({ message }))),
         };
 
         const fiber = yield* Effect.forkDetach(

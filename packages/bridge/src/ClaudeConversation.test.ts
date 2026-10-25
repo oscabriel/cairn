@@ -10,7 +10,17 @@ import type {
 } from "@earendil-works/pi-ai";
 import { normalizeContext, Type } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, Layer, Option, Ref, Stream } from "effect";
+import {
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Ref,
+  References,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 
 import { Claude } from "./Claude.ts";
@@ -1469,5 +1479,88 @@ describe("the live-child cap", () => {
           liveChildren: 1,
         })
       )
+  );
+});
+
+/** Starts, then exits mid-run. */
+const dies: FakeScript = (io) =>
+  Effect.gen(function* () {
+    yield* io.nextPrompt;
+    yield* io.emit(initEvent(SCRIPT_SESSION));
+    yield* io.die("Claude Code process exited with code 1");
+
+    return yield* Effect.never;
+  });
+
+describe("a child that dies mid-run", () => {
+  it.effect("logs the child's failure and ends the turn with an error", () => {
+    const logged: Array<unknown> = [];
+
+    const capture = Logger.make((options) => {
+      const annotations = options.fiber.getRef(
+        References.CurrentLogAnnotations
+      );
+
+      if (annotations.event === "claude_child_stream_failed") {
+        logged.push(annotations.error);
+      }
+    });
+
+    return Effect.gen(function* () {
+      const reply = yield* call([system, user("hi")]);
+
+      expect(reply.stopReason).toBe("error");
+      expect(logged).toStrictEqual(["Claude Code process exited with code 1"]);
+    }).pipe(
+      Effect.provide(
+        bridge([dies]).pipe(
+          Layer.provide(Logger.layer([capture], { mergeWithExisting: false }))
+        )
+      )
+    );
+  });
+});
+
+describe("a tool result that arrives after a real abort", () => {
+  it.effect(
+    "is not delivered: the held child is killed and the turn ends empty",
+    () => {
+      const received: Array<ClaudeToolResult> = [];
+
+      const script: FakeScript = (io) =>
+        Effect.gen(function* () {
+          yield* io.nextPrompt;
+          yield* io.emit(initEvent(SCRIPT_SESSION, ["mark"]));
+          yield* io.emit(
+            ...toolTurn("m1", "u1", "toolu_1", "mark", { line: "a" })
+          );
+          received.push(yield* io.callTool("mark", "toolu_1"));
+          yield* io.emit(...textTurn("m2", "u2", "went on anyway"));
+
+          return yield* Effect.never;
+        });
+
+      const stopped = new AbortController();
+
+      return Effect.gen(function* () {
+        const held = yield* call([system, user("mark it")]);
+
+        stopped.abort();
+
+        const answer = yield* call(
+          [system, user("mark it"), held, toolResult("toolu_1", "marked")],
+          { signal: stopped.signal }
+        );
+
+        yield* settle;
+
+        expect(held.stopReason).toBe("toolUse");
+        expect(answer.content).toStrictEqual([]);
+        expect(received.flatMap((result) => result.content)).not.toContainEqual(
+          { type: "text", text: "marked" }
+        );
+        expect((yield* runs)[0]?.closed ?? 0).toBeGreaterThanOrEqual(1);
+      }).pipe(Effect.provide(bridge([script])));
+    }
   );
 });

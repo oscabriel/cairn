@@ -5,7 +5,7 @@ import type { ThreadId } from "@cairn/protocol/Ids";
 import { Cause, Effect, Option, Predicate, Schema } from "effect";
 import { Command } from "foldkit";
 
-import { CairnConnection } from "../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import type { CairnConnectionService } from "../connection/Connection.ts";
 import { Message } from "./Message.ts";
 import {
@@ -173,4 +173,4 @@ export const reportPresence = (input: {
       visible: document.visibilityState === "visible",
       threadId: input.threadId,
     });
-  }).pipe(Effect.ignore, Effect.as(Message.ReportedPresence()));
+  }).pipe(withBoundary, Effect.ignore, Effect.as(Message.ReportedPresence()));

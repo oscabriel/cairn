@@ -7,7 +7,7 @@ import { Duration, Effect, Predicate, Schema, Stream } from "effect";
 import { Command, Dom } from "foldkit";
 import * as Mount from "foldkit/mount";
 
-import { CairnConnection } from "../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import { highlightStages } from "../timeline/markdown/Highlight.ts";
 import { Message } from "./Message.ts";
 import { DiffScope } from "./Model.ts";
@@ -65,6 +65,7 @@ export const FetchDiff = Command.define("FetchDiff", {
           })
     ).pipe(
       patchInTime,
+      withBoundary,
       Effect.match({
         onSuccess: (result) =>
           Message.LoadedDiff({ version, patch: result.diff }),

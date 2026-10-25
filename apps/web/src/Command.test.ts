@@ -4,6 +4,7 @@ import { Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
 import { answeredInTime, OUTBOX_SEND_TIMEOUT } from "./Command.ts";
+import { BRAIN_INTERNAL_TEXT, withBoundary } from "./connection/Connection.ts";
 
 describe("an outbox send", () => {
   it.effect(
@@ -24,6 +25,24 @@ describe("an outbox send", () => {
           "OutboxSendTimeout",
           true,
         ]);
+      })
+  );
+});
+
+describe("the client boundary", () => {
+  it.effect(
+    "turns a defect from the brain into a failure no retry will fix",
+    () =>
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(
+          withBoundary(Effect.die(new Error("undecodable answer")))
+        );
+
+        expect([
+          failure._tag,
+          failure.retryable,
+          failure.message,
+        ]).toStrictEqual(["Internal", false, BRAIN_INTERNAL_TEXT]);
       })
   );
 });

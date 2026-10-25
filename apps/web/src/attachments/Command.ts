@@ -6,7 +6,7 @@ import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import { File } from "foldkit/file";
 
-import { CairnConnection } from "../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import { createPreview, fitImage, revokePreview } from "./FitImage.ts";
 import { Message } from "./Message.ts";
 import { loadSaved, saveSaved, SavedAttachments } from "./Saved.ts";
@@ -64,7 +64,7 @@ export const UploadAttachment = Command.define("UploadAttachment", {
           onNone: () => ({}),
           onSome: (ms) => ({ pasteToRequestMs: Math.round(ms) }),
         }),
-      }).pipe(Effect.mapError(rpcFailure));
+      }).pipe(withBoundary, Effect.mapError(rpcFailure));
 
       const ref = yield* sendBytes({
         localId,
@@ -93,11 +93,13 @@ export const DiscardAttachment = Command.define("DiscardAttachment", {
   args: { attachmentId: AttachmentId },
   messages: [Message.CompletedDiscard],
   execute: ({ attachmentId }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      yield* client["attachments.discard"]({ attachmentId });
-    }).pipe(
+        yield* client["attachments.discard"]({ attachmentId });
+      })
+    ).pipe(
       // A discard that does not land costs nothing: unclaimed uploads are swept after 24 hours.
       Effect.ignore,
       Effect.as(Message.CompletedDiscard())

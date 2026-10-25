@@ -8,7 +8,7 @@ import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
 import { pushUrl } from "foldkit/navigation";
 
-import { CairnConnection } from "../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import { applyFaviconBadge } from "../shell/Notifications.ts";
 import {
   Intent,
@@ -175,11 +175,13 @@ export const BrowseFolder = Command.define("BrowseFolder", {
   args: { request: Schema.Int, path: Schema.Option(Schema.String) },
   messages: [Message.ReceivedListing, Message.FailedListing],
   execute: ({ path, request }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      return yield* client["projects.browse"]({ path });
-    }).pipe(
+        return yield* client["projects.browse"]({ path });
+      })
+    ).pipe(
       Effect.match({
         onSuccess: (result) => Message.ReceivedListing({ request, result }),
         onFailure: (failure) =>
@@ -199,11 +201,13 @@ export const RetryTask = Command.define("RetryTask", {
   args: { threadId: ThreadId, taskId: TaskId },
   messages: [Message.SucceededRetry, Message.FailedRetry],
   execute: ({ taskId, threadId }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      yield* client["thread.retryTask"]({ threadId, taskId });
-    }).pipe(
+        yield* client["thread.retryTask"]({ threadId, taskId });
+      })
+    ).pipe(
       Effect.match({
         onSuccess: () => Message.SucceededRetry(),
         onFailure: (failure) =>

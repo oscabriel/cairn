@@ -14,7 +14,7 @@ import { Effect, Option, Predicate, Schema } from "effect";
 import { Command } from "foldkit";
 import { replaceUrl } from "foldkit/navigation";
 
-import { CairnConnection } from "../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { workspaceStrategy, EnvMode } from "../hero/ContextStrip.ts";
 import { draftRouter, threadRouter } from "../Route.ts";
@@ -117,7 +117,7 @@ const onClient = <A, E>(
   use: (
     client: Effect.Success<typeof CairnConnection.get>
   ) => Effect.Effect<A, E>
-) => Effect.flatMap(CairnConnection.get, use);
+) => withBoundary(Effect.flatMap(CairnConnection.get, use));
 
 /** Loads the models the picker offers and the server's defaults (run by a Subscription). */
 export const fetchModels = (epoch: number) =>

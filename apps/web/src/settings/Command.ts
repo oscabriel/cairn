@@ -8,7 +8,7 @@ import type { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { load } from "foldkit/navigation";
 
-import { CairnConnection } from "../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import type { CairnConnectionService } from "../connection/Connection.ts";
 import {
   applyClientSettings,
@@ -64,11 +64,13 @@ export const FetchServerSettings = Command.define("FetchServerSettings", {
   args: { epoch: Schema.Int },
   messages: [Message.ReceivedServerSettings, Message.FailedLoad],
   execute: ({ epoch }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      return yield* client["settings.get"]();
-    }).pipe(
+        return yield* client["settings.get"]();
+      })
+    ).pipe(
       Effect.match({
         onSuccess: (settings) =>
           Message.ReceivedServerSettings({ epoch, settings }),
@@ -87,11 +89,13 @@ export const FetchCatalog = Command.define("FetchCatalog", {
   args: { epoch: Schema.Int },
   messages: [Message.ReceivedCatalog, Message.FailedLoad],
   execute: ({ epoch }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      return yield* client["models.list"]();
-    }).pipe(
+        return yield* client["models.list"]();
+      })
+    ).pipe(
       Effect.match({
         onSuccess: (catalog) => Message.ReceivedCatalog({ epoch, catalog }),
         onFailure: (failure) =>
@@ -109,11 +113,13 @@ export const FetchProviders = Command.define("FetchProviders", {
   args: { epoch: Schema.Int },
   messages: [Message.ReceivedProviders, Message.FailedLoad],
   execute: ({ epoch }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      return yield* client["providers.status"]();
-    }).pipe(
+        return yield* client["providers.status"]();
+      })
+    ).pipe(
       Effect.match({
         onSuccess: (providers) =>
           Message.ReceivedProviders({ epoch, providers }),
@@ -132,11 +138,13 @@ export const FetchExecutorStatus = Command.define("FetchExecutorStatus", {
   args: { epoch: Schema.Int },
   messages: [Message.ReceivedExecutorStatus, Message.FailedLoad],
   execute: ({ epoch }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      return yield* client["executor.status"]();
-    }).pipe(
+        return yield* client["executor.status"]();
+      })
+    ).pipe(
       Effect.match({
         onSuccess: (status) =>
           Message.ReceivedExecutorStatus({ epoch, status }),
@@ -158,13 +166,15 @@ export const FetchSkills = Command.define("FetchSkills", {
   args: { epoch: Schema.Int, projectId: ProjectId, reload: Schema.Boolean },
   messages: [Message.ReceivedSkills, Message.FailedLoad],
   execute: ({ epoch, projectId, reload }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      return reload
-        ? yield* client["skills.reload"]({ projectId })
-        : yield* client["skills.list"]({ projectId });
-    }).pipe(
+        return reload
+          ? yield* client["skills.reload"]({ projectId })
+          : yield* client["skills.list"]({ projectId });
+      })
+    ).pipe(
       Effect.match({
         onSuccess: (skills) => Message.ReceivedSkills({ epoch, skills }),
         onFailure: (failure) =>
@@ -182,11 +192,13 @@ export const UpdateServerSettings = Command.define("UpdateServerSettings", {
   args: { patch: SettingsPatch },
   messages: [Message.SucceededServerUpdate, Message.FailedServerUpdate],
   execute: ({ patch }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      return yield* client["settings.update"](patch);
-    }).pipe(
+        return yield* client["settings.update"](patch);
+      })
+    ).pipe(
       Effect.match({
         onSuccess: (settings) => Message.SucceededServerUpdate({ settings }),
         onFailure: (failure) =>
@@ -203,12 +215,14 @@ export const UpdateServerSettings = Command.define("UpdateServerSettings", {
 /** Asks the brain where to grant Executor access again, and goes there. */
 export const SignInExecutor = Command.define("SignInExecutor", {
   messages: [Message.OpenedSignIn, Message.FailedSignIn],
-  execute: Effect.gen(function* () {
-    const client = yield* CairnConnection.get;
-    const signIn = yield* client["executor.signIn"]();
+  execute: withBoundary(
+    Effect.gen(function* () {
+      const client = yield* CairnConnection.get;
+      const signIn = yield* client["executor.signIn"]();
 
-    yield* load(signIn.authorizeUrl);
-  }).pipe(
+      yield* load(signIn.authorizeUrl);
+    })
+  ).pipe(
     Effect.match({
       onSuccess: () => Message.OpenedSignIn(),
       onFailure: (failure) =>

@@ -8,7 +8,7 @@ import { Command } from "foldkit";
 import * as Mount from "foldkit/mount";
 
 import { mintRequestId } from "../composer/Ids.ts";
-import { CairnConnection } from "../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { highlightStages } from "./markdown/Highlight.ts";
 import { Message } from "./Message.ts";
@@ -37,6 +37,7 @@ export const LoadEarlier = Command.define("LoadEarlier", {
             limit: HISTORY_PAGE_LIMIT,
           })
         ).pipe(
+          withBoundary,
           Effect.match({
             onSuccess: (page) => Message.LoadedEarlier({ threadId, page }),
             onFailure: () => Message.FailedEarlier({ threadId }),

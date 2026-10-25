@@ -6,7 +6,7 @@ import type { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { load, pushUrl } from "foldkit/navigation";
 
-import { CairnConnection } from "./connection/Connection.ts";
+import { CairnConnection, withBoundary } from "./connection/Connection.ts";
 import type {
   CairnClient,
   CairnConnectionService,
@@ -123,11 +123,13 @@ export const SayHello = Command.define("SayHello", {
   args: { epoch: Schema.Int },
   messages: [Message.SucceededHello, Message.LostConnection],
   execute: ({ epoch }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      return yield* client["session.hello"]();
-    }).pipe(
+        return yield* client["session.hello"]();
+      })
+    ).pipe(
       Effect.tap((hello) => reloadIfStale(hello.build)),
       Effect.match({
         onSuccess: (hello) => Message.SucceededHello({ epoch, hello }),
@@ -149,11 +151,13 @@ export const SendOutboxItem = Command.define("SendOutboxItem", {
   args: { epoch: Schema.Int, item: OutboxItem },
   messages: [Message.AcknowledgedOutboxItem, Message.FailedOutboxItem],
   execute: ({ epoch, item }) =>
-    Effect.gen(function* () {
-      const client = yield* CairnConnection.get;
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
 
-      yield* sendItem(client, item);
-    }).pipe(
+        yield* sendItem(client, item);
+      })
+    ).pipe(
       answeredInTime,
       Effect.match({
         onSuccess: () =>

@@ -147,10 +147,20 @@ const failure =
     effect: Effect.Effect<A, E, R>
   ) =>
     effect.pipe(
+      // The cause can name files on disk, so it goes to the log, and the message stays fixed (T19).
+      Effect.tapError((cause) =>
+        Effect.logWarning("attachments store failed").pipe(
+          Effect.annotateLogs({
+            event: "attachment_store_failed",
+            operation,
+            cause: cause.message,
+          })
+        )
+      ),
       Effect.mapError(
         (cause) =>
           new AttachmentStoreError({
-            message: `${operation} failed on the attachments store: ${cause.message}. Retry; nothing half-written was kept.`,
+            message: `${operation} failed on the attachments store. Retry; nothing half-written was kept.`,
             operation,
             cause,
           })

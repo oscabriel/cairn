@@ -8,13 +8,32 @@ import path from "node:path";
 
 import { ProjectId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { CodemodeRunOptions } from "@earendil-works/pi-codemode";
 import { createRegistry } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Option, Predicate, Stream } from "effect";
+import {
+  Effect,
+  Fiber,
+  Function,
+  Layer,
+  Option,
+  Predicate,
+  Stream,
+} from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { BrainConfig } from "./BrainConfig.ts";
-import { setsOwnDeadline, TIMEOUT_REFUSAL } from "./CodeMode.ts";
+import {
+  ScriptSlots,
+  setsOwnDeadline,
+  TIMEOUT_REFUSAL,
+  WaitingSandbox,
+} from "./CodeMode.ts";
+import {
+  BASH_DEFAULT_TIMEOUT_SECONDS,
+  BASH_MAX_TIMEOUT_SECONDS,
+  bashTimeoutSeconds,
+} from "./CodingTools.ts";
 import { Extensions } from "./Extensions.ts";
 import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
@@ -101,6 +120,98 @@ const thread = (n: number) =>
   ThreadId.make(
     `0190f0c0-0000-7000-8000-0000000000${String(n).padStart(2, "0")}`
   );
+
+/** Starts `code` in `sandbox` with the fewest options a run takes. */
+const startScript = (
+  sandbox: WaitingSandbox,
+  code: string,
+  signal?: AbortSignal
+) => {
+  const options: CodemodeRunOptions = {
+    startedAt: 0,
+    seed: 1,
+    onCall: Function.constVoid,
+  };
+
+  if (signal !== undefined) {
+    options.signal = signal;
+  }
+
+  return sandbox.start(code, options);
+};
+
+const pause = async (ms: number) => {
+  await Effect.runPromise(Effect.sleep(ms));
+};
+
+describe("code mode slots", () => {
+  it("a script past the limit waits for a slot, and Stop ends the wait", async () => {
+    const sandbox = new WaitingSandbox(
+      { memoryLimitBytes: 64 * 1024 * 1024, timeoutMs: Infinity },
+      new ScriptSlots(1)
+    );
+
+    const stuck = new AbortController();
+    const first = startScript(sandbox, "while (true) {}", stuck.signal);
+    const second = startScript(sandbox, "return 2;");
+    const stopped = new AbortController();
+    const third = startScript(sandbox, "return 3;", stopped.signal);
+
+    await pause(300);
+    assert.isFalse(second.finished, "the second waits behind the first");
+
+    stopped.abort();
+    assert.deepInclude(await third.result, { ok: false });
+
+    stuck.abort();
+
+    const [firstResult, secondResult] = await Promise.all([
+      first.result,
+      second.result,
+    ]);
+
+    assert.isFalse(firstResult.ok);
+    assert.deepInclude(secondResult, { ok: true, value: 2 });
+
+    await sandbox.close();
+  });
+
+  it("frees slots in the order scripts asked", async () => {
+    const slots = new ScriptSlots(1);
+    const order: Array<string> = [];
+
+    assert.isTrue(slots.tryTake());
+
+    const a = (async () => {
+      await slots.take();
+      order.push("a");
+    })();
+
+    const b = (async () => {
+      await slots.take();
+      order.push("b");
+    })();
+
+    await pause(10);
+    slots.release();
+    await a;
+    slots.release();
+    await b;
+
+    assert.deepStrictEqual(order, ["a", "b"]);
+    assert.isFalse(slots.tryTake());
+  });
+});
+
+describe("bash timeouts", () => {
+  it("defaults to 120 seconds and caps a model's ask at 600", () => {
+    assert.strictEqual(bashTimeoutSeconds(), BASH_DEFAULT_TIMEOUT_SECONDS);
+    assert.strictEqual(BASH_DEFAULT_TIMEOUT_SECONDS, 120);
+    assert.strictEqual(bashTimeoutSeconds(30), 30);
+    assert.strictEqual(bashTimeoutSeconds(3600), BASH_MAX_TIMEOUT_SECONDS);
+    assert.strictEqual(BASH_MAX_TIMEOUT_SECONDS, 600);
+  });
+});
 
 describe("coding tools", () => {
   it.effect(

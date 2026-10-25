@@ -8,6 +8,8 @@
 //
 // `bash` gets the brain's environment without `CAIRN_*`: pi-durable's default execution inherits
 // `process.env` whole, so `prepare` turns inheritance off and passes the filtered copy instead.
+// A `bash` call without a timeout stops after 120 seconds, and a model may ask for at most 600
+// (T16), so a hung command cannot hold its thread's turn forever.
 // The search tools run `rg` and `fd` as argv arrays, with no shell between the model and the process.
 import type { Context as ChordContext } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
@@ -169,6 +171,41 @@ const ls = defineTool({
     ),
 });
 
+/** A `bash` command's limit when the model names none, in seconds (T16). */
+export const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
+
+/** The longest limit a model may ask `bash` for, in seconds. */
+export const BASH_MAX_TIMEOUT_SECONDS = 600;
+
+/** The limit a `bash` call runs under: the model's, at most the maximum, else the default. */
+export const bashTimeoutSeconds = (asked?: number): number =>
+  asked === undefined
+    ? BASH_DEFAULT_TIMEOUT_SECONDS
+    : Math.min(asked, BASH_MAX_TIMEOUT_SECONDS);
+
+const BASH_TIMEOUT_NOTE = `Without a timeout a command stops after ${BASH_DEFAULT_TIMEOUT_SECONDS} seconds; pass up to ${BASH_MAX_TIMEOUT_SECONDS} for a longer one.`;
+
+/** pi-durable's `bash` with a default and a maximum timeout, said in its description. */
+const boundedBash = (bash: ReturnType<typeof createBashTool>) => ({
+  ...bash,
+  description: `${bash.description} ${BASH_TIMEOUT_NOTE}`,
+  parameters: {
+    ...bash.parameters,
+    properties: {
+      ...bash.parameters.properties,
+      timeout: {
+        ...bash.parameters.properties.timeout,
+        description: `Timeout in seconds. ${BASH_TIMEOUT_NOTE}`,
+      },
+    },
+  },
+  execute: async (...[args, ...rest]: Parameters<typeof bash.execute>) =>
+    await bash.execute(
+      { ...args, timeout: bashTimeoutSeconds(args.timeout) },
+      ...rest
+    ),
+});
+
 /** The coding tools, with `read` replay-safe and `bash` given a Cairn-free environment. */
 const codingTools = (images: ImageProcessor) => {
   const read = createReadTool({ images });
@@ -179,15 +216,17 @@ const codingTools = (images: ImageProcessor) => {
       { ...read, replay: "safe" as const },
       createWriteTool(),
       createEditTool(),
-      createBashTool({
-        prepare: (execution) => {
-          execution.env = {
-            ...threadProcessEnv(process.env),
-            ...execution.env,
-          };
-          execution.inheritEnv = false;
-        },
-      }),
+      boundedBash(
+        createBashTool({
+          prepare: (execution) => {
+            execution.env = {
+              ...threadProcessEnv(process.env),
+              ...execution.env,
+            };
+            execution.inheritEnv = false;
+          },
+        })
+      ),
       grep,
       find,
       ls,

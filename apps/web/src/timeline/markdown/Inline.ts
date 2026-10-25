@@ -106,11 +106,16 @@ const codeSpan = (
   return Option.none();
 };
 
-/** The `]` closing a bracket opened at `at`, skipping code spans and nested brackets. */
-const closingBracket = (text: string, at: number): number => {
-  let depth = 0;
+/**
+ * Every bracket pair in `text`, by the index of its `[`: one pass with a stack, skipping escapes
+ * and code spans. Scanning to the end from each `[` instead was quadratic on unmatched brackets
+ * (20,000 took 602 ms, paid again on every delta of the last block; T51).
+ */
+const bracketPairs = (text: string): ReadonlyMap<number, number> => {
+  const pairs = new Map<number, number>();
+  const open: Array<number> = [];
 
-  for (let index = at; index < text.length; index += 1) {
+  for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
 
     if (char === "\\") {
@@ -123,17 +128,17 @@ const closingBracket = (text: string, at: number): number => {
         onSome: ({ end }) => end - 1,
       });
     } else if (char === "[") {
-      depth += 1;
+      open.push(index);
     } else if (char === "]") {
-      depth -= 1;
+      const opener = open.pop();
 
-      if (depth === 0) {
-        return index;
+      if (opener !== undefined) {
+        pairs.set(opener, index);
       }
     }
   }
 
-  return -1;
+  return pairs;
 };
 
 interface LinkMatch {
@@ -144,10 +149,14 @@ interface LinkMatch {
 }
 
 /** A `[label](url "title")` starting at the `[` at `at`. */
-const linkAt = (text: string, at: number): Option.Option<LinkMatch> => {
-  const close = closingBracket(text, at);
+const linkAt = (
+  text: string,
+  at: number,
+  brackets: ReadonlyMap<number, number>
+): Option.Option<LinkMatch> => {
+  const close = brackets.get(at);
 
-  if (close === -1) {
+  if (close === undefined) {
     return Option.none();
   }
 
@@ -263,6 +272,8 @@ interface Cursor {
   readonly at: number;
   readonly out: Builder;
   readonly parse: Parse;
+  /** The text's bracket pairs, computed on first use (`bracketPairs`). */
+  readonly brackets: () => ReadonlyMap<number, number>;
 }
 
 const emphasisAt = ({ at, out, parse, text }: Cursor): Option.Option<Step> => {
@@ -297,9 +308,9 @@ const emphasisAt = ({ at, out, parse, text }: Cursor): Option.Option<Step> => {
 };
 
 const linkOrTextAt = (cursor: Cursor, image: boolean): Option.Option<Step> => {
-  const { at, out, parse, text } = cursor;
+  const { at, brackets, out, parse, text } = cursor;
 
-  return Option.map(linkAt(text, image ? at + 1 : at), (link) => {
+  return Option.map(linkAt(text, image ? at + 1 : at, brackets()), (link) => {
     if (image) {
       out.push({ kind: "image", url: link.url, alt: link.label });
 
@@ -438,6 +449,13 @@ export const parseInline = (text: string): ReadonlyArray<Inline> => {
   const out = new Builder();
   let at = 0;
   let plainFrom = 0;
+  let pairs: ReadonlyMap<number, number> | undefined;
+
+  const brackets = () => {
+    pairs ??= bracketPairs(text);
+
+    return pairs;
+  };
 
   while (at < text.length) {
     const step = STEPS.get(text[at] ?? "");
@@ -450,7 +468,7 @@ export const parseInline = (text: string): ReadonlyArray<Inline> => {
     out.text(text.slice(plainFrom, at));
     plainFrom = at;
 
-    const taken = step({ text, at, out, parse: parseInline });
+    const taken = step({ text, at, out, parse: parseInline, brackets });
 
     if (Option.isNone(taken)) {
       at += 1;

@@ -244,3 +244,18 @@ describe("incremental parse", () => {
     );
   });
 });
+
+describe("unmatched brackets", () => {
+  it("parse in linear time: 20,000 [ in under 20 ms", () => {
+    const brackets = "[".repeat(20_000);
+
+    parseInline(brackets);
+
+    const started = performance.now();
+
+    parseInline(brackets);
+    parseInline(`${brackets}]`);
+
+    assert.isBelow(performance.now() - started, 40);
+  });
+});

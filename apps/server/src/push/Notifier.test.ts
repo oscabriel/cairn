@@ -114,7 +114,10 @@ const allowTestEndpoints = Effect.provideService(PushEndpointRule, {
 
 const subscription = (name: string): PushSubscriptionInput => ({
   endpoint: `https://push.test/${name}`,
-  keys: { p256dh: `p256dh-${name}`, auth: `auth-${name}` },
+  keys: {
+    p256dh: "B".padEnd(87, "A"),
+    auth: Buffer.from(name.padEnd(16, "-").slice(0, 16)).toString("base64url"),
+  },
 });
 
 const subscribe = (...names: ReadonlyArray<string>) =>

@@ -5,7 +5,7 @@
 // subscription is deleted only when its keys are still the ones the push went to. Changed: an Effect
 // service over `cairn.sqlite`; rows record the login that subscribed instead of a device name.
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
-import { Clock, Context, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 /** The push services browsers subscribe through. */
@@ -83,6 +83,23 @@ const toSubscription = (row: typeof Row.Type): PushSubscriptionInput => ({
   keys: { p256dh: row.p256dh, auth: row.auth },
 });
 
+/** Decoded bytes of a base64url string, or none when it is not base64url. */
+const base64UrlBytes = (text: string): Option.Option<Uint8Array> =>
+  /^[A-Za-z0-9_-]*={0,2}$/u.test(text)
+    ? Option.some(Uint8Array.from(Buffer.from(text, "base64url")))
+    : Option.none();
+
+/** Whether a subscription's keys are an uncompressed P-256 point and a 16-byte auth secret. */
+export const hasValidKeys = (subscription: PushSubscriptionInput): boolean =>
+  Option.exists(
+    base64UrlBytes(subscription.keys.p256dh),
+    (point) => point.length === 65 && point[0] === 0x04
+  ) &&
+  Option.exists(
+    base64UrlBytes(subscription.keys.auth),
+    (secret) => secret.length === 16
+  );
+
 /** The devices that asked for pushes, one row per endpoint. */
 export class PushSubscriptions extends Context.Service<
   PushSubscriptions,
@@ -125,6 +142,16 @@ export class PushSubscriptions extends Context.Service<
           return yield* new PushEndpointRefused({
             message: `PushSubscriptions refused ${host}: it is not a push service Cairn sends to (Apple, Google, Mozilla or Microsoft).`,
             host,
+          });
+        }
+
+        // A key that is not a P-256 point (65 bytes from 0x04) or a 16-byte secret would fail every
+        // push to this device, three times each, forever (T36).
+        if (!hasValidKeys(subscription)) {
+          return yield* new PushEndpointRefused({
+            message:
+              "PushSubscriptions refused a subscription whose keys are not a P-256 point and a 16-byte secret. Subscribe again from the browser.",
+            host: endpointHost(subscription.endpoint),
           });
         }
 

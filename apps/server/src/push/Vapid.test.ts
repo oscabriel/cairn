@@ -21,6 +21,7 @@ import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { Push0005 } from "../db/migrations/0005Push.ts";
 import {
+  hasValidKeys,
   isPushEndpoint,
   PushEndpointRule,
   PushSubscriptions,
@@ -143,6 +144,10 @@ describe(Vapid, () => {
 
 const P256DH = "B".padEnd(87, "A");
 
+/** A valid 16-byte auth secret, distinct per label. */
+const authOf = (label: string) =>
+  Buffer.from(label.padEnd(16, "-")).toString("base64url");
+
 const subscriptionsLayer = PushSubscriptions.layerNoDeps.pipe(
   Layer.provideMerge(Database.layerTest({ "0005_Push": Push0005 }))
 );
@@ -180,29 +185,29 @@ describe(PushSubscriptions, () => {
 
         yield* subscriptions.upsert("oscabriel@github", {
           endpoint,
-          keys: { p256dh: P256DH, auth: "old" },
+          keys: { p256dh: P256DH, auth: authOf("old") },
         });
         yield* subscriptions.upsert("oscabriel@github", {
           endpoint,
-          keys: { p256dh: P256DH, auth: "new" },
+          keys: { p256dh: P256DH, auth: authOf("new") },
         });
 
         const refused = yield* Effect.flip(
           subscriptions.upsert("oscabriel@github", {
             endpoint: "https://evil.test/x",
-            keys: { p256dh: P256DH, auth: "x" },
+            keys: { p256dh: P256DH, auth: authOf("x") },
           })
         );
 
         assert.strictEqual(refused._tag, "PushEndpointRefused");
         assert.deepStrictEqual(yield* subscriptions.list, [
-          { endpoint, keys: { p256dh: P256DH, auth: "new" } },
+          { endpoint, keys: { p256dh: P256DH, auth: authOf("new") } },
         ]);
 
         // A refusal for the old keys must not delete the row the device sent again since.
         yield* subscriptions.removeRefused({
           endpoint,
-          keys: { p256dh: P256DH, auth: "old" },
+          keys: { p256dh: P256DH, auth: authOf("old") },
         });
 
         assert.strictEqual((yield* subscriptions.list).length, 1);
@@ -220,7 +225,7 @@ describe(PushSubscriptions, () => {
 
       yield* subscriptions.upsert("oscabriel@github", {
         endpoint: "https://push.test/a",
-        keys: { p256dh: P256DH, auth: "a" },
+        keys: { p256dh: P256DH, auth: authOf("a") },
       });
 
       assert.strictEqual((yield* subscriptions.list).length, 1);
@@ -231,4 +236,26 @@ describe(PushSubscriptions, () => {
       Effect.provide(subscriptionsLayer)
     )
   );
+});
+
+describe("subscription keys", () => {
+  it("must be a P-256 point and a 16-byte secret", () => {
+    const endpoint = "https://web.push.apple.com/device-k";
+
+    assert.isTrue(
+      hasValidKeys({ endpoint, keys: { p256dh: P256DH, auth: authOf("k") } })
+    );
+    assert.isFalse(
+      hasValidKeys({
+        endpoint,
+        keys: {
+          p256dh: Buffer.alloc(10, 4).toString("base64url"),
+          auth: authOf("k"),
+        },
+      })
+    );
+    assert.isFalse(
+      hasValidKeys({ endpoint, keys: { p256dh: P256DH, auth: "short" } })
+    );
+  });
 });

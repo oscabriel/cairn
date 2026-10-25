@@ -46,6 +46,9 @@ export const VAPID_TOKEN_LIFETIME = Duration.hours(12);
 /** How long a push service may take to answer before the send fails. */
 const SEND_TIMEOUT = Duration.seconds(15);
 
+/** How long a refused push's body may take to read, after its headers came within the send timeout. */
+const BODY_READ_TIMEOUT = Duration.seconds(2);
+
 /** A device's push subscription: its endpoint and its keys, as the browser gave them. */
 export type PushTarget = PushSubscriptionInput;
 
@@ -430,6 +433,10 @@ export class WebPush extends Context.Service<
           ? ""
           : yield* response.value.text.pipe(
               Effect.map((full) => full.slice(0, 200)),
+              // The send timeout ended with the headers; a body that never comes must not hold
+              // the delivery (T36).
+              Effect.timeoutOption(BODY_READ_TIMEOUT),
+              Effect.map(Option.getOrElse(() => "")),
               Effect.orElseSucceed(() => "")
             );
 

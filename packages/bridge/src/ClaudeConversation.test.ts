@@ -1605,7 +1605,7 @@ describe("slot permits", () => {
         "aborted",
         [],
       ]);
-      expect((yield* runs)).toHaveLength(1);
+      expect(yield* runs).toHaveLength(1);
 
       yield* Fiber.interrupt(first);
     }).pipe(Effect.provide(bridge([goesQuiet])));

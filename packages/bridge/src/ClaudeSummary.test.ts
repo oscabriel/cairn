@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Option, Ref } from "effect";
+import { TestClock } from "effect/testing";
 
 import { Claude } from "./Claude.ts";
 import { ClaudeAccount } from "./ClaudeAccount.ts";
@@ -21,6 +22,7 @@ import {
   PI_PREAMBLE,
   planQuotaExceededText,
   PROMPT_REFUSED_TEXT,
+  STREAM_STALLED_TEXT,
   THIRD_PARTY_DOC_PATHS,
 } from "./ClaudeGuards.ts";
 import { claudeModels, DEFAULT_LONG_CONTEXT } from "./ClaudeModels.ts";
@@ -336,6 +338,27 @@ describe("aborts", () => {
       ]).toStrictEqual(["aborted", "Operation aborted", true]);
     }).pipe(Effect.provide(bridge([hangs])));
   });
+});
+
+describe("a silent one-shot", () => {
+  it.effect("fails once it says nothing for the stall limit", () =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(call([summarizer, user("text")]));
+
+      yield* until(Effect.map(runs, (all) => all.length === 1));
+      yield* TestClock.adjust("89 seconds");
+      expect(fiber.pollUnsafe()).toBeUndefined();
+
+      yield* TestClock.adjust("3 seconds");
+
+      const reply = yield* Fiber.join(fiber);
+
+      expect([reply.stopReason, reply.errorMessage]).toStrictEqual([
+        "error",
+        STREAM_STALLED_TEXT,
+      ]);
+    }).pipe(Effect.provide(bridge([hangs])))
+  );
 });
 
 describe("failures", () => {

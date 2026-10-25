@@ -40,7 +40,7 @@ import type {
   AssistantMessageEvent,
   Usage,
 } from "@earendil-works/pi-ai";
-import { Clock, Effect, Layer, Option, Stream } from "effect";
+import { Clock, Duration, Effect, Layer, Option, Stream } from "effect";
 
 import type { ClaudeEvent } from "./ClaudeEvents.ts";
 import type { ChildOptions } from "./ClaudeGuards.ts";
@@ -50,6 +50,7 @@ import {
   INIT_REFUSED_TEXT,
   PAID_CREDITS_TEXT,
   PROMPT_REFUSED_TEXT,
+  STREAM_STALLED_TEXT,
   abortKind,
   childEnv,
   claudeFailureText,
@@ -92,6 +93,9 @@ interface Progress {
 }
 
 /** Folds one event into `progress`; sets the outcome once the child has said all it will. */
+/** How often a one-shot child's silence is checked. */
+const ONE_SHOT_STALL_CHECK = Duration.seconds(1);
+
 const readEvent = (progress: Progress, event: ClaudeEvent): void => {
   switch (event.type) {
     case "system": {
@@ -270,6 +274,7 @@ const layerNoDeps = Layer.effect(
     const sdk = yield* ClaudeSdk;
     const settings = yield* ClaudeSettings;
     const clock = yield* Clock.Clock;
+    const stallMs = Duration.toMillis(settings.stallAfter);
 
     const finish = (
       request: OneShotRequest,
@@ -360,13 +365,42 @@ const layerNoDeps = Layer.effect(
           });
           yield* child.input.end;
 
-          yield* Stream.runForEachWhile(child.events, (event) =>
+          // The conversation's watchdog, for one-shots (T13): a child silent for `stallAfter`
+          // fails, unless Claude Code said it is waiting out an API retry.
+          let lastEventAt = clock.currentTimeMillisUnsafe();
+          let quietUntil = 0;
+
+          const read = Stream.runForEachWhile(child.events, (event) =>
             Effect.sync(() => {
+              lastEventAt = clock.currentTimeMillisUnsafe();
+
+              if (event.type === "system" && "retry_delay_ms" in event) {
+                quietUntil = lastEventAt + event.retry_delay_ms;
+              }
+
               readEvent(progress, event);
 
               return Option.isNone(progress.outcome);
             })
-          );
+          ).pipe(Effect.as(false));
+
+          const stalled = Effect.gen(function* () {
+            while (true) {
+              yield* Effect.sleep(ONE_SHOT_STALL_CHECK);
+
+              const at = clock.currentTimeMillisUnsafe();
+
+              if (at - lastEventAt > stallMs && at >= quietUntil) {
+                return true;
+              }
+            }
+          });
+
+          if (yield* Effect.raceFirst(read, stalled)) {
+            yield* Effect.logWarning("claude one-shot stalled");
+
+            return { kind: "error", text: STREAM_STALLED_TEXT } as const;
+          }
 
           return Option.getOrElse(progress.outcome, (): Outcome => ({
             kind: "error",

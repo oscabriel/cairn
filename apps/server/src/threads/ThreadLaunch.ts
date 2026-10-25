@@ -51,6 +51,7 @@ import {
   Match,
   Option,
   Predicate,
+  Schedule,
   Schema,
 } from "effect";
 
@@ -61,6 +62,7 @@ import { ScratchProject } from "../projects/ScratchProject.ts";
 import {
   isTemporaryWorktreeBranch,
   worktreePathFor,
+  worktreeRepoKey,
   Worktrees,
 } from "../projects/Worktrees.ts";
 import { CommandReceipts } from "../shell/CommandReceipts.ts";
@@ -138,6 +140,12 @@ const unavailable = (cause: { readonly message: string }) =>
     reason: "unavailable",
     field: Option.none(),
   });
+
+/** How a launch row is forgotten after its turn was submitted: a few tries, a moment apart. */
+const LAUNCH_ROW_REMOVE_RETRY = {
+  times: 4,
+  schedule: Schedule.spaced("250 millis"),
+};
 
 /** The `lastError` of a thread whose launch was stopped before its first message reached the brain. */
 export const STOPPED_BEFORE_START = "Stopped before the thread started.";
@@ -503,20 +511,17 @@ export class ThreadLaunch extends Context.Service<
 
                 const worktreePath = worktreePathFor(
                   worktreesDir,
-                  path.basename(path.resolve(root)),
+                  worktreeRepoKey(root),
                   branch
                 );
 
-                const existing = (yield* worktrees.list(root)).some(
-                  (entry) => path.resolve(entry.path) === worktreePath
-                );
-
+                // Nothing is marked made until `git worktree add` says it made it (T18).
                 planned = {
                   ...row,
                   branch: Option.some(branch),
                   worktreePath: Option.some(worktreePath),
-                  worktreeCreated: !existing,
-                  branchCreated: !(yield* worktrees.branchExists(root, branch)),
+                  worktreeCreated: false,
+                  branchCreated: false,
                 };
 
                 yield* launches.update(planned);
@@ -534,6 +539,9 @@ export class ThreadLaunch extends Context.Service<
                 ...planned,
                 phase: "workspace" as const,
                 cwd: Option.some(made.worktreePath),
+                worktreePath: Option.some(made.worktreePath),
+                worktreeCreated: planned.worktreeCreated || made.created,
+                branchCreated: planned.branchCreated || made.branchCreated,
               };
             }),
         }).pipe(
@@ -614,6 +622,10 @@ export class ThreadLaunch extends Context.Service<
 
         const projectShell = project.value.shell;
         const { text } = input.initialMessage;
+
+        // Set once the harness took the first turn: from then on the run owns the workspace, so a
+        // later failure (forgetting the launch row) cleans nothing up and marks nothing failed (T18).
+        let submitted = false;
 
         const attempt = Effect.gen(function* () {
           if (row.phase === "created") {
@@ -705,6 +717,8 @@ export class ThreadLaunch extends Context.Service<
                 })
                 .pipe(Effect.mapError(stepFailed("message")));
 
+              submitted = true;
+
               yield* logTurnSubmitted(
                 input.threadId,
                 input.initialMessage,
@@ -733,6 +747,23 @@ export class ThreadLaunch extends Context.Service<
               onSome: (error) => error.message,
             });
 
+            if (submitted) {
+              return Effect.logWarning(
+                "thread launch failed after its turn was submitted"
+              ).pipe(
+                Effect.annotateLogs({
+                  event: "thread_launch_failed_after_submit",
+                  threadId: input.threadId,
+                  cause: String(cause),
+                }),
+                Effect.andThen(
+                  launches
+                    .remove(commandId)
+                    .pipe(Effect.retry(LAUNCH_ROW_REMOVE_RETRY), Effect.ignore)
+                )
+              );
+            }
+
             return Effect.gen(function* () {
               yield* Effect.logWarning("thread launch failed").pipe(
                 Effect.annotateLogs({
@@ -744,6 +775,26 @@ export class ThreadLaunch extends Context.Service<
               // A rename still running would race the removal of its branch.
               yield* FiberMap.remove(naming, `branch:${input.threadId}`);
               yield* cleanUp(row, projectShell);
+
+              // A scratch folder is the launch's own until the thread is ensured on it (T18).
+              if (
+                projectShell.kind === "scratch" &&
+                row.phase !== "ensured" &&
+                Option.isSome(row.cwd)
+              ) {
+                yield* scratch.releaseFolder(row.cwd.value).pipe(
+                  Effect.catchCause((released) =>
+                    Effect.logWarning("launch cleanup failed").pipe(
+                      Effect.annotateLogs({
+                        event: "launch_cleanup_failed",
+                        threadId: input.threadId,
+                        cause: String(released),
+                      })
+                    )
+                  )
+                );
+              }
+
               yield* markFailed(row, message);
 
               if (row.phase === "ensured") {

@@ -4,12 +4,15 @@
 // `isTemporaryWorktreeBranch`) and apps/server/src/vcs/GitVcsDriverCore.ts (`createWorktree`, lines
 // 3686 to 3800; `branchExists` and `resolveAvailableBranchName`, 1199 to 1236; the rename behind
 // `renameBranch`). Kept: a thread's worktree gets a temporary `<prefix>/<8 hex>` branch, flattened to
-// `<prefix>-<8 hex>` when a plain `<prefix>` branch blocks the folder form; the worktree folder is
-// `<worktrees>/<repo>/<branch with / as ->`; `git worktree add -b <branch> -- <path> <start>`
+// `<prefix>-<8 hex>` when a plain `<prefix>` branch blocks the folder form;
+// `git worktree add -b <branch> -- <path> <start>`
 // with the repository's `checkout.workers`; a rename takes the first free name of `name`,
 // `name-1` ... `name-100`. Changed: the prefix is `cairn`; Linux only; no progress parsing,
 // submodules or project scripts; every call goes through Cairn's `Git` with its safe options; and
-// the legacy `t3code` temporary names are not recognised.
+// the legacy `t3code` temporary names are not recognised. The worktree folder is
+// `<worktrees>/<repo>-<8 hex of the repo's path>/<branch with / as ->`, so two repositories with
+// one folder name never share a folder, and `remove` deletes a folder only when git lists it as a
+// worktree of that repository (T18).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -27,6 +30,7 @@
 // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import type { Branch, BranchesResult } from "@cairn/protocol/Projects";
@@ -102,7 +106,15 @@ export const flattenTemporaryWorktreeBranchName = (refName: string) => {
 export const isTemporaryWorktreeBranch = (refName: string) =>
   TEMPORARY_BRANCH.test(refName.trim().toLowerCase());
 
-/** Where a worktree for `branch` of the repository named `repoName` lives. */
+/** The folder name a repository's worktrees live under: its name and a short hash of its path. */
+export const worktreeRepoKey = (repoRoot: string) => {
+  const resolved = path.resolve(repoRoot);
+  const hash = createHash("sha256").update(resolved).digest("hex").slice(0, 8);
+
+  return `${path.basename(resolved)}-${hash}`;
+};
+
+/** Where a worktree for `branch` of the repository keyed `repoName` lives. */
 export const worktreePathFor = (
   worktreesDir: string,
   repoName: string,
@@ -414,17 +426,28 @@ export class Worktrees extends Context.Service<
       ) {
         const { repoRoot } = input;
 
-        const worktreePath = worktreePathFor(
+        const plannedPath = worktreePathFor(
           input.worktreesDir,
-          path.basename(path.resolve(repoRoot)),
+          worktreeRepoKey(repoRoot),
           input.branch
         );
 
         yield* checkBranchName(repoRoot, input.branch);
 
-        const existing = (yield* list(repoRoot)).find(
-          (entry) => path.resolve(entry.path) === worktreePath
-        );
+        const worktrees = yield* list(repoRoot);
+        const ownDir = `${path.resolve(input.worktreesDir)}${path.sep}`;
+
+        // The planned folder, or this branch's worktree in Cairn's folder under an older layout.
+        const existing =
+          worktrees.find((entry) => path.resolve(entry.path) === plannedPath) ??
+          worktrees.find(
+            (entry) =>
+              path.resolve(entry.path).startsWith(ownDir) &&
+              Option.contains(entry.branch, input.branch)
+          );
+
+        const worktreePath =
+          existing === undefined ? plannedPath : path.resolve(existing.path);
 
         if (existing !== undefined) {
           if (!Option.contains(existing.branch, input.branch)) {
@@ -558,10 +581,14 @@ export class Worktrees extends Context.Service<
             .pipe(Effect.mapError(gitFailed("Worktrees.remove")));
         }
 
-        // A folder git no longer knows (a half-made add) is removed too.
-        yield* fs
-          .remove(worktreePath, { recursive: true, force: true })
-          .pipe(Effect.ignore);
+        // Only a folder git lists for this repository is deleted: one it does not list may be
+        // another repository's, or the user's (T18).
+        if (known) {
+          yield* fs
+            .remove(worktreePath, { recursive: true, force: true })
+            .pipe(Effect.ignore);
+        }
+
         yield* git
           .run("Worktrees.remove", repoRoot, ["worktree", "prune"])
           .pipe(Effect.ignore);

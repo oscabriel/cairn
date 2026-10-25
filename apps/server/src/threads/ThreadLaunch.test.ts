@@ -28,7 +28,7 @@ import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { Git } from "../git/Git.ts";
 import { Projects } from "../projects/Projects.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
-import { Worktrees } from "../projects/Worktrees.ts";
+import { worktreeRepoKey, Worktrees } from "../projects/Worktrees.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
@@ -304,7 +304,7 @@ describe("launching threads", () => {
               path.join(
                 dataDir,
                 "worktrees",
-                "repo",
+                worktreeRepoKey(repo),
                 temporary.replace("/", "-")
               )
             )

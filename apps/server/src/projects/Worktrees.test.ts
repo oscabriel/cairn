@@ -16,6 +16,7 @@ import {
   sanitizeBranchFragment,
   WORKTREE_BRANCH_PREFIX,
   worktreePathFor,
+  worktreeRepoKey,
   Worktrees,
 } from "./Worktrees.ts";
 
@@ -128,7 +129,7 @@ describe("worktrees and branches", () => {
 
       assert.strictEqual(
         created.worktreePath,
-        path.join(dir, "worktrees", "repo", "feat-one")
+        path.join(dir, "worktrees", worktreeRepoKey(repo), "feat-one")
       );
       assert.isTrue(yield* worktrees.isWorktreeOf(repo, created.worktreePath));
 
@@ -166,5 +167,58 @@ describe("worktrees and branches", () => {
 
       assert.strictEqual(invalid.reason, "invalid_branch");
     }).pipe(Effect.scoped, Effect.provide(TestLayer))
+  );
+
+  it.live(
+    "keeps two repositories with one folder name apart, and never removes the other's worktree",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const git = yield* Git;
+        const worktrees = yield* Worktrees;
+        const dir = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        const worktreesDir = path.join(dir, "worktrees");
+        const first = path.join(dir, "a", "repo");
+        const second = path.join(dir, "b", "repo");
+
+        for (const repo of [first, second]) {
+          yield* fs.makeDirectory(path.dirname(repo), { recursive: true });
+          yield* git.stdout("test", dir, [
+            "init",
+            "--quiet",
+            "-b",
+            "main",
+            repo,
+          ]);
+          yield* git.stdout("test", repo, [
+            ...COMMIT_OPTIONS,
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "init",
+          ]);
+        }
+
+        const options = {
+          worktreesDir,
+          baseRef: "main",
+          startFromOrigin: false,
+          branch: "feat/same",
+        };
+
+        const made = yield* worktrees.create({ ...options, repoRoot: first });
+        const other = yield* worktrees.create({ ...options, repoRoot: second });
+
+        assert.notStrictEqual(made.worktreePath, other.worktreePath);
+        assert.isTrue(other.created);
+
+        // The second repository's clean-up asked to remove the first's folder: git does not list
+        // it for the second, so it stays.
+        yield* worktrees.remove(second, made.worktreePath, Option.none());
+
+        assert.isTrue(yield* fs.exists(made.worktreePath));
+        assert.isTrue(yield* worktrees.isWorktreeOf(first, made.worktreePath));
+      }).pipe(Effect.scoped, Effect.provide(TestLayer))
   );
 });

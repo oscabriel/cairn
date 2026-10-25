@@ -955,7 +955,7 @@ One lane in the main checkout, deployed at `ceffbf7`. T31 and T35 were done in b
 | ThreadStreamHandlers.test: retry refresh | pass | row refreshed for the retried thread |
 | WorkspaceRoot.test | pass | `/` + 40 letters + `//` refused in under 10 ms |
 | ThreadView.test: page after a moved window | pass | dropped; cursor now 180 |
-| Saved.test (attachments) | pass | an attachment 26 h old not restored, a 2 h old one restored; 400 expired, 404, 409 retryable; 413, 415, size mismatch final |
+| Saved.test (attachments) | pass | an attachment past 24 h not restored, one saved 2 h later still restored; 400 expired, 404, 409 retryable; 413, 415, size mismatch final |
 | Vapid.test: subscription keys | pass | a 10-byte point and a short secret refused |
 | Composer.test: picker focus, unavailable model | pass | `FocusPopoverSearch` on open; only `kimi-k3` listed; picking `glm-5` changes nothing |
 | `pnpm check` | pass | 1,275 tests |

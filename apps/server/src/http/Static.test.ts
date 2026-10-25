@@ -118,6 +118,9 @@ describe("the static routes", () => {
           ["GET", "/api"],
           ["POST", "/api/missing"],
           ["DELETE", "/api/threads/x"],
+          ["GET", "/API/missing"],
+          ["GET", "//api/missing"],
+          ["GET", "/%61pi/missing"],
         ] as const) {
           const response = yield* fetchFrom(plain, method, pathname, html);
 

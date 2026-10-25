@@ -1,10 +1,13 @@
 // The guard: one global middleware every request passes, WebSocket upgrades included (GLOSSARY
 // "Guard"). In order: the configured `Host` (421), the owner's login in Caddy's copied
 // `X-Cairn-User` (403), the exact `Origin` on every non-safe method and every upgrade (403, because
-// `Upgrade` is hop-by-hop and Caddy's auth subrequest never sees it), and no cross-site GET on
-// `/api` (403). `/api` answers are `no-store`. Two loopback routes sit outside the host and identity
-// rules: `/_cairn/auth` (Caddy's own subrequest, which carries the peer it judges) and
-// `/_cairn/health` (which refuses anything that came through Caddy itself).
+// `Upgrade` is hop-by-hop and Caddy's auth subrequest never sees it), no cross-site request but a
+// top-level page load, and none at all on `/api` (403). `/api` answers are `no-store` unless their
+// route set a cache policy. `/api` is matched as the router reads it (any case, percent-decoded,
+// repeated slashes collapsed), so `/API`, `//api` and `/%61pi` get the same rules (T23). Two
+// loopback routes sit outside the host and identity rules: `/_cairn/auth` (Caddy's own subrequest,
+// which carries the peer it judges) and `/_cairn/health` (which refuses anything that came through
+// Caddy itself).
 // The Origin rule is cairn-v1 `apps/server/src/Http.ts` at 1a5cd4a, line 54.
 import { Effect, Option } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -23,7 +26,34 @@ const pathnameOf = (url: string) => {
   return end === -1 ? url : url.slice(0, end);
 };
 
-const isApiPath = (path: string) => path === "/api" || path.startsWith("/api/");
+/** A percent-decoded path, or the path itself when its escapes are malformed. */
+const decoded = (path: string) => {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+};
+
+/** The path as the router matches it: percent-decoded, repeated slashes collapsed, any case. */
+export const routedPath = (path: string) =>
+  decoded(path)
+    .replaceAll(/\/{2,}/gu, "/")
+    .toLowerCase();
+
+const isApiPath = (path: string) => {
+  const routed = routedPath(path);
+
+  return routed === "/api" || routed.startsWith("/api/");
+};
+
+/** A cross-site request that is not a top-level page load: a fetch, an embed or a frame. */
+const isCrossSiteSubresource = (request: HttpServerRequest.HttpServerRequest) =>
+  request.headers["sec-fetch-site"] === "cross-site" &&
+  !(
+    request.headers["sec-fetch-mode"] === "navigate" &&
+    request.headers["sec-fetch-dest"] === "document"
+  );
 
 const refuse = (status: number, text: string) =>
   HttpServerResponse.text(`${text}\n`, {
@@ -76,9 +106,13 @@ export const Guard = HttpRouter.middleware(
           return refuse(403, "Cross-site requests to the API are refused.");
         }
 
+        if (isCrossSiteSubresource(request)) {
+          return refuse(403, "Cross-site requests are refused.");
+        }
+
         const response = yield* httpEffect;
 
-        return api
+        return api && response.headers["cache-control"] === undefined
           ? HttpServerResponse.setHeader(response, "cache-control", "no-store")
           : response;
       });

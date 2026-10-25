@@ -18,6 +18,7 @@ import {
 } from "effect/http";
 
 import { ServerConfig } from "../Config.ts";
+import { routedPath } from "./Guard.ts";
 
 /** Renders the JSON the page reads before its socket opens; `None` injects nothing. */
 export class BootJson extends Context.Service<
@@ -67,10 +68,16 @@ const IMMUTABLE = "private, max-age=31536000, immutable";
 /** Paths that belong to the server; the page never answers for them. */
 const RESERVED_PREFIXES = ["/api", "/ws", "/_cairn", "/oauth"];
 
-const isReserved = (pathname: string) =>
-  RESERVED_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+/** The reserved prefix a path falls under, read as the router reads it (`routedPath`). */
+const reservedPrefixOf = (pathname: string) => {
+  const routed = routedPath(pathname);
+
+  return Option.fromNullishOr(
+    RESERVED_PREFIXES.find(
+      (prefix) => routed === prefix || routed.startsWith(`${prefix}/`)
+    )
   );
+};
 
 const pathnameOf = (url: string) => {
   const end = url.search(/[?#]/u);
@@ -171,10 +178,10 @@ export const StaticRoutes = Layer.effectDiscard(
       const request = yield* HttpServerRequest.HttpServerRequest;
       const pathname = pathnameOf(request.url);
 
-      if (isReserved(pathname)) {
-        return pathname === "/api" || pathname.startsWith("/api/")
-          ? apiNotFound
-          : notFound;
+      const reserved = reservedPrefixOf(pathname);
+
+      if (Option.isSome(reserved)) {
+        return reserved.value === "/api" ? apiNotFound : notFound;
       }
 
       if (pathname === "/" || pathname === "/index.html") {

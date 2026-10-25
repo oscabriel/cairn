@@ -23,6 +23,13 @@ const App = Layer.mergeAll(
   HttpRouter.add("GET", "/", ok),
   HttpRouter.add("GET", "/ws", ok),
   HttpRouter.add("GET", "/api/thing", ok),
+  HttpRouter.add(
+    "GET",
+    "/api/cached",
+    HttpServerResponse.text("ok", {
+      headers: { "cache-control": "private, max-age=31536000, immutable" },
+    })
+  ),
   HttpRouter.add("POST", "/api/thing", ok),
   HttpRouter.add("DELETE", "/api/thing", ok),
   HttpRouter.add("GET", "/_cairn/auth", ok),
@@ -34,6 +41,9 @@ const App = Layer.mergeAll(
     ServerConfig.layerWith({ host: HOST, origin: ORIGIN, owner: OWNER })
   )
 );
+
+/** The fetch metadata of a top-level page load. */
+const pageLoad = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
 
 /** Headers Caddy would forward for an admitted page request. */
 const admitted = { host: HOST, "x-cairn-user": OWNER };
@@ -172,11 +182,16 @@ describe("the guard", () => {
     })
   );
 
-  it.effect("refuses a cross-site GET on /api but not on the page", () =>
+  it.effect("refuses a cross-site GET on /api but not a page load", () =>
     Effect.gen(function* () {
       const crossSite = { ...admitted, "sec-fetch-site": "cross-site" };
-      const api = yield* send("GET", "/api/thing", crossSite);
-      const page = yield* send("GET", "/", crossSite);
+
+      const api = yield* send("GET", "/api/thing", {
+        ...crossSite,
+        ...pageLoad,
+      });
+
+      const page = yield* send("GET", "/", { ...crossSite, ...pageLoad });
 
       const sameOrigin = yield* send("GET", "/api/thing", {
         ...admitted,
@@ -186,6 +201,61 @@ describe("the guard", () => {
       assert.strictEqual(api.status, 403);
       assert.strictEqual(page.status, 200);
       assert.strictEqual(sameOrigin.status, 200);
+    })
+  );
+
+  it.effect(
+    "refuses a cross-site request to /api under any spelling the router accepts",
+    () =>
+      Effect.gen(function* () {
+        for (const path of ["/API/thing", "//api/thing", "/%61pi/thing"]) {
+          const crossSite = yield* send("GET", path, {
+            ...admitted,
+            "sec-fetch-site": "cross-site",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
+          });
+
+          const sameOrigin = yield* send("GET", path, {
+            ...admitted,
+            "sec-fetch-site": "same-origin",
+          });
+
+          assert.strictEqual(crossSite.status, 403, path);
+          assert.strictEqual(sameOrigin.status, 200, path);
+          assert.strictEqual(
+            sameOrigin.headers["cache-control"],
+            "no-store",
+            path
+          );
+        }
+      })
+  );
+
+  it.effect("refuses a cross-site embed or frame of the page", () =>
+    Effect.gen(function* () {
+      for (const dest of ["iframe", "image", "script"]) {
+        const response = yield* send("GET", "/", {
+          ...admitted,
+          "sec-fetch-site": "cross-site",
+          "sec-fetch-mode": "no-cors",
+          "sec-fetch-dest": dest,
+        });
+
+        assert.strictEqual(response.status, 403, dest);
+      }
+    })
+  );
+
+  it.effect("keeps the cache policy an /api route set", () =>
+    Effect.gen(function* () {
+      const response = yield* send("GET", "/api/cached", admitted);
+
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(
+        response.headers["cache-control"],
+        "private, max-age=31536000, immutable"
+      );
     })
   );
 

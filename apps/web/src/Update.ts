@@ -319,6 +319,11 @@ const foldSidebarOutMessage = (outMessage: SidebarOutMessage): Step =>
           [persist, sendNext]
         ),
     RequestedDiscardDraft: ({ draftId }) => discardComposerDraft(draftId),
+    RequestedNotice:
+      ({ message }) =>
+      (model) => ({
+        model: modifyFields(model, { notice: () => Option.some(message) }),
+      }),
   });
 
 const foldSidebarMessage = Update.foldChild({

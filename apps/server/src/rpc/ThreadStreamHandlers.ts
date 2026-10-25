@@ -21,6 +21,7 @@ import { Duration, Effect, Layer, Option, Schedule, Stream } from "effect";
 
 import type { HarnessError } from "../brain/HarnessSeam.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import { ShellProjector } from "../shell/ShellProjector.ts";
 import { LaunchStore } from "../threads/LaunchStore.ts";
 import type { LaunchStoreError } from "../threads/LaunchStore.ts";
 import { LaunchWait } from "../threads/Threads.ts";
@@ -73,6 +74,7 @@ const launchesUnavailable = (failure: LaunchStoreError) =>
 export const threadStreamHandlers = Effect.gen(function* () {
   const seam = yield* HarnessSeam;
   const launches = yield* LaunchStore;
+  const projector = yield* Effect.serviceOption(ShellProjector);
 
   // Returns once the thread's launch has ensured it, ended, or outlasted `LaunchWait`; at once
   // when no launch is in flight. The watch after it answers for itself either way.
@@ -144,14 +146,19 @@ export const threadStreamHandlers = Effect.gen(function* () {
             toLookupError(failure, `${input.threadId}/${input.entryId}`)
           )
         ),
+    // The row drops the task from `parkedTaskIds` at once, rather than at the next reconcile (T39).
     retryTask: (input: RetryTaskInput) =>
-      seam
-        .retry(input.taskId)
-        .pipe(
-          Effect.mapError((failure) =>
-            toLookupError(failure, String(input.taskId))
-          )
+      seam.retry(input.taskId).pipe(
+        Effect.mapError((failure) =>
+          toLookupError(failure, String(input.taskId))
         ),
+        Effect.tap(() =>
+          Option.match(projector, {
+            onNone: () => Effect.void,
+            onSome: (found) => found.refresh(input.threadId),
+          })
+        )
+      ),
   };
 });
 

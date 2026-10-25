@@ -111,6 +111,8 @@ export const OutMessage = defineMessageUnion({
   RequestedDispatch: { commands: Schema.Array(ShellCommand) },
   /** The user discarded this unsent draft. */
   RequestedDiscardDraft: { draftId: Schema.String },
+  /** Something the user asked for failed; the root's notice bar says why. */
+  RequestedNotice: { message: Schema.String },
 });
 
 export type OutMessage = typeof OutMessage.Type;

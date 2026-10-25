@@ -962,6 +962,18 @@ const layerNoDeps = Layer.effect(
         }
       }
 
+      // A task that ended without a retry (a stop that cleared the queue, a deleted thread) is no
+      // longer parked: forget it, so the list matches what pi-durable reports (T39).
+      const stillParked = new Set(
+        [...byConversation.values()].flatMap((found) => found.parkedTaskIds)
+      );
+
+      for (const known of yield* parked.list) {
+        if (!stillParked.has(known.taskId)) {
+          yield* parked.remove(known.taskId);
+        }
+      }
+
       for (const submission of inspection.submissions) {
         if (submission.type === "input" && submission.status === "queued") {
           slot(submission.conversationId).queueLength += 1;

@@ -863,7 +863,11 @@ const step = (model: Model, message: Message): UpdateReturn =>
       commands: [RetryTask({ threadId, taskId })],
     }),
     SucceededRetry: () => ({ model }),
-    FailedRetry: () => ({ model }),
+    // A retry that failed says so, as the hold banner's does (T39).
+    FailedRetry: ({ message: reason }) => ({
+      model,
+      outMessage: OutMessage.RequestedNotice({ message: reason }),
+    }),
     ClickedDismissWoke: ({ threadId }) =>
       withThread(model, threadId, (thread) =>
         isThreadWoke(thread, nowOf(model))

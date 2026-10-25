@@ -6,6 +6,7 @@ import { TestClock } from "effect/testing";
 
 import { ReadClock } from "./Command.ts";
 import { snoozePresetsOf } from "./Derived.ts";
+import { Message, OutMessage } from "./Message.ts";
 import { initial } from "./Model.ts";
 import { init, update } from "./Update.ts";
 
@@ -36,4 +37,17 @@ describe("the sidebar clock", () => {
       }
     })
   );
+});
+
+describe("a sidebar retry that fails", () => {
+  it("asks the root to say why", () => {
+    const { outMessage } = update(
+      initial,
+      Message.FailedRetry({ message: "The task is gone." })
+    );
+
+    expect(outMessage).toStrictEqual(
+      OutMessage.RequestedNotice({ message: "The task is gone." })
+    );
+  });
 });

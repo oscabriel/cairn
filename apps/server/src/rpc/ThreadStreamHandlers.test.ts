@@ -34,6 +34,7 @@ import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { ScriptedHarness } from "../brain/ScriptedHarness.ts";
 import { Database } from "../db/Database.ts";
 import { Launches0002 } from "../db/migrations/0002Launches.ts";
+import { ShellProjector } from "../shell/ShellProjector.ts";
 import { LaunchStore } from "../threads/LaunchStore.ts";
 import { ThreadLaunch } from "../threads/ThreadLaunch.ts";
 import { LaunchWait } from "../threads/Threads.ts";
@@ -402,5 +403,50 @@ describe("thread stream handlers", () => {
         yield* (yield* ThreadLaunch).settled(input.threadId);
       })
     )
+  );
+
+  it.effect(
+    "a retried task's row is refreshed at once, not at the next reconcile",
+    () =>
+      Effect.gen(function* () {
+        const refreshed: Array<string> = [];
+
+        const projector = ShellProjector.of({
+          reconcile: Effect.succeed({ threads: 0, live: 0, patched: 0 }),
+          refresh: (threadId) =>
+            Effect.sync(() => {
+              refreshed.push(threadId);
+            }),
+          flushAll: Effect.void,
+        });
+
+        const retrying = Layer.effect(
+          HarnessSeam,
+          HarnessSeam.useSync((seam) =>
+            HarnessSeam.of({ ...seam, retry: () => Effect.void })
+          )
+        ).pipe(Layer.provide(ScriptedHarness.layer));
+
+        const handlers = yield* threadStreamHandlers.pipe(
+          Effect.provideService(ShellProjector, projector),
+          Effect.provide(
+            Layer.merge(
+              retrying,
+              LaunchStore.layerNoDeps.pipe(
+                Layer.provide(
+                  Database.layerTest({ "0002_Launches": Launches0002 })
+                )
+              )
+            )
+          )
+        );
+
+        yield* handlers.retryTask({
+          threadId: THREAD,
+          taskId: TaskId.make(77),
+        });
+
+        assert.deepStrictEqual(refreshed, [THREAD]);
+      })
   );
 });

@@ -36,8 +36,13 @@ catalog:
   # Document text.
   mammoth: 1.13.0
   unpdf: 1.9.1
-  # Toolchain.
+  # Toolchain. oxlint-tsgolint and @effect/tsgo build on TypeScript's Go port, so they move with
+  # `typescript`; oxlint and @oxlint/plugins share one release.
   alchemy: 2.0.0-beta.83
+  "@effect/tsgo": 0.55.0
+  "@oxlint/plugins": 1.89.0
+  oxlint: 1.89.0
+  oxlint-tsgolint: 7.0.2004
   typescript: 7.0.2
   vitest: 5.0.5
 

@@ -1,16 +1,14 @@
 pre-commit:
   jobs:
+    # Both tools apply their own ignores; a commit whose files are all ignored (docs/phase-1, a
+    # spike) has nothing to do, which must not fail the commit.
     - name: format staged files
-      run: pnpm exec oxfmt {staged_files}
+      run: pnpm exec oxfmt --no-error-on-unmatched-pattern {staged_files}
       glob: "*.{ts,tsx,js,mjs,json,jsonc,md,yml,yaml}"
       stage_fixed: true
     - name: lint staged code
-      run: pnpm exec oxlint --fix {staged_files}
+      run: pnpm exec oxlint --no-error-on-unmatched-pattern --fix {staged_files}
       glob: "*.{ts,tsx,js,mjs}"
-      # oxlint ignores these, and fails when every file it is given is ignored.
-      exclude:
-        - "spikes/**"
-        - "tools/oxlint/anti-slop/**"
       stage_fixed: true
 
 pre-push:

@@ -1,5 +1,6 @@
 // Web Push: the VAPID key a device subscribes with, its subscription, and the presence reports that
 // keep a push from firing for a thread the user is looking at.
+
 import { Schema } from "effect";
 
 import { ThreadId } from "./Ids.ts";

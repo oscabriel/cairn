@@ -7,6 +7,7 @@
 // A document whose text cannot be read (damaged, past the deadline, a reader crash) is still kept,
 // as a file the agent can open with a tool, because the user meant to share it; only a DOCX that
 // unpacks past 50 MiB is refused outright.
+
 import { createHash } from "node:crypto";
 
 import type { AttachmentRef, UploadClaims } from "@cairn/protocol/Attachments";

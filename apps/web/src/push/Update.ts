@@ -2,6 +2,7 @@
 // subscription is re-registered with the server once per load (iOS drops them silently); the
 // switch turns push on (asking for the permission from the tap) or off; the badge follows the
 // root's count; a tapped notification asks the root to open its path.
+
 import { Option } from "effect";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";

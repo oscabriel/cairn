@@ -3,6 +3,7 @@
 // child with no saved session. The real path is `ClaudeSummary` (2F, in its own layer); the default
 // layer refuses with a fixed, non-retryable text, so compaction on a bridge model fails visibly
 // rather than corrupting a conversation's Claude Code session.
+
 import type { Api, Message, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { Option } from "effect";
 import { Context, Effect, Layer } from "effect";

@@ -3,6 +3,7 @@
 // literal `$` only (the other symbols must not trigger), and Cairn's own cases for `/` at a line
 // start, `@` searches and the stale-range refusal are added. MIT License, Copyright (c) 2026 T3
 // Tools Inc.; the full notice is in ComposerTrigger.ts.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 

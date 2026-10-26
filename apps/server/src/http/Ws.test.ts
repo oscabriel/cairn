@@ -1,6 +1,7 @@
 // The whole HTTP stack on a real socket: the app layer on an ephemeral loopback port, a Node RPC
 // client sending Caddy's headers and Cairn's Origin, raw upgrade requests for the refusals, and an
 // identity that the test revokes to watch the socket close.
+
 import { mkdtempSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";

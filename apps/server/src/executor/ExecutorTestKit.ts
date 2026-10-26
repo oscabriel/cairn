@@ -1,5 +1,6 @@
 // Test helpers for the Executor tools: an approval ledger in memory (the `cairn.approvals` record of
 // one tool call, without pi-durable) and the link over a fake Executor with a grant in memory.
+
 import type { ApprovalStatus } from "@cairn/protocol/Policy";
 import { Duration, Effect, Layer, Option } from "effect";
 

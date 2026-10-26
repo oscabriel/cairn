@@ -2,6 +2,7 @@
 // duration, else every 15 seconds), the default key bindings (one `streamFromKeyBindings` table), the
 // `md` breakpoint, and dismissing the context menu or the project filter on Escape or a press
 // outside them.
+
 import {
   DEFAULT_RESOLVED_KEYBINDINGS,
   firesWhileTyping,

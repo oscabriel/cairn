@@ -3,6 +3,7 @@
 // one place. Today there is one: the bridge's `beginClosing`, so no Claude child is opened while the
 // brain closes. The Harness is not a hook: `Brain.ts` closes it as its scope ends, with its 5 s
 // timeout, and SQLite closes after that, as its own layer ends.
+
 import { bridgeClosingHook } from "./models/BridgeProvider.ts";
 import type { ShutdownHook } from "./Shutdown.ts";
 

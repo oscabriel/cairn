@@ -2,6 +2,7 @@
 // `thread.respond`: thin calls into `ThreadLaunch` and `Threads` that translate their failures into
 // the protocol's errors, carrying the RPC request id. The sender recorded on a turn is the socket's
 // viewer.
+
 import {
   AttachmentRejected,
   Conflict,

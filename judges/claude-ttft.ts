@@ -14,6 +14,7 @@
 // both, in milliseconds, and the overhead's p50. The judge records rather than gates (bridge note,
 // J13): it exits 0 when every turn answered, 1 otherwise. Children get no idle time to live, so
 // each closes after its turn and the live-child cap never fills. Costs a little plan usage per turn.
+
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

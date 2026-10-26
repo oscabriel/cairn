@@ -1,6 +1,7 @@
 // The transcript adapter, judged on real pi transcripts: pi-durable over opencode-go models, recorded
 // by judges/fixtures/transcripts/record.ts (markdown, every coding tool, a failing tool, a stop
 // during a tool, a thought, and three streamed runs kept frame by frame).
+
 import { attachmentPathLine } from "@cairn/protocol/Attachments";
 import { AttachmentId, ConversationId, EntryId } from "@cairn/protocol/Ids";
 import {

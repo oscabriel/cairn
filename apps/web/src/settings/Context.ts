@@ -1,5 +1,6 @@
 // What the root tells the settings page, built from what the root already holds: the epoch and its
 // client, whether the route is the settings page, and the projects the Skills section can show.
+
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
 import { Equal, Option } from "effect";
 

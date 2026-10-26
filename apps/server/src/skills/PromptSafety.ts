@@ -3,6 +3,7 @@
 // at a line start, pi's documentation routing line, or both of pi's documentation paths together.
 // Sections are built from many pieces (one skill, one context file), and two pieces could each
 // bring one of the two paths, so a piece carrying either path alone is refused here too.
+
 import {
   THIRD_PARTY_DOC_PATHS,
   unsendableFindings,

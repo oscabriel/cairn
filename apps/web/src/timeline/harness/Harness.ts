@@ -1,6 +1,7 @@
 // The transcript alone, for judges/transcript-scroll.ts: two synthetic threads (2,100 rows and a
 // short one) shown through the real transcript submodel, with buttons to switch threads and to
 // stream replies at the end of the long one. No brain, no socket: the thread views are built here.
+
 import { Duration, Effect, Option, Schema, Stream } from "effect";
 import { ManagedResource, Runtime, Subscription, Update } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";

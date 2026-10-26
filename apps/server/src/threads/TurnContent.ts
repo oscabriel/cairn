@@ -7,6 +7,7 @@
 // first message so a turn it cannot send never makes a thread): stages refuse what they would
 // refuse, but read no files, claim nothing and log nothing. The turn is built once, for the
 // submit, and `logTurnSubmitted` writes `turn.submitted` after the harness admitted it.
+
 import type { AttachmentRef } from "@cairn/protocol/Attachments";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { TurnInput } from "@cairn/protocol/Thread";

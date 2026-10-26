@@ -6,6 +6,7 @@
 // judged only when the manifest has a dynamic entry from that folder, and then it must stay out of
 // the entry's static imports; so the test holds before the integrator splits `diff` and
 // `settings` and keeps holding after.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Record, Schema } from "effect";
 import { build } from "vite";

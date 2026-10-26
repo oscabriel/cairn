@@ -1,5 +1,6 @@
 // The thread page's Messages. Stream Messages carry the epoch and watch number they were opened
 // under, so a late item from a closed subscription is recognised and dropped.
+
 import { ThreadStreamItem } from "@cairn/protocol/Thread";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";

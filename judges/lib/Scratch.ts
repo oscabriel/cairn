@@ -5,6 +5,7 @@
 //
 // A child closed on another fiber may write its transcript once more as it exits, so the release
 // removes the folders again after `CHILD_EXIT_GRACE`.
+
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";

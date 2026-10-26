@@ -1,6 +1,7 @@
 // `projects.browse`, `projects.ensureScratch`, `projects.searchEntries` and `git.branches`: thin
 // calls into the projects services that translate their failures into the protocol's errors,
 // carrying the RPC request id.
+
 import { NotFound, Unavailable } from "@cairn/protocol/Errors";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { BrowseInput } from "@cairn/protocol/Projects";

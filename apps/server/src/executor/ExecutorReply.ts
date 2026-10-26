@@ -9,6 +9,7 @@
 // `cut`, the INTERRUPTED and REFUSED texts) and apps/server/src/Executor.ts (`structured`,
 // `declineOutcome`) at 1a5cd4a. Changed: replies are decoded with schemas instead of read through
 // casts, and an outcome is a plain value the extension turns into a pi-durable result.
+
 import { Data, Option, Predicate, Schema } from "effect";
 
 /** A JSON object, as Executor's structured results are. */

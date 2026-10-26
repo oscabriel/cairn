@@ -1,5 +1,6 @@
 // Draws a lucide icon (its node data from the `lucide` package) as Foldkit markup, with the
 // attributes t3code's lucide-react icons carry, so class strings like `lucide lucide-brain` match.
+
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 /** One lucide icon's nodes: element tags with their attributes. */

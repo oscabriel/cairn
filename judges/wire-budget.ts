@@ -21,6 +21,7 @@
 // `--keep` leaves the directory; `--reuse <dir>` starts the brain over a kept directory and skips
 // the seeding, so the same thread is measured before and after a change. Prints one JSON line and
 // exits 0 only on a pass.
+
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";

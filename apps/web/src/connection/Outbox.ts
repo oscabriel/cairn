@@ -8,6 +8,7 @@
 // sent, an acknowledgement drops it and sends the next. A retryable failure leaves it at the head,
 // sent again after a backoff or by the next connection; any other failure drops it, because sending
 // it again cannot succeed.
+
 import { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { ShellCommand } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";

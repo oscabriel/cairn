@@ -7,6 +7,7 @@
 // claims at most 50 MiB uncompressed. Both stop at 500 pages and 2,000,000 characters and say so.
 //
 // The worker reads one `ExtractJob` from `workerData`, posts one encoded `ExtractAnswer` and ends.
+
 import { parentPort, workerData } from "node:worker_threads";
 
 import { Effect, Option, Schema } from "effect";

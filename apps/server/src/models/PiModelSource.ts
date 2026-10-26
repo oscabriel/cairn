@@ -11,6 +11,7 @@
 // catalogs refresh into pi-ai's in-memory store (plan D11). Claude arrives as the `claude-bridge`
 // provider through `ExtraProviders`; pi-ai's own `anthropic` provider is replaced by the guarded one
 // and never listed (ADR 0002). pi-coding-agent is imported lazily, when the layer is built.
+
 import path from "node:path";
 
 import type {

@@ -1,6 +1,7 @@
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/composerTypingGuard.test.ts
 // at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: events are tagged values. MIT License,
 // Copyright (c) 2026 T3 Tools Inc.; the full notice is in ComposerTypingGuard.ts.
+
 import { assert, describe, it } from "@effect/vitest";
 
 import {

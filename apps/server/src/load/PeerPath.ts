@@ -4,6 +4,7 @@
 // peer's current address, empty while the peer is relayed; it sends no packets, unlike `tailscale
 // ping`, whose first pings go over DERP while NAT traversal is still finding the direct path. An
 // answer is reused for a minute per peer, so a burst of reports asks tailscaled once.
+
 import { isIP } from "node:net";
 
 import { NodeServices } from "@effect/platform-node";

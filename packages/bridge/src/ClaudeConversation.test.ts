@@ -2,6 +2,7 @@
 // steering, aborts, resume, fresh sessions, refusals, the watchdog, plan windows and the semaphore.
 // Ported in intent from cairn-v1 apps/server/test/{claude.test.ts, claude-resume.test.ts} at
 // 1a5cd4a56e84bfb187940428d144b584d2e084b0 (Cairn's own code).
+
 import type {
   AssistantMessage,
   Message,

@@ -1,6 +1,7 @@
 // The model picker's view of the brain's model runtime: what is offered, the defaults, and whether
 // each provider has a usable credential. Provider and model ids are pi-ai's (`anthropic`,
 // `claude-bridge`, `opencode-go`, ...), passed through as strings.
+
 import { Schema } from "effect";
 
 import { DisplayText, NonNegativeInt, TrimmedNonEmptyString } from "./Ids.ts";

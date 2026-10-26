@@ -1,6 +1,7 @@
 // The thread page's one stream: `thread.subscribe` for the routed thread, opened while the root's
 // client exists and opened again for every new epoch, every new watch number and every new thread.
 // Each subscription starts with a fresh snapshot.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Cause, Effect, Option, Predicate, Schema, Stream } from "effect";
 import { Subscription } from "foldkit";

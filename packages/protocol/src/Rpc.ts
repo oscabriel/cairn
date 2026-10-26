@@ -2,6 +2,7 @@
 // (ADR 0007): two streams (the shell and a thread) plus unary calls. Errors cross the socket typed.
 // The identity Caddy and the guard decided at the upgrade reaches every handler as `Viewer`,
 // through `ViewerMiddleware` reading the upgrade headers each request carries.
+
 import { Context, Schema } from "effect";
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
 

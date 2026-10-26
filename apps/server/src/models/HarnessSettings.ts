@@ -10,6 +10,7 @@
 //
 // Read at each use: pi-durable calls the getter on every resolution, so a settings change reaches
 // the next request once `PiConfig` has refreshed.
+
 import { Context, Effect, Layer, Option } from "effect";
 
 import type { ModelSource } from "../brain/ModelSource.ts";

@@ -3,6 +3,7 @@
 // that streams the way pi-durable's `pi.live` doc grows, then commits and gives way to the next.
 // The streamed reply carries a short fence whose language arrives a frame after its backticks, in
 // a language the history never uses, and a 300-line TypeScript fence.
+
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { ConversationView, Entry } from "@cairn/protocol/Thread";
 import { Schema } from "effect";

@@ -2,6 +2,7 @@
 // columns, a PDF with no text layer answers empty text, a DOCX is read, a ZIP bomb DOCX is refused
 // before `mammoth` opens it, a damaged PDF is unreadable, and an extraction past its deadline ends
 // with its worker terminated.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Option } from "effect";
 import { TestClock } from "effect/testing";

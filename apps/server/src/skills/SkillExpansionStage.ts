@@ -32,6 +32,7 @@
 //   and logged;
 // - the stage is also the turn-start refresh of the thread's skills (`refreshForTurn`), so a skill
 //   added or edited since the last turn is in this turn's list and this turn's expansion.
+
 import { readFileSync } from "node:fs";
 
 import type { ThreadId } from "@cairn/protocol/Ids";

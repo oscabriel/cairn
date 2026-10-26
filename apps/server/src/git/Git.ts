@@ -7,6 +7,7 @@
 // The safe option set is drawn from cairn-v1, apps/server/src/sandbox/Mirror.ts (`SAFE`) at
 // 1a5cd4a, without its `HOME=/nonexistent` and `GIT_CONFIG_GLOBAL=/dev/null`, which suit a hostile
 // mirror and not the user's checkouts.
+
 import { NodeServices } from "@effect/platform-node";
 import {
   Context,

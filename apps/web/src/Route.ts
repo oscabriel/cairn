@@ -1,6 +1,7 @@
 // The client's routes: the hero at `/`, a thread at `/t/<threadId>`, a new draft at
 // `/new/<draftId>` and the settings page. Every link and navigation prints its path through these
 // routers, so a path is written once.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { pipe, Schema } from "effect";
 import { Route } from "foldkit";

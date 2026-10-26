@@ -25,6 +25,7 @@
 // Prints one JSON line and exits 0 when the judge passes.
 //
 // The helpers below (`startLocalApp` and its parts) are shared with `judges/paste.ts`.
+
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";

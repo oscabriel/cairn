@@ -19,6 +19,7 @@
 // Both talk straight to the brain's port with the headers Caddy would add, as
 // `ops/cairn/deploy-check.ts` does, read `~/.config/cairn/cairn.json` (no secret) and delete their
 // thread afterwards unless `keep`. Each answers one JSON-able result; no reply text is reported.
+
 import { homedir } from "node:os";
 
 import {

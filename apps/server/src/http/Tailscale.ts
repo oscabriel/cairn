@@ -2,6 +2,7 @@
 // tailscaled's unix socket, 0.13 ms median when measured), then the `tailscale whois --json` CLI
 // when the socket does not answer. Whois mechanics follow cairn-v1 `apps/server/src/Gate.ts`
 // at 1a5cd4a; the cache and the admission rules live in `Identity`.
+
 import http from "node:http";
 import { isIP } from "node:net";
 

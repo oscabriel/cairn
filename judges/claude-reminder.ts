@@ -8,6 +8,7 @@
 // section changed, (3) a new bridge, as after a restart, after the `cairn` section changed. It
 // records what the bridge writes to each child's input and how each child was opened, and prints
 // one JSON line with the numbers. Exit 0 when every check holds. Costs a few cents of plan usage.
+
 import { parseArgs } from "node:util";
 
 import { Claude } from "@cairn/bridge/Claude";

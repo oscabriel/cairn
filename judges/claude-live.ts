@@ -39,6 +39,7 @@
 //
 // Prints one JSON line per case with its checks, the sessions opened and the cache numbers. Exit 0
 // when every check holds. Costs a few cents of plan usage on Haiku.
+
 import { execFileSync } from "node:child_process";
 import {
   existsSync,

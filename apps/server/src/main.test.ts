@@ -1,5 +1,6 @@
 // The deployed brain never treats loopback as the owner: `Identity.layerLoopbackOwner` is composed
 // by the dev entry point only. A grep, with the dev entry point as its control.
+
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 

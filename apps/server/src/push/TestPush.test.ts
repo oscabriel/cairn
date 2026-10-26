@@ -2,6 +2,7 @@
 // `cairn.sqlite` without writing either and reports each push service's answer by host; it refuses
 // to start without a key rather than making one; and every brain but the deployed one gets its
 // VAPID key in memory, so dev brains, judges and tests never touch `push.json`.
+
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";

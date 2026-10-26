@@ -1,6 +1,7 @@
 // The app frame's lazy boundaries: a recorded stream replayed through the root update, rendering the
 // root view after every item the way the runtime does, with Foldkit's lazy resolutions observed.
 // The sidebar and the docked composer must reuse their cached views for every streamed item.
+
 import { readFileSync } from "node:fs";
 import path from "node:path";
 

@@ -1,5 +1,6 @@
 // Plan windows and provider usage, for `usage.subscribe`. An unknown value is reported as unknown,
 // never as zero: a meter that reads 0% when the probe failed would invite the wrong decision.
+
 import { Schema } from "effect";
 
 import { DisplayText, TrimmedNonEmptyString } from "./Ids.ts";

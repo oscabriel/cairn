@@ -9,6 +9,7 @@
 // run that ended (failed, or ran longer than 20 seconds) while no visible page reported showing the
 // thread in the last 30 seconds is pushed once, claimed in `notified_runs` under the thread and the
 // run's end time. Executor's needs-sign-in push is sent once until the link is signed in again.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
 import type { ThreadShell } from "@cairn/protocol/Shell";

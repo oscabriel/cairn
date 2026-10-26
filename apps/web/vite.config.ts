@@ -1,6 +1,7 @@
 // The web client's build and dev server. Loopback only; `tools/dev.ts` picks an ephemeral port and
 // points the proxy at a dev brain through CAIRN_DEV_BRAIN (for example http://127.0.0.1:41234), so
 // production's 3774 is never touched (D49).
+
 import { foldkit } from "@foldkit/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";

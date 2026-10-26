@@ -2,6 +2,7 @@
 // push) on one `node:sqlite` connection through Effect SQL. Opening it sets the pragmas, backs the
 // file up when a migration is pending (so a bad migration never costs the inbox), and migrates.
 // pi-durable's transcripts live in their own store, `brain.sqlite`, never here.
+
 import path from "node:path";
 
 import { NodeServices } from "@effect/platform-node";

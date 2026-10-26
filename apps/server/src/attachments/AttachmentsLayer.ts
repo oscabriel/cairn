@@ -2,6 +2,7 @@
 // sweep), signed upload URLs, image fitting, document text and the intake that runs them in order.
 // Needs `ServerConfig`, `FileSystem` and the `SqlClient` of `cairn.sqlite` (migrated through
 // `0003_Attachments`).
+
 import { Layer } from "effect";
 
 import { AttachmentIntake } from "./AttachmentIntake.ts";

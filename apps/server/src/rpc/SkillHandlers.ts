@@ -2,6 +2,7 @@
 // `SkillCatalog` at the project's root. `list` refreshes the cached view (a skill added or edited
 // since shows at once); `reload` resolves the owner's pi setup again first (settings.json filters,
 // packages). Both also report the project's context files, so one left out is logged.
+
 import { NotFound, Unavailable } from "@cairn/protocol/Errors";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import { CairnRpcs } from "@cairn/protocol/Rpc";

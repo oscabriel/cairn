@@ -1,5 +1,6 @@
 // Skills as the composer's `$` and `/` completion sees them. The brain resolves them from pi's
 // configuration and the project's `.agents/skills`.
+
 import { Schema } from "effect";
 
 import { DisplayText, ProjectId, TrimmedNonEmptyString } from "./Ids.ts";

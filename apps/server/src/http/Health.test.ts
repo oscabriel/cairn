@@ -1,4 +1,5 @@
 // The health route answers only processes on this host, and reports readiness once boot marks it.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";

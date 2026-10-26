@@ -1,6 +1,7 @@
 // The static routes against a small web build in a temporary directory: the SPA fallback only for
 // HTML navigations, never for the server's own prefixes, a JSON 404 under /api, the cache split,
 // the security headers, and the boot JSON hook.
+
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -3,6 +3,7 @@
 // 15 s deadline, so a hostile file can cost one thread and never the brain. The worker is
 // terminated on success, failure, timeout and interruption alike. The caller writes the text to
 // `<id>.txt`, where an agent can page through it with `read`.
+
 import { Worker } from "node:worker_threads";
 
 import {

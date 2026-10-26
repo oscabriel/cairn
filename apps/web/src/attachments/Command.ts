@@ -1,6 +1,7 @@
 // The tray's Commands: fit an image in the browser, upload one item (a fresh signed URL, then the
 // bytes), take back an upload the user removed, release a thumbnail's object URL, and read and
 // write the ready attachments saved on this device.
+
 import { AttachmentId } from "@cairn/protocol/Ids";
 import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";

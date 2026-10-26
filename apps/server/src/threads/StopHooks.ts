@@ -2,6 +2,7 @@
 // outlives its generation signal, so the bridge's explicit abort hooks in here (it arrives with the
 // bridge wiring); the default runs nothing. A hook's failure is logged, never the stop's failure:
 // the run is already stopped.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Context, Effect, Layer } from "effect";
 

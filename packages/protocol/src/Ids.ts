@@ -2,6 +2,7 @@
 // Ids minted by pi-durable (entries, conversations, tasks, submissions) are its positive integers;
 // ids minted by a client (threads, commands) are UUIDv7 strings, so a draft becomes a thread
 // idempotently across reconnects.
+
 import { Schema } from "effect";
 
 /** A non-negative integer, as counts, offsets and sequences are. */

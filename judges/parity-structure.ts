@@ -17,6 +17,7 @@
 // given `text-2xl px-8`) fails on that landmark. Writes <out>/structure.json with every state's
 // failures per row kind. Exits 0 when the report is complete and the controls behaved; `--strict`
 // also requires every state to pass, which is wave 5's bar.
+
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";

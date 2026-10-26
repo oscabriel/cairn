@@ -3,6 +3,7 @@
 // from a live page with their boxes and computed tokens. judges/capture.ts writes one file per
 // state; judges/parity-structure.ts compares t3code's file with Cairn's; judges/behaviour.ts reads
 // the composer footer part.
+
 import { Schema } from "effect";
 import type { Page } from "playwright";
 

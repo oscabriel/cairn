@@ -20,6 +20,7 @@
 // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 import type { ProjectId } from "@cairn/protocol/Ids";
 import { ProjectShell } from "@cairn/protocol/Shell";
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";

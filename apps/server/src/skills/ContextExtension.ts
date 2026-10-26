@@ -6,6 +6,7 @@
 // The context sections: the instructions a thread gets from files, as pi would give them to a
 // session in the same cwd. Files are read through `ProjectContext`, which leaves out links leaving
 // their directory, hard links, oversized files and text the Claude bridge refuses.
+
 import { defineExtension, section } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 

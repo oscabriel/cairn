@@ -2,6 +2,7 @@
 // by hand from the field mapping (notes/server.md, "Shell store and the projector"); the debounce
 // commits at most one activity event per thread per 50 ms window and nothing when nothing changed;
 // a parked task shows and clears; and the boot reconcile repairs rows a lost event left wrong.
+
 import {
   ApprovalId,
   ConversationId,

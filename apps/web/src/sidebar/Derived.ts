@@ -1,5 +1,6 @@
 // What update and view both read off the Model: the rows with pending changes laid over them, the
 // shelves, the search results, the visible order and each thread's menu.
+
 import {
   partitionSidebarThreads,
   previewMatchIds,

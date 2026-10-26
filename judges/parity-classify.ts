@@ -9,6 +9,7 @@
 // differ / only t3 / only Cairn, how many are declared and which open items remain. Exits 0 when
 // every landmark is classified, 1 when some are not (they are listed, so a new difference cannot
 // slip into a category unseen).
+
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";

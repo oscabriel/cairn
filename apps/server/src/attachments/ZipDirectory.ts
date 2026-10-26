@@ -3,6 +3,7 @@
 // extraction refuses a DOCX whose claimed uncompressed size is past the cap before `mammoth` opens
 // it. Archives that need ZIP64 records are not read (none of the formats Cairn accepts needs them
 // below 50 MiB), so they count as unreadable. Pure.
+
 import { Option } from "effect";
 
 /** One entry as the central directory describes it. */

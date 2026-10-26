@@ -2,6 +2,7 @@
 // SIGTERM, then the process must be gone within 3 s, the socket must have been closed with 1001
 // (going away, so the page reconnects at once), and the log must show `closing` then `closed <ms>`.
 // The shutdown hooks' order and timeouts are checked in process below it.
+
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";

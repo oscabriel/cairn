@@ -22,6 +22,7 @@
 // recorded (type, size, mtime, mode) before and after and must be identical, no `.lock` may
 // appear, and the process must start no child. Prints names, counts and times only, never a
 // file's contents or a credential.
+
 import childProcess from "node:child_process";
 import {
   constants,

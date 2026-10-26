@@ -8,6 +8,7 @@
 // Rounds alternate plain cuts (the resume replays a short gap) with long outages that commit more
 // than 1,000 events (the resume falls back to a snapshot). Prints one JSON line of measured numbers
 // and exits 0 only when every round converged within the deadline.
+
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";

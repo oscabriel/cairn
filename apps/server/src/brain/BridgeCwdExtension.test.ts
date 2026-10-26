@@ -5,6 +5,7 @@
 //   through a symlink), and the hook records the thread's provider session id;
 // - a thread on another model is never noted;
 // - the stop hook kills a child held on a tool call, so it does not outlive the stopped run.
+
 import {
   mkdirSync,
   mkdtempSync,

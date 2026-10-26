@@ -1,5 +1,6 @@
 // Judges `Scratch`: the folder and Claude Code's transcript folder for it are gone once the scope
 // closes, also when the transcript is written again during the exit grace.
+
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 

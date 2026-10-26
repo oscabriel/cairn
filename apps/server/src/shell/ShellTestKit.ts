@@ -1,5 +1,6 @@
 // Fixtures for the shell store's tests and judges: a migrated in-memory database under the store,
 // deterministic ids, and the commands that make a project and a thread.
+
 import { CommandId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { CairnRpcs, Viewer, ViewerMiddleware } from "@cairn/protocol/Rpc";
 import { ProjectCreate } from "@cairn/protocol/ShellCommands";

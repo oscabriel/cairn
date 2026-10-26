@@ -1,6 +1,7 @@
 // The transcript's effects: paging in older turns through `thread.history`, preparing a Retry for
 // the outbox, the clipboard, and loading a code block's grammar when it mounts, then tokenizing a
 // long block a slice at a time.
+
 import { AttachmentId, EntryId, ThreadId } from "@cairn/protocol/Ids";
 import { SendInput } from "@cairn/protocol/Thread";
 import { Duration, Effect, Option, Schema, Stream } from "effect";

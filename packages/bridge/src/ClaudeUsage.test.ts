@@ -3,6 +3,7 @@
 // rules and the probe cadence. Added: t3code's `monthly_spend` window and `windowDurationMins`, the
 // wire projection, single flight and the timeout on `TestClock`, and the slot policy (J6 units and the
 // resize judge).
+
 import { ProviderUsage } from "@cairn/protocol/Usage";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";

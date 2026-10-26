@@ -6,6 +6,7 @@
 // process on the Beelink that talks to the loopback listener directly can claim the owner's header.
 // Decision rules follow cairn-v1 `apps/server/src/Gate.ts` at 1a5cd4a (generic refusal body, the
 // reason only in the log, a short whois cache), rewritten for a login instead of a device list.
+
 import { isIP } from "node:net";
 
 import { Cache, Context, Effect, Exit, Layer, Option, Schema } from "effect";

@@ -1,6 +1,7 @@
 // `skills.list` and `skills.reload` over a project in the fixture home: the project's skills come
 // first and win over the user's, a hidden skill is listed as not model-invocable, and an unknown
 // project is `NotFound`.
+
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 

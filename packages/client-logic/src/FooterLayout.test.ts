@@ -2,6 +2,7 @@
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: options are `Option` values and positional
 // parameters, and every layout carries `iconOnlyCount` (0 without icon-only widths). MIT License,
 // Copyright (c) 2026 T3 Tools Inc.; the full notice is in FooterLayout.ts.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 

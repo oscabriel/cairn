@@ -1,6 +1,7 @@
 // The push toggle's Commands and the Effects its Subscriptions run: checking the device (and
 // registering `/sw.js`), turning push on from a tap, turning it off, the load's re-check of the
 // subscription, presence reports, and the app badge. Each answers with one Message.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Cause, Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";

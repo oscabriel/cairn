@@ -1,6 +1,7 @@
 // The settings page's Commands: this device's settings (read, save, apply), one question to the
 // brain per section, `settings.update`, the skills reload and Executor's sign-in. Each answers with
 // one Message; a failure carries the brain's sentence when it sent one.
+
 import { ProjectId } from "@cairn/protocol/Ids";
 import { SettingsPatch } from "@cairn/protocol/Settings";
 import { Effect, Schema } from "effect";

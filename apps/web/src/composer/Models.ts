@@ -1,6 +1,7 @@
 // Which model and thinking level the composer shows and sends. A thread runs on what its shell row
 // says; a draft runs on what the user picked, else its project's default, else the server's.
 // Thinking is clamped to the levels the chosen model accepts.
+
 import {
   modelPickerModelKey,
   rankModelSearch,

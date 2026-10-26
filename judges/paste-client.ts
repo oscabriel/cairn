@@ -15,6 +15,7 @@
 // mod+shift+V is left to the editor; an image drop and a non-image drop each make a chip; a send
 // pressed while an upload is held waits, then fires with every ready attachment once it answers.
 // Prints one JSON line and exits 0 when every case passed and the page logged no error.
+
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";

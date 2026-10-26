@@ -1,6 +1,7 @@
 // The composer's Messages and the OutMessages it hands the root. Editor facts come from the
 // `ComposerInput` Mount (Editor.ts), measurements from the footer and headline Mounts, results from
 // the composer's Commands, and the rest from clicks in its view.
+
 import { ControlsMeasurement } from "@cairn/client-logic/FooterLayout";
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { ProjectId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";

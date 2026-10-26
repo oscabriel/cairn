@@ -57,6 +57,7 @@
 //
 // Prints one JSON line per window run: {window, run, pass, killToUp, upToConverged, page, effects,
 // entries, checks, notes}, then a summary line.
+
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {

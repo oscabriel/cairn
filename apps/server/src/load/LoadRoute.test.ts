@@ -2,6 +2,7 @@
 // `load.report` line with the peer's path read from the last `X-Forwarded-For` entry, and a 400
 // that logs nothing for a body that is not a report. `pathFromStatus` against recorded
 // `tailscale status --json` shapes.
+
 import { NodeHttpServer } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Logger, References } from "effect";

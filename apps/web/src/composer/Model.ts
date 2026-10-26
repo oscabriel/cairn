@@ -2,6 +2,7 @@
 // hero, at `/` and `/new/<draftId>`) and an open thread (docked under its transcript). What it needs
 // from the rest of the app arrives as `ComposerContext`, which the root hands it after every update
 // (`Update.ts`, `inform`); everything else here is the composer's own.
+
 import {
   FollowUpBehavior,
   SendShortcut,

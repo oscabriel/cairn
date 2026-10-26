@@ -10,6 +10,7 @@
 // lines, tokens or selection change; a file's shown lines are tokenized together into the
 // transcript's token cache by the file's Mount, a slice at a time, never by a render; and the panel
 // shows at most `MAX_TOTAL_LINES` lines across its files.
+
 import { buildTurnDiffTree, parsePatch } from "@cairn/client-logic/DiffTree";
 import type {
   DiffTreeNode,

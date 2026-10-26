@@ -14,6 +14,7 @@
 // Boot also logs the Agent SDK's version, the `claude` bundled with it and the one on PATH, and any
 // `claude` process whose parent died (re-parented to init or to a systemd subreaper): a child the
 // last brain lost.
+
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";

@@ -4,6 +4,7 @@
 // layer said plainly. The `cairn.user` entry carries the references, and a retried send (same
 // request id) claims nothing new and builds the same content. Claimed uploads survive the sweep
 // and a discard; unclaimed ones do not.
+
 import os from "node:os";
 
 import type { AttachmentRef } from "@cairn/protocol/Attachments";

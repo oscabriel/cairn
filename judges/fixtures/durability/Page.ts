@@ -4,6 +4,7 @@
 // (`[data-testid=timeline]`) and the sidebar's thread rows (`[data-testid=shell-thread-row]`), and
 // its oracle is the same text from a fresh page opened once the brain is quiet, so both sides are
 // rendered by the same renderer from the same build.
+
 import type { Browser, BrowserContext, Page } from "playwright";
 
 const TIMELINE = '[data-testid="timeline"]';

@@ -1,6 +1,7 @@
 // `models.list`, `providers.status`, `settings.get` and `settings.update`: thin calls into the model
 // catalog and the settings store that translate their failures into the protocol's `Unavailable`,
 // carrying the RPC request id. Also the `session.hello` defaults, from the same catalog.
+
 import { Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer, Option } from "effect";

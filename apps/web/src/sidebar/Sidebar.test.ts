@@ -1,5 +1,6 @@
 // Scene tests for the sidebar: the view and update together, driven the way the user drives them.
 // Each test starts from a shell the root has told the sidebar about, with the clock already read.
+
 import {
   allMenuIds,
   buildThreadActionMenuItems,

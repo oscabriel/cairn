@@ -4,6 +4,7 @@
 // side, both with every mutation at once and with each mutation alone. The mutation check runs at
 // a shorter timeout than the suite, so it first runs the unmutated control at that timeout and
 // requires zero failures: a timeout alone must not count as a caught mutation. Set CAIRN_UPDATE_GOLDENS=1 to rewrite the goldens after reviewing a behaviour change.
+
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 

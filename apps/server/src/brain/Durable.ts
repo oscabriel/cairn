@@ -2,6 +2,7 @@
 // chord Context cancelled when the Effect is interrupted, and turns a rejection into a typed error
 // that remembers the operation. "Harness is closed" is recognised everywhere, because every promise
 // the brain holds on a closing Harness rejects with it and that is a normal end, not a failure.
+
 import type { Context as ChordContext } from "@earendil-works/chord/context";
 import {
   BACKGROUND_CONTEXT,

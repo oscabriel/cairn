@@ -2,6 +2,7 @@
 // refs are durable and private, `diff.turn` equals a hand-computed diff, files HEAD's movement
 // explains are filtered out, the output cap marks its cut, and no scratch index survives an
 // interrupted capture. Also the capture service's idempotency and the pure helpers.
+
 import { createHash } from "node:crypto";
 import path from "node:path";
 

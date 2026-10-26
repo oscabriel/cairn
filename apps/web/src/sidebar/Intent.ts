@@ -1,6 +1,7 @@
 // What the user asked the sidebar to change, before the brain has a command id for it. Update records
 // an intent at once (so the row moves before the brain answers, see `Pending.ts`), and a Command mints
 // the UUIDv7 command ids that turn intents into `shell.dispatch` commands for the outbox.
+
 import { CommandId, ThreadId } from "@cairn/protocol/Ids";
 import {
   ProjectCreate,

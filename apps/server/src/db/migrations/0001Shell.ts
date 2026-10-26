@@ -3,6 +3,7 @@
 // server-owned settings. Times are epoch milliseconds. A project's and a thread's sidebar state is
 // stored whole as its encoded wire row (`shell_json`); only the fields queries filter or order on
 // are columns beside it.
+
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 

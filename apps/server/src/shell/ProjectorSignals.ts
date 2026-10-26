@@ -2,6 +2,7 @@
 // generation slot, and when a Claude plan window that refused a run resets. The shell projector
 // merges them into its activity patches; the bridge's usage layer provides them. The default has
 // none, so the projector works before the bridge is wired.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Context, Layer, Option, Stream } from "effect";

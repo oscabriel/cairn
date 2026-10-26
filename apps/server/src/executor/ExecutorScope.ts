@@ -24,6 +24,7 @@
 // `discoveryRefusal`, `executeRefusal`). Changed: the per-project `apps` list, the code mode
 // setting, the account pin and the Executor-app watch are gone (notes/v1.md B7); the scope is the
 // repo alone, an `Option`.
+
 import { Context, Effect, Layer, Option, Predicate } from "effect";
 import type { Schema } from "effect";
 

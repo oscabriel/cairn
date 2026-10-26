@@ -1,6 +1,7 @@
 // The sidebar's state: what the root told it last (the shell, the open page, the connection), the
 // user's view of the list (search, project filter, which shelves are open), the transient UI (rename,
 // context menu, add-project dialog, the undo notice) and the changes the brain has not shown back.
+
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { BrowseResult } from "@cairn/protocol/Projects";
 import { ShellSnapshot } from "@cairn/protocol/Shell";

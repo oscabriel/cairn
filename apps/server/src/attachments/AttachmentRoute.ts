@@ -4,6 +4,7 @@
 // good by the browser that asked and never by anything shared; `nosniff` and a sandboxing CSP keep
 // an uploaded HTML or SVG file from running as a page. Anything that is not an image, a PDF or text
 // is sent as a download. The guard in front of `/api` admits only the owner.
+
 import { AttachmentId } from "@cairn/protocol/Ids";
 import { Effect, Option, Schema } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";

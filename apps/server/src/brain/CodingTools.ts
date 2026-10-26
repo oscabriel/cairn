@@ -11,6 +11,7 @@
 // A `bash` call without a timeout stops after 120 seconds, and a model may ask for at most 600
 // (T16), so a hung command cannot hold its thread's turn forever.
 // The search tools run `rg` and `fd` as argv arrays, with no shell between the model and the process.
+
 import type { Context as ChordContext } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import type {

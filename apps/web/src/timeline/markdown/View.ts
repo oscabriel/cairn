@@ -6,6 +6,7 @@
 // styles, the copy button routed through the transcript's Message, a fence still growing in the
 // streaming message shown plain until it closes or commits, as t3code does, and a block too long
 // to tokenize in one frame tokenized by its Mount a slice at a time.
+
 import { Match, Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { Check, Copy, Image } from "lucide";

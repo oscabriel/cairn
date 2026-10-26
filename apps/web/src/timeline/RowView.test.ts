@@ -1,5 +1,6 @@
 // Scene tests for the user message row, rendered from a thread's view through the transcript's own
 // derivation, as the thread page draws it.
+
 import { AttachmentId } from "@cairn/protocol/Ids";
 import { ConversationView, ProjectedImage } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";

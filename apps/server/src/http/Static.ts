@@ -6,6 +6,7 @@
 // `BootJson` layer renders (none until the load package provides one, plan D46).
 // Static routes and the Content-Security-Policy are ported from cairn-v1 `apps/server/src/Http.ts`
 // at 1a5cd4a; the passkey and artifact paths are gone and the boot JSON hook is new.
+
 import path from "node:path";
 
 import { Context, Effect, FileSystem, Layer, Option } from "effect";

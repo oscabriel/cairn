@@ -278,7 +278,7 @@ export class TurnStarter extends Context.Service<
 ## Ports from other repos
 
 - **S64.** Port functionality and intent, not lines. Read the source to understand it, then write new code to these standards and Cairn's architecture: our services, schemas, errors and names.
-- **S65.** Start every file that draws on another repo with a header naming the repo, the path and the commit. When the source is MIT, add its copyright line and permission notice. A repo with no license (cf-workflow-pool, effect-harness) supplies ideas only: no text, but still named.
+- **S65.** Start every file that draws on another repo with a header naming the repo, the path and the commit. When the source is MIT, add its copyright line and permission notice. A repo with no license (cf-workflow-pool, effect-harness) supplies ideas only: no text, but still named. A file's header comment ends with a blank line before the first import, or oxfmt's import sorter moves it with that import (`judges/headers.test.ts`).
 
   ```ts
   // Ported from github.com/pingdotgg/t3code, apps/server/src/<path>.ts

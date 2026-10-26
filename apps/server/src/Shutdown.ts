@@ -5,6 +5,7 @@
 // Harness with its 5 s timeout as `Brain.ts`'s scope ends, then SQLite as its layer ends, then exit
 // 130. A watchdog logs `shutdown_slow` at 20 s so the journal names the step that ignored its signal
 // before systemd's `TimeoutStopSec` sends SIGKILL.
+
 import {
   Clock,
   Context,

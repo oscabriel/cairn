@@ -2,6 +2,7 @@
 // `auth.apiKey.check` and `resolve`. Cairn never reads Claude Code's token: the login is whatever the
 // `claude` binary has. The usage probe (2F, `ClaudeUsage`) provides the real layer; until then the
 // login is unknown, which counts as available, so a missing login surfaces as Claude Code's own error.
+
 import { Context, Effect, Layer } from "effect";
 
 /** The Claude Code login as the bridge last learned it. */

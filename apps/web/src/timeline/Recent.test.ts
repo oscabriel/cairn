@@ -1,5 +1,6 @@
 // Per-thread caches keep the most recent threads only (T50): opening 25 threads keeps 20, and a
 // thread used again moves to the recent end instead of being forgotten first.
+
 import { describe, expect, it } from "@effect/vitest";
 
 import { SAVED_THREAD_LIMIT } from "./Model.ts";

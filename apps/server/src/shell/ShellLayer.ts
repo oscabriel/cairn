@@ -1,6 +1,7 @@
 // The shell store as one layer: the rows and the event log, the event sink, the snapshot, the
 // stream and settlement (whose fibers start with the layer, reading the server settings). Needs
 // the migrated `SqlClient` from `Database`.
+
 import { Layer } from "effect";
 
 import { SettingsStore } from "../models/SettingsStore.ts";

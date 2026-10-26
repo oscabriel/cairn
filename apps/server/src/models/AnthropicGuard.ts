@@ -13,6 +13,7 @@
 // 4. Picker: `isRefusedProvider` keeps every `anthropic` model out of the listing.
 //
 // This is the only module that imports `@earendil-works/pi-ai/providers/anthropic` (lint enforced).
+
 import type {
   ApiKeyAuth,
   AssistantMessageEventStream,

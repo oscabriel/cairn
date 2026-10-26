@@ -1,6 +1,7 @@
 // The `thread_launches` rows of `cairn.sqlite`: a launch's request and the phase it reached, from
 // its first commit until the thread's first message reaches the brain. ThreadLaunch writes them;
 // boot reads them to resume launches a restart interrupted.
+
 import type { CommandId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";

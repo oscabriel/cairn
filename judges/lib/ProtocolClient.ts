@@ -8,6 +8,7 @@
 // headers, which uses the `ws` package. A client never reconnects by itself (`retryPolicy: recurs(0)`): when
 // its socket drops, every call fails with an `RpcClientError` and the judge decides what to do, usually
 // opening a new client in a new scope. That is also the browser's rule (plan, "Client connection rules").
+
 import {
   CairnRpcs,
   PROTOCOL_QUERY_PARAM,

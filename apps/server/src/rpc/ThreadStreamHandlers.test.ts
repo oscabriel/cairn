@@ -1,6 +1,7 @@
 // The thread stream's RPC handlers and the entry image route over the scripted harness: a fresh
 // snapshot first, history paging, full entries, image bytes by reference, the protocol error each
 // seam failure becomes, and a subscribe that arrives while its thread is still launching.
+
 import path from "node:path";
 
 import {

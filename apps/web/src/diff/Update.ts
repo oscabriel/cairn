@@ -1,6 +1,7 @@
 // The diff panel's update, and `open`, which its parent calls when the changed-files card asks for
 // a turn's diff (optionally at one file). Every request bumps `version`, so a slow answer for a
 // turn the user already left is dropped.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Option } from "effect";
 import type { Update } from "foldkit";

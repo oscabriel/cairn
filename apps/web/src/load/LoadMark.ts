@@ -5,6 +5,7 @@
 // report is posted with `fetch(..., {keepalive: true})` rather than `navigator.sendBeacon`: the
 // guard requires the exact Origin on every POST, which `fetch` always sends and a beacon need not.
 // A page that never becomes interactive within 30 s reports nothing.
+
 import { Duration, Effect, Schema } from "effect";
 
 import { openedEarly } from "./EarlySocket.ts";

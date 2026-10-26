@@ -4,6 +4,7 @@
 // sidebar's shell index. The sidebar, the composer and the chat header are lazy views over their own
 // slices of the Model, so a streamed token rebuilds only the transcript and a keystroke only the
 // composer.
+
 import type { Entry } from "@cairn/protocol/Thread";
 import { Equal, Option } from "effect";
 import { createLazy } from "foldkit/html";

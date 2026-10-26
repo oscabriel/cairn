@@ -1,6 +1,7 @@
 // The PWA's static half: the manifest Cairn installs from, the service worker that only shows
 // pushes (ADR 0021: no `fetch` listener, so a deploy never leaves a stale shell), and the toggle's
 // rule that "off" stays off while the permission stays granted.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 import { vi } from "vitest";

@@ -5,6 +5,7 @@
 // follows t3code's `rememberTimelinePosition` (github.com/pingdotgg/t3code,
 // apps/web/src/components/chat/timelineScrollAnchoring.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92) by keeping each thread's whole list Model.
+
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import type { EntryId } from "@cairn/protocol/Ids";
 import { ThreadId } from "@cairn/protocol/Ids";

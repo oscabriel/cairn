@@ -2,6 +2,7 @@
 // at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: results are values rather than callback
 // calls, and the citation and plan cases are gone. MIT License, Copyright (c) 2026 T3 Tools Inc.;
 // the full notice is in ComposerSubmission.ts.
+
 import { assert, describe, it } from "@effect/vitest";
 
 import {

@@ -1,5 +1,6 @@
 // Values the client's Story tests share: a Model in each connection state, a hello, a snapshot and
 // outbox items. Only tests import this module.
+
 import { RootWorkspace, ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { Hello } from "@cairn/protocol/Rpc";
 import { ShellSnapshot } from "@cairn/protocol/Shell";

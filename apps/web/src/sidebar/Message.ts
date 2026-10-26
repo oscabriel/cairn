@@ -1,5 +1,6 @@
 // The sidebar's Messages, and the OutMessages it hands the root: commands for the outbox, and a draft
 // the user discarded (the composer owns drafts).
+
 import { ProjectId, TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { BrowseResult } from "@cairn/protocol/Projects";
 import { ShellCommand } from "@cairn/protocol/ShellCommands";

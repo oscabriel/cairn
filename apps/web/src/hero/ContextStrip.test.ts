@@ -2,6 +2,7 @@
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 for the parts Cairn kept (labels), and Cairn's own for the
 // branch order and the launch strategy. MIT License, Copyright (c) 2026 T3 Tools Inc.; the full
 // notice is in ContextStrip.ts.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Predicate } from "effect";
 

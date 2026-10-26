@@ -8,6 +8,7 @@
 // The view may be a window: `entriesOffset` older active entries are left out, and op indices count
 // from the window's start. Pages from `thread.history` are kept apart, in `older`, so they never
 // shift the indices ops address.
+
 import type {
   Entry,
   HistoryPage,

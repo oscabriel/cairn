@@ -2,6 +2,7 @@
 // answers 503 until boot is done, then upgrades), the repair that retries parked approval waits,
 // and the one number that matters from the 300-conversation scale probe (plan D1): under 3 s from
 // opening the stores to ready over a brain of 300 threads.
+
 import { mkdtempSync, rmSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";

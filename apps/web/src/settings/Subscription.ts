@@ -2,6 +2,7 @@
 // client lives (the composer's meter reads them on every page), and the device's light or dark
 // preference while the theme follows it. A usage stream that fails or ends stays quiet until the
 // next epoch; the meter then keeps its last frame.
+
 import { Effect, Option, Schema, Stream } from "effect";
 import { Subscription } from "foldkit";
 import { streamFromEventFilterMap } from "foldkit/dom";

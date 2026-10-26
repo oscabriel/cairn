@@ -1,6 +1,7 @@
 // The push toggle's streams: the load's re-check of the subscription (once the socket and the key
 // are there), presence reports (at once, every 15 seconds and on every visibility change, for as
 // long as the epoch's client lives), and the service worker's requests to open a path.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Duration, Option, Schema, Stream } from "effect";
 import { Subscription } from "foldkit";

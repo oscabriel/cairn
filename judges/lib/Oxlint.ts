@@ -1,6 +1,7 @@
 // Runs the repo's oxlint over files and reads its JSON report: which rule fired on which line of
 // which file. The lint judges (`lint-boundaries.test.ts`, `lint-rules.test.ts`) write probe files
 // into real zones, so the repo's own config and overrides apply.
+
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 

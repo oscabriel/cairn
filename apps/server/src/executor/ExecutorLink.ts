@@ -29,6 +29,7 @@
 // `ping`, `check`, `connect`, `callback`, `CairnOAuthProvider`). Changed: one grant from the
 // database (no `mcp.json` declaration, `redeclare` or `confirm`), Effect state instead of closures,
 // and the scoped resource metadata URL derived from the grant's own server URL.
+
 import type { ExecutorStatus } from "@cairn/protocol/Executor";
 import {
   McpClient,

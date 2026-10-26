@@ -2,6 +2,7 @@
 // composerSlashCommandSearch.test.ts at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: provider
 // slash commands are gone, skills are pi `SkillSummary` values, and the `$` search has cases of its
 // own. MIT License, Copyright (c) 2026 T3 Tools Inc.; the full notice is in SlashCommandSearch.ts.
+
 import type { SkillSummary } from "@cairn/protocol/Skills";
 import { assert, describe, it } from "@effect/vitest";
 

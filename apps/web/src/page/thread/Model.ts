@@ -1,5 +1,6 @@
 // The thread page's state: which thread it shows, the connection it may stream over (told by the
 // root on every change), and the client's copy of the thread's projected view.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { ConversationView, Entry } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";

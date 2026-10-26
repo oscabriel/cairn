@@ -1,5 +1,6 @@
 // Git's errors carry the end of its stderr into logs and into a thread's `lastError`; a remote URL
 // in that text keeps its host and path but never the credential it may embed.
+
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer } from "effect";

@@ -8,6 +8,7 @@
 // - `running`: whether `pi.live` has a run.
 // - `approvals`: approval records by age, with their status and tool; `pendingApprovals`.
 // - `model`: the thread's model.
+
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";
 import type { Schema } from "effect";

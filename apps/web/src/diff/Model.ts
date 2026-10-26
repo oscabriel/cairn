@@ -2,6 +2,7 @@
 // turn alone or everything up to it, the whitespace switch, the file the user picked, the patch as
 // the brain sent it, and the code grammars loaded so far. Parsed files are derived in the view,
 // once per patch.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";

@@ -2,6 +2,7 @@
 // and `openai-codex` are never read, every OAuth credential and every subscription token is
 // ignored, and nothing is ever written. Assertions are on provider ids and types only, never on a
 // key's value; the real file's case reads the user's auth.json the same way and prints nothing.
+
 import {
   existsSync,
   mkdtempSync,

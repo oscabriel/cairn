@@ -1,5 +1,6 @@
 // Scene tests for the settings page, plus the client settings' decoding: defaults for what is
 // missing, and a corrupt saved value that leaves the page on its defaults instead of failing.
+
 import { ProjectId } from "@cairn/protocol/Ids";
 import type { ServerSettings } from "@cairn/protocol/Settings";
 import { assert, describe, it } from "@effect/vitest";

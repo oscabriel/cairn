@@ -1,6 +1,7 @@
 // The push toggle's content, which the settings page mounts in its Notifications section: one
 // switch, "Notify me on this device", and a line that says why it cannot be used when it cannot
 // (no push in this browser, iOS outside the Home Screen app, notifications blocked, a failure).
+
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";

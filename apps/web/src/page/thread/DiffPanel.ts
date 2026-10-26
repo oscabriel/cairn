@@ -2,6 +2,7 @@
 // Message and update stay in the entry; only `diff/View.ts` and what it alone imports are fetched,
 // the first time the panel opens. The update asks for the load, the module is held outside the
 // Model (as the shiki grammars are), and `LoadedDiffPanel` makes the page render it.
+
 import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";

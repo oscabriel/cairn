@@ -3,6 +3,7 @@
 // restores the scroll position and what was open), the history paging state, the copy feedback
 // and the code grammars loaded so far. The rows themselves are derived from the page's thread view
 // (Rows.ts), never stored here.
+
 import * as VirtualList from "@foldkit/ui/virtualList";
 import { Option, Predicate, Schema } from "effect";
 

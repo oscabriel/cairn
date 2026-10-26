@@ -2,6 +2,7 @@
 // activity) stored whole as the wire `ThreadShell`, beside the columns queries filter on, a
 // tombstone, and the last time a snooze woke (auto-settle counts from it). Only the shell store's
 // event sink writes rows, inside its command transaction.
+
 import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";

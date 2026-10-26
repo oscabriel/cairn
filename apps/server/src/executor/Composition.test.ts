@@ -1,6 +1,7 @@
 // Only one process may hold the Executor grant, so only the deployed brain composes the real link:
 // `main.ts` never composes `ExecutorLink.layerFake`, and no other file composes `ExecutorLink.layer`.
 // A grep over the server, the judges, the tools and the ops scripts, comments left out.
+
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 

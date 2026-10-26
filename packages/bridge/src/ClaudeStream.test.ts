@@ -1,5 +1,6 @@
 // ClaudeStream on its own: when a turn of Claude Code events ends, and what pi receives. The
 // conversation tests drive the same paths end to end; these pin the stream's rules directly.
+
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import { Option } from "effect";

@@ -3,6 +3,7 @@
 // withdraw, configure), and the two that turn a draft into a turn: each mints the ids the brain
 // dedupes on, so a resend after a reconnect lands once. Turn input itself goes through the root's
 // outbox, never straight to the socket.
+
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { ProjectId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";

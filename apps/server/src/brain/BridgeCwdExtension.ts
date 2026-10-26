@@ -13,6 +13,7 @@
 // changes the extension set (footgun "moving default selections"); off, the hook does nothing.
 // The hook runs Effects through one runtime made from the layer's scope (S43): interrupted when the
 // brain closes, and logging through the brain's logger.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { Context as ChordContext } from "@earendil-works/chord";
 import type { HookApi } from "@earendil-works/pi-durable";

@@ -1,5 +1,6 @@
 // The checkout a folder sits in, found the way pi finds it: the nearest folder above it, itself
 // included, that holds a `.git` entry (a folder, or a worktree's file).
+
 import { existsSync } from "node:fs";
 import path from "node:path";
 

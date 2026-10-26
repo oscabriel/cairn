@@ -1,6 +1,7 @@
 // `push.subscribe`, `push.unsubscribe` and `presence.report`: thin calls into the push services that
 // translate their failures into the protocol's errors, carrying the RPC request id. Also the VAPID
 // public key in `session.hello`, which a page needs before it can subscribe.
+
 import { InvalidInput, Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs, Viewer } from "@cairn/protocol/Rpc";
 import { Effect, Layer, Option } from "effect";

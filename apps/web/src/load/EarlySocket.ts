@@ -3,6 +3,7 @@
 // run while the app's first frame is built, and the connection resource's first dial is handed
 // that socket instead of opening another. Every later dial (a reconnect) opens a new one. A socket
 // that closed before the app asked for it is dropped, and the app dials as usual.
+
 import { PROTOCOL_QUERY_PARAM, PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import { Layer, Option, Predicate } from "effect";
 import { Socket } from "effect/socket";

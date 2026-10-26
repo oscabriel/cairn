@@ -1,6 +1,7 @@
 // The thread stream coalesces for a slow client (T49): commits made while the subscriber reads
 // nothing reach it as a few frames, not one per revision, and applying them lands on the same view
 // a fresh snapshot shows.
+
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

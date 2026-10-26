@@ -1,5 +1,6 @@
 // The tray's queue: three uploads at a time, eager start, one automatic retry with a new URL,
 // removal aborts, and a send pressed during uploads waits for the last one.
+
 import { AttachmentId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";

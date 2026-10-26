@@ -17,6 +17,7 @@
 // The path line (`attachmentPathLine` in @cairn/protocol, after t3code's
 // `providerMessageTextWithAttachmentPaths`) is its own text part, so the transcript can drop it;
 // t3code sends documents as the path only, and Cairn sends their text.
+
 import {
   attachmentPathLine,
   attachmentText,

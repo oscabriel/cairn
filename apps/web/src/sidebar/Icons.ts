@@ -1,6 +1,7 @@
 // Lucide icons (ISC) as Foldkit SVG, with the attributes lucide-react writes, so a row draws the same
 // glyphs t3code draws. Icon nodes come from the `lucide` package; the Claude mark is the provider
 // icon t3code shows beside a Claude thread.
+
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {
   AlarmClock,

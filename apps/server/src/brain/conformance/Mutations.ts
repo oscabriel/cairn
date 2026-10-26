@@ -6,6 +6,7 @@
 // - reorder_events: every two events swap places.
 // - lose_queued_input: every second input on a thread is acknowledged but never admitted.
 // - skip_snapshot: a thread stream starts with ops instead of its snapshot.
+
 import { SubmissionId } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Effect, Option, Predicate, Stream } from "effect";

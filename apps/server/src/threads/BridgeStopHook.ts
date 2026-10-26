@@ -3,6 +3,7 @@
 // result), so without this the child would keep its session and its memory until the idle time to
 // live. The killed sessions are forked on their next call, so the thread resumes natively. Runs
 // for both stops (keeping or clearing the queue); a thread with no live child is a no-op.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Effect, Option } from "effect";
 

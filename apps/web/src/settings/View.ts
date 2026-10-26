@@ -3,6 +3,7 @@
 // toggle the root passes in; Models and providers is read-only apart from the Claude switch, its
 // generation cap and the title model; Skills shows the count and an estimate of the prompt they
 // add, with Reload; Executor shows the link's state and a way to sign in again.
+
 import type { ExecutorStatus } from "@cairn/protocol/Executor";
 import type { ModelCatalog, ProviderStatus } from "@cairn/protocol/Models";
 import type { ServerSettings } from "@cairn/protocol/Settings";

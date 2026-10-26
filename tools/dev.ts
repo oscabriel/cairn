@@ -8,6 +8,7 @@
 // address it bound; Vite then proxies /ws, /api and /_cairn to it. The dev brain keeps its data
 // under ~/.local/share/cairn-dev unless --data-dir says otherwise, never in production's store.
 // Ctrl-C stops both.
+
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";

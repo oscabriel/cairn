@@ -1,6 +1,7 @@
 // The boot JSON as the page receives it: rendered by `BootData`, injected by `Static.ts`, then read
 // back the way a browser reads a script element's text. A project titled with `</script>` must not
 // close the element, and an unreadable shell store must inject nothing rather than fail the page.
+
 import { ProjectId } from "@cairn/protocol/Ids";
 import { PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import type { ShellSnapshot as ShellSnapshotValue } from "@cairn/protocol/Shell";

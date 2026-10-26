@@ -3,6 +3,7 @@
 // reach it; the OAuth `state` must be the one sign-in Cairn has in flight, once, within ten
 // minutes. The answer is a small page that says what happened and links back to Cairn; the query
 // (which carries a one-time code) is never logged.
+
 import { Effect, Option, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 

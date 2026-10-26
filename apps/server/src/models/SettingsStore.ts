@@ -2,6 +2,7 @@
 // `settings` table so every device sees the same values: one row per setting, its value as the
 // setting's encoded JSON. A row that no longer decodes (a setting whose shape changed) reads as the
 // default and is logged; the next update writes it again.
+
 import type { SettingsPatch } from "@cairn/protocol/Settings";
 import { ServerSettings } from "@cairn/protocol/Settings";
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";

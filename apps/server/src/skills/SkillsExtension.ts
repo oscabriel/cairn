@@ -6,6 +6,7 @@
 //
 // The `skills` section: the skills a thread's model may load, with their files' locations, so a
 // thread reads the same list pi would show it in the same cwd.
+
 import type { Context as ChordContext } from "@earendil-works/chord";
 import type { PromptInput } from "@earendil-works/pi-durable";
 import { defineExtension, LiveDoc, section } from "@earendil-works/pi-durable";

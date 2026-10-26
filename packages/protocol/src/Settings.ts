@@ -1,4 +1,5 @@
 // Settings the server owns, so every device agrees.
+
 import { Schema } from "effect";
 
 import { NonNegativeInt, PositiveInt } from "./Ids.ts";

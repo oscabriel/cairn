@@ -1,5 +1,6 @@
 // The thread page's own Command: the wait before a fresh subscription, after a stream ended with
 // a failure or with NotFound while the thread's launch was still on its way to the brain.
+
 import { Duration, Effect, Schema } from "effect";
 import { Command } from "foldkit";
 

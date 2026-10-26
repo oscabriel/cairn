@@ -1,6 +1,7 @@
 // The generation semaphore (plan D8): at most `size` Claude Code children generate at once. A child
 // held across a tool call holds no permit, so a parent waiting on a subagent never holds the slot
 // its child needs. The usage service resizes it (2F, in its own layer); the shell reads who waits.
+
 import { Context, Effect, Layer, PubSub, Ref, Semaphore, Stream } from "effect";
 
 /** The generation permits a fresh bridge starts with. */

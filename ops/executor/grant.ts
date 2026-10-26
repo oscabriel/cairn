@@ -7,6 +7,7 @@
 // connection exposes, which is the step's outside judge. The grant lives in
 // ~/.config/cairn/executor-grant.json (mode 600) until Cairn's database exists, and nothing else may
 // use it: Executor treats a reused rotated refresh token as theft.
+
 import { homedir } from "node:os";
 
 import { McpClient, StreamableHttpTransport } from "@earendil-works/pi-mcp";

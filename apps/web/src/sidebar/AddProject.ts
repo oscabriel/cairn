@@ -1,6 +1,7 @@
 // The add-project dialog: a folder browser over `projects.browse`, starting at the home folder.
 // Clicking a folder opens it; "Add" makes the shown folder a project. t3code adds projects through
 // its command palette; Cairn draws its dialog look (backdrop, card, header, panel, footer) instead.
+
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 

@@ -2,6 +2,7 @@
 // a message written for the person who must act, the request id when the server stamped one, and
 // whether sending the same request again is safe. None carries secrets, paths outside the
 // request, SQL, stack traces or vendor responses.
+
 import { Effect, Schema } from "effect";
 
 import { DisplayText, TrimmedNonEmptyString } from "./Ids.ts";

@@ -3,6 +3,7 @@
 // and modelPickerKeys.test.ts. Changed: a model is a pi provider and model id, so the catalog's
 // sub-provider became the provider's name; legacy section keys are gone. MIT License, Copyright
 // (c) 2026 T3 Tools Inc.; the full notice is in ModelSearch.ts.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 

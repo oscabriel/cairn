@@ -11,6 +11,7 @@
 //
 // Any other message is answered `ok`. The answer never depends on the clock, so a rerun after a
 // crash asks for the same step again.
+
 import type {
   AssistantMessage,
   Message,

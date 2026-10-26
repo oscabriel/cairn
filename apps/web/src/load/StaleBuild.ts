@@ -4,6 +4,7 @@
 // answering an id the page can never get cannot cause a loop. Changed: the page's build id comes
 // from the boot JSON the server inlined (the same id `session.hello` reports), not from a Vite
 // define, and a page with no boot JSON (the dev server) never reloads.
+
 import { Effect, Option, Schema } from "effect";
 
 import { BOOT_ELEMENT_ID } from "../shell/ShellStore.ts";

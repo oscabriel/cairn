@@ -17,6 +17,7 @@
 //
 // Prints one JSON line: {pass, helloMs, models, anthropic, providers, model, launchMs, replyMs,
 // activity, notes}. Prints no credential and no reply text.
+
 import { parseArgs } from "node:util";
 
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";

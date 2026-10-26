@@ -4,6 +4,7 @@
 // Vite origin (the guard checks Origin and Host against it). Pretty log lines. The harness is the
 // scripted one with a demo thread (`DevDemo.ts`), or with `--models real` pi-durable over the user's
 // API models (pi's model runtime, read-only over `~/.pi/agent`).
+
 import { parseArgs } from "node:util";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";

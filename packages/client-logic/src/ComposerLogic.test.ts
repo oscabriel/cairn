@@ -4,6 +4,7 @@
 // apps/web/src/components/chat/composerMenuHighlight.test.ts. Changed: cases for remapped
 // keybindings are gone (Cairn's composer keys are fixed), environments are gone, `restart` is gone.
 // MIT License, Copyright (c) 2026 T3 Tools Inc.; the full notice is in ComposerLogic.ts.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 

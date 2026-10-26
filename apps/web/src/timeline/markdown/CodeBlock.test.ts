@@ -3,6 +3,7 @@
 // when it closes, and the commit reuses it; a long one is tokenized once, a slice at a time, by its
 // Mount after the message commits, drawn as far as the slices have gone, and never tokenized in one
 // go by a render.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Stream } from "effect";
 import { Submodel } from "foldkit";

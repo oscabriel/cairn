@@ -1,5 +1,6 @@
 // The diff panel's Messages. The changed-files card in the transcript opens the panel by sending
 // `RequestedOpen` (through its parent), or the parent calls `open` (Update.ts) directly.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";

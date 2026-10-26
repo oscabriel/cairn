@@ -1,6 +1,7 @@
 // The composer's streams: the soft keyboard, the draft saver's 300 ms pause, the `@` search's 120 ms
 // debounce, the `pagehide` flush, and type-to-focus (a printable key pressed with focus on no field
 // starts typing into the composer, from t3code's composerFocusRedirect.ts).
+
 import { isTypeToFocusKey } from "@cairn/client-logic/ComposerLogic";
 import { ProjectId } from "@cairn/protocol/Ids";
 import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";

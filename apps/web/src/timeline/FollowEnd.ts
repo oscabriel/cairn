@@ -8,6 +8,7 @@
 // It follows while the user has not scrolled away: a scroll event that leaves the end more than
 // 1 px away stops it at once (before the Model hears of it), and the wrapper's `data-following`
 // turning "true" (the pill, or the list's own anchor coming back to its end) starts it again.
+
 import { Effect, Function } from "effect";
 import * as Mount from "foldkit/mount";
 

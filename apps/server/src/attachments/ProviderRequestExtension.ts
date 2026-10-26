@@ -4,6 +4,7 @@
 // file's, which proves the model saw the pasted image and not another. The hook reads and returns
 // nothing, so the request is unchanged; its log runs on a runtime built from the brain's layer
 // (S43), so the line goes through the brain's logger.
+
 import { createHash } from "node:crypto";
 
 import type { Message } from "@earendil-works/pi-ai";

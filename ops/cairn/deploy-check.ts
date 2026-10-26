@@ -9,6 +9,7 @@
 // any process on the Beelink may do this (ADR 0008's accepted consequence). The line also carries the
 // brain's PATH directories, read from /proc without the rest of its environment. Prints one JSON line and
 // exits 0 on a pass, 1 otherwise. Reads ~/.config/cairn/cairn.json, which holds no secret.
+
 import { homedir } from "node:os";
 import { parseArgs } from "node:util";
 

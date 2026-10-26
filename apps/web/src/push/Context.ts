@@ -1,6 +1,7 @@
 // What the root tells the push toggle, built from what the root already holds: the epoch and its
 // client, the VAPID key from that epoch's `session.hello`, the thread on screen, and the badge
 // count (threads whose latest result the user has not opened, as the sidebar computes it).
+
 import { hasUnseenCompletion } from "@cairn/client-logic/Sidebar";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { Hello } from "@cairn/protocol/Rpc";

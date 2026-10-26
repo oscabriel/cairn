@@ -5,6 +5,7 @@
 // the server's upload capability are dropped with those features. Added: admission against Cairn's
 // limits and the image encode plan.
 // MIT License, Copyright (c) 2026 T3 Tools Inc.; the full notice is in AttachmentFiles.ts.
+
 import {
   MAX_ATTACHMENTS_PER_TURN,
   MAX_FILE_BYTES,

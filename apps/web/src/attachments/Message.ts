@@ -1,6 +1,7 @@
 // The attachment tray's Messages and the OutMessages it hands the composer. Files arrive from the
 // composer's paste Mount, the guarded document paste listener, a drop on the composer or the Attach
 // button's file input; results come from the tray's Commands and the upload progress stream.
+
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { AttachmentId } from "@cairn/protocol/Ids";
 import { Schema } from "effect";

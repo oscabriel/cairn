@@ -6,6 +6,7 @@
 // - a run that fails on a spent plan window gets the window's reset time on its row.
 //
 // The pure helpers are judged first.
+
 import { claudeModels, DEFAULT_LONG_CONTEXT } from "@cairn/bridge/ClaudeModels";
 import { providerContext } from "@cairn/bridge/ClaudeProvider";
 import {

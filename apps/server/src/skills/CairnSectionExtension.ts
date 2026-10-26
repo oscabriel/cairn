@@ -2,6 +2,7 @@
 // folder its coding tools work in) and how to reach every tool beyond the coding tools: from a code
 // mode script, through `searchTools()`. The text depends only on the conversation's cwd, so it is
 // byte-stable across requests and changes only when the cwd does.
+
 import { defineExtension, section } from "@earendil-works/pi-durable";
 import { Option } from "effect";
 

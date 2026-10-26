@@ -3,6 +3,7 @@
 // available with thinking clamps, the catalog over a faux model source, and the real layer over a
 // fixture agent dir with providers arriving through `ExtraProviders` (registered natively, listed,
 // and given D7's compaction override in the run settings).
+
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

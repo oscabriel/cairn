@@ -1,6 +1,7 @@
 // The load module's rules: when a page reloads for a new build (once per server build, never
 // without boot JSON), what counts as a request before interactive, and the page build read from the
 // boot JSON the server inlines.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option } from "effect";
 

@@ -2,6 +2,7 @@
 // entries win: `Layer.mergeAll` keeps the last handler for a tag, so each domain's handler layer,
 // listed after the stubs, replaces its stubs. Handlers stay thin: they call services and return
 // protocol values.
+
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer } from "effect";
 

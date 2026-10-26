@@ -2,6 +2,7 @@
 // file `POST`ed to the one-shot URL `attachments.createUploadUrl` signed, as the web client's
 // `UploadQueue` sends them, but paced in chunks so a 20 MB upload lasts a few seconds on loopback
 // and a `kill -9` can land while the brain is writing its `.part` file.
+
 import http from "node:http";
 import type { IncomingMessage } from "node:http";
 import { buffer } from "node:stream/consumers";

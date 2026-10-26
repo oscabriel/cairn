@@ -1,4 +1,5 @@
 // When the memory watch logs a peak: the first reading, then only one past the last by the step.
+
 import { describe, expect, it } from "@effect/vitest";
 import { Option } from "effect";
 

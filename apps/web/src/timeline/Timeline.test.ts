@@ -1,5 +1,6 @@
 // The transcript's update and row derivation. Rendering and scrolling are judged in a browser by
 // judges/transcript-scroll.ts, over the same submodel.
+
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { EntryId } from "@cairn/protocol/Ids";
 import { ConversationView, Entry } from "@cairn/protocol/Thread";

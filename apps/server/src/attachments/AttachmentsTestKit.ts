@@ -2,6 +2,7 @@
 // uses it: PDFs with text placed at given points on each page (one column, two columns, or none),
 // ZIP archives (stored or deflated, with sizes that can be made to lie), DOCX files over them, and a
 // real PNG.
+
 import { crc32, deflateRawSync } from "node:zlib";
 
 /** One run of text on a PDF page, at `x`, `y` points from the bottom left of a US Letter page. */

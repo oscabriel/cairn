@@ -20,6 +20,7 @@
 // Ported from cairn-v1, apps/server/src/ExecutorTools.ts at 1a5cd4a (the five tool definitions,
 // their descriptions and the discovery passthrough). Changed: code mode callers, the ledger
 // sandwich instead of v1's approval queue, no Executor-app watch and no per-project app list.
+
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";

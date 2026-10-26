@@ -7,6 +7,7 @@
 // Ported from cairn-v1, apps/server/src/Files.ts at 1a5cd4a (`sniff`). Changed: PDF, DOCX and the
 // Office files that stay files, the text type taken from the client when it names a text format,
 // and a refusal that names what to attach instead.
+
 import { Option } from "effect";
 
 import { looksLikeZip, readZipDirectory } from "./ZipDirectory.ts";

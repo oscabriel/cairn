@@ -2,6 +2,7 @@
 // at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: the terminal, review, citation and
 // automation cases are gone; Cairn's attachment and skill parts are dropped from recall instead.
 // MIT License, Copyright (c) 2026 T3 Tools Inc.; the full notice is in ComposerPromptHistory.ts.
+
 import { attachmentText } from "@cairn/protocol/Attachments";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";

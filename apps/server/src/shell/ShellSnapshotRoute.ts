@@ -1,6 +1,7 @@
 // `GET /api/shell`: the shell snapshot over plain HTTP, so a page can paint the sidebar before its
 // socket is up and then subscribe with `afterSequence` set to the snapshot's sequence. The guard
 // (Host, identity, Origin, `Sec-Fetch-Site`) runs before this route as global middleware.
+
 import { ShellSnapshot as ShellSnapshotSchema } from "@cairn/protocol/Shell";
 import { Effect, Schema } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";

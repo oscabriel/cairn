@@ -1,6 +1,7 @@
 // A handler for every RPC that fails with a typed `Unavailable`, so the group is complete from the
 // first wave and a client sees a clear, retryable answer instead of a dropped socket. Each domain's
 // handlers replace their entries in `Handlers.ts` as they land.
+
 import { Unavailable } from "@cairn/protocol/Errors";
 import { Effect, Stream } from "effect";
 

@@ -3,6 +3,7 @@
 // the form's drop and paste handling, and the tray's subscriptions. The tray is its own Submodel
 // (`attachments/`): the composer keeps its Model under `attachments` and lifts its Messages with
 // `GotAttachmentsMessage`. Everything here takes the lift as an argument, so it builds on its own.
+
 import type { Option } from "effect";
 import { Subscription } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";

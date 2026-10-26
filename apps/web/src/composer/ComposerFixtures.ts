@@ -1,5 +1,6 @@
 // Values the composer's tests share: a project, a thread row, a model catalog and a Model informed
 // with them. Only tests import this module.
+
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { ModelCatalog } from "@cairn/protocol/Models";
 import { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";

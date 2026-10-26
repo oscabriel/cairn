@@ -18,6 +18,7 @@
 //   same duration t3code shows.
 // - Checkpoints, notices, interrupts, compactions, approvals and subagents have no entry in a
 //   pi transcript; they are counted in `skipped`.
+
 import type {
   AssistantMessage,
   Message,

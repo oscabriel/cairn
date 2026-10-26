@@ -20,6 +20,7 @@
 // The texts and the status handling are ported from cairn-v1, apps/server/src/ExecutorTools.ts at
 // 1a5cd4a (`run`), with v1's approval queue, re-ask after expiry and superseding rows replaced by
 // the ledger sandwich (notes/v1.md B7).
+
 import { Duration, Effect, Option, Ref, Result } from "effect";
 
 import type { ApprovalLedger } from "../brain/CairnDocs.ts";

@@ -1,6 +1,7 @@
 // The phone verdicts on log lines in the brain's own format (Effect's `Logger.formatJson`, as the
 // events log and the unit's journal hold them): a pass, a fail, DERP runs excluded and re-asked, a
 // desktop load ignored, and the paste sum with the user's pause before send left out.
+
 import { describe, expect, it } from "@effect/vitest";
 
 import * as Events from "./lib/Events.ts";

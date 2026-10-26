@@ -2,6 +2,7 @@
 // pasted, dropped or picked until the turn that carries it is sent. Uploads run eagerly, three at a
 // time, and keep running when the user moves to another draft; each item remembers its draft. A
 // ready item holds the brain's `AttachmentRef`, which is all a draft keeps across a reload.
+
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { Option, Schema } from "effect";
 import { File } from "foldkit/file";

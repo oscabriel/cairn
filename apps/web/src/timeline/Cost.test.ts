@@ -2,6 +2,7 @@
 // frames replayed over a thread holding about 3,000 entries, against deriving that transcript from
 // objects never seen before. A share, not a time, so the budget holds on any machine; a frame that
 // re-derives everything costs close to the whole.
+
 import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { EntryId } from "@cairn/protocol/Ids";

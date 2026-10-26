@@ -1,6 +1,7 @@
 // Judges `ProtocolClient` against an in-process server on a real loopback socket: the upgrade carries
 // the Origin and the extra headers, `?protocol=` reaches the server, unary calls, streams and typed
 // errors cross, and a refused upgrade fails the call instead of hanging or retrying.
+
 import { createServer } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";

@@ -2,6 +2,7 @@
 // conversation, never through the Claude bridge, so a ten-token answer never starts a `claude`
 // child. Its callers always have a fallback, so this service never fails: no model, a failed
 // request or an empty answer all read as none.
+
 import type { ModelRef } from "@cairn/protocol/Models";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {

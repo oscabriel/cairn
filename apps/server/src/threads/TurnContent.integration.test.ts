@@ -2,6 +2,7 @@
 // turn carrying a `$skill` reference and a 3-page PDF runs the production stages (text, skill
 // expansion, attachments) and reaches the model as pi's skill block followed by the PDF's text,
 // recorded as exactly one `cairn.user` entry.
+
 import os from "node:os";
 
 import {

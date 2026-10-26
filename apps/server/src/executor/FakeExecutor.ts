@@ -17,6 +17,7 @@
 // Ported from cairn-v1, apps/server/test/fake-executor.ts at 1a5cd4a. Changed: a `github`
 // stand-in app, a hanging tool, counters for refreshes and refused refresh tokens, a grant seeded
 // without the consent page, the clock injected, and an Effect resource around the server.
+
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";

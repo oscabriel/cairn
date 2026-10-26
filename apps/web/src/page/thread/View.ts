@@ -1,5 +1,6 @@
 // The thread page: the stream's status, then the transcript (apps/web/src/timeline), which scrolls
 // itself. The page header (ui/ChatHeader.ts) is drawn by the root view above the hold banner.
+
 import type { Entry } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";
 import { Submodel } from "foldkit";

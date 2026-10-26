@@ -1,6 +1,7 @@
 // The guard's matrix (edges note section 4 and the gate judge's Origin list), run in memory: every
 // request goes through the real `Guard` middleware and the real `Identity` rules in front of a few
 // stand-in routes that answer 200.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";

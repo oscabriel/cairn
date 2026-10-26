@@ -19,6 +19,7 @@
 // The sign-in Cairn starts from `executor.signIn` keeps its OAuth `state` here, single use, for
 // `SIGN_IN_TTL` (ported from cairn-v1, apps/server/src/Executor.ts at 1a5cd4a, `connect` and
 // `callback`; the row shape is v1's `executor_grant`, re-cut to one grant and its import).
+
 import path from "node:path";
 
 import type { McpOAuthState } from "@earendil-works/pi-mcp/oauth";

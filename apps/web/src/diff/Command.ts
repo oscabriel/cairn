@@ -2,6 +2,7 @@
 // for everything up to it), scrolling to a file, and loading a file's grammar when its diff mounts
 // (the same lazy shiki chunks the transcript's code blocks use), then tokenizing a long file a
 // slice at a time.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Duration, Effect, Predicate, Schema, Stream } from "effect";
 import { Command, Dom } from "foldkit";

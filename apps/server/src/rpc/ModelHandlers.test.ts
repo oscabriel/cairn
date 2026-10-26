@@ -1,6 +1,7 @@
 // Judges the hello defaults that come from the model catalog: a new socket learns the model a new
 // thread starts on from the brain's models (here the faux one), not the fixed fallback, and the
 // settings that hide the bridge reach the catalog.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 

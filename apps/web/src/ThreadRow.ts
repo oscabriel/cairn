@@ -1,5 +1,6 @@
 // One lookup of a thread's shell row and its project, so the header, the hold banner, the page and
 // the outbox read the same row the same way.
+
 import type {
   ProjectShell,
   ShellSnapshot,

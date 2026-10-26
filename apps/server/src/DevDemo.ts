@@ -2,6 +2,7 @@
 // project and one thread in the shell store, and a message sent to the scripted harness every few
 // seconds, so `pnpm dev` shows a thread whose transcript grows live. Only `dev-main.ts` composes
 // it. The ids are fixed, so a restart lands on the same rows (the command receipts dedupe them).
+
 import os from "node:os";
 
 import { CommandId, ProjectId, ThreadId } from "@cairn/protocol/Ids";

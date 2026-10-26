@@ -1,5 +1,6 @@
 // The push toggle's Messages and the one OutMessage it hands the root: a tapped notification asks
 // the page to open a path.
+
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 

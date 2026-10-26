@@ -1,5 +1,6 @@
 // `normalizeWorkspaceRoot` (T40): the same answers as before, and a long path with an empty segment
 // is refused at once instead of backtracking for seconds.
+
 import { describe, expect, it } from "@effect/vitest";
 import { Option } from "effect";
 

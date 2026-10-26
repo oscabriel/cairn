@@ -14,6 +14,7 @@
 //
 // Prints one JSON log line with the numbers. Exit 0 when every check holds. Never prints a credential:
 // the dummy API key below is not a key, and the probe's account is reduced to its login kind.
+
 import path from "node:path";
 import { parseArgs } from "node:util";
 

@@ -4,6 +4,7 @@
 // watcher of `ClaudeUsage`, which keeps the probe's five-minute cadence going while a page shows
 // the meter and probes at once when the last reading is stale. With the bridge off the stream says
 // "no providers" once and stays open, so a client never takes the end for a failure.
+
 import type { UsageSnapshot } from "@cairn/protocol/Usage";
 import { Context, Effect, Layer, Option, Stream } from "effect";
 

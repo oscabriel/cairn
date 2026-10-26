@@ -1,5 +1,6 @@
 // Every Command that calls the brain goes through `withBoundary` (T19): a source check, so a new
 // Command cannot reach the client without it. Push's Commands catch every cause themselves.
+
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 

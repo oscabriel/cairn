@@ -11,6 +11,7 @@
 // (`sweepStalePendingAttachments`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (MIT, T3 Tools Inc.);
 // the table design, claims and atomic writes are Cairn's, the writes after cairn-v1,
 // apps/server/src/Files.ts at 1a5cd4a (`writeAtomic`).
+
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 

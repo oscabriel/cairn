@@ -1,5 +1,6 @@
 // The one failure every shell store read or write can end in: SQLite refused the statement or a
 // stored row no longer decodes. Neither is the caller's fault and neither committed anything.
+
 import { Effect, Schema } from "effect";
 
 /** A shell store statement failed or a stored row did not decode; nothing was committed. */

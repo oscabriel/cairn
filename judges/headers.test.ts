@@ -1,6 +1,9 @@
 // Port headers judge (T57): a file drawn from another repo starts with its header, a port of
-// t3code (MIT) carries the notice, and no doc comment sits on top of another one's declaration. The import sorter moves a comment that sits between imports
-// along with the import below it, so a header written after the first import ends up buried.
+// t3code (MIT) carries the notice, and no doc comment sits on top of another one's declaration. A
+// header ends with a blank line: oxfmt's import sorter treats a comment glued to an import as that
+// import's own and moves it with the import, so a glued header ends up buried when another import
+// sorts ahead.
+
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -63,6 +66,17 @@ describe("port headers", () => {
     });
 
     assert.deepStrictEqual(late, []);
+  });
+
+  it("ends every header with a blank line, which keeps the import sorter off it", () => {
+    const glued = files.filter((file) => {
+      const lines = read(file).split("\n");
+      const end = lines.findIndex((line) => !line.startsWith("//"));
+
+      return end > 0 && lines[end]?.startsWith("import") === true;
+    });
+
+    assert.deepStrictEqual(glued, []);
   });
 
   it("keeps no header block between imports", () => {

@@ -1,6 +1,7 @@
 // Dependency smoke test: every library name a later package relies on, checked against the
 // installed packages rather than a clone or a spike's node_modules. A pi or Effect bump that
 // renames or moves one of these fails here first, with the name in the test title.
+
 import { applyImmutable } from "@earendil-works/chord/delta";
 import {
   createProvider,

@@ -10,6 +10,7 @@
 //   thread's, so the latest reset of every spent window is when a resend can work.
 //
 // With the bridge off there are no signals.
+
 import type { ClaudeUsageReading } from "@cairn/bridge/ClaudeUsage";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";

@@ -3,6 +3,7 @@
 // hands the turn to the root's outbox once its ids are minted. `inform` is how the root keeps the
 // composer's context current, and it is also where the composer asks the brain for what the
 // context newly needs (models, skills, branches).
+
 import { resolveComposerDispatchMode } from "@cairn/client-logic/ComposerLogic";
 import { stepComposerPromptHistory } from "@cairn/client-logic/ComposerPromptHistory";
 import {

@@ -1,5 +1,6 @@
 // The sidebar's clock is right from the first render (T29): init reads the clock once, so ages and
 // snooze presets never start from 0 (1970) while the clock subscription drops its first tick.
+
 import { describe, expect, it } from "@effect/vitest";
 import { DateTime, Effect } from "effect";
 import { TestClock } from "effect/testing";

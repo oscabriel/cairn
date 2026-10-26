@@ -19,6 +19,7 @@
 //
 // Prints one JSON line and exits 0 when the verdict passes, 1 when it fails, 2 when the log holds
 // too few runs to judge.
+
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";

@@ -1,6 +1,7 @@
 // The root update: routing, the connection's state machine (Reconnect.ts), the shell, and the
 // outbox. After every Message the thread page is told the routed thread and the connection, so its
 // stream follows both without the root reaching into the page's state.
+
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ShellCommand } from "@cairn/protocol/ShellCommands";

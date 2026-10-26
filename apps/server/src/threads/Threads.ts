@@ -3,6 +3,7 @@
 // seam, which keeps them idempotent (a turn by its request id) and durable. A turn sent while its
 // thread launches follows the launch to its end. Stop keeps queued inputs unless asked to clear
 // them (plan D16), then runs the stop hooks; a stop during the launch cancels the launch.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type {
   ConfigureInput,

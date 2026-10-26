@@ -29,6 +29,7 @@
 //
 // Entries are immutable and the client's applier shares unchanged ones, so each entry's reading is
 // cached by identity, and a view whose entries did not change reuses the whole committed reading.
+
 import type { AttachmentRef } from "@cairn/protocol/Attachments";
 import {
   AttachmentRef as AttachmentRefSchema,

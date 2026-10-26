@@ -5,6 +5,7 @@
 // listed at its target and only when the target is allowed; at most 500 entries, repo checks 16 at
 // a time. Changed: Effect's file system, typed refusals, the wire `BrowseResult`, and the deny list
 // gains `~/.codex`, `~/.alchemy` and the rootless Docker data folder that holds Executor's volume.
+
 import os from "node:os";
 import path from "node:path";
 

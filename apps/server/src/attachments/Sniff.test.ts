@@ -1,6 +1,7 @@
 // What an upload is comes from its bytes: magic numbers win over the name and the claimed type,
 // HEIC and video are refused with a message that says what to attach, Office files are told apart
 // by their ZIP directory, and text must be strict UTF-8 with no NUL.
+
 import { assert, describe, it } from "@effect/vitest";
 
 import { makeDocx, makeZip, PNG_1X1, makePdf } from "./AttachmentsTestKit.ts";

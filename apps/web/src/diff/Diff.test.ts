@@ -1,6 +1,7 @@
 // Scene tests for the changed-files card and the diff panel, driven as the user drives them: the
 // card under a turn opens the panel at a file, the patch arrives and shows as files and numbered
 // lines, the scope switch asks again, a failure offers Retry, and Close empties the panel.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";

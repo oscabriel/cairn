@@ -1,5 +1,6 @@
 // Where the brain keeps its store and backups. The composition root fills it from the server's
 // config; it lives on the NVMe under `/home`, never the NAS.
+
 import { Context, Layer } from "effect";
 
 /** The brain's data directory: `brain.sqlite`, its sidecar and `backups/` live in it. */

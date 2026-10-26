@@ -1,6 +1,7 @@
 // The extension set the brain installs, in order (integration seam). A later package adds its
 // extension by adding its source here at the end of its wave; the order key, not the position in
 // this list, decides where it installs.
+
 import { Effect, Layer } from "effect";
 
 import { ProviderRequestLog } from "../attachments/ProviderRequestExtension.ts";

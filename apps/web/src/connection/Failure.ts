@@ -1,6 +1,7 @@
 // What a failed call says and whether to try it again, read the same way everywhere: the protocol's
 // errors carry a `message` (the brain's sentence) and most a `retryable` verdict; the transport's
 // carry neither, and nothing known ran.
+
 import { Cause, Option, Predicate } from "effect";
 
 /** A failed call: a protocol error or the transport's, told apart by `_tag`. */

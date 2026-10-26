@@ -1,6 +1,7 @@
 // The skill expansion stage, judged against pi itself: pi's own `_expandSkillCommand` (the method
 // pi's `AgentSession` runs on every prompt) produces the expected text for a leading
 // `/skill:name args`, and pi's `parseSkillBlock` must read back what a `$name` reference makes.
+
 import { readFileSync } from "node:fs";
 import path from "node:path";
 

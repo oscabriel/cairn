@@ -6,6 +6,7 @@
 // Adapted from `startProxy` in `judges/load.ts` (Cairn's own code). Changed: no compression, since
 // this judge measures convergence, not bytes, and an upstream that is down closes the client's
 // socket at once so the page's reconnect sees the outage.
+
 import { once } from "node:events";
 import http from "node:http";
 import net from "node:net";

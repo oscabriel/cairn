@@ -5,6 +5,7 @@
 // format. Changed: an Effect service over `HttpClient`; the JWT's `exp` comes from `Clock`; the salt
 // and the sender's ephemeral key pair come from `PushEntropy`, so a test can replay RFC 8291's
 // Appendix A byte for byte; the push service's answer is returned, never thrown.
+
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
 import {
   Clock,

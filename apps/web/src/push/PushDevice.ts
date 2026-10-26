@@ -6,6 +6,7 @@
 // Changed: Effects instead of promises, `PushSubscriptionInput` from the protocol, the iOS rule
 // (PushManager exists only in an installed web app opened from the Home Screen), this device's
 // presence id, and `/sw.js` registered here at scope `/`.
+
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
 import { Duration, Effect, Option, Predicate, Schema } from "effect";
 

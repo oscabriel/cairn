@@ -3,6 +3,7 @@
 // `[overflow-anchor:none]` (the list sets it). Each row is a keyed lazy view over reference-stable
 // arguments, so a settled row is not rebuilt while the answer streams. The scroll-to-end pill shows
 // once the list stops following its end (t3code's pill appears after 150 ms; here a CSS delay).
+
 import { historyCursor } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import * as VirtualList from "@foldkit/ui/virtualList";

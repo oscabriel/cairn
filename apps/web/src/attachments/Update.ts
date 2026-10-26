@@ -5,6 +5,7 @@
 // the last one answers (t3code's pending-draft-work rule, as a count of pending items). The
 // composer passes the active draft's key with each Message, and calls the capabilities at the
 // bottom when a turn is sent or a draft is discarded.
+
 import {
   admitAttachmentFiles,
   imageTooLarge,

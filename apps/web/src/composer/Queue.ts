@@ -3,6 +3,7 @@
 // entries) are not the user's and are not shown, nor are the parts the brain added for
 // attachments. Anything this build cannot read is skipped, so a newer brain never breaks the
 // composer.
+
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import { SubmissionId } from "@cairn/protocol/Ids";
 import { Array, Option, Schema } from "effect";

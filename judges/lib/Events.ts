@@ -9,6 +9,7 @@
 // that annotation is named by its message when the message is one string. Lines that are not such
 // objects (a Node warning, a torn line after `kill -9`) are skipped, never fatal. The same parser
 // reads `journalctl -o cat` output of the unit, which is the same JSON on stdout.
+
 import { Buffer } from "node:buffer";
 
 import {

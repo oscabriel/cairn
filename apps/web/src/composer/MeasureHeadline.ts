@@ -3,6 +3,7 @@
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (MIT License, Copyright (c) 2026 T3 Tools Inc.; the full
 // notice is in hero/Headline.ts). Kept: the fit check against a hidden full-width copy of the
 // heading. Changed: a Foldkit Mount reporting `MeasuredHeadline` instead of React state.
+
 import { Effect, Option, Queue, Stream } from "effect";
 import { Mount } from "foldkit";
 

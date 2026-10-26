@@ -3,6 +3,7 @@
 // on every route; only `settings/View.ts` and what it alone imports are fetched, the first time
 // the settings route opens. The update asks for the load, the module is held outside the Model,
 // and `LoadedSettingsPage` makes the root render it.
+
 import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";

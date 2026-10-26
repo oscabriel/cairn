@@ -9,6 +9,7 @@
 //
 // Every function shells out to `systemctl --user`, `systemd-run --user` or `journalctl --user` with
 // argv only, and reads `/sys/fs/cgroup` and `/proc`. No sudo.
+
 import { existsSync } from "node:fs";
 
 import { Effect, FileSystem, Option, Schema, Stream } from "effect";

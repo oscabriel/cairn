@@ -1,5 +1,6 @@
 // The root Model: the route, the connection, the shell, the outbox, and one child Model per page.
 // Page state lives here under its own key, so leaving a page and coming back keeps it.
+
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { Hello } from "@cairn/protocol/Rpc";
 import { ShellSnapshot } from "@cairn/protocol/Shell";

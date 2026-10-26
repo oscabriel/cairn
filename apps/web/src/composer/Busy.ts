@@ -1,6 +1,7 @@
 // The typing judge's load knob, kept from the S2 spike: `?busy=<ms>` makes every update spend that
 // long, the load that exposed Foldkit 0.168's dropped keystrokes. Without the query parameter it
 // costs one query-string lookup per update.
+
 import { Clock, Effect } from "effect";
 
 const MAX_BUSY_MS = 100;

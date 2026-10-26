@@ -4,6 +4,7 @@
 // the folder's real path. Deleting or archiving a thread, or deleting a project, first stops the
 // runs it removes (queue cleared, stop hooks run), so a hung thread that is deleted frees its
 // Claude Code child instead of holding it for hours.
+
 import {
   Conflict,
   InvalidInput,

@@ -2,6 +2,7 @@
 // applied after it (client-logic's `ShellReducer`). It starts from the boot data the server inlines
 // in index.html when there is any, so the first paint needs no round trip, and is kept current by
 // `shell.subscribe`, which resumes after the client's cursor on every reconnect.
+
 import { shellCursor } from "@cairn/client-logic/ShellReducer";
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import type { ShellStreamItem } from "@cairn/protocol/Shell";

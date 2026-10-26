@@ -19,6 +19,7 @@
 // For the durability judge only: `CAIRN_JUDGE_HOLD_PROJECTOR_MS` makes the projector log
 // `projector_holding` and wait that long before committing a run's end, so a `kill -9` can land
 // after pi-durable committed the run and before the shell did. Unset, nothing waits.
+
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import type { ApprovalId, TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";

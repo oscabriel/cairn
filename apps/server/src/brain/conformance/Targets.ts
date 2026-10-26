@@ -7,6 +7,7 @@
 // - scripted: ScriptedHarness over one ScriptedStore that outlives its instances.
 //
 // The in-process restart is a clean close. The durability judge does the `kill -9` restarts.
+
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

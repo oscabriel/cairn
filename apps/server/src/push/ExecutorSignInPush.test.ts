@@ -1,5 +1,6 @@
 // The glue between the Executor link's status and the notifier: one push per lapse into
 // needs-sign-in, a cleared claim on the way back to connected, nothing for other states.
+
 import type { ExecutorStatus } from "@cairn/protocol/Executor";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option, Ref, SubscriptionRef } from "effect";

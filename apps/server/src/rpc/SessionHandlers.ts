@@ -1,6 +1,7 @@
 // `session.hello`: the first call on every socket. It tells the page which protocol and web build
 // the server has (a page holding another build reloads), the server's clock, who the socket was
 // admitted as, the new-thread defaults and, once push exists, the VAPID public key.
+
 import { createHash } from "node:crypto";
 import path from "node:path";
 

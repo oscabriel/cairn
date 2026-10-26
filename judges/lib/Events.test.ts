@@ -1,5 +1,6 @@
 // Judges `Events` against lines written by Effect's own `Logger.formatJson` (the format the brain is
 // asked to write), plus the torn and foreign lines a killed process leaves behind.
+
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, layer } from "@effect/vitest";
 import { Effect, Fiber, FileSystem, Logger, Option, Stream } from "effect";

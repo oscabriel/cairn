@@ -3,6 +3,7 @@
 // line is appended there too, so a judge driving a transient unit can read `listening`, `closing`
 // and `closed` without the journal. OTLP export is wired but stays a no-op until the standard
 // `OTEL_EXPORTER_OTLP_*` variables are set (plan D52, coding standard S58).
+
 import { appendFileSync } from "node:fs";
 
 import { Config, Effect, Layer, Logger, Option, References } from "effect";

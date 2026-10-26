@@ -2,6 +2,7 @@
 // `AttachmentStore` that translate their failures into the protocol's errors, carrying the RPC
 // request id. Discarding an unknown or already sent attachment succeeds and changes nothing, so a
 // client can retry it freely.
+
 import { AttachmentRejected, Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer, Option } from "effect";

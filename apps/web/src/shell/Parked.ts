@@ -3,6 +3,7 @@
 // spent Claude plan window ("Limited") with its reset time. Retry calls `thread.retryTask` at once
 // rather than through the outbox: retrying a task that is no longer parked does nothing, and the
 // shell stream clears the banner when the thread moves.
+
 import { TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";
 import { Array, Data, Effect, Equal, Option, Schema } from "effect";

@@ -1,6 +1,7 @@
 // JSON Schema documents for every RPC's payload, success and error, describing the JSON each one
 // takes on the wire. A client in another language (the GPUI client later) builds from these; the
 // golden files in `packages/protocol/schema/` record them, and a test fails when they drift.
+
 import { Schema } from "effect";
 import type { JsonSchema } from "effect";
 import { RpcSchema } from "effect/rpc";

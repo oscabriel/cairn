@@ -1,6 +1,7 @@
 // The t3code importer on a small run shaped like a real export: the entry order, the tool names
 // Cairn's coding tools use, the stop reasons, the run's duration, and the protocol accepting every
 // entry once a store gives it an id.
+
 import { Entry } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";

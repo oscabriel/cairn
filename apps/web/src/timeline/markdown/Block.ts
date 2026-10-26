@@ -6,6 +6,7 @@
 // over-indented inside a list item stays text instead of turning into code
 // (packages/shared/src/markdownListIndentation.ts at the same commit). An unclosed fence runs to the
 // end, so a streaming code block renders as code while it grows.
+
 import { Option } from "effect";
 
 import type {

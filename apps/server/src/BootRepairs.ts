@@ -4,6 +4,7 @@
 // approval is still pending; resume interrupted launches from `thread_launches`; repair checkpoint
 // refs. Orphaned `claude` processes are only logged, by the bridge's boot lines
 // (`BridgeProvider.ts`), not repaired here.
+
 import { Effect } from "effect";
 
 import { sweepAttachmentUploads } from "./attachments/AttachmentStore.ts";

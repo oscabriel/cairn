@@ -4,6 +4,7 @@
 // through untouched, so `contextChanged` can compare them by identity. Of the thread's view the
 // composer keeps only the `pi.inbox` document and the user's prompts, which a streamed token does
 // not change.
+
 import { buildComposerPromptHistoryEntries } from "@cairn/client-logic/ComposerPromptHistory";
 import type {
   ComposerPromptHistoryEntry,

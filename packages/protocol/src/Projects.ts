@@ -1,5 +1,6 @@
 // Project and folder queries: the folder picker, the scratch project, `@` file search and the base
 // branches the new-thread context strip offers.
+
 import { Schema } from "effect";
 
 import {

@@ -3,6 +3,7 @@
 // (`EventStore`, `ThreadRows`), the migrated `SqlClient` and `ServerConfig`. The key is made in
 // memory unless the entry point provides `VapidKeyFromFile` (only `main.ts` does), so dev brains,
 // judges and tests never make or read the deployed brain's `push.json`.
+
 import { Layer } from "effect";
 
 import { Notifier } from "./Notifier.ts";

@@ -3,6 +3,7 @@
 // screen. Reports live in memory only: a restart forgets them, and the worst that costs is one push
 // for a thread the user was looking at. A thread counts as watched while a report younger than 30
 // seconds says a visible page shows it.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { PresenceReport } from "@cairn/protocol/Push";
 import { Clock, Context, Duration, Effect, Layer, Option, Ref } from "effect";

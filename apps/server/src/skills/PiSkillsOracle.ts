@@ -5,6 +5,7 @@
 // gives it a read-only settings storage, answers "skip" for every missing package, and refuses
 // every process its package manager would start. Extensions, prompt templates, themes and context
 // files are not loaded. Judge code: nothing in the brain calls it.
+
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 

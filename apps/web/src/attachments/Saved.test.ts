@@ -1,6 +1,7 @@
 // Saved attachments and upload retries (T38): an attachment saved longer ago than the brain's sweep
 // of unclaimed uploads is not restored, and an upload URL that expired, is unknown or was already
 // used is worth a new one, while a refusal of the file itself is final.
+
 import { AttachmentId } from "@cairn/protocol/Ids";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Option } from "effect";

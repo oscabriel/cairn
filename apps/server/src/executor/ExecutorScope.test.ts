@@ -1,6 +1,7 @@
 // A thread's reach through Executor: the Executor app's tools refused and hidden, and GitHub calls
 // held to the project's own repo. Ported from cairn-v1, apps/server/test/executor-scope.test.ts at
 // 1a5cd4a. Changed: no per-project app list or account pin (the scope is the repo alone).
+
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 

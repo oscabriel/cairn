@@ -1,6 +1,7 @@
 // The push toggle's state: what the root tells it (the connection, the VAPID key from
 // `session.hello`, the thread on screen, the badge count), what this browser can do, and whether
 // this device is subscribed.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";

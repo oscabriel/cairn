@@ -6,6 +6,7 @@
 // either differs from what is installed, `backups/brain-<version>-<time>.sqlite` is written first
 // with SQLite's online backup. A daily rolling copy (`brain-daily-<date>.sqlite`, newest three kept)
 // guards against everything else.
+
 import {
   mkdir,
   readdir,

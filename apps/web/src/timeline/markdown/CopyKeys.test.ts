@@ -1,5 +1,6 @@
 // Copy buttons light one check (T33): two list items holding code blocks share a position within
 // their item, so the copy key is the block's path, and copying one marks only that one.
+
 import { Option, Predicate } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";

@@ -7,6 +7,7 @@
 //
 // Ported from cairn-v1, apps/server/src/Files.ts at 1a5cd4a (`prepare` and the processor made once
 // and forgotten when it fails to start). Changed: Cairn's fit, binary output, typed failures.
+
 import { IMAGE_FIT_LONG_EDGE } from "@cairn/protocol/Attachments";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { DEFAULT_IMAGE_LIMITS } from "@earendil-works/pi-durable/tools";

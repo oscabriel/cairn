@@ -1,4 +1,5 @@
 // The tray's streams: upload progress from the running XHRs, and files pasted with focus on no field.
+
 import { Stream } from "effect";
 import { Subscription } from "foldkit";
 

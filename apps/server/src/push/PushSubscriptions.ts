@@ -4,6 +4,7 @@
 // info is stored, so a subscription can never aim Cairn's POSTs anywhere else; a refused
 // subscription is deleted only when its keys are still the ones the push went to. Changed: an Effect
 // service over `cairn.sqlite`; rows record the login that subscribed instead of a device name.
+
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql";

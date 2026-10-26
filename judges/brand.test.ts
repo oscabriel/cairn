@@ -6,6 +6,7 @@
 // Known leftovers that another package owns are listed with their owner instead of failing the
 // gate; the list must match what the scan finds exactly, so a fixed leftover has to leave the list
 // and a new one fails.
+
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 

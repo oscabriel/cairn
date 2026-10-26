@@ -2,6 +2,7 @@
 // milliseconds, the version, then random bits, so ids sort by creation time and a draft becomes a
 // thread idempotently. A turn's request id is a UUIDv7 with a prefix, inside the opaque-token form
 // the protocol checks.
+
 import { CommandId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { Clock, Effect, Schema } from "effect";
 

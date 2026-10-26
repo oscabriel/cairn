@@ -28,6 +28,7 @@
 // paste verdict.
 //
 // Prints one JSON line and exits 0 when every case passed.
+
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";

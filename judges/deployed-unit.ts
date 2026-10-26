@@ -11,6 +11,7 @@
 // restarts and kills the production brain, so every open client sees a short reconnect; one turn on a
 // cheap real model each (cents). Prints one JSON line and exits 0 on a pass. Prints no secret and no
 // reply text.
+
 import { parseArgs } from "node:util";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";

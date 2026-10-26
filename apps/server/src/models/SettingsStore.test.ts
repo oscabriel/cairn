@@ -1,6 +1,7 @@
 // Judges the server settings store on a migrated in-memory cairn.sqlite: defaults before anything
 // is set, a patch changes only its present keys and survives a fresh read, and a stored value that
 // no longer decodes reads as its default instead of failing every read.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql";

@@ -1,6 +1,7 @@
 // The entry image route serves only image types inline (T24): a transcript's media type is whatever
 // a tool wrote, so a stub harness hands back an HTML "image" and the route must turn it into a
 // sandboxed download, while a PNG still shows inline.
+
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Stream } from "effect";
 import { HttpRouter } from "effect/http";

@@ -4,6 +4,7 @@
 // except a NotFound for a thread with no launch on its way, which is Missing until the shell learns
 // of the thread. The hero opens the page in the same update that queues the launch, so the first
 // subscribe can reach the brain before the launch does.
+
 import {
   applyThreadStreamItem,
   prependHistoryAt,

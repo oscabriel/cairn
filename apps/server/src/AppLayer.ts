@@ -5,6 +5,7 @@
 // Build order is shutdown order reversed: whatever the close hooks need is built before
 // `Shutdown`, and the HTTP server after it, so on SIGTERM the sockets close first, then the hooks
 // run, then the stores and the Harness close.
+
 import path from "node:path";
 
 import { NodeServices } from "@effect/platform-node";

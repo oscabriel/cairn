@@ -1,6 +1,7 @@
 // `executor.status` and `executor.signIn`: thin calls into the Executor link. A sign-in that
 // cannot start (no grant, the grant still works, Executor down) is `Unavailable` with the reason in
 // its message, carrying the RPC request id.
+
 import { Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer, Option } from "effect";

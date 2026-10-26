@@ -2,6 +2,7 @@
 // tokenizes: a 300-hunk patch is parsed once and its files tokenized once, by their Mounts, so a
 // second render of the same Model reuses every file's view, parses nothing and tokenizes nothing;
 // and the panel draws at most `MAX_TOTAL_LINES` lines across its files.
+
 import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema, Stream } from "effect";

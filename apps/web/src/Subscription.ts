@@ -2,6 +2,7 @@
 // releases the old client and builds a new one. The shell stream runs while the epoch's client
 // exists and reports the socket lost when it fails or ends; it is the connection's health check.
 // The page also wakes the connection when the browser says it is back (online, shown, visible).
+
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import type { Cause } from "effect";
 import { Effect, Option, Predicate, Schema, Stream } from "effect";

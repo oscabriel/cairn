@@ -2,6 +2,7 @@
 // every SDK message through `decodeClaudeEvent` at its boundary (coding standard S10), so nothing past
 // it sees an SDK type. Field names keep the SDK's spelling, because these schemas describe its wire.
 // A message type the bridge does not read fails to decode and is skipped.
+
 import { Schema } from "effect";
 
 const Count = Schema.optional(Schema.NullOr(Schema.Finite));

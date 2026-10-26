@@ -1,6 +1,7 @@
 // What `TextExtract` hands its worker thread and what the worker answers: the two ends of one
 // `worker_threads` message each way, as schemas both sides decode. Kept apart from the worker's
 // entry module so the brain's thread never loads the PDF and DOCX readers.
+
 import { Schema } from "effect";
 
 /** The pages a PDF is read to; later pages are left in the original. */

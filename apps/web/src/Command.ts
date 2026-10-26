@@ -1,6 +1,7 @@
 // The root's Commands: navigation, the backoff timer, `session.hello`, and the outbox's send and
 // save. Each reads what it needs from the resources the runtime provides (the connection, the
 // browser's key-value store) and answers with one Message.
+
 import { Duration, Effect, Random, Schema } from "effect";
 import type { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";

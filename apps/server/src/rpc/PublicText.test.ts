@@ -1,5 +1,6 @@
 // Brain text reaches a protocol error cut to fit (T19): a 10,000-character harness failure still
 // encodes as the protocol's error, and a missing thread is named by its thread id.
+
 import { Internal, NotFound } from "@cairn/protocol/Errors";
 import { describe, expect, it } from "@effect/vitest";
 import { Option, Schema } from "effect";

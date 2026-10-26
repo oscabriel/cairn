@@ -1,4 +1,5 @@
 // The grant's import and its one holder, on temporary paths (never the deployed grant or lock).
+
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

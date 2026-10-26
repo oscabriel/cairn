@@ -1,6 +1,7 @@
 // Every HTTP route and the global guard (a seam: the integrator adds each domain's route layer
 // here, for example `shell/ShellSnapshotRoute.ts` or `attachments/UploadRoute.ts`). Specific
 // routes win over the static `GET /*`, whatever their order in this list.
+
 import { Layer } from "effect";
 
 import { AttachmentRoute } from "../attachments/AttachmentRoute.ts";

@@ -1,6 +1,7 @@
 // The composer's view: the new-thread hero for a draft, the composer docked under the transcript for
 // an open thread, nothing without a target. The root places it: the hero fills the page, the
 // docked composer sits below the thread page.
+
 import { Submodel } from "foldkit";
 
 import { contextStripView } from "../hero/ContextStripView.ts";

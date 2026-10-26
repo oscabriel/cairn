@@ -1,5 +1,6 @@
 // The JSON error body the HTTP routes answer with, in the shape of the protocol's error codes:
 // `code`, `message`, and whether trying again may help. Never cached.
+
 import { HttpServerResponse } from "effect/http";
 
 /** A JSON problem with `fields` beside the code and message (an upload's `reason`). */

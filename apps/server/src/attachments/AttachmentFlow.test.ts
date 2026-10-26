@@ -3,6 +3,7 @@
 // submitted; the faux model's request carries every nonce as text content inside the attachment
 // block (not only a path). A pasted PNG reaches the model as the prepared image, and the
 // `provider.request` line logs the sha256 of exactly the base64 the model received.
+
 import { createHash } from "node:crypto";
 import os from "node:os";
 

@@ -4,6 +4,7 @@
 // height before it is measured, bucketed by length as t3code's `getItemType` does
 // (github.com/pingdotgg/t3code, apps/web/src/components/chat/MessagesTimeline.tsx:1616-1627 at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92), so one long reply does not skew every estimate.
+
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import type {
   Timeline,

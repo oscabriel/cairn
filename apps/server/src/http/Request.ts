@@ -1,5 +1,6 @@
 // What the routes read off a request the same way: its path without the query, and the peer Caddy
 // saw for it.
+
 import { Option } from "effect";
 import type { HttpServerRequest } from "effect/http";
 

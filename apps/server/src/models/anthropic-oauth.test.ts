@@ -5,6 +5,7 @@
 // Judged: the variables are gone from `process.env`, `anthropic` resolves no auth, no `anthropic`
 // model is available or listed, the registered `anthropic` provider has no `auth.oauth`, and a
 // request carrying a subscription token or a Bearer header ends in an error without a fetch.
+
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

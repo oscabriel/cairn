@@ -2,6 +2,7 @@
 // missing thread, a thread with no checkpoints (the scratch project, a folder that is not a git
 // repository) and a turn never captured are `NotFound` with resource `checkpoint` or `thread`; a
 // git or store failure is `Unavailable`, as a retry may succeed.
+
 import { NotFound, Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer, Option } from "effect";

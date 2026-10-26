@@ -39,6 +39,7 @@
 // Views are synchronous (pi's loader reads with `node:fs`), so a prompt section can render one
 // without a runtime. A view is cached per cwd; `refresh` stats the files and directories it read
 // and rebuilds only when one changed, so the warm path costs a few hundred `stat` calls.
+
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 

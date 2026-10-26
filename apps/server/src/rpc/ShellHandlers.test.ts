@@ -1,5 +1,6 @@
 // `shell.dispatch` stops the runs a delete or an archive removes before it commits (T4 of the full
 // review): a hung thread that is deleted must free its run, its queue and its Claude Code child.
+
 import type { ThreadId } from "@cairn/protocol/Ids";
 import {
   ProjectDelete,

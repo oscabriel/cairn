@@ -1,6 +1,7 @@
 // Web Push's tables: one row per browser push subscription (keyed by its endpoint), the shell event
 // log position the notifier has handled, and one row per run or alert a push was decided for, so a
 // restart or a replayed event never pushes the same thing twice. Times are epoch milliseconds.
+
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 

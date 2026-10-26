@@ -31,6 +31,7 @@
 // `<agentDir>/AGENTS.md` (or pi's other names for it), the workspace's context files, and
 // `<agentDir>/APPEND_SYSTEM.md`. Reads are synchronous and done once per run (`RunPins`), so a
 // prompt section can render them without a runtime and the text stays fixed within a turn.
+
 import {
   closeSync,
   constants,

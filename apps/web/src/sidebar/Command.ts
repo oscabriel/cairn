@@ -1,6 +1,7 @@
 // The sidebar's Commands: minting command ids for intents, navigation, timers for the undo notice and
 // pending changes, the saved shelves, the clipboard, the favicon badge, the folder browser and task
 // retry. Each answers with one Message.
+
 import { ThreadId, TaskId } from "@cairn/protocol/Ids";
 import { Clock, Effect, Option, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";

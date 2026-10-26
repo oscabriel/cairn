@@ -4,6 +4,7 @@
 // rebuilds a Claude Code transcript: the SDK's `resume` with `resumeSessionAt` continues a session,
 // `forkSession` copies one, and a history Claude Code cannot hold opens a fresh session whose first
 // prompt carries pi's context.
+
 import { Option } from "effect";
 
 import type { Effort } from "./ClaudeGuards.ts";

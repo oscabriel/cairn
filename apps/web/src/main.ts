@@ -1,5 +1,6 @@
 // The PWA's entry: one Foldkit routing application over the protocol at /ws. Flags are read before
 // the first update: the shell the server inlined as boot data, and the outbox saved on this device.
+
 import { BrowserKeyValueStore } from "@effect/platform-browser";
 import { Effect } from "effect";
 import { Runtime } from "foldkit";

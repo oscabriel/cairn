@@ -8,6 +8,7 @@
 // (`composerSubmissionIntentForKey`), read against flags the view writes as data attributes, so
 // the Mount needs no Model; the text itself reaches the Model through `OnInput`, synchronously, as in
 // the S2 spike that passed the typing gate, and the Mount reports only the selection.
+
 import {
   composerSubmissionIntentForKey,
   SendShortcut,

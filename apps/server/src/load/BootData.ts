@@ -5,6 +5,7 @@
 // type="application/json">` with `<` and `>` escaped, and serves it only behind the guard, like
 // the page itself. A shell store that cannot be read injects nothing, and the page falls back to
 // the socket's snapshot.
+
 import { VapidKey } from "@cairn/protocol/Push";
 import { PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import { ShellSnapshot as ShellSnapshotSchema } from "@cairn/protocol/Shell";

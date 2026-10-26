@@ -991,3 +991,32 @@ One lane in the main checkout, deployed at `9b20aad`.
 Differs from the task text: T49 is a bounded output buffer, not a pull-driven projector; the judge counts frames in a vitest, not RSS through `judges/wire-budget.ts`. T50 bounds the caches by thread count, not by the current transcript's keys, and has no CDP detached-node measurement. T53 has no RSS measurement.
 
 Not done: T54's server thumbnail variant, the bubble thumbnail, and the PDF check under the sandbox CSP; T50's view input thunks.
+
+### Batch 10: judges that pass vacuously, and judge hygiene (T55, T56)
+
+One lane in the main checkout. Judges and tests only, so nothing was deployed.
+
+- `abaf0e1` (T55): the Ws revocation test refuses a TimeoutError and a failure later than 1 s; `shutdown.sh` prints a FAIL line for a window that fails or prints nothing (it used to end under `set -e`), and removes the kept dirs on exit; the composer launch test asserts `PrepareLaunch`'s model instead of the fixture's default.
+- `4be2d0c` (T55, tools judge): a value counts only when it comes from the output of a script whose `executor_call` ended well, read through JSON, nested MCP text and `Label: value` lines, leaving out MCP results marked `isError`, Executor catalog entries, block types, tool paths and anything the prompt holds. The first live run failed all four turns (code mode puts a header block before the output; MCP servers answer in markdown), which shaped these rules.
+- `6452d8c` (T56): `Unit.start` first stops every `cairn-judge-*` unit whose judge pid is gone (`sweepOrphans`), and gives each unit a reaper timer that stops it after its lifetime (90 minutes by default), because `RuntimeMaxSec` only restarts a `Restart=always` unit. `DeployedUnit` deletes its thread however the check ends and notes a failed delete. `judges/lib/Scratch.ts` gives the bridge judges a folder removed with Claude Code's transcripts. Each vitest run gets its own `TMPDIR`, removed at the end: the suite had left 26,628 folders in the tmpfs `/tmp` (3 GB of them conformance stores, about 140 per run).
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Ws.test with the recheck never firing | fail | the hello succeeds |
+| shutdown.sh with every window failing | 4 FAIL lines, exit 1 | |
+| Composer.test with the server default replaced | fail | |
+| `node judges/tools.ts` | 4 of 4 | convex quoted the deployment URL, playwright and open the page title, github a field of the repository |
+| `node judges/tools.ts --repo oscabriel/no-such-repo-cairn-judge` | github fails | "no executor_call ended well"; convex also failed that run (below) |
+| Unit.test: sweep, lifetime | pass; the lifetime test fails without the reaper | a live judge's unit is left alone |
+| `kill -9` of `durability.ts` mid-window | pass | its brain unit kept running (Restart=always) until the next judge start stopped it and its timer |
+| `deployed-unit.ts restarts` with an unavailable model | pass | timed out at the first restart; its thread deleted, production's live count unchanged at 8 |
+| Scratch.test | pass | both folders gone, also after a late transcript write |
+| `pnpm check` | pass | 1,282 tests; the `/tmp` count unchanged by the run |
+| `node judges/durability.ts --bridge --window bridge-streaming --runs 5 --keep` | 19 of 20 | `markerOnce` held in all ten streaming runs; one `cacheKept` failure, below |
+
+Found along the way:
+
+- **The nightly failed on 2026-10-26** (at `9b20aad`): the bridge step was 7 of 9, after four nights of 9 of 9. One run failed `cacheKept` (cache read 19,683, write 22,200), the other `markerOnce` (the marker ran twice). The kept 19-of-20 run's failure has the same 19,683 and 22,200 split, and its transcripts show why: after the restart the model's first answer was not a valid tool call, so Claude Code appended "The previous response failed to produce a valid tool call. Please retry the tool call now." and re-serialised the prompt block with one more newline, which breaks the cache at that block. No passing run's transcripts hold that retry. Open: why that answer was invalid (model or bridge), and the `markerOnce` failure, whose folder the nightly removed.
+- **Convex through Executor has no deployment for this folder.** Its `status` answers an MCP error ("No CONVEX_DEPLOYMENT set"); the old tools judge passed by quoting that error. The convex turn now passes only when the model finds the real deployment, which it did in two of three runs.
+
+Differs from the task text: the lifetime is a timer, not `RuntimeMaxSec`; `claude-eligibility` and `claude-reminder` were not run live (the weekly Claude window was at 97%), so their folder count is judged by Scratch.test. `shutdown.sh` was judged with stubbed windows, not with `limit_ms=1` on the judge brain.

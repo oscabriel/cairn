@@ -2,13 +2,14 @@
 // pending changes, the saved shelves, the clipboard, the favicon badge, the folder browser and task
 // retry. Each answers with one Message.
 import { ThreadId, TaskId } from "@cairn/protocol/Ids";
-import { Clock, Effect, Option, Predicate, Schema } from "effect";
+import { Clock, Effect, Option, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
 import { pushUrl } from "foldkit/navigation";
 
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
+import { failureMessage } from "../connection/Failure.ts";
 import { applyFaviconBadge } from "../shell/Notifications.ts";
 import {
   Intent,
@@ -170,17 +171,6 @@ export const FocusElement = Command.define("FocusElement", {
     focus(selector).pipe(Effect.ignore, Effect.as(Message.CompletedFocus())),
 });
 
-/** A failed call: one of the protocol's errors, which carry a message, or the transport's. */
-interface CallFailure {
-  readonly _tag: string;
-}
-
-const failureText = (failure: CallFailure, fallback: string): string =>
-  Predicate.hasProperty(failure, "message") &&
-  Predicate.isString(failure.message)
-    ? failure.message
-    : fallback;
-
 /** Lists the folders in `path` (the home folder when none) for the add-project dialog. */
 export const BrowseFolder = Command.define("BrowseFolder", {
   args: { request: Schema.Int, path: Schema.Option(Schema.String) },
@@ -198,7 +188,7 @@ export const BrowseFolder = Command.define("BrowseFolder", {
         onFailure: (failure) =>
           Message.FailedListing({
             request,
-            message: failureText(
+            message: failureMessage(
               failure,
               "The folder could not be listed. Try again."
             ),
@@ -223,7 +213,7 @@ export const RetryTask = Command.define("RetryTask", {
         onSuccess: () => Message.SucceededRetry(),
         onFailure: (failure) =>
           Message.FailedRetry({
-            message: failureText(
+            message: failureMessage(
               failure,
               "The task could not be retried. Try again."
             ),

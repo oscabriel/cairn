@@ -10,12 +10,13 @@ import { ThreadLaunchInput as ThreadLaunchInputSchema } from "@cairn/protocol/La
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { RuntimeMode } from "@cairn/protocol/Policy";
 import { SendInput, TurnInput, WhenBusy } from "@cairn/protocol/Thread";
-import { Effect, Option, Predicate, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
 import { replaceUrl } from "foldkit/navigation";
 
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
+import { failureMessageOrTag } from "../connection/Failure.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { workspaceStrategy, EnvMode } from "../hero/ContextStrip.ts";
 import { draftRouter, threadRouter } from "../Route.ts";
@@ -34,15 +35,8 @@ import {
 import { Message } from "./Message.ts";
 import { ComposerSettings, defaultSettings, Draft } from "./Model.ts";
 
-/** The text a failure shows: the protocol error's message, or its tag. */
-const failureText = (failure: { readonly _tag: string }): string =>
-  Predicate.hasProperty(failure, "message") &&
-  Predicate.isString(failure.message)
-    ? failure.message
-    : `The request failed (${failure._tag}).`;
-
 const failed = (failure: { readonly _tag: string }) =>
-  Message.FailedRequest({ message: failureText(failure) });
+  Message.FailedRequest({ message: failureMessageOrTag(failure) });
 
 /**
  * Puts the keyboard in an opened picker's search field (T30), so typing filters, Enter picks and
@@ -142,7 +136,7 @@ export const fetchModels = (epoch: number) =>
         Message.FailedLoad({
           what: "models",
           projectId: Option.none(),
-          message: failureText(failure),
+          message: failureMessageOrTag(failure),
         }),
     })
   );
@@ -156,7 +150,7 @@ export const fetchSkills = (projectId: ProjectId) =>
         Message.FailedLoad({
           what: "skills",
           projectId: Option.some(projectId),
-          message: failureText(failure),
+          message: failureMessageOrTag(failure),
         }),
     })
   );
@@ -183,7 +177,7 @@ export const SearchEntries = Command.define("SearchEntries", {
           Message.FailedPathSearch({
             projectId,
             query,
-            message: failureText(failure),
+            message: failureMessageOrTag(failure),
           }),
       })
     ),
@@ -198,7 +192,7 @@ export const fetchBranches = (projectId: ProjectId) =>
         Message.FailedLoad({
           what: "branches",
           projectId: Option.some(projectId),
-          message: failureText(failure),
+          message: failureMessageOrTag(failure),
         }),
     })
   );
@@ -363,7 +357,7 @@ export const PrepareLaunch = Command.define("PrepareLaunch", {
             draftKey: plan.draftKey,
             draft: plan.draft,
             attachments: plan.attachments,
-            message: `The thread did not start: ${failureText(failure)} Your message is back in the composer.`,
+            message: `The thread did not start: ${failureMessageOrTag(failure)} Your message is back in the composer.`,
           }),
       })
     ),

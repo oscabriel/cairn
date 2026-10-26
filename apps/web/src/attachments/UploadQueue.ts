@@ -24,7 +24,10 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 import { AttachmentRef } from "@cairn/protocol/Attachments";
-import { Effect, Option, Predicate, Queue, Schema, Stream } from "effect";
+import { Effect, Option, Queue, Schema, Stream } from "effect";
+
+import type { CallFailure } from "../connection/Failure.ts";
+import { failureMessage, isRetryable } from "../connection/Failure.ts";
 
 /** How many uploads run at once. */
 export const MAX_CONCURRENT_UPLOADS = 3;
@@ -213,16 +216,11 @@ export const sendBytes = (input: {
   });
 
 /** The text an RPC failure shows, and whether it is safe to try again. */
-export const rpcFailure = (failure: { readonly _tag: string }): UploadFailed =>
+export const rpcFailure = (failure: CallFailure): UploadFailed =>
   new UploadFailed({
-    message:
-      Predicate.hasProperty(failure, "message") &&
-      Predicate.isString(failure.message)
-        ? failure.message
-        : `The upload could not start (${failure._tag}).`,
-    retryable:
-      Predicate.hasProperty(failure, "retryable") &&
-      Predicate.isBoolean(failure.retryable)
-        ? failure.retryable
-        : true,
+    message: failureMessage(
+      failure,
+      `The upload could not start (${failure._tag}).`
+    ),
+    retryable: isRetryable(failure),
   });

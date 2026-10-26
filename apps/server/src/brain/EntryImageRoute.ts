@@ -10,6 +10,7 @@ import { EntryId, NonNegativeInt, ThreadId } from "@cairn/protocol/Ids";
 import { Effect, Option, Schema } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
+import { problem } from "../http/Problem.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 
 /** The route's path, as the router matches it. */
@@ -44,12 +45,6 @@ export const entryImageHeaders = (mimeType: string) => {
     },
   };
 };
-
-const problem = (status: number, code: string, message: string) =>
-  HttpServerResponse.jsonUnsafe(
-    { code, message },
-    { status, headers: { "cache-control": "no-store" } }
-  );
 
 /** Serves one entry image through the harness seam. */
 const entryImageResponse = (seam: HarnessSeam["Service"]) =>

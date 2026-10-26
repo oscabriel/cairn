@@ -36,6 +36,7 @@ import {
 
 import { Brain } from "../brain/Brain.ts";
 import { Approvals, approvalLedger } from "../brain/CairnDocs.ts";
+import type { ApprovalLedger } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
@@ -159,7 +160,7 @@ const callTool = Effect.fn("ExecutorExtension.call")(function* (
   path: string,
   input: JsonObject,
   cwd: Option.Option<string>,
-  ledger: Parameters<typeof gatedCall>[0]
+  ledger: ApprovalLedger
 ) {
   const scopes = yield* ExecutorScope;
   const scope = yield* scopes.forCwd(cwd);
@@ -180,7 +181,7 @@ const callTool = Effect.fn("ExecutorExtension.call")(function* (
 /** One `executor_execute` program, gated. */
 const executeTool = Effect.fn("ExecutorExtension.execute")(function* (
   code: string,
-  ledger: Parameters<typeof gatedCall>[0]
+  ledger: ApprovalLedger
 ) {
   const refusal = executeRefusal(code);
 

@@ -8,6 +8,7 @@ import { AttachmentId } from "@cairn/protocol/Ids";
 import { Effect, Option, Schema } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
+import { problem } from "../http/Problem.ts";
 import { AttachmentStore, AttachmentVariant } from "./AttachmentStore.ts";
 import type { StoredAttachment } from "./AttachmentStore.ts";
 
@@ -23,12 +24,6 @@ const Params = Schema.Struct({ id: AttachmentId, variant: AttachmentVariant });
 const SAFE_INLINE = /^(?:image\/(?:png|jpeg|gif|webp)|application\/pdf)$/u;
 
 const TEXT_PLAIN = "text/plain; charset=utf-8";
-
-const problem = (status: number, code: string, message: string) =>
-  HttpServerResponse.jsonUnsafe(
-    { code, message, retryable: status >= 500 },
-    { status, headers: { "cache-control": "no-store" } }
-  );
 
 /** How a file is served: its type, and whether the browser should download it. */
 interface Presentation {

@@ -5,7 +5,7 @@
 // shell stream clears the banner when the thread moves.
 import { TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";
-import { Array, Data, Effect, Equal, Option, Predicate, Schema } from "effect";
+import { Array, Data, Effect, Equal, Option, Schema } from "effect";
 import { Command, Submodel } from "foldkit";
 import type { Update } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -17,6 +17,7 @@ import type {
   CairnClient,
   CairnConnectionService,
 } from "../connection/Connection.ts";
+import { failureMessage } from "../connection/Failure.ts";
 import { formatDayTime } from "../settings/Time.ts";
 import { badge } from "../ui/Badge.ts";
 import { button, buttonDefaults } from "../ui/Button.ts";
@@ -50,17 +51,6 @@ export const Message = defineMessageUnion({
 
 export type Message = typeof Message.Type;
 
-/** A failed call: one of the protocol's errors or the transport's. */
-interface CallFailure {
-  readonly _tag: string;
-}
-
-const failureText = (failure: CallFailure): string =>
-  Predicate.hasProperty(failure, "message") &&
-  Predicate.isString(failure.message)
-    ? failure.message
-    : "The task could not be retried. Try again.";
-
 /** Asks the brain to run a parked task again, through `client`. */
 export const retryParkedTask = (
   client: Pick<CairnClient, "thread.retryTask">,
@@ -70,7 +60,12 @@ export const retryParkedTask = (
     Effect.match({
       onSuccess: () => Message.SucceededRetry(),
       onFailure: (failure) =>
-        Message.FailedRetry({ message: failureText(failure) }),
+        Message.FailedRetry({
+          message: failureMessage(
+            failure,
+            "The task could not be retried. Try again."
+          ),
+        }),
     })
   );
 

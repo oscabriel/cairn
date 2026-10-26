@@ -34,7 +34,6 @@
 import {
   closeSync,
   constants,
-  existsSync,
   fstatSync,
   lstatSync,
   openSync,
@@ -48,6 +47,7 @@ import { Context, Effect, Layer, Option } from "effect";
 
 import { errorText } from "../brain/Durable.ts";
 import { contextFileIn, PiConfig } from "../models/PiConfig.ts";
+import { gitRootOf } from "./GitRoot.ts";
 import { refusedPhrases } from "./PromptSafety.ts";
 
 /** A context file longer than this is left out: it would crowd the prompt. */
@@ -193,25 +193,6 @@ const decide = (
     text: Option.some(read.text),
     reason: Option.none(),
   };
-};
-
-/** The nearest directory at or above `start` holding `.git`. */
-const gitRootOf = (start: string): Option.Option<string> => {
-  let dir = start;
-
-  for (;;) {
-    if (existsSync(path.join(dir, ".git"))) {
-      return Option.some(dir);
-    }
-
-    const parent = path.dirname(dir);
-
-    if (parent === dir) {
-      return Option.none();
-    }
-
-    dir = parent;
-  }
 };
 
 /**

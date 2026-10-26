@@ -1,7 +1,7 @@
 // The root's Commands: navigation, the backoff timer, `session.hello`, and the outbox's send and
 // save. Each reads what it needs from the resources the runtime provides (the connection, the
 // browser's key-value store) and answers with one Message.
-import { Duration, Effect, Predicate, Random, Schema } from "effect";
+import { Duration, Effect, Random, Schema } from "effect";
 import type { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { load, pushUrl } from "foldkit/navigation";
@@ -11,6 +11,11 @@ import type {
   CairnClient,
   CairnConnectionService,
 } from "./connection/Connection.ts";
+import {
+  failureMessageOrTag,
+  isRetryable,
+  isTransport,
+} from "./connection/Failure.ts";
 import { OutboxItem, outboxKey, saveOutbox } from "./connection/Outbox.ts";
 import { backoffDelayMs } from "./connection/Reconnect.ts";
 import { reloadIfStale } from "./load/StaleBuild.ts";
@@ -93,31 +98,6 @@ export const answeredInTime = <A, E, R>(
     })
   );
 
-/** A failed call: one of the protocol's errors, which say whether a retry is safe, or the transport's. */
-interface CallFailure {
-  readonly _tag: string;
-}
-
-const failureText = (failure: CallFailure): string =>
-  Predicate.hasProperty(failure, "message") &&
-  Predicate.isString(failure.message)
-    ? failure.message
-    : `The request failed (${failure._tag}).`;
-
-/** True for a failure that carries no `retryable` verdict: the transport's, where nothing known ran. */
-const isTransport = (failure: CallFailure): boolean =>
-  !(
-    Predicate.hasProperty(failure, "retryable") &&
-    Predicate.isBoolean(failure.retryable)
-  );
-
-/** A failure the brain marked retryable, or one of the transport. */
-const isRetryable = (failure: CallFailure): boolean =>
-  Predicate.hasProperty(failure, "retryable") &&
-  Predicate.isBoolean(failure.retryable)
-    ? failure.retryable
-    : true;
-
 /** Asks the brain who it is; a failure means this epoch's socket is not usable. */
 export const SayHello = Command.define("SayHello", {
   args: { epoch: Schema.Int },
@@ -134,7 +114,10 @@ export const SayHello = Command.define("SayHello", {
       Effect.match({
         onSuccess: (hello) => Message.SucceededHello({ epoch, hello }),
         onFailure: (failure) =>
-          Message.LostConnection({ epoch, reason: failureText(failure) }),
+          Message.LostConnection({
+            epoch,
+            reason: failureMessageOrTag(failure),
+          }),
       })
     ),
 });
@@ -168,7 +151,7 @@ export const SendOutboxItem = Command.define("SendOutboxItem", {
             key: outboxKey(item),
             retryable: isRetryable(failure),
             transport: isTransport(failure),
-            message: failureText(failure),
+            message: failureMessageOrTag(failure),
           }),
       })
     ),

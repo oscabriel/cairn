@@ -3,13 +3,14 @@
 // one Message; a failure carries the brain's sentence when it sent one.
 import { ProjectId } from "@cairn/protocol/Ids";
 import { SettingsPatch } from "@cairn/protocol/Settings";
-import { Effect, Predicate, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import type { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { load } from "foldkit/navigation";
 
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import type { CairnConnectionService } from "../connection/Connection.ts";
+import { failureMessage } from "../connection/Failure.ts";
 import {
   applyClientSettings,
   ClientSettings,
@@ -20,18 +21,6 @@ import { Message } from "./Message.ts";
 
 /** The services the settings page's Commands and Subscriptions read. */
 export type Services = CairnConnectionService | KeyValueStore.KeyValueStore;
-
-/** A failed call: one of the protocol's errors or the transport's. */
-interface CallFailure {
-  readonly _tag: string;
-}
-
-/** The brain's sentence for a failure, or `fallback`. */
-export const failureText = (failure: CallFailure, fallback: string): string =>
-  Predicate.hasProperty(failure, "message") &&
-  Predicate.isString(failure.message)
-    ? failure.message
-    : fallback;
 
 /** Reads this device's settings from storage. */
 export const LoadClientSettings = Command.define("LoadClientSettings", {
@@ -78,7 +67,7 @@ export const FetchServerSettings = Command.define("FetchServerSettings", {
           Message.FailedLoad({
             epoch,
             section: "server",
-            message: failureText(failure, "The settings could not be read."),
+            message: failureMessage(failure, "The settings could not be read."),
           }),
       })
     ),
@@ -102,7 +91,7 @@ export const FetchCatalog = Command.define("FetchCatalog", {
           Message.FailedLoad({
             epoch,
             section: "catalog",
-            message: failureText(failure, "The models could not be listed."),
+            message: failureMessage(failure, "The models could not be listed."),
           }),
       })
     ),
@@ -127,7 +116,10 @@ export const FetchProviders = Command.define("FetchProviders", {
           Message.FailedLoad({
             epoch,
             section: "providers",
-            message: failureText(failure, "The providers could not be read."),
+            message: failureMessage(
+              failure,
+              "The providers could not be read."
+            ),
           }),
       })
     ),
@@ -152,7 +144,7 @@ export const FetchExecutorStatus = Command.define("FetchExecutorStatus", {
           Message.FailedLoad({
             epoch,
             section: "executor",
-            message: failureText(
+            message: failureMessage(
               failure,
               "Executor's status could not be read."
             ),
@@ -181,7 +173,7 @@ export const FetchSkills = Command.define("FetchSkills", {
           Message.FailedLoad({
             epoch,
             section: "skills",
-            message: failureText(failure, "The skills could not be read."),
+            message: failureMessage(failure, "The skills could not be read."),
           }),
       })
     ),
@@ -203,7 +195,7 @@ export const UpdateServerSettings = Command.define("UpdateServerSettings", {
         onSuccess: (settings) => Message.SucceededServerUpdate({ settings }),
         onFailure: (failure) =>
           Message.FailedServerUpdate({
-            message: failureText(
+            message: failureMessage(
               failure,
               "The setting was not changed. Try again."
             ),
@@ -227,7 +219,7 @@ export const SignInExecutor = Command.define("SignInExecutor", {
       onSuccess: () => Message.OpenedSignIn(),
       onFailure: (failure) =>
         Message.FailedSignIn({
-          message: failureText(
+          message: failureMessage(
             failure,
             "Executor's sign-in could not be started. Try again."
           ),

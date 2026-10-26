@@ -1,7 +1,6 @@
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/MessagesTimeline.logic.ts
-// (`deriveTurnFolds`, `deriveTerminalAssistantMessageIds`, `computeMessageDurationStart`) and
-// packages/shared/src/orchestrationTiming.ts (`formatDuration`) at
-// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: a settled turn's intermediate messages and work
+// (`deriveTurnFolds`, `deriveTerminalAssistantMessageIds`, `computeMessageDurationStart`) at
+// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (durations are `Time.ts`'s `formatDuration`). Kept: a settled turn's intermediate messages and work
 // fold behind one row anchored right under its prompt, labelled "Worked for <duration>"; the
 // terminal answer stays visible; trailing settled work after it folds too, failures and running
 // work never do; a turn that is still working, failed, or streaming never folds; the duration
@@ -28,6 +27,7 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 import { Option } from "effect";
 
+import { formatDuration } from "./Time.ts";
 import type {
   TimelineEntry,
   TimelineMessage,
@@ -35,40 +35,6 @@ import type {
 } from "./TimelineEntries.ts";
 import { turnElapsedMs } from "./TimelineEntries.ts";
 import { workEntryIndicatesToolFailure } from "./ToolSummary.ts";
-
-/** A duration as t3code writes it: `850ms`, `4.2s`, `37s`, `1h 2m 5s`. */
-export const formatDuration = (durationMs: number): string => {
-  if (!Number.isFinite(durationMs) || durationMs < 0) {
-    return "0ms";
-  }
-
-  if (durationMs < 1000) {
-    return `${Math.max(1, Math.round(durationMs))}ms`;
-  }
-
-  if (durationMs < 10_000) {
-    const tenths = Math.round(durationMs / 100) / 10;
-
-    return tenths >= 10 ? "10s" : `${tenths.toFixed(1)}s`;
-  }
-
-  const totalSeconds = Math.round(durationMs / 1000);
-
-  // The unit is chosen after rounding, so 59.5 seconds never reads "60s".
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
-  }
-
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  return [
-    ...(hours > 0 ? [`${hours}h`] : []),
-    ...(minutes > 0 ? [`${minutes}m`] : []),
-    ...(seconds > 0 ? [`${seconds}s`] : []),
-  ].join(" ");
-};
 
 /**
  * For each message, when its duration starts: the turn's prompt for the first answer, the previous

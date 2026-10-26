@@ -19,6 +19,7 @@ import {
 
 import { ServerConfig } from "../Config.ts";
 import { routedPath } from "./Guard.ts";
+import { pathnameOf } from "./Request.ts";
 
 /** Renders the JSON the page reads before its socket opens; `None` injects nothing. */
 export class BootJson extends Context.Service<
@@ -77,12 +78,6 @@ const reservedPrefixOf = (pathname: string) => {
       (prefix) => routed === prefix || routed.startsWith(`${prefix}/`)
     )
   );
-};
-
-const pathnameOf = (url: string) => {
-  const end = url.search(/[?#]/u);
-
-  return end === -1 ? url : url.slice(0, end);
 };
 
 const acceptsHtml = (request: HttpServerRequest.HttpServerRequest) =>

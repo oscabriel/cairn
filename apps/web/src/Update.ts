@@ -86,6 +86,7 @@ import {
   openAddProject,
   update as updateSidebar,
 } from "./sidebar/Update.ts";
+import { threadRowOf } from "./ThreadRow.ts";
 
 type UpdateReturn = Update.Return<Model, Message, Services>;
 
@@ -495,9 +496,7 @@ const sameRow = Option.makeEquivalence<object>((left, right) => left === right);
 /** Tells the hold banner the open thread's shell row and the connection, when they changed. */
 const syncParked: Step = (model) => {
   const thread = Option.flatMap(routedThreadId(model.route), (id) =>
-    Option.flatMap(model.shell, (shell) =>
-      Array.findFirst(shell.threads, (row) => row.id === id)
-    )
+    threadRowOf(model.shell, id)
   );
 
   const connected = hasClient(model.connection);

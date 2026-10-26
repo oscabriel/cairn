@@ -5,7 +5,7 @@
 // slices of the Model, so a streamed token rebuilds only the transcript and a keystroke only the
 // composer.
 import type { Entry } from "@cairn/protocol/Thread";
-import { Array, Equal, Option } from "effect";
+import { Equal, Option } from "effect";
 import { createLazy } from "foldkit/html";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
@@ -19,6 +19,7 @@ import { AppRoute, draftRouter } from "./Route.ts";
 import { loadedSettingsView, settingsPlaceholder } from "./SettingsPage.ts";
 import { view as parkedView } from "./shell/Parked.ts";
 import { sidebarState, view as sidebarView } from "./sidebar/View.ts";
+import { projectOf, threadRowOf } from "./ThreadRow.ts";
 import { CHAT_COLUMN_CLASS, chatHeader } from "./ui/ChatHeader.ts";
 
 const placeholder = (h: HtmlBuilder<Message>, text: string): Html =>
@@ -31,35 +32,6 @@ const placeholder = (h: HtmlBuilder<Message>, text: string): Html =>
     [text]
   );
 
-const threadTitle = (model: Model, threadId: string): Option.Option<string> =>
-  Option.flatMap(model.shell, (shell) =>
-    Option.map(
-      Array.findFirst(shell.threads, (thread) => thread.id === threadId),
-      (thread) => thread.title
-    )
-  );
-
-/** The thread's working directory: its worktree, else its project's workspace root. */
-const threadWorkspaceRoot = (
-  model: Model,
-  threadId: string
-): Option.Option<string> =>
-  Option.flatMap(model.shell, (shell) =>
-    Option.flatMap(
-      Array.findFirst(shell.threads, (thread) => thread.id === threadId),
-      (thread) =>
-        Option.orElse(thread.worktreePath, () =>
-          Option.map(
-            Array.findFirst(
-              shell.projects,
-              (project) => project.id === thread.projectId
-            ),
-            (project) => project.workspaceRoot
-          )
-        )
-    )
-  );
-
 /**
  * Why the thread's launch failed, from its shell row, and the draft its first message went back to
  * when this page put it there.
@@ -68,44 +40,24 @@ export const launchFailureOf = (
   model: Model,
   threadId: string
 ): Option.Option<Thread.LaunchFailure> =>
-  Option.flatMap(model.shell, (shell) =>
-    Option.flatMap(
-      Array.findFirst(
-        shell.threads,
-        (thread) => thread.id === threadId && thread.activity === "failed"
-      ),
-      (thread) =>
-        Option.map(thread.lastError, (message) => {
-          const draftId = retryDraftId(threadId);
+  Option.flatMap(
+    Option.filter(
+      threadRowOf(model.shell, threadId),
+      (thread) => thread.activity === "failed"
+    ),
+    (thread) =>
+      Option.map(thread.lastError, (message) => {
+        const draftId = retryDraftId(threadId);
 
-          return {
-            message,
-            retryUrl: Option.some(draftRouter({ draftId })).pipe(
-              Option.filter(() =>
-                Object.hasOwn(model.composer.drafts, `draft:${draftId}`)
-              )
-            ),
-          };
-        })
-    )
-  );
-
-const threadProjectTitle = (
-  model: Model,
-  threadId: string
-): Option.Option<string> =>
-  Option.flatMap(model.shell, (shell) =>
-    Option.flatMap(
-      Array.findFirst(shell.threads, (thread) => thread.id === threadId),
-      (thread) =>
-        Option.map(
-          Array.findFirst(
-            shell.projects,
-            (project) => project.id === thread.projectId
+        return {
+          message,
+          retryUrl: Option.some(draftRouter({ draftId })).pipe(
+            Option.filter(() =>
+              Object.hasOwn(model.composer.drafts, `draft:${draftId}`)
+            )
           ),
-          (project) => project.title
-        )
-    )
+        };
+      })
   );
 
 const sidebarLazy = createLazy();
@@ -243,6 +195,17 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
     Hero: () => pageComposerLazy(composerView, [h, model.composer]),
     Thread: ({ threadId }) => {
       const failure = launchFailureOf(model, threadId);
+      const row = threadRowOf(model.shell, threadId);
+
+      const project = Option.flatMap(row, (thread) =>
+        projectOf(model.shell, thread)
+      );
+
+      // The thread's working directory: its worktree, else its project's workspace root.
+      const workspaceRoot = Option.orElse(
+        Option.flatMap(row, (thread) => thread.worktreePath),
+        () => Option.map(project, ({ workspaceRoot: root }) => root)
+      );
 
       return h.div(
         [
@@ -253,8 +216,14 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
         [
           headerLazy(threadHeader, [
             h,
-            Option.getOrElse(threadProjectTitle(model, threadId), () => ""),
-            Option.getOrElse(threadTitle(model, threadId), () => "Thread"),
+            Option.getOrElse(
+              Option.map(project, ({ title }) => title),
+              () => ""
+            ),
+            Option.getOrElse(
+              Option.map(row, ({ title }) => title),
+              () => "Thread"
+            ),
             headerThreadOf(model.thread),
           ]),
           h.submodel({
@@ -270,10 +239,7 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
               threadPageLazy(threadPage, [
                 h,
                 model.thread,
-                Option.getOrElse(
-                  threadWorkspaceRoot(model, threadId),
-                  () => ""
-                ),
+                Option.getOrElse(workspaceRoot, () => ""),
                 Option.match(failure, {
                   onNone: () => "",
                   onSome: ({ message }) => message,

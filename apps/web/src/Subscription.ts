@@ -3,7 +3,8 @@
 // exists and reports the socket lost when it fails or ends; it is the connection's health check.
 // The page also wakes the connection when the browser says it is back (online, shown, visible).
 import { ShellSnapshot } from "@cairn/protocol/Shell";
-import { Cause, Effect, Option, Predicate, Schema, Stream } from "effect";
+import type { Cause } from "effect";
+import { Effect, Option, Predicate, Schema, Stream } from "effect";
 import { ManagedResource, Subscription } from "foldkit";
 import { streamFromEventFilterMap } from "foldkit/dom";
 
@@ -11,6 +12,7 @@ import type { Services } from "./Command.ts";
 import * as Composer from "./composer/Subscription.ts";
 import { acquireClient, CairnConnection } from "./connection/Connection.ts";
 import type { CairnConnectionService } from "./connection/Connection.ts";
+import { causeMessage } from "./connection/Failure.ts";
 import { hasClient, isBackingOff } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
@@ -21,10 +23,11 @@ import { subscribeShell } from "./shell/ShellStore.ts";
 import { subscriptions as sidebarSubscriptions } from "./sidebar/Subscription.ts";
 
 const describe = (cause: Cause.Cause<unknown>): string =>
-  Option.match(Cause.findErrorOption(cause), {
-    onNone: () => "The shell stream was interrupted.",
-    onSome: String,
-  });
+  causeMessage(
+    cause,
+    "The shell stream was interrupted.",
+    "The shell stream failed."
+  );
 
 const shellStream = (
   epoch: number,

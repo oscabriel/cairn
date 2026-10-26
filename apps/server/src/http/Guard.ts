@@ -14,17 +14,12 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { ServerConfig } from "../Config.ts";
 import { Identity } from "./Identity.ts";
+import { pathnameOf } from "./Request.ts";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** Paths the guard lets through without the host and identity rules; each guards itself. */
 const SELF_GUARDED = new Set(["/_cairn/auth", "/_cairn/health"]);
-
-const pathnameOf = (url: string) => {
-  const end = url.search(/[?#]/u);
-
-  return end === -1 ? url : url.slice(0, end);
-};
 
 /** A percent-decoded path, or the path itself when its escapes are malformed. */
 const decoded = (path: string) => {

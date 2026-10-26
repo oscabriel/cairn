@@ -7,6 +7,7 @@
 import { DateTime, Effect, Layer, Option, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
+import { forwardedPeer } from "../http/Request.ts";
 import { PeerPath } from "./PeerPath.ts";
 
 /** The route's path. */
@@ -29,15 +30,6 @@ export const LoadReport = Schema.Struct({
 export type LoadReport = typeof LoadReport.Type;
 
 const noStore = { "cache-control": "no-store" };
-
-/** The address Caddy saw: the last `X-Forwarded-For` entry, which Caddy wrote, else the socket's. */
-const peerOf = (request: HttpServerRequest.HttpServerRequest) => {
-  const forwarded = request.headers["x-forwarded-for"];
-
-  return forwarded === undefined
-    ? request.remoteAddress
-    : Option.fromNullishOr(forwarded.split(",").at(-1)?.trim());
-};
 
 /** Logs one load report; answers 204, or 400 for a body that is not a report. Needs `PeerPath`. */
 export const LoadRoute = Layer.effectDiscard(
@@ -67,7 +59,7 @@ export const LoadRoute = Layer.effectDiscard(
           );
         }
 
-        const path = yield* Option.match(peerOf(request), {
+        const path = yield* Option.match(forwardedPeer(request), {
           onNone: () => Effect.succeed("unknown" as const),
           onSome: (ip) => paths.pathOf(ip),
         });

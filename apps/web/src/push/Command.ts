@@ -2,11 +2,13 @@
 // registering `/sw.js`), turning push on from a tap, turning it off, the load's re-check of the
 // subscription, presence reports, and the app badge. Each answers with one Message.
 import type { ThreadId } from "@cairn/protocol/Ids";
-import { Cause, Effect, Option, Predicate, Schema } from "effect";
+import { Cause, Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import type { CairnConnectionService } from "../connection/Connection.ts";
+import type { CallFailure } from "../connection/Failure.ts";
+import { failureMessage } from "../connection/Failure.ts";
 import { Message } from "./Message.ts";
 import {
   currentPermission,
@@ -26,20 +28,12 @@ import type { CurrentSubscription } from "./PushDevice.ts";
 export type Services = CairnConnectionService;
 
 /** A failed call: one of the protocol's errors, the transport's, or the browser's. */
-interface CallFailure {
-  readonly _tag: string;
-}
-
-const failureText = (failure: CallFailure): string =>
-  Predicate.hasProperty(failure, "message") &&
-  Predicate.isString(failure.message)
-    ? failure.message
-    : "Push did not work this time.";
+const PUSH_FAILED = "Push did not work this time.";
 
 const causeText = (cause: Cause.Cause<CallFailure>): string =>
   Option.match(Cause.findErrorOption(cause), {
-    onNone: () => "Push did not work this time.",
-    onSome: failureText,
+    onNone: () => PUSH_FAILED,
+    onSome: (failure) => failureMessage(failure, PUSH_FAILED),
   });
 
 /** Tells the server about this device's subscription, and to forget the one it replaced. */

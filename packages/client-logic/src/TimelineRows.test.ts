@@ -35,6 +35,7 @@ import streamingFrames from "../../../judges/fixtures/transcripts/streaming.fram
 import thinking from "../../../judges/fixtures/transcripts/thinking.json" with { type: "json" };
 import { applyThreadStreamItem } from "./ThreadView.ts";
 import type { ThreadViewState } from "./ThreadView.ts";
+import { formatDuration } from "./Time.ts";
 import { entriesFromPi } from "./TimelineEntries.ts";
 import type {
   Timeline,
@@ -44,10 +45,7 @@ import type {
   TurnStatus,
   WorkEntry,
 } from "./TimelineEntries.ts";
-import {
-  computeMessageDurationStart,
-  formatDuration,
-} from "./TimelineFolds.ts";
+import { computeMessageDurationStart } from "./TimelineFolds.ts";
 import {
   computeStableTimelineRows,
   deriveTimelineRows,

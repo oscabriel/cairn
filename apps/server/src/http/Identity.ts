@@ -13,6 +13,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { ServerConfig } from "../Config.ts";
 import { isLoopbackAddress } from "./Health.ts";
+import { forwardedPeer } from "./Request.ts";
 import { Tailscale } from "./Tailscale.ts";
 
 /** The header Caddy sets on the auth subrequest from its own `{remote_host}`. */
@@ -45,17 +46,6 @@ export const ADMITTED_TTL = "30 seconds";
 
 /** How long "no such peer" is reused, so a burst of refused requests asks tailscaled once. */
 export const NOT_FOUND_TTL = "5 seconds";
-
-/** The address Caddy saw for a proxied request: the last `X-Forwarded-For` entry, which Caddy wrote. */
-const forwardedPeer = (request: HttpServerRequest.HttpServerRequest) => {
-  const forwarded = request.headers["x-forwarded-for"];
-
-  if (forwarded === undefined) {
-    return request.remoteAddress;
-  }
-
-  return Option.fromNullishOr(forwarded.split(",").at(-1)?.trim());
-};
 
 const fromLoopback = (request: HttpServerRequest.HttpServerRequest) =>
   Option.exists(request.remoteAddress, isLoopbackAddress);

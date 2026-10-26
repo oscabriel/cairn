@@ -43,12 +43,13 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 import type * as PiCodingAgent from "@earendil-works/pi-coding-agent";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Order, Schema } from "effect";
 
 import { errorText } from "../brain/Durable.ts";
 import { homeDirectory } from "../Config.ts";
 import { PiConfig } from "../models/PiConfig.ts";
 import type { PiSnapshot } from "../models/PiConfig.ts";
+import { gitRootOf } from "./GitRoot.ts";
 import { isRefused } from "./PromptSafety.ts";
 
 /** pi-coding-agent could not be loaded. Boot stops; reinstall the brain's dependencies. */
@@ -130,25 +131,6 @@ const stamp = (file: string): string => {
     : `${String(stat.mtimeMs)}:${String(stat.size)}`;
 };
 
-/** The nearest directory at or above `start` that holds `.git`, as pi's package manager finds it. */
-const gitRootOf = (start: string): Option.Option<string> => {
-  let dir = path.resolve(start);
-
-  for (;;) {
-    if (existsSync(path.join(dir, ".git"))) {
-      return Option.some(dir);
-    }
-
-    const parent = path.dirname(dir);
-
-    if (parent === dir) {
-      return Option.none();
-    }
-
-    dir = parent;
-  }
-};
-
 /**
  * The `.agents/skills` directories a thread in `cwd` reads, nearest first: from `cwd` up to its git
  * root, or to the filesystem root outside a repo, without the user's own `<home>/.agents/skills`.
@@ -218,13 +200,10 @@ interface Loaded {
   readonly source: "project" | "user";
 }
 
-const byName = (a: Loaded, b: Loaded) => {
-  if (a.skill.name < b.skill.name) {
-    return -1;
-  }
-
-  return a.skill.name > b.skill.name ? 1 : 0;
-};
+const byName = Order.mapInput(
+  Order.String,
+  (loaded: Loaded) => loaded.skill.name
+);
 
 const diagnosticText = (
   diagnostic: PiCodingAgent.LoadSkillsResult["diagnostics"][number]

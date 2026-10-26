@@ -7,18 +7,16 @@ import { Subscription } from "foldkit";
 
 import { CairnConnection } from "../../connection/Connection.ts";
 import type { CairnConnectionService } from "../../connection/Connection.ts";
+import { causeMessage } from "../../connection/Failure.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 
 const describe = (cause: Cause.Cause<unknown>): string =>
-  Option.match(Cause.findErrorOption(cause), {
-    onNone: () => "The thread stream was interrupted.",
-    onSome: (failure) =>
-      Predicate.hasProperty(failure, "message") &&
-      Predicate.isString(failure.message)
-        ? failure.message
-        : "The thread stream failed.",
-  });
+  causeMessage(
+    cause,
+    "The thread stream was interrupted.",
+    "The thread stream failed."
+  );
 
 const isMissing = (cause: Cause.Cause<unknown>): boolean =>
   Option.exists(Cause.findErrorOption(cause), (failure) =>

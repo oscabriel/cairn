@@ -29,6 +29,7 @@ import { Effect, Option, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { Health } from "../http/Health.ts";
+import { problemWith } from "../http/Problem.ts";
 import { AttachmentIntake } from "./AttachmentIntake.ts";
 import { UPLOAD_ROUTE_PREFIX, UploadTokens } from "./UploadTokens.ts";
 
@@ -51,17 +52,8 @@ const problem = (
   status: number,
   code: string,
   message: string,
-  reason: Option.Option<string> = Option.none()
-) =>
-  HttpServerResponse.jsonUnsafe(
-    {
-      code,
-      message,
-      reason: Option.getOrNull(reason),
-      retryable: status >= 500,
-    },
-    { status, headers: noStore }
-  );
+  reason: Option.Option<string>
+) => problemWith(status, code, message, { reason: Option.getOrNull(reason) });
 
 const rejected = (status: number, reason: string, message: string) =>
   problem(status, "attachment_rejected", message, Option.some(reason));
@@ -91,7 +83,8 @@ const receiveUpload = (
       return problem(
         503,
         "unavailable",
-        "Cairn is still starting, so the upload was not received. Try it again in a moment."
+        "Cairn is still starting, so the upload was not received. Try it again in a moment.",
+        Option.none()
       );
     }
 
@@ -100,7 +93,12 @@ const receiveUpload = (
     );
 
     if (Option.isNone(params)) {
-      return problem(404, "not_found", "There is no upload at this address.");
+      return problem(
+        404,
+        "not_found",
+        "There is no upload at this address.",
+        Option.none()
+      );
     }
 
     const claims = yield* tokens.verify(params.value["*"]);
@@ -123,10 +121,12 @@ const receiveUpload = (
         Effect.succeed(
           refused.reason === "expired"
             ? rejected(400, "expired", refused.message)
-            : problem(404, "not_found", refused.message)
+            : problem(404, "not_found", refused.message, Option.none())
         ),
       UploadAlreadyReceived: (received) =>
-        Effect.succeed(problem(409, "conflict", received.message)),
+        Effect.succeed(
+          problem(409, "conflict", received.message, Option.none())
+        ),
       UploadBodyMismatch: (mismatch) =>
         Effect.succeed(rejected(400, "size_mismatch", mismatch.message)),
       UploadRejected: (refused) =>
@@ -138,14 +138,16 @@ const receiveUpload = (
           )
         ),
       IntakeUnavailable: (unavailable) =>
-        Effect.succeed(problem(503, "unavailable", unavailable.message)),
+        Effect.succeed(
+          problem(503, "unavailable", unavailable.message, Option.none())
+        ),
       AttachmentStoreError: (failure) =>
         Effect.logError("attachment upload failed").pipe(
           Effect.annotateLogs({
             event: "attachment.upload_failed",
             operation: failure.operation,
           }),
-          Effect.as(problem(500, "internal", failure.message))
+          Effect.as(problem(500, "internal", failure.message, Option.none()))
         ),
     })
   );

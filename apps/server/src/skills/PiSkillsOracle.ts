@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import type * as PiCodingAgent from "@earendil-works/pi-coding-agent";
-import { Effect, Schema } from "effect";
+import { Effect, Order, Schema } from "effect";
 
 import { errorText } from "../brain/Durable.ts";
 
@@ -94,13 +94,7 @@ const fence = (packages: PiCodingAgent.DefaultPackageManager) => {
     await resolve(async () => await Promise.resolve("skip" as const));
 };
 
-const byName = (a: OracleSkill, b: OracleSkill) => {
-  if (a.name < b.name) {
-    return -1;
-  }
-
-  return a.name > b.name ? 1 : 0;
-};
+const byName = Order.mapInput(Order.String, (skill: OracleSkill) => skill.name);
 
 /**
  * The skills pi's `DefaultResourceLoader` loads for a session in `agentDir`, with project settings

@@ -11,11 +11,13 @@ import { CairnRpcs, PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import { NodeServices, NodeSocket } from "@effect/platform-node";
 import { assert, layer } from "@effect/vitest";
 import {
+  Cause,
   Duration,
   Effect,
   Exit,
   Layer,
   Option,
+  Predicate,
   Ref,
   Schedule,
   Schema,
@@ -294,12 +296,21 @@ layer(TestServer, { excludeTestServices: true })("the /ws socket", (it) => {
       yield* Ref.set(admitted, false);
       yield* Effect.sleep("700 millis");
 
-      const after = yield* Effect.exit(
-        client["session.hello"]().pipe(Effect.timeout("2 seconds"))
+      // The bound only keeps a regression from hanging the suite: the call must fail because the
+      // socket closed, well inside it, not because the bound ran out.
+      const [elapsed, after] = yield* client["session.hello"]().pipe(
+        Effect.timeout("2 seconds"),
+        Effect.exit,
+        Effect.timed
       );
 
       yield* Ref.set(admitted, true);
       assert.isTrue(Exit.isFailure(after));
+      assert.isFalse(
+        Exit.isFailure(after) &&
+          Predicate.isTagged(Cause.squash(after.cause), "TimeoutError")
+      );
+      assert.isBelow(Duration.toMillis(elapsed), 1000);
     })
   );
 });

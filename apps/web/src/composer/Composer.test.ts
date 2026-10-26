@@ -756,9 +756,19 @@ describe("composer sends", () => {
       ),
       Story.model((model: Model) => {
         assert.strictEqual(activeDraft(model).text, "start here");
-        assert.deepStrictEqual(catalog.defaults.model.modelId, "kimi-k3");
       })
     );
+
+    const typed = update(
+      draft,
+      Message.ChangedDraft({ value: "start here" })
+    ).model;
+
+    const launch = (
+      update(typed, Message.ClickedSend({ alternate: false })).commands ?? []
+    ).find((command) => command.name === PrepareLaunch.name);
+
+    assert.deepStrictEqual(launch?.args?.model, catalog.defaults.model);
   });
 
   it.effect(

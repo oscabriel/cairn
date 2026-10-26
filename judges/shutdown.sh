@@ -38,10 +38,19 @@ say() { printf '%-28s %s\n' "$1" "$2"; }
 fail() { say "$1" "FAIL  $2"; failures=$((failures + 1)); }
 pass() { say "$1" "PASS  $2"; }
 
-# One durability window with --keep; prints its JSON line.
-window() { node judges/durability.ts --keep --window "$1" | grep '"window"'; }
+# The kept window dirs, removed however the script ends.
+kept=()
+trap 'for kept_dir in "${kept[@]}"; do if [[ -n $kept_dir ]]; then rm -rf "$kept_dir"; fi; done' EXIT
 
-field() { node -e 'const v = JSON.parse(process.argv[1])[process.argv[2]]; process.stdout.write(String(v));' "$1" "$2"; }
+# One durability window with --keep; prints its JSON line, or nothing. A failing window exits
+# nonzero, which must reach its FAIL line rather than end the script under `set -e`.
+window() { node judges/durability.ts --keep --window "$1" | grep '"window"' || true; }
+
+# A window's notes, or why there are none.
+notes() { if [[ -n $1 ]]; then field "$1" notes; else echo "the window printed no result"; fi; }
+
+# A field of a window's JSON line; empty when the line is missing or not JSON.
+field() { node -e 'try { const v = JSON.parse(process.argv[1])[process.argv[2]]; process.stdout.write(v === undefined ? "" : String(v)); } catch {}' "$1" "$2"; }
 
 # Milliseconds from each "Stopping" to the next "Stopped" line of the unit in systemd's journal.
 stop_times() {
@@ -53,11 +62,12 @@ stop_times() {
 line=$(window sigterm-six)
 unit=$(field "$line" unit)
 dir=$(field "$line" dir)
+kept+=("$dir")
 
 if [[ $(field "$line" pass) == true ]]; then
 	pass sigterm-six "durability: $(field "$line" notes)"
 else
-	fail sigterm-six "durability: $(field "$line" notes)"
+	fail sigterm-six "durability: $(notes "$line")"
 fi
 
 if [[ -n $dir && -f $dir/events.log ]]; then
@@ -83,7 +93,6 @@ if [[ -n $dir && -f $dir/events.log ]]; then
 		fail stop-time "systemd stops ${stops}, worst ${worst_stop:-none} ms"
 	fi
 
-	rm -rf "$dir"
 else
 	fail closing-closed "no events log from the sigterm-six window"
 fi
@@ -91,19 +100,19 @@ fi
 # --- 2. Five crashes park, retry finishes ------------------------------------------------------
 line=$(window kill-six)
 dir=$(field "$line" dir)
+kept+=("$dir")
 
 if [[ $(field "$line" pass) == true ]]; then
 	pass kill-six "restarts $(field "$line" killToUp) ms, effects $(node -e 'console.log(JSON.stringify(JSON.parse(process.argv[1]).effects))' "$line"), $(field "$line" notes)"
 else
-	fail kill-six "$(field "$line" notes)"
+	fail kill-six "$(notes "$line")"
 fi
-
-[[ -n $dir ]] && rm -rf "$dir"
 
 # --- 3. Control: a tool that ignores its signal ------------------------------------------------
 line=$(window stubborn-control)
 unit=$(field "$line" unit)
 dir=$(field "$line" dir)
+kept+=("$dir")
 
 if [[ -n $unit ]]; then
 	journal=$(journalctl --user --no-pager -o cat -u "$unit.service")
@@ -117,10 +126,8 @@ if [[ -n $unit ]]; then
 		fail control "expected a SIGKILL after TimeoutStopSec=3; stop ${first_stop:-none} ms, kill lines ${killed}"
 	fi
 else
-	fail control "the stubborn window did not start: $(field "$line" notes)"
+	fail control "the stubborn window did not start: $(notes "$line")"
 fi
-
-[[ -n $dir ]] && rm -rf "$dir"
 
 if ((failures > 0)); then
 	echo "shutdown judge: ${failures} checks failed"

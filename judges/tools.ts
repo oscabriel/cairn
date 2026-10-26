@@ -7,8 +7,9 @@
 //
 // - Three directed turns, one per server: `convex` (a status read), `playwright` (a navigate) and
 //   `github` (a read of this repo). Each passes when a committed code mode script called
-//   `tools.executor_call` with a path on that server and the final answer quotes a value from the
-//   script's result.
+//   `tools.executor_call` with a path on that server, the call ended well inside a script that did
+//   not fail, and the final answer quotes a value from the script's result that the prompt does not
+//   already hold.
 // - One open turn that names no tool: it passes when the scripts called `tools.executor_search`
 //   before `tools.executor_call`, and the answer quotes the result.
 //
@@ -153,9 +154,16 @@ const Part = Schema.Union([
   Schema.Struct({ type: Schema.String }),
 ]);
 
+// A code mode result's `details.calls`: one row per nested tool call, with how it ended.
+const CallRow = Schema.Struct({ name: Schema.String, status: Schema.String });
+
 const Message = Schema.Struct({
   role: Schema.String,
   content: Schema.Union([Schema.String, Schema.Array(Part)]),
+  isError: Schema.optionalKey(Schema.Boolean),
+  details: Schema.optionalKey(
+    Schema.Struct({ calls: Schema.optionalKey(Schema.Array(CallRow)) })
+  ),
 });
 
 const decodeMessages = Schema.decodeUnknownOption(Schema.Array(Message));
@@ -190,15 +198,67 @@ const scriptsOf = (messages: ReadonlyArray<Message>) =>
       : []
   );
 
-/** Values worth quoting from the tool results: strings and numbers of four characters or more. */
-const quotable = (messages: ReadonlyArray<Message>) =>
-  messages
-    .filter((message) => message.role === "toolResult")
+/** The tool results that succeeded: a failed call's error text is never a value to quote. */
+const succeededResults = (messages: ReadonlyArray<Message>) =>
+  messages.filter(
+    (message) => message.role === "toolResult" && message.isError !== true
+  );
+
+/** Every string and number in a parsed JSON value, depth first. */
+const leavesOf = (value: Schema.Json): ReadonlyArray<string> => {
+  if (Predicate.isString(value)) {
+    return [value];
+  }
+
+  if (Predicate.isNumber(value)) {
+    return [String(value)];
+  }
+
+  if (value === null || Predicate.isBoolean(value)) {
+    return [];
+  }
+
+  // An array's values are its items.
+  return Object.values(value).flatMap(leavesOf);
+};
+
+const parseJson = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Json)
+);
+
+// The lines code mode adds around a script's output (`==> text 1/2 <==`, the console block).
+const FRAME_LINE = /^(?:==> text \d+\/\d+ <==|<\/?console_output>)$/mu;
+
+/**
+ * The values a script handed back: the leaves of each output item that parses as JSON, else its
+ * lines. A value the prompt already holds (the repo, the URL, a word of RULES) proves nothing, so it
+ * is left out, as are values under three characters.
+ */
+const quotable = (messages: ReadonlyArray<Message>, prompt: string) => {
+  const asked = prompt.toLowerCase();
+
+  return succeededResults(messages)
     .flatMap((message) =>
       textOf(message)
-        .split(/[\s"'`,:;{}[\]()]+/u)
-        .filter((word) => word.length >= 4 && !/^[a-z]+$/u.test(word))
-    );
+        .split(FRAME_LINE)
+        .flatMap((part) =>
+          Option.match(parseJson(part.trim()), {
+            onNone: () => part.split("\n"),
+            onSome: leavesOf,
+          })
+        )
+    )
+    .map((leaf) => leaf.trim())
+    .filter((leaf) => leaf.length >= 3 && !asked.includes(leaf.toLowerCase()));
+};
+
+/** Whether a code mode result shows an `executor_call` that ended well. */
+const callSucceeded = (messages: ReadonlyArray<Message>) =>
+  succeededResults(messages).some((message) =>
+    (message.details?.calls ?? []).some(
+      (row) => row.name === "executor_call" && row.status === "ok"
+    )
+  );
 
 const callIndex = (scripts: ReadonlyArray<string>, tool: string) =>
   scripts.join("\n").indexOf(`tools.${tool}(`);
@@ -397,7 +457,9 @@ const program = Effect.gen(function* () {
       }
     );
 
-    const quoted = quotable(messages).find((word) => answer.includes(word));
+    const quoted = quotable(messages, turn.prompt).find((leaf) =>
+      answer.includes(leaf)
+    );
 
     const reached = Option.match(turn.app, {
       onNone: () => {
@@ -409,6 +471,12 @@ const program = Effect.gen(function* () {
       onSome: (app) =>
         paths.some((found) => segmentsOf(found).slice(0, 2).includes(app)),
     });
+
+    const called = callSucceeded(messages);
+
+    if (!called) {
+      notes.push("no executor_call ended well in a successful script");
+    }
 
     if (!reached) {
       notes.push(
@@ -430,7 +498,7 @@ const program = Effect.gen(function* () {
 
     return {
       name: turn.name,
-      pass: reached && quoted !== undefined,
+      pass: reached && called && quoted !== undefined,
       replyMs,
       calls: paths,
       quoted: quoted?.length ?? 0,

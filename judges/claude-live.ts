@@ -759,7 +759,10 @@ const deletedCase = Effect.gen(function* () {
   };
 });
 
-/** The 800-line ledger of `claude-kill.ts`: about 22K tokens a lost prompt cache rewrites. */
+/**
+ * An 800-line ledger, as `durability.ts`'s bridge windows send: about 22K tokens a lost prompt cache
+ * rewrites.
+ */
 const LEDGER = Array.from(
   { length: 800 },
   (_, index) =>

@@ -23,11 +23,14 @@
 //
 // Bridge windows (`--bridge`, the real Claude bridge on Haiku through `judge-main.ts --models real`,
 // a few cents each, never run by default): bridge-streaming (`kill -9` while Claude's reply
-// streams), bridge-tool-parked (while a `bash` call is held in the bridge), bridge-approval-parked
-// (while `gate` waits; accepted after the restart). They add J2's and J9's checks: the marker or
-// `mark` effect exactly once, an interrupted result for the parked `bash` call, every `claude` child
-// of the killed brain gone within 2 s and none outside the unit's cgroup, and the first reply after
-// the restart keeping the prompt cache (`cacheRead > 0` and `cacheRead >= 10 * cacheWrite`). The
+// streams), bridge-tool-parked (while a `bash` call is held in the bridge), bridge-answer (after
+// the `bash` result is committed, while Claude writes its answer), bridge-approval-parked (while
+// `gate` waits; accepted after the restart). They add J2's and J9's checks: the marker or `mark`
+// effect exactly once, an interrupted result for the parked `bash` call, every `claude` child of the
+// killed brain gone within 2 s and none outside the unit's cgroup, the first reply after the restart
+// keeping the prompt cache (`cacheRead > 0` and `cacheRead >= 10 * cacheWrite`), and, last, a clean
+// restart and a stop with the thread's child alive that leave no `claude` outside the cgroup.
+// `judges/claude-kill.sh` runs the first three by their J2 names. The
 // brain uses the real home (Claude Code's login, pi's models, read only) and a scratch folder under
 // `~/cairn-judges`, removed afterwards with the transcripts Claude Code wrote for it.
 //
@@ -143,6 +146,7 @@ const CONTROL_WINDOWS = ["stubborn-control"] as const;
 const BRIDGE_WINDOWS = [
   "bridge-streaming",
   "bridge-tool-parked",
+  "bridge-answer",
   "bridge-approval-parked",
 ] as const;
 
@@ -875,7 +879,8 @@ interface Expectation {
 type Reported =
   | number
   | null
-  | { readonly cacheRead: number; readonly cacheWrite: number };
+  | { readonly cacheRead: number; readonly cacheWrite: number }
+  | { readonly childrenBefore: number; readonly orphans: number };
 
 interface Measures {
   readonly killToUp: Array<number>;
@@ -1364,6 +1369,54 @@ const bridgeCrash = (context: RunContext) =>
     measures.checks.noOrphansAfterKill = outside.length === 0;
 
     return { committed };
+  });
+
+/** Runs `move` on the unit and counts the `claude` processes from before it left outside it. */
+const orphansAfter = (
+  unit: string,
+  move: Effect.Effect<
+    unknown,
+    Unit.UnitError,
+    ChildProcessSpawner.ChildProcessSpawner
+  >
+) =>
+  Effect.gen(function* () {
+    const before = yield* Unit.snapshot(unit);
+
+    const children = before.filter(({ command }) =>
+      CLAUDE_COMMAND.test(command)
+    );
+
+    yield* move;
+    yield* Effect.sleep(Duration.millis(CONVERGE_MS));
+
+    const left = yield* Unit.orphans(unit, children);
+
+    return { childrenBefore: children.length, orphans: left.length };
+  });
+
+/**
+ * J9's other two moves, at the end of a bridge run with the thread's `claude` child still held: a
+ * clean restart, then a stop. Neither may leave a `claude` process outside the unit's cgroup.
+ */
+const j9Moves = (context: RunContext) =>
+  Effect.gen(function* () {
+    const { brain, measures } = context;
+    const from = yield* Events.size(brain.events);
+
+    const restartMove = yield* orphansAfter(
+      brain.unit,
+      Unit.restart(brain.unit)
+    );
+
+    yield* waitUp(brain, from).pipe(Effect.ignore);
+
+    const stopMove = yield* orphansAfter(brain.unit, Unit.stop(brain.unit));
+
+    measures.extra.restartMove = restartMove;
+    measures.extra.stopMove = stopMove;
+    measures.checks.noOrphansAfterRestart = restartMove.orphans === 0;
+    measures.checks.noOrphansAfterStop = stopMove.orphans === 0;
   });
 
 /**
@@ -2011,6 +2064,37 @@ const plans: Readonly<Record<WindowName, Plan>> = {
         );
       }),
   },
+  "bridge-answer": {
+    bridge: true,
+    message: (brain) =>
+      bridgeMessage(
+        `Use bash to run exactly this command, once: echo ran >> ${markerOf(brain)}. Never run it a second time. Then write the numbers from one to two hundred in words, one per line.`
+      ),
+    expect: { marks: [], userEntries: 1 },
+    run: (context) =>
+      Effect.gen(function* () {
+        // Aim after the command's result is committed, while Claude writes its answer.
+        yield* until(
+          "the answer after the bash result",
+          Effect.gen(function* () {
+            const entries = entriesOf(yield* viewOf(context.follower));
+
+            return (
+              markerLines(markerOf(context.brain)) > 0 &&
+              entries.some((entry) => entry.kind === "pi.tool-result")
+            );
+          }),
+          "180 seconds"
+        );
+
+        return yield* bridgeCrash(context);
+      }),
+    verdict: (context, entries, committed) =>
+      Effect.gen(function* () {
+        yield* markerOnce(context);
+        yield* cacheKept(context, entries, committed);
+      }),
+  },
   "bridge-approval-parked": {
     bridge: true,
     message: () => bridgeMessage(GATE_TASK),
@@ -2300,6 +2384,19 @@ const runWindow = (window: WindowName, run: number, shared: Shared) => {
       pageResult.convergedMs = Option.some(shown.ms);
       measures.extra.pageTimelineChars = shown.timelineChars;
       measures.extra.pageRows = shown.rows;
+    }
+
+    // Last, as the stop ends the unit: J9's restart and stop with a live child.
+    if (plan.bridge === true) {
+      yield* j9Moves(before.context);
+
+      const failedMoves = Object.entries(measures.checks)
+        .filter(([, ok]) => !ok)
+        .map(([name]) => name);
+
+      if (failedMoves.length > 0) {
+        return yield* fail(`checks failed: ${failedMoves.join(", ")}`);
+      }
     }
 
     return {

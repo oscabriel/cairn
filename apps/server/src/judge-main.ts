@@ -24,7 +24,7 @@ import {
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
 
-// `--models real` runs pi's model runtime with the bridge (judges/claude-kill.ts); the default is
+// `--models real` runs pi's model runtime with the bridge (the bridge windows of judges/durability.ts); the default is
 // the judge's faux model.
 const { values } = parseArgs({
   options: { models: { type: "string", default: "judge" } },

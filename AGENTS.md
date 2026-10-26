@@ -33,7 +33,7 @@ Throwaway code goes under `spikes/<n>-<name>/`, each with a `NOTES.md` of measur
 - Never print values from `auth.json`, `mcp-auth.json`, `~/.alchemy`, `~/.codex` or Executor's data volume. Check a credential's kind by its prefix only.
 - Docker is for Executor only (ADR 0005). Caddy runs in Docker at `~/caddy`; back up `~/caddy/conf/Caddyfile` before editing it. There is no sudo.
 - Thread stores live on the NVMe under `/home`, never the NAS.
-- Loopback ports: t3code nightly holds 3773 (`t3.gneiss.run`) and Executor holds 4400. Cairn uses 3774 to 3776.
+- Loopback ports: t3code nightly holds 3773 (`t3.gneiss.run`) and Executor holds 4400. Cairn uses 3774 to 3776, and `ops/executor/grant.ts` waits for its OAuth callback on 3777.
 - Steps only the user can do (logins, browser consent) go into one `wizard` script per phase.
 
 ## Writing for the user

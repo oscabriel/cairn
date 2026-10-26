@@ -1020,3 +1020,38 @@ Found along the way:
 - **Convex through Executor has no deployment for this folder.** Its `status` answers an MCP error ("No CONVEX_DEPLOYMENT set"); the old tools judge passed by quoting that error. The convex turn now passes only when the model finds the real deployment, which it did in two of three runs.
 
 Differs from the task text: the lifetime is a timer, not `RuntimeMaxSec`; `claude-eligibility` and `claude-reminder` were not run live (the weekly Claude window was at 97%), so their folder count is judged by Scratch.test. `shutdown.sh` was judged with stubbed windows, not with `limit_ms=1` on the judge brain.
+
+### Batch 11: standards, design and test gaps (groups 6 to 8: T57 to T63)
+
+One lane in the main checkout, deployed at `e5854d7` (after T60; T61's grant port and T62, T63 are judges and ops only).
+
+- `80e825a` (T59): the oxlint, `@oxlint/plugins`, oxlint-tsgolint and `@effect/tsgo` pins move to the catalog; the pre-commit jobs pass `--no-error-on-unmatched-pattern`, so a commit of only ignored files passes without `-n` (each tool keeps its own ignores, so there is no list to mirror); the edit hook reads `tool_input.file_path` with jq and matches the path only.
+- `1a44af6` (T57): port headers buried among imports move to the top (oxfmt's import sorter carries a comment with the import below it; a blank line after the header stops that), Worktrees.test gets the MIT notice, stacked doc comments move onto their declarations, and `judges/headers.test.ts` checks all three. `claude-eligibility` builds its skills and context sections from the brain's `SkillCatalog` and `ProjectContext`. The seam headers (`ShutdownHooks.ts`, `BootRepairs.ts`, `AppLayer.ts`, `Shutdown.ts`) say what runs; Executor code cites ADRs instead of plan ids and its no-grant messages name `ops/wizards/phase-0.sh 9`; the route tag `Inbox` is `Hero`; Executor is a service, not an arm.
+- `f5093f6` (T58): `Git` takes required options from `GIT_DEFAULTS` through `runWith` and `stdoutWith`; `runEnded` takes `userEntryId` as an Option; the load module's catches fail with tagged errors; the sidebar's `connection` is the `ConnectionState` tag (`ConnectionTag`) and the snooze button finds the Snooze item by id; ScriptedHarness imports `Buffer`, Brain logs `errorText`; `workspaceOf` takes its two services; `ExecutorSweep` splits into `sweep` and `declineEach` and logs `executor_sweep_mode` once at build (T61's item).
+- `9213b1e` (T61): `PiModelSource.thinkingFor` and `liveTurnEnd` are gone; `grant.ts` waits for its OAuth callback on 3777, since the brain holds 3774 (CLAUDE.md's port list says so).
+- `e5854d7` (T60): `formatDuration` lives in `Time.ts`; `http/Request.ts` (`pathnameOf`, `forwardedPeer`) and `http/Problem.ts` replace five copies; `connection/Failure.ts` (`failureMessage`, `isRetryable`, `causeMessage`) replaces seven; `ThreadRow.ts` is the one row lookup for the page, the header and the hold banner; `skills/GitRoot.ts` is the one `gitRootOf`; `byName` is an `Order.mapInput`; `ExecutorExtension` names `ApprovalLedger`.
+- `06df5fa` (T63): `judges/lint-rules.test.ts` lints a firing and a quiet probe for each of the 23 anti-slop rules in one oxlint run and checks every rule file has a case; the boundary test gains the models zone and skills `*Extension.ts`; both share `judges/lib/Oxlint.ts`.
+- `0cc8d17` (T62): `durability.ts` gains `bridge-answer` and, at the end of every bridge run, J9's clean restart and stop with a live child; `claude-kill.sh` runs its three cases as durability windows and `claude-kill.ts` is deleted; ADR 0017's gate says so.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| Hook with a misformatted ClaudeGuards.ts whose written content names `/spikes/` | reformatted | a `docs/phase-1` path is skipped |
+| `pnpm install --frozen-lockfile` | pass | four `catalog:` refs |
+| headers.test | pass; caught three real cases while written (diff/View.ts was a false positive, fixed) | later caught T60's own buried header and three orphaned doc comments |
+| `node judges/claude-eligibility.ts --part eligibility` (J7) | pass | 75 skills from the catalog, 31,511 instruction characters, no findings; the `~/.claude/projects` count unchanged (T56's Scratch, live) |
+| Sidebar.test: snooze from the clock on a pinned row | pass; fails when the lookup names another id | |
+| lint-rules.test with `no-reflect-get`'s `createOnce` returning `{}` | fail | "did not fire" |
+| lint-boundaries.test | pass | 10 zones |
+| `judges/claude-kill.sh` (J2, J9) | 3 of 3 | streaming 41,856 / 0, parked 41,880 / 344, answer 41,851 / 231; children gone 56 to 142 ms; restart and stop each with one live child, no orphans |
+| `node judges/durability.ts --window bridge-approval-parked` | pass | page converged 8 ms; J9 moves clean |
+| `node judges/live-chat.ts` after the deploy | pass | reply 1,630 ms |
+| `executor_sweep_mode` after the deploy | `brain` | |
+| `node judges/behaviour.ts` after the deploy | 21 of 22, twice | only `snooze`, the ordering case below |
+| `node judges/behaviour.ts --only hero-launch,snooze` after the snooze fix | 2 of 2 | hero-launch 20/20; snooze: active 21 to 20, the snoozed card gone |
+| `pnpm check` | pass | 1,291 tests |
+
+- The behaviour judge's `snooze` asked for an empty active list, which holds only when it runs before `hero-launch` leaves 20 threads; it now checks that the snoozed card left and the count dropped by one (the snooze case T56 listed).
+
+Differs from the task text: T59 uses the tools' own flag instead of a mirrored exclude list. T60 leaves the two `thread.retryTask` Commands (the hold banner's and the sidebar's) and `filterSkills`. T61's grant.ts was not run live (it would register an OAuth client at Executor), and the Boot.test over `PiDurableBrain` with a leftover started approval is not written. T63's rule probes live in one test file, not beside each rule.
+
+Also done: `/tmp` entries older than a day were removed at the user's request (24,540 entries, 11 GB to 1.2 GB), leaving sockets, session folders and anything a process had open.

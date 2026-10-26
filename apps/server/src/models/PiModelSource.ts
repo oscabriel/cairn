@@ -425,24 +425,7 @@ const makeCatalog = (source: CatalogSource) => {
     return providerStatuses(source, available, entries);
   }).pipe(Effect.withSpan("PiModelSource.providers"));
 
-  const thinkingFor = (
-    model: ModelRef,
-    wanted: Option.Option<ThinkingLevel>
-  ): ThinkingLevel => {
-    const level = Option.getOrElse(wanted, () =>
-      Option.getOrElse(
-        source.piDefaults().thinkingLevel,
-        () => PI_DEFAULT_THINKING
-      )
-    );
-
-    return Option.match(lookup(model), {
-      onNone: () => level,
-      onSome: (found) => clampThinking(found, level),
-    });
-  };
-
-  return { catalog, providers, thinkingFor };
+  return { catalog, providers };
 };
 
 /** One request outside any conversation; refused providers' models are not offered. */
@@ -529,11 +512,6 @@ export class PiModelSource extends Context.Service<
       ReadonlyArray<ProviderStatus>,
       ModelRuntimeError
     >;
-    /** `wanted` (default pi's level) held to the levels `model` takes; unknown models keep it. */
-    thinkingFor(
-      model: ModelRef,
-      wanted: Option.Option<ThinkingLevel>
-    ): ThinkingLevel;
   }
 >()("cairn/server/models/PiModelSource") {
   /** The catalog over the ambient `ModelSource`'s models, with no pi setup: faux and scripted brains. */

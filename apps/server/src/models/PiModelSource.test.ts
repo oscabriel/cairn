@@ -146,16 +146,8 @@ describe("PiModelSource over a faux model source", () => {
         [[FAUX_MODEL.provider, FAUX_MODEL.modelId]]
       );
       assert.deepStrictEqual(catalog.defaults.model, FAUX_MODEL);
-      // pi-ai's faux models reason up to `high`: a wanted `max` is held there.
+      // pi-ai's faux models reason up to `high`.
       assert.isFalse(catalog.models[0]?.thinkingLevels.includes("max"));
-      assert.strictEqual(
-        source.thinkingFor(FAUX_MODEL, Option.some("max")),
-        "high"
-      );
-      assert.strictEqual(
-        source.thinkingFor(FAUX_MODEL, Option.none()),
-        "medium"
-      );
     }).pipe(
       Effect.provide(
         PiModelSource.layerFromModelSource.pipe(

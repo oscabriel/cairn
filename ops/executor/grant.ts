@@ -3,7 +3,7 @@
 //   EXECUTOR_CONNECTION=<id> node ops/executor/grant.ts
 //
 // With no grant yet, it prints the consent URL and waits for Executor's redirect on
-// http://127.0.0.1:3774/callback. Either way it then connects with the grant and lists what the
+// http://127.0.0.1:3777/callback (3774 is the brain's own port, held while cairn.service runs). Either way it then connects with the grant and lists what the
 // connection exposes, which is the step's outside judge. The grant lives in
 // ~/.config/cairn/executor-grant.json (mode 600) until Cairn's database exists, and nothing else may
 // use it: Executor treats a reused rotated refresh token as theft.
@@ -26,7 +26,7 @@ import { Config, Console, Effect, FileSystem, Schema } from "effect";
 
 const origin = "https://exec.gneiss.run";
 
-const callbackPort = 3774;
+const callbackPort = 3777;
 
 const grantPath = `${homedir()}/.config/cairn/executor-grant.json`;
 

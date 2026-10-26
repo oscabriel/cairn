@@ -20,7 +20,7 @@ The container reaches the host through ufw's rule `allow in on docker0 to 172.17
 
 ## Cairn's grant
 
-Cairn reaches Executor through one scoped connection named Cairn (GitHub and Cairn bridges, Executor's own app off), with one OAuth grant on it. Stage 9 of `ops/wizards/phase-0.sh` has the user create the connection in the UI (`mcp-connections` refuses the setup token) and runs `ops/executor/grant.ts`, which registers a public client by DCR, waits for consent on `127.0.0.1:3774/callback` and keeps the grant in `~/.config/cairn/executor-grant.json` (mode 600) until Cairn has a database.
+Cairn reaches Executor through one scoped connection named Cairn (GitHub and Cairn bridges, Executor's own app off), with one OAuth grant on it. Stage 9 of `ops/wizards/phase-0.sh` has the user create the connection in the UI (`mcp-connections` refuses the setup token) and runs `ops/executor/grant.ts`, which registers a public client by DCR, waits for consent on `127.0.0.1:3777/callback` (not 3774, the brain's port) and keeps the grant in `~/.config/cairn/executor-grant.json` (mode 600) until Cairn has a database.
 
 - Access tokens last an hour. A 401 makes the client refresh by itself, and every refresh rotates the refresh token, so only one process may hold the grant. Checked 2026-10-21 by spoiling the stored access token.
 - A refreshed-away access token still works until it expires: refreshing does not revoke it.

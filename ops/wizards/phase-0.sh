@@ -351,9 +351,9 @@ if want 9; then
   [[ -n "$EXECUTOR_CONNECTION" ]] || EXECUTOR_CONNECTION=$EXECUTOR_CONNECTION_URL
   write_env EXECUTOR_CONNECTION "$EXECUTOR_CONNECTION"
   say ""
-  say "Next, the consent. Executor sends your browser back to http://127.0.0.1:3774 on"
+  say "Next, the consent. Executor sends your browser back to http://127.0.0.1:3777 on"
   say "the Beelink. On the MacBook, first open a tunnel in another terminal and leave it:"
-  say "    ${BOLD}ssh -N -L 3774:127.0.0.1:3774 beelink${RESET}"
+  say "    ${BOLD}ssh -N -L 3777:127.0.0.1:3777 beelink${RESET}"
   step "Open the link printed below, approve Cairn, and wait for the tool list here."
   pause "Press Enter to start"
   EXECUTOR_CONNECTION=$EXECUTOR_CONNECTION node ops/executor/grant.ts ||

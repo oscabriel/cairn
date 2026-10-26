@@ -1316,14 +1316,14 @@ export const entriesFromPi = (
   const committed = committedReading(older, view.entries, live.running);
   const lastBuilder = committed.turns.at(-1);
   const entries = withLiveOutput(committed, live.slots);
-  let liveTurnEnd: Option.Option<number> = Option.none();
 
   if (
     live.running &&
     lastBuilder !== undefined &&
     Option.isSome(live.partial)
   ) {
-    // A copy, so the cached committed turn keeps its count for the next view.
+    // A copy, so the cached committed turn keeps its count for the next view. The partial does not
+    // move the turn's end: a running turn's end is its last committed entry's.
     const scratch: TurnBuilder = { ...lastBuilder };
 
     entries.push(
@@ -1337,17 +1337,13 @@ export const entriesFromPi = (
         false
       )
     );
-    liveTurnEnd = scratch.endedAt;
   }
 
   const turns = committed.turns.map((turn, index) => {
     const isLast = index === committed.turns.length - 1;
 
     if (isLast && live.running) {
-      return {
-        ...freezeTurn(turn, "running"),
-        endedAt: Option.orElse(liveTurnEnd, () => turn.endedAt),
-      };
+      return freezeTurn(turn, "running");
     }
 
     if (turn.interrupted) {

@@ -14,8 +14,8 @@
 //
 // Prints one JSON log line with the numbers. Exit 0 when every check holds. Never prints a credential:
 // the dummy API key below is not a key, and the probe's account is reduced to its login kind.
-import { mkdtempSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -43,6 +43,8 @@ import {
   Stream,
 } from "effect";
 
+import * as Scratch from "./lib/Scratch.ts";
+
 const { values } = parseArgs({
   options: {
     part: { type: "string", default: "all" },
@@ -55,9 +57,6 @@ class ClaudeEligibilityFailed extends Schema.TaggedError<ClaudeEligibilityFailed
   "ClaudeEligibilityFailed",
   { message: Schema.String }
 ) {}
-
-const scratch = (prefix: string) =>
-  realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
 
 const PROBE_BUDGET_MS = 1000;
 
@@ -83,7 +82,7 @@ const probeOnce = (
 
     const raw = yield* sdk
       .probe({
-        cwd: scratch("cairn-claude-probe-"),
+        cwd: yield* Scratch.make("cairn-claude-probe-"),
         env: strip ? childEnv(env, false) : unstripped,
         executable: Option.none(),
       })
@@ -104,7 +103,7 @@ const probePart = Effect.gen(function* () {
   // so an account that reports none (or no source) proves the stripping, not a silent field.
   const control = yield* probeOnce(keyEnv, false);
 
-  const emptyHome = scratch("cairn-claude-empty-home-");
+  const emptyHome = yield* Scratch.make("cairn-claude-empty-home-");
 
   const loggedOut = yield* probeOnce({
     ...process.env,
@@ -321,7 +320,7 @@ const eligibilityPart = Effect.gen(function* () {
   ].join("\n\n");
 
   const findings = unsendableFindings(instructions);
-  const cwd = scratch("cairn-claude-eligibility-");
+  const cwd = yield* Scratch.make("cairn-claude-eligibility-");
   const sessionId = crypto.randomUUID();
 
   const { reply, readings } = yield* Effect.gen(function* () {
@@ -458,6 +457,7 @@ const program = Effect.gen(function* () {
 // A turn that never ends fails the judge at the deadline instead of hanging it.
 NodeRuntime.runMain(
   program.pipe(
+    Effect.scoped,
     Effect.timeoutOrElse({
       duration: Duration.minutes(5),
       orElse: () =>

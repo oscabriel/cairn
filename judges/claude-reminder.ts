@@ -8,9 +8,6 @@
 // section changed, (3) a new bridge, as after a restart, after the `cairn` section changed. It
 // records what the bridge writes to each child's input and how each child was opened, and prints
 // one JSON line with the numbers. Exit 0 when every check holds. Costs a few cents of plan usage.
-import { mkdtempSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { Claude } from "@cairn/bridge/Claude";
@@ -27,6 +24,8 @@ import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { NodeRuntime } from "@effect/platform-node";
 import { Duration, Effect, Layer, Option, Ref, Schema } from "effect";
 
+import * as Scratch from "./lib/Scratch.ts";
+
 const { values } = parseArgs({
   options: {
     model: { type: "string", default: "claude-haiku-5-5" },
@@ -35,10 +34,6 @@ const { values } = parseArgs({
 });
 
 const maxWrite = Number(values["max-write"]);
-
-const cwd = realpathSync(
-  mkdtempSync(path.join(tmpdir(), "cairn-claude-reminder-"))
-);
 
 const sessionId = crypto.randomUUID();
 
@@ -140,7 +135,7 @@ const user = (text: string): Message => ({
   timestamp: 2,
 });
 
-const turn = (messages: ReadonlyArray<Message>) =>
+const turn = (cwd: string, messages: ReadonlyArray<Message>) =>
   Effect.gen(function* () {
     const claude = yield* Claude;
 
@@ -164,13 +159,14 @@ const reminders = (prompts: ReadonlyArray<string>) =>
   prompts.filter((prompt) => prompt.startsWith("<system-reminder>"));
 
 const program = Effect.gen(function* () {
+  const cwd = yield* Scratch.make("cairn-claude-reminder-");
   const live = yield* Ref.make<ReadonlyArray<Opened>>([]);
   const restarted = yield* Ref.make<ReadonlyArray<Opened>>([]);
 
   const first = [system, user("Say hello.")];
 
   const [one, two] = yield* Effect.gen(function* () {
-    const reply1 = yield* turn(first);
+    const reply1 = yield* turn(cwd, first);
 
     const second = [
       ...first,
@@ -179,7 +175,7 @@ const program = Effect.gen(function* () {
       user("Which skills are installed now?"),
     ];
 
-    const reply2 = yield* turn(second);
+    const reply2 = yield* turn(cwd, second);
 
     return [reply1, reply2] as const;
   }).pipe(Effect.scoped, Effect.provide(bridge(live)));
@@ -194,7 +190,7 @@ const program = Effect.gen(function* () {
     user("What is the scratch directory named?"),
   ];
 
-  const three = yield* turn(third).pipe(
+  const three = yield* turn(cwd, third).pipe(
     Effect.scoped,
     Effect.provide(bridge(restarted))
   );
@@ -265,6 +261,7 @@ const program = Effect.gen(function* () {
 // A turn that never ends fails the judge at the deadline instead of hanging it.
 NodeRuntime.runMain(
   program.pipe(
+    Effect.scoped,
     Effect.timeoutOrElse({
       duration: Duration.minutes(5),
       orElse: () =>

@@ -2,7 +2,7 @@
 // is restarted with a new invocation, its journal lines stay attributable to the run that wrote them,
 // nothing is orphaned, and a process that leaves the cgroup is caught. Skipped where there is no
 // user systemd.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { NodeServices } from "@effect/platform-node";
@@ -34,7 +34,7 @@ const hasUserSystemd = (() => {
 })();
 
 const unitName = (role: string) =>
-  `cairn-judge-lib-${role}-${randomBytes(4).toString("hex")}`;
+  `cairn-judge-lib-${role}-${process.pid}-${randomBytes(4).toString("hex")}`;
 
 /** Polls until `check` holds, up to five seconds. */
 const eventually = <E, R>(check: Effect.Effect<boolean, E, R>) =>
@@ -137,6 +137,69 @@ describe.skipIf(!hasUserSystemd)("transient units", () => {
           assert.deepStrictEqual(
             left.map(({ command }) => command),
             ["/usr/bin/sleep 300"]
+          );
+        }).pipe(Effect.scoped),
+      { timeout: 20_000 }
+    );
+
+    it.effect(
+      "stops the restarting unit of a judge that died, and leaves a live judge's unit",
+      () =>
+        Effect.gen(function* () {
+          // Started first: a start sweeps too.
+          const live = yield* Unit.start({
+            name: unitName("live"),
+            command: ["sleep", "300"],
+            properties: { Restart: "always" },
+          });
+
+          // A finished process's pid stands in for a judge killed outright.
+          const deadPid = spawnSync("true").pid ?? 1;
+          const orphan = `cairn-judge-lib-orphan-${deadPid}-${randomBytes(4).toString("hex")}`;
+
+          yield* Effect.addFinalizer(() => Effect.ignore(Unit.stop(orphan)));
+
+          execFileSync("systemd-run", [
+            "--user",
+            "--collect",
+            "--quiet",
+            `--unit=${orphan}`,
+            "--property=Restart=always",
+            "--",
+            "sleep",
+            "300",
+          ]);
+
+          const swept = yield* Unit.sweepOrphans;
+
+          assert.include(swept, orphan);
+          assert.notInclude(swept, live);
+          yield* eventually(
+            Unit.activeState(orphan).pipe(
+              Effect.map((state) => state === "inactive")
+            )
+          );
+          assert.strictEqual(yield* Unit.activeState(live), "active");
+        }).pipe(Effect.scoped),
+      { timeout: 20_000 }
+    );
+
+    it.effect(
+      "stops a restarting unit once its lifetime runs out",
+      () =>
+        Effect.gen(function* () {
+          const unit = yield* Unit.start({
+            name: unitName("lifetime"),
+            command: ["sleep", "300"],
+            properties: { Restart: "always" },
+            lifetime: "1s",
+          });
+
+          assert.strictEqual(yield* Unit.activeState(unit), "active");
+          yield* eventually(
+            Unit.activeState(unit).pipe(
+              Effect.map((state) => state === "inactive")
+            )
           );
         }).pipe(Effect.scoped),
       { timeout: 20_000 }

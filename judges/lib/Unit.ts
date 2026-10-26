@@ -9,6 +9,8 @@
 //
 // Every function shells out to `systemctl --user`, `systemd-run --user` or `journalctl --user` with
 // argv only, and reads `/sys/fs/cgroup` and `/proc`. No sudo.
+import { existsSync } from "node:fs";
+
 import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -41,14 +43,34 @@ export const brainProperties = {
 } as const satisfies Readonly<Record<string, string>>;
 
 export interface StartOptions {
-  /** The unit name without `.service`; judges use `cairn-judge-<n>`. */
+  /**
+   * The unit name without `.service`: `cairn-judge-<role>-<pid>[-<suffix>]`, where pid is the
+   * judge's own process id and the suffix is digits or hex. The pid lets a later judge stop a unit
+   * whose judge died without cleaning up (`sweepOrphans`).
+   */
   readonly name: string;
   readonly command: readonly [string, ...Array<string>];
   readonly cwd?: string;
   /** Set in the unit's environment with `--setenv`, nothing else is inherited. */
   readonly env?: Readonly<Record<string, string>>;
   readonly properties?: Readonly<Record<string, string>>;
+  /**
+   * How long the unit may live, in systemd's time syntax; a timer stops it then even if the judge
+   * died. `RuntimeMaxSec` would not do: under `Restart=always` systemd restarts a unit that hits it.
+   * Default `LIFETIME`.
+   */
+  readonly lifetime?: string;
 }
+
+/** The default lifetime: longer than any judge's longest window set. */
+export const LIFETIME = "90min";
+
+// `cairn-judge-durability-1234-2.service`: the role has no digits, so the first digit run is the pid.
+const JUDGE_UNIT =
+  /^(?<name>cairn-judge-[a-z-]+-(?<pid>\d+)(?:-[\da-f]+)?)\.service$/u;
+
+/** The timer that stops `unit` when its lifetime runs out. */
+const reaperOf = (unit: string) => `${unit}-reaper`;
 
 export interface Process {
   readonly pid: number;
@@ -132,9 +154,49 @@ export const activeState = (unit: string) => show(unit, "ActiveState");
 
 export const stop = (unit: string) => systemctl(unit, "stop", ["stop", unit]);
 
+/** Whether a process id is live; `/proc` has a folder for each. */
+const isAlive = (pid: number) => Effect.sync(() => existsSync(`/proc/${pid}`));
+
 /**
- * Starts a transient service with `systemd-run --user --collect`; the unit is stopped when the
- * scope closes, and `--collect` removes it even when it failed.
+ * Stops every `cairn-judge-*` unit whose judge process is gone, as a judge killed outright leaves
+ * its `Restart=always` brain and that brain's children running. Returns the units it stopped.
+ */
+export const sweepOrphans = Effect.gen(function* () {
+  const listed = yield* systemctl("cairn-judge-*", "list-units", [
+    "list-units",
+    "--all",
+    "--plain",
+    "--no-legend",
+    "--type=service",
+    "cairn-judge-*",
+  ]);
+
+  const orphans = yield* Effect.filter(
+    listed
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/u)[0] ?? "")
+      .flatMap((name) => {
+        const groups = JUDGE_UNIT.exec(name)?.groups;
+
+        return groups?.name === undefined || groups.pid === undefined
+          ? []
+          : [{ unit: groups.name, pid: Number(groups.pid) }];
+      }),
+    ({ pid }) =>
+      Effect.map(isAlive(pid), (alive) => !alive && pid !== process.pid)
+  );
+
+  yield* Effect.forEach(orphans, ({ unit }) =>
+    Effect.ignore(Effect.andThen(stop(unit), stop(`${reaperOf(unit)}.timer`)))
+  );
+
+  return orphans.map(({ unit }) => unit);
+});
+
+/**
+ * Starts a transient service with `systemd-run --user --collect`, after sweeping the units of dead
+ * judges. The unit is stopped when the scope closes, a timer stops it once its lifetime runs out
+ * should the judge die first, and `--collect` removes it even when it failed.
  */
 export const start = (
   options: StartOptions
@@ -161,11 +223,29 @@ export const start = (
     ...options.command,
   ];
 
+  const reaper = [
+    "--user",
+    "--collect",
+    "--quiet",
+    `--unit=${reaperOf(options.name)}`,
+    `--on-active=${options.lifetime ?? LIFETIME}`,
+    "--",
+    "systemctl",
+    "--user",
+    "stop",
+    `${options.name}.service`,
+  ];
+
   return Effect.acquireRelease(
-    run(options.name, "start", "systemd-run", args).pipe(
+    Effect.ignore(sweepOrphans).pipe(
+      Effect.andThen(run(options.name, "start", "systemd-run", args)),
+      Effect.andThen(run(options.name, "reaper", "systemd-run", reaper)),
       Effect.as(options.name)
     ),
-    (unit) => Effect.ignore(stop(unit))
+    (unit) =>
+      Effect.ignore(stop(unit)).pipe(
+        Effect.andThen(Effect.ignore(stop(`${reaperOf(unit)}.timer`)))
+      )
   );
 };
 

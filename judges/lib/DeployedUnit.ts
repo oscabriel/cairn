@@ -37,6 +37,7 @@ import { ConversationView } from "@cairn/protocol/Thread";
 import type { Entry } from "@cairn/protocol/Thread";
 import {
   Clock,
+  Console,
   Effect,
   Exit,
   FileSystem,
@@ -589,14 +590,64 @@ const lostEntries = (
   return before.filter((entry) => !ids.has(entry.id)).length;
 };
 
-const remove = Effect.fnUntraced(
-  function* (client: Client, threadId: ThreadId) {
-    yield* client["shell.dispatch"](
+/** Deletes the judge's thread; a failed delete becomes a note, so the thread is not left unseen. */
+const remove = Effect.fnUntraced(function* (
+  client: Client,
+  threadId: ThreadId
+) {
+  const sent = yield* Effect.result(
+    client["shell.dispatch"](
       ThreadDelete.make({ commandId: yield* newCommandId, threadId })
-    );
-  },
-  (effect) => Effect.ignore(effect)
-);
+    )
+  );
+
+  return Result.isSuccess(sent)
+    ? []
+    : [`thread ${threadId} not deleted: ${sent.failure.message}`];
+});
+
+/**
+ * Deletes the judge's thread unless `keep`, however the check ends. The check calls the returned
+ * `removeWith` on its way out to have a failed delete in its notes; when a step fails or times out
+ * first, the scope's finalizer deletes the thread over a fresh socket and prints a failed delete.
+ */
+const ownThread = Effect.fnUntraced(function* (
+  target: Target,
+  threadId: ThreadId,
+  keep: boolean
+) {
+  const removed = yield* Ref.make(keep);
+
+  yield* Effect.addFinalizer(() =>
+    Effect.gen(function* () {
+      if (yield* Ref.getAndSet(removed, true)) {
+        return;
+      }
+
+      const up = yield* portAfter(target, "");
+      const client = yield* connect(target, up.port);
+      const notes = yield* remove(client, threadId);
+
+      yield* Effect.forEach(notes, (note) => Console.error(note));
+    }).pipe(
+      Effect.scoped,
+      Effect.catch((error) =>
+        Console.error(`thread ${threadId} not deleted: ${error.message}`)
+      )
+    )
+  );
+
+  return {
+    removeWith: (client: Client) =>
+      Effect.gen(function* () {
+        if (yield* Ref.getAndSet(removed, true)) {
+          return [];
+        }
+
+        return yield* remove(client, threadId);
+      }),
+  };
+});
 
 const lastErrorNotes = (row: Option.Option<ThreadShell>) =>
   Option.match(
@@ -657,6 +708,7 @@ export const restarts = Effect.fnUntraced(function* (options: Options) {
 
   const follower = yield* makeFollower;
   const threadId = yield* launch(client, options.model, SLEEP_PROMPT);
+  const owned = yield* ownThread(target, threadId, options.keep);
 
   yield* follow(client, threadId, follower);
 
@@ -747,11 +799,10 @@ export const restarts = Effect.fnUntraced(function* (options: Options) {
 
   const failed = Option.exists(outcome.row, (row) => row.activity === "failed");
 
-  notes.push(...lastErrorNotes(outcome.row));
-
-  if (!options.keep) {
-    yield* remove(client, threadId);
-  }
+  notes.push(
+    ...lastErrorNotes(outcome.row),
+    ...(yield* owned.removeWith(client))
+  );
 
   const worstClosed = Math.max(...closedMs);
   const results = toolResults(outcome.entries, "bash");
@@ -801,6 +852,7 @@ export const streaming = Effect.fnUntraced(function* (options: Options) {
   const client = yield* connect(target, up.port);
   const follower = yield* makeFollower;
   const threadId = yield* launch(client, options.model, STREAM_PROMPT);
+  const owned = yield* ownThread(target, threadId, options.keep);
 
   yield* follow(client, threadId, follower);
   yield* until(
@@ -842,11 +894,10 @@ export const streaming = Effect.fnUntraced(function* (options: Options) {
   const active = yield* Unit.activeState(target.unit);
   const lost = lostEntries(committed, outcome.entries);
 
-  notes.push(...lastErrorNotes(outcome.row));
-
-  if (!options.keep) {
-    yield* remove(next.client, threadId);
-  }
+  notes.push(
+    ...lastErrorNotes(outcome.row),
+    ...(yield* owned.removeWith(next.client))
+  );
 
   const checks = {
     committedKept: lost === 0,

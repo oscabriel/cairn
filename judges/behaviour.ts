@@ -679,10 +679,16 @@ try {
     desktop(1440),
     hero,
     async (page) => {
-      await page
-        .getByTestId("sidebar-row-card")
-        .first()
-        .click({ button: "right" });
+      // Judged by its own effect, not an empty list: earlier checks (hero-launch) leave threads.
+      const cards = page.getByTestId("sidebar-row-card");
+      const before = await cards.count();
+      const first = cards.first();
+
+      const threadId = await first
+        .locator("xpath=ancestor::li[@data-thread-item][1]")
+        .getAttribute("data-thread-item");
+
+      await first.click({ button: "right" });
       await page.locator('[data-level="0"] [data-menu-id="snooze"]').hover();
       await page.waitForTimeout(400);
       await page
@@ -691,9 +697,27 @@ try {
         .click();
       await page.waitForTimeout(800);
 
-      return `${await page.getByTestId("sidebar-row-card").count()} active cards`;
+      const after = await cards.count();
+
+      const stillActive = await page
+        .locator(
+          `[data-thread-item="${threadId ?? ""}"] [data-testid="sidebar-row-card"]`
+        )
+        .count();
+
+      return `active ${before} -> ${after}, snoozed card still active ${stillActive}`;
     },
-    (detail) => detail === "0 active cards"
+    (detail) => {
+      const match =
+        /^active (?<before>\d+) -> (?<after>\d+), snoozed card still active 0$/u.exec(
+          detail
+        );
+
+      return (
+        match?.groups !== undefined &&
+        Number(match.groups.after) === Number(match.groups.before) - 1
+      );
+    }
   );
 } finally {
   await chromiumBrowser.close();

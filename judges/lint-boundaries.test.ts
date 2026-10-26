@@ -4,7 +4,6 @@
 // imports were refused. Zones keyed on one exact file name (AnthropicGuard.ts, PiConfig.ts,
 // ClaudeSdk.ts, ...) are not probed, because a probe there would overwrite real code. A probe is
 // removed in a `finally`, and probes a killed run left behind are swept before the cases run.
-import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -16,25 +15,10 @@ import {
 import path from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Schema } from "effect";
+
+import { lint } from "./lib/Oxlint.ts";
 
 const root = path.join(import.meta.dirname, "..");
-
-const oxlint = path.join(root, "node_modules", ".bin", "oxlint");
-
-const Report = Schema.Struct({
-  diagnostics: Schema.Array(
-    Schema.Struct({
-      code: Schema.String,
-      filename: Schema.String,
-      labels: Schema.Array(
-        Schema.Struct({ span: Schema.Struct({ line: Schema.Int }) })
-      ),
-    })
-  ),
-});
-
-const decodeReport = Schema.decodeUnknownSync(Schema.fromJsonString(Report));
 
 interface Probe {
   /** The import statement. */
@@ -122,6 +106,28 @@ const cases: ReadonlyArray<ProbeCase> = [
     ],
   },
   {
+    zone: "apps/server/src/models",
+    name: "LintProbe<id>.ts",
+    probes: [
+      allowed('import { complete } from "@earendil-works/pi-ai";'),
+      refused('import { Harness } from "@earendil-works/pi-durable";'),
+      refused('import { loadSkills } from "@earendil-works/pi-coding-agent";'),
+      refused(
+        'import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";'
+      ),
+    ],
+  },
+  {
+    zone: "apps/server/src/skills",
+    name: "LintProbe<id>Extension.ts",
+    probes: [
+      allowed('import { defineExtension } from "@earendil-works/pi-durable";'),
+      allowed('import { complete } from "@earendil-works/pi-ai";'),
+      allowed('import { loadSkills } from "@earendil-works/pi-coding-agent";'),
+      refused('import { query } from "@anthropic-ai/claude-agent-sdk";'),
+    ],
+  },
+  {
     zone: "packages/bridge/src",
     name: "LintProbe<id>.ts",
     probes: [
@@ -149,23 +155,12 @@ const cases: ReadonlyArray<ProbeCase> = [
 ];
 
 /** The 1-based lines of `file` that oxlint refused with `no-restricted-imports`. */
-const refusedLines = (file: string): ReadonlySet<number> => {
-  // spawnSync never throws on a non-zero exit, which oxlint uses whenever it reports anything.
-  const result = spawnSync(oxlint, ["-f", "json", file], {
-    cwd: root,
-    encoding: "utf-8",
-  });
-
-  return new Set(
-    decodeReport(result.stdout)
-      .diagnostics.filter(
-        (diagnostic) => diagnostic.code === "eslint(no-restricted-imports)"
-      )
-      .flatMap((diagnostic) =>
-        diagnostic.labels.map((label) => label.span.line)
-      )
+const refusedLines = (file: string): ReadonlySet<number> =>
+  new Set(
+    lint([file])
+      .filter((finding) => finding.code === "eslint(no-restricted-imports)")
+      .flatMap((finding) => finding.lines)
   );
-};
 
 /** A probe file name, as `ProbeCase.name` makes them. */
 const PROBE_FILE = /^LintProbe\d+[0-9a-f]{8}\w*\.ts$/u;

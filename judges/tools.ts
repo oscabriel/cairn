@@ -198,16 +198,61 @@ const scriptsOf = (messages: ReadonlyArray<Message>) =>
       : []
   );
 
-/** The tool results that succeeded: a failed call's error text is never a value to quote. */
-const succeededResults = (messages: ReadonlyArray<Message>) =>
+/**
+ * The code mode results that called Executor and ended well: the script did not fail and one of its
+ * `executor_call`s did not either. Only their output proves an app answered; a search listing or a
+ * caught error proves nothing.
+ */
+const succeededCalls = (messages: ReadonlyArray<Message>) =>
   messages.filter(
-    (message) => message.role === "toolResult" && message.isError !== true
+    (message) =>
+      message.role === "toolResult" &&
+      message.isError !== true &&
+      (message.details?.calls ?? []).some(
+        (row) => row.name === "executor_call" && row.status === "ok"
+      )
   );
 
-/** Every string and number in a parsed JSON value, depth first. */
+// The block code mode puts before a script's output.
+const RESULT_HEADER =
+  /^Script (?:completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/u;
+
+/** A result's text blocks after code mode's header. */
+const outputBlocks = (message: Message) =>
+  Predicate.isString(message.content)
+    ? [message.content]
+    : message.content.flatMap((part) =>
+        "text" in part &&
+        Predicate.isString(part.text) &&
+        !RESULT_HEADER.test(part.text)
+          ? [part.text]
+          : []
+      );
+
+const parseJson = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Json)
+);
+
+/**
+ * Every value in a parsed JSON value, depth first. A string is read as text: its JSON leaves when it
+ * parses, else each line, and the value of a `Label: value` line (an MCP server's markdown,
+ * `- Page Title: Example Domain`). An MCP result marked `isError`, an Executor catalog entry and a
+ * `type` field (a block kind) hold nothing an app answered, so they do not count.
+ */
 const leavesOf = (value: Schema.Json): ReadonlyArray<string> => {
   if (Predicate.isString(value)) {
-    return [value];
+    return Option.match(parseJson(value.trim()), {
+      onSome: leavesOf,
+      onNone: () =>
+        value.split("\n").flatMap((line) => {
+          const bare = line.trim().replace(/^(?:[-*]|#+)\s+/u, "");
+
+          const labelled = /^[^:]{1,40}:\s+(?<value>.+)$/u.exec(bare)?.groups
+            ?.value;
+
+          return labelled === undefined ? [bare] : [bare, labelled];
+        }),
+    });
   }
 
   if (Predicate.isNumber(value)) {
@@ -218,47 +263,48 @@ const leavesOf = (value: Schema.Json): ReadonlyArray<string> => {
     return [];
   }
 
-  // An array's values are its items.
-  return Object.values(value).flatMap(leavesOf);
+  if (Array.isArray(value)) {
+    return value.flatMap(leavesOf);
+  }
+
+  // An app's error, or an Executor catalog entry (a search or describe listing in the same script).
+  if (
+    ("isError" in value && value.isError === true) ||
+    ("path" in value && "description" in value)
+  ) {
+    return [];
+  }
+
+  return Object.entries(value).flatMap(([key, field]) =>
+    key === "type" ? [] : leavesOf(field)
+  );
 };
 
-const parseJson = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Json)
-);
+// A tool path names what was called, not what it answered.
+const TOOL_PATH = /\btools(?:\.|\[)/u;
 
 // The lines code mode adds around a script's output (`==> text 1/2 <==`, the console block).
 const FRAME_LINE = /^(?:==> text \d+\/\d+ <==|<\/?console_output>)$/mu;
 
 /**
  * The values a script handed back: the leaves of each output item that parses as JSON, else its
- * lines. A value the prompt already holds (the repo, the URL, a word of RULES) proves nothing, so it
- * is left out, as are values under three characters.
+ * lines. A value the prompt already holds (the repo, the URL, a word of RULES) or a tool path proves
+ * nothing, so it is left out, as are values under three characters.
  */
 const quotable = (messages: ReadonlyArray<Message>, prompt: string) => {
   const asked = prompt.toLowerCase();
 
-  return succeededResults(messages)
-    .flatMap((message) =>
-      textOf(message)
-        .split(FRAME_LINE)
-        .flatMap((part) =>
-          Option.match(parseJson(part.trim()), {
-            onNone: () => part.split("\n"),
-            onSome: leavesOf,
-          })
-        )
-    )
+  return succeededCalls(messages)
+    .flatMap(outputBlocks)
+    .flatMap((block) => block.split(FRAME_LINE).flatMap(leavesOf))
     .map((leaf) => leaf.trim())
-    .filter((leaf) => leaf.length >= 3 && !asked.includes(leaf.toLowerCase()));
+    .filter(
+      (leaf) =>
+        leaf.length >= 3 &&
+        !asked.includes(leaf.toLowerCase()) &&
+        !TOOL_PATH.test(leaf)
+    );
 };
-
-/** Whether a code mode result shows an `executor_call` that ended well. */
-const callSucceeded = (messages: ReadonlyArray<Message>) =>
-  succeededResults(messages).some((message) =>
-    (message.details?.calls ?? []).some(
-      (row) => row.name === "executor_call" && row.status === "ok"
-    )
-  );
 
 const callIndex = (scripts: ReadonlyArray<string>, tool: string) =>
   scripts.join("\n").indexOf(`tools.${tool}(`);
@@ -472,7 +518,7 @@ const program = Effect.gen(function* () {
         paths.some((found) => segmentsOf(found).slice(0, 2).includes(app)),
     });
 
-    const called = callSucceeded(messages);
+    const called = succeededCalls(messages).length > 0;
 
     if (!called) {
       notes.push("no executor_call ended well in a successful script");

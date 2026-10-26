@@ -49,7 +49,7 @@ import {
   isGitImport,
   parseNumstat,
 } from "./Diffs.ts";
-import { Git } from "./Git.ts";
+import { Git, GIT_DEFAULTS } from "./Git.ts";
 
 const GitLayer = Git.layerNoDeps.pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -292,14 +292,22 @@ describe("Checkpoints with real git", () => {
                 const real = yield* Git;
 
                 return Git.of({
-                  run: (operation, cwd, args, options) =>
+                  run: (operation, cwd, args) =>
                     cut(args)
                       ? Effect.interrupt
-                      : real.run(operation, cwd, args, options),
-                  stdout: (operation, cwd, args, options) =>
+                      : real.run(operation, cwd, args),
+                  runWith: (operation, cwd, args, options) =>
                     cut(args)
                       ? Effect.interrupt
-                      : real.stdout(operation, cwd, args, options),
+                      : real.runWith(operation, cwd, args, options),
+                  stdout: (operation, cwd, args) =>
+                    cut(args)
+                      ? Effect.interrupt
+                      : real.stdout(operation, cwd, args),
+                  stdoutWith: (operation, cwd, args, options) =>
+                    cut(args)
+                      ? Effect.interrupt
+                      : real.stdoutWith(operation, cwd, args, options),
                 });
               })
             ).pipe(Layer.provide(Git.layerNoDeps))
@@ -452,7 +460,7 @@ describe("turn diffs and the capture service", () => {
           yield* fs.writeFileString(path.join(repo, "b.txt"), "bee\n");
 
           const one = yield* capture.runEnded(threadId, "7", Option.some(42));
-          const again = yield* capture.runEnded(threadId, "7");
+          const again = yield* capture.runEnded(threadId, "7", Option.none());
 
           assert.deepStrictEqual(
             Option.map(one, (found) => found.turn),
@@ -560,11 +568,12 @@ describe("turn diffs and the capture service", () => {
         yield* fs.writeFileString(path.join(repo, "upstream.txt"), "pulled\n");
         yield* sh(repo, ["add", "upstream.txt"]);
         yield* Git.use((git) =>
-          git.stdout(
+          git.stdoutWith(
             "test",
             repo,
             [...COMMIT_OPTIONS, "commit", "--quiet", "-m", "upstream"],
             {
+              ...GIT_DEFAULTS,
               env: {
                 GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z",
                 GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z",
@@ -573,7 +582,7 @@ describe("turn diffs and the capture service", () => {
           )
         );
         yield* fs.writeFileString(path.join(repo, "a.txt"), "one\nagent\n");
-        yield* capture.runEnded(threadId, "1");
+        yield* capture.runEnded(threadId, "1", Option.none());
 
         const result = yield* diffs.turn({
           threadId,
@@ -605,7 +614,7 @@ describe("turn diffs and the capture service", () => {
             "\n"
           )
         );
-        yield* capture.runEnded(threadId, "1");
+        yield* capture.runEnded(threadId, "1", Option.none());
 
         const result = yield* diffs.turn({
           threadId,
@@ -631,7 +640,9 @@ describe("turn diffs and the capture service", () => {
         const threadId = yield* threadIn(projectId, 4);
 
         assert.isTrue(Option.isNone(yield* capture.runStarted(threadId, "1")));
-        assert.isTrue(Option.isNone(yield* capture.runEnded(threadId, "1")));
+        assert.isTrue(
+          Option.isNone(yield* capture.runEnded(threadId, "1", Option.none()))
+        );
         assert.deepStrictEqual(yield* Ref.get(written), []);
 
         const failure = yield* diffs

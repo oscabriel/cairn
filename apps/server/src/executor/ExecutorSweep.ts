@@ -1,4 +1,4 @@
-// The boot sweep (ADR 0013, plan "Boot and shutdown" step 5): before the Harness resumes, every
+// The boot sweep (ADR 0013): before the Harness resumes, every
 // Executor request the brain recorded (`apr_` id on a `started` approval) and never finished is
 // declined at Executor, so a late accept on the same grant can never run it (spike 3 showed one
 // would). The tool's own rerun then finds `started` and reports "may have run".
@@ -37,9 +37,11 @@ export interface SweepReport {
 export class ExecutorSweep extends Context.Service<
   ExecutorSweep,
   {
-    /** Declines `requests` (the brain's unfinished ones when none are given). Never fails. */
-    sweep(
-      requests?: ReadonlyArray<UnfinishedRequest>
+    /** Declines the brain's unfinished requests; none without a pi-durable brain. Never fails. */
+    readonly sweep: Effect.Effect<SweepReport>;
+    /** Declines `requests`. Never fails. */
+    declineEach(
+      requests: ReadonlyArray<UnfinishedRequest>
     ): Effect.Effect<SweepReport>;
   }
 >()("cairn/server/executor/ExecutorSweep") {
@@ -50,6 +52,15 @@ export class ExecutorSweep extends Context.Service<
       const link = yield* ExecutorLink;
       const brain = yield* Effect.serviceOption(Brain);
       const layerScope = yield* Effect.scope;
+
+      // Logged once, so a composition that lost `Brain` shows in the journal instead of every
+      // boot quietly declining nothing (T61).
+      yield* Effect.logInfo("Executor sweep mode").pipe(
+        Effect.annotateLogs({
+          event: "executor_sweep_mode",
+          mode: Option.isSome(brain) ? "brain" : "none",
+        })
+      );
 
       // True once Executor answered the decline (whatever it said): nothing more to send.
       const decline = (request: UnfinishedRequest) =>
@@ -86,30 +97,9 @@ export class ExecutorSweep extends Context.Service<
           Effect.ignore
         );
 
-      const sweep = Effect.fn("ExecutorSweep.sweep")(function* (
-        requests?: ReadonlyArray<UnfinishedRequest>
+      const declineEach = Effect.fn("ExecutorSweep.declineEach")(function* (
+        found: ReadonlyArray<UnfinishedRequest>
       ): Effect.fn.Return<SweepReport> {
-        const found =
-          requests ??
-          (yield* Option.match(brain, {
-            onNone: () => Effect.succeed<ReadonlyArray<UnfinishedRequest>>([]),
-            onSome: (service) =>
-              unfinishedExecutorRequests.pipe(
-                Effect.provideService(Brain, service),
-                Effect.tapError((error) =>
-                  Effect.logWarning(
-                    "the Executor sweep could not read approvals"
-                  ).pipe(
-                    Effect.annotateLogs({
-                      event: "executor_sweep_failed",
-                      cause: error.message,
-                    })
-                  )
-                ),
-                Effect.orElseSucceed((): ReadonlyArray<UnfinishedRequest> => [])
-              ),
-          }));
-
         if (found.length === 0) {
           return { found: 0, declined: 0, deferred: 0 };
         }
@@ -149,7 +139,30 @@ export class ExecutorSweep extends Context.Service<
         };
       });
 
-      return ExecutorSweep.of({ sweep });
+      const unfinished = Option.match(brain, {
+        onNone: () => Effect.succeed<ReadonlyArray<UnfinishedRequest>>([]),
+        onSome: (service) =>
+          unfinishedExecutorRequests.pipe(
+            Effect.provideService(Brain, service),
+            Effect.tapError((failure) =>
+              Effect.logWarning(
+                "the Executor sweep could not read approvals"
+              ).pipe(
+                Effect.annotateLogs({
+                  event: "executor_sweep_failed",
+                  cause: failure.message,
+                })
+              )
+            ),
+            Effect.orElseSucceed((): ReadonlyArray<UnfinishedRequest> => [])
+          ),
+      });
+
+      const sweep = Effect.flatMap(unfinished, declineEach).pipe(
+        Effect.withSpan("ExecutorSweep.sweep")
+      );
+
+      return ExecutorSweep.of({ sweep, declineEach });
     })
   );
 }
@@ -159,6 +172,6 @@ export class ExecutorSweep extends Context.Service<
  * `bootRepair("executor-sweep", sweepUnfinishedExecutorRequests)`, before the parked approval waits
  * are retried.
  */
-export const sweepUnfinishedExecutorRequests = ExecutorSweep.use((sweeper) =>
-  sweeper.sweep()
+export const sweepUnfinishedExecutorRequests = ExecutorSweep.use(
+  (sweeper) => sweeper.sweep
 );

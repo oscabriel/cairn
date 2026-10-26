@@ -5,7 +5,7 @@
 // report is posted with `fetch(..., {keepalive: true})` rather than `navigator.sendBeacon`: the
 // guard requires the exact Origin on every POST, which `fetch` always sends and a beacon need not.
 // A page that never becomes interactive within 30 s reports nothing.
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Schema } from "effect";
 
 import { openedEarly } from "./EarlySocket.ts";
 
@@ -61,6 +61,12 @@ const isStandalone = () =>
   ("standalone" in navigator && navigator.standalone === true) ||
   matchMedia("(display-mode: standalone)").matches;
 
+/** The load report could not be sent; the page carries on without it. */
+class LoadReportNotSent extends Schema.TaggedError<LoadReportNotSent>()(
+  "LoadReportNotSent",
+  { cause: Schema.Defect() }
+) {}
+
 const post = (body: LoadReportBody) =>
   Effect.tryPromise({
     try: async () =>
@@ -70,7 +76,7 @@ const post = (body: LoadReportBody) =>
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       }),
-    catch: () => "load report not sent",
+    catch: (cause) => new LoadReportNotSent({ cause }),
   }).pipe(Effect.ignore);
 
 /** Waits until the page is interactive, marks it, and reports the load. Run once per page. */

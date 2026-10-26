@@ -7,6 +7,7 @@ import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
+import type { ConnectionState } from "../connection/Reconnect.ts";
 import { VisitState } from "../shell/Visited.ts";
 import { PendingChange } from "./Pending.ts";
 
@@ -20,6 +21,16 @@ export const DraftSummary = Schema.Struct({
 
 export type DraftSummary = typeof DraftSummary.Type;
 
+/** The connection's state tags, as `ConnectionState` names them. */
+export const ConnectionTag = Schema.Literals([
+  "Connecting",
+  "Syncing",
+  "Live",
+  "Backoff",
+] satisfies ReadonlyArray<ConnectionState["_tag"]>);
+
+export type ConnectionTag = typeof ConnectionTag.Type;
+
 /** What the root tells the sidebar after every change. */
 export const SidebarContext = Schema.Struct({
   shell: Schema.Option(ShellSnapshot),
@@ -27,8 +38,8 @@ export const SidebarContext = Schema.Struct({
   openThreadId: Schema.Option(ThreadId),
   /** The draft the route names, when it names one. */
   openDraftId: Schema.Option(Schema.String),
-  /** The connection's state tag: Connecting, Syncing, Live or Backoff. */
-  connection: Schema.String,
+  /** The connection's state tag. */
+  connection: ConnectionTag,
   drafts: Schema.Array(DraftSummary),
 });
 

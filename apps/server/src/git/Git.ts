@@ -55,13 +55,18 @@ export interface GitResult {
   readonly stderr: string;
 }
 
-/** Options of one `git` call. */
+/** Options of one `git` call; start from `GIT_DEFAULTS`. */
 export interface GitRunOptions {
-  /** Defaults to `DEFAULT_GIT_TIMEOUT`. */
-  readonly timeout?: Duration.Input;
+  readonly timeout: Duration.Input;
   /** Extra environment variables for this call. */
-  readonly env?: Readonly<Record<string, string>>;
+  readonly env: Readonly<Record<string, string>>;
 }
+
+/** A call's options when it names none: `DEFAULT_GIT_TIMEOUT` and no extra environment. */
+export const GIT_DEFAULTS: GitRunOptions = {
+  timeout: DEFAULT_GIT_TIMEOUT,
+  env: {},
+};
 
 const subcommandOf = (args: ReadonlyArray<string>) => {
   // Skip leading `-c key=value` pairs and other global options to name the subcommand.
@@ -108,21 +113,34 @@ export class Git extends Context.Service<
   Git,
   {
     /**
-     * Runs `git <SAFE_GIT_OPTIONS> <args>` in `cwd` and returns its exit code and output, whatever
-     * the exit code. Fails with `GitError` only when git could not run or ran past its timeout.
+     * Runs `git <SAFE_GIT_OPTIONS> <args>` in `cwd` under `GIT_DEFAULTS` and returns its exit code
+     * and output, whatever the exit code. Fails with `GitError` only when git could not run or ran
+     * past its timeout.
      */
     run(
       operation: string,
       cwd: string,
+      args: ReadonlyArray<string>
+    ): Effect.Effect<GitResult, GitError>;
+    /** `run` with its own timeout or environment. */
+    runWith(
+      operation: string,
+      cwd: string,
       args: ReadonlyArray<string>,
-      options?: GitRunOptions
+      options: GitRunOptions
     ): Effect.Effect<GitResult, GitError>;
     /** Like `run`, but fails with `GitError` (`exit_nonzero`) unless git exits 0; returns stdout. */
     stdout(
       operation: string,
       cwd: string,
+      args: ReadonlyArray<string>
+    ): Effect.Effect<string, GitError>;
+    /** `stdout` with its own timeout or environment. */
+    stdoutWith(
+      operation: string,
+      cwd: string,
       args: ReadonlyArray<string>,
-      options?: GitRunOptions
+      options: GitRunOptions
     ): Effect.Effect<string, GitError>;
   }
 >()("cairn/server/git/Git") {
@@ -132,14 +150,14 @@ export class Git extends Context.Service<
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-      const run = Effect.fn("Git.run")(function* (
+      const runWith = Effect.fn("Git.run")(function* (
         operation: string,
         cwd: string,
         args: ReadonlyArray<string>,
-        options?: GitRunOptions
+        options: GitRunOptions
       ) {
         const subcommand = subcommandOf(args);
-        const timeout = options?.timeout ?? DEFAULT_GIT_TIMEOUT;
+        const { timeout } = options;
 
         yield* Effect.annotateCurrentSpan({ operation, subcommand });
 
@@ -164,7 +182,7 @@ export class Git extends Context.Service<
           [...SAFE_GIT_OPTIONS, ...args],
           {
             cwd,
-            env: childEnv(options?.env ?? {}),
+            env: childEnv(options.env),
             extendEnv: true,
             stdin: "ignore",
           }
@@ -209,13 +227,13 @@ export class Git extends Context.Service<
         return result;
       });
 
-      const stdout = Effect.fn("Git.stdout")(function* (
+      const stdoutWith = Effect.fn("Git.stdout")(function* (
         operation: string,
         cwd: string,
         args: ReadonlyArray<string>,
-        options?: GitRunOptions
+        options: GitRunOptions
       ) {
-        const result = yield* run(operation, cwd, args, options);
+        const result = yield* runWith(operation, cwd, args, options);
 
         if (result.exitCode !== 0) {
           const subcommand = subcommandOf(args);
@@ -235,7 +253,14 @@ export class Git extends Context.Service<
         return result.stdout;
       });
 
-      return Git.of({ run, stdout });
+      return Git.of({
+        run: (operation, cwd, args) =>
+          runWith(operation, cwd, args, GIT_DEFAULTS),
+        runWith,
+        stdout: (operation, cwd, args) =>
+          stdoutWith(operation, cwd, args, GIT_DEFAULTS),
+        stdoutWith,
+      });
     })
   );
 

@@ -41,7 +41,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { Git } from "../git/Git.ts";
+import { Git, GIT_DEFAULTS } from "../git/Git.ts";
 import { Worktrees } from "./Worktrees.ts";
 
 /** The most results one search returns, whatever the request asks for. */
@@ -219,7 +219,7 @@ export class FileSearch extends Context.Service<
 
       const gitFiles = (root: string) =>
         git
-          .stdout(
+          .stdoutWith(
             "FileSearch.search",
             root,
             [
@@ -230,7 +230,7 @@ export class FileSearch extends Context.Service<
               "--deduplicate",
               "-z",
             ],
-            { timeout: LIST_TIMEOUT }
+            { ...GIT_DEFAULTS, timeout: LIST_TIMEOUT }
           )
           .pipe(Effect.map(split), Effect.mapError(failure(root)));
 

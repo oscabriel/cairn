@@ -45,7 +45,7 @@ import {
   Schema,
 } from "effect";
 
-import { Git } from "../git/Git.ts";
+import { Git, GIT_DEFAULTS } from "../git/Git.ts";
 import type { GitError } from "../git/Git.ts";
 
 /** The namespace of the temporary branches Cairn gives new worktrees. */
@@ -468,11 +468,11 @@ export class Worktrees extends Context.Service<
 
         if (input.startFromOrigin) {
           yield* git
-            .stdout(
+            .stdoutWith(
               "Worktrees.create",
               repoRoot,
               ["fetch", "--quiet", "origin", "--", input.baseRef],
-              { timeout: FETCH_TIMEOUT }
+              { ...GIT_DEFAULTS, timeout: FETCH_TIMEOUT }
             )
             .pipe(Effect.mapError(gitFailed("Worktrees.create")));
         }
@@ -543,11 +543,11 @@ export class Worktrees extends Context.Service<
           : ["worktree", "add", "--", worktreePath, input.branch];
 
         yield* git
-          .stdout(
+          .stdoutWith(
             "Worktrees.create",
             repoRoot,
             ["-c", `checkout.workers=${workers}`, ...args],
-            { timeout: WORKTREE_ADD_TIMEOUT }
+            { ...GIT_DEFAULTS, timeout: WORKTREE_ADD_TIMEOUT }
           )
           .pipe(Effect.mapError(gitFailed("Worktrees.create")));
 

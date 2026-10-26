@@ -157,12 +157,15 @@ export type ThreadWorkspace =
   | { readonly kind: "scratch" }
   | { readonly kind: "folder"; readonly cwd: string };
 
-/** The thread's working folder: its worktree, else its project's root; none for scratch threads. */
+/**
+ * The thread's working folder: its worktree, else its project's root; none for scratch threads.
+ * Takes the two services its callers already hold, so their layers keep the requirement.
+ */
 export const workspaceOf = Effect.fn("Diffs.workspaceOf")(function* (
+  rows: ThreadRows["Service"],
+  projects: Projects["Service"],
   threadId: ThreadId
 ) {
-  const rows = yield* ThreadRows;
-  const projects = yield* Projects;
   const thread = yield* rows.get(threadId);
 
   if (Option.isNone(thread) || Option.isSome(thread.value.deletedAt)) {
@@ -300,9 +303,7 @@ export class Diffs extends Context.Service<
           diff: "",
         };
 
-        const workspace = yield* workspaceOf(threadId).pipe(
-          Effect.provideService(ThreadRows, rows),
-          Effect.provideService(Projects, projects),
+        const workspace = yield* workspaceOf(rows, projects, threadId).pipe(
           Effect.mapError(failed(operation, threadId))
         );
 

@@ -44,7 +44,7 @@ import {
   Schema,
 } from "effect";
 
-import { Git } from "./Git.ts";
+import { Git, GIT_DEFAULTS } from "./Git.ts";
 import type { GitError } from "./Git.ts";
 
 /** Where every Cairn checkpoint ref lives. Never under `refs/heads`, so `push --all` skips them. */
@@ -283,21 +283,30 @@ export class Checkpoints extends Context.Service<
       const stdout = (
         operation: string,
         cwd: string,
-        args: ReadonlyArray<string>,
-        env?: Readonly<Record<string, string>>
+        args: ReadonlyArray<string>
       ) =>
         git
-          .stdout(operation, cwd, args, env === undefined ? {} : { env })
+          .stdout(operation, cwd, args)
+          .pipe(Effect.mapError(gitFailed(operation, cwd)));
+
+      /** `stdout` with extra environment variables (a scratch index, a fixed author). */
+      const stdoutWith = (
+        operation: string,
+        cwd: string,
+        args: ReadonlyArray<string>,
+        env: Readonly<Record<string, string>>
+      ) =>
+        git
+          .stdoutWith(operation, cwd, args, { ...GIT_DEFAULTS, env })
           .pipe(Effect.mapError(gitFailed(operation, cwd)));
 
       const run = (
         operation: string,
         cwd: string,
-        args: ReadonlyArray<string>,
-        env?: Readonly<Record<string, string>>
+        args: ReadonlyArray<string>
       ) =>
         git
-          .run(operation, cwd, args, env === undefined ? {} : { env })
+          .run(operation, cwd, args)
           .pipe(Effect.mapError(gitFailed(operation, cwd)));
 
       const isRepository = Effect.fn("Checkpoints.isRepository")(function* (
@@ -397,7 +406,7 @@ export class Checkpoints extends Context.Service<
           }
 
           yield* fs.copyFile(indexPath, scratch);
-          yield* stdout(
+          yield* stdoutWith(
             operation,
             cwd,
             [...INDEX_CONFIG, "read-tree", "--reset", "HEAD"],
@@ -407,7 +416,7 @@ export class Checkpoints extends Context.Service<
           yield* fs.utimes(scratch, indexTime, indexTime);
 
           // Assume-unchanged and skip-worktree flags would hide changes from `add`: start over.
-          const flags = yield* stdout(
+          const flags = yield* stdoutWith(
             operation,
             cwd,
             [...INDEX_CONFIG, "ls-files", "-v", "-z"],
@@ -424,7 +433,7 @@ export class Checkpoints extends Context.Service<
         env: Readonly<Record<string, string>>
       ) =>
         Effect.gen(function* () {
-          const untracked = yield* stdout(
+          const untracked = yield* stdoutWith(
             operation,
             cwd,
             ["ls-files", "--others", "--exclude-standard", "-z", "--", "."],
@@ -526,7 +535,7 @@ export class Checkpoints extends Context.Service<
 
             if (!seeded) {
               yield* removeScratchFiles;
-              yield* stdout(
+              yield* stdoutWith(
                 operation,
                 cwd,
                 [...INDEX_CONFIG, "read-tree", "HEAD"],
@@ -536,7 +545,7 @@ export class Checkpoints extends Context.Service<
           }
 
           const stage = (exclusions: ReadonlyArray<string>) =>
-            stdout(
+            stdoutWith(
               operation,
               cwd,
               [
@@ -569,7 +578,7 @@ export class Checkpoints extends Context.Service<
             )
           );
 
-          const tree = (yield* stdout(
+          const tree = (yield* stdoutWith(
             operation,
             cwd,
             [...INDEX_CONFIG, ...DURABLE_WRITE, "write-tree"],
@@ -584,7 +593,7 @@ export class Checkpoints extends Context.Service<
           ].join("\n");
 
           // HEAD is the parent, so listAuthoredPaths sees how HEAD moved between checkpoints.
-          const commit = (yield* stdout(
+          const commit = (yield* stdoutWith(
             operation,
             cwd,
             [

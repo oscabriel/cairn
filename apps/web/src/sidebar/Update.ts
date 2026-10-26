@@ -62,6 +62,7 @@ import {
   nowOf,
   searchResultsOf,
   snoozePresetsOf,
+  threadMenuOf,
   visibleOrderOf,
 } from "./Derived.ts";
 import { Intent } from "./Intent.ts";
@@ -845,15 +846,20 @@ const step = (model: Model, message: Message): UpdateReturn =>
       issue(model, [Intent.Unsnooze({ threadId })]),
     ClickedUnpin: ({ threadId }) => issue(model, [Intent.Unpin({ threadId })]),
     ClickedSnoozeButton: ({ threadId }) =>
-      withThread(model, threadId, () => ({
+      withThread(model, threadId, (thread) => ({
         model: modifyFields(model, {
           contextMenu: () =>
             Option.some({
               target: MenuTarget.Thread({ threadId }),
               x: model.lastPointer.x,
               y: model.lastPointer.y,
-              // The snooze submenu is the third item of a thread's menu.
-              highlighted: Option.some(2),
+              // The menu opens with its Snooze item highlighted, so its submenu shows.
+              highlighted: Option.liftPredicate(
+                threadMenuOf(model, thread).findIndex(
+                  (item) => item.id === "snooze"
+                ),
+                (index) => index >= 0
+              ),
               childHighlighted: Option.none(),
             }),
         }),

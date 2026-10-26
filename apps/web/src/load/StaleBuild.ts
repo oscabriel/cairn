@@ -49,9 +49,15 @@ export const shouldReload = (
   Option.exists(pageBuild, (build) => build !== serverBuild) &&
   !Option.contains(reloadedFor, serverBuild);
 
+/** `sessionStorage` threw (storage disabled, a private window's quota). */
+class StorageUnavailable extends Schema.TaggedError<StorageUnavailable>()(
+  "StorageUnavailable",
+  { cause: Schema.Defect() }
+) {}
+
 const readReloadedFor = Effect.try({
   try: () => Option.fromNullishOr(sessionStorage.getItem(RELOADED_FOR_KEY)),
-  catch: () => "sessionStorage unavailable",
+  catch: (cause) => new StorageUnavailable({ cause }),
 }).pipe(Effect.orElseSucceed(() => Option.none<string>()));
 
 const rememberReload = (build: string) =>
@@ -59,7 +65,7 @@ const rememberReload = (build: string) =>
     try: () => {
       sessionStorage.setItem(RELOADED_FOR_KEY, build);
     },
-    catch: () => "sessionStorage unavailable",
+    catch: (cause) => new StorageUnavailable({ cause }),
   }).pipe(Effect.ignore);
 
 /**

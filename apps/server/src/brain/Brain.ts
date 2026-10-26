@@ -273,7 +273,7 @@ export class Brain extends Context.Service<
               Effect.timeout(CLOSE_TIMEOUT),
               Effect.catch((error) =>
                 Effect.logWarning("brain close did not finish").pipe(
-                  Effect.annotateLogs({ error: String(error) })
+                  Effect.annotateLogs({ error: errorText(error) })
                 )
               )
             );

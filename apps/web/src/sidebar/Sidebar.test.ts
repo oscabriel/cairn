@@ -20,7 +20,7 @@ import { threadMenuOf } from "./Derived.ts";
 import { Intent, toShellCommand } from "./Intent.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { initial } from "./Model.ts";
-import type { Model } from "./Model.ts";
+import type { ConnectionTag, Model } from "./Model.ts";
 import { ListMotion } from "./Motion.ts";
 import { ScrollFade } from "./ScrollFade.ts";
 import { update } from "./Update.ts";
@@ -271,6 +271,49 @@ describe("the sidebar", () => {
     );
   });
 
+  it("opens a pinned row's menu at its Snooze item from the clock button", () => {
+    const pinned = ThreadShell.make({
+      ...bridges,
+      pinnedAt: Option.some(time("2026-10-22T10:00:00Z")),
+      pinOrderKey: Option.some("a0"),
+    });
+
+    const base = sidebarWith(Option.none());
+
+    const model: Model = {
+      ...base,
+      context: {
+        ...base.context,
+        shell: Option.some(
+          ShellSnapshot.make({
+            snapshotSequence: 7,
+            projects: [project],
+            threads: [pinned, research, kickoff],
+          })
+        ),
+      },
+    };
+
+    const opened = update(
+      model,
+      Message.ClickedSnoozeButton({ threadId: pinned.id })
+    ).model;
+
+    const highlighted = Option.flatMap(
+      opened.contextMenu,
+      (menu) => menu.highlighted
+    );
+
+    const items = threadMenuOf(opened, pinned);
+
+    expect(items[0]?.id).toBe("unpin");
+    expect(
+      Option.getOrUndefined(
+        Option.map(highlighted, (index) => items[index]?.id)
+      )
+    ).toBe("snooze");
+  });
+
   it("offers exactly the trimmed thread menu", () => {
     const model = sidebarWith(Option.none());
 
@@ -350,7 +393,7 @@ describe("visits to the open thread", () => {
     lastVisitedAt: Option.some(time("2026-10-22T11:00:00Z")),
   });
 
-  const opened = (connection: string): Model => {
+  const opened = (connection: ConnectionTag): Model => {
     const base = sidebarWith(Option.some(completed));
 
     return {

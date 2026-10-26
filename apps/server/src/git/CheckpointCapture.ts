@@ -198,7 +198,7 @@ export class CheckpointCapture extends Context.Service<
     runEnded(
       threadId: ThreadId,
       runId: string,
-      userEntryId?: Option.Option<number>
+      userEntryId: Option.Option<number>
     ): Effect.Effect<Option.Option<CheckpointCommit>>;
     /**
      * The boot repair: sweeps scratch indexes a kill left in each live thread's repository, then
@@ -233,10 +233,7 @@ export class CheckpointCapture extends Context.Service<
       };
 
       const folderOf = Effect.fnUntraced(function* (threadId: ThreadId) {
-        const workspace = yield* workspaceOf(threadId).pipe(
-          Effect.provideService(ThreadRows, rows),
-          Effect.provideService(Projects, projects)
-        );
+        const workspace = yield* workspaceOf(rows, projects, threadId);
 
         if (workspace.kind !== "folder") {
           return Option.none<string>();
@@ -378,7 +375,7 @@ export class CheckpointCapture extends Context.Service<
         function* (
           threadId: ThreadId,
           runId: string,
-          userEntryId: Option.Option<number> = Option.none()
+          userEntryId: Option.Option<number>
         ) {
           return yield* endUnlocked(threadId, runId, userEntryId);
         },
@@ -422,7 +419,11 @@ export class CheckpointCapture extends Context.Service<
         );
 
         if (missedRunEnd(captured, completedMillis)) {
-          yield* runEnded(threadId, `repair-${String(completedMillis)}`);
+          yield* runEnded(
+            threadId,
+            `repair-${String(completedMillis)}`,
+            Option.none()
+          );
         }
       });
 

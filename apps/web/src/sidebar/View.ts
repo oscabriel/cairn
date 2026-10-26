@@ -76,7 +76,7 @@ import { icon } from "./Icons.ts";
 import { Message } from "./Message.ts";
 import type { Shelf } from "./Message.ts";
 import { MenuTarget } from "./Model.ts";
-import type { Model } from "./Model.ts";
+import type { ConnectionTag, Model } from "./Model.ts";
 import { ListMotion } from "./Motion.ts";
 import { cardRow, cx, draftRow, searchResultRow, slimRow } from "./Row.ts";
 import { ScrollFade } from "./ScrollFade.ts";
@@ -424,24 +424,12 @@ const undoNotice = (h: H, model: Model): Html =>
       ),
   });
 
-const connectionLabel = (state: string): string => {
-  switch (state) {
-    case "Live": {
-      return "Live";
-    }
-
-    case "Syncing": {
-      return "Syncing";
-    }
-
-    case "Backoff": {
-      return "Reconnecting";
-    }
-
-    default: {
-      return "Connecting";
-    }
-  }
+/** What the footer says for each connection state. */
+const CONNECTION_LABELS: Readonly<Record<ConnectionTag, string>> = {
+  Connecting: "Connecting",
+  Syncing: "Syncing",
+  Live: "Live",
+  Backoff: "Reconnecting",
 };
 
 const footer = (h: H, model: Model): Html =>
@@ -531,7 +519,7 @@ const footer = (h: H, model: Model): Html =>
                     ],
                     []
                   ),
-                  connectionLabel(model.context.connection),
+                  CONNECTION_LABELS[model.context.connection],
                 ]
               ),
             ]

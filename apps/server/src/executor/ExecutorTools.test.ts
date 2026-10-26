@@ -445,7 +445,7 @@ describe("the boot sweep", () => {
         assert.strictEqual(fake.pending.size, 1);
 
         const report = yield* ExecutorSweep.use((sweeper) =>
-          sweeper.sweep([
+          sweeper.declineEach([
             { conversationId: 1, approvalId: "call-1", requestId: "apr_1" },
           ])
         ).pipe(Effect.provide(ExecutorSweep.layerNoDeps));

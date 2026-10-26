@@ -17,6 +17,8 @@
 // - `whenEnsured` subscribes to the events before it looks in the store, so an ensure that lands in
 //   between still wakes it.
 
+import { Buffer } from "node:buffer";
+
 import {
   ApprovalId,
   ConversationId,

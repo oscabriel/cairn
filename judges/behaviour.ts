@@ -821,5 +821,8 @@ console.log(
   JSON.stringify({ judge: "behaviour", checks: results.length, passing })
 );
 
-process.exitCode =
-  results.length > 0 && (!values.strict || passing === results.length) ? 0 : 1;
+// Exits outright: a handle the full run leaves open (not one `--only` subsets leave) kept the
+// process alive for good after its report.
+process.exit(
+  results.length > 0 && (!values.strict || passing === results.length) ? 0 : 1
+);

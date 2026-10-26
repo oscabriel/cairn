@@ -1,5 +1,3 @@
-import { Match, Option } from "effect";
-import type { Html, HtmlBuilder } from "foldkit/html";
 // Ported from cairn-v1 at 1a5cd4a, apps/web/src/markdown/view.ts. Kept: the element for each node,
 // links that open in a new tab, images shown only as links (remote images never load), a code
 // block's label (title from its fence, else its language) and copy button, plain text until its
@@ -8,6 +6,8 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 // styles, the copy button routed through the transcript's Message, a fence still growing in the
 // streaming message shown plain until it closes or commits, as t3code does, and a block too long
 // to tokenize in one frame tokenized by its Mount a slice at a time.
+import { Match, Option } from "effect";
+import type { Html, HtmlBuilder } from "foldkit/html";
 import { Check, Copy, Image } from "lucide";
 
 import { icon } from "../../composer/Icon.ts";

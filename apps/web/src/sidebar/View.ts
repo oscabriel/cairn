@@ -36,7 +36,7 @@ import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import { inboxRouter, settingsRouter } from "../Route.ts";
+import { heroRouter, settingsRouter } from "../Route.ts";
 import { addProjectView } from "./AddProject.ts";
 import {
   CHROME_HEADER_CLASS,
@@ -683,7 +683,7 @@ const column = (h: H, model: Model): ReadonlyArray<Html> => [
         [
           h.a(
             [
-              h.Href(inboxRouter()),
+              h.Href(heroRouter()),
               h.AriaLabel("Go to threads"),
               h.DataAttribute("testid", "sidebar-brand"),
               h.Class(

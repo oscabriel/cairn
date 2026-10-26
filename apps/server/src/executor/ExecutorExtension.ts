@@ -1,4 +1,4 @@
-// The Executor proxies (ADR 0003 as amended, plan D38): Executor's MCP tools `skills`, `search`,
+// The Executor proxies (ADR 0003 as amended): Executor's MCP tools `skills`, `search`,
 // `describe`, `call` and `execute` as five pi-durable tools in one Cairn extension. Each is
 // `callers: ["tools"]`, so the model is never offered them: scripts call them as
 // `tools.executor_search(...)` and `tools.executor_call(...)`, listed under code mode's `executor`
@@ -73,7 +73,7 @@ export const CODE_MAX = 65_536;
 const SUMMARY_MAX = 120;
 
 /**
- * Full access is the only permission mode until approval cards exist (plan D37), so every gated
+ * Full access is the only permission mode until approval cards exist (ADR 0013), so every gated
  * call is approved at once and the record kept for the audit trail and the sandwich.
  */
 const AUTO_ACCEPT = true;

@@ -106,8 +106,10 @@ export const Message = defineMessageUnion({
   },
   SucceededBranches: { projectId: ProjectId, result: BranchesResult },
   SucceededScratch: { project: ProjectShell },
-  /** A turn is ready to go: ids minted (and the scratch project made, for a projectless launch). */
-  /** The turn's ids are minted; `attachments` are the refs it carries, kept to restore it if refused. */
+  /**
+   * A turn is ready to go: ids minted (and the scratch project made, for a projectless launch);
+   * `attachments` are the refs it carries, kept to restore it if refused.
+   */
   PreparedTurn: {
     item: OutboxItem,
     navigateTo: Schema.Option(Schema.String),

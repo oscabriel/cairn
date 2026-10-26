@@ -92,10 +92,10 @@ interface Progress {
   readonly usage: Usage;
 }
 
-/** Folds one event into `progress`; sets the outcome once the child has said all it will. */
 /** How often a one-shot child's silence is checked. */
 const ONE_SHOT_STALL_CHECK = Duration.seconds(1);
 
+/** Folds one event into `progress`; sets the outcome once the child has said all it will. */
 const readEvent = (progress: Progress, event: ClaudeEvent): void => {
   switch (event.type) {
     case "system": {

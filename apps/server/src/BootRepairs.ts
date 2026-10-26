@@ -1,8 +1,9 @@
 // The boot repairs, in the order they run after the Harness opens and before the brain is marked
-// ready. This list is a seam: packages hand off a `bootRepair(...)` entry and the integrator adds it
-// here. Planned order: log orphan `claude` processes with a dead parent; `ExecutorSweep` declines
-// unfinished `apr_` ids; `retryTask()` for tasks whose approval is still pending; resume interrupted
-// launches from `thread_launches`.
+// ready. A package hands off a `bootRepair(...)` entry and it is listed here: sweep unfinished
+// attachment uploads; `ExecutorSweep` declines unfinished `apr_` ids; `retryTask()` for tasks whose
+// approval is still pending; resume interrupted launches from `thread_launches`; repair checkpoint
+// refs. Orphaned `claude` processes are only logged, by the bridge's boot lines
+// (`BridgeProvider.ts`), not repaired here.
 import { Effect } from "effect";
 
 import { sweepAttachmentUploads } from "./attachments/AttachmentStore.ts";

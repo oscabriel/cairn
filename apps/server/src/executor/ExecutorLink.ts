@@ -17,7 +17,7 @@
 //   follows `statusChanges` and tells the user once per lapse), `unreachable`, or `disabled` (no
 //   grant, a grant that cannot be read, or another process holds it). A grant layer that fails
 //   (a bad grant file, no `flock`, an unwritable state directory) leaves the link `disabled` with
-//   the error as its detail: Executor is an arm the brain can lose, never a reason not to boot.
+//   the error as its detail: Executor is a service the brain can lose, never a reason not to boot.
 // - Sign-in. `signIn` starts an OAuth authorization from Cairn's own callback
 //   (`/oauth/executor/callback`) when the grant no longer works, and `callback` finishes it.
 //
@@ -262,8 +262,8 @@ const disabledDetail = (held: boolean, unreadable: boolean) => {
   }
 
   return unreadable
-    ? "Cairn's stored Executor grant could not be read. Delete the executor_grant row in cairn.sqlite, run the phase 1 wizard's Executor step, then restart the brain."
-    : "Cairn has no Executor grant. Run the phase 1 wizard's Executor step, then restart the brain.";
+    ? "Cairn's stored Executor grant could not be read. Delete the executor_grant row in cairn.sqlite, run `ops/wizards/phase-0.sh 9` to make a new grant, then restart the brain."
+    : "Cairn has no Executor grant. Run `ops/wizards/phase-0.sh 9` to make one, then restart the brain.";
 };
 
 /** pi-mcp's redirect hook: the consent page URL is kept by `CairnOAuthProvider` instead. */
@@ -787,7 +787,7 @@ export class ExecutorLink extends Context.Service<
         const authorizeUrl = yield* Effect.tryPromise({
           try: async () => {
             // A fresh `state` and verifier for each sign-in; a client registered for another
-            // redirect (Phase 0's local one) is replaced.
+            // redirect (`grant.ts`'s local one) is replaced.
             await provider.invalidateCredentials("verifier");
             await provider.invalidateCredentials("discovery");
 

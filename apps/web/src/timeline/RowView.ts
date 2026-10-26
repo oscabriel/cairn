@@ -1,17 +1,3 @@
-import type {
-  TimelineMessage,
-  WorkEntry,
-} from "@cairn/client-logic/TimelineEntries";
-import { formatDuration } from "@cairn/client-logic/TimelineFolds";
-import type { TimelineRow } from "@cairn/client-logic/TimelineRows";
-import { shouldCollapseUserMessage } from "@cairn/client-logic/TimelineRows";
-import {
-  liveThoughtLine,
-  liveWorkEntryLabel,
-  workEntryDisplayLabel,
-  workEntryIndicatesToolFailure,
-} from "@cairn/client-logic/ToolSummary";
-import type { ToolGroupSummaryKind } from "@cairn/client-logic/ToolSummary";
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/MessagesTimeline.tsx and
 // WorkLog.tsx at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (classes and structure of the rows Cairn
 // keeps). Kept: t3code's row frame (the full-width frame, the centred `chat-content-lane`, and the
@@ -43,6 +29,20 @@ import type { ToolGroupSummaryKind } from "@cairn/client-logic/ToolSummary";
 // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+import type {
+  TimelineMessage,
+  WorkEntry,
+} from "@cairn/client-logic/TimelineEntries";
+import { formatDuration } from "@cairn/client-logic/TimelineFolds";
+import type { TimelineRow } from "@cairn/client-logic/TimelineRows";
+import { shouldCollapseUserMessage } from "@cairn/client-logic/TimelineRows";
+import {
+  liveThoughtLine,
+  liveWorkEntryLabel,
+  workEntryDisplayLabel,
+  workEntryIndicatesToolFailure,
+} from "@cairn/client-logic/ToolSummary";
+import type { ToolGroupSummaryKind } from "@cairn/client-logic/ToolSummary";
 import type { EntryId } from "@cairn/protocol/Ids";
 import {
   Clock,

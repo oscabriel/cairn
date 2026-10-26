@@ -738,13 +738,13 @@ const UNITS = new Map([
   ["d", DAY],
 ]);
 
-/** A relative label's value and unit: "3h" is 3 and an hour; "now" is 0 seconds. */
 /** A relative label read as a count of units. */
 interface LabelReading {
   readonly value: number;
   readonly unit: number;
 }
 
+/** A relative label's value and unit: "3h" is 3 and an hour; "now" is 0 seconds. */
 const parseLabel = (label: string): LabelReading => {
   const duration = /^(?<hours>\d+)h (?<minutes>\d+)m$/u.exec(label.trim());
 

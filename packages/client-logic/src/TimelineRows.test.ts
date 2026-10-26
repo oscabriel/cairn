@@ -1,4 +1,3 @@
-import { ConversationView, ThreadStreamItem } from "@cairn/protocol/Thread";
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/MessagesTimeline.logic.test.ts
 // at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the cases for the rows Cairn keeps (folds and
 // their labels, trailing work after the answer, the working header and the live activity row, single
@@ -24,6 +23,7 @@ import { ConversationView, ThreadStreamItem } from "@cairn/protocol/Thread";
 // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+import { ConversationView, ThreadStreamItem } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option, Result, Schema } from "effect";
 

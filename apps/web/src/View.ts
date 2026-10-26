@@ -1,8 +1,9 @@
 // The app frame: the sidebar (projects, threads, search, shelves) and the routed page beside it, in
-// t3code's sidebar wrapper. The hero and composer serve the inbox and draft pages, and the composer
-// docks under an open thread. The judges' data attributes live in the sidebar's shell index. The
-// sidebar, the composer and the chat header are lazy views over their own slices of the Model, so a
-// streamed token rebuilds only the transcript and a keystroke only the composer.
+// t3code's sidebar wrapper. The hero page and a draft's page show the composer inside the hero;
+// under an open thread it docks below the transcript. The judges' data attributes live in the
+// sidebar's shell index. The sidebar, the composer and the chat header are lazy views over their own
+// slices of the Model, so a streamed token rebuilds only the transcript and a keystroke only the
+// composer.
 import type { Entry } from "@cairn/protocol/Thread";
 import { Array, Equal, Option } from "effect";
 import { createLazy } from "foldkit/html";
@@ -239,7 +240,7 @@ const threadHeader = (
 
 const page = (model: Model, h: HtmlBuilder<Message>): Html =>
   AppRoute.match(model.route, {
-    Inbox: () => pageComposerLazy(composerView, [h, model.composer]),
+    Hero: () => pageComposerLazy(composerView, [h, model.composer]),
     Thread: ({ threadId }) => {
       const failure = launchFailureOf(model, threadId);
 

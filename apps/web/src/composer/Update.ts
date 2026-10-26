@@ -80,7 +80,6 @@ const keep = (model: Model): UpdateReturn => ({ model });
 const toTray = (message: TrayMessage): Message =>
   Message.GotAttachmentsMessage({ message });
 
-/** The composer's first Model and the reads it starts with. */
 /**
  * Drops the unsent draft `/new/<draftId>` (the sidebar's Discard), and the home hero's id when it
  * was that draft. The debounced saver writes the change.
@@ -200,6 +199,7 @@ export const restoreTurn = (
     Dispatch: () => ({ model }),
   });
 
+/** The composer's first Model and the reads it starts with. */
 export const init = (): Update.Return<Model, Message, Services> => ({
   model: initial,
   commands: [

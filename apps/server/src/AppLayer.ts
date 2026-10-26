@@ -1,6 +1,7 @@
-// The brain's layer graph (a seam: the integrator adds each package's layer here). Each entry point
-// provides what it chooses itself: the identity rules, the settings source, logging, the harness
-// behind the seam (`PiDurableBrain` or `ScriptedBrain`) and (from later waves) the Executor link.
+// The brain's layer graph: each package's layer is added here. Each entry point provides what it
+// chooses itself: the identity rules, the settings source, logging, the harness behind the seam
+// (`PiDurableBrain` or `ScriptedBrain`) and the Executor link (`ExecutorLink.layer` or
+// `layerDisabled`).
 // Build order is shutdown order reversed: whatever the close hooks need is built before
 // `Shutdown`, and the HTTP server after it, so on SIGTERM the sockets close first, then the hooks
 // run, then the stores and the Harness close.

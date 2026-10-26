@@ -24,9 +24,9 @@ export const emptySnapshot: ShellSnapshot = Schema.decodeSync(ShellSnapshot)({
   threads: [],
 });
 
-/** A page on the inbox with no shell yet, connecting for the first time. */
+/** A page on the hero with no shell yet, connecting for the first time. */
 export const connectingModel: Model = {
-  route: AppRoute.Inbox(),
+  route: AppRoute.Hero(),
   connection: { epoch: 0, state: ConnectionState.Connecting({ attempt: 0 }) },
   hello: Option.none(),
   shell: Option.none(),

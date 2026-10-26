@@ -1,8 +1,8 @@
-// The close hooks, in the order SIGTERM runs them (after the listener has closed every socket).
-// This list is a seam: packages hand off a `shutdownHook(...)` entry and the integrator adds it here,
-// so the order is decided in one place. Planned order: the bridge's `Claude.beginClosing()`, watches
-// and task-graph watches, then `harness.close(context)` with its 5 s timeout. SQLite closes after
-// these, as its own layer ends.
+// The close hooks, in the order SIGTERM runs them (after the listener has closed every socket). A
+// package hands off a `shutdownHook(...)` entry and it is listed here, so the order is decided in
+// one place. Today there is one: the bridge's `beginClosing`, so no Claude child is opened while the
+// brain closes. The Harness is not a hook: `Brain.ts` closes it as its scope ends, with its 5 s
+// timeout, and SQLite closes after that, as its own layer ends.
 import { bridgeClosingHook } from "./models/BridgeProvider.ts";
 import type { ShutdownHook } from "./Shutdown.ts";
 

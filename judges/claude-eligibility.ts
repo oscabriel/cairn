@@ -7,15 +7,13 @@
 // not logged in. The probe sends no prompt and costs nothing.
 //
 // J7 (eligibility): one turn through the real bridge whose instructions are Cairn's sections as they
-// stand (a Cairn section, every skill the user's agent directories hold in pi's skills format, and
-// this repo's project context), checked by `assertSendablePrompt` first; the turn must succeed with
-// no "Third-party apps" rejection, and every `rate_limit_event` it reports must have
-// `isUsingOverage !== true`. Costs a fraction of a cent of plan usage on Haiku.
+// stand (a Cairn section, and the skills and project context sections the brain's SkillCatalog and
+// ProjectContext build for a thread in this repo), checked by `assertSendablePrompt` first; the
+// turn must succeed with no "Third-party apps" rejection, and every `rate_limit_event` it reports
+// must have `isUsingOverage !== true`. Costs a fraction of a cent of plan usage on Haiku.
 //
 // Prints one JSON log line with the numbers. Exit 0 when every check holds. Never prints a credential:
 // the dummy API key below is not a key, and the probe's account is reduced to its login kind.
-import { readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -31,7 +29,7 @@ import { ClaudeSlots } from "@cairn/bridge/ClaudeSlots";
 import { ClaudeSummary } from "@cairn/bridge/ClaudeSummary";
 import { readProbe } from "@cairn/bridge/ClaudeUsage";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import { NodeRuntime } from "@effect/platform-node";
+import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import {
   Clock,
   Duration,
@@ -43,6 +41,10 @@ import {
   Stream,
 } from "effect";
 
+import { ServerConfig } from "../apps/server/src/Config.ts";
+import { ProjectContext } from "../apps/server/src/skills/ProjectContext.ts";
+import { SkillCatalog } from "../apps/server/src/skills/SkillCatalog.ts";
+import { Skills } from "../apps/server/src/skills/SkillsLayer.ts";
 import * as Scratch from "./lib/Scratch.ts";
 
 const { values } = parseArgs({
@@ -159,127 +161,34 @@ const probePart = Effect.gen(function* () {
 
 // --- J7: eligibility ---
 
-const SKILL_DIRS = [
-  path.join(homedir(), ".agents", "skills"),
-  path.join(homedir(), ".pi", "agent", "skills"),
-  path.join(homedir(), ".claude", "skills"),
-];
-
-interface SkillEntry {
-  readonly name: string;
-  readonly description: string;
-  readonly location: string;
-}
-
-const escapeXml = (text: string) =>
-  text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-
-/** A skill's name and description from its SKILL.md frontmatter (single-line or folded values). */
-const readSkill = (file: string): Option.Option<SkillEntry> => {
-  const text = readFileSync(file, "utf-8");
-  const match = /^---\n(?<front>[\s\S]*?)\n---/u.exec(text);
-
-  if (match === null) {
-    return Option.none();
-  }
-
-  const lines = (match.groups?.front ?? "").split("\n");
-
-  const field = (key: string): Option.Option<string> => {
-    const index = lines.findIndex((line) => line.startsWith(`${key}:`));
-
-    if (index === -1) {
-      return Option.none();
-    }
-
-    const inline = (lines[index] ?? "").slice(key.length + 1).trim();
-
-    if (inline !== "" && inline !== ">" && inline !== "|" && inline !== ">-") {
-      return Option.some(inline.replaceAll(/^["']|["']$/gu, ""));
-    }
-
-    const folded: Array<string> = [];
-
-    for (const line of lines.slice(index + 1)) {
-      if (!/^\s+\S/u.test(line)) {
-        break;
-      }
-
-      folded.push(line.trim());
-    }
-
-    return folded.length > 0 ? Option.some(folded.join(" ")) : Option.none();
-  };
-
-  return Option.all({
-    name: field("name"),
-    description: field("description"),
-  }).pipe(
-    Option.map(({ name, description }) => ({
-      name,
-      description,
-      location: file,
-    }))
-  );
-};
-
-/** Every skill in the user's agent directories, once per name, read-only. */
-const userSkills = (): ReadonlyArray<SkillEntry> => {
-  const byName = new Map<string, SkillEntry>();
-
-  for (const dir of SKILL_DIRS) {
-    const entries = Option.getOrElse(
-      Option.liftThrowable(() => readdirSync(dir))(),
-      (): ReadonlyArray<string> => []
-    );
-
-    for (const entry of entries) {
-      const skill = Option.flatMap(
-        Option.liftThrowable(() => path.join(dir, entry, "SKILL.md"))(),
-        (file) => Option.flatten(Option.liftThrowable(() => readSkill(file))())
-      );
-
-      for (const found of Option.toArray(skill)) {
-        if (!byName.has(found.name)) {
-          byName.set(found.name, found);
-        }
-      }
-    }
-  }
-
-  return [...byName.values()];
-};
-
-/** The skills section in pi's own format (pi-coding-agent `formatSkillsForPrompt`, read not imported). */
-const skillsSection = (skills: ReadonlyArray<SkillEntry>) =>
-  [
-    "The following skills provide specialized instructions for specific tasks.",
-    "Use the read tool to load a skill's file when the task matches its description.",
-    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
-    "",
-    "<available_skills>",
-    ...skills.flatMap((skill) => [
-      "  <skill>",
-      `    <name>${escapeXml(skill.name)}</name>`,
-      `    <description>${escapeXml(skill.description)}</description>`,
-      `    <location>${escapeXml(skill.location)}</location>`,
-      "  </skill>",
-    ]),
-    "</available_skills>",
-  ].join("\n");
-
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
-const contextSection = () => {
-  const file = path.join(repoRoot, "CLAUDE.md");
+/**
+ * The skills and project context sections a thread in this repo gets, from the brain's own
+ * `SkillCatalog` and `ProjectContext` over the owner's pi setup, so J7 judges what the brain sends.
+ */
+const brainSections = Effect.gen(function* () {
+  const dataDir = yield* Scratch.make("cairn-claude-eligibility-data-");
 
-  return `# Project Context\n\nProject-specific instructions and guidelines:\n\n## ${file}\n\n${readFileSync(file, "utf-8")}`;
-};
+  return yield* Effect.gen(function* () {
+    const catalog = yield* SkillCatalog;
+    const reader = yield* ProjectContext;
+    const view = yield* catalog.reload(Option.some(repoRoot));
+
+    return {
+      skills: view.prompt,
+      skillCount: view.skills.length,
+      context: reader.read(Option.some(repoRoot)).projectContext,
+    };
+  }).pipe(
+    Effect.provide(
+      Skills.live.pipe(
+        Layer.provide(ServerConfig.layerWith({ dataDir })),
+        Layer.provide(NodeServices.layer)
+      )
+    )
+  );
+});
 
 const CAIRN_SECTION = [
   "<cairn>",
@@ -300,24 +209,22 @@ const eligibilityPart = Effect.gen(function* () {
     )
   );
 
-  const skills = userSkills();
+  const sections = yield* brainSections;
 
   const system: Message = {
     role: "system",
     content: "",
     sections: {
       cairn: CAIRN_SECTION,
-      context: contextSection(),
-      skills: skillsSection(skills),
+      context: sections.context,
+      skills: sections.skills,
     },
     timestamp: 1,
   };
 
-  const instructions = [
-    CAIRN_SECTION,
-    contextSection(),
-    skillsSection(skills),
-  ].join("\n\n");
+  const instructions = [CAIRN_SECTION, sections.context, sections.skills].join(
+    "\n\n"
+  );
 
   const findings = unsendableFindings(instructions);
   const cwd = yield* Scratch.make("cairn-claude-eligibility-");
@@ -387,7 +294,7 @@ const eligibilityPart = Effect.gen(function* () {
 
   const numbers = {
     model: values.model,
-    skills: skills.length,
+    skills: sections.skillCount,
     instructionChars: instructions.length,
     findings,
     stop: reply.stopReason,

@@ -1,9 +1,9 @@
-import { Internal } from "@cairn/protocol/Errors";
 // Ported from cairn-v1, apps/web/src/rpc.ts at 1a5cd4a. Kept: one RpcClient per connection, held as
 // a Foldkit ManagedResource keyed on the Model's epoch, with the socket's own retry turned off and
 // the client built with `Layer.build` inside `acquire` (`Effect.provide` would close the socket as
 // soon as the client is made). Changed: Cairn's v2 protocol group, the protocol version on the URL,
 // and the plan's ping timings (every 3 s, dropped after 8 s with no frame).
+import { Internal } from "@cairn/protocol/Errors";
 import {
   CairnRpcs,
   PROTOCOL_QUERY_PARAM,

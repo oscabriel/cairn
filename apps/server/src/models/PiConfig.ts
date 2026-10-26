@@ -330,7 +330,6 @@ const runSettingsOf = (
   };
 };
 
-/** The skills pi resolved and enabled, each taken as its `SKILL.md` the way pi's loader maps it. */
 /** The root a skill file lives under when no user skill dir holds it. */
 const ownRootOf = (
   file: string,
@@ -356,6 +355,7 @@ interface ResolvedSkills {
   readonly roots: ReadonlyArray<string>;
 }
 
+/** The skills pi resolved and enabled, each taken as its `SKILL.md` the way pi's loader maps it. */
 const skillsOf = (
   resolved: ReadonlyArray<PiCodingAgent.ResolvedResource>,
   options: PiConfigOptions

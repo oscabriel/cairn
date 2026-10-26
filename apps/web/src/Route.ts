@@ -1,4 +1,4 @@
-// The client's routes: the inbox at `/`, a thread at `/t/<threadId>`, a new draft at
+// The client's routes: the hero at `/`, a thread at `/t/<threadId>`, a new draft at
 // `/new/<draftId>` and the settings page. Every link and navigation prints its path through these
 // routers, so a path is written once.
 import { ThreadId } from "@cairn/protocol/Ids";
@@ -16,7 +16,7 @@ import {
 
 /** Every page the client can show. Ids stay strings here; each page decodes its own. */
 export const AppRoute = defineRouteUnion({
-  Inbox: {},
+  Hero: {},
   Thread: { threadId: Schema.String },
   Draft: { draftId: Schema.String },
   Settings: {},
@@ -25,8 +25,8 @@ export const AppRoute = defineRouteUnion({
 
 export type AppRoute = typeof AppRoute.Type;
 
-/** `/`: the inbox with no thread open. */
-export const inboxRouter = pipe(Route.root, Route.mapTo(AppRoute.Inbox));
+/** `/`: the hero, with no thread open. */
+export const heroRouter = pipe(Route.root, Route.mapTo(AppRoute.Hero));
 
 /** `/t/<threadId>`: one thread. */
 export const threadRouter = pipe(
@@ -52,7 +52,7 @@ const routeParser = oneOf(
   threadRouter,
   draftRouter,
   settingsRouter,
-  inboxRouter
+  heroRouter
 );
 
 const parseRoute = parseUrlWithFallback(routeParser, AppRoute.NotFound);
@@ -69,7 +69,7 @@ export const urlToAppRoute = (url: Url.Url): AppRoute => {
   return AppRoute.match(route, {
     Thread: ({ threadId }) =>
       isThreadId(threadId) ? route : AppRoute.NotFound({ path: url.pathname }),
-    Inbox: () => route,
+    Hero: () => route,
     Draft: () => route,
     Settings: () => route,
     NotFound: () => route,

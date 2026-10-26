@@ -1,8 +1,8 @@
+// Scene tests for the banner above an open thread: a parked task's Retry calls `thread.retryTask`,
+// a thread waiting for a Claude slot says so, and a spent plan window reads "Limited" with its reset.
 import { ProjectId, TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";
 import type { RetryTaskInput } from "@cairn/protocol/Thread";
-// Scene tests for the banner above an open thread: a parked task's Retry calls `thread.retryTask`,
-// a thread waiting for a Claude slot says so, and a spent plan window reads "Limited" with its reset.
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Effect, Option } from "effect";
 import * as Scene from "foldkit/scene";

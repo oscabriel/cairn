@@ -1,10 +1,10 @@
 // The brain's SIGTERM order (ADR 0022). `NodeRuntime.runMain` interrupts the root on SIGTERM and
 // the root layer's finalizers run in reverse build order, so: `begin` (log `closing`, refuse new
 // sockets), then the HTTP server closes its listener and every socket with 1001 (2 s grace), then
-// the close hooks in their listed order (`ShutdownHooks.ts`: the bridge's `beginClosing`, the
-// Harness with its 5 s timeout, ...), then SQLite as its layer ends, then exit 130. A watchdog logs
-// `shutdown_slow` at 20 s so the journal names the step that ignored its signal before systemd's
-// `TimeoutStopSec` sends SIGKILL.
+// the close hooks in their listed order (`ShutdownHooks.ts`: the bridge's `beginClosing`), then the
+// Harness with its 5 s timeout as `Brain.ts`'s scope ends, then SQLite as its layer ends, then exit
+// 130. A watchdog logs `shutdown_slow` at 20 s so the journal names the step that ignored its signal
+// before systemd's `TimeoutStopSec` sends SIGKILL.
 import {
   Clock,
   Context,

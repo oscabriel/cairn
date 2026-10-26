@@ -1,6 +1,6 @@
-// Cairn's one Executor grant: where it is kept and who may hold it (plan D39).
+// Cairn's one Executor grant: where it is kept and who may hold it.
 //
-// - Import. Phase 0's `ops/executor/grant.ts` left the grant in `~/.config/cairn/executor-grant.json`.
+// - Import. `ops/executor/grant.ts` (stage 9 of `ops/wizards/phase-0.sh`) leaves the grant in `~/.config/cairn/executor-grant.json`.
 //   The first brain that holds the lock and finds no row imports it into `executor_grant` in one
 //   transaction, then renames the file `executor-grant.json.imported`; the renamed file is deleted
 //   after the first tokens the brain saves itself (a refresh or a sign-in), so a grant that never
@@ -101,7 +101,7 @@ const decodePendingRows = Schema.decodeUnknownEffect(Schema.Array(PendingRow));
 
 /** Where the grant file and the holder lock are. */
 export interface ExecutorGrantPaths {
-  /** Phase 0's grant file, imported once. */
+  /** The grant file `ops/executor/grant.ts` writes, imported once. */
   readonly grantFile: string;
   /** The holder lock. */
   readonly lockFile: string;

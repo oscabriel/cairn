@@ -1,8 +1,8 @@
-// One Executor `call` or `execute` through Cairn's approval (ADR 0013, plan D37), the effect
+// One Executor `call` or `execute` through Cairn's approval (ADR 0013), the effect
 // sandwich of spikes/4-approvals/brain.ts:
 //
-// 1. Record the approval in `cairn.approvals` (`ledger.ask`). In full access, the only mode Phase 1
-//    offers, it is recorded accepted at once; otherwise the call waits for the user's answer.
+// 1. Record the approval in `cairn.approvals` (`ledger.ask`). In full access, the only mode Cairn offers
+//    until approval cards exist, it is recorded accepted at once; otherwise the call waits for the user's answer.
 // 2. Mark `started` (`ledger.begin`) before anything reaches Executor. A rerun that finds the mark
 //    returns "Interrupted after it started, so it may have run. Not retried." and sends nothing.
 // 3. Send the call. When Executor answers `approval-required`, record its `apr_` id

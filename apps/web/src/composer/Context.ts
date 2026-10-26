@@ -102,7 +102,7 @@ export const composerTarget = (
   threadId: Option.Option<ThreadId>
 ): ComposerTarget =>
   AppRoute.match(route, {
-    Inbox: () => ComposerTarget.Home(),
+    Hero: () => ComposerTarget.Home(),
     Draft: ({ draftId }) => ComposerTarget.Draft({ draftId }),
     Thread: () =>
       Option.match(threadId, {

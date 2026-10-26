@@ -96,7 +96,7 @@ const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 /** The thread the route names, when its id is a well-formed thread id. */
 const routedThreadId = (route: AppRoute): Option.Option<ThreadId> =>
   AppRoute.match(route, {
-    Inbox: () => Option.none(),
+    Hero: () => Option.none(),
     Thread: ({ threadId }) => decodeThreadId(threadId),
     Draft: () => Option.none(),
     Settings: () => Option.none(),
@@ -254,7 +254,7 @@ const writeSidebar = (model: Model, sidebar: SidebarModel): Model =>
 /** The draft the route names, when it names one. */
 const routedDraftId = (route: AppRoute): Option.Option<string> =>
   AppRoute.match(route, {
-    Inbox: () => Option.none(),
+    Hero: () => Option.none(),
     Thread: () => Option.none(),
     Draft: ({ draftId }) => Option.some(draftId),
     Settings: () => Option.none(),

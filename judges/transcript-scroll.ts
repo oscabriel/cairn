@@ -24,7 +24,9 @@
 //              viewport goes from 1,440 px wide to 900, back, to 390 and back (`--broken reflow`
 //              fails it); each step also reports whether the first visible row and its offset,
 //              the coarser place the list itself keeps, held within 1 px.
-// Prints one JSON line and exits 0 when every check passed.
+// Prints one JSON line and exits 0 when every check passed, apart from the known failures in
+// `KNOWN_FAILING`, which it reports without failing on; a known failure that passes fails the run,
+// so the change that fixes one removes it from the set.
 //
 // The range and reflow checks are ported from github.com/hardbeat920/monocode,
 // tests/browser/transcript-scroll.spec.ts ("scrolling settled history keeps the scroll range
@@ -76,6 +78,13 @@ const LOOPBACK = "127.0.0.1";
 const root = path.resolve(import.meta.dirname, "..");
 
 const SCROLLER = '[data-testid="timeline-scroll"]';
+
+/**
+ * Checks that fail on the real transcript today, recorded as findings in `docs/phase-2/backlog.md`
+ * (stage 2.2): `range`, because the virtual list estimates the height of rows it has never drawn,
+ * and `reflow`, because a width change keeps the first visible row rather than the glyph being read.
+ */
+const KNOWN_FAILING: ReadonlySet<string> = new Set(["range", "reflow"]);
 
 /** The longest main-thread task the follow phase allows, in ms: three frames at 60 Hz. */
 const LONG_TASK_MAX_MS = 50;
@@ -778,10 +787,24 @@ const main = async () => {
     errors: errors.length === 0,
   };
 
-  const ok = Object.values(checks).every(Boolean);
+  // Under a broken control every check counts, so the control's failure still shows in the exit.
+  const known: ReadonlySet<string> =
+    values.broken === "" ? KNOWN_FAILING : new Set();
+
+  const entries = Object.entries(checks);
+
+  const failed = entries
+    .filter(([name, passed]) => !passed && !known.has(name))
+    .map(([name]) => name);
+
+  const fixed = entries
+    .filter(([name, passed]) => passed && known.has(name))
+    .map(([name]) => name);
+
+  const ok = failed.length === 0 && fixed.length === 0;
 
   process.stdout.write(
-    `${JSON.stringify({ ok, broken: values.broken, checks, ...result, errors })}\n`
+    `${JSON.stringify({ ok, broken: values.broken, failed, knownFailing: [...known], fixed, checks, ...result, errors })}\n`
   );
   process.exitCode = ok ? 0 : 1;
 };

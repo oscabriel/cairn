@@ -51,6 +51,7 @@ export class ExecutorSweep extends Context.Service<
     ExecutorSweep,
     Effect.gen(function* () {
       const link = yield* ExecutorLink;
+      // Optional on purpose: the scripted brain (dev, judges) composes no pi-durable `Brain`.
       const brain = yield* Effect.serviceOption(Brain);
       const layerScope = yield* Effect.scope;
 

@@ -166,7 +166,9 @@ export class ScratchProject extends Context.Service<
           )
           .pipe(
             Effect.catchTags({
+              // oxlint-disable-next-line automation/no-silent-error-swallow -- another caller registered first; see above
               ProjectWorkspaceConflictError: () => Effect.void,
+              // oxlint-disable-next-line automation/no-silent-error-swallow -- the fixed command was answered before; see above
               ShellCommandConflict: () => Effect.void,
               ShellCommandInvalid: (failure) =>
                 Effect.fail(storeFailure(failure)),

@@ -74,7 +74,7 @@ const launchesUnavailable = (failure: LaunchStoreError) =>
 export const threadStreamHandlers = Effect.gen(function* () {
   const seam = yield* HarnessSeam;
   const launches = yield* LaunchStore;
-  const projector = yield* Effect.serviceOption(ShellProjector);
+  const projector = yield* ShellProjector;
 
   // Returns once the thread's launch has ensured it, ended, or outlasted `LaunchWait`; at once
   // when no launch is in flight. The watch after it answers for itself either way.
@@ -152,12 +152,7 @@ export const threadStreamHandlers = Effect.gen(function* () {
         Effect.mapError((failure) =>
           toLookupError(failure, String(input.taskId))
         ),
-        Effect.tap(() =>
-          Option.match(projector, {
-            onNone: () => Effect.void,
-            onSome: (found) => found.refresh(input.threadId),
-          })
-        )
+        Effect.tap(() => projector.refresh(input.threadId))
       ),
   };
 });

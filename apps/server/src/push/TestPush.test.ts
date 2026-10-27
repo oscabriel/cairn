@@ -77,9 +77,8 @@ const receiverKeys = Effect.promise(async () => {
 
   return {
     p256dh: Buffer.from(raw).toString("base64url"),
-    auth: Buffer.from(
-      globalThis.crypto.getRandomValues(new Uint8Array(16))
-    ).toString("base64url"),
+    // Any 16 octets do; a fixed secret keeps the test deterministic.
+    auth: Buffer.alloc(16, 0x2a).toString("base64url"),
   };
 });
 

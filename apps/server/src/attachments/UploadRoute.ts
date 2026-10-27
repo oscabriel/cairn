@@ -69,16 +69,13 @@ const REJECTED_STATUS = {
 const receiveUpload = (
   tokens: UploadTokens["Service"],
   intake: AttachmentIntake["Service"],
-  health: Option.Option<Health["Service"]>
+  health: Health["Service"]
 ) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
 
     // Boot sweeps `attachments/.tmp`; an upload streaming into it meanwhile would lose its file.
-    const ready = yield* Option.match(health, {
-      onNone: () => Effect.succeed(true),
-      onSome: (service) => service.isReady,
-    });
+    const ready = yield* health.isReady;
 
     if (!ready) {
       return problem(
@@ -154,14 +151,14 @@ const receiveUpload = (
   );
 
 /**
- * Receives one upload; register it in `http/Routes.ts`. It takes `UploadTokens` and
- * `AttachmentIntake` when the router is built.
+ * Receives one upload; register it in `http/Routes.ts`. It takes `UploadTokens`,
+ * `AttachmentIntake` and `Health` (it refuses uploads until boot is done) when the router is built.
  */
 export const UploadRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const tokens = yield* UploadTokens;
     const intake = yield* AttachmentIntake;
-    const health = yield* Effect.serviceOption(Health);
+    const health = yield* Health;
 
     yield* router.add(
       "POST",

@@ -16,14 +16,14 @@
 //
 // Ported from cairn-v1, apps/server/test/fake-executor.ts at 1a5cd4a. Changed: a `github`
 // stand-in app, a hanging tool, counters for refreshes and refused refresh tokens, a grant seeded
-// without the consent page, the clock injected, and an Effect resource around the server.
+// without the consent page, the clock and randomness injected, and an Effect resource around the server.
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
 
-import { Clock, Effect, Option, Predicate, Schema } from "effect";
+import { Clock, Effect, Option, Predicate, Random, Schema } from "effect";
 import type { Scope } from "effect";
 
 type Json = Schema.MutableJson;
@@ -149,7 +149,7 @@ const repoPath = (input: JsonRecord) => {
     : "?";
 };
 
-const build = (now: () => number) => {
+const build = (now: () => number, mintToken: () => string) => {
   let origin = "";
   const sessions = new Set<string>();
   const pending = new Map<string, Pending>();
@@ -174,8 +174,8 @@ const build = (now: () => number) => {
   };
 
   const issueTokens = () => {
-    const access = `at_${randomUUID()}`;
-    const refresh = `rt_${randomUUID()}`;
+    const access = `at_${mintToken()}`;
+    const refresh = `rt_${mintToken()}`;
 
     accessTokens.add(access);
     refreshTokens.add(refresh);
@@ -503,7 +503,7 @@ const build = (now: () => number) => {
     }
 
     if (message.method === "initialize") {
-      const session = randomUUID();
+      const session = mintToken();
 
       sessions.add(session);
       state.sessionsOpened += 1;
@@ -738,7 +738,7 @@ const build = (now: () => number) => {
     },
     consent: (authorizationUrl) => {
       const { searchParams } = new URL(authorizationUrl);
-      const code = `code_${randomUUID()}`;
+      const code = `code_${mintToken()}`;
 
       codes.set(code, {
         challenge: searchParams.get("code_challenge") ?? "",
@@ -782,7 +782,15 @@ export const startFakeExecutor: Effect.Effect<
   Scope.Scope
 > = Effect.gen(function* () {
   const clock = yield* Clock.Clock;
-  const built = build(() => clock.currentTimeMillisUnsafe());
+  const random = yield* Random.Random;
+
+  // Two draws of base-36 digits: unique enough for a fake's tokens, and fixed by `Random.withSeed`.
+  const mintToken = () =>
+    [random.nextDoubleUnsafe(), random.nextDoubleUnsafe()]
+      .map((draw) => draw.toString(36).slice(2))
+      .join("");
+
+  const built = build(() => clock.currentTimeMillisUnsafe(), mintToken);
 
   const port = yield* Effect.acquireRelease(
     Effect.callback<number>((resume) => {

@@ -9,15 +9,11 @@ import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
 import { pushUrl } from "foldkit/navigation";
 
+import { mintCommandId } from "../composer/Ids.ts";
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import { failureMessage } from "../connection/Failure.ts";
 import { applyFaviconBadge } from "../shell/Notifications.ts";
-import {
-  Intent,
-  mintCommandId,
-  mintDraftId,
-  toShellCommand,
-} from "./Intent.ts";
+import { Intent, mintDraftId, toShellCommand } from "./Intent.ts";
 import { Message } from "./Message.ts";
 
 export type { Services } from "../Command.ts";

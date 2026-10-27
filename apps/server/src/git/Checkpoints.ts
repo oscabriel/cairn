@@ -30,7 +30,6 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import type { ThreadId } from "@cairn/protocol/Ids";
@@ -42,6 +41,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Random,
   Schema,
 } from "effect";
 
@@ -53,6 +53,11 @@ export const CHECKPOINT_REFS_ROOT = "refs/cairn/checkpoints";
 
 /** The scratch index files a capture makes in the git common dir start with this. */
 export const SCRATCH_INDEX_PREFIX = "cairn-checkpoint-index-";
+
+/** A suffix that keeps concurrent captures' scratch indexes apart. */
+const scratchSuffix = Random.nextIntBetween(0, Number.MAX_SAFE_INTEGER).pipe(
+  Effect.map((value) => value.toString(36))
+);
 
 /** The ref folder of one thread's checkpoints. */
 export const checkpointRefsOf = (threadId: ThreadId) =>
@@ -484,7 +489,7 @@ export class Checkpoints extends Context.Service<
 
         const scratch = path.join(
           common,
-          `${SCRATCH_INDEX_PREFIX}${randomUUID()}`
+          `${SCRATCH_INDEX_PREFIX}${yield* scratchSuffix}`
         );
 
         const env = { ...AUTHOR_ENV, GIT_INDEX_FILE: scratch };

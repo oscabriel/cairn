@@ -4,16 +4,16 @@
 // the protocol checks.
 
 import { CommandId, RequestId, ThreadId } from "@cairn/protocol/Ids";
-import { Clock, Effect, Schema } from "effect";
+import { Clock, Effect, Random, Schema } from "effect";
 
 const hex = (byte: number): string => byte.toString(16).padStart(2, "0");
 
-/** A fresh UUIDv7 string from the clock and the browser's random source. */
+/** A fresh UUIDv7 string from Effect's `Clock` and `Random`, so a test can fix both. */
 export const mintUuid7: Effect.Effect<string> = Effect.gen(function* () {
   const millis = yield* Clock.currentTimeMillis;
 
-  const bytes = yield* Effect.sync(() =>
-    crypto.getRandomValues(new Uint8Array(16))
+  const bytes = Uint8Array.from(
+    yield* Effect.replicateEffect(Random.nextIntBetween(0, 255), 16)
   );
 
   let time = millis;

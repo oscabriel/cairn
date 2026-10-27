@@ -13,6 +13,7 @@
     "ops",
     "stacks",
     "tools/*.ts",
+    "tools/oxlint/automation",
     "vitest.config.ts"
   ]
 }

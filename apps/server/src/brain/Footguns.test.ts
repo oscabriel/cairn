@@ -1,13 +1,13 @@
 // The pi-durable footguns brain code must never step on (docs/phase-1/notes/brain.md, "Footguns"),
 // checked over the source of `brain/`:
 //
-// - No `Date.now()` or `new Date(`: time comes from Effect's Clock or the Harness clock (S8).
 // - Nothing inside a `commit(` callback reads through the Session (`snapshot`, `documentState`,
 //   `watchDoc`, `getTask`): such reads can queue on the line the callback holds and hang.
 // - No `extensions: [` selection: guards and tools stay in the default selection.
 // - No Cairn document, entry or task kind starts with `pi.`: that namespace is pi-durable's.
 //
-// The checks are first shown to catch planted violations, then run over every brain module.
+// The checks are first shown to catch planted violations, then run over every brain module. Reading
+// the wall clock (S8) is the lint rule `automation/no-ambient-nondeterminism`'s to catch.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -54,10 +54,6 @@ const commitBodies = (source: string): ReadonlyArray<string> => {
 const footguns = (source: string): ReadonlyArray<string> => {
   const found: Array<string> = [];
 
-  if (/Date\.now\(|new Date\(/u.test(source)) {
-    found.push("reads the wall clock directly");
-  }
-
   for (const body of commitBodies(source)) {
     for (const read of SESSION_READS) {
       if (body.includes(`.${read}`)) {
@@ -99,9 +95,6 @@ const brainModules = (directory: string): ReadonlyArray<string> =>
 
 describe("pi-durable footguns", () => {
   it("catches each footgun when it is planted", () => {
-    assert.deepStrictEqual(footguns("const t = Date.now();"), [
-      "reads the wall clock directly",
-    ]);
     assert.deepStrictEqual(
       footguns(
         "await harness.commit(async (tx) => { await harness.snapshot(Doc, ctx); }, ctx);"

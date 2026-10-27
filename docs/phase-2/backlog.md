@@ -21,6 +21,7 @@ None depends on phase 2 or on the open gate. One worktree and branch (`phase2/s2
 | 2.7 Bridge upstream | `packages/bridge/UPSTREAM.md`: what was kept and changed against pi-claude-bridge (ADR 0017). | Review against the ADR. |
 | 2.8 Thread states | `docs/golden/thread-states.md` (after HumanLayer's `golden/session_state_machine.md`). | A test fails if a protocol status is missing from it. |
 | 2.9 Research 03 addendum | The t3code nightly's subagent and workflow model at `fe27e8e3` (`ThreadLineageWorkflowRow`, `WorkflowOpeningBlock`, `ThreadRelationshipsControl`, `ProviderSubagentBar`). | Read against `fe27e8e3`. |
+| 2.10 Spread rules | Turn on anti-slop's `no-conditional-empty-array-spread`, then `no-conditional-spread` (vendored off by 2.1: 86 and 63 sites). Rewrite `packages/client-logic` and `apps/server` first, then `apps/web`; drop the `Date.now` scan in `brain/Footguns.test.ts`, which the S8 lint rule now covers. | `pnpm check` green with both rules on. |
 
 ## Stage 3: the phase 2 plan
 

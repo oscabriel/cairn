@@ -30,6 +30,7 @@ import { EventSink } from "../shell/EventSink.ts";
 import {
   emptyActivityPatch,
   ThreadActivityUpdate,
+  ThreadMessageSent,
 } from "../shell/ShellCommands.ts";
 import type { ShellStoreError } from "../shell/ShellStoreError.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
@@ -180,6 +181,40 @@ export class Threads extends Context.Service<
         }
       });
 
+      // A message the user sends brings a thread settled by hand (or unsettled by hand) back under
+      // auto-settle and ends its snooze, as t3code does. The turn is already admitted, so a failure
+      // here is logged rather than failing the send.
+      const recordMessageSent = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const row = yield* threadRows.get(threadId);
+
+          const touched = Option.exists(
+            row,
+            ({ shell }) =>
+              Option.isSome(shell.settledOverride) ||
+              Option.isSome(shell.snoozedUntil)
+          );
+
+          if (touched) {
+            yield* sink.commitCommand(
+              ThreadMessageSent.make({
+                commandId: yield* sink.mintCommandId,
+                threadId,
+              })
+            );
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("sent message not recorded in the shell").pipe(
+              Effect.annotateLogs({
+                event: "thread_message_sent_record_failed",
+                threadId,
+                cause: String(cause),
+              })
+            )
+          )
+        );
+
       const send = Effect.fn("Threads.send")(function* (
         input: SendInput,
         from: string
@@ -203,6 +238,7 @@ export class Threads extends Context.Service<
         });
 
         yield* logTurnSubmitted(input.threadId, input.input, built, submission);
+        yield* recordMessageSent(input.threadId);
 
         return { submissionId: submission.submissionId };
       });

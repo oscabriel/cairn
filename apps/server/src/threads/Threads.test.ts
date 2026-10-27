@@ -4,6 +4,7 @@ import { RequestId, SubmissionId } from "@cairn/protocol/Ids";
 import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { NewWorktreeWorkspace, RootWorkspace } from "@cairn/protocol/Launch";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
+import { ThreadSettle } from "@cairn/protocol/ShellCommands";
 import type { SendInput } from "@cairn/protocol/Thread";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -211,6 +212,50 @@ const userEntryCount = Effect.fn("test.userEntryCount")(function* (
 });
 
 describe("thread commands", () => {
+  it.live(
+    "a sent message brings a thread settled by hand back to the active shelf",
+    () =>
+      withThread((threadId, projectId) =>
+        Effect.gen(function* () {
+          const sink = yield* EventSink;
+          const rows = yield* ThreadRows;
+
+          yield* sink.commitCommand(
+            ThreadCreate.make({
+              commandId: yield* sink.mintCommandId,
+              threadId,
+              projectId,
+              title: "settled by hand",
+              provider: "faux",
+              modelId: "faux",
+              thinkingLevel: "off",
+              runtimeMode: "full-access",
+              branch: Option.none(),
+              worktreePath: Option.none(),
+            })
+          );
+          yield* sink.commitCommand(
+            ThreadSettle.make({
+              commandId: yield* sink.mintCommandId,
+              threadId,
+            })
+          );
+
+          yield* send(threadId, "r1", "followUp");
+
+          const row = yield* rows.get(threadId);
+
+          assert.isTrue(
+            Option.exists(row, ({ shell }) =>
+              Option.isNone(shell.settledOverride)
+            )
+          );
+          yield* (yield* ModelGate).open;
+          yield* eventually(liveState(threadId), (state) => !isRunning(state));
+        })
+      )
+  );
+
   it.live("a resent turn with the same request id is admitted once", () =>
     withThread((threadId) =>
       Effect.gen(function* () {

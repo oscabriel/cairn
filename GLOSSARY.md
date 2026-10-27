@@ -40,9 +40,9 @@ _Avoid_: session, chat
 
 **Run**: One stretch of a thread's agent loop, from the input that starts it until the answer is final and nothing is queued for it; steers and follow-ups placed along the way join it. pi-durable shows it as `pi.live.run`; RunStarted and RunTerminal bracket it.
 
-**Settle**: To move a thread off the active shelf: by hand, or automatically after `autoSettleDays` of quiet (3 by default; 0 turns it off). A manual settle state wins over the automatic one until cleared.
+**Settle**: To move a thread off the active shelf: by hand, or automatically after `autoSettleDays` of quiet (3 by default; 0 turns it off). A manual settle state (settled, or unsettled by hand) wins over the automatic one until the user sends the thread a message, which clears it.
 
-**Snooze**: To hide a thread until a wake time. The server ends the snooze on time. A failed run or a pending request wakes the thread early.
+**Snooze**: To hide a thread until a wake time. The server ends the snooze on time. A failed run or a pending request wakes the thread early, and a message the user sends ends the snooze.
 
 **Launch**: Creating a thread: its sidebar row appears at once (preparing), then the brain prepares its workspace, opens its conversation and sends its first message, each step recorded so a restart resumes it.
 

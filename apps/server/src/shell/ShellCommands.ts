@@ -7,7 +7,8 @@
 // pull requests, scripts, icons or provider sessions; rows carry the wire `ThreadShell` with Option
 // fields; project ids derive from the command id; deleting a project tombstones its threads in the
 // same commit; and the server's own commands (create, activity, workspace, auto-settle, snooze
-// expiry, project registration) sit beside the client's in one union.
+// expiry, message sent, project registration) sit beside the client's in one union. A message the
+// user sends clears the manual settle state and ends a snooze (dispatchMessage).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -160,6 +161,15 @@ export const ThreadSnoozeExpire = Schema.TaggedStruct("ThreadSnoozeExpire", {
   snoozedUntil: Schema.DateTimeUtc,
 });
 
+/**
+ * A message the user sent to a thread: clears its manual settle state, so it is back on the active
+ * shelf and auto-settle applies to it again, and ends its snooze. Refused when there is neither.
+ */
+export const ThreadMessageSent = Schema.TaggedStruct("ThreadMessageSent", {
+  commandId: CommandId,
+  threadId: ThreadId,
+});
+
 /** Every command the shell store accepts: the client's `ShellCommand`s and the server's own. */
 export const ServerShellCommand = Schema.Union([
   ...ShellCommand.members,
@@ -169,6 +179,7 @@ export const ServerShellCommand = Schema.Union([
   ThreadWorkspaceUpdate,
   ThreadAutoSettle,
   ThreadSnoozeExpire,
+  ThreadMessageSent,
 ]);
 
 /** A command the shell store accepts. */
@@ -404,6 +415,7 @@ export const commandTargets = (
     ThreadWorkspaceUpdate: threadTarget,
     ThreadAutoSettle: threadTarget,
     ThreadSnoozeExpire: threadTarget,
+    ThreadMessageSent: threadTarget,
   });
 };
 
@@ -546,6 +558,42 @@ const unsnooze = (row: ThreadRow, now: DateTime.Utc): ThreadRow => {
     }),
     lastSnoozeWakeAt: Option.some(now),
   };
+};
+
+/**
+ * What a sent message does to a row: the manual settle state goes back to none (keeping the time of
+ * a manual unsettle), then the snooze ends. The events name what changed; none when nothing did.
+ */
+const messageSent = (
+  row: ThreadRow,
+  now: DateTime.Utc
+): Option.Option<ShellPlan> => {
+  const { shell } = row;
+
+  const unsettled = Option.match(shell.settledOverride, {
+    onNone: () => row,
+    onSome: (override) =>
+      withShell(row, {
+        settledOverride: Option.none(),
+        settledAt: Option.none(),
+        unsettledAt:
+          override === "active" ? shell.unsettledAt : Option.some(now),
+        updatedAt: now,
+      }),
+  });
+
+  const events = Arr.getSomes([
+    Option.as(shell.settledOverride, threadEvent(shell.id, "thread.unsettled")),
+    Option.as(shell.snoozedUntil, threadEvent(shell.id, "thread.unsnoozed")),
+  ]);
+
+  return Arr.isReadonlyArrayNonEmpty(events)
+    ? Option.some({
+        events,
+        projects: [],
+        threads: [unsnooze(unsettled, now)],
+      })
+    : Option.none();
 };
 
 const settleBlocker = (shell: ThreadShell): Option.Option<string> => {
@@ -1142,6 +1190,19 @@ export const planShellCommand = (
               `thread ${auto.threadId} changed after the settlement sweep read it.`
             )
           : threadPlan(settle(row, now, auto.settledAt), "thread.settled")
+      ),
+
+    ThreadMessageSent: (sent) =>
+      Result.flatMap(liveThread(command, state, sent.threadId), (row) =>
+        Option.match(messageSent(row, now), {
+          onNone: () =>
+            conflict(
+              command,
+              "stale_state",
+              `thread ${sent.threadId} is neither settled by hand nor snoozed.`
+            ),
+          onSome: Result.succeed,
+        })
       ),
 
     ThreadSnoozeExpire: (expire) =>

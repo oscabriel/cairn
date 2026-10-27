@@ -38,7 +38,7 @@ The first column names the schema: the export that declares the union, or the ex
 | `WaitingFor` | `claude_slot` | Held | One of the thread's Claude conversations waits for a Claude slot. The run is live; the bridge is full. |
 | `WaitingFor` | `none` | Resting | Nothing beyond the user holds the thread. |
 | `SettledOverride` | `settled` | Shelf | The thread is settled, by hand or by auto-settle. It sits on the Settled shelf. |
-| `SettledOverride` | `active` | Shelf | The user unsettled it (or pinned a settled thread). Auto-settle never touches it again. |
+| `SettledOverride` | `active` | Shelf | The user unsettled it (or pinned a settled thread). Auto-settle leaves it alone until the user sends it a message. |
 | `RuntimeRequestKind` | `executor-call` | Waiting on you | The pending approval holds a call to an Executor tool. |
 | `RuntimeRequestKind` | `tool-call` | Waiting on you | The pending approval holds a call to one of Cairn's own tools. |
 | `RuntimeRequestKind` | `user-input` | Waiting on you | The agent asked the user a question. |
@@ -119,10 +119,10 @@ stateDiagram-v2
     pinned --> active: user unpins
     active --> settled: user settles, or auto-settle (brain)
     pinned --> settled: user settles
-    settled --> active: user unsettles
+    settled --> active: user unsettles, or sends it a message
     settled --> pinned: user pins
     active --> snoozed: user snoozes
-    snoozed --> active: the wake time comes (brain), user wakes it, or a request or failure wakes it early
+    snoozed --> active: the wake time comes (brain), user wakes it or sends it a message, or a request or failure wakes it early
     active --> archived: user archives
     archived --> active: user unarchives
 ```
@@ -140,6 +140,7 @@ stateDiagram-v2
 | `parked` | `running` or `idle` | `thread.retryTask` (Retry) | `PiDurableHarness.retry` runs the task again and forgets it; `ShellProjector.refresh` recomputes the row from `inspect()` | `apps/server/src/rpc/ThreadStreamHandlers.ts:150-161`, `apps/server/src/brain/PiDurableHarness.ts:1024-1050`, `apps/server/src/shell/ShellProjector.ts:1040-1050` |
 | shelf | settled | Settle | `ThreadSettle`, refused while busy, waiting or queued (`settleBlocker`); clears pin and snooze | `apps/server/src/shell/ShellCommands.ts:507-571`, `apps/server/src/shell/ShellCommands.ts:898-906` |
 | settled | active | Unsettle | `ThreadUnsettle` sets `settledOverride: active` | `apps/server/src/shell/ShellCommands.ts:908-929` |
+| settled or unsettled by hand, snoozed | active, under auto-settle again | `thread.send` | `Threads.send` commits `ThreadMessageSent` after the turn is admitted, when the row has a manual settle state or a snooze; it clears `settledOverride` and `settledAt` (stamping `unsettledAt` unless the user had unsettled it) and ends the snooze, as t3code's `dispatchMessage` does | `apps/server/src/threads/Threads.ts` (`recordMessageSent`), `apps/server/src/shell/ShellCommands.ts` (`messageSent`); added after `8bb5d5b` |
 | shelf | snoozed | Snooze | `ThreadSnooze`, refused while an approval is pending or an input is queued | `apps/server/src/shell/ShellCommands.ts:931-970` |
 | snoozed | active | Wake now | `ThreadUnsnooze` | `apps/server/src/shell/ShellCommands.ts:972-975` |
 | shelf | pinned | Pin | `ThreadPin` clears settle and snooze | `apps/server/src/shell/ShellCommands.ts:977-1005` |
@@ -186,9 +187,9 @@ stateDiagram-v2
 9. `parkedTaskIds` changes only through pi-durable: a TaskParked event adds an id, and only a reconcile from `inspect()` (at boot, or the refresh after a retry) removes one.
 10. Derived fields (activity, run times, queue, error, waiting, approval, preview, parked tasks) are written only by the shell projector and the launch (`preparing`, the release and `failed`); inbox fields (settle, snooze, pin, visit, archive) only by shell commands. A projector flush writes only the fields its events set, rebased on the row as it stands.
 11. A thread cannot be settled while busy, waiting on an approval or holding a queued input, and cannot be snoozed while an approval is pending or an input is queued. Settling clears pin and snooze; pinning clears settle and snooze.
-12. A snooze ends early, without a write, while an approval is pending or when a run failed after the snooze began; the client computes this (`effectiveSnoozed`, `packages/client-logic/src/ThreadSettled.ts:113-129`) and the settlement sweep uses the same rule (`isSnoozed`, `apps/server/src/shell/Settlement.ts:113-137`). The row keeps `snoozedUntil` until its time comes or the user changes it.
-13. `settledOverride` never returns to none once set. Auto-settle needs it to be none, so a thread the user ever settled, unsettled or pinned out of Settled is never auto-settled again. An auto-settled thread is `settled` like a manual one.
-14. A settled thread that runs again stays on the Settled shelf; the shelf follows `settledOverride`, never `activity`.
+12. A snooze ends early, without a write, while an approval is pending or when a run failed after the snooze began; the client computes this (`effectiveSnoozed`, `packages/client-logic/src/ThreadSettled.ts:113-129`) and the settlement sweep uses the same rule (`isSnoozed`, `apps/server/src/shell/Settlement.ts:113-137`). The row keeps `snoozedUntil` until its time comes, the user changes it, or the user sends the thread a message.
+13. `settledOverride` returns to none only when the user sends the thread a message. Auto-settle needs it to be none, so a thread the user settled, unsettled or pinned out of Settled is not auto-settled again until then. An auto-settled thread is `settled` like a manual one.
+14. The shelf follows `settledOverride`, never `activity`: a settled thread the user sends a message to returns to the active shelf because the message clears the override, not because it runs.
 15. An archived or deleted thread is not in the shell stream; its row is kept by the shell store.
 16. Every status reaches the UI through a label (see the label map). No raw enum value is rendered as text; the sidebar row carries `activity` only as a `data-activity` attribute for tests.
 

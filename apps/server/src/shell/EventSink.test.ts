@@ -7,6 +7,7 @@ import {
   ThreadSettle,
   ThreadSnooze,
   ThreadUnarchive,
+  ThreadUnsettle,
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
 import { assert, describe, it } from "@effect/vitest";
@@ -20,6 +21,7 @@ import {
   emptyActivityPatch,
   ThreadActivityUpdate,
   ThreadAutoSettle,
+  ThreadMessageSent,
 } from "./ShellCommands.ts";
 import type { ServerShellCommand } from "./ShellCommands.ts";
 import { ShellSnapshot } from "./ShellSnapshot.ts";
@@ -280,6 +282,72 @@ describe("thread inbox commands", () => {
             (yield* thread(1)).lastVisitedAt,
             Option.some(DateTime.makeUnsafe(8999))
           );
+        })
+      )
+  );
+
+  it.effect(
+    "a sent message clears the manual settle state and ends a snooze, so auto-settle applies again",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+
+          const sent = () =>
+            ThreadMessageSent.make({ commandId: nextCommandId(), threadId });
+
+          // Nothing to clear: refused, so a send writes no event of its own.
+          assert.strictEqual(yield* refusal(sent()), "ShellCommandConflict");
+
+          yield* commit(
+            ThreadSettle.make({ commandId: nextCommandId(), threadId })
+          );
+          yield* TestClock.adjust(Duration.seconds(1));
+          yield* commit(sent());
+
+          const cleared = yield* thread(1);
+
+          assert.isTrue(Option.isNone(cleared.settledOverride));
+          assert.isTrue(Option.isNone(cleared.settledAt));
+          assert.deepStrictEqual(
+            cleared.unsettledAt,
+            Option.some(cleared.updatedAt)
+          );
+
+          yield* commit(
+            ThreadAutoSettle.make({
+              commandId: nextCommandId(),
+              threadId,
+              snapshotAt: cleared.updatedAt,
+              settledAt: cleared.updatedAt,
+            })
+          );
+          assert.deepStrictEqual(
+            (yield* thread(1)).settledOverride,
+            Option.some("settled")
+          );
+
+          yield* commit(
+            ThreadUnsettle.make({ commandId: nextCommandId(), threadId })
+          );
+          const { unsettledAt } = yield* thread(1);
+
+          yield* TestClock.adjust(Duration.seconds(1));
+          yield* commit(
+            ThreadSnooze.make({
+              commandId: nextCommandId(),
+              threadId,
+              until: DateTime.makeUnsafe(60_000),
+            })
+          );
+          yield* commit(sent());
+
+          const woken = yield* thread(1);
+
+          assert.isTrue(Option.isNone(woken.settledOverride));
+          assert.deepStrictEqual(woken.unsettledAt, unsettledAt);
+          assert.isTrue(Option.isNone(woken.snoozedUntil));
+          assert.isTrue(Option.isNone(woken.snoozedAt));
         })
       )
   );

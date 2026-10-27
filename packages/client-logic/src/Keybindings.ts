@@ -27,6 +27,8 @@
 
 import { Array, Option } from "effect";
 
+import { onlyIf } from "./OnlyIf.ts";
+
 /** The commands Cairn binds to keys. */
 export type KeybindingCommand =
   | "sidebar.toggle"
@@ -494,10 +496,10 @@ export const formatShortcutLabel = (
   }
 
   return [
-    ...(showCtrl ? ["Ctrl"] : []),
-    ...(shortcut.altKey ? ["Alt"] : []),
-    ...(shortcut.shiftKey ? ["Shift"] : []),
-    ...(showMeta ? ["Meta"] : []),
+    ...onlyIf(showCtrl, "Ctrl"),
+    ...onlyIf(shortcut.altKey, "Alt"),
+    ...onlyIf(shortcut.shiftKey, "Shift"),
+    ...onlyIf(showMeta, "Meta"),
     keyLabel,
   ].join("+");
 };
@@ -560,11 +562,11 @@ export const toFoldkitKeys = (shortcut: KeybindingShortcut): string => {
   const key = FOLDKIT_KEY_NAMES.get(shifted) ?? shifted;
 
   return [
-    ...(shortcut.modKey ? ["Mod"] : []),
-    ...(shortcut.ctrlKey ? ["Control"] : []),
-    ...(shortcut.metaKey ? ["Meta"] : []),
-    ...(shortcut.altKey ? ["Alt"] : []),
-    ...(shortcut.shiftKey ? ["Shift"] : []),
+    ...onlyIf(shortcut.modKey, "Mod"),
+    ...onlyIf(shortcut.ctrlKey, "Control"),
+    ...onlyIf(shortcut.metaKey, "Meta"),
+    ...onlyIf(shortcut.altKey, "Alt"),
+    ...onlyIf(shortcut.shiftKey, "Shift"),
     key,
   ].join("+");
 };

@@ -24,6 +24,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import {
   isThreadWoke,
   nextThreadAfterLeaving,
@@ -230,9 +231,10 @@ const undo = (model: Model): UpdateReturn =>
           ? [Intent.Unsnooze({ threadId: entry.threadId })]
           : [
               Intent.Unsettle({ threadId: entry.threadId }),
-              ...(entry.wasPinned
-                ? [Intent.Pin({ threadId: entry.threadId })]
-                : []),
+              ...onlyIf(
+                entry.wasPinned,
+                Intent.Pin({ threadId: entry.threadId })
+              ),
               ...Option.toArray(
                 Option.map(entry.snoozedUntil, (until) =>
                   Intent.Snooze({ threadId: entry.threadId, until })
@@ -681,7 +683,7 @@ const settleDerived = (model: Model): UpdateReturn => {
     model: issued.model,
     commands: [
       ...issued.commands,
-      ...(count === model.badgeCount ? [] : [SetBadge({ count })]),
+      ...onlyIf(count !== model.badgeCount, SetBadge({ count })),
     ],
   };
 };

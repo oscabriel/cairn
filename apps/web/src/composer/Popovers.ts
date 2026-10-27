@@ -31,6 +31,7 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { modelPickerModelKey } from "@cairn/client-logic/ModelSearch";
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ModelListing } from "@cairn/protocol/Models";
 import { Array, Option, Predicate } from "effect";
@@ -226,9 +227,9 @@ const modelRow = (
       h.AriaSelected(selected),
       h.DataAttribute("slot", "combobox-item"),
       h.DataAttribute("model-key", key),
-      ...(selected ? [h.DataAttribute("selected", "")] : []),
-      ...(highlighted ? [h.DataAttribute("highlighted", "")] : []),
-      ...(listing.available ? [] : [h.DataAttribute("disabled", "")]),
+      ...onlyIf(selected, h.DataAttribute("selected", "")),
+      ...onlyIf(highlighted, h.DataAttribute("highlighted", "")),
+      ...onlyIf(!listing.available, h.DataAttribute("disabled", "")),
       h.Class(ROW_CLASS),
       h.OnMouseMove(Message.MovedPopoverHighlight({ id: key })),
       h.OnClick(
@@ -436,7 +437,7 @@ const projectItem = (
       h.Role("option"),
       h.AriaSelected(highlighted),
       // Enter picks the first row, so it is the highlighted one, as in t3code.
-      ...(highlighted ? [h.DataAttribute("highlighted", "")] : []),
+      ...onlyIf(highlighted, h.DataAttribute("highlighted", "")),
       h.DataAttribute("slot", "combobox-item"),
       h.Class(COMBOBOX_ITEM_CLASS),
       h.OnClick(onClick),
@@ -566,18 +567,17 @@ const projectPicker = (
         index === 0
       )
     ),
-    ...(needle.length === 0
-      ? [
-          projectItem(
-            h,
-            "add-project",
-            Message.ClickedAddProject(),
-            "Add project",
-            icon(h, FolderPlus, "folder-plus", ""),
-            false
-          ),
-        ]
-      : []),
+    ...onlyIf(
+      needle.length === 0,
+      projectItem(
+        h,
+        "add-project",
+        Message.ClickedAddProject(),
+        "Add project",
+        icon(h, FolderPlus, "folder-plus", ""),
+        false
+      )
+    ),
   ];
 
   return h.div(

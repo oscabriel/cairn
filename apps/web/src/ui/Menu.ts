@@ -20,6 +20,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type { GroupHeading, ItemConfig } from "@foldkit/ui/menu";
 import type { HtmlBuilder } from "foldkit/html";
 
@@ -68,9 +69,7 @@ export const menuItem = <Message>(
   content: h.span(
     [
       h.Class("flex min-w-0 flex-1 items-center gap-2"),
-      ...(look.isDestructive
-        ? [h.DataAttribute("variant", "destructive")]
-        : []),
+      ...onlyIf(look.isDestructive, h.DataAttribute("variant", "destructive")),
     ],
     [
       h.span([h.Class("min-w-0 truncate")], look.label),

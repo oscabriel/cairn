@@ -20,6 +20,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import * as Switch from "@foldkit/ui/switch";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
@@ -71,7 +72,7 @@ export const switchView = <Message>(
                 h.DataAttribute("size", config.size),
                 // @foldkit/ui sets only data-checked; Base UI also marks the unchecked track, which
                 // its `data-unchecked:bg-input` keys on.
-                ...(config.isChecked ? [] : [h.DataAttribute("unchecked", "")]),
+                ...onlyIf(!config.isChecked, h.DataAttribute("unchecked", "")),
                 h.Class(classNames(TRACK_CLASS, SIZE[config.size])),
               ],
               [

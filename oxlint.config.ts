@@ -311,7 +311,7 @@ export default defineConfig({
     // Vendored but off until the conditional spreads they flag are rewritten: at 8bb5d5b,
     // `no-conditional-spread` flagged 86 spreads (75 outside tests, judges and tools) and
     // `no-conditional-empty-array-spread` 63 (56), most in apps/web and packages/client-logic.
-    "anti-slop/no-conditional-empty-array-spread": "off",
+    "anti-slop/no-conditional-empty-array-spread": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-conditional-spread": "off",
     "anti-slop/no-known-value-widening": "error",

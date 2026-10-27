@@ -40,7 +40,7 @@ import { Message } from "./Message.ts";
 import { AttachmentStatus } from "./Model.ts";
 import type { Item, Model } from "./Model.ts";
 import { AttachmentPaste } from "./Paste.ts";
-import { itemsOf } from "./Update.ts";
+import { itemsOf, readyRef } from "./Update.ts";
 
 /** What accepts the Attach button's picker offers (plan section 3, 3B). */
 export const ATTACH_ACCEPT = "image/*,application/pdf,.docx,text/*";
@@ -108,9 +108,10 @@ const chipData = (item: Item, h: HtmlBuilder<Message>) => [
     onNone: () => [],
     onSome: (reason) => [h.Title(reason)],
   }),
-  ...(AttachmentStatus.guards.Ready(item.status)
-    ? [h.DataAttribute("attachment-id", item.status.ref.id)]
-    : []),
+  ...Option.match(readyRef(item), {
+    onNone: () => [],
+    onSome: (ref) => [h.DataAttribute("attachment-id", ref.id)],
+  }),
   ...Option.match(item.pasteToRequestMs, {
     onNone: () => [],
     onSome: (ms) => [

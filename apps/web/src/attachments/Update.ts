@@ -72,7 +72,8 @@ const isPending = (item: Item): boolean =>
 const isFailed = (item: Item): boolean =>
   AttachmentStatus.guards.Failed(item.status);
 
-const readyRef = (item: Item): Option.Option<AttachmentRef> =>
+/** The brain's ref for an attachment whose upload is ready; none until then. */
+export const readyRef = (item: Item): Option.Option<AttachmentRef> =>
   AttachmentStatus.guards.Ready(item.status)
     ? Option.some(item.status.ref)
     : Option.none();
@@ -346,7 +347,10 @@ const removeItem = (model: Model, localId: string): UpdateReturn =>
           ...cancel,
           ...revokeCommands([item]),
           ...discard,
-          ...(Option.isSome(ref) ? saveCommands(without) : []),
+          ...Option.match(ref, {
+            onNone: () => [],
+            onSome: () => saveCommands(without),
+          }),
         ],
         Option.map(ref, ({ id }) =>
           OutMessage.Detached({ draftKey: item.draftKey, attachmentId: id })

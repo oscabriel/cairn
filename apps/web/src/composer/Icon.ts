@@ -1,6 +1,7 @@
 // Draws a lucide icon (its node data from the `lucide` package) as Foldkit markup, with the
 // attributes t3code's lucide-react icons carry, so class strings like `lucide lucide-brain` match.
 
+import { Array } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 /** One lucide icon's nodes: element tags with their attributes. */
@@ -61,7 +62,9 @@ export const icon = <Message>(
 ): Html =>
   h.svg(
     [
-      ...(hook === undefined ? [] : [h.DataAttribute(hook, "true")]),
+      ...Array.fromNullishOr(hook).map((attribute) =>
+        h.DataAttribute(attribute, "true")
+      ),
       h.Attribute("xmlns", "http://www.w3.org/2000/svg"),
       h.Attribute("width", "24"),
       h.Attribute("height", "24"),

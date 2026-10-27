@@ -677,15 +677,22 @@ export class Checkpoints extends Context.Service<
           return "";
         }
 
+        const formatFlags =
+          input.format === "numstat" ? ["--numstat", "-z"] : ["--patch"];
+
+        const whitespaceFlags = input.ignoreWhitespace
+          ? ["--ignore-all-space"]
+          : [];
+
         const result = yield* run(operation, input.cwd, [
           "diff",
-          ...(input.format === "numstat" ? ["--numstat", "-z"] : ["--patch"]),
+          ...formatFlags,
           "--no-color",
           "--no-ext-diff",
           "--no-textconv",
           "--src-prefix=a/",
           "--dst-prefix=b/",
-          ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+          ...whitespaceFlags,
           `${input.fromRef}^{commit}`,
           `${input.toRef}^{commit}`,
           // Paths are repository-relative, while cwd can be a subdirectory.

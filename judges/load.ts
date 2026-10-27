@@ -257,12 +257,11 @@ export const startLocalApp = async (options: {
   const proxyPort = await freePort();
   const origin = `http://${LOOPBACK}:${proxyPort}`;
 
+  const modelFlags = options.models === "real" ? ["--models", "real"] : [];
+
   const child: ChildProcess = spawn(
     process.execPath,
-    [
-      "apps/server/src/judge-main.ts",
-      ...(options.models === "real" ? ["--models", "real"] : []),
-    ],
+    ["apps/server/src/judge-main.ts", ...modelFlags],
     {
       cwd: REPO,
       stdio: "ignore",

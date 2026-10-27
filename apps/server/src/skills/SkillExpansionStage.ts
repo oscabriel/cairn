@@ -134,8 +134,12 @@ export const expandSkills = (
     onSome: ({ name, args }) => (expanded[0] === name ? args : text),
   });
 
+  if (rest !== "") {
+    blocks.push(rest);
+  }
+
   return {
-    text: [...blocks, ...(rest === "" ? [] : [rest])].join("\n\n"),
+    text: blocks.join("\n\n"),
     expanded,
     skipped,
   };

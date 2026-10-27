@@ -179,31 +179,35 @@ export const toolBlockOpening = (
   index: number,
   block: ToolBlock,
   cut = 0
-): ReadonlyArray<ClaudeEvent> => [
-  {
+): ReadonlyArray<ClaudeEvent> => {
+  const start: ClaudeEvent = {
     type: "stream_event",
     event: {
       type: "content_block_start",
       index,
       content_block: { ...servedBlock(block), input: {} },
     },
-  },
-  ...(cut > 0
-    ? [
-        {
-          type: "stream_event" as const,
-          event: {
-            type: "content_block_delta" as const,
-            index,
-            delta: {
-              type: "input_json_delta" as const,
-              partial_json: JSON.stringify(block.args ?? {}).slice(0, cut),
-            },
+  };
+
+  if (cut > 0) {
+    return [
+      start,
+      {
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index,
+          delta: {
+            type: "input_json_delta",
+            partial_json: JSON.stringify(block.args ?? {}).slice(0, cut),
           },
         },
-      ]
-    : []),
-];
+      },
+    ];
+  }
+
+  return [start];
+};
 
 /** The rest of a tool block after its first `cut` JSON characters, its stop, then its `assistant` event. */
 export const toolBlockClosing = (

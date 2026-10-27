@@ -27,7 +27,7 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { Context, Effect, Layer } from "effect";
+import { Array as Arr, Context, Effect, Layer } from "effect";
 
 import { threadProcessEnv } from "./Arms.ts";
 import { ExtensionOrder } from "./Extensions.ts";
@@ -103,23 +103,26 @@ const grep = defineTool({
     ignoreCase: Type.Optional(Type.Boolean()),
   }),
   replay: "safe",
-  execute: async (args, api, context) =>
-    await runSearch(
+  execute: async (args, api, context) => {
+    const caseFlags = args.ignoreCase === true ? ["--ignore-case"] : [];
+
+    return await runSearch(
       api,
       [
         "rg",
         "--line-number",
         "--no-heading",
         "--color=never",
-        ...(args.ignoreCase === true ? ["--ignore-case"] : []),
-        ...(args.glob === undefined ? [] : ["--glob", args.glob]),
+        ...caseFlags,
+        ...Arr.fromNullishOr(args.glob).flatMap((glob) => ["--glob", glob]),
         "--",
         args.pattern,
         args.path ?? ".",
       ],
       context,
       "No matches."
-    ),
+    );
+  },
 });
 
 const find = defineTool({
@@ -145,9 +148,10 @@ const find = defineTool({
       [
         "fd",
         "--color=never",
-        ...(args.type === undefined
-          ? []
-          : ["--type", args.type === "file" ? "f" : "d"]),
+        ...Arr.fromNullishOr(args.type).flatMap((type) => [
+          "--type",
+          type === "file" ? "f" : "d",
+        ]),
         "--",
         args.pattern ?? ".",
         args.path ?? ".",

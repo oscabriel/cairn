@@ -210,23 +210,31 @@ export const resolveSnoozePresets = (
     MORNING_HOUR
   );
 
+  const eveningPreset = Option.map(
+    Option.liftPredicate(
+      evening,
+      (wake) => millis(wake) - millis(now) > HOUR_MS
+    ),
+    (wake) => preset("evening", "This evening", wake)
+  );
+
+  const nextWeekPreset = Option.map(
+    Option.liftPredicate(nextWeek, (wake) => millis(wake) !== millis(tomorrow)),
+    (wake) =>
+      preset(
+        "next-week",
+        "Next week",
+        wake,
+        `${formatShortWeekday(wake, locale)} ${formatTimeOfDay(wake, locale)}`
+      )
+  );
+
   return [
     preset("hour", "In 1 hour", DateTime.add(now, { hours: 1 })),
     preset("three-hours", "In 3 hours", DateTime.add(now, { hours: 3 })),
-    ...(millis(evening) - millis(now) > HOUR_MS
-      ? [preset("evening", "This evening", evening)]
-      : []),
+    ...Option.toArray(eveningPreset),
     preset("tomorrow", "Tomorrow", tomorrow),
-    ...(millis(nextWeek) === millis(tomorrow)
-      ? []
-      : [
-          preset(
-            "next-week",
-            "Next week",
-            nextWeek,
-            `${formatShortWeekday(nextWeek, locale)} ${formatTimeOfDay(nextWeek, locale)}`
-          ),
-        ]),
+    ...Option.toArray(nextWeekPreset),
   ];
 };
 

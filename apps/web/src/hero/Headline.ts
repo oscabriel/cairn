@@ -24,6 +24,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { Option, Predicate } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { FolderPlus, Plus } from "lucide";
@@ -61,7 +62,7 @@ const projectPicker = (
       h.Type("button"),
       h.DataAttribute("draft-project-trigger", ""),
       h.DataAttribute("testid", "hero-project-trigger"),
-      ...(open ? [h.DataAttribute("popup-open", "")] : []),
+      ...onlyIf(open, h.DataAttribute("popup-open", "")),
       h.AriaHasPopup("listbox"),
       h.AriaExpanded(open),
       h.Class(PICKER_CLASS),

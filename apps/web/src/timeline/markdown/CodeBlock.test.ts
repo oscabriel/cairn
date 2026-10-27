@@ -4,6 +4,7 @@
 // Mount after the message commits, drawn as far as the slices have gone, and never tokenized in one
 // go by a render.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Stream } from "effect";
 import { Submodel } from "foldkit";
@@ -79,7 +80,7 @@ const textOf = (model: Model): string =>
     "",
     "```ts",
     fenceCode(model.name, Math.ceil((model.lines * model.frame) / FRAMES)),
-    ...(model.closed ? ["```", "", "Done."] : []),
+    ...onlyIf(model.closed, "```", "", "Done."),
   ].join("\n");
 
 const update = (model: Model, message: Message) =>

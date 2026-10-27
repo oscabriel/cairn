@@ -23,6 +23,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { ChevronDown, Folder, GitBranch } from "lucide";
@@ -134,7 +135,7 @@ const strip = (
   h.div(
     [
       h.DataAttribute("slot", "composer-context-strip"),
-      ...(locked ? [h.DataAttribute("locked", "true")] : []),
+      ...onlyIf(locked, h.DataAttribute("locked", "true")),
       h.Class(CONTEXT_STRIP_CLASS),
     ],
     [

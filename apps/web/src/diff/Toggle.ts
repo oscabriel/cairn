@@ -23,6 +23,7 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { checkpointSummaryOf } from "@cairn/client-logic/DiffTree";
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { Entry } from "@cairn/protocol/Thread";
 import { Array, Option } from "effect";
@@ -124,7 +125,7 @@ export const diffToggle = <Message>(
               : "No changes to show yet"
           ),
           h.Disabled(Option.isNone(input.onToggle)),
-          ...(input.open ? [h.DataAttribute("pressed", "")] : []),
+          ...onlyIf(input.open, h.DataAttribute("pressed", "")),
           ...Option.match(input.onToggle, {
             onNone: () => [],
             onSome: (message) => [h.OnClick(message)],

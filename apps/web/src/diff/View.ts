@@ -18,6 +18,7 @@ import type {
   PatchHunk,
   PatchLine,
 } from "@cairn/client-logic/DiffTree";
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import { createKeyedLazy, createLazy } from "foldkit/html";
@@ -234,6 +235,11 @@ const hunkView = (
       ...shown.lines.map((line) => {
         codeIndex += line.kind === "note" ? 0 : 1;
 
+        const content =
+          line.kind === "note"
+            ? [line.text]
+            : tokenContent(h, line, tokens, codeIndex);
+
         return h.div(
           [
             h.DataAttribute("kind", line.kind),
@@ -252,15 +258,15 @@ const hunkView = (
             h.span(
               [h.Class("whitespace-pre pr-3")],
               [
-                ...(line.kind === "added"
-                  ? [h.span([h.Class("sr-only")], ["Added: "])]
-                  : []),
-                ...(line.kind === "removed"
-                  ? [h.span([h.Class("sr-only")], ["Removed: "])]
-                  : []),
-                ...(line.kind === "note"
-                  ? [line.text]
-                  : tokenContent(h, line, tokens, codeIndex)),
+                ...onlyIf(
+                  line.kind === "added",
+                  h.span([h.Class("sr-only")], ["Added: "])
+                ),
+                ...onlyIf(
+                  line.kind === "removed",
+                  h.span([h.Class("sr-only")], ["Removed: "])
+                ),
+                ...content,
               ]
             ),
           ]

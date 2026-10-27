@@ -617,7 +617,7 @@ const dispatch = (
         return {
           ...sent,
           model: cleared.model,
-          commands: [...(sent.commands ?? []), ...cleared.commands],
+          commands: Array.appendAll(sent.commands ?? [], cleared.commands),
         };
       },
     }
@@ -686,7 +686,7 @@ const withTray = (model: Model, result: Tray.UpdateReturn): UpdateReturn => {
 
   return {
     ...released,
-    commands: [...applied.commands, ...(released.commands ?? [])],
+    commands: Array.appendAll(applied.commands, released.commands ?? []),
   };
 };
 
@@ -788,11 +788,12 @@ const pickMenuItem = (model: Model, id: string): UpdateReturn =>
             });
 
             const changed = chooseModel(cleared, chosen);
+            const changedCommands = changed.commands ?? [];
 
             return {
               model: changed.model,
               commands: [
-                ...(changed.commands ?? []),
+                ...changedCommands,
                 SetEditorValue({ value: next.text, cursor: next.cursor }),
               ],
             };

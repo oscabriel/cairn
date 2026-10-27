@@ -400,8 +400,9 @@ const masksOf = async (
 
   const ages = await page.evaluate((selector) => {
     const scope = document.querySelector(selector);
+    const elements = scope?.querySelectorAll("*") ?? [];
 
-    return [...(scope?.querySelectorAll("*") ?? [])].flatMap((element) => {
+    return [...elements].flatMap((element) => {
       if (
         element.childElementCount !== 0 ||
         !/^(?:\d+[smhd]|now)$/u.test(element.textContent.trim())

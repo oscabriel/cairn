@@ -7,6 +7,7 @@
 // streaming message shown plain until it closes or commits, as t3code does, and a block too long
 // to tokenize in one frame tokenized by its Mount a slice at a time.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { Match, Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { Check, Copy, Image } from "lucide";
@@ -128,9 +129,9 @@ const tokenSpans = (h: H, lines: TokenLines, source: string): Content => {
               [token.content]
             )
       ),
-      ...(index < lines.length - 1 || rest.length > 0 ? ["\n"] : []),
+      ...onlyIf(index < lines.length - 1 || rest.length > 0, "\n"),
     ]),
-    ...(rest.length > 0 ? [rest.join("\n")] : []),
+    ...onlyIf(rest.length > 0, rest.join("\n")),
   ];
 };
 
@@ -477,7 +478,7 @@ export const markdownView = (
           h.Class(
             "chat-markdown w-full min-w-0 [overflow-wrap:anywhere] [word-break:break-word] text-sm leading-relaxed text-foreground/[calc(80%+var(--appearance-contrast-boost))]"
           ),
-          ...(streaming ? [h.DataAttribute("streaming", "")] : []),
+          ...onlyIf(streaming, h.DataAttribute("streaming", "")),
         ],
         document.blocks.map((placed, index) =>
           blockView(blockContext, placed.block, String(index))

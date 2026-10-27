@@ -23,6 +23,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { X } from "lucide";
@@ -170,9 +171,10 @@ export const cardView = (
   return h.div(
     [
       h.DataAttribute("slot", "composer-shell"),
-      ...(Option.isSome(contextStrip)
-        ? [h.DataAttribute("with-context", "true")]
-        : []),
+      ...onlyIf(
+        Option.isSome(contextStrip),
+        h.DataAttribute("with-context", "true")
+      ),
       h.Class(SHELL_CLASS),
     ],
     [

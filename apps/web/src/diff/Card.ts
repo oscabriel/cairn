@@ -111,10 +111,11 @@ const flatten = (
   nodes: ReadonlyArray<DiffTreeNode>,
   depth: number
 ): ReadonlyArray<FlatRow> =>
-  nodes.flatMap((node) => [
-    { node, depth },
-    ...(node.kind === "directory" ? flatten(node.children, depth + 1) : []),
-  ]);
+  nodes.flatMap((node) =>
+    node.kind === "directory"
+      ? [{ node, depth }, ...flatten(node.children, depth + 1)]
+      : [{ node, depth }]
+  );
 
 const statCell = <Message>(h: HtmlBuilder<Message>, stat: DiffStat): Html =>
   hasNonZeroStat(stat)

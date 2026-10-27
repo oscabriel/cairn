@@ -252,22 +252,26 @@ export const applyHarnessEvent = (
           usageLimitResetAt: Option.none(),
         }
       ),
-    RunTerminal: (ended) =>
-      withFields(
+    RunTerminal: (ended) => {
+      const errorFields =
+        ended.status === "failed"
+          ? failureFields(projection, ended.failure)
+          : {
+              lastError: Option.none(),
+              lastErrorClass: Option.none(),
+              usageLimitResetAt: projection.fields.usageLimitResetAt,
+            };
+
+      return withFields(
         { ...projection, outcome: Option.some(ended.status) },
         {
           activeRunId: Option.none(),
           latestRunCompletedAt: Option.some(ended.at),
           waitingFor: "none",
-          ...(ended.status === "failed"
-            ? failureFields(projection, ended.failure)
-            : {
-                lastError: Option.none(),
-                lastErrorClass: Option.none(),
-                usageLimitResetAt: projection.fields.usageLimitResetAt,
-              }),
+          ...errorFields,
         }
-      ),
+      );
+    },
     MessageCommitted: (message) =>
       withFields(projection, {
         latestVisibleMessage: Option.some({

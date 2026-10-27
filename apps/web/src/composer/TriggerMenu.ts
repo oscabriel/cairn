@@ -30,6 +30,7 @@ import type {
 } from "@cairn/client-logic/ComposerTrigger";
 import { serializeComposerFileLink } from "@cairn/client-logic/ComposerTrigger";
 import { modelPickerModelKey } from "@cairn/client-logic/ModelSearch";
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import {
   searchSkills,
   searchSlashItems,
@@ -270,7 +271,7 @@ const itemRow = (
       h.AriaSelected(isActive),
       h.DataAttribute("slot", "command-item"),
       h.DataAttribute("composer-item-id", item.id),
-      ...(isActive ? [h.DataAttribute("active", "true")] : []),
+      ...onlyIf(isActive, h.DataAttribute("active", "true")),
       h.Class(
         isActive
           ? `${ITEM_CLASS} bg-accent! text-accent-foreground!`

@@ -12,7 +12,14 @@
 
 import { existsSync } from "node:fs";
 
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import {
+  Array as Arr,
+  Effect,
+  FileSystem,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import type { Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -217,9 +224,9 @@ export const start = (
     ...Object.entries(options.env ?? {}).map(
       ([key, value]) => `--setenv=${key}=${value}`
     ),
-    ...(options.cwd === undefined
-      ? []
-      : [`--working-directory=${options.cwd}`]),
+    ...Arr.fromNullishOr(options.cwd).map(
+      (cwd) => `--working-directory=${cwd}`
+    ),
     "--",
     ...options.command,
   ];

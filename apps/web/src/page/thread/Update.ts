@@ -10,7 +10,7 @@ import {
   prependHistoryAt,
 } from "@cairn/client-logic/ThreadView";
 import type { ThreadId } from "@cairn/protocol/Ids";
-import { Equal, Option, Predicate, Result } from "effect";
+import { Array, Equal, Option, Predicate, Result } from "effect";
 import { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
@@ -121,7 +121,7 @@ export const inform = (model: Model, context: PageContext): InformReturn => {
 
     return {
       model: closed.model,
-      commands: [...(switched.commands ?? []), ...(closed.commands ?? [])],
+      commands: Array.appendAll(switched.commands ?? [], closed.commands ?? []),
     };
   }
 

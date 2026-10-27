@@ -752,17 +752,18 @@ const skillsSection = (model: Model, h: H): Html => {
     { id: "skills", title: "Skills", headerAction: Option.some(reload) },
     [
       ...projectPicker,
-      ...(Option.isNone(model.skillsProject)
-        ? [
-            row(
-              h,
-              "skills-none",
-              "No project",
-              Option.some("Add a project to see its skills."),
-              Option.none()
-            ),
-          ]
-        : pending(h, "skills", model.skills, (list) => [
+      ...Option.match(model.skillsProject, {
+        onNone: () => [
+          row(
+            h,
+            "skills-none",
+            "No project",
+            Option.some("Add a project to see its skills."),
+            Option.none()
+          ),
+        ],
+        onSome: () =>
+          pending(h, "skills", model.skills, (list) => [
             row(
               h,
               "skills-count",
@@ -770,7 +771,8 @@ const skillsSection = (model: Model, h: H): Html => {
               Option.some(skillsSummary(list)),
               Option.none()
             ),
-          ])),
+          ]),
+      }),
     ]
   );
 };

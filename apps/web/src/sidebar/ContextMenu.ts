@@ -23,6 +23,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type { ContextMenuItem } from "@cairn/client-logic/ThreadMenu";
 import { Array, Effect, Option, Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -191,16 +192,19 @@ const itemView = <Id extends string>(
       h.Type("button"),
       h.Disabled(item.disabled),
       h.DataAttribute("menu-id", item.id),
-      ...(inputs.isTopLevel
-        ? [h.Attribute(ITEM_ATTRIBUTE, String(inputs.index))]
-        : []),
+      ...onlyIf(
+        inputs.isTopLevel,
+        h.Attribute(ITEM_ATTRIBUTE, String(inputs.index))
+      ),
       ...Option.match(item.checked, {
         onNone: () => [],
         onSome: (checked) => [h.Role("menuitemradio"), h.AriaChecked(checked)],
       }),
-      ...(hasChildren
-        ? [h.AriaHasPopup("menu"), h.AriaExpanded(inputs.highlighted)]
-        : []),
+      ...onlyIf(
+        hasChildren,
+        h.AriaHasPopup("menu"),
+        h.AriaExpanded(inputs.highlighted)
+      ),
       h.Class(rowClass(item.disabled, destructive)),
       h.Style(rowStyle(item.disabled, destructive, inputs.highlighted)),
       h.OnMouseEnter(

@@ -24,6 +24,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type { ProjectShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
@@ -105,16 +106,16 @@ const searchField = (h: H, model: Model): Html => {
             h.Role("combobox"),
             h.Attribute("aria-autocomplete", "list"),
             h.AriaExpanded(resultsVisible),
-            ...(resultsVisible
-              ? [h.AriaControls("sidebar-thread-search-results")]
-              : []),
-            ...(resultsVisible && model.activeSearchIndex < resultCount
-              ? [
-                  h.AriaActiveDescendant(
-                    `sidebar-thread-search-result-${model.activeSearchIndex}`
-                  ),
-                ]
-              : []),
+            ...onlyIf(
+              resultsVisible,
+              h.AriaControls("sidebar-thread-search-results")
+            ),
+            ...onlyIf(
+              resultsVisible && model.activeSearchIndex < resultCount,
+              h.AriaActiveDescendant(
+                `sidebar-thread-search-result-${model.activeSearchIndex}`
+              )
+            ),
             h.Type("search"),
             h.Value(model.search),
             h.OnInput((value) => Message.ChangedSearch({ value })),
@@ -176,7 +177,7 @@ const filterOption = (
     [
       h.Role("option"),
       h.AriaSelected(inputs.selected),
-      ...(inputs.selected ? [h.DataAttribute("selected", "")] : []),
+      ...onlyIf(inputs.selected, h.DataAttribute("selected", "")),
       h.DataAttribute("slot", "combobox-item"),
       h.Class(COMBOBOX_ITEM_CLASS),
       h.OnClick(
@@ -333,27 +334,26 @@ export const headerView = (h: H, model: Model): Html =>
       h.div(
         [h.Class("flex shrink-0 items-center")],
         [
-          ...(projectsOf(model).length > 0
-            ? [
-                iconButton(h, {
-                  label: "Filter threads by project",
-                  onClick: Message.ClickedFilterTrigger(),
-                  content: filterTriggerContent(h, model),
-                  extra: [
-                    h.Role("combobox"),
-                    h.AriaExpanded(Option.isSome(model.filterMenu)),
-                    h.AriaHasPopup("dialog"),
-                    h.DataAttribute("slot", "combobox-trigger"),
-                  ],
-                }),
-                iconButton(h, {
-                  label: "Add project",
-                  onClick: Message.ClickedAddProject(),
-                  content: plainIcon(h, "folder-plus"),
-                  extra: [h.DataAttribute("slot", "tooltip-trigger")],
-                }),
-              ]
-            : []),
+          ...onlyIf(
+            projectsOf(model).length > 0,
+            iconButton(h, {
+              label: "Filter threads by project",
+              onClick: Message.ClickedFilterTrigger(),
+              content: filterTriggerContent(h, model),
+              extra: [
+                h.Role("combobox"),
+                h.AriaExpanded(Option.isSome(model.filterMenu)),
+                h.AriaHasPopup("dialog"),
+                h.DataAttribute("slot", "combobox-trigger"),
+              ],
+            }),
+            iconButton(h, {
+              label: "Add project",
+              onClick: Message.ClickedAddProject(),
+              content: plainIcon(h, "folder-plus"),
+              extra: [h.DataAttribute("slot", "tooltip-trigger")],
+            })
+          ),
           iconButton(h, {
             label: "New thread",
             onClick: Message.ClickedNewThread(),

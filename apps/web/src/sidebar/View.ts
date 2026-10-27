@@ -26,11 +26,15 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import {
   SETTLED_TAIL_PAGE_COUNT,
   visibleSettledCount,
 } from "@cairn/client-logic/Sidebar";
-import type { SidebarSection } from "@cairn/client-logic/Sidebar";
+import type {
+  SidebarPartition,
+  SidebarSection,
+} from "@cairn/client-logic/Sidebar";
 import { buildDraftActionMenuItems } from "@cairn/client-logic/ThreadMenu";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
@@ -247,6 +251,93 @@ const emptyState = (h: H, model: Model): Html =>
         ]
   );
 
+/** The snoozed shelf: its header, then its rows while it is open; nothing when none is snoozed. */
+const snoozedShelf = (
+  h: H,
+  model: Model,
+  snoozed: ReadonlyArray<ThreadShell>
+): ReadonlyArray<Html> => {
+  if (snoozed.length === 0) {
+    return [];
+  }
+
+  const expanded = model.shelves.snoozedExpanded;
+
+  const header = shelfHeader(h, {
+    shelf: "snoozed",
+    label: expanded ? "Snoozed" : `Snoozed (${snoozed.length})`,
+    expanded,
+    pushDown: true,
+  });
+
+  if (!expanded) {
+    return [header];
+  }
+
+  return [header, ...snoozed.map((thread) => row(h, model, thread, "snoozed"))];
+};
+
+const showMoreSettled = (h: H, hiddenSettled: number): Html =>
+  h.li(
+    [h.Key("show-more"), h.Class("list-none")],
+    [
+      h.button(
+        [
+          h.Type("button"),
+          h.DataAttribute("testid", "sidebar-settled-show-more"),
+          h.OnClick(Message.ClickedShowMoreSettled()),
+          h.Class(SHOW_MORE_CLASS),
+        ],
+        [
+          icon(h, "plus", "size-4 shrink-0"),
+          `Show ${Math.min(hiddenSettled, SETTLED_TAIL_PAGE_COUNT)} more`,
+        ]
+      ),
+    ]
+  );
+
+/** Every shelf with its markers, in order: pinned, active, snoozed, settled. */
+const shelves = (
+  h: H,
+  model: Model,
+  partition: SidebarPartition<ThreadShell>
+): ReadonlyArray<Html> => {
+  const shownSettled = model.shelves.settledExpanded
+    ? partition.settled.slice(
+        0,
+        visibleSettledCount(
+          partition.settled.length,
+          model.shelves.settledPages
+        )
+      )
+    : [];
+
+  const hiddenSettled = partition.settled.length - shownSettled.length;
+
+  return [
+    marker(h, "pinned-header", MARKER_CLASS),
+    ...partition.pinned.map((thread) => row(h, model, thread, "pinned")),
+    marker(h, "pinned-divider", MARKER_CLASS),
+    marker(h, "active-placeholder", PLACEHOLDER_CLASS),
+    ...partition.active.map((thread) => row(h, model, thread, "active")),
+    ...snoozedShelf(h, model, partition.snoozed),
+    shelfHeader(h, {
+      shelf: "settled",
+      label: model.shelves.settledExpanded
+        ? "Settled"
+        : `Settled (${partition.settled.length})`,
+      expanded: model.shelves.settledExpanded,
+      pushDown: partition.snoozed.length === 0,
+    }),
+    marker(h, "settled-placeholder", PLACEHOLDER_CLASS),
+    ...shownSettled.map((thread) => row(h, model, thread, "settled")),
+    ...onlyIf(
+      model.shelves.settledExpanded && hiddenSettled > 0,
+      showMoreSettled(h, hiddenSettled)
+    ),
+  ];
+};
+
 const threadList = (h: H, model: Model): Html => {
   const partition = partitionOf(model);
 
@@ -262,17 +353,7 @@ const threadList = (h: H, model: Model): Html => {
     return emptyState(h, model);
   }
 
-  const shownSettled = model.shelves.settledExpanded
-    ? partition.settled.slice(
-        0,
-        visibleSettledCount(
-          partition.settled.length,
-          model.shelves.settledPages
-        )
-      )
-    : [];
-
-  const hiddenSettled = partition.settled.length - shownSettled.length;
+  const threads = total === 0 ? [] : shelves(h, model, partition);
 
   return h.ul(
     [
@@ -281,73 +362,7 @@ const threadList = (h: H, model: Model): Html => {
       h.Class(cx("relative flex flex-col gap-px", total > 0 && "flex-1")),
       h.OnMount(ListMotion()),
     ],
-    [
-      ...drafts,
-      ...(total === 0
-        ? []
-        : [
-            marker(h, "pinned-header", MARKER_CLASS),
-            ...partition.pinned.map((thread) =>
-              row(h, model, thread, "pinned")
-            ),
-            marker(h, "pinned-divider", MARKER_CLASS),
-            marker(h, "active-placeholder", PLACEHOLDER_CLASS),
-            ...partition.active.map((thread) =>
-              row(h, model, thread, "active")
-            ),
-            ...(partition.snoozed.length > 0
-              ? [
-                  shelfHeader(h, {
-                    shelf: "snoozed",
-                    label: model.shelves.snoozedExpanded
-                      ? "Snoozed"
-                      : `Snoozed (${partition.snoozed.length})`,
-                    expanded: model.shelves.snoozedExpanded,
-                    pushDown: true,
-                  }),
-                  ...(model.shelves.snoozedExpanded
-                    ? partition.snoozed.map((thread) =>
-                        row(h, model, thread, "snoozed")
-                      )
-                    : []),
-                ]
-              : []),
-            shelfHeader(h, {
-              shelf: "settled",
-              label: model.shelves.settledExpanded
-                ? "Settled"
-                : `Settled (${partition.settled.length})`,
-              expanded: model.shelves.settledExpanded,
-              pushDown: partition.snoozed.length === 0,
-            }),
-            marker(h, "settled-placeholder", PLACEHOLDER_CLASS),
-            ...shownSettled.map((thread) => row(h, model, thread, "settled")),
-            ...(model.shelves.settledExpanded && hiddenSettled > 0
-              ? [
-                  h.li(
-                    [h.Key("show-more"), h.Class("list-none")],
-                    [
-                      h.button(
-                        [
-                          h.Type("button"),
-                          h.DataAttribute(
-                            "testid",
-                            "sidebar-settled-show-more"
-                          ),
-                          h.OnClick(Message.ClickedShowMoreSettled()),
-                          h.Class(SHOW_MORE_CLASS),
-                        ],
-                        [
-                          icon(h, "plus", "size-4 shrink-0"),
-                          `Show ${Math.min(hiddenSettled, SETTLED_TAIL_PAGE_COUNT)} more`,
-                        ]
-                      ),
-                    ]
-                  ),
-                ]
-              : []),
-          ]),
-    ]
+    [...drafts, ...threads]
   );
 };
 
@@ -850,7 +865,7 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
               h.DataAttribute("app-sidebar", ""),
               h.Role("navigation"),
               h.AriaLabel("Threads"),
-              ...(model.isOpen ? [] : [h.Inert(true)]),
+              ...onlyIf(!model.isOpen, h.Inert(true)),
             ],
             [
               h.div(

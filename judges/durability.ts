@@ -187,11 +187,23 @@ const { values } = parseArgs({
 
 const unknownWindows = (values.window ?? []).filter((name) => !isWindow(name));
 
-const chosen: ReadonlyArray<WindowName> = [
-  ...(values.window ?? (values.bridge || values.slow ? [] : [...WINDOWS])),
-  ...(values.bridge ? BRIDGE_WINDOWS : []),
-  ...(values.slow ? SLOW_WINDOWS : []),
-].filter(isWindow);
+// Named windows, or the default set unless a flag picks windows of its own.
+const named: ReadonlyArray<string> =
+  values.window ?? (values.bridge || values.slow ? [] : WINDOWS);
+
+const flagged: Array<string> = [];
+
+if (values.bridge) {
+  flagged.push(...BRIDGE_WINDOWS);
+}
+
+if (values.slow) {
+  flagged.push(...SLOW_WINDOWS);
+}
+
+const chosen: ReadonlyArray<WindowName> = [...named, ...flagged].filter(
+  isWindow
+);
 
 const runs = Math.max(1, Math.trunc(Number(values.runs)) || 1);
 
@@ -408,12 +420,14 @@ const startBrain = (
       })
     );
 
+    const modelFlags = bridge ? ["--models", "real"] : [];
+
     yield* Unit.start({
       name: brain.unit,
       command: [
         process.execPath,
         "apps/server/src/judge-main.ts",
-        ...(bridge ? ["--models", "real"] : []),
+        ...modelFlags,
       ],
       cwd: REPO,
       properties: { ...Unit.brainProperties, ...plan.properties },

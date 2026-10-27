@@ -29,6 +29,7 @@
 
 import { shouldUseCompactComposerFooter } from "@cairn/client-logic/FooterLayout";
 import type { ControlsMeasurement } from "@cairn/client-logic/FooterLayout";
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import {
   LATER_PHASE_NOTE,
   runtimeModeOptions,
@@ -313,7 +314,7 @@ const block = (
       h.DataAttribute("resting-block", name),
       h.DataAttribute("composer-block-icon-only", String(iconOnly)),
       h.DataAttribute("composer-block-hidden", String(hidden)),
-      ...(hidden ? [h.AriaHidden(true), h.Inert(true)] : []),
+      ...onlyIf(hidden, h.AriaHidden(true), h.Inert(true)),
       h.Class(
         hidden
           ? `${BLOCK_CLASS} pointer-events-none invisible absolute`
@@ -478,7 +479,7 @@ const overflowHolder = (model: Model, h: HtmlBuilder<Message>): Html => {
   return h.div(
     [
       h.DataAttribute("resting-controls-overflow", "true"),
-      ...(needed ? [] : [h.AriaHidden(true), h.Inert(true)]),
+      ...onlyIf(!needed, h.AriaHidden(true), h.Inert(true)),
       h.Class(
         needed
           ? "min-w-0 shrink-0"

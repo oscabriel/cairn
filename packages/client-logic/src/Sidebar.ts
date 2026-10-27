@@ -148,21 +148,20 @@ export const visibleThreadOrder = <T extends { readonly id: string }>(
     readonly settledExpanded: boolean;
     readonly settledPages: number;
   }
-): Array<string> => [
-  ...partition.pinned.map((thread) => thread.id),
-  ...partition.active.map((thread) => thread.id),
-  ...(shelves.snoozedExpanded
-    ? partition.snoozed.map((thread) => thread.id)
-    : []),
-  ...(shelves.settledExpanded
-    ? partition.settled
-        .slice(
-          0,
-          visibleSettledCount(partition.settled.length, shelves.settledPages)
-        )
-        .map((thread) => thread.id)
-    : []),
-];
+): Array<string> => {
+  const snoozed = shelves.snoozedExpanded ? partition.snoozed : [];
+
+  const settled = shelves.settledExpanded
+    ? partition.settled.slice(
+        0,
+        visibleSettledCount(partition.settled.length, shelves.settledPages)
+      )
+    : [];
+
+  return [...partition.pinned, ...partition.active, ...snoozed, ...settled].map(
+    (thread) => thread.id
+  );
+};
 
 /** What a row shows in its status slot, by priority. */
 export type SidebarThreadStatus =

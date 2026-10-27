@@ -111,12 +111,11 @@ const dataDir = path.resolve(values["data-dir"]);
 
 mkdirSync(dataDir, { recursive: true });
 
+const modelFlags = values.models === "real" ? ["--models", "real"] : [];
+
 const brain = spawn(
   process.execPath,
-  [
-    path.join(root, "apps/server/src/dev-main.ts"),
-    ...(values.models === "real" ? ["--models", "real"] : []),
-  ],
+  [path.join(root, "apps/server/src/dev-main.ts"), ...modelFlags],
   {
     cwd: root,
     env: {

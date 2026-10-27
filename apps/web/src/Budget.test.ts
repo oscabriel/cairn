@@ -116,7 +116,9 @@ const staticClosure = (manifest: Manifest) => {
   for (let key = pending.pop(); key !== undefined; key = pending.pop()) {
     if (!seen.has(key)) {
       seen.add(key);
-      pending.push(...(manifest[key]?.imports ?? []));
+      const imports = manifest[key]?.imports ?? [];
+
+      pending.push(...imports);
     }
   }
 

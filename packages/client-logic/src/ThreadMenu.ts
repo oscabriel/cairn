@@ -26,6 +26,7 @@
 
 import { Option } from "effect";
 
+import { onlyIf } from "./OnlyIf.ts";
 import type { SnoozePreset, SnoozePresetId } from "./ThreadSettled.ts";
 
 /** Every action a thread row's context menu can carry. */
@@ -201,13 +202,12 @@ export const buildThreadActionMenuItems = (
       item<ThreadActionMenuId>("copy-path", "Path", {
         icon: Option.some("folder"),
       }),
-      ...(state.hasBranch
-        ? [
-            item<ThreadActionMenuId>("copy-branch", "Branch", {
-              icon: Option.some("git-branch"),
-            }),
-          ]
-        : []),
+      ...onlyIf(
+        state.hasBranch,
+        item<ThreadActionMenuId>("copy-branch", "Branch", {
+          icon: Option.some("git-branch"),
+        })
+      ),
       item<ThreadActionMenuId>("copy-thread-id", "Thread ID", {
         icon: Option.some("hash"),
       }),

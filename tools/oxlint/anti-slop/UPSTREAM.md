@@ -21,7 +21,7 @@ Four rules added on 2026-10-27, each file copied byte for byte and registered in
 | `no-reprovide-ambient-service` | K-Mistele/anti-slop | `src/rules/no-reprovide-ambient-service.ts` | `3abfdfb3ce1f0aa3c692a7b4c7520bbfd87ccd9c` |
 | `no-conditional-empty-array-spread` | [humanlayer/fold](https://github.com/humanlayer/fold), a local rule of Fold's anti-slop copy | `tools/oxlint/anti-slop/rules/no-conditional-empty-array-spread.ts` | `4bd8c58c4c644ad43df573c156ecdf8bddedd04d` |
 
-`oxlint.config.ts` enables `max-ternary-depth` and `no-reprovide-ambient-service`. It keeps `no-conditional-spread` and `no-conditional-empty-array-spread` off until the spreads they flag are rewritten; the config comment there records the counts. `judges/lint-rules.test.ts` probes every enabled rule and names the two that are off.
+`oxlint.config.ts` enables all four. It kept `no-conditional-spread` and `no-conditional-empty-array-spread` off until the 86 and 63 spreads they flagged were rewritten, later on 2026-10-27. `judges/lint-rules.test.ts` probes every rule.
 
 Both sources are MIT licensed:
 

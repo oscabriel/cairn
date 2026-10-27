@@ -237,6 +237,8 @@ const boundaryOverrides = zones.map(({ files, allowed }) => ({
 // Brand leftovers from t3code (plan D24) are judged by `judges/brand.test.ts`, which skips port
 // headers; a lint rule cannot tell a header from code.
 
+const coreIgnores = core.ignorePatterns ?? [];
+
 const agentDirs = [
   ".agent/**",
   ".agents/**",
@@ -256,7 +258,7 @@ export default defineConfig({
   env: core.env,
   extends: [core, vitestForEffect, effectRecommended],
   ignorePatterns: [
-    ...(core.ignorePatterns ?? []),
+    ...coreIgnores,
     ...agentDirs,
     // Spikes are throwaway; their NOTES.md is the deliverable.
     "spikes/**",
@@ -308,12 +310,13 @@ export default defineConfig({
     "anti-slop/max-ternary-depth": "error",
     "anti-slop/no-array-filter-map": "error",
     "anti-slop/no-chained-type-assertions": "error",
-    // Vendored but off until the conditional spreads they flag are rewritten: at 8bb5d5b,
-    // `no-conditional-spread` flagged 86 spreads (75 outside tests, judges and tools) and
-    // `no-conditional-empty-array-spread` 63 (56), most in apps/web and packages/client-logic.
+    // Instead of a conditional spread: `onlyIf` (`@cairn/client-logic/OnlyIf`) for a list entry one
+    // state adds, `Option.toArray` or `Array.fromNullishOr` for an optional value,
+    // `Array.appendAll` for an optional list, and a statement for anything costly or narrowed by
+    // its condition.
     "anti-slop/no-conditional-empty-array-spread": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
-    "anti-slop/no-conditional-spread": "off",
+    "anti-slop/no-conditional-spread": "error",
     "anti-slop/no-known-value-widening": "error",
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",

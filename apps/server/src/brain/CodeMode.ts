@@ -29,7 +29,14 @@ import {
   CODEMODE_TOOL_NAME,
   createCodemodeExtension,
 } from "@earendil-works/pi-durable/codemode";
-import { Context, Effect, Layer, Predicate, Semaphore } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Effect,
+  Layer,
+  Predicate,
+  Semaphore,
+} from "effect";
 
 import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
@@ -228,7 +235,7 @@ export class CodeMode extends Context.Service<
           order: ExtensionOrder.codemode,
           extension: defineExtension({
             ...codemode,
-            hooks: [...(codemode.hooks ?? []), deadlineGuard],
+            hooks: Arr.append(codemode.hooks ?? [], deadlineGuard),
           }),
         },
       });

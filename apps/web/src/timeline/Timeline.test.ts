@@ -248,16 +248,14 @@ const checkpointOf = (userEntryId: number) =>
 const answerThenTools = ((): Entry => {
   const raw = coding.entries.find((entry) => entry.id === 43);
   const message = raw?.model?.[0];
+  const content = message?.content ?? [];
 
   return Schema.decodeUnknownSync(Entry)({
     ...raw,
     model: [
       {
         ...message,
-        content: [
-          { type: "text", text: "Searching the folder." },
-          ...(message?.content ?? []),
-        ],
+        content: [{ type: "text", text: "Searching the folder." }, ...content],
       },
     ],
   });

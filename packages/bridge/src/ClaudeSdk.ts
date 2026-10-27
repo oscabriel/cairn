@@ -36,6 +36,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
+  Array as Arr,
   Context,
   Deferred,
   Effect,
@@ -818,10 +819,10 @@ export class ClaudeSdk extends Context.Service<
 
       const record = (sessionId: string, entry: SessionEntry) =>
         Ref.update(fake.sessions, (sessions) =>
-          new Map(sessions).set(sessionId, [
-            ...(sessions.get(sessionId) ?? []),
-            entry,
-          ])
+          new Map(sessions).set(
+            sessionId,
+            Arr.append(sessions.get(sessionId) ?? [], entry)
+          )
         );
 
       const open = Effect.fn("ClaudeSdk.open")(function* (

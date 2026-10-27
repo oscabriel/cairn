@@ -56,6 +56,13 @@ const cases: ReadonlyArray<RuleCase> = [
     quiet: "export const f = (on: boolean) => ({ a: 1, b: on ? 2 : 0 });",
   },
   {
+    code: "anti-slop(no-conditional-spread)",
+    fires:
+      "export const f = (xs: ReadonlyArray<number> | undefined) => [0, ...(xs ?? [])];",
+    quiet:
+      "export const f = (xs: ReadonlyArray<number> | undefined) => {\n  const ys = xs ?? [];\n\n  return [0, ...ys];\n};",
+  },
+  {
     code: "anti-slop(no-known-value-widening)",
     fires: "const v: unknown = { a: 1 };\n\nexport const f = () => v;",
     quiet: "const v = { a: 1 };\n\nexport const f = () => v;",
@@ -194,7 +201,7 @@ const cases: ReadonlyArray<RuleCase> = [
 ];
 
 /** Rules a plugin defines that oxlint.config.ts keeps off for now, so no probe can fire them. */
-const off: ReadonlyArray<string> = ["anti-slop(no-conditional-spread)"];
+const off: ReadonlyArray<string> = [];
 
 /** A probe file name, as `probeName` makes them. */
 const PROBE_FILE = /^LintRuleProbe\d+[0-9a-f]{8}(?:Fires|Quiet)\d+\.ts$/u;

@@ -972,6 +972,6 @@ export const init: Runtime.RoutingApplicationInit<
 
   return {
     model: synced.model,
-    commands: [...(started.commands ?? []), ...(synced.commands ?? [])],
+    commands: Array.appendAll(started.commands ?? [], synced.commands ?? []),
   };
 };

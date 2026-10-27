@@ -109,7 +109,7 @@ const savedFrom = (items: ReadonlyArray<Item>): SavedAttachments =>
         onNone: () => saved,
         onSome: (ref) => ({
           ...saved,
-          [item.draftKey]: [...(saved[item.draftKey] ?? []), ref],
+          [item.draftKey]: Array.append(saved[item.draftKey] ?? [], ref),
         }),
       })
   );
@@ -663,6 +663,6 @@ export const discardDraft = (
 
   return {
     model: pumped.model,
-    commands: [...stop, ...(cleared.commands ?? []), ...pumped.commands],
+    commands: Array.flatten([stop, cleared.commands ?? [], pumped.commands]),
   };
 };

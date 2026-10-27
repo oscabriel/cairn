@@ -235,6 +235,11 @@ const hunkView = (
       ...shown.lines.map((line) => {
         codeIndex += line.kind === "note" ? 0 : 1;
 
+        const content =
+          line.kind === "note"
+            ? [line.text]
+            : tokenContent(h, line, tokens, codeIndex);
+
         return h.div(
           [
             h.DataAttribute("kind", line.kind),
@@ -261,9 +266,7 @@ const hunkView = (
                   line.kind === "removed",
                   h.span([h.Class("sr-only")], ["Removed: "])
                 ),
-                ...(line.kind === "note"
-                  ? [line.text]
-                  : tokenContent(h, line, tokens, codeIndex)),
+                ...content,
               ]
             ),
           ]

@@ -31,7 +31,7 @@ import {
   pastedTextDisposition,
   wouldTextPasteExceedLimit,
 } from "@cairn/client-logic/TextPaste";
-import { Effect, Option, Queue, Stream } from "effect";
+import { Array, Effect, Option, Queue, Stream } from "effect";
 import { Mount } from "foldkit";
 import { streamFromEventFilterMapPreventDefault } from "foldkit/dom";
 
@@ -53,9 +53,8 @@ type PasteMessage =
   | typeof Message.PastedFiles.Type
   | typeof Message.PastedText.Type;
 
-const clipboardFiles = (event: ClipboardEvent): ReadonlyArray<File> => [
-  ...(event.clipboardData?.files ?? []),
-];
+const clipboardFiles = (event: ClipboardEvent): ReadonlyArray<File> =>
+  Array.fromIterable(event.clipboardData?.files ?? []);
 
 const plainTextOf = (event: ClipboardEvent): string =>
   event.clipboardData?.getData("text/plain") ?? "";

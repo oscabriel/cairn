@@ -1,11 +1,13 @@
 import { defineConfig } from "oxfmt";
 import ultracite from "ultracite/oxfmt";
 
+const ultraciteIgnores = ultracite.ignorePatterns ?? [];
+
 // oxfmt has no `extends`: an `extends` key is silently ignored, so spread.
 export default defineConfig({
   ...ultracite,
   ignorePatterns: [
-    ...(ultracite.ignorePatterns ?? []),
+    ...ultraciteIgnores,
     ".agents/**",
     ".claude/**",
     // The phase plan and its notes are prose kept as written; oxfmt rewrites markdown inline code.

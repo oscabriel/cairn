@@ -1204,14 +1204,17 @@ export const openConversation = Effect.fnUntraced(function* (
 
       const routed = yield* attach(started.value, call, bridge.messages);
 
+      const prompt: ReadonlyArray<PromptBlock> =
+        opened.blocks.length > 0
+          ? opened.blocks
+          : [{ type: "text", text: CONTINUE_AFTER_RESUME_PROMPT }];
+
       const blocks: ReadonlyArray<PromptBlock> = [
         ...Option.toArray(opened.reminder).map((text): PromptBlock => ({
           type: "text",
           text,
         })),
-        ...(opened.blocks.length > 0
-          ? opened.blocks
-          : [{ type: "text" as const, text: CONTINUE_AFTER_RESUME_PROMPT }]),
+        ...prompt,
       ];
 
       yield* started.value.query.input

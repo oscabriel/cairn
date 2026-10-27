@@ -34,6 +34,18 @@ describe("run failure classes", () => {
     assert.isTrue(classify("socket hang up", "model_error").retryable);
   });
 
+  it("takes undici's bare `terminated` as a stream cut, but not the word inside a provider answer", () => {
+    // undici ends a body that went quiet past its idle timeout with exactly this (spike 9).
+    assert.strictEqual(
+      classify("terminated", "model_error").class,
+      "transport_error"
+    );
+    assert.strictEqual(
+      classify("Request terminated by content policy", "model_error").class,
+      "provider_error"
+    );
+  });
+
   it("marks permanent provider errors as not worth sending again", () => {
     const overloaded = classify("529 overloaded_error", "model_error");
     const unauthorized = classify("401 invalid api key", "model_error");

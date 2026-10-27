@@ -11,9 +11,13 @@ import type { RunFailureInfo } from "./HarnessSeam.ts";
 /** What the Claude bridge's plan-window rejection starts with. */
 export const PLAN_QUOTA_PREFIX = "Claude plan quota exceeded";
 
-/** Network failures between the brain and a provider: worth sending again. */
+/**
+ * Network failures between the brain and a provider: worth sending again. A bare `terminated` is
+ * undici cutting a body that went quiet past its idle timeout (`spikes/9-http-idle`); only the
+ * whole message counts, so a provider answer that uses the word stays a provider error.
+ */
 const TRANSPORT_PATTERN =
-  /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|socket hang up|fetch failed|network error|connection (?:reset|closed|refused)|timed? ?out/iu;
+  /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|socket hang up|fetch failed|network error|connection (?:reset|closed|refused)|timed? ?out|^terminated$/iu;
 
 /** Provider answers that will fail the same way again: bad request, auth, unknown model. */
 const PERMANENT_PATTERN =

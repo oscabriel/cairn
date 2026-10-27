@@ -245,17 +245,31 @@ describe("incremental parse", () => {
   });
 });
 
+/** The fastest of five parses of `count` unmatched brackets, closed and not, in ms. */
+const fastestParse = (count: number): number => {
+  const brackets = "[".repeat(count);
+
+  parseInline(brackets);
+
+  return Math.min(
+    ...Array.from({ length: 5 }, () => {
+      const started = performance.now();
+
+      parseInline(brackets);
+      parseInline(`${brackets}]`);
+
+      return performance.now() - started;
+    })
+  );
+};
+
 describe("unmatched brackets", () => {
-  it("parse in linear time: 20,000 [ in under 20 ms", () => {
-    const brackets = "[".repeat(20_000);
+  // A ratio, not a wall-clock limit, so a loaded machine cannot fail it: four times the brackets
+  // take about four times as long in linear time and sixteen times in quadratic time.
+  it("parse in linear time: 4x the brackets take well under 16x as long", () => {
+    const small = fastestParse(10_000);
+    const large = fastestParse(40_000);
 
-    parseInline(brackets);
-
-    const started = performance.now();
-
-    parseInline(brackets);
-    parseInline(`${brackets}]`);
-
-    assert.isBelow(performance.now() - started, 40);
+    assert.isBelow(large, Math.max(small, 1) * 8);
   });
 });

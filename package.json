@@ -8,7 +8,7 @@
     "lint": "oxlint",
     "typecheck": "tsc --noEmit -p . && pnpm -r --if-present typecheck",
     "test": "vitest run --passWithNoTests",
-    "check": "oxfmt --check && oxlint && pnpm typecheck && pnpm test",
+    "check": "node tools/check.ts",
     "fix": "oxlint --fix && oxfmt",
     "deploy": "alchemy deploy",
     "plan": "alchemy plan",

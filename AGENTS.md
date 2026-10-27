@@ -8,7 +8,7 @@ One person's agent harness control plane: a web app whose brain (pi-durable) run
 
 ## The gate
 
-`pnpm check` (format, type-aware lint, typecheck, test) is the outer gate, and warnings fail it. A step is done when its outside judge says so: a test, a conformance suite, a screenshot comparison, a `kill -9` script, or the user. Looking right is not done.
+`pnpm check` (format, type-aware lint, typecheck, test) is the outer gate, and warnings fail it. It prints one line on success and the failing step's full output otherwise; `VERBOSE=1 pnpm check` streams every step. A step is done when its outside judge says so: a test, a conformance suite, a screenshot comparison, a `kill -9` script, or the user. Looking right is not done.
 
 ## Before using an API
 

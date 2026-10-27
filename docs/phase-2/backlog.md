@@ -10,7 +10,7 @@ Done on 2026-10-27. Two tiers of work (goal threads and approved briefs, ADR 002
 
 None depends on phase 2 or on the open gate. One worktree and branch (`phase2/s2-<n>`) each, merged with `--no-ff` after its judge passes.
 
-2.1 to 2.9 were merged on 2026-10-27 (`pnpm check` green at 1,310 tests). 2.5's decision: no dispatcher change (`spikes/9-http-idle/NOTES.md`). 2.10 is open.
+2.1 to 2.10 were merged on 2026-10-27 (`pnpm check` green at 1,313 tests). 2.5's decision: no dispatcher change (`spikes/9-http-idle/NOTES.md`).
 
 | Task | What | Judge |
 | --- | --- | --- |

@@ -1,10 +1,12 @@
 // The transcript's scroll judge (plan 3C, D26): the real transcript submodel over a 2,100-row
 // synthetic thread with a streaming tail, in Chromium, sampled once per animation frame.
 //
-//   node judges/transcript-scroll.ts [--seconds 6] [--headed]
+//   node judges/transcript-scroll.ts [--seconds 6] [--headed] [--broken estimate|reflow]
 //
 // It starts the web client's Vite server on an ephemeral loopback port and opens the transcript
-// harness (apps/web/src/timeline/harness), which has no brain. Checks, in order:
+// harness (apps/web/src/timeline/harness), which has no brain. `--broken` turns on one of the
+// harness's broken controls, to show the check it names fails without what it guards. Checks, in
+// order:
 //   follow     while replies stream at the end (growing, then committing and starting the next),
 //              every frame ends within 1 px of the bottom;
 //   scroll-up  a wheel up stops following: the pill shows and, while the reply keeps streaming, no
@@ -12,8 +14,41 @@
 //   expand     opening a turn fold, then the output of the tool row it revealed, moves no frame's
 //              `scrollTop` or the clicked control;
 //   pill       the pill brings the list back to its end, which it follows again;
-//   switch     thread A's first visible row and its offset come back after showing thread B.
+//   switch     thread A's first visible row and its offset come back after showing thread B;
+//   range      on a fresh load, a 40-tick wheel gesture up from the end over settled history, then
+//              one back down: the scroll range (`scrollHeight - clientHeight`) moves at most 1 px
+//              from frame to frame, and neither `scrollTop` nor the rows on screen move against
+//              the gesture by more than 1 px (`--broken estimate` fails it);
+//   reflow     a glyph near the top of the viewport, bookmarked with `caretRangeFromPoint` as a
+//              row and a character offset in it, is back within 3 px of its place once the
+//              viewport goes from 1,440 px wide to 900, back, to 390 and back (`--broken reflow`
+//              fails it); each step also reports whether the first visible row and its offset,
+//              the coarser place the list itself keeps, held within 1 px.
 // Prints one JSON line and exits 0 when every check passed.
+//
+// The range and reflow checks are ported from github.com/hardbeat920/monocode,
+// tests/browser/transcript-scroll.spec.ts ("scrolling settled history keeps the scroll range
+// fixed") and tests/browser/readerAnchor.ts, at 26465c620977f3951d0a532a0f7db32c3c179007.
+// Changed: rows on screen are checked for reversal besides `scrollTop`, the gesture also runs back
+// down, the bookmark names a list row rather than a reply, and the width steps are this judge's.
+//
+// MIT License. Copyright (c) 2026 Nick
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or
+// substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+// NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 /* oxlint-disable no-await-in-loop -- a judge drives one browser step after another, on purpose */
 import { once } from "node:events";
 import { createServer as createNetServer } from "node:net";
@@ -21,7 +56,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
-import { Predicate, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 import { chromium } from "playwright";
 import type { Page } from "playwright";
 import { createServer as createViteServer } from "vite";
@@ -30,6 +65,7 @@ const { values } = parseArgs({
   options: {
     seconds: { type: "string", default: "6" },
     headed: { type: "boolean", default: false },
+    broken: { type: "string", default: "" },
   },
 });
 
@@ -50,6 +86,25 @@ const LONG_TASK_MAX_MS = 50;
  * machine, and this leaves room for three tasks at the limit.
  */
 const LONG_TASK_TOTAL_MS = 150;
+
+/** The range gesture, as MonoCode's: 40 wheel ticks of 160 px, each two frames after the last. */
+const GESTURE_TICKS = 40;
+
+const GESTURE_TICK_PX = 160;
+
+/** How far the gesture must carry the list, so a list that hardly moved cannot pass. */
+const GESTURE_MIN_TRAVEL_PX = 3000;
+
+/** The widths the reflow check takes the viewport through, in order, from 1,440. */
+const REFLOW_WIDTHS = [900, 1440, 390, 1440];
+
+const VIEWPORT = { width: 1440, height: 900 };
+
+/** How far the bookmarked glyph may settle from its place after a width change (MonoCode's 3). */
+const REFLOW_TOLERANCE_PX = 3;
+
+/** How long the reflow check watches the glyph after each width change; its last frame counts. */
+const REFLOW_SETTLE_MS = 1500;
 
 // Runs in the page before the app: per-frame sampling, the long-task log, and probes. A string, so
 // the page's globals stay out of this file's types; what comes back is decoded below.
@@ -103,6 +158,108 @@ window.__sample = (duration, probe) => new Promise((resolve) => {
   };
   requestAnimationFrame(step);
 });
+window.__twoFrames = () =>
+  new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))));
+window.__rest = () => new Promise((resolve) => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  let last = scroller?.scrollTop ?? 0;
+  const check = () => setTimeout(() => {
+    const now = scroller?.scrollTop ?? 0;
+    if (now === last) resolve(true);
+    else { last = now; check(); }
+  }, 150);
+  check();
+});
+window.__startTrace = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  const frames = [];
+  let frame = 0;
+  const read = () => {
+    if (scroller === null) return;
+    const box = scroller.getBoundingClientRect();
+    const rows = [...scroller.querySelectorAll("[data-virtual-list-item-key]")]
+      .map((row) => ({
+        key: row.dataset.virtualListItemKey ?? "",
+        rect: row.getBoundingClientRect(),
+      }))
+      .filter(({ rect }) => rect.bottom > box.top && rect.top < box.bottom)
+      .map(({ key, rect }) => ({ key, top: rect.top - box.top }));
+    frames.push({
+      scrollTop: scroller.scrollTop,
+      range: scroller.scrollHeight - scroller.clientHeight,
+      rows,
+    });
+  };
+  const step = () => {
+    read();
+    frame = requestAnimationFrame(step);
+  };
+  read();
+  frame = requestAnimationFrame(step);
+  window.__stopTrace = () => {
+    cancelAnimationFrame(frame);
+    return frames;
+  };
+};
+// MonoCode's reader anchor: a visible glyph, not a scroll offset or a node boundary.
+window.__bookmark = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  if (scroller === null) return null;
+  const box = scroller.getBoundingClientRect();
+  for (const offsetY of [32, 48, 64]) {
+    for (const fraction of [0.25, 0.5, 0.75]) {
+      const x = box.left + box.width * fraction;
+      const range = document.caretRangeFromPoint(x, box.top + offsetY);
+      if (range === null || range.startContainer.nodeType !== Node.TEXT_NODE) continue;
+      const node = range.startContainer;
+      const row = node.parentElement?.closest("[data-virtual-list-item-key]");
+      if (row == null || !scroller.contains(row) || node.length === 0) continue;
+      const offset = Math.min(range.startOffset, node.length - 1);
+      if (/\\s/u.test(node.data[offset])) continue;
+      range.setStart(node, offset);
+      range.setEnd(node, offset + 1);
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue;
+      const prefix = document.createRange();
+      prefix.selectNodeContents(row);
+      prefix.setEnd(node, offset);
+      return {
+        key: row.dataset.virtualListItemKey,
+        character: prefix.toString().length,
+        glyph: node.data[offset],
+        top: rect.top - box.top,
+      };
+    }
+  }
+  return null;
+};
+window.__bookmarkTop = (key, character) => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  const row = scroller?.querySelector('[data-virtual-list-item-key="' + CSS.escape(key) + '"]');
+  if (scroller == null || row == null) return null;
+  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+  let remaining = character;
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    if (remaining < node.length) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.setEnd(node, remaining + 1);
+      return range.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    }
+    remaining -= node.length;
+  }
+  return null;
+};
+window.__traceBookmark = (duration, key, character) => new Promise((resolve) => {
+  const tops = [];
+  const end = performance.now() + duration;
+  const step = () => {
+    tops.push(window.__bookmarkTop(key, character));
+    if (performance.now() < end) requestAnimationFrame(step);
+    else resolve(tops);
+  };
+  requestAnimationFrame(step);
+});
 `;
 
 const Frame = Schema.Struct({
@@ -124,6 +281,33 @@ const decodeBooleans = Schema.decodeUnknownSync(Schema.Array(Schema.Boolean));
 const decodeBoolean = Schema.decodeUnknownSync(Schema.Boolean);
 
 const decodeNumber = Schema.decodeUnknownSync(Schema.Finite);
+
+const TraceFrame = Schema.Struct({
+  scrollTop: Schema.Finite,
+  range: Schema.Finite,
+  rows: Schema.Array(Schema.Struct({ key: Schema.String, top: Schema.Finite })),
+});
+
+type TraceFrame = typeof TraceFrame.Type;
+
+const decodeTrace = Schema.decodeUnknownSync(Schema.Array(TraceFrame));
+
+const Bookmark = Schema.Struct({
+  key: Schema.String,
+  character: Schema.Int,
+  glyph: Schema.String,
+  top: Schema.Finite,
+});
+
+type Bookmark = typeof Bookmark.Type;
+
+const decodeBookmark = Schema.decodeUnknownSync(
+  Schema.OptionFromNullOr(Bookmark)
+);
+
+const decodeTops = Schema.decodeUnknownSync(
+  Schema.Array(Schema.OptionFromNullOr(Schema.Finite))
+);
 
 const freePort = async (): Promise<number> => {
   const server = createNetServer().listen(0, LOOPBACK);
@@ -334,16 +518,191 @@ const switchPhase = async (page: Page) => {
   };
 };
 
-const run = async (page: Page, port: number) => {
+const rest = async (page: Page): Promise<void> => {
+  await page.evaluate("window.__rest()");
+};
+
+/** One wheel gesture of `GESTURE_TICKS` ticks, `direction` 1 down or -1 up, traced per frame. */
+const gesture = async (
+  page: Page,
+  direction: 1 | -1
+): Promise<ReadonlyArray<TraceFrame>> => {
+  await page.evaluate("window.__startTrace()");
+
+  for (let tick = 0; tick < GESTURE_TICKS; tick += 1) {
+    await page.mouse.wheel(0, direction * GESTURE_TICK_PX);
+    await page.evaluate("window.__twoFrames()");
+  }
+
+  await rest(page);
+
+  return decodeTrace(await page.evaluate("window.__stopTrace()"));
+};
+
+/** How far the rows on screen moved from one frame to the next, read on a row both frames show. */
+const contentSteps = (frames: ReadonlyArray<TraceFrame>): Array<number> =>
+  frames.slice(1).flatMap((frame, index) => {
+    const previous = frames[index]?.rows ?? [];
+
+    const shared = frame.rows.find((row) =>
+      previous.some((other) => other.key === row.key)
+    );
+
+    const before = previous.find((row) => row.key === shared?.key);
+
+    return shared === undefined || before === undefined
+      ? []
+      : [shared.top - before.top];
+  });
+
+const summarizeGesture = (
+  frames: ReadonlyArray<TraceFrame>,
+  direction: 1 | -1
+) => {
+  const ranges = frames.map((frame) => frame.range);
+
+  const rangeSteps = frames
+    .slice(1)
+    .map((frame, index) => Math.abs(frame.range - (frames[index]?.range ?? 0)));
+
+  // Scrolling down, `scrollTop` grows and rows rise; a reversal is a step the other way.
+  const scrollTopReversals = frames
+    .slice(1)
+    .filter(
+      (frame, index) =>
+        direction * (frame.scrollTop - (frames[index]?.scrollTop ?? 0)) < -1
+    ).length;
+
+  const contentReversals = contentSteps(frames).filter(
+    (step) => direction * step > 1
+  ).length;
+
+  const travelPx = Math.round(
+    Math.abs((frames.at(-1)?.scrollTop ?? 0) - (frames[0]?.scrollTop ?? 0))
+  );
+
+  const rangeMaxStepPx = Math.max(0, ...rangeSteps);
+
+  return {
+    held:
+      travelPx >= GESTURE_MIN_TRAVEL_PX &&
+      rangeMaxStepPx <= 1 &&
+      scrollTopReversals === 0 &&
+      contentReversals === 0,
+    frames: frames.length,
+    travelPx,
+    rangeMaxStepPx,
+    rangeSpreadPx: Math.max(...ranges) - Math.min(...ranges),
+    rangeStepsOver1Px: rangeSteps.filter((step) => step > 1).length,
+    scrollTopReversals,
+    contentReversals,
+  };
+};
+
+/** Opens the harness at the end of thread A, as a fresh page. */
+const load = async (page: Page, url: string): Promise<number> => {
   const started = performance.now();
 
-  await page.goto(`http://${LOOPBACK}:${port}/src/timeline/harness/index.html`);
+  await page.goto(url);
   await page.waitForSelector(`${SCROLLER} [data-virtual-list-item-key]`, {
     timeout: 30_000,
   });
   await sleep(1500);
 
-  const loadMs = Math.round(performance.now() - started);
+  return Math.round(performance.now() - started);
+};
+
+const rangePhase = async (page: Page, url: string) => {
+  // A fresh load: the history above the end has never been on screen.
+  await load(page, url);
+
+  const box = await page.locator(SCROLLER).boundingBox();
+
+  if (box !== null) {
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  const up = summarizeGesture(await gesture(page, -1), -1);
+  const down = summarizeGesture(await gesture(page, 1), 1);
+
+  return { up, down };
+};
+
+const tenths = (value: number): number => Math.round(value * 10) / 10;
+
+/**
+ * Per frame for `REFLOW_SETTLE_MS`, how far the bookmarked glyph sits from its place; none while
+ * its row is off the list.
+ */
+const bookmarkShifts = async (
+  page: Page,
+  bookmark: Bookmark
+): Promise<ReadonlyArray<Option.Option<number>>> => {
+  const tops = decodeTops(
+    await page.evaluate(
+      `window.__traceBookmark(${REFLOW_SETTLE_MS}, ${JSON.stringify(bookmark.key)}, ${bookmark.character})`
+    )
+  );
+
+  return tops.map((top) =>
+    Option.map(top, (value) => tenths(Math.abs(value - bookmark.top)))
+  );
+};
+
+const reflowPhase = async (page: Page) => {
+  await wheelUp(page, 2400);
+  await rest(page);
+
+  const bookmark = decodeBookmark(await page.evaluate("window.__bookmark()"));
+  const [before] = await sampleFrames(page, 50);
+  const steps = [];
+
+  for (const width of REFLOW_WIDTHS) {
+    await page.setViewportSize({ width, height: VIEWPORT.height });
+
+    const shifts = Option.isSome(bookmark)
+      ? await bookmarkShifts(page, bookmark.value)
+      : [];
+
+    const shiftPx = Option.flatten(Option.fromUndefinedOr(shifts.at(-1)));
+    const [after] = await sampleFrames(page, 50);
+
+    const firstOffsetDeltaPx = tenths(
+      Math.abs((after?.firstOffset ?? 0) - (before?.firstOffset ?? 0))
+    );
+
+    steps.push({
+      width,
+      held: Option.exists(shiftPx, (shift) => shift <= REFLOW_TOLERANCE_PX),
+      shiftPx: Option.getOrNull(shiftPx),
+      // A frame with the glyph's row off the list counts as unbounded.
+      maxShiftPx: shifts.some(Option.isNone)
+        ? null
+        : Math.max(0, ...shifts.flatMap(Option.toArray)),
+      // The coarser place: the first visible row and its offset, as the list itself keeps it.
+      rowKept:
+        after !== undefined &&
+        after.firstKey === before?.firstKey &&
+        firstOffsetDeltaPx <= 1,
+      firstKey: after?.firstKey ?? "",
+      firstOffsetDeltaPx,
+    });
+  }
+
+  return {
+    bookmark: Option.getOrNull(bookmark),
+    firstKey: before?.firstKey ?? "",
+    firstOffset: tenths(before?.firstOffset ?? 0),
+    steps,
+  };
+};
+
+const run = async (page: Page, port: number) => {
+  const query =
+    values.broken === "" ? "" : `?broken=${encodeURIComponent(values.broken)}`;
+
+  const url = `http://${LOOPBACK}:${port}/src/timeline/harness/index.html${query}`;
+  const loadMs = await load(page, url);
   const rows = decodeNumber(await page.evaluate("window.__rows()"));
   const atEndOnLoad = maxDistance(await sampleFrames(page, 300));
   const follow = await followPhase(page);
@@ -351,6 +710,8 @@ const run = async (page: Page, port: number) => {
   const expand = await expandPhase(page);
   const pill = await pillPhase(page);
   const threadSwitch = await switchPhase(page);
+  const range = await rangePhase(page, url);
+  const reflow = await reflowPhase(page);
 
   return {
     rows,
@@ -361,6 +722,8 @@ const run = async (page: Page, port: number) => {
     expand,
     pill,
     switch: threadSwitch,
+    range,
+    reflow,
   };
 };
 
@@ -378,9 +741,7 @@ const main = async () => {
 
   const browser = await chromium.launch({ headless: !values.headed });
 
-  const page = await browser.newPage({
-    viewport: { width: 1440, height: 900 },
-  });
+  const page = await browser.newPage({ viewport: VIEWPORT });
 
   const errors: Array<string> = [];
 
@@ -410,13 +771,17 @@ const main = async () => {
       result.expand.controlMoves === 0,
     pill: result.pill.maxDistancePx <= 1 && !result.pill.visibleAfter,
     switch: result.switch.keyKept && result.switch.offsetDeltaPx <= 1,
+    range: result.range.up.held && result.range.down.held,
+    reflow:
+      result.reflow.bookmark !== null &&
+      result.reflow.steps.every((step) => step.held),
     errors: errors.length === 0,
   };
 
   const ok = Object.values(checks).every(Boolean);
 
   process.stdout.write(
-    `${JSON.stringify({ ok, checks, ...result, errors })}\n`
+    `${JSON.stringify({ ok, broken: values.broken, checks, ...result, errors })}\n`
   );
   process.exitCode = ok ? 0 : 1;
 };

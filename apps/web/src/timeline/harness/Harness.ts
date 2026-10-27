@@ -1,8 +1,14 @@
 // The transcript alone, for judges/transcript-scroll.ts: two synthetic threads (2,100 rows and a
 // short one) shown through the real transcript submodel, with buttons to switch threads and to
 // stream replies at the end of the long one. No brain, no socket: the thread views are built here.
+//
+// `?broken=` turns on one broken control, so the judge can show a check fails without what it
+// guards: `estimate` makes the list keep no measured row heights, so every row outside the rendered
+// window counts at its estimate (the range check); `reflow` makes a width change keep the raw
+// `scrollTop` instead of the row the reader was on (the reflow check).
 
-import { Duration, Effect, Option, Schema, Stream } from "effect";
+import * as VirtualList from "@foldkit/ui/virtualList";
+import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";
 import { ManagedResource, Runtime, Subscription, Update } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { defineMessageUnion } from "foldkit/message";
@@ -53,6 +59,12 @@ type Message = typeof Message.Type;
 
 const LONG_TURNS = 700;
 
+const Broken = Schema.Literals(["estimate", "reflow"]);
+
+const broken = Schema.decodeUnknownOption(Broken)(
+  new URLSearchParams(location.search).get("broken")
+);
+
 const TICK = Duration.millis(40);
 
 /** The reply of the turn streaming now, built once per turn rather than once per tick. */
@@ -95,6 +107,60 @@ const foldTimeline = (model: Model, message: TimelineMessage): Return =>
     // The harness neither pages history nor sends: OutMessages are dropped.
     foldOutMessage: () => (next: Model) => ({ model: next }),
   })(model, message);
+
+const modifyList = (
+  model: Model,
+  change: (list: VirtualList.Model) => VirtualList.Model
+): Model => ({
+  ...model,
+  timeline: {
+    ...model.timeline,
+    ui: { ...model.timeline.ui, list: change(model.timeline.ui.list) },
+  },
+});
+
+const isListMessage = (
+  message: TimelineMessage,
+  tag: "MeasuredRows" | "ResizedContainer"
+): boolean =>
+  Predicate.isTagged(message, "GotListMessage") &&
+  Predicate.isTagged(message.message, tag);
+
+/** The timeline's update, with the broken control the page asked for, if any. */
+const updateChild = (model: Model, message: TimelineMessage): Return => {
+  if (
+    Option.contains(broken, "reflow") &&
+    isListMessage(message, "ResizedContainer")
+  ) {
+    // The list then restores this offset, not the row the reader was on, after the width change.
+    return foldTimeline(
+      modifyList(model, (list) => ({
+        ...list,
+        viewportAnchor: VirtualList.Model.fields.viewportAnchor.Offset({
+          scrollTop: list.scrollTop,
+        }),
+      })),
+      message
+    );
+  }
+
+  const next = foldTimeline(model, message);
+
+  if (
+    Option.contains(broken, "estimate") &&
+    isListMessage(message, "MeasuredRows")
+  ) {
+    return {
+      ...next,
+      model: modifyList(next.model, (list) => ({
+        ...list,
+        measuredRowHeights: {},
+      })),
+    };
+  }
+
+  return next;
+};
 
 const show = (model: Model, id: "a" | "b"): Return =>
   Update.combine<Model, Message, CairnConnectionService>(
@@ -148,7 +214,7 @@ const tick = (model: Model): Return => {
 
 const update = (model: Model, message: Message): Return =>
   Message.match<Return>(message, {
-    GotTimelineMessage: ({ message: child }) => foldTimeline(model, child),
+    GotTimelineMessage: ({ message: child }) => updateChild(model, child),
     ClickedThread: ({ id }) => show(model, id),
     ClickedStream: ({ on }) =>
       on && !model.streaming

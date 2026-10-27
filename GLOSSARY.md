@@ -64,6 +64,10 @@ _Avoid_: orb, cloud thread, sandbox
 
 _Avoid_: child agent, worker (except as a role alias)
 
+**Goal**: A thread with stated criteria that owns the subagents and stones working toward them. Still a thread: same transcript, sidebar row and composer. Its criteria are met only when an outside judge says so.
+
+_Avoid_: task, epic, project (for the goal)
+
 **Workflow**: A durable script that fans work out across subagents and stones. Every node returns a typed result, writers get verified, and integration is an explicit step.
 
 _Avoid_: pipeline, DAG, job
@@ -175,6 +179,10 @@ _Avoid_: plugin
 **Approval**: A durable record in the brain that holds one gated tool call until the user answers it, from any device, or it expires. Executor's own approval prompts are answered by Cairn, never shown as a second question.
 
 _Avoid_: permission request, prompt (for the record)
+
+**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. It is an approval, and nothing delegated starts until it is answered with Go.
+
+_Avoid_: task, spec, ticket
 
 **Parked**: A task pi-durable stopped running after the brain crashed 5 times in a row while it ran without progress. It shows in the UI with a retry; a task waiting on a pending approval is retried at boot by itself.
 

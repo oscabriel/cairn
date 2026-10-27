@@ -10,6 +10,8 @@ Done on 2026-10-27. Two tiers of work (goal threads and approved briefs, ADR 002
 
 None depends on phase 2 or on the open gate. One worktree and branch (`phase2/s2-<n>`) each, merged with `--no-ff` after its judge passes.
 
+2.1 to 2.9 were merged on 2026-10-27 (`pnpm check` green at 1,310 tests). 2.5's decision: no dispatcher change (`spikes/9-http-idle/NOTES.md`). 2.10 is open.
+
 | Task | What | Judge |
 | --- | --- | --- |
 | 2.1 Lint rules | Vendor Fold's `no-ambient-nondeterminism` and `no-silent-error-swallow` (after checking the license of their source, typeonce-dev/ai-automation); fix the three `randomUUID` files; decide the five `Effect.serviceOption` sites; refresh anti-slop for its four missing rules. | `pnpm check` green, and each rule's test fails on a planted violation. |

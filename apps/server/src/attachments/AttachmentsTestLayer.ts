@@ -13,6 +13,7 @@ import { Database } from "../db/Database.ts";
 import { Shell0001 } from "../db/migrations/0001Shell.ts";
 import { Launches0002 } from "../db/migrations/0002Launches.ts";
 import { Attachments0003 } from "../db/migrations/0003Attachments.ts";
+import { Health } from "../http/Health.ts";
 import type { AttachmentIntake } from "./AttachmentIntake.ts";
 import { AttachmentRoute } from "./AttachmentRoute.ts";
 import { AttachmentsLayer } from "./AttachmentsLayer.ts";
@@ -62,6 +63,18 @@ export const attachmentsTestLayer = (dir: string) =>
     Layer.provideMerge(NodeServices.layer)
   );
 
+/** A finished boot: the upload route refuses uploads until `Health` is ready. */
+const bootedHealth = Layer.effect(
+  Health,
+  Effect.gen(function* () {
+    const health = yield* Health;
+
+    yield* health.markReady;
+
+    return health;
+  })
+).pipe(Layer.provide(Health.layer));
+
 /** A web request handler. */
 export type WebHandler = (request: Request) => Promise<Response>;
 
@@ -71,7 +84,8 @@ export const uploadHandler = Effect.gen(function* () {
 
   const { handler, dispose } = HttpRouter.toWebHandler(
     Layer.mergeAll(UploadRoute, AttachmentRoute).pipe(
-      Layer.provide(Layer.succeedContext(context))
+      Layer.provide(Layer.succeedContext(context)),
+      Layer.provide(bootedHealth)
     ),
     { disableLogger: true }
   );

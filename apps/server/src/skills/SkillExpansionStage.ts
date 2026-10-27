@@ -171,6 +171,7 @@ const unavailable = (failure: { readonly message: string }) =>
  * shell store is composed (tests of other stages), when only the user's skills apply.
  */
 const cwdOfThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+  // Optional on purpose: a stage's `run` has no requirements channel to name the stores in.
   const stores = Option.all({
     rows: yield* Effect.serviceOption(ThreadRows),
     projects: yield* Effect.serviceOption(Projects),

@@ -2,7 +2,8 @@
 // an intent at once (so the row moves before the brain answers, see `Pending.ts`), and a Command mints
 // the UUIDv7 command ids that turn intents into `shell.dispatch` commands for the outbox.
 
-import { CommandId, ThreadId } from "@cairn/protocol/Ids";
+import { ThreadId } from "@cairn/protocol/Ids";
+import type { CommandId } from "@cairn/protocol/Ids";
 import {
   ProjectCreate,
   ThreadArchive,
@@ -19,8 +20,10 @@ import {
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
 import type { ShellCommand } from "@cairn/protocol/ShellCommands";
-import { Clock, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
+
+import { mintCommandId } from "../composer/Ids.ts";
 
 /** One change the sidebar asks the brain for. */
 export const Intent = defineTaggedUnion({
@@ -85,40 +88,7 @@ export const toShellCommand = (
       ProjectCreate.make({ commandId, workspaceRoot, title: Option.none() }),
   });
 
-const decodeCommandId = Schema.decodeSync(CommandId);
-
-const hex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-
-/**
- * A UUIDv7 command id: 48 bits of `Clock` milliseconds, the version and variant bits, and random
- * bits from the platform's secure generator.
- */
-export const mintCommandId: Effect.Effect<CommandId> = Effect.gen(function* () {
-  const millis = yield* Clock.currentTimeMillis;
-
-  const bytes = yield* Effect.sync(() =>
-    globalThis.crypto.getRandomValues(new Uint8Array(16))
-  );
-
-  let remaining = Math.trunc(millis);
-
-  for (let index = 5; index >= 0; index -= 1) {
-    bytes[index] = remaining % 256;
-    remaining = Math.floor(remaining / 256);
-  }
-
-  bytes[6] = 0x70 + ((bytes[6] ?? 0) % 16);
-  bytes[8] = 0x80 + ((bytes[8] ?? 0) % 64);
-
-  const digits = hex(bytes);
-
-  return decodeCommandId(
-    `${digits.slice(0, 8)}-${digits.slice(8, 12)}-${digits.slice(12, 16)}-${digits.slice(16, 20)}-${digits.slice(20)}`
-  );
-});
-
-/** A draft id for a new thread, minted the same way so a draft becomes a thread idempotently. */
+/** A draft id for a new thread, a command id's UUIDv7, so a draft becomes a thread idempotently. */
 export const mintDraftId: Effect.Effect<string> = Effect.map(
   mintCommandId,
   String

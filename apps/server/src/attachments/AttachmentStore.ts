@@ -1,6 +1,6 @@
 // Uploaded attachments on the NVMe and in `cairn.sqlite`. Files live under `<dataDir>/attachments/`:
 // `<id>` (the original), `<id>.prepared` (an image fitted for the model) and `<id>.txt` (a
-// document's text). An upload streams to `.tmp/<id>.<uuid>.part` while it is hashed and counted,
+// document's text). An upload streams to `.tmp/<id>.<random>.part` while it is hashed and counted,
 // and is renamed into place only when its length matches the signed claim; derived files are
 // written to `.tmp` and renamed too, so a reader never sees half a file. The row in `attachments`
 // is written last, so a row always names files that exist. A send claims its attachments
@@ -12,7 +12,7 @@
 // the table design, claims and atomic writes are Cairn's, the writes after cairn-v1,
 // apps/server/src/Files.ts at 1a5cd4a (`writeAtomic`).
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { AttachmentKind, AttachmentRef } from "@cairn/protocol/Attachments";
@@ -25,6 +25,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Random,
   Schedule,
   Schema,
   Stream,
@@ -39,6 +40,11 @@ export const UNCLAIMED_TTL = Duration.hours(24);
 
 /** How often the running brain sweeps. */
 const SWEEP_EVERY = Duration.hours(24);
+
+/** A suffix that keeps concurrent scratch files for one attachment apart. */
+const scratchSuffix = Random.nextIntBetween(0, Number.MAX_SAFE_INTEGER).pipe(
+  Effect.map((value) => value.toString(36))
+);
 
 /** The files an attachment may have. */
 export const AttachmentVariant = Schema.Literals([
@@ -277,7 +283,7 @@ export class AttachmentStore extends Context.Service<
         sizeBytes: number,
         body: Stream.Stream<Uint8Array, E>
       ) {
-        const part = path.join(tmp, `${id}.${randomUUID()}.part`);
+        const part = path.join(tmp, `${id}.${yield* scratchSuffix}.part`);
         const hash = createHash("sha256");
         const chunks: Array<Uint8Array> = [];
         let received = 0;
@@ -383,7 +389,7 @@ export class AttachmentStore extends Context.Service<
       ) {
         const scratch = path.join(
           tmp,
-          `${id}.${randomUUID()}${SUFFIX[variant]}`
+          `${id}.${yield* scratchSuffix}${SUFFIX[variant]}`
         );
 
         yield* Effect.gen(function* () {

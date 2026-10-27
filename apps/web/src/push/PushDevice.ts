@@ -10,6 +10,8 @@
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
 import { Duration, Effect, Option, Predicate, Schema } from "effect";
 
+import { mintUuid7 } from "../composer/Ids.ts";
+
 /** Something the browser refused while turning push on or off. */
 export class PushDeviceError extends Schema.TaggedError<PushDeviceError>()(
   "PushDeviceError",
@@ -264,7 +266,7 @@ const DeviceId = Schema.String.check(
 const isDeviceId = Schema.is(DeviceId);
 
 /** A fresh id; kept in storage, or used for this load alone when storage refuses it. */
-const freshId = Effect.sync(() => crypto.randomUUID().replaceAll("-", ""));
+const freshId = Effect.map(mintUuid7, (id) => id.replaceAll("-", ""));
 
 /**
  * This device's presence id, made and kept in localStorage the first time it is asked for. A

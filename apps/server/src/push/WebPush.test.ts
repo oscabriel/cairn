@@ -9,7 +9,6 @@ import {
   createECDH,
   createPublicKey,
   hkdfSync,
-  randomBytes,
   verify,
 } from "node:crypto";
 import { createServer } from "node:http";
@@ -73,7 +72,8 @@ const browser = (): Browser => {
 
   ecdh.generateKeys();
 
-  const auth = randomBytes(16);
+  // Any 16 octets do; a fixed secret keeps the test deterministic.
+  const auth = Buffer.alloc(16, 0x2a);
 
   return {
     ecdh,

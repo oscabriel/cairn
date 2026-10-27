@@ -56,21 +56,35 @@ import {
 
 const isNotFound = Predicate.isTagged("NotFound");
 
+/** A projector for tests that retry no task, so `refresh` has nothing to recompute. */
+const IdleProjector = Layer.succeed(
+  ShellProjector,
+  ShellProjector.of({
+    reconcile: Effect.succeed({ threads: 0, live: 0, patched: 0 }),
+    refresh: () => Effect.void,
+    flushAll: Effect.void,
+  })
+);
+
 /** The scripted harness with an empty `thread_launches`: no thread is launching. */
 const HarnessNoLaunches = Layer.mergeAll(
   ScriptedHarness.layer,
+  IdleProjector,
   LaunchStore.layerNoDeps.pipe(
     Layer.provide(Database.layerTest({ "0002_Launches": Launches0002 }))
   )
 );
 
 const launchLayer = (dataDir: string, gate: Latch.Latch) =>
-  threadsTestLayer({
-    dataDir,
-    titleModel: TitleModelScripted({ held: false }),
-    model: HeldModel,
-    worktrees: heldWorktrees(gate),
-  });
+  Layer.merge(
+    threadsTestLayer({
+      dataDir,
+      titleModel: TitleModelScripted({ held: false }),
+      model: HeldModel,
+      worktrees: heldWorktrees(gate),
+    }),
+    IdleProjector
+  );
 
 /**
  * Runs `body` over the launch services and a repository at `repo/`, with worktree creation held

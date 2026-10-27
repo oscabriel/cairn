@@ -1,6 +1,6 @@
-// Judges the vendored anti-slop rules (T63): for each rule, one probe the rule must flag and one it
-// must leave alone, linted with the repo's own config in a real zone (apps/server/src/brain), all in
-// one oxlint run. A rule that stops firing (a broken `createOnce`, a config that turns it off) or
+// Judges the vendored anti-slop rules (T63) and Cairn's automation rules: for each rule, one probe
+// the rule must flag and one it must leave alone, linted with the repo's own config in a real zone
+// (apps/server/src/brain), all in one oxlint run. A rule that stops firing (a broken `createOnce`, a config that turns it off) or
 // starts firing on ordinary code fails here, not in review. Probes a killed run left behind are
 // swept first.
 
@@ -26,6 +26,12 @@ interface RuleCase {
 }
 
 const cases: ReadonlyArray<RuleCase> = [
+  {
+    code: "anti-slop(max-ternary-depth)",
+    fires:
+      "export const f = (a: boolean, b: boolean, c: boolean) => (a ? 1 : b ? 2 : c ? 3 : 4);",
+    quiet: "export const f = (a: boolean, b: boolean) => (a ? 1 : b ? 2 : 3);",
+  },
   {
     code: "anti-slop(no-array-filter-map)",
     fires:
@@ -76,6 +82,13 @@ const cases: ReadonlyArray<RuleCase> = [
     fires:
       'export const f = (o: { readonly a: number }) => Reflect.get(o, "a");',
     quiet: "export const f = (o: { readonly a: number }) => o.a;",
+  },
+  {
+    code: "anti-slop(no-reprovide-ambient-service)",
+    fires:
+      'import { Context, Effect } from "effect";\n\nclass Db extends Context.Service<Db, { readonly n: number }>()("cairn/probe/Db") {}\n\nconst read = Effect.gen(function* () {\n  return (yield* Db).n;\n});\n\nexport const f = Effect.gen(function* () {\n  const db = yield* Db;\n\n  return yield* read.pipe(Effect.provideService(Db, db));\n});',
+    quiet:
+      'import { Context, Effect } from "effect";\n\nclass Db extends Context.Service<Db, { readonly n: number }>()("cairn/probe/Db") {}\n\nconst read = Effect.gen(function* () {\n  return (yield* Db).n;\n});\n\nexport const f = Effect.gen(function* () {\n  return yield* read;\n});',
   },
   {
     code: "anti-slop(no-runtime-typeof)",
@@ -160,6 +173,25 @@ const cases: ReadonlyArray<RuleCase> = [
       'export const f = (x: "a" | "b" | "c") => (x === "a" ? 1 : x === "b" ? 2 : 3);',
     quiet: 'export const f = (x: "a" | "b") => (x === "a" ? 1 : 2);',
   },
+  {
+    code: "automation(no-ambient-nondeterminism)",
+    fires: "export const now = () => Date.now();",
+    quiet:
+      'import { Clock } from "effect";\n\nexport const now = Clock.currentTimeMillis;',
+  },
+  {
+    code: "automation(no-silent-error-swallow)",
+    fires:
+      'import { Effect } from "effect";\n\nexport const f = (e: Effect.Effect<number, string>) =>\n  e.pipe(Effect.catch(() => Effect.void));',
+    quiet:
+      'import { Effect } from "effect";\n\nexport const f = (e: Effect.Effect<number, string>) =>\n  e.pipe(Effect.catch(() => Effect.succeed(0)));',
+  },
+];
+
+/** Rules a plugin defines that oxlint.config.ts keeps off for now, so no probe can fire them. */
+const off: ReadonlyArray<string> = [
+  "anti-slop(no-conditional-empty-array-spread)",
+  "anti-slop(no-conditional-spread)",
 ];
 
 /** A probe file name, as `probeName` makes them. */
@@ -173,7 +205,7 @@ const sweepProbes = () => {
   }
 };
 
-describe("the anti-slop rules", () => {
+describe("the anti-slop and automation rules", () => {
   sweepProbes();
 
   it("flag each rule's firing probe and leave its quiet probe alone", () => {
@@ -225,18 +257,19 @@ describe("the anti-slop rules", () => {
     assert.deepStrictEqual(wrong, []);
   });
 
-  it("probe every rule the two plugins define", () => {
+  it("probe every rule the three plugins define, or name it as off", () => {
     const defined = [
       ["anti-slop", "tools/oxlint/anti-slop/rules"],
       ["anti-slop-effect", "tools/oxlint/anti-slop/effect/rules"],
+      ["automation", "tools/oxlint/automation/rules"],
     ].flatMap(([plugin, directory]) =>
       readdirSync(path.join(root, directory ?? ""))
-        .filter((name) => name.endsWith(".ts"))
+        .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
         .map((name) => `${plugin}(${name.replace(/\.ts$/u, "")})`)
     );
 
     assert.sameMembers(
-      cases.map((ruleCase) => ruleCase.code),
+      [...cases.map((ruleCase) => ruleCase.code), ...off],
       defined
     );
   });

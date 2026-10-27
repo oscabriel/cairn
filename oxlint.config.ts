@@ -265,6 +265,7 @@ export default defineConfig({
   jsPlugins: [
     { name: "foldkit", specifier: "@foldkit/oxlint-plugin" },
     { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
+    { name: "automation", specifier: "./tools/oxlint/automation/index.ts" },
     {
       name: "anti-slop-effect",
       specifier: "./tools/oxlint/anti-slop/effect/index.ts",
@@ -283,6 +284,12 @@ export default defineConfig({
         "effecttsgo/unstable-api-usage": "off",
       },
     },
+    {
+      // Judges watch the real system from outside: they wait on wall-clock deadlines and name
+      // their probes with real randomness, where TestClock and a seeded Random would lie.
+      files: ["judges/**"],
+      rules: { "automation/no-ambient-nondeterminism": "off" },
+    },
     ...foldkitOverrides,
     ...boundaryOverrides,
     {
@@ -298,15 +305,22 @@ export default defineConfig({
     "anti-slop-effect/no-manual-tagged-construction": "error",
     "anti-slop-effect/no-service-constructor-imports": "error",
     "anti-slop-effect/prefer-effect-match": "error",
+    "anti-slop/max-ternary-depth": "error",
     "anti-slop/no-array-filter-map": "error",
     "anti-slop/no-chained-type-assertions": "error",
+    // Vendored but off until the conditional spreads they flag are rewritten: at 8bb5d5b,
+    // `no-conditional-spread` flagged 86 spreads (75 outside tests, judges and tools) and
+    // `no-conditional-empty-array-spread` 63 (56), most in apps/web and packages/client-logic.
+    "anti-slop/no-conditional-empty-array-spread": "off",
     "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-conditional-spread": "off",
     "anti-slop/no-known-value-widening": "error",
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-reduce-accumulator-copy": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-reprovide-ambient-service": "error",
     "anti-slop/no-runtime-typeof": "error",
     "anti-slop/no-shape-in-symbol-names": "error",
     "anti-slop/no-unknown-parameters": "error",
@@ -316,6 +330,8 @@ export default defineConfig({
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-readable-spacing": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "automation/no-ambient-nondeterminism": "error",
+    "automation/no-silent-error-swallow": "error",
     // Effect's own convention: `import { Effect } from "effect"` (ADR 0004).
     "effecttsgo/prefer-barrel-import": "error",
     // The rest are Effect v4 idioms that ultracite core rejects (research 07 §3.3).

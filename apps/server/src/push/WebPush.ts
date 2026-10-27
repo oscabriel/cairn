@@ -193,6 +193,7 @@ const drawSenderKeys: DrawSenderKeys = Effect.gen(function* () {
     )
   );
 
+  // oxlint-disable-next-line automation/no-ambient-nondeterminism -- RFC 8291's salt must come from a CSPRNG; tests replace it through `PushEntropy`
   const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
 
   return { salt, publicKey, privateKey: pair.privateKey };

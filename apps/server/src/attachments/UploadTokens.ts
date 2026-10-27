@@ -23,6 +23,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+// oxlint-disable-next-line automation/no-ambient-nondeterminism -- the signing key and attachment ids must come from a CSPRNG; Effect's `Random` is Math.random
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 
@@ -145,6 +146,7 @@ const keyFromFile = Effect.fn("UploadTokens.keyFromFile")(function* () {
       .pipe(
         Effect.catchIf(
           (error) => Predicate.isTagged(error.reason, "AlreadyExists"),
+          // oxlint-disable-next-line automation/no-silent-error-swallow -- another brain's key is the outcome we wanted
           () => Effect.void
         ),
         Effect.mapError(keyError)

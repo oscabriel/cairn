@@ -26,6 +26,11 @@ None depends on phase 2 or on the open gate. One worktree and branch (`phase2/s2
 
 Planned the phase 1 way. Area notes in `docs/phase-2/notes/`: subagents and delivery; briefs, goals and approvals UI; workflows, the dispatch ledger and durable events; role aliases, cost and the Codex login; artifacts and portals through porch; UI and tokens. Proposed ADRs for durable events with exactly-once reactors and, if the design pass forks the shell, a UI fork amending ADR 0015. Then `docs/phase-2/plan.md` in waves. Open question carried from ADR 0026: how a workflow's launch approval relates to the briefs of its nodes. Judge: the user's sign-off.
 
+Carried in from stage 2:
+
+- Subagents and delivery: a layer built for a subagent, child thread or workflow node needs a fresh memo map (`Layer.makeMemoMap` with `Layer.buildWithMemoMap`) or `Layer.fresh`. Plain `Layer.build`, `Effect.provide` and an unwrapped `LayerMap` hand a child the parent's or the root's instances (2.6, `apps/server/src/brain/MemoMapIsolation.test.ts`). Candidate for an ADR.
+- Bridge: compare three pi-claude-bridge fixes after `874fa7c` (abort-signal binding in `38980d1` and `1ae18a2`, the queued-steer MCP fix in `8a60b18`) against the port, and check whether the bridge should set `CLAUDE_CODE_MAX_RETRIES=0` and `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` as `docs/phase-1/notes/pi-claude-code.md` recommended (2.7).
+
 ## Stage 4: the build, as sketched
 
 For the plan, not binding.

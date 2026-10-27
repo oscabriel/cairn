@@ -3,7 +3,7 @@
 // conversation to join. Each runs in its own Claude Code child with no saved session
 // (`persistSession: false`), no tools and one turn, and never touches a conversation's held query.
 //
-// Ported from elidickinson/pi-claude-bridge, src/index.ts (lines 551-680, `runIsolatedSummary`) at
+// Ported from elidickinson/pi-claude-bridge, src/index.ts (lines 543-666, `runIsolatedSummary`) at
 // 874fa7c2678456336f23b64e784e2057e608d83e, by way of cairn-v1 apps/server/src/claude/summary.ts at
 // 1a5cd4a56e84bfb187940428d144b584d2e084b0. Behaviour kept: route on the `cacheRetention` marker, not
 // on which summarizer calls; only a real abort (an `AbortError` reason) stops the child, never

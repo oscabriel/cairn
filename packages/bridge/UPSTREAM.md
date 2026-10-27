@@ -29,7 +29,7 @@ Two further sources are read for ideas and carry no code: `earendil-works/pi-cla
 | --- | --- | --- |
 | `Claude.ts` | v1 `Claude.ts` and the `ClaudeBridge` class (in intent); dot314 `stream-idle-watchdog.ts` (idea only) | The service: conversations live in an `RcMap` keyed by pi's provider session id, with a cap on live children and an idle time to live; the cwd arrives through `noteConversation`; permits from `ClaudeSlots`; plan windows as a stream. |
 | `ClaudeAccount.ts` | Own | The cached Claude Code login, read by the provider's availability check; never the token. |
-| `ClaudeConversation.ts` | Upstream `index.ts` `streamClaudeAgentSdk` (1766-2214), `deliverToolResults`, `buildMcpServers` and the resumed-result path (1035-1089, 1631-1721); v1 `claude/conversation.ts` | An Effect state machine under one lock, one conversation per pi session id, no module state; the resume table replaces v1's native resume and rebuild; a finished child stays alive; a generation permit; a stall watchdog. |
+| `ClaudeConversation.ts` | Upstream `index.ts` `streamClaudeAgentSdk` (1766-2212), `deliverToolResults`, `buildMcpServers` and the resumed-result path (1035-1089, 1631-1721); v1 `claude/conversation.ts` | An Effect state machine under one lock, one conversation per pi session id, no module state; the resume table replaces v1's native resume and rebuild; a finished child stays alive; a generation permit; a stall watchdog. |
 | `ClaudeEvents.ts` | Own | The SDK messages the bridge reads, as Schemas, decoded at `ClaudeSdk`'s boundary. |
 | `ClaudeGuards.ts` | v1 `claude/{query-options,prompt-safety,abort}.ts`; dot314 `third-party-rejection.ts`; upstream `index.ts` 48-64 (`CC_CHILD_ENV`, `CLAUDE_MD_EXCLUDES`) | Pure checks on a `ChildOptions` value; strips every `ANTHROPIC_*`, `CAIRN_*` and inherited `CLAUDE_CODE_*` name; adds `CLAUDE_CODE_FORK_SUBAGENT=0`; every bridge error text lives here. |
 | `ClaudeInstructions.ts` | v1 `claude/system-reminder.ts` (Cairn's own code) | Replays the effective system state with pi-ai 1.4.0's `getCurrentSystemMessage`; the rebuild-only history renderer is gone. |
@@ -46,7 +46,7 @@ Two further sources are read for ideas and carry no code: `earendil-works/pi-cla
 | `ClaudeSlots.ts` | Own | The generation semaphore; a child held across a tool call holds no permit. |
 | `ClaudeStamp.ts` | v1 `claude/session-map.ts` (Cairn's own code); dot314 `history-digest.ts` (ideas only) | Adds `ccUuid`, `piSessionId`, `cwd`; drops `ccMessageId`; details decoded with a Schema. |
 | `ClaudeStream.ts` | Upstream `index.ts` 1139-1610 and `query-state.ts`; v1 `claude/{stream,query-state}.ts` | Reads decoded `ClaudeEvent`s; records each message's chain uuid; ends a streamed tool-use turn on `message_stop`; `pending`, `deferred` and `cacheWrite1h` from pi-ai 1.4.0; no singletons; no bash timeout default. |
-| `ClaudeSummary.ts` | Upstream `index.ts` `runIsolatedSummary` (551-680); v1 `claude/summary.ts` | Goes through `ClaudeSdk` with the guards; the instructions ride as the preset's append; prior history carried as a transcript. |
+| `ClaudeSummary.ts` | Upstream `index.ts` `runIsolatedSummary` (543-666); v1 `claude/summary.ts` | Goes through `ClaudeSdk` with the guards; the instructions ride as the preset's append; prior history carried as a transcript. |
 | `ClaudeTokens.ts` | Upstream `usage.ts`; v1 `claude/tokens.ts` | Renamed to avoid `ClaudeUsage`; fills the one-hour cache write split. |
 | `ClaudeToolResults.ts` | dot314 `extract-tool-results.ts` (identical to upstream's file of that name at `874fa7c`); v1 `claude/extract-tool-results.ts` | Typed over pi-ai's messages; the pairing id is required. |
 | `ClaudeTranscript.ts` | Upstream `transcript.ts`; v1 `claude/transcript.ts` | pi-ai 1.4.0's replay helpers do the work; sections in pi-durable's replay order. |
@@ -90,7 +90,7 @@ ADR 0025 (compaction forks the stamped session, `status: proposed`) adds nothing
 
 ## Header findings
 
-Checked against `874fa7c` on 2026-10-27. These are recorded, not fixed (headers are code):
+Checked against `874fa7c` on 2026-10-27. The four range errors below were fixed in the headers the same day; the list stays as the record of what was checked.
 
 - `ClaudePrompt.ts` cites "lines 399-472 and 1612-1619, the continuation prompt". Lines 1612-1619 are `steerBlocks`; the continuation prompt is `CONTINUE_AFTER_RESUME_PROMPT` at 1716-1721. `docs/phase-1/notes/bridge.md` 3.5 repeats "1612 to 1619".
 - `ClaudeSummary.ts` cites `runIsolatedSummary` as lines 551-680. The function ends at 666; 667-680 is the start of the next section (`syncSharedSession` documentation, `verifyWrittenSession`). The entry point `isolatedStreamFn` (543-548) is not in the range.

@@ -1,7 +1,8 @@
-// Ported from elidickinson/pi-claude-bridge, src/index.ts (lines 399-472 and 1612-1619, the
-// continuation prompt) at 874fa7c2678456336f23b64e784e2057e608d83e, by way of cairn-v1
-// apps/server/src/claude/prompt.ts at 1a5cd4a56e84bfb187940428d144b584d2e084b0. Behaviour kept: the
-// trailing run of user messages is the prompt, images ride as blocks, a steer is the same blocks.
+// Ported from elidickinson/pi-claude-bridge, src/index.ts (lines 399-472, 1612-1619 for
+// `steerBlocks` and 1716-1721 for the continuation prompt) at
+// 874fa7c2678456336f23b64e784e2057e608d83e, by way of cairn-v1 apps/server/src/claude/prompt.ts at
+// 1a5cd4a56e84bfb187940428d144b584d2e084b0. Behaviour kept: the trailing run of user messages is
+// the prompt, images ride as blocks, a steer is the same blocks.
 // Changed: blocks are Cairn values (`ClaudeSdk` maps them onto the Agent SDK); tool results Claude
 // Code does not hold, and pi's whole context for a fresh session, render here as prompt text.
 //

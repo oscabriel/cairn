@@ -1,8 +1,8 @@
 // Ported from cairn-v1, apps/server/src/claude/{query-options.ts, prompt-safety.ts, abort.ts} at
 // 1a5cd4a56e84bfb187940428d144b584d2e084b0, plus w-winter/dot314,
 // extensions/pi-claude-bridge/src/third-party-rejection.ts at c157f4e6f9fda15b2d6698a12820e7118d19fbd7,
-// and the CC_CHILD_ENV idea from elidickinson/pi-claude-bridge, src/index.ts (lines 48-64) at
-// 874fa7c2678456336f23b64e784e2057e608d83e. Behaviour kept; rewritten as Cairn's pure guards: the
+// and the CC_CHILD_ENV and CLAUDE_MD_EXCLUDES ideas from elidickinson/pi-claude-bridge,
+// src/index.ts (lines 48-64) at 874fa7c2678456336f23b64e784e2057e608d83e. Behaviour kept; rewritten as Cairn's pure guards: the
 // child's options are a Cairn value checked here, env stripping adds CAIRN_* and every ANTHROPIC_*
 // name, and every error text the bridge produces is defined here so its retry class is judged once.
 //

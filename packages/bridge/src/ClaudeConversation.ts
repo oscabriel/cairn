@@ -1,4 +1,4 @@
-// Ported from elidickinson/pi-claude-bridge, src/index.ts `streamClaudeAgentSdk` (lines 1766-2214),
+// Ported from elidickinson/pi-claude-bridge, src/index.ts `streamClaudeAgentSdk` (lines 1766-2212),
 // with `deliverToolResults`, `buildMcpServers` and the orphaned-result path (lines 1035-1089,
 // 1631-1721), at 874fa7c2678456336f23b64e784e2057e608d83e, by way of cairn-v1
 // apps/server/src/claude/conversation.ts at 1a5cd4a56e84bfb187940428d144b584d2e084b0. Behaviour kept:

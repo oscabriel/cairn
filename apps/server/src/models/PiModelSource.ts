@@ -10,7 +10,8 @@
 // creates `auth.json`), `modelsPath` is null (no `models.json`, no `models-store.json`), and remote
 // catalogs refresh into pi-ai's in-memory store (plan D11). Claude arrives as the `claude-bridge`
 // provider through `ExtraProviders`; pi-ai's own `anthropic` provider is replaced by the guarded one
-// and never listed (ADR 0002). pi-coding-agent is imported lazily, when the layer is built.
+// and never listed (ADR 0002). Every non-bridge stream passes the degenerate stream guard
+// (`StreamGuard.ts`). pi-coding-agent is imported lazily, when the layer is built.
 
 import path from "node:path";
 
@@ -53,6 +54,7 @@ import { CairnCredentialStore, CODEX_PROVIDER } from "./CredentialStore.ts";
 import { BRIDGE_PROVIDER, HarnessSettings } from "./HarnessSettings.ts";
 import type { PiDefaults } from "./PiConfig.ts";
 import { PiConfig } from "./PiConfig.ts";
+import { guardModels } from "./StreamGuard.ts";
 
 /** The model runtime could not be built or answered. */
 export class ModelRuntimeError extends Schema.TaggedError<ModelRuntimeError>()(
@@ -581,13 +583,16 @@ export class PiModelSource extends Context.Service<
         credentialEntries: async () => await credentials.entries(),
       });
 
+      // Every stream the brain opens goes through the degenerate stream guard (bridge excepted).
+      const guarded = guardModels(runtime);
+
       return Context.make(PiModelSource, PiModelSource.of(catalog)).pipe(
         Context.add(
           ModelSource,
           ModelSource.of({
-            models: () => runtime,
+            models: () => guarded,
             settings: () => harness.settings(bridgeModelIds()),
-            completeSimple: completeSimpleOn(runtime),
+            completeSimple: completeSimpleOn(guarded),
           })
         )
       );

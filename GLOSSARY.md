@@ -60,7 +60,7 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Stone image**: The base container image every stone starts from (`images/stone`). GitHub Actions builds it and pushes it to Cloudflare's registry, and the stack deploys it by digest.
 
-**Subagent**: A child conversation that a thread or stone spawns through a tool. Its parent owns it, and it is visible and steerable in the UI.
+**Subagent**: A thread that another thread or a stone spawns through a tool, from an approved brief. Its parent owns it; it has no sidebar row of its own but shows under its parent, where it can be steered and stopped. Its result reaches the parent as a note.
 
 _Avoid_: child agent, worker (except as a role alias)
 
@@ -71,6 +71,12 @@ _Avoid_: task, epic, project (for the goal)
 **Workflow**: A durable script that fans work out across subagents and stones. Every node returns a typed result, writers get verified, and integration is an explicit step.
 
 _Avoid_: pipeline, DAG, job
+
+**Dispatch ledger**: A workflow's record of every node it dispatched: the brief that approved it, its model and its cost. A replay reads it, and the steps panel shows it.
+
+**Role**: A name such as `@worker`, `@scout`, `@judge` or `@verifier` that briefs and workflows use instead of a model. It resolves to a concrete model when the child is created, and the child keeps that model.
+
+_Avoid_: alias (alone), agent type
 
 ## Seams and services
 
@@ -176,13 +182,19 @@ _Avoid_: plugin
 
 ## Asking the user
 
-**Approval**: A durable record in the brain that holds one gated tool call until the user answers it, from any device, or it expires. Executor's own approval prompts are answered by Cairn, never shown as a second question.
+**Approval**: A durable record in the brain that holds one decision (a gated tool call, a question or a brief) until it is answered, from any device, or it expires. It records who decided and why. Executor's own approval prompts are answered by Cairn, never shown as a second question.
 
 _Avoid_: permission request, prompt (for the record)
 
-**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. It is an approval, and nothing delegated starts until it is answered with Go.
+**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. It is an approval, and nothing delegated starts until the user answers it with Go or it fits its workflow's envelope.
 
 _Avoid_: task, spec, ticket
+
+**Envelope**: The limits a workflow's launch approval sets: its script, the roles at each call site, a node cap and a budget. A node brief that fits the envelope is approved by it; one outside it asks the user.
+
+**Request card**: The card above the composer that holds what waits on the user in a thread: an approval, a question or a brief. Once answered, it leaves one line in the transcript saying who decided and why.
+
+_Avoid_: prompt, modal, panel
 
 **Parked**: A task pi-durable stopped running after the brain crashed 5 times in a row while it ran without progress. It shows in the UI with a retry; a task waiting on a pending approval is retried at boot by itself.
 
@@ -199,6 +211,8 @@ _Avoid_: approval policy, trust level
 _Avoid_: page, report (for the published thing)
 
 **Portal**: A private `gneiss.run` URL in front of a running dev server, on the Beelink or in a stone.
+
+**Porch**: The user's tool (porchlight) that names private `gneiss.run` URLs and renders them into Caddy. Cairn publishes artifacts and opens portals by calling it.
 
 _Avoid_: preview, tunnel
 

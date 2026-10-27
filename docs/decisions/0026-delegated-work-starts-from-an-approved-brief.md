@@ -15,6 +15,7 @@ Consequences:
 
 - Every approval records who decided it and why. Hands-off goals, where something other than the user answers a brief, come after phase 2; with those fields and criteria that name outside judges, they need no schema change. Nothing but an outside judge marks a criterion met.
 - "Task" stays pi-durable's word; the delegated unit is a subagent or a stone.
-- How a workflow's launch approval relates to the briefs of its nodes is left to the phase 2 plan.
+- A workflow's launch approval is an envelope: node briefs that fit it are approved by it and recorded as such, and a node outside it asks (ADR 0032).
+- The brief, its Go and its record are specified in ADRs 0029 and 0030; a brief waits for Go in every permission mode.
 
 Decided by the user on 2026-10-27.

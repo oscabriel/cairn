@@ -10,3 +10,5 @@ Ultimate (HazAT/ultimate) puts a standing agent, @ultimate, between the user and
 The routing is code, not prompt rules. Ultimate's version holds only because its prompts tell agents not to message the user directly. Cairn's durable approvals and the derived inbox already decide what the user sees, and a standing agent would be one more model making that choice.
 
 Decided by the user on 2026-10-27.
+
+Amended on 2026-10-27 with the routing rules (`docs/phase-2/notes/briefs.md` and `subagents.md`). Only questions route to the parent; an approval is always the user's, shown as a card in the parent thread, and the parent's reply tool refuses an approval id. A child's question is a record in the child's own approvals. The parent's model answers it or escalates it; it escalates by itself when the parent's run ends, fails or parks, or 15 minutes after the parent's model first saw it. Escalation writes the child's record and a mirror in the parent's approvals in one commit, so an answer from either thread resolves it exactly once.

@@ -1,14 +1,17 @@
 // Ported in part from cairn-v1, apps/server/src/providers.ts at 1a5cd4a (the refused providers);
 // the store itself is new (plan D11, ADR 0009). Changed: pi's `auth.json` is read, never written or
-// locked, and only literal API keys pass.
+// locked, and only literal API keys pass; Cairn's own OAuth sign-ins come from its own store.
 //
-// The brain's credentials, read from pi's own `~/.pi/agent/auth.json` so a key the user added in pi
-// works in Cairn too. Read-only: the file is read on each call (never locked, never created) and
-// `modify` and `delete` refuse, so nothing Cairn does can change it. Only API keys pass:
+// The brain's credentials. API keys are read from pi's own `~/.pi/agent/auth.json` so a key the user
+// added in pi works in Cairn too. That file is read-only: it is read on each call (never locked,
+// never created), and `modify` and `delete` refuse for every provider it serves, so nothing Cairn
+// does can change it. Only API keys pass from it:
 //
-// - every OAuth credential is ignored (Cairn keeps its own OAuth store, ADR 0009, from Phase 2),
+// - every OAuth credential is ignored (Cairn keeps its own OAuth sign-ins, ADR 0009 and 0037),
 // - `anthropic` is hidden whatever it holds (ADR 0002: Claude runs only through the bridge),
-// - `openai-codex` is never read from pi's file (its login is Cairn's own, Phase 2),
+// - `openai-codex` is never read from pi's file: its sign-in is Cairn's own, served by an
+//   `OAuthCredentialSource` (`OAuthStore.ts`, in `cairn.sqlite`), which is also where pi-ai's
+//   refresh writes the rotated token,
 // - a key that is not a literal (pi's `!command` or `$VAR` templates) is ignored, because
 //   resolving it would run a command or read the environment,
 // - any value carrying an Anthropic subscription token (`sk-ant-oat`) is ignored, for every provider.
@@ -23,13 +26,33 @@ import type {
   Credential,
   CredentialInfo,
   CredentialStore,
+  OAuthCredential,
 } from "@earendil-works/pi-ai";
 import { Option, Schema } from "effect";
 
 import { ANTHROPIC_PROVIDER, isOAuthToken } from "./AnthropicGuard.ts";
 
-/** pi-ai's Codex provider id; its OAuth login is Cairn's own from Phase 2. */
+/** pi-ai's Codex provider id; its OAuth sign-in is Cairn's own (ADR 0037). */
 export const CODEX_PROVIDER = "openai-codex";
+
+/** Providers whose OAuth sign-in Cairn keeps itself; their entries in pi's file are never read. */
+export const OAUTH_PROVIDERS: ReadonlySet<string> = new Set([CODEX_PROVIDER]);
+
+/**
+ * Cairn's own OAuth sign-ins as pi-ai's credential store methods (`OAuthStore.source`). `held` is
+ * false when another process holds the OAuth lock; `read` then answers nothing and writes reject.
+ */
+export interface OAuthCredentialSource {
+  /** The providers it serves. */
+  readonly providers: ReadonlySet<string>;
+  readonly held: boolean;
+  read(providerId: string): Promise<OAuthCredential | undefined>;
+  modify(
+    providerId: string,
+    update: (current: Credential | undefined) => Promise<Credential | undefined>
+  ): Promise<Credential | undefined>;
+  delete(providerId: string): Promise<void>;
+}
 
 /** Providers whose entry in pi's file is never read. */
 export const HIDDEN_PROVIDERS: ReadonlySet<string> = new Set([
@@ -37,15 +60,23 @@ export const HIDDEN_PROVIDERS: ReadonlySet<string> = new Set([
   CODEX_PROVIDER,
 ]);
 
-/** Why an entry in pi's file is not offered to the model runtime. */
+/**
+ * Why a credential is not offered to the model runtime: the first five for entries in pi's file,
+ * `signed_out` and `not_holder` for Cairn's own OAuth sign-ins.
+ */
 export type CredentialRefusal =
   | "hidden_provider"
+  | "signed_out"
+  | "not_holder"
   | "oauth"
   | "not_literal"
   | "subscription_token"
   | "malformed";
 
-/** One entry of pi's file as Cairn sees it: id, type and verdict, never the value. */
+/**
+ * One credential as Cairn sees it, from pi's file or Cairn's own OAuth store: id, type and verdict,
+ * never the value.
+ */
 export interface CredentialEntry {
   readonly provider: string;
   /** The stored type, or `unknown` when the entry is not one pi-ai knows. */
@@ -152,27 +183,57 @@ export const judgeAuthFile = (text: string): ReadonlyArray<CredentialVerdict> =>
   });
 
 /**
- * pi-ai's `CredentialStore` over pi's `auth.json`, read-only, offering only literal API keys of
- * providers Cairn allows. A missing file reads as empty; an unreadable one rejects, which pi-ai
- * reports as an auth failure.
+ * pi-ai's `CredentialStore`: pi's `auth.json`, read-only, offering only literal API keys of
+ * providers Cairn allows, and Cairn's own OAuth sign-ins for `OAUTH_PROVIDERS` when `oauth` is
+ * given. A missing file reads as empty; an unreadable one rejects, which pi-ai reports as an auth
+ * failure. Without `oauth` (a judge or dev brain), the OAuth providers are not offered.
  */
 export class CairnCredentialStore implements CredentialStore {
   /** The `auth.json` this store reads. */
   readonly authPath: string;
 
-  constructor(authPath: string) {
+  /** Cairn's own OAuth sign-ins, when this brain keeps them. */
+  readonly oauth: Option.Option<OAuthCredentialSource>;
+
+  constructor(
+    authPath: string,
+    oauth: Option.Option<OAuthCredentialSource> = Option.none()
+  ) {
     this.authPath = authPath;
+    this.oauth = oauth;
   }
 
-  /** Every entry's verdict: provider id, type and why it is not offered. Never a value. */
+  /**
+   * Every entry's verdict: provider id, type and why it is not offered. pi's file's entries
+   * (without the OAuth providers, which it never serves), then one entry per OAuth provider from
+   * Cairn's own store. Never a value.
+   */
   async entries(): Promise<ReadonlyArray<CredentialEntry>> {
     const verdicts = await this.verdicts();
 
-    return verdicts.map((verdict) => verdict.entry);
+    const fromFile = verdicts
+      .map((verdict) => verdict.entry)
+      .filter((entry) => !OAUTH_PROVIDERS.has(entry.provider));
+
+    const own = await Promise.all(
+      [...OAUTH_PROVIDERS].map(async (provider): Promise<CredentialEntry> => ({
+        provider,
+        type: "oauth",
+        refusal: await this.oauthRefusal(provider),
+      }))
+    );
+
+    return [...fromFile, ...own];
   }
 
-  /** The offered API key of `providerId`, if there is one. */
+  /** The offered credential of `providerId`, if there is one. */
   async read(providerId: string): Promise<Credential | undefined> {
+    if (OAUTH_PROVIDERS.has(providerId)) {
+      return Option.isSome(this.oauth)
+        ? await this.oauth.value.read(providerId)
+        : undefined;
+    }
+
     const verdicts = await this.verdicts();
 
     return Option.getOrUndefined(
@@ -189,26 +250,75 @@ export class CairnCredentialStore implements CredentialStore {
   async list(): Promise<ReadonlyArray<CredentialInfo>> {
     const verdicts = await this.verdicts();
 
-    return verdicts
+    const keys = verdicts
       .filter((verdict) => Option.isSome(verdict.credential))
       .map((verdict): CredentialInfo => ({
         providerId: verdict.entry.provider,
         type: "api_key",
       }));
+
+    const own = await Promise.all(
+      [...OAUTH_PROVIDERS].map(async (provider) => ({
+        provider,
+        signedIn: (await this.read(provider)) !== undefined,
+      }))
+    );
+
+    return [
+      ...keys,
+      ...own
+        .filter((found) => found.signedIn)
+        .map((found): CredentialInfo => ({
+          providerId: found.provider,
+          type: "oauth",
+        })),
+    ];
   }
 
-  /** Refuses: Cairn never writes pi's file. */
-  async modify(): Promise<Credential | undefined> {
-    return await Promise.reject(new Error(this.readOnlyText()));
+  /**
+   * Updates an OAuth provider's sign-in in Cairn's own store: pi-ai's refresh writes the rotated
+   * token here before it releases the store. Refuses for every other provider: Cairn never writes
+   * pi's file.
+   */
+  async modify(
+    providerId: string,
+    update: (current: Credential | undefined) => Promise<Credential | undefined>
+  ): Promise<Credential | undefined> {
+    if (OAUTH_PROVIDERS.has(providerId) && Option.isSome(this.oauth)) {
+      return await this.oauth.value.modify(providerId, update);
+    }
+
+    return await Promise.reject(new Error(this.readOnlyText(providerId)));
   }
 
-  /** Refuses: Cairn never writes pi's file. */
-  async delete(): Promise<void> {
-    await Promise.reject(new Error(this.readOnlyText()));
+  /** Signs an OAuth provider out of Cairn's own store; refuses for every other provider. */
+  async delete(providerId: string): Promise<void> {
+    if (OAUTH_PROVIDERS.has(providerId) && Option.isSome(this.oauth)) {
+      await this.oauth.value.delete(providerId);
+
+      return;
+    }
+
+    await Promise.reject(new Error(this.readOnlyText(providerId)));
   }
 
-  private readOnlyText(): string {
-    return `CairnCredentialStore is read-only: Cairn never writes ${this.authPath}. Add or change the key in pi (/login), then reload the brain's models.`;
+  private readOnlyText(providerId: string): string {
+    return OAUTH_PROVIDERS.has(providerId)
+      ? `CairnCredentialStore keeps no ${providerId} sign-in on this brain; only the brain that holds Cairn's OAuth lock does. Sign in from that brain's Settings.`
+      : `CairnCredentialStore is read-only: Cairn never writes ${this.authPath}. Add or change the key in pi (/login), then reload the brain's models.`;
+  }
+
+  /** Why an OAuth provider is not offered: none when it is signed in on this brain. */
+  private async oauthRefusal(
+    provider: string
+  ): Promise<Option.Option<CredentialRefusal>> {
+    if (Option.isNone(this.oauth) || !this.oauth.value.held) {
+      return Option.some("not_holder");
+    }
+
+    const credential = await this.oauth.value.read(provider);
+
+    return credential === undefined ? Option.some("signed_out") : Option.none();
   }
 
   private async verdicts(): Promise<ReadonlyArray<CredentialVerdict>> {

@@ -50,8 +50,13 @@ import {
   stripAnthropicEnvironment,
 } from "./AnthropicGuard.ts";
 import type { CredentialEntry, CredentialRefusal } from "./CredentialStore.ts";
-import { CairnCredentialStore, CODEX_PROVIDER } from "./CredentialStore.ts";
+import {
+  CairnCredentialStore,
+  CODEX_PROVIDER,
+  OAUTH_PROVIDERS,
+} from "./CredentialStore.ts";
 import { BRIDGE_PROVIDER, HarnessSettings } from "./HarnessSettings.ts";
+import { OAuthStore } from "./OAuthStore.ts";
 import type { PiDefaults } from "./PiConfig.ts";
 import { PiConfig } from "./PiConfig.ts";
 import { guardModels } from "./StreamGuard.ts";
@@ -209,7 +214,11 @@ export const defaultsOf = (
 const providerName = (models: Models, id: string): string =>
   (models.getProvider(id)?.name ?? id).slice(0, 4096);
 
-/** The state and sentence for each reason an auth.json entry is not offered. */
+/** How the settings page names a provider Cairn signs in to itself. */
+const signInName = (provider: string): string =>
+  provider === CODEX_PROVIDER ? "Codex" : provider;
+
+/** The state and sentence for each reason a credential is not offered. */
 const REFUSAL_STATUS: Record<
   CredentialRefusal,
   {
@@ -219,10 +228,17 @@ const REFUSAL_STATUS: Record<
 > = {
   hidden_provider: {
     state: "missing",
+    detail: (provider) => `Cairn does not read pi's ${provider} credential.`,
+  },
+  signed_out: {
+    state: "missing",
     detail: (provider) =>
-      provider === CODEX_PROVIDER
-        ? "Cairn does not use pi's Codex login; its own Codex sign-in is not available yet."
-        : `Cairn does not read pi's ${provider} credential.`,
+      `Not signed in. Sign in to ${signInName(provider)} from Settings; Cairn does not use pi's login for it.`,
+  },
+  not_holder: {
+    state: "missing",
+    detail: (provider) =>
+      `This brain does not hold Cairn's ${signInName(provider)} sign-in; only the deployed brain does.`,
   },
   oauth: {
     state: "refused",
@@ -271,17 +287,19 @@ const entryStatus = (
         ? {
             provider,
             name,
-            credential: "api-key",
+            credential: entry.type === "oauth" ? "subscription" : "api-key",
             state: "ready",
             detail: Option.none(),
           }
         : {
             provider,
             name,
-            credential: "api-key",
+            credential: entry.type === "oauth" ? "subscription" : "api-key",
             state: "unknown",
             detail: Option.some(
-              `pi's auth.json has a key for ${provider}, but the provider offers no model with it.`
+              entry.type === "oauth"
+                ? `${signInName(provider)} is signed in, but the provider offers no model with the sign-in.`
+                : `pi's auth.json has a key for ${provider}, but the provider offers no model with it.`
             ),
           },
     onSome: (refusal): ProviderStatus => ({
@@ -344,7 +362,10 @@ const providerStatuses = (
     statuses.set(provider, {
       provider,
       name: providerName(models, provider),
-      credential: provider === BRIDGE_PROVIDER ? "subscription" : "api-key",
+      credential:
+        provider === BRIDGE_PROVIDER || OAUTH_PROVIDERS.has(provider)
+          ? "subscription"
+          : "api-key",
       state: "ready",
       detail: Option.none(),
     });
@@ -542,7 +563,9 @@ export class PiModelSource extends Context.Service<
    * pi's model runtime, read-only over `~/.pi/agent`, as both the brain's `ModelSource` and the
    * picker's `PiModelSource`. Strips the Anthropic auth variables from `process.env` first, then
    * registers the guarded `anthropic` provider and every `ExtraProviders` entry. Needs `PiConfig`
-   * and `HarnessSettings`; fails with `ModelRuntimeError` when pi-coding-agent cannot be loaded.
+   * and `HarnessSettings`, and reads Cairn's own OAuth sign-ins from `OAuthStore` when one is
+   * provided (the deployed brain); fails with `ModelRuntimeError` when pi-coding-agent cannot be
+   * loaded.
    */
   static readonly layerNoDeps = Layer.effectContext(
     Effect.gen(function* () {
@@ -561,8 +584,13 @@ export class PiModelSource extends Context.Service<
         );
       }
 
+      // Cairn's own OAuth sign-ins (Codex), when this brain keeps them: only the deployed brain
+      // provides `OAuthStore`; judge and dev brains read those providers as not held.
+      const oauth = yield* Effect.serviceOption(OAuthStore);
+
       const credentials = new CairnCredentialStore(
-        path.join(pi.agentDir, "auth.json")
+        path.join(pi.agentDir, "auth.json"),
+        Option.map(oauth, (store) => store.source)
       );
 
       const runtime = yield* createRuntime(credentials);

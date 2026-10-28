@@ -237,6 +237,7 @@ const runEnd = (
         classifyRunFailure({
           message: outcome.error?.message ?? outcome.reason ?? "",
           reason,
+          at: timeOf(at),
         })
       );
     }

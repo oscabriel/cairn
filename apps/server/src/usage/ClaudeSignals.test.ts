@@ -3,7 +3,8 @@
 //
 // - five concurrent bridge threads with four generation permits show exactly one row waiting for a
 //   Claude slot, and that row stops waiting when a permit frees;
-// - a run that fails on a spent plan window gets the window's reset time on its row.
+// - a run that fails on a spent plan window gets the window's reset time on its row, and a run that
+//   fails on a Codex or OpenCode Go limit does not, even while a Claude window is spent.
 //
 // The pure helpers are judged first.
 
@@ -347,6 +348,7 @@ describe("the bridge's projector signals", () => {
               class: "usage_limit",
               retryable: false,
               resetAt: Option.none(),
+              plan: Option.some("claude"),
             }),
             at,
           })
@@ -360,6 +362,82 @@ describe("the bridge's projector signals", () => {
         assert.deepStrictEqual(
           row.usageLimitResetAt,
           Option.some(DateTime.makeUnsafe(resetsAtSeconds * 1000))
+        );
+      }).pipe(Effect.provide(TestLayer))
+  );
+
+  it.live(
+    "leaves a Codex or OpenCode Go limit alone while a Claude window is spent",
+    () =>
+      Effect.gen(function* () {
+        yield* seed;
+
+        const bridge = yield* BridgeProvider;
+        const usage = Option.getOrThrow(bridge.usage);
+        const { pubsub } = yield* Events;
+
+        const [
+          claude = testThreadId(1),
+          codex = testThreadId(2),
+          go = testThreadId(3),
+        ] = THREADS;
+
+        const at = DateTime.makeUnsafe(1_800_000_000_000);
+        const codexReset = DateTime.makeUnsafe(1_800_001_800_000);
+
+        // A spent Claude window, so a signal for any thread would patch it without a probe.
+        yield* usage.observe({
+          status: "rejected",
+          resetsAt: 1_900_000_000,
+          rateLimitType: "five_hour",
+          utilization: 1,
+        });
+
+        const failed = (
+          threadId: ThreadId,
+          run: number,
+          plan: "claude" | "codex" | "opencode-go",
+          resetAt: Option.Option<DateTime.Utc>
+        ) =>
+          Effect.gen(function* () {
+            yield* PubSub.publish(
+              pubsub,
+              RunStarted.make({ threadId, runId: RunId.make(run), at })
+            );
+            yield* PubSub.publish(
+              pubsub,
+              RunTerminal.make({
+                threadId,
+                runId: RunId.make(run),
+                status: "failed",
+                failure: Option.some({
+                  class: "usage_limit",
+                  retryable: false,
+                  resetAt,
+                  plan: Option.some(plan),
+                }),
+                at,
+              })
+            );
+          });
+
+        yield* failed(codex, 1, "codex", Option.some(codexReset));
+        yield* failed(go, 2, "opencode-go", Option.none());
+        yield* failed(claude, 3, "claude", Option.none());
+
+        // The Claude thread's patch comes after the other two events were read.
+        yield* eventually(rowOf(claude), (shell) =>
+          Option.isSome(shell.usageLimitResetAt)
+        );
+        yield* Effect.sleep(Duration.millis(200));
+
+        assert.deepStrictEqual(
+          (yield* rowOf(codex)).usageLimitResetAt,
+          Option.some(codexReset)
+        );
+        assert.deepStrictEqual(
+          (yield* rowOf(go)).usageLimitResetAt,
+          Option.none()
         );
       }).pipe(Effect.provide(TestLayer))
   );

@@ -109,7 +109,7 @@ export interface ThreadProjection {
 /** What `lastError` says for each failure class; the harness event carries the class, not the text. */
 export const FAILURE_TEXT: Readonly<Record<RunFailureClass, string>> = {
   usage_limit:
-    "The Claude plan limit was reached. The thread can run again when the window resets.",
+    "The model plan's usage limit was reached. The thread can run again when the limit resets.",
   provider_error:
     "The model provider refused the request. Send again to retry.",
   transport_error:

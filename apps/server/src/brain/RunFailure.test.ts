@@ -1,10 +1,25 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Option } from "effect";
+import { DateTime, Option } from "effect";
 
-import { classifyRunFailure, PLAN_QUOTA_PREFIX } from "./RunFailure.ts";
+import {
+  classifyRunFailure,
+  CODEX_LIMIT_TEXT,
+  PLAN_QUOTA_PREFIX,
+  usageLimitOf,
+} from "./RunFailure.ts";
+
+const AT = DateTime.makeUnsafe("2026-10-28T12:00:00Z");
 
 const classify = (message: string, reason?: string) =>
-  classifyRunFailure({ message, reason: Option.fromUndefinedOr(reason) });
+  classifyRunFailure({
+    message,
+    reason: Option.fromUndefinedOr(reason),
+    at: AT,
+  });
+
+/** The plan whose limit `message` names. */
+const plan = (message: string) =>
+  Option.map(usageLimitOf(message, AT), (limit) => limit.plan);
 
 describe("run failure classes", () => {
   it("maps the bridge's plan-quota text to a usage limit that is not retried", () => {
@@ -62,5 +77,78 @@ describe("run failure classes", () => {
       "provider_error"
     );
     assert.strictEqual(classify("  ").class, "unknown");
+  });
+
+  it("maps Codex's usage-limit sentence to a usage limit that resets after the minutes it names", () => {
+    // Worded by pi-ai's `parseErrorResponse` in `openai-codex-responses.ts`.
+    const failure = classify(
+      "You have hit your ChatGPT usage limit (plus plan). Try again in ~95 min.",
+      "model_error"
+    );
+
+    assert.strictEqual(failure.class, "usage_limit");
+    assert.isFalse(failure.retryable);
+    assert.deepStrictEqual(
+      failure.resetAt,
+      Option.some(DateTime.makeUnsafe("2026-10-28T13:35:00Z"))
+    );
+  });
+
+  it("takes a Codex limit with no wait as a limit with no reset", () => {
+    const failure = classify(`${CODEX_LIMIT_TEXT}.`, "model_error");
+
+    assert.strictEqual(failure.class, "usage_limit");
+    assert.isTrue(Option.isNone(failure.resetAt));
+  });
+
+  it("takes the Responses API's shared-plan limit codes as a Codex usage limit", () => {
+    for (const message of [
+      'openai-codex API error (429): {"error":{"code":"usage_limit_reached"}}',
+      "429 subscription_sharing_usage_limit_exceeded\nCheck your ChatGPT usage: https://chatgpt.com/codex/settings/usage",
+      "429 subscription_sharing_workplace_individual_usage_limit_exceeded",
+    ]) {
+      const failure = classify(message, "model_error");
+
+      assert.strictEqual(failure.class, "usage_limit", message);
+      assert.isFalse(failure.retryable, message);
+    }
+  });
+
+  it("maps OpenCode Go's limit errors to a usage limit with no reset", () => {
+    for (const message of [
+      '429 {"type":"error","error":{"type":"GoUsageLimitError","message":"Rolling usage limit reached"}}',
+      "429 FreeUsageLimitError: free tier exhausted",
+      "Monthly usage limit reached. Enable available balance to keep going.",
+      "Usage limit reached; turn on usage from your available balance",
+    ]) {
+      const failure = classify(message, "model_error");
+
+      assert.strictEqual(failure.class, "usage_limit", message);
+      assert.isFalse(failure.retryable, message);
+      assert.isTrue(Option.isNone(failure.resetAt), message);
+    }
+  });
+
+  it("names the plan whose limit was hit", () => {
+    assert.deepStrictEqual(
+      plan(`${PLAN_QUOTA_PREFIX}: weekly`),
+      Option.some("claude")
+    );
+    assert.deepStrictEqual(
+      plan(`${CODEX_LIMIT_TEXT}. Try again in ~3 min.`),
+      Option.some("codex")
+    );
+    assert.deepStrictEqual(
+      plan("GoUsageLimitError"),
+      Option.some("opencode-go")
+    );
+    assert.deepStrictEqual(plan("429 rate limit, slow down"), Option.none());
+  });
+
+  it("keeps a transient 429 a retryable provider error, not a usage limit", () => {
+    const failure = classify("429 Too Many Requests", "model_error");
+
+    assert.strictEqual(failure.class, "provider_error");
+    assert.isTrue(failure.retryable);
   });
 });

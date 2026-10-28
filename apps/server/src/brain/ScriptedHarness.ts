@@ -690,6 +690,7 @@ const layerNoDeps = Layer.effectContext(
                           classifyRunFailure({
                             message: answer.errorMessage ?? "",
                             reason: Option.some("model_error"),
+                            at: DateTime.makeUnsafe(answer.timestamp),
                           })
                         )
                       : Option.none(),

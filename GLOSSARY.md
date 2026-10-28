@@ -26,7 +26,7 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Agent dir**: pi's own configuration folder (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`): settings, skills, packages and `auth.json`. The brain reads it through pi's own classes and never writes it, which `judges/pi-readonly.sh` judges.
 
-**Server settings**: The settings the brain owns and every device shares (auto-settle days, the title model, whether Claude is offered through the bridge, the bridge's generation cap), kept in `cairn.sqlite`.
+**Server settings**: The settings the brain owns and every device shares (auto-settle days, the title model, whether Claude is offered through the bridge, the bridge's generation cap, the role table and the default budget), kept in `cairn.sqlite`.
 
 ## Conversations
 
@@ -63,6 +63,12 @@ _Avoid_: orb, cloud thread, sandbox
 **Subagent**: A thread that another thread or a stone spawns through a tool, from an approved brief. Its parent owns it; it has no sidebar row of its own but shows under its parent, where it can be steered and stopped. Its result reaches the parent as a note.
 
 _Avoid_: child agent, worker (except as a role alias)
+
+**Lineage**: A subagent's place in the tree, on its row: its parent, its root, and how it relates to its parent. A row with a lineage is hidden from the sidebar, which shows it under its nearest ancestor that has a row.
+
+**Settlement**: A subagent's closed result for one input: completed, stopped or failed, with a summary, a divergence from its brief, a payload checked against the brief's schema, and its commit and branch. It reaches the parent as a note; waking the parent is a separate input.
+
+_Avoid_: using it for a thread's settle state, which is **Settle**
 
 **Goal**: A thread with stated criteria that owns the subagents and stones working toward them. Still a thread: same transcript, sidebar row and composer. Its criteria are met only when an outside judge says so.
 

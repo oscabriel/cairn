@@ -128,6 +128,34 @@ const cases: ReadonlyArray<ProbeCase> = [
       refused('import { query } from "@anthropic-ai/claude-agent-sdk";'),
     ],
   },
+  ...["subagents", "approvals", "workflows", "verdicts", "reach"].map(
+    (folder): ProbeCase => ({
+      zone: `apps/server/src/${folder}`,
+      name: "LintProbe<id>.ts",
+      probes: [
+        allowed('import { defineTool } from "@earendil-works/pi-durable";'),
+        allowed('import { complete } from "@earendil-works/pi-ai";'),
+        refused(
+          'import { loadSkills } from "@earendil-works/pi-coding-agent";'
+        ),
+        refused('import { query } from "@anthropic-ai/claude-agent-sdk";'),
+      ],
+    })
+  ),
+  {
+    zone: "apps/server/src/pi-host",
+    name: "LintProbe<id>.ts",
+    probes: [
+      allowed(
+        'import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";'
+      ),
+      allowed('import { defineTool } from "@earendil-works/pi-durable";'),
+      refused('import { query } from "@anthropic-ai/claude-agent-sdk";'),
+      refused(
+        'import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";'
+      ),
+    ],
+  },
   {
     zone: "packages/bridge/src",
     name: "LintProbe<id>.ts",

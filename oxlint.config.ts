@@ -70,14 +70,14 @@ const restrictions = {
       {
         name: "@earendil-works/pi-durable",
         message:
-          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files and in judges/fixtures/ (coding standard S42).",
+          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts) (coding standard S42).",
       },
     ],
     patterns: [
       {
         group: ["@earendil-works/pi-durable/**"],
         message:
-          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files and in judges/fixtures/ (coding standard S42).",
+          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts) (coding standard S42).",
       },
     ],
   },
@@ -106,7 +106,7 @@ const restrictions = {
       {
         name: "@earendil-works/pi-coding-agent",
         message:
-          "pi-coding-agent is imported only in models/PiModelSource.ts, models/PiConfig.ts and skills/ (coding standard S42).",
+          "pi-coding-agent is imported only in models/PiModelSource.ts, models/PiConfig.ts, skills/ and pi-host/ (coding standard S42).",
       },
     ],
     patterns: [],
@@ -212,9 +212,32 @@ const zones: ReadonlyArray<{
   },
   { files: [server("skills/**")], allowed: ["codingAgent"] },
   { files: [server("brain/**")], allowed: ["durable", "piAi"] },
+  // Phase 2's tool and task folders are written in pi-durable, as brain/ is (plan step 1.0):
+  // subagents' tools and reporter tasks, briefs and question routing, workflow nodes, judge runs,
+  // the reach tools, and the result tool.
+  {
+    files: [
+      server("subagents/**"),
+      server("approvals/**"),
+      server("workflows/**"),
+      server("verdicts/**"),
+      server("reach/**"),
+      server("models/ResultTool.ts"),
+    ],
+    allowed: ["durable", "piAi"],
+  },
+  // The tools-only pi host loads pi extensions through pi's own loader (ADR 0039).
+  {
+    files: [server("pi-host/**")],
+    allowed: ["durable", "piAi", "codingAgent"],
+  },
   { files: [server("**/*Extension.ts")], allowed: ["durable", "piAi"] },
   // Upload-time image fitting runs pi-durable's Photon processor (plan section 1, "Attachments").
   { files: [server("attachments/ImagePrepare.ts")], allowed: ["durable"] },
+  {
+    files: [server("pi-host/**/*Extension.ts")],
+    allowed: ["durable", "piAi", "codingAgent"],
+  },
   {
     files: [server("skills/**/*Extension.ts")],
     allowed: ["durable", "piAi", "codingAgent"],

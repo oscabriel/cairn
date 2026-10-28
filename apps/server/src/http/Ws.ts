@@ -1,4 +1,4 @@
-// `GET /ws?protocol=1`: one WebSocket, one RPC server per socket (ADR 0007, plan D45). The guard has
+// `GET /ws?protocol=2`: one WebSocket, one RPC server per socket (ADR 0007, plan D45). The guard has
 // already checked host, identity and Origin. Here: an unknown protocol gets HTTP 426, a brain that
 // is booting or closing gets 503, and otherwise the upgrade becomes a socket whose RPC server runs
 // in the request's scope, so closing the socket ends every subscription it owns. The identity

@@ -62,6 +62,7 @@ import {
 import type { T3ThreadExport } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { EntryId, ProjectId, ThreadId } from "../packages/protocol/src/Ids.ts";
 import {
+  BARE_ROW_FIELDS,
   ProjectShell,
   ShellSnapshot,
   ThreadShell,
@@ -826,6 +827,7 @@ const baseThread = (input: {
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
     parkedTaskIds: [],
+    ...BARE_ROW_FIELDS,
   });
 
 /** The activity behind each status label t3code shows on a card. */

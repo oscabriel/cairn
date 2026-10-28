@@ -2,7 +2,12 @@ import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option, Schema } from "effect";
 
 import { ProjectId, ThreadId } from "./Ids.ts";
-import { ShellStreamItem, ThreadShell, ThreadUpdatedItem } from "./Shell.ts";
+import {
+  BARE_ROW_FIELDS,
+  ShellStreamItem,
+  ThreadShell,
+  ThreadUpdatedItem,
+} from "./Shell.ts";
 
 const toJson = Schema.encodeSync(
   Schema.fromJsonString(Schema.toCodecJson(ShellStreamItem))
@@ -51,6 +56,7 @@ const thread = ThreadShell.make({
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
   parkedTaskIds: [],
+  ...BARE_ROW_FIELDS,
 });
 
 describe("ShellStreamItem on the wire", () => {

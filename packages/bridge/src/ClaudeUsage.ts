@@ -762,6 +762,7 @@ export const toProviderUsage = (
   reading: ClaudeUsageReading
 ): ProviderUsage => ({
   provider: PROVIDER_ID,
+  reading: Option.isSome(reading.checkedAt) ? "read" : "unreadable",
   windows: reading.windows.map((window): PlanWindow => ({
     id: window.id,
     label: window.label,

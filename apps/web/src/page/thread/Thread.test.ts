@@ -1,5 +1,9 @@
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
-import { ThreadShell, ThreadUpdatedItem } from "@cairn/protocol/Shell";
+import {
+  BARE_ROW_FIELDS,
+  ThreadShell,
+  ThreadUpdatedItem,
+} from "@cairn/protocol/Shell";
 import { ThreadStreamItem } from "@cairn/protocol/Thread";
 import { DateTime, Option, Schema } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -370,6 +374,7 @@ const launchRow = (activity: ThreadShell["activity"]): ThreadShell =>
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
     parkedTaskIds: [],
+    ...BARE_ROW_FIELDS,
   });
 
 describe("the root tells the thread page", () => {

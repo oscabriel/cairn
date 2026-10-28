@@ -481,7 +481,6 @@ const program = Effect.gen(function* () {
 
     const view = yield* client["thread.subscribe"]({
       threadId,
-      conversationId: Option.none(),
     }).pipe(Stream.take(1), Stream.runHead);
 
     const entries = Option.match(view, {

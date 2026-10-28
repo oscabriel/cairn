@@ -1,4 +1,4 @@
-// The Node protocol client the judges share: one `RpcClient` over one WebSocket to `GET /ws?protocol=1`,
+// The Node protocol client the judges share: one `RpcClient` over one WebSocket to `GET /ws?protocol=2`,
 // the same wire the browser speaks (ADR 0007), with the headers a browser or Caddy would add.
 //
 //   const client = yield* ProtocolClient.cairn({ base: "http://127.0.0.1:3774", origin: "https://code.gneiss.run" })

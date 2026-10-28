@@ -22,6 +22,7 @@
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import {
+  BARE_ROW_FIELDS,
   ProjectRemovedItem,
   ProjectShell,
   ProjectUpdatedItem,
@@ -99,6 +100,7 @@ const thread = (id: ThreadId, title = "A thread") =>
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
     parkedTaskIds: [],
+    ...BARE_ROW_FIELDS,
   });
 
 const follow = (

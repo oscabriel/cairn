@@ -7,6 +7,7 @@ import {
 } from "@cairn/client-logic/ThreadMenu";
 import { CommandId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import {
+  BARE_ROW_FIELDS,
   ProjectShell,
   ShellSnapshot,
   ThreadShell,
@@ -91,6 +92,7 @@ const thread = (
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
     parkedTaskIds: [],
+    ...BARE_ROW_FIELDS,
   });
 
 const bridges = thread(1, "Executor MCP Stdio Bridges", "2026-10-22T11:00:00Z");

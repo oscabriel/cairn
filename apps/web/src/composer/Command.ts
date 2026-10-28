@@ -214,7 +214,9 @@ export const StopThread = Command.define("StopThread", {
   args: { threadId: ThreadId, clearQueue: Schema.Boolean },
   messages: [Message.CompletedRequest, Message.FailedRequest],
   execute: (input) =>
-    onClient((client) => client["thread.stop"](input)).pipe(
+    onClient((client) =>
+      client["thread.stop"]({ ...input, subagents: Option.none() })
+    ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
         onFailure: failed,
@@ -244,7 +246,9 @@ export const ConfigureThread = Command.define("ConfigureThread", {
   },
   messages: [Message.CompletedRequest, Message.FailedRequest],
   execute: (input) =>
-    onClient((client) => client["thread.configure"](input)).pipe(
+    onClient((client) =>
+      client["thread.configure"]({ ...input, runtimeMode: Option.none() })
+    ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
         onFailure: failed,

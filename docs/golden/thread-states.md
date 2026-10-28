@@ -15,13 +15,13 @@ Source references are `path:first-last` at commit `8bb5d5b`. `judges/thread-stat
 | Held | A hold: the thread cannot move on by itself (a parked task, a Claude slot, a spent plan window). |
 | Resting | Nothing runs and nothing is asked. |
 | Failed | The latest run or launch failed; a send starts a new run. |
-| Ended | An approval that no longer holds its tool call. |
+| Ended | Nothing more happens to it: a settled approval, a finished child, node or workflow. |
 | Shelf | Where the row sits in the sidebar, apart from what the thread is doing. |
 | Ready, Off, Unknown | The state of something beside the thread (Executor, a provider) that threads depend on. |
 
 ## Statuses
 
-The first column names the schema: the export that declares the union, or the export and field for a union declared inline. The first five are fields of the thread row (`ThreadShell`, `packages/protocol/src/Shell.ts:117-156`) that the shell stream carries; `ApprovalStatus` is the `status` of each record in a thread's `cairn.approvals` document, which the thread stream carries; the last two are read on the settings page.
+The first column names the schema: the export that declares the union, or the export and field for a union declared inline. The first five are fields of the thread row (`ThreadShell`, `packages/protocol/src/Shell.ts`) that the shell stream carries; `ApprovalStatus` is the `status` of each record in a thread's `cairn.approvals` document, which the thread stream carries; `ExecutorStatus`, `ProviderStatus` and `UsageReading` are read on the settings page and the meters. The rows after them are phase 2's (`docs/phase-2/plan.md`, step 1.0): a row's budget (`BudgetState`), a goal's criteria (`cairn.goal`), a parent's children (`cairn.subagents`, `cairn.escalations`), a child's settlements, a thread's workflows and their nodes (`cairn.workflows`), and portals (`reach.list`). Until their packages land, nothing writes them.
 
 | Schema | Value | Category | Meaning |
 | --- | --- | --- | --- |
@@ -36,6 +36,7 @@ The first column names the schema: the export that declares the union, or the ex
 | `RunFailureClass` | `transport_error` | Failed | The model provider could not be reached. |
 | `RunFailureClass` | `unknown` | Failed | The run or launch failed for a reason the brain does not classify. |
 | `WaitingFor` | `claude_slot` | Held | One of the thread's Claude conversations waits for a Claude slot. The run is live; the bridge is full. |
+| `WaitingFor` | `parent` | Held | A subagent asked its parent a question (`ask_parent`) and waits for the parent's model to answer or escalate it. The user is not asked yet (ADR 0027). |
 | `WaitingFor` | `none` | Resting | Nothing beyond the user holds the thread. |
 | `SettledOverride` | `settled` | Shelf | The thread is settled, by hand or by auto-settle. It sits on the Settled shelf. |
 | `SettledOverride` | `active` | Shelf | The user unsettled it (or pinned a settled thread). Auto-settle leaves it alone until the user sends it a message. |
@@ -43,11 +44,14 @@ The first column names the schema: the export that declares the union, or the ex
 | `RuntimeRequestKind` | `tool-call` | Waiting on you | The pending approval holds a call to one of Cairn's own tools. |
 | `RuntimeRequestKind` | `user-input` | Waiting on you | The agent asked the user a question. |
 | `RuntimeRequestKind` | `sign-in` | Waiting on you | A tool needs the user to sign in before it can run. |
+| `RuntimeRequestKind` | `brief` | Waiting on you | A brief waits for Go: a subagent's (ADR 0026), or a workflow's launch approval, whose envelope covers its nodes' briefs (ADR 0032). No run holds it; nothing delegated starts until it is answered, in every permission mode, and it expires after 7 days (ADR 0030). |
+| `RuntimeRequestKind` | `criteria` | Waiting on you | A goal's model proposed criteria and their judges; they bind only when the user accepts. |
 | `ApprovalStatus` | `pending` | Waiting on you | The approval holds its tool call until the user answers or it expires. |
-| `ApprovalStatus` | `accepted` | Ended | The user accepted it (or the permission mode accepted it when asked); the tool call runs. |
+| `ApprovalStatus` | `accepted` | Ended | Accepted; the tool call runs, the brief's child starts, or the question returns its answer. `decidedBy` names who: the user, the permission mode at ask time, a parent's model (a question), or a workflow's envelope (a node's brief). |
 | `ApprovalStatus` | `declined` | Ended | The user declined it; the tool call does not run. |
 | `ApprovalStatus` | `expired` | Ended | Nobody answered before `expiresAt`; the tool call does not run. |
-| `ApprovalStatus` | `cancelled` | Ended | Defined for an approval withdrawn without an answer. Only the scripted harness reports it today. |
+| `ApprovalStatus` | `cancelled` | Ended | Withdrawn without an answer: the stop of the run that held it (`decidedBy` system, `run-stopped`). Briefs and escalated questions, which no run holds, are not cancelled by a stop. Phase 1 brains leave such records `pending`; only the scripted harness reports `cancelled` until package 1A. |
+| `ApprovalStatus` | `revised` | Ended | Sent back: the user answered a brief with notes (`reason`), and the proposer writes a new brief that `supersedes` it. Briefs only. |
 | `ExecutorStatus.state` | `connected` | Ready | The brain's link to Executor works; Executor's tools are offered to every thread. |
 | `ExecutorStatus.state` | `needs-sign-in` | Waiting on you | Executor refused Cairn's grant; the user must sign in again. |
 | `ExecutorStatus.state` | `unreachable` | Failed | Executor did not answer. |
@@ -56,6 +60,49 @@ The first column names the schema: the export that declares the union, or the ex
 | `ProviderStatus.state` | `missing` | Off | The provider has no credential. |
 | `ProviderStatus.state` | `refused` | Failed | The provider refused the credential. |
 | `ProviderStatus.state` | `unknown` | Unknown | The brain could not tell. |
+| `UsageReading` | `read` | Ready | The provider's plan windows were read; `windows` is what it reported. |
+| `UsageReading` | `unreadable` | Unknown | The probe failed or the response changed shape. The meter says unknown, never zero (ADR 0037). |
+| `UsageReading` | `unsupported` | Off | The provider has no readable windows (OpenCode Go). |
+| `BudgetState` | `none` | Off | No budget covers the thread. |
+| `BudgetState` | `within` | Ready | A budget covers the thread and its spend is under the warning line. |
+| `BudgetState` | `warned` | Ready | Spend passed the warning line (`warnAt`, 0.8 by default); a notice went out once. |
+| `BudgetState` | `exhausted` | Held | Spend reached the budget: a workflow aborts its running nodes, a goal's subagents take no new work, and a raise is an approval (ADR 0036). |
+| `CriterionState` | `open` | Active | Not met yet: no `ok` verdict recorded since the criterion last changed. |
+| `CriterionState` | `met` | Ended | The latest verdict, recorded by a judge run after the criterion last changed, is `ok`. Only the verdict writer sets it. |
+| `CriterionState` | `failed` | Failed | The latest verdict is not `ok`. |
+| `SubagentStatus` | `working` | Active | The child runs, or has an input queued. |
+| `SubagentStatus` | `waiting` | Waiting on you | The child asked a question (of its parent or the user) or holds an approval. |
+| `SubagentStatus` | `settled` | Ended | The child's latest input has a settlement; more inputs can still reach it. |
+| `SubagentStatus` | `declined` | Ended | Its brief was declined; no child exists. |
+| `SubagentStatus` | `expired` | Ended | Its brief went unanswered for 7 days; no child exists. |
+| `SubagentQuestionState` | `pending` | Held | The parent's model has the child's question and has not answered or escalated it. |
+| `SubagentQuestionState` | `answered` | Ended | Answered, by the parent's model or by the user. |
+| `SubagentQuestionState` | `escalated` | Waiting on you | Escalated to the user, shown in the parent thread (ADR 0027). |
+| `EscalationStatus` | `open` | Waiting on you | A child's escalated question waits for the user in the parent thread. |
+| `EscalationStatus` | `resolved` | Ended | Answered once, from either thread. |
+| `SettlementOutcome` | `completed` | Ended | The child answered its input; the note carries its summary, divergence and payload. |
+| `SettlementOutcome` | `stopped` | Ended | The child's run was stopped; the note says so and the parent is not woken if the user stopped the parent. |
+| `SettlementOutcome` | `failed` | Failed | The child's run failed, or its result was invalid three times; `error` says why. A spent plan window (`usageLimit`) wakes nobody. |
+| `WorkflowState` | `proposed` | Waiting on you | The launch approval waits for Go, Run on 1 first, or Decline. |
+| `WorkflowState` | `approved` | Resting | Go was given; nothing runs until the model calls `codemode` with the same script. |
+| `WorkflowState` | `running` | Active | The script runs inside the launching thread's run. |
+| `WorkflowState` | `finished` | Ended | The script returned; `outcome` says complete or partial, and why. |
+| `WorkflowState` | `failed` | Failed | The script threw, or its replay diverged. |
+| `WorkflowState` | `stopped` | Ended | The whole workflow was stopped; settled results stay. |
+| `WorkflowState` | `declined` | Ended | The launch approval was declined; nothing ran. |
+| `NodeState` | `reserved` | Active | The ledger row is written; the child is not created yet. |
+| `NodeState` | `running` | Active | The node's child runs. |
+| `NodeState` | `held` | Held | The child's run hit a spent plan window; the node waits for the reset and other providers' nodes go on. |
+| `NodeState` | `settled` | Ended | The node's result is validated and its receipt recorded. |
+| `NodeState` | `failed` | Failed | The child failed, or its result was invalid twice; the script sees `null`. |
+| `NodeState` | `stopped` | Ended | Stopped alone or with its workflow, or by a budget; the script sees `null`. |
+| `NodeState` | `refused` | Ended | Refused before it started (`refusal` says why); the script sees `null`. |
+| `NodeState` | `start_unknown` | Waiting on you | A stone or integrate node's start cannot be proved after a restart; the user is asked. Agent nodes never reach it. |
+| `NodeState` | `stop_unknown` | Waiting on you | A stop of an outside job cannot be proved; the user is asked. |
+| `PortalState` | `opening` | Active | The portal's row is written and its dev server is starting; it turns `open` when its port answers. |
+| `PortalState` | `open` | Ready | The page answers at its URL. |
+| `PortalState` | `stopped` | Off | The process ended (closed, expired, exited, or lost at boot); the name and command stay, so Start runs it again. |
+| `PortalState` | `removed` | Ended | Closed for good; the name is free. |
 
 ### States without a status value
 
@@ -66,7 +113,10 @@ Some states have no literal of their own; the row says them through other fields
 | Launch | `activity` is `preparing`. The launch's phase (`created`, `workspace`, `ensured`) lives only in the brain's `thread_launches` table (`apps/server/src/threads/LaunchStore.ts:10-18`), so a restart resumes it. | Active |
 | Run | `activeRunId` is set. pi-durable shows it as `pi.live.run`; the brain's RunStarted and RunTerminal bracket it, and RunTerminal's outcome (`completed`, `interrupted`, `failed`) stays in the brain (`apps/server/src/brain/HarnessSeam.ts:187-191`). | Active |
 | Queued input | `queueLength` is above 0: inputs admitted but not yet in the transcript. | Active |
-| Pending approval | `pendingRuntimeRequest` names the oldest pending approval and its kind. | Waiting on you |
+| Pending approval | `pendingRuntimeRequest` names the oldest pending request the user can answer and its kind; `origin` names the child when it mirrors a child's escalated question. `pendingCount` counts them. | Waiting on you |
+| Subagent | `lineage` is set: the row is a child, hidden from the sidebar, which resolves it to its nearest ancestor with a row. | Shelf |
+| Children working | `subagents` counts the thread's children by `working`, `asking`, `settled` and `failed`. | Active |
+| Goal | `goal` is set: the thread has criteria, counted `total`, `met` and `failed`. | Active |
 | Parked task | `parkedTaskIds` lists each parked task; the thread offers Retry for the first. | Held |
 | Hold | Computed by the client from the row: a parked task, else a `usage_limit` failure (Limited), else `waitingFor` `claude_slot`. | Held |
 | Unseen | `latestRunCompletedAt` is after `lastVisitedAt` (or the thread was never visited). | Resting |
@@ -107,7 +157,8 @@ stateDiagram-v2
     pending --> accepted: user accepts
     pending --> declined: user declines
     pending --> expired: nobody answers before expiresAt (brain)
-    pending --> cancelled: scripted harness only
+    pending --> cancelled: the run that held it is stopped (brain)
+    pending --> revised: user sends a brief back with notes
 ```
 
 ### Shelf
@@ -176,14 +227,14 @@ stateDiagram-v2
 
 ## Invariants
 
-1. `activity` is a function of the other derived fields: `parked` when `parkedTaskIds` is not empty; else `waiting` or `running` while `activeRunId` is set, `waiting` exactly when `pendingRuntimeRequest` is also set; else what the newest run's end says; else a busy row becomes `idle` and `idle`, `preparing` or `failed` stays. The shell projector recomputes it on every change and never stores it apart from its inputs (`apps/server/src/shell/ShellProjector.ts:154-175`).
+1. `activity` is a function of the other derived fields: `parked` when `parkedTaskIds` is not empty; else `waiting` or `running` while `activeRunId` is set, `waiting` exactly when `pendingRuntimeRequest` is also set (a pending request with no run, such as a brief or an escalated question, leaves the row `idle`); else what the newest run's end says; else a busy row becomes `idle` and `idle`, `preparing` or `failed` stays. The shell projector recomputes it on every change and never stores it apart from its inputs (`apps/server/src/shell/ShellProjector.ts:154-175`).
 2. A row whose run is terminal has no `activeRunId`, has `latestRunCompletedAt` set, has `waitingFor` `none`, and its `activity` is `idle`, `failed` or `parked`. It is `failed` exactly when the run failed, and then `lastErrorClass` is set.
 3. Only the launch writes `preparing`, and only before the thread's first run. A launched row is created `idle` and marked `preparing` in the next commit, so a client may see one `idle` frame between them (`apps/server/src/threads/ThreadLaunch.ts:943-1005`).
 4. A launch ends in exactly one of: the release (`idle`, then the first run), `failed` with a `lastError`, or a stop (`failed` with "Stopped before the thread started."). A launch row in `thread_launches` exists only while its launch is unfinished.
 5. `failed` lasts until the next run starts. Nothing but a new run (or a parked task) moves a thread out of `failed`, and RunStarted clears `lastError`, `lastErrorClass` and `usageLimitResetAt` together.
 6. `lastErrorClass` is set exactly when `lastError` is set. A launch failure is always `unknown`; `usage_limit` comes only from the bridge's "Claude plan quota exceeded" text.
-7. `pendingRuntimeRequest` names the oldest `pending` approval of the thread, and is none when the thread has none. After a restart, an approval the projector had not seen is shown as a `tool-call`, because `inspect()` carries only its id. An approval leaves `pending` once and never returns to it: `answerApproval` and `expire` change only a `pending` record.
-8. A record is born `pending` or `accepted`; `declined`, `expired` and `cancelled` are reached only from `pending`.
+7. `pendingRuntimeRequest` names the oldest `pending` record of the thread that the user can answer, escalated children's questions included, and is none when the thread has none; a question routed to the parent is not one. After a restart, an approval the projector had not seen is shown as a `tool-call`, because `inspect()` carries only its id. An approval leaves `pending` once and never returns to it: `answerApproval` and `expire` change only a `pending` record.
+8. A record is born `pending` or `accepted`; `declined`, `expired`, `cancelled` and `revised` are reached only from `pending`, and every status past `pending` has `decidedBy` set. `payload` never changes after the ask (ADR 0029).
 9. `parkedTaskIds` changes only through pi-durable: a TaskParked event adds an id, and only a reconcile from `inspect()` (at boot, or the refresh after a retry) removes one.
 10. Derived fields (activity, run times, queue, error, waiting, approval, preview, parked tasks) are written only by the shell projector and the launch (`preparing`, the release and `failed`); inbox fields (settle, snooze, pin, visit, archive) only by shell commands. A projector flush writes only the fields its events set, rebased on the row as it stands.
 11. A thread cannot be settled while busy, waiting on an approval or holding a queued input, and cannot be snoozed while an approval is pending or an input is queued. Settling clears pin and snooze; pinning clears settle and snooze.
@@ -210,6 +261,7 @@ What the web client shows for each status today. The sidebar row's label comes f
 | `RunFailureClass` | `transport_error` | "Failed", and `lastError`: "The model provider could not be reached. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `unknown` | "Failed", and `lastError`: "The run failed. Send again to retry.", or a launch's own message. | Sidebar row, thread page |
 | `WaitingFor` | `claude_slot` | Banner "Waiting": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
+| `WaitingFor` | `parent` | Nothing yet; a child's row is hidden from the sidebar. The thread-state function (1E) says "Asked its parent". | None |
 | `WaitingFor` | `none` | Nothing. | None |
 | `SettledOverride` | `settled` | The row sits under the "Settled" shelf header ("Settled (<n>)" when folded); its menu offers "Unsettle". The undo notice after settling says "Settled <n> thread" or "threads", with Undo. | Sidebar |
 | `SettledOverride` | `active` | Nothing of its own: the row sits on the active or pinned shelf and its menu offers "Settle". | Sidebar |
@@ -217,11 +269,14 @@ What the web client shows for each status today. The sidebar row's label comes f
 | `RuntimeRequestKind` | `tool-call` | "Approval". | Sidebar row |
 | `RuntimeRequestKind` | `user-input` | "Input". | Sidebar row |
 | `RuntimeRequestKind` | `sign-in` | "Input". | Sidebar row |
+| `RuntimeRequestKind` | `brief` | "Approval" today; the thread-state function (1E) says "Go". | Sidebar row |
+| `RuntimeRequestKind` | `criteria` | "Approval". | Sidebar row |
 | `ApprovalStatus` | `pending` | Only through the thread's row ("Approval" or "Input"). There is no approval card yet. | Sidebar row |
 | `ApprovalStatus` | `accepted` | Not shown. | None |
 | `ApprovalStatus` | `declined` | Not shown. | None |
 | `ApprovalStatus` | `expired` | Not shown. | None |
-| `ApprovalStatus` | `cancelled` | Not shown. | None |
+| `ApprovalStatus` | `cancelled` | Not shown; the settled-record line (3C, 6A) says "Stopped". | None |
+| `ApprovalStatus` | `revised` | Not shown; the settled-record line (3C, 6A) says "Sent back: <reason>". | None |
 | `ExecutorStatus.state` | `connected` | "Connected". | Settings, Executor (`apps/web/src/settings/View.ts:778-783`) |
 | `ExecutorStatus.state` | `needs-sign-in` | "Needs sign-in", with the sign-in button. | Settings, Executor |
 | `ExecutorStatus.state` | `unreachable` | "Unreachable". | Settings, Executor |
@@ -230,8 +285,51 @@ What the web client shows for each status today. The sidebar row's label comes f
 | `ProviderStatus.state` | `missing` | "No credential". | Settings, providers |
 | `ProviderStatus.state` | `refused` | "Refused". | Settings, providers |
 | `ProviderStatus.state` | `unknown` | "Unknown". | Settings, providers |
+| `UsageReading` | `read` | The meter's windows. | Composer meter, settings |
+| `UsageReading` | `unreadable` | Not shown yet; the meter (6G) says "unreadable". | None |
+| `UsageReading` | `unsupported` | Not shown yet; the meter (6G) shows no windows for the provider. | None |
+| `BudgetState` | `none` | Not shown. | None |
+| `BudgetState` | `within` | Not shown yet; the meters (6G) draw the budget bar. | None |
+| `BudgetState` | `warned` | Not shown yet; a notice and a push (4E), then the meters (6G). | None |
+| `BudgetState` | `exhausted` | Not shown yet; the notice "Stopped at $X of $Y" (4E), then the meters (6G). | None |
+| `CriterionState` | `open` | Not shown yet; the goal strip (6H). | None |
+| `CriterionState` | `met` | Not shown yet; the goal strip (6H). | None |
+| `CriterionState` | `failed` | Not shown yet; the goal strip (6H). | None |
+| `SubagentStatus` | `working` | Not shown yet; subagent rows (6C). | None |
+| `SubagentStatus` | `waiting` | Not shown yet; subagent rows (6C). | None |
+| `SubagentStatus` | `settled` | Not shown yet; subagent rows (6C). | None |
+| `SubagentStatus` | `declined` | Not shown yet; subagent rows (6C). | None |
+| `SubagentStatus` | `expired` | Not shown yet; subagent rows (6C). | None |
+| `SubagentQuestionState` | `pending` | Not shown yet; the rollup and parent banner (6D). | None |
+| `SubagentQuestionState` | `answered` | Not shown yet; the settled-record line (6A). | None |
+| `SubagentQuestionState` | `escalated` | Not shown yet; the request card in the parent thread (6A, 6D). | None |
+| `EscalationStatus` | `open` | Not shown yet; the request card in the parent thread (6A, 6D). | None |
+| `EscalationStatus` | `resolved` | Not shown yet; the settled-record line (6A). | None |
+| `SettlementOutcome` | `completed` | Not shown yet; the subagent result row in the parent (6C). | None |
+| `SettlementOutcome` | `stopped` | Not shown yet; the subagent result row in the parent (6C). | None |
+| `SettlementOutcome` | `failed` | Not shown yet; the subagent result row in the parent (6C). | None |
+| `WorkflowState` | `proposed` | Not shown yet; the launch approval card (6F). | None |
+| `WorkflowState` | `approved` | Not shown yet; the steps panel (6F). | None |
+| `WorkflowState` | `running` | Not shown yet; the steps panel (6F). | None |
+| `WorkflowState` | `finished` | Not shown yet; the steps panel (6F). | None |
+| `WorkflowState` | `failed` | Not shown yet; the steps panel (6F). | None |
+| `WorkflowState` | `stopped` | Not shown yet; the steps panel (6F). | None |
+| `WorkflowState` | `declined` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `reserved` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `running` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `held` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `settled` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `failed` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `stopped` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `refused` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `start_unknown` | Not shown yet; the steps panel (6F). | None |
+| `NodeState` | `stop_unknown` | Not shown yet; the steps panel (6F). | None |
+| `PortalState` | `opening` | Not shown yet; the portal entry (6I). | None |
+| `PortalState` | `open` | Not shown yet; the portal entry (6I). | None |
+| `PortalState` | `stopped` | Not shown yet; the portal entry (6I), with Start. | None |
+| `PortalState` | `removed` | Not shown yet; the portal entry (6I). | None |
 
-No status is shown raw. Two gaps: approval records past `pending` are not shown anywhere, because approval cards have not landed (full access, the default permission mode, asks for none); and the sidebar's "Waiting" label (`apps/web/src/sidebar/Row.ts:96-100`) has no path to it, since the projector sets `waiting` only together with a pending request, which the sidebar shows as "Approval" or "Input" first.
+No status is shown raw. Phase 2's statuses are labelled "Not shown yet" with the package that draws them; the thread-state function (1E) is tested over every row of this document. Two phase 1 gaps: approval records past `pending` are not shown anywhere, because approval cards have not landed (full access, the default permission mode, asks for none); and the sidebar's "Waiting" label (`apps/web/src/sidebar/Row.ts:96-100`) has no path to it, since the projector sets `waiting` only together with a pending request, which the sidebar shows as "Approval" or "Input" first.
 
 ## Source references
 

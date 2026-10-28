@@ -1,5 +1,5 @@
 import { ApprovalId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
-import { ThreadShell } from "@cairn/protocol/Shell";
+import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
@@ -44,6 +44,7 @@ const base = ThreadShell.make({
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
   parkedTaskIds: [],
+  ...BARE_ROW_FIELDS,
 });
 
 const request = (kind: "executor-call" | "user-input") => ({
@@ -52,6 +53,7 @@ const request = (kind: "executor-call" | "user-input") => ({
     id: ApprovalId.make("apr_1"),
     kind,
     createdAt: base.createdAt,
+    origin: Option.none(),
   }),
 });
 

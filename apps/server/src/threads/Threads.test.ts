@@ -278,7 +278,11 @@ describe("thread commands", () => {
         yield* send(threadId, "r2", "followUp");
         assert.strictEqual(queueLength(yield* liveState(threadId)), 1);
 
-        yield* (yield* Threads).stop({ threadId, clearQueue: false });
+        yield* (yield* Threads).stop({
+          threadId,
+          clearQueue: false,
+          subagents: Option.none(),
+        });
 
         const after = yield* eventually(
           liveState(threadId),
@@ -298,7 +302,11 @@ describe("thread commands", () => {
         yield* eventually(liveState(threadId), isRunning);
         yield* send(threadId, "r2", "followUp");
 
-        yield* (yield* Threads).stop({ threadId, clearQueue: true });
+        yield* (yield* Threads).stop({
+          threadId,
+          clearQueue: true,
+          subagents: Option.none(),
+        });
 
         const after = yield* eventually(
           liveState(threadId),
@@ -525,6 +533,7 @@ describe("thread commands", () => {
           yield* (yield* Threads).stop({
             threadId: input.threadId,
             clearQueue: false,
+            subagents: Option.none(),
           });
 
           // A launch that carried on would now make its worktree and start the run.

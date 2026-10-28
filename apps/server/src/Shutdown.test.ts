@@ -58,7 +58,7 @@ const openSocket = (port: number) =>
     const request = http.request({
       host: "127.0.0.1",
       port,
-      path: "/ws?protocol=1",
+      path: "/ws?protocol=2",
       headers: {
         host: "127.0.0.1",
         origin: "http://127.0.0.1",

@@ -3,8 +3,10 @@
 // setting's encoded JSON. A row that no longer decodes (a setting whose shape changed) reads as the
 // default and is logged; the next update writes it again.
 
+import { DEFAULT_ROLE_TABLE } from "@cairn/protocol/Roles";
 import type { SettingsPatch } from "@cairn/protocol/Settings";
 import { ServerSettings } from "@cairn/protocol/Settings";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -24,6 +26,8 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   titleModel: Option.none(),
   bridgeEnabled: true,
   bridgeGenerationCap: 4,
+  roleBindings: DEFAULT_ROLE_TABLE,
+  defaultBudget: DEFAULT_BUDGET,
 };
 
 const { fields } = ServerSettings;
@@ -33,6 +37,8 @@ const codecs = {
   titleModel: Schema.fromJsonString(fields.titleModel),
   bridgeEnabled: Schema.fromJsonString(fields.bridgeEnabled),
   bridgeGenerationCap: Schema.fromJsonString(fields.bridgeGenerationCap),
+  roleBindings: Schema.fromJsonString(fields.roleBindings),
+  defaultBudget: Schema.fromJsonString(fields.defaultBudget),
 };
 
 const Row = Schema.Struct({ key: Schema.String, value_json: Schema.String });
@@ -82,6 +88,14 @@ const encodeRows = Effect.fnUntraced(function* (settings: ServerSettings) {
         settings.bridgeGenerationCap
       ),
     ],
+    [
+      "roleBindings",
+      yield* Schema.encodeEffect(codecs.roleBindings)(settings.roleBindings),
+    ],
+    [
+      "defaultBudget",
+      yield* Schema.encodeEffect(codecs.defaultBudget)(settings.defaultBudget),
+    ],
   ];
 
   return rows;
@@ -104,6 +118,14 @@ export const applySettingsPatch = (
   bridgeGenerationCap: Option.getOrElse(
     patch.bridgeGenerationCap,
     () => current.bridgeGenerationCap
+  ),
+  roleBindings: Option.getOrElse(
+    patch.roleBindings,
+    () => current.roleBindings
+  ),
+  defaultBudget: Option.getOrElse(
+    patch.defaultBudget,
+    () => current.defaultBudget
   ),
 });
 
@@ -166,6 +188,16 @@ export class SettingsStore extends Context.Service<
             "bridgeGenerationCap",
             codecs.bridgeGenerationCap,
             defaults.bridgeGenerationCap
+          ),
+          roleBindings: yield* value(
+            "roleBindings",
+            codecs.roleBindings,
+            defaults.roleBindings
+          ),
+          defaultBudget: yield* value(
+            "defaultBudget",
+            codecs.defaultBudget,
+            defaults.defaultBudget
           ),
         };
 

@@ -145,6 +145,17 @@ const fromLaunchError = (
 const requestIdOf = (requestId: RpcMessage.RequestId) =>
   Option.some(String(requestId));
 
+/**
+ * A phase 2 input this brain cannot act on yet (a permission mode, an answer beyond accept and
+ * decline). Refused, so nothing is silently dropped; the packages that build them lift the refusal.
+ */
+const notYet = (field: string, requestId: Option.Option<string>) =>
+  new InvalidInput({
+    message: `This brain does not handle ${field} yet. Nothing changed; update the brain and retry.`,
+    field: Option.some(field),
+    requestId,
+  });
+
 /** The handlers, for the handler group and for tests that call them directly. */
 export const threadCommandHandlers = Effect.gen(function* () {
   const launcher = yield* ThreadLaunch;
@@ -219,26 +230,30 @@ export const threadCommandHandlers = Effect.gen(function* () {
           )
         ),
     configure: (input: ConfigureInput, requestId: Option.Option<string>) =>
-      threads
-        .configure(input)
-        .pipe(
-          Effect.mapError((failure) =>
-            fromHarnessError(failure, input.threadId, requestId)
-          )
-        ),
+      Option.isSome(input.runtimeMode)
+        ? Effect.fail(notYet("runtimeMode", requestId))
+        : threads
+            .configure(input)
+            .pipe(
+              Effect.mapError((failure) =>
+                fromHarnessError(failure, input.threadId, requestId)
+              )
+            ),
     respond: (input: RespondInput, requestId: Option.Option<string>) =>
-      threads
-        .respond(input)
-        .pipe(
-          Effect.mapError((failure) =>
-            fromHarnessError(
-              failure,
-              input.approvalId,
-              requestId,
-              input.threadId
-            )
-          )
-        ),
+      input.decision !== "accept" && input.decision !== "decline"
+        ? Effect.fail(notYet("decision", requestId))
+        : threads
+            .respond(input)
+            .pipe(
+              Effect.mapError((failure) =>
+                fromHarnessError(
+                  failure,
+                  input.approvalId,
+                  requestId,
+                  input.threadId
+                )
+              )
+            ),
   };
 });
 

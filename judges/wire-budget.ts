@@ -402,7 +402,6 @@ const follow = (client: Client, threadId: ThreadId) =>
 
     yield* client["thread.subscribe"]({
       threadId,
-      conversationId: Option.none(),
     }).pipe(
       Stream.runForEach((item) =>
         Effect.gen(function* () {
@@ -646,7 +645,6 @@ const coldRound = (port: number, threadId: ThreadId) =>
 
       const first = yield* client["thread.subscribe"]({
         threadId,
-        conversationId: Option.none(),
       }).pipe(Stream.runHead);
 
       const at = yield* Clock.currentTimeMillis;
@@ -718,7 +716,6 @@ const wholeThread = (
     while (!exhausted && before !== undefined) {
       const page = yield* client["thread.history"]({
         threadId,
-        conversationId: Option.none(),
         before: EntryId.make(before),
         limit: 500,
       });

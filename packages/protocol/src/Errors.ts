@@ -55,6 +55,11 @@ export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
     "submission",
     "folder",
     "checkpoint",
+    "workflow",
+    "node",
+    "recipe",
+    "artifact",
+    "portal",
   ]),
   /** The id or path as the request gave it. */
   id: DisplayText,
@@ -88,6 +93,10 @@ export class Conflict extends Schema.TaggedError<Conflict>()("Conflict", {
     "thread_busy",
     /** The thread or project changed in a way that makes the command meaningless. */
     "stale_state",
+    /** A permission mode wider than the parent thread's (ADR 0031). */
+    "mode_too_wide",
+    /** A fixed cap is reached: live children, open portals. */
+    "limit_reached",
   ]),
   requestId,
   retryable: retryable(false),

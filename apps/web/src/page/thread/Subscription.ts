@@ -34,7 +34,6 @@ const threadStream = (
       Effect.map((client) =>
         client["thread.subscribe"]({
           threadId,
-          conversationId: Option.none(),
         }).pipe(
           Stream.map((item) =>
             Message.ReceivedThreadItem({ epoch, watch, item })

@@ -34,7 +34,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-import type { PlanWindow, ProviderUsage } from "@cairn/protocol/Usage";
+import type {
+  PlanWindow,
+  ProviderUsage,
+  UsageReading,
+} from "@cairn/protocol/Usage";
 import {
   Clock,
   Context,
@@ -757,11 +761,28 @@ export const applyEvent = (
   };
 };
 
+/**
+ * Whether the windows were read, from the state rather than the check time: a failed probe and an
+ * `unavailable` answer both set `checkedAt` with no windows. `unavailable` is `unsupported` when a
+ * login answered and has no plan windows (an API key or a third-party provider), and `unreadable`
+ * when the CLI is not logged in.
+ */
+const readingOf = (reading: ClaudeUsageReading): UsageReading => {
+  if (reading.state === "ok" || reading.state === "limited") {
+    return "read";
+  }
+
+  return reading.state === "unavailable" && reading.login.kind !== "none"
+    ? "unsupported"
+    : "unreadable";
+};
+
 /** The reading as the wire's `ProviderUsage`: a fraction per window, resets and checks as `DateTime`. */
 export const toProviderUsage = (
   reading: ClaudeUsageReading
 ): ProviderUsage => ({
   provider: PROVIDER_ID,
+  reading: readingOf(reading),
   windows: reading.windows.map((window): PlanWindow => ({
     id: window.id,
     label: window.label,

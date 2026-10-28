@@ -23,9 +23,23 @@ export const PlanWindow = Schema.Struct({
 
 export type PlanWindow = typeof PlanWindow.Type;
 
+/**
+ * Whether a provider's windows could be read, so an empty `windows` list stops meaning two things:
+ * `unreadable` when the probe failed or the response changed shape, `unsupported` when the
+ * provider has no readable windows (OpenCode Go).
+ */
+export const UsageReading = Schema.Literals([
+  "read",
+  "unreadable",
+  "unsupported",
+]);
+
+export type UsageReading = typeof UsageReading.Type;
+
 /** Usage of one provider. */
 export const ProviderUsage = Schema.Struct({
   provider: TrimmedNonEmptyString,
+  reading: UsageReading,
   windows: Schema.Array(PlanWindow),
   checkedAt: Schema.OptionFromNullOr(Schema.DateTimeUtc),
 });

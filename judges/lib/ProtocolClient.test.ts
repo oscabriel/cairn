@@ -4,6 +4,7 @@
 
 import { createServer } from "node:http";
 
+import { PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import { NodeHttpServer } from "@effect/platform-node";
 import { assert, describe, layer } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
@@ -80,7 +81,7 @@ const Guard = HttpRouter.middleware(
         "protocol"
       );
 
-      if (protocol !== "1") {
+      if (protocol !== String(PROTOCOL_VERSION)) {
         return HttpServerResponse.text("protocol_incompatible\n", {
           status: 426,
         });
@@ -207,7 +208,7 @@ layer(ServerLayer, { excludeTestServices: true })("ProtocolClient", (it) => {
       const stale = yield* ProtocolClient.make(TestRpcs, {
         base,
         origin,
-        protocol: 2,
+        protocol: PROTOCOL_VERSION + 1,
       });
 
       const incompatible = yield* stale

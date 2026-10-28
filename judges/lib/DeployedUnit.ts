@@ -275,7 +275,6 @@ const follow = Effect.fnUntraced(function* (
 
   yield* client["thread.subscribe"]({
     threadId,
-    conversationId: Option.none(),
   }).pipe(
     Stream.runForEach((item) =>
       Effect.gen(function* () {

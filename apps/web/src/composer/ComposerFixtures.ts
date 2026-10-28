@@ -3,7 +3,11 @@
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { ModelCatalog } from "@cairn/protocol/Models";
-import { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
+import {
+  BARE_ROW_FIELDS,
+  ProjectShell,
+  ThreadShell,
+} from "@cairn/protocol/Shell";
 import type { SkillSummary } from "@cairn/protocol/Skills";
 import { DateTime, Option } from "effect";
 
@@ -72,6 +76,7 @@ export const thread = (id: ThreadId = threadId): ThreadShell =>
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
     parkedTaskIds: [],
+    ...BARE_ROW_FIELDS,
   });
 
 /** Two providers' models, the first with thinking levels. */

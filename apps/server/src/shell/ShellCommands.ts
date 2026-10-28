@@ -36,7 +36,11 @@ import {
 } from "@cairn/protocol/Ids";
 import { ThinkingLevel } from "@cairn/protocol/Models";
 import { RuntimeMode } from "@cairn/protocol/Policy";
-import { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
+import {
+  BARE_ROW_FIELDS,
+  ProjectShell,
+  ThreadShell,
+} from "@cairn/protocol/Shell";
 import { ShellCommand } from "@cairn/protocol/ShellCommands";
 import { Array as Arr, DateTime, Match, Option, Result, Schema } from "effect";
 
@@ -927,6 +931,7 @@ export const planShellCommand = (
           autoSettleDisabledAt: Option.none(),
           lastVisitedAt: Option.none(),
           parkedTaskIds: [],
+          ...BARE_ROW_FIELDS,
         };
 
         return threadPlan(

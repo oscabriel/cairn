@@ -1,7 +1,7 @@
 // The thread stream's RPCs: `thread.subscribe`, `thread.history`, `thread.entry` and
 // `thread.retryTask`. Each is a thin call into the harness seam; this module only translates the
-// seam's failures into the protocol's errors. Subagent conversations inside a thread arrive with
-// subagents; until then a `conversationId` is refused as not found.
+// seam's failures into the protocol's errors. A subagent is a thread of its own (ADR 0028), served
+// by its own thread id like any other.
 //
 // A subscribe to a thread whose launch is still in flight waits for the launch's ensure (or for the
 // launch to end, or `LaunchWait`) before it watches, because the client opens the thread page as
@@ -58,13 +58,6 @@ export const toLookupError = (
   });
 };
 
-const noSubagents = (threadId: string) =>
-  new NotFound({
-    message: `Conversations inside thread ${threadId} are not served yet; subscribe to the thread itself.`,
-    resource: "thread",
-    id: threadId,
-  });
-
 const launchesUnavailable = (failure: LaunchStoreError) =>
   new Unavailable({
     message: `The thread stream could not read the thread's launch: ${failure.message}`,
@@ -110,34 +103,28 @@ export const threadStreamHandlers = Effect.gen(function* () {
 
   return {
     subscribe: (input: SubscribeThreadInput) =>
-      Option.isSome(input.conversationId)
-        ? Stream.fail(noSubagents(input.threadId))
-        : Stream.unwrap(
-            untilLaunched(input.threadId).pipe(
-              Effect.as(
-                seam
-                  .watch(input.threadId)
-                  .pipe(
-                    Stream.mapError((failure) =>
-                      toLookupError(failure, input.threadId)
-                    )
-                  )
+      Stream.unwrap(
+        untilLaunched(input.threadId).pipe(
+          Effect.as(
+            seam
+              .watch(input.threadId)
+              .pipe(
+                Stream.mapError((failure) =>
+                  toLookupError(failure, input.threadId)
+                )
               )
-            )
-          ),
+          )
+        )
+      ),
     history: (input: HistoryInput) =>
-      Option.isSome(input.conversationId)
-        ? Effect.fail(noSubagents(input.threadId))
-        : seam
-            .history(input.threadId, {
-              before: input.before,
-              limit: input.limit,
-            })
-            .pipe(
-              Effect.mapError((failure) =>
-                toLookupError(failure, input.threadId)
-              )
-            ),
+      seam
+        .history(input.threadId, {
+          before: input.before,
+          limit: input.limit,
+        })
+        .pipe(
+          Effect.mapError((failure) => toLookupError(failure, input.threadId))
+        ),
     entry: (input: EntryInput) =>
       seam
         .entry(input.threadId, input.entryId)

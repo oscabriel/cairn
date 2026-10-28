@@ -33,7 +33,6 @@ export const LoadEarlier = Command.define("LoadEarlier", {
         Effect.flatMap(CairnConnection.get, (client) =>
           client["thread.history"]({
             threadId: id,
-            conversationId: Option.none(),
             before,
             limit: HISTORY_PAGE_LIMIT,
           })

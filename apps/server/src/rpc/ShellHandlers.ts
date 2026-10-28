@@ -87,23 +87,25 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
       Effect.forEach(
         threadIds,
         (threadId) =>
-          threads.stop({ threadId, clearQueue: true }).pipe(
-            Effect.catchTags({
-              HarnessError: (failure) =>
-                failure.reason === "thread_not_found"
-                  ? Effect.void
-                  : Effect.logWarning("run not stopped before removal").pipe(
-                      Effect.annotateLogs({
-                        threadId,
-                        reason: failure.message,
-                      })
-                    ),
-              LaunchStoreError: (failure) =>
-                Effect.logWarning("launch not stopped before removal").pipe(
-                  Effect.annotateLogs({ threadId, reason: failure.message })
-                ),
-            })
-          ),
+          threads
+            .stop({ threadId, clearQueue: true, subagents: Option.none() })
+            .pipe(
+              Effect.catchTags({
+                HarnessError: (failure) =>
+                  failure.reason === "thread_not_found"
+                    ? Effect.void
+                    : Effect.logWarning("run not stopped before removal").pipe(
+                        Effect.annotateLogs({
+                          threadId,
+                          reason: failure.message,
+                        })
+                      ),
+                LaunchStoreError: (failure) =>
+                  Effect.logWarning("launch not stopped before removal").pipe(
+                    Effect.annotateLogs({ threadId, reason: failure.message })
+                  ),
+              })
+            ),
         { concurrency: "unbounded", discard: true }
       );
 

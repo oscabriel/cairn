@@ -25,7 +25,14 @@ import {
 import { ExecutorSignIn, ExecutorStatus } from "./Executor.ts";
 import { TrimmedNonEmptyString } from "./Ids.ts";
 import { ThreadLaunchInput, ThreadLaunchResult } from "./Launch.ts";
-import { ModelCatalog, ModelDefaults, ProviderStatus } from "./Models.ts";
+import {
+  LoginProgress,
+  ModelCatalog,
+  ModelDefaults,
+  ProviderLoginInput,
+  ProviderStatus,
+} from "./Models.ts";
+import { SetCriteriaInput } from "./Policy.ts";
 import {
   BranchesInput,
   BranchesResult,
@@ -40,10 +47,18 @@ import {
   PushUnsubscribeInput,
   VapidKey,
 } from "./Push.ts";
+import {
+  ArtifactRevokeInput,
+  PortalInput,
+  ReachList,
+  ReachListInput,
+} from "./Reach.ts";
+import { RoleCheck, RolesCheckInput } from "./Roles.ts";
 import { ServerSettings, SettingsPatch } from "./Settings.ts";
 import { ProjectShell, ShellStreamItem, SubscribeShellInput } from "./Shell.ts";
 import { DispatchResult, ShellCommand } from "./ShellCommands.ts";
 import { SkillList, SkillsInput } from "./Skills.ts";
+import { Spend, SpendGetInput } from "./Spend.ts";
 import {
   ConfigureInput,
   EntryInput,
@@ -61,9 +76,16 @@ import {
   WithdrawResult,
 } from "./Thread.ts";
 import { UsageSnapshot } from "./Usage.ts";
+import {
+  EventStatus,
+  RecipeList,
+  WorkflowListInput,
+  WorkflowStopInput,
+  WorkflowStopNodeInput,
+} from "./Workflows.ts";
 
 /** The wire protocol this package describes. Bumped on any change an older client cannot read. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** The query parameter that carries the protocol version on the WebSocket upgrade. */
 export const PROTOCOL_QUERY_PARAM = "protocol";
@@ -119,7 +141,7 @@ const Turn = Schema.Union([
   AttachmentRejected,
 ]);
 
-/** Every Phase 1 RPC. Tags are dotted, as t3code's are. */
+/** Every RPC of phases 1 and 2. Tags are dotted, as t3code's are. */
 export const CairnRpcs = RpcGroup.make(
   Rpc.make("session.hello", { success: Hello, error: Common }),
 
@@ -249,7 +271,54 @@ export const CairnRpcs = RpcGroup.make(
     payload: SettingsPatch,
     success: ServerSettings,
     error: Change,
-  })
+  }),
+
+  // Phase 2. Steering, stopping and answering a subagent are thread.send, thread.stop and
+  // thread.respond on the child's own thread id (ADR 0028); no RPC is added for them.
+  Rpc.make("roles.check", {
+    payload: RolesCheckInput,
+    success: Schema.Array(RoleCheck),
+    error: Common,
+  }),
+  Rpc.make("spend.get", {
+    payload: SpendGetInput,
+    success: Spend,
+    error: Lookup,
+  }),
+  Rpc.make("providers.login.start", {
+    payload: ProviderLoginInput,
+    success: LoginProgress,
+    error: Schema.Union([Unavailable, Internal, InvalidInput, Conflict]),
+    stream: true,
+  }),
+  Rpc.make("providers.login.cancel", {
+    payload: ProviderLoginInput,
+    error: Common,
+  }),
+  Rpc.make("providers.logout", { payload: ProviderLoginInput, error: Change }),
+
+  Rpc.make("goal.setCriteria", { payload: SetCriteriaInput, error: Change }),
+
+  Rpc.make("workflow.stop", { payload: WorkflowStopInput, error: Change }),
+  Rpc.make("workflow.stopNode", {
+    payload: WorkflowStopNodeInput,
+    error: Change,
+  }),
+  Rpc.make("workflow.list", {
+    payload: WorkflowListInput,
+    success: RecipeList,
+    error: Lookup,
+  }),
+  Rpc.make("workflow.eventStatus", { success: EventStatus, error: Common }),
+
+  Rpc.make("reach.list", {
+    payload: ReachListInput,
+    success: ReachList,
+    error: Lookup,
+  }),
+  Rpc.make("artifact.revoke", { payload: ArtifactRevokeInput, error: Change }),
+  Rpc.make("portal.close", { payload: PortalInput, error: Change }),
+  Rpc.make("portal.start", { payload: PortalInput, error: Change })
 ).middleware(ViewerMiddleware);
 
 /** The RPC group's type, for handler layers and clients. */

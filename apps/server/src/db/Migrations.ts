@@ -1,5 +1,15 @@
 // Every `cairn.sqlite` migration in one record (a seam: the integrator adds each package's
 // migration here). One id space; keys are `<NNNN>_<Name>` and files `migrations/<NNNN><Name>.ts`.
+//
+// Reserved for phase 2 (plan step 1.0), so packages that run in parallel never take the same id.
+// Each package writes its file under its number and hands the integrator the line to add below:
+// - 0007_OAuthCredentials: `oauth_credentials` (1D, ADR 0037)
+// - 0008_ModelHealth: a provider's last success, auth failure and transient failures (1C)
+// - 0009_Spend: `spend_totals` and `spend_events` (2C)
+// - 0010_Artifacts: `artifacts` (2F, the reach index)
+// - 0011_Portals: `portals` (2F, ADR 0038)
+// - 0012_ChildWorkspaces: `child_workspaces` (3B)
+// A phase 2 package that needs a table not listed here asks the integrator for the next number.
 
 import type { MigrationRecord } from "./Database.ts";
 import { Shell0001 } from "./migrations/0001Shell.ts";

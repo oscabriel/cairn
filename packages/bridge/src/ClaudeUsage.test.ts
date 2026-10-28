@@ -555,6 +555,10 @@ describe("the monthly spend window", () => {
   });
 });
 
+/** What the wire says about whether the windows were read. */
+const wireReading = (state: ClaudeUsageReading) =>
+  toProviderUsage(state).reading;
+
 describe("the wire projection", () => {
   it("sends fractions, resets and the check time, and encodes as the protocol's ProviderUsage", () => {
     const reading: ClaudeUsageReading = {
@@ -606,6 +610,66 @@ describe("the wire projection", () => {
       limited.state,
       toProviderUsage(limited).windows.map((window) => window.exhausted),
     ]).toStrictEqual(["limited", [true]]);
+  });
+
+  it("says whether the windows were read from the state, not from the check time", () => {
+    const failed = applyReading(
+      INITIAL_READING,
+      {
+        login: { kind: "unknown", reason: "spawn failed" },
+        apiKeySource: Option.none(),
+        state: "unknown",
+        reason: Option.some("probe failed: spawn failed"),
+        plan: Option.none(),
+        windows: [],
+        names: NO_SCOPED_NAMES,
+      },
+      T
+    );
+
+    expect([
+      wireReading(INITIAL_READING),
+      [Option.isSome(failed.checkedAt), wireReading(failed)],
+      wireReading(
+        applyReading(
+          INITIAL_READING,
+          readProbe(raw(account, probeUsage(fullLimits)), T),
+          T
+        )
+      ),
+      wireReading(
+        applyReading(
+          INITIAL_READING,
+          readProbe(
+            raw(
+              { apiProvider: "bedrock" },
+              probeUsage(null, { available: false })
+            ),
+            T
+          ),
+          T
+        )
+      ),
+      wireReading(
+        applyReading(
+          INITIAL_READING,
+          readProbe(
+            raw(
+              { tokenSource: "none", apiKeySource: "none" },
+              probeUsage(null, { available: false })
+            ),
+            T
+          ),
+          T
+        )
+      ),
+    ]).toStrictEqual([
+      "unreadable",
+      [true, "unreadable"],
+      "read",
+      "unsupported",
+      "unreadable",
+    ]);
   });
 });
 

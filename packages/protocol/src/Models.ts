@@ -69,3 +69,37 @@ export const ProviderStatus = Schema.Struct({
 });
 
 export type ProviderStatus = typeof ProviderStatus.Type;
+
+/** `providers.login.start`, `providers.login.cancel` and `providers.logout` input (ADR 0037). */
+export const ProviderLoginInput = Schema.Struct({
+  provider: TrimmedNonEmptyString,
+});
+
+export type ProviderLoginInput = typeof ProviderLoginInput.Type;
+
+/** An https URL a login step hands to the user. */
+const HttpsUrl = Schema.String.check(Schema.isPattern(/^https:\/\//u));
+
+/**
+ * One step of a provider login, streamed by `providers.login.start` until it ends: the device code
+ * to enter (finishable from the phone), a browser URL, progress, then signed in or failed. Never
+ * carries a credential value.
+ */
+export const LoginProgress = Schema.Union([
+  Schema.TaggedStruct("DeviceCode", {
+    userCode: TrimmedNonEmptyString,
+    verificationUri: HttpsUrl,
+    expiresInSeconds: NonNegativeInt,
+  }),
+  Schema.TaggedStruct("AuthUrl", { url: HttpsUrl }),
+  Schema.TaggedStruct("Progress", { message: DisplayText }),
+  Schema.TaggedStruct("SignedIn", {
+    account: Schema.OptionFromNullOr(DisplayText),
+  }),
+  Schema.TaggedStruct("Failed", {
+    reason: Schema.Literals(["expired", "cancelled", "refused", "unavailable"]),
+    message: DisplayText,
+  }),
+]);
+
+export type LoginProgress = typeof LoginProgress.Type;

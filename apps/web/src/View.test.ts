@@ -6,7 +6,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
-import { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
+import {
+  BARE_ROW_FIELDS,
+  ProjectShell,
+  ThreadShell,
+} from "@cairn/protocol/Shell";
 import { ThreadStreamItem } from "@cairn/protocol/Thread";
 import { Context, DateTime, Option, Schema } from "effect";
 import { describe, expect, it } from "vitest";
@@ -94,6 +98,7 @@ const row = ThreadShell.make({
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
   parkedTaskIds: [],
+  ...BARE_ROW_FIELDS,
 });
 
 /** The thread's page, opened with the shell current and its stream subscribed. */

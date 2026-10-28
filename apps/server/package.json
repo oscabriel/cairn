@@ -7,6 +7,7 @@
   },
   "dependencies": {
     "@cairn/bridge": "workspace:*",
+    "@cairn/client-logic": "workspace:*",
     "@cairn/protocol": "workspace:*",
     "@earendil-works/chord": "catalog:",
     "@earendil-works/pi-ai": "catalog:",
@@ -22,7 +23,6 @@
     "unpdf": "catalog:"
   },
   "devDependencies": {
-    "@cairn/client-logic": "workspace:*",
     "@types/node": "26.6.5"
   }
 }

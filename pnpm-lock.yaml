@@ -192,6 +192,9 @@ importers:
       '@cairn/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
+      '@cairn/client-logic':
+        specifier: workspace:*
+        version: link:../../packages/client-logic
       '@cairn/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -232,9 +235,6 @@ importers:
         specifier: 'catalog:'
         version: 1.9.1
     devDependencies:
-      '@cairn/client-logic':
-        specifier: workspace:*
-        version: link:../../packages/client-logic
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5

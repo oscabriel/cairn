@@ -19,13 +19,18 @@ import * as Models from "@cairn/protocol/Models";
 import * as Policy from "@cairn/protocol/Policy";
 import * as Projects from "@cairn/protocol/Projects";
 import * as Push from "@cairn/protocol/Push";
+import * as Reach from "@cairn/protocol/Reach";
+import * as Roles from "@cairn/protocol/Roles";
 import * as Rpc from "@cairn/protocol/Rpc";
 import * as Settings from "@cairn/protocol/Settings";
 import * as Shell from "@cairn/protocol/Shell";
 import * as ShellCommands from "@cairn/protocol/ShellCommands";
 import * as Skills from "@cairn/protocol/Skills";
+import * as Spend from "@cairn/protocol/Spend";
+import * as Subagents from "@cairn/protocol/Subagents";
 import * as Thread from "@cairn/protocol/Thread";
 import * as Usage from "@cairn/protocol/Usage";
+import * as Workflows from "@cairn/protocol/Workflows";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema, SchemaAST } from "effect";
 
@@ -48,13 +53,18 @@ const MODULES = {
   Policy,
   Projects,
   Push,
+  Reach,
+  Roles,
   Rpc,
   Settings,
   Shell,
   ShellCommands,
   Skills,
+  Spend,
+  Subagents,
   Thread,
   Usage,
+  Workflows,
 } as const;
 
 /** Literal unions that are not states, and why. */
@@ -73,6 +83,28 @@ const NOT_STATUSES = {
   "AttachmentRejected.reason": "an error reason",
   "SearchEntry.kind": "file or directory, a search result",
   "SkillSummary.source": "where a skill was found",
+  ApprovalRoute: "who a question goes to first, a routing setting",
+  BriefWorkspace: "where a child works, chosen in its brief",
+  WakeMode: "whether a result wakes the parent, chosen in the brief",
+  NodeArms: "where a node runs, a placement",
+  ArtifactKind: "file or folder, fixed at publish",
+  PortalArms: "where a portal's process runs, a placement",
+  PortalStopReason: "why a portal stopped, a reason beside `PortalState`",
+  ModelFamily: "a model's maker, for the different-family rule",
+  RoleSkipReason: "why a candidate model was passed over, a reason",
+  PriceBasis: "how a dollar figure relates to a bill, a label",
+  RelationshipToParent: "how a row relates to its parent, a kind",
+  SubagentStopPolicy: "a stop option",
+  WorkflowPartialReason: "why a workflow ended partial, a reason",
+  NodeStage: "where a rerun resumes a dispatch; the panel shows `NodeState`",
+  NodeRefusal: "why a node was refused, a reason beside `NodeState` `refused`",
+  EventName: "the kind of a durable event",
+  "LoginProgress.reason": "why a login failed, a reason",
+  "Decider.why": "why the system decided a record, a reason",
+  "ApprovalRecord.run": "the effect sandwich's mark, read by the boot repair",
+  "ResolvedRole.via": "which binding a role resolved through",
+  "RecipeSummary.source": "where a recipe was found",
+  "RoleCheck.resolution.reason": "why a role spec did not resolve, a reason",
 } as const;
 
 const isLiteralUnion = (

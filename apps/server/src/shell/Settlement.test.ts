@@ -1,4 +1,5 @@
 import { ApprovalId } from "@cairn/protocol/Ids";
+import { BARE_ROW_FIELDS } from "@cairn/protocol/Shell";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { ThreadSnooze, ThreadUnsettle } from "@cairn/protocol/ShellCommands";
 import { assert, describe, expect, it } from "@effect/vitest";
@@ -70,6 +71,7 @@ const baseShell: ThreadShell = {
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
   parkedTaskIds: [],
+  ...BARE_ROW_FIELDS,
 };
 
 const row = (
@@ -124,6 +126,7 @@ describe(resolveAutoSettlementAt, () => {
           id: ApprovalId.make("apr_1"),
           kind: "tool-call",
           createdAt: at(NOW - 5 * DAY),
+          origin: Option.none(),
         }),
       },
       { archivedAt: Option.some(at(NOW - 5 * DAY)) },

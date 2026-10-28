@@ -145,6 +145,37 @@ const fromLaunchError = (
 const requestIdOf = (requestId: RpcMessage.RequestId) =>
   Option.some(String(requestId));
 
+/**
+ * A phase 2 input this brain cannot act on yet: `thread.configure`'s `runtimeMode` (2B),
+ * `thread.respond`'s decisions beyond accept and decline, its `reason`, `answers` and `launch`
+ * (1A, 2B, 5A), and `thread.stop`'s `subagents: "stop"` (4C). Refused, so nothing is silently
+ * dropped; the package that builds each lifts its refusal and turns its test in
+ * `ThreadCommandHandlers.test.ts` around.
+ */
+const notYet = (field: string, requestId: Option.Option<string>) =>
+  new InvalidInput({
+    message: `This brain does not handle ${field} yet. Nothing changed; update the brain and retry.`,
+    field: Option.some(field),
+    requestId,
+  });
+
+/** The first field of a `thread.respond` this brain cannot act on yet, if any. */
+const respondNotYet = (input: RespondInput): Option.Option<string> => {
+  if (input.decision !== "accept" && input.decision !== "decline") {
+    return Option.some("decision");
+  }
+
+  if (Option.isSome(input.reason)) {
+    return Option.some("reason");
+  }
+
+  if (Option.isSome(input.answers)) {
+    return Option.some("answers");
+  }
+
+  return Option.isSome(input.launch) ? Option.some("launch") : Option.none();
+};
+
 /** The handlers, for the handler group and for tests that call them directly. */
 export const threadCommandHandlers = Effect.gen(function* () {
   const launcher = yield* ThreadLaunch;
@@ -195,16 +226,20 @@ export const threadCommandHandlers = Effect.gen(function* () {
         })
       ),
     stop: (input: StopInput, requestId: Option.Option<string>) =>
-      threads.stop(input).pipe(
-        Effect.catchTags({
-          HarnessError: (failure) =>
-            Effect.fail(fromHarnessError(failure, input.threadId, requestId)),
-          LaunchStoreError: (failure) =>
-            Effect.fail(
-              new Unavailable({ message: failure.message, requestId })
-            ),
-        })
-      ),
+      Option.contains(input.subagents, "stop")
+        ? Effect.fail(notYet("subagents", requestId))
+        : threads.stop(input).pipe(
+            Effect.catchTags({
+              HarnessError: (failure) =>
+                Effect.fail(
+                  fromHarnessError(failure, input.threadId, requestId)
+                ),
+              LaunchStoreError: (failure) =>
+                Effect.fail(
+                  new Unavailable({ message: failure.message, requestId })
+                ),
+            })
+          ),
     withdraw: (input: WithdrawInput, requestId: Option.Option<string>) =>
       threads
         .withdraw(input)
@@ -219,26 +254,32 @@ export const threadCommandHandlers = Effect.gen(function* () {
           )
         ),
     configure: (input: ConfigureInput, requestId: Option.Option<string>) =>
-      threads
-        .configure(input)
-        .pipe(
-          Effect.mapError((failure) =>
-            fromHarnessError(failure, input.threadId, requestId)
-          )
-        ),
+      Option.isSome(input.runtimeMode)
+        ? Effect.fail(notYet("runtimeMode", requestId))
+        : threads
+            .configure(input)
+            .pipe(
+              Effect.mapError((failure) =>
+                fromHarnessError(failure, input.threadId, requestId)
+              )
+            ),
     respond: (input: RespondInput, requestId: Option.Option<string>) =>
-      threads
-        .respond(input)
-        .pipe(
-          Effect.mapError((failure) =>
-            fromHarnessError(
-              failure,
-              input.approvalId,
-              requestId,
-              input.threadId
-            )
-          )
-        ),
+      Option.match(respondNotYet(input), {
+        onSome: (field) => Effect.fail(notYet(field, requestId)),
+        onNone: () =>
+          threads
+            .respond(input)
+            .pipe(
+              Effect.mapError((failure) =>
+                fromHarnessError(
+                  failure,
+                  input.approvalId,
+                  requestId,
+                  input.threadId
+                )
+              )
+            ),
+      }),
   };
 });
 

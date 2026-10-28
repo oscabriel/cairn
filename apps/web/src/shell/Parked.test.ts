@@ -2,7 +2,7 @@
 // a thread waiting for a Claude slot says so, and a spent plan window reads "Limited" with its reset.
 
 import { ProjectId, TaskId, ThreadId } from "@cairn/protocol/Ids";
-import { ThreadShell } from "@cairn/protocol/Shell";
+import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import type { RetryTaskInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Effect, Option } from "effect";
@@ -63,6 +63,7 @@ const thread = ThreadShell.make({
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
   parkedTaskIds: [],
+  ...BARE_ROW_FIELDS,
 });
 
 const showing = (shell: ThreadShell): Model =>

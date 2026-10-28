@@ -34,6 +34,8 @@ describe("the server settings", () => {
         ),
         bridgeEnabled: Option.some(false),
         bridgeGenerationCap: Option.none(),
+        roleBindings: Option.none(),
+        defaultBudget: Option.none(),
       });
 
       const expected = {
@@ -53,6 +55,8 @@ describe("the server settings", () => {
         titleModel: Option.some(Option.none()),
         bridgeEnabled: Option.none(),
         bridgeGenerationCap: Option.none(),
+        roleBindings: Option.none(),
+        defaultBudget: Option.none(),
       });
 
       assert.strictEqual(cleared.autoSettleDays, 0);

@@ -562,7 +562,6 @@ const follow = (
 
     yield* client["thread.subscribe"]({
       threadId,
-      conversationId: Option.none(),
     }).pipe(
       Stream.runForEach((item) =>
         Effect.gen(function* () {
@@ -1318,6 +1317,9 @@ const accept = (context: RunContext) =>
         threadId: context.threadId,
         approvalId: approval.value,
         decision: "accept",
+        reason: Option.none(),
+        answers: Option.none(),
+        launch: Option.none(),
       }).pipe(
         Effect.mapError(
           (error) =>

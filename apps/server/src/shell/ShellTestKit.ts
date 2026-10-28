@@ -93,7 +93,21 @@ export const ShellRpcs = CairnRpcs.omit(
   "push.unsubscribe",
   "presence.report",
   "settings.get",
-  "settings.update"
+  "settings.update",
+  "roles.check",
+  "spend.get",
+  "providers.login.start",
+  "providers.login.cancel",
+  "providers.logout",
+  "goal.setCriteria",
+  "workflow.stop",
+  "workflow.stopNode",
+  "workflow.list",
+  "workflow.eventStatus",
+  "reach.list",
+  "artifact.revoke",
+  "portal.close",
+  "portal.start"
 );
 
 /** Admits every request as the test owner. */

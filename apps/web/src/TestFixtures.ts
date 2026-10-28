@@ -62,7 +62,7 @@ export const backingOff = (epoch: number, attempt: number): Model => ({
 
 /** A hello as the brain answers it. */
 export const hello: Hello = Schema.decodeSync(Schema.toCodecJson(Hello))({
-  protocol: 1,
+  protocol: 2,
   build: "test",
   serverTime: "2026-10-22T00:00:00.000Z",
   viewer: "owner@github",

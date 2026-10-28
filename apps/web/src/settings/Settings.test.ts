@@ -2,7 +2,9 @@
 // missing, and a corrupt saved value that leaves the page on its defaults instead of failing.
 
 import { ProjectId } from "@cairn/protocol/Ids";
+import { DEFAULT_ROLE_TABLE } from "@cairn/protocol/Roles";
 import type { ServerSettings } from "@cairn/protocol/Settings";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Effect, Option } from "effect";
 import { KeyValueStore } from "effect/persistence";
@@ -39,6 +41,8 @@ const server: ServerSettings = {
   titleModel: Option.none(),
   bridgeEnabled: true,
   bridgeGenerationCap: 4,
+  roleBindings: DEFAULT_ROLE_TABLE,
+  defaultBudget: DEFAULT_BUDGET,
 };
 
 const resetAt = DateTime.makeUnsafe("2026-10-22T15:00:00Z");
@@ -114,6 +118,7 @@ const loaded: Model = {
     providers: [
       {
         provider: "claude-bridge",
+        reading: "read",
         windows: [
           {
             id: "five_hour",
@@ -284,6 +289,8 @@ describe("the settings page", () => {
             titleModel: Option.none(),
             bridgeEnabled: Option.some(false),
             bridgeGenerationCap: Option.none(),
+            roleBindings: Option.none(),
+            defaultBudget: Option.none(),
           },
         }),
         Message.SucceededServerUpdate({ settings: off })
@@ -327,6 +334,7 @@ describe("the composer usage meter", () => {
       providers: [
         {
           provider: "claude-bridge",
+          reading: "read" as const,
           windows: [
             {
               id: "seven_day",

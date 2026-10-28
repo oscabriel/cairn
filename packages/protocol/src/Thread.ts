@@ -32,6 +32,7 @@ import {
   ApprovalId,
   AttachmentId,
   ConversationId,
+  DisplayText,
   EntryId,
   NonNegativeInt,
   PositiveInt,
@@ -42,7 +43,22 @@ import {
   TrimmedNonEmptyString,
 } from "./Ids.ts";
 import { ModelRef, ThinkingLevel } from "./Models.ts";
-import { ApprovalDecision } from "./Policy.ts";
+import {
+  APPROVALS_DOCUMENT,
+  ApprovalDecision,
+  GOAL_DOCUMENT,
+  LaunchEdits,
+  PERMISSIONS_DOCUMENT,
+  QuestionAnswer,
+  RuntimeMode,
+} from "./Policy.ts";
+import {
+  CHILD_DOCUMENT,
+  ESCALATIONS_DOCUMENT,
+  SUBAGENTS_DOCUMENT,
+  SubagentStopPolicy,
+} from "./Subagents.ts";
+import { WORKFLOWS_DOCUMENT } from "./Workflows.ts";
 
 /** The largest string the projection sends; longer ones are cut and marked. */
 export const WIRE_STRING_LIMIT_BYTES = 32_768;
@@ -59,7 +75,13 @@ export const VISIBLE_DOCUMENTS: ReadonlyArray<string> = [
   "pi.live",
   "pi.inbox",
   "pi.usage",
-  "cairn.approvals",
+  APPROVALS_DOCUMENT,
+  PERMISSIONS_DOCUMENT,
+  GOAL_DOCUMENT,
+  SUBAGENTS_DOCUMENT,
+  CHILD_DOCUMENT,
+  ESCALATIONS_DOCUMENT,
+  WORKFLOWS_DOCUMENT,
 ];
 
 const Segment = Schema.Union([Schema.String, Schema.Int]);
@@ -134,8 +156,15 @@ export const NOTICE_ENTRY_KIND = "cairn.notice";
 
 /** The `data` of a `cairn.notice` entry. */
 export const NoticeEntryData = Schema.Struct({
-  /** What the notice reports: a launch that failed after its conversation existed. */
-  reason: Schema.Literals(["launch_failed"]),
+  /**
+   * What the notice reports: a launch that failed after its conversation existed, a budget's
+   * warning line crossed, or work stopped at a budget (ADR 0036).
+   */
+  reason: Schema.Literals([
+    "launch_failed",
+    "budget_warning",
+    "budget_stopped",
+  ]),
   /** The text to show, as the thread row's `lastError` has it. */
   text: Schema.String,
 });
@@ -191,11 +220,9 @@ export const ThreadStreamItem = Schema.Union([
 
 export type ThreadStreamItem = typeof ThreadStreamItem.Type;
 
-/** `thread.subscribe` input. */
+/** `thread.subscribe` input. A subagent is a thread of its own and is subscribed by its id. */
 export const SubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
-  /** A conversation inside the thread (a subagent); none is the thread itself. */
-  conversationId: Schema.OptionFromNullOr(ConversationId),
 });
 
 export type SubscribeThreadInput = typeof SubscribeThreadInput.Type;
@@ -203,7 +230,6 @@ export type SubscribeThreadInput = typeof SubscribeThreadInput.Type;
 /** `thread.history` input: up to `limit` active entries before `before`, oldest first. */
 export const HistoryInput = Schema.Struct({
   threadId: ThreadId,
-  conversationId: Schema.OptionFromNullOr(ConversationId),
   before: EntryId,
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(500)),
 });
@@ -271,10 +297,14 @@ export const SendResult = Schema.Struct({
 
 export type SendResult = typeof SendResult.Type;
 
-/** `thread.stop` input. Stopping keeps queued inputs unless `clearQueue` is set. */
+/**
+ * `thread.stop` input. Stopping keeps queued inputs unless `clearQueue` is set, and leaves the
+ * thread's subagents working unless `subagents` is `stop` (Stop all, ADR 0028).
+ */
 export const StopInput = Schema.Struct({
   threadId: ThreadId,
   clearQueue: Schema.Boolean,
+  subagents: Schema.OptionFromOptionalKey(SubagentStopPolicy),
 });
 
 export type StopInput = typeof StopInput.Type;
@@ -294,20 +324,36 @@ export const WithdrawResult = Schema.Struct({
 
 export type WithdrawResult = typeof WithdrawResult.Type;
 
-/** `thread.configure` input; an absent key leaves that setting as it is. */
+/**
+ * `thread.configure` input; an absent key leaves that setting as it is. `runtimeMode` is taken
+ * only while the thread is idle, and never wider than its parent's (ADR 0031).
+ */
 export const ConfigureInput = Schema.Struct({
   threadId: ThreadId,
   model: Schema.OptionFromOptionalKey(ModelRef),
   thinkingLevel: Schema.OptionFromOptionalKey(ThinkingLevel),
+  runtimeMode: Schema.OptionFromOptionalKey(RuntimeMode),
 });
 
 export type ConfigureInput = typeof ConfigureInput.Type;
 
-/** `thread.respond` input: an answer to one approval. */
+/**
+ * `thread.respond` input: an answer to one approval, question or brief. `reason` carries the
+ * user's words on Decline or Send back (required for `revise`); `answers` answer a question's
+ * payload by index; `launch` carries the user's edits to a workflow's launch card (its budget and
+ * role overrides) with Go, stored as the answer's `launch` beside the untouched payload. On a
+ * parent's mirror of a child's escalated question it answers the child's record; whichever answer
+ * lands second is `already_settled` (ADR 0027).
+ */
 export const RespondInput = Schema.Struct({
   threadId: ThreadId,
   approvalId: ApprovalId,
   decision: ApprovalDecision,
+  reason: Schema.OptionFromOptionalKey(DisplayText),
+  answers: Schema.OptionFromOptionalKey(
+    Schema.Array(QuestionAnswer).check(Schema.isMaxLength(9))
+  ),
+  launch: Schema.OptionFromOptionalKey(LaunchEdits),
 });
 
 export type RespondInput = typeof RespondInput.Type;

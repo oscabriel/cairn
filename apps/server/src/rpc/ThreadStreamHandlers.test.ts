@@ -5,7 +5,6 @@
 import path from "node:path";
 
 import {
-  ConversationId,
   EntryId,
   ProjectId,
   RequestId,
@@ -171,7 +170,7 @@ describe("thread stream handlers", () => {
       const handlers = yield* threadStreamHandlers;
 
       const [first] = yield* handlers
-        .subscribe({ threadId: THREAD, conversationId: Option.none() })
+        .subscribe({ threadId: THREAD })
         .pipe(Stream.take(1), Stream.runCollect);
 
       assert.strictEqual(first?._tag, "Snapshot");
@@ -185,7 +184,6 @@ describe("thread stream handlers", () => {
 
       const page = yield* handlers.history({
         threadId: THREAD,
-        conversationId: Option.none(),
         before: last?.id ?? EntryId.make(1),
         limit: 10,
       });
@@ -205,22 +203,11 @@ describe("thread stream handlers", () => {
       assert.strictEqual(full.entry.kind, "pi.user");
 
       const unknown = yield* handlers
-        .subscribe({ threadId: UNKNOWN, conversationId: Option.none() })
+        .subscribe({ threadId: UNKNOWN })
         .pipe(Stream.runCollect, Effect.flip);
 
       assert.strictEqual(unknown._tag, "NotFound");
       assert.strictEqual(isNotFound(unknown) ? unknown.resource : "", "thread");
-
-      const subagent = yield* handlers
-        .history({
-          threadId: THREAD,
-          conversationId: Option.some(ConversationId.make(99)),
-          before: EntryId.make(5),
-          limit: 5,
-        })
-        .pipe(Effect.flip);
-
-      assert.strictEqual(subagent._tag, "NotFound");
 
       const missingEntry = yield* handlers
         .entry({ threadId: THREAD, entryId: EntryId.make(9999) })
@@ -334,7 +321,6 @@ describe("thread stream handlers", () => {
           const first = yield* handlers
             .subscribe({
               threadId: input.threadId,
-              conversationId: Option.none(),
             })
             .pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
 
@@ -371,7 +357,6 @@ describe("thread stream handlers", () => {
           const ended = yield* (yield* threadStreamHandlers)
             .subscribe({
               threadId: input.threadId,
-              conversationId: Option.none(),
             })
             .pipe(Stream.runCollect, Effect.flip, Effect.forkChild);
 
@@ -403,7 +388,6 @@ describe("thread stream handlers", () => {
         const failure = yield* (yield* threadStreamHandlers)
           .subscribe({
             threadId: input.threadId,
-            conversationId: Option.none(),
           })
           .pipe(
             Stream.runCollect,

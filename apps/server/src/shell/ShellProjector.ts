@@ -304,7 +304,12 @@ export const applyHarnessEvent = (
         ? projection
         : withApprovals(projection, [
             ...projection.approvals,
-            { id: update.id, kind: update.kind, createdAt: now },
+            {
+              id: update.id,
+              kind: update.kind,
+              createdAt: now,
+              origin: Option.none(),
+            },
           ]);
     },
     UsageUpdated: () => projection,
@@ -360,7 +365,12 @@ export const reconcileProjection = (
 
   const approvals = pendingIds.map(
     (id): PendingRuntimeRequest =>
-      known.get(id) ?? { id, kind: "tool-call", createdAt: now }
+      known.get(id) ?? {
+        id,
+        kind: "tool-call",
+        createdAt: now,
+        origin: Option.none(),
+      }
   );
 
   const endedUnseen =

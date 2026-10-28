@@ -28,7 +28,7 @@ import {
   WorkflowPhase,
 } from "./Policy.ts";
 import { RoleSpec } from "./Roles.ts";
-import { Budget } from "./Spend.ts";
+import { Budget, Micros } from "./Spend.ts";
 
 /** Nodes one workflow runs at once (a semaphore in the `agent` tool); the hard cap is 32. */
 export const MAX_CONCURRENT_NODES = 8;
@@ -128,9 +128,11 @@ export type NodeReceipt = typeof NodeReceipt.Type;
 
 /**
  * One dispatch in the ledger. `id` is `n-<node tool task id>`, stable across reruns; `requestId`
- * (`wf-<workflowId>-<id>`) is the idempotency key and the submission's request id; `briefId` names
- * the accepted approval that let it start, the workflow's own launch approval for a node inside
- * the envelope (ADR 0032).
+ * (`wf-<workflowId>-<id>`) is the idempotency key and the submission's request id, written with
+ * `-` where the notes write `:` because every brain-minted request id matches the protocol's
+ * `RequestId` (`[A-Za-z0-9_-]{1,128}`, see `docs/phase-2/waves.md`); `briefId` names the accepted
+ * approval that let it start, the workflow's own launch approval for a node inside the envelope
+ * (ADR 0032).
  */
 export const NodeRecord = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -172,8 +174,24 @@ export const NodeRecord = Schema.Struct({
 
 export type NodeRecord = typeof NodeRecord.Type;
 
+/** A workflow run's meter: what its nodes spent so far, plain JSON. */
+export const WorkflowSpent = Schema.Struct({
+  tokens: NonNegativeInt,
+  listMicros: Micros,
+  unpricedTokens: NonNegativeInt,
+});
+
+export type WorkflowSpent = typeof WorkflowSpent.Type;
+
+/** A meter at zero, for a workflow that has not dispatched. */
+export const NOTHING_SPENT: WorkflowSpent = {
+  tokens: 0,
+  listMicros: Micros.make(0),
+  unpricedTokens: 0,
+};
+
 /**
- * One workflow in the ledger, `id` = `wf-<workflow_plan tool task id>`. Phases are the declared
+ * One workflow in the ledger, `id` =`wf-<workflow_plan tool task id>`. Phases are the declared
  * ones followed by any that appear at run time, append-only.
  */
 export const WorkflowRecord = Schema.Struct({
@@ -201,8 +219,25 @@ export const WorkflowRecord = Schema.Struct({
   /** A reference to the script's return value. */
   result: Schema.NullOr(TrimmedNonEmptyString),
   nodes: Schema.Record(Schema.String, NodeRecord),
-  /** `log(msg)` lines, keyed by the call's task id so a replay writes each once. */
-  log: Schema.Array(Schema.Struct({ at: EpochMillis, text: DisplayText })),
+  /**
+   * `log(msg)` lines keyed by the `tools.log` nested task id (decimal), so a rerun after a kill
+   * between the task's commit and its result writes the same key again instead of a second line.
+   * Shown in key order, which is call order.
+   */
+  log: Schema.Record(
+    Schema.String,
+    Schema.Struct({ at: EpochMillis, text: DisplayText })
+  ),
+  /**
+   * The run's meter, recomputed by the budget reactor (5B) from its nodes' `pi.usage` and carried
+   * to clients by the thread stream. `listMicros` sums priced nodes only; `unpricedTokens` is what
+   * it leaves out (ADR 0036).
+   */
+  spent: WorkflowSpent,
+  /** When the meter first crossed the budget's `warnAt`; set once, in the commit that emits `workflow.budget.soft`. */
+  softAt: Schema.NullOr(EpochMillis),
+  /** When the meter first reached the budget; set once, in the commit that emits `workflow.budget.spent`. */
+  spentAt: Schema.NullOr(EpochMillis),
 });
 
 export type WorkflowRecord = typeof WorkflowRecord.Type;

@@ -196,7 +196,19 @@ _Avoid_: permission request, prompt (for the record)
 
 _Avoid_: task, spec, ticket
 
-**Envelope**: The limits a workflow's launch approval sets: its script, the roles at each call site, a node cap and a budget. A node brief that fits the envelope is approved by it; one outside it asks the user.
+**Go**: The user's yes to a brief or a workflow's launch. It starts the child (or the workflow) in the same commit that accepts the record. On a launch card, the user may edit the budget and the per-launch role overrides before Go; the edits travel with the answer and the proposal stays as the model wrote it.
+
+_Avoid_: approve (for a brief), run
+
+**Decider**: Who settled an approval record: the user, a parent thread answering its child's question, the permission mode, a workflow's envelope, a judge, expiry, or the system (a stop or boot). Every record past pending names one.
+
+**Escalate**: To pass a child's question up from its parent to the user, because the parent chose to, its run ended, or 15 minutes passed. The user answers it in the parent thread, and either answer settles both records once.
+
+_Avoid_: forward, bubble up
+
+**Criterion**: One stated, checkable condition of a goal or a brief, naming the outside judge that decides it. It is met only by a verdict recorded after it last changed.
+
+**Verdict**: A judge run's recorded result for a criterion: pass or fail, the judge, and the evidence (exit code, output tail, commit, model). Only the verdict writer records one.
 
 **Request card**: The card above the composer that holds what waits on the user in a thread: an approval, a question or a brief. Once answered, it leaves one line in the transcript saying who decided and why.
 
@@ -208,7 +220,15 @@ _Avoid_: prompt, modal, panel
 
 _Avoid_: approval policy, trust level
 
-**Plan window**: One rate-limit window of a subscription plan (five hours, seven days), with how much of it is used and when it resets. Unknown is shown as unknown, never as zero.
+**Plan window**: One rate-limit window of a subscription plan (five hours, seven days), with how much of it is used and when it resets. Unknown is shown as unknown, never as zero. A provider whose windows could not be read says `unreadable`; one that has none to read (OpenCode Go, an API key login) says `unsupported`, so an empty list never means two things.
+
+**Spend**: What a thread, goal or workflow run used, derived from each conversation's `pi.usage`: tokens per model, and their list price where the model has one. Tokens with no price are counted and named, never priced at zero.
+
+**List price**: A model's catalog price per token, which Cairn uses to put a dollar figure on spend. On a plan (the bridge, OpenCode Go, Codex) it is not a bill, and the figure says so.
+
+_Avoid_: cost (for a plan's figure)
+
+**Budget**: The limits a brief or a workflow's launch carries (list-price dollars, tokens, turns, minutes, a plan window guard), with a warning line at 80% by default. Reaching it stops new work and asks for a raise.
 
 ## Results
 

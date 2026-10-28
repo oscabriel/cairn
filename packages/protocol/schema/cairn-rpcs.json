@@ -4624,6 +4624,190 @@
               "additionalProperties": true
             },
             "maxItems": 9
+          },
+          "launch": {
+            "type": "object",
+            "properties": {
+              "budget": {
+                "type": "object",
+                "properties": {
+                  "maxListMicros": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxTokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxTurns": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxMinutes": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "planGuard": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                            "minLength": 1
+                          },
+                          "windowId": {
+                            "type": "string",
+                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                            "minLength": 1
+                          },
+                          "maxUsedFraction": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": ["provider", "windowId", "maxUsedFraction"],
+                        "additionalProperties": true
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "warnAt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "required": [
+                  "maxListMicros",
+                  "maxTokens",
+                  "maxTurns",
+                  "maxMinutes",
+                  "planGuard",
+                  "warnAt"
+                ],
+                "additionalProperties": true
+              },
+              "roleOverrides": {
+                "type": "object",
+                "patternProperties": {
+                  "^@[a-z0-9-]{1,24}$": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                            "minLength": 1
+                          },
+                          "modelId": {
+                            "type": "string",
+                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["provider", "modelId"],
+                        "additionalProperties": true
+                      },
+                      "thinkingLevel": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "minimal",
+                              "low",
+                              "medium",
+                              "high",
+                              "xhigh",
+                              "max"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "fallbacks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "provider": {
+                              "type": "string",
+                              "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                              "minLength": 1
+                            },
+                            "modelId": {
+                              "type": "string",
+                              "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                              "minLength": 1
+                            }
+                          },
+                          "required": ["provider", "modelId"],
+                          "additionalProperties": true
+                        },
+                        "maxItems": 4
+                      },
+                      "note": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 4096
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["model", "thinkingLevel", "fallbacks", "note"],
+                    "additionalProperties": true
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "required": ["budget", "roleOverrides"],
+            "additionalProperties": true
           }
         },
         "required": ["threadId", "approvalId", "decision"],

@@ -34,7 +34,7 @@ import {
   TrimmedNonEmptyString,
 } from "./Ids.ts";
 import { ModelRef, ThinkingLevel } from "./Models.ts";
-import { RoleSpec } from "./Roles.ts";
+import { RoleOverrides, RoleSpec } from "./Roles.ts";
 import { Budget } from "./Spend.ts";
 
 /**
@@ -374,9 +374,27 @@ export const WorkflowLaunch = Schema.Struct({
   nodes: Schema.Struct({ count: NonNegativeInt, unbounded: Schema.Boolean }),
   estimate: Schema.NullOr(WorkflowEstimate),
   envelope: Envelope,
+  /**
+   * Role bindings the model proposes for this launch only (ADR 0035, "a per-launch override on a
+   * workflow's approval"); empty uses the global table. The user's edits on the card travel in the
+   * answer's `launch`, never in this frozen payload.
+   */
+  roleOverrides: RoleOverrides,
 });
 
 export type WorkflowLaunch = typeof WorkflowLaunch.Type;
+
+/**
+ * What the user changed on a workflow's launch card before Go: the budget and the per-launch role
+ * overrides, each replacing the payload's whole. Carried in the answer, so the frozen payload stays
+ * what the model proposed and the record still shows both. Only a launch approval takes one.
+ */
+export const LaunchEdits = Schema.Struct({
+  budget: Budget,
+  roleOverrides: RoleOverrides,
+});
+
+export type LaunchEdits = typeof LaunchEdits.Type;
 
 /** A question record's payload (`ask_user`, `ask_parent`). */
 export const QuestionsPayload = Schema.Struct({
@@ -394,7 +412,10 @@ export const CriteriaPayload = Schema.Struct({
 
 export type CriteriaPayload = typeof CriteriaPayload.Type;
 
-/** A raise asked for when a budget is reached (ADR 0036). */
+/**
+ * A raise asked for when a budget is reached (ADR 0036). Its record has kind `tool-call` and tool
+ * `budget_raise`: a yes or no on a gated action, which the card tells apart by the payload's `type`.
+ */
 export const BudgetRaisePayload = Schema.Struct({
   type: Schema.Literal("budget-raise"),
   /** `thread`, `goal` or a workflow id: the scope whose budget is reached. */
@@ -405,11 +426,50 @@ export const BudgetRaisePayload = Schema.Struct({
 
 export type BudgetRaisePayload = typeof BudgetRaisePayload.Type;
 
+/**
+ * The largest program a `program` record holds, in UTF-8 bytes: the thread stream's string limit
+ * (`WIRE_STRING_LIMIT_BYTES` in `Thread.ts`, held equal by a test), so the card never shows a cut
+ * program the user would approve unseen. A longer program is refused at ask time.
+ */
+export const PROGRAM_CODE_LIMIT_BYTES = 32_768;
+
+/** The UTF-8 length of one code point; a lone surrogate counts as the 3-byte replacement it encodes to. */
+const utf8Width = (point: number): number => {
+  if (point < 0x80) {
+    return 1;
+  }
+
+  if (point < 0x8_00) {
+    return 2;
+  }
+
+  return point < 0x1_00_00 ? 3 : 4;
+};
+
+/** A string's length in UTF-8 bytes. */
+const utf8Length = (text: string): number => {
+  let bytes = 0;
+
+  for (const char of text) {
+    bytes += utf8Width(char.codePointAt(0) ?? 0);
+  }
+
+  return bytes;
+};
+
 /** An Executor program approved once, as the program, in Supervised mode (ADR 0031). */
 export const ProgramPayload = Schema.Struct({
   type: Schema.Literal("program"),
-  /** The code the user approves exactly, up to 64 KiB. */
-  code: Schema.String.check(Schema.isMaxLength(65_536)),
+  /** The code the user approves exactly, as the card shows it whole. */
+  code: Schema.String.check(
+    Schema.isMaxLength(PROGRAM_CODE_LIMIT_BYTES),
+    Schema.makeFilter(
+      (code: string) =>
+        utf8Length(code) <= PROGRAM_CODE_LIMIT_BYTES ||
+        `a program must fit the wire's ${PROGRAM_CODE_LIMIT_BYTES} bytes`,
+      { identifier: "ProgramCodeBytes" }
+    )
+  ),
 });
 
 export type ProgramPayload = typeof ProgramPayload.Type;
@@ -426,11 +486,15 @@ export const ApprovalPayload = Schema.Union([
 
 export type ApprovalPayload = typeof ApprovalPayload.Type;
 
-/** What the decider answered. */
+/**
+ * What the decider answered. `launch` is set only on Go (`accept` or `accept_sample`) for a
+ * workflow's launch approval when the user edited the card; null runs the payload as proposed.
+ */
 export const ApprovalAnswer = Schema.Struct({
   decision: ApprovalDecision,
   answers: Schema.NullOr(Schema.Array(QuestionAnswer)),
   note: Schema.NullOr(DisplayText),
+  launch: Schema.NullOr(LaunchEdits),
 });
 
 export type ApprovalAnswer = typeof ApprovalAnswer.Type;

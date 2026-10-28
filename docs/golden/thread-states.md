@@ -73,8 +73,6 @@ The first column names the schema: the export that declares the union, or the ex
 | `SubagentStatus` | `working` | Active | The child runs, or has an input queued. |
 | `SubagentStatus` | `waiting` | Waiting on you | The child asked a question (of its parent or the user) or holds an approval. |
 | `SubagentStatus` | `settled` | Ended | The child's latest input has a settlement; more inputs can still reach it. |
-| `SubagentStatus` | `declined` | Ended | Its brief was declined; no child exists. |
-| `SubagentStatus` | `expired` | Ended | Its brief went unanswered for 7 days; no child exists. |
 | `SubagentQuestionState` | `pending` | Held | The parent's model has the child's question and has not answered or escalated it. |
 | `SubagentQuestionState` | `answered` | Ended | Answered, by the parent's model or by the user. |
 | `SubagentQuestionState` | `escalated` | Waiting on you | Escalated to the user, shown in the parent thread (ADR 0027). |
@@ -298,8 +296,6 @@ What the web client shows for each status today. The sidebar row's label comes f
 | `SubagentStatus` | `working` | Not shown yet; subagent rows (6C). | None |
 | `SubagentStatus` | `waiting` | Not shown yet; subagent rows (6C). | None |
 | `SubagentStatus` | `settled` | Not shown yet; subagent rows (6C). | None |
-| `SubagentStatus` | `declined` | Not shown yet; subagent rows (6C). | None |
-| `SubagentStatus` | `expired` | Not shown yet; subagent rows (6C). | None |
 | `SubagentQuestionState` | `pending` | Not shown yet; the rollup and parent banner (6D). | None |
 | `SubagentQuestionState` | `answered` | Not shown yet; the settled-record line (6A). | None |
 | `SubagentQuestionState` | `escalated` | Not shown yet; the request card in the parent thread (6A, 6D). | None |

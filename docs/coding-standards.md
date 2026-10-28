@@ -67,7 +67,7 @@ Rules are numbered so reviews can cite them ("breaks S28"). Effect's own guidanc
 ## Optional values
 
 - **S22.** Represent optional fields, parameters and results inside the app as `Option.Option<A>`, not `null`, `undefined` or `?:`.
-- **S23.** Two carve-outs. Wire and serialized payloads (Workflow step outputs, DO storage, JSON over a link) keep a plain encoded side through `Schema.OptionFromNullOr` or `Schema.OptionFromOptionalKey`, and `HttpApi` query fields may use `Schema.optional`. A platform value narrowed locally (`map.get(id) === undefined`) is fine inside one function; convert it to `Option` before it leaves.
+- **S23.** Carve-outs. Wire and serialized payloads (Workflow step outputs, DO storage, JSON over a link) keep a plain encoded side through `Schema.OptionFromNullOr` or `Schema.OptionFromOptionalKey`, and `HttpApi` query fields may use `Schema.optional`. A platform value narrowed locally (`map.get(id) === undefined`) is fine inside one function; convert it to `Option` before it leaves. Documents are the exception to the first: pi-durable documents (`cairn.*`) and the `data` and `details` of transcript entries Cairn writes are plain JSON with `null` for an absent value, never an Option, because ops address the raw JSON by path on the server and in the client alike (phase 1's `CairnDocs`); `JsonSchema.test.ts` refuses a transformation inside any schema in `DOCUMENT_SCHEMAS`. Read such a value into an `Option` where code works on it.
 
   ```ts
   const StepOutput = Schema.Struct({

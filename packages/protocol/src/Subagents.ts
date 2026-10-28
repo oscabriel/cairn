@@ -37,6 +37,25 @@ export const MAX_SUBAGENT_DEPTH = 2;
 /** How many children one parent may have working at once (ADR 0028), fixed until measured. */
 export const MAX_LIVE_CHILDREN = 8;
 
+/**
+ * How many children the whole brain may have working at once (subagents note, section 7),
+ * proposed and unmeasured until the phase 2 fan-out judge sets it.
+ */
+export const MAX_LIVE_CHILDREN_PER_BRAIN = 32;
+
+/** Days a brief waits for Go before it expires and the parent is told (ADR 0030). */
+export const BRIEF_EXPIRY_DAYS = 7;
+
+/**
+ * The `details` a `subagent_spawn` tool call carries through `api.details` (subagents note,
+ * section 9), so the transcript row links to the child without a lookup. Plain JSON.
+ */
+export const SubagentSpawnDetails = Schema.Struct({
+  threadId: ThreadId,
+});
+
+export type SubagentSpawnDetails = typeof SubagentSpawnDetails.Type;
+
 /** How a row relates to its parent. Only subagents in phase 2; stones arrive in phase 3. */
 export const RelationshipToParent = Schema.Literals(["subagent"]);
 
@@ -116,13 +135,15 @@ export type SubagentSettlement = typeof SubagentSettlement.Type;
  */
 export const SUBAGENT_RESULT_ENTRY = "cairn.subagent-result";
 
-/** Where a child stands in its parent's registry. */
+/**
+ * Where a child stands in its parent's registry. The registry item is written by the start task at
+ * Go, so a brief that is declined, revised or expires never reaches it; those ends live on the
+ * brief's own record (`ApprovalStatus`).
+ */
 export const SubagentStatus = Schema.Literals([
   "working",
   "waiting",
   "settled",
-  "declined",
-  "expired",
 ]);
 
 export type SubagentStatus = typeof SubagentStatus.Type;

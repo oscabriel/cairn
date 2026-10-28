@@ -42,6 +42,27 @@ export const RoleBinding = Schema.Struct({
 
 export type RoleBinding = typeof RoleBinding.Type;
 
+/**
+ * A binding as a document carries it, plain JSON with `null` for an absent value: a workflow
+ * launch's per-launch overrides (ADR 0035) live in the frozen payload and in the answer to it.
+ */
+export const RoleBindingJson = Schema.Struct({
+  model: ModelRef,
+  thinkingLevel: Schema.NullOr(ThinkingLevel),
+  fallbacks: Schema.Array(ModelRef).check(Schema.isMaxLength(4)),
+  note: Schema.NullOr(DisplayText),
+});
+
+export type RoleBindingJson = typeof RoleBindingJson.Type;
+
+/**
+ * Per-launch role overrides: role name to the binding this launch uses instead of the global
+ * table's. Roles it does not name resolve through the table as usual.
+ */
+export const RoleOverrides = Schema.Record(RoleName, RoleBindingJson);
+
+export type RoleOverrides = typeof RoleOverrides.Type;
+
 /** The role table, global (ADR 0035): role name to binding. */
 export const RoleTable = Schema.Record(RoleName, RoleBinding);
 

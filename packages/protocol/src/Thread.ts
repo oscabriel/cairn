@@ -47,6 +47,7 @@ import {
   APPROVALS_DOCUMENT,
   ApprovalDecision,
   GOAL_DOCUMENT,
+  LaunchEdits,
   PERMISSIONS_DOCUMENT,
   QuestionAnswer,
   RuntimeMode,
@@ -339,8 +340,10 @@ export type ConfigureInput = typeof ConfigureInput.Type;
 /**
  * `thread.respond` input: an answer to one approval, question or brief. `reason` carries the
  * user's words on Decline or Send back (required for `revise`); `answers` answer a question's
- * payload by index. On a parent's mirror of a child's escalated question it answers the child's
- * record; whichever answer lands second is `already_settled` (ADR 0027).
+ * payload by index; `launch` carries the user's edits to a workflow's launch card (its budget and
+ * role overrides) with Go, stored as the answer's `launch` beside the untouched payload. On a
+ * parent's mirror of a child's escalated question it answers the child's record; whichever answer
+ * lands second is `already_settled` (ADR 0027).
  */
 export const RespondInput = Schema.Struct({
   threadId: ThreadId,
@@ -350,6 +353,7 @@ export const RespondInput = Schema.Struct({
   answers: Schema.OptionFromOptionalKey(
     Schema.Array(QuestionAnswer).check(Schema.isMaxLength(9))
   ),
+  launch: Schema.OptionFromOptionalKey(LaunchEdits),
 });
 
 export type RespondInput = typeof RespondInput.Type;

@@ -26,6 +26,7 @@ import {
   SUBAGENT_RESULT_ENTRY,
   SUBAGENTS_DOCUMENT,
   SubagentSettlement,
+  SubagentSpawnDetails,
   SubagentsDocument,
 } from "./Subagents.ts";
 import { NOTICE_ENTRY_KIND, NoticeEntryData } from "./Thread.ts";
@@ -91,6 +92,7 @@ export const DOCUMENT_SCHEMAS: ReadonlyArray<readonly [string, Schema.Top]> = [
   [NOTICE_ENTRY_KIND, NoticeEntryData],
   ["artifact_publish details", ArtifactDetails],
   ["portal_open details", PortalDetails],
+  ["subagent_spawn details", SubagentSpawnDetails],
 ];
 
 /**

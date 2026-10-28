@@ -1319,6 +1319,7 @@ const accept = (context: RunContext) =>
         decision: "accept",
         reason: Option.none(),
         answers: Option.none(),
+        launch: Option.none(),
       }).pipe(
         Effect.mapError(
           (error) =>

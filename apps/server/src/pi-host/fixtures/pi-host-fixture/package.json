@@ -1,0 +1,10 @@
+{
+  "name": "pi-host-fixture",
+  "version": "1.2.3",
+  "private": true,
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

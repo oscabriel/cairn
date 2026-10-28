@@ -237,6 +237,47 @@ describe("pi's setup, read-only", () => {
   );
 
   it.live(
+    "lists the extensions pi enables with their package's name and version, loading none",
+    () =>
+      Effect.gen(function* () {
+        const on = pkg(
+          "tools-pack",
+          { extensions: ["./index.ts"] },
+          { "index.ts": "throw new Error('PiConfig must never load me');\n" }
+        );
+
+        pkg(
+          "off-pack",
+          { extensions: ["./index.ts"] },
+          { "index.ts": "throw new Error('PiConfig must never load me');\n" }
+        );
+
+        write(
+          path.join(dirs.agent, "settings.json"),
+          JSON.stringify({
+            packages: [
+              "npm:tools-pack",
+              // An empty filter enables none of the package's extensions.
+              { source: "npm:off-pack", extensions: [] },
+            ],
+          })
+        );
+
+        const snapshot = yield* withPi(resolveOnce);
+
+        assert.deepStrictEqual(snapshot.extensions, [
+          {
+            path: path.join(on, "index.ts"),
+            source: "npm:tools-pack",
+            packageRoot: Option.some(on),
+            packageName: Option.some("tools-pack"),
+            packageVersion: Option.some("1.0.0"),
+          },
+        ]);
+      })
+  );
+
+  it.live(
     "resolves again on refresh only when a file it read changed; reload always does",
     () =>
       Effect.sync(fixture).pipe(

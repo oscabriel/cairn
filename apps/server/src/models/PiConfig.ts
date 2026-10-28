@@ -7,8 +7,9 @@
 //
 // What the user's pi setup (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`) gives Cairn, read through
 // pi-coding-agent's own classes so Cairn and pi agree on it: the skills pi resolves (with
-// settings.json's `+`, `-` and `!` filters), the default model and thinking level, the run settings
-// and the agent-level context files. Strictly read-only:
+// settings.json's `+`, `-` and `!` filters), the extension entries it enables (listed with their
+// package's name and version for the tools-only pi host, never loaded here), the default model and
+// thinking level, the run settings and the agent-level context files. Strictly read-only:
 //
 // - settings.json is read through a storage whose lock never locks and which refuses any write;
 //   project settings are never read (`projectTrusted: false`, from an empty host-owned cwd), so no
@@ -115,6 +116,22 @@ export interface PiDefaults {
   readonly thinkingLevel: Option.Option<ThinkingLevel>;
 }
 
+/**
+ * An extension entry pi resolved and enabled, with the package it came from. Only the tools-only
+ * pi host reads these, and it loads none whose package it does not allow by name and version.
+ */
+export interface PiExtensionEntry {
+  /** The entry file or directory, as pi's loader takes it. */
+  readonly path: string;
+  /** The settings.json source that brought it in (`npm:pi-web-access`), or `auto` for a loose file. */
+  readonly source: string;
+  /** The package's root directory; none for an extension that is not part of a package. */
+  readonly packageRoot: Option.Option<string>;
+  /** `name` and `version` from the package's `package.json`; none when it cannot be read. */
+  readonly packageName: Option.Option<string>;
+  readonly packageVersion: Option.Option<string>;
+}
+
 /** One resolve of the agent dir. */
 export interface PiSnapshot {
   readonly agentDir: string;
@@ -124,6 +141,8 @@ export interface PiSnapshot {
   readonly skills: ReadonlyArray<PiSkill>;
   /** The distinct roots of `skills`, outermost only. */
   readonly skillRoots: ReadonlyArray<string>;
+  /** The extension entries pi resolved and enabled; read only by the tools-only pi host. */
+  readonly extensions: ReadonlyArray<PiExtensionEntry>;
   /** Package sources settings.json names that are not installed. */
   readonly missing: ReadonlyArray<string>;
   readonly defaults: PiDefaults;
@@ -414,6 +433,47 @@ const skillsOf = (
   };
 };
 
+const PackageManifest = Schema.Struct({
+  name: Schema.String,
+  version: Schema.String,
+});
+
+const decodeManifest = Schema.decodeUnknownOption(
+  Schema.fromJsonString(PackageManifest)
+);
+
+/** The `name` and `version` of the package at `root`; none when its manifest is unreadable. */
+const manifestOf = (root: string) => {
+  const file = path.join(root, "package.json");
+
+  return existsSync(file)
+    ? decodeManifest(readFileSync(file, "utf-8"))
+    : Option.none();
+};
+
+/** The extensions pi resolved and enabled, each with its package's name and version. */
+const extensionsOf = (
+  resolved: ReadonlyArray<PiCodingAgent.ResolvedResource>
+): ReadonlyArray<PiExtensionEntry> =>
+  resolved.flatMap((resource) => {
+    if (!resource.enabled) {
+      return [];
+    }
+
+    const packageRoot = Option.fromNullishOr(resource.metadata.packageRoot);
+    const manifest = Option.flatMap(packageRoot, manifestOf);
+
+    return [
+      {
+        path: resource.path,
+        source: resource.metadata.source,
+        packageRoot,
+        packageName: Option.map(manifest, (found) => found.name),
+        packageVersion: Option.map(manifest, (found) => found.version),
+      },
+    ];
+  });
+
 const contextFilesOf = (agentDir: string): ReadonlyArray<PiContextFile> => {
   const agent = contextFileIn(agentDir).pipe(
     Option.map((file): PiContextFile => ({ source: "agent", path: file }))
@@ -546,6 +606,10 @@ const resolvePiConfig = Effect.fn("PiConfig.resolve")(function* (
     loadedAt: yield* DateTime.now,
     skills,
     skillRoots: roots,
+    extensions: Option.match(resolved, {
+      onNone: () => [],
+      onSome: (paths) => extensionsOf(paths.extensions),
+    }),
     missing: [...missing],
     defaults: {
       provider: Option.fromNullishOr(settings.getDefaultProvider()),

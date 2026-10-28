@@ -1,15 +1,17 @@
-// The reactor host (ADR 0033): runs every registered reactor over the durable event log
+// The reactor host (ADR 0033): runs every registered reactor over the event conversation
 // (`Events.ts`), one event per commit, serially per reactor and independently across reactors.
 //
 // - Wakes: a commit that appends one of a reactor's events (or rotates the log) wakes it; so does
 //   each Session as it opens (boot, and every reopen after a storage failure). The commit listener
 //   only offers to a one-slot queue, because pi-durable calls it on the mutation line.
 // - Steps: one commit per event (`reactOnce`). A step that throws rolls back with its cursor; the
-//   reactor records the failure, waits (100 ms doubling to 30 s) and tries again, and a commit or a
-//   reopen in between wakes it sooner. A closed Harness is not a failure: the next Session wakes it.
+//   reactor records the failure and retries on its timer (100 ms doubling to 30 s). Wakes during
+//   the backoff are coalesced into the retry, never acted on sooner, so a poison event cannot spin.
+//   A closed Harness is not a failure: the next Session wakes it.
 // - Lifetime: nothing runs before `start`, which boot calls after its other repairs and before the
-//   brain is ready. It first gives every reactor without a cursor one at the start of the current
-//   log (`registerCursors`), so a reactor misses nothing from its first boot on. `stop` runs among
+//   brain is ready. It first gives every reactor without a cursor one in the current log, at its
+//   tail or its start as the reactor's `from` says (`registerCursors`), so a reactor misses nothing
+//   emitted from its first boot on. `stop` runs among
 //   the close hooks, before the Harness closes, and waits for the step in flight (each step is
 //   uninterruptible: it is one commit).
 // - Status: per reactor, the events after its cursor (counted in a read-only commit), and the last
@@ -59,6 +61,15 @@ const RETRY_MAX = Duration.seconds(30);
 
 const at = (millis: number) => DateTime.makeUnsafe(millis);
 
+/** The longest failure message status carries: the protocol's `DisplayText` limit. */
+const MESSAGE_LIMIT = 4096;
+
+/** `message` cut to `MESSAGE_LIMIT` characters, marked when cut. */
+export const boundedMessage = (message: string) =>
+  message.length <= MESSAGE_LIMIT
+    ? message
+    : `${message.slice(0, MESSAGE_LIMIT - 1)}…`;
+
 /** The wait before the next try after `failures` failed steps in a row (at least one). */
 const retryAfter = (failures: number) =>
   Duration.min(
@@ -76,6 +87,7 @@ export class ReactorStepFailed extends Schema.TaggedError<ReactorStepFailed>()(
     eventId: Schema.Option(EntryId),
     /** The Harness was closing: not the reactor's failure. */
     closed: Schema.Boolean,
+    cause: Schema.Defect(),
   }
 ) {}
 
@@ -193,6 +205,7 @@ export class EventReactors extends Context.Service<
                     reactor: state.reactor.name,
                     eventId: Option.map(attempted.event, (event) => event.id),
                     closed: failure.closed,
+                    cause: failure.cause,
                   })
               )
             );
@@ -203,7 +216,7 @@ export class EventReactors extends Context.Service<
             state.failuresInARow += 1;
             state.lastFailure = Option.some({
               at: brain.now(),
-              message: failed.message,
+              message: boundedMessage(failed.message),
             });
 
             const annotations = {
@@ -294,7 +307,7 @@ export class EventReactors extends Context.Service<
             Effect.flatMap((session) =>
               durable("events.register", async (context) => {
                 await session.harness.commit(async (tx) => {
-                  await registerCursors(tx, [...names], brain.now());
+                  await registerCursors(tx, reactors, brain.now());
                 }, context);
               })
             ),

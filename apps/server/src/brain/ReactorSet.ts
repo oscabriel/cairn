@@ -2,6 +2,10 @@
 // that adds a reactor hands off its source to be listed here at the end of its wave; the list order
 // is the status page's order and nothing else, since reactors run independently. A reactor that
 // creates pi-durable tasks registers their definitions through its own extension's `tasks`.
+//
+// A reactor added in a later deploy starts where its `from` says (`ReactorStart` in `Events.ts`):
+// `now` handles only what is emitted after it, `start` also replays this UTC month's events so far.
+// Any reactor whose tasks reach outside (pushes, child starts) takes `now`.
 
 import { Effect } from "effect";
 

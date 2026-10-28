@@ -18,9 +18,12 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 // Durable events (ADR 0033). A fact with several consumers is an entry `event.<name>` appended to
-// the event log, one ownerless conversation that never runs, inside the commit of the change it
+// the event conversation (one ownerless conversation that never runs; the glossary's "Event
+// conversation", not the brain's "Events log" of JSON lines) inside the commit of the change it
 // describes: the event exists exactly when the change does, and the entry id is the global order.
-// The session document `cairn.events` names the current log and holds one cursor per reactor.
+// Its data is the protocol's `EventEnvelope`. The session document `cairn.events` names the current
+// event conversation and holds one cursor per reactor. Below, "log" is short for the event
+// conversation of one month.
 //
 // A reactor handles each event of its kinds once, oldest first: one commit reads its cursor, finds
 // the next matching entry, runs the handler with that commit's `tx` and moves the cursor. A throw
@@ -34,7 +37,11 @@
 // About 70 MB a year without it (the workflows note, "Operations").
 
 import { ConversationId, EntryId } from "@cairn/protocol/Ids";
-import { EventName, EVENTS_DOCUMENT } from "@cairn/protocol/Workflows";
+import {
+  EventEnvelope,
+  EventName,
+  EVENTS_DOCUMENT,
+} from "@cairn/protocol/Workflows";
 import type { JsonValue } from "@earendil-works/chord";
 import type {
   Cursor,
@@ -114,6 +121,8 @@ export interface EventRecord {
   /** Epoch milliseconds on the emitter's Harness clock. */
   readonly at: number;
   readonly data: JsonValue;
+  /** What the emitter adds about where the event came from (a run, a thread), if anything. */
+  readonly context: Option.Option<JsonValue>;
 }
 
 /** What an emitter states; the log, the entry id and the version are the log's. */
@@ -122,7 +131,21 @@ export interface EventDraft {
   readonly data: JsonValue;
   /** Epoch milliseconds on the Harness clock (`runtime.now()` in a task). Picks the log's month. */
   readonly at: number;
+  /** Written as `null` when none (S23: the envelope is plain JSON). */
+  readonly context: Option.Option<JsonValue>;
 }
+
+/**
+ * Where a reactor without a cursor starts, when it is first registered (or first steps):
+ *
+ * - `now`: at the tail of the current log. It handles only events emitted after it was added. Use
+ *   it for any reactor whose tasks reach outside (pushes, child starts), so a deploy that adds it
+ *   does not replay old facts.
+ * - `start`: at the start of the current log, so it also handles the events already emitted this
+ *   UTC month. How far back that reaches depends on the day of the deploy, and older months' logs
+ *   are never replayed. Only for reactors whose effects are safe to repeat over old facts.
+ */
+export type ReactorStart = "now" | "start";
 
 /**
  * A reactor: a name, the events it handles and the handler. `handle` runs inside the commit that
@@ -131,18 +154,29 @@ export interface EventDraft {
  * anything outside `tx`. A throw rolls back its writes and leaves the event pending.
  */
 export interface Reactor {
-  /** Stable: the cursor is stored under it. Renaming a reactor starts it over at the current log. */
+  /**
+   * Stable: the cursor is stored under it. Renaming a reactor registers it anew, starting where
+   * `from` says.
+   */
   readonly name: string;
   readonly events: ReadonlyArray<EventName>;
+  /** Where its cursor starts when it has none. */
+  readonly from: ReactorStart;
   handle(tx: Tx, event: EventRecord): Promise<void>;
 }
 
-/** Builds a reactor. */
+/**
+ * Builds a reactor. `ReactorFootguns.test.ts` checks its handler: no Session read, and no await of
+ * anything but `tx` (or a helper given `tx`).
+ */
 export const reactor = (
   name: string,
-  events: ReadonlyArray<EventName>,
+  options: {
+    readonly events: ReadonlyArray<EventName>;
+    readonly from: ReactorStart;
+  },
   handle: (tx: Tx, event: EventRecord) => Promise<void>
-): Reactor => ({ name, events, handle });
+): Reactor => ({ name, events: options.events, from: options.from, handle });
 
 /** Plain JSON check for handlers that read `data`: an object, not an array. */
 export const isEventObject = (
@@ -152,14 +186,25 @@ export const isEventObject = (
 
 const decodeEventName = Schema.decodeUnknownOption(EventName);
 
-/** The envelope's version and time; `data` is read as plain JSON beside it. */
-const decodeEnvelope = Schema.decodeUnknownOption(
-  Schema.Struct({ v: Schema.Int, at: Schema.Finite })
-);
+/** The protocol's envelope; `data` and `context` are then read as plain JSON from the entry. */
+const decodeEnvelope = Schema.decodeUnknownOption(EventEnvelope);
 
 const decodeRotated = Schema.decodeUnknownOption(
   Schema.Struct({ next: Schema.Int, month: Schema.String })
 );
+
+/**
+ * The log a rotation marker names. Throws (failing the step, which the reactor status shows) on a
+ * malformed marker: passing over it would leave every cursor in a dead log with no lag to report.
+ */
+const nextLogOf = (entry: EntryRecord): number =>
+  Option.getOrThrowWith(
+    Option.map(decodeRotated(entry.data), (data) => data.next),
+    () =>
+      new Error(
+        `Rotation marker ${entry.id} names no next log. Every reactor stops here; repair the entry.`
+      )
+  );
 
 /** The UTC month of epoch milliseconds `at`, `YYYY-MM`. */
 export const monthOf = (at: number): string => {
@@ -188,7 +233,8 @@ const eventOf = (entry: EntryRecord): Option.Option<EventRecord> => {
     Option.isNone(name) ||
     Option.isNone(envelope) ||
     !isEventObject(data) ||
-    data.data === undefined
+    data.data === undefined ||
+    data.context === undefined
   ) {
     return Option.none();
   }
@@ -199,6 +245,7 @@ const eventOf = (entry: EntryRecord): Option.Option<EventRecord> => {
     v: envelope.value.v,
     at: envelope.value.at,
     data: data.data,
+    context: Option.fromNullOr(data.context),
   });
 };
 
@@ -245,23 +292,58 @@ const logFor = async (tx: Tx, at: number): Promise<PiConversationId> => {
   return created.id;
 };
 
+/** The last entry of log `log`, or null for an empty log. Reads tables only. */
+const tailOf = async (tx: Tx, log: number): Promise<number | null> => {
+  const read = await tx.scanEntries(
+    { conversationId: logId(log), order: "descending" },
+    1
+  );
+
+  return read.items[0]?.id ?? null;
+};
+
+/** A new cursor for `target` in the current log `log`, where its `from` says. Reads tables only. */
+const newCursor = async (
+  tx: Tx,
+  target: Pick<Reactor, "from">,
+  log: number
+): Promise<EventCursorState> => ({
+  logConversationId: log,
+  entryId: target.from === "now" ? await tailOf(tx, log) : null,
+});
+
 /**
- * Gives every reactor in `names` that has no cursor one at the start of the current log, opening
- * the first log if there is none (its month from `at`). The host commits this at start, so a
- * reactor misses no event from then on, even across a rotation before its first step. A reactor
- * first registered after a rotation starts at the current log, not at older ones.
+ * Gives every reactor in `targets` that has no cursor one in the current log (its tail or its
+ * start, as its `from` says), opening the first log if there is none (its month from `at`). The
+ * host commits this at start, so a reactor misses no event emitted from then on, even across a
+ * rotation before its first step. A `start` reactor first registered after a rotation starts at the
+ * current log, not at older ones.
  */
 export const registerCursors = async (
   tx: Tx,
-  names: ReadonlyArray<string>,
+  targets: ReadonlyArray<Pick<Reactor, "name" | "from">>,
   at: number
 ): Promise<void> => {
   // No reactors: the first event opens the log.
-  if (names.length === 0) {
+  if (targets.length === 0) {
     return;
   }
 
   const state = await tx.doc(EventsDoc);
+
+  const unregistered = targets.filter(
+    (target) => state.cursors[target.name] === undefined
+  );
+
+  if (unregistered.length === 0) {
+    return;
+  }
+
+  // Table reads first (the tail), then the writes.
+  const tail =
+    state.logConversationId === null
+      ? null
+      : await tailOf(tx, state.logConversationId);
 
   if (state.logConversationId === null) {
     const created = await tx.createConversation({
@@ -272,10 +354,10 @@ export const registerCursors = async (
     state.logMonth = monthOf(at);
   }
 
-  for (const name of names) {
-    state.cursors[name] ??= {
+  for (const target of unregistered) {
+    state.cursors[target.name] = {
       logConversationId: state.logConversationId,
-      entryId: null,
+      entryId: target.from === "now" ? tail : null,
     };
   }
 };
@@ -288,9 +370,16 @@ export const emit = async (tx: Tx, draft: EventDraft): Promise<EventRecord> => {
   const log = await logFor(tx, draft.at);
   const v = EVENT_VERSIONS[draft.name];
 
+  const envelope = {
+    v,
+    at: draft.at,
+    data: draft.data,
+    context: Option.getOrNull(draft.context),
+  } satisfies typeof EventEnvelope.Encoded;
+
   const entry = await tx.appendEntry(log, {
     kind: eventKind(draft.name),
-    data: { v, at: draft.at, data: draft.data },
+    data: envelope,
   });
 
   return {
@@ -299,6 +388,7 @@ export const emit = async (tx: Tx, draft: EventDraft): Promise<EventRecord> => {
     v,
     at: draft.at,
     data: draft.data,
+    context: draft.context,
   };
 };
 
@@ -347,7 +437,7 @@ const walk = async (
         after = entry.id;
 
         if (entry.kind === RotatedEntry.kind) {
-          next = Option.map(decodeRotated(entry.data), (data) => data.next);
+          next = Option.some(nextLogOf(entry));
           break;
         }
 
@@ -388,27 +478,15 @@ const walk = async (
   }
 };
 
-/** The cursor of `name`, or the start of the current log for a reactor that has none. */
-const cursorOf = (
+/** The stored cursor of `name`, copied out of the draft. */
+const storedCursor = (
   state: EventsState,
   name: string
-): Option.Option<EventCursorState> => {
-  const stored = state.cursors[name];
-
-  if (stored !== undefined) {
-    return Option.some({
-      logConversationId: stored.logConversationId,
-      entryId: stored.entryId,
-    });
-  }
-
-  return state.logConversationId === null
-    ? Option.none()
-    : Option.some({
-        logConversationId: state.logConversationId,
-        entryId: null,
-      });
-};
+): Option.Option<EventCursorState> =>
+  Option.map(Option.fromUndefinedOr(state.cursors[name]), (stored) => ({
+    logConversationId: stored.logConversationId,
+    entryId: stored.entryId,
+  }));
 
 const sameCursor = (a: EventCursorState, b: EventCursorState) =>
   a.logConversationId === b.logConversationId && a.entryId === b.entryId;
@@ -450,9 +528,18 @@ export const reactOnce = async (
   attempt: (event: EventRecord) => void
 ): Promise<Option.Option<EventRecord>> => {
   const state = await tx.doc(EventsDoc);
-  const from = cursorOf(state, target.name);
+  const from = storedCursor(state, target.name);
 
+  // Registered late (start could not commit): this step only registers it, where `from` says.
   if (Option.isNone(from)) {
+    if (state.logConversationId !== null) {
+      state.cursors[target.name] = await newCursor(
+        tx,
+        target,
+        state.logConversationId
+      );
+    }
+
     return Option.none();
   }
 
@@ -463,17 +550,17 @@ export const reactOnce = async (
     await target.handle(tx, pending.event.value);
   }
 
-  if (
-    state.cursors[target.name] === undefined ||
-    !sameCursor(from.value, pending.cursor)
-  ) {
+  if (!sameCursor(from.value, pending.cursor)) {
     state.cursors[target.name] = { ...pending.cursor };
   }
 
   return pending.event;
 };
 
-/** Matching events after a reactor's cursor, counted up to `limit`. Reads only. */
+/**
+ * Matching events after a reactor's cursor, counted up to `limit`. Reads only. A reactor with no
+ * cursor yet counts from where it would start.
+ */
 export const lagOf = async (
   tx: Tx,
   target: Reactor,
@@ -481,13 +568,19 @@ export const lagOf = async (
   limit: number
 ): Promise<number> => {
   const state = await tx.doc(EventsDoc);
-  const from = cursorOf(state, target.name);
+  const stored = storedCursor(state, target.name);
 
-  if (Option.isNone(from)) {
+  let from: EventCursorState;
+
+  if (Option.isSome(stored)) {
+    from = stored.value;
+  } else if (state.logConversationId === null) {
     return 0;
+  } else {
+    from = await newCursor(tx, target, state.logConversationId);
   }
 
-  const result = await walk(tx, from.value, kinds, { count: true, limit });
+  const result = await walk(tx, from, kinds, { count: true, limit });
 
   return result.count;
 };

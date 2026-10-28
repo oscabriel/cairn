@@ -10,14 +10,15 @@
 // - kills: 12 kills, injected handler faults on all three reactors, one log.
 // - rotation: 10 kills, faults, and the log rotating mid-run (two rotations).
 // - control: the broken control, reactors that keep their cursor in memory; 4 kills, no faults.
-//   It must fail, or the judge proves nothing.
+//   It must fail by handling events more than once (and their tasks), with nothing missing and no
+//   other fault, or the judge proves nothing.
 //
 // Per case it asserts: every event of each reactor's kinds was handled exactly once and nothing
 // else was; `judge.spawn` created one task per event and each ran to its end once (its outside
 // effect at least once, counted for the record); every reactor's lag is 0; faults were injected
 // when asked; with rotation, the log moved on to the last month and every cursor is in that log.
 // Prints one JSON line per case and a summary, and exits 0 when kills and rotation pass and the
-// control fails.
+// control fails for that reason alone.
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -177,6 +178,27 @@ const countLines = (file: string) =>
         .filter((line) => line !== "").length
     : 0;
 
+/**
+ * One failed check. `duplicate` is the failure the broken control must show (an event handled more
+ * than once, and none missing or stray); `tasks` follows from it, since a twice-handled spawn event
+ * creates a second task; anything else is `other`.
+ */
+interface Failure {
+  readonly kind: "duplicate" | "tasks" | "other";
+  readonly text: string;
+}
+
+/** A failure no report check made: the brain died, stalled or wrote no report. */
+const lifeFailure = (text: string): Failure => ({ kind: "other", text });
+
+/**
+ * True when the control failed for the reason it exists: its cursors in memory replay events after
+ * a kill. A control that crashed, timed out or lost events fails the judge instead.
+ */
+const controlFailedRightly = (failures: ReadonlyArray<Failure>) =>
+  failures.some((failure) => failure.kind === "duplicate") &&
+  failures.every((failure) => failure.kind !== "other");
+
 /** Every failed check of one case's report; empty when it passed. */
 const check = (
   spec: CaseSpec,
@@ -184,12 +206,13 @@ const check = (
   total: number,
   faults: number
 ) => {
-  const failures: Array<string> = [];
+  const failures: Array<Failure> = [];
+  const other = (text: string) => failures.push({ kind: "other", text });
   const { judge, events } = report;
   const recorded = Object.entries(judge.events);
 
   if (judge.emitted !== total || recorded.length !== total) {
-    failures.push(
+    other(
       `emitted ${judge.emitted} events and recorded ${recorded.length}, expected ${total}`
     );
   }
@@ -208,9 +231,13 @@ const check = (
     if (twice.length > 0 || missing.length > 0 || stray.length > 0) {
       const most = Math.max(0, ...twice.map(([, times]) => times));
 
-      failures.push(
-        `${name}: ${twice.length} handled more than once (up to ${most} times), ${missing.length} missing, ${stray.length} stray, of ${expected.size}`
-      );
+      failures.push({
+        kind:
+          twice.length > 0 && missing.length === 0 && stray.length === 0
+            ? "duplicate"
+            : "other",
+        text: `${name}: ${twice.length} handled more than once (up to ${most} times), ${missing.length} missing, ${stray.length} stray, of ${expected.size}`,
+      });
     }
   }
 
@@ -222,21 +249,22 @@ const check = (
   const badRun = spawned.filter((id) => judge.ran[id] !== 1);
 
   if (badCreate.length > 0 || badRun.length > 0) {
-    failures.push(
-      `tasks: ${badCreate.length} not created exactly once and ${badRun.length} not run exactly once, of ${spawned.length}`
-    );
+    failures.push({
+      kind: "tasks",
+      text: `tasks: ${badCreate.length} not created exactly once and ${badRun.length} not run exactly once, of ${spawned.length}`,
+    });
   }
 
   const lagging = report.status.filter((each) => each.lag !== 0);
 
   if (!spec.control && lagging.length > 0) {
-    failures.push(
+    other(
       `lag not zero: ${lagging.map((each) => `${each.reactor} ${each.lag}`).join(", ")}`
     );
   }
 
   if (spec.faults && faults === 0) {
-    failures.push("no handler fault was injected");
+    other("no handler fault was injected");
   }
 
   if (spec.rotate) {
@@ -245,11 +273,11 @@ const check = (
     );
 
     if (events.logMonth !== "2999-11") {
-      failures.push(`the log covers ${String(events.logMonth)}, not 2999-11`);
+      other(`the log covers ${String(events.logMonth)}, not 2999-11`);
     }
 
     if (behind.length > 0) {
-      failures.push(
+      other(
         `cursors left in an old log: ${behind.map(([name]) => name).join(", ")}`
       );
     }
@@ -294,7 +322,12 @@ const runCase = Effect.fn("events-kill.case")(function* (spec: CaseSpec) {
         break;
       }
 
-      return { case: spec.name, pass: false, failures: [ready.failure], dir };
+      return {
+        case: spec.name,
+        pass: false,
+        failures: [lifeFailure(ready.failure)],
+        dir,
+      };
     }
 
     const delay = yield* Random.nextIntBetween(50, 600);
@@ -316,7 +349,12 @@ const runCase = Effect.fn("events-kill.case")(function* (spec: CaseSpec) {
   if (Result.isFailure(done) || !existsSync(reportFile)) {
     const failure = Result.isFailure(done) ? done.failure : "no report";
 
-    return { case: spec.name, pass: false, failures: [failure], dir };
+    return {
+      case: spec.name,
+      pass: false,
+      failures: [lifeFailure(failure)],
+      dir,
+    };
   }
 
   // SAFETY: `report.json` is written by `EventsBrain.ts` in this run, from the `Report` shape.
@@ -373,8 +411,10 @@ const program = Effect.gen(function* () {
 
     yield* Console.log(JSON.stringify(result));
 
-    // The control proves the judge can fail: it must not pass.
-    ok &&= spec.value.control ? !result.pass : result.pass;
+    // The control proves the judge can fail: it must fail, and for the reason it exists.
+    ok &&= spec.value.control
+      ? controlFailedRightly(result.failures)
+      : result.pass;
   }
 
   yield* Console.log(JSON.stringify({ summary: ok ? "pass" : "fail" }));

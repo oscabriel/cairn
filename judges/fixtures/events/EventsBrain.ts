@@ -187,19 +187,29 @@ const count = async (tx: Tx, name: string, id: number) => {
 const reactors: ReadonlyArray<Reactor> = [
   reactor(
     "judge.count",
-    ["workflow.node.settled", "workflow.node.refused"],
+    {
+      events: ["workflow.node.settled", "workflow.node.refused"],
+      from: "start",
+    },
     async (tx, event) => {
       await count(tx, "judge.count", event.id);
       fault("judge.count", 7, event.id);
     }
   ),
-  reactor("judge.meter", ["workflow.node.settled"], async (tx, event) => {
-    await count(tx, "judge.meter", event.id);
-    fault("judge.meter", 5, event.id);
-  }),
+  reactor(
+    "judge.meter",
+    { events: ["workflow.node.settled"], from: "start" },
+    async (tx, event) => {
+      await count(tx, "judge.meter", event.id);
+      fault("judge.meter", 5, event.id);
+    }
+  ),
   reactor(
     "judge.spawn",
-    ["workflow.node.settled", "workflow.budget.soft"],
+    {
+      events: ["workflow.node.settled", "workflow.budget.soft"],
+      from: "start",
+    },
     async (tx, event) => {
       const state = await tx.doc(JudgeDoc);
       let { home } = state;
@@ -378,7 +388,12 @@ const program = Effect.gen(function* () {
         at = n <= total / 2 ? FIRST_MONTH : SECOND_MONTH;
       }
 
-      const event = await emit(tx, { name: nameOf(n), data: { n }, at });
+      const event = await emit(tx, {
+        name: nameOf(n),
+        data: { n },
+        at,
+        context: Option.none(),
+      });
 
       state.events[String(event.id)] = event.name;
       state.emitted = n;

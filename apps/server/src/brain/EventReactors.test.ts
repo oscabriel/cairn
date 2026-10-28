@@ -2,23 +2,37 @@
 // exactly when the commit that emitted it does; a reactor handles each of its events once, oldest
 // first, skipping other kinds; a throwing handler rolls back its writes with its cursor and is
 // retried; the log rotates monthly and a reactor follows the marker into the next log; a task a
-// handler creates runs once; and the status counts what is pending. The kill -9 half of the judge
-// is `judges/events-kill.sh`.
+// handler creates runs once; the status counts what is pending; an entry is the protocol's
+// envelope; a new reactor starts where its `from` says; a Session reopen wakes the reactors; `stop`
+// waits for the step in flight; and a bad reactor name kills the layer. The kill -9 half of the
+// judge is `judges/events-kill.sh`.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ConversationId } from "@cairn/protocol/Ids";
+import { EventEnvelope } from "@cairn/protocol/Workflows";
 import type { JsonValue } from "@earendil-works/chord";
-import type { SessionDocToken, Tx } from "@earendil-works/pi-durable";
+import type { SessionDocToken, Storage, Tx } from "@earendil-works/pi-durable";
 import {
   defineDoc,
   defineExtension,
   defineTask,
 } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
-import { Context, DateTime, Duration, Effect, Layer, Option } from "effect";
+import {
+  Cause,
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import type { Scope } from "effect";
 
 import { Arms } from "./Arms.ts";
@@ -32,7 +46,7 @@ import { emit, EventsDoc, monthOf, reactor } from "./Events.ts";
 import { Extensions } from "./Extensions.ts";
 import { ModelSource } from "./ModelSource.ts";
 import { Parked } from "./Parked.ts";
-import { piConversationId } from "./PiIds.ts";
+import { piConversationId, piEntryId } from "./PiIds.ts";
 
 /** What the test reactors write, through `tx` only. */
 interface Seen {
@@ -108,29 +122,78 @@ const record = async (tx: Tx, name: string, id: number) => {
   seen.handled[name] = handled;
 };
 
+/** A handler that records each event it is given under `name`. */
+const recorder =
+  (name: string) => async (tx: Tx, event: { readonly id: number }) => {
+    await record(tx, name, event.id);
+  };
+
+/** A reactor that does nothing, under `name`. */
+const named = (name: string) =>
+  reactor(
+    name,
+    { events: ["workflow.node.settled"], from: "now" },
+    async () => {
+      await Promise.resolve();
+    }
+  );
+
+/** Whether the reopen reactor has failed its Session yet. */
+const armed = { done: false };
+
 /** Events the flaky reactor lets through; it throws on every other one after writing. */
 const passing = new Set<number>();
 
 /** Counts its attempt and records the event, then throws unless let through: both writes roll back. */
 const flaky = (name: string) =>
-  reactor(name, ["workflow.node.settled"], async (tx, event) => {
-    const seen = await tx.doc(SeenDoc);
-    const key = `${name}:${event.id}`;
-    const attempts = (seen.attempts[key] ?? 0) + 1;
+  reactor(
+    name,
+    { events: ["workflow.node.settled"], from: "start" },
+    async (tx, event) => {
+      const seen = await tx.doc(SeenDoc);
+      const key = `${name}:${event.id}`;
+      const attempts = (seen.attempts[key] ?? 0) + 1;
 
-    seen.attempts[key] = attempts;
-    await record(tx, name, event.id);
+      seen.attempts[key] = attempts;
+      await record(tx, name, event.id);
 
-    if (!passing.has(event.id)) {
-      throw new Error(`injected fault on ${event.id}`);
+      if (!passing.has(event.id)) {
+        throw new Error(`injected fault on ${event.id}`);
+      }
     }
-  });
+  );
+
+/** Set it and the store's next commit rejects, failing the Session as a platform reset would. */
+const failNext = { value: false };
+
+const failing = (storage: Storage): Storage => {
+  const commitWrites = storage.commit.bind(storage);
+
+  storage.commit = async (writes, context) => {
+    if (failNext.value) {
+      failNext.value = false;
+
+      throw new Error("storage reset (test)");
+    }
+
+    return await commitWrites(writes, context);
+  };
+
+  return storage;
+};
+
+const failingStore = Layer.effect(
+  BrainStore,
+  Effect.map(BrainStore, (real) =>
+    BrainStore.of({ ...real, open: Effect.map(real.open, failing) })
+  )
+).pipe(Layer.provide(BrainStore.layer));
 
 const brainLayer = (dataDir: string, reactors: ReadonlyArray<Reactor>) =>
   EventReactors.fromSources(reactors.map((each) => Effect.succeed(each))).pipe(
     Layer.provideMerge(
       Brain.layerNoDeps.pipe(
-        Layer.provide(BrainStore.layer),
+        Layer.provide(failingStore),
         Layer.provide(Arms.layer)
       )
     ),
@@ -183,6 +246,7 @@ const settled = (at: number, n: number): EventDraft => ({
   name: "workflow.node.settled",
   data: { n },
   at,
+  context: Option.none(),
 });
 
 const snapshot = <T extends Seen | EventsState>(
@@ -245,9 +309,13 @@ describe("durable events", () => {
     () =>
       withBrain(
         [
-          reactor("settled", ["workflow.node.settled"], async (tx, event) => {
-            await record(tx, "settled", event.id);
-          }),
+          reactor(
+            "settled",
+            { events: ["workflow.node.settled"], from: "start" },
+            async (tx, event) => {
+              await record(tx, "settled", event.id);
+            }
+          ),
         ],
         (context) =>
           Effect.gen(function* () {
@@ -260,6 +328,7 @@ describe("durable events", () => {
               name: "workflow.node.refused",
               data: { n: 2 },
               at: OCTOBER,
+              context: Option.none(),
             });
 
             const third = yield* emitOne(brain, settled(OCTOBER, 3));
@@ -378,9 +447,13 @@ describe("durable events", () => {
     () =>
       withBrain(
         [
-          reactor("settled", ["workflow.node.settled"], async (tx, event) => {
-            await record(tx, "settled", event.id);
-          }),
+          reactor(
+            "settled",
+            { events: ["workflow.node.settled"], from: "start" },
+            async (tx, event) => {
+              await record(tx, "settled", event.id);
+            }
+          ),
         ],
         (context) =>
           Effect.gen(function* () {
@@ -432,32 +505,36 @@ describe("durable events", () => {
     () =>
       withBrain(
         [
-          reactor("spawn", ["workflow.node.settled"], async (tx, event) => {
-            const seen = await tx.doc(SeenDoc);
-            let { home } = seen;
+          reactor(
+            "spawn",
+            { events: ["workflow.node.settled"], from: "start" },
+            async (tx, event) => {
+              const seen = await tx.doc(SeenDoc);
+              let { home } = seen;
 
-            if (home === 0) {
-              const created = await tx.createConversation({
-                ownership: { kind: "ownerless" },
-              });
+              if (home === 0) {
+                const created = await tx.createConversation({
+                  ownership: { kind: "ownerless" },
+                });
 
-              home = created.id;
-              seen.home = home;
-            }
-
-            const key = String(event.id);
-
-            seen.created[key] = (seen.created[key] ?? 0) + 1;
-            await tx.createTask(
-              RecordRun,
-              { eventId: event.id },
-              {
-                ownership: { kind: "conversation" },
-                conversationId: piConversationId(ConversationId.make(home)),
-                background: true,
+                home = created.id;
+                seen.home = home;
               }
-            );
-          }),
+
+              const key = String(event.id);
+
+              seen.created[key] = (seen.created[key] ?? 0) + 1;
+              await tx.createTask(
+                RecordRun,
+                { eventId: event.id },
+                {
+                  ownership: { kind: "conversation" },
+                  conversationId: piConversationId(ConversationId.make(home)),
+                  background: true,
+                }
+              );
+            }
+          ),
         ],
         (context) =>
           Effect.gen(function* () {
@@ -491,5 +568,285 @@ describe("durable events", () => {
           })
       ),
     20_000
+  );
+
+  it.live(
+    "an emitted entry is the protocol's EventEnvelope, context and all",
+    () =>
+      withBrain([], (context) =>
+        Effect.gen(function* () {
+          const brain = Context.get(context, Brain);
+
+          const ids = yield* commit(brain, async (tx) => {
+            const bare = await emit(tx, settled(OCTOBER, 1));
+
+            const placed = await emit(tx, {
+              name: "workflow.node.refused",
+              data: { n: 2 },
+              at: OCTOBER,
+              context: Option.some({ runId: "run-1" }),
+            });
+
+            return [bare.id, placed.id];
+          });
+
+          const state = yield* readEvents(brain);
+
+          const entries = yield* commit(brain, async (tx) => {
+            const page = await tx.scanEntries(
+              {
+                conversationId: piConversationId(
+                  ConversationId.make(state.logConversationId ?? 0)
+                ),
+                order: "ascending",
+              },
+              10
+            );
+
+            return page.items.map((entry) => ({
+              id: entry.id,
+              data: entry.data,
+            }));
+          });
+
+          const decode = Schema.decodeUnknownEffect(EventEnvelope);
+
+          assert.deepStrictEqual(
+            entries.map((entry) => entry.id),
+            ids.map((id) => piEntryId(id))
+          );
+          assert.deepStrictEqual(yield* decode(entries[0]?.data), {
+            v: 1,
+            at: OCTOBER,
+            data: { n: 1 },
+            context: null,
+          });
+          assert.deepStrictEqual(yield* decode(entries[1]?.data), {
+            v: 1,
+            at: OCTOBER,
+            data: { n: 2 },
+            context: { runId: "run-1" },
+          });
+        })
+      ),
+    20_000
+  );
+
+  it.live(
+    "a reactor that starts now skips what came before it; one that starts at the start does not",
+    () =>
+      Effect.gen(function* () {
+        // A first life with no reactors writes two events; a later deploy adds both reactors.
+        const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-events-test-"));
+
+        const life = <A, E>(
+          reactors: ReadonlyArray<Reactor>,
+          use: (
+            context: Context.Context<EventReactors | Brain>
+          ) => Effect.Effect<A, E, Scope.Scope>
+        ) =>
+          Effect.scoped(
+            Effect.flatMap(Layer.build(brainLayer(dataDir, reactors)), use)
+          ).pipe(Effect.orDie);
+
+        const before = yield* life([], (context) =>
+          Effect.gen(function* () {
+            const brain = Context.get(context, Brain);
+
+            return [
+              yield* emitOne(brain, settled(OCTOBER, 1)),
+              yield* emitOne(brain, settled(OCTOBER, 2)),
+            ];
+          })
+        );
+
+        const seen = yield* life(
+          [
+            reactor(
+              "late-now",
+              { events: ["workflow.node.settled"], from: "now" },
+              recorder("late-now")
+            ),
+            reactor(
+              "late-start",
+              { events: ["workflow.node.settled"], from: "start" },
+              recorder("late-start")
+            ),
+          ],
+          (context) =>
+            Effect.gen(function* () {
+              const brain = Context.get(context, Brain);
+              const reactors = Context.get(context, EventReactors);
+
+              yield* reactors.start;
+
+              const after = yield* emitOne(brain, settled(OCTOBER, 3));
+
+              assert.isTrue(
+                yield* eventually(
+                  Effect.map(
+                    readSeen(brain),
+                    (state) =>
+                      (state.handled["late-now"] ?? []).length === 1 &&
+                      (state.handled["late-start"] ?? []).length === 3
+                  )
+                )
+              );
+
+              const state = yield* readSeen(brain);
+
+              return { state, after };
+            })
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              rmSync(dataDir, { recursive: true, force: true });
+            })
+          )
+        );
+
+        assert.deepStrictEqual(seen.state.handled["late-now"], [seen.after]);
+        assert.deepStrictEqual(seen.state.handled["late-start"], [
+          ...before,
+          seen.after,
+        ]);
+      }),
+    20_000
+  );
+
+  it.live(
+    "a Session that fails and reopens wakes the reactor, and an event after the reopen is handled",
+    () =>
+      withBrain(
+        [
+          reactor(
+            "reopen",
+            { events: ["workflow.node.settled"], from: "start" },
+            async (tx, event) => {
+              // The first step's commit fails the store under it: the Session reopens.
+              if (!armed.done) {
+                armed.done = true;
+                failNext.value = true;
+              }
+
+              await record(tx, "reopen", event.id);
+            }
+          ),
+        ],
+        (context) =>
+          Effect.gen(function* () {
+            const brain = Context.get(context, Brain);
+            const reactors = Context.get(context, EventReactors);
+            const first = (yield* brain.session).generation;
+
+            yield* reactors.start;
+
+            const cut = yield* emitOne(brain, settled(OCTOBER, 1));
+
+            assert.isTrue(
+              yield* eventually(
+                Effect.map(
+                  Effect.option(brain.session),
+                  (session) =>
+                    Option.isSome(session) && session.value.generation > first
+                )
+              ),
+              "the Session never reopened"
+            );
+
+            const after = yield* emitOne(brain, settled(OCTOBER, 2));
+
+            assert.isTrue(
+              yield* eventually(
+                Effect.map(
+                  readSeen(brain),
+                  (seen) => (seen.handled.reopen ?? []).length === 2
+                )
+              )
+            );
+
+            const seen = yield* readSeen(brain);
+
+            assert.deepStrictEqual(seen.handled.reopen, [cut, after]);
+          })
+      ),
+    20_000
+  );
+
+  it.live(
+    "stop waits for the step in flight, which commits once",
+    () => {
+      const held = Promise.withResolvers<boolean>();
+      const gate = { entered: false };
+
+      return withBrain(
+        [
+          reactor(
+            "slow",
+            { events: ["workflow.node.settled"], from: "start" },
+            async (tx, event) => {
+              gate.entered = true;
+              // A test-only stall inside the commit: what stop must wait out.
+              await held.promise;
+              await record(tx, "slow", event.id);
+            }
+          ),
+        ],
+        (context) =>
+          Effect.gen(function* () {
+            const brain = Context.get(context, Brain);
+            const reactors = Context.get(context, EventReactors);
+
+            yield* reactors.start;
+
+            const id = yield* emitOne(brain, settled(OCTOBER, 1));
+
+            assert.isTrue(yield* eventually(Effect.sync(() => gate.entered)));
+
+            const stopped = { value: false };
+
+            const stopping = yield* reactors.stop.pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  stopped.value = true;
+                })
+              ),
+              Effect.forkScoped
+            );
+
+            yield* Effect.sleep(Duration.millis(300));
+            assert.isFalse(stopped.value, "stop did not wait for the step");
+
+            held.resolve(true);
+            yield* Fiber.join(stopping);
+
+            const seen = yield* readSeen(brain);
+            const state = yield* readEvents(brain);
+
+            assert.deepStrictEqual(seen.handled.slow, [id]);
+            assert.strictEqual(state.cursors.slow?.entryId, id);
+          })
+      );
+    },
+    20_000
+  );
+
+  it.live("an empty, padded or repeated reactor name makes the layer die", () =>
+    Effect.gen(function* () {
+      for (const names of [[""], [" padded"], ["twice", "twice"]]) {
+        const exit = yield* Effect.exit(
+          withBrain(names.map(named), () => Effect.void)
+        );
+
+        assert.isTrue(Exit.isFailure(exit), `${names.join(",")} built`);
+
+        if (Exit.isFailure(exit)) {
+          assert.include(
+            Cause.pretty(exit.cause),
+            "is empty, padded or used twice"
+          );
+        }
+      }
+    })
   );
 });

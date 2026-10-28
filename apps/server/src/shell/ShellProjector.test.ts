@@ -509,7 +509,7 @@ describe("the shell projector", () => {
   );
 
   it.effect(
-    "a pending approval makes a running thread wait, oldest first",
+    "a pending approval makes a running thread wait, oldest first, and the row counts them",
     () =>
       run(
         Effect.gen(function* () {
@@ -544,6 +544,7 @@ describe("the shell projector", () => {
             ]),
             Option.some([first, "executor-call"])
           );
+          assert.strictEqual(waiting.pendingCount, 2);
 
           yield* emit([
             RuntimeRequestUpdated.make({
@@ -561,6 +562,7 @@ describe("the shell projector", () => {
             Option.map(next.pendingRuntimeRequest, (request) => request.id),
             Option.some(second)
           );
+          assert.strictEqual(next.pendingCount, 1);
 
           yield* emit([
             RuntimeRequestUpdated.make({
@@ -575,6 +577,7 @@ describe("the shell projector", () => {
 
           assert.strictEqual(answered.activity, "running");
           assert.deepStrictEqual(answered.pendingRuntimeRequest, Option.none());
+          assert.strictEqual(answered.pendingCount, 0);
         })
       )
   );
@@ -963,7 +966,10 @@ describe("the shell projector", () => {
               runId: Option.some(RunId.make(10)),
               queueLength: 0,
               parkedTaskIds: [],
-              pendingApprovals: [ApprovalId.make("apr_boot")],
+              pendingApprovals: [
+                ApprovalId.make("apr_boot"),
+                ApprovalId.make("apr_boot_2"),
+              ],
             },
           ]);
 
@@ -996,6 +1002,8 @@ describe("the shell projector", () => {
             Option.map(waiting.pendingRuntimeRequest, (request) => request.id),
             Option.some(ApprovalId.make("apr_boot"))
           );
+          assert.strictEqual(waiting.pendingCount, 2);
+          assert.strictEqual(ended.pendingCount, 0);
 
           // A second reconcile finds nothing to change.
           assert.strictEqual((yield* projector.reconcile).patched, 0);

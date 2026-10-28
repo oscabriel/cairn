@@ -1,0 +1,69 @@
+{
+  "items": {
+    "call-11": {
+      "id": "call-11",
+      "toolTaskId": 11,
+      "tool": "executor_call",
+      "kind": "executor-call",
+      "summary": "Call github.issues.list",
+      "status": "accepted",
+      "askedAt": 1761600000000,
+      "expiresAt": 1761600600000,
+      "answeredAt": 1761600000000,
+      "run": "done",
+      "executorRequestId": "apr_01JB2X"
+    },
+    "call-12": {
+      "id": "call-12",
+      "toolTaskId": 12,
+      "tool": "gate",
+      "kind": "tool-call",
+      "summary": "Open the gate",
+      "status": "accepted",
+      "askedAt": 1761600100000,
+      "expiresAt": 1761686500000,
+      "answeredAt": 1761600104000,
+      "run": null,
+      "executorRequestId": null
+    },
+    "call-13": {
+      "id": "call-13",
+      "toolTaskId": 13,
+      "tool": "gate",
+      "kind": "tool-call",
+      "summary": "Open the gate",
+      "status": "declined",
+      "askedAt": 1761600200000,
+      "expiresAt": 1761686600000,
+      "answeredAt": 1761600209000,
+      "run": null,
+      "executorRequestId": null
+    },
+    "call-14": {
+      "id": "call-14",
+      "toolTaskId": 14,
+      "tool": "executor_execute",
+      "kind": "executor-call",
+      "summary": "Run a program",
+      "status": "expired",
+      "askedAt": 1761600300000,
+      "expiresAt": 1761600900000,
+      "answeredAt": 1761600900000,
+      "run": null,
+      "executorRequestId": null
+    },
+    "call-15": {
+      "id": "call-15",
+      "toolTaskId": 15,
+      "tool": "gate",
+      "kind": "tool-call",
+      "summary": "Open the gate",
+      "status": "pending",
+      "askedAt": 1761600400000,
+      "expiresAt": 1761686800000,
+      "answeredAt": null,
+      "run": null,
+      "executorRequestId": null
+    }
+  }
+}

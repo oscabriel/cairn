@@ -29,7 +29,6 @@ import {
 } from "@cairn/protocol/Ids";
 import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
-import type { ApprovalDecision, ApprovalStatus } from "@cairn/protocol/Policy";
 import { ThreadOpsItem, ThreadSnapshotItem } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord";
 import { copyJson } from "@earendil-works/chord";
@@ -61,8 +60,17 @@ import {
   SubscriptionRef,
 } from "effect";
 
-import type { ApprovalRecord } from "./CairnDocs.ts";
-import { approvalIdOf } from "./CairnDocs.ts";
+import type { ApprovalRecord, ApprovalSettlement } from "./CairnDocs.ts";
+import {
+  applyAnswer,
+  approvalIdOf,
+  cancelRecord,
+  copyRecord,
+  heldByRun,
+  refusalText,
+  settlementOf,
+  UNDECIDED,
+} from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
 import {
   CompactionEnded,
@@ -77,6 +85,7 @@ import {
   ThreadEnsured,
 } from "./HarnessSeam.ts";
 import type {
+  ApprovalAnswerInput,
   EnsureThread,
   HarnessEvent,
   RunFailureInfo,
@@ -151,8 +160,8 @@ export class ScriptedModel extends Context.Service<
 
 /** What a scripted tool may ask of the harness. */
 export interface ScriptedToolApi {
-  /** Records an approval for this call (once; a rerun finds it) and waits for its answer. */
-  ask(summary: string): Effect.Effect<ApprovalStatus>;
+  /** Records an approval for this call (once; a rerun finds it) and waits for its settlement. */
+  ask(summary: string): Effect.Effect<ApprovalSettlement>;
 }
 
 /** The result a scripted tool gives the model. */
@@ -563,6 +572,7 @@ const layerNoDeps = Layer.effectContext(
                 answeredAt: null,
                 run: null,
                 executorRequestId: null,
+                ...UNDECIDED,
               });
 
               yield* publish(thread, [
@@ -578,15 +588,21 @@ const layerNoDeps = Layer.effectContext(
 
           const ref = yield* revision(thread);
 
-          const status = yield* SubscriptionRef.changes(ref).pipe(
-            Stream.map(
-              () => thread.approvals.get(approvalId)?.status ?? "cancelled"
-            ),
-            Stream.filter((current) => current !== "pending"),
+          const settled = yield* SubscriptionRef.changes(ref).pipe(
+            Stream.map(() => thread.approvals.get(approvalId)),
+            Stream.filter(Predicate.isNotUndefined),
+            Stream.filter((record) => record.status !== "pending"),
             Stream.runHead
           );
 
-          return Option.getOrElse(status, () => "cancelled" as const);
+          return Option.match(settled, {
+            onNone: (): ApprovalSettlement => ({
+              status: "cancelled",
+              decidedBy: Option.none(),
+              reason: Option.none(),
+            }),
+            onSome: settlementOf,
+          });
         }),
     });
 
@@ -937,7 +953,27 @@ const layerNoDeps = Layer.effectContext(
             emitted.push(queueChanged(thread));
           }
 
+          const held = Option.isSome(thread.run)
+            ? [...thread.approvals.values()].filter(heldByRun)
+            : [];
+
           emitted.push(...endRun(thread, "interrupted", Option.none(), at));
+
+          // The run's tools waited on these; nobody can answer them now (ADR 0029).
+          for (const record of held) {
+            const cancelled = copyRecord(record);
+
+            cancelRecord(cancelled, at, "run-stopped");
+            thread.approvals.set(cancelled.id, cancelled);
+            emitted.push(
+              RuntimeRequestUpdated.make({
+                threadId,
+                id: ApprovalId.make(cancelled.id),
+                kind: cancelled.kind,
+                status: cancelled.status,
+              })
+            );
+          }
 
           return yield* publish(thread, emitted);
         })
@@ -982,7 +1018,7 @@ const layerNoDeps = Layer.effectContext(
     const respond = Effect.fn("ScriptedHarness.respond")(function* (
       threadId: ThreadId,
       approvalId: ApprovalId,
-      decision: ApprovalDecision
+      answer: ApprovalAnswerInput
     ) {
       const thread = yield* find(threadId);
 
@@ -998,24 +1034,32 @@ const layerNoDeps = Layer.effectContext(
             );
           }
 
-          if (record.status !== "pending") {
+          const answered = copyRecord(record);
+
+          const outcome = applyAnswer(
+            answered,
+            { ...answer, by: { kind: "user" } },
+            yield* now
+          );
+
+          const refused = refusalText(outcome, approvalId);
+
+          if (Option.isSome(refused)) {
+            return yield* failure("invalid_input", threadId, refused.value);
+          }
+
+          if (outcome !== "answered") {
             return yield* Effect.void;
           }
 
-          const status = decision === "accept" ? "accepted" : "declined";
-
-          thread.approvals.set(approvalId, {
-            ...record,
-            status,
-            answeredAt: yield* now,
-          });
+          thread.approvals.set(approvalId, answered);
 
           return yield* publish(thread, [
             RuntimeRequestUpdated.make({
               threadId,
               id: approvalId,
-              kind: record.kind,
-              status,
+              kind: answered.kind,
+              status: answered.status,
             }),
           ]);
         })

@@ -1,0 +1,14 @@
+{"type":"transcript_start","scenario":"approval_declined_with_reason","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"gate","arguments":{}}]}
+{"type":"model","label":"m2","text":"the gate stays shut"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"open the gate"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"pending","kind":"tool-call"}}
+{"type":"expect_view","path":["pendingApprovals"],"equals":1}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"pending","decidedBy":null,"reason":null}]}
+{"type":"input","step":"respond","decision":"decline","reason":"not before the review"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"declined"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"open the gate","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["gate"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"declined: not before the review","images":0,"toolCalls":[],"toolName":"gate","isError":true},{"kind":"pi.assistant","role":"assistant","text":"the gate stays shut","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"declined","decidedBy":"user","reason":"not before the review"}]}
+{"type":"expect_view","path":["pendingApprovals"],"equals":0}

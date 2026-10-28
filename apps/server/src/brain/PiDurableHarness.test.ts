@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import type { Harness } from "@earendil-works/pi-durable";
@@ -18,6 +19,7 @@ import {
   Context,
   Duration,
   Effect,
+  Fiber,
   Latch,
   Layer,
   Option,
@@ -30,6 +32,7 @@ import type { Scope } from "effect";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
+import { Approvals, cancelAbandonedApprovalsAtBoot } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
 import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
@@ -258,7 +261,13 @@ describe("PiDurableHarness stop", () => {
           // The stop has read the run's task; before its abort lands, the approval ends the tool
           // round and the run hands over to the next generation.
           const aborted = yield* holdNextAbort(
-            seam.respond(THREAD_ID, asked.id, "accept").pipe(Effect.orDie)
+            seam
+              .respond(THREAD_ID, asked.id, {
+                decision: "accept",
+                reason: Option.none(),
+                answers: Option.none(),
+              })
+              .pipe(Effect.orDie)
           );
 
           yield* seam.stop(THREAD_ID, { clearQueue: false });
@@ -333,6 +342,240 @@ describe("PiDurableHarness stop", () => {
           assert.strictEqual(terminal.status, "completed");
           assert.deepStrictEqual(answers, ["one done", "two done"]);
         })
+      ),
+    30_000
+  );
+});
+
+/** One brain over `dataDir` in the caller's scope, not yet resumed. */
+const openBrain = (dataDir: string) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(harnessLayer(dataDir));
+    const seam = Context.get(context, HarnessSeam);
+    const brain = Context.get(context, Brain);
+    const { faux } = Context.get(context, FauxModels);
+    const run = Effect.runPromiseWith(yield* Effect.context());
+    const events = yield* Ref.make<ReadonlyArray<HarnessEvent>>([]);
+
+    yield* seam.events.pipe(
+      Stream.runForEach((event) =>
+        Ref.update(events, (all) => [...all, event])
+      ),
+      Effect.forkScoped
+    );
+
+    return { seam, brain, faux, run, events };
+  });
+
+/** Ensures the thread and returns its pi-durable conversation id. */
+const ensure = (seam: HarnessSeam["Service"]) =>
+  Effect.map(
+    seam.ensureThread({
+      threadId: THREAD_ID,
+      projectId: ProjectId.make("harness-stop-test"),
+      model: FAUX_MODEL,
+      thinkingLevel: "off",
+      cwd: process.cwd(),
+      instructions: Option.none(),
+    }),
+    ({ conversationId }) => piConversationId(conversationId)
+  );
+
+/** The thread's decision records as `[status, decidedBy]`. */
+const decisions = (
+  brain: Brain["Service"],
+  conversationId: ReturnType<typeof piConversationId>
+) =>
+  Effect.gen(function* () {
+    const { harness } = yield* Effect.orDie(brain.session);
+
+    const doc = yield* Effect.promise(
+      async () =>
+        await harness.snapshot(Approvals, conversationId, BACKGROUND_CONTEXT)
+    );
+
+    return Object.values(doc?.items ?? {}).map(
+      (item) => [item.status, item.decidedBy] as const
+    );
+  });
+
+/** The first generation calls `gate`; a later one answers only if nothing aborts it first. */
+const gateThenAnswer = (
+  faux: FauxModels["Service"]["faux"],
+  run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>
+) => {
+  faux.setResponses([
+    async () =>
+      await Promise.resolve(
+        fauxAssistantMessage([fauxToolCall("gate", {})], {
+          stopReason: "toolUse",
+        })
+      ),
+    async (_request, options) =>
+      await run(
+        answerUnlessAborted(
+          options?.signal,
+          CARRY_ON_AFTER,
+          fauxAssistantMessage("never seen")
+        )
+      ),
+  ]);
+};
+
+/** Sends the message that makes the run wait on `gate`, and waits for its pending record. */
+const askGate = (
+  seam: HarnessSeam["Service"],
+  events: Ref.Ref<ReadonlyArray<HarnessEvent>>
+) =>
+  Effect.gen(function* () {
+    yield* seam.submit(THREAD_ID, {
+      requestId: "gate-1",
+      content: [{ type: "text", text: "open the gate" }],
+      entry: Option.none(),
+      whenBusy: "followUp",
+    });
+
+    return yield* waitForEvents(events, "RuntimeRequestUpdated", 1);
+  });
+
+/** Runs `body` with a fresh data directory, removed afterwards. */
+const withDataDir = <A, E>(body: (dataDir: string) => Effect.Effect<A, E>) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-harness-cut-"))),
+    (dataDir) => Effect.orDie(body(dataDir)),
+    (dataDir) =>
+      Effect.sync(() => {
+        rmSync(dataDir, { recursive: true, force: true });
+      })
+  );
+
+// The stop's crash window: its abort marks are committed before it cancels the records the run
+// held. A process that goes in between, or a caller that goes away, must not leave a request
+// pending that nobody can answer (ADR 0029).
+describe("PiDurableHarness stop, cut off between its abort and its cancellation", () => {
+  it.live(
+    "a crash after the abort mark leaves the record pending, and the boot repair cancels it",
+    () =>
+      withDataDir((dataDir) =>
+        Effect.gen(function* () {
+          // First life: the run waits on `gate`; the stop's abort mark lands, then the process
+          // goes before the stop cancels the record.
+          const conversationId = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { seam, brain, faux, run, events } =
+                yield* openBrain(dataDir);
+
+              gateThenAnswer(faux, run);
+              yield* brain.resume;
+
+              const id = yield* ensure(seam);
+
+              yield* askGate(seam, events);
+
+              const { harness } = yield* Effect.orDie(brain.session);
+
+              const live = yield* Effect.promise(
+                async () =>
+                  await harness.snapshot(LiveDoc, id, BACKGROUND_CONTEXT)
+              );
+
+              const runTask = live?.run?.taskId;
+
+              assert.isDefined(runTask);
+
+              yield* Effect.promise(async () => {
+                await harness.abortTask(runTask, BACKGROUND_CONTEXT);
+              });
+
+              return id;
+            })
+          );
+
+          // Second life: before the repair the record is the ghost; after it, cancelled at boot.
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { seam, brain } = yield* openBrain(dataDir);
+
+              assert.deepStrictEqual(yield* decisions(brain, conversationId), [
+                ["pending", null],
+              ]);
+
+              const cancelled = yield* cancelAbandonedApprovalsAtBoot.pipe(
+                Effect.provideService(Brain, brain)
+              );
+
+              assert.strictEqual(cancelled, 1);
+
+              yield* brain.resume;
+
+              assert.deepStrictEqual(yield* decisions(brain, conversationId), [
+                ["cancelled", { kind: "system", why: "boot" }],
+              ]);
+
+              const states = yield* seam.inspect;
+
+              assert.deepStrictEqual(
+                states.flatMap((state) => state.pendingApprovals),
+                []
+              );
+            })
+          );
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a stop whose caller is interrupted after the abort still cancels the record",
+    () =>
+      withDataDir((dataDir) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { seam, brain, faux, run, events } =
+              yield* openBrain(dataDir);
+
+            gateThenAnswer(faux, run);
+            yield* brain.resume;
+
+            const conversationId = yield* ensure(seam);
+
+            yield* askGate(seam, events);
+
+            // The stop's abort lands, then holds until its caller has gone away.
+            const { harness } = yield* Effect.orDie(brain.session);
+            const abortTask = harness.abortTask.bind(harness);
+            const marked = yield* Latch.make(false);
+            const callerGone = yield* Latch.make(false);
+
+            harness.abortTask = async (taskId, abortContext) => {
+              const mark = await abortTask(taskId, abortContext);
+
+              await run(Effect.andThen(marked.open, callerGone.await));
+
+              return mark;
+            };
+
+            const stopping = yield* seam
+              .stop(THREAD_ID, { clearQueue: false })
+              .pipe(Effect.forkChild);
+
+            yield* marked.await;
+            yield* Fiber.interrupt(stopping);
+            yield* callerGone.open;
+
+            const settled = yield* waitFor(
+              Effect.map(decisions(brain, conversationId), (found) =>
+                Option.filter(Option.some(found), (all) =>
+                  all.every(([status]) => status !== "pending")
+                )
+              )
+            );
+
+            assert.deepStrictEqual(settled, [
+              ["cancelled", { kind: "system", why: "run-stopped" }],
+            ]);
+          })
+        )
       ),
     30_000
   );

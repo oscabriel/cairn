@@ -4,10 +4,12 @@
 import type { ApprovalStatus } from "@cairn/protocol/Policy";
 import { Duration, Effect, Layer, Option } from "effect";
 
+import { UNDECIDED } from "../brain/CairnDocs.ts";
 import type {
   ApprovalLedger,
   ApprovalRecord,
   ApprovalRequest,
+  ApprovalSettlement,
 } from "../brain/CairnDocs.ts";
 import { ServerConfig } from "../Config.ts";
 import { ExecutorGrant } from "./ExecutorGrant.ts";
@@ -57,6 +59,10 @@ export const memoryLedger = (options: {
           answeredAt: request.autoAccept ? 0 : null,
           run: Option.getOrNull(options.prior),
           executorRequestId: null,
+          ...UNDECIDED,
+          decidedBy: request.autoAccept
+            ? { kind: "mode", mode: "full-access" }
+            : null,
         });
       }
 
@@ -76,14 +82,24 @@ export const memoryLedger = (options: {
     return before;
   });
 
+  const settlement: ApprovalSettlement = {
+    status: options.answer,
+    decidedBy: Option.some({ kind: "user" }),
+    reason: Option.none(),
+  };
+
+  const awaitSettlement = update((record) => ({
+    ...record,
+    status: options.answer,
+    decidedBy: { kind: "user" },
+  })).pipe(Effect.as(settlement));
+
   return {
     ledger: {
       approvalId: "call-1",
       ask,
-      awaitAnswer: update((record) => ({
-        ...record,
-        status: options.answer,
-      })).pipe(Effect.as(options.answer)),
+      awaitAnswer: Effect.as(awaitSettlement, options.answer),
+      awaitSettlement,
       begin,
       noteExecutorRequest: (requestId) =>
         update((record) => ({ ...record, executorRequestId: requestId })),

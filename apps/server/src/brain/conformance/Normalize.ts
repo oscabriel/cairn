@@ -7,6 +7,7 @@
 // - `queue`: queued inputs with their mode and text; `queueLength`.
 // - `running`: whether `pi.live` has a run.
 // - `approvals`: approval records by age, with their status and tool; `pendingApprovals`.
+// - `decisions`: the same records' status, who decided (the `decidedBy` kind) and the reason.
 // - `model`: the thread's model.
 
 import type { ConversationView } from "@cairn/protocol/Thread";
@@ -116,12 +117,22 @@ export const normalizeView = (view: ConversationView): Json => {
       ? Object.values(approvalsDoc.items).filter(isRecord)
       : [];
 
-  const approvals = records
-    .toSorted((a, b) => Number(a.askedAt ?? 0) - Number(b.askedAt ?? 0))
-    .map((record) => ({
-      status: record.status ?? null,
-      tool: record.tool ?? null,
-    }));
+  const byAge = records.toSorted(
+    (a, b) => Number(a.askedAt ?? 0) - Number(b.askedAt ?? 0)
+  );
+
+  const approvals = byAge.map((record) => ({
+    status: record.status ?? null,
+    tool: record.tool ?? null,
+  }));
+
+  const decisions = byAge.map((record) => ({
+    status: record.status ?? null,
+    decidedBy: isRecord(record.decidedBy)
+      ? (record.decidedBy.kind ?? null)
+      : null,
+    reason: record.reason ?? null,
+  }));
 
   const agent = view.docs["pi.agent"];
 
@@ -134,6 +145,7 @@ export const normalizeView = (view: ConversationView): Json => {
     approvals,
     pendingApprovals: approvals.filter((item) => item.status === "pending")
       .length,
+    decisions,
     model: isRecord(agent) && isRecord(agent.model) ? agent.model : null,
   };
 };

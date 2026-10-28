@@ -9,7 +9,7 @@ import {
   toFoldkitKeys,
 } from "@cairn/client-logic/Keybindings";
 import type { KeybindingCommand } from "@cairn/client-logic/Keybindings";
-import { resolveSidebarThreadStatus } from "@cairn/client-logic/Sidebar";
+import { threadStatus } from "@cairn/client-logic/ThreadState";
 import { Clock, Duration, Effect, Option, Schema, Stream } from "effect";
 import { Subscription } from "foldkit";
 import {
@@ -59,7 +59,7 @@ const clock = (fast: boolean): Stream.Stream<Message> =>
 
 const hasRunningRow = (model: Model): boolean =>
   threadsOf(model).some((thread) => {
-    const status = resolveSidebarThreadStatus(thread);
+    const status = threadStatus(thread, Option.none());
 
     return status === "working" || status === "waiting";
   });

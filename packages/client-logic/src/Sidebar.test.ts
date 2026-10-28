@@ -1,8 +1,9 @@
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/Sidebar.logic.test.ts at
-// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the section, recede, status, top status,
-// accessibility, search, adjacent-thread and preferred-order cases. Changed: rows are Cairn's shell
-// rows, so a runtime's status is `activity` and an approval or question is `pendingRuntimeRequest`.
-// Removed: drag, sweep, multi-select, pull request, lineage, prewarm, jump hint, stage badge, project
+// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the section, recede, accessibility, search,
+// adjacent-thread and preferred-order cases; the status and top status cases moved to
+// ThreadState.test.ts and the lineage cases to SubagentRollup.test.ts (package 1E). Changed: rows
+// are Cairn's shell rows.
+// Removed: drag, sweep, multi-select, pull request, fork, prewarm, jump hint, stage badge, project
 // sort and Working shelf cases (not ported). Added: the partition into shelves, settled paging,
 // parked rows, the project monogram and leaving an open thread.
 //
@@ -23,13 +24,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import {
-  ApprovalId,
-  EntryId,
-  ProjectId,
-  TaskId,
-  ThreadId,
-} from "@cairn/protocol/Ids";
+import { EntryId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
@@ -44,12 +39,9 @@ import {
   resolveAdjacentThreadId,
   resolveSidebarRowAccessibility,
   resolveSidebarThreadSection,
-  resolveSidebarThreadStatus,
-  resolveSidebarTopStatus,
   searchExcerpt,
   searchSidebarThreads,
   shouldRecedeSidebarThread,
-  shouldShowSidebarDuration,
   splitHighlights,
   visibleSettledCount,
   visibleThreadOrder,
@@ -110,16 +102,6 @@ const thread = (
   suffix: number,
   overrides: Partial<ThreadShell> = {}
 ): ThreadShell => ({ ...base, id: threadId(suffix), ...overrides });
-
-const request = (
-  kind: "tool-call" | "executor-call" | "user-input" | "sign-in"
-) =>
-  Option.some({
-    id: ApprovalId.make("apr_1"),
-    kind,
-    createdAt: time("2026-04-10T11:00:00Z"),
-    origin: Option.none(),
-  });
 
 describe(resolveSidebarThreadSection, () => {
   it("keeps a pinned thread in the pinned shelf", () => {
@@ -261,168 +243,6 @@ describe(visibleSettledCount, () => {
       }).length,
       13
     );
-  });
-});
-
-describe(resolveSidebarThreadStatus, () => {
-  it("prioritizes approval over a running thread, and a question below approval", () => {
-    assert.strictEqual(
-      resolveSidebarThreadStatus({
-        ...base,
-        activity: "running",
-        pendingRuntimeRequest: request("tool-call"),
-      }),
-      "approval"
-    );
-    assert.strictEqual(
-      resolveSidebarThreadStatus({
-        ...base,
-        pendingRuntimeRequest: request("executor-call"),
-      }),
-      "approval"
-    );
-    assert.strictEqual(
-      resolveSidebarThreadStatus({
-        ...base,
-        activity: "running",
-        pendingRuntimeRequest: request("user-input"),
-      }),
-      "input"
-    );
-    assert.strictEqual(
-      resolveSidebarThreadStatus({
-        ...base,
-        pendingRuntimeRequest: request("sign-in"),
-      }),
-      "input"
-    );
-  });
-
-  it("reports working for preparing and running threads, and waiting for a waiting one", () => {
-    assert.strictEqual(
-      resolveSidebarThreadStatus({ ...base, activity: "running" }),
-      "working"
-    );
-    assert.strictEqual(
-      resolveSidebarThreadStatus({ ...base, activity: "preparing" }),
-      "working"
-    );
-    assert.strictEqual(
-      resolveSidebarThreadStatus({ ...base, activity: "waiting" }),
-      "waiting"
-    );
-  });
-
-  it("keeps usage-limit stops Limited and visible", () => {
-    const limited = {
-      ...base,
-      activity: "failed" as const,
-      lastErrorClass: Option.some("usage_limit" as const),
-    };
-
-    assert.strictEqual(resolveSidebarThreadStatus(limited), "limited");
-    assert.strictEqual(
-      resolveSidebarThreadStatus({ ...limited, activity: "running" }),
-      "working"
-    );
-    assert.strictEqual(
-      resolveSidebarThreadStatus({ ...limited, activity: "idle" }),
-      "ready"
-    );
-    assert.deepStrictEqual(
-      resolveSidebarTopStatus({
-        status: "limited",
-        isUnread: false,
-        isWoke: false,
-      }),
-      Option.some("limited")
-    );
-    assert.isFalse(
-      shouldRecedeSidebarThread({
-        status: "limited",
-        isUnread: false,
-        isWoke: false,
-        isActive: false,
-        isSelected: false,
-      })
-    );
-  });
-
-  it("reports failed only while the latest run failed", () => {
-    assert.strictEqual(
-      resolveSidebarThreadStatus({
-        ...base,
-        activity: "failed",
-        lastErrorClass: Option.some("provider_error"),
-      }),
-      "failed"
-    );
-
-    const recovered: ThreadShell = {
-      ...base,
-      lastError: Option.some("persisted"),
-    };
-
-    assert.strictEqual(resolveSidebarThreadStatus(recovered), "ready");
-  });
-
-  it("reports parked when a task is parked, so the row can offer a retry", () => {
-    assert.strictEqual(
-      resolveSidebarThreadStatus({ ...base, activity: "parked" }),
-      "parked"
-    );
-    assert.strictEqual(
-      resolveSidebarThreadStatus({ ...base, parkedTaskIds: [TaskId.make(7)] }),
-      "parked"
-    );
-  });
-
-  it("defaults to ready", () => {
-    assert.strictEqual(resolveSidebarThreadStatus(base), "ready");
-  });
-
-  it("keeps a waiting thread visible ahead of unread and woke presentation", () => {
-    assert.deepStrictEqual(
-      resolveSidebarTopStatus({
-        status: "waiting",
-        isUnread: true,
-        isWoke: true,
-      }),
-      Option.some("waiting")
-    );
-  });
-
-  it("shows woke, then done, then nothing for a ready row", () => {
-    assert.deepStrictEqual(
-      resolveSidebarTopStatus({
-        status: "ready",
-        isUnread: true,
-        isWoke: true,
-      }),
-      Option.some("woke")
-    );
-    assert.deepStrictEqual(
-      resolveSidebarTopStatus({
-        status: "ready",
-        isUnread: true,
-        isWoke: false,
-      }),
-      Option.some("done")
-    );
-    assert.isTrue(
-      Option.isNone(
-        resolveSidebarTopStatus({
-          status: "ready",
-          isUnread: false,
-          isWoke: false,
-        })
-      )
-    );
-  });
-
-  it("keeps Waiting static while Working shows elapsed duration", () => {
-    assert.isFalse(shouldShowSidebarDuration("waiting"));
-    assert.isTrue(shouldShowSidebarDuration("working"));
   });
 });
 

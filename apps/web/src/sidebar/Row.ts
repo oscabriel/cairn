@@ -2,8 +2,9 @@
 // and slim variants, `SidebarSearchResultRow`, `SidebarDraftRow`, `WorkingDuration`,
 // `RelativeTimeLabel`), apps/web/src/components/ProjectMonogram.tsx, ThreadSearchMatch.tsx and
 // ThreadStatusIndicators.tsx (`ThreadWorktreeIndicator`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92.
-// Kept: the DOM, class strings, `data-testid`s and the status words of each row state, with the
-// receding and unseen rules. Changed: Foldkit views over Cairn's shell rows; a parked row reads
+// Kept: the DOM, class strings, `data-testid`s, the icon and colour of each row state, with the
+// receding and unseen rules. Changed: Foldkit views over Cairn's shell rows; a row's status, words
+// and tone come from the one thread-state function (`ThreadState.ts`); a parked row reads
 // "Parked" and offers Retry; the provider mark is shown for Claude threads only; the hover card, the
 // pull request badge, terminal and drag controls are not ported.
 //
@@ -25,22 +26,22 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import {
-  hasUnseenCompletion,
-  isThreadWoke,
   resolveSidebarRowAccessibility,
-  resolveSidebarThreadStatus,
-  resolveSidebarTopStatus,
   searchExcerpt,
   shouldRecedeSidebarThread,
   splitHighlights,
 } from "@cairn/client-logic/Sidebar";
-import type {
-  SidebarSection,
-  SidebarThreadStatus,
-  SidebarTopStatus,
-} from "@cairn/client-logic/Sidebar";
+import type { SidebarSection } from "@cairn/client-logic/Sidebar";
+import type { SubagentRequest } from "@cairn/client-logic/SubagentRollup";
 import { canSnooze, snoozeWakeLabel } from "@cairn/client-logic/ThreadSettled";
 import { resolveSettledThreadTimestamp } from "@cairn/client-logic/ThreadSort";
+import { threadState } from "@cairn/client-logic/ThreadState";
+import type {
+  ThreadLabel,
+  ThreadLabelKind,
+  ThreadStatus,
+  ThreadTone,
+} from "@cairn/client-logic/ThreadState";
 import {
   formatSidebarAge,
   formatWorkingDurationLabel,
@@ -78,93 +79,68 @@ export interface RowInputs {
   readonly isActive: boolean;
   /** The title being typed, while this row is being renamed. */
   readonly renaming: Option.Option<string>;
+  /** What the thread's subagents ask of the user, shown on this row (`pendingSubagentRequests`). */
+  readonly subagentRequest: Option.Option<SubagentRequest>;
 }
 
-/** A row's top label: its words, icon and colour. */
-interface TopStatusLook {
-  readonly label: string;
-  readonly icon: Option.Option<IconName>;
-  readonly className: string;
-}
+/** Each top label's icon; its words and tone come from the thread state. */
+const LABEL_ICONS: Readonly<Record<ThreadLabelKind, IconName>> = {
+  working: "circle-dashed",
+  waiting: "circle-dot-dashed",
+  "asking-parent": "circle-dot-dashed",
+  approval: "shield-question",
+  go: "shield-question",
+  input: "message-circle-question",
+  limited: "circle-alert",
+  failed: "circle-alert",
+  parked: "circle-alert",
+  woke: "alarm-clock",
+  done: "circle-check",
+};
 
-const TOP_STATUS_LOOKS: Readonly<Record<SidebarTopStatus, TopStatusLook>> = {
-  working: {
-    label: "Working",
-    icon: Option.some("circle-dashed"),
-    className: "text-info",
-  },
-  waiting: {
-    label: "Waiting",
-    icon: Option.some("circle-dot-dashed"),
-    className: "text-muted-foreground",
-  },
-  approval: {
-    label: "Approval",
-    icon: Option.some("shield-question"),
-    className: "text-warning-foreground",
-  },
-  input: {
-    label: "Input",
-    icon: Option.some("message-circle-question"),
-    className: "text-indigo-600 dark:text-indigo-300",
-  },
-  limited: {
-    label: "Limited",
-    icon: Option.some("circle-alert"),
-    className: "text-warning",
-  },
-  failed: {
-    label: "Failed",
-    icon: Option.some("circle-alert"),
-    className: "text-error",
-  },
-  parked: {
-    label: "Parked",
-    icon: Option.some("circle-alert"),
-    className: "text-warning",
-  },
-  woke: {
-    label: "Woke",
-    icon: Option.some("alarm-clock"),
-    className: "text-warning",
-  },
-  done: {
-    label: "Done",
-    icon: Option.some("circle-check"),
-    className: "text-success",
-  },
+/** Each tone's colour classes. */
+const TONE_CLASSES: Readonly<Record<ThreadTone, string>> = {
+  info: "text-info",
+  muted: "text-muted-foreground",
+  attention: "text-warning-foreground",
+  question: "text-indigo-600 dark:text-indigo-300",
+  warning: "text-warning",
+  error: "text-error",
+  success: "text-success",
 };
 
 /** The facts every row variant reads off its thread. */
 interface RowState {
-  readonly status: SidebarThreadStatus;
+  readonly status: ThreadStatus;
   readonly isUnread: boolean;
   readonly isWoke: boolean;
   readonly recede: boolean;
-  readonly topStatus: Option.Option<SidebarTopStatus>;
+  readonly label: Option.Option<ThreadLabel>;
 }
 
 const rowState = (inputs: RowInputs): RowState => {
-  const { thread } = inputs;
-  const now = DateTime.makeUnsafe(inputs.nowMs);
-  const status = resolveSidebarThreadStatus(thread);
-  const isUnread = hasUnseenCompletion(thread);
-  const isWoke = isThreadWoke(thread, now);
+  const state = threadState(inputs.thread, {
+    now: DateTime.makeUnsafe(inputs.nowMs),
+    subagentRequest: inputs.subagentRequest,
+  });
 
   return {
-    status,
-    isUnread,
-    isWoke,
+    status: state.status,
+    isUnread: state.isUnread,
+    isWoke: state.isWoke,
     recede: shouldRecedeSidebarThread({
-      status,
-      isUnread,
-      isWoke,
+      status: state.status,
+      isUnread: state.isUnread,
+      isWoke: state.isWoke,
       isActive: inputs.isActive,
       isSelected: false,
     }),
-    topStatus: resolveSidebarTopStatus({ status, isUnread, isWoke }),
+    label: state.label,
   };
 };
+
+const isWokeLabel = (state: RowState): boolean =>
+  Option.exists(state.label, (label) => label.kind === "woke");
 
 const ageOf = (thread: ThreadShell, nowMs: number): string =>
   formatSidebarAge(
@@ -175,7 +151,7 @@ const ageOf = (thread: ThreadShell, nowMs: number): string =>
 /** How long the row has been working or waiting, when it shows a duration. */
 const durationOf = (
   thread: ThreadShell,
-  status: SidebarThreadStatus,
+  status: ThreadStatus,
   nowMs: number
 ): Option.Option<string> => {
   let since = Option.none<DateTime.Utc>();
@@ -340,17 +316,13 @@ const pinIndicator = (h: H, thread: ThreadShell): Html =>
     : h.empty;
 
 const topStatusView = (h: H, inputs: RowInputs, state: RowState): Html =>
-  Option.match(state.topStatus, {
+  Option.match(state.label, {
     onNone: () => h.empty,
-    onSome: (status) => {
-      const look = TOP_STATUS_LOOKS[status];
+    onSome: (label) => {
+      const toneClass = TONE_CLASSES[label.tone];
+      const iconView = icon(h, LABEL_ICONS[label.kind], "size-4 shrink-0");
 
-      const iconView = Option.match(look.icon, {
-        onNone: () => h.empty,
-        onSome: (name) => icon(h, name, "size-4 shrink-0"),
-      });
-
-      if (status === "woke") {
+      if (label.kind === "woke") {
         return h.button(
           [
             h.Type("button"),
@@ -362,23 +334,19 @@ const topStatusView = (h: H, inputs: RowInputs, state: RowState): Html =>
             h.Class(
               cx(
                 "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                look.className
+                toneClass
               )
             ),
           ],
-          [iconView, h.span([h.Role("status")], [look.label])]
+          [iconView, h.span([h.Role("status")], [label.word])]
         );
       }
 
       return h.span(
-        [
-          h.Class(
-            cx("inline-flex items-center gap-1 font-medium", look.className)
-          ),
-        ],
+        [h.Class(cx("inline-flex items-center gap-1 font-medium", toneClass))],
         [
           iconView,
-          h.span([h.Role("status")], [look.label]),
+          h.span([h.Role("status")], [label.word]),
           Option.match(durationOf(inputs.thread, state.status, inputs.nowMs), {
             onNone: () => h.empty,
             onSome: (duration) =>
@@ -521,10 +489,7 @@ const branchLine = (h: H, thread: ThreadShell): Html =>
 const accessibleLabel = (inputs: RowInputs, state: RowState): string =>
   resolveSidebarRowAccessibility({
     title: inputs.thread.title,
-    statusLabel: Option.map(
-      state.topStatus,
-      (status) => TOP_STATUS_LOOKS[status].label
-    ),
+    statusLabel: Option.map(state.label, (label) => label.word),
     projectDisplayName: Option.map(inputs.project, (project) => project.title),
     isActive: inputs.isActive,
   }).label;
@@ -604,13 +569,13 @@ export const cardRow = (h: H, inputs: RowInputs): Html => {
                       h.span(
                         [
                           h.Class(
-                            Option.contains(state.topStatus, "woke")
+                            isWokeLabel(state)
                               ? "pointer-events-auto flex items-center self-center justify-self-end tabular-nums text-secondary-label transition-opacity"
                               : STATUS_LABEL_CLASS
                           ),
                         ],
                         [
-                          Option.isSome(state.topStatus)
+                          Option.isSome(state.label)
                             ? topStatusView(h, inputs, state)
                             : ageOf(thread, inputs.nowMs),
                         ]

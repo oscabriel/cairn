@@ -298,7 +298,7 @@ The fan-out target (ten stones) is phase 3's.
 
 One script, `ops/wizards/phase-2.sh`, written with the `wizard` skill.
 
-1. **Finish the phase 1 gate.** Done on 2026-10-28; the day chose the project rail. Left: rerun `judges/load.ts --browser webkit` on the MacBook from home Wi-Fi (Claude runs it over SSH).
+1. **Finish the phase 1 gate.** Done on 2026-10-28, WebKit load included; the day chose the project rail.
 2. **Codex login.** Open the device-code link the wizard prints, from any device, and approve (about two minutes). Without it, the typed-results target runs on the recorded fallback.
 3. **Caddy and porch.** The wizard backs up `~/caddy/conf/Caddyfile`, then shows each edit before applying it: porch's `import` line, `stream_close_delay`, the compose mount, owner-only `plans.gneiss.run`. Confirm each; anyone you shared a plan link with will need to be on your login to open it.
 4. **The design pass.** Preview rounds of the new look, published to `plans.gneiss.run`; approve or name changes. Each approved round freezes its screenshots.

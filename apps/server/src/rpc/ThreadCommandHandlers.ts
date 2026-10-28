@@ -148,9 +148,9 @@ const requestIdOf = (requestId: RpcMessage.RequestId) =>
 /**
  * A phase 2 input this brain cannot act on yet: `thread.configure`'s `runtimeMode` (2B),
  * `thread.respond`'s decisions beyond accept and decline and its `launch` (2B, 5A), and
- * `thread.stop`'s `subagents: "stop"` (4C). `reason` and `answers` are recorded (1A). Refused, so nothing is silently
- * dropped; the package that builds each lifts its refusal and turns its test in
- * `ThreadCommandHandlers.test.ts` around.
+ * `thread.stop`'s `subagents: "stop"` (4C). `reason` and `answers` are recorded (1A). Refused,
+ * so nothing is silently dropped; the package that builds each lifts its refusal and turns its test
+ * in `ThreadCommandHandlers.test.ts` around.
  */
 const notYet = (field: string, requestId: Option.Option<string>) =>
   new InvalidInput({

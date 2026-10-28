@@ -8,12 +8,17 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { TaskId } from "@cairn/protocol/Ids";
 import { ApprovalsDocument } from "@cairn/protocol/Policy";
 import type { ApprovalDecision } from "@cairn/protocol/Policy";
 import { copyJson } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId } from "@earendil-works/pi-durable";
-import { createSession, defineDoc } from "@earendil-works/pi-durable";
+import {
+  createSession,
+  defineDoc,
+  defineTask,
+} from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
@@ -22,6 +27,8 @@ import {
   answerApproval,
   applyAnswer,
   Approvals,
+  cancelAbandonedApprovals,
+  cancelStoppedApprovals,
   copyRecord,
   heldByRun,
   migrateApprovals,
@@ -33,6 +40,7 @@ import type {
   JsonRecord,
   RecordAnswer,
 } from "./CairnDocs.ts";
+import { piTaskId } from "./PiIds.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -72,6 +80,21 @@ const ApprovalsV1 = defineDoc<JsonRecord>({
 });
 
 const decodeDocument = Schema.decodeUnknownResult(ApprovalsDocument);
+
+/** A task that only has to exist: no Harness runs it, so it stays live and unmarked. */
+const IdleTask = defineTask<Record<string, never>, { phase: "idle" }, null>({
+  name: "cairn.test.idle",
+  version: 1,
+  initial: () => ({ phase: "idle" }),
+  phases: {
+    idle: async () => {
+      await Promise.resolve();
+    },
+  },
+  abort: async () => {
+    await Promise.resolve();
+  },
+});
 
 /** Opens a Session over the store at `file`, runs `use`, and closes it. */
 const withSession = async <A>(
@@ -244,10 +267,22 @@ describe("cairn.approvals version 1 to 2", () => {
       })
   );
 
-  it("keeps every version 1 record and leaves out one no version can read", () => {
-    const migrated = migrateApprovals({ items: { bad: { id: 3 } } }, 1);
+  it("keeps every version 1 record, and one no version can read as cancelled", () => {
+    const migrated = migrateApprovals(
+      { items: { bad: { id: 3, askedAt: 1200 } } },
+      1
+    );
 
-    assert.deepStrictEqual(Object.keys(migrated.items), []);
+    assert.deepInclude(migrated.items.bad, {
+      id: "bad",
+      status: "cancelled",
+      decidedBy: { kind: "system", why: "boot" },
+      askedAt: 1200,
+      answeredAt: 1200,
+    });
+    assert.include(migrated.items.bad?.summary, '"askedAt":1200');
+    // The kept record is one the protocol reads.
+    assert.isTrue(Result.isSuccess(decodeDocument(migrated)));
 
     const kept: ApprovalsState = migrateApprovals(fixture, 1);
 
@@ -258,6 +293,12 @@ describe("cairn.approvals version 1 to 2", () => {
       "call-14",
       "call-15",
     ]);
+  });
+
+  it("refuses a version it has no migration from, instead of dropping its records", () => {
+    assert.throws(() => {
+      migrateApprovals(fixture, 0);
+    }, /no migration from version 0/u);
   });
 });
 
@@ -368,6 +409,17 @@ describe("an answer to a record", () => {
       "answered"
     );
     assert.strictEqual(brief.status, "revised");
+
+    // Send back says what to change: no notes, or blank ones, are refused.
+    for (const reason of [Option.none(), Option.some("  ")]) {
+      const unsaid = record({ kind: "brief" });
+
+      assert.strictEqual(
+        applyAnswer(unsaid, byUser("revise", reason), 1500),
+        "refused_revise_reason"
+      );
+      assert.strictEqual(unsaid.status, "pending");
+    }
   });
 });
 
@@ -389,4 +441,105 @@ describe("what a stop cancels", () => {
       [true, true, false, false, false, false, false]
     );
   });
+
+  it.live(
+    "only the stopped run's records, and at boot only those whose tool task is gone",
+    () =>
+      Effect.promise(async () => {
+        const root = mkdtempSync(path.join(tmpdir(), "cairn-approvals-own-"));
+        const file = path.join(root, "brain.sqlite");
+
+        try {
+          await withSession(file, async (session) => {
+            // Two runs of one conversation, each with a tool task waiting on its own record, and
+            // a record whose tool task the store no longer has.
+            const { conversationId, stopped } = await session.commit(
+              async (tx) => {
+                const conversation = await tx.createConversation({
+                  ownership: { kind: "ownerless" },
+                });
+
+                const make = async (owner: Option.Option<number>) =>
+                  Number(
+                    await tx.createTask(
+                      IdleTask,
+                      {},
+                      {
+                        conversationId: conversation.id,
+                        ownership: Option.match(owner, {
+                          onNone: () => ({ kind: "conversation" as const }),
+                          onSome: (taskId) => ({
+                            kind: "task" as const,
+                            taskId: piTaskId(TaskId.make(taskId)),
+                          }),
+                        }),
+                      }
+                    )
+                  );
+
+                const runA = await make(Option.none());
+                const toolA = await make(Option.some(runA));
+                const runB = await make(Option.none());
+                const toolB = await make(Option.some(runB));
+                const doc = await tx.doc(Approvals, conversation.id);
+
+                for (const [id, toolTaskId] of [
+                  ["call-a", toolA],
+                  ["call-b", toolB],
+                  ["call-gone", 9999],
+                ] as const) {
+                  doc.items[id] = record({
+                    id,
+                    toolTaskId,
+                    kind: "tool-call",
+                  });
+                }
+
+                return {
+                  conversationId: conversation.id,
+                  stopped: [piTaskId(TaskId.make(runA))],
+                };
+              },
+              context
+            );
+
+            const cancelled = await Effect.runPromise(
+              cancelStoppedApprovals(session, conversationId, stopped, 1500)
+            );
+
+            assert.deepStrictEqual(cancelled, ["call-a"]);
+
+            // Run B's tool task is live and unmarked, so its record still waits.
+            const abandoned = await Effect.runPromise(
+              cancelAbandonedApprovals(session, conversationId, 1600)
+            );
+
+            assert.deepStrictEqual(abandoned, ["call-gone"]);
+
+            const after = await session.snapshot(
+              Approvals,
+              conversationId,
+              context
+            );
+
+            const items = after?.items ?? {};
+
+            assert.deepStrictEqual(
+              Object.values(items).map((item) => [
+                item.id,
+                item.status,
+                item.decidedBy,
+              ]),
+              [
+                ["call-a", "cancelled", { kind: "system", why: "run-stopped" }],
+                ["call-b", "pending", null],
+                ["call-gone", "cancelled", { kind: "system", why: "boot" }],
+              ]
+            );
+          });
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      })
+  );
 });

@@ -963,7 +963,7 @@ const layerNoDeps = Layer.effectContext(
           for (const record of held) {
             const cancelled = copyRecord(record);
 
-            cancelRecord(cancelled, at);
+            cancelRecord(cancelled, at, "run-stopped");
             thread.approvals.set(cancelled.id, cancelled);
             emitted.push(
               RuntimeRequestUpdated.make({

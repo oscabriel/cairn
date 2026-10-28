@@ -13,7 +13,8 @@
 // The approval ledger is the interface tools use to record an approval and the effect sandwich
 // around it (`started` before the effect, `done` after), so callers outside `brain/` never touch
 // pi-durable. The shape comes from spikes/4-approvals/brain.ts in this repo. The host side answers
-// a record (`answerApproval`) and cancels the records a stopped run held (`cancelStoppedApprovals`).
+// a record (`answerApproval`) and cancels the records a stopped run held (`cancelStoppedApprovals`);
+// a boot repair cancels those a stop cut off by a crash left behind (`cancelAbandonedApprovals`).
 
 import { TaskId } from "@cairn/protocol/Ids";
 import {
@@ -32,6 +33,7 @@ import { copyJson } from "@earendil-works/chord";
 import type { JsonValue } from "@earendil-works/chord";
 import type {
   ConversationId,
+  Cursor,
   Session,
   TaskId as PiTaskId,
   ToolExecutionApi,
@@ -52,6 +54,7 @@ import {
   Stream,
 } from "effect";
 
+import { Brain } from "./Brain.ts";
 import { durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
 import { piTaskId } from "./PiIds.ts";
@@ -140,7 +143,7 @@ export interface MirrorState {
 export interface ApprovalRecord {
   [key: string]: JsonValue;
   id: string;
-  /** The pi-durable tool task that asked; a rerun of that task finds its record again. 0 for a mirror. */
+  /** The pi-durable tool task that asked; a rerun of it finds its record again. 0 for a mirror. */
   toolTaskId: number;
   tool: string;
   kind: RuntimeRequestKind;
@@ -234,39 +237,94 @@ const v1Answer = (record: ApprovalRecordV1): ApprovalAnswerState | null =>
       }
     : null;
 
+/** The version 2 fields a version 1 record gains: nothing it never kept. */
+const V1_GAINS = {
+  payload: null,
+  reason: null,
+  route: "user",
+  escalatedAt: null,
+  supersedes: null,
+  started: null,
+  briefHash: null,
+  mirrorOf: null,
+} as const satisfies Partial<ApprovalRecord>;
+
+/** A version 1 record as version 2 keeps it: every field kept, the decider read from the status. */
+const fromV1 = (record: ApprovalRecordV1): ApprovalRecord => ({
+  ...record,
+  ...V1_GAINS,
+  answer: v1Answer(record),
+  decidedBy: v1Decider(record),
+});
+
+/** How much of an unreadable record its summary keeps. */
+const UNREADABLE_SUMMARY_MAX = 500;
+
+/** The one field an unreadable record may still say: when it was asked. */
+const decodeAskedAt = Schema.decodeUnknownOption(
+  Schema.Struct({ askedAt: Schema.Finite })
+);
+
+/**
+ * A stored record no version can read, kept rather than dropped: cancelled at the migration
+ * (`decidedBy` system `boot`) with what it kept in `summary`, so nobody can answer it and the loss
+ * shows on the card instead of vanishing.
+ */
+const unreadable = (id: string, raw: JsonValue | undefined): ApprovalRecord => {
+  const at = Option.match(decodeAskedAt(raw), {
+    onNone: () => 0,
+    onSome: (kept) => kept.askedAt,
+  });
+
+  return {
+    id,
+    toolTaskId: 0,
+    tool: "unknown",
+    kind: "tool-call",
+    summary:
+      `Unreadable record kept at migration: ${JSON.stringify(raw ?? null)}`.slice(
+        0,
+        UNREADABLE_SUMMARY_MAX
+      ),
+    status: "cancelled",
+    askedAt: at,
+    expiresAt: at,
+    answeredAt: at,
+    run: null,
+    executorRequestId: null,
+    ...V1_GAINS,
+    answer: null,
+    decidedBy: { kind: "system", why: "boot" },
+  };
+};
+
 /**
  * `cairn.approvals` version 1 to 2, pure as pi-durable's `migrate` must be. Every record keeps its
  * fields and gains version 2's: `payload`, `reason` and the brief and question fields are null and
  * `route` is `user`, because version 1 held only tool calls and kept no words; `decidedBy` and
  * `answer` are read from the status, so every status past `pending` names a decider (invariant 8
- * of `docs/golden/thread-states.md`). A record that is not version 1's shape cannot be read by
- * either version and is left out.
+ * of `docs/golden/thread-states.md`). A record that is not version 1's shape is kept as cancelled
+ * (`unreadable`), never dropped. A version this code does not know throws: a later version adds its
+ * own case here, so nothing is lost by a migration that skipped it.
  */
 export const migrateApprovals = (
   value: JsonRecord,
   fromVersion: number
 ): ApprovalsState => {
+  if (fromVersion !== 1) {
+    throw new Error(
+      `cairn.approvals has no migration from version ${fromVersion} to ${APPROVALS_VERSION}`
+    );
+  }
+
   const items: ApprovalsState["items"] = {};
   const stored = isJsonRecord(value.items) ? value.items : {};
 
   for (const [id, raw] of Object.entries(stored)) {
-    const record = fromVersion === 1 ? decodeRecordV1(raw) : Option.none();
-
-    if (Option.isSome(record)) {
-      items[id] = {
-        ...record.value,
-        payload: null,
-        answer: v1Answer(record.value),
-        decidedBy: v1Decider(record.value),
-        reason: null,
-        route: "user",
-        escalatedAt: null,
-        supersedes: null,
-        started: null,
-        briefHash: null,
-        mirrorOf: null,
-      };
-    }
+    items[id] = Option.match(decodeRecordV1(raw), {
+      onNone: () => unreadable(id, raw),
+      onSome: fromV1,
+    });
   }
 
   return { items };
@@ -657,14 +715,15 @@ export interface RecordAnswer {
 /**
  * How an answer landed: it changed a pending record, the record was already settled, there is no
  * such record, or the record cannot take it (`answers` on a record that asked no questions,
- * `revise` on anything but a brief).
+ * `revise` on anything but a brief, or `revise` with no notes: Send back says what to change).
  */
 export type AnswerOutcome =
   | "answered"
   | "already_settled"
   | "not_found"
   | "refused_answers"
-  | "refused_revise";
+  | "refused_revise"
+  | "refused_revise_reason";
 
 /** Why a record refused an answer, in the words both harnesses fail with; none when it took it. */
 export const refusalText = (
@@ -674,6 +733,12 @@ export const refusalText = (
   if (outcome === "refused_answers") {
     return Option.some(
       `Approval ${approvalId} asked no questions, so it takes no answers. Answer it with a decision alone.`
+    );
+  }
+
+  if (outcome === "refused_revise_reason") {
+    return Option.some(
+      `Sending back approval ${approvalId} needs notes on what to change. Add them and send it back again.`
     );
   }
 
@@ -718,6 +783,15 @@ export const applyAnswer = (
 
   if (answer.decision === "revise" && record.kind !== "brief") {
     return "refused_revise";
+  }
+
+  if (
+    answer.decision === "revise" &&
+    Option.isNone(
+      Option.filter(answer.reason, (reason) => reason.trim() !== "")
+    )
+  ) {
+    return "refused_revise_reason";
   }
 
   record.status = STATUS_OF[answer.decision];
@@ -774,11 +848,18 @@ export const heldByRun = (record: ApprovalRecord) =>
 /** A stored task id as pi-durable types it. */
 const piTaskOf = (id: number) => piTaskId(TaskId.make(id));
 
-/** Marks a held record cancelled by a stop, in place. */
-export const cancelRecord = (record: ApprovalRecord, now: number) => {
+/** Why the system cancelled a record: a stop, or boot finding its tool task abandoned. */
+export type CancelWhy = "run-stopped" | "boot";
+
+/** Marks a held record cancelled by the system, in place. */
+export const cancelRecord = (
+  record: ApprovalRecord,
+  now: number,
+  why: CancelWhy
+) => {
   record.status = "cancelled";
   record.answeredAt = now;
-  record.decidedBy = { kind: "system", why: "run-stopped" };
+  record.decidedBy = { kind: "system", why };
 };
 
 /** How many owners up a tool task may sit below its run's task (a tool, a nested call). */
@@ -839,9 +920,129 @@ export const cancelStoppedApprovals = (
         );
 
         for (const record of cancelled) {
-          cancelRecord(record, now);
+          cancelRecord(record, now, "run-stopped");
         }
 
         return cancelled.map((record) => record.id);
       }, context)
   );
+
+/**
+ * Whether a held record's tool task will never wait on it again: the task (or an owner up its
+ * chain) is gone, ending, or under an abort mark. A stop commits its abort marks before it cancels
+ * the records its run held, so a crash between the two leaves exactly this.
+ */
+const abandonedTask = async (tx: Tx, taskId: number): Promise<boolean> => {
+  let current: Option.Option<number> = Option.some(taskId);
+
+  for (let hop = 0; hop <= OWNER_HOPS && Option.isSome(current); hop += 1) {
+    // Each hop reads the owner the last one named.
+    // oxlint-disable-next-line no-await-in-loop
+    const task = await tx.task(piTaskOf(current.value));
+
+    if (
+      task === undefined ||
+      task.abortRequested ||
+      task.state.status === "completing" ||
+      task.state.status === "terminal"
+    ) {
+      return true;
+    }
+
+    current = Option.map(Option.fromUndefinedOr(task.owner), Number);
+  }
+
+  return false;
+};
+
+/**
+ * Cancels, in one transaction, every record of one conversation that a run held and whose tool
+ * task is abandoned (`abandonedTask`), with `decidedBy` system `boot`. Returns the ids.
+ */
+export const cancelAbandonedApprovals = (
+  session: Pick<Session, "commit">,
+  conversationId: ConversationId,
+  now: number
+): Effect.Effect<ReadonlyArray<string>, DurableCallError> =>
+  durable(
+    "approvals.cancel-abandoned",
+    async (context) =>
+      await session.commit(async (tx) => {
+        const { items } = await tx.doc(Approvals, conversationId);
+        const held = Object.values(items).filter(heldByRun);
+
+        const abandoned = await Promise.all(
+          held.map(async (record) => await abandonedTask(tx, record.toolTaskId))
+        );
+
+        const cancelled = held.filter(
+          (_record, index) => abandoned[index] === true
+        );
+
+        for (const record of cancelled) {
+          cancelRecord(record, now, "boot");
+        }
+
+        return cancelled.map((record) => record.id);
+      }, context)
+  );
+
+/** How many conversations one page of the boot scan reads. */
+const SCAN_PAGE = 200;
+
+/**
+ * The boot repair for a stop cut off between its abort and its cancellations (a crash, or a
+ * failed cancel): before the Harness resumes, every conversation's held records whose tool task is
+ * abandoned are cancelled (`cancelAbandonedApprovals`), so no request nobody can answer stays
+ * pending. Every conversation is read, not only those with live tasks, because the tool task of
+ * such a record may already be terminal. None without a pi-durable `Brain`. Returns how many it
+ * cancelled. `BootRepairs.ts` lists it before the parked approval waits are retried.
+ */
+export const cancelAbandonedApprovalsAtBoot = Effect.gen(function* () {
+  const found = yield* Effect.serviceOption(Brain);
+
+  if (Option.isNone(found)) {
+    return 0;
+  }
+
+  const brain = found.value;
+  const { harness, storage } = yield* brain.session;
+  let cursor: Option.Option<Cursor> = Option.none();
+  let cancelled = 0;
+
+  do {
+    const after = Option.getOrUndefined(cursor);
+
+    const page = yield* durable(
+      "conversations.scan",
+      async (context) =>
+        await storage.scanConversations({}, SCAN_PAGE, after, context)
+    );
+
+    for (const conversation of page.items) {
+      const approvals = yield* durable(
+        "approvals.read",
+        async (context) =>
+          await harness.snapshot(Approvals, conversation.id, context)
+      );
+
+      if (Object.values(approvals?.items ?? {}).some(heldByRun)) {
+        const ids = yield* cancelAbandonedApprovals(
+          harness,
+          conversation.id,
+          brain.now()
+        );
+
+        cancelled += ids.length;
+      }
+    }
+
+    cursor = Option.fromUndefinedOr(page.next);
+  } while (Option.isSome(cursor));
+
+  yield* Effect.logInfo(`cancelled ${cancelled} abandoned approvals`).pipe(
+    Effect.annotateLogs({ event: "boot_cancelled_approvals", cancelled })
+  );
+
+  return cancelled;
+});

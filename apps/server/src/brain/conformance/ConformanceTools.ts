@@ -1,8 +1,9 @@
 // The tools conformance scenarios call, on both sides: `echo` returns its `text`; `gate` asks for an
 // approval through the approval ledger and answers with the decision and the decider's reason
-// (`accepted` succeeds, anything else is an error result: "declined: not now"). Both are replay-safe, so a restart reruns them: `gate` then finds its
-// record and waits again. The pi-durable side installs this extension; the scripted side has the
-// same two tools as a ScriptedTools layer.
+// (`accepted` succeeds, anything else is an error result: "declined: not now"). Both are
+// replay-safe, so a restart reruns them: `gate` then finds its record and waits again. The
+// pi-durable side installs this extension; the scripted side has the same two tools as a
+// ScriptedTools layer.
 
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";

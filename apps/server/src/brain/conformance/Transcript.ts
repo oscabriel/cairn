@@ -8,7 +8,7 @@
 // - `model {label, hold?, text?, toolCalls?, stopReason?, errorMessage?}`: the next model answer,
 //   consumed in order by whichever request comes next. `hold` keeps it until `release {label}`.
 // - `input {step, ...}`: `ensure`, `ensure_race`, `subscribe`, `message` (with `whenBusy`),
-//   `steer`, `follow_up`, `stop`, `stop_clear`, `withdraw {requestId}`, `respond {decision}`,
+//   `steer`, `follow_up`, `stop`, `stop_clear`, `withdraw {requestId}`, `respond {decision, reason?}`,
 //   `compact`, `restart`. `subscribe` opens the client's one subscription now, before any ensure,
 //   as a page opened on a launch does: it waits on `whenEnsured`, then watches, and is never
 //   reopened. An input may carry `expect` on its own result (an error reason, `withdrawn`, the
@@ -45,6 +45,7 @@ const inputFields = {
     Schema.Literals(["steer", "followUp", "reject"])
   ),
   decision: Schema.optionalKey(Schema.Literals(["accept", "decline"])),
+  reason: Schema.optionalKey(Schema.String),
   expect: Schema.optionalKey(
     Schema.Struct({
       error: Schema.optionalKey(Schema.String),

@@ -1,0 +1,15 @@
+{"type":"transcript_start","scenario":"approval_cancelled_on_stop","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"gate","arguments":{}}]}
+{"type":"model","label":"m2","text":"never seen"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"open the gate"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"pending","kind":"tool-call"}}
+{"type":"expect_view","path":["pendingApprovals"],"equals":1}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"input","step":"stop"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"interrupted"}}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"cancelled","kind":"tool-call"}}
+{"type":"expect_view","path":["running"],"equals":false}
+{"type":"expect_view","path":["pendingApprovals"],"equals":0}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"cancelled","decidedBy":"system","reason":null}]}
+{"type":"expect_event_count","event":{"_tag":"MessageCommitted","text":"never seen"},"count":0}

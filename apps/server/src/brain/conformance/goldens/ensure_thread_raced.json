@@ -12,6 +12,7 @@
     "running": false,
     "approvals": [],
     "pendingApprovals": 0,
+    "decisions": [],
     "model": {
       "provider": "faux",
       "modelId": "scripted"

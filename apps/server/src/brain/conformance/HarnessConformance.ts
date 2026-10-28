@@ -401,7 +401,11 @@ export const runScenario = (
         );
 
         yield* seam
-          .respond(THREAD_ID, approvalId, line.decision ?? "accept")
+          .respond(THREAD_ID, approvalId, {
+            decision: line.decision ?? "accept",
+            reason: Option.fromUndefinedOr(line.reason),
+            answers: Option.none(),
+          })
           .pipe(Effect.mapError(fromSeam(where)));
       });
 

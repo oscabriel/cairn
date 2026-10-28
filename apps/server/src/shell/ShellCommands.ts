@@ -92,6 +92,7 @@ export const ThreadActivityPatch = Schema.Struct({
   usageLimitResetAt: patchField(ThreadShell.fields.usageLimitResetAt),
   waitingFor: patchField(ThreadShell.fields.waitingFor),
   pendingRuntimeRequest: patchField(ThreadShell.fields.pendingRuntimeRequest),
+  pendingCount: patchField(ThreadShell.fields.pendingCount),
   latestVisibleMessage: patchField(ThreadShell.fields.latestVisibleMessage),
   latestUserMessageAt: patchField(ThreadShell.fields.latestUserMessageAt),
   parkedTaskIds: patchField(ThreadShell.fields.parkedTaskIds),
@@ -117,6 +118,7 @@ export const emptyActivityPatch: ThreadActivityPatch = {
   usageLimitResetAt: Option.none(),
   waitingFor: Option.none(),
   pendingRuntimeRequest: Option.none(),
+  pendingCount: Option.none(),
   latestVisibleMessage: Option.none(),
   latestUserMessageAt: Option.none(),
   parkedTaskIds: Option.none(),
@@ -661,6 +663,10 @@ const applyPatch = (
     pendingRuntimeRequest: Option.getOrElse(
       patch.pendingRuntimeRequest,
       () => shell.pendingRuntimeRequest
+    ),
+    pendingCount: Option.getOrElse(
+      patch.pendingCount,
+      () => shell.pendingCount
     ),
     latestVisibleMessage: Option.getOrElse(
       patch.latestVisibleMessage,

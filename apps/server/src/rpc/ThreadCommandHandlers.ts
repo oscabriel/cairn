@@ -147,8 +147,8 @@ const requestIdOf = (requestId: RpcMessage.RequestId) =>
 
 /**
  * A phase 2 input this brain cannot act on yet: `thread.configure`'s `runtimeMode` (2B),
- * `thread.respond`'s decisions beyond accept and decline, its `reason`, `answers` and `launch`
- * (1A, 2B, 5A), and `thread.stop`'s `subagents: "stop"` (4C). Refused, so nothing is silently
+ * `thread.respond`'s decisions beyond accept and decline and its `launch` (2B, 5A), and
+ * `thread.stop`'s `subagents: "stop"` (4C). `reason` and `answers` are recorded (1A). Refused, so nothing is silently
  * dropped; the package that builds each lifts its refusal and turns its test in
  * `ThreadCommandHandlers.test.ts` around.
  */
@@ -163,14 +163,6 @@ const notYet = (field: string, requestId: Option.Option<string>) =>
 const respondNotYet = (input: RespondInput): Option.Option<string> => {
   if (input.decision !== "accept" && input.decision !== "decline") {
     return Option.some("decision");
-  }
-
-  if (Option.isSome(input.reason)) {
-    return Option.some("reason");
-  }
-
-  if (Option.isSome(input.answers)) {
-    return Option.some("answers");
   }
 
   return Option.isSome(input.launch) ? Option.some("launch") : Option.none();

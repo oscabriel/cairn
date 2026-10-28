@@ -25,7 +25,6 @@ import {
   TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
-import type { ApprovalDecision } from "@cairn/protocol/Policy";
 import {
   FULL_ENTRY_LIMIT_BYTES,
   ThreadOpsItem,
@@ -38,6 +37,7 @@ import type {
   ConversationView as PiConversationView,
   InputSubmissionDraft,
   LiveState,
+  TaskId as PiTaskId,
 } from "@earendil-works/pi-durable";
 import {
   ConversationBusy,
@@ -45,6 +45,7 @@ import {
   LiveDoc,
 } from "@earendil-works/pi-durable";
 import {
+  Duration,
   Effect,
   Layer,
   Option,
@@ -62,6 +63,8 @@ import { BrainStore } from "./BrainStore.ts";
 import {
   answerApproval,
   Approvals,
+  cancelStoppedApprovals,
+  refusalText,
   ThreadMeta,
   ThreadReceipt,
 } from "./CairnDocs.ts";
@@ -71,6 +74,7 @@ import { durable, errorText, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
 import { HarnessError, HarnessSeam, TaskParked } from "./HarnessSeam.ts";
 import type {
+  ApprovalAnswerInput,
   EnsureThread,
   HarnessEvent,
   HarnessTurnInput,
@@ -160,6 +164,14 @@ const fromWire =
  * already unlikely.
  */
 const STOP_HANDOVERS = 4;
+
+/**
+ * How long a stop waits for the run's tasks to end before it cancels their records. The wait only
+ * orders RunTerminal before the cancellations (which records a run held is read from task owners,
+ * not from their ends); an aborted run ends within a tool's abort handling, and a tool that ignores
+ * aborts is not waited out.
+ */
+const STOP_SETTLE = Duration.seconds(2);
 
 /** `pi.live.run`: the task that owns a busy conversation's run, and the run's inputs. */
 type LiveRun = NonNullable<LiveState["run"]>;
@@ -458,6 +470,52 @@ const layerNoDeps = Layer.effect(
       };
     });
 
+    /**
+     * After a stop: waits (bounded) for the stopped run's tasks to end, so RunTerminal comes first,
+     * then cancels the records they held (ADR 0029). A failure here leaves the run stopped and the
+     * records pending, as phase 1 did, and is logged rather than failing the stop.
+     */
+    const cancelHeld = Effect.fn("PiDurableHarness.cancelHeld")(function* (
+      session: BrainSession,
+      threadId: ThreadId,
+      conversationId: PiConversationId,
+      stopped: ReadonlyArray<PiTaskId>
+    ) {
+      if (stopped.length === 0) {
+        return yield* Effect.void;
+      }
+
+      yield* Effect.forEach(
+        stopped,
+        (taskId) =>
+          call(
+            Option.some(threadId),
+            "wait-stopped",
+            async (context) =>
+              await session.harness.waitForTask(taskId, context)
+          ).pipe(Effect.timeoutOption(STOP_SETTLE), Effect.ignore),
+        { discard: true }
+      );
+
+      return yield* cancelStoppedApprovals(
+        session.harness,
+        conversationId,
+        stopped,
+        brain.now()
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("stop left approvals pending").pipe(
+            Effect.annotateLogs({
+              event: "stop_cancel_failed",
+              threadId,
+              cause: error.message,
+            })
+          )
+        ),
+        Effect.asVoid
+      );
+    });
+
     const stop = Effect.fn("PiDurableHarness.stop")(function* (
       threadId: ThreadId,
       options: StopOptions
@@ -465,15 +523,22 @@ const layerNoDeps = Layer.effect(
       const session = yield* open(Option.some(threadId));
       const conversation = yield* conversationOf(session, threadId);
 
+      let run = yield* liveRun(session, threadId, conversation.id);
+
       if (options.clearQueue) {
         yield* call(Option.some(threadId), "abort", async (context) => {
           await conversation.abort(context);
         });
 
-        return;
+        return yield* cancelHeld(
+          session,
+          threadId,
+          conversation.id,
+          Option.toArray(Option.map(run, (stopped) => stopped.taskId))
+        );
       }
 
-      let run = yield* liveRun(session, threadId, conversation.id);
+      const stopped: Array<PiTaskId> = [];
       let followed = 0;
 
       while (Option.isSome(run) && followed < STOP_HANDOVERS) {
@@ -482,6 +547,7 @@ const layerNoDeps = Layer.effect(
         yield* call(Option.some(threadId), "abort-task", async (context) => {
           await session.harness.abortTask(current.taskId, context);
         });
+        stopped.push(current.taskId);
 
         // Anything but a handover (no run, the same task still ending, a run for queued inputs)
         // ends the stop.
@@ -501,6 +567,8 @@ const layerNoDeps = Layer.effect(
           })
         );
       }
+
+      return yield* cancelHeld(session, threadId, conversation.id, stopped);
     });
 
     const withdraw = Effect.fn("PiDurableHarness.withdraw")(function* (
@@ -535,7 +603,7 @@ const layerNoDeps = Layer.effect(
     const respond = Effect.fn("PiDurableHarness.respond")(function* (
       threadId: ThreadId,
       approvalId: ApprovalId,
-      decision: ApprovalDecision
+      answer: ApprovalAnswerInput
     ) {
       const session = yield* open(Option.some(threadId));
       const conversationId = yield* conversationIdOf(session, threadId);
@@ -544,7 +612,7 @@ const layerNoDeps = Layer.effect(
         session.harness,
         conversationId,
         approvalId,
-        decision,
+        { ...answer, by: { kind: "user" } },
         brain.now()
       ).pipe(Effect.mapError(fromDurable(Option.some(threadId))));
 
@@ -553,6 +621,16 @@ const layerNoDeps = Layer.effect(
           "approval_not_found",
           Option.some(threadId),
           `Approval ${approvalId} is not on thread ${threadId}. Refresh the thread; it may have been answered elsewhere.`
+        );
+      }
+
+      const refused = refusalText(outcome, approvalId);
+
+      if (Option.isSome(refused)) {
+        return yield* failure(
+          "invalid_input",
+          Option.some(threadId),
+          refused.value
         );
       }
 

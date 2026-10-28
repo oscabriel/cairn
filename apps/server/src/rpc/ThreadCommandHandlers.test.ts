@@ -1,6 +1,6 @@
 // The phase 2 inputs this brain cannot act on yet are refused with `InvalidInput` naming the field,
 // and reach no service. Each package that builds one lifts its guard and turns its test here around:
-// 2B `runtimeMode` and the decisions, 1A `reason` and `answers`, 5A `launch`, 4C `subagents`.
+// 2B `runtimeMode` and the decisions, 5A `launch`, 4C `subagents`. 1A lifted `reason` and `answers`.
 
 import { InvalidInput } from "@cairn/protocol/Errors";
 import { ApprovalId } from "@cairn/protocol/Ids";
@@ -132,7 +132,7 @@ describe("thread commands not handled yet", () => {
   );
 
   it.effect(
-    "refuses each respond field it cannot record, and passes a plain accept or decline",
+    "refuses each respond field it cannot record, and passes accept or decline with a reason or answers",
     () =>
       Effect.gen(function* () {
         reached.length = 0;
@@ -148,12 +148,6 @@ describe("thread commands not handled yet", () => {
         const refused = yield* Effect.forEach(
           [
             ...decisions.map((decision) => respond({ decision })),
-            respond({ decision: "decline", reason: Option.some("not now") }),
-            respond({
-              answers: Option.some([
-                { index: 0, picks: ["Yes"], custom: null },
-              ]),
-            }),
             respond({
               launch: Option.some({
                 budget: DEFAULT_BUDGET,
@@ -165,16 +159,25 @@ describe("thread commands not handled yet", () => {
         );
 
         const taken = yield* Effect.forEach(
-          [respond(), respond({ decision: "decline" })],
+          [
+            respond(),
+            respond({ decision: "decline" }),
+            respond({ decision: "decline", reason: Option.some("not now") }),
+            respond({
+              answers: Option.some([
+                { index: 0, picks: ["Yes"], custom: null },
+              ]),
+            }),
+          ],
           (input) => outcome(handlers.respond(input, requestId))
         );
 
         assert.deepStrictEqual(
           [refused, taken, reached],
           [
-            ["decision", "decision", "decision", "reason", "answers", "launch"],
-            ["ok", "ok"],
-            ["respond", "respond"],
+            ["decision", "decision", "decision", "launch"],
+            ["ok", "ok", "ok", "ok"],
+            ["respond", "respond", "respond", "respond"],
           ]
         );
       }).pipe(Effect.provide(TestLayer))

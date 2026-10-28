@@ -88,6 +88,13 @@
       }
     ],
     "pendingApprovals": 0,
+    "decisions": [
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      }
+    ],
     "model": {
       "provider": "faux",
       "modelId": "scripted"

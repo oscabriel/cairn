@@ -5,23 +5,37 @@
 //   the conversation, configures it and records it here, so a raced `ensureThread` lands once.
 // - `cairn.thread-meta` (conversation) names the thread and project, so the store describes itself
 //   and a lost cairn.sqlite can be re-linked. A fork starts empty: it is another thread.
-// - `cairn.approvals` (conversation) holds approval records in spike 4's shape. It is a
-//   conversation document so the thread's own view carries its approvals.
+// - `cairn.approvals` (conversation) holds decision records, version 2 (ADR 0029): spike 4's
+//   shape plus who decided (`decidedBy`), why (`reason`), the `answer` and a `payload` frozen at
+//   ask time. Version 1 records migrate on first access. It is a conversation document so the
+//   thread's own view carries its approvals.
 //
 // The approval ledger is the interface tools use to record an approval and the effect sandwich
 // around it (`started` before the effect, `done` after), so callers outside `brain/` never touch
-// pi-durable. The shape comes from spikes/4-approvals/brain.ts in this repo.
+// pi-durable. The shape comes from spikes/4-approvals/brain.ts in this repo. The host side answers
+// a record (`answerApproval`) and cancels the records a stopped run held (`cancelStoppedApprovals`).
 
-import type {
-  ApprovalDecision,
+import { TaskId } from "@cairn/protocol/Ids";
+import {
+  APPROVALS_DOCUMENT,
+  APPROVALS_VERSION,
   ApprovalStatus,
   RuntimeRequestKind,
 } from "@cairn/protocol/Policy";
+import type {
+  ApprovalDecision,
+  ApprovalRoute,
+  Decider,
+  QuestionAnswer,
+} from "@cairn/protocol/Policy";
+import { copyJson } from "@earendil-works/chord";
 import type { JsonValue } from "@earendil-works/chord";
 import type {
   ConversationId,
   Session,
+  TaskId as PiTaskId,
   ToolExecutionApi,
+  Tx,
 } from "@earendil-works/pi-durable";
 import {
   defineDoc,
@@ -40,6 +54,7 @@ import {
 
 import { durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
+import { piTaskId } from "./PiIds.ts";
 
 /** The creation receipt of one thread: the conversation it lives in, 0 until created. */
 export interface ThreadReceiptState {
@@ -80,11 +95,52 @@ export const ThreadMeta = defineDoc<ThreadMetaState>({
   checkpointWhen: () => false,
 });
 
-/** One approval: a tool call waiting on, or answered by, the user (ADR 0013). */
+/** A JSON object as a document holds it. */
+export interface JsonRecord {
+  [key: string]: JsonValue;
+}
+
+/** A question's answer as a record keeps it: the option labels picked and any custom text. */
+export interface QuestionAnswerState {
+  [key: string]: JsonValue;
+  index: number;
+  picks: Array<string>;
+  custom: string | null;
+}
+
+/** What the decider answered: the protocol's `ApprovalAnswer` as plain JSON. */
+export interface ApprovalAnswerState {
+  [key: string]: JsonValue;
+  decision: ApprovalDecision;
+  answers: Array<QuestionAnswerState> | null;
+  note: string | null;
+  /** A workflow launch's edited budget and roles (package 5A); null runs the payload as proposed. */
+  launch: JsonRecord | null;
+}
+
+/** The child a brief started, set once by its start task. */
+export interface StartedState {
+  [key: string]: JsonValue;
+  childThreadId: string;
+}
+
+/** The child's escalated question a parent's record mirrors. */
+export interface MirrorState {
+  [key: string]: JsonValue;
+  threadId: string;
+  approvalId: string;
+}
+
+/**
+ * One decision record (ADR 0013, ADR 0029): a gated tool call, a question, a brief or proposed
+ * criteria, and who decided it and why. The protocol's `ApprovalRecord` schema describes the same
+ * JSON. `payload` never changes after the ask; `status` leaves `pending` once, and every status
+ * past `pending` has `decidedBy` set.
+ */
 export interface ApprovalRecord {
   [key: string]: JsonValue;
   id: string;
-  /** The pi-durable tool task that asked; a rerun of that task finds its record again. */
+  /** The pi-durable tool task that asked; a rerun of that task finds its record again. 0 for a mirror. */
   toolTaskId: number;
   tool: string;
   kind: RuntimeRequestKind;
@@ -98,6 +154,24 @@ export interface ApprovalRecord {
   run: "started" | "done" | null;
   /** Executor's own `apr_` request id, once Executor asked; boot declines unfinished ones. */
   executorRequestId: string | null;
+  /** Frozen at ask time: a brief, questions or criteria. A plain tool call keeps `summary`. */
+  payload: JsonRecord | null;
+  answer: ApprovalAnswerState | null;
+  /** Null only while `pending`. */
+  decidedBy: Decider | null;
+  /** The user's words on Decline or Send back, a parent's reason, or a rule's text. */
+  reason: string | null;
+  /** Questions only; every other kind is `user`. */
+  route: ApprovalRoute;
+  escalatedAt: number | null;
+  /** Briefs: the revision this one replaces. */
+  supersedes: string | null;
+  /** Briefs: set once, by the start task. */
+  started: StartedState | null;
+  /** Briefs: the hash of the rendered input the child received. */
+  briefHash: string | null;
+  /** In a parent's document: the child's escalated question this record mirrors. */
+  mirrorOf: MirrorState | null;
 }
 
 /** `cairn.approvals` document state. */
@@ -106,14 +180,107 @@ export interface ApprovalsState {
   items: { [id: string]: ApprovalRecord };
 }
 
-/** `cairn.approvals`: every approval record of one conversation, by id. */
+const isJsonRecord = (value: JsonValue | undefined): value is JsonRecord =>
+  Predicate.isObject(value) && !Array.isArray(value);
+
+/** A record as version 1 of `cairn.approvals` stored it. */
+const ApprovalRecordV1 = Schema.Struct({
+  id: Schema.String,
+  toolTaskId: Schema.Finite,
+  tool: Schema.String,
+  kind: RuntimeRequestKind,
+  summary: Schema.String,
+  status: ApprovalStatus,
+  askedAt: Schema.Finite,
+  expiresAt: Schema.Finite,
+  answeredAt: Schema.NullOr(Schema.Finite),
+  run: Schema.NullOr(Schema.Literals(["started", "done"])),
+  executorRequestId: Schema.NullOr(Schema.String),
+});
+
+type ApprovalRecordV1 = typeof ApprovalRecordV1.Type;
+
+const decodeRecordV1 = Schema.decodeUnknownOption(ApprovalRecordV1);
+
+/**
+ * Who decided a version 1 record, read from what it kept. Phase 1 wrote `accepted` at ask time
+ * only for full access, with `answeredAt` equal to `askedAt`; the user's answers and the expiry
+ * came later. No phase 1 brain wrote `cancelled`, so one comes from a scripted store's stop.
+ */
+const v1Decider = (record: ApprovalRecordV1): Decider | null => {
+  const deciders: Record<ApprovalStatus, Decider | null> = {
+    pending: null,
+    accepted:
+      record.answeredAt === record.askedAt
+        ? { kind: "mode", mode: "full-access" }
+        : { kind: "user" },
+    declined: { kind: "user" },
+    revised: { kind: "user" },
+    expired: { kind: "expiry" },
+    cancelled: { kind: "system", why: "run-stopped" },
+  };
+
+  return deciders[record.status];
+};
+
+/** The answer a version 1 status implies: accept or decline, with nothing else recorded. */
+const v1Answer = (record: ApprovalRecordV1): ApprovalAnswerState | null =>
+  record.status === "accepted" || record.status === "declined"
+    ? {
+        decision: record.status === "accepted" ? "accept" : "decline",
+        answers: null,
+        note: null,
+        launch: null,
+      }
+    : null;
+
+/**
+ * `cairn.approvals` version 1 to 2, pure as pi-durable's `migrate` must be. Every record keeps its
+ * fields and gains version 2's: `payload`, `reason` and the brief and question fields are null and
+ * `route` is `user`, because version 1 held only tool calls and kept no words; `decidedBy` and
+ * `answer` are read from the status, so every status past `pending` names a decider (invariant 8
+ * of `docs/golden/thread-states.md`). A record that is not version 1's shape cannot be read by
+ * either version and is left out.
+ */
+export const migrateApprovals = (
+  value: JsonRecord,
+  fromVersion: number
+): ApprovalsState => {
+  const items: ApprovalsState["items"] = {};
+  const stored = isJsonRecord(value.items) ? value.items : {};
+
+  for (const [id, raw] of Object.entries(stored)) {
+    const record = fromVersion === 1 ? decodeRecordV1(raw) : Option.none();
+
+    if (Option.isSome(record)) {
+      items[id] = {
+        ...record.value,
+        payload: null,
+        answer: v1Answer(record.value),
+        decidedBy: v1Decider(record.value),
+        reason: null,
+        route: "user",
+        escalatedAt: null,
+        supersedes: null,
+        started: null,
+        briefHash: null,
+        mirrorOf: null,
+      };
+    }
+  }
+
+  return { items };
+};
+
+/** `cairn.approvals`: every decision record of one conversation, by id (ADR 0029). */
 export const Approvals = defineDoc<ApprovalsState>({
-  kind: "cairn.approvals",
-  version: 1,
+  kind: APPROVALS_DOCUMENT,
+  version: APPROVALS_VERSION,
   scope: "conversation",
   history: "latest",
   fork: "initial",
   initial: () => ({ items: {} }),
+  migrate: migrateApprovals,
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
 });
 
@@ -153,6 +320,30 @@ export interface ApprovalRequest {
   readonly autoAccept: boolean;
 }
 
+/** How a record settled: its status, who decided and the reason they gave. */
+export interface ApprovalSettlement {
+  readonly status: ApprovalStatus;
+  readonly decidedBy: Option.Option<Decider>;
+  readonly reason: Option.Option<string>;
+}
+
+/** A settled record's settlement. */
+export const settlementOf = (record: ApprovalRecord): ApprovalSettlement => ({
+  status: record.status,
+  decidedBy: Option.fromNullOr(record.decidedBy),
+  reason: Option.fromNullOr(record.reason),
+});
+
+/**
+ * The text a tool gives the model for a settlement: the status, then the decider's reason, so a
+ * declined call tells the model why ("declined: not before the review").
+ */
+export const settlementText = (settlement: ApprovalSettlement): string =>
+  Option.match(settlement.reason, {
+    onNone: () => settlement.status,
+    onSome: (reason) => `${settlement.status}: ${reason}`,
+  });
+
 /**
  * The approval records of one tool call. `ask` is idempotent (a rerun finds its record), and
  * `begin` returns what an earlier attempt already marked, so a rerun after `started` never runs
@@ -166,6 +357,11 @@ export interface ApprovalLedger {
   ): Effect.Effect<ApprovalRecord, ApprovalLedgerError>;
   /** Waits until the record is answered or expires (and records the expiry). */
   readonly awaitAnswer: Effect.Effect<ApprovalStatus, ApprovalLedgerError>;
+  /** As `awaitAnswer`, with who decided and why. */
+  readonly awaitSettlement: Effect.Effect<
+    ApprovalSettlement,
+    ApprovalLedgerError
+  >;
   /** Marks `started`; returns the mark an earlier attempt left, if any. */
   readonly begin: Effect.Effect<
     Option.Option<"started" | "done">,
@@ -193,7 +389,69 @@ const missing = (approvalId: string) =>
     reason: "missing_record",
   });
 
-const copy = (record: ApprovalRecord): ApprovalRecord => ({ ...record });
+const copyObject = (value: JsonRecord | null): JsonRecord | null => {
+  if (value === null) {
+    return null;
+  }
+
+  const copied = copyJson(value);
+
+  return isJsonRecord(copied) ? copied : null;
+};
+
+const copyAnswers = (
+  answers: ReadonlyArray<QuestionAnswer | QuestionAnswerState>
+): Array<QuestionAnswerState> =>
+  answers.map((answer) => ({
+    index: answer.index,
+    picks: [...answer.picks],
+    custom: answer.custom,
+  }));
+
+/** A detached deep copy of a record, safe to hold after its transaction ends. */
+export const copyRecord = (record: ApprovalRecord): ApprovalRecord => ({
+  ...record,
+  payload: copyObject(record.payload),
+  answer:
+    record.answer === null
+      ? null
+      : {
+          ...record.answer,
+          answers:
+            record.answer.answers === null
+              ? null
+              : copyAnswers(record.answer.answers),
+          launch: copyObject(record.answer.launch),
+        },
+  decidedBy: record.decidedBy === null ? null : { ...record.decidedBy },
+  started: record.started === null ? null : { ...record.started },
+  mirrorOf: record.mirrorOf === null ? null : { ...record.mirrorOf },
+});
+
+/** The fields a new record starts with past the ask's own: nothing decided, nothing started. */
+export const UNDECIDED = {
+  payload: null,
+  answer: null,
+  decidedBy: null,
+  reason: null,
+  route: "user",
+  escalatedAt: null,
+  supersedes: null,
+  started: null,
+  briefHash: null,
+  mirrorOf: null,
+} as const satisfies Partial<ApprovalRecord>;
+
+/** The decider of a record a permission mode accepted at ask time (phase 1: full access only). */
+const FULL_ACCESS: Decider = { kind: "mode", mode: "full-access" };
+
+/** The answer a record accepted at ask time carries. */
+const ACCEPTED_AT_ASK: ApprovalAnswerState = {
+  decision: "accept",
+  answers: null,
+  note: null,
+  launch: null,
+};
 
 /** The approval id of a tool task. Stable across reruns of that task. */
 export const approvalIdOf = (taskId: number) => `call-${taskId}`;
@@ -224,7 +482,7 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
       const existing = items[approvalId];
 
       if (existing !== undefined) {
-        return copy(existing);
+        return copyRecord(existing);
       }
 
       const askedAt = api.now();
@@ -241,37 +499,41 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
         answeredAt: request.autoAccept ? askedAt : null,
         run: null,
         executorRequestId: null,
+        ...UNDECIDED,
+        answer: request.autoAccept ? ACCEPTED_AT_ASK : null,
+        decidedBy: request.autoAccept ? FULL_ACCESS : null,
       };
 
       items[approvalId] = record;
 
-      return copy(record);
+      return copyRecord(record);
     });
 
   const expire = change("approvals.expire", (items) => {
     const current = items[approvalId];
 
     if (current === undefined) {
-      return Option.none<ApprovalStatus>();
+      return Option.none<ApprovalSettlement>();
     }
 
     if (current.status === "pending") {
       current.status = "expired";
       current.answeredAt = api.now();
+      current.decidedBy = { kind: "expiry" };
     }
 
-    return Option.some(current.status);
+    return Option.some(settlementOf(current));
   });
 
-  // The first status other than `pending` this record takes, from a watch on the conversation's
-  // approvals. The listener only hands values on; the stream's scope stops the watch.
-  const answered = Stream.callback<ApprovalStatus, ApprovalLedgerError>(
+  // The first settlement this record reaches, from a watch on the conversation's approvals. The
+  // listener only hands values on; the stream's scope stops the watch.
+  const answered = Stream.callback<ApprovalSettlement, ApprovalLedgerError>(
     (queue) => {
       const offer = (value: Readonly<ApprovalsState> | null) => {
-        const status = value?.items[approvalId]?.status;
+        const record = value?.items[approvalId];
 
-        if (status !== undefined && status !== "pending") {
-          Queue.offerUnsafe(queue, status);
+        if (record !== undefined && record.status !== "pending") {
+          Queue.offerUnsafe(queue, settlementOf(record));
         }
       };
 
@@ -305,7 +567,7 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
     Effect.map((doc) => Option.fromUndefinedOr(doc?.items[approvalId]))
   );
 
-  const awaitAnswer = Effect.gen(function* () {
+  const awaitSettlement = Effect.gen(function* () {
     const record = yield* read;
 
     if (Option.isNone(record)) {
@@ -313,7 +575,7 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
     }
 
     if (record.value.status !== "pending") {
-      return record.value.status;
+      return settlementOf(record.value);
     }
 
     const remaining = Math.max(0, record.value.expiresAt - api.now());
@@ -334,6 +596,11 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
       Effect.mapError(() => missing(approvalId))
     );
   });
+
+  const awaitAnswer = Effect.map(
+    awaitSettlement,
+    (settlement) => settlement.status
+  );
 
   // Applies `apply` to this call's record; fails when it has no record.
   const update = <A>(operation: string, apply: (record: ApprovalRecord) => A) =>
@@ -368,21 +635,114 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
     record.run = "done";
   });
 
-  return { approvalId, ask, awaitAnswer, begin, noteExecutorRequest, finish };
+  return {
+    approvalId,
+    ask,
+    awaitAnswer,
+    awaitSettlement,
+    begin,
+    noteExecutorRequest,
+    finish,
+  };
 };
 
-/** How an answer landed: it changed a pending record, the record was already settled, or none. */
-export type AnswerOutcome = "answered" | "already_settled" | "not_found";
+/** An answer to one record from the host side: the decision, who made it, and their words. */
+export interface RecordAnswer {
+  readonly decision: ApprovalDecision;
+  readonly by: Decider;
+  readonly reason: Option.Option<string>;
+  readonly answers: Option.Option<ReadonlyArray<QuestionAnswer>>;
+}
 
 /**
- * Answers one approval from the host side, in one transaction. A record that is no longer pending
- * stays as it was, so a late or repeated answer cannot run a declined call.
+ * How an answer landed: it changed a pending record, the record was already settled, there is no
+ * such record, or the record cannot take it (`answers` on a record that asked no questions,
+ * `revise` on anything but a brief).
  */
+export type AnswerOutcome =
+  | "answered"
+  | "already_settled"
+  | "not_found"
+  | "refused_answers"
+  | "refused_revise";
+
+/** Why a record refused an answer, in the words both harnesses fail with; none when it took it. */
+export const refusalText = (
+  outcome: AnswerOutcome,
+  approvalId: string
+): Option.Option<string> => {
+  if (outcome === "refused_answers") {
+    return Option.some(
+      `Approval ${approvalId} asked no questions, so it takes no answers. Answer it with a decision alone.`
+    );
+  }
+
+  return outcome === "refused_revise"
+    ? Option.some(
+        `Approval ${approvalId} is not a brief, so it cannot be sent back. Approve or decline it.`
+      )
+    : Option.none();
+};
+
+/** The status a decision moves a pending record to. */
+const STATUS_OF: Readonly<Record<ApprovalDecision, ApprovalStatus>> = {
+  accept: "accepted",
+  accept_for_thread: "accepted",
+  accept_sample: "accepted",
+  decline: "declined",
+  revise: "revised",
+};
+
+/** Whether a record asked questions, so it can take `answers`. */
+const asksQuestions = (record: ApprovalRecord) =>
+  record.payload?.type === "questions";
+
+/**
+ * Applies an answer to one record in place: the status, `answer`, `decidedBy`, `reason` and
+ * `answeredAt` together, and nothing else (the payload stays as asked). A record that is no longer
+ * pending stays as it was, so a late or repeated answer cannot run a declined call. Both harnesses
+ * answer through this, pi-durable's inside one transaction.
+ */
+export const applyAnswer = (
+  record: ApprovalRecord,
+  answer: RecordAnswer,
+  now: number
+): AnswerOutcome => {
+  if (record.status !== "pending") {
+    return "already_settled";
+  }
+
+  if (Option.isSome(answer.answers) && !asksQuestions(record)) {
+    return "refused_answers";
+  }
+
+  if (answer.decision === "revise" && record.kind !== "brief") {
+    return "refused_revise";
+  }
+
+  record.status = STATUS_OF[answer.decision];
+  record.answeredAt = now;
+  record.decidedBy = { ...answer.by };
+  record.reason = Option.getOrNull(answer.reason);
+  record.answer = {
+    decision: answer.decision,
+    answers: Option.match(answer.answers, {
+      onNone: () => null,
+      onSome: copyAnswers,
+    }),
+    note: null,
+    launch: null,
+  };
+
+  return "answered";
+};
+
+/** Answers one record from the host side, in one transaction (`applyAnswer`). */
 export const answerApproval = (
   session: Pick<Session, "commit">,
   conversationId: ConversationId,
   approvalId: string,
-  decision: ApprovalDecision,
+  answer: RecordAnswer,
   now: number
 ): Effect.Effect<AnswerOutcome, DurableCallError> =>
   durable(
@@ -392,17 +752,96 @@ export const answerApproval = (
         const { items } = await tx.doc(Approvals, conversationId);
         const record = items[approvalId];
 
-        if (record === undefined) {
-          return "not_found";
+        return record === undefined
+          ? "not_found"
+          : applyAnswer(record, answer, now);
+      }, context)
+  );
+
+/**
+ * Whether a run holds this record: a pending tool call or question its own tool task waits on.
+ * Briefs and criteria wait for the user with no run, and an escalated question or a mirror is
+ * answered across threads, so a stop leaves those pending.
+ */
+export const heldByRun = (record: ApprovalRecord) =>
+  record.status === "pending" &&
+  record.toolTaskId > 0 &&
+  record.kind !== "brief" &&
+  record.kind !== "criteria" &&
+  record.escalatedAt === null &&
+  record.mirrorOf === null;
+
+/** A stored task id as pi-durable types it. */
+const piTaskOf = (id: number) => piTaskId(TaskId.make(id));
+
+/** Marks a held record cancelled by a stop, in place. */
+export const cancelRecord = (record: ApprovalRecord, now: number) => {
+  record.status = "cancelled";
+  record.answeredAt = now;
+  record.decidedBy = { kind: "system", why: "run-stopped" };
+};
+
+/** How many owners up a tool task may sit below its run's task (a tool, a nested call). */
+const OWNER_HOPS = 8;
+
+/** Whether `taskId` is one of `stopped` or owned, through any chain, by one of them. */
+const ownedByStopped = async (
+  tx: Tx,
+  taskId: number,
+  stopped: ReadonlySet<number>
+): Promise<boolean> => {
+  let current: Option.Option<number> = Option.some(taskId);
+
+  for (let hop = 0; hop <= OWNER_HOPS && Option.isSome(current); hop += 1) {
+    if (stopped.has(current.value)) {
+      return true;
+    }
+
+    // Each hop reads the owner the last one named.
+    // oxlint-disable-next-line no-await-in-loop
+    const task = await tx.task(piTaskOf(current.value));
+
+    current = Option.map(Option.fromUndefinedOr(task?.owner), Number);
+  }
+
+  return false;
+};
+
+/**
+ * Cancels, in one transaction, every pending record a stopped run held: those whose tool task is
+ * one of `stopped` (the run's tasks) or owned by one. Each records `cancelled` with `decidedBy`
+ * system `run-stopped`, so the row stops naming a request nobody can answer. Returns the ids.
+ */
+export const cancelStoppedApprovals = (
+  session: Pick<Session, "commit">,
+  conversationId: ConversationId,
+  stopped: ReadonlyArray<PiTaskId>,
+  now: number
+): Effect.Effect<ReadonlyArray<string>, DurableCallError> =>
+  durable(
+    "approvals.cancel",
+    async (context) =>
+      await session.commit(async (tx) => {
+        const { items } = await tx.doc(Approvals, conversationId);
+        const runTasks = new Set(stopped.map(Number));
+
+        const held = Object.values(items).filter(heldByRun);
+
+        const owned = await Promise.all(
+          held.map(
+            async (record) =>
+              await ownedByStopped(tx, record.toolTaskId, runTasks)
+          )
+        );
+
+        const cancelled = held.filter(
+          (_record, index) => owned[index] === true
+        );
+
+        for (const record of cancelled) {
+          cancelRecord(record, now);
         }
 
-        if (record.status !== "pending") {
-          return "already_settled";
-        }
-
-        record.status = decision === "accept" ? "accepted" : "declined";
-        record.answeredAt = now;
-
-        return "answered";
+        return cancelled.map((record) => record.id);
       }, context)
   );

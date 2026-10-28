@@ -1,6 +1,6 @@
 // The tools conformance scenarios call, on both sides: `echo` returns its `text`; `gate` asks for an
-// approval through the approval ledger and answers with the decision (`accepted` succeeds, anything
-// else is an error result). Both are replay-safe, so a restart reruns them: `gate` then finds its
+// approval through the approval ledger and answers with the decision and the decider's reason
+// (`accepted` succeeds, anything else is an error result: "declined: not now"). Both are replay-safe, so a restart reruns them: `gate` then finds its
 // record and waits again. The pi-durable side installs this extension; the scripted side has the
 // same two tools as a ScriptedTools layer.
 
@@ -8,7 +8,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Layer, Predicate } from "effect";
 
-import { approvalLedger } from "../CairnDocs.ts";
+import { approvalLedger, settlementText } from "../CairnDocs.ts";
 import { ExtensionOrder } from "../Extensions.ts";
 import type { CairnExtension } from "../Extensions.ts";
 import { ScriptedTools } from "../ScriptedHarness.ts";
@@ -36,7 +36,7 @@ const gate = defineTool({
   execute: async (_args, api, context) => {
     const ledger = approvalLedger(api);
 
-    const status = await Effect.runPromise(
+    const settlement = await Effect.runPromise(
       Effect.gen(function* () {
         yield* ledger.ask({
           tool: "gate",
@@ -46,14 +46,14 @@ const gate = defineTool({
           autoAccept: false,
         });
 
-        return yield* ledger.awaitAnswer;
+        return yield* ledger.awaitSettlement;
       }),
       { signal: context.abortSignal }
     );
 
     return {
-      output: [{ type: "text", text: status }],
-      isError: status !== "accepted",
+      output: [{ type: "text", text: settlementText(settlement) }],
+      isError: settlement.status !== "accepted",
     };
   },
 });
@@ -83,9 +83,12 @@ export const scriptedConformanceTools = Layer.succeed(
         }
 
         if (call.name === "gate") {
-          const status = yield* api.ask("Open the gate");
+          const settlement = yield* api.ask("Open the gate");
 
-          return { text: status, isError: status !== "accepted" };
+          return {
+            text: settlementText(settlement),
+            isError: settlement.status !== "accepted",
+          };
         }
 
         return { text: `Tool ${call.name} not found`, isError: true };

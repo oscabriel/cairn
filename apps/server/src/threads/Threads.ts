@@ -308,7 +308,11 @@ export class Threads extends Context.Service<
       const respond = Effect.fn("Threads.respond")(function* (
         input: RespondInput
       ) {
-        yield* seam.respond(input.threadId, input.approvalId, input.decision);
+        yield* seam.respond(input.threadId, input.approvalId, {
+          decision: input.decision,
+          reason: input.reason,
+          answers: input.answers,
+        });
       });
 
       return Threads.of({ send, stop, withdraw, configure, respond });

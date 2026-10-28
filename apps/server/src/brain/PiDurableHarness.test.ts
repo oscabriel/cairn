@@ -258,7 +258,13 @@ describe("PiDurableHarness stop", () => {
           // The stop has read the run's task; before its abort lands, the approval ends the tool
           // round and the run hands over to the next generation.
           const aborted = yield* holdNextAbort(
-            seam.respond(THREAD_ID, asked.id, "accept").pipe(Effect.orDie)
+            seam
+              .respond(THREAD_ID, asked.id, {
+                decision: "accept",
+                reason: Option.none(),
+                answers: Option.none(),
+              })
+              .pipe(Effect.orDie)
           );
 
           yield* seam.stop(THREAD_ID, { clearQueue: false });

@@ -86,6 +86,7 @@ export type DerivedFields = Pick<
   | "usageLimitResetAt"
   | "waitingFor"
   | "pendingRuntimeRequest"
+  | "pendingCount"
   | "latestVisibleMessage"
   | "latestUserMessageAt"
   | "parkedTaskIds"
@@ -102,7 +103,7 @@ export interface ThreadProjection {
   readonly changed: Partial<DerivedFields>;
   /** How the newest run ended, when one ended since the projection was loaded. */
   readonly outcome: Option.Option<RunOutcome>;
-  /** Every pending approval, oldest first; the row shows the first. */
+  /** Every pending approval, oldest first; the row shows the first and counts them (`pendingCount`). */
   readonly approvals: ReadonlyArray<PendingRuntimeRequest>;
 }
 
@@ -140,6 +141,7 @@ export const projectionOf = (
     usageLimitResetAt: shell.usageLimitResetAt,
     waitingFor: shell.waitingFor,
     pendingRuntimeRequest: shell.pendingRuntimeRequest,
+    pendingCount: shell.pendingCount,
     latestVisibleMessage: shell.latestVisibleMessage,
     latestUserMessageAt: shell.latestUserMessageAt,
     parkedTaskIds: shell.parkedTaskIds,
@@ -193,7 +195,10 @@ const withApprovals = (
 ): ThreadProjection =>
   withFields(
     { ...projection, approvals },
-    { pendingRuntimeRequest: Option.fromUndefinedOr(approvals[0]) }
+    {
+      pendingRuntimeRequest: Option.fromUndefinedOr(approvals[0]),
+      pendingCount: approvals.length,
+    }
   );
 
 const preview = (text: string) => text.slice(0, PREVIEW_LIMIT);
@@ -413,6 +418,7 @@ const same = {
   pendingRuntimeRequest: Schema.toEquivalence(
     shellFields.pendingRuntimeRequest
   ),
+  pendingCount: Schema.toEquivalence(shellFields.pendingCount),
   latestVisibleMessage: Schema.toEquivalence(shellFields.latestVisibleMessage),
   parkedTaskIds: Schema.toEquivalence(shellFields.parkedTaskIds),
 };
@@ -493,6 +499,11 @@ export const patchFor = (
       row.pendingRuntimeRequest,
       fields.pendingRuntimeRequest
     ),
+    pendingCount: diff(
+      same.pendingCount,
+      row.pendingCount,
+      fields.pendingCount
+    ),
     latestVisibleMessage: diff(
       same.latestVisibleMessage,
       row.latestVisibleMessage,
@@ -522,6 +533,7 @@ export const patchFor = (
     Option.isSome(patch.usageLimitResetAt),
     Option.isSome(patch.waitingFor),
     Option.isSome(patch.pendingRuntimeRequest),
+    Option.isSome(patch.pendingCount),
     Option.isSome(patch.latestVisibleMessage),
     Option.isSome(patch.latestUserMessageAt),
     Option.isSome(patch.parkedTaskIds),

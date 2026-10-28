@@ -20,7 +20,7 @@ import {
   ThreadId,
 } from "@cairn/protocol/Ids";
 import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
-import type { ApprovalDecision } from "@cairn/protocol/Policy";
+import type { ApprovalDecision, QuestionAnswer } from "@cairn/protocol/Policy";
 import { RuntimeRequestKind, ApprovalStatus } from "@cairn/protocol/Policy";
 import { RunFailureClass } from "@cairn/protocol/Shell";
 import type {
@@ -139,6 +139,15 @@ export interface EntryImage {
 
 /** One frame of the thread stream: a fresh projected snapshot, then ops against it. */
 export type ThreadFrame = ThreadStreamItem;
+
+/** The user's answer to one approval, as `thread.respond` carries it (ADR 0029). */
+export interface ApprovalAnswerInput {
+  readonly decision: ApprovalDecision;
+  /** The user's words: on Decline they reach the model with the tool's result. */
+  readonly reason: Option.Option<string>;
+  /** A question record's answers; any other kind refuses them. */
+  readonly answers: Option.Option<ReadonlyArray<QuestionAnswer>>;
+}
 
 /** A thread whose run, queue, approval or task needs attention at boot. */
 export interface LiveThreadState {
@@ -288,11 +297,14 @@ export class HarnessSeam extends Context.Service<
       threadId: ThreadId,
       submissionId: SubmissionId
     ): Effect.Effect<WithdrawResult, HarnessError>;
-    /** Answers one approval; an answered one stays as it was. */
+    /**
+     * Answers one approval as the user (`decidedBy` user), with the user's reason and answers; an
+     * answered one stays as it was.
+     */
     respond(
       threadId: ThreadId,
       approvalId: ApprovalId,
-      decision: ApprovalDecision
+      answer: ApprovalAnswerInput
     ): Effect.Effect<void, HarnessError>;
     /** Appends a passive entry that never starts a run, idempotent by `requestId`. */
     write(

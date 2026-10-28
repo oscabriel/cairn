@@ -82,6 +82,20 @@ const send = (response: ServerResponse, status: number, body: Answer) => {
   response.end(JSON.stringify(body));
 };
 
+/**
+ * `realFetch` with OpenAI's sign-in host sent to the fake at `base`, for a process (a judge's
+ * brain) other than the one the fake runs in.
+ */
+export const redirectFetch =
+  (base: string, realFetch: typeof fetch): typeof fetch =>
+  async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+
+    return url.startsWith(AUTH_ORIGIN)
+      ? await realFetch(`${base}${url.slice(AUTH_ORIGIN.length)}`, init)
+      : await realFetch(input, init);
+  };
+
 /** How long the fake's access tokens live. pi-ai refreshes one with less than five minutes left. */
 export interface FakeCodexAuthOptions {
   /** Seconds an access token from a sign-in lives; one hour by default. */
@@ -219,19 +233,10 @@ export const startFakeCodexAuth = async (
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   const address = server.address() as AddressInfo;
   const base = `http://127.0.0.1:${address.port}`;
-  const realFetch = globalThis.fetch;
-
-  const redirected: typeof fetch = async (input, init) => {
-    const url = input instanceof Request ? input.url : String(input);
-
-    return url.startsWith(AUTH_ORIGIN)
-      ? await realFetch(`${base}${url.slice(AUTH_ORIGIN.length)}`, init)
-      : await realFetch(input, init);
-  };
 
   return {
     base,
-    fetch: redirected,
+    fetch: redirectFetch(base, globalThis.fetch),
     log,
     approve: () => {
       approved = true;

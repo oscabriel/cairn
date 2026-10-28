@@ -13,7 +13,10 @@
 #
 # - the two records are identical (no entry created, removed, resized, touched or re-moded),
 # - no `.lock` entry exists in the agent dir,
-# - the brain process started no child process (no npm, no git, no `!command` key),
+# - the brain process started no child process (no npm, no git, no `!command` key) other than the
+#   one `flock` that holds Cairn's OAuth lock (the store is built as the deployed brain's is),
+# - openai-codex is not ready: Cairn's own OAuth store is empty here, and pi's Codex login is
+#   never read,
 # - the listing has opencode-go models and no anthropic model,
 # - the turn completed (unless --no-turn).
 #
@@ -76,11 +79,27 @@ const { HarnessSettings } = await import(`${src}/models/HarnessSettings.ts`);
 const { HarnessBoot, PiDurableBrain } = await import(`${src}/AppLayer.ts`);
 const { HarnessSeam } = await import(`${src}/brain/HarnessSeam.ts`);
 const { ThreadId, ProjectId } = await import("@cairn/protocol/Ids");
+const { OAuthStore } = await import(`${src}/models/OAuthStore.ts`);
+const { Database } = await import(`${src}/db/Database.ts`);
+const { migrations } = await import(`${src}/db/Migrations.ts`);
+const { OAuthCredentials0007 } = await import(`${src}/db/migrations/0007OAuthCredentials.ts`);
+const { NodeServices } = await import("@effect/platform-node");
 
-const config = ServerConfig.layerWith({ dataDir: process.env.CAIRN_JUDGE_DATA });
+const data = process.env.CAIRN_JUDGE_DATA;
+const config = ServerConfig.layerWith({ dataDir: data });
 const pi = PiConfig.layer.pipe(Layer.provide(config));
+// The OAuth store of Cairn itself, built as on the deployed brain, over the throwaway data dir:
+// Codex is read from it, never from the auth.json of pi.
+const oauth = OAuthStore.layerWith(`${data}/state/oauth.lock`).pipe(
+  Layer.provide(Database.layer({
+    filename: `${data}/cairn.sqlite`,
+    migrations: { ...migrations, "0007_OAuthCredentials": OAuthCredentials0007 },
+  })),
+  Layer.provide(NodeServices.layer)
+);
 const models = PiModelSource.layerNoDeps.pipe(
   Layer.provide(HarnessSettings.layerNoDeps),
+  Layer.provide(oauth),
   Layer.provideMerge(pi)
 );
 const brain = PiDurableBrain({ models }).pipe(Layer.provide(config));
@@ -105,6 +124,7 @@ const program = Effect.gen(function* () {
 
   const statuses = yield* source.providers;
   yield* report(`providers: ${statuses.map((s) => `${s.provider}=${s.state}`).join(" ")}`);
+  const codex = statuses.find((s) => s.provider === "openai-codex")?.state ?? "absent";
 
   const resolveStart = Date.now();
   const snapshot = yield* piConfig.reload;
@@ -136,7 +156,7 @@ const program = Effect.gen(function* () {
         threadId,
         projectId: ProjectId.make("prj_pi_readonly_judge"),
         model: { provider: pick.provider, modelId: pick.modelId },
-        thinkingLevel: source.thinkingFor(pick, Option.some("minimal")),
+        thinkingLevel: pick.thinkingLevels.includes("minimal") ? "minimal" : (pick.thinkingLevels[0] ?? "off"),
         cwd: process.env.CAIRN_JUDGE_DATA,
         instructions: Option.none(),
       });
@@ -153,7 +173,7 @@ const program = Effect.gen(function* () {
     }
   }
 
-  return { opencode: opencode.length, anthropic: anthropic.length, turn };
+  return { opencode: opencode.length, anthropic: anthropic.length, codex, turn };
 });
 
 const result = await Effect.runPromise(
@@ -172,7 +192,10 @@ else {
   if (result.anthropic > 0) failures.push("an anthropic model was listed");
   if (process.env.CAIRN_JUDGE_TURN === "1" && result.turn !== "completed") failures.push(`the turn ended ${result.turn}`);
 }
-if (spawned.length > 0) failures.push("the brain started a child process");
+if (result !== undefined && result.codex === "ready") failures.push("openai-codex is ready from the pi login, with the Cairn OAuth store empty");
+// The OAuth store holds its lock through one `flock` child, by design; anything else fails.
+if (spawned.some((name) => name !== "flock")) failures.push("the brain started a child process other than the OAuth lock");
+if (spawned.filter((name) => name === "flock").length !== 1) failures.push("the OAuth store did not take its lock");
 for (const failure of failures) console.log(`FAIL ${failure}`);
 process.exit(failures.length);
 '

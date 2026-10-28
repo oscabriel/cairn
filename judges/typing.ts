@@ -47,6 +47,7 @@ import {
   HarnessBoot,
   withCatalog,
 } from "../apps/server/src/AppLayer.ts";
+import { EventReactors } from "../apps/server/src/brain/EventReactors.ts";
 import { HarnessSeam } from "../apps/server/src/brain/HarnessSeam.ts";
 import { ModelSource } from "../apps/server/src/brain/ModelSource.ts";
 import {
@@ -143,9 +144,9 @@ const FastModel = Layer.succeed(
   })
 );
 
-const Harness = Layer.succeed(
-  HarnessBoot,
-  HarnessBoot.of({ resume: Effect.void })
+const Harness = Layer.mergeAll(
+  Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
+  EventReactors.layerOff
 ).pipe(
   Layer.provideMerge(ScriptedHarness.layerNoDeps),
   Layer.provide(ScriptedStore.layer),

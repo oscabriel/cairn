@@ -13,6 +13,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option, Result, Stream } from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { PiHost } from "../pi-host/PiHost.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { ExtensionSet } from "./ExtensionSet.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
@@ -21,7 +22,10 @@ import { PiDurableHarness } from "./PiDurableHarness.ts";
 
 const harness = PiDurableHarness.layer.pipe(
   Layer.provideMerge(
-    ExtensionSet.layer.pipe(Layer.provide(ExecutorLink.layerDisabled))
+    ExtensionSet.layer.pipe(
+      Layer.provide(ExecutorLink.layerDisabled),
+      Layer.provide(PiHost.layerEmpty)
+    )
   ),
   Layer.provideMerge(
     ModelSource.layerFaux({ tokensPerSecond: 4000, settings: {} })

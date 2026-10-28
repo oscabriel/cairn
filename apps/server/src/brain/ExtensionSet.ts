@@ -6,6 +6,7 @@ import { Effect, Layer } from "effect";
 
 import { ProviderRequestLog } from "../attachments/ProviderRequestExtension.ts";
 import { ExecutorExtension } from "../executor/ExecutorExtension.ts";
+import { PiHost } from "../pi-host/PiHost.ts";
 import { skillExtensionSources } from "../skills/SkillsLayer.ts";
 import { BridgeCwd } from "./BridgeCwdExtension.ts";
 import { CodeMode } from "./CodeMode.ts";
@@ -17,7 +18,12 @@ const production: ReadonlyArray<
   Effect.Effect<
     CairnExtension,
     never,
-    CodingTools | CodeMode | ProviderRequestLog | ExecutorExtension | BridgeCwd
+    | CodingTools
+    | CodeMode
+    | ProviderRequestLog
+    | ExecutorExtension
+    | BridgeCwd
+    | PiHost
   >
 > = [
   CodingTools.useSync((tools) => tools.extension),
@@ -25,12 +31,15 @@ const production: ReadonlyArray<
   ...skillExtensionSources,
   ExecutorExtension.useSync((executor) => executor.extension),
   BridgeCwd.useSync((bridgeCwd) => bridgeCwd.extension),
+  PiHost.useSync((host) => host.extension),
   ProviderRequestLog.useSync((log) => log.extension),
 ];
 
 // The Executor proxies need an `ExecutorLink` from the composition root: the real one in
 // `main.ts` only, the fake in dev and judge brains, the disabled one in tests. `BridgeCwd.layer`
-// is the same reference `AppLayer` gives the bridge stop hook, so the memo map builds one.
+// is the same reference `AppLayer` gives the bridge stop hook, so the memo map builds one. `PiHost`
+// is left to the composition root too: `PiHost.layer` (the user's pi packages) in `main.ts`,
+// `PiHost.layerEmpty` (the same empty `cairn.pi-tools` extension) everywhere else.
 const dependencies = Layer.mergeAll(
   CodingTools.layer,
   CodeMode.layer,

@@ -17,6 +17,7 @@ import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
+import { PiHost } from "./pi-host/PiHost.ts";
 
 const { values } = parseArgs({
   options: { models: { type: "string", default: "scripted" } },
@@ -41,6 +42,7 @@ const App =
       );
 
 const DevLayer = App.pipe(
+  Layer.provide(PiHost.layerEmpty),
   Layer.provide(ExecutorLink.layerFake),
   Layer.provide(Identity.layerLoopbackOwner),
   Layer.provide(ServerConfig.layerLocal),

@@ -55,6 +55,7 @@ import { Identity, IdentityRefused, USER_HEADER } from "./http/Identity.ts";
 import { BootJson } from "./http/Static.ts";
 import { PeerPath } from "./load/PeerPath.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
+import { PiHost } from "./pi-host/PiHost.ts";
 import { PushLayer } from "./push/PushLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
@@ -304,6 +305,7 @@ const GatedApp = Layer.mergeAll(
   ),
   Layer.provide(ScriptedBrain),
   Layer.provide(ExecutorLink.layerDisabled),
+  Layer.provide(PiHost.layerEmpty),
   Layer.provide(TestIdentity),
   Layer.provide(
     ServerConfig.layerWith({
@@ -426,6 +428,7 @@ const brainFor = (dataDir: string) =>
     models: ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} }),
   }).pipe(
     Layer.provideMerge(ExecutorLink.layerDisabled),
+    Layer.provide(PiHost.layerEmpty),
     Layer.provideMerge(
       ShellLayer.pipe(
         Layer.provideMerge(ProjectorSignals.layer),

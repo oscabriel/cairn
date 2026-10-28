@@ -35,6 +35,7 @@ import { defineExtension, section } from "@earendil-works/pi-durable";
 import { Context, Effect, FiberSet, Layer, Option, Schema } from "effect";
 
 import { errorText } from "../brain/Durable.ts";
+import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { ServerConfig } from "../Config.ts";
 import { PiConfig } from "../models/PiConfig.ts";
@@ -67,12 +68,6 @@ export const PI_TOOLS_EXTENSION = "cairn.pi-tools";
 
 /** The prompt section the surviving tools' snippets and guidelines render into. */
 export const PI_TOOLS_SECTION = "pi-tools";
-
-/**
- * Where the extension installs: after the bridge's cwd hook, before judge extensions. Becomes
- * `ExtensionOrder.piTools` when the integrator adds that key to `Extensions.ts`.
- */
-export const PI_TOOLS_ORDER = 800;
 
 /** pi-coding-agent could not be loaded. Boot stops; reinstall the brain's dependencies. */
 export class PiHostError extends Schema.TaggedError<PiHostError>()(
@@ -664,7 +659,7 @@ export class PiHost extends Context.Service<
         });
 
         return PiHost.of({
-          extension: { order: PI_TOOLS_ORDER, extension },
+          extension: { order: ExtensionOrder.piTools, extension },
           packages,
           folders: (name) => pools.get(name)?.folders() ?? [],
         });
@@ -691,7 +686,7 @@ export class PiHost extends Context.Service<
     PiHost,
     PiHost.of({
       extension: {
-        order: PI_TOOLS_ORDER,
+        order: ExtensionOrder.piTools,
         extension: defineExtension({ name: PI_TOOLS_EXTENSION, tools: [] }),
       },
       packages: [],

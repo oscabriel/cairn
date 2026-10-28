@@ -18,6 +18,7 @@ import { Attachments0003 } from "./migrations/0003Attachments.ts";
 import { Executor0004 } from "./migrations/0004Executor.ts";
 import { Push0005 } from "./migrations/0005Push.ts";
 import { ExecutorSignal0006 } from "./migrations/0006ExecutorSignal.ts";
+import { OAuthCredentials0007 } from "./migrations/0007OAuthCredentials.ts";
 
 /** Every cairn.sqlite migration, keyed <NNNN>_<Name>; one id space. */
 export const migrations: MigrationRecord = {
@@ -27,4 +28,5 @@ export const migrations: MigrationRecord = {
   "0004_Executor": Executor0004,
   "0005_Push": Push0005,
   "0006_ExecutorSignal": ExecutorSignal0006,
+  "0007_OAuthCredentials": OAuthCredentials0007,
 };

@@ -87,3 +87,71 @@ The package's own deviations are in its review record; the ones later packages r
 ### Left for the user
 
 - Nothing to do now: no brain is deployed in this step. When the next deploy happens, the web build and the brain must ship together, because the protocol moved from 1 to 2. A page still on protocol 1 is refused with 426 and reloads.
+
+## Wave 1 integration
+
+Integrated on 2026-10-28 on `main`.
+
+### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| 1A Decision record | `phase2/1A` | `2ebf9ea` | done, merged as `d7585ed` |
+| 1B Durable events | `phase2/1B` | `a73c6ef` | done, merged as `e671f91` |
+| 1C Prices, families and model health | `phase2/1C` | `141dba1` | left out: open blocking finding |
+| 1D OAuth store and the Codex login | `phase2/1D` | `ec2f77b` | done, merged as `88db786`; the user's login is still to come |
+| 1E One thread-state function | `phase2/1E` | `0c4f39c` | done, merged as `2de14c9` |
+| 1F Workflow script and plan | `phase2/1F-r2` | `0c44caa` | done, merged as `26ec31f` |
+| 1G porch changes | none | none | dropped in 1.0 |
+| 1H Tools-only pi host | `phase2/1H` | `2176229` | done, merged as `b0044be` |
+
+Each branch merged with `--no-ff` in the order A, B, D, E, F, H, with no conflicts. Every builder had reset its branch to `e1232ec` (step 1.0 integrated) before working. 1F's review rounds live on `phase2/1F-r2`, which contains `phase2/1F` and `phase2/1F-fixes`; `phase2/1F` was fast-forwarded to it. The stale package worktrees of 1A, 1B and 1C (`wf_25b03501-c51-1`, `-2`, `-3`), whose indexes held reversals of later commits, were reset to their branch heads.
+
+**1C is not merged.** Its review has one open blocking finding: on `phase2/1C` alone, OpenCode Go and Codex limits become `usage_limit`, so the web Limited banner names the Claude plan window on an OpenCode Go thread, and `ClaudeSignals.isUsageLimited` starts a Claude probe for any plan's limit and can overwrite a Codex or Go thread's reset time with Claude's. The fix is held on `phase2/1C-seam` (`2a75839`): `RunFailureInfo.plan` in `HarnessSeam.ts`, the `ClaudeSignals` filter on `plan` `claude`, and plan-neutral banner wording. 1C lands only together with that commit, once the user says yes to the seam change (or 1C folds it in and is approved). Until then migration 0008 stays unregistered and `ModelHealth` has no layer or feed.
+
+### Integration judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 82 s: fmt, lint, typecheck, 1,481 tests. No dependency changed (only two fixture `package.json` files under `pi-host/fixtures/`), so `pnpm install --frozen-lockfile` over the existing `node_modules`. |
+| `judges/events-kill.sh` (1B, on main) | pass | kills case: 12 kills, 300 events, 118 faults injected, every (event, reactor) handled once (count 250, meter 150, spawn 200), 200 tasks, 11 s. Rotation: 10 kills, 111 faults, log ended in `2999-11`, 9.3 s. Control failed rightly by duplicates only (count 45, meter 38, spawn 44 handled more than once, up to 5 times; 0 missing). The kills case counted 201 outside effects for 200 tasks: a task's outside effect is at least once across a kill, which the judge allows. $0. |
+| `node judges/codex-login.ts` (1D) | pass | 5 of 5: sign-in (1 exchange), kill-poll (0 exchanges, next brain holds the lock), rotation (3 refreshes, 0 reuses), second brain (no lock, 0 refreshes while held; after `kill -9` 0 reuses), control caught (2 reuses). 7.6 s, $0. |
+| `judges/pi-readonly.sh`, now with the real `PiHost.layer` | pass | 62,151 agent-dir entries identical before and after; the host loaded pi-web-access 0.45.0 (4 tools) and @ff-labs/pi-fff 0.11.0 (2 tools); 1 child (the OAuth lock's `flock`); opencode-go=ready, anthropic=refused, openai-codex=missing; one real turn on opencode-go/minimax-m3 in 1,972 ms, well under a cent on the OpenCode Go plan. |
+| `node judges/durability.ts --no-page` (faux windows, the judge brain with the new boot repair, reactors and close hook) | pass | 10 of 10. Kill to up 1,234 to 1,393 ms, up to converged 5 to 12 ms; approval-parked accepted once after the restart; kill-six 1,180 to 1,235 ms; sigterm-six 3,064 to 3,084 ms (phase 1's last runs: 3,059 to 3,067). 1 min 51 s. |
+| `judges/shutdown.sh` | pass | closing 7 and closed 7, worst closed 2,014 ms, 0 `shutdown_slow`; systemd stops worst 2,034 ms; kill-six restarts 1,234 to 1,389 ms; control: the stubborn stop took 3,179 ms and systemd killed it. |
+| `judge-main.ts` boot on a throwaway port | pass | boot repairs in order: sweep attachment uploads, executor-sweep, cancel abandoned approvals, retry-parked-approval-waits, resume interrupted launches, checkpoint repair, start event reactors; then `event_reactors_started` and `ready`; SIGTERM gave `closing` and `closed`. |
+| `node judges/dev-smoke.ts` (scripted brain with `EventReactors.layerOff` and the empty pi host) | pass | Live after 2,737 ms; the demo thread grew from 2 to 8 entries; 0 page errors. |
+| Real-model judges | pass | only pi-readonly's one OpenCode Go turn (minimax-m3); under a cent. |
+
+### Hand-offs applied
+
+- **`BootRepairs.ts`**: `cancel abandoned approvals` (1A) after the Executor sweep and before `retryParkedApprovalWaits`; `startEventReactors` (1B) last, as the raw `BootRepair` 1B wrote (a defect from start is not caught as `boot_repair_failed`). The header names both.
+- **`ShutdownHooks.ts`**: `stopEventReactors` after `bridgeClosingHook`; the list is `ShutdownHook<EventReactors>`.
+- **`AppLayer.ts`**: `PiDurableBrain` builds `ReactorSet.layer` beside its resume; `ScriptedBrain` provides `EventReactors.layerOff`. Three judges that build their own scripted harness for `AppLayer` (`judges/typing.ts`, `judges/paste-client.ts`, `judges/fixtures/parity/CairnApp.ts`) also take `EventReactors.layerOff`.
+- **`rpc/Handlers.ts`**: `EventHandlers` (replaces the `workflow.eventStatus` stub) and `LoginHandlers` over `CodexLogin.layer` (replaces `providers.login.start`, `providers.login.cancel` and `providers.logout`).
+- **`db/Migrations.ts`**: `0007_OAuthCredentials`. 1D's tests still spread it over `migrations` themselves; that is now redundant and harmless.
+- **`main.ts`**: one `OAuth` constant (`OAuthStore.layer` over `DatabaseLive`) given to the models and to `MainLayer`, so one store and one flock; and `PiHost.layer`. `judge-main.ts` and `dev-main.ts` take `PiHost.layerEmpty` and no OAuth store, so judge and dev brains never take the real lock or load the user's pi packages.
+- **`Extensions.ts`**: `ExtensionOrder.piTools: 800`; `PiHost.ts` uses it and `PI_TOOLS_ORDER` is gone. **`ExtensionSet.ts`**: the host's extension is in `production`, with `PiHost` left in the layer's requirements for each root to choose. Every test and judge that builds `ExtensionSet` or `PiDurableBrain` now provides `PiHost.layerEmpty`; `PiHostTestKit.brainLayer` uses the production set, whose `cairn.pi-tools` comes from the host under test (it had added the extension a second time through `withExtra`). `CodingTools.test.ts` expects `cairn.pi-tools` last: its key, 800, sorts after the provider request log's 750, not right after `cairn.bridge-cwd` as the hand-off said.
+- **`GLOSSARY.md`**: event conversation, durable event, reactor (1B); pi host (1H); recipe, prelude, dry run, call site (1F).
+- **ADR 0029** is accepted. ADR 0033 needs no change. ADR 0037 and 0039 stay proposed (below).
+
+### Rules later packages follow
+
+- **`apps/server/src/brain/ReactorSet.ts` is integrator-only**, like `ExtensionSet.ts`. A package that adds a reactor hands off its source for the `production` list and registers the task definitions its handler creates through its own extension's `tasks`. A reactor with outside effects (pushes, child starts) takes `from: "now"`.
+- **Emitting and reacting.** Call `emit` after the commit's table reads: pi-durable throws `ReadAfterWrite` on a table read after a table write. Pass `at` from the Harness clock (`runtime.now()` in a task). Reactor names are stable: renaming one starts it over at the current log. A handler never awaits anything outside `tx`.
+- **Approvals (for 2B, 3C, 4A).** `ApprovalRequest` still takes `autoAccept: boolean`, recorded as `decidedBy` mode `full-access`, and has no `payload`. The first package that asks with a payload or a real mode replaces it with `payload: Option<JsonRecord>` and an accepting `Option<RuntimeMode>`, written once in `ask`; callers are `ConformanceTools.ts`, `GatedCall.ts`, `ExecutorExtension.ts`, `ExecutorTools.test.ts`, `ExecutorTestKit.ts` and `judges/fixtures/JudgeTools.ts`. When Executor gating goes live (2B), `GatedCall.ts` switches to `ledger.awaitSettlement` and puts `settlementText(settlement)` in its refusal. `HarnessSeam.respond` takes an `ApprovalAnswerInput` (`decision`, `reason`, `answers`); `launch` is 5A's.
+- **Workflows (for W3, 4D, 5A, 5D).** The gate calls `parseWorkflowScript` then `rewriteScript`, and decides by the approved row's hash, never by `isRewrittenWorkflow`; the slot pool is chosen with `isRewrittenWorkflow` on stored text (`isWorkflowSource` is for scripts as the model submits them). The node tools accept and answer the schemas in `Prelude.ts`; `agent` defaults to `DEFAULT_NODE_ROLE` and `verify` to `DEFAULT_VERIFY_ROLE`, and neither answers usage. A workflow script that calls a non-node tool is refused in the plan, so the run-time gate refuses one too. `PRELUDE_VERSION` is 2 and pinned by a hash test. `DryRun.sitesComplete` false should make the card say the call-site table may be incomplete (a `WorkflowLaunch` field, if wanted, is an integrator change to `Policy.ts`). `estimateRun` gets only history from each role's current binding. With `maxNodes` none, `toLaunch` caps the envelope at the dry run's happy-path count, so a fallback path the stubs never take raises its own brief: 5A and 5D decide whether to add headroom. A `.js` recipe under `src/` needs ignore patterns in `oxlint.config.ts` and `oxfmt.config.ts` (seams); the fixtures use `.workflow`. The model's workflow docs (W3) say that a node without a `schema` answers placeholder text in the dry run, and that `agent()` and `verify()` resolve null when a node is refused, stopped or failed. `WorkflowPlan.layer` joins `AppLayer.ts` when 4D or 5A first uses it.
+- **Login and health (for 1C's landing, 2D).** 1D's login and logout handlers should call `ModelHealth.reset` once 1C lands; that hand-off waits with 1C.
+
+### What differs from the plan
+
+- **1C is left out** (above), so wave 1 ends without prices, families or provider health on `main`. 2C and 2D depend on it.
+- **`pi-readonly.sh` loads the real pi host.** The judge says it builds the brain as deployed, and the deployed brain now loads the user's pi packages, so it does too. 3G still owns its ADR 0039 additions.
+- **Not taken:** 1B's optional cache of known non-thread conversations in `CommitFeed.learn` (one extra metadata read per commit that emits an event; no package emits yet), and 1H's suggested process-level `unhandledRejection` logger. Both are small and can come with the first package that needs them.
+- Each package's own deviations are in its review record. The ones later packages read: 1A moved `HarnessSeam.respond` to `ApprovalAnswerInput` and regenerated every conformance golden with a `decisions` key; 1B made `from` a required field of every reactor and chains monthly logs by a marker entry rather than a document field; 1D's sign-in calls pi-ai's Codex `oauth.login` directly and stores through `OAuthStore.signIn`, with no settings card yet (ADR 0040's look track); 1E made an idle row with queued input read "Working"; 1F puts the prelude where `export` was so script lines keep their numbers; 1H drops `sendMessage` and friends with a `pi_host_dropped` log once their call has returned, instead of throwing.
+
+### Left for the user
+
+- **Say yes or no to 1C's seam change** (`phase2/1C-seam`, `2a75839`: a `plan` field on `RunFailureInfo` and plan-neutral Limited wording), so 1C can land.
+- **The Codex login**, after the next deploy of the phase 2 brain: `ops/wizards/phase-2.sh 1`. ADR 0037 stays proposed until it passes; the recorded fallback is opencode-go/gpt-6-luna. Nothing is deployed by this integration; when it is, the web build and the brain ship together (protocol 2).
+- ADR 0039 stays proposed until 3G's `judges/pi-host.ts` and its `pi-readonly.sh` additions pass.

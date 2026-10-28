@@ -43,6 +43,7 @@ import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { PiHost } from "../pi-host/PiHost.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { projectIdFor } from "../shell/ShellCommands.ts";
 import { ShellLayer } from "../shell/ShellLayer.ts";
@@ -80,7 +81,10 @@ const stack = (dir: string, userSkills: string) =>
     Layer.provideMerge(
       PiDurableBrain({
         models: ModelSource.layerFaux({ tokensPerSecond: 5000, settings: {} }),
-      }).pipe(Layer.provide(ExecutorLink.layerDisabled))
+      }).pipe(
+        Layer.provide(ExecutorLink.layerDisabled),
+        Layer.provide(PiHost.layerEmpty)
+      )
     ),
     Layer.provideMerge(
       ShellLayer.pipe(

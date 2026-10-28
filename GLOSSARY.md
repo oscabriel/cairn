@@ -38,6 +38,10 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 _Avoid_: session, chat
 
+**Event conversation**: The ownerless pi-durable conversation, one per UTC month, whose entries are durable events (`event.<name>`, data an `EventEnvelope`). It never runs. A `cairn.events-rotated` marker closes each month's conversation and names the next.
+
+_Avoid_: events log (for this conversation)
+
 **Run**: One stretch of a thread's agent loop, from the input that starts it until the answer is final and nothing is queued for it; steers and follow-ups placed along the way join it. pi-durable shows it as `pi.live.run`; RunStarted and RunTerminal bracket it.
 
 **Settle**: To move a thread off the active shelf: by hand, or automatically after `autoSettleDays` of quiet (3 by default; 0 turns it off). A manual settle state (settled, or unsettled by hand) wins over the automatic one until the user sends the thread a message, which clears it.
@@ -79,6 +83,14 @@ _Avoid_: task, epic, project (for the goal)
 _Avoid_: pipeline, DAG, job
 
 **Dispatch ledger**: A workflow's record of every node it dispatched: the brief that approved it, its model and its cost. A replay reads it, and the steps panel shows it.
+
+**Recipe**: A saved workflow script, named by its `meta.name`.
+
+**Prelude**: The fixed JavaScript added to an approved workflow script that gives it `agent`, `parallel`, `pipeline`, `phase`, `log`, `budget`, `args`, `verify` and `approve` over the node tools. Its text is pinned by `PRELUDE_VERSION`.
+
+**Dry run**: Running a workflow script in its own sandbox with stub nodes, to build its launch card: the call sites, the node count and the estimate.
+
+**Call site**: One row of a launch card's table: a script `line:column` with its role, label, phase, schema name, whether it may write, and how many times it may run at most.
 
 **Role**: A name such as `@worker`, `@scout`, `@judge` or `@verifier` that briefs and workflows use instead of a model. It resolves to a concrete model when the child is created, and the child keeps that model.
 
@@ -153,6 +165,12 @@ _Avoid_: plugin
 **Close hook**: A step SIGTERM runs after every socket has closed and before the stores close, in the fixed order listed in `apps/server/src/ShutdownHooks.ts`, each with its own timeout.
 
 **Command receipt**: The shell store's record of a command id's first answer (the sequence it committed at, or its rejection), so a resent command lands once.
+
+**Durable event**: A fact with several consumers (a node settled, a child's result, an approval answered), appended to the event conversation in the commit of the change it describes, so it exists exactly when the change does (ADR 0033). Not the events log.
+
+**Reactor**: A named handler of some durable event kinds that runs each event once, oldest first, in one commit with its cursor in `cairn.events`. It writes only through `tx` and creates pi-durable tasks for outside work. Its `from` (`now` or `start`) says where a newly added reactor's cursor starts. The brain's reactors are listed in `apps/server/src/brain/ReactorSet.ts`.
+
+**Pi host**: The brain service that loads the allowlisted pi TUI extensions (pi-web-access, pi-fff) and offers their tools to every thread as pi-durable tools, one instance per brain or per folder (ADR 0039).
 
 **Events log**: The brain's structured JSON log lines (Effect's `Logger.formatJson`). Judges and the deploy check read it by event name (the `event` annotation), for example `listening` with the bound port.
 

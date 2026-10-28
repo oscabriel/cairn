@@ -17,6 +17,7 @@ export const ExtensionOrder = {
   codemode: 500,
   executor: 600,
   bridgeCwd: 700,
+  piTools: 800,
   judge: 900,
 } as const;
 

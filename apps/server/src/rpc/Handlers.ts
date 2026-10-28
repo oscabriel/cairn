@@ -6,10 +6,13 @@
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer } from "effect";
 
+import { CodexLogin } from "../models/CodexLogin.ts";
 import { UsageFeed } from "../usage/UsageFeed.ts";
 import { AttachmentHandlers } from "./AttachmentHandlers.ts";
 import { DiffHandlers } from "./DiffHandlers.ts";
+import { EventHandlers } from "./EventHandlers.ts";
 import { ExecutorHandlers } from "./ExecutorHandlers.ts";
+import { LoginHandlers } from "./LoginHandlers.ts";
 import { ModelHandlers } from "./ModelHandlers.ts";
 import { ProjectHandlers } from "./ProjectHandlers.ts";
 import { PushHandlers } from "./PushHandlers.ts";
@@ -50,5 +53,7 @@ export const HandlersLayer = Layer.mergeAll(
   SkillHandlers.layer,
   UsageHandlers.pipe(Layer.provide(UsageFeed.layer)),
   PushHandlers,
-  DiffHandlers.layer
+  DiffHandlers.layer,
+  EventHandlers,
+  LoginHandlers.pipe(Layer.provide(CodexLogin.layer))
 );

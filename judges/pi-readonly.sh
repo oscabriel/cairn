@@ -78,6 +78,7 @@ const { PiModelSource } = await import(`${src}/models/PiModelSource.ts`);
 const { HarnessSettings } = await import(`${src}/models/HarnessSettings.ts`);
 const { HarnessBoot, PiDurableBrain } = await import(`${src}/AppLayer.ts`);
 const { HarnessSeam } = await import(`${src}/brain/HarnessSeam.ts`);
+const { PiHost } = await import(`${src}/pi-host/PiHost.ts`);
 const { ThreadId, ProjectId } = await import("@cairn/protocol/Ids");
 const { OAuthStore } = await import(`${src}/models/OAuthStore.ts`);
 const { Database } = await import(`${src}/db/Database.ts`);
@@ -102,7 +103,12 @@ const models = PiModelSource.layerNoDeps.pipe(
   Layer.provide(oauth),
   Layer.provideMerge(pi)
 );
-const brain = PiDurableBrain({ models }).pipe(Layer.provide(config));
+// The tools-only pi host as the deployed brain builds it: the allowlisted pi packages the user
+// enabled, loaded from the agent dir under the throwaway data dir.
+const brain = PiDurableBrain({ models }).pipe(
+  Layer.provide(PiHost.layer),
+  Layer.provide(config)
+);
 
 const report = (line) => Effect.sync(() => console.log(line));
 

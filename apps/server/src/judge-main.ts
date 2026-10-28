@@ -24,6 +24,7 @@ import {
 } from "./models/BridgeProvider.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
+import { PiHost } from "./pi-host/PiHost.ts";
 
 // `--models real` runs pi's model runtime with the bridge (the bridge windows of judges/durability.ts); the default is
 // the judge's faux model.
@@ -74,6 +75,7 @@ const Harness = real
 
 const JudgeLayer = AppLayer.pipe(
   Layer.provide(Harness),
+  Layer.provide(PiHost.layerEmpty),
   Layer.provide(real ? BridgeProvider.layer : BridgeProvider.layerOff),
   Layer.provide(ExecutorLink.layerFake),
   Layer.provide(Identity.layerNoDeps),

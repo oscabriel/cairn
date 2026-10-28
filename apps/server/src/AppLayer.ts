@@ -17,11 +17,13 @@ import { runBootRepairs } from "./BootRepairs.ts";
 import { Brain } from "./brain/Brain.ts";
 import { BrainConfig } from "./brain/BrainConfig.ts";
 import { BridgeCwd } from "./brain/BridgeCwdExtension.ts";
+import { EventReactors } from "./brain/EventReactors.ts";
 import type { CairnExtension } from "./brain/Extensions.ts";
 import { ExtensionSet } from "./brain/ExtensionSet.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
 import { ModelSource } from "./brain/ModelSource.ts";
 import { PiDurableHarness } from "./brain/PiDurableHarness.ts";
+import { ReactorSet } from "./brain/ReactorSet.ts";
 import { ScriptedHarness } from "./brain/ScriptedHarness.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
@@ -152,7 +154,8 @@ export const withCatalog = <E, R>(models: Layer.Layer<ModelSource, E, R>) =>
 
 /**
  * pi-durable behind the harness seam, with the given models and extension set (the production
- * set unless a judge adds its tools). Boot resumes it after the repairs. The models layer is also
+ * set unless a judge adds its tools) and the durable event reactors (`ReactorSet.ts`). Boot resumes
+ * it after the repairs. The models layer is also
  * exposed, so the app's catalog and title model read the same runtime the harness does.
  */
 export const PiDurableBrain = <Models = never>(options: {
@@ -177,7 +180,7 @@ export const PiDurableBrain = <Models = never>(options: {
     )
   );
 
-  return resume.pipe(
+  return Layer.mergeAll(resume, ReactorSet.layer).pipe(
     Layer.provideMerge(PiDurableHarness.layer),
     Layer.provide(
       options.extraExtensions === undefined
@@ -194,9 +197,9 @@ export const PiDurableBrain = <Models = never>(options: {
  * The scripted harness (echoing model, in-memory store) behind the seam: the dev default. The
  * picker's catalog and the title model see the faux model.
  */
-export const ScriptedBrain = Layer.succeed(
-  HarnessBoot,
-  HarnessBoot.of({ resume: Effect.void })
+export const ScriptedBrain = Layer.mergeAll(
+  Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
+  EventReactors.layerOff
 ).pipe(
   Layer.provideMerge(ScriptedHarness.layer),
   Layer.provideMerge(Skills.local),

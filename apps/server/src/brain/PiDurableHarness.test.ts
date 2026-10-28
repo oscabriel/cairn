@@ -30,6 +30,7 @@ import {
 import type { Scope } from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { PiHost } from "../pi-host/PiHost.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { Approvals, cancelAbandonedApprovalsAtBoot } from "./CairnDocs.ts";
@@ -55,7 +56,8 @@ const harnessLayer = (dataDir: string) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
       ExtensionSet.withExtra([conformanceTools]).pipe(
-        Layer.provide(ExecutorLink.layerDisabled)
+        Layer.provide(ExecutorLink.layerDisabled),
+        Layer.provide(PiHost.layerEmpty)
       )
     ),
     Layer.provideMerge(

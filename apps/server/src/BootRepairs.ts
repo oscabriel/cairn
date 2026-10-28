@@ -1,8 +1,10 @@
 // The boot repairs, in the order they run after the Harness opens and before the brain is marked
 // ready. A package hands off a `bootRepair(...)` entry and it is listed here: sweep unfinished
-// attachment uploads; `ExecutorSweep` declines unfinished `apr_` ids; `retryTask()` for tasks whose
+// attachment uploads; `ExecutorSweep` declines unfinished `apr_` ids; cancel approval records a
+// stop left pending (the abort mark committed, the cancel not); `retryTask()` for tasks whose
 // approval is still pending; resume interrupted launches from `thread_launches`; repair checkpoint
-// refs. Orphaned `claude` processes are only logged, by the bridge's boot lines
+// refs; then start the durable event reactors, last, so they run after every repair and before
+// resume and ready. Orphaned `claude` processes are only logged, by the bridge's boot lines
 // (`BridgeProvider.ts`), not repaired here.
 
 import { Effect } from "effect";
@@ -10,6 +12,9 @@ import { Effect } from "effect";
 import { sweepAttachmentUploads } from "./attachments/AttachmentStore.ts";
 import type { AttachmentStore } from "./attachments/AttachmentStore.ts";
 import { retryParkedApprovalWaits } from "./Boot.ts";
+import { cancelAbandonedApprovalsAtBoot } from "./brain/CairnDocs.ts";
+import { startEventReactors } from "./brain/EventReactors.ts";
+import type { EventReactors } from "./brain/EventReactors.ts";
 import type { HarnessSeam } from "./brain/HarnessSeam.ts";
 import { sweepUnfinishedExecutorRequests } from "./executor/ExecutorSweep.ts";
 import type { ExecutorSweep } from "./executor/ExecutorSweep.ts";
@@ -49,6 +54,7 @@ export const bootRepairs: ReadonlyArray<
   BootRepair<
     | AttachmentStore
     | CheckpointCapture
+    | EventReactors
     | ExecutorSweep
     | HarnessSeam
     | ThreadLaunch
@@ -56,6 +62,7 @@ export const bootRepairs: ReadonlyArray<
 > = [
   sweepAttachmentUploads,
   bootRepair("executor-sweep", sweepUnfinishedExecutorRequests),
+  bootRepair("cancel abandoned approvals", cancelAbandonedApprovalsAtBoot),
   retryParkedApprovalWaits,
   bootRepair(
     "resume interrupted launches",
@@ -65,6 +72,7 @@ export const bootRepairs: ReadonlyArray<
     "checkpoint repair",
     CheckpointCapture.use((capture) => capture.repair)
   ),
+  startEventReactors,
 ];
 
 /** Runs every repair in order, logging each one by name. */

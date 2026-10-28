@@ -140,20 +140,16 @@ export const hostLayer = (fixture: HostFixture, policy: PiHostPolicy) =>
   );
 
 /**
- * A brain on the faux model with the host's extension installed beside the production set, and
- * the host itself, both from `host`.
+ * A brain on the faux model with the production set, whose `cairn.pi-tools` extension comes from
+ * `host`, and the host itself.
  */
 export const brainLayer = <E>(
   host: Layer.Layer<PiHost, E>,
   dataDir: string
 ) => {
-  const extensions = Layer.unwrap(
-    Effect.gen(function* () {
-      const piHost = yield* PiHost;
-
-      return ExtensionSet.withExtra([piHost.extension]);
-    })
-  ).pipe(Layer.provide(ExecutorLink.layerDisabled));
+  const extensions = ExtensionSet.layer.pipe(
+    Layer.provide(ExecutorLink.layerDisabled)
+  );
 
   return PiDurableHarness.layer.pipe(
     Layer.provideMerge(extensions),

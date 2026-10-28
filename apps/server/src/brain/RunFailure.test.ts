@@ -154,6 +154,20 @@ describe("run failure classes", () => {
       Option.some("opencode-go")
     );
     assert.deepStrictEqual(plan("429 rate limit, slow down"), Option.none());
+
+    // The failure carries it, so a Claude-only consumer can tell a Codex limit from its own.
+    assert.deepStrictEqual(
+      classify("GoUsageLimitError", "model_error").plan,
+      Option.some("opencode-go")
+    );
+    assert.deepStrictEqual(
+      classify(`${PLAN_QUOTA_PREFIX}: weekly`, "model_error").plan,
+      Option.some("claude")
+    );
+    assert.deepStrictEqual(
+      classify("429 Too Many Requests", "model_error").plan,
+      Option.none()
+    );
   });
 
   it("keeps a transient 429 a retryable provider error, not a usage limit", () => {

@@ -4,7 +4,8 @@
 //   permit (`Claude.offered`, which names the thread the `bridge-cwd` hook noted), and `none` again
 //   when its last waiting conversation gets one. Only changes are sent.
 // - `usageLimitResetAt` when a thread's run failed on a spent plan window (`RunTerminal` with the
-//   `usage_limit` class, from the bridge's "Claude plan quota exceeded" text): the time the spent
+//   `usage_limit` class and the `claude` plan, from the bridge's "Claude plan quota exceeded" text;
+//   a Codex or OpenCode Go limit keeps the reset its own failure named): the time the spent
 //   windows reset, from the plan windows `ClaudeUsage` merged (the rejecting `rate_limit_event`
 //   carries it, and the probe it starts confirms it). Plan windows are the account's, not the
 //   thread's, so the latest reset of every spent window is when a resend can work.
@@ -89,10 +90,15 @@ export const applyWait = (
   ];
 };
 
+/** A run that failed on a Claude plan window; a Codex or OpenCode Go limit is not the bridge's. */
 const isUsageLimited = (event: HarnessEvent) =>
   Predicate.isTagged(event, "RunTerminal") &&
   event.status === "failed" &&
-  Option.exists(event.failure, (failure) => failure.class === "usage_limit");
+  Option.exists(
+    event.failure,
+    (failure) =>
+      failure.class === "usage_limit" && Option.contains(failure.plan, "claude")
+  );
 
 /** `ProjectorSignals` from the bridge. Needs `BridgeProvider` and `HarnessSeam`. */
 export const ClaudeSignals = Layer.effect(

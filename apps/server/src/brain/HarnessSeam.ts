@@ -158,11 +158,22 @@ export interface HarnessCapabilities {
   readonly live: boolean;
 }
 
+/** The plans whose usage limit a run failure can name. */
+export const UsageLimitPlan = Schema.Literals([
+  "claude",
+  "codex",
+  "opencode-go",
+]);
+
+export type UsageLimitPlan = typeof UsageLimitPlan.Type;
+
 /** How a failed run failed, from the provider's error text (see RunFailure). */
 export const RunFailureInfo = Schema.Struct({
   class: RunFailureClass,
   retryable: Schema.Boolean,
   resetAt: Schema.OptionFromNullOr(Schema.DateTimeUtc),
+  /** Whose usage limit a `usage_limit` failure hit; none for every other class. */
+  plan: Schema.OptionFromNullOr(UsageLimitPlan),
 });
 
 export type RunFailureInfo = typeof RunFailureInfo.Type;

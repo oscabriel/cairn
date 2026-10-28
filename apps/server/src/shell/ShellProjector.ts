@@ -215,6 +215,7 @@ const failureFields = (
     class: "unknown" as const,
     retryable: false,
     resetAt: Option.none<DateTime.Utc>(),
+    plan: Option.none(),
   }));
 
   return {

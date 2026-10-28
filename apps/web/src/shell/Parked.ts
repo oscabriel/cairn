@@ -240,9 +240,9 @@ const content = (model: Model, h: H): Html =>
                 [
                   Option.match(resetsAt, {
                     onNone: () =>
-                      "The Claude plan window is spent. Send again once it resets.",
+                      "The model plan's usage limit was reached. Send again once it resets.",
                     onSome: (at) =>
-                      `The Claude plan window is spent. It resets ${formatDayTime(at)}.`,
+                      `The model plan's usage limit was reached. It resets ${formatDayTime(at)}.`,
                   }),
                 ]
               ),

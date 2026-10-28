@@ -31,7 +31,7 @@ The first column names the schema: the export that declares the union, or the ex
 | `ThreadActivity` | `waiting` | Waiting on you | A run is live and holds a tool call for an approval (`pendingRuntimeRequest` is set). |
 | `ThreadActivity` | `parked` | Held | pi-durable parked at least one of the thread's tasks (`parkedTaskIds` is not empty). Wins over every other activity. |
 | `ThreadActivity` | `failed` | Failed | The latest run failed, or the launch failed before its first run; `lastError` says why. |
-| `RunFailureClass` | `usage_limit` | Held | The run was refused because a Claude plan window is spent; `usageLimitResetAt` says when it resets. |
+| `RunFailureClass` | `usage_limit` | Held | The run was refused because a model plan's usage limit was reached (a Claude plan window, a Codex limit or OpenCode Go's; the failure's `plan` says which); `usageLimitResetAt` says when it resets. |
 | `RunFailureClass` | `provider_error` | Failed | The model provider refused the request. |
 | `RunFailureClass` | `transport_error` | Failed | The model provider could not be reached. |
 | `RunFailureClass` | `unknown` | Failed | The run or launch failed for a reason the brain does not classify. |
@@ -254,7 +254,7 @@ What the web client shows for each status today. The sidebar row's label comes f
 | `ThreadActivity` | `waiting` | "Approval" or "Input", from the pending request's kind. The row's "Waiting" label is never reached from `waiting`, because a pending request wins. | Sidebar row |
 | `ThreadActivity` | `parked` | "Parked"; the banner says "Work on this thread stopped after it was cut off several times in a row." with "Retry" ("Retrying" while it runs). | Sidebar row, hold banner |
 | `ThreadActivity` | `failed` | "Failed", or "Limited" for a `usage_limit` failure. The thread page shows `lastError` (`apps/web/src/View.ts:36-62`). | Sidebar row, thread page |
-| `RunFailureClass` | `usage_limit` | "Limited"; the banner says "The Claude plan window is spent. It resets <day and time>." (or "Send again once it resets." with no reset time). | Sidebar row, hold banner |
+| `RunFailureClass` | `usage_limit` | "Limited"; the banner says "The model plan's usage limit was reached. It resets <day and time>." (or "Send again once it resets." with no reset time). | Sidebar row, hold banner |
 | `RunFailureClass` | `provider_error` | "Failed", and `lastError`: "The model provider refused the request. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `transport_error` | "Failed", and `lastError`: "The model provider could not be reached. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `unknown` | "Failed", and `lastError`: "The run failed. Send again to retry.", or a launch's own message. | Sidebar row, thread page |

@@ -15,7 +15,7 @@
 
 import { DateTime, Duration, Option } from "effect";
 
-import type { RunFailureInfo } from "./HarnessSeam.ts";
+import type { RunFailureInfo, UsageLimitPlan } from "./HarnessSeam.ts";
 
 /** What the Claude bridge's plan-window rejection starts with. */
 export const PLAN_QUOTA_PREFIX = "Claude plan quota exceeded";
@@ -61,7 +61,7 @@ export interface RunFailureInput {
 
 /** Which plan's limit a failure message names, and when it lifts if the message says. */
 export interface UsageLimit {
-  readonly plan: "claude" | "codex" | "opencode-go";
+  readonly plan: UsageLimitPlan;
   /** None when the message names no wait: the usage feed, or the next success, says when. */
   readonly resetAt: Option.Option<DateTime.Utc>;
 }
@@ -112,6 +112,7 @@ export const classifyRunFailure = (input: RunFailureInput): RunFailureInfo => {
       class: "usage_limit",
       retryable: false,
       resetAt: limit.value.resetAt,
+      plan: Option.some(limit.value.plan),
     };
   }
 
@@ -120,11 +121,17 @@ export const classifyRunFailure = (input: RunFailureInput): RunFailureInfo => {
       class: "provider_error",
       retryable: false,
       resetAt: Option.none(),
+      plan: Option.none(),
     };
   }
 
   if (message === "") {
-    return { class: "unknown", retryable: false, resetAt: Option.none() };
+    return {
+      class: "unknown",
+      retryable: false,
+      resetAt: Option.none(),
+      plan: Option.none(),
+    };
   }
 
   if (TRANSPORT_PATTERN.test(message)) {
@@ -132,6 +139,7 @@ export const classifyRunFailure = (input: RunFailureInput): RunFailureInfo => {
       class: "transport_error",
       retryable: true,
       resetAt: Option.none(),
+      plan: Option.none(),
     };
   }
 
@@ -139,5 +147,6 @@ export const classifyRunFailure = (input: RunFailureInput): RunFailureInfo => {
     class: "provider_error",
     retryable: !PERMANENT_PATTERN.test(message),
     resetAt: Option.none(),
+    plan: Option.none(),
   };
 };

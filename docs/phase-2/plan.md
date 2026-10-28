@@ -2,7 +2,7 @@
 
 Written 2026-10-27 from the six area notes in `docs/phase-2/notes/` (subagents, briefs, workflows, models, reach, surfaces) and the t3code nightly addendum beside them, the kickoff's phase 2 section and Targets (`~/Developer/agent-artifacts/cairn/v2/KICKOFF.md`), `docs/phase-2/backlog.md`, ADRs 0001 to 0041 and `GLOSSARY.md`. Pins are phase 1's (`docs/phase-1/plan.md`): pi (`@earendil-works/*`) 1.4.0, Effect 4.0.5, Foldkit 0.169.0, Node 26.11, t3code `fe27e8e3`.
 
-The notes are the evidence; this plan is the decision. An implementing agent given one package should read this plan's sections 1 and 2, its package block, the note and local id the block cites, the ADRs it names, and the installed source of every library it touches (AGENTS.md, "Before using an API").
+Signed off by the user on 2026-10-28, after the phase 1 gate passed. The notes are the evidence; this plan is the decision. An implementing agent given one package should read this plan's sections 1 and 2, its package block, the note and local id the block cites, the ADRs it names, and the installed source of every library it touches (AGENTS.md, "Before using an API").
 
 ## Summary
 

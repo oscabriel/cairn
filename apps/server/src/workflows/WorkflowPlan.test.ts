@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
-import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
+import { RoleSpec } from "@cairn/protocol/Roles";
+import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import { MAX_WORKFLOW_NODES } from "@cairn/protocol/Workflows";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -273,6 +274,44 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
       })
   );
 
+  test.effect(
+    "refuses, never dies on, values the launch card cannot carry",
+    () =>
+      Effect.gen(function* () {
+        yield* expectRefusal(
+          `${META}await agent("x", { phase: "p".repeat(5000) });`,
+          "agent_options_invalid",
+          "a phase title is at most 120"
+        );
+        yield* expectRefusal(
+          `${META}phase("p".repeat(5000));\nawait agent("x");`,
+          "agent_options_invalid",
+          "phase()"
+        );
+        yield* expectRefusal(
+          `${META}phase("p".repeat(200));\nawait verify({});`,
+          "agent_options_invalid",
+          "a phase title is at most 120"
+        );
+      })
+  );
+
+  test.effect("a blank or padded schema title is trimmed, not refused", () =>
+    Effect.gen(function* () {
+      const plan = yield* WorkflowPlan;
+
+      const run = yield* plan.validate(
+        `${META}await agent("a", { schema: { type: "object", title: "Findings " } });\nawait agent("b", { schema: { type: "object", title: "" } });\nawait agent("c", { schema: { type: "object", title: "  " } });`,
+        input({})
+      );
+
+      assert.deepStrictEqual(
+        run.callSites.map((site) => site.schemaName),
+        ["Findings", null, null]
+      );
+    })
+  );
+
   test.effect("records phases the meta does not declare", () =>
     Effect.gen(function* () {
       const plan = yield* WorkflowPlan;
@@ -329,7 +368,59 @@ layer(tight)("WorkflowPlan under tight limits", (test) => {
       );
 
       assert.deepStrictEqual(run.nodes, { count: 10, unbounded: true });
+      assert.isTrue(run.sitesComplete);
     })
+  );
+
+  test.effect(
+    "past the cap the run goes on with refused nodes, so sites after the loop reach the table",
+    () =>
+      Effect.gen(function* () {
+        const plan = yield* WorkflowPlan;
+
+        const run = yield* plan.validate(
+          `${META}await agent("first");\nfor (let i = 0; i < 30; i += 1) {\n  await agent("item " + i, { role: "@scout" });\n}\nawait agent("summary", { role: "@writer" });`,
+          input({})
+        );
+
+        assert.deepStrictEqual(run.nodes, { count: 10, unbounded: true });
+        assert.isTrue(run.sitesComplete);
+        assert.deepStrictEqual(
+          run.callSites.map((site) => [String(site.spec), site.maxCount]),
+          [
+            ["@worker", 1],
+            ["@scout", null],
+            ["@writer", null],
+          ]
+        );
+        assert.deepStrictEqual(
+          run.byRole.map((entry) => [String(entry.spec), entry.count]),
+          [
+            ["@worker", 1],
+            ["@scout", 9],
+          ]
+        );
+      })
+  );
+
+  test.effect(
+    "a run past the cap that never ends is unbounded and says its table may be incomplete",
+    () =>
+      Effect.gen(function* () {
+        const plan = yield* WorkflowPlan;
+
+        const run = yield* plan.validate(
+          `${META}for (;;) {\n  await agent("again");\n}\nawait agent("never", { role: "@writer" });`,
+          input({})
+        );
+
+        assert.deepStrictEqual(run.nodes, { count: 10, unbounded: true });
+        assert.isFalse(run.sitesComplete);
+        assert.deepStrictEqual(
+          run.callSites.map((site) => [String(site.spec), site.maxCount]),
+          [["@worker", null]]
+        );
+      })
   );
 });
 
@@ -339,7 +430,7 @@ const priced = (
   tokens: ReadonlyArray<number>
 ): Array<NodeHistory> =>
   tokens.map((totalTokens) => ({
-    spec,
+    spec: RoleSpec.make(spec),
     totalTokens,
     listMicros: Option.some(totalTokens * 3),
   }));
@@ -392,7 +483,11 @@ describe(estimateRun, () => {
 
         const unpriced = estimateRun(run, [
           ...history,
-          { spec: "@judge", totalTokens: 5500, listMicros: Option.none() },
+          {
+            spec: RoleSpec.make("@judge"),
+            totalTokens: 5500,
+            listMicros: Option.none(),
+          },
         ]);
 
         assert.isNull(unpriced.listMicrosHigh);
@@ -440,6 +535,36 @@ describe(estimateRun, () => {
           isLargeWorkflow(run, estimate, {
             ...DEFAULT_BUDGET,
             maxTokens: 100_000,
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "says Large workflow when a dollar budget is under the priced estimate's high end",
+    () =>
+      Effect.gen(function* () {
+        const run = yield* councilRun;
+
+        const estimate = estimateRun(run, [
+          ...priced("@worker", [10_000, 20_000]),
+          ...priced("opencode-go/gpt-6-luna", [8000]),
+          ...priced("@judge", [5000]),
+        ]);
+
+        const high = estimate.listMicrosHigh ?? 0;
+
+        assert.isAbove(high, 0);
+        assert.isFalse(
+          isLargeWorkflow(run, estimate, {
+            ...DEFAULT_BUDGET,
+            maxListMicros: Micros.make(high),
+          })
+        );
+        assert.isTrue(
+          isLargeWorkflow(run, estimate, {
+            ...DEFAULT_BUDGET,
+            maxListMicros: Micros.make(high - 1),
           })
         );
       })

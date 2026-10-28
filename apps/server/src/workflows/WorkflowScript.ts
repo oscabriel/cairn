@@ -2,15 +2,18 @@
 // `export const meta = {...}`. This module reads that statement without running anything: `meta`
 // must be a pure literal (no names, calls, spreads, computed keys or template interpolation), the
 // rest of the script may export and import nothing and may not declare the prelude's names at its
-// top level, and a script that sets its own `timeout_ms` is refused, because code mode stores the
-// deadline and a rerun after a restart then fails. The source is hashed as submitted, so the gate
+// top level (as a `const`, `let` or `var` binding, destructured or not and in any declarator, or as
+// a function or class name), and a script that sets its own `timeout_ms` is refused, because code
+// mode stores the deadline and a rerun after a restart then fails. The source is hashed as submitted, so the gate
 // can match a launched script to the one the user approved byte for byte.
 //
 // The `meta` rules follow Claude Code's workflow scripts (research 06 section 2.5); refusing before
 // launch follows pi-subagents' `validate` action (github.com/nicobailon/pi-subagents,
-// docs/workflows.md at 1a80e24, MIT), ideas only: no text was taken. A JavaScript parser package is
-// not a dependency (phase 2 step 1.0), so a small lexer here skips strings, comments, template
-// literals and regular expressions, which is all the checks need.
+// docs/workflows.md at 1a80e24, MIT), ideas only: no text was taken. The server does not depend on
+// a JavaScript parser, so a small lexer here skips strings, comments, template literals and regular
+// expressions, which is all the checks need. Its one known limit: a `/` after the `)` of an `if`,
+// `while`, `for` or `with` head is read as a regular expression, which is right for statements
+// like `if (s) /x/.test(s)`, but a division right after such a head is not valid JavaScript anyway.
 
 import { createHash } from "node:crypto";
 
@@ -157,7 +160,12 @@ interface Token {
   readonly start: number;
   /** Curly-brace depth where the token starts, template interpolations included. */
   readonly depth: number;
+  /** For a `)`: it closes the head of an `if`, `while`, `for` or `with`, so a statement follows. */
+  readonly closesHead?: boolean;
 }
+
+/** Keywords whose parenthesised head is followed by a statement, which may open with a regex. */
+const HEAD_WORDS = new Set(["if", "while", "for", "with"]);
 
 /** A place in the source the lexer or the literal reader could not go past. */
 class SourceProblemError extends globalThis.Error {
@@ -339,6 +347,50 @@ const tokenize = (text: string, from: number): ReadonlyArray<Token> => {
     throw new SourceProblemError(opened, "a template literal is never closed");
   };
 
+  // One entry per open `(`: whether it opens the head of `if`, `while`, `for` or `with`.
+  const parens: Array<boolean> = [];
+
+  /** True when the tokens before end in a postfix `++` or `--`, after which `/` divides. */
+  const endsInPostfix = () => {
+    const [operand, first, second] = tokens.slice(-3);
+
+    return (
+      operand !== undefined &&
+      first !== undefined &&
+      second !== undefined &&
+      first.kind === "punct" &&
+      second.kind === "punct" &&
+      (first.text === "+" || first.text === "-") &&
+      second.text === first.text &&
+      second.start === first.start + 1 &&
+      (operand.kind === "literal" ||
+        (operand.kind === "word" && !REGEX_AFTER_WORDS.has(operand.text)) ||
+        operand.text === ")" ||
+        operand.text === "]")
+    );
+  };
+
+  /** Pushes a one-character punctuator, noting which `)` closes a statement head. */
+  const punct = (char: string, start: number) => {
+    if (char === "(") {
+      const before = tokens.at(-1);
+
+      parens.push(before?.kind === "word" && HEAD_WORDS.has(before.text));
+    }
+
+    tokens.push(
+      char === ")"
+        ? {
+            kind: "punct",
+            text: char,
+            start,
+            depth,
+            closesHead: parens.pop() === true,
+          }
+        : { kind: "punct", text: char, start, depth }
+    );
+  };
+
   const regexAllowed = () => {
     const last = tokens.at(-1);
 
@@ -350,11 +402,16 @@ const tokenize = (text: string, from: number): ReadonlyArray<Token> => {
       return REGEX_AFTER_WORDS.has(last.text);
     }
 
+    if (last.closesHead === true) {
+      return true;
+    }
+
     return (
       last.kind === "punct" &&
       last.text !== ")" &&
       last.text !== "]" &&
-      last.text !== "}"
+      last.text !== "}" &&
+      !endsInPostfix()
     );
   };
 
@@ -414,7 +471,7 @@ const tokenize = (text: string, from: number): ReadonlyArray<Token> => {
         tokens.push({ kind: "punct", text: char, start, depth });
       }
     } else {
-      tokens.push({ kind: "punct", text: char, start, depth });
+      punct(char, start);
       at += 1;
     }
   }
@@ -826,6 +883,227 @@ const readMetaStatement = (code: string): MetaStatement | null => {
   return { exportAt, literal, end: afterValue };
 };
 
+// ---------------------------------------------------------------------------------------------
+// Top-level declarations: the names a `const`, `let` or `var` statement binds.
+
+const OPENERS = new Map([
+  ["(", ")"],
+  ["[", "]"],
+  ["{", "}"],
+]);
+
+const isCloser = (text: string) => text === ")" || text === "]" || text === "}";
+
+const isPunct = (token: Token | undefined, text: string) =>
+  token?.kind === "punct" && token.text === text;
+
+/** True when a line break separates `token` from the one before it. */
+const startsLine = (
+  code: string,
+  tokens: ReadonlyArray<Token>,
+  index: number
+) => {
+  const before = tokens[index - 1];
+  const token = tokens[index];
+
+  return (
+    before !== undefined &&
+    token !== undefined &&
+    code.slice(before.start, token.start).includes("\n")
+  );
+};
+
+/** True when `token` can end an expression, so a line break after it may end the statement. */
+const endsExpression = (token: Token | undefined) =>
+  token !== undefined &&
+  (token.kind === "literal" ||
+    (token.kind === "word" && !REGEX_AFTER_WORDS.has(token.text)) ||
+    token.text === ")" ||
+    token.text === "]" ||
+    token.text === "}");
+
+/** Reads the binding names of one declaration, from the token after its keyword. */
+class DeclarationReader {
+  readonly code: string;
+  readonly tokens: ReadonlyArray<Token>;
+  at: number;
+  readonly names: Array<Token> = [];
+
+  constructor(code: string, tokens: ReadonlyArray<Token>, from: number) {
+    this.code = code;
+    this.tokens = tokens;
+    this.at = from;
+  }
+
+  /** Every declarator: `pattern (= init)?`, separated by commas. */
+  read(): ReadonlyArray<Token> {
+    for (;;) {
+      this.pattern();
+
+      if (isPunct(this.tokens[this.at], "=")) {
+        this.at += 1;
+        this.expression(new Set([","]), true);
+      }
+
+      if (!isPunct(this.tokens[this.at], ",")) {
+        return this.names;
+      }
+
+      this.at += 1;
+    }
+  }
+
+  /** A binding: a name, or an object or array pattern. */
+  pattern() {
+    const token = this.tokens[this.at];
+
+    if (token === undefined) {
+      return;
+    }
+
+    if (token.kind === "word") {
+      this.names.push(token);
+      this.at += 1;
+    } else if (isPunct(token, "[")) {
+      this.at += 1;
+      this.elements("]", () => {
+        this.pattern();
+      });
+    } else if (isPunct(token, "{")) {
+      this.at += 1;
+      this.elements("}", () => {
+        this.property();
+      });
+    }
+  }
+
+  /** The elements of a pattern up to `close`, each with an optional default. */
+  elements(close: string, element: () => void) {
+    while (this.at < this.tokens.length) {
+      const token = this.tokens[this.at];
+
+      if (isPunct(token, close)) {
+        this.at += 1;
+
+        return;
+      }
+
+      if (isPunct(token, ",")) {
+        this.at += 1;
+      } else {
+        while (isPunct(this.tokens[this.at], ".")) {
+          this.at += 1;
+        }
+
+        const before = this.at;
+
+        element();
+
+        if (isPunct(this.tokens[this.at], "=")) {
+          this.at += 1;
+          this.expression(new Set([",", close]), false);
+        } else if (this.at === before) {
+          // Something a pattern cannot hold: step over it rather than loop.
+          this.at += 1;
+        }
+      }
+    }
+  }
+
+  /** One property of an object pattern: `key: pattern`, `[computed]: pattern` or a shorthand name. */
+  property() {
+    const token = this.tokens[this.at];
+
+    if (isPunct(token, "[")) {
+      this.at += 1;
+      this.expression(new Set(["]"]), false);
+      this.at += 1;
+    } else if (
+      token?.kind === "word" &&
+      !isPunct(this.tokens[this.at + 1], ":")
+    ) {
+      this.names.push(token);
+      this.at += 1;
+
+      return;
+    } else {
+      this.at += 1;
+    }
+
+    if (isPunct(this.tokens[this.at], ":")) {
+      this.at += 1;
+      this.pattern();
+    }
+  }
+
+  /**
+   * Steps over an expression to the first of `stops` outside any bracket, a `;`, or (when
+   * `statement` is set) a line break after which the statement has ended.
+   */
+  expression(stops: ReadonlySet<string>, statement: boolean) {
+    const open: Array<string> = [];
+
+    while (this.at < this.tokens.length) {
+      const token = this.tokens[this.at];
+
+      if (token === undefined) {
+        return;
+      }
+
+      if (open.length === 0) {
+        if (
+          token.kind === "punct" &&
+          (stops.has(token.text) || token.text === ";" || isCloser(token.text))
+        ) {
+          return;
+        }
+
+        if (
+          statement &&
+          startsLine(this.code, this.tokens, this.at) &&
+          endsExpression(this.tokens[this.at - 1]) &&
+          !CONTINUES_EXPRESSION.has(token.text.charAt(0))
+        ) {
+          return;
+        }
+      }
+
+      const closer =
+        token.kind === "punct" ? OPENERS.get(token.text) : undefined;
+
+      if (closer !== undefined) {
+        open.push(closer);
+      } else if (token.kind === "punct" && token.text === open.at(-1)) {
+        open.pop();
+      }
+
+      this.at += 1;
+    }
+  }
+}
+
+/** The names a declaration keyword at `index` binds: one, or several for patterns and lists. */
+const declaredNames = (
+  code: string,
+  tokens: ReadonlyArray<Token>,
+  index: number
+): ReadonlyArray<Token> => {
+  const keyword = tokens[index];
+  let next = index + 1;
+
+  if (keyword?.text === "function" && isPunct(tokens[next], "*")) {
+    next += 1;
+  }
+
+  const name = tokens[next];
+
+  if (keyword?.text === "function" || keyword?.text === "class") {
+    return name?.kind === "word" ? [name] : [];
+  }
+
+  return new DeclarationReader(code, tokens, next).read();
+};
+
 /** The first problem with the body after the meta statement, or null. */
 const bodyProblem = (
   code: string,
@@ -884,16 +1162,18 @@ const bodyProblem = (
       token.text
     );
 
-    if (
-      declares &&
-      token.depth === 0 &&
-      after?.kind === "word" &&
-      reserved.has(after.text)
-    ) {
+    const shadowed =
+      declares && token.depth === 0
+        ? declaredNames(code, tokens, index).find((name) =>
+            reserved.has(name.text)
+          )
+        : undefined;
+
+    if (shadowed !== undefined) {
       return {
         reason: "reserved_name",
-        offset: after.start,
-        problem: `\`${after.text}\` is defined by the workflow prelude; use another name`,
+        offset: shadowed.start,
+        problem: `\`${shadowed.text}\` is defined by the workflow prelude; use another name`,
       };
     }
   }

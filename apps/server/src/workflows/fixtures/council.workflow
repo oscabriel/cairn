@@ -2,10 +2,28 @@
 // sorts their claims into agreements and disputes, and each advisor is resumed once to answer only
 // the claims another advisor disputed. Five nodes with two advisors and two passes.
 //
-// The dry-run judge's fixture until recipes/council.js lands. Ported in intent from pi-subagents'
-// council mode (github.com/nicobailon/pi-subagents, skills/council-mode/SKILL.md and
-// references/pass-contracts.md at 1a80e24, MIT, Copyright (c) 2026 Nico Bailon) as
-// docs/phase-2/notes/workflows.md ("The council recipe") records its rules; no text was taken.
+// The dry-run judge's council script. Ported in intent from pi-subagents' council mode
+// (github.com/nicobailon/pi-subagents, skills/council-mode/SKILL.md and
+// references/pass-contracts.md at 1a80e24) as docs/phase-2/notes/workflows.md ("The council
+// recipe") records its rules; no text was taken. Changed: the passes are one workflow script over
+// Cairn's prelude, and each advisor's second pass resumes its first node.
+//
+// MIT License. Copyright (c) 2026 Nico Bailon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or
+// substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+// NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 export const meta = {
   name: "council",
   description: "Independent advisor reports, a claim matrix, then one cross-examination pass",

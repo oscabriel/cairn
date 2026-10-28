@@ -3,8 +3,12 @@
 // resolves at once with a value built from its schema, and is recorded with its call site (the
 // script's `line:column`), role, label, phase, schema name and whether it may write. The calls
 // become the call-site table and the node count; a script that reaches the node cap is `unbounded`
-// ("at least N, depends on the data"). Nothing outside the sandbox runs, no model is called, and a
-// script the run refuses never reaches the user.
+// ("at least N, depends on the data"), and it keeps running past the cap with every further node
+// refused, so sites it reaches only after its loop still reach the table. Nothing outside the
+// sandbox runs, no model is called, and a script the run refuses never reaches the user.
+//
+// Only the node tools exist in the dry run's sandbox: a workflow script that calls any other tool
+// (`tools.read`, say) fails here, so the run's gate must refuse the same call.
 //
 // `validate` is parse plus dry run, never a launch. The estimate multiplies each role's call count by
 // the spread of that role's settled nodes in past ledgers, with a labelled fallback for a role with
@@ -62,7 +66,7 @@ export class DryRunUnavailable extends Schema.TaggedError<DryRunUnavailable>()(
 
 /** How far a dry run may go before it stops. */
 export interface DryRunLimits {
-  /** Nodes recorded before the run stops and calls the script `unbounded`. */
+  /** Nodes recorded before the run calls the script `unbounded` and refuses every further node. */
   readonly nodeCap: number;
   /** Tool calls of any kind before the run stops; a script looping on `log` ends here. */
   readonly callCap: number;
@@ -99,8 +103,14 @@ export interface DryRun {
   readonly script: WorkflowScript;
   /** In order of each site's first call. */
   readonly callSites: ReadonlyArray<CallSite>;
-  /** Nodes dispatched; with `unbounded`, the run stopped at the cap and the real count is higher. */
+  /** Nodes dispatched; with `unbounded`, the run reached the cap and the real count is higher. */
   readonly nodes: { readonly count: number; readonly unbounded: boolean };
+  /**
+   * False when an unbounded run was stopped (by the call cap, its time or a throw) before the
+   * script ended: sites after that point are missing from `callSites`, so the card should say the
+   * table may be incomplete. Always true for a bounded run.
+   */
+  readonly sitesComplete: boolean;
   /** Nodes per role spec, in order of each spec's first node: what the estimate multiplies. */
   readonly byRole: ReadonlyArray<{
     readonly spec: RoleSpec;
@@ -114,7 +124,7 @@ export interface DryRun {
 
 /** One settled node of a past ledger: what its role spent. */
 export interface NodeHistory {
-  readonly spec: string;
+  readonly spec: RoleSpec;
   readonly totalTokens: number;
   /** None when its model has no list price (ADR 0036). */
   readonly listMicros: Option.Option<number>;
@@ -154,6 +164,8 @@ const decodeApproveCall = Schema.decodeUnknownOption(ApproveCall);
 
 const decodeRoleSpec = Schema.decodeUnknownOption(RoleSpec);
 
+const decodeCallSites = Schema.decodeUnknownEffect(Schema.Array(CallSite));
+
 const isThinkingLevel = Schema.is(ThinkingLevel);
 
 const isDisplayText = Schema.is(DisplayText);
@@ -162,6 +174,9 @@ const ARMS: NodeArms = "host";
 
 /** Longest label a call site shows; a prompt used as the label is cut here. */
 const LABEL_MAX = 80;
+
+/** Longest phase title the protocol carries (`WorkflowPhase.title`). */
+const PHASE_TITLE_MAX = 120;
 
 /** The parts of a JSON Schema the dry run reads to build a placeholder value. */
 interface SchemaNode {
@@ -285,10 +300,12 @@ const stubValue = (schema: Schema.Json): Schema.Json =>
     Option.match({ onNone: () => null, onSome: (node) => stubOf(node, 0) })
   );
 
-/** The `title` of a result schema, which the call-site table shows as its name. */
+/** A result schema's `title`, trimmed: the call-site table's name for it. None when blank. */
 const schemaTitle = (schema: Schema.Json) =>
   decodeSchemaNode(schema).pipe(
-    Option.flatMap((node) => Option.fromUndefinedOr(node.title))
+    Option.flatMap((node) => Option.fromUndefinedOr(node.title)),
+    Option.map((title) => title.trim()),
+    Option.filter((title) => title !== "")
   );
 
 /** One recorded node call before the table groups it. */
@@ -300,6 +317,10 @@ interface RecordedNode {
   readonly schemaName: Option.Option<string>;
   readonly readonly: boolean;
 }
+
+/** What makes two calls one row of the table. */
+const siteKey = (node: RecordedNode) =>
+  `${node.site}|${node.spec}|${node.readonly}`;
 
 /** The first line of `prompt`, cut to a label. */
 const labelFrom = (prompt: string) => {
@@ -313,6 +334,8 @@ const labelFrom = (prompt: string) => {
 /** The stub tools of one dry run and what they recorded. */
 class Recorder {
   readonly nodes: Array<RecordedNode> = [];
+  /** Nodes asked for past the cap and refused: the first of each site, role and mutability. */
+  readonly late = new Map<string, RecordedNode>();
   readonly problems: Array<string> = [];
   readonly phases: Array<string> = [];
   readonly logs: Array<string> = [];
@@ -341,11 +364,18 @@ class Recorder {
     return true;
   }
 
-  /** Records a node unless the cap is reached, in which case the run stops. */
+  /**
+   * Records a node unless the cap is reached. Past the cap the node is refused and only its site
+   * is kept, so the run goes on (bounded by the call cap) to sites it reaches after its loop.
+   */
   node(entry: RecordedNode): Option.Option<string> {
     if (this.nodes.length >= this.limits.nodeCap) {
       this.capReached = true;
-      this.stop.abort();
+      const key = siteKey(entry);
+
+      if (!this.late.has(key)) {
+        this.late.set(key, entry);
+      }
 
       return Option.none();
     }
@@ -366,6 +396,21 @@ class Recorder {
     if (this.problems.length < 10) {
       this.problems.push(text);
     }
+  }
+
+  /** The phase a call runs in, or the problem with it: the protocol carries 120 characters. */
+  phase(where: string, phase: Option.Option<string>): Option.Option<string> {
+    return Option.filter(phase, (title) => {
+      if (title.length <= PHASE_TITLE_MAX) {
+        return true;
+      }
+
+      this.problem(
+        `${where}: the phase \`${title.slice(0, 40)}…\` is ${title.length} characters long; a phase title is at most ${PHASE_TITLE_MAX}`
+      );
+
+      return false;
+    });
   }
 
   /** The role spec a call names, or the problem with it. */
@@ -430,7 +475,7 @@ class Recorder {
       site,
       spec: spec.value,
       label: Option.getOrElse(call.label, () => labelFrom(call.prompt)),
-      phase: call.phase,
+      phase: this.phase(`line ${site}`, call.phase),
       schemaName: Option.flatMap(schema, schemaTitle),
       readonly: call.readonly,
     });
@@ -464,7 +509,7 @@ class Recorder {
       label: Option.getOrElse(call.label, () =>
         labelFrom(`Verify: ${Option.getOrElse(call.claim, () => "result")}`)
       ),
-      phase: call.phase,
+      phase: this.phase(`line ${site}`, call.phase),
       schemaName: Option.some("verdict"),
       readonly: true,
     });
@@ -549,7 +594,9 @@ class Recorder {
             this.count() &&
             Schema.is(Schema.Struct({ title: Schema.String }))(args)
           ) {
-            this.phases.push(args.title);
+            this.phases.push(
+              ...Option.toArray(this.phase("phase()", Option.some(args.title)))
+            );
           }
 
           return null;
@@ -579,29 +626,46 @@ class Recorder {
 // ---------------------------------------------------------------------------------------------
 // From the recording to the table.
 
-/** Groups recorded nodes by site, spec and mutability, in order of first call. */
+/**
+ * Groups recorded nodes by site, spec and mutability, in order of first call, then the sites first
+ * reached past the cap. The values come from the script, so the rows are decoded, not asserted: a
+ * row the protocol would not carry fails as a refusal, not a defect.
+ */
 const callSitesOf = (
   nodes: ReadonlyArray<RecordedNode>,
+  late: ReadonlyMap<string, RecordedNode>,
   unbounded: boolean
 ) => {
   const groups = new Map<
     string,
-    { readonly first: RecordedNode; count: number }
+    { readonly first: RecordedNode; count: number; open: boolean }
   >();
 
   for (const node of nodes) {
-    const key = `${node.site}|${node.spec}|${node.readonly}`;
+    const key = siteKey(node);
     const group = groups.get(key);
 
     if (group === undefined) {
-      groups.set(key, { first: node, count: 1 });
+      groups.set(key, { first: node, count: 1, open: false });
     } else {
       group.count += 1;
     }
   }
 
-  return [...groups.values()].map(({ first, count }) =>
-    CallSite.make({
+  // A site asked for again past the cap is in the loop, and one first reached there is after it:
+  // neither count is known.
+  for (const [key, node] of late) {
+    const group = groups.get(key);
+
+    if (group === undefined) {
+      groups.set(key, { first: node, count: 1, open: true });
+    } else {
+      group.open = true;
+    }
+  }
+
+  return decodeCallSites(
+    [...groups.values()].map(({ first, count, open }) => ({
       spec: first.spec,
       label: first.label.slice(0, LABEL_MAX),
       phase: Option.getOrNull(first.phase),
@@ -609,8 +673,8 @@ const callSitesOf = (
       readonly: first.readonly,
       arms: ARMS,
       // A site called more than once in a run that hit the cap may be the loop: its count is open.
-      maxCount: unbounded && count > 1 ? null : count,
-    })
+      maxCount: open || (unbounded && count > 1) ? null : count,
+    }))
   );
 };
 
@@ -727,7 +791,10 @@ export const isLargeWorkflow = (
   run.nodes.unbounded ||
   run.nodes.count > LARGE_WORKFLOW.nodes ||
   estimate.tokensHigh > LARGE_WORKFLOW.tokens ||
-  (budget.maxTokens !== null && estimate.tokensHigh > budget.maxTokens);
+  (budget.maxTokens !== null && estimate.tokensHigh > budget.maxTokens) ||
+  (budget.maxListMicros !== null &&
+    estimate.listMicrosHigh !== null &&
+    estimate.listMicrosHigh > budget.maxListMicros);
 
 /** The launch approval's payload for a dry run: the plan the user says Go to. */
 export const toLaunch = (run: DryRun, input: LaunchInput): WorkflowLaunch => {
@@ -851,7 +918,7 @@ export class WorkflowPlan extends Context.Service<
             })
         );
 
-        if (recorder.callCapReached) {
+        if (recorder.callCapReached && !recorder.capReached) {
           return yield* refuse(
             "dry_run_timeout",
             `The dry run of workflow ${script.meta.name} made over ${limits.callCap} tool calls without finishing. Bound its loops (a loop that only logs never ends), then propose it again.`
@@ -908,13 +975,27 @@ export class WorkflowPlan extends Context.Service<
           ...recorder.nodes.flatMap((node) => Option.toArray(node.phase)),
         ];
 
+        const callSites = yield* callSitesOf(
+          recorder.nodes,
+          recorder.late,
+          recorder.capReached
+        ).pipe(
+          Effect.mapError((issue) =>
+            refuse(
+              "agent_options_invalid",
+              `The dry run of workflow ${script.meta.name} recorded a call the launch card cannot show: ${issue.message}.`
+            )
+          )
+        );
+
         return {
           script,
-          callSites: callSitesOf(recorder.nodes, recorder.capReached),
+          callSites,
           nodes: {
             count: recorder.nodes.length,
             unbounded: recorder.capReached,
           },
+          sitesComplete: result.ok,
           undeclaredPhases: [
             ...new Set(reached.filter((title) => !declared.has(title))),
           ],

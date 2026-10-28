@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
@@ -6,13 +7,16 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Schema } from "effect";
 
 import {
+  isRewrittenWorkflow,
   NODE_TOOLS,
+  PRELUDE_OPENING,
+  PRELUDE_SOURCE,
   PRELUDE_VERSION,
   rewriteScript,
   TOO_MANY_ITEMS,
 } from "./Prelude.ts";
 import type { PreludeBake } from "./Prelude.ts";
-import { parseWorkflowScript } from "./WorkflowScript.ts";
+import { isWorkflowSource, parseWorkflowScript } from "./WorkflowScript.ts";
 
 const META = `export const meta = {
   name: "prelude-test",
@@ -160,6 +164,61 @@ describe(rewriteScript, () => {
       );
     })
   );
+
+  it.effect(
+    "opens with the same text for every bake, so a call on the meta's line keeps its column",
+    () =>
+      Effect.gen(function* () {
+        const script = yield* parseWorkflowScript(
+          `${META} await agent("on the meta line");\nreturn 1;`
+        );
+
+        const sites = (bake: PreludeBake) =>
+          rewriteScript(script, bake).split("\n").slice(0, 4).join("\n");
+
+        assert.strictEqual(
+          sites(BAKE),
+          sites({
+            workflowId: "dry-run",
+            sample: Option.some(3),
+            budgetTokens: Option.none(),
+            args: { other: "args, longer than the first" },
+          })
+        );
+        assert.include(sites(BAKE), PRELUDE_OPENING);
+      })
+  );
+
+  it.effect(
+    "marks rewritten scripts apart from the source they came from",
+    () =>
+      Effect.gen(function* () {
+        const source = `${META}\nreturn 1;`;
+        const script = yield* parseWorkflowScript(source);
+        const rewritten = rewriteScript(script, BAKE);
+
+        assert.isTrue(isWorkflowSource(source));
+        assert.isFalse(isRewrittenWorkflow(source));
+        assert.isTrue(isRewrittenWorkflow(rewritten));
+      })
+  );
+
+  it("pins the prelude's text to its version", () => {
+    // Changing the opening or the prelude changes what a stored run replays: bump PRELUDE_VERSION,
+    // then update this pair.
+    const hash = createHash("sha256")
+      .update(`${PRELUDE_OPENING}\n${PRELUDE_SOURCE}`, "utf-8")
+      .digest("hex")
+      .slice(0, 16);
+
+    assert.deepStrictEqual(
+      { version: PRELUDE_VERSION, hash },
+      {
+        version: 1,
+        hash: "9b7b7630bb9b441f",
+      }
+    );
+  });
 
   it.effect(
     "begins every run with workflow_begin naming the script's hash",

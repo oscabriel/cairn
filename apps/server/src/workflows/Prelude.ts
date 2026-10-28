@@ -5,12 +5,15 @@
 // the call's start data, so a workflow replays with the prelude it started with even after Cairn
 // upgrades. `PRELUDE_VERSION` names this text.
 //
-// The rewrite keeps every line of the script on its line: the constants and the call to
-// `workflow_begin` take the place of the `export` keyword, the body runs inside one async function
-// so unawaited `phase()` and `log()` calls finish before the script returns, and the prelude's
-// functions follow the body, where their declarations hoist. A call site is therefore the script's
-// own `line:column`, read from the stack inside `agent`, the dry run's table and the ledger agree on
-// it, and an error's line is the line the model wrote.
+// The rewrite keeps every line of the script on its line: `PRELUDE_OPENING` takes the place of the
+// `export` keyword, the body runs inside one async function so unawaited `phase()` and `log()`
+// calls finish before the script returns, and the prelude's functions follow the body, where their
+// declarations hoist. What a launch bakes in (the workflow id, args, sample and token ceiling) sits
+// in a function after the prelude, so the opening is the same text for every bake. A call site is
+// therefore the script's own `line:column`, read from the stack inside `agent`, the dry run's table
+// and the ledger agree on it, and an error's line is the line the model wrote. One exception: a
+// call written on the meta statement's own line reports a column shifted by the opening's length,
+// the same shift in the dry run and in every live run.
 //
 // The semantics are Claude Code's workflow script API (research 06 section 2.5): `agent` resolves
 // with the value or `null` when its node was stopped, refused or failed; `parallel` is a barrier
@@ -24,8 +27,14 @@ import { Option, Schema } from "effect";
 
 import type { WorkflowScript } from "./WorkflowScript.ts";
 
-/** The version of `PRELUDE_SOURCE`; bump it with any change to the text. */
+/**
+ * The version of `PRELUDE_OPENING` and `PRELUDE_SOURCE`; bump it with any change to either text.
+ * A test pins their hash to this number, so an edit without a bump fails the gate.
+ */
 export const PRELUDE_VERSION = 1;
+
+/** The comment that opens `PRELUDE_SOURCE`: what marks a rewritten script. */
+export const PRELUDE_MARK = "/* Cairn workflow prelude v";
 
 /** The nested tools the prelude calls, all `callers: ["tools"]`. */
 export const NODE_TOOLS = [
@@ -170,7 +179,7 @@ export const isObjectRootSchema = Schema.is(
  * The prelude's functions, appended after the script's body. Plain ES2023 for QuickJS, no
  * template literals, so it can sit in a TypeScript template string unchanged.
  */
-export const PRELUDE_SOURCE = `/* Cairn workflow prelude v${PRELUDE_VERSION} */
+export const PRELUDE_SOURCE = `${PRELUDE_MARK}${PRELUDE_VERSION} */
 function __cairnSite() {
   var lines = String(new Error().stack || "").split("\\n");
   for (var i = 0; i < lines.length; i++) {
@@ -337,6 +346,18 @@ export interface PreludeBake {
   readonly args: Schema.Json;
 }
 
+/**
+ * What stands where the script's `export` stood, on the same line: the baked constants read from
+ * `__cairnBake`, the first nested call, and the opening of the body's function. One line, and the
+ * same for every bake, so a column on the meta's line shifts by the same amount in every run.
+ */
+export const PRELUDE_OPENING =
+  "const __cairnBaked = __cairnBake(), WORKFLOW = __cairnBaked.workflowId, SAMPLE = __cairnBaked.sample, __cairnPreludeLine = __cairnBaked.preludeLine, __cairnPending = [], args = __cairnFreeze(__cairnBaked.args), budget = __cairnBudget(__cairnBaked.budgetTokens); let __cairnPhase = null; agent.full = __cairnAgentFull; await tools.workflow_begin(__cairnBaked.begin); return await __cairnRun(async () => {";
+
+/** True when `source` is a script `rewriteScript` produced, the prelude appended. */
+export const isRewrittenWorkflow = (source: string): boolean =>
+  source.includes(`\n});\n${PRELUDE_MARK}`);
+
 /** The number of line breaks in `text`. */
 const breaks = (text: string) => text.split("\n").length - 1;
 
@@ -354,25 +375,23 @@ export const rewriteScript = (
   // Drop `export`, keep `const meta = ...` and everything after it as written.
   const body = script.source.slice(script.exportAt + "export".length);
 
-  const begin = JSON.stringify({
+  const begin = {
     workflowId: bake.workflowId,
     scriptHash: script.hash,
     preludeVersion: PRELUDE_VERSION,
-  });
+  };
 
   // The opening adds no line break, so the prelude starts on the line after the closing `});`.
   const preludeLine = breaks(`${before}${body}\n});\n`) + 1;
 
-  const constants = [
-    `const WORKFLOW = ${JSON.stringify(bake.workflowId)}`,
-    `SAMPLE = ${JSON.stringify(Option.getOrNull(bake.sample))}`,
-    `__cairnPreludeLine = ${preludeLine}`,
-    `__cairnPending = []`,
-    `args = __cairnFreeze(${JSON.stringify(bake.args)})`,
-    `budget = __cairnBudget(${JSON.stringify(Option.getOrNull(bake.budgetTokens))})`,
-  ].join(", ");
+  const baked = JSON.stringify({
+    workflowId: bake.workflowId,
+    sample: Option.getOrNull(bake.sample),
+    preludeLine,
+    args: bake.args,
+    budgetTokens: Option.getOrNull(bake.budgetTokens),
+    begin,
+  });
 
-  const opening = `${constants}; let __cairnPhase = null; agent.full = __cairnAgentFull; await tools.workflow_begin(${begin}); return await __cairnRun(async () => {`;
-
-  return `${before}${opening}${body}\n});\n${PRELUDE_SOURCE}`;
+  return `${before}${PRELUDE_OPENING}${body}\n});\n${PRELUDE_SOURCE}function __cairnBake() {\n  return ${baked};\n}\n`;
 };

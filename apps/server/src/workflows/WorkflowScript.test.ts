@@ -42,6 +42,15 @@ const expectRefusal = (
     }
   });
 
+/** A refusal's reason and the decoder's part of its message: the advice after it names every field. */
+const issue = (source: string) =>
+  refusedWith(source).pipe(
+    Effect.map(({ reason, message }) => ({
+      reason,
+      issue: message.split(". It needs")[0] ?? "",
+    }))
+  );
+
 describe(parseWorkflowScript, () => {
   it.effect("reads a meta literal and hashes the source as submitted", () =>
     Effect.gen(function* () {
@@ -224,16 +233,19 @@ return 1;`);
     "refuses a meta literal that is not a valid meta, naming the fields",
     () =>
       Effect.gen(function* () {
-        yield* expectRefusal(
-          'export const meta = { name: "x" };',
-          "meta_invalid",
-          "description"
+        const missing = yield* issue('export const meta = { name: "x" };');
+
+        assert.strictEqual(missing.reason, "meta_invalid");
+        assert.include(missing.issue, '["description"]');
+        assert.notInclude(missing.issue, '["name"]');
+
+        const badName = yield* issue(
+          'export const meta = { name: "Review Modules", description: "d" };'
         );
-        yield* expectRefusal(
-          'export const meta = { name: "Review Modules", description: "d" };',
-          "meta_invalid",
-          "lowercase"
-        );
+
+        assert.strictEqual(badName.reason, "meta_invalid");
+        assert.include(badName.issue, '["name"]');
+        assert.notInclude(badName.issue, '["description"]');
         yield* expectRefusal(
           'export const meta = { name: "x", description: "d", phases: [{ title: "A", model: "opus" }] };',
           "meta_invalid",
@@ -286,7 +298,13 @@ const c = \`export \${"import"} and \${ { n: "export" }.n }\`;
 const d = /export|import/u.test(a) ? 1 : 2 / 3;
 const e = { export: 1, import: 2 }.export;
 const log2 = (x) => x;
-return [a, b, c, d, e, log2];`)
+let n = 4;
+const f = n-- / 2;
+const counts = [1];
+const g = counts[0]++ / 2 + (n)-- / 1;
+if (a) /"/.test(a);
+while (false) /'/.test(a);
+return [a, b, c, d, e, log2, f, g];`)
         );
 
         assert.strictEqual(parsed.meta.name, "review-modules");
@@ -313,6 +331,36 @@ return [a, b, c, d, e, log2];`)
           "`budget`"
         );
         yield* expectRefusal(
+          script("const { budget } = { budget: 1 };"),
+          "reserved_name",
+          "`budget`"
+        );
+        yield* expectRefusal(
+          script("const { a: [, { b: approve = 2 }] } = x;"),
+          "reserved_name",
+          "`approve`"
+        );
+        yield* expectRefusal(
+          script("const [first, ...log] = [1, 2];"),
+          "reserved_name",
+          "`log`"
+        );
+        yield* expectRefusal(
+          script("let x = f(1, 2), agent = 2;"),
+          "reserved_name",
+          "`agent`"
+        );
+        yield* expectRefusal(
+          script("var x = 1\n, phase = 2;"),
+          "reserved_name",
+          "`phase`"
+        );
+        yield* expectRefusal(
+          script("function* agent() {}"),
+          "reserved_name",
+          "`agent`"
+        );
+        yield* expectRefusal(
           script("const __cairnPhase = 1;"),
           "reserved_name",
           "__cairn"
@@ -330,6 +378,15 @@ return [a, b, c, d, e, log2];`)
         );
 
         assert.strictEqual(nested.meta.name, "review-modules");
+
+        // Names a declaration reads, not binds: keys, defaults, initialisers, the next statement.
+        const reads = yield* parseWorkflowScript(
+          script(
+            "const { agent: worker = budget, [args.key]: value } = { agent: 1 };\nlet x = { phase: log }, y = parallel([])\nlog(x, y);\nreturn [worker, value];"
+          )
+        );
+
+        assert.strictEqual(reads.meta.name, "review-modules");
       })
   );
 

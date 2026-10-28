@@ -170,7 +170,7 @@ _Avoid_: plugin
 
 **Client settings**: The settings that belong to one device (send shortcut, follow-up behaviour, timestamp format, confirm delete, composer collapse, theme, font sizes, chat width, diff layout), saved in localStorage under `cairn:client-settings:v1`. Server settings are the ones the brain keeps for every device.
 
-**Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a spent plan window (Limited).
+**Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.
 
 **Projection**: The client's view of a thread: pi-durable's conversation with brain-only documents and Claude stamps removed, image data replaced by references and long strings cut.
 
@@ -227,6 +227,10 @@ _Avoid_: approval policy, trust level
 **List price**: A model's catalog price per token, which Cairn uses to put a dollar figure on spend. On a plan (the bridge, OpenCode Go, Codex) it is not a bill, and the figure says so.
 
 _Avoid_: cost (for a plan's figure)
+
+**Model family**: The vendor a model comes from (Anthropic, OpenAI, Google, or other), whichever provider serves it. A judge or verifier on another family than the worker is the outside judge the kickoff asks for.
+
+**Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between). Role resolution passes over a limited or failing provider.
 
 **Budget**: The limits a brief or a workflow's launch carries (list-price dollars, tokens, turns, minutes, a plan window guard), with a warning line at 80% by default. Reaching it stops new work and asks for a raise.
 

@@ -1,3 +1,7 @@
+import {
+  fauxAssistantMessage,
+  isRetryableAssistantError,
+} from "@earendil-works/pi-ai";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
@@ -20,6 +24,12 @@ const classify = (message: string, reason?: string) =>
 /** The plan whose limit `message` names. */
 const plan = (message: string) =>
   Option.map(usageLimitOf(message, AT), (limit) => limit.plan);
+
+/** Whether pi-ai would send a request again after an error answer with `errorMessage`. */
+const retried = (errorMessage: string) =>
+  isRetryableAssistantError(
+    fauxAssistantMessage("", { stopReason: "error", errorMessage })
+  );
 
 describe("run failure classes", () => {
   it("maps the bridge's plan-quota text to a usage limit that is not retried", () => {
@@ -150,5 +160,26 @@ describe("run failure classes", () => {
 
     assert.strictEqual(failure.class, "provider_error");
     assert.isTrue(failure.retryable);
+  });
+
+  it("agrees with pi-ai's retry rule on the limit texts pi-ai words itself", () => {
+    // pi-ai retries an assistant error before the run fails; a limit it retried would only cost
+    // backoff, but the texts its own providers write must reach the run as they are.
+    for (const message of [
+      "You have hit your ChatGPT usage limit (plus plan). Try again in ~95 min.",
+      '429 {"type":"error","error":{"type":"GoUsageLimitError"}}',
+      "Monthly usage limit reached",
+      `${PLAN_QUOTA_PREFIX}: the weekly window resets Friday.`,
+    ]) {
+      assert.isFalse(retried(message), message);
+      assert.strictEqual(classify(message, "model_error").class, "usage_limit");
+    }
+
+    // A raw `usage_limit_reached` body with its 429 is retried by pi-ai first, then classified.
+    const raw =
+      'openai-codex API error (429): {"error":{"code":"usage_limit_reached"}}';
+
+    assert.isTrue(retried(raw));
+    assert.strictEqual(classify(raw, "model_error").class, "usage_limit");
   });
 });

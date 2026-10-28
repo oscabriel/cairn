@@ -4,10 +4,13 @@
 // transient by those words; only failures newer than the last success count, so writes merged out of
 // order still count right; capacity failures never mark a provider. Changed: Cairn's rule from
 // docs/phase-2/notes/models.md (failing after an auth failure newer than the last success, or three
-// transient failures inside five minutes with no success between), a usage limit as its own state
+// transient failures inside five minutes with no success between, which lapses `TRANSIENT_HOLD_MS`
+// after the newest of them so one request can find out), a usage limit as its own state
 // (`limited` until the reset a Codex limit names; a limit that names none, as OpenCode Go's and the
 // Claude plan's, lifts at the next success or after `UNSTATED_LIMIT_MS`, so role resolution sends one
-// request an hour to find out); request-specific failures (bad request, unknown model, context
+// request an hour to find out; a quota or billing exhaustion pi-ai will not retry is such a limit);
+// pi-ai's credential errors (no API key, a token with no account id, a failed refresh) as auth;
+// request-specific failures (bad request, unknown model, context
 // overflow) as their own kind that never counts; the record kept in memory and in `cairn.sqlite`
 // instead of a JSON file, and time from `Clock`. Ultimate's `reset` on a login change is kept as
 // `ModelHealth.reset`, which the login and logout RPCs call.
@@ -51,6 +54,14 @@ export const STREAK = 3;
 
 /** The span `STREAK` transient failures must fall inside, with no success between. */
 export const STREAK_WINDOW_MS = 5 * 60_000;
+
+/**
+ * How long a transient streak holds a provider failing after its newest failure. The failures are
+ * transient and role resolution never sends to a failing provider, so without this no success would
+ * ever come to clear the streak; after it one request finds out, and three more failures inside
+ * `STREAK_WINDOW_MS` mark the provider again.
+ */
+export const TRANSIENT_HOLD_MS = 15 * 60_000;
 
 /**
  * How long a usage limit that names no reset holds without a success. OpenCode Go's monthly limit
@@ -101,12 +112,29 @@ const KNOWN: ReadonlySet<string> = new Set([
   "aborted",
   "quota",
   "unavailable",
+  "billing",
+  "usage_limit",
+  "no_api_key",
+  "no_account_id",
+  "refresh_failed",
+  "out_of_budget",
   "ECONNREFUSED",
   "ECONNRESET",
   "ENOTFOUND",
   "ETIMEDOUT",
   "EAI_AGAIN",
 ]);
+
+/**
+ * pi-ai's credential and account-limit sentences, each stored as one word of its own, since their
+ * words alone (`No`, `key`, `Failed`) say nothing.
+ */
+const PHRASES: ReadonlyArray<readonly [pattern: RegExp, word: string]> = [
+  [/\bno api key for provider\b/iu, "no_api_key"],
+  [/\bfailed to extract accountid\b/iu, "no_account_id"],
+  [/\b(?:oauth|token) refresh failed\b/iu, "refresh_failed"],
+  [/\bout of budget\b/iu, "out_of_budget"],
+];
 
 /** Each known word by its lower case, so `Unauthorized` is stored as `unauthorized`. */
 const KNOWN_LOWER: ReadonlyMap<string, string> = new Map(
@@ -121,7 +149,8 @@ const MAX_PARTS = 5;
 
 /**
  * A failure message reduced to what may be stored: the HTTP status when it leads or is named
- * (`401 ...`, `status 429`, `API error (403)`), then the known words it contains, in order, without
+ * (`401 ...`, `status 429`, `API error (403)`), then the word for each pi-ai sentence it holds
+ * (`No API key for provider` is `no_api_key`), then the known words it contains, in order, without
  * duplicates; anything else is dropped, and a message with nothing known is "request failed".
  */
 export const sanitizeError = (message: string): string => {
@@ -131,6 +160,12 @@ export const sanitizeError = (message: string): string => {
 
   if (code !== undefined) {
     parts.push(code);
+  }
+
+  for (const [pattern, word] of PHRASES) {
+    if (pattern.test(message)) {
+      parts.push(word);
+    }
   }
 
   for (const word of message.split(/[^A-Za-z_]+/u)) {
@@ -163,6 +198,20 @@ const AUTH: ReadonlySet<string> = new Set([
   "forbidden",
   "expired",
   "revoked",
+  "no_api_key",
+  "no_account_id",
+  "refresh_failed",
+]);
+
+/**
+ * An account's quota or billing is spent: pi-ai's retry rule never retries these, so they are a
+ * limit that names no reset, not a busy provider. A bare `quota` stays capacity, because a per-minute
+ * quota (Google's `Quota exceeded for quota metric`) lifts in seconds.
+ */
+const ACCOUNT_LIMIT: ReadonlySet<string> = new Set([
+  "insufficient_quota",
+  "out_of_budget",
+  "billing",
 ]);
 
 const CAPACITY: ReadonlySet<string> = new Set([
@@ -172,7 +221,6 @@ const CAPACITY: ReadonlySet<string> = new Set([
   "overloaded",
   "rate_limit_error",
   "rate_limit_exceeded",
-  "insufficient_quota",
   "quota",
 ]);
 
@@ -193,6 +241,18 @@ const REQUEST: ReadonlySet<string> = new Set([
   "request_too_large",
 ]);
 
+/** Stored words that name a limit by themselves. */
+const LIMIT_WORDS: ReadonlySet<string> = new Set([
+  ...ACCOUNT_LIMIT,
+  "usage_limit",
+  "usage_limit_reached",
+  "usage_not_included",
+  "subscription_sharing_usage_limit_exceeded",
+  "subscription_sharing_workplace_individual_usage_limit_exceeded",
+  "GoUsageLimitError",
+  "FreeUsageLimitError",
+]);
+
 /** What a failure says about its provider. */
 export type FailureKind =
   | "limit"
@@ -202,7 +262,8 @@ export type FailureKind =
   | "transient";
 
 /**
- * A failure's kind: `limit` for a plan's usage limit (`classifyRunFailure`'s patterns), `auth` when
+ * A failure's kind: `limit` for a plan's usage limit (`classifyRunFailure`'s patterns) or a spent
+ * account quota or billing, `auth` when
  * the login is broken, `capacity` when the provider is busy or rate limited, `request` when the
  * request itself was wrong (neither of those two ever counts), and `transient` for anything else
  * (timeouts, network errors, server errors).
@@ -220,6 +281,10 @@ export const failureKind = (message: string, at: DateTime.Utc): FailureKind => {
 
   if (parts.some((part) => AUTH.has(part))) {
     return "auth";
+  }
+
+  if (parts.some((part) => ACCOUNT_LIMIT.has(part))) {
+    return "limit";
   }
 
   if (parts.some((part) => CAPACITY.has(part))) {
@@ -294,6 +359,24 @@ const after = (time: number, since: Option.Option<number>) =>
 const forAll = <A>(option: Option.Option<A>, predicate: (a: A) => boolean) =>
   Option.isNone(option) || predicate(option.value);
 
+/**
+ * The words stored for a failure. A limit's sentence may hold no known word (Codex's "You have hit
+ * your ChatGPT usage limit"), so a limit without one of its own words leads with `usage_limit`.
+ */
+const errorOf = (kind: FailureKind, message: string) => {
+  const words = sanitizeError(message);
+
+  if (kind !== "limit") {
+    return words;
+  }
+
+  const parts = words === "request failed" ? [] : words.split(" ");
+
+  return parts.some((part) => LIMIT_WORDS.has(part))
+    ? words
+    : ["usage_limit", ...parts].slice(0, MAX_PARTS).join(" ");
+};
+
 /** `record` with one failure folded in, counted by its kind. */
 const applyFailure = (
   record: HealthRecord,
@@ -332,7 +415,7 @@ const applyFailure = (
             .slice(-STREAK)
         : record.transient,
     limit,
-    error: isNewest ? Option.some(sanitizeError(message)) : record.error,
+    error: isNewest ? Option.some(errorOf(kind, message)) : record.error,
   };
 };
 
@@ -360,8 +443,8 @@ export const applyOutcome = (
  * The provider's state at `now`: `failing` after an auth failure newer than the last success;
  * `limited` under a usage limit newer than the last success whose reset is still ahead (when it
  * names none, for `UNSTATED_LIMIT_MS` after it);
- * `failing` after `STREAK` transient failures inside `STREAK_WINDOW_MS` with no success between;
- * otherwise `ok` once anything succeeded, else `unknown`.
+ * `failing` after `STREAK` transient failures inside `STREAK_WINDOW_MS` with no success between,
+ * until `TRANSIENT_HOLD_MS` after the newest of them; otherwise `ok` once anything succeeded, else `unknown`.
  */
 export const healthState = (record: HealthRecord, now: number): HealthState => {
   if (Option.exists(record.lastAuth, (at) => after(at, record.lastOk))) {
@@ -386,7 +469,7 @@ export const healthState = (record: HealthRecord, now: number): HealthState => {
     const first = recent[0] ?? 0;
     const last = recent.at(-1) ?? 0;
 
-    if (last - first <= STREAK_WINDOW_MS) {
+    if (last - first <= STREAK_WINDOW_MS && now < last + TRANSIENT_HOLD_MS) {
       return "failing";
     }
   }

@@ -1,7 +1,8 @@
 // J-health (docs/phase-2/notes/models.md): one auth failure turns a provider failing until a
-// success; three transient failures within five minutes do, two do not, and three spread wider do
-// not; capacity and request failures never count; a Codex limit holds until the reset it names and
-// an OpenCode Go limit until the next success or for an hour; the stored error holds only the fixed
+// success; three transient failures within five minutes do, until fifteen minutes after the newest
+// of them, two do not, and three spread wider do not; pi-ai's credential errors are auth failures;
+// capacity and request failures never count; a Codex limit holds until the reset it names and
+// an OpenCode Go limit or a spent quota or bill until the next success or for an hour; the stored error holds only the fixed
 // vocabulary; `reset` forgets a provider; and the record survives a restart, on a migrated in-memory
 // cairn.sqlite.
 
@@ -21,6 +22,8 @@ import {
   ModelHealth,
   outcomeOfResponse,
   sanitizeError,
+  STREAK_WINDOW_MS,
+  TRANSIENT_HOLD_MS,
   UNSTATED_LIMIT_MS,
 } from "./ModelHealth.ts";
 
@@ -143,6 +146,147 @@ describe("provider health", () => {
       }).pipe(Effect.provide(TestLayer))
   );
 
+  it.effect(
+    "lets a transient streak lapse fifteen minutes after its newest failure",
+    () =>
+      Effect.gen(function* () {
+        const health = yield* ModelHealth;
+        const hold = TRANSIENT_HOLD_MS / MINUTE;
+
+        // One request whose three retries each failed with a 503, recorded one per attempt.
+        const state = yield* stateAfter(
+          "opencode-go",
+          [
+            ok(0),
+            failed(1, "503 server_error"),
+            failed(1.5, "503 server_error"),
+            failed(2, "503 server_error"),
+          ],
+          2 + STREAK_WINDOW_MS / MINUTE + 1
+        );
+
+        assert.strictEqual(state.state, "failing");
+
+        yield* TestClock.setTime(BASE + (2 + hold - 1) * MINUTE);
+        assert.strictEqual(
+          (yield* health.stateOf("opencode-go")).state,
+          "failing"
+        );
+
+        // With no success to clear it, the streak lapses so role resolution sends one request.
+        yield* TestClock.setTime(BASE + (2 + hold) * MINUTE);
+        assert.strictEqual((yield* health.stateOf("opencode-go")).state, "ok");
+
+        // A week on it still reads as before the streak, across a restart too.
+        const restarted = yield* ModelHealth.pipe(
+          Effect.provide(ModelHealth.layerNoDeps)
+        );
+
+        yield* TestClock.setTime(BASE + 7 * 24 * 60 * MINUTE);
+        assert.strictEqual(
+          (yield* restarted.stateOf("opencode-go")).state,
+          "ok"
+        );
+
+        // One more failure does not mark it again; a fresh streak does.
+        yield* restarted.record("opencode-go", failed(hold + 3, TRANSIENT));
+        yield* TestClock.setTime(BASE + (hold + 4) * MINUTE);
+        assert.strictEqual(
+          (yield* restarted.stateOf("opencode-go")).state,
+          "ok"
+        );
+
+        yield* restarted.record("opencode-go", failed(hold + 4, TRANSIENT));
+        yield* restarted.record("opencode-go", failed(hold + 5, TRANSIENT));
+        yield* TestClock.setTime(BASE + (hold + 6) * MINUTE);
+        assert.strictEqual(
+          (yield* restarted.stateOf("opencode-go")).state,
+          "failing"
+        );
+      }).pipe(Effect.provide(TestLayer))
+  );
+
+  it.effect("turns failing on pi-ai's credential errors", () =>
+    Effect.gen(function* () {
+      const health = yield* ModelHealth;
+
+      const messages = [
+        ["opencode-go", "No API key for provider: opencode-go", "no_api_key"],
+        [
+          "openai-codex",
+          "Failed to extract accountId from token",
+          "no_account_id",
+        ],
+        ["anthropic", "OAuth refresh failed for anthropic", "refresh_failed"],
+      ] as const;
+
+      for (const [provider, message, word] of messages) {
+        const state = yield* stateAfter(
+          provider,
+          [ok(0), failed(1, message)],
+          2
+        );
+
+        assert.strictEqual(state.state, "failing", message);
+        assert.deepStrictEqual(state.error, Option.some(word));
+      }
+
+      yield* health.record("opencode-go", ok(3));
+      assert.strictEqual((yield* health.stateOf("opencode-go")).state, "ok");
+    }).pipe(Effect.provide(TestLayer))
+  );
+
+  it.effect(
+    "holds a spent quota or bill as a limit for an hour, and a per-minute quota as capacity",
+    () =>
+      Effect.gen(function* () {
+        const health = yield* ModelHealth;
+        const hour = UNSTATED_LIMIT_MS / MINUTE;
+
+        const messages = [
+          ["openai", "429 insufficient_quota: You exceeded your current quota"],
+          ["openrouter", "402 Your account is out of budget"],
+          ["zai", "Insufficient balance, please check your billing details"],
+        ] as const;
+
+        for (const [provider, message] of messages) {
+          const state = yield* stateAfter(
+            provider,
+            [ok(0), failed(1, message)],
+            2
+          );
+
+          assert.strictEqual(state.state, "limited", message);
+          assert.isTrue(Option.isNone(state.limitedUntil));
+        }
+
+        yield* TestClock.setTime(BASE + (hour + 1) * MINUTE);
+        assert.strictEqual((yield* health.stateOf("openai")).state, "ok");
+
+        const perMinute = yield* stateAfter(
+          "google",
+          [
+            ok(0),
+            failed(
+              1,
+              "429 Quota exceeded for quota metric requests per minute"
+            ),
+            failed(
+              2,
+              "429 Quota exceeded for quota metric requests per minute"
+            ),
+            failed(
+              3,
+              "429 Quota exceeded for quota metric requests per minute"
+            ),
+          ],
+          4
+        );
+
+        assert.strictEqual(perMinute.state, "ok");
+      }).pipe(Effect.provide(TestLayer))
+  );
+
   it.effect("stays ok on two transient failures", () =>
     Effect.gen(function* () {
       const state = yield* stateAfter(
@@ -229,6 +373,8 @@ describe("provider health", () => {
 
       assert.strictEqual(limited.state, "limited");
       assert.deepStrictEqual(limited.limitedUntil, Option.some(at(31)));
+      // The sentence holds no known word, so the stored error names the limit.
+      assert.deepStrictEqual(limited.error, Option.some("usage_limit"));
 
       yield* TestClock.setTime(BASE + 31 * MINUTE);
       assert.strictEqual((yield* health.stateOf("openai-codex")).state, "ok");

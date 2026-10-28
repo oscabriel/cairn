@@ -1,0 +1,10 @@
+{
+  "name": "pi-host-provider",
+  "version": "1.0.0",
+  "private": true,
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

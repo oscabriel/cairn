@@ -5,9 +5,12 @@
 // order still count right; capacity failures never mark a provider. Changed: Cairn's rule from
 // docs/phase-2/notes/models.md (failing after an auth failure newer than the last success, or three
 // transient failures inside five minutes with no success between), a usage limit as its own state
-// (`limited` until the reset a Codex limit names, or until the next success on OpenCode Go and the
-// Claude plan), the record kept in memory and in `cairn.sqlite` instead of a JSON file, and time from
-// `Clock`.
+// (`limited` until the reset a Codex limit names; a limit that names none, as OpenCode Go's and the
+// Claude plan's, lifts at the next success or after `UNSTATED_LIMIT_MS`, so role resolution sends one
+// request an hour to find out); request-specific failures (bad request, unknown model, context
+// overflow) as their own kind that never counts; the record kept in memory and in `cairn.sqlite`
+// instead of a JSON file, and time from `Clock`. Ultimate's `reset` on a login change is kept as
+// `ModelHealth.reset`, which the login and logout RPCs call.
 //
 // MIT License. Copyright (c) 2026 Daniel Griesser
 //
@@ -48,6 +51,14 @@ export const STREAK = 3;
 
 /** The span `STREAK` transient failures must fall inside, with no success between. */
 export const STREAK_WINDOW_MS = 5 * 60_000;
+
+/**
+ * How long a usage limit that names no reset holds without a success. OpenCode Go's monthly limit
+ * and a spent Claude window say nothing about when they lift, and role resolution never sends to a
+ * limited provider, so without this ceiling no success would ever come to clear one. After it the
+ * provider reads as it did before the limit; one more limited answer marks it again.
+ */
+export const UNSTATED_LIMIT_MS = 60 * 60_000;
 
 /**
  * The only words a stored error may contain: provider and OAuth error codes, network errors, plan
@@ -165,13 +176,40 @@ const CAPACITY: ReadonlySet<string> = new Set([
   "quota",
 ]);
 
+/**
+ * Failures of one request, not of its provider: a bad or oversized request, an unknown model, a
+ * context overflow. The words `classifyRunFailure` takes as permanent, less the auth ones.
+ */
+const REQUEST: ReadonlySet<string> = new Set([
+  "400",
+  "404",
+  "413",
+  "422",
+  "invalid_request",
+  "invalid_request_error",
+  "context_length_exceeded",
+  "model_not_found",
+  "not_found_error",
+  "request_too_large",
+]);
+
 /** What a failure says about its provider. */
-export type FailureKind = "limit" | "auth" | "capacity" | "transient";
+export type FailureKind =
+  | "limit"
+  | "auth"
+  | "capacity"
+  | "request"
+  | "transient";
 
 /**
  * A failure's kind: `limit` for a plan's usage limit (`classifyRunFailure`'s patterns), `auth` when
- * the login is broken, `capacity` when the provider is busy or rate limited (never counted), and
- * `transient` for anything else (timeouts, network errors, server errors).
+ * the login is broken, `capacity` when the provider is busy or rate limited, `request` when the
+ * request itself was wrong (neither of those two ever counts), and `transient` for anything else
+ * (timeouts, network errors, server errors).
+ *
+ * pi-durable's `afterResponse` fires for every attempt, retries included, so one request whose
+ * retries run out would count up to its attempt count. The feed should record a request's attempts
+ * as one outcome (its last), not one per attempt.
  */
 export const failureKind = (message: string, at: DateTime.Utc): FailureKind => {
   if (Option.isSome(usageLimitOf(message, at))) {
@@ -186,6 +224,10 @@ export const failureKind = (message: string, at: DateTime.Utc): FailureKind => {
 
   if (parts.some((part) => CAPACITY.has(part))) {
     return "capacity";
+  }
+
+  if (parts.some((part) => REQUEST.has(part))) {
+    return "request";
   }
 
   return "transient";
@@ -316,7 +358,8 @@ export const applyOutcome = (
 
 /**
  * The provider's state at `now`: `failing` after an auth failure newer than the last success;
- * `limited` under a usage limit newer than the last success whose reset (when known) is still ahead;
+ * `limited` under a usage limit newer than the last success whose reset is still ahead (when it
+ * names none, for `UNSTATED_LIMIT_MS` after it);
  * `failing` after `STREAK` transient failures inside `STREAK_WINDOW_MS` with no success between;
  * otherwise `ok` once anything succeeded, else `unknown`.
  */
@@ -330,7 +373,7 @@ export const healthState = (record: HealthRecord, now: number): HealthState => {
       record.limit,
       (limit) =>
         after(limit.at, record.lastOk) &&
-        forAll(limit.until, (until) => now < until)
+        now < Option.getOrElse(limit.until, () => limit.at + UNSTATED_LIMIT_MS)
     )
   ) {
     return "limited";
@@ -382,7 +425,10 @@ export const outcomeOfResponse = (
 export interface ProviderHealth {
   readonly provider: string;
   readonly state: HealthState;
-  /** When a `limited` state lifts on its own; none when it waits for a success. */
+  /**
+   * When a `limited` state lifts, as the limit named it; none when it named no reset (it then lifts
+   * at the next success, or `UNSTATED_LIMIT_MS` after the limit).
+   */
   readonly limitedUntil: Option.Option<DateTime.Utc>;
   readonly lastOk: Option.Option<DateTime.Utc>;
   /** The newest failure, as words from the fixed vocabulary. */
@@ -394,7 +440,11 @@ export class ModelHealthError extends Schema.TaggedError<ModelHealthError>()(
   "ModelHealthError",
   {
     message: Schema.String,
-    operation: Schema.Literals(["ModelHealth.load", "ModelHealth.record"]),
+    operation: Schema.Literals([
+      "ModelHealth.load",
+      "ModelHealth.record",
+      "ModelHealth.reset",
+    ]),
     provider: Schema.optionalKey(Schema.String),
     cause: Schema.Defect(),
   }
@@ -468,6 +518,11 @@ export class ModelHealth extends Context.Service<
     stateOf(provider: string): Effect.Effect<ProviderHealth>;
     /** Every provider heard from, by id. */
     readonly all: Effect.Effect<ReadonlyArray<ProviderHealth>>;
+    /**
+     * Forgets everything heard from the provider, for a login or logout: a new login mends a broken
+     * one and may lift a limit, so the old record says nothing about it.
+     */
+    reset(provider: string): Effect.Effect<void, ModelHealthError>;
   }
 >()("cairn/server/models/ModelHealth") {
   /** Loads `model_health` through the ambient `SqlClient`; a row that does not decode is skipped. */
@@ -587,7 +642,37 @@ export class ModelHealth extends Context.Service<
           .map(([provider, health]) => reportOf(provider, health, now));
       }).pipe(Effect.withSpan("ModelHealth.all"));
 
-      return ModelHealth.of({ record, stateOf, all });
+      const reset = Effect.fn("ModelHealth.reset")(
+        function* (provider: string) {
+          yield* writes.withPermits(1)(
+            Effect.gen(function* () {
+              yield* sql`DELETE FROM model_health WHERE provider_id = ${provider}`;
+
+              yield* Ref.update(records, (current) => {
+                const next = new Map(current);
+                next.delete(provider);
+
+                return next;
+              });
+            })
+          );
+        },
+        (effect, provider) =>
+          effect.pipe(
+            Effect.catchTag("SqlError", (cause) =>
+              Effect.fail(
+                new ModelHealthError({
+                  message: `ModelHealth.reset could not forget the health of provider ${provider}. The stored and in-memory records are unchanged; reset again.`,
+                  operation: "ModelHealth.reset",
+                  provider,
+                  cause,
+                })
+              )
+            )
+          )
+      );
+
+      return ModelHealth.of({ record, stateOf, all, reset });
     })
   );
 }

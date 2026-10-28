@@ -2,16 +2,21 @@
 // priced as its `anthropic` twin and labelled at API list price, plan providers are `list_on_plan`
 // and keyed ones `metered`, and a model whose rates are all zero, or that the catalog lacks, is
 // unpriced: no figure at all, never $0. The catalog rows are copied from pi-ai 1.4.0's
-// `providers/data/*.json`; pi-ai's own `calculateCost` is the outside judge of the arithmetic.
+// `providers/data/*.json`, and one test reads the runtime catalog with the guarded anthropic provider,
+// as the brain registers it; pi-ai's own `calculateCost` is the outside judge of the arithmetic.
 
+import { claudeModels, DEFAULT_LONG_CONTEXT } from "@cairn/bridge/ClaudeModels";
 import type { Usage } from "@earendil-works/pi-ai";
 import { calculateCost, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai/models";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 
+import { guardedAnthropicProvider } from "./AnthropicGuard.ts";
 import type { CatalogEntry, CatalogLookup, TokenUse } from "./ModelPrice.ts";
 import {
   basisOf,
+  catalogLookupOf,
   listMicrosOf,
   ModelPrice,
   priceBasisOf,
@@ -250,6 +255,7 @@ describe("model prices", () => {
     const price = priceOf(ref("openrouter", "odd/tier-only"), lookup);
 
     assert.isTrue(ModelPrice.$is("Priced")(price));
+    assert.strictEqual(priceLabel(price), "<$0.0001 in, <$0.0001 out per Mtok");
     assert.deepStrictEqual(
       listMicrosOf(price, use({ input: 500 })),
       Option.some(0)
@@ -294,5 +300,28 @@ describe("model prices", () => {
       priceLabel(priceOf(ref("openai-codex", "gpt-6-luna"), lookup)),
       "$0.1 in, $0.5 out per Mtok at API list price"
     );
+  });
+
+  it("prices every bridge model from the runtime's own anthropic catalog", () => {
+    const models = createModels();
+
+    models.setProvider(guardedAnthropicProvider());
+
+    const runtime = catalogLookupOf(models);
+    const opus = priceOf(ref("claude-bridge", "claude-opus-5-5"), runtime);
+
+    assert.strictEqual(
+      priceLabel(opus),
+      "$4 in, $20 out per Mtok at API list price"
+    );
+
+    for (const model of claudeModels(DEFAULT_LONG_CONTEXT)) {
+      assert.isTrue(
+        ModelPrice.$is("Priced")(
+          priceOf(ref(model.provider, model.id), runtime)
+        ),
+        model.id
+      );
+    }
   });
 });

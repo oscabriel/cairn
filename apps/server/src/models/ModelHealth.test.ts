@@ -1,8 +1,9 @@
 // J-health (docs/phase-2/notes/models.md): one auth failure turns a provider failing until a
 // success; three transient failures within five minutes do, two do not, and three spread wider do
-// not; capacity failures never count; a Codex limit holds until the reset it names and an OpenCode
-// Go limit until the next success; the stored error holds only the fixed vocabulary; and the record
-// survives a restart, on a migrated in-memory cairn.sqlite.
+// not; capacity and request failures never count; a Codex limit holds until the reset it names and
+// an OpenCode Go limit until the next success or for an hour; the stored error holds only the fixed
+// vocabulary; `reset` forgets a provider; and the record survives a restart, on a migrated in-memory
+// cairn.sqlite.
 
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Effect, Layer, Option, Schema } from "effect";
@@ -20,6 +21,7 @@ import {
   ModelHealth,
   outcomeOfResponse,
   sanitizeError,
+  UNSTATED_LIMIT_MS,
 } from "./ModelHealth.ts";
 
 const DbLayer = Database.layerTest({
@@ -29,7 +31,9 @@ const DbLayer = Database.layerTest({
 
 const TestLayer = ModelHealth.layerNoDeps.pipe(Layer.provideMerge(DbLayer));
 
-const BASE = Date.parse("2026-10-28T12:00:00Z");
+const BASE = DateTime.toEpochMillis(
+  DateTime.makeUnsafe("2026-10-28T12:00:00Z")
+);
 
 const MINUTE = 60_000;
 
@@ -231,32 +235,107 @@ describe("provider health", () => {
     }).pipe(Effect.provide(TestLayer))
   );
 
-  it.effect("holds an OpenCode Go limit until the next success", () =>
-    Effect.gen(function* () {
-      const health = yield* ModelHealth;
+  it.effect(
+    "holds an OpenCode Go limit until the next success, or for an hour",
+    () =>
+      Effect.gen(function* () {
+        const health = yield* ModelHealth;
+        const hour = UNSTATED_LIMIT_MS / MINUTE;
 
-      const limited = yield* stateAfter(
-        "opencode-go",
+        const limited = yield* stateAfter(
+          "opencode-go",
+          [
+            ok(0),
+            failed(
+              1,
+              '429 {"type":"error","error":{"type":"GoUsageLimitError","message":"Rolling usage limit reached"}}'
+            ),
+          ],
+          hour
+        );
+
+        assert.strictEqual(limited.state, "limited");
+        assert.isTrue(Option.isNone(limited.limitedUntil));
+        assert.deepStrictEqual(
+          limited.error,
+          Option.some("429 GoUsageLimitError")
+        );
+
+        yield* health.record("opencode-go", ok(hour));
+        assert.strictEqual((yield* health.stateOf("opencode-go")).state, "ok");
+
+        // A limit that names no reset lapses after an hour, so one request can find out; another
+        // limited answer marks the provider again.
+        yield* health.record(
+          "opencode-go",
+          failed(hour + 1, "Monthly usage limit reached")
+        );
+        yield* TestClock.setTime(BASE + (hour + 1) * MINUTE);
+        assert.strictEqual(
+          (yield* health.stateOf("opencode-go")).state,
+          "limited"
+        );
+
+        yield* TestClock.setTime(BASE + (2 * hour + 1) * MINUTE);
+        assert.strictEqual((yield* health.stateOf("opencode-go")).state, "ok");
+
+        yield* health.record(
+          "opencode-go",
+          failed(2 * hour + 1, "Monthly usage limit reached")
+        );
+        assert.strictEqual(
+          (yield* health.stateOf("opencode-go")).state,
+          "limited"
+        );
+      }).pipe(Effect.provide(TestLayer))
+  );
+
+  it.effect("never counts a failure of the request itself", () =>
+    Effect.gen(function* () {
+      const state = yield* stateAfter(
+        "openai-codex",
         [
           ok(0),
-          failed(
-            1,
-            '429 {"type":"error","error":{"type":"GoUsageLimitError","message":"Rolling usage limit reached"}}'
-          ),
+          failed(1, "400 context_length_exceeded"),
+          failed(2, "404 model_not_found"),
+          failed(3, "invalid_request_error: messages too long"),
+          failed(4, "413 request_too_large"),
         ],
-        10_000
+        5
       );
 
-      assert.strictEqual(limited.state, "limited");
-      assert.isTrue(Option.isNone(limited.limitedUntil));
-      assert.deepStrictEqual(
-        limited.error,
-        Option.some("429 GoUsageLimitError")
-      );
-
-      yield* health.record("opencode-go", ok(10_001));
-      assert.strictEqual((yield* health.stateOf("opencode-go")).state, "ok");
+      assert.strictEqual(state.state, "ok");
     }).pipe(Effect.provide(TestLayer))
+  );
+
+  it.effect("forgets a provider on reset, in memory and in storage", () =>
+    Effect.gen(function* () {
+      const fresh = ModelHealth.pipe(Effect.provide(ModelHealth.layerNoDeps));
+
+      const before = yield* fresh;
+
+      yield* before.record("openai-codex", ok(0));
+      yield* before.record("openai-codex", failed(1, "401 invalid_grant"));
+      yield* before.record("opencode-go", ok(0));
+      yield* TestClock.setTime(BASE + 2 * MINUTE);
+
+      yield* before.reset("openai-codex");
+      assert.strictEqual(
+        (yield* before.stateOf("openai-codex")).state,
+        "unknown"
+      );
+
+      const after = yield* fresh;
+
+      assert.strictEqual(
+        (yield* after.stateOf("openai-codex")).state,
+        "unknown"
+      );
+      assert.deepStrictEqual(
+        (yield* after.all).map((health) => health.provider),
+        ["opencode-go"]
+      );
+    }).pipe(Effect.provide(DbLayer))
   );
 
   it.effect("stores only words from the fixed vocabulary", () =>

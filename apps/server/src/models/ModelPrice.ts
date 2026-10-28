@@ -197,7 +197,11 @@ const microsAt = (price: PricedModel, use: TokenUse): Micros => {
 
 /**
  * The list price of `use`, in millionths of a dollar, rounded; none when the model is unpriced, so
- * unknown never adds up as zero. Tiers apply per request: price each response, then sum.
+ * unknown never adds up as zero. Tiers apply per request: price each response, then sum. Never
+ * price a sum of responses, such as pi-durable's per-model `pi.usage` totals: a tier would then
+ * apply to the whole sum (Haiku 5.5's tier above 100k input prices a long thread about five times
+ * too high). A bridge response records zero cost, so its price is read from each assistant entry's
+ * own `usage`, or recorded when the response arrives.
  */
 export const listMicrosOf = (
   price: ModelPrice,
@@ -208,12 +212,18 @@ export const listMicrosOf = (
     Unpriced: () => Option.none(),
   });
 
+/** The smallest rate a label shows; a lower one, zero included, reads as below it, never "$0". */
+const SMALLEST_RATE = 0.0001;
+
 const dollars = (perMtok: number) =>
-  `$${perMtok.toFixed(4).replace(/\.?0+$/u, "")}`;
+  perMtok < SMALLEST_RATE
+    ? `<$${SMALLEST_RATE}`
+    : `$${perMtok.toFixed(4).replace(/\.?0+$/u, "")}`;
 
 /**
  * How a price reads on a card or in the `roles` tool: input and output per million tokens, with
- * "at API list price" on a plan, or "no price listed". Never "$0".
+ * "at API list price" on a plan, or "no price listed". Never "$0": a priced model's rate below
+ * $0.0001 reads "<$0.0001".
  */
 export const priceLabel = (price: ModelPrice): string =>
   ModelPrice.$match(price, {

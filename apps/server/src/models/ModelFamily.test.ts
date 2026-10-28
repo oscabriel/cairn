@@ -31,6 +31,8 @@ describe("model families", () => {
       ["openrouter", "google/gemma-4", "google"],
       ["openrouter", "deepseek/deepseek-v4-pro", "other"],
       ["vercel-ai-gateway", "codex-mini-latest", "openai"],
+      ["vercel-ai-gateway", "o4-mini", "openai"],
+      ["opencode-go", "gemma-4", "google"],
       ["openrouter", "openai/chatgpt-4o-latest", "openai"],
       ["openrouter", "google/learnlm-2.0-flash", "google"],
       ["amazon-bedrock", "us.anthropic.claude-sonnet-5-5", "anthropic"],

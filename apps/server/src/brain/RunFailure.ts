@@ -5,7 +5,11 @@
 //   time comes from the plan window that rejected, so it is left to the usage feed;
 // - Codex (pi-ai `openai-codex-responses.ts` `parseErrorResponse`) says "You have hit your ChatGPT
 //   usage limit (<plan> plan). Try again in ~<n> min.", and the reset is the failure's time plus
-//   those minutes; the Responses API path words a shared-plan limit with its error codes;
+//   those minutes; the Responses API path words a shared-plan limit with its error codes; on the
+//   WebSocket transport (Codex's default) an `error` event becomes "Codex error: <server message>",
+//   with the code left out when a message is present, so a message that speaks of a usage limit
+//   counts too. No real WebSocket limit body has been captured yet: the Codex login judge (1D, 3D)
+//   records one and adds it to RunFailure.test.ts;
 // - OpenCode Go answers with `GoUsageLimitError` (or `FreeUsageLimitError`), "Monthly usage limit
 //   reached" or a request to enable "available balance" (pi-ai `utils/retry.ts`), with no reset.
 
@@ -19,9 +23,12 @@ export const PLAN_QUOTA_PREFIX = "Claude plan quota exceeded";
 /** What pi-ai's Codex provider says when a ChatGPT plan's limit rejects a request. */
 export const CODEX_LIMIT_TEXT = "You have hit your ChatGPT usage limit";
 
-/** A Codex plan limit: pi-ai's sentence, or the error codes the Responses API path passes through. */
+/**
+ * A Codex plan limit: pi-ai's sentence, the WebSocket path's "Codex error:" naming a usage limit, or
+ * the error codes the Responses API path passes through.
+ */
 const CODEX_LIMIT_PATTERN =
-  /You have hit your ChatGPT usage limit|\busage_limit_reached\b|subscription_sharing_(?:workplace_individual_)?usage_limit_exceeded/iu;
+  /You have hit your ChatGPT usage limit|^Codex error: .*\busage limit|\busage_limit_reached\b|subscription_sharing_(?:workplace_individual_)?usage_limit_exceeded/iu;
 
 /** The wait Codex's sentence names, in whole minutes. */
 const CODEX_RESET_PATTERN = /Try again in ~(?<minutes>\d+) min\b/u;

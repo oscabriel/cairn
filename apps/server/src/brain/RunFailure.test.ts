@@ -111,11 +111,12 @@ describe("run failure classes", () => {
     assert.isTrue(Option.isNone(failure.resetAt));
   });
 
-  it("takes the Responses API's shared-plan limit codes as a Codex usage limit", () => {
+  it("takes the Responses API's shared-plan limit codes and the WebSocket's wording as a Codex usage limit", () => {
     for (const message of [
       'openai-codex API error (429): {"error":{"code":"usage_limit_reached"}}',
       "429 subscription_sharing_usage_limit_exceeded\nCheck your ChatGPT usage: https://chatgpt.com/codex/settings/usage",
       "429 subscription_sharing_workplace_individual_usage_limit_exceeded",
+      "Codex error: The usage limit for your plan has been reached.",
     ]) {
       const failure = classify(message, "model_error");
 

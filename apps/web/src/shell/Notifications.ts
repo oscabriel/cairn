@@ -24,20 +24,31 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { hasUnseenCompletion } from "@cairn/client-logic/PresentThreadShell";
 import {
-  hasUnseenCompletion,
-  resolveSidebarThreadStatus,
-} from "@cairn/client-logic/Sidebar";
+  isSubagentThread,
+  pendingSubagentRequests,
+  subagentRequestFor,
+} from "@cairn/client-logic/SubagentRollup";
+import type { SubagentRequest } from "@cairn/client-logic/SubagentRollup";
+import { threadStatus } from "@cairn/client-logic/ThreadState";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
 
-/** True when a thread needs the user: a question, an approval, a failure or an unseen result. */
-export const needsAttention = (thread: ThreadShell): boolean => {
-  const status = resolveSidebarThreadStatus(thread);
+/**
+ * True when a thread needs the user: a question, an approval or a brief, its own or one of its
+ * subagents' (`subagentRequest`), a failure, a hold, or an unseen result.
+ */
+export const needsAttention = (
+  thread: ThreadShell,
+  subagentRequest: Option.Option<SubagentRequest>
+): boolean => {
+  const status = threadStatus(thread, subagentRequest);
 
   return (
     status === "input" ||
     status === "approval" ||
+    status === "go" ||
     status === "failed" ||
     status === "limited" ||
     status === "parked" ||
@@ -45,17 +56,24 @@ export const needsAttention = (thread: ThreadShell): boolean => {
   );
 };
 
-/** The favicon badge's count: threads that need the user, the open one excepted. */
+/**
+ * The favicon badge's count: threads with a sidebar row that need the user, the open one excepted.
+ * A subagent has no row; its requests count on its ancestors.
+ */
 export const badgeCount = (
   threads: ReadonlyArray<ThreadShell>,
   openThreadId: Option.Option<string>
-): number =>
-  threads.filter(
+): number => {
+  const requests = pendingSubagentRequests(threads);
+
+  return threads.filter(
     (thread) =>
       Option.isNone(thread.archivedAt) &&
+      !isSubagentThread(thread) &&
       !Option.contains(openThreadId, thread.id) &&
-      needsAttention(thread)
+      needsAttention(thread, subagentRequestFor(requests, thread.id))
   ).length;
+};
 
 const BADGE_ATTRIBUTE = "data-cairn-badge";
 

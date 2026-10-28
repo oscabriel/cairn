@@ -2,13 +2,13 @@
 // and paging in apps/web/src/components/Sidebar.tsx (`partitionSidebarThreads`,
 // `SETTLED_TAIL_*`), apps/web/src/projectIdentity.ts and apps/web/src/projectIconColors.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the shelves and their precedence (snoozed,
-// settled, pinned, active), the row status and its top label, receding rows, unseen completion,
-// title search with content matches after title matches, adjacent-thread traversal, preferred-id
-// ordering, the project monogram and colour, the row accessibility label and settled paging (10,
-// then 25). Changed: Cairn's shell rows (status comes from `activity` and `pendingRuntimeRequest`,
-// with `parked` added beside `failed` and `limited`), one environment, an `Option` where t3code
-// returns `null`. Not ported: drag and drop, sweep gestures, multi-select, pull requests, subagent
-// lineage and the Working shelf (plan D27), and React hooks.
+// settled, pinned, active), receding rows, unseen completion, title search with content matches
+// after title matches, adjacent-thread traversal, preferred-id ordering, the project monogram and
+// colour, the row accessibility label and settled paging (10, then 25), and subagent rows left out
+// of the shelves. Changed: Cairn's shell rows, one environment, an `Option` where t3code returns
+// `null`; a row's status, top label and words come from `ThreadState.ts` (package 1E). Not ported:
+// drag and drop, sweep gestures, multi-select, pull requests, forks and the Working shelf (plan
+// D27), and React hooks.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -31,12 +31,14 @@ import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Array, DateTime, Option, Order } from "effect";
 
-import { effectiveSnoozed, threadWokeAt } from "./ThreadSettled.ts";
+import { isSubagentThread } from "./SubagentRollup.ts";
+import { effectiveSnoozed } from "./ThreadSettled.ts";
 import {
   sortActiveThreadsByOrderKey,
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "./ThreadSort.ts";
+import type { ThreadStatus } from "./ThreadState.ts";
 
 /** The shelves of the sidebar, top to bottom. */
 export type SidebarSection = "pinned" | "active" | "snoozed" | "settled";
@@ -79,7 +81,7 @@ export const sectionOf = (
 
 /**
  * Splits the shell's threads into shelves at `now`, keeping only `projectFilter`'s threads when
- * one is set. Pinned by pin order, active by active order (activity never reorders it), snoozed by
+ * one is set, and leaving out archived threads and subagents (ADR 0028). Pinned by pin order, active by active order (activity never reorders it), snoozed by
  * wake time, settled by settle time.
  */
 export const partitionSidebarThreads = <T extends ThreadShell>(
@@ -94,10 +96,11 @@ export const partitionSidebarThreads = <T extends ThreadShell>(
     settled: [],
   };
 
-  // One pass: each visible thread's shelf is resolved once.
+  // One pass: each visible thread's shelf is resolved once. A subagent has no row of its own.
   for (const thread of threads) {
     if (
       Option.isNone(thread.archivedAt) &&
+      !isSubagentThread(thread) &&
       Option.match(projectFilter, {
         onNone: () => true,
         onSome: (projectId) => thread.projectId === projectId,
@@ -163,93 +166,12 @@ export const visibleThreadOrder = <T extends { readonly id: string }>(
   );
 };
 
-/** What a row shows in its status slot, by priority. */
-export type SidebarThreadStatus =
-  | "approval"
-  | "input"
-  | "working"
-  | "waiting"
-  | "parked"
-  | "failed"
-  | "limited"
-  | "ready";
-
-/**
- * A thread's status: a request for the user first (approval over a question), then busy work,
- * then a parked task, then the latest run's failure (a usage limit reads as limited).
- */
-export const resolveSidebarThreadStatus = (
-  thread: Pick<
-    ThreadShell,
-    "activity" | "pendingRuntimeRequest" | "lastErrorClass" | "parkedTaskIds"
-  >
-): SidebarThreadStatus => {
-  if (Option.isSome(thread.pendingRuntimeRequest)) {
-    const { kind } = thread.pendingRuntimeRequest.value;
-
-    return kind === "user-input" || kind === "sign-in" ? "input" : "approval";
-  }
-
-  if (thread.activity === "preparing" || thread.activity === "running") {
-    return "working";
-  }
-
-  if (thread.activity === "waiting") {
-    return "waiting";
-  }
-
-  if (thread.activity === "parked" || thread.parkedTaskIds.length > 0) {
-    return "parked";
-  }
-
-  if (thread.activity === "failed") {
-    return Option.contains(thread.lastErrorClass, "usage_limit")
-      ? "limited"
-      : "failed";
-  }
-
-  return "ready";
-};
-
-/** The label in a row's top-right corner, when it has one instead of the row's age. */
-export type SidebarTopStatus =
-  | "approval"
-  | "done"
-  | "failed"
-  | "limited"
-  | "parked"
-  | "input"
-  | "waiting"
-  | "woke"
-  | "working";
-
-/** The top label: the status, else "Woke" after an early wake, else "Done" when unseen. */
-export const resolveSidebarTopStatus = (input: {
-  readonly status: SidebarThreadStatus;
-  readonly isUnread: boolean;
-  readonly isWoke: boolean;
-}): Option.Option<SidebarTopStatus> => {
-  if (input.status !== "ready") {
-    return Option.some(input.status);
-  }
-
-  if (input.isWoke) {
-    return Option.some("woke");
-  }
-
-  return input.isUnread ? Option.some("done") : Option.none();
-};
-
-/** Only working rows show how long they have been at it. */
-export const shouldShowSidebarDuration = (status: SidebarThreadStatus) =>
-  status === "working";
-
 /**
  * True when a row should fade back: busy rows always (unless open or selected), and quiet or
  * approval rows once seen. Rows asking a question never recede.
  */
 export const shouldRecedeSidebarThread = (input: {
-  readonly status: SidebarThreadStatus;
+  readonly status: ThreadStatus;
   readonly isUnread: boolean;
   readonly isWoke: boolean;
   readonly isActive: boolean;
@@ -259,29 +181,26 @@ export const shouldRecedeSidebarThread = (input: {
     return false;
   }
 
-  if (input.status === "working" || input.status === "waiting") {
+  if (
+    input.status === "working" ||
+    input.status === "waiting" ||
+    input.status === "asking-parent"
+  ) {
     return true;
   }
 
-  if (input.status === "ready" || input.status === "approval") {
+  if (
+    input.status === "ready" ||
+    input.status === "approval" ||
+    input.status === "go"
+  ) {
     return !input.isUnread && !input.isWoke;
   }
 
   return false;
 };
 
-/**
- * True when the row shows "Woke": a snooze ended (early or on time) after the user last looked,
- * and the thread was not settled since.
- */
-export const isThreadWoke = (thread: ThreadShell, now: DateTime.Utc): boolean =>
-  !Option.contains(thread.settledOverride, "settled") &&
-  Option.exists(threadWokeAt(thread, now), (wokeAt) =>
-    Option.match(thread.lastVisitedAt, {
-      onNone: () => true,
-      onSome: (visitedAt) => DateTime.isLessThan(visitedAt, wokeAt),
-    })
-  );
+export { isThreadWoke } from "./ThreadState.ts";
 
 export { hasUnseenCompletion } from "./PresentThreadShell.ts";
 

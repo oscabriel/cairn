@@ -12,6 +12,12 @@ import type {
   SidebarPartition,
   SidebarSection,
 } from "@cairn/client-logic/Sidebar";
+import {
+  isSubagentThread,
+  pendingSubagentRequests,
+  subagentRequestFor,
+} from "@cairn/client-logic/SubagentRollup";
+import type { SubagentRequest } from "@cairn/client-logic/SubagentRollup";
 import { buildThreadActionMenuItems } from "@cairn/client-logic/ThreadMenu";
 import type {
   ContextMenuItem,
@@ -107,6 +113,43 @@ export const partitionOf = (model: Model): SidebarPartition<ThreadShell> => {
   return partition;
 };
 
+interface RequestsMemo {
+  readonly shell: Model["context"]["shell"];
+  readonly requests: ReturnType<typeof pendingSubagentRequests>;
+}
+
+/** The last rollup, so every row of one render shares it. */
+const requestsMemo = new Map<"last", RequestsMemo>();
+
+/** The rollup of the shell's subagent requests onto their ancestors. */
+const requestsOf = (
+  model: Model
+): ReturnType<typeof pendingSubagentRequests> => {
+  const last = requestsMemo.get("last");
+
+  if (last !== undefined && last.shell === model.context.shell) {
+    return last.requests;
+  }
+
+  const requests = pendingSubagentRequests(
+    Option.match(model.context.shell, {
+      onNone: () => [],
+      onSome: (shell) => shell.threads,
+    })
+  );
+
+  requestsMemo.set("last", { shell: model.context.shell, requests });
+
+  return requests;
+};
+
+/** What `thread`'s subagents ask of the user, shown on its row. */
+export const subagentRequestOf = (
+  model: Model,
+  thread: ThreadShell
+): Option.Option<SubagentRequest> =>
+  subagentRequestFor(requestsOf(model), thread.id);
+
 /** A thread's shelf now. */
 export const sectionOfThread = (
   model: Model,
@@ -123,11 +166,13 @@ export const isSearching = (model: Model): boolean =>
 
 /** The search results: title matches, then threads whose latest message matches. */
 export const searchResultsOf = (model: Model): Array<ThreadShell> => {
-  const threads = threadsOf(model).filter((thread) =>
-    Option.match(model.projectFilter, {
-      onNone: () => true,
-      onSome: (projectId) => thread.projectId === projectId,
-    })
+  const threads = threadsOf(model).filter(
+    (thread) =>
+      !isSubagentThread(thread) &&
+      Option.match(model.projectFilter, {
+        onNone: () => true,
+        onSome: (projectId) => thread.projectId === projectId,
+      })
   );
 
   return searchSidebarThreads(

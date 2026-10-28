@@ -113,7 +113,7 @@ Some states have no literal of their own; the row says them through other fields
 | Queued input | `queueLength` is above 0: inputs admitted but not yet in the transcript. | Active |
 | Pending approval | `pendingRuntimeRequest` names the oldest pending request the user can answer and its kind; `origin` names the child when it mirrors a child's escalated question. `pendingCount` counts them. | Waiting on you |
 | Subagent | `lineage` is set: the row is a child, hidden from the sidebar, which resolves it to its nearest ancestor with a row. | Shelf |
-| Children working | `subagents` counts the thread's children by `working`, `asking`, `settled` and `failed`. | Active |
+| Children working | `subagents` counts the thread's children by `working`, `asking`, `settled` and `failed`; a thread whose run ended while children still work or ask says "Waiting". | Active |
 | Goal | `goal` is set: the thread has criteria, counted `total`, `met` and `failed`. | Active |
 | Parked task | `parkedTaskIds` lists each parked task; the thread offers Retry for the first. | Held |
 | Hold | Computed by the client from the row: a parked task, else a `usage_limit` failure (Limited), else `waitingFor` `claude_slot`. | Held |
@@ -244,7 +244,7 @@ stateDiagram-v2
 
 ## Label map
 
-What the web client shows for each status today. The sidebar row's label comes from `resolveSidebarThreadStatus` and `resolveSidebarTopStatus` (`packages/client-logic/src/Sidebar.ts:178-242`) and its words from `TOP_STATUS_LOOKS` (`apps/web/src/sidebar/Row.ts:90-136`); the hold banner above an open thread from `holdOf` (`apps/web/src/shell/Parked.ts:139-260`).
+What the web client shows for each status today. One function gives a thread's state, its category, its row label's words and tone, and its hold: `threadState` in `packages/client-logic/src/ThreadState.ts` (package 1E), with a descendant's request rolled up to its ancestors by `pendingSubagentRequests` (`packages/client-logic/src/SubagentRollup.ts`). The sidebar row (`apps/web/src/sidebar/Row.ts`) adds only the icon and the colour classes for each tone; the hold banner above an open thread (`apps/web/src/shell/Parked.ts`) adds its sentences. `judges/thread-state-rows.test.ts` checks every row of the status tables above against the function, and the words below against it.
 
 | Schema | Value | The UI shows | Where |
 | --- | --- | --- | --- |
@@ -259,7 +259,7 @@ What the web client shows for each status today. The sidebar row's label comes f
 | `RunFailureClass` | `transport_error` | "Failed", and `lastError`: "The model provider could not be reached. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `unknown` | "Failed", and `lastError`: "The run failed. Send again to retry.", or a launch's own message. | Sidebar row, thread page |
 | `WaitingFor` | `claude_slot` | Banner "Waiting": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
-| `WaitingFor` | `parent` | Nothing yet; a child's row is hidden from the sidebar. The thread-state function (1E) says "Asked its parent". | None |
+| `WaitingFor` | `parent` | The thread-state function says "Asked its parent"; no surface draws it yet, because a child's row is hidden from the sidebar. | None |
 | `WaitingFor` | `none` | Nothing. | None |
 | `SettledOverride` | `settled` | The row sits under the "Settled" shelf header ("Settled (<n>)" when folded); its menu offers "Unsettle". The undo notice after settling says "Settled <n> thread" or "threads", with Undo. | Sidebar |
 | `SettledOverride` | `active` | Nothing of its own: the row sits on the active or pinned shelf and its menu offers "Settle". | Sidebar |
@@ -267,7 +267,7 @@ What the web client shows for each status today. The sidebar row's label comes f
 | `RuntimeRequestKind` | `tool-call` | "Approval". | Sidebar row |
 | `RuntimeRequestKind` | `user-input` | "Input". | Sidebar row |
 | `RuntimeRequestKind` | `sign-in` | "Input". | Sidebar row |
-| `RuntimeRequestKind` | `brief` | "Approval" today; the thread-state function (1E) says "Go". | Sidebar row |
+| `RuntimeRequestKind` | `brief` | "Go", in the approval colour. A child's brief shows on its ancestors as "Approval". | Sidebar row |
 | `RuntimeRequestKind` | `criteria` | "Approval". | Sidebar row |
 | `ApprovalStatus` | `pending` | Only through the thread's row ("Approval" or "Input"). There is no approval card yet. | Sidebar row |
 | `ApprovalStatus` | `accepted` | Not shown. | None |
@@ -325,7 +325,7 @@ What the web client shows for each status today. The sidebar row's label comes f
 | `PortalState` | `stopped` | Not shown yet; the portal entry (6I), with Start. | None |
 | `PortalState` | `removed` | Not shown yet; the portal entry (6I). | None |
 
-No status is shown raw. Phase 2's statuses are labelled "Not shown yet" with the package that draws them; the thread-state function (1E) is tested over every row of this document. Two phase 1 gaps: approval records past `pending` are not shown anywhere, because approval cards have not landed (full access, the default permission mode, asks for none); and the sidebar's "Waiting" label (`apps/web/src/sidebar/Row.ts:96-100`) has no path to it, since the projector sets `waiting` only together with a pending request, which the sidebar shows as "Approval" or "Input" first.
+No status is shown raw. Phase 2's statuses are labelled "Not shown yet" with the package that draws them; the thread-state function (1E) is tested over every row of this document. A subagent's own request shows on every ancestor's row, approval over input, while the child's run is live (a brief or criteria whatever the run). One phase 1 gap remains: approval records past `pending` are not shown anywhere, because approval cards have not landed (full access, the default permission mode, asks for none). The sidebar's "Waiting" label now has a path: a thread whose run ended while its children still work or ask.
 
 ## Source references
 

@@ -2,11 +2,18 @@
 // stopped retrying it after repeated crashes) with Retry, a turn waiting for a Claude slot, and a
 // spent Claude plan window ("Limited") with its reset time. Retry calls `thread.retryTask` at once
 // rather than through the outbox: retrying a task that is no longer parked does nothing, and the
-// shell stream clears the banner when the thread moves.
+// shell stream clears the banner when the thread moves. Which hold stands, and its badge's word and
+// tone, come from the one thread-state function (`threadHold`, `HOLD_LABELS` in `ThreadState.ts`).
 
+import {
+  HOLD_LABELS,
+  ThreadHold,
+  threadHold,
+} from "@cairn/client-logic/ThreadState";
+import type { ThreadTone } from "@cairn/client-logic/ThreadState";
 import { TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";
-import { Array, Data, Effect, Equal, Option, Schema } from "effect";
+import { Effect, Equal, Option, Schema } from "effect";
 import { Command, Submodel } from "foldkit";
 import type { Update } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -21,6 +28,7 @@ import type {
 import { failureMessage } from "../connection/Failure.ts";
 import { formatDayTime } from "../settings/Time.ts";
 import { badge } from "../ui/Badge.ts";
+import type { BadgeVariant } from "../ui/Badge.ts";
 import { button, buttonDefaults } from "../ui/Button.ts";
 
 /** The banner's Model: the open thread's row, and the retry in flight. */
@@ -136,42 +144,27 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
   });
 
-/** What holds the thread up, most urgent first. */
-export type Hold = Data.TaggedEnum<{
-  Parked: { readonly taskId: TaskId };
-  Limited: { readonly resetsAt: ThreadShell["usageLimitResetAt"] };
-  WaitingForSlot: { readonly threadId: ThreadId };
-}>;
+type H = HtmlBuilder<Message>;
 
-/** The holds' constructors and matcher. */
-export const Hold = Data.taggedEnum<Hold>();
+/** A badge's variant for a hold's tone. */
+const BADGE_VARIANTS: Readonly<Record<ThreadTone, BadgeVariant>> = {
+  info: "info",
+  muted: "secondary",
+  attention: "warning",
+  question: "info",
+  warning: "warning",
+  error: "error",
+  success: "success",
+};
 
-/** What the banner shows for `thread`, if anything. */
-export const holdOf = (thread: ThreadShell): Option.Option<Hold> => {
-  const parked = Array.head(thread.parkedTaskIds);
+const holdBadge = (h: H, tag: ThreadHold["_tag"]): Html => {
+  const label = HOLD_LABELS[tag];
 
-  if (Option.isSome(parked)) {
-    return Option.some(Hold.Parked({ taskId: parked.value }));
-  }
-
-  if (
-    thread.activity === "failed" &&
-    Option.contains(thread.lastErrorClass, "usage_limit")
-  ) {
-    return Option.some(Hold.Limited({ resetsAt: thread.usageLimitResetAt }));
-  }
-
-  if (thread.waitingFor === "claude_slot") {
-    return Option.some(Hold.WaitingForSlot({ threadId: thread.id }));
-  }
-
-  return Option.none();
+  return badge(h, BADGE_VARIANTS[label.tone], "default", [], [label.word]);
 };
 
 const BANNER_CLASS =
   "mx-auto mt-2 flex w-full max-w-(--chat-content-max-width) items-center gap-2 rounded-xl border px-3 py-2 text-sm";
-
-type H = HtmlBuilder<Message>;
 
 const banner = (
   h: H,
@@ -196,7 +189,7 @@ const parkedBanner = (
   h: H
 ): Html =>
   banner(h, "parked", "border-warning/32 bg-warning/8", [
-    badge(h, "warning", "default", [], ["Parked"]),
+    holdBadge(h, "Parked"),
     h.span(
       [h.Class("min-w-0 flex-1")],
       [
@@ -225,16 +218,16 @@ const parkedBanner = (
 const content = (model: Model, h: H): Html =>
   Option.match(
     Option.flatMap(model.thread, (thread) =>
-      Option.map(holdOf(thread), (hold) => ({ thread, hold }))
+      Option.map(threadHold(thread), (hold) => ({ thread, hold }))
     ),
     {
       onNone: () => h.empty,
       onSome: ({ hold, thread }) =>
-        Hold.$match(hold, {
+        ThreadHold.$match(hold, {
           Parked: ({ taskId }) => parkedBanner(model, thread, taskId, h),
           Limited: ({ resetsAt }) =>
             banner(h, "limited", "border-warning/32 bg-warning/8", [
-              badge(h, "warning", "default", [], ["Limited"]),
+              holdBadge(h, "Limited"),
               h.span(
                 [h.Class("min-w-0 flex-1")],
                 [
@@ -249,7 +242,7 @@ const content = (model: Model, h: H): Html =>
             ]),
           WaitingForSlot: () =>
             banner(h, "claude-slot", "border-border/60 bg-card/40", [
-              badge(h, "info", "default", [], ["Waiting"]),
+              holdBadge(h, "WaitingForSlot"),
               h.span(
                 [h.Class("min-w-0 flex-1 text-muted-foreground")],
                 ["This thread is waiting for a Claude slot."]

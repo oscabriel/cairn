@@ -74,6 +74,7 @@ import {
   partitionOf,
   projectsOf,
   searchResultsOf,
+  subagentRequestOf,
   threadMenuOf,
 } from "./Derived.ts";
 import { headerView } from "./Header.ts";
@@ -174,6 +175,7 @@ const row = (
         ? Option.some(renaming.title)
         : Option.none()
     ),
+    subagentRequest: subagentRequestOf(model, thread),
   };
 
   return section === "pinned" || section === "active"

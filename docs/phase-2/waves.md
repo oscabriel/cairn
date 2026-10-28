@@ -50,3 +50,40 @@ The S42 import boundaries gained phase 2's tool folders: pi-durable and pi-ai at
 - `judges/thread-states.test.ts` reads the five new modules; it failed on 47 status values with no row and no label before `docs/golden/thread-states.md` gained them, and passes now (5 of 5).
 - `JsonSchema.test.ts` regenerates both goldens without drift; its plain-JSON check fails on a planted `OptionFromNullOr` and caught `ResolvedRole`'s Options inside `cairn.subagents` before they were made plain.
 - Review fixes: `ThreadCommandHandlers.test.ts` (3 cases, one per guarded command), `Policy.test.ts` (the program cap equals the wire limit and counts UTF-8 bytes), `Shell.test.ts` (a phase 1 row decodes with the defaults), and a `ClaudeUsage.test.ts` case for `reading` over a failed probe, a fresh brain, a read, a third-party login and a logged-out CLI. `SubagentStatus` lost `declined` and `expired` and their two golden rows.
+
+## Step 1.0 integration
+
+Integrated on 2026-10-28 on `main`.
+
+### Packages
+
+| Package      | Branch       | Commit    | Status                    |
+| ------------ | ------------ | --------- | ------------------------- |
+| 1.0 Contract | `phase2/1.0` | `13d0f5f` | done, merged as `37f9404` |
+
+The branch merged with `--no-ff` and no conflicts: `main` had not moved since the branch started.
+
+### Integration judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` from a clean install (every `node_modules` removed, `pnpm install --frozen-lockfile`), since the lockfile changed | pass | ok in 75 s: fmt, lint, typecheck, 1,330 tests. `pnpm why -r effect`: one `effect@4.0.5`. |
+| `judges/thread-states.test.ts`, `judges/lint-boundaries.test.ts`, `JsonSchema.test.ts` (both goldens), `ThreadWire.test.ts` | pass | 4 files, 35 tests (21 root, 8 protocol, 6 server). Goldens regenerated with 0 drift. |
+| Real-model judges | not applicable | none run; cost $0. |
+
+### Hand-offs applied
+
+- **`ThreadWire` against the new `VISIBLE_DOCUMENTS`.** The projection reads the protocol list, so the six new `cairn.*` kinds pass its filter with no code change. Its header comment now names them, and says that listing a kind does not watch it.
+- **The stale package worktree.** `.claude/worktrees/wf_f64abd35-692-1` had `phase2/1.0` checked out with `15f213e`'s files staged over `13d0f5f`. It was reset to `phase2/1.0`, so nobody commits a reversal from it.
+
+### Hand-offs held for later packages
+
+These stay open and are recorded under "Rules later packages follow" above or in the package blocks: lifting the `notYet` refusals (1A, 2B, 4C, 5A) and turning their test cases around; replacing stubs through `rpc/Handlers.ts`; each package's migration line (0007 to 0012); and turning the one approvals watch in `PiDurableHarness.watch` into a loop over every visible `cairn.*` kind when the first of 2B, 3A, 4B, 4D or 5F lands (the integrator does it then).
+
+### What differs from the plan
+
+The package's own deviations are in its review record; the ones later packages read are above: `PROTOCOL_VERSION` 2 and the second golden `schema/cairn-documents.json`, one merged `Budget` in `Spend.ts`, the workflow launch as approval kind `brief` with a `WorkflowLaunch` payload and the decision `accept_sample`, request ids using `-` as the separator, and `RespondInput.reason` refused until 1A.
+
+### Left for the user
+
+- Nothing to do now: no brain is deployed in this step. When the next deploy happens, the web build and the brain must ship together, because the protocol moved from 1 to 2. A page still on protocol 1 is refused with 426 and reloads.

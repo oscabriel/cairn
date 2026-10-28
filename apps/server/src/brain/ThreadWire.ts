@@ -1,7 +1,10 @@
 // The wire projection of a thread (ADR 0020): what a client sees of pi-durable's conversation view.
 //
 // - Documents: only those in `VISIBLE_DOCUMENTS` (`pi.agent`, `pi.live`, `pi.inbox`, `pi.usage`,
-//   `cairn.approvals`). `pi.provider` carries the Claude session id and stays in the brain.
+//   `cairn.approvals`, `cairn.permissions`, `cairn.goal`, `cairn.subagents`, `cairn.child`,
+//   `cairn.escalations`, `cairn.workflows`). Listing a kind does not watch it: the harness's
+//   `watch` decides which documents reach the stream. `pi.provider` carries the Claude session id
+//   and stays in the brain.
 // - Entries: `pi.system` entries (prompt and tool-set deltas) become a bare `cairn.hidden`
 //   placeholder in the same position, so entry indices still line up and the prompt never leaves.
 // - Assistant messages lose their `cairn.claude` diagnostics (the bridge's stamp, ADR 0018).

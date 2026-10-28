@@ -7,6 +7,8 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Schema } from "effect";
 
 import {
+  BAKE_CLOSING,
+  BAKE_OPENING,
   isRewrittenWorkflow,
   NODE_TOOLS,
   PRELUDE_OPENING,
@@ -207,15 +209,18 @@ describe(rewriteScript, () => {
     // Changing the opening or the prelude changes what a stored run replays: bump PRELUDE_VERSION,
     // then update this pair.
     const hash = createHash("sha256")
-      .update(`${PRELUDE_OPENING}\n${PRELUDE_SOURCE}`, "utf-8")
+      .update(
+        `${PRELUDE_OPENING}\n${PRELUDE_SOURCE}\n${BAKE_OPENING}\n${BAKE_CLOSING}`,
+        "utf-8"
+      )
       .digest("hex")
       .slice(0, 16);
 
     assert.deepStrictEqual(
       { version: PRELUDE_VERSION, hash },
       {
-        version: 1,
-        hash: "9b7b7630bb9b441f",
+        version: 2,
+        hash: "c1eecb76450d137b",
       }
     );
   });
@@ -419,6 +424,22 @@ try {
 
       assert.deepStrictEqual(valueOf(result), [true, 3]);
     })
+  );
+
+  it.effect(
+    "reads a __proto__ key in args as a key, as the card shows it",
+    () =>
+      Effect.gen(function* () {
+        const { result } = yield* runScript(
+          "return [Object.keys(args), args.polluted === undefined, Object.getPrototypeOf(args) === Object.prototype];",
+          {
+            ...BAKE,
+            args: decodeJson(JSON.parse('{"__proto__":{"polluted":"yes"}}')),
+          }
+        );
+
+        assert.deepStrictEqual(valueOf(result), [["__proto__"], true, true]);
+      })
   );
 
   it.effect("refuses more than 4,096 items rather than cutting the list", () =>

@@ -216,6 +216,40 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
     )
   );
 
+  test.effect(
+    "an error the prelude throws names the script's line that called it",
+    () =>
+      Effect.gen(function* () {
+        yield* expectRefusal(
+          `${META}const x = 1;\nawait agent("");`,
+          "script_failed",
+          "(line 3)"
+        );
+
+        const plan = yield* WorkflowPlan;
+
+        const refusal = yield* plan
+          .validate(
+            `${META}const items = Array.from({ length: 5000 }, (_, i) => i);\nawait parallel(items.map((n) => () => agent("n" + n)));`,
+            input({})
+          )
+          .pipe(Effect.flip);
+
+        assert.include(refusal.message, "(line 3)");
+        assert.include(refusal.message, "split the list. Every node");
+      })
+  );
+
+  test.effect(
+    "a script that parses a schema-less answer is told to give a schema",
+    () =>
+      expectRefusal(
+        `${META}const plan = JSON.parse(await agent("plan"));\nreturn plan;`,
+        "script_failed",
+        "give agent() a `schema`"
+      )
+  );
+
   test.effect("refuses agent options a launch would refuse", () =>
     Effect.gen(function* () {
       yield* expectRefusal(
@@ -401,6 +435,20 @@ layer(tight)("WorkflowPlan under tight limits", (test) => {
           ]
         );
       })
+  );
+
+  test.effect("a node refused past the cap answers a null value", () =>
+    Effect.gen(function* () {
+      const plan = yield* WorkflowPlan;
+
+      const run = yield* plan.validate(
+        `${META}for (let i = 0; i < 10; i += 1) {\n  await agent("item " + i);\n}\nconst late = await agent.full("late", { schema: { type: "object" } });\nif (late.status !== "refused" || late.value !== null) throw new Error("a value past the cap");`,
+        input({})
+      );
+
+      assert.deepStrictEqual(run.nodes, { count: 10, unbounded: true });
+      assert.isTrue(run.sitesComplete);
+    })
   );
 
   test.effect(

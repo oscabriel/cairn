@@ -46,7 +46,9 @@ import {
   AgentCall,
   ApproveCall,
   DEFAULT_NODE_ROLE,
+  DEFAULT_VERIFY_ROLE,
   isObjectRootSchema,
+  preludeLineOf,
   rewriteScript,
   TOO_MANY_ITEMS,
   VerifyCall,
@@ -122,7 +124,11 @@ export interface DryRun {
   readonly output: ReadonlyArray<string>;
 }
 
-/** One settled node of a past ledger: what its role spent. */
+/**
+ * One settled node of a past ledger: what its role spent. The caller passes only nodes that ran on
+ * the binding each role spec has now (its provider and model), so after the user rebinds an alias
+ * the old model's nodes do not feed the new estimate.
+ */
 export interface NodeHistory {
   readonly spec: RoleSpec;
   readonly totalTokens: number;
@@ -177,6 +183,9 @@ const LABEL_MAX = 80;
 
 /** Longest phase title the protocol carries (`WorkflowPhase.title`). */
 const PHASE_TITLE_MAX = 120;
+
+/** What a node without a schema answers in the dry run. */
+const NO_ANSWER = "(dry run: no answer)";
 
 /** The parts of a JSON Schema the dry run reads to build a placeholder value. */
 interface SchemaNode {
@@ -331,6 +340,14 @@ const labelFrom = (prompt: string) => {
   return line.length > LABEL_MAX ? `${line.slice(0, LABEL_MAX - 1)}…` : line;
 };
 
+/** What a node past the cap answers: refused, so its value is null as for any status but `ok`. */
+const refusedPastCap: NodeOutcome = {
+  status: "refused",
+  value: null,
+  reason: "the dry run's node cap is reached",
+  nodeId: null,
+};
+
 /** The stub tools of one dry run and what they recorded. */
 class Recorder {
   readonly nodes: Array<RecordedNode> = [];
@@ -341,6 +358,8 @@ class Recorder {
   readonly logs: Array<string> = [];
   readonly stop = new AbortController();
   calls = 0;
+  /** A node without a schema answered with `NO_ANSWER`, which a script may fail to parse. */
+  answeredText = false;
   capReached = false;
   callCapReached = false;
 
@@ -480,19 +499,23 @@ class Recorder {
       readonly: call.readonly,
     });
 
+    if (Option.isNone(nodeId)) {
+      return refusedPastCap;
+    }
+
+    this.answeredText ||= Option.isNone(schema);
+
     return {
-      status: Option.isSome(nodeId) ? "ok" : "refused",
-      value: Option.isSome(schema)
-        ? stubValue(schema.value)
-        : "(dry run: no answer)",
+      status: "ok",
+      value: Option.isSome(schema) ? stubValue(schema.value) : NO_ANSWER,
       reason: null,
-      nodeId: Option.getOrNull(nodeId),
+      nodeId: nodeId.value,
     };
   }
 
   verify(call: VerifyCall): NodeOutcome {
     const site = Option.getOrElse(call.site, () => "?");
-    const spec = this.spec(site, call.role, "@verifier");
+    const spec = this.spec(site, call.role, DEFAULT_VERIFY_ROLE);
 
     if (Option.isNone(spec)) {
       return {
@@ -514,11 +537,15 @@ class Recorder {
       readonly: true,
     });
 
+    if (Option.isNone(nodeId)) {
+      return refusedPastCap;
+    }
+
     return {
-      status: Option.isSome(nodeId) ? "ok" : "refused",
+      status: "ok",
       value: { verdict: "verified", reason: "(dry run)" },
       reason: null,
-      nodeId: Option.getOrNull(nodeId),
+      nodeId: nodeId.value,
     };
   }
 
@@ -689,16 +716,24 @@ const byRoleOf = (nodes: ReadonlyArray<RecordedNode>) => {
   return [...counts].map(([spec, count]) => ({ spec, count }));
 };
 
-/** The script line a failed run's stack points at, when it points into the script. */
-const failedLine = (result: CodemodeResult) => {
+/**
+ * The script line a failed run's stack points at: its first frame before `preludeLine`, so an error
+ * thrown inside the prelude names the script's line that called it, never a line the model did not
+ * write.
+ */
+const failedLine = (result: CodemodeResult, preludeLine: number) => {
   if (result.ok) {
     return Option.none<number>();
   }
 
-  const line = /codemode\.js:(?<line>\d+):\d+/u.exec(result.error.stack ?? "")
-    ?.groups?.line;
+  return Arr.findFirst(
+    (result.error.stack ?? "").matchAll(/codemode\.js:(?<line>\d+):\d+/gu),
+    (match) => {
+      const line = Number(match.groups?.line);
 
-  return line === undefined ? Option.none<number>() : Option.some(Number(line));
+      return line < preludeLine ? Option.some(line) : Option.none();
+    }
+  );
 };
 
 const outputOf = (result: CodemodeResult, logs: ReadonlyArray<string>) => [
@@ -926,7 +961,7 @@ export class WorkflowPlan extends Context.Service<
         }
 
         if (!result.ok && !recorder.capReached) {
-          const line = failedLine(result).pipe(
+          const line = failedLine(result, preludeLineOf(script)).pipe(
             Option.match({ onNone: () => "", onSome: (at) => ` (line ${at})` })
           );
 
@@ -944,11 +979,15 @@ export class WorkflowPlan extends Context.Service<
             });
           }
 
+          const textHint = recorder.answeredText
+            ? ` A node without a schema answered with the text "${NO_ANSWER}"; give agent() a \`schema\` when the script reads structure from its answer.`
+            : "";
+
           return yield* refuse(
             result.error.message.includes(TOO_MANY_ITEMS)
               ? "too_many_items"
               : "script_failed",
-            `The dry run of workflow ${script.meta.name} failed${line}: ${result.error.message}. Every node answered at once with a placeholder shaped by its schema; fix the script, then propose it again.`
+            `The dry run of workflow ${script.meta.name} failed${line}: ${result.error.message.replace(/\.$/u, "")}. Every node answered at once with a placeholder shaped by its schema.${textHint} Fix the script, then propose it again.`
           );
         }
 

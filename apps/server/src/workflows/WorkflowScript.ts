@@ -9,11 +9,33 @@
 //
 // The `meta` rules follow Claude Code's workflow scripts (research 06 section 2.5); refusing before
 // launch follows pi-subagents' `validate` action (github.com/nicobailon/pi-subagents,
-// docs/workflows.md at 1a80e24, MIT), ideas only: no text was taken. The server does not depend on
-// a JavaScript parser, so a small lexer here skips strings, comments, template literals and regular
-// expressions, which is all the checks need. Its one known limit: a `/` after the `)` of an `if`,
-// `while`, `for` or `with` head is read as a regular expression, which is right for statements
-// like `if (s) /x/.test(s)`, but a division right after such a head is not valid JavaScript anyway.
+// docs/workflows.md at 1a80e24), ideas only: no text was taken. The server does not depend on a
+// JavaScript parser, so a small lexer here skips strings, comments, template literals and regular
+// expressions, which is all the checks need. It tells a regular expression from a division by the
+// token before the `/`, with two known limits. A `/` after the `)` of an `if`, `while`, `for` or
+// `with` head is read as a regular expression, which is right for statements like
+// `if (s) /x/.test(s)`; a division right after such a head is not valid JavaScript anyway. And a
+// `}` counts as closing a block (so a regular expression may follow) when its `{` came after a `)`,
+// `=>`, `else`, `try`, `finally` or `do`, or where a statement starts, so a division right after a
+// function expression's body (`function () {} / 2`) is misread. None of these checks is a security
+// boundary: the node tools check every call again.
+//
+// MIT License. Copyright (c) 2026 Nico Bailon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or
+// substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+// NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { createHash } from "node:crypto";
 
@@ -72,7 +94,11 @@ export const PRELUDE_NAMES: ReadonlyArray<string> = [
   "SAMPLE",
 ];
 
-/** Every name the prelude keeps for itself starts with this; scripts may not use it at all. */
+/**
+ * Every name the prelude keeps for itself starts with this; scripts may not use it at all. The rule
+ * keeps a script's names from colliding with the prelude's, nothing more: the lexer can be fooled
+ * and direct `eval` reaches the prelude's locals anyway, so the node tools are the guard.
+ */
 export const PRELUDE_PREFIX = "__cairn";
 
 /** The longest a workflow's name may be: it is a recipe name and a label. */
@@ -162,7 +188,12 @@ interface Token {
   readonly depth: number;
   /** For a `)`: it closes the head of an `if`, `while`, `for` or `with`, so a statement follows. */
   readonly closesHead?: boolean;
+  /** For a `}`: it closes a block rather than an object literal, so a statement may follow. */
+  readonly closesBlock?: boolean;
 }
+
+/** Keywords after which a `{` opens a block. */
+const BLOCK_AFTER_WORDS = new Set(["else", "try", "finally", "do"]);
 
 /** Keywords whose parenthesised head is followed by a statement, which may open with a regex. */
 const HEAD_WORDS = new Set(["if", "while", "for", "with"]);
@@ -370,6 +401,32 @@ const tokenize = (text: string, from: number): ReadonlyArray<Token> => {
     );
   };
 
+  // One entry per open `{` outside template interpolations: whether it opens a block.
+  const braces: Array<boolean> = [];
+
+  /** True when a `{` here opens a block: after a `)`, `=>`, a block keyword or a statement's end. */
+  const opensBlock = () => {
+    const [arrowHead, before] = tokens.slice(-2);
+
+    if (before === undefined) {
+      return true;
+    }
+
+    if (before.kind === "word") {
+      return BLOCK_AFTER_WORDS.has(before.text);
+    }
+
+    if (before.kind !== "punct") {
+      return false;
+    }
+
+    if (before.text === ">") {
+      return arrowHead?.text === "=" && arrowHead.start === before.start - 1;
+    }
+
+    return [")", ";", "{", "}"].includes(before.text);
+  };
+
   /** Pushes a one-character punctuator, noting which `)` closes a statement head. */
   const punct = (char: string, start: number) => {
     if (char === "(") {
@@ -399,10 +456,18 @@ const tokenize = (text: string, from: number): ReadonlyArray<Token> => {
     }
 
     if (last.kind === "word") {
-      return REGEX_AFTER_WORDS.has(last.text);
+      // `o.return / 2` names a property; a keyword, or one after a spread's `...`, may start one.
+      const [spread, dot] = tokens.slice(-3, -1);
+
+      const isProperty =
+        dot?.kind === "punct" &&
+        dot.text === "." &&
+        !(spread?.kind === "punct" && spread.text === ".");
+
+      return !isProperty && REGEX_AFTER_WORDS.has(last.text);
     }
 
-    if (last.closesHead === true) {
+    if (last.closesHead === true || last.closesBlock === true) {
       return true;
     }
 
@@ -455,6 +520,7 @@ const tokenize = (text: string, from: number): ReadonlyArray<Token> => {
 
       tokens.push({ kind: "literal", text: "number", start, depth });
     } else if (char === "{") {
+      braces.push(opensBlock());
       tokens.push({ kind: "punct", text: char, start, depth });
       depth += 1;
       at += 1;
@@ -468,7 +534,13 @@ const tokenize = (text: string, from: number): ReadonlyArray<Token> => {
         tokens.push({ kind: "literal", text: "template", start, depth });
       } else {
         depth -= 1;
-        tokens.push({ kind: "punct", text: char, start, depth });
+        tokens.push({
+          kind: "punct",
+          text: char,
+          start,
+          depth,
+          closesBlock: braces.pop() === true,
+        });
       }
     } else {
       punct(char, start);
@@ -1124,10 +1196,14 @@ const bodyProblem = (
     const before = tokens[index - 1];
     const after = tokens[index + 1];
 
-    // `x.export` and `{ export: 1 }` name a property, not the keyword.
+    // `x.export` and `{ export: 1 }` name a property, not the keyword. A word before `:` is a key
+    // only after `{` or `,`; after `?` or `case` it is a value and the rules below apply.
     const isProperty =
       (before?.kind === "punct" && before.text === ".") ||
-      (after?.kind === "punct" && after.text === ":");
+      (after?.kind === "punct" &&
+        after.text === ":" &&
+        before?.kind === "punct" &&
+        (before.text === "{" || before.text === ","));
 
     if (isProperty) {
       continue;

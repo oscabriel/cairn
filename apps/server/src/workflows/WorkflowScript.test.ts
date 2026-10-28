@@ -304,7 +304,13 @@ const counts = [1];
 const g = counts[0]++ / 2 + (n)-- / 1;
 if (a) /"/.test(a);
 while (false) /'/.test(a);
-return [a, b, c, d, e, log2, f, g];`)
+if (a) {
+  n = 1;
+}
+/"/.test(a);
+const o = { return: 4 };
+const h = o.return / 2 + { k: 1 }.k / 3;
+return [a, b, c, d, e, log2, f, g, h];`)
         );
 
         assert.strictEqual(parsed.meta.name, "review-modules");
@@ -369,6 +375,25 @@ return [a, b, c, d, e, log2, f, g];`)
           script("tools.x(__cairnRun);"),
           "reserved_name",
           "__cairn"
+        );
+        // A keyword used as a property does not hide the rest of the line from the checks.
+        yield* expectRefusal(
+          script(
+            "const o = { return: 4 };\nconst r = o.return / 2; const agent = 1;"
+          ),
+          "reserved_name",
+          "`agent`"
+        );
+        // A word before `:` is a key only inside an object literal.
+        yield* expectRefusal(
+          script("const f = true ? __cairnBake : 0;"),
+          "reserved_name",
+          "__cairnBake"
+        );
+        yield* expectRefusal(
+          script("switch (1) {\n  case __cairnRun: break;\n}"),
+          "reserved_name",
+          "__cairnRun"
         );
 
         const nested = yield* parseWorkflowScript(

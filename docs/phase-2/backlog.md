@@ -4,7 +4,7 @@ The work between the phase 1 gate and the phase 2 plan, in order. Sources: the o
 
 ## Stage 1: decisions
 
-Done on 2026-10-27. Two tiers of work (goal threads and approved briefs, ADR 0026), the user at the top with a child asking its parent (ADR 0027), the design pass after the daily-driver day as phase 2's look wave, phase 2 screens ported in behaviour and drawn once in the new look, the sidebar decided in the pass, hands-off goals after phase 2.
+Done on 2026-10-27. Two tiers of work (goal threads and approved briefs, ADR 0026), the user at the top with a child asking its parent (ADR 0027), the design pass after the daily-driver day as phase 2's look wave, phase 2 screens ported in behaviour and drawn once in the new look, the sidebar decided in the pass (on 2026-10-28, from the daily-driver day: a project rail with the inbox on top), hands-off goals after phase 2.
 
 ## Stage 2: small tasks
 
@@ -27,7 +27,7 @@ None depends on phase 2 or on the open gate. One worktree and branch (`phase2/s2
 
 ## Stage 3: the phase 2 plan
 
-Written on 2026-10-27: six area notes in `docs/phase-2/notes/`, ADRs 0028 to 0041 (proposed) with amendments to 0012, 0026 and 0027, and `docs/phase-2/plan.md`. Waiting on the user's sign-off.
+Written on 2026-10-27: six area notes in `docs/phase-2/notes/`, ADRs 0028 to 0041 (proposed) with amendments to 0012, 0026 and 0027, and `docs/phase-2/plan.md`. The phase 1 gate passed on 2026-10-28 (WebKit load to rerun from home Wi-Fi). Waiting on the user's sign-off.
 
 Planned the phase 1 way. Area notes in `docs/phase-2/notes/`: subagents and delivery; briefs, goals and approvals UI; workflows, the dispatch ledger and durable events; role aliases, cost and the Codex login; artifacts and portals through porch; UI and tokens. Proposed ADRs for durable events with exactly-once reactors and, if the design pass forks the shell, a UI fork amending ADR 0015. Then `docs/phase-2/plan.md` in waves. Open question carried from ADR 0026: how a workflow's launch approval relates to the briefs of its nodes. Judge: the user's sign-off.
 

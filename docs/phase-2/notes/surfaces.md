@@ -225,7 +225,7 @@ Three kinds, plus one the user's approval creates. Every behaviour script gets a
 
 ## Sidebar inputs: questions for the daily-driver day
 
-The pass decides whether the inbox stays the whole sidebar or becomes the top entry of a project rail (sketch). These are cheap to answer from that day and decide it:
+The pass decides whether the inbox stays the whole sidebar or becomes the top entry of a project rail (sketch). Answered on 2026-10-28: the user wants the project rail. The questions below were the inputs, and still help size it:
 
 1. How many projects had a thread open you cared about? (The rail pays off at several; one or two favours the inbox.)
 2. How often did you filter to one project against reading across all? (`SidebarThreadHeader`'s project filter exists.)

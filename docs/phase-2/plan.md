@@ -41,7 +41,7 @@ Decided by the user on 2026-10-27 (stage 1 of the backlog, then the thirty quest
 | Who sits at the top | The user; a child asks its parent; routing in code | ADR 0027 |
 | Design pass | After the daily-driver day, as the look track; new screens built once in `next` | ADR 0011, 0040 |
 | Port or rebuild | Port the nightly's behaviour, draw it in the new look; new surfaces from scratch | ADR 0011 |
-| Sidebar | Decided in the design pass, from the daily-driver day | ADR 0011 |
+| Sidebar | A project rail with the inbox as its top entry (the user, 2026-10-28, from the daily-driver day) | ADR 0011 |
 | Hands-off goals | After phase 2; phase 2 adds `decidedBy`, reason and judge-bound criteria | ADR 0026, 0029 |
 | Subagent model | A thread with a hidden row; the reserved `conversationId` is removed | ADR 0028 |
 | Stop on a goal thread | Children keep working; the row offers Stop all | ADR 0028 |
@@ -251,7 +251,7 @@ Starts when the phase 1 gate's stage 8 is done and the design pass has chosen it
 - **L2 Tokens.** `next/tokens.css` for dark and light. Judge: `judges/contrast.test.ts` (a planted low-contrast token fails); no palette utility or literal in `next`.
 - **L3 Primitives and gallery.** `next/ui/` and a dev-only `/__look` catalogue. Judge: scene tests per primitive; `look-rules.ts` at 390 and 1,440 px with planted violations failing.
 - **L5 Look tool and rounds.** `judges/look.ts`, `look-rules.ts`, publish to `plans.gneiss.run`, freeze on approval. Judge: a sabotaged state fails the rules; a frozen round fails when a token changes.
-- **L6 Shell in the new look.** The sidebar as the pass decides, the chat header, the hold banner. Judge: `behaviour.ts`'s shell checks on `next`; the user's round.
+- **L6 Shell in the new look.** The sidebar as a project rail with the inbox on top, the chat header, the hold banner. Judge: `behaviour.ts`'s shell checks on `next`; the user's round.
 - **L7 Phase 1 surfaces redrawn.** Composer and hero; transcript rows and the fold line with tallies; diff, settings and push. Judge: all of `behaviour.ts`, `typing.ts` on Chromium and WebKit, `transcript-scroll.ts`, `load.ts`, `paste.ts`, the user's rounds.
 
 Source for all: surfaces L0 to L7 (L4 is 1E).
@@ -298,7 +298,7 @@ The fan-out target (ten stones) is phase 3's.
 
 One script, `ops/wizards/phase-2.sh`, written with the `wizard` skill.
 
-1. **Finish the phase 1 gate** (stages 3, 4, 5, 7 and 8 of `ops/wizards/phase-1.sh`). The build starts after it, and the daily-driver day feeds the design pass: note anything about the sidebar (inbox only, or a project rail) and any scroll jumps.
+1. **Finish the phase 1 gate.** Done on 2026-10-28; the day chose the project rail. Left: rerun `judges/load.ts --browser webkit` on the MacBook from home Wi-Fi (Claude runs it over SSH).
 2. **Codex login.** Open the device-code link the wizard prints, from any device, and approve (about two minutes). Without it, the typed-results target runs on the recorded fallback.
 3. **Caddy and porch.** The wizard backs up `~/caddy/conf/Caddyfile`, then shows each edit before applying it: porch's `import` line, `stream_close_delay`, the compose mount, owner-only `plans.gneiss.run`. Confirm each; anyone you shared a plan link with will need to be on your login to open it.
 4. **The design pass.** Preview rounds of the new look, published to `plans.gneiss.run`; approve or name changes. Each approved round freezes its screenshots.

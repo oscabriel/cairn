@@ -256,6 +256,11 @@ export const registerCursors = async (
   names: ReadonlyArray<string>,
   at: number
 ): Promise<void> => {
+  // No reactors: the first event opens the log.
+  if (names.length === 0) {
+    return;
+  }
+
   const state = await tx.doc(EventsDoc);
 
   if (state.logConversationId === null) {

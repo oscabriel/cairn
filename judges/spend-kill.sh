@@ -8,7 +8,11 @@
 # `judges/fixtures/spend/SpendBrain.ts`, a plain child process of the judge; nothing here touches
 # cairn.service or the user's store.
 #
-#   judges/spend-kill.sh [--case kills|control]... [--kills N] [--turns N] [--keep]
+#   judges/spend-kill.sh [--case kills|control]... [--kills N] [--turns N] [--quick] [--keep]
+#
+# `--quick` kills 50 to 150 ms after each life starts producing, so five kills land on one request
+# and pi-durable parks it (`restart_limit`). The last life retries every parked task at boot, so it
+# finishes instead of waiting on a turn that never runs; the result counts them as `retriedParked`.
 #
 # Prints one JSON line per case and a summary line; exits 0 when the real case passes and the
 # control fails. No model, no network, no secrets.

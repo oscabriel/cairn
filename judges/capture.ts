@@ -1885,3 +1885,7 @@ try {
 } finally {
   await browser.close();
 }
+
+// Exits outright, as behaviour.ts does: a handle a cairn run leaves open kept the process alive
+// after its final report, holding the judge lock.
+process.exit(0);

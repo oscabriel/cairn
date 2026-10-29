@@ -337,3 +337,55 @@ Each branch merged with `--no-ff` in the order B to H, all from `631afb3` (wave 
 - **The live Codex usage read (3D's second judge)**, after `ops/wizards/phase-2.sh 1` and a deploy: subscribe to `usage.subscribe` on `cairn.service` (the only holder of the OAuth lock) and expect an `openai-codex` row with `reading: "read"`. Save the `wham/usage` body, with the access token, refresh token and account id removed, as `apps/server/src/usage/fixtures/wham-usage/live-<plan>.json`.
 - **The reach stage of the wizard** (`ops/wizards/phase-2.sh 2`) from wave 2 is still to come; until porch is set up, the deployed brain's portal reconcile and the artifact tools answer porch's "not set up" error.
 - **When deploying** (nothing is deployed by this integration): migration 0012 runs with a backup first; the `cairn.reach` and `cairn.ask-user` extensions append `pi.system` entries to every conversation once; deploy while no thread is mid-tool, as before.
+
+## Look track L0 and L1 integration
+
+Integrated on 2026-10-29 on `main`.
+
+### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| L0 Fork frame | `phase2/L0` | `d5e0b97` | done, merged as `d1079c7` |
+| L0 seam (`View.ts`) | `phase2/L0-seam` | `0f62b93` | the integrator's yes, merged as `e450e8c` |
+| L1 Measured transcript list | `phase2/L1` | `0439feb` | done, not approved: left out (below) |
+
+L0 merged with `--no-ff` from `de007a5`, then its seam branch on top, with no conflict. The seam is accepted as proposed: `View.ts` keeps the classic body as `classicView` and draws the `next` frame only when the `ui` setting is `next` and its chunk has loaded, handing it the classic regions (sidebar state, sidebar, notice, page). The note, the glossary entry and the `capture.ts` exit fix are the next commit.
+
+**L1 is left out.** Its review holds two blocking findings. First, an off-screen measuring copy and its list row share one memoized vnode: `offScreen(index)` and `row(index)` both call `itemToView`, which the timeline answers from one per-thread keyed lazy. When a render draws a row in the list and drops the probe box in the same patch, snabbdom points the shared vnode at the new element first, so the probe's destroy hooks strip the live row's click listeners and release its Mounts. In the probe (1,440 px, 1,600 px into history, narrowed to 1,000 px, then scrolled up), 5 rows that came in from the probe box lost their `click` listener, and "Worked for 3.4s" no longer opened. The fix asked for gives the off-screen copy its own cache slot (a `probe:` key or a second keyed lazy) and a judge check that clicks a fold that came in from the probe box. Second, `transcript-scroll.ts` passed 2 of 3 clean runs: a harness commit inside `scrollUp`'s 2.5 s window moves the working indicator, the list rightly corrects `scrollTop` by 43 px to hold the reader's row, and the check counts any `scrollTop` change. The fix asked for judges what the reader sees, as the land checks do, and shows several green runs in a row. L1's hand-offs (the waves numbers, the backlog line, the "measured list" glossary entry, its `capture.ts` changes) come with its merge; `phase2/L1` and its worktree stay for the next round.
+
+### Integration judges
+
+L0's block names no judge "at integration"; these rerun its own judges on the merged `main`.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 166 s: fmt, lint, typecheck, 1,875 tests (16 more than wave 3: L0's `Frame`, `FrameLoad`, `Hooks` and `Fork` tests). No dependency changed; `pnpm install --frozen-lockfile` was a no-op. `Budget.test.ts` unchanged and green. |
+| `node judges/behaviour.ts --ui next --strict` | pass | 22 of 22, every page showing `#root[data-ui=next]`. |
+| `node judges/behaviour.ts --strict` (classic) | pass | 22 of 22, with the check that no classic page shows the next frame. |
+| `node judges/capture.ts cairn --group sidebar` (after the exit fix) | pass | Printed its final JSON and exited 0 in 45 s, releasing the judge lock. |
+| Real-model judges | not run | None needed. $0. |
+
+The full before-and-after `capture.ts cairn` comparison was the package's (34 PNGs and 26 landmark files byte-identical; 10 HTML files differing only in run-to-run values: blob URLs, the settings clock, the virtual list's scroll counter, Syncing against Reconnecting). The integration added nothing to the classic path beyond the seam that comparison already covered, so it was not rerun.
+
+### Hand-offs applied
+
+- **`apps/web/src/View.ts`**: merged from `phase2/L0-seam` as proposed, with `next/Fork.test.ts`.
+- **`apps/web/src/next/Frame.ts` is integrator-only** from now on (already listed in the plan's section 3). Its contract is `view(model, h, regions)`, where `regions` is `{ sidebarState, sidebar(), notice(), page() }`; L6 and L7 replace regions inside it.
+- **`judges/capture.ts`** (L0's blocker, done by the integrator): it now calls `process.exit(0)` after its report, as `behaviour.ts` does, because a handle a cairn run left open kept the process alive and the judge lock held. A thrown error still exits non-zero.
+- **`GLOSSARY.md`**: "Next (views)".
+- `Route.ts` and `main.ts`: no change; `?ui=` is read by the settings `LoadClientSettings` command.
+
+### Rules later packages follow
+
+- **`next` reads the classic hooks through `next/Hooks.ts`.** A judge that reads a hook `Hooks.ts` does not name fails `Hooks.test.ts`.
+- **Classic stays byte for byte.** A look-track package that touches a shared view proves it with `capture.ts cairn` before and after.
+
+### What differs from the plan
+
+- **L0**: there is no `ui` row on the classic settings page, since it would change the classic settings capture; the switch is `?ui=next` and `?ui=classic` until L7 draws the row on next's page. The chunk's load state lives in the settings submodel (`nextFrame`), not the root Model. Classic draws until the settings load and the chunk arrives, so a next page shows classic for its first frames. The entry bundle grew 861 B gzip (289,334 to 290,195 B, budget 294,912 B) for the setting, the `?ui=` read, the loader and the switch; `Frame.ts` itself is a 402 B chunk of its own. `behaviour.ts --ui next` writes `behaviour-next.json`.
+- **L1 left out** (above); `range` and `reflow` stay in `KNOWN_FAILING` on `main`.
+
+### Left for the user
+
+- Nothing for L0: to try it, open Cairn with `?ui=next` (it looks like classic inside a marked frame until L6 and L7). Nothing is deployed by this integration.

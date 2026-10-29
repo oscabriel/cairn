@@ -202,6 +202,8 @@ _Avoid_: plugin
 
 **Client settings**: The settings that belong to one device (send shortcut, follow-up behaviour, timestamp format, confirm delete, composer collapse, theme, font sizes, chat width, diff layout), saved in localStorage under `cairn:client-settings:v1`. Server settings are the ones the brain keeps for every device.
 
+**Next (views)**: The forked set of views the `ui` client setting picks (`?ui=next` sets it, `?ui=classic` returns), drawn in `next/Frame.ts` over the same Model and update as the classic views and loaded as its own chunk (ADR 0040). Classic is the default and stays unchanged.
+
 **Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.
 
 **Projection**: The client's view of a thread: pi-durable's conversation with brain-only documents and Claude stamps removed, image data replaced by references and long strings cut.

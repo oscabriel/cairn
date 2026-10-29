@@ -3,7 +3,9 @@
 // passes `FolderRules` (the deny list, dot folders, links escaping the home) and is committed with
 // the folder's real path. Deleting or archiving a thread, or deleting a project, first stops the
 // runs it removes (queue cleared, stop hooks run), so a hung thread that is deleted frees its
-// Claude Code child instead of holding it for hours.
+// Claude Code child instead of holding it for hours. Clearing a scratch thread stops its run and its
+// subagents' first, then removes its folder once the clear is committed; a crash between the two
+// leaves the folder to the scratch boot repair.
 
 import {
   Conflict,
@@ -18,6 +20,8 @@ import type { ShellCommand } from "@cairn/protocol/ShellCommands";
 import { Effect, Layer, Option, Predicate, Stream } from "effect";
 
 import { FolderRules } from "../projects/FolderRules.ts";
+import { Projects } from "../projects/Projects.ts";
+import { ScratchProject } from "../projects/ScratchProject.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import type { ShellStoreError } from "../shell/ShellStoreError.ts";
 import { ShellStream } from "../shell/ShellStream.ts";
@@ -61,11 +65,32 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
     const folders = yield* FolderRules;
     const threads = yield* Threads;
     const rows = yield* ThreadRows;
+    const projects = yield* Projects;
+    const scratch = yield* ScratchProject;
+
+    /** Whether `threadId` is a scratch thread a clear would remove; the planner refuses others. */
+    const isScratchThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+      const row = yield* rows.get(threadId);
+
+      if (Option.isNone(row) || Option.isSome(row.value.deletedAt)) {
+        return false;
+      }
+
+      const project = yield* projects.get(row.value.shell.projectId);
+
+      return Option.exists(project, (found) => found.shell.kind === "scratch");
+    });
 
     /** The threads whose runs `command` removes from the shell. */
     const runsEndedBy = (
       command: ShellCommand
     ): Effect.Effect<ReadonlyArray<ThreadId>, ShellStoreError> => {
+      if (Predicate.isTagged(command, "ThreadClear")) {
+        return Effect.map(isScratchThread(command.threadId), (scratchThread) =>
+          scratchThread ? [command.threadId] : []
+        );
+      }
+
       if (
         Predicate.isTagged(command, "ThreadDelete") ||
         Predicate.isTagged(command, "ThreadArchive")
@@ -82,13 +107,23 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
       return Effect.succeed([]);
     };
 
-    /** Stops each run; a thread the brain never ensured has none, and any other failure is logged. */
-    const stopRuns = (threadIds: ReadonlyArray<ThreadId>) =>
+    /**
+     * Stops each run, and with `subagents: "stop"` its working subagents' runs too; a thread the
+     * brain never ensured has none, and any other failure is logged.
+     */
+    const stopRuns = (
+      threadIds: ReadonlyArray<ThreadId>,
+      subagents: "keep" | "stop"
+    ) =>
       Effect.forEach(
         threadIds,
         (threadId) =>
           threads
-            .stop({ threadId, clearQueue: true, subagents: Option.none() })
+            .stop({
+              threadId,
+              clearQueue: true,
+              subagents: Option.some(subagents),
+            })
             .pipe(
               Effect.catchTags({
                 HarnessError: (failure) =>
@@ -107,6 +142,33 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
               })
             ),
         { concurrency: "unbounded", discard: true }
+      );
+
+    /**
+     * Removes a cleared scratch thread's folder. A failure is logged and left to the scratch boot
+     * repair: the thread is already gone from the shell.
+     */
+    const releaseFolders = (threadId: ThreadId) =>
+      scratch.releaseThread(threadId).pipe(
+        Effect.tap((removed) =>
+          Effect.logInfo("scratch thread cleared").pipe(
+            Effect.annotateLogs({
+              event: "scratch_thread_cleared",
+              threadId,
+              folders: removed.length,
+            })
+          )
+        ),
+        Effect.catchTag("ScratchError", (failure) =>
+          Effect.logWarning("scratch folder not removed").pipe(
+            Effect.annotateLogs({
+              event: "scratch_folder_release_failed",
+              threadId,
+              reason: failure.message,
+            })
+          )
+        ),
+        Effect.asVoid
       );
 
     /** The command as it is committed: a new project's folder checked and made real. */
@@ -134,8 +196,21 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
       const id = Option.some(String(requestId));
 
       return admitted(command, id).pipe(
-        Effect.tap((checked) => Effect.flatMap(runsEndedBy(checked), stopRuns)),
-        Effect.flatMap((checked) => sink.commitCommand(checked)),
+        Effect.tap((checked) =>
+          Effect.flatMap(runsEndedBy(checked), (ended) =>
+            stopRuns(
+              ended,
+              Predicate.isTagged(checked, "ThreadClear") ? "stop" : "keep"
+            )
+          )
+        ),
+        Effect.flatMap((checked) =>
+          Effect.tap(sink.commitCommand(checked), () =>
+            Predicate.isTagged(checked, "ThreadClear")
+              ? releaseFolders(checked.threadId)
+              : Effect.void
+          )
+        ),
         Effect.catchTags({
           ShellStoreError: (failure) =>
             Effect.fail(unavailable(String(requestId))(failure)),
@@ -178,7 +253,10 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
   })
 );
 
-/** Both shell handlers. Needs `ShellStream`, `EventSink`, `FolderRules`, `ThreadRows` and `Threads`. */
+/**
+ * Both shell handlers. Needs `ShellStream`, `EventSink`, `FolderRules`, `ThreadRows`, `Projects`,
+ * `ScratchProject` and `Threads`.
+ */
 export const ShellHandlers = Layer.mergeAll(
   ShellSubscribeHandler,
   ShellDispatchHandler

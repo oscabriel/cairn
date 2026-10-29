@@ -28,6 +28,7 @@ const SNAPSHOT: ShellSnapshotValue = {
       workspaceRoot: "/home/owner/boot",
       repository: Option.none(),
       defaultModel: Option.none(),
+      projectThreadId: Option.none(),
       createdAt: at,
       updatedAt: at,
     },

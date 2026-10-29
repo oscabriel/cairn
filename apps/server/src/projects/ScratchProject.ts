@@ -7,7 +7,9 @@
 // registered through the shell store with a fixed command id, so concurrent callers collapse onto
 // one receipt, and a fresh id only when the user deleted the first; no icon; no named projects;
 // no `git init` (scratch threads get no per-turn diff); no work-tree probe, because the data folder
-// lives under `~/.local/share` and never inside a checkout.
+// lives under `~/.local/share` and never inside a checkout. Added for the scratch thread (the user,
+// 2026-10-29): clearing a thread removes the folders its id claims, and a boot repair removes every
+// folder whose thread is gone, both read from the folder's name, since the shell keeps no cwd.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -46,6 +48,7 @@ import {
 import { ServerConfig } from "../Config.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ProjectRegister } from "../shell/ShellCommands.ts";
+import { ThreadRows } from "../shell/ThreadRows.ts";
 import { Projects } from "./Projects.ts";
 
 /** The title the scratch project carries; the sidebar shows its threads as "no project". */
@@ -81,6 +84,58 @@ export const folderWords = (text: string) =>
     .slice(0, 48)
     .replace(/-+$/u, "");
 
+/** The id part a thread puts in its folder's name: its id, lowercase, with no dashes. */
+const idPartOf = (threadId: ThreadId) =>
+  threadId.toLowerCase().replaceAll(/[^a-z0-9]/gu, "");
+
+const FULL_ID = /^[0-9a-f]{32}$/u;
+
+const SHORT_ID = /^[0-9a-f]{8}$/u;
+
+const COLLISION_SUFFIX = /^[0-9a-f]{6}$/u;
+
+/**
+ * Which thread a folder `folderForThread` named was claimed for, read from its name: the full id
+ * part (`...-<32 hex>`, or `...-<32 hex>-<6 hex>` after a collision) or its last eight characters
+ * (`...-<8 hex>`). None for a name it never makes, which is left alone.
+ */
+export const folderClaimant = (
+  name: string
+): Option.Option<{ readonly kind: "full" | "short"; readonly id: string }> => {
+  const segments = name.split("-");
+  const last = segments.at(-1) ?? "";
+  const before = segments.at(-2) ?? "";
+
+  if (FULL_ID.test(last)) {
+    return Option.some({ kind: "full", id: last });
+  }
+
+  if (COLLISION_SUFFIX.test(last) && FULL_ID.test(before)) {
+    return Option.some({ kind: "full", id: before });
+  }
+
+  if (SHORT_ID.test(last)) {
+    return Option.some({ kind: "short", id: last });
+  }
+
+  return Option.none();
+};
+
+/** Whether the thread whose id part is `idPart` could have claimed a folder with this claimant. */
+const claims = (
+  idPart: string,
+  claimant: { readonly kind: "full" | "short"; readonly id: string }
+) =>
+  claimant.kind === "full"
+    ? idPart === claimant.id
+    : idPart.endsWith(claimant.id);
+
+/** Whether any of the `kept` id parts could have claimed a folder with this claimant. */
+const keptBy =
+  (kept: ReadonlySet<string>) =>
+  (claimant: { readonly kind: "full" | "short"; readonly id: string }) =>
+    [...kept].some((idPart) => claims(idPart, claimant));
+
 const folderFailure = (folder: string) => (cause: unknown) =>
   new ScratchError({
     message: `ScratchProject could not create the folder ${folder}. Check the data folder's permissions and free space, then retry.`,
@@ -113,15 +168,29 @@ export class ScratchProject extends Context.Service<
      * directly under the scratch root is removed; any other path, or one already gone, is left.
      */
     releaseFolder(folder: string): Effect.Effect<void, ScratchError>;
+    /**
+     * Removes the folders `threadId` claimed (read from their names) that no thread still in the
+     * shell could have claimed: a cleared scratch thread's folder. Returns the folders removed.
+     */
+    releaseThread(
+      threadId: ThreadId
+    ): Effect.Effect<ReadonlyArray<string>, ScratchError>;
+    /**
+     * The boot repair: removes every folder under the scratch root whose thread is gone (deleted,
+     * cleared, or never made), keeping any a live or archived scratch thread could have claimed and
+     * any whose name `folderForThread` never makes. Returns the folders removed.
+     */
+    readonly repair: Effect.Effect<ReadonlyArray<string>, ScratchError>;
   }
 >()("cairn/server/projects/ScratchProject") {
-  /** Needs `ServerConfig`, `FileSystem`, `Projects` and `EventSink`. */
+  /** Needs `ServerConfig`, `FileSystem`, `Projects`, `ThreadRows` and `EventSink`. */
   static readonly layerNoDeps = Layer.effect(
     ScratchProject,
     Effect.gen(function* () {
       const config = yield* ServerConfig;
       const fs = yield* FileSystem.FileSystem;
       const projects = yield* Projects;
+      const threadRows = yield* ThreadRows;
       const sink = yield* EventSink;
       const root = path.join(config.dataDir, "scratch");
 
@@ -221,7 +290,7 @@ export class ScratchProject extends Context.Service<
 
           const date = DateTime.formatIso(yield* DateTime.now).slice(0, 10);
           const words = folderWords(text);
-          const id = threadId.toLowerCase().replaceAll(/[^a-z0-9]/gu, "");
+          const id = idPartOf(threadId);
 
           const folderFor = (idPart: string) =>
             path.join(
@@ -269,12 +338,111 @@ export class ScratchProject extends Context.Service<
         }
       );
 
+      // The id parts of the live scratch project's threads that are not deleted (archived ones
+      // included, since they can come back); none when the scratch project itself was deleted.
+      const keptIdParts = Effect.gen(function* () {
+        const project = yield* active;
+
+        if (Option.isNone(project)) {
+          return new Set<string>();
+        }
+
+        const rows = yield* threadRows
+          .listByProject(project.value.shell.id)
+          .pipe(Effect.mapError(storeFailure));
+
+        return new Set(rows.map((row) => idPartOf(row.shell.id)));
+      });
+
+      // Removes each folder directly under the root whose name names a claimant `remove` picks.
+      const removeFolders = Effect.fnUntraced(function* (
+        remove: (claimant: {
+          readonly kind: "full" | "short";
+          readonly id: string;
+        }) => boolean
+      ) {
+        if (
+          !(yield* fs.exists(root).pipe(Effect.mapError(folderFailure(root))))
+        ) {
+          return [];
+        }
+
+        const names = yield* fs
+          .readDirectory(root)
+          .pipe(Effect.mapError(folderFailure(root)));
+
+        const removed: Array<string> = [];
+
+        for (const name of names.toSorted()) {
+          const claimant = folderClaimant(name);
+
+          if (Option.isNone(claimant) || !remove(claimant.value)) {
+            continue;
+          }
+
+          const folder = path.join(root, name);
+
+          const info = yield* fs
+            .stat(folder)
+            .pipe(Effect.mapError(folderFailure(folder)));
+
+          if (info.type !== "Directory") {
+            continue;
+          }
+
+          yield* fs
+            .remove(folder, { recursive: true, force: true })
+            .pipe(Effect.mapError(folderFailure(folder)));
+          removed.push(folder);
+        }
+
+        return removed;
+      });
+
+      const releaseThread = Effect.fn("ScratchProject.releaseThread")(
+        function* (threadId: ThreadId) {
+          const idPart = idPartOf(threadId);
+          const kept = yield* keptIdParts;
+
+          kept.delete(idPart);
+
+          const keep = keptBy(kept);
+
+          return yield* removeFolders(
+            (claimant) => claims(idPart, claimant) && !keep(claimant)
+          );
+        }
+      );
+
+      const repair = Effect.gen(function* () {
+        const keep = keptBy(yield* keptIdParts);
+
+        return yield* removeFolders((claimant) => !keep(claimant));
+      }).pipe(Effect.withSpan("ScratchProject.repair"));
+
       return ScratchProject.of({
         root,
         ensure,
         folderForThread,
         releaseFolder,
+        releaseThread,
+        repair,
       });
     })
   );
 }
+
+/**
+ * The boot repair (a `bootRepair` entry in `BootRepairs.ts`): removes scratch folders whose thread
+ * is gone, as a clear that a crash cut off between its commit and its folder removal would leave.
+ */
+export const repairScratchFoldersAtBoot = Effect.gen(function* () {
+  const removed = yield* (yield* ScratchProject).repair;
+
+  yield* Effect.logInfo("scratch folders repaired").pipe(
+    Effect.annotateLogs({
+      event: "scratch_folders_repaired",
+      removed: removed.length,
+    })
+  );
+}).pipe(Effect.withSpan("ScratchProject.repairAtBoot"));

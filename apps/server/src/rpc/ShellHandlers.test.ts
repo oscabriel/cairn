@@ -1,10 +1,14 @@
 // `shell.dispatch` stops the runs a delete or an archive removes before it commits (T4 of the full
 // review): a hung thread that is deleted must free its run, its queue and its Claude Code child.
+// Clearing a scratch thread stops its run and its subagents' first and releases its folder after
+// the commit; a clear refused for a folder project's thread stops and releases nothing.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
+import { ProjectId } from "@cairn/protocol/Ids";
 import {
   ProjectDelete,
   ThreadArchive,
+  ThreadClear,
   ThreadDelete,
   ThreadRename,
 } from "@cairn/protocol/ShellCommands";
@@ -15,7 +19,9 @@ import { RpcTest } from "effect/rpc";
 
 import { HarnessError } from "../brain/HarnessSeam.ts";
 import { FolderRules } from "../projects/FolderRules.ts";
+import { ScratchProject } from "../projects/ScratchProject.ts";
 import { EventSink } from "../shell/EventSink.ts";
+import { ProjectRegister } from "../shell/ShellCommands.ts";
 import {
   createProject,
   createThread,
@@ -31,6 +37,12 @@ import { ShellHandlers } from "./ShellHandlers.ts";
 /** The stops each test saw, in order: thread id and whether the queue was cleared. */
 const stops: Array<readonly [ThreadId, boolean]> = [];
 
+/** The subagent policy of each stop, in order. */
+const policies: Array<string> = [];
+
+/** The threads whose scratch folders were released, in order. */
+const released: Array<ThreadId> = [];
+
 /** Thread 3 was never ensured in the brain: its stop fails the way the seam reports that. */
 const RecordingThreads = Layer.mock(Threads)({
   stop: (input) =>
@@ -45,7 +57,18 @@ const RecordingThreads = Layer.mock(Threads)({
         )
       : Effect.sync(() => {
           stops.push([input.threadId, input.clearQueue]);
+          policies.push(Option.getOrElse(input.subagents, () => "keep"));
         }),
+});
+
+const RecordingScratch = Layer.mock(ScratchProject)({
+  root: "/srv/data/scratch",
+  releaseThread: (threadId) =>
+    Effect.sync(() => {
+      released.push(threadId);
+
+      return [];
+    }),
 });
 
 const AllowAllFolders = Layer.mock(FolderRules)({
@@ -56,6 +79,7 @@ const AllowAllFolders = Layer.mock(FolderRules)({
 const TestLayer = ShellHandlers.pipe(
   Layer.provide(AllowAllFolders),
   Layer.provide(RecordingThreads),
+  Layer.provide(RecordingScratch),
   Layer.provideMerge(ShellTestLayer),
   Layer.provideMerge(ViewerTest)
 );
@@ -65,6 +89,8 @@ const run = <A, E>(
 ) =>
   Effect.sync(() => {
     stops.length = 0;
+    policies.length = 0;
+    released.length = 0;
   }).pipe(Effect.andThen(body), Effect.scoped, Effect.provide(TestLayer));
 
 const makeClient = RpcTest.makeClient(ShellRpcs);
@@ -160,5 +186,69 @@ describe("shell.dispatch stops the runs it removes", () => {
         assert.deepStrictEqual(stops, []);
       })
     )
+  );
+});
+
+/** A scratch project with scratch thread 7 in it. */
+const seedScratch = Effect.gen(function* () {
+  const sink = yield* EventSink;
+  const projectId = ProjectId.make("prj_scratch");
+
+  yield* sink.commitCommand(
+    ProjectRegister.make({
+      commandId: testCommandId(70),
+      projectId,
+      kind: "scratch",
+      title: "No project",
+      workspaceRoot: "/srv/data/scratch",
+      repository: Option.none(),
+    })
+  );
+  yield* sink.commitCommand(createThread(projectId, 7));
+});
+
+describe("shell.dispatch clears a scratch thread", () => {
+  it.effect(
+    "stops its run and its subagents' first, then releases its folder after the commit",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const { client } = yield* seed;
+
+          yield* seedScratch;
+
+          yield* client["shell.dispatch"](
+            ThreadClear.make({
+              commandId: testCommandId(71),
+              threadId: testThreadId(7),
+            })
+          );
+
+          assert.deepStrictEqual(stops, [[testThreadId(7), true]]);
+          assert.deepStrictEqual(policies, ["stop"]);
+          assert.deepStrictEqual(released, [testThreadId(7)]);
+        })
+      )
+  );
+
+  it.effect(
+    "refuses a folder project's thread without stopping or releasing anything",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const { client } = yield* seed;
+
+          const refused = yield* client["shell.dispatch"](
+            ThreadClear.make({
+              commandId: testCommandId(72),
+              threadId: testThreadId(1),
+            })
+          ).pipe(Effect.flip);
+
+          assert.strictEqual(refused._tag, "InvalidInput");
+          assert.deepStrictEqual(stops, []);
+          assert.deepStrictEqual(released, []);
+        })
+      )
   );
 });

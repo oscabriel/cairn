@@ -5,7 +5,8 @@
 // optional fields are Options (null on the wire), run state is Cairn's `activity` derived from
 // pi-durable, one location (archived threads leave the stream), and items are tagged structs.
 // Phase 2 adds the row's `lineage` (t3code's shape, orchestrationV2.ts 108 to 112), its children's
-// tally, goal, spend and pending count, each decoding to a default from rows stored before it.
+// tally, goal, spend and pending count, and the project's `projectThreadId`, each decoding to a
+// default from rows stored before it.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -44,6 +45,13 @@ import { NO_SUBAGENTS, SubagentTally, ThreadLineage } from "./Subagents.ts";
 
 const OptionalTime = Schema.OptionFromNullOr(Schema.DateTimeUtc);
 
+/**
+ * A field phase 2 added to a row the shell store keeps as JSON: absent in a stored row, it decodes
+ * to `fallback` (the encoded value), so rows written before it still read.
+ */
+const added = <S extends Schema.Top>(schema: S, fallback: S["Encoded"]) =>
+  schema.pipe(Schema.withDecodingDefaultKey(Effect.succeed(fallback)));
+
 /** A project as the sidebar shows it. */
 export const ProjectShell = Schema.Struct({
   id: ProjectId,
@@ -56,6 +64,13 @@ export const ProjectShell = Schema.Struct({
   repository: Schema.OptionFromNullOr(TrimmedNonEmptyString),
   /** The model new threads in this project start with; none uses the server default. */
   defaultModel: Schema.OptionFromNullOr(ModelRef),
+  /**
+   * The project's one project thread, the thread the user talks to (the user, 2026-10-29): set by
+   * the first launch in a folder project and moved by a refresh; none in the scratch project, and
+   * none once the marked thread is archived or deleted. The threads it manages are the rows whose
+   * `lineage.rootThreadId` is this id.
+   */
+  projectThreadId: added(Schema.OptionFromNullOr(ThreadId), null),
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
 });
@@ -91,13 +106,6 @@ export type RunFailureClass = typeof RunFailureClass.Type;
 export const WaitingFor = Schema.Literals(["claude_slot", "parent", "none"]);
 
 export type WaitingFor = typeof WaitingFor.Type;
-
-/**
- * A field phase 2 added to a row the shell store keeps as JSON: absent in a stored row, it decodes
- * to `fallback` (the encoded value), so rows written before it still read.
- */
-const added = <S extends Schema.Top>(schema: S, fallback: S["Encoded"]) =>
-  schema.pipe(Schema.withDecodingDefaultKey(Effect.succeed(fallback)));
 
 /**
  * The oldest request on a thread that needs the user. `origin` names the descendant whose request

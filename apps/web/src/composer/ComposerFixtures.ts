@@ -25,6 +25,7 @@ export const project: ProjectShell = ProjectShell.make({
   workspaceRoot: "/home/user/cairn",
   repository: Option.some("oscabriel/cairn"),
   defaultModel: Option.none(),
+  projectThreadId: Option.none(),
   createdAt: at,
   updatedAt: at,
 });

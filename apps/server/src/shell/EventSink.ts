@@ -140,10 +140,6 @@ export class EventSink extends Context.Service<
       ) {
         const targets = commandTargets(command);
 
-        const project = Option.isSome(targets.projectId)
-          ? yield* projects.get(targets.projectId.value)
-          : Option.none();
-
         const workspaceOwner = Option.isSome(targets.workspaceRoot)
           ? yield* projects.activeByWorkspaceRoot(targets.workspaceRoot.value)
           : Option.none();
@@ -152,12 +148,38 @@ export class EventSink extends Context.Service<
           ? yield* threads.get(targets.threadId.value)
           : Option.none();
 
+        // The command's project, or (for a thread command that reads it) the thread's own.
+        const projectId = Option.orElse(targets.projectId, () =>
+          targets.threadProject
+            ? Option.map(thread, (row) => row.shell.projectId)
+            : Option.none()
+        );
+
+        const project = Option.isSome(projectId)
+          ? yield* projects.get(projectId.value)
+          : Option.none();
+
         const projectThreads =
-          targets.projectThreads && Option.isSome(targets.projectId)
-            ? yield* threads.listByProject(targets.projectId.value)
+          targets.projectThreads && Option.isSome(projectId)
+            ? yield* threads.listByProject(projectId.value)
             : [];
 
-        return { now, project, workspaceOwner, thread, projectThreads };
+        const markedId = Option.flatMap(project, (row) =>
+          targets.projectThread ? row.shell.projectThreadId : Option.none()
+        );
+
+        const projectThread = Option.isSome(markedId)
+          ? yield* threads.get(markedId.value)
+          : Option.none();
+
+        return {
+          now,
+          project,
+          workspaceOwner,
+          thread,
+          projectThreads,
+          projectThread,
+        };
       });
 
       const transaction = Effect.fnUntraced(function* (

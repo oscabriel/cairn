@@ -136,6 +136,16 @@ export const ThreadDelete = Schema.TaggedStruct("ThreadDelete", {
   threadId: ThreadId,
 });
 
+/**
+ * Clear a scratch thread (the user, 2026-10-29): its run and its subagents' runs are stopped, then
+ * the thread and its subagents are deleted from the shell and its throwaway folder is removed.
+ * Refused for a thread in a folder project.
+ */
+export const ThreadClear = Schema.TaggedStruct("ThreadClear", {
+  commandId: CommandId,
+  threadId: ThreadId,
+});
+
 /** One command for `shell.dispatch`. Idempotent by `commandId`. */
 export const ShellCommand = Schema.Union([
   ProjectCreate,
@@ -154,6 +164,7 @@ export const ShellCommand = Schema.Union([
   ThreadArchive,
   ThreadUnarchive,
   ThreadDelete,
+  ThreadClear,
 ]);
 
 export type ShellCommand = typeof ShellCommand.Type;

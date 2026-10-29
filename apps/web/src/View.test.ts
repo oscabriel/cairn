@@ -57,6 +57,7 @@ const project = ProjectShell.make({
   workspaceRoot: "/home/owner/Developer/projects/cairn",
   repository: Option.none(),
   defaultModel: Option.none(),
+  projectThreadId: Option.none(),
   createdAt: created,
   updatedAt: created,
 });

@@ -322,6 +322,18 @@
                             }
                           ]
                         },
+                        "projectThreadId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                              "format": "uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "createdAt": {
                           "type": "string"
                         },
@@ -995,6 +1007,18 @@
                         },
                         "required": ["provider", "modelId"],
                         "additionalProperties": true
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "projectThreadId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                        "format": "uuid"
                       },
                       {
                         "type": "null"
@@ -2199,6 +2223,27 @@
             },
             "required": ["_tag", "commandId", "threadId"],
             "additionalProperties": true
+          },
+          {
+            "type": "object",
+            "properties": {
+              "_tag": {
+                "type": "string",
+                "enum": ["ThreadClear"]
+              },
+              "commandId": {
+                "type": "string",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                "format": "uuid"
+              },
+              "threadId": {
+                "type": "string",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                "format": "uuid"
+              }
+            },
+            "required": ["_tag", "commandId", "threadId"],
+            "additionalProperties": true
           }
         ]
       },
@@ -2703,6 +2748,11 @@
             },
             "required": ["requestId", "text", "attachments", "skillRefs"],
             "additionalProperties": true
+          },
+          "replaces": {
+            "type": "string",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "format": "uuid"
           }
         },
         "required": [
@@ -6961,6 +7011,18 @@
                 },
                 "required": ["provider", "modelId"],
                 "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectThreadId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                "format": "uuid"
               },
               {
                 "type": "null"

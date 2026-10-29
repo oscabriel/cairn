@@ -25,6 +25,7 @@ import { RpcTest } from "effect/rpc";
 import { SqlClient } from "effect/sql";
 
 import { FolderRules } from "../projects/FolderRules.ts";
+import { ScratchProject } from "../projects/ScratchProject.ts";
 import { ShellHandlers } from "../rpc/ShellHandlers.ts";
 import { Threads } from "../threads/Threads.ts";
 import { EventSink } from "./EventSink.ts";
@@ -51,9 +52,13 @@ const AllowAllFolders = Layer.mock(FolderRules)({
 // Stopping runs before a delete is judged in rpc/ShellHandlers.test.ts.
 const NoRuns = Layer.mock(Threads)({ stop: () => Effect.void });
 
+// Clearing a scratch thread is judged in projects/ScratchThread.test.ts.
+const NoScratch = Layer.mock(ScratchProject)({ root: "/srv/data/scratch" });
+
 const TestLayer = ShellHandlers.pipe(
   Layer.provide(AllowAllFolders),
   Layer.provide(NoRuns),
+  Layer.provide(NoScratch),
   Layer.provideMerge(ShellTestLayer),
   Layer.provideMerge(ViewerTest)
 );

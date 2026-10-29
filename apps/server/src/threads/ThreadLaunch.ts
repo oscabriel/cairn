@@ -9,7 +9,8 @@
 // clone tracking, submodules or scheduled tasks; the launch's request and the phase it reached
 // live in `thread_launches`, so boot resumes a launch a restart cut off, each phase idempotent;
 // the first message goes through `TurnContent` and the harness seam; scratch threads get their own
-// claimed folder.
+// claimed folder; a launch in a folder project makes its project thread, or refreshes it (the
+// thread row, the old one's archive and the project's mark in one shell commit).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -913,6 +914,17 @@ export class ThreadLaunch extends Context.Service<
           });
         }
 
+        const scratchProject = project.value.shell.kind === "scratch";
+
+        if (scratchProject && input.replaces !== undefined) {
+          return yield* new LaunchError({
+            message:
+              "A scratch thread replaces nothing: the scratch project has no project thread. Launch it without `replaces`.",
+            reason: "invalid_input",
+            field: Option.some("replaces"),
+          });
+        }
+
         if (
           Predicate.isTagged(input.workspace, "Worktree") &&
           !(yield* worktrees.isRepository(project.value.shell.workspaceRoot))
@@ -942,58 +954,66 @@ export class ThreadLaunch extends Context.Service<
               placeholderTitle(input.initialMessage.text)
             );
 
-            yield* sink
-              .commitCommand(
-                ThreadCreate.make({
-                  commandId: input.commandId,
-                  threadId: input.threadId,
-                  projectId: input.projectId,
-                  title,
-                  provider: input.model.provider,
-                  modelId: input.model.modelId,
-                  thinkingLevel: input.thinkingLevel,
-                  runtimeMode: input.runtimeMode,
-                  branch: Option.none(),
-                  worktreePath: Option.none(),
-                })
+            const thread = ThreadCreate.make({
+              commandId: input.commandId,
+              threadId: input.threadId,
+              projectId: input.projectId,
+              title,
+              provider: input.model.provider,
+              modelId: input.model.modelId,
+              thinkingLevel: input.thinkingLevel,
+              runtimeMode: input.runtimeMode,
+              branch: Option.none(),
+              worktreePath: Option.none(),
+            });
+
+            // Every top-level launch in a folder project is its project thread: the first marks
+            // it, a later one refreshes it. A scratch thread is one of many.
+            const create = scratchProject
+              ? thread
+              : ThreadCreate.make({
+                  ...thread,
+                  projectThread: {
+                    replaces: Option.fromUndefinedOr(input.replaces),
+                  },
+                });
+
+            yield* sink.commitCommand(create).pipe(
+              Effect.catchTags({
+                ShellStoreError: (failure) => Effect.fail(unavailable(failure)),
+                ShellTargetNotFound: (failure) =>
+                  Effect.fail(
+                    new LaunchError({
+                      message: failure.message,
+                      reason: "project_not_found",
+                      field: Option.some("projectId"),
+                    })
+                  ),
+                ShellCommandConflict: (failure) =>
+                  Effect.fail(
+                    new LaunchError({
+                      message: failure.message,
+                      reason: "thread_exists",
+                      field: Option.some("threadId"),
+                    })
+                  ),
+                ShellCommandInvalid: (failure) =>
+                  Effect.fail(
+                    new LaunchError({
+                      message: failure.message,
+                      reason: "invalid_input",
+                      field: failure.field,
+                    })
+                  ),
+                ProjectWorkspaceConflictError: (failure) =>
+                  Effect.fail(unavailable(failure)),
+              }),
+              Effect.tapError(() =>
+                recorded
+                  ? launches.remove(input.commandId).pipe(Effect.ignore)
+                  : Effect.void
               )
-              .pipe(
-                Effect.catchTags({
-                  ShellStoreError: (failure) =>
-                    Effect.fail(unavailable(failure)),
-                  ShellTargetNotFound: (failure) =>
-                    Effect.fail(
-                      new LaunchError({
-                        message: failure.message,
-                        reason: "project_not_found",
-                        field: Option.some("projectId"),
-                      })
-                    ),
-                  ShellCommandConflict: (failure) =>
-                    Effect.fail(
-                      new LaunchError({
-                        message: failure.message,
-                        reason: "thread_exists",
-                        field: Option.some("threadId"),
-                      })
-                    ),
-                  ShellCommandInvalid: (failure) =>
-                    Effect.fail(
-                      new LaunchError({
-                        message: failure.message,
-                        reason: "invalid_input",
-                        field: failure.field,
-                      })
-                    ),
-                  ProjectWorkspaceConflictError: (failure) =>
-                    Effect.fail(unavailable(failure)),
-                }),
-                Effect.tapError(() =>
-                  recorded
-                    ? launches.remove(input.commandId).pipe(Effect.ignore)
-                    : Effect.void
-                )
-              );
+            );
 
             yield* sink
               .commitCommand(

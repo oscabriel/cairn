@@ -314,3 +314,115 @@ export const commitReply = (
     },
   };
 };
+
+/** The id of turn `turn`'s prompt in a synthetic thread. */
+export const userEntryIdOf = (turn: number): number => 1 + turn * 4;
+
+/** The turn a synthetic thread's prompt `entryId` opens. */
+export const turnOfUserEntry = (entryId: number): number =>
+  Math.floor((entryId - 1) / 4);
+
+/**
+ * A turn inserted before turn `turn`'s prompt, as a card lands above the reader (an escalated
+ * question): a prompt and a three-paragraph answer, with ids from `id`.
+ */
+export const insertTurn = (
+  state: ThreadViewState,
+  turn: number,
+  id: number
+): ThreadViewState => {
+  const conversationId = state.view.conversation.id;
+
+  const before = state.view.entries.findIndex(
+    (entry) => entry.id === userEntryIdOf(turn)
+  );
+
+  if (before === -1) {
+    return state;
+  }
+
+  const timestamp = at(turn) - 5000;
+
+  return {
+    ...state,
+    seq: state.seq + 1,
+    view: {
+      ...state.view,
+      entries: [
+        ...state.view.entries.slice(0, before),
+        userEntry(id, conversationId, "A question from a subagent.", timestamp),
+        assistantEntry(
+          id + 1,
+          conversationId,
+          [{ type: "text", text: answerText(2) }],
+          "stop",
+          timestamp + 1000
+        ),
+        ...state.view.entries.slice(before),
+      ],
+    },
+  };
+};
+
+/** Turn `turn` of a synthetic thread taken out whole, as rows leave the list above the reader. */
+export const removeTurn = (
+  state: ThreadViewState,
+  turn: number
+): ThreadViewState => {
+  const first = userEntryIdOf(turn);
+
+  return {
+    ...state,
+    seq: state.seq + 1,
+    view: {
+      ...state.view,
+      entries: state.view.entries.filter(
+        (entry) => entry.id < first || entry.id >= first + 4
+      ),
+    },
+  };
+};
+
+/**
+ * A checkpoint for turn `turn` landing after the turn settled, as a late line arrives in a settled
+ * row: the turn's answer gains its changed-files card.
+ */
+export const landCheckpoint = (
+  state: ThreadViewState,
+  turn: number,
+  id: number
+): ThreadViewState => ({
+  ...state,
+  seq: state.seq + 1,
+  view: {
+    ...state.view,
+    entries: [
+      ...state.view.entries,
+      decodeEntry({
+        id,
+        conversationId: state.view.conversation.id,
+        kind: "cairn.checkpoint",
+        data: {
+          turn: turn + 1,
+          ref: `refs/cairn/checkpoints/synthetic/turn/${String(turn + 1)}`,
+          headOid: null,
+          capturedAt: at(turn) + 4000,
+          files: [
+            {
+              path: `src/step-${String(turn)}/a.ts`,
+              additions: 4,
+              deletions: 1,
+            },
+            {
+              path: `src/step-${String(turn)}/b.ts`,
+              additions: 2,
+              deletions: 0,
+            },
+          ],
+          moreFiles: 0,
+          userEntryId: userEntryIdOf(turn),
+        },
+      }),
+    ],
+  },
+});

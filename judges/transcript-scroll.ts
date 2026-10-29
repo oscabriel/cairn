@@ -1,7 +1,8 @@
 // The transcript's scroll judge (plan 3C, D26): the real transcript submodel over a 2,100-row
 // synthetic thread with a streaming tail, in Chromium, sampled once per animation frame.
 //
-//   node judges/transcript-scroll.ts [--seconds 6] [--headed] [--broken estimate|reflow]
+//   node judges/transcript-scroll.ts [--seconds 6] [--headed]
+//     [--broken estimate|reflow|bookmark|anchor|extend|wheel]
 //
 // It starts the web client's Vite server on an ephemeral loopback port and opens the transcript
 // harness (apps/web/src/timeline/harness), which has no brain. `--broken` turns on one of the
@@ -9,8 +10,13 @@
 // order:
 //   follow     while replies stream at the end (growing, then committing and starting the next),
 //              every frame ends within 1 px of the bottom;
+//   nested-wheel  a wheel up over a scrollable box inside the last row, which the box takes, keeps
+//              the list following: once replies stream again, every frame ends within 1 px of the
+//              bottom and the pill stays hidden (`--broken wheel`, which stops following on any
+//              wheel up, as t3code did before #5566, fails it);
 //   scroll-up  a wheel up stops following: the pill shows and, while the reply keeps streaming, no
-//              frame moves `scrollTop` or the first visible row;
+//              frame changes the first visible row or moves it more than 1 px (`scrollTop` changes,
+//              the list holding the reader as a commit moves a parked row, are reported);
 //   expand     opening a turn fold, then the output of the tool row it revealed, moves no frame's
 //              `scrollTop` or the clicked control;
 //   pill       the pill brings the list back to its end, which it follows again;
@@ -22,11 +28,37 @@
 //   reflow     a glyph near the top of the viewport, bookmarked with `caretRangeFromPoint` as a
 //              row and a character offset in it, is back within 3 px of its place once the
 //              viewport goes from 1,440 px wide to 900, back, to 390 and back (`--broken reflow`
-//              fails it); each step also reports whether the first visible row and its offset,
-//              the coarser place the list itself keeps, held within 1 px.
-// Prints one JSON line and exits 0 when every check passed, apart from the known failures in
-// `KNOWN_FAILING`, which it reports without failing on; a known failure that passes fails the run,
-// so the change that fixes one removes it from the set.
+//              fails it, and so does `--broken bookmark`, which keeps only the first visible row
+//              and its offset); each step also reports whether that coarser place held within 1 px;
+//   insert-above  a turn inserted a few rows above the first visible row, as an escalated
+//              question's card lands, changes the first visible row in no frame and moves it by
+//              more than 1 px (whole-px `scrollTop`) in none, and the list made room above
+//              (`--broken anchor` fails it);
+//   arrive     a checkpoint landing late for a settled turn above the reader, so that turn's answer
+//              grows its changed-files card, likewise moves nothing on screen (`--broken anchor`);
+//   insert-far, arrive-far  the same changes far enough above that the rows they touch are parked,
+//              measured off-screen before they take room, likewise move nothing on screen;
+//   remove-far  a parked turn far above taken out, which only shrinks a gap, likewise moves
+//              nothing on screen (`--broken anchor` fails it);
+//   extend     on a fresh load at 1,440 px wide and at 390, a wheel up to the top of the measured
+//              range, then a pause while the list measures more history and it joins above the
+//              reader: the range grows by at least a viewport, and no frame changes the first
+//              visible row or moves it more than 1 px (`--broken extend`, which windows the rows around the scroll
+//              position the list last saw rather than the reader's row, fails it);
+//   range-after-reflow  a fresh load at 1,440 px, 1,600 px up into history, then the viewport
+//              narrowed to 390 and, 400 ms on, the range gesture up: the range holds as in `range`.
+//              The same gesture started at once after the width change is reported, not checked:
+//              stale rows above the reader are corrected as they are drawn in the first frames
+//              (ADR 0041 records the window as a measured cost);
+//   probe-click  a fresh load at 1,440 px, 1,600 px up, the viewport narrowed to 1,000 so stale rows
+//              are drawn in the off-screen measuring box, and a 900 px scroll up the frame after it
+//              draws: the rows it held come into the list as it goes, and none loses a click
+//              listener while it stays, and a fold among them opens on a click (a row and its
+//              off-screen copy sharing one memoized vnode fails it).
+// It also reports the document's element count once the fresh load settled, and after the range
+// gesture. Prints one JSON line and exits 0 when every check passed, apart from the known failures
+// in `KNOWN_FAILING`, which it reports without failing on; a known failure that passes fails the
+// run, so the change that fixes one removes it from the set.
 //
 // The range and reflow checks are ported from github.com/hardbeat920/monocode,
 // tests/browser/transcript-scroll.spec.ts ("scrolling settled history keeps the scroll range
@@ -63,6 +95,8 @@ import { chromium } from "playwright";
 import type { Page } from "playwright";
 import { createServer as createViteServer } from "vite";
 
+import { BrokenControl } from "../apps/web/src/timeline/list/Model.ts";
+
 const { values } = parseArgs({
   options: {
     seconds: { type: "string", default: "6" },
@@ -70,6 +104,18 @@ const { values } = parseArgs({
     broken: { type: "string", default: "" },
   },
 });
+
+/** The harness's broken controls; any other `--broken` would run the healthy list unnoticed. */
+const BROKEN_CONTROLS: ReadonlyArray<string> = BrokenControl.literals.filter(
+  (control) => control !== "none"
+);
+
+if (values.broken !== "" && !BROKEN_CONTROLS.includes(values.broken)) {
+  process.stderr.write(
+    `judges/transcript-scroll.ts: --broken must be one of ${BROKEN_CONTROLS.join(", ")}; got ${JSON.stringify(values.broken)}.\n`
+  );
+  process.exit(2);
+}
 
 const SECONDS = Number(values.seconds);
 
@@ -80,11 +126,10 @@ const root = path.resolve(import.meta.dirname, "..");
 const SCROLLER = '[data-testid="timeline-scroll"]';
 
 /**
- * Checks that fail on the real transcript today, recorded as findings in `docs/phase-2/backlog.md`
- * (stage 2.2): `range`, because the virtual list estimates the height of rows it has never drawn,
- * and `reflow`, because a width change keeps the first visible row rather than the glyph being read.
+ * Checks that fail on the real transcript today. Empty since the measured list (ADR 0041) fixed
+ * stage 2.2's `range` and `reflow` findings (`docs/phase-2/backlog.md`).
  */
-const KNOWN_FAILING: ReadonlySet<string> = new Set(["range", "reflow"]);
+const KNOWN_FAILING: ReadonlySet<string> = new Set();
 
 /** The longest main-thread task the follow phase allows, in ms: three frames at 60 Hz. */
 const LONG_TASK_MAX_MS = 50;
@@ -115,6 +160,23 @@ const REFLOW_TOLERANCE_PX = 3;
 /** How long the reflow check watches the glyph after each width change; its last frame counts. */
 const REFLOW_SETTLE_MS = 1500;
 
+/** How long the insert-above and arrive checks watch the screen after their change. */
+const LAND_WATCH_MS = 1500;
+
+/** How far the list must have scrolled to make room above, so a change that missed cannot pass. */
+const LAND_MIN_SHIFT_PX = 20;
+
+/** The widths the extend check runs at: the desktop's and the phone's. */
+const EXTEND_WIDTHS = [1440, 390];
+
+/** The extend check's wheel ticks up to the range's top, and the most it takes, as a ceiling. */
+const EXTEND_TICK_PX = 400;
+
+const EXTEND_MAX_TICKS = 600;
+
+/** How long the extend check watches while history joins above the paused reader. */
+const EXTEND_WATCH_MS = 4000;
+
 // Runs in the page before the app: per-frame sampling, the long-task log, and probes. A string, so
 // the page's globals stay out of this file's types; what comes back is decoded below.
 const PAGE_SCRIPT = `
@@ -129,13 +191,18 @@ window.__streamedCode = () =>
   [...document.querySelectorAll('[data-streaming] [data-slot="code-block"] code')].map(
     (code) => code.dataset.highlighted === "true"
   );
+window.__nodes = () => document.getElementsByTagName("*").length;
+window.__landed = () =>
+  Number(document.querySelector('[data-testid="landed"]')?.dataset.count ?? 0);
 window.__rows = () =>
   Number(document.querySelector(${JSON.stringify(SCROLLER)})?.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") ?? 0);
 window.__markVisible = (selector, name) => {
   const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
   if (scroller === null) return false;
   const box = scroller.getBoundingClientRect();
+  // Rows drawn off-screen to be measured are hidden copies with the same hooks: not those.
   const found = [...scroller.querySelectorAll(selector)].find((candidate) => {
+    if (candidate.closest("[data-list-probe]") !== null) return false;
     const rect = candidate.getBoundingClientRect();
     return rect.top > box.top + 40 && rect.bottom < box.bottom - 120;
   });
@@ -167,6 +234,93 @@ window.__sample = (duration, probe) => new Promise((resolve) => {
   };
   requestAnimationFrame(step);
 });
+// A box that scrolls on its own, 1,000 px down its content, at the bottom of the last drawn row.
+window.__nest = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  const rows = scroller === null ? [] : [...scroller.querySelectorAll(":scope > [data-virtual-list-item-key]")];
+  const row = rows.at(-1);
+  if (row === undefined) return false;
+  const box = document.createElement("div");
+  box.dataset.judgeNested = "true";
+  box.style.cssText = "height: 200px; overflow-y: auto;";
+  const content = document.createElement("div");
+  content.style.height = "2000px";
+  box.append(content);
+  row.append(box);
+  box.scrollTop = 1000;
+  return true;
+};
+window.__nested = () => {
+  const box = document.querySelector("[data-judge-nested]");
+  return box === null ? -1 : box.scrollTop;
+};
+window.__unnest = () => {
+  document.querySelector("[data-judge-nested]")?.remove();
+  return true;
+};
+// Listener removals on elements that stay in the list: a row whose off-screen copy shared its
+// vnode lost its listeners when the measuring box went (the probe-click check). Removals from
+// elements on their way out are not counted, as those leave the document.
+window.__removals = [];
+window.__watchRemovals = false;
+const removeListener = EventTarget.prototype.removeEventListener;
+EventTarget.prototype.removeEventListener = function (type, ...rest) {
+  if (window.__watchRemovals && this instanceof Element && type === "click") {
+    window.__removals.push(this);
+  }
+  return removeListener.call(this, type, ...rest);
+};
+window.__liveRemovals = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  return window.__removals.filter(
+    (element) =>
+      element.isConnected &&
+      scroller !== null &&
+      scroller.contains(element) &&
+      element.closest("[data-list-probe]") === null
+  ).length;
+};
+// Once the measuring box next draws, the frame after it a scroll of 900 px up: a gesture that
+// starts while rows sit in the box, so the next render draws them in the list as the box goes.
+window.__armProbeScroll = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  window.__probed = [];
+  window.__probeScrolled = false;
+  window.__removals = [];
+  window.__watchRemovals = true;
+  if (scroller === null) return false;
+  const observer = new MutationObserver(() => {
+    const box = scroller.querySelector(":scope > [data-list-probe]");
+    if (box === null) return;
+    observer.disconnect();
+    requestAnimationFrame(() => {
+      window.__probed = [...box.children].map((row) => row.dataset.probeKey ?? "");
+      scroller.scrollTop -= 900;
+      // A reader's scroll is heard at the frame's start, before the observers that keep the place
+      // run; one set from here would be heard a frame late, after they put it back.
+      scroller.dispatchEvent(new Event("scroll"));
+      window.__probeScrolled = true;
+    });
+  });
+  observer.observe(scroller, { childList: true });
+  return true;
+};
+// A closed turn fold drawn in the list whose row was in the measuring box at the scroll, marked
+// and brought to the middle of the viewport (its element stays: it is drawn either way).
+window.__markProbedFold = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  if (scroller === null) return "";
+  const probed = new Set(window.__probed ?? []);
+  const fold = [...scroller.querySelectorAll(':scope > [data-virtual-list-item-key] [data-testid="turn-fold"]')].find(
+    (candidate) =>
+      probed.has(candidate.closest("[data-virtual-list-item-key]")?.dataset.virtualListItemKey ?? "") &&
+      candidate.getAttribute("aria-expanded") === "false"
+  );
+  if (fold === undefined) return "";
+  fold.dataset.probe = "probed-fold";
+  fold.scrollIntoView({ block: "center" });
+  return fold.closest("[data-virtual-list-item-key]")?.dataset.virtualListItemKey ?? "";
+};
 window.__twoFrames = () =>
   new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))));
 window.__rest = () => new Promise((resolve) => {
@@ -421,21 +575,73 @@ const followPhase = async (page: Page) => {
   };
 };
 
+/** How far the nested-wheel check scrolls the box inside the last row. */
+const NESTED_WHEEL_PX = 300;
+
+/** How long the nested-wheel check watches replies stream after the wheel. */
+const NESTED_WATCH_MS = 2500;
+
+const nestedWheelPhase = async (page: Page) => {
+  await click(page, "stream-off");
+  await sleep(300);
+
+  const nested = decodeBoolean(await page.evaluate("window.__nest()"));
+
+  await page.evaluate("window.__twoFrames()");
+
+  const box = await page.locator("[data-judge-nested]").boundingBox();
+
+  if (box !== null) {
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+    for (let moved = 0; moved < NESTED_WHEEL_PX; moved += 100) {
+      await page.mouse.wheel(0, -100);
+      await sleep(16);
+    }
+  }
+
+  await sleep(300);
+
+  const boxScrollTop = decodeNumber(await page.evaluate("window.__nested()"));
+
+  await click(page, "stream-on");
+
+  const frames = await sampleFrames(page, NESTED_WATCH_MS);
+  const pill = await pillVisible(page);
+
+  await page.evaluate("window.__unnest()");
+
+  return {
+    nested: nested && box !== null,
+    // The box took the wheel: it moved up from 1,000 px.
+    boxScrollTop,
+    frames: frames.length,
+    maxDistancePx: maxDistance(frames),
+    pill,
+  };
+};
+
 const scrollUpPhase = async (page: Page) => {
   await wheelUp(page, 800);
   await sleep(400);
 
   const pill = await pillVisible(page);
   const frames = await sampleFrames(page, 2500);
-  const firstKey = frames[0]?.firstKey ?? "";
+  const [first] = frames;
+  const firstKey = first?.firstKey ?? "";
 
   return {
     pill,
     frames: frames.length,
+    // Reported, not checked: a turn committing at the end can move a parked row's frozen height
+    // across the reader's place, and the list holds the reader by moving `scrollTop`.
     scrollTopChanges: changes(frames, (frame) => frame.scrollTop),
+    // What the reader sees, as in the land checks: a frame whose first visible row changed or sits
+    // more than 1 px (whole-px `scrollTop`) from where it was.
     anchorMoves:
-      changes(frames, (frame) => frame.firstOffset) +
-      frames.filter((frame) => frame.firstKey !== firstKey).length,
+      frames.filter(
+        (frame) => Math.abs(frame.firstOffset - (first?.firstOffset ?? 0)) > 1
+      ).length + frames.filter((frame) => frame.firstKey !== firstKey).length,
   };
 };
 
@@ -498,7 +704,11 @@ const pillPhase = async (page: Page) => {
   await click(page, "stream-off");
   await sleep(300);
 
-  return { maxDistancePx: maxDistance(frames), visibleAfter };
+  return {
+    maxDistancePx: maxDistance(frames),
+    framesOver1Px: frames.filter((frame) => frame.distance > 1).length,
+    visibleAfter,
+  };
 };
 
 const switchPhase = async (page: Page) => {
@@ -658,6 +868,223 @@ const bookmarkShifts = async (
   );
 };
 
+/** Clicks the harness button `testId`, which changes thread A above the reader, and watches. */
+const landPhase = async (page: Page, testId: string) => {
+  await rest(page);
+
+  const before = decodeNumber(await page.evaluate("window.__landed()"));
+  const sampling = sampleFrames(page, LAND_WATCH_MS);
+
+  await click(page, testId);
+
+  const frames = await sampling;
+  const after = decodeNumber(await page.evaluate("window.__landed()"));
+  const [first] = frames;
+  const firstKey = first?.firstKey ?? "";
+
+  return {
+    landed: after === before + 1,
+    frames: frames.length,
+    firstKey,
+    scrollTopShiftPx: tenths(
+      Math.abs((frames.at(-1)?.scrollTop ?? 0) - (first?.scrollTop ?? 0))
+    ),
+    // `scrollTop` is whole px and each correction rounds the row to within half a px of the place
+    // the list holds, so two in a row can step it by up to 1 px: a move is a frame more than 1 px
+    // from where the row was, as in the extend check.
+    anchorMoves:
+      frames.filter(
+        (frame) => Math.abs(frame.firstOffset - (first?.firstOffset ?? 0)) > 1
+      ).length + frames.filter((frame) => frame.firstKey !== firstKey).length,
+    maxOffsetShiftPx: tenths(
+      Math.max(
+        0,
+        ...frames.map((frame) =>
+          Math.abs(frame.firstOffset - (first?.firstOffset ?? 0))
+        )
+      )
+    ),
+  };
+};
+
+/** How far into history the range-after-reflow check starts, and the width it narrows to. */
+const REFLOW_RANGE_UP_PX = 1600;
+
+const REFLOW_RANGE_WIDTH = 390;
+
+/** When the checked gesture starts after the width change; the reported one starts at once. */
+const REFLOW_RANGE_DELAY_MS = 400;
+
+/**
+ * A fresh load at 1,440 px, a wheel up into history and a rest, the viewport narrowed, and after
+ * `delayMs` the range gesture up.
+ */
+const rangeAfterReflowPhase = async (
+  page: Page,
+  url: string,
+  delayMs: number
+) => {
+  await load(page, url);
+  await wheelUp(page, REFLOW_RANGE_UP_PX);
+  await rest(page);
+  await page.setViewportSize({
+    width: REFLOW_RANGE_WIDTH,
+    height: VIEWPORT.height,
+  });
+  // The pointer stays where the wide viewport's middle was: over the narrow scroller again.
+  const box = await page.locator(SCROLLER).boundingBox();
+
+  if (box !== null) {
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  await sleep(delayMs);
+
+  const up = summarizeGesture(await gesture(page, -1), -1);
+
+  await page.setViewportSize(VIEWPORT);
+
+  return { delayMs, ...up };
+};
+
+/** How far into history the probe-click check starts, and the width it narrows to. */
+const PROBE_CLICK_UP_PX = 1600;
+
+const PROBE_CLICK_WIDTH = 1000;
+
+/**
+ * A fresh load at 1,440 px, a wheel up into history and a rest, then the viewport narrowed so the
+ * stale rows near the reader are drawn in the measuring box, and in the frame after it first draws
+ * a scroll of 900 px up: the rows it held come on screen as it goes. Each must keep its listeners:
+ * none loses a click listener while it stays in the list, and a fold among them opens on a click.
+ */
+const probeClickPhase = async (page: Page, url: string) => {
+  await load(page, url);
+  await wheelUp(page, PROBE_CLICK_UP_PX);
+  await rest(page);
+
+  const armed = decodeBoolean(await page.evaluate("window.__armProbeScroll()"));
+
+  await page.setViewportSize({
+    width: PROBE_CLICK_WIDTH,
+    height: VIEWPORT.height,
+  });
+
+  // A list that never draws the box (`--broken estimate`) never scrolls: the check fails on it.
+  const scrolled = await page
+    .waitForFunction("window.__probeScrolled === true", undefined, {
+      timeout: 5000,
+    })
+    .then(
+      () => true,
+      () => false
+    );
+
+  await rest(page);
+  await sleep(500);
+
+  const probed = decodeNumber(
+    await page.evaluate("(window.__probed ?? []).length")
+  );
+
+  const liveRemovals = decodeNumber(
+    await page.evaluate("window.__liveRemovals()")
+  );
+
+  const foldKey = Schema.decodeUnknownSync(Schema.String)(
+    await page.evaluate("window.__markProbedFold()")
+  );
+
+  let opened = false;
+
+  if (foldKey !== "") {
+    await rest(page);
+    await page.click('[data-probe="probed-fold"]');
+    await sleep(300);
+    opened =
+      (await page.getAttribute(
+        '[data-probe="probed-fold"]',
+        "aria-expanded"
+      )) === "true";
+  }
+
+  await page.evaluate("window.__watchRemovals = false");
+  await page.setViewportSize(VIEWPORT);
+
+  return { armed: armed && scrolled, probed, liveRemovals, foldKey, opened };
+};
+
+/**
+ * A fresh load at `width`, a wheel up to the top of the measured range, then a pause: history
+ * joins above the reader, who must not move.
+ */
+const extendPhase = async (page: Page, url: string, width: number) => {
+  await page.setViewportSize({ width, height: VIEWPORT.height });
+  await load(page, url);
+  await rest(page);
+
+  const box = await page.locator(SCROLLER).boundingBox();
+
+  if (box !== null) {
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  let ticks = 0;
+
+  for (
+    let top = Number.POSITIVE_INFINITY;
+    top > 0 && ticks < EXTEND_MAX_TICKS;
+    ticks += 1
+  ) {
+    await page.mouse.wheel(0, -EXTEND_TICK_PX);
+    await page.evaluate("window.__twoFrames()");
+    top = decodeNumber(
+      await page.evaluate(
+        `document.querySelector(${JSON.stringify(SCROLLER)}).scrollTop`
+      )
+    );
+  }
+
+  // The pause starts at the last wheel: the list measures history 150 ms on, inside the watch.
+  await page.evaluate("window.__startTrace()");
+
+  const frames = await sampleFrames(page, EXTEND_WATCH_MS);
+  const trace = decodeTrace(await page.evaluate("window.__stopTrace()"));
+  const [first] = frames;
+  const firstKey = first?.firstKey ?? "";
+  const ranges = trace.map((frame) => frame.range);
+
+  await page.setViewportSize(VIEWPORT);
+
+  return {
+    width,
+    ticks,
+    frames: frames.length,
+    firstKey,
+    lastKey: frames.at(-1)?.firstKey ?? "",
+    rangeGrowthPx: Math.round(
+      Math.max(0, ...ranges) - (ranges[0] ?? Number.POSITIVE_INFINITY)
+    ),
+    keyChanges: frames.filter((frame) => frame.firstKey !== firstKey).length,
+    // `scrollTop` is whole px, so each join rounds the row by up to half a px either way: a move is
+    // a frame more than 1 px from where the row was.
+    offsetMoves: frames.filter(
+      (frame) => Math.abs(frame.firstOffset - (first?.firstOffset ?? 0)) > 1
+    ).length,
+    maxOffsetShiftPx: tenths(
+      Math.max(
+        0,
+        ...frames.map((frame) =>
+          Math.abs(frame.firstOffset - (first?.firstOffset ?? 0))
+        )
+      )
+    ),
+  };
+};
+
+const nodeCount = async (page: Page): Promise<number> =>
+  decodeNumber(await page.evaluate("window.__nodes()"));
+
 const reflowPhase = async (page: Page) => {
   await wheelUp(page, 2400);
   await rest(page);
@@ -713,28 +1140,95 @@ const run = async (page: Page, port: number) => {
   const url = `http://${LOOPBACK}:${port}/src/timeline/harness/index.html${query}`;
   const loadMs = await load(page, url);
   const rows = decodeNumber(await page.evaluate("window.__rows()"));
+  const nodesOnLoad = await nodeCount(page);
   const atEndOnLoad = maxDistance(await sampleFrames(page, 300));
   const follow = await followPhase(page);
+  const nestedWheel = await nestedWheelPhase(page);
   const scrollUp = await scrollUpPhase(page);
   const expand = await expandPhase(page);
   const pill = await pillPhase(page);
   const threadSwitch = await switchPhase(page);
   const range = await rangePhase(page, url);
+  const nodesAfterRange = await nodeCount(page);
   const reflow = await reflowPhase(page);
+  const insertAbove = await landPhase(page, "insert-above");
+  const arrive = await landPhase(page, "arrive");
+  const insertFar = await landPhase(page, "insert-far");
+  const arriveFar = await landPhase(page, "arrive-far");
+  const removeFar = await landPhase(page, "remove-far");
+  const extend = [];
+
+  for (const width of EXTEND_WIDTHS) {
+    extend.push(await extendPhase(page, url, width));
+  }
+
+  const rangeAfterReflow = await rangeAfterReflowPhase(
+    page,
+    url,
+    REFLOW_RANGE_DELAY_MS
+  );
+
+  const rangeAtReflow = await rangeAfterReflowPhase(page, url, 0);
+  const probeClick = await probeClickPhase(page, url);
 
   return {
     rows,
     loadMs,
+    nodes: { onLoad: nodesOnLoad, afterRange: nodesAfterRange },
     atEndOnLoad,
     follow,
+    nestedWheel,
     scrollUp,
     expand,
     pill,
     switch: threadSwitch,
     range,
     reflow,
+    insertAbove,
+    arrive,
+    insertFar,
+    arriveFar,
+    removeFar,
+    extend,
+    rangeAfterReflow,
+    rangeAtReflow,
+    probeClick,
   };
 };
+
+/** History joined above the paused reader and nothing on screen moved. */
+const extended = (phase: {
+  readonly rangeGrowthPx: number;
+  readonly keyChanges: number;
+  readonly offsetMoves: number;
+}): boolean =>
+  phase.rangeGrowthPx >= VIEWPORT.height &&
+  phase.keyChanges === 0 &&
+  phase.offsetMoves === 0;
+
+/** A change above the reader landed, the list made room for it, and nothing on screen moved. */
+const landed = (phase: {
+  readonly landed: boolean;
+  readonly scrollTopShiftPx: number;
+  readonly anchorMoves: number;
+}): boolean =>
+  phase.landed &&
+  phase.scrollTopShiftPx >= LAND_MIN_SHIFT_PX &&
+  phase.anchorMoves === 0;
+
+/** Rows came from the measuring box into the list with their listeners: a fold among them opens. */
+const keptListeners = (phase: {
+  readonly armed: boolean;
+  readonly probed: number;
+  readonly liveRemovals: number;
+  readonly foldKey: string;
+  readonly opened: boolean;
+}): boolean =>
+  phase.armed &&
+  phase.probed > 0 &&
+  phase.liveRemovals === 0 &&
+  phase.foldKey !== "" &&
+  phase.opened;
 
 const main = async () => {
   const port = await freePort();
@@ -770,10 +1264,12 @@ const main = async () => {
     highlighted:
       result.follow.codeBlocks === 2 &&
       result.follow.codeBlocksHighlighted === 2,
-    scrollUp:
-      result.scrollUp.pill &&
-      result.scrollUp.scrollTopChanges === 0 &&
-      result.scrollUp.anchorMoves === 0,
+    nestedWheel:
+      result.nestedWheel.nested &&
+      result.nestedWheel.boxScrollTop < 1000 &&
+      result.nestedWheel.maxDistancePx <= 1 &&
+      !result.nestedWheel.pill,
+    scrollUp: result.scrollUp.pill && result.scrollUp.anchorMoves === 0,
     expand:
       result.expand.opened === 2 &&
       result.expand.scrollTopChanges === 0 &&
@@ -784,6 +1280,16 @@ const main = async () => {
     reflow:
       result.reflow.bookmark !== null &&
       result.reflow.steps.every((step) => step.held),
+    insertAbove: landed(result.insertAbove),
+    arrive: landed(result.arrive),
+    insertFar: landed(result.insertFar),
+    arriveFar: landed(result.arriveFar),
+    removeFar: landed(result.removeFar),
+    extend:
+      result.extend.length === EXTEND_WIDTHS.length &&
+      result.extend.every(extended),
+    rangeAfterReflow: result.rangeAfterReflow.held,
+    probeClick: keptListeners(result.probeClick),
     errors: errors.length === 0,
   };
 

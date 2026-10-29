@@ -52,7 +52,7 @@ import { parseArgs } from "node:util";
 
 import { DateTime, Effect, Option, Predicate, Schema } from "effect";
 import { chromium } from "playwright";
-import type { Browser, BrowserContextOptions, Page } from "playwright";
+import type { Browser, BrowserContextOptions, Locator, Page } from "playwright";
 
 import {
   formatT3ThreadExport,
@@ -1367,15 +1367,93 @@ const enterHeroState = async (
   await page.waitForTimeout(800);
 };
 
+/**
+ * A transcript row hook, outside Cairn's off-screen measuring box: the measured list (ADR 0041)
+ * also draws rows there to measure them, hidden copies that carry the same hooks. t3code has no
+ * such box, so the same selector serves both apps.
+ */
+const drawn = (selector: string): string =>
+  `${selector}:not([data-list-probe] ${selector})`;
+
+/** Cairn's transcript scroller; t3code's has no test id. */
+const CAIRN_SCROLLER = '[data-testid="timeline-scroll"]';
+
+/** How far one step up moves the transcript, and the most steps a search for a row takes. */
+const SCROLL_STEP_PX = 600;
+
+const MAX_SCROLL_STEPS = 40;
+
+/**
+ * Moves the transcript up by one step. Cairn's scroller is found by its test id: its list parks
+ * rows far from the reader, so the row a search starts from may not be drawn. t3code's is the
+ * nearest ancestor of a fold row that scrolls.
+ */
+const scrollTranscriptUp = async (page: Page, folds: Locator) => {
+  const cairn = page.locator(CAIRN_SCROLLER);
+
+  if ((await cairn.count()) > 0) {
+    await cairn.first().evaluate((element, step) => {
+      element.scrollBy({ top: -step });
+    }, SCROLL_STEP_PX);
+
+    return;
+  }
+
+  if ((await folds.count()) === 0) {
+    return;
+  }
+
+  await folds.first().evaluate((element, step) => {
+    let scroller = element.parentElement;
+
+    while (
+      scroller !== null &&
+      scroller.scrollHeight <= scroller.clientHeight + 1
+    ) {
+      scroller = scroller.parentElement;
+    }
+
+    scroller?.scrollBy({ top: -step });
+  }, SCROLL_STEP_PX);
+};
+
+/** Scrolls the transcript up until `target` is drawn, within `MAX_SCROLL_STEPS` steps. */
+const scrollUpUntilDrawn = async (
+  page: Page,
+  target: Locator,
+  folds: Locator
+) => {
+  for (
+    let step = 0;
+    step < MAX_SCROLL_STEPS && (await target.count()) === 0;
+    step += 1
+  ) {
+    await scrollTranscriptUp(page, folds);
+    await page.waitForTimeout(250);
+  }
+};
+
 /** Brings a thread page into `state`. */
 const enterThreadState = async (page: Page, state: ThreadState) => {
-  const folds = page.locator('[data-timeline-row-kind="turn-fold"]');
+  const folds = page.locator(drawn('[data-timeline-row-kind="turn-fold"]'));
 
   await page
-    .locator("[data-timeline-row-kind]")
+    .locator(drawn("[data-timeline-row-kind]"))
     .last()
     .waitFor({ state: "attached", timeout: 20_000 });
   await page.waitForTimeout(1500);
+
+  // The end state is captured as it loaded.
+  if (state === "thread-end") {
+    await page.mouse.move(2, 2);
+    await page.waitForTimeout(800);
+
+    return;
+  }
+
+  // A last reply taller than the viewport and the list's buffer parks the fold row above it (390
+  // px): scroll up until the last turn's fold is drawn.
+  await scrollUpUntilDrawn(page, folds, folds);
 
   // An app without fold rows is captured as it stands; the structure judge lists the rows missing.
   if ((await folds.count()) === 0) {
@@ -1395,23 +1473,9 @@ const enterThreadState = async (page: Page, state: ThreadState) => {
 
   if (state === "thread-changed-files") {
     // The card may sit in a turn the list has not rendered yet: scroll up until it appears.
-    const card = page.locator("[data-changed-files-state]");
+    const card = page.locator(drawn("[data-changed-files-state]"));
 
-    for (let step = 0; step < 40 && (await card.count()) === 0; step += 1) {
-      await folds.first().evaluate((element) => {
-        let scroller = element.parentElement;
-
-        while (
-          scroller !== null &&
-          scroller.scrollHeight <= scroller.clientHeight + 1
-        ) {
-          scroller = scroller.parentElement;
-        }
-
-        scroller?.scrollBy({ top: -600 });
-      });
-      await page.waitForTimeout(250);
-    }
+    await scrollUpUntilDrawn(page, card, folds);
 
     if ((await card.count()) > 0) {
       await card.last().evaluate((element) => {

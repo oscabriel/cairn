@@ -125,7 +125,7 @@ export const WorkingTimer = Mount.define("WorkingTimer", {
 
 /**
  * The row frame, carrying the chat canvas's lane inset itself: t3code pads its scroller
- * (`[data-chat-canvas] .messages-timeline-scroll`), but the virtual list writes `padding: 0` on
+ * (`[data-chat-canvas] .messages-timeline-scroll`), but the measured list writes `padding: 0` on
  * its own scroller, so each frame takes the same inset inside the scroller's gutters.
  */
 const FRAME_CLASS =

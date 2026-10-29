@@ -1,17 +1,16 @@
 // The transcript's update, and the two calls the thread page makes into it: `switchThread` when the
 // routed thread changes (the old thread's list and open folds are kept, the new one's restored)
 // and `afterView` after the page's view changed shape (a first snapshot or a page of history: the
-// list re-anchors on its stable row keys, so nothing on screen moves). Per-thread scroll memory
-// follows t3code's `rememberTimelinePosition` (github.com/pingdotgg/t3code,
+// list forgets the heights of rows that are gone; list/Place.ts keeps what is on screen still).
+// Per-thread scroll memory follows t3code's `rememberTimelinePosition` (github.com/pingdotgg/t3code,
 // apps/web/src/components/chat/timelineScrollAnchoring.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92) by keeping each thread's whole list Model.
 
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import type { EntryId } from "@cairn/protocol/Ids";
 import { ThreadId } from "@cairn/protocol/Ids";
-import * as VirtualList from "@foldkit/ui/virtualList";
 import { Option, Record, Schema } from "effect";
-import { Update } from "foldkit";
+import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import type { CairnConnectionService } from "../connection/Connection.ts";
@@ -21,6 +20,8 @@ import {
   LoadEarlier,
   PrepareRetry,
 } from "./Command.ts";
+import type * as ListModel from "./list/Model.ts";
+import * as List from "./list/Update.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { Model, ThreadUi } from "./Model.ts";
 import { freshUi, SAVED_THREAD_LIMIT } from "./Model.ts";
@@ -43,37 +44,11 @@ const toggle = (
 ): ReadonlyArray<string> =>
   ids.includes(id) ? ids.filter((other) => other !== id) : [...ids, id];
 
-const readList = (model: Model): Option.Option<VirtualList.Model> =>
-  Option.some(model.ui.list);
-
-const writeList = (model: Model, list: VirtualList.Model): Model =>
-  modifyFields(model, { ui: (ui) => modifyFields(ui, { list: () => list }) });
-
-const toGotListMessage = (message: VirtualList.Message): Message =>
-  Message.GotListMessage({ message });
-
-const foldList = Update.foldChild({
-  update: VirtualList.update,
-  read: readList,
-  write: writeList,
-  toParentMessage: toGotListMessage,
-});
-
-const scrollToEnd = Update.foldChildStep({
-  update: VirtualList.scrollToEnd,
-  read: readList,
-  write: writeList,
-  toParentMessage: toGotListMessage,
-});
-
-const informList = (keys: ReadonlyArray<string>) =>
-  Update.foldChildStep({
-    update: (list: VirtualList.Model) =>
-      VirtualList.informItemsChanged(list, keys),
-    read: readList,
-    write: writeList,
-    toParentMessage: toGotListMessage,
-  });
+const modifyList = (
+  model: Model,
+  change: (list: ListModel.Model) => ListModel.Model
+): Model =>
+  modifyFields(model, { ui: (ui) => modifyFields(ui, { list: change }) });
 
 const modifyUi = (
   model: Model,
@@ -123,7 +98,9 @@ const isCurrent = (model: Model, threadId: string): boolean =>
 /** The transcript's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    GotListMessage: ({ message: listMessage }) => foldList(model, listMessage),
+    GotListMessage: ({ message: listMessage }) => ({
+      model: modifyList(model, (list) => List.update(list, listMessage)),
+    }),
     ToggledTurnFold: ({ turnId }) =>
       modifyUi(model, (ui) =>
         modifyFields(ui, { expandedTurnIds: (ids) => toggle(ids, turnId) })
@@ -140,7 +117,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           expandedUserMessageIds: (ids) => toggle(ids, rowId),
         })
       ),
-    ClickedScrollToEnd: () => scrollToEnd(model),
+    ClickedScrollToEnd: () => ({ model: modifyList(model, List.scrollToEnd) }),
     ClickedLoadEarlier: ({ before, threadId }) =>
       loadEarlier(model, threadId, before),
     LoadedEarlier: ({ before, page, threadId }) =>
@@ -196,7 +173,6 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     FailedLanguage: () => ({ model }),
     MountedTimer: () => ({ model }),
-    MountedFollowEnd: () => ({ model }),
   });
 
 const saveCurrent = (model: Model): Pick<Model, "saved" | "savedOrder"> => {
@@ -259,8 +235,8 @@ const viewReplaced = (
   );
 
 /**
- * Re-anchors the list after the page's view changed shape: its first snapshot, or a page of
- * history in front. Streaming needs nothing: rows keep their keys and the list measures them.
+ * After the page's view changed shape (its first snapshot, or a page of history in front), the list
+ * forgets the heights of rows that are gone. Streaming needs nothing: rows keep their keys.
  */
 export const afterView = (
   model: Model,
@@ -271,9 +247,9 @@ export const afterView = (
     return { model };
   }
 
-  const keys = itemKeys(
-    transcriptForKeys(model.threadId.value, after, model.ui)
+  const keys = new Set(
+    itemKeys(transcriptForKeys(model.threadId.value, after, model.ui))
   );
 
-  return informList(keys)(model);
+  return { model: modifyList(model, (list) => List.keepRows(list, keys)) };
 };

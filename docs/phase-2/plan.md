@@ -41,7 +41,7 @@ Decided by the user on 2026-10-27 (stage 1 of the backlog, then the thirty quest
 | Who sits at the top | The user; a child asks its parent; routing in code | ADR 0027 |
 | Design pass | After the daily-driver day, as the look track; new screens built once in `next` | ADR 0011, 0040 |
 | Port or rebuild | Port the nightly's behaviour, draw it in the new look; new surfaces from scratch | ADR 0011 |
-| Sidebar | A project rail with the inbox as its top entry (the user, 2026-10-28, from the daily-driver day) | ADR 0011 |
+| Sidebar | A project rail of favicon bubbles (each project's favicon, found as t3code finds it), no global inbox for now. A project shows its one project thread, the only thread the user talks to, and under it a running list of the threads it manages (subagents, brief children, workflow nodes) with status icons; no Active, Settled, Pinned or Snoozed groups. The foot holds a Usage button (to a usage page) and Settings, no meters (the user, 2026-10-29; replaces the inbox-on-top rail of 2026-10-28) | ADR 0011, 0026 |
 | Hands-off goals | After phase 2; phase 2 adds `decidedBy`, reason and judge-bound criteria | ADR 0026, 0029 |
 | Subagent model | A thread with a hidden row; the reserved `conversationId` is removed | ADR 0028 |
 | Stop on a goal thread | Children keep working; the row offers Stop all | ADR 0028 |
@@ -73,7 +73,7 @@ Decided by the user on 2026-10-27 (stage 1 of the backlog, then the thirty quest
 | New screens | Only in `next`; the phone on `next` before the gate | ADR 0040 |
 | Transcript list | The look track's first package, confirmed after the daily-driver day | ADR 0041 |
 | Themes | Tokens for dark and light; preview rounds in dark | ADR 0040 |
-| Look | Stone, chosen by the user from round 0 on 2026-10-29; graphite and ink are dropped | ADR 0040 |
+| Look | Stone, chosen by the user from round 0 on 2026-10-29, then revised the same day: less brown, more black and white, still layered surfaces, with colour only on status icons; graphite and ink are dropped | ADR 0040 |
 | Reach (porch) | Shelved by the user on 2026-10-29: porch is not a live project. The artifact and portal code stays, dormant, with its tools hidden while porch is missing; wizard stage 2 and 5G are dropped, and the phone reach target is not judged in phase 2 | ADR 0038 |
 
 ## 3. Waves
@@ -253,7 +253,7 @@ Starts when the phase 1 gate's stage 8 is done and the design pass has chosen it
 - **L2 Tokens.** `next/tokens.css` for dark and light. Judge: `judges/contrast.test.ts` (a planted low-contrast token fails); no palette utility or literal in `next`.
 - **L3 Primitives and gallery.** `next/ui/` and a dev-only `/__look` catalogue. Judge: scene tests per primitive; `look-rules.ts` at 390 and 1,440 px with planted violations failing.
 - **L5 Look tool and rounds.** `judges/look.ts`, `look-rules.ts`, publish to `plans.gneiss.run`, freeze on approval. Judge: a sabotaged state fails the rules; a frozen round fails when a token changes.
-- **L6 Shell in the new look.** The sidebar as a project rail with the inbox on top, the chat header, the hold banner. Judge: `behaviour.ts`'s shell checks on `next`; the user's round.
+- **L6 Shell in the new look.** The sidebar as the decisions table's Sidebar row describes (favicon rail, one project thread and its running list, Usage and Settings at the foot), the chat header, the hold banner. Judge: `behaviour.ts`'s shell checks on `next`; the user's round.
 - **L7 Phase 1 surfaces redrawn.** Composer and hero; transcript rows and the fold line with tallies; diff, settings and push. Judge: all of `behaviour.ts`, `typing.ts` on Chromium and WebKit, `transcript-scroll.ts`, `load.ts`, `paste.ts`, the user's rounds.
 
 Source for all: surfaces L0 to L7 (L4 is 1E).

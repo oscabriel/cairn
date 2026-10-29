@@ -323,8 +323,8 @@ Each branch merged with `--no-ff` in the order B to H, all from `631afb3` (wave 
 
 ### What differs from the plan
 
-- **3A left out** (above), three times; wave 3's "subagents live" is not yet live.
-- **3B**: the spawn's workspace step is built and judged on its own (temp-repo tests, the kill between the intent row and `git worktree add`, the boot repair over a real pi-durable brain); nothing calls it until 3A merges.
+- **3A left out** (above), three times; its fourth round merged later ("Wave 3 completion: 3A" below).
+- **3B**: the spawn's workspace step is built and judged on its own (temp-repo tests, the kill between the intent row and `git worktree add`, the boot repair over a real pi-durable brain); 3A's brief task calls it since 3A merged (below).
 - **3C** added a third scenario, `question_across_restart`, beyond the two the block names. The card is wave 6.
 - **3D**: `CodexAccess.ts` sits in `models/` (S42 keeps pi-ai's runtime imports there); a failed read clears the windows rather than greying them; the live read is the user's (below).
 - **3E**: the kill judge runs separate child processes over the real porch (`fixtures/reach/ArtifactBrain.ts`) instead of a systemd judge brain. Dot folders are refused only on the way to the source, so a site's `.well-known/` publishes.
@@ -389,3 +389,67 @@ The full before-and-after `capture.ts cairn` comparison was the package's (34 PN
 ### Left for the user
 
 - Nothing for L0: to try it, open Cairn with `?ui=next` (it looks like classic inside a marked frame until L6 and L7). Nothing is deployed by this integration.
+
+## Wave 3 completion: 3A
+
+Integrated on 2026-10-29 on `main`.
+
+### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| 3A Subagents extension | `phase2/3A` | `5ae27ba` | done and approved, merged as `23bc5e5` |
+
+3A merged with `--no-ff` from `1b41929` (look track L0 integrated), with no conflict. Its fourth round fixes the third round's unbounded stopped-run finding: an unanswered child run's identity and extent are read from pi-durable's committed transcript, not from live `pi.live` watches (a steer shares the `byTaskId` of the tool-calling entry before it, inputs one commit placed are read as one placement by adjacent entry ids and one attribution, anything else starts a run, a reset bounds it), so `followRun` is gone and a late reporter never takes a later run's typed result, words or turns. 3B's held spawn step comes with it: the brief task calls `ChildWorkspaces.prepare` after Go and before the creating commit, and the child runs in that cwd. The hand-offs are one commit, `6687474`; this note, ADR 0034 and the glossary are the next.
+
+### Integration judges
+
+3A's block names no judge "at integration"; these rerun its own judges on the merged `main` and the wave 3 judges whose brains now carry `cairn.subagents`.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 360 s: fmt, lint, typecheck, 1,965 tests (90 more than the L0 note: 3A's scenarios and tests). No dependency changed; `pnpm install --frozen-lockfile` was a no-op. `MemoMapIsolation.test.ts` and the `ChildScope.test.ts` build scan are inside it. |
+| `Conformance.test.ts -t subagent` (pi-durable and scripted, both held reporter orders) | pass | 88 passed (65 other scenarios skipped by the filter) in 122 s, with `Subagents` now coming from the production set (`Subagents.layerWith`) rather than an extra extension. |
+| `judge-main.ts` boot on a throwaway port and a fresh data folder | pass | Boot repairs in order: sweep uploads, executor sweep, cancel abandoned approvals, retry parked approval waits, subagent rows (0 made), retry parked subagent tasks (0), child workspace repair, resume launches, checkpoint repair, spend reconcile, portal reconcile, start portal sweep, start event reactors; no `boot_repair_failed`; `ready`; `closing` and `closed` on SIGTERM. |
+| `node judges/durability.ts --no-page` | pass | 13 of 13. Kill to up 1,285 to 1,491 ms; up to converged 5 to 17 ms; sigterm-six 3,118 to 3,174 ms. |
+| `judges/pi-readonly.sh --no-turn` (the brain as deployed, now opening `cairn.sqlite` for its child workspaces) | pass | Agent dir identical (62,151 entries), pi home identical (4 entries), children `flock` and `git-version`, opencode-go ready, anthropic refused, openai-codex missing, boot 1,113 ms. $0. |
+| `node judges/dev-smoke.ts` | pass | Live after 2,555 ms; the demo thread grew from 2 to 8 entries; 0 page errors. |
+| Real-model judges | not run | None needed. The package's own rounds used none either. $0. |
+
+### Hand-offs applied
+
+- **`Extensions.ts`**: `ExtensionOrder.subagents: 650`, between Executor and the bridge's cwd; `Subagents.ts` drops its `SUBAGENTS_ORDER`.
+- **`ExtensionSet.ts`**: `Subagents` in `production`, left out of `dependencies`: the composition root gives it. **`AppLayer.ts`**: `SubagentsLive`, `Subagents.layer` over the app's `ChildWorkspacesLive` (with the same `Worktrees`, `Git` and `DatabaseLive` references `ProjectsLive` uses, so the memo map builds one `ChildWorkspaces`), provided inside `PiDurableBrain`, so `main.ts`, `judge-main.ts`, `dev-main.ts` and every test that builds `PiDurableBrain` get it with no edit of their own. `SubagentRows` (the row fiber) joins `AppLayer`'s `mergeAll`.
+- **Tests that build the extension set** take the new `Subagents.layerTest` (no faults, children's workspaces under a fresh temporary folder), beside `ReachServicesTest`. `ChildWorkspaceRepair.test.ts` gives `Subagents.layer` over its own `workspacesAt(data)` instead, since `ChildWorkspaces.layerNoDeps` is one memoized reference and the test's repair must see the same plans. `SubagentWorkspaceCrash.test.ts` gives its hanging workspace access as its own `Subagents` layer under `ExtensionSet.layer`. `CodingTools.test.ts` expects `cairn.subagents` after `cairn-executor`.
+- **`conformance/Targets.ts`**: `piDurableLayer` is `ExtensionSet.withExtra([conformanceTools])` with `Subagents.layerWith(faults, tuning)`; `childWorkspacesAt(dataDir)` stays provided under it, and the `workspaceAccess` unwrap is gone, so the extension installs once.
+- **`BootRepairs.ts`**: `subagent rows` and `retry parked subagent tasks` right after retrying parked approval waits and before the child workspace repair, so before the Harness resumes; the requirement union gains `ThreadRows` and `EventSink`.
+- **ADR 0034 is accepted** with its gate evidence. ADR 0028 stays proposed until 4C's `judges/subagent-durability.ts` passes.
+- **`GLOSSARY.md`**: subagent anchor, brief task, run mark, child scope; Landmark's _Avoid_ now says that "anchor" is the subagent anchor's.
+
+### Hand-offs held for later packages
+
+- **4A**: the dispatch scenario must give the child a model or thinking level that differs from its parent's (today removing the configure in `startChild` fails no scenario); `RoleAliases.resolve` at Go and `priced`; the S3 cap of 32 live children per brain.
+- **4B**: `ask_parent`'s `parentIdle` escalation (a question queued behind a parent run that fails or ends is withdrawn and escalated) stays 3A's; 4B builds its other three triggers around it. When 4B writes `cairn.escalations` on pi-durable, put `why` back into `EscalationTarget` at the three `SubagentTools.ts` call sites (`subagent_reply` passes `SubagentToolText.parentEscalated`, `ask_parent` passes `EscalationWhy.parentStopped` or `parentRunEnded`). S3's rule that a final answer ending in a question becomes a route-parent question needs a protocol `source` field, which 4B proposes.
+- **4C, `judges/subagent-durability.ts` with `kill -9`**: a kill between a steer reporter's commit and the seam's submit; a kill between a reporter's settle commit and its nudge submit; a real park of a subagent task after 5 crashes. A kill between `ChildWorkspaces.prepare` and the brief task's creating commit is covered in process by `SubagentWorkspaceCrash.test.ts`, and the steer-then-stop run identity by the shared-run scenarios; 4C may add them as kills. Also for 4C and 6: a thread created before this change gets no `cairn.subagents` document until its first child starts, and a stream opened before then shows the registry only after the client resubscribes.
+
+### Rules later packages follow
+
+- **`Subagents` comes from the root.** An entry point gets it through `PiDurableBrain`; a test that builds `ExtensionSet.layer` gives `Subagents.layerTest`, or `Subagents.layer` over its own child workspaces when it reads them, or `Subagents.layerWith(faults, tuning)` for planted faults. Never add `subagentsExtension` through `withExtra` beside the production set: it would install twice under one name.
+- **Per-child layers go through `ChildScope.build`** (ADR 0034); the scan in `ChildScope.test.ts` refuses direct builds under `subagents/` and `workflows/`.
+
+### What differs from the plan
+
+Protocol and document shapes beyond the plan, accepted by the integrator:
+
+- `packages/protocol/src/Subagents.ts`: `SubagentRecord.runs: Array<RunMark>`, where a `RunMark` is `{run, phase: "nudge", seq, inputs, quiet}` or `{run, phase: "settled", seq}` and `run` is `answer:<entry>`, `run:<first input entry>` or `input:<submission>`; `SettlementMark.inputs` (the request ids of every input a settled run ended); `SubagentQuestionState` gains `cancelled` (with a row in `docs/golden/thread-states.md` and a case in `judges/thread-state-rows.test.ts`). `packages/protocol/schema/cairn-documents.json` is regenerated. No index export changed.
+- `cairn.brief-answer` entry data gains `started` (true on Go, false on decline, revise, expire and `noWorkspace`) in both harnesses; `BriefAnswer` gains `noWorkspace` in `brain/SubagentText.ts`. Nothing in protocol or web decodes either.
+- 2E's `models/ResultTool.ts`: a task-scoped `cairn.result-call` document (never on the wire) remembers the accepting `submit_result` call, so a rerun after a crash answers accepted again; `markOf` tells `already` from accepted by matching `ResultToolText.already` word for word.
+- `shell/ShellCommands.ts`: `ThreadCreate.lineage`, optional, used by `SubagentRows`; 4C's row creation keeps it.
+- 2A's conformance runner: `expect_view` gains an optional `match: "equals" | "includes"` (`Transcript.ts` schema, `HarnessConformance.ts` `viewAt`); with `includes` the array at `path` must hold an element equal to `equals`, so a scenario can assert two settlement notes whose order depends on reporter commit order. The runner also gained `picks`, `expect_request`, `requestsOf` and the normalized `model` and `questions` fields.
+- Other edits outside 3A's block: `brain/NoteAdmission.ts` (new, note admission moved out of `PiDurableHarness.ts`); `PiDurableHarness.ts` (`STREAM_DOCUMENTS` gains the subagents and child documents, the subagents document is opened at ensure, `steerReporter` runs in `submit`, Stop all is `stopTree` forked into the layer scope); `Permissions.ts` (a child's mode narrowed by every ancestor's); `CairnDocs.ts`; `ScriptedHarness.ts` (subagent parity, and its idle admission places the first queued steer and follow-up in one run, as pi-durable's final boundary does); `brain/SubagentWorkspaceCrash.test.ts` (new); `Conformance.test.ts` (the shared-run scenario list) and the new scenarios and goldens.
+- Limits 3A documents rather than closes: an input that no reporter's `pi.live` watch saw and that was stopped or failed before any reporter recorded it settles as a run of its own (one note more for the parent; on `runOf` and `RunSpan`); a run whose end lies past `RUN_SCAN` keeps its key with no end, and its reads are unbounded; Cairn installs no `onYield` continuation, so a generation's continuation would read as a new run. `subagent_typed_steer_then_result_stopped` is a regression guard, not a failing-first test.
+- `SubagentRows` logs `subagent row fiber ended` (warning, exit `Failure`) when the brain shuts down, since the interrupt reaches its `onExit`; harmless, and worth quieting for interrupts when the file is next edited.
+
+### Left for the user
+
+- Nothing to do now; nothing is deployed by this integration. **When deploying**: the `cairn.subagents` extension appends one `pi.system` entry to every conversation once, so deploy while no thread is mid-tool, as before; subagents then become live on the deployed brain, with a child's worktree under the data folder when its brief asks for one.

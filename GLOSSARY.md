@@ -66,6 +66,14 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Subagent**: A thread that another thread or a stone spawns through a tool, from an approved brief. Its parent owns it; it has no sidebar row of its own but shows under its parent, where it can be steered and stopped. Its result reaches the parent as a note.
 
+**Subagent anchor**: The background task a parent owns for each child. It owns the child's conversation, so the parent's run is never held open by its children (ADR 0028).
+
+**Brief task**: The parent's background task that waits for Go on a brief, makes the child's workspace, then starts the child in one commit.
+
+**Run mark**: A child run's mark in its parent's `cairn.subagents` document, `nudge` or `settled`, keyed by the run's identity (its answer, its first input, or the submission), so each child run settles once whichever reporter commits first.
+
+**Child scope**: The one way a per-subagent or per-workflow-node layer is built (`ChildScope.build`): a fresh memo map and a scope that closes with the child, so nothing leaks from the parent's layers (ADR 0034).
+
 **Child workspace**: A subagent's own git worktree and branch, planned in `cairn.sqlite` before git makes it, so a crash between the two is repaired at boot. Releasing it never deletes a worktree with uncommitted or unmerged work. Every commit a thread's `bash` makes carries a `Cairn-Thread: <thread id>` trailer.
 
 _Avoid_: child agent, worker (except as a role alias)
@@ -298,7 +306,7 @@ _Avoid_: e2e, test suite (for the recipe)
 
 **Parity baseline**: t3code's captured states (screenshots, page HTML, landmark files, `states.json` with masks, `version.json`) committed under `judges/fixtures/parity/t3@fe27e8e3/<group>/`, written only by `judges/capture.ts t3` when the installed nightly matches ADR 0015 (D56).
 
-**Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens; the structure judge compares landmarks by key. _Avoid_: anchor.
+**Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens; the structure judge compares landmarks by key. _Avoid_: anchor (that word is the subagent anchor's).
 
 **Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a verifier on another model family, or the user.
 

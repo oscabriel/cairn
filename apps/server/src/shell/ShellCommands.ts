@@ -42,6 +42,7 @@ import {
   ThreadShell,
 } from "@cairn/protocol/Shell";
 import { ShellCommand } from "@cairn/protocol/ShellCommands";
+import { ThreadLineage } from "@cairn/protocol/Subagents";
 import { Array as Arr, DateTime, Match, Option, Result, Schema } from "effect";
 
 import type { ProjectRow } from "../projects/Projects.ts";
@@ -71,6 +72,8 @@ export const ThreadCreate = Schema.TaggedStruct("ThreadCreate", {
   runtimeMode: RuntimeMode,
   branch: ThreadShell.fields.branch,
   worktreePath: ThreadShell.fields.worktreePath,
+  /** A subagent's parent and root (ADR 0028); absent for a thread the user launched. */
+  lineage: Schema.optionalKey(Schema.OptionFromNullOr(ThreadLineage)),
 });
 
 const patchField = <S extends Schema.Top>(schema: S) =>
@@ -946,6 +949,7 @@ export const planShellCommand = (
           lastVisitedAt: Option.none(),
           parkedTaskIds: [],
           ...BARE_ROW_FIELDS,
+          lineage: create.lineage ?? Option.none(),
         };
 
         return threadPlan(

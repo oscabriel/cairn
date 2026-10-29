@@ -33,6 +33,7 @@ import { ModelHealth } from "../../models/ModelHealth.ts";
 import { PiModelSource } from "../../models/PiModelSource.ts";
 import { SettingsStore } from "../../models/SettingsStore.ts";
 import { PiHost } from "../../pi-host/PiHost.ts";
+import { subagentsExtension } from "../../subagents/Subagents.ts";
 import { Brain } from "../Brain.ts";
 import type { BrainSession } from "../Brain.ts";
 import { BrainConfig } from "../BrainConfig.ts";
@@ -161,15 +162,17 @@ const restartable = Effect.fnUntraced(function* (
   } satisfies ConformanceTarget;
 });
 
-/** The pi-durable side. */
-// The subagent faults reach pi-durable with the subagents extension; until then it plants none.
-export const piDurableTarget: MakeTarget = (script) =>
+/** The pi-durable side, with the subagents extension and the faults the mutation check plants. */
+export const piDurableTarget: MakeTarget = (script, faults) =>
   Effect.gen(function* () {
     const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-conformance-"));
 
     const layer = PiDurableHarness.layer.pipe(
       Layer.provide(
-        ExtensionSet.withExtra([conformanceTools]).pipe(
+        ExtensionSet.withExtra([
+          conformanceTools,
+          subagentsExtension(faults),
+        ]).pipe(
           Layer.provide(ExecutorLink.layerDisabled),
           Layer.provide(PiHost.layerEmpty),
           Layer.provide(ModelHealth.layerTest),

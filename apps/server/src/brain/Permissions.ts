@@ -19,8 +19,11 @@
 // writes no approval record for these tools. The memo is the task's own, so a rerun of the same tool
 // task finds it and another call never does.
 
+import { narrowerMode } from "@cairn/client-logic/EffectiveMode";
+import { ConversationId } from "@cairn/protocol/Ids";
 import { DEFAULT_RUNTIME_MODE } from "@cairn/protocol/Policy";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
+import { MAX_SUBAGENT_DEPTH } from "@cairn/protocol/Subagents";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
 import type {
   ToolExecutionApi,
@@ -29,8 +32,10 @@ import type {
 } from "@earendil-works/pi-durable";
 import { Effect, Option } from "effect";
 
+import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import { approvalLedger, Permissions, settlementText } from "./CairnDocs.ts";
 import type { ApprovalLedgerError } from "./CairnDocs.ts";
+import { piConversationId } from "./PiIds.ts";
 
 /**
  * What a tool does, as the modes see it: `read` only reads; `edit` writes files; `command` runs a
@@ -72,16 +77,49 @@ export const callAsks = (
 ): boolean =>
   modeAsks(permissions.mode, action) && !permissions.allow.includes(tool);
 
-/** The permissions a tool call runs under, read once at call time. */
+/** How many ancestors a subagent's mode is narrowed by: the depth cap, with room to spare. */
+const ANCESTOR_HOPS = MAX_SUBAGENT_DEPTH + 2;
+
+/**
+ * The permissions a tool call runs under, read once at call time: the thread's own allow list, and
+ * its mode narrowed by every ancestor's (ADR 0031), found by walking each subagent's `cairn.child`
+ * up to the thread the user opened. A parent narrowed after the spawn so narrows its child's next
+ * gated call.
+ */
 export const readPermissions = async (
   api: Pick<ToolExecutionApi, "snapshot" | "conversationId">,
   context: ChordContext
 ): Promise<ThreadPermissions> => {
   const doc = await api.snapshot(Permissions, api.conversationId, context);
 
-  return doc === undefined
-    ? DEFAULT_PERMISSIONS
-    : { mode: doc.mode, allow: [...doc.allow] };
+  const own =
+    doc === undefined
+      ? DEFAULT_PERMISSIONS
+      : { mode: doc.mode, allow: [...doc.allow] };
+
+  let { mode } = own;
+  let { conversationId } = api;
+
+  for (let hop = 0; hop < ANCESTOR_HOPS; hop += 1) {
+    // Each hop reads the parent the last one named.
+    // oxlint-disable-next-line no-await-in-loop
+    const link = await api.snapshot(ChildDoc, conversationId, context);
+
+    if (!isLinked(link)) {
+      break;
+    }
+
+    conversationId = piConversationId(
+      ConversationId.make(link.parentConversationId)
+    );
+
+    // oxlint-disable-next-line no-await-in-loop
+    const parent = await api.snapshot(Permissions, conversationId, context);
+
+    mode = narrowerMode(mode, parent?.mode ?? DEFAULT_RUNTIME_MODE);
+  }
+
+  return { mode, allow: own.allow };
 };
 
 /** The memo a gated tool commits right before its effect. Prefixed: hooks share the task's memos. */

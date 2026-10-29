@@ -100,3 +100,37 @@ export const resolveAliases = (value: Json, aliases: ThreadAliases): Json => {
 
   return value;
 };
+
+/**
+ * `value` with every thread id the aliases know replaced by `$<alias>`, inside any string: the
+ * reverse of `resolveAliases`, for the goldens. Each harness mints its children's ids its own way
+ * (pi-durable's carry the Harness clock), so a recorded text names a child by alias, not by id.
+ */
+export const maskThreadIds = (value: Json, aliases: ThreadAliases): Json => {
+  if (Predicate.isString(value)) {
+    let text = value;
+
+    for (const threadId of aliases.threads()) {
+      for (const alias of Option.toArray(aliases.aliasOf(threadId))) {
+        text = text.replaceAll(threadId, `$${alias}`);
+      }
+    }
+
+    return text;
+  }
+
+  if (isJsonList(value)) {
+    return value.map((item) => maskThreadIds(item, aliases));
+  }
+
+  if (isJsonRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        maskThreadIds(item, aliases),
+      ])
+    );
+  }
+
+  return value;
+};

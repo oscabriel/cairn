@@ -51,8 +51,8 @@ const isSubagentScenario = (scenario: Scenario) =>
 type Side = "pi-durable" | "scripted";
 
 /**
- * Scenarios each side does not pass yet. pi-durable passes the subagent groups once its subagents
- * extension lands; the scripted harness models them now.
+ * Scenarios each side does not pass yet: none. pi-durable passes the subagent groups with the
+ * subagents extension (`subagents/`), and the scripted harness models them.
  *
  * Two windows of the subagents note's groups are judged elsewhere. `subagent_result_once_with_crash`
  * crashes while the child's answer and the parent's woken run are held; the scripted reporter
@@ -61,12 +61,8 @@ type Side = "pi-durable" | "scripted";
  * `judges/subagent-durability.ts`. `subagent_brief_declined` covers declined and revised briefs;
  * an expired brief (group 2's third case) belongs to 4A, which owns expiry.
  */
-const subagentNames = scenarios.flatMap((scenario) =>
-  isSubagentScenario(scenario) ? [scenario.name] : []
-);
-
 const PENDING: Readonly<Record<Side, ReadonlySet<string>>> = {
-  "pi-durable": new Set(subagentNames),
+  "pi-durable": new Set(),
   scripted: new Set(),
 };
 

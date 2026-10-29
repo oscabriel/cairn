@@ -29,7 +29,7 @@
 
 import type { ModelRef } from "@cairn/protocol/Models";
 import { JsonObject } from "@cairn/protocol/Policy";
-import { CHILD_DOCUMENT, RESULT_DOCUMENT } from "@cairn/protocol/Subagents";
+import { RESULT_DOCUMENT } from "@cairn/protocol/Subagents";
 import type { Context as ChordContext, JsonValue } from "@earendil-works/chord";
 import { copyJson } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
@@ -64,6 +64,8 @@ import {
 
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { ChildDoc } from "../subagents/SubagentDocs.ts";
+import type { ChildState } from "../subagents/SubagentDocs.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const RESULTS_EXTENSION = "cairn.results";
@@ -121,28 +123,6 @@ export const ResultDoc = defineDoc<ResultState>({
   fork: "initial",
   initial: () => ({ result: null, divergence: "", attempts: 0 }),
   // Written once.
-  checkpointWhen: () => false,
-});
-
-/** The part of `cairn.child` this extension reads: the schema the brief named. */
-interface ChildSchemaState {
-  [key: string]: JsonValue;
-  resultSchema: JsonValue;
-}
-
-/**
- * A read-only view of `cairn.child`, which the spawn writes (the subagents extension owns it).
- * Only `snapshot` reads go through this token, so its `initial` is never stored. Its version
- * must match the writer's: pi-durable refuses a stored record newer than the token, so this view
- * gives way to 3A's exported token when that lands.
- */
-const ChildSchemaDoc = defineDoc<ChildSchemaState>({
-  kind: CHILD_DOCUMENT,
-  version: 1,
-  scope: "conversation",
-  history: "latest",
-  fork: "initial",
-  initial: () => ({ resultSchema: null }),
   checkpointWhen: () => false,
 });
 
@@ -666,7 +646,7 @@ export const returnedModelOf = (
 
 // The tool.
 
-const resultSchemaOf = (value: Readonly<ChildSchemaState> | undefined) =>
+const resultSchemaOf = (value: Readonly<ChildState> | undefined) =>
   Option.flatMap(decodeChildSchema(value), (child): Option.Option<JsonObject> =>
     Option.fromNullOr(child.resultSchema)
   );
@@ -720,11 +700,7 @@ export const RESULT_TOOL = defineTool({
     return (Option.getOrUndefined(parsed) ?? args) as JsonObject;
   },
   execute: async (args, api, context) => {
-    const child = await api.snapshot(
-      ChildSchemaDoc,
-      api.conversationId,
-      context
-    );
+    const child = await api.snapshot(ChildDoc, api.conversationId, context);
 
     const schema = resultSchemaOf(child);
 
@@ -880,7 +856,7 @@ export class ResultTool extends Context.Service<
             hook(GenerationTask, {
               beforeRequest: async (request, api, context) => {
                 const child = await api.snapshot(
-                  ChildSchemaDoc,
+                  ChildDoc,
                   api.conversationId,
                   context
                 );

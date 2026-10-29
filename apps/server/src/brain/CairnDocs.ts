@@ -18,7 +18,10 @@
 // a record (`answerApproval`) and cancels the records a stopped run held (`cancelStoppedApprovals`);
 // a boot repair cancels those a stop cut off by a crash left behind (`cancelAbandonedApprovals`).
 
-import { TaskId } from "@cairn/protocol/Ids";
+import {
+  ConversationId as ProtocolConversationId,
+  TaskId,
+} from "@cairn/protocol/Ids";
 import {
   APPROVALS_DOCUMENT,
   APPROVALS_VERSION,
@@ -59,10 +62,12 @@ import {
   Stream,
 } from "effect";
 
+import { ChildDoc, isLinked, markQuestion } from "../subagents/SubagentDocs.ts";
+import type { ChildState } from "../subagents/SubagentDocs.ts";
 import { Brain } from "./Brain.ts";
 import { durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
-import { piTaskId } from "./PiIds.ts";
+import { piConversationId, piTaskId } from "./PiIds.ts";
 
 /** The creation receipt of one thread: the conversation it lives in, 0 until created. */
 export interface ThreadReceiptState {
@@ -868,38 +873,122 @@ export const applyAnswer = (
   return "answered";
 };
 
+/** A stored conversation id as pi-durable types it. */
+const piConversationOf = (id: number) =>
+  piConversationId(ProtocolConversationId.make(id));
+
+/**
+ * Settles, inside the answering transaction, what an answered record is linked to (ADR 0027): a
+ * parent's mirror settles the child's escalated question it mirrors, and a child's question settles
+ * every mirror of it in its parent, so an answer from either thread lands once and the other
+ * reports `already_settled`. A child's question also marks its parent's registry. `link` is the
+ * conversation's `cairn.child`, read before the transaction (it never changes once written).
+ */
+const settleLinked = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  record: ApprovalRecord,
+  link: Readonly<ChildState> | undefined,
+  answer: RecordAnswer,
+  now: number
+): Promise<void> => {
+  if (record.mirrorOf !== null) {
+    const { approvalId, threadId } = record.mirrorOf;
+
+    const receipt = await tx.doc(ThreadReceipt, threadId, {
+      conversationId: 0,
+    });
+
+    if (receipt.conversationId < 1) {
+      return;
+    }
+
+    const childId = piConversationOf(receipt.conversationId);
+    const childApprovals = await tx.doc(Approvals, childId);
+    const child = childApprovals.items[approvalId];
+
+    if (child !== undefined) {
+      applyAnswer(child, answer, now);
+    }
+
+    await markQuestion(
+      tx,
+      conversationId,
+      childId,
+      approvalId,
+      "answered",
+      Option.none()
+    );
+
+    return;
+  }
+
+  if (!isLinked(link) || record.kind !== "user-input") {
+    return;
+  }
+
+  const parentId = piConversationOf(link.parentConversationId);
+  const meta = await tx.doc(ThreadMeta, conversationId);
+  const parent = await tx.doc(Approvals, parentId);
+
+  for (const mirror of Object.values(parent.items)) {
+    if (
+      mirror.mirrorOf?.threadId === meta.threadId &&
+      mirror.mirrorOf.approvalId === record.id
+    ) {
+      applyAnswer(mirror, answer, now);
+    }
+  }
+
+  await markQuestion(
+    tx,
+    parentId,
+    conversationId,
+    record.id,
+    "answered",
+    Option.none()
+  );
+};
+
 /**
  * Answers one record from the host side, in one transaction (`applyAnswer`). "Allow for this
- * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit.
+ * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit,
+ * and an escalated question settles with its mirror (`settleLinked`).
  */
 export const answerApproval = (
-  session: Pick<Session, "commit">,
+  session: Pick<Session, "commit" | "snapshot">,
   conversationId: ConversationId,
   approvalId: string,
   answer: RecordAnswer,
   now: number
 ): Effect.Effect<AnswerOutcome, DurableCallError> =>
-  durable(
-    "approvals.answer",
-    async (context) =>
-      await session.commit(async (tx): Promise<AnswerOutcome> => {
-        const { items } = await tx.doc(Approvals, conversationId);
-        const record = items[approvalId];
+  durable("approvals.answer", async (context) => {
+    const link = await session.snapshot(ChildDoc, conversationId, context);
 
-        if (record === undefined) {
-          return "not_found";
-        }
+    return await session.commit(async (tx): Promise<AnswerOutcome> => {
+      const { items } = await tx.doc(Approvals, conversationId);
+      const record = items[approvalId];
 
-        const outcome = applyAnswer(record, answer, now);
+      if (record === undefined) {
+        return "not_found";
+      }
 
-        // "Allow for this thread" lands with the answer, so the next call of the tool runs at once.
-        if (outcome === "answered" && answer.decision === "accept_for_thread") {
-          await allowTool(tx, conversationId, record.tool);
-        }
+      const outcome = applyAnswer(record, answer, now);
 
+      if (outcome !== "answered") {
         return outcome;
-      }, context)
-  );
+      }
+
+      // "Allow for this thread" lands with the answer, so the next call of the tool runs at once.
+      if (answer.decision === "accept_for_thread") {
+        await allowTool(tx, conversationId, record.tool);
+      }
+
+      await settleLinked(tx, conversationId, record, link, answer, now);
+
+      return outcome;
+    }, context);
+  });
 
 /**
  * Whether a run holds this record: a pending tool call or question its own tool task waits on.

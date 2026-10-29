@@ -175,7 +175,7 @@
       {
         "kind": "cairn.brief-answer",
         "role": "user",
-        "text": "The user approved the brief \"Tidy the imports\"; subagent thread 0190f0c0-0000-7000-9000-000000000009 started.",
+        "text": "The user approved the brief \"Tidy the imports\"; subagent thread $child1 started.",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -184,7 +184,7 @@
       {
         "kind": "cairn.subagent-result",
         "role": "user",
-        "text": "Subagent \"Tidy the imports\" (thread 0190f0c0-0000-7000-9000-000000000009) completed.\n<subagent_result>\nSorted both files.\n</subagent_result>\nDivergence: not reported",
+        "text": "Subagent \"Tidy the imports\" (thread $child1) completed.\n<subagent_result>\nSorted both files.\n</subagent_result>\nDivergence: not reported",
         "images": 0,
         "toolCalls": [],
         "toolName": null,

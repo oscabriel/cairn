@@ -51,6 +51,7 @@ import {
 import { responseScript } from "./ResponseScript.ts";
 import type { MakeTarget } from "./Targets.ts";
 import {
+  maskThreadIds,
   threadAliasesOf,
   PARENT_ALIAS,
   resolveAliases,
@@ -525,7 +526,11 @@ export const runScenario = (
         return yield* Effect.void;
       });
 
-      /** The oldest pending approval in a thread's client view, waited for. */
+      // The records this run answered, by `<thread>:<id>`: a client view can lag the answer's
+      // commit, so the next respond must not take a record it already answered for a pending one.
+      const answered = new Set<string>();
+
+      /** The oldest pending approval this run has not answered in a thread's client view, waited for. */
       const pendingIn = (where: string, threadId: ThreadId) =>
         Effect.gen(function* () {
           const client = yield* clientOf(threadId);
@@ -536,7 +541,11 @@ export const runScenario = (
             Effect.map(Ref.get(client), (state) =>
               Option.match(
                 Option.flatMap(state, (view) =>
-                  Option.fromUndefinedOr(pendingApprovalIds(view.view)[0])
+                  Option.fromUndefinedOr(
+                    pendingApprovalIds(view.view).find(
+                      (id) => !answered.has(`${threadId}:${id}`)
+                    )
+                  )
                 ),
                 {
                   onNone: () =>
@@ -562,6 +571,7 @@ export const runScenario = (
         const threadId = yield* threadOf(where, line.thread);
         const approvalId = yield* pendingIn(where, threadId);
 
+        answered.add(`${threadId}:${approvalId}`);
         yield* seam
           .respond(threadId, approvalId, answerOf(line))
           .pipe(Effect.mapError(fromSeam(where)));
@@ -581,6 +591,10 @@ export const runScenario = (
             return { threadId, approvalId: yield* pendingIn(where, threadId) };
           })
         );
+
+        for (const { threadId, approvalId } of targets) {
+          answered.add(`${threadId}:${approvalId}`);
+        }
 
         yield* Effect.forEach(
           targets,
@@ -845,7 +859,11 @@ export const runScenario = (
           onFailure: (failure) => Option.some(failure.message),
           onSuccess: () => Option.none<string>(),
         }),
-        record: order.length > 1 ? { ...record, children } : record,
+        // Texts name a child by alias: each harness mints child ids its own way.
+        record: maskThreadIds(
+          order.length > 1 ? { ...record, children } : record,
+          aliases
+        ),
       };
     })
   );

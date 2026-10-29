@@ -187,7 +187,7 @@
       {
         "kind": "cairn.brief-answer",
         "role": "user",
-        "text": "The user approved the brief \"Clean the build\"; subagent thread 0190f0c0-0000-7000-9000-000000000009 started.",
+        "text": "The user approved the brief \"Clean the build\"; subagent thread $child1 started.",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -214,7 +214,7 @@
       {
         "kind": "pi.tool-result",
         "role": "toolResult",
-        "text": "Subagent 0190f0c0-0000-7000-9000-000000000009 has no question waiting for its parent. Its approvals are the user's to answer.",
+        "text": "Subagent $child1 has no question waiting for its parent. Its approvals are the user's to answer.",
         "images": 0,
         "toolCalls": [],
         "toolName": "subagent_reply",
@@ -232,7 +232,7 @@
       {
         "kind": "cairn.subagent-result",
         "role": "user",
-        "text": "Subagent \"Clean the build\" (thread 0190f0c0-0000-7000-9000-000000000009) completed.\n<subagent_result>\nRemoved the build folder.\n</subagent_result>\nDivergence: not reported",
+        "text": "Subagent \"Clean the build\" (thread $child1) completed.\n<subagent_result>\nRemoved the build folder.\n</subagent_result>\nDivergence: not reported",
         "images": 0,
         "toolCalls": [],
         "toolName": null,

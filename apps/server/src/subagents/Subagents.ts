@@ -17,17 +17,18 @@ import type {
   Session,
 } from "@earendil-works/pi-durable";
 import { defineExtension, LiveDoc } from "@earendil-works/pi-durable";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Result } from "effect";
 
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { NO_SUBAGENT_FAULTS, SubagentFaults } from "../brain/SubagentFaults.ts";
 import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
+import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
 import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
-import type { SubagentTasks } from "./SubagentTasks.ts";
+import type { ChildWorkspaceAccess, SubagentTasks } from "./SubagentTasks.ts";
 import {
   childAgentOf,
   DEFAULT_TOOL_OPTIONS,
@@ -49,8 +50,38 @@ interface ChildAgentHolder {
   agent: (typed: boolean) => AgentChange;
 }
 
+/**
+ * `ChildWorkspaces.prepare` for the brief task, which runs outside Effect: the child's cwd and
+ * worktree, or the error's words for the parent.
+ */
+export const workspaceAccess = (
+  workspaces: ChildWorkspaces["Service"]
+): ChildWorkspaceAccess => ({
+  prepare: async (input) =>
+    await Effect.runPromise(
+      workspaces
+        .prepare(input)
+        .pipe(
+          Effect.result,
+          Effect.map(Result.mapError((error) => error.message))
+        )
+    ),
+});
+
+/** No workspaces: for the host's copy of the task definitions, whose brief task never runs. */
+const NO_WORKSPACES: ChildWorkspaceAccess = {
+  prepare: async () =>
+    await Promise.resolve(
+      Result.fail("This copy of the subagent tasks makes no workspaces.")
+    ),
+};
+
 /** The tools and tasks with `faults` planted, as one extension. */
-const build = (faults: SubagentFaultSet, tuning: SubagentToolOptions) => {
+const build = (
+  faults: SubagentFaultSet,
+  tuning: SubagentToolOptions,
+  workspaces: ChildWorkspaceAccess
+) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
   const child: ChildAgentHolder = { agent: () => ({}) };
@@ -58,6 +89,7 @@ const build = (faults: SubagentFaultSet, tuning: SubagentToolOptions) => {
   const tasks: SubagentTasks = subagentTaskSet({
     faults,
     childAgent: (typed) => child.agent(typed),
+    workspaces,
     settleDelayMillis: tuning.settleDelayMillis,
   });
 
@@ -76,22 +108,28 @@ const build = (faults: SubagentFaultSet, tuning: SubagentToolOptions) => {
 };
 
 /**
- * The subagents extension with `faults` planted; the conformance suite's mutation check uses it,
- * and a test that needs a question to expire soon passes `tuning`.
+ * The subagents extension with `faults` planted, making children's workspaces with `workspaces`;
+ * the conformance suite's mutation check uses it, and a test that needs a question to expire soon
+ * passes `tuning`.
  */
 export const subagentsExtension = (
   faults: SubagentFaultSet,
+  workspaces: ChildWorkspaceAccess,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
 ): CairnExtension => ({
   order: SUBAGENTS_ORDER,
-  extension: build(faults, tuning).extension,
+  extension: build(faults, tuning, workspaces).extension,
 });
 
 /**
  * The task definitions host code creates tasks from. pi-durable runs a task by its registered name,
  * so the installed extension's code runs it, faults included.
  */
-const hostTasks = build(NO_SUBAGENT_FAULTS, DEFAULT_TOOL_OPTIONS).tasks;
+const hostTasks = build(
+  NO_SUBAGENT_FAULTS,
+  DEFAULT_TOOL_OPTIONS,
+  NO_WORKSPACES
+).tasks;
 
 /**
  * Gives a user's input to a subagent its reporter before it is submitted (ADR 0028): the input's
@@ -181,18 +219,30 @@ export class Subagents extends Context.Service<
     faults: SubagentFaultSet,
     tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
   ) =>
-    Layer.succeed(
+    Layer.effect(
       Subagents,
-      Subagents.of({ extension: subagentsExtension(faults, tuning) })
+      Effect.gen(function* () {
+        const workspaces = workspaceAccess(yield* ChildWorkspaces);
+
+        return Subagents.of({
+          extension: subagentsExtension(faults, workspaces, tuning),
+        });
+      })
     );
 
-  /** The extension with the faults `SubagentFaults` names: none, unless a test plants some. */
+  /**
+   * The extension with the faults `SubagentFaults` names (none, unless a test plants some), making
+   * children's worktrees with `ChildWorkspaces`.
+   */
   static readonly layer = Layer.effect(
     Subagents,
     Effect.gen(function* () {
       const faults = yield* SubagentFaults;
+      const workspaces = workspaceAccess(yield* ChildWorkspaces);
 
-      return Subagents.of({ extension: subagentsExtension(faults) });
+      return Subagents.of({
+        extension: subagentsExtension(faults, workspaces),
+      });
     })
   );
 }

@@ -199,10 +199,35 @@ export const SettlementMark = Schema.Struct({
 
 export type SettlementMark = typeof SettlementMark.Type;
 
+/** Where a child run stands in its parent's registry: nudged for its typed result, or settled. */
+export const RunMarkPhase = Schema.Literals(["nudge", "settled"]);
+
+export type RunMarkPhase = typeof RunMarkPhase.Type;
+
+/**
+ * One child run, as its parent's registry keys it: `run` is the run's identity (its answer entry,
+ * or for a run that ended unanswered its terminal entry), never a reason or a detail. A `nudge`
+ * mark is written by the commit that sends a typed child its nudge and lists every input the
+ * nudged run ended; a `settled` mark by the commit that settles a run, with every input (a nudge's
+ * request id included) it ended. A reporter whose run or input a mark names settles nothing.
+ * `seq` is the settlement's (for a nudge, the one its nudge's request id is derived from).
+ */
+export const RunMark = Schema.Struct({
+  run: Schema.String,
+  phase: RunMarkPhase,
+  seq: PositiveInt,
+  inputs: Schema.Array(Schema.String),
+  quiet: Schema.Boolean,
+});
+
+export type RunMark = typeof RunMark.Type;
+
 /**
  * One child in its parent's `cairn.subagents`, keyed by the spawn tool's approval id (stable
  * across reruns). `inputs` maps each input's request id to its reporter task, so a resent steer
- * lands once; `delivered` is the last settlement whose note and wake were written.
+ * lands once; `runs` marks each child run nudged or settled, so a run settles once whichever of
+ * its reporters gets there first; `delivered` is the last settlement whose note and wake were
+ * written.
  */
 export const SubagentRecord = Schema.Struct({
   threadId: ThreadId,
@@ -216,6 +241,7 @@ export const SubagentRecord = Schema.Struct({
   status: SubagentStatus,
   wake: WakeMode,
   settlements: Schema.Array(SettlementMark),
+  runs: Schema.Array(RunMark),
   delivered: NonNegativeInt,
   questions: Schema.Record(
     Schema.String,

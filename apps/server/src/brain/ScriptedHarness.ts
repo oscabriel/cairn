@@ -317,6 +317,8 @@ interface QueuedInput {
 /** How the run that took a submission ended; `runId` none when it was withdrawn unplaced. */
 interface SubmissionEnd {
   readonly runId: Option.Option<number>;
+  /** The thread's last entry when the run's segment ended: the run's end, past which nothing is its. */
+  readonly lastEntry: Option.Option<number>;
   readonly status: RunStatus;
   readonly failure: Option.Option<RunFailureInfo>;
 }
@@ -405,8 +407,11 @@ interface SubagentItem {
     }
   >;
   readonly inputs: Map<string, number>;
-  /** Runs already settled, so two inputs answered by one run settle once. */
-  readonly settledRuns: Set<number>;
+  /**
+   * `cairn.subagents`' run marks: each run segment nudged or settled, so a run settles once and a
+   * nudged run's inputs are settled by the nudge's run.
+   */
+  readonly runs: Array<ScriptedRunMark>;
 }
 
 /** A question offered to this thread's model, by `<child>:<approvalId>`. */
@@ -466,22 +471,71 @@ interface Reporter {
    */
   quietRun: boolean;
   phase: "deliver" | "nudge" | "report" | "done";
-  /** The seq a nudge was sent for, in the `nudge` phase. */
+  /** The seq a nudge was sent for, in the `nudge` phase; its nudge mark lists the run's inputs. */
   nudgeSeq: number;
-  /**
-   * In the `nudge` phase, the other inputs the nudged run ended: the nudge's run settles them with
-   * its own, and wakes the parent unless all of them were quiet.
-   */
-  carried: Array<SharedInput>;
   settlement: Option.Option<SubagentSettlement>;
 }
 
-/** One input a run ended, as the reporter settling that run counts it. */
-interface SharedInput {
+/** The nudge mark `reporter` wrote for its nudge, listing the inputs of the run it nudged. */
+const nudgeMarkOf = (item: SubagentItem, reporter: Reporter) =>
+  item.runs.findLast(
+    (mark) =>
+      mark.phase === "nudge" &&
+      mark.seq === reporter.nudgeSeq &&
+      mark.inputs.includes(reporter.requestId)
+  );
+
+/** One run mark, as `cairn.subagents` keeps it (`RunMark`). */
+interface ScriptedRunMark {
+  /** The run's key: its segment. */
+  readonly run: string;
+  readonly phase: "nudge" | "settled";
+  readonly seq: number;
+  readonly inputs: ReadonlyArray<string>;
   readonly quiet: boolean;
-  readonly placedAs: Option.Option<number>;
-  readonly requestId: string;
 }
+
+/**
+ * What a live peer reporter of `child` waits on, when the run segment `end` names ended it: its
+ * input, or the nudge it sent with that nudge's inputs.
+ */
+const peerOf = (
+  other: Reporter,
+  child: ScriptedThread,
+  item: SubagentItem,
+  end: SubmissionEnd
+) => {
+  const nudge = other.phase === "nudge" ? nudgeMarkOf(item, other) : undefined;
+
+  const waitsOn =
+    nudge === undefined
+      ? other.requestId
+      : SubagentRequestIds.nudge(child.threadId, other.nudgeSeq);
+
+  const found = child.byRequest.get(waitsOn);
+
+  if (
+    found === undefined ||
+    (other.phase !== "deliver" && nudge === undefined) ||
+    !Option.exists(found.ended, (ended) =>
+      Option.exists(end.runId, (runId) => Option.contains(ended.runId, runId))
+    )
+  ) {
+    return Option.none();
+  }
+
+  const inputs = [waitsOn];
+
+  if (nudge !== undefined) {
+    inputs.push(...nudge.inputs);
+  }
+
+  return Option.some({
+    inputs,
+    quiet: nudge === undefined ? other.quiet : nudge.quiet,
+    placedAs: found.placedAs,
+  });
+};
 
 /** Settles the inputs the run's current segment placed, as the run's end leaves them. */
 const settleInputs = (
@@ -497,6 +551,7 @@ const settleInputs = (
       submission.status = status === "completed" ? "done" : "unanswered";
       submission.ended = Option.some({
         runId: Option.some(run.segment),
+        lastEntry: Option.fromUndefinedOr(thread.entries.at(-1)?.id),
         status,
         failure: failureInfo,
       });
@@ -632,6 +687,7 @@ const subagentItem = (item: SubagentItem): JsonValue => ({
     ...mark,
     inputs: [...mark.inputs],
   })),
+  runs: item.runs.map((mark) => ({ ...mark, inputs: [...mark.inputs] })),
   delivered: item.delivered,
   questions: Object.fromEntries(
     [...item.questions].map(([id, question]) => [id, { ...question }])
@@ -813,24 +869,30 @@ const lastSpokenIn = (thread: ScriptedThread): string => {
 };
 
 /**
- * `accepted` when the run being settled accepted it: an accepted `submit_result` (not a later
- * call answered `already`) lies after `from`, the run's first input. A typed result goes to the
- * parent once, with its run; the child's later runs settle without it, and so does an input that
- * ran in no run.
+ * Where the child's accepted result lies against the run from `from` (its first input) to `end`
+ * (its last entry), as pi-durable's `resultPlace` says: in it, so its settlement carries it once;
+ * before it, delivered with an earlier run; after it, a later run's; or none yet.
  */
-const resultOfRun = <A>(
+const resultPlace = (
   child: ScriptedThread,
   from: Option.Option<number>,
-  accepted: Option.Option<A>
-): Option.Option<A> =>
-  Option.isNone(from)
-    ? Option.none()
-    : Option.filter(accepted, () =>
-        child.entries.some(
-          (entry) =>
-            entry.id > from.value && Option.contains(markOf(entry), "accepted")
-        )
-      );
+  end: Option.Option<number>,
+  accepted: Option.Option<unknown>
+): "none" | "before" | "in" | "after" => {
+  if (Option.isNone(accepted)) {
+    return "none";
+  }
+
+  const at = child.entries.find((entry) =>
+    Option.contains(markOf(entry), "accepted")
+  )?.id;
+
+  if (Option.isNone(from) || at === undefined || at < from.value) {
+    return "before";
+  }
+
+  return Option.exists(end, (last) => at > last) ? "after" : "in";
+};
 
 /** How many answers a thread gave after the entry `after` (its whole transcript without one). */
 const answersAfter = (thread: ScriptedThread, after: Option.Option<number>) => {
@@ -980,6 +1042,7 @@ const endUnplaced = (submission: Submission) => {
   submission.status = "unanswered";
   submission.ended = Option.some({
     runId: Option.none(),
+    lastEntry: Option.none(),
     status: "interrupted",
     failure: Option.none(),
   });
@@ -1066,10 +1129,20 @@ const statusText = (items: ReadonlyArray<SubagentItem>) =>
 const settledCount = (items: ReadonlyArray<SubagentItem>) =>
   items.reduce((sum, item) => sum + item.settlements.length, 0);
 
-/** The attempt state of a child, from its transcript's `submit_result` results and nudge. */
-const attemptStateIn = (thread: ScriptedThread) =>
+/**
+ * The attempt state of a child, from its transcript's `submit_result` results and nudge: up to
+ * `through` when given (a run's last entry, so a later run's result does not count for it).
+ */
+const attemptStateIn = (
+  thread: ScriptedThread,
+  through: Option.Option<number> = Option.none()
+) =>
   attemptStateOf(
-    thread.entries.flatMap((entry) => Option.toArray(markOf(entry)))
+    thread.entries.flatMap((entry) =>
+      Option.exists(through, (last) => entry.id > last)
+        ? []
+        : Option.toArray(markOf(entry))
+    )
   );
 
 /** Starts a run's fiber and a reporter's fiber; filled in once the harness defines both. */
@@ -1690,7 +1763,6 @@ const layerNoDeps = Layer.effectContext(
         quietRun: quiet,
         phase: "deliver",
         nudgeSeq: 0,
-        carried: [],
         settlement: Option.none(),
       };
 
@@ -1778,7 +1850,7 @@ const layerNoDeps = Layer.effectContext(
         delivered: 0,
         questions: new Map(),
         inputs: new Map(),
-        settledRuns: new Set(),
+        runs: [],
       };
 
       parent.subagents.set(record.id, item);
@@ -1948,6 +2020,60 @@ const layerNoDeps = Layer.effectContext(
       }
     };
 
+    /**
+     * Every input the run segment that ended `submission` (`current`, the input or nudge `reporter`
+     * waited on) ended: with the nudged run's inputs when it waited on a nudge, and each live peer
+     * whose own submission (its input, or the nudge it sent, with that nudge's inputs) the same
+     * segment ended, answered or not. `quiet` when all were; `from` is the earliest placed.
+     */
+    const runInputsOf = (
+      reporter: Reporter,
+      child: ScriptedThread,
+      item: SubagentItem,
+      current: string,
+      submission: Submission,
+      end: SubmissionEnd
+    ) => {
+      const own =
+        reporter.phase === "nudge" ? nudgeMarkOf(item, reporter) : undefined;
+
+      const inputs = [current];
+      let quiet = own === undefined ? reporter.quiet : own.quiet;
+      const placed = [...Option.toArray(submission.placedAs)];
+
+      const add = (requestIds: ReadonlyArray<string>) => {
+        for (const requestId of requestIds) {
+          if (!inputs.includes(requestId)) {
+            inputs.push(requestId);
+          }
+        }
+      };
+
+      add(own?.inputs ?? []);
+
+      for (const other of store.reporters.values()) {
+        const peer =
+          other.child === child.threadId && other.id !== reporter.id
+            ? peerOf(other, child, item, end)
+            : Option.none();
+
+        if (Option.isSome(peer)) {
+          add(peer.value.inputs);
+          quiet &&= peer.value.quiet;
+          placed.push(...Option.toArray(peer.value.placedAs));
+        }
+      }
+
+      return {
+        inputs,
+        quiet,
+        from:
+          placed.length === 0
+            ? Option.none<number>()
+            : Option.some(Math.min(...placed)),
+      };
+    };
+
     /** Settles one reporter's input once its run ended: one settlement per run. */
     const settle = (
       reporter: Reporter,
@@ -1967,84 +2093,57 @@ const layerNoDeps = Layer.effectContext(
 
       const { link, parent, item } = linked.value;
 
-      if (Option.isSome(end.runId) && item.settledRuns.has(end.runId.value)) {
+      // The run's key: its segment, or the submission alone when it ran in no run.
+      const key = Option.match(end.runId, {
+        onNone: () => `input:${submission.id}`,
+        onSome: (runId) => `seg:${runId}`,
+      });
+
+      const current =
+        reporter.phase === "nudge"
+          ? SubagentRequestIds.nudge(child.threadId, reporter.nudgeSeq)
+          : reporter.requestId;
+
+      // A run settles once: whichever of its reporters gets here first marks it. A nudge mark names
+      // the inputs whose run its nudge's run settles; the nudge's reporter settles the child then.
+      const marked = item.runs.filter(
+        (mark) => mark.run === key || mark.inputs.includes(current)
+      );
+
+      if (marked.length > 0) {
         reporter.phase = "done";
-        settledUnlessWorking(child, changes);
+
+        if (marked.some((mark) => mark.phase === "settled")) {
+          settledUnlessWorking(child, changes);
+        }
 
         return;
       }
 
-      for (const runId of Option.toArray(end.runId)) {
-        item.settledRuns.add(runId);
-      }
+      const run = runInputsOf(reporter, child, item, current, submission, end);
+      const { inputs, quiet } = run;
 
-      // Every input the run ended, answered or not: its wake follows all of them, not only the
-      // first reporter to settle, and its typed result is the one it accepted after its first
-      // input. A reporter in its nudge phase waits on its nudge, which this run may have answered;
-      // one that settled already belongs to the run it settled. A nudge's run also ends the inputs
-      // its nudged run ended (`carried`).
-      const peers = [...store.reporters.values()].flatMap((other) => {
-        const waitsOn =
-          other.phase === "nudge"
-            ? SubagentRequestIds.nudge(child.threadId, other.nudgeSeq)
-            : other.requestId;
-
-        const found = child.byRequest.get(waitsOn);
-
-        return other.child === child.threadId &&
-          other.id !== reporter.id &&
-          (other.phase === "deliver" || other.phase === "nudge") &&
-          found !== undefined &&
-          Option.exists(found.ended, (ended) =>
-            Option.exists(end.runId, (runId) =>
-              Option.contains(ended.runId, runId)
-            )
-          )
-          ? [
-              {
-                quiet: other.quiet,
-                placedAs: found.placedAs,
-                requestId: other.requestId,
-              },
-              ...other.carried,
-            ]
-          : [];
-      });
-
-      const shared = [...reporter.carried, ...peers].filter(
-        (other, index, all) =>
-          other.requestId !== reporter.requestId &&
-          all.findIndex((first) => first.requestId === other.requestId) ===
-            index
-      );
-
-      reporter.quietRun =
-        reporter.quiet && shared.every((other) => other.quiet);
-
-      const placed = [submission, ...shared].flatMap((other) =>
-        Option.toArray(other.placedAs)
-      );
-
-      const from =
-        placed.length === 0 ? Option.none() : Option.some(Math.min(...placed));
+      reporter.quietRun = quiet;
 
       // The report of the run being settled: a settlement spends it, so the next run has none.
       const { report } = link;
       const answered = lastAnswerAfter(child, submission.placedAs);
       const seq = item.settlements.length + 1;
+      const where = resultPlace(child, run.from, end.lastEntry, link.result);
 
-      // A typed child whose run completed without a result: nudged once while its attempts allow
-      // (the run is not settled yet: the nudge's run settles it), failed otherwise.
+      // A typed child whose run completed without a result, and none before it: nudged once while
+      // its attempts up to the run's end allow (the nudge's run settles the run's inputs), failed
+      // otherwise.
       const missing =
         link.resultSchema !== null &&
         end.status === "completed" &&
-        Option.isNone(link.result)
-          ? Option.some(attemptStateIn(child))
+        (where === "none" || where === "after")
+          ? Option.some(attemptStateIn(child, end.lastEntry))
           : Option.none();
 
       if (Option.isSome(missing) && nudgeDue(missing.value)) {
+        item.runs.push({ run: key, phase: "nudge", seq, inputs, quiet });
         reporter.nudgeSeq = seq;
-        reporter.carried = shared;
         reporter.phase = "nudge";
 
         return;
@@ -2069,7 +2168,7 @@ const layerNoDeps = Layer.effectContext(
       );
 
       // A typed result goes to the parent once: with the run that accepted it.
-      const result = resultOfRun(child, from, link.result);
+      const result = where === "in" ? link.result : Option.none();
 
       const worded = Option.match(report, {
         onNone: () =>
@@ -2127,8 +2226,9 @@ const layerNoDeps = Layer.effectContext(
           Option.map(answered, (found) => found.id)
         ),
         reportedAt: at,
-        inputs: [reporter.requestId, ...shared.map((other) => other.requestId)],
+        inputs,
       });
+      item.runs.push({ run: key, phase: "settled", seq, inputs, quiet });
       link.report = Option.none();
       reporter.settlement = Option.some(settlement);
       reporter.phase = "report";

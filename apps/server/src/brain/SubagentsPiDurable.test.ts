@@ -15,7 +15,8 @@
 //
 // Kept under `brain/`, where pi-durable may be imported in a test (S42).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -26,6 +27,7 @@ import {
 } from "@cairn/protocol/Ids";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
+import { AgentDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Context,
@@ -131,6 +133,39 @@ const ANSWER_RESPONSES = [
   fauxAssistantMessage("The image shows one pixel."),
 ];
 
+/** A spawn whose brief asks for a worktree (a writing role's), then the child's answer. */
+const WORKTREE_RESPONSES = [
+  fauxAssistantMessage(
+    fauxToolCall(
+      "subagent_spawn",
+      {
+        description: "Fix the readme",
+        brief: "Fix the typo in README.md.",
+        isolation: "worktree",
+      },
+      { id: "call_1" }
+    ),
+    { stopReason: "toolUse" }
+  ),
+  fauxAssistantMessage("Waiting for Go."),
+  fauxAssistantMessage("Fixed."),
+  fauxAssistantMessage("Noted."),
+];
+
+/** Runs git in `cwd` with a test identity, returning its trimmed output. */
+const git = (cwd: string, args: ReadonlyArray<string>) =>
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Cairn Test",
+      "-c",
+      "user.email=test@cairn.invalid",
+      ...args,
+    ],
+    { cwd, encoding: "utf-8" }
+  ).trim();
+
 /** How a test's brain is set up. */
 interface ChildSetup {
   /** Adds the `SubagentRows` fiber. */
@@ -138,6 +173,8 @@ interface ChildSetup {
   /** The faux model's answers, in the order the threads ask. */
   readonly responses: ReadonlyArray<ReturnType<typeof fauxAssistantMessage>>;
   readonly tuning: SubagentToolOptions;
+  /** The parent's cwd; the test's own when none. */
+  readonly parentCwd?: string;
 }
 
 /**
@@ -198,7 +235,7 @@ const withStarted = <A, E>(
             projectId: project.projectId,
             model: FAUX_MODEL,
             thinkingLevel: "off",
-            cwd: process.cwd(),
+            cwd: setup.parentCwd ?? process.cwd(),
             instructions: Option.none(),
             runtimeMode: "full-access",
           });
@@ -502,6 +539,102 @@ describe("subagents over a pi-durable brain", () => {
               ),
               [SubagentToolText.questionEnded("expired")]
             );
+          })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a writing role's child runs in its own worktree, on its own branch",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const dir = realpathSync(
+            mkdtempSync(path.join(tmpdir(), "cairn-repo-"))
+          );
+
+          const repo = path.join(dir, "repo");
+
+          mkdirSync(repo);
+          git(repo, ["init", "--quiet", "-b", "main"]);
+          git(repo, ["commit", "--quiet", "--allow-empty", "-m", "init"]);
+
+          return { dir, repo };
+        }),
+        ({ repo }) =>
+          withStarted(
+            {
+              withRows: true,
+              responses: WORKTREE_RESPONSES,
+              tuning: DEFAULT_TOOL_OPTIONS,
+              parentCwd: repo,
+            },
+            (child) =>
+              Effect.gen(function* () {
+                const brain = yield* Brain;
+                const { harness } = yield* Effect.orDie(brain.session);
+
+                const { cwd, worktree } = yield* durable(
+                  "test.read",
+                  async (context) => {
+                    const conversation = piConversationId(child.conversationId);
+
+                    const agent = await harness.snapshot(
+                      AgentDoc,
+                      conversation,
+                      context
+                    );
+
+                    const link = await harness.snapshot(
+                      ChildDoc,
+                      conversation,
+                      context
+                    );
+
+                    const registry = await harness.snapshot(
+                      SubagentsDoc,
+                      piConversationId(
+                        ConversationIdOf.make(link?.parentConversationId ?? 0)
+                      ),
+                      context
+                    );
+
+                    return {
+                      cwd: agent?.cwd ?? "",
+                      worktree: registry?.items[link?.key ?? ""]?.worktree,
+                    };
+                  }
+                );
+
+                // Its own checkout: not the parent's, on a branch of its own, and the one its
+                // registry record names.
+                assert.notStrictEqual(cwd, "");
+                assert.notStrictEqual(cwd, repo);
+                assert.strictEqual(worktree?.path, cwd);
+
+                const branch = git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+
+                assert.strictEqual(worktree?.branch, branch);
+                assert.notStrictEqual(branch, "main");
+                assert.strictEqual(
+                  git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]),
+                  "main"
+                );
+                assert.include(
+                  git(repo, ["worktree", "list", "--porcelain"]),
+                  `worktree ${cwd}`
+                );
+
+                // Its row names its worktree and branch, not its parent's.
+                const { shell } = yield* waitFor(rowOf(child.threadId));
+
+                assert.deepStrictEqual(shell.worktreePath, Option.some(cwd));
+                assert.deepStrictEqual(shell.branch, Option.some(branch));
+              })
+          ),
+        ({ dir }) =>
+          Effect.sync(() => {
+            rmSync(dir, { recursive: true, force: true });
           })
       ),
     30_000

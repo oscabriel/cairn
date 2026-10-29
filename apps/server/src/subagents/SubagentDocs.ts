@@ -13,6 +13,7 @@ import { DEFAULT_RUNTIME_MODE } from "@cairn/protocol/Policy";
 import type { RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
 import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
 import type {
+  RunMarkPhase,
   SettlementOutcome,
   SubagentQuestionState,
   SubagentStatus,
@@ -40,6 +41,19 @@ export interface SettlementMarkState {
   inputs: Array<string>;
 }
 
+/** One child run nudged or settled: the protocol's `RunMark` as plain JSON. */
+export interface RunMarkState {
+  [key: string]: JsonValue;
+  /** The run's identity: its answer entry, or its terminal entry for a run that ended unanswered. */
+  run: string;
+  phase: RunMarkPhase;
+  seq: number;
+  /** The request ids of every input the run ended (a nudge mark: the nudged run's). */
+  inputs: Array<string>;
+  /** Whether every one of them was a user's own steer: the run's settlement wakes no one. */
+  quiet: boolean;
+}
+
 /** Where a child's question stands, from the parent's side. */
 export interface QuestionMarkState {
   [key: string]: JsonValue;
@@ -62,6 +76,8 @@ export interface SubagentItemState {
   status: SubagentStatus;
   wake: WakeMode;
   settlements: Array<SettlementMarkState>;
+  /** Every child run nudged or settled, so a run settles once whichever reporter gets there first. */
+  runs: Array<RunMarkState>;
   /** The last settlement whose note (and wake, when due) was written. */
   delivered: number;
   questions: { [approvalId: string]: QuestionMarkState };

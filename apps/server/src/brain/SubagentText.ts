@@ -109,7 +109,9 @@ export type BriefAnswer =
   | { readonly kind: "go"; readonly childThreadId: string }
   | { readonly kind: "declined"; readonly reason: Option.Option<string> }
   | { readonly kind: "revised"; readonly reason: Option.Option<string> }
-  | { readonly kind: "expired" };
+  | { readonly kind: "expired" }
+  /** Accepted, but the child's workspace could not be made (`why`), so nothing started. */
+  | { readonly kind: "noWorkspace"; readonly why: string };
 
 /** `: <reason>` after an answer's verb, or nothing without one. */
 const withReason = (reason: Option.Option<string>) =>
@@ -127,6 +129,8 @@ export const renderBriefAnswer = (title: string, answer: BriefAnswer): string =>
         `The user sent back the brief "${title}"${withReason(found.reason)}.`,
       expired: () =>
         `The brief "${title}" expired without an answer; nothing started.`,
+      noWorkspace: (found) =>
+        `The user approved the brief "${title}", but its workspace could not be made, so nothing started: ${found.why}`,
     })
   );
 

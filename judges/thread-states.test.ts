@@ -95,6 +95,8 @@ const NOT_STATUSES = {
   PriceBasis: "how a dollar figure relates to a bill, a label",
   RelationshipToParent: "how a row relates to its parent, a kind",
   SubagentStopPolicy: "a stop option",
+  RunMarkPhase:
+    "a registry mark that a child run settles once; the child shows `SubagentStatus`",
   WorkflowPartialReason: "why a workflow ended partial, a reason",
   NodeStage: "where a rerun resumes a dispatch; the panel shows `NodeState`",
   NodeRefusal: "why a node was refused, a reason beside `NodeState` `refused`",

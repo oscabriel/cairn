@@ -31,6 +31,7 @@ const sourceOf = (parent: ThreadId): ChildRowSource => ({
   title: "Count the files",
   model: Option.some({ provider: "faux", modelId: "small" }),
   runtimeMode: "approval-required",
+  worktree: Option.none(),
 });
 
 describe("a subagent's shell row", () => {
@@ -89,6 +90,34 @@ describe("a subagent's shell row", () => {
 
       assert.strictEqual(shell.provider, "opencode-go");
       assert.strictEqual(shell.modelId, "small");
+    }).pipe(Effect.provide(ShellTestLayer))
+  );
+
+  it.effect("takes a writing child's own worktree and branch", () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink;
+      const rows = yield* ThreadRows;
+      const project = createProject(1);
+
+      yield* sink.commitCommand(project.command);
+      yield* sink.commitCommand(createThread(project.projectId, 1));
+
+      yield* ensureChildRow({
+        ...sourceOf(testThreadId(1)),
+        worktree: Option.some({
+          path: "/data/worktrees/repo/sub-0a1b2c3d",
+          branch: "cairn/sub-0a1b2c3d",
+          baseSha: "0123456789abcdef0123456789abcdef01234567",
+        }),
+      });
+
+      const { shell } = Option.getOrThrow(yield* rows.get(CHILD));
+
+      assert.deepStrictEqual(shell.branch, Option.some("cairn/sub-0a1b2c3d"));
+      assert.deepStrictEqual(
+        shell.worktreePath,
+        Option.some("/data/worktrees/repo/sub-0a1b2c3d")
+      );
     }).pipe(Effect.provide(ShellTestLayer))
   );
 

@@ -3,14 +3,16 @@
 // of that commit: one fiber answers each `ThreadEnsured` that names a parent with `ThreadCreate`, and
 // a boot repair does the same for every child conversation without a row. The command id is the
 // child's thread id, so a repeat (the fiber after a crash, then the boot repair) lands once; a row
-// that exists already is left as it is. The row takes its project, cwd and branch from the parent's
-// row, its title from the brief's description, its model from the dispatch record, its mode from
-// the child's link, and a `lineage` naming the parent and the root. Hiding it from the sidebar,
+// that exists already is left as it is. The row takes its project from the parent's row, its
+// branch and worktree from the child's own worktree when it has one (else the parent's row's), its
+// title from the brief's description, its model from the dispatch record, its mode from the
+// child's link, and a `lineage` naming the parent and the root. Hiding it from the sidebar,
 // tallies and settle refusals are the shell's (4C).
 
 import { CommandId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelRef } from "@cairn/protocol/Models";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
+import { ChildWorktree } from "@cairn/protocol/Subagents";
 import type { ThreadLineage } from "@cairn/protocol/Subagents";
 import type { ConversationId, Cursor } from "@earendil-works/pi-durable";
 import { Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
@@ -39,6 +41,8 @@ export interface ChildRowSource {
   /** The dispatched model; none when the record names none, and the parent's is used. */
   readonly model: Option.Option<ModelRef>;
   readonly runtimeMode: RuntimeMode;
+  /** The child's own worktree (a writing role's); none for a shared child, on its parent's. */
+  readonly worktree: Option.Option<ChildWorktree>;
 }
 
 const nonEmpty = (value: string | undefined): Option.Option<string> =>
@@ -50,6 +54,8 @@ const nonEmpty = (value: string | undefined): Option.Option<string> =>
 const decodeDispatched = Schema.decodeUnknownOption(
   Schema.Struct({ resolved: Schema.Struct({ model: ModelRef }) })
 );
+
+const decodeWorktree = Schema.decodeUnknownOption(ChildWorktree);
 
 /** The dispatched model, when the record names a real one. */
 const dispatchedModel = (dispatch: JsonRecord | undefined) =>
@@ -98,6 +104,7 @@ export const childRowSource = (
       title: Option.getOrElse(nonEmpty(item?.description), () => "Subagent"),
       model: dispatchedModel(item?.dispatch),
       runtimeMode: link.permissionMode,
+      worktree: decodeWorktree(item?.worktree ?? null),
     }));
   });
 
@@ -139,8 +146,14 @@ export const ensureChildRow = Effect.fn("SubagentRows.ensureChildRow")(
         }),
         thinkingLevel: shell.thinkingLevel,
         runtimeMode: source.runtimeMode,
-        branch: shell.branch,
-        worktreePath: shell.worktreePath,
+        branch: Option.match(source.worktree, {
+          onNone: () => shell.branch,
+          onSome: (worktree) => Option.some(worktree.branch),
+        }),
+        worktreePath: Option.match(source.worktree, {
+          onNone: () => shell.worktreePath,
+          onSome: (worktree) => Option.some(worktree.path),
+        }),
         lineage: Option.some(source.lineage),
       })
     );

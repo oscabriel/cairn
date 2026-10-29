@@ -4,6 +4,8 @@
 // to the user with a mirror in the parent. None of them awaits anything outside the transaction,
 // and the table reads are named, so a caller can make them before its first table write.
 
+import { createHash } from "node:crypto";
+
 import { ConversationId, TaskId, ThreadId } from "@cairn/protocol/Ids";
 import type {
   SettlementOutcome,
@@ -69,16 +71,22 @@ const hex = (value: number, width: number) =>
   value.toString(16).padStart(width, "0").slice(-width);
 
 /**
- * A child's thread id: a UUIDv7 from the Harness clock and the child's conversation id, which no
- * other conversation in the store has, so it is unique without randomness. Minted inside the
- * commit that creates the child, so only the committed value ever exists.
+ * A child's thread id: a UUIDv7 from the moment its brief was answered (`at`) and a hash of the
+ * parent's conversation and the brief's approval id, which no other brief in the store has. It is
+ * the same on every attempt, so the brief task mints it before its workspace and its creating
+ * commit: a rerun after a crash prepares the same worktree and creates the same thread.
  */
 export const childThreadIdOf = (
-  now: number,
-  conversationId: PiConversationId
+  at: number,
+  parent: PiConversationId,
+  approvalId: string
 ): ThreadId => {
-  const time = hex(now, 12);
-  const tail = hex(conversationId, 18);
+  const time = hex(at, 12);
+
+  const tail = createHash("sha256")
+    .update(`${parent}:${approvalId}`)
+    .digest("hex")
+    .slice(0, 18);
 
   return ThreadId.make(
     `${time.slice(0, 8)}-${time.slice(8, 12)}-7${tail.slice(0, 3)}-8${tail.slice(3, 6)}-${tail.slice(6, 18)}`

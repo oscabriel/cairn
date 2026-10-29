@@ -3182,6 +3182,37 @@
                     "additionalProperties": true
                   }
                 },
+                "runs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "run": {
+                        "type": "string"
+                      },
+                      "phase": {
+                        "type": "string",
+                        "enum": ["nudge", "settled"]
+                      },
+                      "seq": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "inputs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "quiet": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["run", "phase", "seq", "inputs", "quiet"],
+                    "additionalProperties": true
+                  }
+                },
                 "delivered": {
                   "type": "integer",
                   "minimum": 0,
@@ -3239,6 +3270,7 @@
                 "status",
                 "wake",
                 "settlements",
+                "runs",
                 "delivered",
                 "questions",
                 "inputs"

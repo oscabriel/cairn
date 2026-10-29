@@ -40,6 +40,7 @@ import type {
   ConversationId,
   Cursor,
   DocumentReader,
+  EntryId,
   EntryRecord,
   Tx,
 } from "@earendil-works/pi-durable";
@@ -656,17 +657,28 @@ export const markOf = (entry: EntryRecord): Option.Option<ResultMark> => {
 
 const SCAN_PAGE = 256;
 
-/** The attempt state of `conversationId`, read from its transcript inside `tx`. */
+/**
+ * The attempt state of `conversationId`, read from its transcript inside `tx`: up to `through` when
+ * given (a run's last entry, so a later run's result does not count for it), else all of it.
+ */
 export const readAttemptState = async (
   tx: Tx,
-  conversationId: ConversationId
+  conversationId: ConversationId,
+  through: Option.Option<EntryId> = Option.none()
 ): Promise<AttemptState> => {
   const marks: Array<ResultMark> = [];
 
   // Pages are read one after another: each cursor comes from the page before.
   const scan = async (cursor: Option.Option<Cursor>): Promise<AttemptState> => {
     const page = await tx.scanEntries(
-      { conversationId, order: "ascending" },
+      {
+        conversationId,
+        order: "ascending",
+        ...Option.match(through, {
+          onNone: () => ({}),
+          onSome: (maxEntryId) => ({ maxEntryId }),
+        }),
+      },
       SCAN_PAGE,
       Option.getOrUndefined(cursor)
     );

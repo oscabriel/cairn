@@ -30,15 +30,22 @@ import {
   Scope,
 } from "effect";
 
+import { ServerConfig } from "../../Config.ts";
+import { Database } from "../../db/Database.ts";
+import { migrations } from "../../db/Migrations.ts";
 import { ExecutorLink } from "../../executor/ExecutorLink.ts";
 import { ModelHealth } from "../../models/ModelHealth.ts";
 import { PiModelSource } from "../../models/PiModelSource.ts";
 import { SettingsStore } from "../../models/SettingsStore.ts";
 import { PiHost } from "../../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../../reach/ReachLayer.ts";
-import { subagentsExtension } from "../../subagents/Subagents.ts";
+import {
+  subagentsExtension,
+  workspaceAccess,
+} from "../../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../../subagents/SubagentTools.ts";
+import { ChildWorkspaces } from "../../workspaces/ChildWorkspaces.ts";
 import { Brain } from "../Brain.ts";
 import type { BrainSession } from "../Brain.ts";
 import { BrainConfig } from "../BrainConfig.ts";
@@ -187,10 +194,22 @@ const restartable = Effect.fnUntraced(function* (
 });
 
 /**
+ * Children's workspaces for a test brain over `dataDir`: worktrees under `<dataDir>/worktrees`, plan
+ * rows in a fresh migrated in-memory `cairn.sqlite`.
+ */
+export const childWorkspacesAt = (dataDir: string) =>
+  ChildWorkspaces.layer.pipe(
+    Layer.provide(Database.layerTest(migrations)),
+    Layer.provide(ServerConfig.layerWith({ dataDir })),
+    Layer.orDie
+  );
+
+/**
  * The pi-durable brain the conformance suite runs over `dataDir`: the production seam, brain and
  * extension set, the conformance tools and the subagents extension with `faults` (and `tuning`, for a
- * test that needs a question to expire soon), over pi-ai's faux provider. Subagent tests under
- * `brain/` build on it too.
+ * test that needs a question to expire soon), making children's workspaces under `dataDir`
+ * (`ChildWorkspaces`, also provided), over pi-ai's faux provider. Subagent tests under `brain/`
+ * build on it too.
  */
 export const piDurableLayer = (
   dataDir: string,
@@ -199,10 +218,16 @@ export const piDurableLayer = (
 ) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
-      ExtensionSet.withExtra([
-        conformanceTools,
-        subagentsExtension(faults, tuning),
-      ]).pipe(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const workspaces = workspaceAccess(yield* ChildWorkspaces);
+
+          return ExtensionSet.withExtra([
+            conformanceTools,
+            subagentsExtension(faults, workspaces, tuning),
+          ]);
+        })
+      ).pipe(
         Layer.provide(ExecutorLink.layerDisabled),
         Layer.provide(PiHost.layerEmpty),
         Layer.provide(ModelHealth.layerTest),
@@ -222,6 +247,7 @@ export const piDurableLayer = (
         },
       })
     ),
+    Layer.provideMerge(childWorkspacesAt(dataDir)),
     Layer.provide(BrainConfig.layerFrom(dataDir))
   );
 

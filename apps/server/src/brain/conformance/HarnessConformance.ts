@@ -198,13 +198,18 @@ const turnInput = (line: InputLine): HarnessTurnInput => {
   };
 };
 
-/** The answer a respond line gives: its decision and reason, and a question's custom answer. */
+/**
+ * The answer a respond line gives: its decision and reason, and a question's answers (in full, or
+ * as one custom answer to the first question).
+ */
 const answerOf = (line: InputLine): ApprovalAnswerInput => ({
   decision: line.decision ?? "accept",
   reason: Option.fromUndefinedOr(line.reason),
-  answers: Option.map(Option.fromUndefinedOr(line.answer), (custom) => [
-    { index: 0, picks: [], custom },
-  ]),
+  answers: Option.orElse(Option.fromUndefinedOr(line.answers), () =>
+    Option.map(Option.fromUndefinedOr(line.answer), (custom) => [
+      { index: 0, picks: [], custom },
+    ])
+  ),
 });
 
 /** Waits until `check` finds nothing wrong, or fails with its last complaint. */
@@ -259,6 +264,24 @@ const applyFrame =
       return yield* Ref.set(client, Option.some(next.success));
     });
 
+// A named client: subscribes to the thread, and subscribes afresh after a refused frame or an
+// ended stream, as a second page on another device does.
+const followDevice = (
+  seam: HarnessSeam["Service"],
+  threadId: ThreadId,
+  view: Ref.Ref<Option.Option<ThreadViewState>>
+) =>
+  Effect.gen(function* () {
+    yield* Ref.set(view, Option.none());
+    yield* seam
+      .watch(threadId)
+      .pipe(Stream.runForEach(applyFrame(view)), Effect.ignore);
+    yield* Effect.sleep(POLL);
+  }).pipe(Effect.forever);
+
+const deviceKey = (alias: string | undefined, device: string) =>
+  `${alias ?? PARENT_ALIAS}/${device}`;
+
 /** Runs one scenario against one harness. Never fails: a failure is in the outcome. */
 export const runScenario = (
   scenario: Scenario,
@@ -283,6 +306,17 @@ export const runScenario = (
         Ref.Ref<Option.Option<ThreadViewState>>
       >();
 
+      // Named clients on a thread (`open_device`), by `<thread alias>/<device>`, and the record each
+      // last looked at.
+      const devices = new Map<
+        string,
+        {
+          readonly threadId: ThreadId;
+          readonly view: Ref.Ref<Option.Option<ThreadViewState>>;
+        }
+      >();
+
+      const looked = new Map<string, string>();
       const submissions = new Map<string, SubmissionId>();
       const feeds: Array<Fiber.Fiber<void>> = [];
       const mutationState: MutationState = { inputs: new Map() };
@@ -364,6 +398,14 @@ export const runScenario = (
 
         for (const threadId of aliases.threads()) {
           feeds.push(yield* follow(seam, threadId).pipe(Effect.forkScoped));
+        }
+
+        for (const device of devices.values()) {
+          feeds.push(
+            yield* followDevice(seam, device.threadId, device.view).pipe(
+              Effect.forkScoped
+            )
+          );
         }
 
         // Let the subscriptions start, then let the harness run what a restart left.
@@ -525,11 +567,32 @@ export const runScenario = (
         return yield* Effect.void;
       });
 
-      /** The oldest pending approval in a thread's client view, waited for. */
-      const pendingIn = (where: string, threadId: ThreadId) =>
+      /** The client a line reads or acts through: a named device, or the thread's own client. */
+      const clientFor = (where: string, line: InputLine) =>
         Effect.gen(function* () {
-          const client = yield* clientOf(threadId);
+          const threadId = yield* threadOf(where, line.thread);
 
+          if (line.device === undefined) {
+            return { threadId, client: yield* clientOf(threadId) };
+          }
+
+          const device = devices.get(deviceKey(line.thread, line.device));
+
+          if (device === undefined) {
+            return yield* new ScenarioFailure({
+              message: `${where}: no device ${line.device} is open on ${line.thread ?? PARENT_ALIAS}`,
+            });
+          }
+
+          return { threadId, client: device.view };
+        });
+
+      /** The oldest pending approval in a client's view, waited for. */
+      const pendingIn = (
+        where: string,
+        client: Ref.Ref<Option.Option<ThreadViewState>>
+      ) =>
+        Effect.gen(function* () {
           const found = yield* eventually(
             options.timeout,
             where,
@@ -554,17 +617,88 @@ export const runScenario = (
           );
         });
 
+      const lookedAt = (where: string, line: InputLine) =>
+        Effect.gen(function* () {
+          const seen = looked.get(deviceKey(line.thread, line.device ?? ""));
+
+          if (seen === undefined) {
+            return yield* new ScenarioFailure({
+              message: `${where}: device ${line.device ?? "(none)"} looked at no record`,
+            });
+          }
+
+          return yield* decodeApprovalId(seen).pipe(
+            Effect.mapError(
+              () => new ScenarioFailure({ message: `${where}: no approval id` })
+            )
+          );
+        });
+
       const respondStep = Effect.fn("Conformance.respond")(function* (
         where: string,
         line: InputLine
       ) {
         const seam = yield* seamNow;
-        const threadId = yield* threadOf(where, line.thread);
-        const approvalId = yield* pendingIn(where, threadId);
+        const { threadId, client } = yield* clientFor(where, line);
 
-        yield* seam
-          .respond(threadId, approvalId, answerOf(line))
-          .pipe(Effect.mapError(fromSeam(where)));
+        const approvalId =
+          line.stale === true
+            ? yield* lookedAt(where, line)
+            : yield* pendingIn(where, client);
+
+        const result = yield* Effect.result(
+          seam.respond(threadId, approvalId, answerOf(line))
+        );
+
+        const expected = line.expect?.error;
+
+        if (Result.isFailure(result)) {
+          return expected === result.failure.reason
+            ? yield* Effect.void
+            : yield* new ScenarioFailure({
+                message: `${where}: respond failed with ${result.failure.reason}: ${result.failure.message}`,
+              });
+        }
+
+        return expected === undefined
+          ? yield* Effect.void
+          : yield* new ScenarioFailure({
+              message: `${where}: respond succeeded, expected ${expected}`,
+            });
+      });
+
+      const openDeviceStep = Effect.fn("Conformance.openDevice")(function* (
+        where: string,
+        line: InputLine
+      ) {
+        const seam = yield* seamNow;
+        const threadId = yield* threadOf(where, line.thread);
+        const key = deviceKey(line.thread, line.device ?? "device");
+
+        if (devices.has(key)) {
+          return yield* new ScenarioFailure({
+            message: `${where}: device ${key} is already open`,
+          });
+        }
+
+        const view = yield* Ref.make(Option.none<ThreadViewState>());
+
+        devices.set(key, { threadId, view });
+        feeds.push(
+          yield* followDevice(seam, threadId, view).pipe(Effect.forkScoped)
+        );
+
+        return yield* Effect.sleep(SUBSCRIBE_SETTLE);
+      });
+
+      const lookStep = Effect.fn("Conformance.look")(function* (
+        where: string,
+        line: InputLine
+      ) {
+        const { client } = yield* clientFor(where, line);
+        const approvalId = yield* pendingIn(where, client);
+
+        looked.set(deviceKey(line.thread, line.device ?? ""), approvalId);
       });
 
       // Each thread's oldest pending record, then every answer at once.
@@ -577,8 +711,9 @@ export const runScenario = (
         const targets = yield* Effect.forEach(line.threads ?? [], (alias) =>
           Effect.gen(function* () {
             const threadId = yield* threadOf(where, alias);
+            const client = yield* clientOf(threadId);
 
-            return { threadId, approvalId: yield* pendingIn(where, threadId) };
+            return { threadId, approvalId: yield* pendingIn(where, client) };
           })
         );
 
@@ -702,6 +837,8 @@ export const runScenario = (
               .pipe(Effect.mapError(fromSeam(where)))
           ),
         restart: () => restart,
+        open_device: openDeviceStep,
+        look: lookStep,
       };
 
       const findEvent = (expected: Json) =>
@@ -741,6 +878,7 @@ export const runScenario = (
 
       const viewAt = (
         alias: string | undefined,
+        device: string | undefined,
         path: ReadonlyArray<string | number>,
         equals: Json
       ) =>
@@ -753,7 +891,21 @@ export const runScenario = (
             );
           }
 
-          const view = yield* normalized(threadId.value);
+          const named =
+            device === undefined
+              ? undefined
+              : devices.get(deviceKey(alias, device));
+
+          if (device !== undefined && named === undefined) {
+            return Result.fail(`no device ${device} is open`);
+          }
+
+          const view =
+            named === undefined
+              ? yield* normalized(threadId.value)
+              : Option.map(yield* Ref.get(named.view), (state) =>
+                  normalizeView(state.view)
+                );
 
           if (Option.isNone(view)) {
             return Result.fail("the client has no snapshot");
@@ -794,7 +946,7 @@ export const runScenario = (
               eventually(
                 options.timeout,
                 where,
-                viewAt(found.thread, found.path, found.equals)
+                viewAt(found.thread, found.device, found.path, found.equals)
               ),
           })
         );

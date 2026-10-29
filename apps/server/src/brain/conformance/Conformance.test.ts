@@ -65,9 +65,15 @@ const subagentNames = scenarios.flatMap((scenario) =>
   isSubagentScenario(scenario) ? [scenario.name] : []
 );
 
+/** A request answered from another device (3C): `ask_user` and the answer check come next. */
+const DEVICE_SCENARIOS = [
+  "approval_answered_from_another_device",
+  "question_answered_from_another_device",
+];
+
 const PENDING: Readonly<Record<Side, ReadonlySet<string>>> = {
-  "pi-durable": new Set(subagentNames),
-  scripted: new Set(),
+  "pi-durable": new Set([...subagentNames, ...DEVICE_SCENARIOS]),
+  scripted: new Set(DEVICE_SCENARIOS),
 };
 
 const TARGETS: Readonly<Record<Side, MakeTarget>> = {

@@ -1,0 +1,31 @@
+{"type":"transcript_start","scenario":"question_answered_from_another_device","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"ask_user","arguments":{"questions":[{"header":"Database","question":"Which database should the service use?","options":[{"label":"Postgres","description":"The team runs it already.","recommended":true},{"label":"SQLite"}]},{"header":"Targets","question":"Where should it deploy?","options":[{"label":"staging"},{"label":"production"}],"multiSelect":true}]}}]}
+{"type":"model","label":"m2","text":"Postgres, on staging and production."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"open_device","device":"laptop"}
+{"type":"input","step":"open_device","device":"phone"}
+{"type":"input","step":"message","requestId":"r1","text":"set up the service"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"pending","kind":"user-input"}}
+{"type":"expect_view","device":"laptop","path":["approvals"],"equals":[{"status":"pending","tool":"ask_user"}]}
+{"type":"expect_view","device":"phone","path":["pendingApprovals"],"equals":1}
+{"type":"expect_view","device":"phone","path":["card"],"equals":[{"tool":"ask_user","body":"Question","position":1,"total":1}]}
+{"type":"expect_view","device":"laptop","path":["lines"],"equals":[]}
+{"type":"expect_view","device":"phone","path":["running"],"equals":true}
+{"type":"input","step":"look","device":"laptop"}
+{"type":"input","step":"respond","device":"phone","answers":[{"index":0,"picks":["MySQL"],"custom":null}],"expect":{"error":"invalid_input"}}
+{"type":"expect_view","device":"phone","path":["pendingApprovals"],"equals":1}
+{"type":"input","step":"respond","device":"phone","answers":[{"index":0,"picks":["Postgres"],"custom":null},{"index":1,"picks":["staging","production"],"custom":null}]}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"accepted","kind":"user-input"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","device":"laptop","path":["pendingApprovals"],"equals":0}
+{"type":"expect_view","device":"laptop","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}
+{"type":"expect_view","device":"laptop","path":["card"],"equals":[]}
+{"type":"expect_view","device":"laptop","path":["lines"],"equals":[{"status":"accepted","text":"Answered by you","answers":["Database: Postgres","Targets: staging, production"]}]}
+{"type":"input","step":"respond","device":"laptop","stale":true,"decision":"decline","reason":"not from the laptop"}
+{"type":"settle","ms":200}
+{"type":"expect_view","device":"laptop","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}
+{"type":"expect_view","device":"laptop","path":["card"],"equals":[]}
+{"type":"expect_view","device":"laptop","path":["lines"],"equals":[{"status":"accepted","text":"Answered by you","answers":["Database: Postgres","Targets: staging, production"]}]}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"set up the service","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["ask_user"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"The user answered:\n1. Database: Postgres\n2. Targets: staging, production","images":0,"toolCalls":[],"toolName":"ask_user","isError":false},{"kind":"pi.assistant","role":"assistant","text":"Postgres, on staging and production.","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","status":"accepted","kind":"user-input"},"count":1}
+{"type":"expect_event_count","event":{"_tag":"RunTerminal"},"count":1}

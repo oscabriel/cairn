@@ -10,6 +10,7 @@ import { Option, Schema } from "effect";
 import coding from "../../../../judges/fixtures/transcripts/coding.json" with { type: "json" };
 import { latestCheckpointTurn } from "../diff/Toggle.ts";
 import { growReply, startReply, syntheticThread } from "./harness/Fixture.ts";
+import { Message as ListMessage } from "./list/Message.ts";
 import { Message } from "./Message.ts";
 import { initial, isFollowingEnd } from "./Model.ts";
 import type { Model } from "./Model.ts";
@@ -38,7 +39,7 @@ describe("switching threads", () => {
 
     assert.deepStrictEqual(onB.ui.expandedTurnIds, []);
     assert.strictEqual(onB.ui.list.id, "timeline-b");
-    assert.strictEqual(onB.ui.list.initialScroll._tag, "Pending");
+    assert.isTrue(isFollowingEnd(onB));
 
     const backOnA = switchThread(onB, Option.some("a")).model;
 
@@ -206,24 +207,46 @@ describe("rows", () => {
     assert.isTrue(first.timeline.isWorking);
   });
 
-  it("re-anchors the list when the first snapshot arrives, not while a reply streams", () => {
-    const model = shown("synthetic");
+  it("forgets the heights of rows that are gone when the view changes shape, not while a reply streams", () => {
     const state = startReply(syntheticThread(9, 30), 30);
-    const anchored = afterView(model, Option.none(), Option.some(state));
 
-    assert.strictEqual(
-      anchored.model.ui.list.layoutVersion,
-      model.ui.list.layoutVersion + 1
+    const keys = itemKeys(
+      transcriptOf(
+        "synthetic",
+        Option.some(state),
+        shown("synthetic").ui,
+        Option.none()
+      )
     );
 
+    const first = keys[0] ?? "";
+
+    const measuredList = update(
+      shown("synthetic"),
+      Message.GotListMessage({
+        message: ListMessage.MeasuredRows({
+          width: 800,
+          rows: [
+            { key: first, height: 40 },
+            { key: "gone", height: 30 },
+          ],
+          offScreen: false,
+        }),
+      })
+    ).model;
+
+    const kept = afterView(measuredList, Option.none(), Option.some(state));
+
+    assert.deepStrictEqual(kept.model.ui.list.heights, { [first]: 40 });
+
     const streamed = afterView(
-      anchored.model,
+      kept.model,
       Option.some(state),
       Option.some(growReply(state, 30, "Hi"))
     );
 
-    assert.strictEqual(streamed.model, anchored.model);
-    assert.isFalse(isFollowingEnd(initial));
+    assert.strictEqual(streamed.model, kept.model);
+    assert.isTrue(isFollowingEnd(initial));
   });
 });
 

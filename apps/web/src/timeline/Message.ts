@@ -1,15 +1,15 @@
 import { AttachmentId, EntryId } from "@cairn/protocol/Ids";
 import { HistoryPage } from "@cairn/protocol/Thread";
 // The transcript's Messages and the OutMessages it hands to the thread page.
-import * as VirtualList from "@foldkit/ui/virtualList";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
 import { OutboxItem } from "../connection/Outbox.ts";
+import { Message as ListMessage } from "./list/Message.ts";
 
 /** Everything the transcript reacts to. */
 export const Message = defineMessageUnion({
-  GotListMessage: { message: VirtualList.Message },
+  GotListMessage: { message: ListMessage },
   ToggledTurnFold: { turnId: Schema.String },
   ToggledWorkGroup: { groupId: Schema.String },
   ToggledUserMessage: { rowId: Schema.String },
@@ -44,8 +44,6 @@ export const Message = defineMessageUnion({
   FailedLanguage: { language: Schema.String },
   /** The working timer's Mount started; it writes its own text. */
   MountedTimer: {},
-  /** The end-follow Mount started. */
-  MountedFollowEnd: {},
   /** A changed-files card asked for its turn's diff, at a file or at the top. */
   ClickedOpenDiff: { turn: Schema.Int, path: Schema.Option(Schema.String) },
 });

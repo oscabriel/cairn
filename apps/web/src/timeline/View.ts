@@ -1,12 +1,11 @@
-// The transcript: @foldkit/ui's virtual list over the derived rows, with measured row heights,
-// estimated ones bucketed by length before measurement, the end followed within 1 px, and
-// `[overflow-anchor:none]` (the list sets it). Each row is a keyed lazy view over reference-stable
-// arguments, so a settled row is not rebuilt while the answer streams. The scroll-to-end pill shows
+// The transcript: the measured list (ADR 0041, list/View.ts) over the derived rows, with every row
+// measured before it counts, the end followed within 1 px, and the reader's place kept through
+// changes above it and width changes (list/Place.ts). Each row is a keyed lazy view over
+// reference-stable arguments, so a settled row is not rebuilt while the answer streams. The scroll-to-end pill shows
 // once the list stops following its end (t3code's pill appears after 150 ms; here a CSS delay).
 
 import { historyCursor } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
-import * as VirtualList from "@foldkit/ui/virtualList";
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import { childAttributes, createKeyedLazy } from "foldkit/html";
@@ -14,7 +13,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { ArrowDown } from "lucide";
 
 import { icon } from "../composer/Icon.ts";
-import { FollowEnd } from "./FollowEnd.ts";
+import * as List from "./list/View.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import { isFollowingEnd } from "./Model.ts";
@@ -43,7 +42,7 @@ const rowLazyFor = (threadId: string) =>
     rowLazies.get(threadId) ?? createKeyedLazy()
   );
 
-const listView = VirtualList.view<ListItem>();
+const listView = List.view<ListItem>();
 
 const renderRow = (
   h: HtmlBuilder<Message>,
@@ -170,7 +169,6 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
         // t3code's chat canvas: its lane insets pad the scroller (styles.css).
         h.DataAttribute("chat-canvas", "true"),
         h.Style({ "--chat-timeline-gutter": "6px" }),
-        h.OnMount(FollowEnd()),
         h.Class("relative flex min-h-0 flex-1 flex-col"),
       ],
       [
@@ -183,14 +181,11 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
             itemToKey: (item) => item.id,
             itemToView: (item) =>
               itemView(h, model, threadId, inputs, transcript, item),
-            dynamicRowHeights: true,
-            itemToEstimatedRowHeightPx: (item) =>
+            itemToEstimatedHeightPx: (item) =>
               estimatedHeightOf(item, expandedUsers),
-            overscan: 6,
-            rowElement: "div",
-            containerClassName:
-              "messages-timeline-scroll min-h-0 [scrollbar-gutter:stable_both-edges] flex-1 overflow-x-hidden overscroll-y-contain pt-4 [overflow-anchor:none]",
-            containerAttributes: childAttributes([
+            className:
+              "messages-timeline-scroll min-h-0 [scrollbar-gutter:stable_both-edges] flex-1 overflow-x-hidden overscroll-y-contain",
+            attributes: childAttributes([
               h.DataAttribute("testid", "timeline-scroll"),
             ]),
           },

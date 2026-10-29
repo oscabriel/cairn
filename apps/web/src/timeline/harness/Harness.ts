@@ -2,12 +2,15 @@
 // short one) shown through the real transcript submodel, with buttons to switch threads and to
 // stream replies at the end of the long one. No brain, no socket: the thread views are built here.
 //
-// `?broken=` turns on one broken control, so the judge can show a check fails without what it
-// guards: `estimate` makes the list keep no measured row heights, so every row outside the rendered
-// window counts at its estimate (the range check); `reflow` makes a width change keep the raw
-// `scrollTop` instead of the row the reader was on (the reflow check).
+// Two more buttons change thread A above the reader: `insert-above` puts a turn in front of a prompt
+// a few rows above the first visible row, as an escalated question's card lands; `arrive` lands a
+// checkpoint for a settled turn above it, so that turn's answer gains its changed-files card late.
+//
+// `?broken=` turns on one of the list's broken controls (ListModel.ts), so the judge can show a
+// check fails without what it guards: `estimate` lays rows the list never drew out at an estimate
+// (the range check), `reflow` keeps the raw `scrollTop` through a width change (the reflow check),
+// and `anchor` lets a change above the reader move what they see (insert-above and arrive).
 
-import * as VirtualList from "@foldkit/ui/virtualList";
 import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";
 import { ManagedResource, Runtime, Subscription, Update } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -16,11 +19,13 @@ import { defineMessageUnion } from "foldkit/message";
 import { CairnConnection } from "../../connection/Connection.ts";
 import type { CairnConnectionService } from "../../connection/Connection.ts";
 import { ThreadViewModel } from "../../page/thread/Model.ts";
+import type { BrokenControl } from "../list/Model.ts";
 import { Message as TimelineMessage } from "../Message.ts";
 import {
   initial as timelineInitial,
   Model as TimelineModel,
 } from "../Model.ts";
+import { transcriptOf } from "../Rows.ts";
 import {
   afterView,
   switchThread,
@@ -30,9 +35,12 @@ import { view as timelineView } from "../View.ts";
 import {
   commitReply,
   growReply,
+  insertTurn,
+  landCheckpoint,
   startReply,
   streamedReply,
   syntheticThread,
+  turnOfUserEntry,
 } from "./Fixture.ts";
 import type { StreamedReply } from "./Fixture.ts";
 
@@ -44,6 +52,10 @@ const Model = Schema.Struct({
   streaming: Schema.Boolean,
   turn: Schema.Int,
   frame: Schema.Int,
+  /** The next id for an entry the harness adds above the reader. */
+  nextId: Schema.Int,
+  /** How many changes `insert-above` and `arrive` made. */
+  landed: Schema.Int,
 });
 
 type Model = typeof Model.Type;
@@ -52,6 +64,8 @@ const Message = defineMessageUnion({
   GotTimelineMessage: { message: TimelineMessage },
   ClickedThread: { id: Schema.Literals(["a", "b"]) },
   ClickedStream: { on: Schema.Boolean },
+  ClickedInsertAbove: {},
+  ClickedArrive: {},
   Ticked: {},
 });
 
@@ -59,11 +73,20 @@ type Message = typeof Message.Type;
 
 const LONG_TURNS = 700;
 
-const Broken = Schema.Literals(["estimate", "reflow"]);
+const Broken = Schema.Literals(["estimate", "reflow", "anchor"]);
 
-const broken = Schema.decodeUnknownOption(Broken)(
-  new URLSearchParams(location.search).get("broken")
+const broken: BrokenControl = Option.getOrElse(
+  Schema.decodeUnknownOption(Broken)(
+    new URLSearchParams(location.search).get("broken")
+  ),
+  () => "none" as const
 );
+
+/** Ids for added entries, clear of the synthetic threads' own. */
+const FIRST_ADDED_ID = 1_000_000;
+
+/** How many rows above the first visible one a change lands, at least: wholly off screen. */
+const ROWS_ABOVE = 3;
 
 const TICK = Duration.millis(40);
 
@@ -108,59 +131,86 @@ const foldTimeline = (model: Model, message: TimelineMessage): Return =>
     foldOutMessage: () => (next: Model) => ({ model: next }),
   })(model, message);
 
-const modifyList = (
-  model: Model,
-  change: (list: VirtualList.Model) => VirtualList.Model
-): Model => ({
-  ...model,
-  timeline: {
-    ...model.timeline,
-    ui: { ...model.timeline.ui, list: change(model.timeline.ui.list) },
-  },
-});
-
-const isListMessage = (
-  message: TimelineMessage,
-  tag: "MeasuredRows" | "ResizedContainer"
-): boolean =>
-  Predicate.isTagged(message, "GotListMessage") &&
-  Predicate.isTagged(message.message, tag);
-
-/** The timeline's update, with the broken control the page asked for, if any. */
+/** The timeline's update, with the list's broken control the page asked for, if any. */
 const updateChild = (model: Model, message: TimelineMessage): Return => {
-  if (
-    Option.contains(broken, "reflow") &&
-    isListMessage(message, "ResizedContainer")
-  ) {
-    // The list then restores this offset, not the row the reader was on, after the width change.
-    return foldTimeline(
-      modifyList(model, (list) => ({
-        ...list,
-        viewportAnchor: VirtualList.Model.fields.viewportAnchor.Offset({
-          scrollTop: list.scrollTop,
-        }),
-      })),
-      message
-    );
-  }
-
   const next = foldTimeline(model, message);
+  const { list } = next.model.timeline.ui;
 
-  if (
-    Option.contains(broken, "estimate") &&
-    isListMessage(message, "MeasuredRows")
-  ) {
-    return {
-      ...next,
-      model: modifyList(next.model, (list) => ({
-        ...list,
-        measuredRowHeights: {},
-      })),
-    };
+  return list.broken === broken
+    ? next
+    : {
+        ...next,
+        model: {
+          ...next.model,
+          timeline: {
+            ...next.model.timeline,
+            ui: { ...next.model.timeline.ui, list: { ...list, broken } },
+          },
+        },
+      };
+};
+
+/**
+ * The turn a change lands in: the prompt (`prompt`) or answer (`answer`) of thread A's first
+ * original turn at least `ROWS_ABOVE` rows above the first visible row, walking up.
+ */
+const turnAbove = (
+  model: Model,
+  wanted: "prompt" | "answer"
+): Option.Option<number> => {
+  const { place } = model.timeline.ui.list;
+
+  if (model.current !== "a" || !Predicate.isTagged(place, "Row")) {
+    return Option.none();
   }
 
-  return next;
+  const { items } = transcriptOf(
+    "a",
+    Option.some(model.a),
+    model.timeline.ui,
+    Option.none()
+  );
+
+  const first = items.findIndex((item) => item.id === place.key);
+
+  for (let index = first - ROWS_ABOVE; index >= 0; index -= 1) {
+    const item = items[index];
+
+    if (item?.kind === "message") {
+      const userEntryId = Number(item.message.turnId.replace("turn:", ""));
+
+      const fits =
+        userEntryId < FIRST_ADDED_ID &&
+        (wanted === "prompt"
+          ? item.message.role === "user"
+          : item.message.role === "assistant" &&
+            Option.isNone(item.changedFiles));
+
+      if (fits) {
+        return Option.some(turnOfUserEntry(userEntryId));
+      }
+    }
+  }
+
+  return Option.none();
 };
+
+const landAbove = (
+  model: Model,
+  wanted: "prompt" | "answer",
+  change: (state: Model["a"], turn: number, id: number) => Model["a"]
+): Return =>
+  Option.match(turnAbove(model, wanted), {
+    onNone: () => ({ model }),
+    onSome: (turn) => ({
+      model: {
+        ...model,
+        a: change(model.a, turn, model.nextId),
+        nextId: model.nextId + 2,
+        landed: model.landed + 1,
+      },
+    }),
+  });
 
 const show = (model: Model, id: "a" | "b"): Return =>
   Update.combine<Model, Message, CairnConnectionService>(
@@ -226,6 +276,8 @@ const update = (model: Model, message: Message): Return =>
             },
           }
         : { model: { ...model, streaming: on } },
+    ClickedInsertAbove: () => landAbove(model, "prompt", insertTurn),
+    ClickedArrive: () => landAbove(model, "answer", landCheckpoint),
     Ticked: () =>
       model.streaming && model.current === "a" ? tick(model) : { model },
   });
@@ -240,6 +292,8 @@ const init = (): Return =>
       streaming: false,
       turn: LONG_TURNS,
       frame: 0,
+      nextId: FIRST_ADDED_ID,
+      landed: 0,
     },
     "a"
   );
@@ -273,6 +327,21 @@ const view = (model: Model, h: HtmlBuilder<Message>): Html =>
           button(h, "switch-b", "Thread B", Message.ClickedThread({ id: "b" })),
           button(h, "stream-on", "Stream", Message.ClickedStream({ on: true })),
           button(h, "stream-off", "Stop", Message.ClickedStream({ on: false })),
+          button(
+            h,
+            "insert-above",
+            "Insert above",
+            Message.ClickedInsertAbove()
+          ),
+          button(h, "arrive", "Arrive", Message.ClickedArrive()),
+          h.span(
+            [
+              h.DataAttribute("testid", "landed"),
+              h.DataAttribute("count", String(model.landed)),
+              h.Class("self-center text-xs text-muted-foreground"),
+            ],
+            [`${String(model.landed)} landed`]
+          ),
         ]
       ),
       h.submodel({

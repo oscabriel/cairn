@@ -4,12 +4,13 @@
 // and the code grammars loaded so far. The rows themselves are derived from the page's thread view
 // (Rows.ts), never stored here.
 
-import * as VirtualList from "@foldkit/ui/virtualList";
-import { Option, Predicate, Schema } from "effect";
+import { Option, Schema } from "effect";
+
+import * as List from "./list/Model.ts";
 
 /** What the transcript remembers about one thread while it is not on screen. */
 export const ThreadUi = Schema.Struct({
-  list: VirtualList.Model,
+  list: List.Model,
   expandedTurnIds: Schema.Array(Schema.String),
   expandedWorkGroupIds: Schema.Array(Schema.String),
   expandedUserMessageIds: Schema.Array(Schema.String),
@@ -43,21 +44,13 @@ export type Model = typeof Model.Type;
 /** How many other threads keep their scroll position and open folds. */
 export const SAVED_THREAD_LIMIT = 20;
 
-/** A row's height before it is measured, when nothing better is known. */
-export const DEFAULT_ROW_HEIGHT_PX = 56;
-
 /** The scroll list's element id for a thread: each thread mounts its own list. */
 export const listIdOf = (threadId: Option.Option<string>): string =>
   `timeline-${Option.getOrElse(threadId, () => "none").replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`;
 
 /** A thread shown for the first time: at its end, following new rows, nothing open. */
 export const freshUi = (threadId: Option.Option<string>): ThreadUi => ({
-  list: VirtualList.init({
-    id: listIdOf(threadId),
-    rowHeightPx: DEFAULT_ROW_HEIGHT_PX,
-    initialScroll: { target: VirtualList.ScrollTarget.End() },
-    followEnd: { thresholdPx: 1 },
-  }),
+  list: List.init(listIdOf(threadId)),
   expandedTurnIds: [],
   expandedWorkGroupIds: [],
   expandedUserMessageIds: [],
@@ -78,4 +71,4 @@ export const initial: Model = {
 
 /** True while the list follows its end (new rows scroll into view). */
 export const isFollowingEnd = (model: Model): boolean =>
-  Predicate.isTagged(model.ui.list.viewportAnchor, "End");
+  List.isFollowingEnd(model.ui.list);

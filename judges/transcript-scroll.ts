@@ -1,7 +1,7 @@
 // The transcript's scroll judge (plan 3C, D26): the real transcript submodel over a 2,100-row
 // synthetic thread with a streaming tail, in Chromium, sampled once per animation frame.
 //
-//   node judges/transcript-scroll.ts [--seconds 6] [--headed] [--broken estimate|reflow]
+//   node judges/transcript-scroll.ts [--seconds 6] [--headed] [--broken estimate|reflow|anchor]
 //
 // It starts the web client's Vite server on an ephemeral loopback port and opens the transcript
 // harness (apps/web/src/timeline/harness), which has no brain. `--broken` turns on one of the
@@ -23,10 +23,16 @@
 //              row and a character offset in it, is back within 3 px of its place once the
 //              viewport goes from 1,440 px wide to 900, back, to 390 and back (`--broken reflow`
 //              fails it); each step also reports whether the first visible row and its offset,
-//              the coarser place the list itself keeps, held within 1 px.
-// Prints one JSON line and exits 0 when every check passed, apart from the known failures in
-// `KNOWN_FAILING`, which it reports without failing on; a known failure that passes fails the run,
-// so the change that fixes one removes it from the set.
+//              the coarser place the list itself keeps, held within 1 px;
+//   insert-above  a turn inserted a few rows above the first visible row, as an escalated
+//              question's card lands, moves neither the first visible row nor its offset in any
+//              frame, and the list made room above (`--broken anchor` fails it);
+//   arrive     a checkpoint landing late for a settled turn above the reader, so that turn's answer
+//              grows its changed-files card, likewise moves nothing on screen (`--broken anchor`).
+// It also reports the document's element count once the fresh load settled, and after the range
+// gesture. Prints one JSON line and exits 0 when every check passed, apart from the known failures
+// in `KNOWN_FAILING`, which it reports without failing on; a known failure that passes fails the
+// run, so the change that fixes one removes it from the set.
 //
 // The range and reflow checks are ported from github.com/hardbeat920/monocode,
 // tests/browser/transcript-scroll.spec.ts ("scrolling settled history keeps the scroll range
@@ -80,11 +86,10 @@ const root = path.resolve(import.meta.dirname, "..");
 const SCROLLER = '[data-testid="timeline-scroll"]';
 
 /**
- * Checks that fail on the real transcript today, recorded as findings in `docs/phase-2/backlog.md`
- * (stage 2.2): `range`, because the virtual list estimates the height of rows it has never drawn,
- * and `reflow`, because a width change keeps the first visible row rather than the glyph being read.
+ * Checks that fail on the real transcript today. Empty since the measured list (ADR 0041) fixed
+ * stage 2.2's `range` and `reflow` findings (`docs/phase-2/backlog.md`).
  */
-const KNOWN_FAILING: ReadonlySet<string> = new Set(["range", "reflow"]);
+const KNOWN_FAILING: ReadonlySet<string> = new Set();
 
 /** The longest main-thread task the follow phase allows, in ms: three frames at 60 Hz. */
 const LONG_TASK_MAX_MS = 50;
@@ -115,6 +120,12 @@ const REFLOW_TOLERANCE_PX = 3;
 /** How long the reflow check watches the glyph after each width change; its last frame counts. */
 const REFLOW_SETTLE_MS = 1500;
 
+/** How long the insert-above and arrive checks watch the screen after their change. */
+const LAND_WATCH_MS = 1500;
+
+/** How far the list must have scrolled to make room above, so a change that missed cannot pass. */
+const LAND_MIN_SHIFT_PX = 20;
+
 // Runs in the page before the app: per-frame sampling, the long-task log, and probes. A string, so
 // the page's globals stay out of this file's types; what comes back is decoded below.
 const PAGE_SCRIPT = `
@@ -129,6 +140,9 @@ window.__streamedCode = () =>
   [...document.querySelectorAll('[data-streaming] [data-slot="code-block"] code')].map(
     (code) => code.dataset.highlighted === "true"
   );
+window.__nodes = () => document.getElementsByTagName("*").length;
+window.__landed = () =>
+  Number(document.querySelector('[data-testid="landed"]')?.dataset.count ?? 0);
 window.__rows = () =>
   Number(document.querySelector(${JSON.stringify(SCROLLER)})?.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") ?? 0);
 window.__markVisible = (selector, name) => {
@@ -658,6 +672,44 @@ const bookmarkShifts = async (
   );
 };
 
+/** Clicks the harness button `testId`, which changes thread A above the reader, and watches. */
+const landPhase = async (page: Page, testId: string) => {
+  await rest(page);
+
+  const before = decodeNumber(await page.evaluate("window.__landed()"));
+  const sampling = sampleFrames(page, LAND_WATCH_MS);
+
+  await click(page, testId);
+
+  const frames = await sampling;
+  const after = decodeNumber(await page.evaluate("window.__landed()"));
+  const [first] = frames;
+  const firstKey = first?.firstKey ?? "";
+
+  return {
+    landed: after === before + 1,
+    frames: frames.length,
+    firstKey,
+    scrollTopShiftPx: tenths(
+      Math.abs((frames.at(-1)?.scrollTop ?? 0) - (first?.scrollTop ?? 0))
+    ),
+    anchorMoves:
+      changes(frames, (frame) => frame.firstOffset) +
+      frames.filter((frame) => frame.firstKey !== firstKey).length,
+    maxOffsetShiftPx: tenths(
+      Math.max(
+        0,
+        ...frames.map((frame) =>
+          Math.abs(frame.firstOffset - (first?.firstOffset ?? 0))
+        )
+      )
+    ),
+  };
+};
+
+const nodeCount = async (page: Page): Promise<number> =>
+  decodeNumber(await page.evaluate("window.__nodes()"));
+
 const reflowPhase = async (page: Page) => {
   await wheelUp(page, 2400);
   await rest(page);
@@ -713,6 +765,7 @@ const run = async (page: Page, port: number) => {
   const url = `http://${LOOPBACK}:${port}/src/timeline/harness/index.html${query}`;
   const loadMs = await load(page, url);
   const rows = decodeNumber(await page.evaluate("window.__rows()"));
+  const nodesOnLoad = await nodeCount(page);
   const atEndOnLoad = maxDistance(await sampleFrames(page, 300));
   const follow = await followPhase(page);
   const scrollUp = await scrollUpPhase(page);
@@ -720,11 +773,15 @@ const run = async (page: Page, port: number) => {
   const pill = await pillPhase(page);
   const threadSwitch = await switchPhase(page);
   const range = await rangePhase(page, url);
+  const nodesAfterRange = await nodeCount(page);
   const reflow = await reflowPhase(page);
+  const insertAbove = await landPhase(page, "insert-above");
+  const arrive = await landPhase(page, "arrive");
 
   return {
     rows,
     loadMs,
+    nodes: { onLoad: nodesOnLoad, afterRange: nodesAfterRange },
     atEndOnLoad,
     follow,
     scrollUp,
@@ -733,8 +790,20 @@ const run = async (page: Page, port: number) => {
     switch: threadSwitch,
     range,
     reflow,
+    insertAbove,
+    arrive,
   };
 };
+
+/** A change above the reader landed, the list made room for it, and nothing on screen moved. */
+const landed = (phase: {
+  readonly landed: boolean;
+  readonly scrollTopShiftPx: number;
+  readonly anchorMoves: number;
+}): boolean =>
+  phase.landed &&
+  phase.scrollTopShiftPx >= LAND_MIN_SHIFT_PX &&
+  phase.anchorMoves === 0;
 
 const main = async () => {
   const port = await freePort();
@@ -784,6 +853,8 @@ const main = async () => {
     reflow:
       result.reflow.bookmark !== null &&
       result.reflow.steps.every((step) => step.held),
+    insertAbove: landed(result.insertAbove),
+    arrive: landed(result.arrive),
     errors: errors.length === 0,
   };
 

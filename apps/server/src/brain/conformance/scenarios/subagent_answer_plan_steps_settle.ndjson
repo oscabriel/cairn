@@ -1,0 +1,16 @@
+{"type":"transcript_start","scenario":"subagent_answer_plan_steps_settle","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in one folder."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","text":"src has 12 files. Next I will:\n1. Count lib.\n2. Report both."}
+{"type":"model","label":"p3","thread":"parent","text":"Noted."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"settle","ms":200}
+{"type":"expect_event_count","event":{"_tag":"SubagentUpdated","child":"$child1","status":"waiting"},"count":0}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":1,"delivered":1,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"expect_view","path":["approvals"],"equals":[],"thread":"child1"}

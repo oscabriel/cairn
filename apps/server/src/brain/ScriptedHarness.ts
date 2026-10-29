@@ -110,6 +110,14 @@ import {
   QUESTION_TTL_MILLIS,
   questionAskOf,
 } from "../approvals/AskUser.ts";
+import { needsDecision } from "../approvals/NeedsDecision.ts";
+import {
+  MAX_ESCALATE_REASON,
+  MAX_QUESTION_LENGTH,
+  MAX_QUESTION_OPTIONS,
+  questionRecord,
+  relayedAsk,
+} from "../approvals/QuestionRoute.ts";
 import { familyOf } from "../models/ModelFamily.ts";
 import {
   attemptStateOf,
@@ -139,8 +147,11 @@ import {
   approvalIdOf,
   cancelRecord,
   copyRecord,
+  expirePending,
   heldByRun,
+  RELAYED_QUESTION_TOOL,
   refusalText,
+  relayedQuestion,
   settlementOf,
   UNDECIDED,
 } from "./CairnDocs.ts";
@@ -475,11 +486,40 @@ interface Reporter {
    * answered was quiet, so a user's steer and the parent's send settled by one run still wake it.
    */
   quietRun: boolean;
-  phase: "deliver" | "nudge" | "report" | "done";
-  /** The seq a nudge was sent for, in the `nudge` phase; its nudge mark lists the run's inputs. */
+  phase: "deliver" | "nudge" | "ask" | "answer" | "report" | "done";
+  /**
+   * The seq a nudge was sent for, in the `nudge` phase, or the mark seq of the question a final
+   * answer became, in `ask` and `answer`; its run mark lists the run's inputs.
+   */
   nudgeSeq: number;
   settlement: Option.Option<SubagentSettlement>;
+  /** In `ask`: the question record a final answer became, and that answer's entry. */
+  asked: Option.Option<{
+    readonly approvalId: string;
+    readonly answerEntry: number | null;
+  }>;
+  /** In `answer`: the answer the child gets as the run's next input. */
+  answerText: string;
 }
+
+/** The submission a reporter waits on in its continuing phases: its nudge, or its answer. */
+const continuationOf = (reporter: Reporter, child: ThreadId) =>
+  reporter.phase === "answer"
+    ? SubagentRequestIds.answer(child, reporter.nudgeSeq)
+    : SubagentRequestIds.nudge(child, reporter.nudgeSeq);
+
+/** Whether a reporter waits on a continuation of the run it settled: a nudge or an answer. */
+const continues = (reporter: Reporter) =>
+  reporter.phase === "nudge" || reporter.phase === "answer";
+
+/** A settled run's outcome, from how it ended and whether a typed result is missing. */
+const outcomeOf = (status: RunStatus, noResult: boolean): SettlementOutcome => {
+  if (status === "interrupted") {
+    return "stopped";
+  }
+
+  return status === "failed" || noResult ? "failed" : "completed";
+};
 
 /** The nudge mark `reporter` wrote for its nudge, listing the inputs of the run it nudged. */
 const nudgeMarkOf = (item: SubagentItem, reporter: Reporter) =>
@@ -524,12 +564,12 @@ const peerOf = (
   item: SubagentItem,
   end: SubmissionEnd
 ) => {
-  const nudge = other.phase === "nudge" ? nudgeMarkOf(item, other) : undefined;
+  const nudge = continues(other) ? nudgeMarkOf(item, other) : undefined;
 
   const waitsOn =
     nudge === undefined
       ? other.requestId
-      : SubagentRequestIds.nudge(child.threadId, other.nudgeSeq);
+      : continuationOf(other, child.threadId);
 
   const found = child.byRequest.get(waitsOn);
 
@@ -632,12 +672,6 @@ const offeredTools = (thread: ScriptedThread): ReadonlyArray<string> =>
         ? [...CHILD_TOOLS]
         : [...CHILD_TOOLS, RESULT_TOOL_NAME],
   });
-
-/** The most options an `ask_parent` question offers: the protocol's `Question`. */
-const MAX_QUESTION_OPTIONS = 9;
-
-/** The longest question or option label: the protocol's `DisplayText`. */
-const MAX_QUESTION_LENGTH = 4096;
 
 /** The longest bounded wait `subagent_status` takes, as on pi-durable. */
 const MAX_WAIT_SECONDS = 600;
@@ -1903,6 +1937,8 @@ const layerNoDeps = Layer.effectContext(
         phase: "deliver",
         nudgeSeq: 0,
         settlement: Option.none(),
+        asked: Option.none(),
+        answerText: "",
       };
 
       store.reporters.set(reporter.id, reporter);
@@ -2155,6 +2191,18 @@ const layerNoDeps = Layer.effectContext(
       at: number,
       changes: Changes
     ): AnswerOutcome => {
+      const asked = thread.approvals.get(approvalId);
+
+      // A mirror is answered through its open escalation entry, its authorization (ADR 0027).
+      if (
+        asked?.mirrorOf !== null &&
+        asked?.mirrorOf !== undefined &&
+        asked.status === "pending" &&
+        thread.escalations.get(asked.mirrorOf.approvalId)?.status !== "open"
+      ) {
+        return "not_found";
+      }
+
       const outcome = answerOne(thread, approvalId, given, at, changes);
 
       if (outcome !== "answered") {
@@ -2210,10 +2258,9 @@ const layerNoDeps = Layer.effectContext(
           reporter.child === child.threadId &&
           ((reporter.phase === "deliver" &&
             !child.byRequest.has(reporter.requestId)) ||
-            (reporter.phase === "nudge" &&
-              !child.byRequest.has(
-                SubagentRequestIds.nudge(child.threadId, reporter.nudgeSeq)
-              )))
+            reporter.phase === "ask" ||
+            (continues(reporter) &&
+              !child.byRequest.has(continuationOf(reporter, child.threadId))))
       );
 
       if (Option.isNone(child.run) && !undelivered) {
@@ -2235,8 +2282,7 @@ const layerNoDeps = Layer.effectContext(
       submission: Submission,
       end: SubmissionEnd
     ) => {
-      const own =
-        reporter.phase === "nudge" ? nudgeMarkOf(item, reporter) : undefined;
+      const own = continues(reporter) ? nudgeMarkOf(item, reporter) : undefined;
 
       const inputs = [current];
       let quiet = own === undefined ? reporter.quiet : own.quiet;
@@ -2275,6 +2321,99 @@ const layerNoDeps = Layer.effectContext(
       };
     };
 
+    /**
+     * The relay (ADR 0027), in the settling critical section: a run whose final answer asks for a
+     * decision (`needsDecision`) becomes a question record (`source: "answer"`, route parent) in
+     * the child's ledger, offered to the parent, with a run mark listing the run's inputs, and the
+     * reporter goes on to `ask`. False for an answer that asks nothing, which settles as usual.
+     */
+    const relayQuestion = (
+      reporter: Reporter,
+      child: ScriptedThread,
+      relayed: {
+        readonly item: SubagentItem;
+        readonly key: string;
+        readonly inputs: ReadonlyArray<string>;
+        readonly quiet: boolean;
+        readonly outcome: SettlementOutcome;
+        /** The child called `report` in the run. */
+        readonly reported: boolean;
+        /** The brief asked for a typed result. */
+        readonly typed: boolean;
+        readonly answered: Option.Option<{
+          readonly id: number;
+          readonly text: string;
+        }>;
+        readonly settlement: SubagentSettlement;
+        readonly at: number;
+        readonly changes: Changes;
+      }
+    ): boolean => {
+      const { item, at, changes } = relayed;
+
+      const asked = Option.match(relayed.answered, {
+        onNone: () => "",
+        onSome: (found) => found.text,
+      });
+
+      // Only a completed plain answer: no report, no typed result due, not a user's own steer.
+      if (
+        relayed.outcome !== "completed" ||
+        relayed.reported ||
+        relayed.typed ||
+        relayed.quiet ||
+        !needsDecision(asked)
+      ) {
+        return false;
+      }
+
+      const seq = item.runs.length + 1;
+      const approvalId = SubagentRequestIds.answerQuestion(child.threadId, seq);
+
+      const record = questionRecord(
+        {
+          approvalId,
+          toolTaskId: reporter.id,
+          tool: RELAYED_QUESTION_TOOL,
+          source: "answer",
+          askedAt: at,
+          ...relayedAsk(asked),
+        },
+        RECORD_TTL_MILLIS
+      );
+
+      item.runs.push({
+        run: relayed.key,
+        phase: "nudge",
+        seq,
+        inputs: relayed.inputs,
+        quiet: relayed.quiet,
+      });
+      reporter.nudgeSeq = seq;
+      reporter.phase = "ask";
+      reporter.settlement = Option.some(relayed.settlement);
+      reporter.asked = Option.some({
+        approvalId,
+        answerEntry: Option.getOrNull(
+          Option.map(relayed.answered, (found) => found.id)
+        ),
+      });
+      child.approvals.set(approvalId, record);
+      changes.touched.add(child);
+      changes.events.push(
+        RuntimeRequestUpdated.make({
+          threadId: child.threadId,
+          id: ApprovalId.make(approvalId),
+          kind: "user-input",
+          status: "pending",
+        })
+      );
+      recordsChanged(child, changes);
+      offerToParent(child, record, at, changes);
+
+      return true;
+    };
+
     /** Settles one reporter's input once its run ended: one settlement per run. */
     const settle = (
       reporter: Reporter,
@@ -2300,10 +2439,9 @@ const layerNoDeps = Layer.effectContext(
         onSome: (runId) => `seg:${runId}`,
       });
 
-      const current =
-        reporter.phase === "nudge"
-          ? SubagentRequestIds.nudge(child.threadId, reporter.nudgeSeq)
-          : reporter.requestId;
+      const current = continues(reporter)
+        ? continuationOf(reporter, child.threadId)
+        : reporter.requestId;
 
       // A run settles once: whichever of its reporters gets here first marks it. A nudge mark names
       // the inputs whose run its nudge's run settles; the nudge's reporter settles the child then.
@@ -2362,13 +2500,7 @@ const layerNoDeps = Layer.effectContext(
         state.used >= MAX_RESULT_ATTEMPTS ? CAP_TEXT : NO_RESULT_ERROR
       );
 
-      let outcome: SettlementOutcome = "completed";
-
-      if (end.status === "interrupted") {
-        outcome = "stopped";
-      } else if (end.status === "failed" || Option.isSome(noResult)) {
-        outcome = "failed";
-      }
+      const outcome = outcomeOf(end.status, Option.isSome(noResult));
 
       const failureMessage = Option.orElse(noResult, () =>
         end.status === "failed"
@@ -2428,6 +2560,27 @@ const layerNoDeps = Layer.effectContext(
         ),
       };
 
+      // The relay (ADR 0027): an untyped child's completed plain answer that asks for a decision
+      // becomes a question to its parent instead of a result; a user's own steer is answered to
+      // the user, in the child's thread.
+      if (
+        relayQuestion(reporter, child, {
+          item,
+          key,
+          inputs,
+          quiet,
+          outcome,
+          reported: Option.isSome(report),
+          typed: Option.isSome(missing) || link.resultSchema !== null,
+          answered,
+          settlement,
+          at,
+          changes,
+        })
+      ) {
+        return;
+      }
+
       item.settlements.push({
         seq: settlement.seq,
         outcome,
@@ -2440,6 +2593,70 @@ const layerNoDeps = Layer.effectContext(
       item.runs.push({ run: key, phase: "settled", seq });
       link.report = Option.none();
       reporter.settlement = Option.some(settlement);
+      reporter.phase = "report";
+      changes.touched.add(parent);
+      settledUnlessWorking(child, changes);
+    };
+
+    /**
+     * After the question a child's final answer became settled: accepted, the reporter gives the
+     * child the answer next; otherwise the run settles with its own answer, once.
+     */
+    const questionAnswered = (
+      reporter: Reporter,
+      child: ScriptedThread,
+      asked: {
+        readonly approvalId: string;
+        readonly answerEntry: number | null;
+      },
+      at: number,
+      changes: Changes
+    ) => {
+      const record = child.approvals.get(asked.approvalId);
+
+      if (record?.status === "accepted") {
+        reporter.answerText = renderAnswer(
+          record.decidedBy?.kind === "thread" ? "parent" : "user",
+          record.answer?.answers?.[0]
+        );
+        reporter.phase = "answer";
+
+        return;
+      }
+
+      const linked = linkOf(child);
+
+      const mark = Option.flatMap(linked, ({ item }) =>
+        Option.fromUndefinedOr(
+          item.runs.find(
+            (found) =>
+              found.phase === "nudge" && found.seq === reporter.nudgeSeq
+          )
+        )
+      );
+
+      if (
+        Option.isNone(linked) ||
+        Option.isNone(mark) ||
+        Option.isNone(reporter.settlement)
+      ) {
+        reporter.phase = "done";
+
+        return;
+      }
+
+      const { item, parent } = linked.value;
+      const seq = item.settlements.length + 1;
+
+      item.settlements.push({
+        seq,
+        outcome: reporter.settlement.value.outcome,
+        answerEntry: asked.answerEntry,
+        reportedAt: at,
+        inputs: [...markInputs(item, mark.value)],
+      });
+      item.runs.push({ run: mark.value.run, phase: "settled", seq });
+      reporter.settlement = Option.some({ ...reporter.settlement.value, seq });
       reporter.phase = "report";
       changes.touched.add(parent);
       settledUnlessWorking(child, changes);
@@ -2586,6 +2803,110 @@ const layerNoDeps = Layer.effectContext(
         );
       });
 
+    /**
+     * Ends the parent's side of a child's question that ended unanswered (cancelled by a stop, or
+     * expired), in the caller's critical section: its pending mirror in the parent takes `end`,
+     * the registry marks it `cancelled` and its escalation entry resolves (ADR 0027). Nothing for a
+     * record that is not a question to the parent.
+     */
+    const endParentSide = (
+      thread: ScriptedThread,
+      record: ApprovalRecord,
+      at: number,
+      changes: Changes,
+      end: (mirror: ApprovalRecord) => void
+    ) => {
+      if (
+        record.kind !== "user-input" ||
+        (record.route !== "parent" && record.escalatedAt === null)
+      ) {
+        return;
+      }
+
+      for (const { parent, item } of Option.toArray(linkOf(thread))) {
+        const mirrorId = `esc-${thread.conversationId}-${record.id}`;
+        const mirror = parent.approvals.get(mirrorId);
+
+        if (mirror?.status === "pending") {
+          const ended = copyRecord(mirror);
+
+          end(ended);
+          ended.answeredAt = at;
+          parent.approvals.set(mirrorId, ended);
+          changes.events.push(
+            RuntimeRequestUpdated.make({
+              threadId: parent.threadId,
+              id: ApprovalId.make(mirrorId),
+              kind: ended.kind,
+              status: ended.status,
+            })
+          );
+        }
+
+        const mark = item.questions.get(record.id);
+
+        if (mark?.state !== "answered") {
+          item.questions.set(record.id, {
+            state: "cancelled",
+            escalatedAt: mark?.escalatedAt ?? null,
+          });
+        }
+
+        const escalation = parent.escalations.get(record.id);
+
+        if (escalation !== undefined) {
+          parent.escalations.set(record.id, {
+            ...escalation,
+            status: "resolved",
+          });
+        }
+
+        parent.offered.delete(`${thread.threadId}:${record.id}`);
+        changes.touched.add(parent);
+      }
+    };
+
+    /** Expires a record still pending at its expiry, in the caller's critical section. */
+    const expireRecord = (
+      thread: ScriptedThread,
+      approvalId: string,
+      at: number,
+      changes: Changes
+    ) => {
+      const found = thread.approvals.get(approvalId);
+
+      if (found?.status !== "pending") {
+        return;
+      }
+
+      const expired = copyRecord(found);
+
+      expirePending(expired, at);
+      thread.approvals.set(approvalId, expired);
+      endParentSide(thread, expired, at, changes, (mirror) => {
+        expirePending(mirror, at);
+      });
+      changes.touched.add(thread);
+      changes.events.push(
+        RuntimeRequestUpdated.make({
+          threadId: thread.threadId,
+          id: ApprovalId.make(approvalId),
+          kind: expired.kind,
+          status: expired.status,
+        })
+      );
+      recordsChanged(thread, changes);
+    };
+
+    /** Waits until a record leaves `pending`; none when the instance closes first. */
+    const settledRecord = (thread: ScriptedThread, approvalId: string) =>
+      awaitThread(thread, () =>
+        Option.filter(
+          Option.fromUndefinedOr(thread.approvals.get(approvalId)),
+          (record) => record.status !== "pending"
+        )
+      );
+
     /** One reporter, from wherever it stood: deliver, then report. */
     const runReporter = (reporter: Reporter): Effect.Effect<void> =>
       Effect.gen(function* () {
@@ -2643,6 +2964,60 @@ const layerNoDeps = Layer.effectContext(
           );
         }
 
+        // A question the child's final answer became: answered, the child gets the answer as the
+        // run's next input; otherwise (expired at its expiry, declined or cancelled) the run's own
+        // answer settles as its result after all.
+        if (reporter.phase === "ask") {
+          for (const asked of Option.toArray(reporter.asked)) {
+            const expiresAt =
+              child.approvals.get(asked.approvalId)?.expiresAt ?? 0;
+
+            const remaining = Math.max(0, expiresAt - (yield* now));
+
+            const settled = yield* settledRecord(child, asked.approvalId).pipe(
+              Effect.timeoutOption(Duration.millis(remaining))
+            );
+
+            yield* locked((at, changes) =>
+              Effect.sync(() => {
+                if (Option.isNone(settled)) {
+                  expireRecord(child, asked.approvalId, at, changes);
+                }
+
+                questionAnswered(reporter, child, asked, at, changes);
+              })
+            );
+          }
+        }
+
+        if (reporter.phase === "answer") {
+          const submission = yield* locked((at, changes) =>
+            Effect.sync(() =>
+              admit(
+                child,
+                {
+                  requestId: continuationOf(reporter, child.threadId),
+                  content: [{ type: "text", text: reporter.answerText }],
+                  entry: Option.none(),
+                  whenBusy: "followUp",
+                },
+                at,
+                changes
+              )
+            )
+          );
+
+          const end = yield* awaitThread(child, () => submission.ended);
+
+          yield* locked((at, changes) =>
+            Effect.sync(() => {
+              for (const found of Option.toArray(end)) {
+                settle(reporter, submission, found, at, changes);
+              }
+            })
+          );
+        }
+
         if (reporter.phase === "report") {
           yield* locked((at, changes) =>
             Effect.sync(() => {
@@ -2678,15 +3053,6 @@ const layerNoDeps = Layer.effectContext(
 
       return id;
     };
-
-    /** Waits until a record leaves `pending`; none when the instance closes first. */
-    const settledRecord = (thread: ScriptedThread, approvalId: string) =>
-      awaitThread(thread, () =>
-        Option.filter(
-          Option.fromUndefinedOr(thread.approvals.get(approvalId)),
-          (record) => record.status !== "pending"
-        )
-      );
 
     const toolApi = (
       thread: ScriptedThread,
@@ -2951,6 +3317,17 @@ const layerNoDeps = Layer.effectContext(
             return refused(SubagentToolText.replyNeedsAnswer);
           }
 
+          if (
+            Option.exists(
+              textArgument(call, "escalate"),
+              (reason) => reason.length > MAX_ESCALATE_REASON
+            )
+          ) {
+            return refused(
+              SubagentToolText.escalateTooLong(MAX_ESCALATE_REASON)
+            );
+          }
+
           // The child's questions for its parent, whatever their status: a second call, or a
           // replay after the answer committed, finds its question settled.
           const questions = [...child.approvals.values()]
@@ -3108,37 +3485,18 @@ const layerNoDeps = Layer.effectContext(
               return;
             }
 
-            const record: ApprovalRecord = {
-              id: approvalId,
-              toolTaskId: taskOf(thread, call),
-              tool: call.name,
-              kind: "user-input",
-              summary: question.value,
-              status: "pending",
-              askedAt,
-              expiresAt: askedAt + RECORD_TTL_MILLIS,
-              answeredAt: null,
-              run: null,
-              executorRequestId: null,
-              ...UNDECIDED,
-              payload: {
-                type: "questions",
-                questions: [
-                  {
-                    header: "Question",
-                    question: question.value,
-                    options: options.map((label) => ({
-                      label,
-                      description: null,
-                      recommended: false,
-                    })),
-                    multiSelect: false,
-                    allowCustomAnswer: true,
-                  },
-                ],
+            const record = questionRecord(
+              {
+                approvalId,
+                toolTaskId: taskOf(thread, call),
+                tool: call.name,
+                source: "tool",
+                askedAt,
+                question: question.value,
+                options,
               },
-              route: "parent",
-            };
+              RECORD_TTL_MILLIS
+            );
 
             thread.approvals.set(approvalId, record);
             changes.touched.add(thread);
@@ -3390,9 +3748,12 @@ const layerNoDeps = Layer.effectContext(
               changes.events.push(queueChanged(thread));
             }
 
-            const held = Option.isSome(thread.run)
-              ? [...thread.approvals.values()].filter(heldByRun)
-              : [];
+            // A question the thread's final answer became ends with any stop, run or not.
+            const held = [...thread.approvals.values()].filter(
+              (record) =>
+                relayedQuestion(record) ||
+                (Option.isSome(thread.run) && heldByRun(record))
+            );
 
             endRun(thread, "interrupted", Option.none(), at, changes);
 
@@ -3414,45 +3775,14 @@ const layerNoDeps = Layer.effectContext(
 
             // A question to the parent ends with the call that asked it: its mirror in the parent
             // is cancelled too, and the parent's registry marks it (ADR 0027).
-            for (const { parent, item } of Option.toArray(linkOf(thread))) {
-              for (const record of held) {
-                if (
-                  record.kind !== "user-input" ||
-                  (record.route !== "parent" && record.escalatedAt === null)
-                ) {
-                  continue;
-                }
-
-                const mirrorId = `esc-${thread.conversationId}-${record.id}`;
-                const mirror = parent.approvals.get(mirrorId);
-
-                if (mirror?.status === "pending") {
-                  const cancelled = copyRecord(mirror);
-
-                  cancelRecord(cancelled, at, "run-stopped");
-                  parent.approvals.set(mirrorId, cancelled);
-                  changes.touched.add(parent);
-                  changes.events.push(
-                    RuntimeRequestUpdated.make({
-                      threadId: parent.threadId,
-                      id: ApprovalId.make(mirrorId),
-                      kind: cancelled.kind,
-                      status: cancelled.status,
-                    })
-                  );
-                }
-
-                item.questions.set(record.id, {
-                  state: "cancelled",
-                  escalatedAt:
-                    item.questions.get(record.id)?.escalatedAt ?? null,
-                });
-                parent.offered.delete(`${thread.threadId}:${record.id}`);
-                changes.touched.add(parent);
-              }
+            for (const record of held) {
+              endParentSide(thread, record, at, changes, (mirror) => {
+                cancelRecord(mirror, at, "run-stopped");
+              });
             }
 
             if (held.length > 0) {
+              changes.touched.add(thread);
               recordsChanged(thread, changes);
             }
           })

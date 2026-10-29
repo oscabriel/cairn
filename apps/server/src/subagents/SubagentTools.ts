@@ -39,9 +39,21 @@ import type {
   ToolExecutionApi,
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
-import { defineTool, LiveDoc } from "@earendil-works/pi-durable";
-import { Duration, Effect, Option, Predicate, Result } from "effect";
+import { defineTool } from "@earendil-works/pi-durable";
+import { Duration, Effect, Option, Result } from "effect";
 
+import {
+  endUnanswered,
+  escalateIn,
+  MAX_ESCALATE_REASON,
+  MAX_QUESTION_LENGTH,
+  MAX_QUESTION_OPTIONS,
+  placedMemoOf,
+  QUESTION_WINDOW_MILLIS,
+  questionRecord,
+  routeQuestion,
+} from "../approvals/QuestionRoute.ts";
+import type { RouteIo } from "../approvals/QuestionRoute.ts";
 import { BRIEF_TTL_MILLIS } from "../brain/BriefTtl.ts";
 import {
   applyAnswer,
@@ -52,7 +64,7 @@ import {
   ThreadMeta,
   UNDECIDED,
 } from "../brain/CairnDocs.ts";
-import type { ApprovalRecord, ApprovalSettlement } from "../brain/CairnDocs.ts";
+import type { ApprovalSettlement } from "../brain/CairnDocs.ts";
 import {
   GATED_APPROVAL_TTL_MILLIS,
   readPermissions,
@@ -60,21 +72,13 @@ import {
 import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
 import {
   renderAnswer,
-  renderQuestion,
   SPAWN_WAITING,
-  SubagentRequestIds,
   SubagentToolText,
 } from "../brain/SubagentText.ts";
 import { offerResultTool } from "../models/ResultTool.ts";
 import { countLive, dropIdle, listParent } from "./BrainCap.ts";
 import { briefOf, briefPayload } from "./Briefs.ts";
-import {
-  conversationOf,
-  endUnanswered,
-  escalateIn,
-  parentHalted,
-  setStatus,
-} from "./Delivery.ts";
+import { conversationOf, setStatus } from "./Delivery.ts";
 import {
   ChildDoc,
   isLinked,
@@ -92,12 +96,6 @@ import { awaitDoc, runWait } from "./Waits.ts";
 
 /** The longest bounded wait `subagent_status` takes. */
 const MAX_WAIT_SECONDS = 600;
-
-/** The most options an `ask_parent` question offers: the protocol's `Question`. */
-export const MAX_QUESTION_OPTIONS = 9;
-
-/** The longest question or option label: the protocol's `DisplayText`. */
-export const MAX_QUESTION_LENGTH = 4096;
 
 const said = (text: string): ToolExecutionResult => ({
   output: [{ type: "text", text }],
@@ -187,19 +185,12 @@ const linkOf = async (
   return isLinked(link) ? Option.some(link) : Option.none();
 };
 
-/** What one `ask_parent` call asks. */
-interface AskedQuestion {
-  readonly approvalId: string;
-  readonly toolTaskId: number;
-  readonly askedAt: number;
-  readonly question: string;
-  readonly options: ReadonlyArray<string>;
-}
-
 /** What a test may tune in the tools; production keeps the defaults. */
 export interface SubagentToolOptions {
   /** How long a child's question waits before it expires: a gated call's day. */
   readonly questionTtlMillis: number;
+  /** How long a parent's model may hold a child's question it was shown (ADR 0027): 15 minutes. */
+  readonly questionWindowMillis: number;
   /**
    * How long a reporter waits, once its input's run ended, before it settles, by whether its
    * input is quiet: none in production. A test delays the waking reporters to make a quiet one
@@ -215,6 +206,7 @@ export interface SubagentToolOptions {
 /** The tools' production options. */
 export const DEFAULT_TOOL_OPTIONS: SubagentToolOptions = {
   questionTtlMillis: GATED_APPROVAL_TTL_MILLIS,
+  questionWindowMillis: QUESTION_WINDOW_MILLIS,
   settleDelayMillis: () => 0,
   briefTtlMillis: BRIEF_TTL_MILLIS,
   maxLivePerBrain: MAX_LIVE_CHILDREN_PER_BRAIN,
@@ -225,40 +217,19 @@ type CapRefusal =
   | { readonly cap: "parent"; readonly live: number }
   | { readonly cap: "brain"; readonly live: number };
 
-/** The pending record of a child's question to its parent (ADR 0027), in the child's ledger. */
-const questionRecord = (
-  asked: AskedQuestion,
-  ttlMillis: number
-): ApprovalRecord => ({
-  id: asked.approvalId,
-  toolTaskId: asked.toolTaskId,
-  tool: "ask_parent",
-  kind: "user-input",
-  summary: asked.question,
-  status: "pending",
-  askedAt: asked.askedAt,
-  expiresAt: asked.askedAt + ttlMillis,
-  answeredAt: null,
-  run: null,
-  executorRequestId: null,
-  ...UNDECIDED,
-  payload: {
-    type: "questions",
-    questions: [
-      {
-        header: "Question",
-        question: asked.question,
-        options: asked.options.map((label) => ({
-          label,
-          description: null,
-          recommended: false,
-        })),
-        multiSelect: false,
-        allowCustomAnswer: true,
-      },
-    ],
+/** A route's view of a replay-safe tool call: its commits, its clock and its memo. */
+export const routeIo = (
+  api: ToolExecutionApi,
+  context: ChordContext
+): RouteIo => ({
+  observer: api,
+  now: () => api.now(),
+  placedAt: async (approvalId, candidate) =>
+    await api.memo(placedMemoOf(approvalId), candidate, context),
+  conversation: async (id) => await api.conversation(id, context),
+  commitDocs: async (change) => {
+    await api.commit(change, context);
   },
-  route: "parent",
 });
 
 /** What a child's `ask_parent` returns once its record settled: the answer, or why there is none. */
@@ -649,6 +620,15 @@ export const subagentToolSet = (
         return refused(SubagentToolText.replyNeedsAnswer);
       }
 
+      if (
+        Option.exists(
+          escalation,
+          (reason) => reason.length > MAX_ESCALATE_REASON
+        )
+      ) {
+        return refused(SubagentToolText.escalateTooLong(MAX_ESCALATE_REASON));
+      }
+
       const text = await api.commit(async (tx) => {
         const meta = await tx.doc(ThreadMeta, api.conversationId);
         const { items } = await tx.doc(Approvals, child);
@@ -693,6 +673,7 @@ export const subagentToolSet = (
             childConversationId: child,
             approvalId: record.id,
             now: api.now(),
+            why: SubagentToolText.parentEscalated(escalation.value),
           });
 
           return Result.succeed(SubagentToolText.replyEscalated);
@@ -786,57 +767,37 @@ export const subagentToolSet = (
       const registry = await api.snapshot(SubagentsDoc, parent, context);
       const description = registry?.items[link.value.key]?.description ?? "";
 
-      // Records the question (a rerun finds it), and escalates it at once to a halted parent.
-      const offer = await api.commit(async (tx) => {
-        const halted = await parentHalted(tx, parent);
+      // Records the question; a rerun finds it.
+      await api.commit(async (tx) => {
         const { items } = await tx.doc(Approvals, api.conversationId);
 
-        if (items[approvalId] === undefined) {
-          items[approvalId] = questionRecord(
-            {
-              approvalId,
-              toolTaskId: api.taskId,
-              askedAt: api.now(),
-              question: question.value,
-              options,
-            },
-            tuning.questionTtlMillis
-          );
-
-          const parentRegistry = await tx.doc(SubagentsDoc, parent);
-          const item = parentRegistry.items[link.value.key];
-
-          if (item !== undefined) {
-            item.questions[approvalId] = {
-              state: "pending",
-              escalatedAt: null,
-            };
-            setStatus(item, "waiting");
-          }
+        if (items[approvalId] !== undefined) {
+          return;
         }
 
-        const record = items[approvalId];
-
-        if (
-          record === undefined ||
-          record.status !== "pending" ||
-          record.escalatedAt !== null
-        ) {
-          return false;
-        }
-
-        if (halted && !faults.wakeStoppedParent) {
-          await escalateIn(tx, {
-            parentConversationId: parent,
-            childConversationId: api.conversationId,
+        items[approvalId] = questionRecord(
+          {
             approvalId,
-            now: api.now(),
-          });
+            toolTaskId: api.taskId,
+            tool: "ask_parent",
+            source: "tool",
+            askedAt: api.now(),
+            question: question.value,
+            options,
+          },
+          tuning.questionTtlMillis
+        );
 
-          return false;
+        const parentRegistry = await tx.doc(SubagentsDoc, parent);
+        const item = parentRegistry.items[link.value.key];
+
+        if (item !== undefined) {
+          item.questions[approvalId] = {
+            state: "pending",
+            escalatedAt: null,
+          };
+          setStatus(item, "waiting");
         }
-
-        return true;
       }, context);
 
       const settled = runWait(
@@ -852,85 +813,21 @@ export const subagentToolSet = (
         context
       );
 
-      if (offer) {
-        const conversation = await api.conversation(parent, context);
-
-        const submission = await conversation?.submit(
-          {
-            type: "input",
-            requestId: SubagentRequestIds.question(childThreadId, approvalId),
-            content: renderQuestion(description, question.value),
-            whenBusy: "followUp",
-          },
-          context
-        );
-
-        if (submission !== undefined) {
-          // The parent's run that placed the question ends: unanswered, it goes to the user.
-          const answeredOrEnded = async () =>
-            await Promise.race([
-              settled.then(() => "answered" as const),
-              submission.wait(context).then(
-                () => "ended" as const,
-                () => "answered" as const
-              ),
-            ]);
-
-          // A parent whose run failed or stopped keeps the question queued (`afterFailedRun:
-          // "keep"`), where no run places it: withdrawn there, it goes to the user too.
-          const idle = new AbortController();
-
-          const parentIdle = async () => {
-            try {
-              await Effect.runPromise(
-                awaitDoc(api, LiveDoc, parent, (value) =>
-                  value?.run === undefined ? Option.some(value) : Option.none()
-                ).pipe(
-                  Effect.flatMap(
-                    Option.match({
-                      onNone: () => Effect.never,
-                      onSome: () => Effect.void,
-                    })
-                  )
-                ),
-                {
-                  signal: AbortSignal.any(
-                    [context.abortSignal, idle.signal].filter(
-                      Predicate.isNotUndefined
-                    )
-                  ),
-                }
-              );
-
-              return "idle" as const;
-            } catch {
-              // Cut off once the race is decided, or with the call: this side lost.
-              return "answered" as const;
-            }
-          };
-
-          let first = await Promise.race([answeredOrEnded(), parentIdle()]);
-
-          idle.abort();
-
-          if (first === "idle") {
-            const withdrawn = await submission.abort(context);
-
-            first = withdrawn === "aborted" ? "ended" : await answeredOrEnded();
-          }
-
-          if (first === "ended") {
-            await api.commit(async (tx) => {
-              await escalateIn(tx, {
-                parentConversationId: parent,
-                childConversationId: api.conversationId,
-                approvalId,
-                now: api.now(),
-              });
-            }, context);
-          }
-        }
-      }
+      await routeQuestion(
+        routeIo(api, context),
+        {
+          parent,
+          child: api.conversationId,
+          childThreadId,
+          approvalId,
+          description,
+          question: question.value,
+          windowMillis: tuning.questionWindowMillis,
+          settled,
+          offerHalted: faults.wakeStoppedParent,
+        },
+        context
+      );
 
       const settlement = await settled;
 

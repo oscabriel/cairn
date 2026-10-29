@@ -64,7 +64,12 @@ import {
   Stream,
 } from "effect";
 
-import { ChildDoc, isLinked, markQuestion } from "../subagents/SubagentDocs.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  isLinked,
+  markQuestion,
+} from "../subagents/SubagentDocs.ts";
 import type { ChildState } from "../subagents/SubagentDocs.ts";
 import { Brain } from "./Brain.ts";
 import { durable, handOff } from "./Durable.ts";
@@ -573,6 +578,15 @@ const ACCEPTED_AT_ASK: ApprovalAnswerState = {
 /** The approval id of a tool task. Stable across reruns of that task. */
 export const approvalIdOf = (taskId: number) => `call-${taskId}`;
 
+/** Expires a record still pending at its expiry, in place; any other record is left as it is. */
+export const expirePending = (record: ApprovalRecord, now: number) => {
+  if (record.status === "pending") {
+    record.status = "expired";
+    record.answeredAt = now;
+    record.decidedBy = { kind: "expiry" };
+  }
+};
+
 /** The ledger of one tool invocation, committing through that invocation's own `commit`. */
 export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
   const approvalId = approvalIdOf(api.taskId);
@@ -638,11 +652,7 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
       return Option.none<ApprovalSettlement>();
     }
 
-    if (current.status === "pending") {
-      current.status = "expired";
-      current.answeredAt = api.now();
-      current.decidedBy = { kind: "expiry" };
-    }
+    expirePending(current, api.now());
 
     return Option.some(settlementOf(current));
   });
@@ -993,9 +1003,10 @@ const noAnsweredHook: AnsweredHook = async () => {
 /**
  * Answers one record from the host side, in one transaction (`applyAnswer`). "Allow for this
  * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit,
- * and an escalated question settles with its mirror (`settleLinked`). `answered` runs last inside
- * the same transaction, for a record the answer moved out of `pending`: a brief's Go creates its
- * child's start task there (ADR 0030), so the two land together or not at all.
+ * and an escalated question settles with its mirror (`settleLinked`). A parent's pending mirror is
+ * answered only through its open `cairn.escalations` entry, which the answer resolves. `answered`
+ * runs last inside the same transaction, for a record the answer moved out of `pending`: a brief's
+ * Go creates its child's start task there (ADR 0030), so the two land together or not at all.
  */
 export const answerApproval = (
   session: Pick<Session, "commit" | "snapshot">,
@@ -1014,6 +1025,16 @@ export const answerApproval = (
 
       if (record === undefined) {
         return "not_found";
+      }
+
+      // A mirror is answered through its open escalation entry, which is also its authorization
+      // (ADR 0027): a pending mirror with none was never escalated here.
+      if (record.mirrorOf !== null && record.status === "pending") {
+        const index = await tx.doc(EscalationsDoc, conversationId);
+
+        if (index.items[record.mirrorOf.approvalId]?.status !== "open") {
+          return "not_found";
+        }
       }
 
       const outcome = applyAnswer(record, answer, now);
@@ -1048,6 +1069,19 @@ export const heldByRun = (record: ApprovalRecord) =>
   record.kind !== "criteria" &&
   record.mirrorOf === null;
 
+/** The `tool` of a question record a child's final answer became (ADR 0027): no tool asked it. */
+export const RELAYED_QUESTION_TOOL = "subagent_answer";
+
+/**
+ * Whether a record is a pending question a child's final answer became. The reporter task in the
+ * parent waits on it, not a run of the child's, so a stop of the child cancels it by its tool
+ * (`cancelStoppedApprovals`, `cancelAbandonedApprovals`), whether or not the child runs.
+ */
+export const relayedQuestion = (record: ApprovalRecord) =>
+  record.status === "pending" &&
+  record.tool === RELAYED_QUESTION_TOOL &&
+  record.mirrorOf === null;
+
 /** A stored task id as pi-durable types it. */
 const piTaskOf = (id: number) => piTaskId(TaskId.make(id));
 
@@ -1069,8 +1103,9 @@ export const cancelRecord = (
  * For the records just cancelled in `conversationId`, a subagent's questions to its parent: every
  * mirror of them in the parent is cancelled too, and the parent's registry marks each question
  * `cancelled`, inside the caller's transaction (ADR 0027, ADR 0029). Nothing for a conversation
- * that is not a subagent: only `ask_parent` records are routed to a parent or escalated, so the
- * child link is opened only when one was cancelled. Writes documents only.
+ * that is not a subagent: only a subagent's questions (`ask_parent`, or a final answer the relay
+ * turned into one) are routed to a parent or escalated, so the child link is opened only when one
+ * was cancelled. Writes documents only.
  */
 const cancelLinkedQuestions = async (
   tx: Tx,
@@ -1150,8 +1185,10 @@ const ownedByStopped = async (
 
 /**
  * Cancels, in one transaction, every pending record a stopped run held: those whose tool task is
- * one of `stopped` (the run's tasks) or owned by one. Each records `cancelled` with `decidedBy`
- * system `run-stopped`, so the row stops naming a request nobody can answer. Returns the ids.
+ * one of `stopped` (the run's tasks) or owned by one, and any question the conversation's final
+ * answer became (`relayedQuestion`), which the stop ends whether or not a run was stopped. Each
+ * records `cancelled` with `decidedBy` system `run-stopped`, so the row stops naming a request
+ * nobody can answer. Returns the ids.
  */
 export const cancelStoppedApprovals = (
   session: Pick<Session, "commit">,
@@ -1175,8 +1212,9 @@ export const cancelStoppedApprovals = (
           )
         );
 
+        // A question the child's final answer became ends with the stop too: the child stopped.
         const cancelled = held.filter(
-          (_record, index) => owned[index] === true
+          (record, index) => owned[index] === true || relayedQuestion(record)
         );
 
         for (const record of cancelled) {
@@ -1226,7 +1264,8 @@ const abandonedTask = async (tx: Tx, taskId: number): Promise<boolean> => {
 /**
  * Cancels, in one transaction, every record of one conversation that a run held and whose tool
  * task is abandoned (`abandonedTask`), with `decidedBy` system `why`: `boot` for the boot repair,
- * `run-stopped` for a stop that cancels after its abort (`subagent_stop`). Returns the ids.
+ * `run-stopped` for a stop that cancels after its abort (`subagent_stop`), which also cancels any
+ * question the conversation's final answer became (`relayedQuestion`). Returns the ids.
  */
 export const cancelAbandonedApprovals = (
   session: Pick<Session, "commit">,
@@ -1245,8 +1284,11 @@ export const cancelAbandonedApprovals = (
           held.map(async (record) => await abandonedTask(tx, record.toolTaskId))
         );
 
+        // A stop (not the boot repair) also ends a question the child's final answer became.
         const cancelled = held.filter(
-          (_record, index) => abandoned[index] === true
+          (record, index) =>
+            abandoned[index] === true ||
+            (why === "run-stopped" && relayedQuestion(record))
         );
 
         for (const record of cancelled) {

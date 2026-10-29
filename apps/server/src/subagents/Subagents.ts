@@ -149,6 +149,8 @@ const build = (
     briefFaults,
     roles,
     maxLivePerBrain: tuning.maxLivePerBrain,
+    questionTtlMillis: tuning.questionTtlMillis,
+    questionWindowMillis: tuning.questionWindowMillis,
   });
 
   const tools = subagentToolSet(faults, tasks, roles, tuning);

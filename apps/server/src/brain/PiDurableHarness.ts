@@ -67,7 +67,11 @@ import {
 } from "effect";
 
 import { BriefFaults } from "../subagents/BriefFaults.ts";
-import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  SubagentsDoc,
+} from "../subagents/SubagentDocs.ts";
 import { answerBrief, steerReporter } from "../subagents/Subagents.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
@@ -79,6 +83,7 @@ import {
   Permissions,
   cancelStoppedApprovals,
   refusalText,
+  relayedQuestion,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
@@ -127,6 +132,7 @@ const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
   Permissions,
   SubagentsDoc,
   ChildDoc,
+  EscalationsDoc,
 ];
 
 const encoder = new TextEncoder();
@@ -400,6 +406,7 @@ const layerNoDeps = Layer.effect(
             // opened before that shows it only once the client resubscribes (4C, 6).
             await tx.doc(Approvals, record.id);
             await tx.doc(SubagentsDoc, record.id);
+            await tx.doc(EscalationsDoc, record.id);
             // The mode gated tools read at call time (ADR 0031).
             await writeMode(tx, record.id, input.runtimeMode);
 
@@ -536,7 +543,9 @@ const layerNoDeps = Layer.effect(
      * After a stop: waits (bounded, all at once) for the stopped run's tasks to end, so RunTerminal
      * comes first, then cancels the records they held (ADR 0029). A failure here leaves the run
      * stopped and the records pending, and is logged rather than failing the stop; the boot repair
-     * (`cancelAbandonedApprovalsAtBoot`) cancels them at the next start.
+     * (`cancelAbandonedApprovalsAtBoot`) cancels them at the next start. A stop with no run still
+     * cancels a question the thread's final answer became (`relayedQuestion`, ADR 0027): the stopped
+     * child no longer waits for its answer.
      */
     const cancelHeld = Effect.fn("PiDurableHarness.cancelHeld")(function* (
       session: BrainSession,
@@ -545,7 +554,20 @@ const layerNoDeps = Layer.effect(
       stopped: ReadonlyArray<PiTaskId>
     ) {
       if (stopped.length === 0) {
-        return yield* Effect.void;
+        const approvals = yield* call(
+          Option.some(threadId),
+          "read-approvals",
+          async (context) =>
+            await session.harness.snapshot(Approvals, conversationId, context)
+        ).pipe(Effect.option);
+
+        if (
+          !Option.exists(approvals, (found) =>
+            Object.values(found?.items ?? {}).some(relayedQuestion)
+          )
+        ) {
+          return yield* Effect.void;
+        }
       }
 
       yield* Effect.forEach(

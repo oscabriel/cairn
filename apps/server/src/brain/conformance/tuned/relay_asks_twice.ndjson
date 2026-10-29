@@ -1,0 +1,27 @@
+{"type":"transcript_start","scenario":"relay_asks_twice","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in one folder."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","text":"Which folder should I count?\n1. src\n2. lib"}
+{"type":"model","label":"p3","thread":"parent","toolCalls":[{"id":"call_p3","name":"subagent_reply","arguments":{"subagent":"$child1","answer":"src"}}]}
+{"type":"model","label":"p4","thread":"parent","text":"Answered: src."}
+{"type":"model","label":"c2","thread":"child1","hold":true,"text":"Should I count hidden files?\n1. yes\n2. no"}
+{"type":"model","label":"p5","thread":"parent","hold":true,"toolCalls":[{"id":"call_p5","name":"subagent_reply","arguments":{"subagent":"$child1","answer":"no"}}]}
+{"type":"model","label":"p6","thread":"parent","text":"Answered: no."}
+{"type":"model","label":"c3","thread":"child1","text":"src has 12 files."}
+{"type":"model","label":"p7","thread":"parent","text":"src has 12 files."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"settle","ms":2500}
+{"type":"release","label":"c2"}
+{"type":"expect_view","path":["subagents",0,"questions"],"equals":["answered","pending"]}
+{"type":"settle","ms":400}
+{"type":"release","label":"p5"}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":1,"delivered":1,"questions":["answered","answered"],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"user-input"},"count":0}
+{"type":"expect_view","thread":"child1","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"thread","reason":null},{"status":"accepted","decidedBy":"thread","reason":null}]}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"src has 12 files.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

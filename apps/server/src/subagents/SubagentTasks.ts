@@ -54,7 +54,13 @@
 //   reporter whose run or input a mark already names settles nothing.
 //   `nudge` sends a typed child that ended without a result its one nudge (`NUDGE_TEXT`); the
 //   commit that decides it writes a `nudge` run mark listing every input the nudged run ended, so
-//   their reporters settle nothing and the nudge's run settles them all. `report` writes the
+//   their reporters settle nothing and the nudge's run settles them all.
+//   The relay (ADR 0027): an untyped child's run that completed with a plain answer whose last line
+//   asks for a decision (`needsDecision`), with no `report` and not a user's own steer, settles
+//   nothing yet. Its commit writes a question record (`source: "answer"`, route parent) in the
+//   child's ledger and the same kind of run mark, and `ask` routes it (approvals/QuestionRoute.ts):
+//   answered, `answer` gives the child the answer as the run's next input, whose run settles them
+//   all; declined, expired or cancelled, the run's own answer settles as its result after all. `report` writes the
 //   settlement's note and decides the wake by the parent's state; `wake` submits the wake and marks
 //   the settlement delivered. Nudge, note and wake request ids derive from the child and the
 //   settlement's `seq`, so a rerun after `kill -9` lands each once.
@@ -105,11 +111,22 @@ import {
   InboxDoc,
   LiveDoc,
 } from "@earendil-works/pi-durable";
-import { DateTime, Option, Predicate, Result, Schema } from "effect";
+import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
 
+import { needsDecision } from "../approvals/NeedsDecision.ts";
+import {
+  endUnanswered,
+  placedMemoOf,
+  questionRecord,
+  relayedAsk,
+  routeQuestion,
+} from "../approvals/QuestionRoute.ts";
+import type { RouteIo } from "../approvals/QuestionRoute.ts";
 import {
   Approvals,
+  expirePending,
   Permissions,
+  RELAYED_QUESTION_TOOL,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
@@ -127,6 +144,7 @@ import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
 import {
   BRIEF_ANSWER_ENTRY,
   NO_RESULT_ERROR,
+  renderAnswer,
   renderBrief,
   renderBriefAnswer,
   renderQuestion,
@@ -165,6 +183,7 @@ import {
 import type { SettlementState } from "./Delivery.ts";
 import {
   ChildDoc,
+  EscalationsDoc,
   isJsonRecord,
   isLinked,
   jsonRecordOf,
@@ -177,7 +196,7 @@ import type {
   SubagentItemState,
   SubagentsState,
 } from "./SubagentDocs.ts";
-import type { runWait } from "./Waits.ts";
+import { awaitDoc, runWait } from "./Waits.ts";
 
 /** The anchor task's name. */
 export const ANCHOR_TASK = "cairn.subagent-anchor";
@@ -633,7 +652,10 @@ const runContext = async (
     ...Object.keys(item.inputs),
     ...item.runs.flatMap((mark) =>
       mark.phase === "nudge"
-        ? [SubagentRequestIds.nudge(item.threadId, mark.seq)]
+        ? [
+            SubagentRequestIds.nudge(item.threadId, mark.seq),
+            SubagentRequestIds.answer(item.threadId, mark.seq),
+          ]
         : []
     ),
   ]);
@@ -780,8 +802,10 @@ const peerWait = async (
         };
   }
 
+  // A reporter in `answer` waits on the answer it gave the child after a question, under a mark
+  // of the same kind as a nudge's.
   const nudge =
-    phase === "nudge" && Predicate.isNumber(seq)
+    (phase === "nudge" || phase === "answer") && Predicate.isNumber(seq)
       ? nudgeMarkOf(item, seq, requestId)
       : undefined;
 
@@ -789,7 +813,11 @@ const peerWait = async (
     return undefined;
   }
 
-  const waitsOn = SubagentRequestIds.nudge(reporter.childThreadId, nudge.seq);
+  const waitsOn =
+    phase === "answer"
+      ? SubagentRequestIds.answer(reporter.childThreadId, nudge.seq)
+      : SubagentRequestIds.nudge(reporter.childThreadId, nudge.seq);
+
   const submission = await tx.submissionByRequest(child, waitsOn);
 
   return submission === undefined
@@ -1000,6 +1028,18 @@ interface WakeState {
 type ReporterState =
   | { phase: "deliver" }
   | { phase: "nudge"; seq: number }
+  | {
+      phase: "ask";
+      /** The run mark's `seq`, which the question's record and answer ids derive from. */
+      seq: number;
+      approvalId: string;
+      question: string;
+      /** The run's own result, settled after all when the question ends unanswered. */
+      settlement: SettlementState;
+      answerEntry: number | null;
+      quiet: boolean;
+    }
+  | { phase: "answer"; seq: number; text: string }
   | { phase: "report"; settlement: SettlementState; quiet: boolean }
   | { phase: "wake"; settlement: SettlementState; wakes: Array<WakeState> };
 
@@ -1486,6 +1526,10 @@ export interface TaskDependencies {
   readonly roles: RoleAccess;
   /** How many children the whole brain may hold live (`MAX_LIVE_CHILDREN_PER_BRAIN`). */
   readonly maxLivePerBrain: number;
+  /** How long a question a child's answer became waits before it expires. */
+  readonly questionTtlMillis: number;
+  /** How long its parent's model may hold that question (ADR 0027). */
+  readonly questionWindowMillis: number;
 }
 
 /** A stored brief task's input, whatever version stored it. */
@@ -1559,9 +1603,36 @@ const answerTaskExists = async (
   return false;
 };
 
+/** The answer entry of a settled input, when a run answered it. */
+const answerEntryOf = (settled: SettledSubmissionRecord) =>
+  settled.type === "input" && settled.status === "done" ? settled.answer : null;
+
+/** A route's view of a reporter task: its commits, its clock and its memo. */
+const taskRouteIo = (
+  runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
+  context: Parameters<typeof runWait>[1]
+): RouteIo => ({
+  observer: runtime,
+  now: () => runtime.now(),
+  placedAt: async (approvalId, candidate) =>
+    await runtime.memo(placedMemoOf(approvalId), candidate, context),
+  conversation: async (id) => await runtime.conversation(id, context),
+  commitDocs: async (change) => {
+    await runtime.commit(async (tx) => {
+      await change(tx);
+    }, context);
+  },
+});
+
 /** The task definitions, closed over the extension's faults and the child's agent change. */
 export const subagentTaskSet = (dependencies: TaskDependencies) => {
-  const { faults, settleDelayMillis, briefFaults } = dependencies;
+  const {
+    faults,
+    settleDelayMillis,
+    briefFaults,
+    questionTtlMillis,
+    questionWindowMillis,
+  } = dependencies;
 
   /**
    * While a child works, its pending records set its registry status: `waiting` while any is
@@ -1664,6 +1735,140 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   };
 
   /**
+   * Resolves once the question `approvalId` in the child's ledger left `pending`, committing
+   * `expired` (decided by expiry) when its `expiresAt` comes first.
+   */
+  const settledOrExpired = async (
+    runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
+    child: ConversationId,
+    approvalId: string,
+    context: Parameters<typeof runWait>[1]
+  ): Promise<void> => {
+    const approvals = await runtime.snapshot(Approvals, child, context);
+    const record = approvals?.items[approvalId];
+
+    if (record === undefined || record.status !== "pending") {
+      return;
+    }
+
+    const remaining = Math.max(0, record.expiresAt - runtime.now());
+
+    const found = await runWait(
+      awaitDoc(runtime, Approvals, child, (value) => {
+        const current = value?.items[approvalId];
+
+        return current === undefined || current.status !== "pending"
+          ? Option.some(true)
+          : Option.none();
+      }).pipe(Effect.timeoutOption(remaining), Effect.map(Option.flatten)),
+      context
+    );
+
+    if (Option.isNone(found)) {
+      await runtime.commit(async (tx) => {
+        const ledger = await tx.doc(Approvals, child);
+        const expiring = ledger.items[approvalId];
+
+        if (expiring !== undefined) {
+          expirePending(expiring, runtime.now());
+        }
+      }, context);
+    }
+  };
+
+  /** What the relay reads of the run it may turn into a question. */
+  interface RelayedRun {
+    readonly input: ReporterInput;
+    readonly item: SubagentItemState;
+    /** The run's key in the registry's run marks. */
+    readonly key: string;
+    readonly run: RunInputs;
+    readonly answer: EntryRecord | undefined;
+    readonly answerEntry: number | null;
+    readonly settlement: SettlementState;
+    readonly reporterTask: number;
+    readonly now: number;
+    readonly outcome: SettlementOutcome;
+    /** The child called `report` in the run. */
+    readonly reported: boolean;
+    /** The brief asked for a typed result. */
+    readonly typed: boolean;
+  }
+
+  /**
+   * The relay (ADR 0027), inside the settling commit: a run whose final answer asks for a decision
+   * (`needsDecision`) writes a question record (`source: "answer"`, route parent) in the child's
+   * ledger and a run mark listing the run's inputs, and the reporter goes on to `ask`. None for an
+   * answer that asks nothing, which settles as usual.
+   */
+  const relayQuestion = async (
+    tx: Tx,
+    relayed: RelayedRun
+  ): Promise<Option.Option<NextTaskState<ReporterState, null>>> => {
+    const { input, item } = relayed;
+
+    const asked =
+      relayed.answer === undefined ? "" : entryText(relayed.answer.model);
+
+    // Only a completed plain answer: no report, no typed result due, not a user's own steer.
+    if (
+      relayed.outcome !== "completed" ||
+      relayed.reported ||
+      relayed.typed ||
+      relayed.run.quiet ||
+      !needsDecision(asked)
+    ) {
+      return Option.none();
+    }
+
+    const seq = item.runs.length + 1;
+
+    const approvalId = SubagentRequestIds.answerQuestion(
+      input.childThreadId,
+      seq
+    );
+
+    const { question, options } = relayedAsk(asked);
+    const { items } = await tx.doc(Approvals, conversationOf(input.child));
+
+    items[approvalId] ??= questionRecord(
+      {
+        approvalId,
+        toolTaskId: relayed.reporterTask,
+        tool: RELAYED_QUESTION_TOOL,
+        source: "answer",
+        askedAt: relayed.now,
+        question,
+        options,
+      },
+      questionTtlMillis
+    );
+
+    item.questions[approvalId] = { state: "pending", escalatedAt: null };
+    item.runs.push({
+      run: relayed.key,
+      phase: "nudge",
+      seq,
+      inputs: relayed.run.inputs,
+      quiet: relayed.run.quiet,
+    });
+    setStatus(item, "waiting");
+
+    return Option.some({
+      status: "running",
+      checkpoint: {
+        phase: "ask",
+        seq,
+        approvalId,
+        question,
+        settlement: relayed.settlement,
+        answerEntry: relayed.answerEntry,
+        quiet: relayed.run.quiet,
+      },
+    });
+  };
+
+  /**
    * Settles the run that ended the submission a reporter waited on (`current`: its input, or the
    * nudge it sent), in one commit: one settlement per run, answered or not. The run is keyed by its
    * identity (`runOf`), and a run mark already naming that run or `current` (a peer settled the
@@ -1686,15 +1891,13 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     settled: SettledSubmissionRecord,
     accepted: Option.Option<ResultState>,
     now: number,
-    nudgeSeq: Option.Option<number>
+    nudgeSeq: Option.Option<number>,
+    reporterTask: number
   ): Promise<NextTaskState<ReporterState, null>> => {
     const child = conversationOf(input.child);
 
     // Table reads first.
-    const answerEntry =
-      settled.type === "input" && settled.status === "done"
-        ? settled.answer
-        : null;
+    const answerEntry = answerEntryOf(settled);
 
     const answer =
       answerEntry === null ? undefined : await tx.entry(answerEntry);
@@ -1839,6 +2042,28 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       usageLimit: end.usageLimit,
     };
 
+    // The relay (ADR 0027): an untyped child's completed plain answer that asks for a decision
+    // becomes a question to its parent instead of a result. A user's own steer is answered to the
+    // user, who reads it in the child's thread.
+    const asked = await relayQuestion(tx, {
+      input,
+      item,
+      key: mine.key,
+      run,
+      answer,
+      answerEntry,
+      settlement,
+      reporterTask,
+      now,
+      outcome: end.outcome,
+      reported: Option.isSome(report),
+      typed: Option.isSome(missing) || link.resultSchema !== null,
+    });
+
+    if (Option.isSome(asked)) {
+      return asked.value;
+    }
+
     item.settlements.push({
       seq,
       outcome: end.outcome,
@@ -1896,7 +2121,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           settled,
           result,
           runtime.now(),
-          nudgeSeq
+          nudgeSeq,
+          Number(runtime.taskId)
         ),
       context
     );
@@ -1994,6 +2220,145 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           runtime,
           input,
           nudge,
+          submission,
+          context,
+          Option.some(seq)
+        );
+      },
+      // A question the child's final answer became: routed to the parent (ADR 0027), then the
+      // answer goes to the child, or the run's own answer settles when none came.
+      ask: async (task, runtime, context) => {
+        const { input } = task;
+
+        const { seq, approvalId, question, settlement, answerEntry, quiet } =
+          task.state.checkpoint;
+
+        const parent = runtime.conversationId;
+
+        const child = conversationOf(input.child);
+        const registry = await runtime.snapshot(SubagentsDoc, parent, context);
+
+        // Settled by an answer, a decline or a cancellation, or expired at its expiry, as
+        // `ask_parent`'s ledger and the brief task expire theirs.
+        const settled = settledOrExpired(runtime, child, approvalId, context);
+
+        await routeQuestion(
+          taskRouteIo(runtime, context),
+          {
+            parent,
+            child,
+            childThreadId: input.childThreadId,
+            approvalId,
+            description: registry?.items[input.key]?.description ?? "",
+            question,
+            windowMillis: questionWindowMillis,
+            settled,
+            offerHalted: faults.wakeStoppedParent,
+          },
+          context
+        );
+
+        await settled;
+
+        const approvals = await runtime.snapshot(Approvals, child, context);
+        const record = approvals?.items[approvalId];
+
+        if (record?.status === "accepted") {
+          const text = renderAnswer(
+            record.decidedBy?.kind === "thread" ? "parent" : "user",
+            record.answer?.answers?.[0]
+          );
+
+          await runtime.commit(
+            () => ({
+              status: "running",
+              checkpoint: { phase: "answer", seq, text },
+            }),
+            context
+          );
+
+          return;
+        }
+
+        // Unanswered: the run's own answer is its result after all, once.
+        await runtime.commit(
+          async (tx): Promise<NextTaskState<ReporterState, null>> => {
+            // Table reads first.
+            const live = await tx.doc(LiveDoc, child);
+            const current = await tx.doc(SubagentsDoc, parent);
+            const item = current.items[input.key];
+
+            const unadmitted =
+              item !== undefined &&
+              (await anyUnadmitted(tx, child, item, input.requestId));
+
+            await endUnanswered(tx, {
+              parentConversationId: parent,
+              childConversationId: child,
+              approvalId,
+              now: runtime.now(),
+            });
+
+            const mark = item?.runs.find(
+              (found) => found.phase === "nudge" && found.seq === seq
+            );
+
+            if (item === undefined || mark === undefined) {
+              return completed();
+            }
+
+            const next = item.settlements.length + 1;
+            const settling = { ...settlement, seq: next };
+
+            item.settlements.push({
+              seq: next,
+              outcome: settling.outcome,
+              answerEntry,
+              reportedAt: runtime.now(),
+              inputs: [...markInputs(item, mark)],
+            });
+            item.runs.push({ run: mark.run, phase: "settled", seq: next });
+            settleUnlessWorking(item, live.run !== undefined, unadmitted);
+
+            return {
+              status: "running",
+              checkpoint: { phase: "report", settlement: settling, quiet },
+            };
+          },
+          context
+        );
+      },
+      // The answer to the child's question, as the run's next input, settled as a nudge's is.
+      answer: async (task, runtime, context) => {
+        const { input } = task;
+        const { seq, text } = task.state.checkpoint;
+        const requestId = SubagentRequestIds.answer(input.childThreadId, seq);
+
+        const child = await runtime.conversation(
+          conversationOf(input.child),
+          context
+        );
+
+        if (child === undefined) {
+          await runtime.commit(() => completed(), context);
+
+          return;
+        }
+
+        const submission = await child.submit(
+          {
+            type: "input",
+            requestId,
+            content: text,
+            whenBusy: "followUp",
+          },
+          context
+        );
+
+        await deliverAndSettle(
+          runtime,
+          input,
+          requestId,
           submission,
           context,
           Option.some(seq)
@@ -2259,6 +2624,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     meta.projectId = parentMeta.projectId;
 
     await tx.doc(Approvals, child.id);
+    // Created now, so the child's stream can watch the index of its own children's escalations.
+    await tx.doc(EscalationsDoc, child.id);
     await writeMode(tx, child.id, mode);
 
     const link = await tx.doc(ChildDoc, child.id);

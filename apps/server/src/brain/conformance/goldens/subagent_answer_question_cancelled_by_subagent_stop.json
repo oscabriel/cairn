@@ -1,0 +1,397 @@
+{
+  "events": [
+    {
+      "event": "ThreadEnsured"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "delegate it"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Waiting for Go."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "working"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "waiting"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Subagent \"Count the files\" asks: Which folder should I count?\n1. src\n2. lib\nAnswer with subagent_reply, or escalate it to the user."
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "I asked the user."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "stop the child"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "cancelled"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "settled"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Stopped it."
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Subagent \"Count the files\" reported; its result is in the note above."
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Noted the answer it had."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "thread": "child1",
+      "event": "ThreadEnsured",
+      "parent": "parent"
+    },
+    {
+      "thread": "child1",
+      "event": "RunStarted"
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Count the files\n\nCount the files in one folder."
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Which folder should I count?\n1. src\n2. lib"
+    },
+    {
+      "thread": "child1",
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "thread": "child1",
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "thread": "child1",
+      "event": "RuntimeRequestUpdated",
+      "status": "cancelled"
+    }
+  ],
+  "view": {
+    "subagents": [
+      {
+        "status": "settled",
+        "settlements": 1,
+        "delivered": 1,
+        "questions": ["cancelled"],
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
+      }
+    ],
+    "escalations": [
+      {
+        "status": "resolved",
+        "why": "The parent escalated: the user knows the layout"
+      }
+    ],
+    "transcript": [
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "delegate it",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["subagent_spawn"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "The brief is waiting for the user's Go. You will be told when it is answered.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_spawn",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Waiting for Go.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.brief-answer",
+        "role": "user",
+        "text": "The user approved the brief \"Count the files\"; subagent thread $child1 started.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "Subagent \"Count the files\" asks: Which folder should I count?\n1. src\n2. lib\nAnswer with subagent_reply, or escalate it to the user.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["subagent_reply"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "escalated",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_reply",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "I asked the user.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "stop the child",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["subagent_stop"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "Stopped subagent $child1. Uncommitted paths: none.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_stop",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Stopped it.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.subagent-result",
+        "role": "user",
+        "text": "Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\nWhich folder should I count?\n1. src\n2. lib\n</subagent_result>\nDivergence: not reported",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "Subagent \"Count the files\" reported; its result is in the note above.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Noted the answer it had.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      }
+    ],
+    "transcriptLength": 16,
+    "queue": [],
+    "queueLength": 0,
+    "running": false,
+    "approvals": [
+      {
+        "status": "accepted",
+        "tool": "subagent_spawn"
+      },
+      {
+        "status": "cancelled",
+        "tool": "subagent_answer"
+      }
+    ],
+    "pendingApprovals": 0,
+    "decisions": [
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      },
+      {
+        "status": "cancelled",
+        "decidedBy": "system",
+        "reason": null
+      }
+    ],
+    "model": {
+      "provider": "faux",
+      "modelId": "scripted"
+    }
+  },
+  "children": {
+    "child1": {
+      "transcript": [
+        {
+          "kind": "pi.user",
+          "role": "user",
+          "text": "Count the files\n\nCount the files in one folder.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        },
+        {
+          "kind": "pi.assistant",
+          "role": "assistant",
+          "text": "Which folder should I count?\n1. src\n2. lib",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        }
+      ],
+      "transcriptLength": 2,
+      "queue": [],
+      "queueLength": 0,
+      "running": false,
+      "approvals": [
+        {
+          "status": "cancelled",
+          "tool": "subagent_answer"
+        }
+      ],
+      "pendingApprovals": 0,
+      "decisions": [
+        {
+          "status": "cancelled",
+          "decidedBy": "system",
+          "reason": null
+        }
+      ],
+      "model": {
+        "provider": "faux",
+        "modelId": "scripted"
+      }
+    }
+  }
+}

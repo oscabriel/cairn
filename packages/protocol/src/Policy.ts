@@ -396,10 +396,21 @@ export const LaunchEdits = Schema.Struct({
 
 export type LaunchEdits = typeof LaunchEdits.Type;
 
-/** A question record's payload (`ask_user`, `ask_parent`). */
+/**
+ * Where a question came from (ADR 0027): a tool call (`ask_user`, `ask_parent`), or a subagent's
+ * final plain answer whose last line asked for a decision, which the relay turned into a question
+ * to its parent instead of a result.
+ */
+export const QuestionSource = Schema.Literals(["tool", "answer"]);
+
+export type QuestionSource = typeof QuestionSource.Type;
+
+/** A question record's payload (`ask_user`, `ask_parent`, a relayed answer). */
 export const QuestionsPayload = Schema.Struct({
   type: Schema.Literal("questions"),
   questions: Schema.NonEmptyArray(Question).check(Schema.isMaxLength(9)),
+  /** Absent on records written before it existed, which all came from a tool. */
+  source: Schema.optionalKey(QuestionSource),
 });
 
 export type QuestionsPayload = typeof QuestionsPayload.Type;

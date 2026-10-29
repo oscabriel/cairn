@@ -5,16 +5,23 @@
 
 import path from "node:path";
 
+import { ThreadId } from "@cairn/protocol/Ids";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import { Duration, Effect, Exit, FileSystem, Layer, Option } from "effect";
+import { Duration, Effect, Exit, FileSystem, Layer, Option, Ref } from "effect";
+import { SqlClient } from "effect/sql";
 
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { Artifacts0010 } from "../db/migrations/0010Artifacts.ts";
 import { Portals0011 } from "../db/migrations/0011Portals.ts";
 import { ArtifactPublisher } from "./ArtifactPublisher.ts";
-import { makeFakePorch, PorchClient, PorchSettings } from "./PorchClient.ts";
+import {
+  makeFakePorch,
+  PorchClient,
+  PorchError,
+  PorchSettings,
+} from "./PorchClient.ts";
 import {
   clientScenarios,
   publisherScenarios,
@@ -23,6 +30,26 @@ import {
 import type { PorchStage } from "./PorchScenarios.ts";
 
 const DOMAIN = "example.test";
+
+const THREAD = ThreadId.make("0199f0c2-6a4e-7d4c-8a6b-00000000c003");
+
+const reachDatabase = Database.layerTest({
+  ...migrations,
+  "0010_Artifacts": Artifacts0010,
+  "0011_Portals": Portals0011,
+});
+
+/** The hash column of every artifacts row named `name`. */
+const hashesOf = (name: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    const rows = yield* sql<{
+      readonly hash: string | null;
+    }>`SELECT hash FROM artifacts WHERE name = ${name}`;
+
+    return rows.map((row) => row.hash);
+  });
 
 const BROKEN = "unrecognized directive: cairn_judge_broken";
 
@@ -49,13 +76,7 @@ const fakeStage = Effect.gen(function* () {
 
   const layer = ArtifactPublisher.layer.pipe(
     Layer.provideMerge(porch),
-    Layer.provideMerge(
-      Database.layerTest({
-        ...migrations,
-        "0010_Artifacts": Artifacts0010,
-        "0011_Portals": Portals0011,
-      })
-    ),
+    Layer.provideMerge(reachDatabase),
     Layer.provideMerge(NodeServices.layer)
   );
 
@@ -199,7 +220,7 @@ describe("PorchClient real layer: receipts and refusals", () => {
     ).pipe(Effect.provide(NodeServices.layer))
   );
 
-  it.live("an unknown code is other, and keeps porch's code", () =>
+  it.live("busy is porch's lock, and retryable", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { bin } = yield* stubPorch(
@@ -217,8 +238,33 @@ describe("PorchClient real layer: receipts and refusals", () => {
           }).pipe(Effect.provide(realLayer(bin)))
         );
 
+        assert.strictEqual(error.reason, "busy");
+        assert.isTrue(error.retryable);
+      })
+    ).pipe(Effect.provide(NodeServices.layer))
+  );
+
+  it.live("an unknown code is other, and keeps porch's code", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { bin } = yield* stubPorch(
+          JSON.stringify({
+            error: { code: "wobbly", message: "a code from a newer porch" },
+          }),
+          1
+        );
+
+        const error = yield* Effect.flip(
+          Effect.gen(function* () {
+            const porch = yield* PorchClient;
+
+            return yield* porch.remove("main--cairn");
+          }).pipe(Effect.provide(realLayer(bin)))
+        );
+
         assert.strictEqual(error.reason, "other");
-        assert.strictEqual(Option.getOrNull(error.porchCode), "busy");
+        assert.strictEqual(Option.getOrNull(error.porchCode), "wobbly");
+        assert.isFalse(error.retryable);
       })
     ).pipe(Effect.provide(NodeServices.layer))
   );
@@ -351,6 +397,82 @@ describe("PorchClient real layer: receipts and refusals", () => {
     ).pipe(Effect.provide(NodeServices.layer))
   );
 
+  it.live("the child reads its config where machine does", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+
+        const root = yield* fs.makeTempDirectoryScoped({
+          prefix: "cairn-porch-env-",
+        });
+
+        const bin = path.join(root, "porch");
+        yield* fs.writeFileString(
+          bin,
+          `#!/bin/sh\nprintf '%s' "$XDG_CONFIG_HOME" > "${root}/xdg"\necho '[]'\n`
+        );
+        yield* fs.chmod(bin, 0o755);
+
+        yield* Effect.gen(function* () {
+          return yield* (yield* PorchClient).list;
+        }).pipe(Effect.provide(realLayer(bin, { HOME: root })));
+
+        assert.strictEqual(
+          yield* fs.readFileString(path.join(root, "xdg")),
+          path.join(root, ".config")
+        );
+      })
+    ).pipe(Effect.provide(NodeServices.layer))
+  );
+
+  it.live("a timeout is retryable for ls, not for add or rm", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+
+        const root = yield* fs.makeTempDirectoryScoped({
+          prefix: "cairn-porch-slow-",
+        });
+
+        const bin = path.join(root, "porch");
+        yield* fs.writeFileString(bin, "#!/bin/sh\nexec sleep 5\n");
+        yield* fs.chmod(bin, 0o755);
+
+        const layer = PorchClient.layer.pipe(
+          Layer.provide(
+            Layer.succeed(PorchSettings, {
+              bin,
+              env: {},
+              timeout: Duration.millis(200),
+            })
+          )
+        );
+
+        const errors = yield* Effect.gen(function* () {
+          const porch = yield* PorchClient;
+
+          return [
+            yield* Effect.flip(porch.list),
+            yield* Effect.flip(
+              porch.add("main--cairn", "http://127.0.0.1:3101")
+            ),
+            yield* Effect.flip(porch.remove("main--cairn")),
+          ];
+        }).pipe(Effect.provide(layer));
+
+        assert.deepStrictEqual(
+          errors.map((error) => [error.reason, error.retryable]),
+          [
+            ["timeout", true],
+            ["timeout", false],
+            ["timeout", false],
+          ]
+        );
+        assert.include(errors[1]?.message ?? "", "porch ls");
+      })
+    ).pipe(Effect.provide(NodeServices.layer))
+  );
+
   it.live("bad input never reaches porch", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -365,6 +487,125 @@ describe("PorchClient real layer: receipts and refusals", () => {
 
         assert.strictEqual(error.reason, "bad-input");
         assert.isFalse(yield* fs.exists(path.join(root, "argv")));
+      })
+    ).pipe(Effect.provide(NodeServices.layer))
+  );
+});
+
+describe("ArtifactPublisher: a claim survives anything but a refusal", () => {
+  it.live(
+    "porch published but its receipt did not decode: the claim stays",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+
+          const root = yield* fs.makeTempDirectoryScoped({
+            prefix: "cairn-porch-",
+          });
+
+          const artifacts = path.join(root, "artifacts");
+          yield* fs.makeDirectory(artifacts);
+
+          const fake = yield* makeFakePorch({ domain: DOMAIN, artifacts });
+          const garbled = yield* Ref.make(true);
+
+          // porch copies the page, then Cairn cannot read what it printed.
+          const client: PorchClient["Service"] = {
+            ...fake.client,
+            publish: (source, project) =>
+              Effect.gen(function* () {
+                const receipt = yield* fake.client.publish(source, project);
+
+                if (yield* Ref.getAndSet(garbled, false)) {
+                  return yield* new PorchError({
+                    message: "porch publish answered output Cairn cannot read",
+                    operation: "publish",
+                    reason: "bad-receipt",
+                    porchCode: Option.none(),
+                    detail: "{}",
+                    retryable: false,
+                  });
+                }
+
+                return receipt;
+              }),
+          };
+
+          const layer = ArtifactPublisher.layer.pipe(
+            Layer.provideMerge(Layer.succeed(PorchClient, client)),
+            Layer.provideMerge(reachDatabase),
+            Layer.provideMerge(NodeServices.layer)
+          );
+
+          const source = path.join(root, "garbled.html");
+          yield* fs.writeFileString(source, "<p>garbled</p>\n");
+
+          yield* Effect.gen(function* () {
+            const publisher = yield* ArtifactPublisher;
+            const input = { threadId: THREAD, source, project: "judge" };
+
+            const error = yield* Effect.flip(publisher.publish(input));
+            assert.strictEqual(error.reason, "bad-receipt");
+            assert.deepStrictEqual(yield* hashesOf("garbled.html"), [null]);
+
+            const rerun = yield* publisher.publish(input);
+            assert.isFalse(rerun.changed);
+            assert.strictEqual(rerun.row.name, "garbled.html");
+            assert.deepStrictEqual((yield* hashesOf("garbled.html")).length, 1);
+          }).pipe(Effect.provide(layer));
+        })
+      ).pipe(Effect.provide(NodeServices.layer))
+  );
+
+  it.live("a real binary exiting 0 with an undecodable receipt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { bin, root } = yield* stubPorch("published, but not as JSON", 0);
+        const artifacts = path.join(root, "artifacts");
+        yield* fs.makeDirectory(path.join(root, "config", "porchlight"), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          path.join(root, "config", "porchlight", "config.json"),
+          JSON.stringify({ artifacts, domain: DOMAIN })
+        );
+
+        const source = path.join(root, "stub.html");
+        yield* fs.writeFileString(source, "<p>stub</p>\n");
+
+        const layer = ArtifactPublisher.layer.pipe(
+          Layer.provideMerge(
+            realLayer(bin, { XDG_CONFIG_HOME: path.join(root, "config") })
+          ),
+          Layer.provideMerge(reachDatabase),
+          Layer.provideMerge(NodeServices.layer)
+        );
+
+        yield* Effect.gen(function* () {
+          const publisher = yield* ArtifactPublisher;
+          const input = { threadId: THREAD, source, project: "judge" };
+
+          const error = yield* Effect.flip(publisher.publish(input));
+          assert.strictEqual(error.reason, "bad-receipt");
+          assert.deepStrictEqual(yield* hashesOf("stub.html"), [null]);
+
+          // porch is mended; the rerun records the page in place.
+          yield* fs.writeFileString(
+            path.join(root, "out"),
+            JSON.stringify({
+              changed: false,
+              hash: "abc123",
+              path: path.join(artifacts, "judge", "stub.html"),
+              url: `https://plans.${DOMAIN}/judge/stub.html`,
+            })
+          );
+
+          const rerun = yield* publisher.publish(input);
+          assert.isFalse(rerun.changed);
+          assert.deepStrictEqual(yield* hashesOf("stub.html"), ["abc123"]);
+        }).pipe(Effect.provide(layer));
       })
     ).pipe(Effect.provide(NodeServices.layer))
   );

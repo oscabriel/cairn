@@ -10,7 +10,13 @@
 //   user's file or some other tool's, and porch would overwrite it;
 // - otherwise the row is claimed first, porch publishes, and the row is filled in. A crash between
 //   the two leaves the claim, so the rerun republishes in place (`changed: false` when the bytes
-//   match); a refusal from porch on a fresh claim gives the key back.
+//   match). A fresh claim is given back only on a real refusal: porch answered with a code (it
+//   refuses before it copies) or Cairn refused the input. A timeout, a crash, an unreadable
+//   receipt or a porch that could not start may have published, so the claim stays for the rerun.
+//
+// A claim whose row still has no hash (the brain died before porch ran, or porch failed in a way
+// that keeps it) holds its key for its thread until that thread publishes again; listings filter
+// `hash IS NULL`. A revoked row still belongs to its thread, so another thread is refused `taken`.
 //
 // The publish is idempotent per thread and source, so a tool built on it can be `replay: "safe"`.
 
@@ -29,11 +35,12 @@ import {
   FileSystem,
   Layer,
   Option,
+  Predicate,
   Schema,
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { PorchClient } from "./PorchClient.ts";
+import { checkPublish, PorchClient } from "./PorchClient.ts";
 import type { PorchError } from "./PorchClient.ts";
 
 /** What to publish: a file or a folder with an `index.html`, under a project slug. */
@@ -117,6 +124,13 @@ const rowOf = (stored: StoredRow) =>
     ),
   });
 
+/**
+ * Whether a failed publish certainly changed nothing: porch answered a refusal code (it refuses
+ * before it copies, `proxy-refused` included) or Cairn refused the input before porch ran.
+ */
+const releasesClaim = (error: PorchError) =>
+  Option.isSome(error.porchCode) || error.reason === "bad-input";
+
 /** A source's kind and size: one file, or every file under a folder. */
 const measure = (fs: FileSystem.FileSystem, source: string) =>
   Effect.gen(function* () {
@@ -175,7 +189,7 @@ export class ArtifactPublisher extends Context.Service<
         const refuse = (
           reason: ArtifactPublishError["reason"],
           message: string,
-          cause?: unknown
+          cause: Option.Option<Error>
         ) =>
           new ArtifactPublishError({
             message,
@@ -183,22 +197,29 @@ export class ArtifactPublisher extends Context.Service<
             project,
             artifactName: name,
             retryable: reason === "store",
-            cause,
+            cause: Option.getOrUndefined(cause),
           });
 
         const storeFailure = (cause: Error) =>
           refuse(
             "store",
             `ArtifactPublisher could not read or write the artifacts row for ${project}/${name}: ${cause.message}. The publish is safe to retry.`,
-            cause
+            Option.some(cause)
           );
+
+        // A climbing or malformed slug is refused before it names a path or a row.
+        const badInput = checkPublish(input.source, project);
+
+        if (Option.isSome(badInput)) {
+          return yield* badInput.value;
+        }
 
         const measured = yield* measure(fs, input.source).pipe(
           Effect.mapError((cause) =>
             refuse(
               "source",
               `ArtifactPublisher could not read ${input.source}: ${cause.message}. Check the path and publish again.`,
-              cause
+              Option.some(cause)
             )
           )
         );
@@ -206,7 +227,8 @@ export class ArtifactPublisher extends Context.Service<
         if (measured.bytes > MAX_ARTIFACT_BYTES) {
           return yield* refuse(
             "too-large",
-            `${input.source} is ${String(measured.bytes)} bytes, over the ${String(MAX_ARTIFACT_BYTES)}-byte artifact limit. Publish something smaller.`
+            `${input.source} is ${String(measured.bytes)} bytes, over the ${String(MAX_ARTIFACT_BYTES)}-byte artifact limit. Publish something smaller.`,
+            Option.none()
           );
         }
 
@@ -230,7 +252,8 @@ export class ArtifactPublisher extends Context.Service<
         if (Option.isSome(held) && held.value.thread_id !== input.threadId) {
           return yield* refuse(
             "taken",
-            `Another thread already published ${project}/${name}. Publish under another name.`
+            `Another thread already published ${project}/${name}. Publish under another name.`,
+            Option.none()
           );
         }
 
@@ -243,7 +266,8 @@ export class ArtifactPublisher extends Context.Service<
         ) {
           return yield* refuse(
             "unmanaged",
-            `${project}/${name} already exists in the artifacts folder and Cairn did not publish it, so publishing would overwrite it. Publish under another name.`
+            `${project}/${name} already exists in the artifacts folder and Cairn did not publish it, so publishing would overwrite it. Publish under another name.`,
+            Option.none()
           );
         }
 
@@ -251,18 +275,21 @@ export class ArtifactPublisher extends Context.Service<
         const fresh = Option.isNone(held);
 
         if (fresh) {
-          // The UNIQUE key turns a race with another thread's claim into `taken`.
+          // The UNIQUE key turns a race with another thread's claim into `taken`; any other
+          // store failure is only a store failure.
           yield* sql`
             INSERT INTO artifacts (id, thread_id, project_slug, name, claimed_at, updated_at)
             VALUES (${id}, ${input.threadId}, ${project}, ${name}, ${now}, ${now})
           `.pipe(
             Effect.catchTag("SqlError", (cause) =>
               Effect.fail(
-                refuse(
-                  "taken",
-                  `Another thread claimed ${project}/${name} at the same moment. Publish under another name.`,
-                  cause
-                )
+                Predicate.isTagged(cause.reason, "UniqueViolation")
+                  ? refuse(
+                      "taken",
+                      `Another thread claimed ${project}/${name} at the same moment. Publish under another name.`,
+                      Option.some(cause)
+                    )
+                  : storeFailure(cause)
               )
             )
           );
@@ -270,9 +297,10 @@ export class ArtifactPublisher extends Context.Service<
 
         const receipt = yield* porch.publish(input.source, project).pipe(
           Effect.tapError((error) =>
-            // A refusal changed nothing, so a fresh claim gives the key back; a timeout or a
-            // crash may have published, so the claim stays for the rerun.
-            fresh && !error.retryable && error.reason !== "crashed"
+            // A refusal changed nothing, so a fresh claim gives the key back. Anything else (a
+            // timeout, a crash, a receipt Cairn could not read after porch exited 0) may have
+            // published, so the claim stays for the rerun.
+            fresh && releasesClaim(error)
               ? sql`DELETE FROM artifacts WHERE id = ${id} AND hash IS NULL`.pipe(
                   Effect.catchTag("SqlError", (cause) =>
                     Effect.logWarning("artifact claim not released").pipe(
@@ -316,7 +344,8 @@ export class ArtifactPublisher extends Context.Service<
         if (Option.isNone(stored)) {
           return yield* refuse(
             "store",
-            `The artifacts row for ${project}/${name} vanished while it was published. The page is live at ${receipt.url}; publish again to record it.`
+            `The artifacts row for ${project}/${name} vanished while it was published. The page is live at ${receipt.url}; publish again to record it.`,
+            Option.none()
           );
         }
 

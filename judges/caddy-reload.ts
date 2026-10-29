@@ -39,8 +39,9 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { NodeRuntime } from "@effect/platform-node";
-import { Console, Duration, Effect, Option } from "effect";
+import { Console, Duration, Effect, Option, Schema } from "effect";
 
+import { AddReceipt } from "../apps/server/src/reach/PorchClient.ts";
 import {
   adaptIn,
   checkCloseDelay,
@@ -50,6 +51,8 @@ import {
   startCaddy,
   ThrowawayCaddyError,
 } from "./lib/ThrowawayCaddy.ts";
+
+const decodeAddReceipt = Schema.decodeOption(Schema.fromJsonString(AddReceipt));
 
 const { values } = parseArgs({
   options: {
@@ -343,7 +346,11 @@ const runVariant = (delay: boolean) =>
         );
 
         reloadOk =
-          added.status === 0 && added.stdout.includes('"reloaded": true');
+          added.status === 0 &&
+          Option.exists(
+            decodeAddReceipt(added.stdout),
+            (receipt) => receipt.reloaded
+          );
       } else {
         mark += 1;
         writeFileSync(

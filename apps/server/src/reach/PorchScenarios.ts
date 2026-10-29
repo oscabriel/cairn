@@ -497,6 +497,81 @@ export const publisherScenarios: ReadonlyArray<
         );
       })
   ),
+  scenario(
+    "a crash after the claim and before porch leaves a claim its thread publishes",
+    (stage) =>
+      Effect.gen(function* () {
+        const publisher = yield* ArtifactPublisher;
+        const sql = yield* SqlClient.SqlClient;
+
+        const source = yield* writeSource(
+          stage,
+          "p5/claimed.html",
+          "<p>claimed</p>\n"
+        );
+
+        // The claim committed, then the brain died before porch ran.
+        yield* sql`
+          INSERT INTO artifacts (id, thread_id, project_slug, name, claimed_at, updated_at)
+          VALUES (${artifactIdOf(PROJECT, "claimed.html")}, ${THREAD_A}, ${PROJECT}, ${"claimed.html"}, 1, 1)
+        `;
+
+        const other = yield* refusal(
+          publisher.publish({
+            threadId: THREAD_B,
+            source,
+            project: PROJECT,
+          }),
+          "another thread's publish over a dangling claim"
+        );
+
+        yield* expect(
+          Predicate.isTagged(other, "ArtifactPublishError") &&
+            other.reason === "taken",
+          `refused ${other._tag}, expected taken`
+        );
+
+        const rerun = yield* publisher.publish({
+          threadId: THREAD_A,
+          source,
+          project: PROJECT,
+        });
+
+        yield* expect(rerun.changed, "the rerun publishes the page");
+        yield* expect(
+          (yield* readTarget(stage, `${PROJECT}/claimed.html`)) ===
+            "<p>claimed</p>\n",
+          "the page is on disk"
+        );
+      })
+  ),
+  scenario("a climbing project is refused before any path or row", (stage) =>
+    Effect.gen(function* () {
+      const publisher = yield* ArtifactPublisher;
+      const sql = yield* SqlClient.SqlClient;
+
+      const source = yield* writeSource(
+        stage,
+        "p6/climb.html",
+        "<p>climb</p>\n"
+      );
+
+      const error = yield* refusal(
+        publisher.publish({ threadId: THREAD_A, source, project: ".." }),
+        "a publish to project .."
+      );
+
+      yield* expect(
+        Predicate.isTagged(error, "PorchError") && error.reason === "bad-input",
+        `refused ${error._tag}, expected PorchError bad-input`
+      );
+
+      const rows =
+        yield* sql`SELECT id FROM artifacts WHERE name = ${"climb.html"}`;
+
+      yield* expect(rows.length === 0, "no claim was written");
+    })
+  ),
   scenario("a fresh claim porch refuses gives the key back", (stage) =>
     Effect.gen(function* () {
       const publisher = yield* ArtifactPublisher;

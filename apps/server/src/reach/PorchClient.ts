@@ -117,7 +117,7 @@ const ErrorBody = Schema.Struct({
 });
 
 const decodeJson = <S extends Schema.Top>(schema: S) =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(schema));
+  Schema.decodeEffect(Schema.fromJsonString(schema));
 
 const decodePublish = decodeJson(PublishReceipt);
 
@@ -137,15 +137,14 @@ const decodeConfigHome = Schema.decodeUnknownOption(
   Schema.String.check(Schema.isPattern(/^\//u))
 );
 
-const decodeErrorBody = Schema.decodeUnknownOption(
-  Schema.fromJsonString(ErrorBody)
-);
+const decodeErrorBody = Schema.decodeOption(Schema.fromJsonString(ErrorBody));
 
 // ── Errors ───────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Why a porch call failed. The first group are porch's own refusals, by its `error.code`; `other`
- * is a code Cairn does not know yet. The rest are Cairn's: `unavailable` (the binary did not start
+ * Why a porch call failed. The first group are porch's own refusals, by its `error.code` (`busy`:
+ * another porch command held the state lock past its wait; `no-port`: the port range is spent);
+ * `other` is a code Cairn does not know yet. The rest are Cairn's: `unavailable` (the binary did not start
  * or its config is unreadable), `timeout`, `crashed` (a non-zero exit with no JSON refusal),
  * `bad-receipt` (output that does not decode) and `bad-input` (refused before porch ran).
  */
@@ -156,6 +155,8 @@ export const PorchErrorReason = Schema.Literals([
   "invalid-name",
   "proxy-refused",
   "no-config",
+  "busy",
+  "no-port",
   "other",
   "unavailable",
   "timeout",
@@ -173,6 +174,8 @@ const PORCH_CODES: ReadonlyArray<PorchErrorReason> = [
   "invalid-name",
   "proxy-refused",
   "no-config",
+  "busy",
+  "no-port",
 ];
 
 const reasonOfCode = (code: string): PorchErrorReason =>
@@ -195,12 +198,22 @@ export class PorchError extends Schema.TaggedError<PorchError>()("PorchError", {
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
-// Failures where the same call may simply be made again; every refusal changed nothing and will
-// refuse again until something else changes.
+// Failures where the same call may simply be made again. `busy` is porch's lock, held a moment
+// by another porch command; every other refusal changed nothing and will refuse again until
+// something else changes.
 const RETRYABLE: ReadonlySet<PorchErrorReason> = new Set<PorchErrorReason>([
+  "busy",
   "timeout",
   "unavailable",
 ]);
+
+// `add` and `rm` are not idempotent: after a timeout that did complete, the same call answers
+// `exists` or `missing`. A timeout of theirs is retryable only after a `porch ls` (S32).
+const NOT_IDEMPOTENT: ReadonlySet<string> = new Set(["add", "rm"]);
+
+const retryableOf = (operation: string, reason: PorchErrorReason) =>
+  RETRYABLE.has(reason) &&
+  !(reason === "timeout" && NOT_IDEMPOTENT.has(operation));
 
 const porchRefusal = (
   operation: string,
@@ -215,7 +228,7 @@ const porchRefusal = (
     reason,
     porchCode: Option.some(code),
     detail,
-    retryable: false,
+    retryable: retryableOf(operation, reason),
   });
 };
 
@@ -224,7 +237,7 @@ const cairnFailure = (
   reason: PorchErrorReason,
   message: string,
   detail: string,
-  cause?: unknown
+  cause: Option.Option<unknown>
 ) =>
   new PorchError({
     message,
@@ -232,8 +245,8 @@ const cairnFailure = (
     reason,
     porchCode: Option.none(),
     detail,
-    retryable: RETRYABLE.has(reason),
-    cause,
+    retryable: retryableOf(operation, reason),
+    cause: Option.getOrUndefined(cause),
   });
 
 // ── Settings ─────────────────────────────────────────────────────────────────────────────────────
@@ -298,10 +311,16 @@ const badInput = (operation: string, detail: string) =>
     operation,
     "bad-input",
     `porch ${operation} was not run: ${detail}`,
-    detail
+    detail,
+    Option.none()
   );
 
-const checkPublish = (source: string, project: string) => {
+/**
+ * Why `porch publish <source> --project <project>` would be refused before porch runs: a source
+ * that is not an absolute path, or a project that is not one slug segment. `ArtifactPublisher`
+ * checks it before it reads the artifacts folder or the table.
+ */
+export const checkPublish = (source: string, project: string) => {
   if (!path.isAbsolute(source)) {
     return Option.some(
       badInput("publish", `the source ${source} is not an absolute path.`)
@@ -384,7 +403,7 @@ const fsFailure = (operation: string) => (cause: Error) =>
     "crashed",
     `fake porch ${operation} failed on the file system: ${cause.message}`,
     cause.message,
-    cause
+    Option.some(cause)
   );
 
 interface FakeState {
@@ -708,6 +727,10 @@ export class PorchClient extends Context.Service<
 
       const configFile = path.join(configHome, "porchlight", "config.json");
 
+      // The child reads its config from the same folder `machine` does, whatever the brain's own
+      // XDG_CONFIG_HOME says.
+      const env = childEnv({ ...settings.env, XDG_CONFIG_HOME: configHome });
+
       /** Runs porch once; answers its exit code and output, failing only when it could not run. */
       const run = Effect.fn("PorchClient.run")(function* (
         operation: string,
@@ -716,7 +739,7 @@ export class PorchClient extends Context.Service<
         yield* Effect.annotateCurrentSpan({ operation });
 
         const command = ChildProcess.make(settings.bin, [...args], {
-          env: childEnv(settings.env),
+          env,
           extendEnv: true,
           stdin: "ignore",
         });
@@ -744,7 +767,7 @@ export class PorchClient extends Context.Service<
               "unavailable",
               `porch ${operation} could not start ${settings.bin}: ${cause.message}. Check that porch is installed and on the brain's PATH (ops/wizards/phase-2.sh, the reach stage).`,
               cause.message,
-              cause
+              Option.some(cause)
             )
           ),
           Effect.timeoutOrElse({
@@ -754,8 +777,11 @@ export class PorchClient extends Context.Service<
                 cairnFailure(
                   operation,
                   "timeout",
-                  `porch ${operation} stopped after ${Duration.format(settings.timeout)}. porch saves its registry only after a reload succeeds; check \`porch ls\`, then retry.`,
-                  ""
+                  NOT_IDEMPOTENT.has(operation)
+                    ? `porch ${operation} stopped after ${Duration.format(settings.timeout)}. It may have finished: run \`porch ls\` to see whether it did before calling ${operation} again.`
+                    : `porch ${operation} stopped after ${Duration.format(settings.timeout)}. porch saves its registry only after a reload succeeds; check \`porch ls\`, then retry.`,
+                  "",
+                  Option.none()
                 )
               ),
           })
@@ -791,7 +817,8 @@ export class PorchClient extends Context.Service<
               operation,
               "crashed",
               `porch ${operation} exited ${String(result.exitCode)} without a refusal: ${detail}`,
-              detail
+              detail,
+              Option.none()
             );
           }
 
@@ -802,7 +829,7 @@ export class PorchClient extends Context.Service<
                 "bad-receipt",
                 `porch ${operation} answered output Cairn cannot read (${cause.message}). The porch binary may have changed; run judges/porch-contract.ts against it.`,
                 tail(result.stdout),
-                cause
+                Option.some(cause)
               )
             )
           );
@@ -818,7 +845,8 @@ export class PorchClient extends Context.Service<
             "version",
             "unavailable",
             `porch --version exited ${String(result.exitCode)}: ${detail}`,
-            detail
+            detail,
+            Option.none()
           );
         }
 
@@ -847,7 +875,7 @@ export class PorchClient extends Context.Service<
                 "unavailable",
                 `porch's machine config ${configFile} could not be read: ${cause.message}.`,
                 cause.message,
-                cause
+                Option.some(cause)
               )
             )
           );
@@ -859,7 +887,7 @@ export class PorchClient extends Context.Service<
               "bad-receipt",
               `porch's machine config ${configFile} has no domain or absolute artifacts folder (${cause.message}).`,
               "",
-              cause
+              Option.some(cause)
             )
           )
         );
@@ -917,7 +945,8 @@ export class PorchClient extends Context.Service<
                 "doctor",
                 "timeout",
                 "porch doctor did not finish within 30 seconds; its DNS or certificate probe hung. Run it by hand to see which.",
-                ""
+                "",
+                Option.none()
               )
             ),
         }),

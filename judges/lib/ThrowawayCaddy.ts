@@ -241,6 +241,12 @@ export interface ProxyHandler {
   readonly dials: ReadonlyArray<string>;
   /** Whether it sets a non-zero `stream_close_delay`. */
   readonly closeDelay: boolean;
+  /**
+   * Whether it is a `forward_auth` subrequest: Caddy adapts `forward_auth` to a `reverse_proxy`
+   * that rewrites the request to a GET and answers through `handle_response`. It carries no
+   * long-lived stream, so it needs no close delay.
+   */
+  readonly forwardAuth: boolean;
 }
 
 const isJsonArray = (value: Schema.Json): value is Schema.JsonArray =>
@@ -276,7 +282,19 @@ export const proxyHandlers = (
           }
         }
 
-        found.push({ dials, closeDelay: hasDelay(node.stream_close_delay) });
+        const { rewrite } = node;
+
+        const forwardAuth =
+          node.handle_response !== undefined &&
+          rewrite !== undefined &&
+          isJsonObject(rewrite) &&
+          rewrite.method === "GET";
+
+        found.push({
+          dials,
+          closeDelay: hasDelay(node.stream_close_delay),
+          forwardAuth,
+        });
       }
 
       pending.push(...Object.values(node));
@@ -289,21 +307,24 @@ export const proxyHandlers = (
 /** What the close-delay check found for one required upstream. */
 export interface DelayFinding {
   readonly dial: string;
-  /** How many `reverse_proxy` handlers dial it. */
+  /** How many `reverse_proxy` handlers dial it, `forward_auth` subrequests aside. */
   readonly handlers: number;
   /** How many of those have no `stream_close_delay`. */
   readonly withoutDelay: number;
 }
 
 /**
- * Checks that every `reverse_proxy` dialing each of `required` sets `stream_close_delay`. Passes
- * only when each required upstream has at least one handler and none lacks the delay.
+ * Checks that every `reverse_proxy` dialing each of `required` sets `stream_close_delay`, leaving
+ * out `forward_auth` subrequests. Passes only when each required upstream has at least one handler
+ * and none lacks the delay.
  */
 export const checkCloseDelay = (
   config: Schema.Json,
   required: ReadonlyArray<string>
 ) => {
-  const handlers = proxyHandlers(config);
+  const handlers = proxyHandlers(config).filter(
+    (handler) => !handler.forwardAuth
+  );
 
   const findings: ReadonlyArray<DelayFinding> = required.map((dial) => {
     const dialing = handlers.filter((handler) => handler.dials.includes(dial));

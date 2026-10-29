@@ -8,7 +8,8 @@
 // default selections"), so the registered tool cannot carry any one child's schema. Instead:
 //
 // - The tool is `deferred`, so a thread is offered it only when its spawn adds it to `modelTools`
-//   (`offerResultTool`); a thread the user opened never sees it.
+//   (`offerResultTool`); a thread the user opened never sees it. It is callable by the model alone
+//   (`callers`), so neither a code mode script nor another tool can reach it as a nested call.
 // - Its registered parameters accept any object, so every call reaches `execute`, which validates
 //   against the child's own schema (`cairn.child`'s `resultSchema`). That is also what lets the cap
 //   hold: pi-durable runs `beforeTool` only after its own validation, so a cap in a hook would never
@@ -72,11 +73,18 @@ export const RESULT_TOOL_NAME = "submit_result";
 /** How many attempts a child gets at a valid result: its calls, and a nudge before any call. */
 export const MAX_RESULT_ATTEMPTS = 2;
 
-/** The deepest nesting a result schema may have, counted in schema objects from its root. */
+/**
+ * The deepest nesting a result schema may have, counted in schema levels from its root (1): each
+ * subschema under `properties`, `items`, `additionalProperties`, a combinator and the like is one
+ * level deeper; keyword containers such as the `properties` map are not levels themselves.
+ */
 export const MAX_SCHEMA_DEPTH = 8;
 
 /** The largest result schema, in bytes of its JSON. */
 export const MAX_SCHEMA_BYTES = 16_384;
+
+/** The longest divergence, in characters: the protocol's `DisplayText`, which 3A decodes it as. */
+export const MAX_DIVERGENCE_LENGTH = 4096;
 
 /**
  * The one nudge a child gets when its run ends without a result: the delegating side sends it as
@@ -123,7 +131,9 @@ interface ChildSchemaState {
 
 /**
  * A read-only view of `cairn.child`, which the spawn writes (the subagents extension owns it).
- * Only `snapshot` reads go through this token, so its `initial` is never stored.
+ * Only `snapshot` reads go through this token, so its `initial` is never stored. Its version
+ * must match the writer's: pi-durable refuses a stored record newer than the token, so this view
+ * gives way to 3A's exported token when that lands.
  */
 const ChildSchemaDoc = defineDoc<ChildSchemaState>({
   kind: CHILD_DOCUMENT,
@@ -167,18 +177,68 @@ const isJsonArray = (
 const isJsonObject = (value: Schema.Json | undefined): value is JsonObject =>
   Predicate.isObject(value) && !Arr.isArray(value);
 
-/** How deep `schema` nests schema objects, its root being 1. */
-const depthOf = (schema: Schema.Json): number => {
-  if (isJsonArray(schema)) {
-    return Math.max(0, ...schema.map(depthOf));
-  }
+/** Keywords whose value is one subschema, or (`items`, `additionalItems`) a list of them. */
+const SINGLE_KEYWORDS = [
+  "items",
+  "additionalItems",
+  "additionalProperties",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+  "propertyNames",
+  "contains",
+  "not",
+  "if",
+  "then",
+  "else",
+] as const;
 
-  if (!isJsonObject(schema)) {
-    return 0;
-  }
+/** Keywords whose value is a list of subschemas. */
+const LIST_KEYWORDS = [...COMBINATORS, "prefixItems"] as const;
 
-  return 1 + Math.max(0, ...Object.values(schema).map(depthOf));
-};
+/** Keywords whose value maps names to subschemas. */
+const MAP_KEYWORDS = [
+  "properties",
+  "patternProperties",
+  "dependentSchemas",
+  "$defs",
+  "definitions",
+] as const;
+
+/** The subschemas one level below `schema`. */
+const subschemasOf = (schema: JsonObject): ReadonlyArray<JsonObject> => [
+  ...SINGLE_KEYWORDS.flatMap((keyword) => {
+    const value = schema[keyword];
+
+    if (isJsonArray(value)) {
+      return value.filter(isJsonObject);
+    }
+
+    return isJsonObject(value) ? [value] : [];
+  }),
+  ...LIST_KEYWORDS.flatMap((keyword) => {
+    const value = schema[keyword];
+
+    return isJsonArray(value) ? value.filter(isJsonObject) : [];
+  }),
+  ...MAP_KEYWORDS.flatMap((keyword) => {
+    const value = schema[keyword];
+
+    return isJsonObject(value) ? Object.values(value).filter(isJsonObject) : [];
+  }),
+];
+
+/**
+ * How many schema levels `schema` nests, its root being 1, counted no further than `cap`: the
+ * walk stops there, so a schema of any depth cannot overflow the stack.
+ */
+const depthOf = (schema: JsonObject, cap: number): number =>
+  cap <= 1
+    ? 1
+    : 1 +
+      Math.max(
+        0,
+        ...subschemasOf(schema).map((child) => depthOf(child, cap - 1))
+      );
 
 /** The JSON types a schema names: its `type`, or the one its keywords imply. */
 const typesOf = (schema: JsonObject): ReadonlyArray<string> => {
@@ -213,6 +273,7 @@ export const envelopeOf = (schema: JsonObject): JsonObject => ({
     result: schema,
     divergence: {
       type: "string",
+      maxLength: MAX_DIVERGENCE_LENGTH,
       description:
         'How the work differs from the brief, or "None" when it does not.',
     },
@@ -259,8 +320,8 @@ const validateWith = (
 
 /**
  * `schema` if Cairn can ask a model to fill it, else why not: a union at the root (strict tool
- * decoding refuses it and providers differ on it), nesting deeper than `MAX_SCHEMA_DEPTH`, JSON
- * larger than `MAX_SCHEMA_BYTES`, or a schema the validator cannot compile. Checked when a brief
+ * decoding refuses it and providers differ on it), JSON larger than `MAX_SCHEMA_BYTES`, nesting
+ * deeper than `MAX_SCHEMA_DEPTH` schema levels, or a schema the validator cannot compile. Checked when a brief
  * names the schema, so the refusal reaches the parent instead of surfacing on a provider.
  */
 export const checkResultSchema = (
@@ -277,21 +338,19 @@ export const checkResultSchema = (
     });
   }
 
-  const depth = depthOf(schema);
-
-  if (depth > MAX_SCHEMA_DEPTH) {
-    return Result.fail({
-      reason: "too-deep",
-      message: `The result schema nests ${String(depth)} levels; the limit is ${String(MAX_SCHEMA_DEPTH)}. Flatten it.`,
-    });
-  }
-
   const bytes = new TextEncoder().encode(JSON.stringify(schema)).length;
 
   if (bytes > MAX_SCHEMA_BYTES) {
     return Result.fail({
       reason: "too-large",
       message: `The result schema is ${String(bytes)} bytes; the limit is ${String(MAX_SCHEMA_BYTES)}. Shorten its descriptions or split the work.`,
+    });
+  }
+
+  if (depthOf(schema, MAX_SCHEMA_DEPTH + 1) > MAX_SCHEMA_DEPTH) {
+    return Result.fail({
+      reason: "too-deep",
+      message: `The result schema nests more than ${String(MAX_SCHEMA_DEPTH)} schema levels. Flatten it.`,
     });
   }
 
@@ -614,6 +673,7 @@ const resultSchemaOf = (value: Readonly<ChildSchemaState> | undefined) =>
 /** The verdict of one call, decided in the commit that reads the transcript. */
 type Verdict =
   | { readonly kind: "accepted"; readonly value: ResultState }
+  | { readonly kind: "already"; readonly value: ResultState }
   | {
       readonly kind: "rejected";
       readonly attempt: number;
@@ -636,6 +696,10 @@ export const RESULT_TOOL = defineTool({
   constrainedSampling: { type: "json_schema", strict: "prefer" },
   replay: "safe",
   deferred: true,
+  // Only the model may call it. Code mode's `tools.<name>` covers every tool callable by tools,
+  // and a nested call's result goes to its caller, never the transcript: it would escape the
+  // attempt count, and pi-durable drops a nested call's `control.terminate`.
+  callers: ["model"],
   structuredOutputSchema: Type.Object({
     result: Type.Unknown(),
     divergence: Type.String(),
@@ -677,6 +741,16 @@ export const RESULT_TOOL = defineTool({
     const decided = await api.commit(async (tx): Promise<Verdict> => {
       const state = await readAttemptState(tx, api.conversationId);
 
+      // A call after the accepted one (a round that also called another tool goes on): the
+      // accepted document exists, so opening it creates nothing.
+      if (state.accepted) {
+        const document = await tx.doc(ResultDoc, api.conversationId);
+
+        if (document.attempts > 0) {
+          return { kind: "already", value: { ...document } };
+        }
+      }
+
       if (!canSubmit(state)) {
         return { kind: "capped" };
       }
@@ -690,9 +764,10 @@ export const RESULT_TOOL = defineTool({
       // Opened only to accept, since opening creates the document.
       const document = await tx.doc(ResultDoc, api.conversationId);
 
-      // A rerun, or a second call of the same round: the first accepted value stands.
+      // A rerun, or a second call of the same round (whose results reach the transcript only
+      // when the round ends): the first accepted value stands.
       if (document.attempts > 0) {
-        return { kind: "accepted", value: { ...document } };
+        return { kind: "already", value: { ...document } };
       }
 
       document.result = copyJson(verdict.success.result);
@@ -705,6 +780,16 @@ export const RESULT_TOOL = defineTool({
     if (decided.kind === "accepted") {
       return {
         output: text("Result accepted. Your work on this brief is done."),
+        structuredOutput: decided.value,
+        control: { terminate: true },
+      };
+    }
+
+    if (decided.kind === "already") {
+      return {
+        output: text(
+          "A result was already accepted; this call changes nothing. Your work on this brief is done."
+        ),
         structuredOutput: decided.value,
         control: { terminate: true },
       };
@@ -760,6 +845,19 @@ export const declareSchema = (
   );
 };
 
+/** The accepted result of `conversationId`, if it has one, as the delegating tool reads it. */
+export const readResult = async (
+  read: DocumentReader,
+  conversationId: ConversationId,
+  context: ChordContext
+): Promise<Option.Option<ResultState>> => {
+  const document = await read.snapshot(ResultDoc, conversationId, context);
+
+  return document !== undefined && document.attempts > 0
+    ? Option.some({ ...document })
+    : Option.none();
+};
+
 /** The `results` extension: the tool and the hook that declares each child's schema. */
 export class ResultTool extends Context.Service<
   ResultTool,
@@ -800,16 +898,3 @@ export class ResultTool extends Context.Service<
       })
     );
 }
-
-/** The accepted result of `conversationId`, if it has one, as the delegating tool reads it. */
-export const readResult = async (
-  read: DocumentReader,
-  conversationId: ConversationId,
-  context: ChordContext
-): Promise<Option.Option<ResultState>> => {
-  const document = await read.snapshot(ResultDoc, conversationId, context);
-
-  return document !== undefined && document.attempts > 0
-    ? Option.some({ ...document })
-    : Option.none();
-};

@@ -1,8 +1,9 @@
 // J-typed: the typed-results target on real models. Each model runs N trials of the probe task
 // (`judges/fixtures/TypedResults.ts`) through a bare pi-durable Harness with Cairn's `results`
 // extension; a trial passes when its stored result decodes against the judge's own schema, holds
-// the task's facts, took at most two attempts counted from the transcript (a nudge before any
-// call counts as one), and came from the model the child was dispatched on.
+// the task's facts, took at most two attempts counted by the judge from the transcript (a nudge
+// before any call counts as one) and equal to the count the tool stored, and came from the model
+// the child was dispatched on.
 //   node judges/typed-results.ts [--provider opencode-go,bridge]
 //     [--models claude-haiku-5-5,deepseek-v4.1-flash,qwen3.8-flash,gpt-6-luna]
 //     [--bridge-model claude-haiku-5-5] [--trials 8] [--control v1,union]

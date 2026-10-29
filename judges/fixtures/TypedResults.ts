@@ -3,7 +3,8 @@
 // schema in its `cairn.child` and `submit_result` offered, the nudge sent once when a child ends
 // without a result, and every trial judged from outside the tool: the stored result decoded
 // against a schema written here (not the tool's), its counts checked against the task's facts,
-// attempts read from the transcript, and the returned model compared with the dispatched one.
+// attempts counted here from the transcript's messages and compared with the count the tool
+// stored, and the returned model compared with the dispatched one.
 //
 // Two controls run the same task and must fail: the v1 tool (an open object, the schema in the
 // prompt, no repair: 0 of 8 valid on OpenCode Go in the models note's probe), and a schema whose
@@ -126,23 +127,38 @@ const Report = Schema.Struct({
 
 const decodeReport = Schema.decodeUnknownOption(Report);
 
-/** Whether `value` is the task's result: the schema, then the facts the task gave. */
-const strictlyValid = (value: JsonValue): boolean =>
-  Option.exists(
-    decodeReport(value),
-    (report) =>
-      report.files.length === FILES.length &&
-      FILES.every(
-        (file, index) =>
-          report.files[index]?.path === file.path &&
-          report.files[index]?.lines === file.lines &&
-          report.files[index]?.role === file.role
-      ) &&
-      report.evidence.length >= 2 &&
-      report.evidence.every((line) => !line.trim().startsWith("[")) &&
-      report.confidence >= 0 &&
-      report.confidence <= 1
-  );
+/**
+ * Why `value` is not the task's result, checked against the schema and then the facts the task
+ * gave, or `""` when it is.
+ */
+const factsFailure = (value: JsonValue): string =>
+  Option.match(decodeReport(value), {
+    onNone: () => "schema",
+    onSome: (report) => {
+      if (
+        report.files.length !== FILES.length ||
+        !FILES.every(
+          (file, index) =>
+            report.files[index]?.path === file.path &&
+            report.files[index]?.lines === file.lines &&
+            report.files[index]?.role === file.role
+        )
+      ) {
+        return `files ${JSON.stringify(report.files)}`;
+      }
+
+      if (
+        report.evidence.length < 2 ||
+        report.evidence.some((line) => line.trim().startsWith("["))
+      ) {
+        return `evidence ${JSON.stringify(report.evidence)}`;
+      }
+
+      return report.confidence >= 0 && report.confidence <= 1
+        ? ""
+        : `confidence ${String(report.confidence)}`;
+    },
+  });
 
 /** How a trial's child is set up: Cairn's result tool, or the v1 control. */
 export type TrialMode = "typed" | "v1";
@@ -152,7 +168,12 @@ export interface Trial {
   readonly valid: boolean;
   readonly stored: boolean;
   readonly strict: boolean;
+  /** Why the stored result is not the task's, when it is not: `factsFailure`, or "none stored". */
+  readonly failure: string;
+  /** Attempts counted by the judge from the transcript. */
   readonly attempts: number;
+  /** The count the tool stored with the result; 0 when none was stored. */
+  readonly storedAttempts: number;
   readonly nudged: boolean;
   readonly returnedModel: string;
   readonly modelMatches: boolean;
@@ -280,6 +301,47 @@ const usageOf = (messages: ReadonlyArray<Message>) => {
   return sum;
 };
 
+const textOf = (message: Message): string => {
+  if (message.role === "assistant") {
+    return "";
+  }
+
+  return Predicate.isString(message.content)
+    ? message.content
+    : message.content
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .join("");
+};
+
+/**
+ * The attempts a child used, counted from its messages without the tool's own reading: each
+ * `submit_result` result up to and including the first that is not an error, and the nudge when
+ * the judge sent it before any such result.
+ */
+const attemptsOf = (messages: ReadonlyArray<Message>, nudged: boolean) => {
+  let calls = 0;
+  let callsBeforeNudge = 0;
+
+  for (const message of messages) {
+    if (message.role === "user" && textOf(message).trim() === NUDGE_TEXT) {
+      callsBeforeNudge = calls;
+    }
+
+    if (
+      message.role === "toolResult" &&
+      message.toolName === RESULT_TOOL_NAME
+    ) {
+      calls += 1;
+
+      if (!message.isError) {
+        break;
+      }
+    }
+  }
+
+  return calls + (nudged && callsBeforeNudge === 0 ? 1 : 0);
+};
+
 const errorOf = (messages: ReadonlyArray<Message>) => {
   const last = messages.findLast((message) => message.role === "assistant");
 
@@ -360,7 +422,9 @@ export const runTrials = (target: Target, mode: TrialMode, trials: number) =>
       await conversation.waitForIdle(context);
 
       // The delegating side's one nudge, as the subagent reporter sends it.
-      if (nudgeDue(await stateOf())) {
+      const nudged = nudgeDue(await stateOf());
+
+      if (nudged) {
         await conversation.submit(
           {
             type: "input",
@@ -372,19 +436,23 @@ export const runTrials = (target: Target, mode: TrialMode, trials: number) =>
         await conversation.waitForIdle(context);
       }
 
-      const state = await stateOf();
       const stored = await readResult(harness, conversation.id, context);
       const { messages } = await conversation.context(context);
 
       const returned = returnedModelOf(messages);
       const usage = usageOf(messages);
 
-      const strict = Option.exists(stored, (value) =>
-        strictlyValid(value.result)
-      );
+      const failure = Option.match(stored, {
+        onNone: () => "none stored",
+        onSome: (value) => factsFailure(value.result),
+      });
 
-      const attempts = Option.match(stored, {
-        onNone: () => state.used,
+      const strict = failure === "";
+
+      const attempts = attemptsOf(messages, nudged);
+
+      const storedAttempts = Option.match(stored, {
+        onNone: () => 0,
         onSome: (value) => value.attempts,
       });
 
@@ -396,11 +464,17 @@ export const runTrials = (target: Target, mode: TrialMode, trials: number) =>
       );
 
       return {
-        valid: strict && attempts <= 2 && modelMatches,
+        valid:
+          strict &&
+          attempts <= 2 &&
+          storedAttempts === attempts &&
+          modelMatches,
         stored: Option.isSome(stored),
         strict,
+        failure,
         attempts,
-        nudged: state.nudged,
+        storedAttempts,
+        nudged,
         returnedModel: Option.match(returned, {
           onNone: () => "none",
           onSome: (model) => `${model.provider}/${model.modelId}`,

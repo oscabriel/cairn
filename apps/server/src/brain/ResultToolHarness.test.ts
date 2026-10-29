@@ -1,7 +1,9 @@
 // The `results` extension under a real pi-durable Harness over pi-ai's faux provider: the
 // provider is sent the child's envelope schema, a rejected call is attempt 1 and a valid second
 // call is kept with the run ended on it, a third call is refused even when valid, a nudge before
-// any call uses the first attempt, and a thread with no schema is never offered the tool. Kept
+// any call uses the first attempt, a thread with no schema is never offered the tool, a nested call
+// (another tool relaying through `executeTool`) never reaches it, the first of two valid calls in
+// one round stands, and a call after the accepted one is told so, not refused. Kept
 // under `brain/`, where pi-durable may be imported in a test (S42).
 
 import type { JsonObject } from "@cairn/protocol/Policy";
@@ -9,7 +11,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import { copyJson } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels, Type } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -17,9 +19,12 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import type { FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
+import type { Extension } from "@earendil-works/pi-durable";
 import {
   createRegistry,
   defineDoc,
+  defineExtension,
+  defineTool,
   Harness,
   MemoryStorage,
 } from "@earendil-works/pi-durable";
@@ -103,9 +108,55 @@ const call = (args: Record<string, JsonValue>, id: string) =>
 
 const say = (text: string) => fauxAssistantMessage(text);
 
-const submitText = (messages: ReadonlyArray<Message>) =>
+const RELAY_TOOL_NAME = "relay";
+
+const NOOP_TOOL_NAME = "noop";
+
+/**
+ * Tools beside the result tool: `relay` calls `submit_result` with its arguments as a nested call,
+ * as a code mode script would, and answers with the nested result; `noop` does nothing.
+ */
+const sideTools: Extension = defineExtension({
+  name: "cairn.test.side-tools",
+  tools: [
+    defineTool({
+      name: RELAY_TOOL_NAME,
+      description: "Calls submit_result for you.",
+      parameters: Type.Unsafe<Record<string, JsonValue>>({ type: "object" }),
+      replay: "safe",
+      execute: async (args, api, invocation) => {
+        const nested = await api.executeTool(
+          RESULT_TOOL_NAME,
+          args,
+          invocation
+        );
+
+        return {
+          output: [{ type: "text", text: JSON.stringify(nested) }],
+        };
+      },
+    }),
+    defineTool({
+      name: NOOP_TOOL_NAME,
+      description: "Does nothing.",
+      parameters: Type.Object({}),
+      replay: "safe",
+      execute: async () =>
+        await Promise.resolve({
+          output: [{ type: "text", text: "ok" }],
+        }),
+    }),
+  ],
+});
+
+const relay = (args: Record<string, JsonValue>, id: string) =>
+  fauxAssistantMessage(fauxToolCall(RELAY_TOOL_NAME, args, { id }), {
+    stopReason: "toolUse",
+  });
+
+const textsOf = (messages: ReadonlyArray<Message>, toolName: string) =>
   messages.flatMap((message) =>
-    message.role === "toolResult" && message.toolName === RESULT_TOOL_NAME
+    message.role === "toolResult" && message.toolName === toolName
       ? [
           message.content
             .map((part) => (part.type === "text" ? part.text : ""))
@@ -114,16 +165,21 @@ const submitText = (messages: ReadonlyArray<Message>) =>
       : []
   );
 
+const submitText = (messages: ReadonlyArray<Message>) =>
+  textsOf(messages, RESULT_TOOL_NAME);
+
 /**
  * Runs a child whose model answers `steps` in turn: with the results extension installed, the
  * tool offered and `schema` in its `cairn.child` (none: no schema and no offer). `inputs` are sent
- * one after another, each waited until idle. Returns the transcript's messages, the stored
+ * one after another, each waited until idle; `sides` installs `relay` and `noop` too. A round's
+ * calls run at once, pi-durable's default. Returns the transcript's messages, the stored
  * result, the provider's calls and the tools each request offered.
  */
 const runChild = (
   schema: Option.Option<JsonObject>,
   steps: ReadonlyArray<AssistantMessage>,
-  inputs: ReadonlyArray<string> = ["Report on the module."]
+  inputs: ReadonlyArray<string> = ["Report on the module."],
+  sides = false
 ) =>
   Effect.gen(function* () {
     const offered: Array<ReadonlyArray<Tool>> = [];
@@ -153,6 +209,10 @@ const runChild = (
     const registry = createRegistry();
 
     registry.install(results.extension.extension);
+
+    if (sides) {
+      registry.install(sideTools);
+    }
 
     const harness = yield* Effect.acquireRelease(
       Effect.promise(
@@ -230,6 +290,7 @@ describe("the results extension under a Harness", () => {
             result: REPORT,
             divergence: {
               type: "string",
+              maxLength: 4096,
               description:
                 'How the work differs from the brief, or "None" when it does not.',
             },
@@ -326,6 +387,115 @@ describe("the results extension under a Harness", () => {
         Option.map(returnedModelOf(messages), (model) => model.modelId),
         Option.some("small")
       );
+    })
+  );
+
+  it.live("never runs for a nested call", () =>
+    Effect.gen(function* () {
+      const { stored, calls, messages } = yield* runChild(
+        Option.some(REPORT),
+        [
+          relay({ result: valid, divergence: "None" }, "c1"),
+          say("I could not submit."),
+        ],
+        ["Report on the module."],
+        true
+      );
+
+      assert.isTrue(Option.isNone(stored));
+      assert.strictEqual(calls, 2);
+      assert.lengthOf(submitText(messages), 0);
+      assert.include(textsOf(messages, RELAY_TOOL_NAME)[0], "tool_unavailable");
+    })
+  );
+
+  it.live("keeps the first committed of two valid calls in one round", () =>
+    Effect.gen(function* () {
+      const { stored, calls, messages } = yield* runChild(Option.some(REPORT), [
+        fauxAssistantMessage(
+          [
+            fauxToolCall(
+              RESULT_TOOL_NAME,
+              { result: valid, divergence: "None" },
+              { id: "c1" }
+            ),
+            fauxToolCall(
+              RESULT_TOOL_NAME,
+              { result: { ...valid, confidence: 0.2 }, divergence: "Some" },
+              { id: "c2" }
+            ),
+          ],
+          { stopReason: "toolUse" }
+        ),
+        say("never asked for"),
+      ]);
+
+      assert.strictEqual(calls, 1);
+
+      // The calls run at once, so either may commit first; the one told it was accepted is the
+      // one stored, and the other is told a result already stands.
+      const texts = submitText(messages);
+
+      const kept = texts.findIndex((each) =>
+        each.startsWith("Result accepted")
+      );
+
+      const expected: { result: JsonValue; divergence: string } =
+        kept === 0
+          ? { result: valid, divergence: "None" }
+          : { result: { ...valid, confidence: 0.2 }, divergence: "Some" };
+
+      assert.strictEqual(texts.length, 2);
+      assert.notStrictEqual(kept, -1);
+      assert.include(texts[1 - kept], "already accepted");
+      assert.deepStrictEqual(
+        Option.map(stored, ({ result, divergence, attempts }) => ({
+          result,
+          divergence,
+          attempts,
+        })),
+        Option.some({ ...expected, attempts: 1 })
+      );
+    })
+  );
+
+  it.live("tells a call after the accepted one that it is done", () =>
+    Effect.gen(function* () {
+      const { stored, calls, messages } = yield* runChild(
+        Option.some(REPORT),
+        [
+          fauxAssistantMessage(
+            [
+              fauxToolCall(
+                RESULT_TOOL_NAME,
+                { result: valid, divergence: "None" },
+                { id: "c1" }
+              ),
+              fauxToolCall(NOOP_TOOL_NAME, {}, { id: "n1" }),
+            ],
+            { stopReason: "toolUse" }
+          ),
+          call(
+            { result: { ...valid, confidence: 3 }, divergence: "None" },
+            "c2"
+          ),
+          say("never asked for"),
+        ],
+        ["Report on the module."],
+        true
+      );
+
+      assert.strictEqual(calls, 2);
+      assert.deepStrictEqual(
+        Option.map(stored, ({ result, attempts }) => ({ result, attempts })),
+        Option.some({ result: valid, attempts: 1 })
+      );
+
+      const texts = submitText(messages);
+
+      assert.strictEqual(texts.length, 2);
+      assert.include(texts[1], "already accepted");
+      assert.notInclude(texts[1], CAP_TEXT);
     })
   );
 });

@@ -15,7 +15,9 @@ import {
   canSubmit,
   checkResultSchema,
   declareSchema,
+  MAX_DIVERGENCE_LENGTH,
   MAX_SCHEMA_BYTES,
+  MAX_SCHEMA_DEPTH,
   nudgeDue,
   RESULT_TOOL,
   RESULT_TOOL_NAME,
@@ -83,6 +85,16 @@ const rejected = (args: Schema.Json) => {
 };
 
 describe("validateResult (J-validator)", () => {
+  it("rejects a divergence longer than the protocol keeps", () => {
+    assert.include(
+      rejected({
+        result: valid,
+        divergence: "x".repeat(MAX_DIVERGENCE_LENGTH + 1),
+      }),
+      "divergence"
+    );
+  });
+
   it("accepts a valid result and its divergence", () => {
     const value = accepted({ result: valid, divergence: "None" });
 
@@ -230,6 +242,48 @@ describe(checkResultSchema, () => {
     assert.strictEqual(reasonOf(schema), "too-deep");
   });
 
+  it("counts depth in schema levels, not JSON objects", () => {
+    // Root, then three objects nested under `properties`: four schema levels, nine JSON objects.
+    const schema: JsonObject = {
+      type: "object",
+      properties: {
+        a: {
+          type: "object",
+          properties: {
+            b: {
+              type: "object",
+              properties: { c: { type: "object", properties: {} } },
+            },
+          },
+        },
+      },
+    };
+
+    assert.strictEqual(reasonOf(schema), "accepted");
+
+    let deepest: JsonObject = { type: "string" };
+
+    for (let level = 1; level < MAX_SCHEMA_DEPTH; level += 1) {
+      deepest = { type: "object", properties: { next: deepest } };
+    }
+
+    assert.strictEqual(reasonOf(deepest), "accepted");
+    assert.strictEqual(
+      reasonOf({ type: "object", properties: { next: deepest } }),
+      "too-deep"
+    );
+  });
+
+  it("refuses a very deep schema as too large instead of throwing", () => {
+    let schema: JsonObject = { type: "string" };
+
+    for (let level = 0; level < 20_000; level += 1) {
+      schema = { items: schema };
+    }
+
+    assert.strictEqual(reasonOf(schema), "too-large");
+  });
+
   it("refuses a schema too large", () => {
     assert.strictEqual(
       reasonOf({ type: "string", description: "x".repeat(MAX_SCHEMA_BYTES) }),
@@ -328,6 +382,7 @@ describe(declareSchema, () => {
           result: REPORT,
           divergence: {
             type: "string",
+            maxLength: MAX_DIVERGENCE_LENGTH,
             description:
               'How the work differs from the brief, or "None" when it does not.',
           },

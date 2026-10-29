@@ -4,14 +4,23 @@
 //
 // The pairs come from the token names (the families tokens.css's header lists), so a token added
 // to a family joins its pairs without editing this file. Text is 4.5:1 (WCAG 1.4.3, AA for normal
-// text); the focus ring and the accent fill are 3:1 against every surface (1.4.11, non-text).
+// text); the focus ring and the accent fill are 3:1 (1.4.11, non-text). Each text token is read
+// on every surface, alone and under each selection-ladder step; every ink is read on the accent
+// wash and on each tone's wash, and each tone and --ink-1 on its wash under each ladder step too
+// (a chip on a selected row); the focus ring on every surface, ladder step and wash.
 // Translucent text and grounds are composited the way CSS draws them: `color-mix(in srgb, ...)`
 // mixes with premultiplied alpha, a translucent ground sits on an opaque surface, and the text sits
 // on the result. A planted 40 percent ink must fail, so the judge cannot pass by reading nothing.
 //
-// The second half is the class-string lint: no palette utility (`text-amber-500`, `bg-white`), no
-// arbitrary colour (`bg-[#fff]`) and no colour literal (hex, `rgb()`, `hsl()`, `oklch()`...) in
-// `next/` outside tokens.css. Comments and tests are skipped.
+// Both elements `data-ui="next"` marks, <html> and #root, must resolve the same values: the dark
+// rules name `.dark[data-ui="next"]` for <html> and `.dark [data-ui="next"]` for #root.
+//
+// The second half is the class-string lint: no palette utility (`text-amber-500`, `bg-white`,
+// `drop-shadow-blue-400`; the palettes are read from the installed Tailwind's theme.css), no
+// arbitrary colour (`bg-[#fff]`, `bg-[red]`), no colour literal (hex, `rgb()`, `hsl()`,
+// `oklch()`...) and no named colour in a colour property (`{ color: "white" }`, `fill: red`) in
+// `next/` outside tokens.css. The token forms `text-(--ink-2)` and `text-[color:var(--ink-2)]`
+// pass. Comments and tests are skipped.
 //
 // `CONTRAST_REPORT=1` prints each candidate's lowest text and non-text ratios.
 
@@ -139,25 +148,45 @@ const parseRules = (text: string): ReadonlyArray<Rule> => {
 
 type Theme = "light" | "dark";
 
+/** The two elements `data-ui="next"` marks: <html>, which carries the `dark` class, and #root. */
+type Element = "html" | "root";
+
+const ELEMENTS: ReadonlyArray<Element> = ["html", "root"];
+
 /** What a selector applies to: a candidate (`default` when no `data-look`) and a theme. */
 interface Scope {
   readonly look: string;
   readonly theme: Theme;
 }
 
-const SELECTOR =
-  /^(?<dark>\.dark\s+)?\[data-ui="next"\](?:\[data-look="(?<look>[a-z-]+)"\])?$/u;
+/** A selector's scope and the elements it matches. */
+interface Target {
+  readonly scope: Scope;
+  readonly elements: ReadonlyArray<Element>;
+}
 
-/** The scope a selector names, or undefined when tokens.css should not hold it. */
-const scopeOf = (selector: string): Scope | undefined => {
+const SELECTOR =
+  /^(?:(?<dark>\.dark)(?<descendant>\s+)?)?\[data-ui="next"\](?:\[data-look="(?<look>[a-z-]+)"\])?$/u;
+
+/** The scope a selector names and what it matches, or undefined when tokens.css should not hold it. */
+const targetOf = (selector: string): Target | undefined => {
   const match = SELECTOR.exec(selector);
 
-  return match === null
-    ? undefined
-    : {
-        look: match.groups?.look ?? "default",
-        theme: match.groups?.dark === undefined ? "light" : "dark",
-      };
+  if (match === null) {
+    return undefined;
+  }
+
+  const look = match.groups?.look ?? "default";
+
+  if (match.groups?.dark === undefined) {
+    return { scope: { look, theme: "light" }, elements: ELEMENTS };
+  }
+
+  // `.dark[data-ui]` is <html> itself; `.dark [data-ui]` is a descendant, so #root only.
+  return {
+    scope: { look, theme: "dark" },
+    elements: match.groups.descendant === undefined ? ["html"] : ["root"],
+  };
 };
 
 /** Colour tokens: the families the pairs are drawn from. */
@@ -170,8 +199,14 @@ interface Tokens {
   readonly looks: ReadonlyArray<string>;
   readonly unscoped: ReadonlyArray<string>;
   readonly wrappedColours: ReadonlyArray<string>;
-  readonly declared: (scope: Scope) => ReadonlyMap<string, string>;
-  readonly resolved: (scope: Scope) => ReadonlyMap<string, string>;
+  readonly declared: (
+    scope: Scope,
+    element?: Element
+  ) => ReadonlyMap<string, string>;
+  readonly resolved: (
+    scope: Scope,
+    element?: Element
+  ) => ReadonlyMap<string, string>;
 }
 
 const readTokens = (text: string): Tokens => {
@@ -181,9 +216,9 @@ const readTokens = (text: string): Tokens => {
     .filter((rule) => !rule.wrapped)
     .flatMap((rule) =>
       rule.selectors.flatMap((selector) => {
-        const scope = scopeOf(selector);
+        const target = targetOf(selector);
 
-        return scope === undefined ? [] : [{ scope, rule }];
+        return target === undefined ? [] : [{ ...target, rule }];
       })
     );
 
@@ -194,7 +229,7 @@ const readTokens = (text: string): Tokens => {
   ];
 
   const unscoped = rules.flatMap((rule) =>
-    rule.selectors.filter((selector) => scopeOf(selector) === undefined)
+    rule.selectors.filter((selector) => targetOf(selector) === undefined)
   );
 
   const wrappedColours = rules
@@ -205,21 +240,30 @@ const readTokens = (text: string): Tokens => {
         .filter((name) => COLOUR_TOKEN.test(name))
     );
 
-  // The declarations one exact scope's rules hold, later rules winning.
-  const declared = (scope: Scope): ReadonlyMap<string, string> =>
+  // The declarations one exact scope's rules hold on one element, later rules winning.
+  const declared = (
+    scope: Scope,
+    element: Element = "root"
+  ): ReadonlyMap<string, string> =>
     new Map(
       scoped
         .filter(
           (entry) =>
-            entry.scope.look === scope.look && entry.scope.theme === scope.theme
+            entry.scope.look === scope.look &&
+            entry.scope.theme === scope.theme &&
+            entry.elements.includes(element)
         )
         .flatMap(({ rule }) => rule.declarations)
     );
 
   // The cascade for an element with `data-look` set to `scope.look`, by specificity: the default
   // light rules (0,1,0), then the default dark and the look's light rules (0,2,0, in source order;
-  // every look block follows the default ones), then the look's dark rules (0,3,0).
-  const resolved = (scope: Scope): ReadonlyMap<string, string> => {
+  // every look block follows the default ones), then the look's dark rules (0,3,0). Both dark
+  // forms have the same specificity, so <html> and #root follow the same order.
+  const resolved = (
+    scope: Scope,
+    element: Element = "root"
+  ): ReadonlyMap<string, string> => {
     const layers: Array<Scope> = [{ look: "default", theme: "light" }];
 
     if (scope.theme === "dark") {
@@ -234,7 +278,7 @@ const readTokens = (text: string): Tokens => {
       }
     }
 
-    return new Map(layers.flatMap((layer) => [...declared(layer)]));
+    return new Map(layers.flatMap((layer) => [...declared(layer, element)]));
   };
 
   return { looks, unscoped, wrappedColours, declared, resolved };
@@ -410,6 +454,13 @@ const textOn = (
 ): ReadonlyArray<Pair> =>
   texts.map((text) => ({ text, ground, floor: TEXT_RATIO }));
 
+/** The focus ring over one stack of grounds, at the non-text floor. */
+const focusOn = (ground: ReadonlyArray<string>): Pair => ({
+  text: "--stroke-focus",
+  ground,
+  floor: NON_TEXT_RATIO,
+});
+
 /** The pairs a scope's names call for, by family (tokens.css's header). */
 const pairsOf = (names: ReadonlyArray<string>): ReadonlyArray<Pair> => {
   const family = (pattern: RegExp): ReadonlyArray<string> =>
@@ -418,23 +469,26 @@ const pairsOf = (names: ReadonlyArray<string>): ReadonlyArray<Pair> => {
   const surfaces = family(/^--surface-/u);
   const ladder = family(/^--select-\d+$/u);
   const tones = family(/^--tone-[a-z]+$/u);
+  const inks = family(/^--ink-\d+$/u);
 
-  const texts = [
-    ...family(/^--ink-\d+$/u),
-    ...family(/^--accent-text$/u),
-    ...tones,
-  ];
+  const texts = [...inks, ...family(/^--accent-text$/u), ...tones];
 
   return surfaces.flatMap((surface) => [
     ...textOn(texts, [surface]),
     ...ladder.flatMap((step) => textOn(texts, [surface, step])),
-    ...textOn(["--ink-1", "--accent-text"], [surface, "--accent-wash"]),
-    ...tones.flatMap((tone) =>
-      textOn([tone, "--ink-1"], [surface, `${tone}-wash`])
-    ),
+    ...textOn([...inks, "--accent-text"], [surface, "--accent-wash"]),
+    ...tones.flatMap((tone) => [
+      ...textOn([tone, ...inks], [surface, `${tone}-wash`]),
+      ...ladder.flatMap((step) =>
+        textOn([tone, "--ink-1"], [surface, step, `${tone}-wash`])
+      ),
+    ]),
     ...textOn(["--accent-ink"], [surface, "--accent-fill"]),
     { text: "--accent-fill", ground: [surface], floor: NON_TEXT_RATIO },
-    { text: "--stroke-focus", ground: [surface], floor: NON_TEXT_RATIO },
+    focusOn([surface]),
+    ...ladder.map((step) => focusOn([surface, step])),
+    focusOn([surface, "--accent-wash"]),
+    ...tones.map((tone) => focusOn([surface, `${tone}-wash`])),
   ]);
 };
 
@@ -577,6 +631,28 @@ describe("contrast of the next tokens", () => {
     }
   });
 
+  it("resolves the same values on <html> and #root, in both themes, for every candidate", () => {
+    for (const look of ["default", ...tokens.looks]) {
+      for (const theme of THEMES) {
+        assert.deepStrictEqual(
+          tokens.resolved({ look, theme }, "html"),
+          tokens.resolved({ look, theme }, "root"),
+          `${look} ${theme}`
+        );
+      }
+    }
+
+    // A dark rule naming only the descendant form leaves <html> on the light values.
+    const rootOnly = readTokens(
+      tokensText.replace('.dark[data-ui="next"][data-look="stone"],\n', "")
+    );
+
+    assert.notDeepEqual(
+      rootOnly.resolved({ look: "stone", theme: "dark" }, "html"),
+      rootOnly.resolved({ look: "stone", theme: "dark" }, "root")
+    );
+  });
+
   it("meets AA for every named pair, in both themes, for every candidate", () => {
     const report: Array<string> = [];
 
@@ -662,20 +738,69 @@ describe("contrast of the next tokens", () => {
 // ---------------------------------------------------------------------------------------------
 // The class-string lint
 
-const PALETTE =
-  "slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose";
+/**
+ * The colour names the installed Tailwind's theme ships: the palettes with shades (`amber`,
+ * `taupe`...) and the bare colours (`black`, `white`). Read from theme.css, so the lint cannot fall
+ * behind a Tailwind upgrade.
+ */
+interface TailwindColours {
+  readonly shaded: ReadonlyArray<string>;
+  readonly bare: ReadonlyArray<string>;
+}
+
+const tailwindColours = (): TailwindColours => {
+  const theme = readFileSync(
+    path.join(root, "apps/web/node_modules/tailwindcss/theme.css"),
+    "utf-8"
+  );
+
+  const names = [
+    ...theme.matchAll(/--color-(?<name>[a-z]+)(?<shade>-\d+)?:/gu),
+  ];
+
+  const pick = (shaded: boolean): ReadonlyArray<string> => [
+    ...new Set(
+      names.flatMap((match) =>
+        (match.groups?.shade !== undefined) === shaded
+          ? [match.groups?.name ?? ""]
+          : []
+      )
+    ),
+  ];
+
+  return { shaded: pick(true), bare: pick(false) };
+};
+
+const TAILWIND_COLOURS = tailwindColours();
+
+const PALETTE = TAILWIND_COLOURS.shaded.join("|");
+
+const BARE = TAILWIND_COLOURS.bare.join("|");
 
 const UTILITY =
-  "bg|text|border|border-[xytrbl]|border-[se]|ring|ring-offset|outline|fill|stroke|from|via|to|decoration|divide|placeholder|caret|accent|shadow|inset-shadow|inset-ring";
+  "bg|text|border|border-[xytrbl]|border-[se]|ring|ring-offset|outline|fill|stroke|from|via|to|decoration|divide|placeholder|caret|accent|shadow|inset-shadow|inset-ring|text-shadow|drop-shadow";
+
+/** CSS Color 4's named colours (`transparent` and `currentcolor` are not colours of their own). */
+const NAMED =
+  "aliceblue|antiquewhite|aqua|aquamarine|azure|beige|bisque|black|blanchedalmond|blue|blueviolet|brown|burlywood|cadetblue|chartreuse|chocolate|coral|cornflowerblue|cornsilk|crimson|cyan|darkblue|darkcyan|darkgoldenrod|darkgray|darkgreen|darkgrey|darkkhaki|darkmagenta|darkolivegreen|darkorange|darkorchid|darkred|darksalmon|darkseagreen|darkslateblue|darkslategray|darkslategrey|darkturquoise|darkviolet|deeppink|deepskyblue|dimgray|dimgrey|dodgerblue|firebrick|floralwhite|forestgreen|fuchsia|gainsboro|ghostwhite|gold|goldenrod|gray|green|greenyellow|grey|honeydew|hotpink|indianred|indigo|ivory|khaki|lavender|lavenderblush|lawngreen|lemonchiffon|lightblue|lightcoral|lightcyan|lightgoldenrodyellow|lightgray|lightgreen|lightgrey|lightpink|lightsalmon|lightseagreen|lightskyblue|lightslategray|lightslategrey|lightsteelblue|lightyellow|lime|limegreen|linen|magenta|maroon|mediumaquamarine|mediumblue|mediumorchid|mediumpurple|mediumseagreen|mediumslateblue|mediumspringgreen|mediumturquoise|mediumvioletred|midnightblue|mintcream|mistyrose|moccasin|navajowhite|navy|oldlace|olive|olivedrab|orange|orangered|orchid|palegoldenrod|palegreen|paleturquoise|palevioletred|papayawhip|peachpuff|peru|pink|plum|powderblue|purple|rebeccapurple|red|rosybrown|royalblue|saddlebrown|salmon|sandybrown|seagreen|seashell|sienna|silver|skyblue|slateblue|slategray|slategrey|snow|springgreen|steelblue|tan|teal|thistle|tomato|turquoise|violet|wheat|white|whitesmoke|yellow|yellowgreen";
+
+/** Properties, in CSS or a style object, whose value may hold a colour. */
+const COLOUR_PROPERTY =
+  "[\\w-]*(?:color|Color)|background|fill|stroke|border(?:-[a-z]+)?|outline|(?:box-|text-)?shadow|boxShadow|textShadow";
 
 /** What `next/` code may not hold: palette utilities, arbitrary colours and colour literals. */
 const FORBIDDEN: ReadonlyArray<RegExp> = [
   new RegExp(
-    `(?<![\\w-])(?:${UTILITY})-(?:(?:${PALETTE})-\\d{2,3}|black|white)(?![\\w-])`,
+    `(?<![\\w-])(?:${UTILITY})-(?:(?:${PALETTE})-\\d{2,3}|${BARE})(?![\\w-])`,
     "gu"
   ),
   new RegExp(
-    `(?<![\\w-])(?:${UTILITY})-\\[(?:#|rgb|hsl|oklch|oklab|lab|lch|color)`,
+    `(?<![\\w-])(?:${UTILITY})-\\[(?:#|(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch|color)\\(|color:(?!var\\())`,
+    "gu"
+  ),
+  new RegExp(`(?<![\\w-])(?:${UTILITY})-\\[(?:${NAMED})\\]`, "giu"),
+  new RegExp(
+    `(?<![\\w-])["']?(?:${COLOUR_PROPERTY})["']?\\s*:\\s*["'\`]?[^;"'\`}\\n]*?(?<![\\w-])(?:${NAMED})(?![\\w-])`,
     "gu"
   ),
   /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{3,4})(?![\w-])/giu,
@@ -725,7 +850,7 @@ describe("colours in next", () => {
     );
     assert.deepStrictEqual(
       coloursIn('h.Class("bg-[#0a0a0a] text-[rgb(0_0_0)]")'),
-      ["bg-[#", "text-[rgb", "#0a0a0a", "rgb("]
+      ["bg-[#", "text-[rgb(", "#0a0a0a", "rgb("]
     );
     assert.deepStrictEqual(
       coloursIn("const shade = 'rgb(0 0 0 / 40%)'; const ink = \"#fff\";"),
@@ -733,10 +858,44 @@ describe("colours in next", () => {
     );
     assert.deepStrictEqual(
       coloursIn(
-        '// fixes #5566, was text-blue-500\nh.Id("root"); h.Class("bg-background text-ink-2 text-tone-waiting border-stroke-1 text-2xs")\n'
+        'h.Class("text-mauve-500 bg-taupe-200/50 text-shadow-red-500 drop-shadow-blue-400")'
+      ),
+      [
+        "text-mauve-500",
+        "bg-taupe-200",
+        "text-shadow-red-500",
+        "drop-shadow-blue-400",
+      ]
+    );
+    assert.deepStrictEqual(
+      coloursIn('h.Class("bg-[red] text-[color:#fff] border-[White]")'),
+      ["text-[color:", "bg-[red]", "border-[White]", "#fff"]
+    );
+    assert.deepStrictEqual(
+      coloursIn(
+        'h.Style({ color: "white", backgroundColor: \'tomato\' }); const css = "fill: red; border: 1px solid navy";'
+      ),
+      [
+        'color: "white',
+        "backgroundColor: 'tomato",
+        '"fill: red',
+        "border: 1px solid navy",
+      ]
+    );
+    assert.deepStrictEqual(
+      coloursIn(
+        '// fixes #5566, was text-blue-500\nh.Id("root"); h.Class("bg-background text-ink-2 text-tone-waiting border-stroke-1 text-2xs text-(--ink-2) text-[color:var(--ink-2)] bg-transparent")\nh.Style({ color: "var(--ink-1)", outline: "none", background: "transparent" });\n'
       ),
       []
     );
+  });
+
+  it("reads every palette the installed Tailwind ships", () => {
+    for (const name of ["amber", "zinc", "mauve", "olive", "mist", "taupe"]) {
+      assert.include(TAILWIND_COLOURS.shaded, name);
+    }
+
+    assert.sameMembers([...TAILWIND_COLOURS.bare], ["black", "white"]);
   });
 
   it("finds none in next outside tokens.css", () => {

@@ -73,6 +73,9 @@ Decided by the user on 2026-10-27 (stage 1 of the backlog, then the thirty quest
 | New screens | Only in `next`; the phone on `next` before the gate | ADR 0040 |
 | Transcript list | The look track's first package, confirmed after the daily-driver day | ADR 0041 |
 | Themes | Tokens for dark and light; preview rounds in dark | ADR 0040 |
+| Project thread | Each project has one project thread that lives on (compacted as it grows); an optional refresh replaces it with a new one and archives the old. Managed threads can be opened and used fully (read, message, steer, stop, answer), but the default flow goes through the project thread. New top-level threads in a project come only from refresh (the user, 2026-10-29) | ADR 0026 |
+| Scratch thread | A keybind opens a floating, ephemeral thread with no project for one-off questions; it runs in a throwaway scratch folder and clearing it deletes the thread and its folder (the user, 2026-10-29) | surfaces |
+| Existing threads | No migration: the user will delete today's threads at some point; the new model starts without them (2026-10-29) |  |
 | Look | Stone, chosen by the user from round 0 on 2026-10-29, then revised the same day: less brown, more black and white, still layered surfaces, with colour only on status icons; graphite and ink are dropped | ADR 0040 |
 | Reach (porch) | Shelved by the user on 2026-10-29: porch is not a live project. The artifact and portal code stays, dormant, with its tools hidden while porch is missing; wizard stage 2 and 5G are dropped, and the phone reach target is not judged in phase 2 | ADR 0038 |
 

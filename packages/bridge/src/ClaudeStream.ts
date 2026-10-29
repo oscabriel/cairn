@@ -58,6 +58,9 @@ import { applyUsage, emptyUsage } from "./ClaudeTokens.ts";
 /** Where a turn's pi events go: the stream one provider call returned. */
 export type TurnSink = AssistantMessageEventStream;
 
+/** What a turn writes to: a sink, or a writer that forwards to one (the conversation's done gate). */
+export type TurnWriter = Pick<TurnSink, "push" | "end">;
+
 /** Called with the final message of a delivered reply, just before its `done` event, to stamp it. */
 export type StampReply = (message: AssistantMessage) => void;
 
@@ -187,7 +190,7 @@ export class ClaudeStream {
   readonly #tools: ReadonlyArray<ToolDeclaration>;
   readonly #stamp: StampReply;
 
-  #sink: Option.Option<TurnSink> = Option.none();
+  #sink: Option.Option<TurnWriter> = Option.none();
   #output: AssistantMessage;
   #open: Array<OpenBlock | undefined> = [];
   #started = false;
@@ -239,7 +242,7 @@ export class ClaudeStream {
   }
 
   /** Starts a turn on `sink`; `timestamp` is epoch milliseconds from the caller's clock. */
-  begin(sink: TurnSink, timestamp: number): void {
+  begin(sink: TurnWriter, timestamp: number): void {
     // A rejection belongs to the turn it arrived in: a stale one would label a later, unrelated
     // failure a spent plan window (T13).
     this.#rejection = Option.none();
@@ -258,7 +261,7 @@ export class ClaudeStream {
     this.#callsArrived = new Set();
   }
 
-  #push(event: Parameters<TurnSink["push"]>[0]): void {
+  #push(event: Parameters<TurnWriter["push"]>[0]): void {
     if (Option.isSome(this.#sink)) {
       this.#sink.value.push(event);
     }

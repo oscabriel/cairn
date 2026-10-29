@@ -578,8 +578,16 @@ export interface FakeIO {
     toolUseId: string,
     signal?: AbortSignal
   ): Effect.Effect<ClaudeToolResult>;
-  /** Emits SDK messages, as decoded events. */
+  /**
+   * Emits SDK messages, as decoded events, and writes each top-level assistant message to the
+   * transcript of the session the child's `system:init` named, as Claude Code does.
+   */
   emit(...events: ReadonlyArray<ClaudeEvent>): Effect.Effect<void>;
+  /**
+   * Emits SDK messages without writing their transcript entries: Claude Code writes on a 100 ms
+   * timer, so an entry trails its event. `record` writes them later.
+   */
+  emitUnwritten(...events: ReadonlyArray<ClaudeEvent>): Effect.Effect<void>;
   /** Appends to the fake transcript of `sessionId`. */
   record(sessionId: string, entry: SessionEntry): Effect.Effect<void>;
   /** Ends the event stream with a failure, as a child that exits mid-run does. */
@@ -867,6 +875,44 @@ export class ClaudeSdk extends Context.Service<
         const written = yield* Queue.unbounded<PromptMessage, Cause.Done>();
         const writtenLog = yield* Ref.make<ReadonlyArray<PromptMessage>>([]);
 
+        // The session this child writes to, once its `system:init` named it.
+        const session = yield* Ref.make(Option.none<string>());
+
+        const writeEntry = (event: ClaudeEvent) =>
+          Effect.gen(function* () {
+            if (event.type === "system" && "session_id" in event) {
+              yield* Ref.set(session, Option.some(event.session_id));
+
+              return;
+            }
+
+            const sessionId = yield* Ref.get(session);
+
+            if (
+              event.type !== "assistant" ||
+              Predicate.isNotNullish(event.parent_tool_use_id) ||
+              Option.isNone(sessionId)
+            ) {
+              return;
+            }
+
+            const chain =
+              (yield* Ref.get(fake.sessions)).get(sessionId.value) ?? [];
+
+            if (chain.some((entry) => entry.uuid === event.uuid)) {
+              return;
+            }
+
+            yield* record(sessionId.value, {
+              uuid: event.uuid,
+              role: "assistant",
+              toolUseIds: event.message.content.flatMap((block) =>
+                block.type === "tool_use" && "id" in block ? [block.id] : []
+              ),
+              toolResultIds: [],
+            });
+          });
+
         const pump = yield* Effect.forkDetach(
           Effect.gen(function* () {
             let next = yield* input.take;
@@ -893,7 +939,16 @@ export class ClaudeSdk extends Context.Service<
               name,
               signal: Option.fromNullishOr(signal),
             }),
-          emit: (...events) => Effect.asVoid(Queue.offerAll(out, events)),
+          emit: (...events) =>
+            Effect.gen(function* () {
+              for (const event of events) {
+                yield* writeEntry(event);
+              }
+
+              yield* Queue.offerAll(out, events);
+            }),
+          emitUnwritten: (...events) =>
+            Effect.asVoid(Queue.offerAll(out, events)),
           record,
           die: (message) =>
             Effect.asVoid(Queue.fail(out, new ClaudeQueryError({ message }))),

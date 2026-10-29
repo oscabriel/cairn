@@ -12,6 +12,7 @@
 // `reading` is `read`, and the body it got is saved here with the tokens and account id removed.
 
 import { readdirSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
@@ -22,11 +23,12 @@ import {
   Fiber,
   Layer,
   Option,
+  Predicate,
   Redacted,
   Ref,
   Stream,
 } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import type { HttpClientRequest } from "effect/http";
 import { TestClock } from "effect/testing";
 
@@ -200,6 +202,8 @@ interface Sent {
   readonly authorization: string;
   readonly account: string;
   readonly userAgent: string;
+  /** Trace headers the client added; a read must send none. */
+  readonly trace: ReadonlyArray<string>;
 }
 
 interface Endpoint {
@@ -232,6 +236,9 @@ const clientOver = (endpoint: Endpoint) =>
           authorization: request.headers.authorization ?? "",
           account: request.headers["chatgpt-account-id"] ?? "",
           userAgent: request.headers["user-agent"] ?? "",
+          trace: ["traceparent", "b3"].filter(
+            (name) => request.headers[name] !== undefined
+          ),
         },
       ]);
 
@@ -251,6 +258,55 @@ const clientOver = (endpoint: Endpoint) =>
       );
     })
   );
+
+/**
+ * A server on 127.0.0.1 that answers the usage path with a 302 to `/elsewhere`, which would answer
+ * a readable body, and keeps the path of every request it gets. Closed with the scope.
+ */
+const redirectingServer = Effect.acquireRelease(
+  Effect.callback<{
+    readonly origin: string;
+    readonly hits: () => ReadonlyArray<string>;
+    readonly close: () => void;
+  }>((resume) => {
+    const hits: Array<string> = [];
+
+    const server = createServer((request, response) => {
+      hits.push(request.url ?? "");
+
+      if (request.url === "/elsewhere") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(body("plus-two-windows.json"));
+
+        return;
+      }
+
+      response.writeHead(302, { location: "/elsewhere" });
+      response.end();
+    });
+
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = Predicate.isObject(address) ? address.port : 0;
+
+      resume(
+        Effect.succeed({
+          origin: `http://127.0.0.1:${String(port)}`,
+          hits: () => [...hits],
+          close: () => {
+            server.closeAllConnections();
+            server.close();
+          },
+        })
+      );
+    });
+  }),
+  (server) => Effect.sync(server.close)
+);
+
+/** The address a `fetch` was asked for, whatever form it came in. */
+const urlOf = (input: Parameters<typeof globalThis.fetch>[0]) =>
+  new Request(input).url;
 
 const testCredential = parseCodexCredential({
   access: "test-access-token",
@@ -333,6 +389,7 @@ describe("the Codex usage reader", () => {
               authorization: "Bearer test-access-token",
               account: "acct_test",
               userAgent: USER_AGENT,
+              trace: [],
             },
           ]);
           assert.strictEqual(readingOf(reading), "read");
@@ -383,7 +440,7 @@ describe("the Codex usage reader", () => {
   );
 
   it.effect(
-    "keeps the last windows and their time when a later read is refused",
+    "shows a refused read after a good one as unreadable, never the old windows as current",
     () =>
       Effect.gen(function* () {
         const endpoint = yield* makeEndpoint;
@@ -395,6 +452,8 @@ describe("the Codex usage reader", () => {
 
           const first = yield* usage.current;
 
+          assert.strictEqual(first.windows.length, 2);
+
           yield* Ref.set(
             endpoint.next,
             Option.some({ status: 401, body: "{}" })
@@ -404,15 +463,81 @@ describe("the Codex usage reader", () => {
 
           const after = yield* usage.current;
 
+          const rows = Option.getOrThrow(
+            yield* usage.watch.pipe(Stream.runHead)
+          );
+
           assert.strictEqual(after.state, "failed");
           assert.include(
             Option.getOrElse(after.reason, () => ""),
             "HTTP 401"
           );
-          assert.deepStrictEqual(after.windows, first.windows);
-          assert.deepStrictEqual(after.checkedAt, first.checkedAt);
-          assert.strictEqual(readingOf(after), "read");
+          assert.deepStrictEqual(after.windows, []);
+          assert.strictEqual(readingOf(after), "unreadable");
+          assert.deepStrictEqual(
+            rows.map((row) => [row.provider, row.reading, row.windows]),
+            [[CODEX_PROVIDER, "unreadable", []]]
+          );
+
+          // A later good read shows the windows again.
+          yield* Ref.set(
+            endpoint.next,
+            Option.some({ status: 200, body: body("plus-two-windows.json") })
+          );
+          yield* usage.read;
+          assert.strictEqual(readingOf(yield* usage.current), "read");
         }).pipe(Effect.provide(usageOver(endpoint, signedIn)));
+      })
+  );
+
+  it.effect(
+    "shows a login that stops refreshing after a good read as unreadable, with no windows",
+    () =>
+      Effect.gen(function* () {
+        const endpoint = yield* makeEndpoint;
+        const refusing = yield* Ref.make(false);
+        const credential = yield* testCredential;
+
+        const access = accessOf(
+          Effect.flatMap(Ref.get(refusing), (refuse) =>
+            refuse
+              ? Effect.fail(
+                  new CodexAccessError({
+                    message:
+                      "the Codex access token is stale and its refresh failed",
+                    reason: "refresh_failed",
+                  })
+                )
+              : Effect.succeedSome(credential)
+          )
+        );
+
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
+
+          yield* usage.read;
+          assert.strictEqual(readingOf(yield* usage.current), "read");
+
+          yield* Ref.set(refusing, true);
+          yield* TestClock.adjust(Duration.minutes(5));
+          yield* usage.read;
+
+          const after = yield* usage.current;
+
+          const rows = Option.getOrThrow(
+            yield* usage.watch.pipe(Stream.runHead)
+          );
+
+          assert.strictEqual(after.state, "failed");
+          assert.include(
+            Option.getOrElse(after.reason, () => ""),
+            "refresh failed"
+          );
+          assert.deepStrictEqual(
+            rows.map((row) => [row.provider, row.reading, row.windows]),
+            [[CODEX_PROVIDER, "unreadable", []]]
+          );
+        }).pipe(Effect.provide(usageOver(endpoint, access)));
       })
   );
 
@@ -540,30 +665,101 @@ describe("the Codex usage reader", () => {
       })
   );
 
-  it.effect("reads a redirect as a failed read, never following it", () =>
-    Effect.gen(function* () {
-      const endpoint = yield* makeEndpoint;
+  it.live(
+    "reads a redirect as a failed read, never following it (the real fetch client)",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* redirectingServer;
 
-      yield* Ref.set(
-        endpoint.next,
-        Option.some<Answer>({ status: 302, body: "" })
-      );
+        // The reader's own client over the platform fetch; only the host is moved to the local
+        // server, so the redirect handling judged is the reader's request options.
+        const toLocal: typeof globalThis.fetch = async (input, init) =>
+          await globalThis.fetch(
+            urlOf(input).replace("https://chatgpt.com", server.origin),
+            init
+          );
 
-      yield* Effect.gen(function* () {
-        const usage = yield* CodexUsage;
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
 
-        yield* usage.read;
+          yield* usage.read;
 
-        const after = yield* usage.current;
+          const after = yield* usage.current;
 
-        assert.strictEqual(after.state, "failed");
-        assert.include(
-          Option.getOrElse(after.reason, () => ""),
-          "HTTP 302"
+          assert.strictEqual(after.state, "failed");
+          assert.include(
+            Option.getOrElse(after.reason, () => ""),
+            "HTTP 302"
+          );
+          assert.deepStrictEqual(server.hits(), ["/backend-api/wham/usage"]);
+        }).pipe(
+          Effect.provide(
+            CodexUsage.layer.pipe(
+              Layer.provide(signedIn),
+              Layer.provide(Layer.succeed(FetchHttpClient.Fetch, toLocal))
+            )
+          )
         );
-        assert.strictEqual((yield* Ref.get(endpoint.requests)).length, 1);
-      }).pipe(Effect.provide(usageOver(endpoint, signedIn)));
-    })
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
+    "finishes a read others joined when the caller that started it stops waiting",
+    () =>
+      Effect.gen(function* () {
+        const endpoint = yield* makeEndpoint;
+        const gate = yield* Deferred.make<boolean>();
+
+        const slow = HttpClient.make((request) =>
+          Effect.andThen(
+            Deferred.await(gate),
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(body("plus-two-windows.json"), { status: 200 })
+              )
+            )
+          ).pipe(
+            Effect.tap(() =>
+              Ref.update(endpoint.requests, (all) => [
+                ...all,
+                {
+                  url: request.url,
+                  authorization: "",
+                  account: "",
+                  userAgent: "",
+                  trace: [],
+                },
+              ])
+            )
+          )
+        );
+
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
+
+          const starter = yield* Effect.forkChild(usage.read);
+
+          yield* TestClock.adjust(Duration.seconds(1));
+
+          const joiner = yield* Effect.forkChild(usage.read);
+
+          yield* TestClock.adjust(Duration.seconds(1));
+          yield* Fiber.interrupt(starter);
+          yield* Deferred.succeed(gate, true);
+          yield* Fiber.join(joiner);
+
+          assert.strictEqual((yield* usage.current).state, "read");
+          assert.strictEqual((yield* Ref.get(endpoint.requests)).length, 1);
+        }).pipe(
+          Effect.provide(
+            CodexUsage.layerNoDeps.pipe(
+              Layer.provide(Layer.succeed(HttpClient.HttpClient, slow)),
+              Layer.provide(signedIn)
+            )
+          )
+        );
+      })
   );
 
   it.effect("joins a read already running instead of sending another", () =>

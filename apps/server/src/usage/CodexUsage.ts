@@ -1,7 +1,9 @@
 // Codex's plan windows, read from ChatGPT's usage endpoint (`wham/usage`) with the Codex login
 // Cairn holds (ADR 0037). The endpoint is undocumented, so the body goes through a Schema decode and
 // any shape the decode does not know reads as "unreadable": a meter that says it cannot read the
-// plan beats one that shows a wrong number. A plan that answers with no windows at all (a free plan's
+// plan beats one that shows a wrong number. A read that fails (a refusal, a timeout, a redirect, a
+// login that could not be refreshed) is unreadable too, with no windows, as the bridge reports a
+// failed probe: windows from an earlier read are not shown as current. A plan that answers with no windows at all (a free plan's
 // `rate_limit: null`, or both windows null) reads as "unsupported". Reads run only while a client
 // watches, on the bridge's cadence (a watcher arriving after `STALE_PROBE` starts one, then one every
 // `PROBE_EVERY`), one at a time, and once after a turn reports a spent Codex limit (`CodexSignals`).
@@ -19,7 +21,7 @@
 // named by their length (a weekly primary is never called a session); a `used_percent` above 100
 // shown as 100 and spent (MonoCode rejects it as an unexpected shape; over-use past the cap is a
 // spent window, not a changed shape); a plan with no windows read as unsupported rather than an
-// error; a spent window or a refused turn marks it exhausted; and the token comes from Cairn's own
+// error; a spent window or a refused turn marks it exhausted; no trace headers are sent; and the token comes from Cairn's own
 // login instead of pi's `auth.json`, which this code never reads.
 //
 // MIT License
@@ -276,7 +278,10 @@ export type CodexUsageState =
   | "unsupported"
   /** The endpoint answered with a shape this reader does not know. */
   | "unreadable"
-  /** The last read got no answer, or a refusal; earlier windows stay, with their old time. */
+  /**
+   * The last read got no answer, or a refusal, or the login could not be refreshed: no windows are
+   * shown (earlier ones may no longer be true), and the row reads as unreadable until a read decodes.
+   */
   | "failed";
 
 /** What is known about Codex's plan windows. */
@@ -369,27 +374,35 @@ const applyOutcome = (
     return INITIAL_READING;
   }
 
-  if (outcome.kind === "failed") {
-    return { ...current, state: "failed", reason: Option.some(outcome.reason) };
-  }
-
-  const unreadable = (reason: string): CodexUsageReading => ({
+  const unreadable = (
+    state: "unreadable" | "failed",
+    reason: string
+  ): CodexUsageReading => ({
     ...current,
-    state: "unreadable",
+    state,
     windows: [],
     checkedAt: Option.some(now),
     reason: Option.some(reason),
   });
 
+  // As the bridge does for a failed probe: no windows rather than old ones shown as current.
+  if (outcome.kind === "failed") {
+    return unreadable("failed", outcome.reason);
+  }
+
   if (outcome.kind === "too_long") {
     return unreadable(
+      "unreadable",
       `the usage answer is longer than ${MAX_BODY_BYTES} bytes`
     );
   }
 
   return Option.match(readUsageBody(outcome.body), {
     onNone: () =>
-      unreadable("the usage answer has a shape this reader does not know"),
+      unreadable(
+        "unreadable",
+        "the usage answer has a shape this reader does not know"
+      ),
     onSome: (windows): CodexUsageReading => {
       if (windows.length === 0) {
         return {
@@ -440,18 +453,15 @@ const applyLimit = (
 
 /**
  * Whether the row's windows can be read (`ProviderUsage.reading`): a plan with no windows is
- * unsupported; a failed read with windows from before still shows them; without any it reads as
- * unreadable.
+ * unsupported; an answer of another shape, a failed read and a login that could not be refreshed
+ * are unreadable, as the protocol's `UsageReading` says.
  */
 export const readingOf = (reading: CodexUsageReading): UsageReading => {
   if (reading.state === "unsupported") {
     return "unsupported";
   }
 
-  return reading.state === "read" ||
-    (reading.state === "failed" && reading.windows.length > 0)
-    ? "read"
-    : "unreadable";
+  return reading.state === "read" ? "read" : "unreadable";
 };
 
 /** A window on the wire; none when its reset is not a time a `DateTime` can hold. */
@@ -470,8 +480,8 @@ const toPlanWindow = (window: CodexWindow): Option.Option<PlanWindow> =>
   );
 
 /**
- * The Codex row for `usage.subscribe`: none while signed out. An unreadable answer is a row with no
- * windows and a check time; a failed read keeps the last windows and their old check time. Total: a
+ * The Codex row for `usage.subscribe`: none while signed out. An unreadable answer and a failed read
+ * are a row with no windows and the time the read gave up. Total: a
  * window whose time cannot be built reads as unreadable, so no reading can break the feed.
  */
 export const toProviderUsage = (
@@ -556,10 +566,12 @@ export class CodexUsage extends Context.Service<
           );
 
           // A redirect is answered as it comes (a 3xx, so a failed read), never followed to a page.
+          // No trace headers (`traceparent`, `b3`): trace ids stay off a third party's endpoint.
           const response = yield* client.execute(request).pipe(
             Effect.provideService(FetchHttpClient.RequestInit, {
               redirect: "manual",
-            })
+            }),
+            Effect.provideService(HttpClient.TracerPropagationEnabled, false)
           );
 
           if (response.status !== 200) {
@@ -747,8 +759,7 @@ export class CodexUsage extends Context.Service<
       return CodexUsage.of({
         current: SubscriptionRef.get(ref),
         changes,
-        // A reading that changes nothing on the wire (a signed-out tick, the same failure again)
-        // sends no frame.
+        // A reading that changes nothing on the wire (a signed-out tick) sends no frame.
         watch: changes.pipe(Stream.map(toProviderUsage), Stream.changes),
         read,
         observeLimit,

@@ -1,12 +1,20 @@
 // A refused Codex turn marks its window spent on the Codex meter at once: faux `RunTerminal` events
 // on a fake harness, into the real `CodexUsage` over a fake endpoint. A Claude or OpenCode Go limit,
 // and a Codex run that failed for another reason, leave the meter alone. `UsageFeed.layer` gives
-// the signal and the feed one reader, so the feed's Codex row shows the spent window.
+// the signal and the feed one reader, so the feed's Codex row shows the spent window: judged on the
+// deployed layer itself, over a Codex login in a real `OAuthStore` (in-memory database, temporary
+// lock) and a fake `fetch` behind the reader's own fetch client.
+
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { RunId } from "@cairn/protocol/Ids";
 import type { UsageSnapshot } from "@cairn/protocol/Usage";
+import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  Clock,
   Context,
   DateTime,
   Effect,
@@ -16,17 +24,22 @@ import {
   Queue,
   Stream,
 } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 
 import { HarnessSeam, RunTerminal } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent, UsageLimitPlan } from "../brain/HarnessSeam.ts";
+import { Database } from "../db/Database.ts";
+import { migrations } from "../db/Migrations.ts";
 import { BridgeProvider } from "../models/BridgeProvider.ts";
 import { CodexAccess, parseCodexCredential } from "../models/CodexAccess.ts";
+import { CODEX_PROVIDER } from "../models/CredentialStore.ts";
+import { OAuthStore } from "../models/OAuthStore.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import { codexLimitOf, CodexSignals } from "./CodexSignals.ts";
-import { CodexUsage } from "./CodexUsage.ts";
+import { CODEX_USAGE_URL, CodexUsage } from "./CodexUsage.ts";
 import { UsageFeed } from "./UsageFeed.ts";
+import { providersOf } from "./UsageTestKit.ts";
 
 /** A session window at 23 percent resetting at 1_793_178_000 s, and a weekly one at 41. */
 const BODY = JSON.stringify({
@@ -104,6 +117,10 @@ class Events extends Context.Service<
   Events,
   { readonly pubsub: PubSub.PubSub<HarnessEvent> }
 >()("cairn/server/usage/CodexSignals.test/Events") {}
+
+/** The address a `fetch` was asked for, whatever form it came in. */
+const urlOf = (input: Parameters<typeof globalThis.fetch>[0]) =>
+  new Request(input).url;
 
 const unsupported = () => Effect.die("not used by this test");
 
@@ -291,10 +308,120 @@ describe("the usage feed with Codex signals", () => {
           Layer.merge(UsageFeed.layerNoDeps, CodexSignals).pipe(
             Layer.provide(Usage),
             Layer.provideMerge(FakeHarness),
-            Layer.provide(BridgeProvider.layerOff)
+            Layer.provide(BridgeProvider.layerOff),
+            Layer.provide(providersOf([]))
           )
         ),
         (test) => Effect.andThen(TestClock.setTime(1_793_177_000_000), test)
+      )
+  );
+
+  it.live(
+    "marks the window on the deployed feed's own Codex row, over a Codex login in the OAuth store",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        // Whole seconds an hour and a week ahead, so the refusal's mark holds past the read.
+        const sessionReset = Math.floor(now / 1000) + 3600;
+        const weekReset = Math.floor(now / 1000) + 6 * 86_400;
+        const fetched = { count: 0 };
+
+        const body = JSON.stringify({
+          rate_limit: {
+            limit_reached: false,
+            primary_window: {
+              used_percent: 23,
+              limit_window_seconds: 18_000,
+              reset_at: sessionReset,
+            },
+            secondary_window: {
+              used_percent: 41,
+              limit_window_seconds: 604_800,
+              reset_at: weekReset,
+            },
+          },
+        });
+
+        // No network: the reader's own fetch client over a fetch that answers the usage URL alone.
+        const fakeFetch: typeof globalThis.fetch = async (input) => {
+          fetched.count += 1;
+
+          return await Promise.resolve(
+            urlOf(input) === CODEX_USAGE_URL
+              ? new Response(body, { status: 200 })
+              : new Response("", { status: 404 })
+          );
+        };
+
+        const lock = path.join(
+          mkdtempSync(path.join(tmpdir(), "cairn-usage-feed-")),
+          "oauth.lock"
+        );
+
+        yield* Effect.gen(function* () {
+          const oauth = yield* OAuthStore;
+          const feed = yield* UsageFeed;
+          const { pubsub } = yield* Events;
+
+          assert.isTrue(oauth.held);
+
+          // Signed in before anyone watches, as the deployed brain is after the wizard.
+          yield* oauth.signIn(CODEX_PROVIDER, {
+            type: "oauth",
+            access: "test-access-token",
+            refresh: "test-refresh-token",
+            expires: now + 10 * 3_600_000,
+            accountId: "acct_1",
+          });
+
+          const frames = yield* Queue.unbounded<UsageSnapshot>();
+
+          yield* Effect.forkChild(
+            feed.snapshots.pipe(
+              Stream.runForEach((frame) => Queue.offer(frames, frame))
+            )
+          );
+
+          const firstRead = yield* takeUntil(frames, (frame) =>
+            frame.providers.some(
+              (row) => row.provider === CODEX_PROVIDER && row.reading === "read"
+            )
+          );
+
+          assert.deepStrictEqual(spentOnFeed(firstRead), []);
+
+          yield* PubSub.publish(
+            pubsub,
+            terminal(
+              Option.some("codex"),
+              "usage_limit",
+              Option.some(sessionReset * 1000 + 60_000)
+            )
+          );
+
+          const marked = yield* takeUntil(
+            frames,
+            (frame) => spentOnFeed(frame).length > 0
+          );
+
+          assert.deepStrictEqual(spentOnFeed(marked), ["five_hour"]);
+          assert.isAtLeast(fetched.count, 1);
+        }).pipe(
+          Effect.provide(
+            UsageFeed.layer.pipe(
+              Layer.provide(BridgeProvider.layerOff),
+              Layer.provide(providersOf([])),
+              Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fakeFetch)),
+              Layer.provideMerge(FakeHarness),
+              Layer.provideMerge(OAuthStore.layerWith(lock))
+            )
+          )
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(Database.layerTest(migrations), NodeServices.layer)
+        )
       )
   );
 
@@ -312,7 +439,8 @@ describe("the usage feed with Codex signals", () => {
         Effect.provide(
           UsageFeed.layer.pipe(
             Layer.provide(FakeHarness),
-            Layer.provide(BridgeProvider.layerOff)
+            Layer.provide(BridgeProvider.layerOff),
+            Layer.provide(providersOf([]))
           )
         )
       )

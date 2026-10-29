@@ -22,6 +22,7 @@ import {
 import { ModelSource } from "../brain/ModelSource.ts";
 import { CodexUsage } from "../usage/CodexUsage.ts";
 import { UsageFeed } from "../usage/UsageFeed.ts";
+import { providersOf } from "../usage/UsageTestKit.ts";
 import {
   BridgeExtraProviders,
   BridgeProvider,
@@ -204,7 +205,8 @@ describe("pi's model runtime with the bridge", () => {
 /** The feed with Codex signed out, so its frames hold the bridge's rows alone. */
 const BridgeOnlyFeed = UsageFeed.layerNoDeps.pipe(
   Layer.provide(CodexUsage.layer),
-  Layer.provide(CodexAccess.layerSignedOut)
+  Layer.provide(CodexAccess.layerSignedOut),
+  Layer.provide(providersOf([]))
 );
 
 describe("the usage feed", () => {

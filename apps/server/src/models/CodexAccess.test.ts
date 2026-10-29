@@ -14,6 +14,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   Clock,
   Context,
+  Deferred,
   Duration,
   Effect,
   Layer,
@@ -156,6 +157,72 @@ describe("the Codex login for usage reads", () => {
         assert.strictEqual(
           Option.getOrThrow(yield* store.read(CODEX_PROVIDER)).refresh,
           "rt_1-r1"
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(Sql, NodeServices.layer))
+      )
+  );
+
+  it.live(
+    "refreshes once when a second read saw the stale token before the first refresh was written",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const readsDone = yield* Ref.make(0);
+        const bothRead = yield* Deferred.make<boolean>();
+
+        // The real store, whose `read` waits until both callers have read: each finds the stale
+        // token before either asks for the permit to refresh, so only the re-check under the
+        // permit keeps the second from refreshing again.
+        const context = yield* Layer.build(OAuthStore.layerWith(lockPath()));
+        const store = Context.get(context, OAuthStore);
+
+        const barrier = Effect.andThen(
+          Ref.updateAndGet(readsDone, (n) => n + 1),
+          (n) =>
+            n >= 2 ? Deferred.succeed(bothRead, true) : Deferred.await(bothRead)
+        );
+
+        const access = Context.get(
+          yield* Layer.build(
+            CodexAccess.layer.pipe(
+              Layer.provide(
+                Layer.succeed(CodexRefresh, fakeRefresh(calls, false))
+              ),
+              Layer.provide(
+                Layer.succeed(
+                  OAuthStore,
+                  OAuthStore.of({
+                    ...store,
+                    read: (provider) =>
+                      Effect.tap(store.read(provider), () => barrier),
+                  })
+                )
+              )
+            )
+          ),
+          CodexAccess
+        );
+
+        const now = yield* Clock.currentTimeMillis;
+        const nearExpiry = now + Duration.toMillis(REFRESH_MARGIN) - 1000;
+
+        yield* store.signIn(CODEX_PROVIDER, credential("rt_1", nearExpiry));
+
+        const [first, second] = yield* Effect.all(
+          [access.credential, access.credential],
+          { concurrency: 2 }
+        );
+
+        assert.strictEqual(yield* Ref.get(calls), 1);
+        assert.strictEqual(
+          Redacted.value(Option.getOrThrow(first).access),
+          "access-rt_1-r1"
+        );
+        assert.strictEqual(
+          Redacted.value(Option.getOrThrow(second).access),
+          "access-rt_1-r1"
         );
       }).pipe(
         Effect.scoped,

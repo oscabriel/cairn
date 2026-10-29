@@ -1,6 +1,7 @@
 // The usage feed beyond the bridge: a Codex login adds Codex's row, an unreadable Codex answer is a
 // row with no windows, with no login the frame is unchanged from the bridge-only feed, and with both
-// sources the rows come Claude first and a change in either keeps the other's row. The bridge's own
+// sources the rows come Claude first and a change in either keeps the other's row; OpenCode Go,
+// while ready, is an `unsupported` row after them. The bridge's own
 // rows are judged in `models/BridgeProvider.test.ts`.
 
 import { ClaudeUsage } from "@cairn/bridge/ClaudeUsage";
@@ -20,8 +21,10 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { BridgeProvider } from "../models/BridgeProvider.ts";
 import { CodexAccess, parseCodexCredential } from "../models/CodexAccess.ts";
 import { CODEX_PROVIDER } from "../models/CredentialStore.ts";
+import { ModelRuntimeError, PiModelSource } from "../models/PiModelSource.ts";
 import { CodexUsage } from "./CodexUsage.ts";
-import { UsageFeed } from "./UsageFeed.ts";
+import { OPENCODE_GO_PROVIDER, UsageFeed } from "./UsageFeed.ts";
+import { OPENCODE_GO_READY, providersOf } from "./UsageTestKit.ts";
 
 const SESSION_AND_WEEK = JSON.stringify({
   rate_limit: {
@@ -67,7 +70,8 @@ const feedOver = (body: string) =>
   UsageFeed.layerNoDeps.pipe(
     Layer.provide(CodexUsage.layerNoDeps),
     Layer.provide(answering(body)),
-    Layer.provide(signedIn)
+    Layer.provide(signedIn),
+    Layer.provide(providersOf([]))
   );
 
 /** Claude's row with one session window `used` full. */
@@ -242,10 +246,82 @@ describe("the usage feed beyond the bridge", () => {
               Layer.provide(CodexUsage.layerNoDeps),
               Layer.provide(answering(SESSION_AND_WEEK)),
               Layer.provide(signedIn),
-              Layer.provide(bridgeOver(claude))
+              Layer.provide(bridgeOver(claude)),
+              Layer.provide(providersOf([]))
             )
           )
         );
+      })
+  );
+
+  it.effect(
+    "adds OpenCode Go as unsupported while it is ready, after Codex, with no windows and no check time",
+    () =>
+      Effect.gen(function* () {
+        const frame = yield* firstChecked;
+
+        assert.deepStrictEqual(
+          frame.providers.map((row) => [
+            row.provider,
+            row.reading,
+            row.windows.length,
+            Option.isSome(row.checkedAt),
+          ]),
+          [
+            [CODEX_PROVIDER, "read", 2, true],
+            [OPENCODE_GO_PROVIDER, "unsupported", 0, false],
+          ]
+        );
+      }).pipe(
+        Effect.provide(
+          UsageFeed.layerNoDeps.pipe(
+            Layer.provide(CodexUsage.layerNoDeps),
+            Layer.provide(answering(SESSION_AND_WEEK)),
+            Layer.provide(signedIn),
+            Layer.provide(providersOf([OPENCODE_GO_READY])),
+            Layer.provide(BridgeProvider.layerOff)
+          )
+        )
+      )
+  );
+
+  it.effect(
+    "adds no OpenCode Go row while it is missing, or when the catalog cannot be read",
+    () =>
+      Effect.gen(function* () {
+        for (const models of [
+          providersOf([{ ...OPENCODE_GO_READY, state: "missing" }]),
+          Layer.succeed(
+            PiModelSource,
+            PiModelSource.of({
+              catalog: () => Effect.die("not used by this test"),
+              providers: Effect.fail(
+                new ModelRuntimeError({
+                  message: "unreadable catalog",
+                  operation: "PiModelSource.providers",
+                  cause: "test",
+                })
+              ),
+            })
+          ),
+        ]) {
+          const frame = yield* firstChecked.pipe(
+            Effect.provide(
+              UsageFeed.layerNoDeps.pipe(
+                Layer.provide(CodexUsage.layerNoDeps),
+                Layer.provide(answering(SESSION_AND_WEEK)),
+                Layer.provide(signedIn),
+                Layer.provide(models),
+                Layer.provide(BridgeProvider.layerOff)
+              )
+            )
+          );
+
+          assert.deepStrictEqual(
+            frame.providers.map((row) => row.provider),
+            [CODEX_PROVIDER]
+          );
+        }
       })
   );
 });

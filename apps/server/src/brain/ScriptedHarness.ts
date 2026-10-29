@@ -468,7 +468,19 @@ interface Reporter {
   phase: "deliver" | "nudge" | "report" | "done";
   /** The seq a nudge was sent for, in the `nudge` phase. */
   nudgeSeq: number;
+  /**
+   * In the `nudge` phase, the other inputs the nudged run ended: the nudge's run settles them with
+   * its own, and wakes the parent unless all of them were quiet.
+   */
+  carried: Array<SharedInput>;
   settlement: Option.Option<SubagentSettlement>;
+}
+
+/** One input a run ended, as the reporter settling that run counts it. */
+interface SharedInput {
+  readonly quiet: boolean;
+  readonly placedAs: Option.Option<number>;
+  readonly requestId: string;
 }
 
 /** Settles the inputs the run's current segment placed, as the run's end leaves them. */
@@ -1678,6 +1690,7 @@ const layerNoDeps = Layer.effectContext(
         quietRun: quiet,
         phase: "deliver",
         nudgeSeq: 0,
+        carried: [],
         settlement: Option.none(),
       };
 
@@ -1918,11 +1931,16 @@ const layerNoDeps = Layer.effectContext(
      * the child working.
      */
     const settledUnlessWorking = (child: ScriptedThread, changes: Changes) => {
+      // A reporter in its nudge phase whose nudge is not admitted yet still works too.
       const undelivered = [...store.reporters.values()].some(
         (reporter) =>
           reporter.child === child.threadId &&
-          reporter.phase === "deliver" &&
-          !child.byRequest.has(reporter.requestId)
+          ((reporter.phase === "deliver" &&
+            !child.byRequest.has(reporter.requestId)) ||
+            (reporter.phase === "nudge" &&
+              !child.byRequest.has(
+                SubagentRequestIds.nudge(child.threadId, reporter.nudgeSeq)
+              )))
       );
 
       if (Option.isNone(child.run) && !undelivered) {
@@ -1963,8 +1981,9 @@ const layerNoDeps = Layer.effectContext(
       // Every input the run ended, answered or not: its wake follows all of them, not only the
       // first reporter to settle, and its typed result is the one it accepted after its first
       // input. A reporter in its nudge phase waits on its nudge, which this run may have answered;
-      // one that settled already belongs to the run it settled.
-      const shared = [...store.reporters.values()].flatMap((other) => {
+      // one that settled already belongs to the run it settled. A nudge's run also ends the inputs
+      // its nudged run ended (`carried`).
+      const peers = [...store.reporters.values()].flatMap((other) => {
         const waitsOn =
           other.phase === "nudge"
             ? SubagentRequestIds.nudge(child.threadId, other.nudgeSeq)
@@ -1987,9 +2006,17 @@ const layerNoDeps = Layer.effectContext(
                 placedAs: found.placedAs,
                 requestId: other.requestId,
               },
+              ...other.carried,
             ]
           : [];
       });
+
+      const shared = [...reporter.carried, ...peers].filter(
+        (other, index, all) =>
+          other.requestId !== reporter.requestId &&
+          all.findIndex((first) => first.requestId === other.requestId) ===
+            index
+      );
 
       reporter.quietRun =
         reporter.quiet && shared.every((other) => other.quiet);
@@ -2017,6 +2044,7 @@ const layerNoDeps = Layer.effectContext(
 
       if (Option.isSome(missing) && nudgeDue(missing.value)) {
         reporter.nudgeSeq = seq;
+        reporter.carried = shared;
         reporter.phase = "nudge";
 
         return;

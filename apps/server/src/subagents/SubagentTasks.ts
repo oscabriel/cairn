@@ -35,7 +35,8 @@
 //   run that ended several inputs, a nudge's included, settles them all and wakes the parent
 //   unless all of them were a user's steers; its mark lists their request ids);
 //   `nudge` sends a typed child that ended without a result its one nudge (`NUDGE_TEXT`) and
-//   settles on that run; `report` writes the settlement's note and decides the wake by the
+//   settles on that run, with every input the nudged run ended (its checkpoint carries them, and
+//   a peer it carries settles nothing); `report` writes the settlement's note and decides the wake by the
 //   parent's state; `wake` submits the wake and marks the settlement delivered. Nudge, note and
 //   wake request ids derive from the child and the settlement's `seq`, so a rerun after `kill -9`
 //   lands each once.
@@ -232,7 +233,50 @@ interface RunInputs {
   readonly inputs: Array<string>;
 }
 
-/** Whether two settled submissions ended in one run (table records only). */
+/**
+ * What a reporter in its `nudge` phase carries from the run it nudged: the request ids of every
+ * input that run ended and whether all of them were quiet. The nudge's run settles them with its
+ * own, so the reporter that sent the nudge decides that run's wake for all of them.
+ */
+interface NudgedRun {
+  readonly inputs: ReadonlyArray<string>;
+  readonly quiet: boolean;
+}
+
+/** A run that carries nothing from a nudged one: the reporter's own input only. */
+const NOTHING_CARRIED: NudgedRun = { inputs: [], quiet: true };
+
+/** What a reporter in its `nudge` phase carries, from its checkpoint (plain JSON). */
+const nudgedRunOf = (
+  task: TaskRecord<JsonValue, JsonValue, JsonValue> | undefined
+): Option.Option<NudgedRun> => {
+  const state = task?.state;
+
+  if (
+    state === undefined ||
+    state.status === "completing" ||
+    state.status === "terminal" ||
+    !isJsonRecord(state.checkpoint) ||
+    state.checkpoint.phase !== "nudge"
+  ) {
+    return Option.none();
+  }
+
+  const { inputs, quiet } = state.checkpoint;
+
+  return Option.some({
+    inputs: Array.isArray(inputs) ? inputs.filter(Predicate.isString) : [],
+    quiet: quiet !== false,
+  });
+};
+
+/**
+ * Whether two settled submissions ended in one run (table records only). A failed or stopped run
+ * keeps no run id on its inputs, so they match by placed entry, reason and detail. Its limit: a
+ * peer whose input an earlier run failed the same way, and whose reporter has not settled yet (a
+ * restart between the two runs, say), is grouped into the later run, and the earlier failure's
+ * settlement is lost; its parent still hears of the later one.
+ */
 const sameRun = (
   mine: SettledSubmissionRecord,
   other: SubmissionRecord | undefined
@@ -299,19 +343,31 @@ const peerSubmission = async (
  * The run `settled` ended, over every input it ended (table reads only): another reporter's input
  * belongs to it when its current submission (its own input, or the nudge it sent) was answered by
  * the same answer, or, for a run that ended without one, was placed and ended with the same reason.
- * A reporter that already settled is left out: its run's mark lists it.
+ * A reporter that already settled is left out: its run's mark lists it. The inputs of a nudged run
+ * come along with its nudge: `carried` for this reporter's own, a peer's checkpoint for its.
  */
 const runInputs = async (
   tx: Tx,
   input: ReporterInput,
   item: SubagentItemState,
   others: ReadonlyArray<string>,
-  settled: SettledSubmissionRecord
+  settled: SettledSubmissionRecord,
+  carried: NudgedRun
 ): Promise<RunInputs> => {
-  let { quiet } = input;
+  let quiet = input.quiet && carried.quiet;
   let from = settled.entry;
   const inputs = [input.requestId];
   const child = conversationOf(input.child);
+
+  const add = (requestId: string) => {
+    if (!inputs.includes(requestId)) {
+      inputs.push(requestId);
+    }
+  };
+
+  for (const requestId of carried.inputs) {
+    add(requestId);
+  }
 
   if (settled.status === "unanswered" && settled.entry === undefined) {
     return { quiet, from, inputs };
@@ -338,16 +394,47 @@ const runInputs = async (
       }
 
       const reporter = isJsonRecord(task?.input) ? task.input : {};
+      const nudged = Option.getOrElse(nudgedRunOf(task), () => NOTHING_CARRIED);
 
-      if (reporter.quiet === false) {
+      if (reporter.quiet === false || !nudged.quiet) {
         quiet = false;
       }
 
-      inputs.push(requestId);
+      add(requestId);
+
+      for (const carriedId of nudged.inputs) {
+        add(carriedId);
+      }
     }
   }
 
   return { quiet, from, inputs };
+};
+
+/**
+ * Whether a peer reporter in its `nudge` phase carries `requestId`: the run that ended it was
+ * nudged, and the nudge's run settles it (table reads only).
+ */
+const nudgedByPeer = async (
+  tx: Tx,
+  item: SubagentItemState,
+  others: ReadonlyArray<string>,
+  requestId: string
+): Promise<boolean> => {
+  for (const other of others) {
+    const taskId = item.inputs[other];
+
+    if (taskId !== undefined) {
+      // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+      const nudged = nudgedRunOf(await tx.task(taskOf(taskId)));
+
+      if (Option.exists(nudged, (found) => found.inputs.includes(requestId))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 };
 
 /** How many entries `resultOfRun` reads per page. */
@@ -441,7 +528,7 @@ interface WakeState {
 /** Where a reporter stands. */
 type ReporterState =
   | { phase: "deliver" }
-  | { phase: "nudge"; seq: number }
+  | { phase: "nudge"; seq: number; inputs: Array<string>; quiet: boolean }
   | { phase: "report"; settlement: SettlementState; quiet: boolean }
   | { phase: "wake"; settlement: SettlementState; wakes: Array<WakeState> };
 
@@ -809,7 +896,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     input: ReporterInput,
     settled: SettledSubmissionRecord,
     accepted: Option.Option<ResultState>,
-    now: number
+    now: number,
+    carried: NudgedRun
   ): Promise<NextTaskState<ReporterState, null>> => {
     const child = conversationOf(input.child);
 
@@ -853,7 +941,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       }
     }
 
-    const run = await runInputs(tx, input, item, others, settled);
+    const run = await runInputs(tx, input, item, others, settled, carried);
+    const nudged = await nudgedByPeer(tx, item, others, input.requestId);
     const result = await resultOfRun(tx, child, run.from, accepted);
 
     const link = await tx.doc(ChildDoc, child);
@@ -882,10 +971,28 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       return completed();
     }
 
+    // A peer nudged the run that ended this input: the nudge's run settles it, so the child still
+    // works and this reporter settles nothing (not `failed`, its nudge being spent).
+    if (nudged) {
+      return completed();
+    }
+
     const seq = item.settlements.length + 1;
 
+    // The nudge carries every input the run ended: its run settles them all, and wakes the parent
+    // unless all of them were quiet, whichever of their reporters got here first.
     if (Option.isSome(missing) && nudgeDue(missing.value)) {
-      return { status: "running", checkpoint: { phase: "nudge", seq } };
+      return {
+        status: "running",
+        checkpoint: {
+          phase: "nudge",
+          seq,
+          inputs: run.inputs.filter(
+            (requestId) => requestId !== input.requestId
+          ),
+          quiet: run.quiet,
+        },
+      };
     }
 
     const report = Option.fromNullOr(link.report);
@@ -957,7 +1064,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
     input: ReporterInput,
     submission: Submission,
-    context: Parameters<typeof runWait>[1]
+    context: Parameters<typeof runWait>[1],
+    carried: NudgedRun
   ) => {
     const stop = await followChild(runtime, input, context);
     const settled = await withCleanup(submission.wait(context), stop);
@@ -978,7 +1086,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           input,
           settled,
           result,
-          runtime.now()
+          runtime.now(),
+          carried
         ),
       context
     );
@@ -1033,11 +1142,17 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           return;
         }
 
-        await deliverAndSettle(runtime, input, submission, context);
+        await deliverAndSettle(
+          runtime,
+          input,
+          submission,
+          context,
+          NOTHING_CARRIED
+        );
       },
       nudge: async (task, runtime, context) => {
         const { input } = task;
-        const { seq } = task.state.checkpoint;
+        const { seq, inputs, quiet } = task.state.checkpoint;
 
         const child = await runtime.conversation(
           conversationOf(input.child),
@@ -1060,7 +1175,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context
         );
 
-        await deliverAndSettle(runtime, input, submission, context);
+        await deliverAndSettle(runtime, input, submission, context, {
+          inputs,
+          quiet,
+        });
       },
       report: async (task, runtime, context) => {
         const { input } = task;

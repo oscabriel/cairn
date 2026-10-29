@@ -149,50 +149,58 @@ describe.each(SIDES)("%s harness, pending scenarios", (side) => {
 /** The scenarios where one child run ends a user's quiet steer and a waking input together. */
 const SHARED_RUN_SCENARIOS: ReadonlySet<string> = new Set([
   "subagent_send_and_user_steer_share_a_run",
+  "subagent_typed_brief_run_shares_user_steer",
   "subagent_typed_nudge_run_shares_user_steer",
   "subagent_user_steer_and_send_share_a_failed_run",
   "subagent_user_steer_and_send_share_a_run",
 ]);
 
-/** How long a waking reporter waits before it settles, so the quiet one settles first. */
-const WAKING_SETTLE_DELAY_MILLIS = 300;
+/** How long the reporter held back waits before it settles, so the other one settles first. */
+const HELD_SETTLE_DELAY_MILLIS = 300;
 
-// On pi-durable the reporters of a shared run settle in whatever order their commits land. The
-// waking ones held back here, the user's quiet steer settles the run first, and the parent must
-// still be woken (ADR 0028: only a stop may lose a wake).
-describe("pi-durable harness, a shared run settled by its quiet input first", () => {
-  it.live(
-    "every shared-run scenario passes",
-    () =>
-      Effect.gen(function* () {
-        const target = piDurableTargetWith({
-          ...DEFAULT_TOOL_OPTIONS,
-          settleDelayMillis: (quiet) =>
-            quiet ? 0 : WAKING_SETTLE_DELAY_MILLIS,
-        });
+// On pi-durable the reporters of a shared run settle in whatever order their commits land. Each
+// order is forced here: with the waking ones held back the user's quiet steer settles the run
+// first, and with the quiet one held back a waking one does. Either way the parent is woken once,
+// with one settlement (ADR 0028: only a stop may lose a wake).
+describe.each([
+  { first: "quiet", heldQuiet: false },
+  { first: "waking", heldQuiet: true },
+])(
+  "pi-durable harness, a shared run settled by its $first input first",
+  ({ heldQuiet }) => {
+    it.live(
+      "every shared-run scenario passes",
+      () =>
+        Effect.gen(function* () {
+          const target = piDurableTargetWith({
+            ...DEFAULT_TOOL_OPTIONS,
+            settleDelayMillis: (quiet) =>
+              quiet === heldQuiet ? HELD_SETTLE_DELAY_MILLIS : 0,
+          });
 
-        const outcomes = yield* Effect.forEach(
-          scenarios.filter((scenario) =>
-            SHARED_RUN_SCENARIOS.has(scenario.name)
-          ),
-          (scenario) => runScenario(scenario, target, options),
-          { concurrency: 4 }
-        );
+          const outcomes = yield* Effect.forEach(
+            scenarios.filter((scenario) =>
+              SHARED_RUN_SCENARIOS.has(scenario.name)
+            ),
+            (scenario) => runScenario(scenario, target, options),
+            { concurrency: 4 }
+          );
 
-        assert.strictEqual(outcomes.length, SHARED_RUN_SCENARIOS.size);
-        assert.deepStrictEqual(
-          outcomes.flatMap((outcome) =>
-            Option.match(outcome.failure, {
-              onNone: () => [],
-              onSome: (failure) => [`${outcome.scenario}: ${failure}`],
-            })
-          ),
-          []
-        );
-      }),
-    120_000
-  );
-});
+          assert.strictEqual(outcomes.length, SHARED_RUN_SCENARIOS.size);
+          assert.deepStrictEqual(
+            outcomes.flatMap((outcome) =>
+              Option.match(outcome.failure, {
+                onNone: () => [],
+                onSome: (failure) => [`${outcome.scenario}: ${failure}`],
+              })
+            ),
+            []
+          );
+        }),
+      120_000
+    );
+  }
+);
 
 /** The side whose record a scenario's golden holds; none while no side passes it. */
 const goldenSide = (scenario: Scenario): Option.Option<Side> => {

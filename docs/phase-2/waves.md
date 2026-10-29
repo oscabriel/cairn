@@ -251,3 +251,85 @@ Each branch merged with `--no-ff` in the order A, B, C, C-seam, D, E, F. Every b
 - **The reach stage of the wizard**, after the next deploy of the phase 2 brain: `ops/wizards/phase-2.sh 2` (Caddyfile backup, porch binary and `init`, the compose mount, the `import` line, `stream_close_delay`, the owner guard, validate, reload, a probe publish), then `porch doctor` clean. `~/.local/state/porchlight` held only the registry of three probe publishes from 2F's builder's dry run (it set `HOME` and `XDG_CONFIG_HOME` but not `XDG_STATE_HOME`); the integrator moved it to `/tmp/porchlight-state-from-2F-dryrun`, so the wizard's `porch init` starts from a machine where porch never ran. Judges that run porch set `XDG_STATE_HOME` too.
 - **The Codex login** from wave 1 (`ops/wizards/phase-2.sh 1`) is still to come after a deploy.
 - **When deploying** (nothing is deployed by this integration): ship the web build and the brain together; migrations 0009 to 0011 run with a backup first; the two new extensions append `pi.system` entries to every conversation once. Deploy while no thread is mid-tool: a `bash`, `write` or `edit` call cut off under the old `unsafe` build and resumed by this one has no effect mark, so it would run again.
+
+## Wave 3 integration
+
+Integrated on 2026-10-29 on `main`.
+
+### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| 3A Subagents extension | `phase2/3A` | `9a1b3d7` | done, not approved: left out (below) |
+| 3B Workspaces and the trailer | `phase2/3B` | `2d085de` | done, merged as `52cd4ad` |
+| 3C Pending requests, server side | `phase2/3C` | `58eb5aa` | done, merged as `352659e` |
+| 3D Codex plan windows | `phase2/3D` | `3a13b0f` | done, merged as `1904bfc`; the live read waits on the user's Codex login |
+| 3E Artifacts | `phase2/3E` | `737f911` | done, merged as `e70a0bb` |
+| 3F Portals | `phase2/3F` | `c343bf7` | done, merged as `4339bc8` |
+| 3G pi host judges | `phase2/3G` | `adf947e` | done, merged as `34909a1` |
+| 3H Bridge transcript lag | `phase2/3H` | `38b30d3` | done, merged as `d2a8628` |
+
+Each branch merged with `--no-ff` in the order B to H, all from `631afb3` (wave 2 integrated), with no conflict. The hand-offs are one commit, `80171d1`; this note and the judge and doc edits are the next.
+
+**3A is left out.** Its review holds one blocking finding: when a quiet reporter (the user's steer of an idle child) and a waking reporter (the parent's `subagent_send`) end on the same child run, pi-durable settles both inputs with that run's one answer, `settle` settles each answer once, and the reporter that commits first decides `quiet`. If that is the user's steer, the parent never wakes for its own send (reproduced 5 of 5 on pi-durable; the scripted harness has the same flaw and also disagrees with pi-durable in the followUp case). ADR 0028 allows only a stop to lose a wake. 3A's hand-offs (the `subagents: 650` order key, `Subagents` in the production set, the subagent boot repairs, `SubagentRows`, ADR 0034 accepted, `SubagentQuestionState.cancelled`, `ThreadCreate.lineage`, the glossary's subagent anchor, child scope and brief task) wait for its fix and come with its merge. So does 3B's last hand-off: the spawn calls `ChildWorkspaces.prepare` before it commits the child's receipt and gives the child that cwd.
+
+### Integration judges
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 166 s: fmt, lint, typecheck, 1,859 tests. No dependency changed, so `pnpm install --frozen-lockfile` was not needed over the existing `node_modules`. |
+| `judges/reach-restart.sh --porch /tmp/reach-probe/porch-bin` (3F, ADR 0038's gate) | pass | restart: 15 of 15 probes through the `kill -9`, 15 of 15 through the SIGTERM, close 200, then the name 404; matrix 16 of 16 (open and close steps, rerun or left to the repair), nothing left; control 1 ok and 15 failed, as it must; no leftover unit, porch or container. No model, $0. |
+| `node judges/artifacts-kill.ts --porch /tmp/reach-probe/porch-bin` (3E, with the two new cases) | pass | 40 of 40 checks over six cases: stage, claim (a claim with no hash, nothing served, then published), porch (served with its hash not filled in, then filled in, `changed: false`), publish, restore, remove. No model, $0. |
+| `judge-main.ts` boot on a throwaway port and a fresh data folder | pass | Migration 0012 made `child_workspaces`; boot repairs in order: sweep uploads, executor sweep, cancel abandoned approvals, retry parked approval waits, child workspace repair, resume launches, checkpoint repair, spend reconcile, portal reconcile, start portal sweep, start event reactors; no `boot_repair_failed`; ready in 20 ms; `closing` and `closed` on SIGTERM. |
+| `node judges/durability.ts --no-page` (the judge brain with `cairn.reach` and `ask_user` installed) | pass | 13 of 13. Kill to up 1,231 to 1,441 ms; up to converged 5 to 12 ms; sigterm-six 3,108 to 3,122 ms. |
+| `judges/pi-readonly.sh --no-turn` (the brain as deployed) | pass, after a fix | It failed first on a second child process: 3B's coding tools ask `git version` once at boot to decide the commit trailer. The judge now counts that call apart (`git-version`, matched on its arguments) and still fails on any other child. Agent dir identical (62,151 entries), pi home identical (4 entries), children `flock` and `git-version`, opencode-go ready, anthropic refused, openai-codex missing, boot 883 ms. $0. |
+| `node judges/pi-host.ts` (3G) | pass | kills: 2 kills (2.2 s and 3.2 s), `counter_safe` ran 3 times, `counter_unsafe` once; control failed rightly (`counter_safe` once); pi home unchanged. Faux model, $0. |
+| `node judges/dev-smoke.ts` (scripted dev brain, now with its own portal settings and fake porch) | pass | Live after 2,583 ms; the demo thread grew from 2 to 8 entries; 0 page errors. |
+| Real-model judges | not run | None at integration. The packages' own: 3H's bridge windows on `claude-haiku-5-5` on the Claude Code plan (nothing billed, about $1 to $2 at API rates); 3G's committed `--search` run, a few cents on `opencode-go/minimax-m3`; the rest $0. |
+
+`judges/reach.ts` (3E's artifact half over a throwaway Caddy container) was not rerun: it passed 15 of 15 on the branch, the integration changed only how its services are built, and ADR 0005 keeps Docker for Executor.
+
+### Hand-offs applied
+
+- **`db/Migrations.ts`**: `0012_ChildWorkspaces` (3B). Its test kits and kill fixture still spread it themselves, which is redundant and harmless.
+- **`Extensions.ts`**: `ExtensionOrder.reach: 760` and `askUser: 870`. The reach note's 750 is already the provider request log's private order (`PROVIDER_REQUEST_ORDER`), and the extension set refuses two entries on one key, so reach takes 760. **`ExtensionSet.ts`**: `ReachTools` (over `ExtensionOrder.reach`) and `askUserExtension(ExtensionOrder.askUser)` in `production`; the conformance target's `ask_user` extra and `ASK_USER_ORDER` are gone. `CodingTools.test.ts` expects `cairn.reach` after the request log and `cairn.ask-user` after `cairn.roles`.
+- **`reach/ReachExtension.ts`** (3E's file, the 3F hand-off): `ReachTools.layerAt` also yields `PortalTools` and installs `portal_open`, `portal_close` and `portal_list` beside the artifact tools under the one `cairn.reach` name.
+- **`reach/ReachLayer.ts`** (new, integrator): `ReachServices` (Artifacts, Portals, PortalTools, ReachLister over Git), needing `PorchClient`, `PortalUnits`, `SqlClient` and `ServerConfig`; `ReachMachine.layerTest` (a fake porch and fake units in a temp folder) and `layerFakePorch` (a fake porch with the real units); `judgePortalSettings(prefix, offset, PATH)`; `ReachServicesTest` for tests that build the extension set. `AppLayer.ts` exports `ReachLive` (`ReachServices` over `DatabaseLive`), which `AppLayer` merges and each entry point gives `PiDurableBrain`, as `SettingsLive` is, so one portal store serves the tools, the RPCs, the boot repairs and the close hook.
+- **Porch and units are the entry point's**, so nothing but `main.ts` can reach the user's porch or production portal units: `main.ts` gives `PorchClient.layer`, `PortalUnits.layer` and `portalSettingsLayer(process.env)`; `judge-main.ts` gives `layerFakePorch`, units `cairn-judge-portal-<pid>-` on ports 38100 to 38199 and `judgePortalFaults(CAIRN_JUDGE_FAULT, <data>/portal-fault-fired)`; `dev-main.ts` gives `layerFakePorch` and `cairn-dev-portal-` on 38200 to 38299. Tests and judges that build `AppLayer` (`Boot.test.ts`, `Ws.test.ts`, `typing.ts`, `paste-client.ts`, `shell-resume.ts`, the parity `CairnApp.ts`) take `ReachMachine.layerTest`; those that build the extension set take `ReachServicesTest`, as do `judges/fixtures/transcripts/record.ts` and `judges/pi-readonly.sh`.
+- **`AppLayer.ts`**: `ChildWorkspaces.layerNoDeps` over `ChildWorkspaceStore.layerNoDeps` inside `ProjectsLive`, beside `Worktrees` and `Git`.
+- **`rpc/Handlers.ts`**: `PortalHandlers` and `ReachHandlers` after the stubs, replacing `reach.list`, `artifact.revoke`, `portal.close` and `portal.start`. The stubs stay in `StubHandlers.ts`, since the RPC tests build a full handler set from them. `reach.list`'s portal half was already `ReachLister`'s read of the `portals` table.
+- **`BootRepairs.ts`**: `child workspace repair` after retrying parked approval waits and before resuming launches (so before the Harness resumes); `portal reconcile` then `start portal sweep` after `spend reconcile` and before the event reactors. `ReachRepair.ts`'s `portalReconcile` is now built by hand rather than through `bootRepair`, which closed an import cycle with `BootRepairs.ts`. **`ShutdownHooks.ts`**: `stop portal sweep` after the bridge's closing hook.
+- **`reach/ArtifactPublisher.ts`** (2F's file, 3E's hand-off): `ArtifactFaults` read at build; `after("claim")` once the claim is held, before porch; `after("porch")` after porch, before the row is filled in. `judges/artifacts-kill.ts` gained the `claim` and `porch` cases.
+- **ADR 0038 is accepted**, with this run's gate evidence. **`docs/phase-2/notes/models.md` M7** now says OpenCode Go reports `unsupported`, as the protocol and glossary do.
+- **`GLOSSARY.md`**: child workspace (with the `Cairn-Thread` trailer); the portal entry says how a portal outlives a restart and when it closes.
+
+### Hand-offs held for later packages
+
+- **3A's**, all of them, and 3B's spawn step (above).
+- **3C, for 6A**: `client-logic/PendingRequests.ts` exports `pendingRequests`, `requestBodyOf`, `settledLines` and `settledLineOf`, `answersProblem`, `answeredQuestions` and `answerText`. The card validates with `answersProblem` before `thread.respond`, since the server refuses a misfit as `invalid_input`. The t3code `pendingUserInput` card behaviour (digits, the 200 ms advance, undo) is 6A's port.
+- **3D, for 6G**: `UsageFeed` has no `opencode-go` row yet. Add a ready OpenCode Go provider with `reading: "unsupported"` and `windows: []` from the feed (it then reads `PiModelSource`'s readiness) or from the wave 6 meter. `UsageFeed.layer` and `layerNoDeps` now also need `PiModelSource`, which `HandlersLayer` already has.
+- **3E, for whoever next edits `reach/`**: export `StoredRow`, `decodeStoredRows` and `rowOf` from `ArtifactPublisher.ts` so `Artifacts.ts` drops its duplicate codec (S12); make the fake porch answer `changed: false` when its registry holds the same hash for that source, as porch 0.0.0 does, and drop the `registryOnly` wrapper in `Artifacts.test.ts`. Thread deletion needs a hook that removes `<data>/artifacts/<thread>/`.
+- **3F, for a judge-brain case**: with `judgePortalFaults` now in `judge-main.ts`, a faux-model thread can call `portal_open`, be killed at `portal:after-unit`, and its resumed run end with the same portal open. `reach-restart` still uses its own fixture brain (`judges/fixtures/reach/PortalBrain.ts`).
+
+### Rules later packages follow
+
+- **Reach services come from the root.** Use `ReachLive` in an entry point and `ReachServicesTest` or `ReachMachine.layerTest` in a test; never build `PorchClient.layer` or `PortalUnits.layer` outside `main.ts`. A judge or dev brain's portal units carry its own prefix, which its reconcile and sweep keep to, and its ports sit outside 3100 to 3699.
+- **Portal units** are `cairn-portal-<16 hex>` on ports 3100 to 3699; a judge's are `cairn-judge-portal-<pid>-<id>`, which `Unit.sweepOrphans` also reaps.
+- **The coding tools ask `git version` once at boot** (3B's trailer); a judge that counts child processes counts it apart.
+
+### What differs from the plan
+
+- **3A left out** (above); wave 3's "subagents live" is not yet live.
+- **3B**: the spawn's workspace step is built and judged on its own (temp-repo tests, the kill between the intent row and `git worktree add`, the boot repair over a real pi-durable brain); nothing calls it until 3A merges.
+- **3C** added a third scenario, `question_across_restart`, beyond the two the block names. The card is wave 6.
+- **3D**: `CodexAccess.ts` sits in `models/` (S42 keeps pi-ai's runtime imports there); a failed read clears the windows rather than greying them; the live read is the user's (below).
+- **3E**: the kill judge runs separate child processes over the real porch (`fixtures/reach/ArtifactBrain.ts`) instead of a systemd judge brain. Dot folders are refused only on the way to the source, so a site's `.well-known/` publishes.
+- **3F**: no `porch lease` exists, so a portal's porch is `porch add` with a port Cairn picks; archiving a thread closes its portals through the one-minute sweep; both tools gate as the `command` action; the close fault cells are `portal:after-close-<row|unit|porch>`.
+- **3G** reran `pi-readonly.sh` without a paid turn; pi-web-access 0.45.0 no longer writes `~/.pi/exa-usage.json` when an Exa key is set (ADR 0039).
+- **3H** changed the convergence check every durability window uses: `sameShell` compares projects and threads, not `snapshotSequence`, because an unchanged thread row is skipped on purpose and leaves a live client one sequence behind. The skip-snapshot sabotage control still fails all 13 windows. The write-up is `spikes/10-bridge-transcript-lag/NOTES.md`.
+
+### Left for the user
+
+- **The live Codex usage read (3D's second judge)**, after `ops/wizards/phase-2.sh 1` and a deploy: subscribe to `usage.subscribe` on `cairn.service` (the only holder of the OAuth lock) and expect an `openai-codex` row with `reading: "read"`. Save the `wham/usage` body, with the access token, refresh token and account id removed, as `apps/server/src/usage/fixtures/wham-usage/live-<plan>.json`.
+- **The reach stage of the wizard** (`ops/wizards/phase-2.sh 2`) from wave 2 is still to come; until porch is set up, the deployed brain's portal reconcile and the artifact tools answer porch's "not set up" error.
+- **When deploying** (nothing is deployed by this integration): migration 0012 runs with a backup first; the `cairn.reach` and `cairn.ask-user` extensions append `pi.system` entries to every conversation once; deploy while no thread is mid-tool, as before.

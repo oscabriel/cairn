@@ -66,6 +66,8 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Subagent**: A thread that another thread or a stone spawns through a tool, from an approved brief. Its parent owns it; it has no sidebar row of its own but shows under its parent, where it can be steered and stopped. Its result reaches the parent as a note.
 
+**Child workspace**: A subagent's own git worktree and branch, planned in `cairn.sqlite` before git makes it, so a crash between the two is repaired at boot. Releasing it never deletes a worktree with uncommitted or unmerged work. Every commit a thread's `bash` makes carries a `Cairn-Thread: <thread id>` trailer.
+
 _Avoid_: child agent, worker (except as a role alias)
 
 **Lineage**: A subagent's place in the tree, on its row: its parent, its root, and how it relates to its parent. A row with a lineage is hidden from the sidebar, which shows it under its nearest ancestor that has a row.
@@ -274,7 +276,7 @@ _Avoid_: cost (for a plan's figure)
 
 _Avoid_: page, report (for the published thing)
 
-**Portal**: A private `gneiss.run` URL in front of a running dev server, on the Beelink or in a stone.
+**Portal**: A private `gneiss.run` URL in front of a running dev server, on the Beelink or in a stone. On the Beelink its server runs as its own systemd user unit (`cairn-portal-<id>`), so the page outlives a brain restart; a portal lives 12 hours and closes when its thread is archived.
 
 **Porch**: The user's tool (porchlight) that names private `gneiss.run` URLs and renders them into Caddy. Cairn publishes artifacts and opens portals by calling it.
 

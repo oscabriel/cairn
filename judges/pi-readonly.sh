@@ -19,7 +19,8 @@
 #   changes it (still a `{ month, count }` record, the count never lower within one month),
 # - no `.lock` entry exists in the agent dir,
 # - the brain process started no child process (no npm, no git, no `!command` key) other than the
-#   one `flock` that holds Cairn's OAuth lock (the store is built as the deployed brain's is),
+#   one `flock` that holds Cairn's OAuth lock (the store is built as the deployed brain's is) and
+#   the coding tools' one `git version` at boot,
 # - openai-codex is not ready: Cairn's own OAuth store is empty here, and pi's Codex login is
 #   never read,
 # - the listing has opencode-go models and no anthropic model,
@@ -112,7 +113,10 @@ const cp = createRequire(process.cwd() + "/")("node:child_process");
 for (const name of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
   const original = cp[name];
   cp[name] = (command, ...rest) => {
-    spawned.push(String(command).split("/").pop());
+    const base = String(command).split("/").pop();
+    // `git version`, asked once at boot by the coding tools (the commit trailer needs git 2.54),
+    // reads nothing of the agent dir; it is counted under its own name.
+    spawned.push(base === "git" && Array.isArray(rest[0]) && rest[0].at(-1) === "version" && rest[0].filter((arg) => !arg.startsWith("-") && !arg.includes("=")).length === 1 ? "git-version" : base);
     return original.call(cp, command, ...rest);
   };
 }
@@ -129,6 +133,7 @@ const { HarnessSeam } = await import(`${src}/brain/HarnessSeam.ts`);
 const { PiHost } = await import(`${src}/pi-host/PiHost.ts`);
 const { ModelHealth } = await import(`${src}/models/ModelHealth.ts`);
 const { SettingsStore } = await import(`${src}/models/SettingsStore.ts`);
+const { ReachServicesTest } = await import(`${src}/reach/ReachLayer.ts`);
 const { ThreadId, ProjectId } = await import("@cairn/protocol/Ids");
 const { OAuthStore } = await import(`${src}/models/OAuthStore.ts`);
 const { Database } = await import(`${src}/db/Database.ts`);
@@ -161,6 +166,8 @@ const brain = PiDurableBrain({ models }).pipe(
   Layer.provide(ModelHealth.layerTest),
   // The settings the roles tool reads its table from, in memory as well.
   Layer.provide(SettingsStore.layerTest),
+  // Artifacts and portals for the reach tools, over a fake porch and in-memory units.
+  Layer.provide(ReachServicesTest),
   Layer.provide(config)
 );
 
@@ -302,8 +309,9 @@ else {
   if (process.env.CAIRN_JUDGE_SEARCH === "1" && result.searchErrors > 0) failures.push(`${result.searchErrors} web_search results were errors`);
 }
 if (result !== undefined && result.codex === "ready") failures.push("openai-codex is ready from the pi login, with the Cairn OAuth store empty");
-// The OAuth store holds its lock through one `flock` child, by design; anything else fails.
-if (spawned.some((name) => name !== "flock")) failures.push("the brain started a child process other than the OAuth lock");
+// The OAuth store holds its lock through one `flock` child, by design, and the coding tools ask
+// `git version` once; anything else fails.
+if (spawned.some((name) => name !== "flock" && name !== "git-version")) failures.push("the brain started a child process other than the OAuth lock");
 if (spawned.filter((name) => name === "flock").length !== 1) failures.push("the OAuth store did not take its lock");
 for (const failure of failures) console.log(`FAIL ${failure}`);
 process.exit(failures.length);

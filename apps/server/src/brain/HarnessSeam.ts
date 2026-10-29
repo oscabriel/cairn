@@ -20,7 +20,11 @@ import {
   ThreadId,
 } from "@cairn/protocol/Ids";
 import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
-import type { ApprovalDecision, QuestionAnswer } from "@cairn/protocol/Policy";
+import type {
+  ApprovalDecision,
+  QuestionAnswer,
+  RuntimeMode,
+} from "@cairn/protocol/Policy";
 import { RuntimeRequestKind, ApprovalStatus } from "@cairn/protocol/Policy";
 import { RunFailureClass } from "@cairn/protocol/Shell";
 import type {
@@ -77,6 +81,8 @@ export interface EnsureThread {
   readonly cwd: string;
   /** Text rendered after every extension section; none leaves pi-durable's default. */
   readonly instructions: Option.Option<string>;
+  /** The permission mode its gated tools read at call time (`cairn.permissions`, ADR 0031). */
+  readonly runtimeMode: RuntimeMode;
 }
 
 /** The conversation a thread lives in. `created` is false when the thread already existed. */
@@ -92,6 +98,11 @@ export interface ThreadAgentChange {
   readonly thinkingLevel: Option.Option<ThinkingLevel>;
   /** Accepted only while the thread is idle, so a rerun after a crash builds its env where it ran. */
   readonly cwd: Option.Option<string>;
+  /**
+   * The permission mode of later tool calls. Accepted only while the thread is idle, so a call
+   * waiting on an approval, or a rerun after a crash, never finds its mode changed under it.
+   */
+  readonly runtimeMode: Option.Option<RuntimeMode>;
 }
 
 /** The kind and data a user input is recorded as, instead of a bare `pi.user` entry. */
@@ -288,7 +299,10 @@ export class HarnessSeam extends Context.Service<
     ensureThread(
       input: EnsureThread
     ): Effect.Effect<ThreadHandle, HarnessError>;
-    /** Changes the thread's model, thinking level or cwd; a cwd change fails while it runs. */
+    /**
+     * Changes the thread's model, thinking level, cwd or permission mode; a cwd or mode change fails
+     * with `invalid_input` while it runs.
+     */
     configure(
       threadId: ThreadId,
       change: ThreadAgentChange

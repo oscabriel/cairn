@@ -12,6 +12,7 @@ import {
   Unavailable,
 } from "@cairn/protocol/Errors";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
+import type { ApprovalDecision } from "@cairn/protocol/Policy";
 import { CairnRpcs, Viewer } from "@cairn/protocol/Rpc";
 import type {
   ConfigureInput,
@@ -146,11 +147,11 @@ const requestIdOf = (requestId: RpcMessage.RequestId) =>
   Option.some(String(requestId));
 
 /**
- * A phase 2 input this brain cannot act on yet: `thread.configure`'s `runtimeMode` (2B),
- * `thread.respond`'s decisions beyond accept and decline and its `launch` (2B, 5A), and
- * `thread.stop`'s `subagents: "stop"` (4C). `reason` and `answers` are recorded (1A). Refused,
- * so nothing is silently dropped; the package that builds each lifts its refusal and turns its test
- * in `ThreadCommandHandlers.test.ts` around.
+ * A phase 2 input this brain cannot act on yet: `thread.respond`'s `revise` (briefs, 4A),
+ * `accept_sample` and `launch` (5A), and `thread.stop`'s `subagents: "stop"` (4C). `reason` and
+ * `answers` are recorded (1A); `accept_for_thread` and `thread.configure`'s `runtimeMode` are
+ * handled (ADR 0031). Refused, so nothing is silently dropped; the package that builds each lifts
+ * its refusal and turns its test in `ThreadCommandHandlers.test.ts` around.
  */
 const notYet = (field: string, requestId: Option.Option<string>) =>
   new InvalidInput({
@@ -159,9 +160,28 @@ const notYet = (field: string, requestId: Option.Option<string>) =>
     requestId,
   });
 
+/** The decisions this brain records; the others wait for the packages that build them. */
+const HANDLED_DECISIONS: ReadonlySet<ApprovalDecision> = new Set([
+  "accept",
+  "accept_for_thread",
+  "decline",
+]);
+
+/**
+ * `auto` is listed for later (a decider answers routine approvals, after phase 2) and is not
+ * offered, so a thread is never set to it (ADR 0031).
+ */
+const autoNotOffered = (requestId: Option.Option<string>) =>
+  new InvalidInput({
+    message:
+      "The Auto permission mode is not offered yet. Nothing changed; choose Supervised, Auto-accept edits or Full access.",
+    field: Option.some("runtimeMode"),
+    requestId,
+  });
+
 /** The first field of a `thread.respond` this brain cannot act on yet, if any. */
 const respondNotYet = (input: RespondInput): Option.Option<string> => {
-  if (input.decision !== "accept" && input.decision !== "decline") {
+  if (!HANDLED_DECISIONS.has(input.decision)) {
     return Option.some("decision");
   }
 
@@ -246,8 +266,8 @@ export const threadCommandHandlers = Effect.gen(function* () {
           )
         ),
     configure: (input: ConfigureInput, requestId: Option.Option<string>) =>
-      Option.isSome(input.runtimeMode)
-        ? Effect.fail(notYet("runtimeMode", requestId))
+      Option.contains(input.runtimeMode, "auto")
+        ? Effect.fail(autoNotOffered(requestId))
         : threads
             .configure(input)
             .pipe(

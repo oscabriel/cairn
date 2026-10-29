@@ -175,6 +175,7 @@ const withHarness = <A, E>(
             thinkingLevel: "off",
             cwd: process.cwd(),
             instructions: Option.none(),
+            runtimeMode: "full-access",
           });
 
           const holdNextAbort = Effect.fnUntraced(function* (
@@ -381,6 +382,7 @@ const ensure = (seam: HarnessSeam["Service"]) =>
       thinkingLevel: "off",
       cwd: process.cwd(),
       instructions: Option.none(),
+      runtimeMode: "full-access",
     }),
     ({ conversationId }) => piConversationId(conversationId)
   );

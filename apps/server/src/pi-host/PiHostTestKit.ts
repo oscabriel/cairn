@@ -212,6 +212,7 @@ export const callTool = (
         thinkingLevel: "off",
         cwd: turn.cwd,
         instructions: Option.none(),
+        runtimeMode: "full-access",
       });
     }
 

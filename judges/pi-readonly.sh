@@ -168,6 +168,7 @@ const program = Effect.gen(function* () {
         thinkingLevel: pick.thinkingLevels.includes("minimal") ? "minimal" : (pick.thinkingLevels[0] ?? "off"),
         cwd: process.env.CAIRN_JUDGE_DATA,
         instructions: Option.none(),
+        runtimeMode: "full-access",
       });
       const turnStart = Date.now();
       yield* seam.submit(threadId, {

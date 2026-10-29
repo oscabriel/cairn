@@ -141,6 +141,7 @@ const seeded = Effect.gen(function* () {
     thinkingLevel: "off",
     cwd: "/tmp",
     instructions: Option.none(),
+    runtimeMode: "full-access",
   });
 
   const ended = yield* seam.events.pipe(

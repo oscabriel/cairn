@@ -13,6 +13,7 @@ import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { ApprovalId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { SubmissionId } from "@cairn/protocol/Ids";
+import { DEFAULT_RUNTIME_MODE } from "@cairn/protocol/Policy";
 import type { ThreadStreamItem } from "@cairn/protocol/Thread";
 import {
   Clock,
@@ -283,7 +284,7 @@ export const runScenario = (
         Option.map(state, (found) => normalizeView(found.view))
       );
 
-      const ensure = (where: string) =>
+      const ensure = (where: string, line: InputLine) =>
         Effect.flatMap(seamNow, (seam) =>
           seam
             .ensureThread({
@@ -293,9 +294,41 @@ export const runScenario = (
               thinkingLevel: "off",
               cwd: process.cwd(),
               instructions: Option.none(),
+              runtimeMode: line.runtimeMode ?? DEFAULT_RUNTIME_MODE,
             })
             .pipe(Effect.mapError(fromSeam(where)))
         );
+
+      const configureStep = Effect.fn("Conformance.configure")(function* (
+        where: string,
+        line: InputLine
+      ) {
+        const seam = yield* seamNow;
+        const expected = line.expect?.error;
+
+        const result = yield* Effect.result(
+          seam.configure(THREAD_ID, {
+            model: Option.none(),
+            thinkingLevel: Option.none(),
+            cwd: Option.none(),
+            runtimeMode: Option.fromUndefinedOr(line.runtimeMode),
+          })
+        );
+
+        if (Result.isFailure(result)) {
+          return expected === result.failure.reason
+            ? yield* Effect.void
+            : yield* new ScenarioFailure({
+                message: `${where}: configure failed with ${result.failure.reason}: ${result.failure.message}`,
+              });
+        }
+
+        return expected === undefined
+          ? yield* Effect.void
+          : yield* new ScenarioFailure({
+              message: `${where}: configure succeeded, expected ${expected}`,
+            });
+      });
 
       const submitStep = Effect.fn("Conformance.submit")(function* (
         where: string,
@@ -416,15 +449,16 @@ export const runScenario = (
           line: InputLine
         ) => Effect.Effect<void, ScenarioFailure, Scope.Scope>
       > = {
-        ensure: (where) =>
-          Effect.map(ensure(where), () => {
+        ensure: (where, line) =>
+          Effect.map(ensure(where, line), () => {
             progress.ensured = true;
           }),
         ensure_race: (where, line) =>
           Effect.gen(function* () {
-            const [a, b] = yield* Effect.all([ensure(where), ensure(where)], {
-              concurrency: 2,
-            });
+            const [a, b] = yield* Effect.all(
+              [ensure(where, line), ensure(where, line)],
+              { concurrency: 2 }
+            );
 
             progress.ensured = true;
 
@@ -454,6 +488,7 @@ export const runScenario = (
             );
             yield* Effect.sleep(SUBSCRIBE_SETTLE);
           }),
+        configure: configureStep,
         message: submitStep,
         steer: submitStep,
         follow_up: submitStep,

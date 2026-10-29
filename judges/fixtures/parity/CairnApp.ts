@@ -181,6 +181,7 @@ const seedLayer = (seed: CairnSeed, workspace: string) =>
         thinkingLevel: "medium",
         cwd: workspace,
         instructions: Option.none(),
+        runtimeMode: "full-access",
       });
 
       // `ensureThread` above made it; its absence is a broken harness, so a defect.
@@ -210,6 +211,7 @@ const seedLayer = (seed: CairnSeed, workspace: string) =>
         model: Option.none(),
         thinkingLevel: Option.some("medium"),
         cwd: Option.none(),
+        runtimeMode: Option.none(),
       });
     })
   );

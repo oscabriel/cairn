@@ -228,6 +228,7 @@ describe("attachments reach the model", () => {
             thinkingLevel: "off",
             cwd: dir,
             instructions: Option.none(),
+            runtimeMode: "full-access",
           });
 
           const pdf = yield* uploadThroughRoute(

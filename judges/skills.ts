@@ -481,6 +481,7 @@ const brainPart = Effect.fn("skills.brainPart")(function* () {
       thinkingLevel: "off",
       cwd,
       instructions: Option.none(),
+      runtimeMode: "full-access",
     });
 
     const turn = Effect.fn("skills.turn")(function* (n: number) {

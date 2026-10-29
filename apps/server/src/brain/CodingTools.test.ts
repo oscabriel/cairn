@@ -86,6 +86,7 @@ const toolResult = (
       thinkingLevel: "off",
       cwd,
       instructions: Option.none(),
+      runtimeMode: "full-access",
     });
 
     const ended = yield* seam.events.pipe(
@@ -221,7 +222,7 @@ describe("bash timeouts", () => {
 
 describe("coding tools", () => {
   it.effect(
-    "marks read and the search tools replay-safe, and the writers unsafe",
+    "marks every coding tool replay-safe: the writers are gated wrappers with an effect mark",
     () =>
       Effect.gen(function* () {
         const { installed } = yield* Extensions;
@@ -255,9 +256,9 @@ describe("coding tools", () => {
             find: "safe",
             ls: "safe",
             codemode: "safe",
-            write: "unsafe",
-            edit: "unsafe",
-            bash: "unsafe",
+            write: "safe",
+            edit: "safe",
+            bash: "safe",
           }
         );
         assert.deepStrictEqual(

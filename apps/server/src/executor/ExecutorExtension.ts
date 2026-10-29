@@ -9,6 +9,9 @@
 //   `replay: "safe"`. Results leave out the Executor app's own tools (ExecutorScope.ts).
 // - `call` and `execute` change the world and go through the approval sandwich (GatedCall.ts);
 //   they are `replay: "safe"` because the ledger's `started` mark makes the effect at most once.
+//   The thread's permission mode (`cairn.permissions`, ADR 0031) decides whether the record is
+//   accepted at once or waits for the user; in Supervised a program is approved once, as the
+//   program, with its code on the card.
 // - Each tool returns its value to scripts as `structuredOutput` and its JSON to the model; a
 //   failure is an error result with its text as an error diagnostic, which a script reads as a
 //   rejected call.
@@ -21,6 +24,11 @@
 // their descriptions and the discovery passthrough). Changed: code mode callers, the ledger
 // sandwich instead of v1's approval queue, no Executor-app watch and no per-project app list.
 
+import {
+  PROGRAM_CODE_LIMIT_BYTES,
+  ProgramPayload,
+} from "@cairn/protocol/Policy";
+import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
@@ -41,6 +49,8 @@ import type { ApprovalLedger } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { callAsks, readPermissions } from "../brain/Permissions.ts";
+import type { ThreadPermissions } from "../brain/Permissions.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";
 import type { ExecutorCallError } from "./ExecutorLink.ts";
 import { cut, failed, succeeded } from "./ExecutorReply.ts";
@@ -75,10 +85,19 @@ export const CODE_MAX = 65_536;
 const SUMMARY_MAX = 120;
 
 /**
- * Full access is the only permission mode until approval cards exist (ADR 0013), so every gated
- * call is approved at once and the record kept for the audit trail and the sandwich.
+ * The mode that lets a call of `tool` through without asking (ADR 0031): the thread's own when it
+ * does not ask for Executor calls, or "Allow for this thread" covers the tool; none asks the user.
+ * Either way the record is written, for the audit trail and the sandwich.
  */
-const AUTO_ACCEPT = true;
+const acceptedBy = (
+  permissions: ThreadPermissions,
+  tool: string
+): Option.Option<RuntimeMode> =>
+  callAsks(permissions, tool, "executor")
+    ? Option.none()
+    : Option.some(permissions.mode);
+
+const isProgramPayload = Schema.is(ProgramPayload);
 
 const decodeJsonObject = Schema.decodeUnknownOption(
   Schema.Record(Schema.String, Schema.MutableJson)
@@ -156,11 +175,12 @@ const discover = Effect.fn("ExecutorExtension.discover")(function* (
   return { ...outcome, text: `${outcome.text}${note}`, isError };
 });
 
-/** One `executor_call`, scoped to the thread's project and gated. */
+/** One `executor_call`, scoped to the thread's project and gated by the thread's mode. */
 const callTool = Effect.fn("ExecutorExtension.call")(function* (
   path: string,
   input: JsonObject,
   cwd: Option.Option<string>,
+  permissions: ThreadPermissions,
   ledger: ApprovalLedger
 ) {
   const scopes = yield* ExecutorScope;
@@ -175,19 +195,35 @@ const callTool = Effect.fn("ExecutorExtension.call")(function* (
     kind: "call",
     request: { calls: [{ path, input }] },
     summary: cut(`${path} ${JSON.stringify(input)}`, SUMMARY_MAX),
-    autoAccept: AUTO_ACCEPT,
+    payload: Option.none(),
+    acceptedBy: acceptedBy(permissions, "executor_call"),
   });
 });
 
-/** One `executor_execute` program, gated. */
+/**
+ * One `executor_execute` program, gated by the thread's mode. Where the mode asks, the program is
+ * approved once, as the program: its code is the record's payload, so the card shows all of it, and
+ * a program too long for the card is refused before anything is asked or sent.
+ */
 const executeTool = Effect.fn("ExecutorExtension.execute")(function* (
   code: string,
+  permissions: ThreadPermissions,
   ledger: ApprovalLedger
 ) {
   const refusal = executeRefusal(code);
 
   if (Option.isSome(refusal)) {
     return failed(refusal.value);
+  }
+
+  const program = { type: "program", code };
+  const accepted = acceptedBy(permissions, "executor_execute");
+  const fits = isProgramPayload(program);
+
+  if (Option.isNone(accepted) && !fits) {
+    return failed(
+      `The program is longer than an approval card can show (${PROGRAM_CODE_LIMIT_BYTES} bytes), and this thread asks before running programs, so nothing was asked or sent. Split it into smaller programs, or call tools.executor_call for each step.`
+    );
   }
 
   return yield* gatedCall(ledger, {
@@ -197,7 +233,8 @@ const executeTool = Effect.fn("ExecutorExtension.execute")(function* (
       `executor_execute ${code.trim().split("\n")[0] ?? ""}`,
       SUMMARY_MAX
     ),
-    autoAccept: AUTO_ACCEPT,
+    payload: fits ? Option.some(program) : Option.none(),
+    acceptedBy: accepted,
   });
 });
 
@@ -357,6 +394,7 @@ export class ExecutorExtension extends Context.Service<
         replay: "safe",
         execute: async (args, api, context) => {
           const agent = await api.agent(context);
+          const permissions = await readPermissions(api, context);
           const input = decodeJsonObject(args.input ?? {});
 
           const outcome = Option.match(input, {
@@ -371,6 +409,7 @@ export class ExecutorExtension extends Context.Service<
                 args.path,
                 value,
                 Option.fromUndefinedOr(agent.cwd),
+                permissions,
                 approvalLedger(api)
               ),
           });
@@ -390,7 +429,11 @@ export class ExecutorExtension extends Context.Service<
         replay: "safe",
         execute: async (args, api, context) =>
           await runTool(
-            executeTool(args.code, approvalLedger(api)),
+            executeTool(
+              args.code,
+              await readPermissions(api, context),
+              approvalLedger(api)
+            ),
             context.abortSignal
           ),
       });

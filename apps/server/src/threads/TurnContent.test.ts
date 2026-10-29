@@ -120,6 +120,7 @@ describe("turn content stages", () => {
           thinkingLevel: "off",
           cwd: root,
           instructions: Option.none(),
+          runtimeMode: "full-access",
         });
 
         const failure = yield* Effect.flip(

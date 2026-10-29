@@ -89,6 +89,7 @@ const withThread = <A, E>(
         thinkingLevel: "off",
         cwd: root,
         instructions: Option.none(),
+        runtimeMode: "full-access",
       });
 
       return yield* body(input.threadId, projectId);

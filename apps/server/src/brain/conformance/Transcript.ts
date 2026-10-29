@@ -7,9 +7,10 @@
 // - `transcript_start {scenario, version}`: first line.
 // - `model {label, hold?, text?, toolCalls?, stopReason?, errorMessage?}`: the next model answer,
 //   consumed in order by whichever request comes next. `hold` keeps it until `release {label}`.
-// - `input {step, ...}`: `ensure`, `ensure_race`, `subscribe`, `message` (with `whenBusy`),
-//   `steer`, `follow_up`, `stop`, `stop_clear`, `withdraw {requestId}`, `respond {decision, reason?}`,
-//   `compact`, `restart`. `subscribe` opens the client's one subscription now, before any ensure,
+// - `input {step, ...}`: `ensure {runtimeMode?}` (full access by default), `ensure_race`,
+//   `subscribe`, `configure {runtimeMode}`, `message` (with `whenBusy`), `steer`, `follow_up`,
+//   `stop`, `stop_clear`, `withdraw {requestId}`, `respond {decision, reason?}`, `compact`,
+//   `restart`. `subscribe` opens the client's one subscription now, before any ensure,
 //   as a page opened on a launch does: it waits on `whenEnsured`, then watches, and is never
 //   reopened. An input may carry `expect` on its own result (an error reason, `withdrawn`, the
 //   submission of an earlier request id, one conversation for a race).
@@ -23,6 +24,7 @@
 // (github.com/pingdotgg/t3code, packages/provider-testing/src/replayTranscript.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92), format ideas only.
 
+import { RuntimeMode } from "@cairn/protocol/Policy";
 import { Result, Schema } from "effect";
 
 const { Json } = Schema;
@@ -44,7 +46,10 @@ const inputFields = {
   whenBusy: Schema.optionalKey(
     Schema.Literals(["steer", "followUp", "reject"])
   ),
-  decision: Schema.optionalKey(Schema.Literals(["accept", "decline"])),
+  decision: Schema.optionalKey(
+    Schema.Literals(["accept", "accept_for_thread", "decline"])
+  ),
+  runtimeMode: Schema.optionalKey(RuntimeMode),
   reason: Schema.optionalKey(Schema.String),
   expect: Schema.optionalKey(
     Schema.Struct({
@@ -80,6 +85,7 @@ export const TranscriptLine = Schema.Union([
       "ensure",
       "ensure_race",
       "subscribe",
+      "configure",
       "message",
       "steer",
       "follow_up",

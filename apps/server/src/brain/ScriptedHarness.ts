@@ -96,6 +96,7 @@ import type {
   ThreadAgentChange,
   ThreadFrame,
 } from "./HarnessSeam.ts";
+import type { ThreadPermissions } from "./Permissions.ts";
 import { piConversationId, piEntryId, piTaskId } from "./PiIds.ts";
 import { classifyRunFailure } from "./RunFailure.ts";
 import { entryImages, projectEntry, wireProjector } from "./ThreadWire.ts";
@@ -162,6 +163,8 @@ export class ScriptedModel extends Context.Service<
 export interface ScriptedToolApi {
   /** Records an approval for this call (once; a rerun finds it) and waits for its settlement. */
   ask(summary: string): Effect.Effect<ApprovalSettlement>;
+  /** The thread's permissions now (`cairn.permissions`), read at call time as gated tools do. */
+  permissions(): ThreadPermissions;
 }
 
 /** The result a scripted tool gives the model. */
@@ -239,6 +242,8 @@ interface ScriptedThread {
   readonly approvals: Map<string, ApprovalRecord>;
   /** Tool call id to the task id its approval is keyed by, so a rerun finds its record. */
   readonly toolTasks: Map<string, number>;
+  /** `cairn.permissions`: the mode gated tools read at call time, and the tools allowed. */
+  permissions: ThreadPermissions;
   usage: { input: number; output: number };
 }
 
@@ -538,6 +543,7 @@ const layerNoDeps = Layer.effectContext(
       thread: ScriptedThread,
       call: ToolCall
     ): ScriptedToolApi => ({
+      permissions: () => thread.permissions,
       ask: (summary) =>
         Effect.gen(function* () {
           const taskId =
@@ -798,6 +804,7 @@ const layerNoDeps = Layer.effectContext(
             run: Option.none(),
             approvals: new Map(),
             toolTasks: new Map(),
+            permissions: { mode: input.runtimeMode, allow: [] },
             usage: { input: 0, output: 0 },
           };
 
@@ -829,6 +836,22 @@ const layerNoDeps = Layer.effectContext(
               `Thread ${threadId} is running, so its folder cannot change now. Stop it or wait, then change the folder.`
             );
           }
+
+          if (Option.isSome(change.runtimeMode) && Option.isSome(thread.run)) {
+            return yield* failure(
+              "invalid_input",
+              threadId,
+              `Thread ${threadId} is running, so its permission mode cannot change now. Stop it or wait, then change the mode.`
+            );
+          }
+
+          thread.permissions = {
+            mode: Option.getOrElse(
+              change.runtimeMode,
+              () => thread.permissions.mode
+            ),
+            allow: thread.permissions.allow,
+          };
 
           thread.agent = {
             model: Option.getOrElse(change.model, () => thread.agent.model),
@@ -1054,6 +1077,16 @@ const layerNoDeps = Layer.effectContext(
           }
 
           thread.approvals.set(approvalId, answered);
+
+          if (
+            answer.decision === "accept_for_thread" &&
+            !thread.permissions.allow.includes(answered.tool)
+          ) {
+            thread.permissions = {
+              mode: thread.permissions.mode,
+              allow: [...thread.permissions.allow, answered.tool],
+            };
+          }
 
           return yield* publish(thread, [
             RuntimeRequestUpdated.make({

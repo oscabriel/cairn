@@ -53,16 +53,18 @@ export const memoryLedger = (options: {
           tool: request.tool,
           kind: request.kind,
           summary: request.summary,
-          status: request.autoAccept ? "accepted" : "pending",
+          status: Option.isSome(request.acceptedBy) ? "accepted" : "pending",
           askedAt: 0,
           expiresAt: request.ttlMillis,
-          answeredAt: request.autoAccept ? 0 : null,
+          answeredAt: Option.isSome(request.acceptedBy) ? 0 : null,
           run: Option.getOrNull(options.prior),
           executorRequestId: null,
           ...UNDECIDED,
-          decidedBy: request.autoAccept
-            ? { kind: "mode", mode: "full-access" }
-            : null,
+          payload: Option.getOrNull(request.payload),
+          decidedBy: Option.match(request.acceptedBy, {
+            onNone: () => null,
+            onSome: (mode) => ({ kind: "mode" as const, mode }),
+          }),
         });
       }
 

@@ -274,6 +274,7 @@ const program = Effect.gen(function* () {
       thinkingLevel: conversation.thinking,
       cwd: projectDir,
       instructions: Option.none(),
+      runtimeMode: "full-access",
     });
 
     const watcher = yield* seam.watch(threadId).pipe(

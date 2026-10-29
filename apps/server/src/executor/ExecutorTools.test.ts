@@ -20,7 +20,8 @@ const callRequest = (path: string, input: JsonObject) => ({
   kind: "call" as const,
   request: { calls: [{ path, input }] },
   summary: path,
-  autoAccept: true,
+  payload: Option.none(),
+  acceptedBy: Option.some("full-access" as const),
 });
 
 /** Runs `body` against a fresh fake Executor and a link to it. */
@@ -88,41 +89,52 @@ describe("the gated call", () => {
 
         const outcome = yield* gatedCall(ledger, {
           ...callRequest("tools.spike.mark", { id: "b" }),
-          autoAccept: false,
+          acceptedBy: Option.none(),
         });
 
         assert.isTrue(outcome.isError);
         assert.include(outcome.text, "declined, so nothing was sent");
+        assert.strictEqual(Option.getOrThrow(record()).status, "declined");
         assert.strictEqual(fake.state.log.length, 0);
         assert.isNull(Option.getOrThrow(record()).run);
       })
     )
   );
 
-  it.live("declines a program's nested approval outside full access", () =>
-    withFake((fake) =>
-      Effect.gen(function* () {
-        const { ledger } = memoryLedger({
-          prior: Option.none(),
-          answer: "accepted",
-        });
+  it.live(
+    "accepts a program's nested approvals under its one approval, with its code on the record",
+    () =>
+      withFake((fake) =>
+        Effect.gen(function* () {
+          const { ledger, record } = memoryLedger({
+            prior: Option.none(),
+            answer: "accepted",
+          });
 
-        const outcome = yield* gatedCall(ledger, {
-          kind: "execute",
-          request: { code: "await tools.spike.mark({ id: 'x' })" },
-          summary: "program",
-          autoAccept: false,
-        });
+          const code = "await tools.spike.mark({ id: 'x' })";
 
-        assert.isTrue(outcome.isError);
-        assert.include(outcome.text, "declined it");
-        assert.deepStrictEqual(fake.marks, []);
-        assert.strictEqual(
-          JSON.stringify(fake.calls("resume")[0]?.args.response),
-          JSON.stringify({ action: "decline" })
-        );
-      })
-    )
+          const outcome = yield* gatedCall(ledger, {
+            kind: "execute",
+            request: { code },
+            summary: "program",
+            payload: Option.some({ type: "program", code }),
+            acceptedBy: Option.none(),
+          });
+
+          assert.isFalse(outcome.isError, outcome.text);
+          assert.deepStrictEqual(fake.marks, ["from-program"]);
+          assert.strictEqual(
+            JSON.stringify(fake.calls("resume")[0]?.args.response),
+            JSON.stringify({ action: "accept" })
+          );
+
+          const kept = Option.getOrThrow(record());
+
+          assert.deepStrictEqual(kept.payload, { type: "program", code });
+          assert.deepStrictEqual(kept.decidedBy, { kind: "user" });
+          assert.strictEqual(kept.run, "done");
+        })
+      )
   );
 
   it.live("reports an expired Executor request as not run", () =>

@@ -126,7 +126,10 @@ export class Threads extends Context.Service<
     ): Effect.Effect<void, HarnessError | LaunchStoreError>;
     /** Takes back one queued input; `withdrawn: false` when it had already been placed. */
     withdraw(input: WithdrawInput): Effect.Effect<WithdrawResult, HarnessError>;
-    /** Changes the model or thinking level of later turns, and the sidebar row with them. */
+    /**
+     * Changes the model, thinking level or permission mode of later turns, and the sidebar row with
+     * them. A mode change fails with `invalid_input` while the thread runs.
+     */
     configure(input: ConfigureInput): Effect.Effect<void, HarnessError>;
     /** Answers one approval. */
     respond(input: RespondInput): Effect.Effect<void, HarnessError>;
@@ -258,13 +261,18 @@ export class Threads extends Context.Service<
         return yield* seam.withdraw(input.threadId, input.submissionId);
       });
 
-      // The sidebar row shows the thread's model; the shell projector would correct it later, but
-      // the picker should not wait for that.
+      // The sidebar row shows the thread's model and permission mode; the shell projector would
+      // correct the model later, but the picker should not wait for that. The row's mode is the
+      // sidebar's copy; the brain's `cairn.permissions` is the one gated tools read.
       const recordModel = Effect.fnUntraced(function* (
         threadId: ThreadId,
         input: ConfigureInput
       ) {
-        if (Option.isNone(input.model) && Option.isNone(input.thinkingLevel)) {
+        if (
+          Option.isNone(input.model) &&
+          Option.isNone(input.thinkingLevel) &&
+          Option.isNone(input.runtimeMode)
+        ) {
           return;
         }
 
@@ -278,6 +286,7 @@ export class Threads extends Context.Service<
                 provider: Option.map(input.model, (model) => model.provider),
                 modelId: Option.map(input.model, (model) => model.modelId),
                 thinkingLevel: input.thinkingLevel,
+                runtimeMode: input.runtimeMode,
               },
             })
           )
@@ -301,6 +310,7 @@ export class Threads extends Context.Service<
           model: input.model,
           thinkingLevel: input.thinkingLevel,
           cwd: Option.none(),
+          runtimeMode: input.runtimeMode,
         });
         yield* recordModel(input.threadId, input);
       });

@@ -162,6 +162,7 @@ describe("the Executor extension", () => {
           thinkingLevel: "off",
           cwd,
           instructions: Option.none(),
+          runtimeMode: "full-access",
         });
 
         const ended = yield* seam.events.pipe(

@@ -17,7 +17,7 @@ import { setTimeout as wait } from "node:timers/promises";
 
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { Effect, Predicate } from "effect";
+import { Effect, Option, Predicate } from "effect";
 
 import { approvalLedger } from "../../apps/server/src/brain/CairnDocs.ts";
 import { ExtensionOrder } from "../../apps/server/src/brain/Extensions.ts";
@@ -91,7 +91,8 @@ const gate = defineTool({
           kind: "tool-call",
           summary: summary ?? "Open the gate",
           ttlMillis: APPROVAL_TTL_MILLIS,
-          autoAccept: false,
+          payload: Option.none(),
+          acceptedBy: Option.none(),
         });
 
         return yield* ledger.awaitAnswer;

@@ -45,6 +45,7 @@ import { retryParkedApprovalWaits, runBoot } from "./Boot.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
 import type { LiveThreadState } from "./brain/HarnessSeam.ts";
 import { FAUX_MODEL, ModelSource } from "./brain/ModelSource.ts";
+import { Parked } from "./brain/Parked.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
@@ -83,6 +84,7 @@ import {
 import { ThreadRows } from "./shell/ThreadRows.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
+import { START_TASK } from "./subagents/SubagentTasks.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
 
 const unsupported = (operation: string) =>
@@ -245,6 +247,44 @@ describe("boot", () => {
           TaskId.make(5),
         ]);
       })
+  );
+
+  it.effect(
+    "the repair leaves a parked start task for a human Retry, even beside a pending approval",
+    () =>
+      Effect.gen(function* () {
+        const retried = yield* Ref.make<ReadonlyArray<TaskId>>([]);
+        const parked = yield* Parked;
+
+        // A parent with a second brief pending, whose Go'd start the guard parked (ADR 0030).
+        yield* parked.add({
+          taskId: TaskId.make(4),
+          conversationId: ConversationId.make(1),
+          kind: "pi.tool",
+        });
+        yield* parked.add({
+          taskId: TaskId.make(5),
+          conversationId: ConversationId.make(1),
+          kind: START_TASK,
+        });
+
+        const live: ReadonlyArray<LiveThreadState> = [
+          {
+            threadId: testThreadId(1),
+            conversationId: ConversationId.make(1),
+            runId: Option.none(),
+            queueLength: 0,
+            parkedTaskIds: [TaskId.make(4), TaskId.make(5)],
+            pendingApprovals: [ApprovalId.make("apr_second_brief")],
+          },
+        ];
+
+        yield* retryParkedApprovalWaits.repair.pipe(
+          Effect.provideService(HarnessSeam, fakeHarness(live, retried))
+        );
+
+        assert.deepStrictEqual(yield* Ref.get(retried), [TaskId.make(4)]);
+      }).pipe(Effect.provide(Parked.layer))
   );
 });
 

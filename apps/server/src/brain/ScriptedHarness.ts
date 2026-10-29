@@ -57,8 +57,9 @@ import {
   ThreadId,
 } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
-import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
+import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import type { Brief, RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
+import { DEFAULT_ROLE_TABLE, RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
@@ -114,6 +115,7 @@ import {
   attemptStateOf,
   CAP_TEXT,
   canSubmit,
+  checkResultSchema,
   markOf,
   MAX_RESULT_ATTEMPTS,
   NUDGE_TEXT,
@@ -123,6 +125,8 @@ import {
   validateResult,
 } from "../models/ResultTool.ts";
 import type { ResultState } from "../models/ResultTool.ts";
+import { ParsedSpec, parseRoleSpec } from "../models/RoleAliases.ts";
+import { BriefTtl } from "./BriefTtl.ts";
 import type {
   ApprovalRecord,
   ApprovalSettlement,
@@ -187,6 +191,7 @@ import {
   SubagentToolText,
   TYPED_RESULT_SUMMARY,
 } from "./SubagentText.ts";
+import type { BriefAnswer } from "./SubagentText.ts";
 import { entryImages, projectEntry, wireProjector } from "./ThreadWire.ts";
 
 type RunStatus = (typeof RunTerminal.Type)["status"];
@@ -982,6 +987,65 @@ const textInput = (requestId: string, text: string): AdmitInput => ({
   whenBusy: "followUp",
 });
 
+const decodeRoleSpec = Schema.decodeOption(RoleSpec);
+
+const decodeModelRef = Schema.decodeUnknownOption(ModelRef);
+
+const decodeThinkingLevel = Schema.decodeUnknownOption(ThinkingLevel);
+
+/** A resolution as the dispatch record keeps it: plain JSON. */
+const resolvedJson = (
+  spec: string,
+  role: string | null,
+  model: ModelRef,
+  thinkingLevel: ThinkingLevel | null,
+  via: "literal" | "primary"
+): JsonRecord => ({
+  spec,
+  role,
+  model: { provider: model.provider, modelId: model.modelId },
+  thinkingLevel,
+  via,
+  skipped: [],
+  family: familyOf(model),
+  priced: false,
+});
+
+/**
+ * What a brief's role runs a child on in the scripted harness, which has no catalog: a literal
+ * `provider/modelId[:level]` as named, a role through the default role table's primary binding.
+ * Nothing is passed over, and nothing is priced. A role the table does not bind resolves to
+ * nothing, in pi-durable's words for it.
+ */
+const scriptedResolve = (spec: RoleSpec): Result.Result<JsonRecord, string> =>
+  Option.match(parseRoleSpec(spec), {
+    onNone: () =>
+      Result.fail(`"${spec}" is neither a role (@name) nor provider/modelId.`),
+    onSome: (parsed) =>
+      ParsedSpec.$match(parsed, {
+        Literal: ({ model, level }) =>
+          Result.succeed(
+            resolvedJson(spec, null, model, Option.getOrNull(level), "literal")
+          ),
+        Role: ({ role, level }) =>
+          Option.match(Option.fromUndefinedOr(DEFAULT_ROLE_TABLE[role]), {
+            onNone: () => Result.fail(`No role by the name ${role} is bound.`),
+            onSome: (binding) =>
+              Result.succeed(
+                resolvedJson(
+                  spec,
+                  role,
+                  binding.model,
+                  Option.getOrNull(
+                    Option.orElse(level, () => binding.thinkingLevel)
+                  ),
+                  "primary"
+                )
+              ),
+          }),
+      }),
+  });
+
 /** The brief a `subagent_spawn` call proposes, frozen into its record. */
 const briefOf = (
   call: ToolCall,
@@ -999,6 +1063,22 @@ const briefOf = (
     return Result.fail(SubagentToolText.resultSchemaNotObject);
   }
 
+  const role = Option.map(textArgument(call, "role"), (text) => text.trim());
+  const spec = Option.flatMap(role, decodeRoleSpec);
+
+  if (Option.isSome(role) && Option.isNone(spec)) {
+    return Result.fail(SubagentToolText.roleInvalid(role.value));
+  }
+
+  // A schema the result tool cannot hold the child to is refused at the ask, as pi-durable does.
+  if (isJsonRecord(resultSchema)) {
+    const checked = checkResultSchema(resultSchema);
+
+    if (Result.isFailure(checked)) {
+      return Result.fail(checked.failure.message);
+    }
+  }
+
   return Result.succeed({
     type: "brief",
     title: description,
@@ -1011,7 +1091,7 @@ const briefOf = (
     workspace: isolation === "worktree" ? "worktree" : "shared",
     base: null,
     writes: [],
-    role: null,
+    role: Option.getOrNull(spec),
     model: null,
     thinking: null,
     mode,
@@ -1195,6 +1275,7 @@ const layerNoDeps = Layer.effectContext(
     const model = yield* ScriptedModel;
     const tools = yield* ScriptedTools;
     const faults = yield* SubagentFaults;
+    const briefTtlMillis = yield* BriefTtl;
     const events = yield* PubSub.unbounded<HarnessEvent>();
     // One mutation at a time, as pi-durable's Session line.
     const line = yield* Semaphore.make(1);
@@ -1206,6 +1287,8 @@ const layerNoDeps = Layer.effectContext(
 
     const runs = new Map<ThreadId, Fiber.Fiber<void>>();
     const reporting = new Set<number>();
+    // Briefs whose expiry this instance watches, by thread and approval id.
+    const expiring = new Set<string>();
     const scope = yield* Effect.scope;
 
     const nextId = () => {
@@ -1829,6 +1912,44 @@ const layerNoDeps = Layer.effectContext(
       setChildStatus(child, "working", changes);
     };
 
+    /**
+     * Tells a parent how its brief ended without a child: as an input, or as a note when the
+     * parent is halted, under the answer's request id.
+     */
+    const tellNothingStarted = (
+      parent: ScriptedThread,
+      record: ApprovalRecord,
+      brief: Brief,
+      answer: BriefAnswer,
+      at: number,
+      changes: Changes
+    ) => {
+      const text = renderBriefAnswer(brief.title, answer);
+      const requestId = SubagentRequestIds.briefAnswer(record.id);
+
+      if (parent.halted) {
+        writeNote(
+          parent,
+          {
+            requestId,
+            kind: BRIEF_ANSWER_ENTRY,
+            data: {
+              briefId: record.id,
+              decision: record.status,
+              started: false,
+            },
+            text,
+          },
+          at,
+          changes
+        );
+
+        return;
+      }
+
+      admit(parent, textInput(requestId, text), at, changes);
+    };
+
     /** Starts a brief's child once, in the critical section that accepted it (ADR 0030). */
     const startChild = (
       parent: ScriptedThread,
@@ -1841,7 +1962,41 @@ const layerNoDeps = Layer.effectContext(
         return;
       }
 
+      // The role resolves again at Go (ADR 0035); one that no longer does starts nothing.
+      const dispatch =
+        brief.role === null
+          ? Result.succeed(Option.none<JsonRecord>())
+          : Result.map(scriptedResolve(brief.role), Option.some);
+
+      if (Result.isFailure(dispatch)) {
+        tellNothingStarted(
+          parent,
+          record,
+          brief,
+          { kind: "noModel", why: dispatch.failure },
+          at,
+          changes
+        );
+
+        return;
+      }
+
       const childThreadId = childThreadIdOf(nextId());
+
+      const agent = Option.match(dispatch.success, {
+        onNone: () => ({ ...parent.agent }),
+        onSome: (resolved) => ({
+          model: Option.getOrElse(
+            decodeModelRef(resolved.model),
+            () => parent.agent.model
+          ),
+          thinkingLevel: Option.getOrElse(
+            decodeThinkingLevel(resolved.thinkingLevel),
+            () => parent.agent.thinkingLevel
+          ),
+          cwd: parent.agent.cwd,
+        }),
+      });
 
       const depth = Option.match(parent.link, {
         onNone: () => 1,
@@ -1849,12 +2004,7 @@ const layerNoDeps = Layer.effectContext(
       });
 
       const child: ScriptedThread = {
-        ...freshThread(
-          childThreadId,
-          parent.projectId,
-          { ...parent.agent },
-          brief.mode
-        ),
+        ...freshThread(childThreadId, parent.projectId, agent, brief.mode),
         link: Option.some({
           key: record.id,
           parentThreadId: parent.threadId,
@@ -1878,6 +2028,16 @@ const layerNoDeps = Layer.effectContext(
 
       const spec = `${parent.agent.model.provider}/${parent.agent.model.modelId}`;
 
+      const resolved = Option.getOrElse(dispatch.success, () =>
+        resolvedJson(
+          spec,
+          null,
+          parent.agent.model,
+          parent.agent.thinkingLevel,
+          "literal"
+        )
+      );
+
       const item: SubagentItem = {
         threadId: childThreadId,
         conversationId: child.conversationId,
@@ -1885,17 +2045,8 @@ const layerNoDeps = Layer.effectContext(
         briefApprovalId: record.id,
         description: brief.title,
         dispatch: {
-          spec: null,
-          resolved: {
-            spec,
-            role: null,
-            model: { ...parent.agent.model },
-            thinkingLevel: parent.agent.thinkingLevel,
-            via: "literal",
-            skipped: [],
-            family: familyOf(parent.agent.model),
-            priced: false,
-          },
+          spec: brief.role,
+          resolved,
           previewed: null,
           dispatchedAt: at,
         },
@@ -1977,34 +2128,19 @@ const layerNoDeps = Layer.effectContext(
 
       const reason = Option.fromNullOr(record.reason);
 
-      const text = renderBriefAnswer(brief.title, {
-        kind: record.status === "revised" ? "revised" : "declined",
-        reason,
-      });
-
-      const requestId = SubagentRequestIds.briefAnswer(record.id);
-
-      if (parent.halted) {
-        writeNote(
-          parent,
-          {
-            requestId,
-            kind: BRIEF_ANSWER_ENTRY,
-            data: {
-              briefId: record.id,
-              decision: record.status,
-              started: false,
+      tellNothingStarted(
+        parent,
+        record,
+        brief,
+        record.status === "expired"
+          ? { kind: "expired" }
+          : {
+              kind: record.status === "revised" ? "revised" : "declined",
+              reason,
             },
-            text,
-          },
-          at,
-          changes
-        );
-
-        return;
-      }
-
-      admit(parent, textInput(requestId, text), at, changes);
+        at,
+        changes
+      );
     };
 
     /**
@@ -2633,6 +2769,62 @@ const layerNoDeps = Layer.effectContext(
         }),
     });
 
+    /**
+     * Watches a pending brief until its `expiresAt` (ADR 0030): one still pending then expires,
+     * decided by `expiry`, and its parent is told in the same critical section. Once per brief and
+     * instance; a restart watches again from `resume`.
+     */
+    const watchExpiry = (thread: ScriptedThread, briefId: string) =>
+      Effect.gen(function* () {
+        const key = `${thread.threadId}:${briefId}`;
+        const record = thread.approvals.get(briefId);
+
+        if (
+          expiring.has(key) ||
+          record === undefined ||
+          record.status !== "pending"
+        ) {
+          return;
+        }
+
+        expiring.add(key);
+
+        const expire = Effect.gen(function* () {
+          yield* Effect.sleep(
+            Duration.millis(Math.max(0, record.expiresAt - (yield* now)))
+          );
+
+          yield* locked((at, changes) =>
+            Effect.sync(() => {
+              const current = thread.approvals.get(briefId);
+
+              if (current?.status !== "pending") {
+                return;
+              }
+
+              const expired = copyRecord(current);
+
+              expired.status = "expired";
+              expired.answeredAt = at;
+              expired.decidedBy = { kind: "expiry" };
+              thread.approvals.set(briefId, expired);
+              changes.touched.add(thread);
+              changes.events.push(
+                RuntimeRequestUpdated.make({
+                  threadId: thread.threadId,
+                  id: ApprovalId.make(briefId),
+                  kind: expired.kind,
+                  status: expired.status,
+                })
+              );
+              briefAnswered(thread, expired, at, changes);
+            })
+          );
+        });
+
+        yield* expire.pipe(Effect.forkIn(scope));
+      });
+
     /** `subagent_spawn`: records the brief and returns at once; Go starts the child. */
     const spawnTool = (thread: ScriptedThread, call: ToolCall) =>
       locked((askedAt, changes) =>
@@ -2682,6 +2874,14 @@ const layerNoDeps = Layer.effectContext(
             return refused(brief.failure);
           }
 
+          if (brief.success.role !== null) {
+            const resolved = scriptedResolve(brief.success.role);
+
+            if (Result.isFailure(resolved)) {
+              return refused(SubagentToolText.roleRefused(resolved.failure));
+            }
+          }
+
           thread.briefs.set(briefId, brief.success);
           thread.approvals.set(briefId, {
             id: briefId,
@@ -2691,7 +2891,7 @@ const layerNoDeps = Layer.effectContext(
             summary: description.value,
             status: "pending",
             askedAt,
-            expiresAt: askedAt + RECORD_TTL_MILLIS,
+            expiresAt: askedAt + briefTtlMillis,
             answeredAt: null,
             run: null,
             executorRequestId: null,
@@ -2710,6 +2910,8 @@ const layerNoDeps = Layer.effectContext(
 
           return said(SPAWN_WAITING);
         })
+      ).pipe(
+        Effect.tap(() => watchExpiry(thread, `brief-${taskOf(thread, call)}`))
       );
 
     /** The child a parent's tool names, by its thread id. */
@@ -3501,6 +3703,14 @@ const layerNoDeps = Layer.effectContext(
       yield* Effect.forEach(store.reporters.values(), startReporter, {
         discard: true,
       });
+      // Pending briefs expire on time across a restart, as pi-durable's sleeping expiry task does.
+      yield* Effect.forEach(
+        [...store.threads.values()].flatMap((thread) =>
+          [...thread.briefs.keys()].map((briefId) => ({ thread, briefId }))
+        ),
+        ({ thread, briefId }) => watchExpiry(thread, briefId),
+        { discard: true }
+      );
     });
 
     const ensureThread = Effect.fn("ScriptedHarness.ensureThread")(function* (

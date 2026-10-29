@@ -1,0 +1,25 @@
+{"type":"transcript_start","scenario":"subagent_spawn_with_role","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in the project root.","role":"faux/scripted:high"}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","text":"There are 3 files."}
+{"type":"model","label":"p3","thread":"parent","text":"The child counted 3 files."}
+{"type":"model","label":"p4","thread":"parent","toolCalls":[{"id":"call_2","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count them again.","role":"the fast one"}}]}
+{"type":"model","label":"p5","thread":"parent","text":"That role was refused."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"ThreadEnsured","parent":"$parent"}}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","threadId":"$parent","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_view","path":["model"],"equals":{"provider":"faux","modelId":"scripted"},"thread":"child1"}
+{"type":"expect_view","path":["thinkingLevel"],"equals":"high","thread":"child1"}
+{"type":"expect_view","path":["thinkingLevel"],"equals":"off"}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":1,"delivered":1,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"input","step":"message","requestId":"r2","text":"again, with another role"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"settle","ms":200}
+{"type":"expect_event_count","event":{"_tag":"ThreadEnsured"},"count":2}
+{"type":"expect_view","path":["transcript",10],"equals":{"kind":"pi.tool-result","role":"toolResult","text":"subagent_spawn's role \"the fast one\" is neither a role (@worker, @scout) nor provider/modelId[:level]. Call it again with one, or leave role out.","images":0,"toolCalls":[],"toolName":"subagent_spawn","isError":true}}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}

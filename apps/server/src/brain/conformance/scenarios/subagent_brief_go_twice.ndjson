@@ -1,0 +1,27 @@
+{"type":"transcript_start","scenario":"subagent_brief_go_twice","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in the project root."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","text":"There are 3 files."}
+{"type":"model","label":"p3","thread":"parent","text":"The child counted 3 files."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"open_device","device":"laptop"}
+{"type":"input","step":"open_device","device":"phone"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"look","device":"laptop"}
+{"type":"input","step":"look","device":"phone"}
+{"type":"input","step":"respond","device":"phone","stale":true,"decision":"accept"}
+{"type":"input","step":"respond","device":"laptop","stale":true,"decision":"accept"}
+{"type":"input","step":"respond","device":"laptop","stale":true,"decision":"decline","reason":"too late"}
+{"type":"expect_event","event":{"_tag":"ThreadEnsured","parent":"$parent"}}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","threadId":"$parent","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"settle","ms":300}
+{"type":"expect_event_count","event":{"_tag":"ThreadEnsured"},"count":2}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","kind":"brief","status":"accepted"},"count":1}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","kind":"brief","status":"declined"},"count":0}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in the project root.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"There are 3 files.","images":0,"toolCalls":[],"toolName":null,"isError":null}],"thread":"child1"}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":1,"delivered":1,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}
+{"type":"expect_view","path":["transcript",4],"equals":{"kind":"cairn.brief-answer","role":"user","text":"The user approved the brief \"Count the files\"; subagent thread $child1 started.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

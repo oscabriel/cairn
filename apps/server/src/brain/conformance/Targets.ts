@@ -46,6 +46,7 @@ import { ChildWorkspaces } from "../../workspaces/ChildWorkspaces.ts";
 import { Brain } from "../Brain.ts";
 import type { BrainSession } from "../Brain.ts";
 import { BrainConfig } from "../BrainConfig.ts";
+import { BRIEF_TTL_MILLIS, BriefTtl } from "../BriefTtl.ts";
 import { ThreadMeta } from "../CairnDocs.ts";
 import { messageText } from "../CommitFeed.ts";
 import { durable } from "../Durable.ts";
@@ -301,33 +302,39 @@ export const piDurableTargetWith =
 export const piDurableTarget: MakeTarget =
   piDurableTargetWith(DEFAULT_TOOL_OPTIONS);
 
-/** The scripted side. */
-export const scriptedTarget: MakeTarget = (script, faults) =>
-  Effect.gen(function* () {
-    const store = yield* Layer.build(ScriptedStore.layer);
+/** The scripted side, its briefs expiring after `briefTtlMillis` (a week unless a test says less). */
+export const scriptedTargetWith =
+  (briefTtlMillis: number = BRIEF_TTL_MILLIS): MakeTarget =>
+  (script, faults) =>
+    Effect.gen(function* () {
+      const store = yield* Layer.build(ScriptedStore.layer);
 
-    const model = Layer.succeed(
-      ScriptedModel,
-      ScriptedModel.of({
-        answer: (request) =>
-          script.next(Option.none(), Option.some(request.threadId), {
-            tools: request.tools,
-            firstInput: firstInputOf(request.messages),
-          }),
-      })
-    );
+      const model = Layer.succeed(
+        ScriptedModel,
+        ScriptedModel.of({
+          answer: (request) =>
+            script.next(Option.none(), Option.some(request.threadId), {
+              tools: request.tools,
+              firstInput: firstInputOf(request.messages),
+            }),
+        })
+      );
 
-    const layer = ScriptedHarness.layerNoDeps.pipe(
-      Layer.provide(Layer.succeedContext(store)),
-      Layer.provide(model),
-      Layer.provide(scriptedConformanceTools),
-      Layer.provide(Layer.succeed(SubagentFaults, faults))
-    );
+      const layer = ScriptedHarness.layerNoDeps.pipe(
+        Layer.provide(Layer.succeedContext(store)),
+        Layer.provide(model),
+        Layer.provide(scriptedConformanceTools),
+        Layer.provide(Layer.succeed(SubagentFaults, faults)),
+        Layer.provide(Layer.succeed(BriefTtl, briefTtlMillis))
+      );
 
-    return yield* restartable(
-      Effect.map(Layer.build(layer), (context) => ({
-        seam: Context.get(context, HarnessSeam),
-        resume: Context.get(context, ScriptedBoot).resume,
-      }))
-    );
-  });
+      return yield* restartable(
+        Effect.map(Layer.build(layer), (context) => ({
+          seam: Context.get(context, HarnessSeam),
+          resume: Context.get(context, ScriptedBoot).resume,
+        }))
+      );
+    });
+
+/** The scripted side with the production brief lifetime. */
+export const scriptedTarget: MakeTarget = scriptedTargetWith();

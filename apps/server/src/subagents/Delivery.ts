@@ -73,7 +73,7 @@ const hex = (value: number, width: number) =>
 /**
  * A child's thread id: a UUIDv7 from the moment its brief was answered (`at`) and a hash of the
  * parent's conversation and the brief's approval id, which no other brief in the store has. It is
- * the same on every attempt, so the brief task mints it before its workspace and its creating
+ * the same on every attempt, so the start task mints it before its workspace and its creating
  * commit: a rerun after a crash prepares the same worktree and creates the same thread.
  */
 export const childThreadIdOf = (

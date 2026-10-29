@@ -6,11 +6,13 @@
 //   which reruns after a restart (`replay: "safe"`) and submits the parent's note under the same
 //   request id; a wait parked by the crash-loop guard is a pending record in the child's own
 //   `cairn.approvals`, so `retry-parked-approval-waits` already retries it. Nothing more is needed.
-// - `subagent-tasks`: the reporter and brief tasks are background tasks of the parent and wait in
-//   memory (a reporter on its child's submission, a brief task on Go), so five crashes park them
-//   like an approval wait (ADR 0013's hole). A parent with no pending approval of its own is not
-//   reached by the approval repair, so every parked subagent task is retried here. The anchor
-//   completes in its first phase and never waits, so it is not among them.
+// - `subagent-tasks`: the reporter, brief and tell tasks are background tasks of the parent (a
+//   reporter waits in memory on its child's submission, a brief task sleeps until its brief
+//   expires), so five crashes park them like an approval wait (ADR 0013's hole). A parent with no
+//   pending approval of its own is not reached by the approval repair, so each such parked task is
+//   retried here. The anchor completes in its first phase and never waits, so it is not among them.
+//   The start task is left parked on purpose (ADR 0030): a start that crashed the brain five times
+//   would loop under a boot retry, so it shows Parked on the parent and waits for a human Retry.
 
 import type { TaskId } from "@earendil-works/pi-durable";
 import { Effect, Option } from "effect";

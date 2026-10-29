@@ -14,13 +14,15 @@
 // `boot_slow` naming it, so a boot that never ends says where it stopped (T6). The listener answers static files from the first
 // moment; only `/ws` waits for step 7.
 
-import { Clock, Duration, Effect, Fiber, Layer } from "effect";
+import { Clock, Duration, Effect, Fiber, Layer, Option } from "effect";
 
 import type { BootRepair } from "./BootRepairs.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
+import { Parked } from "./brain/Parked.ts";
 import { Health } from "./http/Health.ts";
 import { ShellProjector } from "./shell/ShellProjector.ts";
 import type { ReconcileReport } from "./shell/ShellProjector.ts";
+import { HUMAN_RETRY_TASKS } from "./subagents/SubagentTasks.ts";
 
 /** What boot runs that the composition root chooses: the repairs and how the harness resumes. */
 export interface BootSteps<Repairs, Resume> {
@@ -120,18 +122,32 @@ export const BootLayer = <Repairs, Resume>(steps: BootSteps<Repairs, Resume>) =>
 /**
  * The boot repair for approval waits the crash-loop guard parked: a task that waits on a pending
  * approval commits nothing while it waits, so five crashes park it, and it must run again to keep
- * waiting (spikes/4-approvals). Every parked task of a thread with a pending approval is retried.
+ * waiting (spikes/4-approvals). Every parked task of a thread with a pending approval is retried,
+ * except a kind left for a human Retry (`HUMAN_RETRY_TASKS`: a subagent's start, ADR 0030), which
+ * would loop under a boot retry; its kind is read from `Parked`, which `inspect` fills.
  */
 export const retryParkedApprovalWaits: BootRepair<HarnessSeam> = {
   name: "retry-parked-approval-waits",
   repair: Effect.gen(function* () {
     const harness = yield* HarnessSeam;
     const live = yield* harness.inspect;
+    const parked = yield* Effect.serviceOption(Parked);
+
+    const kinds = new Map(
+      Option.isSome(parked)
+        ? (yield* parked.value.list).map((task) => [task.taskId, task.kind])
+        : []
+    );
+
     let retried = 0;
 
     for (const state of live) {
       if (state.pendingApprovals.length > 0) {
         for (const taskId of state.parkedTaskIds) {
+          if (HUMAN_RETRY_TASKS.has(kinds.get(taskId) ?? "")) {
+            continue;
+          }
+
           yield* harness.retry(taskId).pipe(
             Effect.tapError((failure) =>
               Effect.logWarning("parked approval wait was not retried").pipe(

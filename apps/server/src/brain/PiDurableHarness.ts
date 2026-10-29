@@ -66,8 +66,9 @@ import {
   Stream,
 } from "effect";
 
+import { BriefFaults } from "../subagents/BriefFaults.ts";
 import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
-import { steerReporter } from "../subagents/Subagents.ts";
+import { answerBrief, steerReporter } from "../subagents/Subagents.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession, BrainUnavailable } from "./Brain.ts";
@@ -281,6 +282,8 @@ const layerNoDeps = Layer.effect(
     const brain = yield* Brain;
     const feed = yield* CommitFeed;
     const parked = yield* Parked;
+    // Where a judge brain kills itself inside a brief's Go commit; none elsewhere.
+    const briefAnswered = answerBrief(yield* BriefFaults);
     // A stop finishes here once it started aborting, whatever happens to its caller.
     const layerScope = yield* Effect.scope;
 
@@ -815,7 +818,8 @@ const layerNoDeps = Layer.effect(
         conversationId,
         approvalId,
         { ...answer, by: { kind: "user" } },
-        brain.now()
+        brain.now(),
+        briefAnswered
       ).pipe(Effect.mapError(fromDurable(Option.some(threadId))));
 
       if (outcome === "not_found") {

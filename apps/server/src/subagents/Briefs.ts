@@ -2,16 +2,19 @@
 // frozen into its approval record as plain JSON, and read back from that record when Go starts the
 // child, so the child's first input is the approved brief and never the call's own arguments.
 //
-// Spawning asks no role resolution yet: the brief names no role and the child runs on its parent's
-// model. The brief tool with roles, its card and expiry come with the briefs package (4A), which
-// gates the start where `Subagents` reads the accepted record.
+// A result schema is checked when the brief is asked (`checkResultSchema`), so a schema the result
+// tool cannot hold a child to comes back to the parent at once, naming what to change. A role must
+// be a role or a model by its form here; whether it resolves is the tool's check at the ask, and
+// the start task resolves it again at Go (ADR 0035).
 
 import { Brief } from "@cairn/protocol/Policy";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
+import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { Option, Result, Schema } from "effect";
 
 import { SubagentToolText } from "../brain/SubagentText.ts";
+import { checkResultSchema } from "../models/ResultTool.ts";
 import { jsonRecordOf } from "./SubagentDocs.ts";
 import type { JsonRecord } from "./SubagentDocs.ts";
 
@@ -23,11 +26,15 @@ export interface SpawnArguments {
   readonly isolation: Option.Option<string>;
   readonly resultSchema: Option.Option<JsonRecord>;
   readonly wake: Option.Option<string>;
+  /** A role (`@worker`) or `provider/modelId[:level]` the child runs on; none for the parent's. */
+  readonly role: Option.Option<string>;
 }
 
 const encodeBrief = Schema.encodeSync(Brief);
 
 const decodeBrief = Schema.decodeUnknownOption(Brief);
+
+const decodeRoleSpec = Schema.decodeOption(RoleSpec);
 
 /**
  * The brief a spawn proposes, in `mode` (the parent's effective mode, which a child never widens);
@@ -39,8 +46,27 @@ export const briefOf = (
 ): Result.Result<Brief, string> => {
   const schema = Option.map(args.resultSchema, jsonRecordOf);
 
+  const role = Option.map(args.role, (text) => text.trim());
+  const spec = Option.flatMap(role, decodeRoleSpec);
+
+  if (Option.isSome(role) && Option.isNone(spec)) {
+    return Result.fail(SubagentToolText.roleInvalid(role.value));
+  }
+
   if (Option.isSome(schema) && schema.value === null) {
     return Result.fail(SubagentToolText.resultSchemaNotObject);
+  }
+
+  // A schema the result tool cannot hold the child to is refused now, while the parent can fix
+  // it, rather than at the child's first request (2E's rule).
+  for (const named of Option.toArray(
+    Option.flatMap(schema, Option.fromNullOr)
+  )) {
+    const checked = checkResultSchema(named);
+
+    if (Result.isFailure(checked)) {
+      return Result.fail(checked.failure.message);
+    }
   }
 
   return Result.succeed({
@@ -57,7 +83,7 @@ export const briefOf = (
       : "shared",
     base: null,
     writes: [],
-    role: null,
+    role: Option.getOrNull(spec),
     model: null,
     thinking: null,
     mode,

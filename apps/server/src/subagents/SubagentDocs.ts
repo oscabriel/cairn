@@ -135,6 +135,24 @@ export const SubagentsDoc = defineDoc<SubagentsState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
 });
 
+/** `cairn.subagent-parents` state: the conversations that hold children, as keys. */
+export interface SubagentParentsState {
+  [key: string]: JsonValue;
+  parents: { [conversationId: string]: boolean };
+}
+
+/**
+ * `cairn.subagent-parents` (session scope): every thread that may hold a live child, so the
+ * brain-wide cap counts them without a scan of every conversation (BrainCap.ts).
+ */
+export const SubagentParentsDoc = defineDoc<SubagentParentsState>({
+  kind: "cairn.subagent-parents",
+  version: 1,
+  scope: "session",
+  initial: () => ({ parents: {} }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
+});
+
 /**
  * A child's first `report`: the protocol's `ChildReport` as plain JSON. `payload` stays null: a
  * typed result is `submit_result`'s, in `cairn.result`.

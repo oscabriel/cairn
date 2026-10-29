@@ -16,7 +16,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ThreadId } from "@cairn/protocol/Ids";
-import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { ProviderDoc } from "@earendil-works/pi-durable";
 import {
   Context,
@@ -40,14 +39,12 @@ import { durable } from "../Durable.ts";
 import { ExtensionSet } from "../ExtensionSet.ts";
 import { FauxModels } from "../FauxModels.ts";
 import { HarnessSeam } from "../HarnessSeam.ts";
-import type { HarnessError } from "../HarnessSeam.ts";
 import { ModelSource } from "../ModelSource.ts";
 import { PiDurableHarness } from "../PiDurableHarness.ts";
 import {
   ScriptedBoot,
   ScriptedHarness,
   ScriptedModel,
-  ScriptedModes,
   ScriptedStore,
 } from "../ScriptedHarness.ts";
 import { SubagentFaults } from "../SubagentFaults.ts";
@@ -66,24 +63,12 @@ export interface ConformanceTarget {
   readonly resume: Effect.Effect<void>;
   /** Closes the instance and opens another over the same store, not yet resumed. */
   readonly restart: Effect.Effect<void>;
-  /**
-   * Sets a thread's permission mode, refusing a child's widening (ADR 0031); none where the
-   * harness has no way to set one yet.
-   */
-  readonly setMode: Effect.Effect<Option.Option<SetMode>>;
 }
-
-/** Sets one thread's permission mode. */
-export type SetMode = (
-  threadId: ThreadId,
-  mode: RuntimeMode
-) => Effect.Effect<void, HarnessError>;
 
 /** One open instance of a harness. */
 interface Instance {
   readonly seam: HarnessSeam["Service"];
   readonly resume: Effect.Effect<void>;
-  readonly setMode: Option.Option<SetMode>;
 }
 
 /** Builds a target over a scenario's script and planted delivery faults, for one scenario. */
@@ -165,7 +150,6 @@ const restartable = Effect.fnUntraced(function* (
   return {
     seam: Effect.map(Ref.get(current), ({ instance }) => instance.seam),
     resume: Effect.flatMap(Ref.get(current), ({ instance }) => instance.resume),
-    setMode: Effect.map(Ref.get(current), ({ instance }) => instance.setMode),
     restart: Effect.gen(function* () {
       const { scope } = yield* Ref.get(current);
 
@@ -243,8 +227,6 @@ export const piDurableTarget: MakeTarget = (script) =>
         return {
           seam: Context.get(context, HarnessSeam),
           resume: brain.resume.pipe(Effect.orDie),
-          // A thread's permission mode reaches the seam with `ThreadAgentChange.runtimeMode`.
-          setMode: Option.none(),
         };
       }).pipe(Effect.orDie)
     );
@@ -274,9 +256,6 @@ export const scriptedTarget: MakeTarget = (script, faults) =>
       Effect.map(Layer.build(layer), (context) => ({
         seam: Context.get(context, HarnessSeam),
         resume: Context.get(context, ScriptedBoot).resume,
-        setMode: Option.some((threadId, mode) =>
-          Context.get(context, ScriptedModes).set(threadId, mode)
-        ),
       }))
     );
   });

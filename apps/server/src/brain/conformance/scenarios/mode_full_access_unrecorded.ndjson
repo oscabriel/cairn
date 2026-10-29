@@ -1,0 +1,9 @@
+{"type":"transcript_start","scenario":"mode_full_access_unrecorded","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"touch","arguments":{"label":"d"}},{"id":"call_2","name":"run","arguments":{"label":"e"}}]}
+{"type":"model","label":"m2","text":"both ran"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"edit and run"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"edit and run","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["touch","run"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"touched d","images":0,"toolCalls":[],"toolName":"touch","isError":false},{"kind":"pi.tool-result","role":"toolResult","text":"ran e","images":0,"toolCalls":[],"toolName":"run","isError":false},{"kind":"pi.assistant","role":"assistant","text":"both ran","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_view","path":["approvals"],"equals":[]}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated"},"count":0}

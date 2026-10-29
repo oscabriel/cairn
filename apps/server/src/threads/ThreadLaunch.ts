@@ -683,6 +683,7 @@ export class ThreadLaunch extends Context.Service<
                 thinkingLevel: input.thinkingLevel,
                 cwd,
                 instructions: Option.none(),
+                runtimeMode: input.runtimeMode,
               })
               .pipe(Effect.mapError(stepFailed("ensure")));
 

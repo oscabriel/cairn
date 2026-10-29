@@ -174,6 +174,7 @@ const Seed = Layer.effectDiscard(
       thinkingLevel: "medium",
       cwd: os.tmpdir(),
       instructions: Option.none(),
+      runtimeMode: "full-access",
     });
   })
 );

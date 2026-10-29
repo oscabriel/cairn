@@ -15,13 +15,13 @@ describe("runtime modes", () => {
     assert.deepStrictEqual(runtimeModeOptions, RuntimeMode.literals);
   });
 
-  it("defaults to full access, the only mode enforced in Phase 1", () => {
+  it("defaults to full access, and enforces every mode but Auto", () => {
     assert.strictEqual(defaultRuntimeMode, "full-access");
     assert.deepStrictEqual(
       runtimeModeOptions.filter(
         (mode) => runtimeModePresentation[mode].isEnforced
       ),
-      ["full-access"]
+      ["approval-required", "auto-accept-edits", "full-access"]
     );
   });
 

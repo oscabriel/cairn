@@ -732,7 +732,7 @@ export const thinkingItems = (
   );
 };
 
-/** The four runtime modes, as menu rows; every mode but full access says it applies later. */
+/** The four runtime modes, as menu rows; a mode not enforced yet (Auto) says it applies later. */
 export const modeItems = (
   model: Model,
   h: HtmlBuilder<Message>

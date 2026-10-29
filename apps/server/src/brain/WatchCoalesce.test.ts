@@ -62,6 +62,7 @@ describe("the thread stream for a slow client", () => {
           thinkingLevel: "off",
           cwd: tmpdir(),
           instructions: Option.none(),
+          runtimeMode: "full-access",
         });
 
         const pull = yield* Stream.toPull(seam.watch(THREAD));

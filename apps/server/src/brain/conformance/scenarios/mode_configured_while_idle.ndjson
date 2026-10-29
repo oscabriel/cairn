@@ -1,0 +1,12 @@
+{"type":"transcript_start","scenario":"mode_configured_while_idle","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"touch","arguments":{"label":"h"}}]}
+{"type":"model","label":"m2","text":"left it"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"configure","runtimeMode":"approval-required"}
+{"type":"input","step":"message","requestId":"r1","text":"touch h"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"pending","kind":"tool-call"}}
+{"type":"input","step":"configure","runtimeMode":"full-access","expect":{"error":"invalid_input"}}
+{"type":"input","step":"respond","decision":"decline"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"touch h","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["touch"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"Not run: the approval for this call was declined.","images":0,"toolCalls":[],"toolName":"touch","isError":true},{"kind":"pi.assistant","role":"assistant","text":"left it","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"declined","decidedBy":"user","reason":null}]}

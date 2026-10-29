@@ -1,6 +1,8 @@
 // The phase 2 inputs this brain cannot act on yet are refused with `InvalidInput` naming the field,
 // and reach no service. Each package that builds one lifts its guard and turns its test here around:
-// 2B `runtimeMode` and the decisions, 5A `launch`, 4C `subagents`. 1A lifted `reason` and `answers`.
+// 4A `revise`, 5A `accept_sample` and `launch`, 4C `subagents`. 1A lifted `reason` and `answers`;
+// permission modes lifted `runtimeMode` (all but `auto`, which is not offered) and
+// `accept_for_thread`.
 
 import { InvalidInput } from "@cairn/protocol/Errors";
 import { ApprovalId } from "@cairn/protocol/Ids";
@@ -71,7 +73,7 @@ const outcome = <A, E extends { readonly _tag: string }>(
 
 describe("thread commands not handled yet", () => {
   it.effect(
-    "refuses a permission mode on configure, and configures without one",
+    "configures a permission mode, and refuses Auto, which is not offered",
     () =>
       Effect.gen(function* () {
         reached.length = 0;
@@ -86,18 +88,29 @@ describe("thread commands not handled yet", () => {
 
         const refused = yield* outcome(
           handlers.configure(
-            { ...base, runtimeMode: Option.some("approval-required") },
+            { ...base, runtimeMode: Option.some("auto") },
             requestId
           )
         );
 
-        const taken = yield* outcome(
-          handlers.configure({ ...base, runtimeMode: Option.none() }, requestId)
+        const taken = yield* Effect.forEach(
+          [
+            Option.some("approval-required" as const),
+            Option.some("auto-accept-edits" as const),
+            Option.some("full-access" as const),
+            Option.none(),
+          ],
+          (runtimeMode) =>
+            outcome(handlers.configure({ ...base, runtimeMode }, requestId))
         );
 
         assert.deepStrictEqual(
           [refused, taken, reached],
-          ["runtimeMode", "ok", ["configure"]]
+          [
+            "runtimeMode",
+            ["ok", "ok", "ok", "ok"],
+            ["configure", "configure", "configure", "configure"],
+          ]
         );
       }).pipe(Effect.provide(TestLayer))
   );
@@ -132,7 +145,7 @@ describe("thread commands not handled yet", () => {
   );
 
   it.effect(
-    "refuses each respond field it cannot record, and passes accept or decline with a reason or answers",
+    "refuses each respond field it cannot record, and passes accept, Allow for this thread or decline with a reason or answers",
     () =>
       Effect.gen(function* () {
         reached.length = 0;
@@ -140,7 +153,6 @@ describe("thread commands not handled yet", () => {
         const handlers = yield* threadCommandHandlers;
 
         const decisions: ReadonlyArray<ApprovalDecision> = [
-          "accept_for_thread",
           "accept_sample",
           "revise",
         ];
@@ -161,6 +173,7 @@ describe("thread commands not handled yet", () => {
         const taken = yield* Effect.forEach(
           [
             respond(),
+            respond({ decision: "accept_for_thread" }),
             respond({ decision: "decline" }),
             respond({ decision: "decline", reason: Option.some("not now") }),
             respond({
@@ -175,9 +188,9 @@ describe("thread commands not handled yet", () => {
         assert.deepStrictEqual(
           [refused, taken, reached],
           [
-            ["decision", "decision", "decision", "launch"],
-            ["ok", "ok", "ok", "ok"],
-            ["respond", "respond", "respond", "respond"],
+            ["decision", "decision", "launch"],
+            ["ok", "ok", "ok", "ok", "ok"],
+            ["respond", "respond", "respond", "respond", "respond"],
           ]
         );
       }).pipe(Effect.provide(TestLayer))

@@ -3,8 +3,11 @@
 // search. Replay policy is the point of this module:
 //
 // - `read`, `grep`, `find` and `ls` only read, so a rerun after a crash is harmless: `safe`.
-// - `write`, `edit` and `bash` change the world: `unsafe`, so a crash mid-call comes back
-//   `interrupted` to the model instead of running twice.
+// - `write`, `edit` and `bash` change the world. They are `safe` wrappers gated by the thread's
+//   permission mode (ADR 0031, Permissions.ts): where the mode asks, the call records an approval
+//   and waits for it (a crash during the wait waits again), then commits an effect mark before its
+//   effect, so a crash after the mark comes back "may have run" to the model instead of running
+//   twice. This replaced phase 1's `unsafe` policy (D18), because a hook cannot hold a wait.
 //
 // `bash` gets the brain's environment without `CAIRN_*`: pi-durable's default execution inherits
 // `process.env` whole, so `prepare` turns inheritance off and passes the filtered copy instead.
@@ -32,6 +35,7 @@ import { Array as Arr, Context, Effect, Layer } from "effect";
 import { threadProcessEnv } from "./Arms.ts";
 import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
+import { gatedTool } from "./Permissions.ts";
 
 /** The name of the extension, as pi-durable selects it. */
 export const CODING_TOOLS = "coding-tools";
@@ -211,7 +215,25 @@ const boundedBash = (bash: ReturnType<typeof createBashTool>) => ({
     ),
 });
 
-/** The coding tools, with `read` replay-safe and `bash` given a Cairn-free environment. */
+/** `bash` as the brain runs it: bounded, with a Cairn-free environment, gated by the mode. */
+export const gatedBash = () =>
+  gatedTool(
+    boundedBash(
+      createBashTool({
+        prepare: (execution) => {
+          execution.env = {
+            ...threadProcessEnv(process.env),
+            ...execution.env,
+          };
+          execution.inheritEnv = false;
+        },
+      })
+    ),
+    "command",
+    (args) => `bash: ${args.command}`
+  );
+
+/** The coding tools, with `read` replay-safe and the writers gated by the thread's mode. */
 const codingTools = (images: ImageProcessor) => {
   const read = createReadTool({ images });
 
@@ -219,19 +241,14 @@ const codingTools = (images: ImageProcessor) => {
     name: CODING_TOOLS,
     tools: [
       { ...read, replay: "safe" as const },
-      createWriteTool(),
-      createEditTool(),
-      boundedBash(
-        createBashTool({
-          prepare: (execution) => {
-            execution.env = {
-              ...threadProcessEnv(process.env),
-              ...execution.env,
-            };
-            execution.inheritEnv = false;
-          },
-        })
+      gatedTool(createWriteTool(), "edit", (args) => `write ${args.path}`),
+      gatedTool(
+        createEditTool(),
+        "edit",
+        (args) =>
+          `edit ${args.path} (${args.edits.length} ${args.edits.length === 1 ? "change" : "changes"})`
       ),
+      gatedBash(),
       grep,
       find,
       ls,

@@ -1,15 +1,17 @@
-// One Executor `call` or `execute` through Cairn's approval (ADR 0013), the effect
+// One Executor `call` or `execute` through Cairn's approval (ADR 0013, ADR 0031), the effect
 // sandwich of spikes/4-approvals/brain.ts:
 //
-// 1. Record the approval in `cairn.approvals` (`ledger.ask`). In full access, the only mode Cairn offers
-//    until approval cards exist, it is recorded accepted at once; otherwise the call waits for the user's answer.
+// 1. Record the approval in `cairn.approvals` (`ledger.ask`). When the thread's permission mode
+//    lets the call through (full access), it is recorded accepted at once with `decidedBy` mode;
+//    otherwise the call waits for the user's answer. A program (`execute`) carries its code as the
+//    record's payload, so the user approves exactly what the card shows.
 // 2. Mark `started` (`ledger.begin`) before anything reaches Executor. A rerun that finds the mark
 //    returns "Interrupted after it started, so it may have run. Not retried." and sends nothing.
 // 3. Send the call. When Executor answers `approval-required`, record its `apr_` id
 //    (`ledger.noteExecutorRequest`) and answer `resume accept` at once: Cairn's approval already
-//    covers this call, so Executor's prompt never meets a person. A program (`execute`) may pause
-//    again for each nested call; each is accepted the same way in full access, and declined
-//    otherwise (approval cards for nested calls arrive with the other permission modes).
+//    covers this call, so Executor's prompt never meets a person. A program may pause again for
+//    each nested call; each is accepted the same way, because the program was approved once, as
+//    the program (ADR 0031), in every mode.
 // 4. Mark `done` (`ledger.finish`) once the outcome is known.
 //
 // `input-required` forms are cancelled with a clear error: Cairn has no form renderer yet. A
@@ -21,9 +23,11 @@
 // 1a5cd4a (`run`), with v1's approval queue, re-ask after expiry and superseding rows replaced by
 // the ledger sandwich (notes/v1.md B7).
 
+import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Duration, Effect, Option, Ref, Result } from "effect";
 
-import type { ApprovalLedger } from "../brain/CairnDocs.ts";
+import { settlementOf, settlementText } from "../brain/CairnDocs.ts";
+import type { ApprovalLedger, JsonRecord } from "../brain/CairnDocs.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";
 import type { ExecutorCallError } from "./ExecutorLink.ts";
 import {
@@ -58,8 +62,10 @@ export interface GatedRequest {
   readonly request: JsonObject;
   /** One line for the approval record. */
   readonly summary: string;
-  /** Full access: approve at once (the record is still written). */
-  readonly autoAccept: boolean;
+  /** Frozen on the record: a program's code, so the card shows what the user approves. */
+  readonly payload: Option.Option<JsonRecord>;
+  /** The mode that lets the call through without asking (the record is still written). */
+  readonly acceptedBy: Option.Option<RuntimeMode>;
 }
 
 const callFailure = (error: ExecutorCallError, accepted: boolean) => {
@@ -124,7 +130,7 @@ export const gatedCall = Effect.fn("GatedCall.run")(function* (
 
     return matchOutcome(outcomeOf(reply.structured.value), {
       Completed: ({ value }) => Effect.succeed(format(value)),
-      ApprovalRequired: ({ requestId, name }) =>
+      ApprovalRequired: ({ requestId }) =>
         Effect.gen(function* () {
           yield* ledger.noteExecutorRequest(requestId).pipe(
             Effect.catchTag("ApprovalLedgerError", (error) =>
@@ -135,14 +141,6 @@ export const gatedCall = Effect.fn("GatedCall.run")(function* (
               )
             )
           );
-
-          if (!gated.autoAccept && gated.kind === "execute") {
-            yield* refuse(requestId, "decline");
-
-            return failed(
-              `The program asked Executor to approve ${name}, and Cairn approves nested calls only in full access, so it declined it. Earlier calls in the program may have run. ${INTERRUPTED}`
-            );
-          }
 
           yield* Ref.set(unanswered, Option.some(requestId));
 
@@ -220,15 +218,18 @@ export const gatedCall = Effect.fn("GatedCall.run")(function* (
       kind: "executor-call",
       summary: gated.summary,
       ttlMillis: Duration.toMillis(APPROVAL_TTL),
-      autoAccept: gated.autoAccept,
+      payload: gated.payload,
+      acceptedBy: gated.acceptedBy,
     });
 
-    const answer =
-      record.status === "pending" ? yield* ledger.awaitAnswer : record.status;
+    const settlement =
+      record.status === "pending"
+        ? yield* ledger.awaitSettlement
+        : settlementOf(record);
 
-    if (answer !== "accepted") {
+    if (settlement.status !== "accepted") {
       return failed(
-        `Cairn's approval for this call was ${answer}, so nothing was sent to Executor.`
+        `Cairn's approval for this call was ${settlementText(settlement)}, so nothing was sent to Executor.`
       );
     }
 

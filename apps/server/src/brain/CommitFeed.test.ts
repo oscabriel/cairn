@@ -156,6 +156,7 @@ const withBrain = <A, E>(
             thinkingLevel: "off",
             cwd: process.cwd(),
             instructions: Option.none(),
+            runtimeMode: "full-access",
           });
 
           return yield* body({

@@ -80,6 +80,7 @@ import {
   refusalText,
   ThreadMeta,
   ThreadReceipt,
+  writeMode,
 } from "./CairnDocs.ts";
 import type { ApprovalsState } from "./CairnDocs.ts";
 import { CommitFeed, RUN_TASK } from "./CommitFeed.ts";
@@ -437,6 +438,8 @@ const layerNoDeps = Layer.effect(
 
             // Created now, so a thread stream can always watch it.
             await tx.doc(Approvals, record.id);
+            // The mode gated tools read at call time (ADR 0031).
+            await writeMode(tx, record.id, input.runtimeMode);
 
             meta.threadId = input.threadId;
             meta.projectId = input.projectId;
@@ -480,23 +483,45 @@ const layerNoDeps = Layer.effect(
       const session = yield* open(Option.some(threadId));
       const conversation = yield* conversationOf(session, threadId);
 
-      if (Option.isSome(change.cwd)) {
+      if (Option.isSome(change.cwd) || Option.isSome(change.runtimeMode)) {
         const run = yield* liveRun(session, threadId, conversation.id);
 
         if (Option.isSome(run)) {
           return yield* failure(
             "invalid_input",
             Option.some(threadId),
-            `Thread ${threadId} is running, so its folder cannot change now. Stop it or wait, then change the folder.`
+            Option.isSome(change.cwd)
+              ? `Thread ${threadId} is running, so its folder cannot change now. Stop it or wait, then change the folder.`
+              : `Thread ${threadId} is running, so its permission mode cannot change now. Stop it or wait, then change the mode.`
           );
         }
+      }
+
+      if (Option.isSome(change.runtimeMode)) {
+        const mode = change.runtimeMode.value;
+
+        yield* call(
+          Option.some(threadId),
+          "permissions.mode",
+          async (context) => {
+            await session.harness.commit(async (tx) => {
+              await writeMode(tx, conversation.id, mode);
+            }, context);
+          }
+        );
+      }
+
+      const agent = agentChange(change);
+
+      if (Object.keys(agent).length === 0) {
+        return yield* Effect.void;
       }
 
       return yield* call(
         Option.some(threadId),
         "configure",
         async (context) => {
-          await conversation.configure(agentChange(change), context);
+          await conversation.configure(agent, context);
         }
       );
     });

@@ -35,7 +35,7 @@
 //   escalation writes the child's record and a mirror in the parent in one critical section, and
 //   an answer to either settles both once. A child's approvals are never routed to the parent.
 // - A child's permission mode is the narrower of its own and its parent's, read at each ask, and
-//   `ScriptedModes.set` refuses a child's widening.
+//   `configure` refuses a child's widening.
 // - Stopping a parent leaves its children working unless the stop says `subagents: "stop"`.
 // The pi-durable side builds the same behaviour as its subagents extension; `SubagentFaults` can
 // break this one on purpose for the conformance suite's mutation check.
@@ -144,6 +144,7 @@ import type {
   ThreadAgentChange,
   ThreadFrame,
 } from "./HarnessSeam.ts";
+import type { ThreadPermissions } from "./Permissions.ts";
 import { piConversationId, piEntryId, piTaskId } from "./PiIds.ts";
 import { classifyRunFailure } from "./RunFailure.ts";
 import { SubagentFaults } from "./SubagentFaults.ts";
@@ -228,6 +229,11 @@ export interface ScriptedToolApi {
   ask(summary: string, autoAccept: boolean): Effect.Effect<ApprovalSettlement>;
   /** The thread's effective permission mode: its own, narrowed by every ancestor's. */
   readonly mode: Effect.Effect<RuntimeMode>;
+  /**
+   * The thread's permissions now (`cairn.permissions`), read at call time as gated tools do, with
+   * the effective mode.
+   */
+  permissions(): ThreadPermissions;
 }
 
 /** The result a scripted tool gives the model. */
@@ -262,18 +268,6 @@ export class ScriptedTools extends Context.Service<
     })
   );
 }
-
-/** Sets a scripted thread's permission mode, as `thread.configure` will (ADR 0031). */
-export class ScriptedModes extends Context.Service<
-  ScriptedModes,
-  {
-    /** Fails `invalid_input` when a subagent's mode would be wider than its parent's. */
-    set(
-      threadId: ThreadId,
-      mode: RuntimeMode
-    ): Effect.Effect<void, HarnessError>;
-  }
->()("cairn/server/brain/ScriptedModes") {}
 
 /** A tool's result inside the harness: a terminating result ends the run after its round. */
 interface ToolOutcome extends ScriptedToolResult {
@@ -405,8 +399,9 @@ interface ScriptedThread {
   readonly approvals: Map<string, ApprovalRecord>;
   /** Tool call id to the task id its approval is keyed by, so a rerun finds its record. */
   readonly toolTasks: Map<string, number>;
+  /** `cairn.permissions`: the mode gated tools read at call time, and the tools allowed. */
+  permissions: ThreadPermissions;
   usage: { input: number; output: number };
-  mode: RuntimeMode;
   /** The user stopped the last run, or it failed, and no user input came since. */
   halted: boolean;
   readonly link: Option.Option<ChildLink>;
@@ -562,7 +557,7 @@ const childDocument = (
       commit: Option.getOrNull(report.commit),
     }),
   }),
-  permissionMode: thread.mode,
+  permissionMode: thread.permissions.mode,
 });
 
 /** The thread's view in pi-durable's shape: active entries and the visible documents. */
@@ -1061,9 +1056,9 @@ const layerNoDeps = Layer.effectContext(
     /** The thread's mode, narrowed by every ancestor's (ADR 0031). */
     const effectiveMode = (thread: ScriptedThread): RuntimeMode =>
       Option.match(linkOf(thread), {
-        onNone: () => thread.mode,
+        onNone: () => thread.permissions.mode,
         onSome: ({ parent }) =>
-          narrowerMode(thread.mode, effectiveMode(parent)),
+          narrowerMode(thread.permissions.mode, effectiveMode(parent)),
       });
 
     const setChildStatus = (
@@ -1523,7 +1518,8 @@ const layerNoDeps = Layer.effectContext(
     const freshThread = (
       threadId: ThreadId,
       projectId: ProjectId,
-      agent: Agent
+      agent: Agent,
+      mode: RuntimeMode
     ): ScriptedThread => ({
       threadId,
       projectId,
@@ -1540,7 +1536,7 @@ const layerNoDeps = Layer.effectContext(
       approvals: new Map(),
       toolTasks: new Map(),
       usage: { input: 0, output: 0 },
-      mode: "full-access",
+      permissions: { mode, allow: [] },
       halted: false,
       link: Option.none(),
       briefs: new Map(),
@@ -1599,8 +1595,12 @@ const layerNoDeps = Layer.effectContext(
       });
 
       const child: ScriptedThread = {
-        ...freshThread(childThreadId, parent.projectId, { ...parent.agent }),
-        mode: brief.mode,
+        ...freshThread(
+          childThreadId,
+          parent.projectId,
+          { ...parent.agent },
+          brief.mode
+        ),
         link: Option.some({
           key: record.id,
           parentThreadId: parent.threadId,
@@ -2144,6 +2144,10 @@ const layerNoDeps = Layer.effectContext(
       call: ToolCall
     ): ScriptedToolApi => ({
       mode: Effect.sync(() => effectiveMode(thread)),
+      permissions: () => ({
+        mode: effectiveMode(thread),
+        allow: thread.permissions.allow,
+      }),
       ask: (summary, autoAccept) =>
         Effect.gen(function* () {
           const taskId = taskOf(thread, call);
@@ -2927,11 +2931,16 @@ const layerNoDeps = Layer.effectContext(
             };
           }
 
-          const thread = freshThread(input.threadId, input.projectId, {
-            model: input.model,
-            thinkingLevel: input.thinkingLevel,
-            cwd: input.cwd,
-          });
+          const thread = freshThread(
+            input.threadId,
+            input.projectId,
+            {
+              model: input.model,
+              thinkingLevel: input.thinkingLevel,
+              cwd: input.cwd,
+            },
+            input.runtimeMode
+          );
 
           store.threads.set(input.threadId, thread);
 
@@ -2966,6 +2975,36 @@ const layerNoDeps = Layer.effectContext(
               `Thread ${threadId} is running, so its folder cannot change now. Stop it or wait, then change the folder.`
             );
           }
+
+          for (const mode of Option.toArray(change.runtimeMode)) {
+            for (const { parent } of Option.toArray(linkOf(thread))) {
+              const ceiling = effectiveMode(parent);
+
+              if (isWiderThan(mode, ceiling)) {
+                return yield* failure(
+                  "invalid_input",
+                  threadId,
+                  `A subagent's permission mode cannot be wider than its parent's (${ceiling}). Choose ${ceiling} or a narrower mode.`
+                );
+              }
+            }
+          }
+
+          if (Option.isSome(change.runtimeMode) && Option.isSome(thread.run)) {
+            return yield* failure(
+              "invalid_input",
+              threadId,
+              `Thread ${threadId} is running, so its permission mode cannot change now. Stop it or wait, then change the mode.`
+            );
+          }
+
+          thread.permissions = {
+            mode: Option.getOrElse(
+              change.runtimeMode,
+              () => thread.permissions.mode
+            ),
+            allow: thread.permissions.allow,
+          };
 
           thread.agent = {
             model: Option.getOrElse(change.model, () => thread.agent.model),
@@ -3102,6 +3141,21 @@ const layerNoDeps = Layer.effectContext(
               threadId,
               refusedAnswer.value
             );
+          }
+
+          const answered = thread.approvals.get(approvalId);
+
+          if (
+            outcome === "answered" &&
+            given.decision === "accept_for_thread" &&
+            answered !== undefined &&
+            !thread.permissions.allow.includes(answered.tool)
+          ) {
+            thread.permissions = {
+              mode: thread.permissions.mode,
+              allow: [...thread.permissions.allow, answered.tool],
+            };
+            changes.touched.add(thread);
           }
 
           return yield* Effect.void;
@@ -3364,34 +3418,6 @@ const layerNoDeps = Layer.effectContext(
       return states;
     });
 
-    const setMode = Effect.fn("ScriptedModes.set")(function* (
-      threadId: ThreadId,
-      mode: RuntimeMode
-    ) {
-      const thread = yield* find(threadId);
-
-      return yield* locked((_at, changes) =>
-        Effect.gen(function* () {
-          for (const { parent } of Option.toArray(linkOf(thread))) {
-            const ceiling = effectiveMode(parent);
-
-            if (isWiderThan(mode, ceiling)) {
-              return yield* failure(
-                "invalid_input",
-                threadId,
-                `A subagent's permission mode cannot be wider than its parent's (${ceiling}). Choose ${ceiling} or a narrower mode.`
-              );
-            }
-          }
-
-          thread.mode = mode;
-          changes.touched.add(thread);
-
-          return yield* Effect.void;
-        })
-      );
-    });
-
     const seam = HarnessSeam.of({
       ensureThread,
       configure,
@@ -3422,8 +3448,7 @@ const layerNoDeps = Layer.effectContext(
     });
 
     return Context.make(HarnessSeam, seam).pipe(
-      Context.add(ScriptedBoot, ScriptedBoot.of({ resume })),
-      Context.add(ScriptedModes, ScriptedModes.of({ set: setMode }))
+      Context.add(ScriptedBoot, ScriptedBoot.of({ resume }))
     );
   })
 );

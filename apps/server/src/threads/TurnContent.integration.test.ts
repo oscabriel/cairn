@@ -164,6 +164,7 @@ describe("turn content, every stage in order", () => {
             thinkingLevel: "off",
             cwd: fixture.project,
             instructions: Option.none(),
+            runtimeMode: "full-access",
           });
 
           const pdfBytes = makePdf(

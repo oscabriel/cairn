@@ -1,0 +1,14 @@
+{"type":"transcript_start","scenario":"mode_auto_accept_edits","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"touch","arguments":{"label":"b"}}]}
+{"type":"model","label":"m2","toolCalls":[{"id":"call_2","name":"run","arguments":{"label":"c"}}]}
+{"type":"model","label":"m3","text":"the edit went in, the command did not"}
+{"type":"input","step":"ensure","runtimeMode":"auto-accept-edits"}
+{"type":"input","step":"message","requestId":"r1","text":"edit, then run"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"pending","kind":"tool-call"}}
+{"type":"expect_view","path":["approvals"],"equals":[{"status":"pending","tool":"run"}]}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"edit, then run","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["touch"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"touched b","images":0,"toolCalls":[],"toolName":"touch","isError":false},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["run"],"toolName":null,"isError":null}]}
+{"type":"input","step":"respond","decision":"decline","reason":"not now"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"edit, then run","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["touch"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"touched b","images":0,"toolCalls":[],"toolName":"touch","isError":false},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["run"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"Not run: the approval for this call was declined: not now.","images":0,"toolCalls":[],"toolName":"run","isError":true},{"kind":"pi.assistant","role":"assistant","text":"the edit went in, the command did not","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"declined","decidedBy":"user","reason":"not now"}]}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","status":"pending"},"count":1}

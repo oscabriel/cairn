@@ -1,0 +1,12 @@
+{"type":"transcript_start","scenario":"mode_allow_for_thread","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"run","arguments":{"label":"f"}}]}
+{"type":"model","label":"m2","toolCalls":[{"id":"call_2","name":"run","arguments":{"label":"g"}}]}
+{"type":"model","label":"m3","text":"ran twice"}
+{"type":"input","step":"ensure","runtimeMode":"approval-required"}
+{"type":"input","step":"message","requestId":"r1","text":"run twice"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"pending","kind":"tool-call"}}
+{"type":"input","step":"respond","decision":"accept_for_thread"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"run twice","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["run"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"ran f","images":0,"toolCalls":[],"toolName":"run","isError":false},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["run"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"ran g","images":0,"toolCalls":[],"toolName":"run","isError":false},{"kind":"pi.assistant","role":"assistant","text":"ran twice","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","status":"pending"},"count":1}

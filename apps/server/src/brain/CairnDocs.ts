@@ -5,6 +5,8 @@
 //   the conversation, configures it and records it here, so a raced `ensureThread` lands once.
 // - `cairn.thread-meta` (conversation) names the thread and project, so the store describes itself
 //   and a lost cairn.sqlite can be re-linked. A fork starts empty: it is another thread.
+// - `cairn.permissions` (conversation) holds the thread's permission mode and the tools "Allow for
+//   this thread" added (ADR 0031); gated tools read it at call time (Permissions.ts).
 // - `cairn.approvals` (conversation) holds decision records, version 2 (ADR 0029): spike 4's
 //   shape plus who decided (`decidedBy`), why (`reason`), the `answer` and a `payload` frozen at
 //   ask time. Version 1 records migrate on first access. It is a conversation document so the
@@ -21,6 +23,8 @@ import {
   APPROVALS_DOCUMENT,
   APPROVALS_VERSION,
   ApprovalStatus,
+  DEFAULT_RUNTIME_MODE,
+  PERMISSIONS_DOCUMENT,
   RuntimeRequestKind,
 } from "@cairn/protocol/Policy";
 import type {
@@ -28,6 +32,7 @@ import type {
   ApprovalRoute,
   Decider,
   QuestionAnswer,
+  RuntimeMode,
 } from "@cairn/protocol/Policy";
 import { copyJson } from "@earendil-works/chord";
 import type { JsonValue } from "@earendil-works/chord";
@@ -342,6 +347,51 @@ export const Approvals = defineDoc<ApprovalsState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
 });
 
+/** `cairn.permissions` state: the thread's mode, and the tools "Allow for this thread" added. */
+export interface PermissionsState {
+  [key: string]: JsonValue;
+  mode: RuntimeMode;
+  allow: Array<string>;
+}
+
+/** `cairn.permissions`: the mode gated tools read at call time (ADR 0031). */
+export const Permissions = defineDoc<PermissionsState>({
+  kind: PERMISSIONS_DOCUMENT,
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  // A fork is another thread, which starts in the default mode.
+  fork: "initial",
+  initial: () => ({ mode: DEFAULT_RUNTIME_MODE, allow: [] }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
+});
+
+/** Writes the thread's mode into its permissions, inside the caller's transaction. */
+export const writeMode = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  mode: RuntimeMode
+): Promise<void> => {
+  const doc = await tx.doc(Permissions, conversationId);
+
+  if (doc.mode !== mode) {
+    doc.mode = mode;
+  }
+};
+
+/** Adds `tool` to the thread's "Allow for this thread" list, inside the caller's transaction. */
+export const allowTool = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  tool: string
+): Promise<void> => {
+  const doc = await tx.doc(Permissions, conversationId);
+
+  if (!doc.allow.includes(tool)) {
+    doc.allow.push(tool);
+  }
+};
+
 /** Data of a `cairn.user` entry: who sent it, and the attachments it carries. */
 export type CairnUserData = Readonly<{
   from: string;
@@ -374,8 +424,13 @@ export interface ApprovalRequest {
   readonly summary: string;
   /** How long the record stays answerable. */
   readonly ttlMillis: number;
-  /** Full access: record the approval as accepted at once, for the audit trail and the sandwich. */
-  readonly autoAccept: boolean;
+  /** Frozen on the record at ask time, such as the program an Executor `execute` runs. */
+  readonly payload: Option.Option<JsonRecord>;
+  /**
+   * The permission mode that accepts this call at ask time without asking (`decidedBy` mode), for
+   * the audit trail and the sandwich; none asks the user.
+   */
+  readonly acceptedBy: Option.Option<RuntimeMode>;
 }
 
 /** How a record settled: its status, who decided and the reason they gave. */
@@ -500,9 +555,6 @@ export const UNDECIDED = {
   mirrorOf: null,
 } as const satisfies Partial<ApprovalRecord>;
 
-/** The decider of a record a permission mode accepted at ask time (phase 1: full access only). */
-const FULL_ACCESS: Decider = { kind: "mode", mode: "full-access" };
-
 /** The answer a record accepted at ask time carries. */
 const ACCEPTED_AT_ASK: ApprovalAnswerState = {
   decision: "accept",
@@ -544,6 +596,7 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
       }
 
       const askedAt = api.now();
+      const accepted = Option.isSome(request.acceptedBy);
 
       const record: ApprovalRecord = {
         id: approvalId,
@@ -551,15 +604,19 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
         tool: request.tool,
         kind: request.kind,
         summary: request.summary,
-        status: request.autoAccept ? "accepted" : "pending",
+        status: accepted ? "accepted" : "pending",
         askedAt,
         expiresAt: askedAt + request.ttlMillis,
-        answeredAt: request.autoAccept ? askedAt : null,
+        answeredAt: accepted ? askedAt : null,
         run: null,
         executorRequestId: null,
         ...UNDECIDED,
-        answer: request.autoAccept ? ACCEPTED_AT_ASK : null,
-        decidedBy: request.autoAccept ? FULL_ACCESS : null,
+        payload: copyObject(Option.getOrNull(request.payload)),
+        answer: accepted ? ACCEPTED_AT_ASK : null,
+        decidedBy: Option.match(request.acceptedBy, {
+          onNone: () => null,
+          onSome: (mode): Decider => ({ kind: "mode", mode }),
+        }),
       };
 
       items[approvalId] = record;
@@ -811,7 +868,10 @@ export const applyAnswer = (
   return "answered";
 };
 
-/** Answers one record from the host side, in one transaction (`applyAnswer`). */
+/**
+ * Answers one record from the host side, in one transaction (`applyAnswer`). "Allow for this
+ * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit.
+ */
 export const answerApproval = (
   session: Pick<Session, "commit">,
   conversationId: ConversationId,
@@ -826,9 +886,18 @@ export const answerApproval = (
         const { items } = await tx.doc(Approvals, conversationId);
         const record = items[approvalId];
 
-        return record === undefined
-          ? "not_found"
-          : applyAnswer(record, answer, now);
+        if (record === undefined) {
+          return "not_found";
+        }
+
+        const outcome = applyAnswer(record, answer, now);
+
+        // "Allow for this thread" lands with the answer, so the next call of the tool runs at once.
+        if (outcome === "answered" && answer.decision === "accept_for_thread") {
+          await allowTool(tx, conversationId, record.tool);
+        }
+
+        return outcome;
       }, context)
   );
 

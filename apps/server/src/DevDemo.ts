@@ -73,6 +73,7 @@ export const DevDemo = Layer.effectDiscard(
       thinkingLevel: "medium",
       cwd: os.tmpdir(),
       instructions: Option.none(),
+      runtimeMode: DEFAULT_RUNTIME_MODE,
     });
 
     const send = Effect.gen(function* () {

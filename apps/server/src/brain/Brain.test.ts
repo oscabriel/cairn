@@ -191,6 +191,7 @@ describe("Brain supervisor", () => {
             thinkingLevel: "off",
             cwd: process.cwd(),
             instructions: Option.none(),
+            runtimeMode: "full-access",
           });
           yield* seam.submit(THREAD_ID, {
             requestId: "reopen-1",

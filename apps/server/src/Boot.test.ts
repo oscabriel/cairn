@@ -468,6 +468,7 @@ const seedBrain = (dataDir: string) =>
             thinkingLevel: "off",
             cwd: dataDir,
             instructions: Option.none(),
+            runtimeMode: "full-access",
           });
 
           if (n <= STALE_RUNNING) {

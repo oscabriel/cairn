@@ -28,11 +28,18 @@
 // schema in the prompt on the bare Harness (the models note measured 0 of 8); `union` asks the
 // result tool to accept a schema whose root is a union, which it must refuse.
 //
-// Prints one JSON line per model and control, then a summary line with the total cost. Exit 0
+// Prints one JSON line per model and control on stdout (logs go to stderr), then a summary line
+// with the total cost. The trial cwd is seeded with the files the task names (`PROBE_FILES`). Exit 0
 // when every model run passes every trial and both controls fail. A model the runtime does not
 // have, or a provider with no credential, prints a skipped line and fails the run.
 
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -42,10 +49,12 @@ import { ClaudeUsage } from "@cairn/bridge/ClaudeUsage";
 import type { ModelRef } from "@cairn/protocol/Models";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import {
+  Cause,
   Duration,
   Effect,
   FileSystem,
   Layer,
+  Logger,
   Option,
   Result,
   Schema,
@@ -64,6 +73,7 @@ import {
 } from "./fixtures/TypedChildren.ts";
 import {
   bridgeTarget,
+  PROBE_FILES,
   runTrials,
   unionControl,
 } from "./fixtures/TypedResults.ts";
@@ -119,16 +129,18 @@ class TypedResultsFailed extends Schema.TaggedError<TypedResultsFailed>()(
 ) {}
 
 /** Which provider a model line stands for in the target's three. */
-type Role = "opencode-go" | "bridge" | "codex" | "codex-fallback";
+type Slot = "opencode-go" | "bridge" | "codex" | "codex-fallback";
 
 /** One model's line. */
 interface Line {
   readonly name: string;
-  readonly role: Role;
+  readonly slot: Slot;
   readonly mode: TrialMode;
   readonly path: "children" | "bare";
   readonly valid: number;
   readonly factsRight: number;
+  /** Children the parent's registry settled `completed`: what the parent was told. */
+  readonly settledCompleted: number;
   readonly trials: number;
   readonly costUsd: number;
   readonly skipped: string;
@@ -197,7 +209,7 @@ const nameOf = (model: ModelRef) => `${model.provider}/${model.modelId}`;
 /** Runs one model's trials under the deadline and prints its line. */
 const timed = <E, R>(
   name: string,
-  role: Role,
+  slot: Slot,
   mode: TrialMode,
   bare: boolean,
   trials: Effect.Effect<ReadonlyArray<Trial>, E, R>
@@ -209,11 +221,13 @@ const timed = <E, R>(
 
     const line: Line = {
       name,
-      role,
+      slot,
       mode,
       path: bare ? "bare" : "children",
       valid: results.filter((trial) => trial.valid).length,
       factsRight: results.filter((trial) => trial.factsRight).length,
+      settledCompleted: results.filter((trial) => trial.settled === "completed")
+        .length,
       trials: TRIALS,
       costUsd: round(costOf(results)),
       skipped: "",
@@ -229,13 +243,14 @@ const timed = <E, R>(
     return line;
   });
 
-const skipped = (name: string, role: Role, why: string): Line => ({
+const skipped = (name: string, slot: Slot, why: string): Line => ({
   name,
-  role,
+  slot,
   mode: "typed",
   path: throughChildren ? "children" : "bare",
   valid: 0,
   factsRight: 0,
+  settledCompleted: 0,
   trials: TRIALS,
   costUsd: 0,
   skipped: why,
@@ -307,10 +322,10 @@ const availableIn = Effect.fn("TypedResults.available")(function* (
   );
 });
 
-/** What the run plans: each model with its role. */
+/** What the run plans: each model with the provider slot it fills. */
 interface Planned {
   readonly model: ModelRef;
-  readonly role: Role;
+  readonly slot: Slot;
 }
 
 /** The models to run, given the Codex case. */
@@ -318,7 +333,7 @@ const planOf = (codex: CodexCase): ReadonlyArray<Planned> => {
   const go: Array<Planned> = providers.has("opencode-go")
     ? goModels.map((modelId) => ({
         model: { provider: "opencode-go", modelId },
-        role: "opencode-go" as const,
+        slot: "opencode-go" as const,
       }))
     : [];
 
@@ -326,7 +341,7 @@ const planOf = (codex: CodexCase): ReadonlyArray<Planned> => {
     ? [
         {
           model: { provider: "claude-bridge", modelId: values["bridge-model"] },
-          role: "bridge",
+          slot: "bridge",
         },
       ]
     : [];
@@ -339,7 +354,7 @@ const planOf = (codex: CodexCase): ReadonlyArray<Planned> => {
     return [
       ...go,
       ...bridge,
-      { model: { provider: CODEX, modelId: CODEX_MODEL }, role: "codex" },
+      { model: { provider: CODEX, modelId: CODEX_MODEL }, slot: "codex" },
     ];
   }
 
@@ -348,7 +363,7 @@ const planOf = (codex: CodexCase): ReadonlyArray<Planned> => {
   return [
     ...go.filter((planned) => nameOf(planned.model) !== nameOf(FALLBACK)),
     ...bridge,
-    { model: FALLBACK, role: "codex-fallback" },
+    { model: FALLBACK, slot: "codex-fallback" },
   ];
 };
 
@@ -370,7 +385,7 @@ const childrenRun = (plan: ReadonlyArray<Planned>, cwd: string) =>
         lines.push(
           yield* timed(
             name,
-            planned.role,
+            planned.slot,
             "typed",
             false,
             runChildTrials(log, planned.model, TRIALS, offset * TRIALS + 1, cwd)
@@ -378,11 +393,11 @@ const childrenRun = (plan: ReadonlyArray<Planned>, cwd: string) =>
         );
       } else {
         const why =
-          planned.role === "codex"
+          planned.slot === "codex"
             ? "openai-codex is ready on the deployed brain, but only the brain holding the OAuth lock may use the sign-in, so this judge brain cannot"
             : "model not available";
 
-        const line = skipped(name, planned.role, why);
+        const line = skipped(name, planned.slot, why);
 
         yield* print(line);
         lines.push(line);
@@ -403,7 +418,7 @@ const bareRun = (plan: ReadonlyArray<Planned>, cwd: string) =>
       const name = nameOf(planned.model);
 
       if (!(yield* availableIn(planned.model))) {
-        const line = skipped(name, planned.role, "model not available");
+        const line = skipped(name, planned.slot, "model not available");
 
         yield* print(line);
         lines.push(line);
@@ -413,7 +428,7 @@ const bareRun = (plan: ReadonlyArray<Planned>, cwd: string) =>
         lines.push(
           yield* timed(
             name,
-            planned.role,
+            planned.slot,
             "typed",
             true,
             runTrials(target, "typed", TRIALS)
@@ -430,7 +445,7 @@ const bareRun = (plan: ReadonlyArray<Planned>, cwd: string) =>
         lines.push(
           yield* timed(
             name,
-            planned.role,
+            planned.slot,
             "typed",
             true,
             runTrials(target, "typed", TRIALS)
@@ -495,6 +510,12 @@ const program = Effect.gen(function* () {
   const plan = planOf(codex);
   const cwd = realpathSync(mkdtempSync(path.join(tmpdir(), "cairn-typed-")));
 
+  // The repository the task describes, so a child that looks finds it.
+  for (const file of PROBE_FILES) {
+    mkdirSync(path.dirname(path.join(cwd, file.path)), { recursive: true });
+    writeFileSync(path.join(cwd, file.path), file.text);
+  }
+
   const removeCwd = Effect.sync(() => {
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -532,9 +553,9 @@ const program = Effect.gen(function* () {
     ),
   ];
 
-  const byRole = (role: Role) =>
+  const bySlot = (slot: Slot) =>
     typed
-      .flatMap((line) => (line.role === role ? [count(line, line.valid)] : []))
+      .flatMap((line) => (line.slot === slot ? [count(line, line.valid)] : []))
       .join(", ");
 
   yield* print({
@@ -544,12 +565,12 @@ const program = Effect.gen(function* () {
     models: typed.map((line) => count(line, line.valid)),
     factsRight: typed.map((line) => count(line, line.factsRight)),
     providers: {
-      bridge: byRole("bridge"),
-      "opencode-go": byRole("opencode-go"),
+      bridge: bySlot("bridge"),
+      "opencode-go": bySlot("opencode-go"),
       codex:
         codex.blocked === ""
-          ? byRole("codex")
-          : `blocked; fallback ${byRole("codex-fallback")}`,
+          ? bySlot("codex")
+          : `blocked; fallback ${bySlot("codex-fallback")}`,
     },
     codex,
     controls: [
@@ -586,13 +607,24 @@ NodeRuntime.runMain(
     Effect.provide(
       childBrain(brainDir, parentModel.provider).pipe(
         Layer.provideMerge(bridgeLayer),
-        Layer.provideMerge(NodeServices.layer)
+        Layer.provideMerge(NodeServices.layer),
+        // Logs go to stderr, so stdout carries only the JSON lines.
+        Layer.provideMerge(
+          Logger.layer([Logger.withConsoleError(Logger.formatSimple)])
+        )
       )
     ),
     Effect.ensuring(
       Effect.sync(() => {
         rmSync(brainDir, { recursive: true, force: true });
       })
+    ),
+    // The failure goes to stderr too; runMain's own report would land on stdout.
+    Effect.tapCause((cause) =>
+      Effect.sync(() => {
+        process.stderr.write(`${Cause.pretty(cause)}\n`);
+      })
     )
-  )
+  ),
+  { disableErrorReporting: true }
 );

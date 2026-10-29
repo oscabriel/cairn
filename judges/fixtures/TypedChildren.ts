@@ -13,6 +13,12 @@
 //    record (`judgeTrial`): the dispatched and returned models must both be the one asked for.
 //
 // The parent never runs on the real model: Go is a note and a quiet settlement does not wake it.
+// Every child works in the parent's cwd (a temp dir, so a shared workspace), which the judge seeds
+// with the files the task names (`PROBE_FILES`), so a child that looks finds what the brief says.
+//
+// Depends on 2D's interim rule that a child runs on its parent's model: when 4A resolves the
+// brief's role at Go instead, `oneChild`'s `configure` stops choosing the child's model and every
+// trial fails on `modelMatches`; recheck this file when 4A lands.
 //
 // pi-durable is imported here, under `judges/fixtures/` (S42).
 
@@ -310,7 +316,10 @@ const readChild = (parent: ConversationId, child: StartedChild) =>
         (record): ModelRef => record.resolved.model
       );
 
-      return { messages, stored, dispatched };
+      // What the parent was told: the registry's first settlement of the child.
+      const settled = item?.settlements[0]?.outcome ?? "none";
+
+      return { messages, stored, dispatched, settled };
     });
   });
 
@@ -416,6 +425,9 @@ const stuck = (model: ModelRef, why: string): Trial => ({
   outputTokens: 0,
   error: `${model.provider}/${model.modelId}: ${why}`,
   rejections: [],
+  toolCalls: [],
+  lastText: "",
+  settled: "none",
 });
 
 /**

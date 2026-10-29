@@ -110,6 +110,42 @@ const FILES = [
   { path: "README.md", lines: 30, role: "doc" },
 ] as const;
 
+/**
+ * The repository the task describes, one file per entry at its stated line count, so a child that
+ * looks finds what the task says. Each file holds `lines` lines, the last ending in a newline.
+ */
+export const PROBE_FILES: ReadonlyArray<{
+  readonly path: string;
+  readonly text: string;
+}> = FILES.map((file) => {
+  const head: Record<(typeof FILES)[number]["role"], ReadonlyArray<string>> = {
+    source: [
+      "// parse(): splits a comma-separated line into trimmed fields.",
+      "export const parse = (line: string): Array<string> =>",
+      '  line.split(",").map((field) => field.trim());',
+    ],
+    test: [
+      'import { expect, it } from "vitest";',
+      'import { parse } from "./parse.ts";',
+      'it("parses a line", () => {',
+      '  expect(parse("a, b")).toEqual(["a", "b"]);',
+      "});",
+    ],
+    doc: ["# parse", "", "`parse(line)` splits a comma-separated line."],
+  };
+
+  const filler = file.role === "doc" ? "" : "//";
+  const lines = head[file.role];
+
+  return {
+    path: file.path,
+    text: `${[
+      ...lines,
+      ...Array.from({ length: file.lines - lines.length }, () => filler),
+    ].join("\n")}\n`,
+  };
+});
+
 /** The probe task: the bare child's first input, and the brief a parent spawns with. */
 export const TASK = [
   "You reviewed a small repository. Its files are:",
@@ -124,21 +160,27 @@ export const TASK = [
 /** The v1 prompt: the same task with the schema written out, as v1 did. */
 const V1_TASK = `${TASK}\nThe result must match this JSON Schema:\n${JSON.stringify(REPORT_SCHEMA)}`;
 
-/** The probe's result as the judge decodes it, independently of the tool. */
+/**
+ * The probe's result as the judge decodes it, independently of the tool: `REPORT_SCHEMA` written
+ * again, every constraint included (`lines` at least 1, `confidence` from 0 to 1, no extra keys on
+ * the root or a file), so validity never rests on the validator under test.
+ */
 const Report = Schema.Struct({
   summary: Schema.String,
   files: Schema.Array(
     Schema.Struct({
       path: Schema.String,
-      lines: Schema.Int,
+      lines: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
       role: Schema.Literals(["source", "test", "doc"]),
     })
   ),
   evidence: Schema.Array(Schema.String),
-  confidence: Schema.Finite,
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
 });
 
-const decodeReport = Schema.decodeUnknownOption(Report);
+const decodeReport = Schema.decodeUnknownOption(Report, {
+  onExcessProperty: "error",
+});
 
 const decodeWrapped = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Array(Schema.String))
@@ -160,7 +202,8 @@ export const schemaFailure = (value: JsonValue): string =>
 
 /**
  * Which of the task's facts a result gets wrong, or `""` when it holds them all: every file in
- * order with its line count and role, at least two pieces of evidence, a confidence in range.
+ * order with its line count and role, and at least two pieces of evidence. Ranges and shape are
+ * validity's (`schemaFailure`), not facts.
  */
 export const factsFailure = (value: JsonValue): string =>
   Option.match(decodeReport(value), {
@@ -178,13 +221,9 @@ export const factsFailure = (value: JsonValue): string =>
         return `files ${JSON.stringify(report.files)}`;
       }
 
-      if (report.evidence.length < 2) {
-        return `evidence ${JSON.stringify(report.evidence)}`;
-      }
-
-      return report.confidence >= 0 && report.confidence <= 1
-        ? ""
-        : `confidence ${String(report.confidence)}`;
+      return report.evidence.length < 2
+        ? `evidence ${JSON.stringify(report.evidence)}`
+        : "";
     },
   });
 
@@ -218,6 +257,15 @@ export interface Trial {
   readonly error: string;
   /** Each rejected `submit_result` call's first line, in order: why an attempt was spent. */
   readonly rejections: ReadonlyArray<string>;
+  /** Every tool the child called, in order: what it did, read most when nothing was stored. */
+  readonly toolCalls: ReadonlyArray<string>;
+  /** The child's last assistant text, kept only when nothing was stored. */
+  readonly lastText: string;
+  /**
+   * How the parent's registry settled the child (`completed`, `failed`...), "none" when it holds
+   * no settlement, "bare" off the children path. Reported, not gated.
+   */
+  readonly settled: string;
 }
 
 /** What a trial left behind, read once its child settled. */
@@ -230,6 +278,8 @@ export interface TrialReading {
   readonly requested: ModelRef;
   /** The model the child was dispatched on: its dispatch record's, or the requested one when bare. */
   readonly dispatched: Option.Option<ModelRef>;
+  /** The parent registry's first settlement outcome for the child, "none" unsettled, "bare" bare. */
+  readonly settled: string;
 }
 
 const usageOf = (messages: ReadonlyArray<Message>) => {
@@ -301,6 +351,26 @@ const rejectionsOf = (messages: ReadonlyArray<Message>) =>
       ? [textOf(message).slice(0, 240)]
       : []
   );
+
+const toolCallsOf = (messages: ReadonlyArray<Message>) =>
+  messages.flatMap((message) =>
+    message.role === "assistant"
+      ? message.content.flatMap((part) =>
+          part.type === "toolCall" ? [part.name] : []
+        )
+      : []
+  );
+
+const lastTextOf = (messages: ReadonlyArray<Message>) => {
+  const last = messages.findLast((message) => message.role === "assistant");
+
+  return last?.role === "assistant"
+    ? last.content
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .join("")
+        .slice(0, 400)
+    : "";
+};
 
 const errorOf = (messages: ReadonlyArray<Message>) => {
   const last = messages.findLast((message) => message.role === "assistant");
@@ -374,6 +444,9 @@ export const judgeTrial = (reading: TrialReading): Trial => {
     outputTokens: usage.output,
     error: errorOf(messages),
     rejections: rejectionsOf(messages),
+    toolCalls: toolCallsOf(messages),
+    lastText: Option.isNone(stored) ? lastTextOf(messages) : "",
+    settled: reading.settled,
   };
 };
 
@@ -570,6 +643,7 @@ export const runTrials = (target: Target, mode: TrialMode, trials: number) =>
         stored,
         requested: target.model,
         dispatched: Option.some(target.model),
+        settled: "bare",
       });
     };
 

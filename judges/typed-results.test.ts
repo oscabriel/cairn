@@ -75,6 +75,7 @@ const reading = (
   stored: Option.some({ result, divergence: "None.", attempts }),
   requested: MODEL,
   dispatched: Option.some(dispatched),
+  settled: "completed",
 });
 
 const firstTry = [user("task"), assistant(), submitted(false), assistant()];
@@ -162,6 +163,31 @@ describe("J-typed's verdict", () => {
     assert.strictEqual(trial.failure, "schema");
   });
 
+  it.each([
+    ["a confidence out of range", { ...GOOD, confidence: 7 }],
+    [
+      "a file of zero lines",
+      {
+        ...GOOD,
+        files: [{ ...GOOD.files[0], lines: 0 }, ...GOOD.files.slice(1)],
+      },
+    ],
+    ["an extra root key", { ...GOOD, notes: "extra" }],
+    [
+      "an extra file key",
+      {
+        ...GOOD,
+        files: [{ ...GOOD.files[0], size: 1 }, ...GOOD.files.slice(1)],
+      },
+    ],
+  ])("fails %s, as REPORT_SCHEMA does", (_, result) => {
+    const trial = judgeTrial(reading(firstTry, result, 1));
+
+    assert.isFalse(trial.valid);
+    assert.isFalse(trial.schemaValid);
+    assert.strictEqual(trial.failure, "schema");
+  });
+
   it("fails evidence sent as one JSON string, which the schema alone lets through", () => {
     const trial = judgeTrial(
       reading(
@@ -181,10 +207,12 @@ describe("J-typed's verdict", () => {
       stored: Option.none(),
       requested: MODEL,
       dispatched: Option.some(MODEL),
+      settled: "completed",
     });
 
     assert.isFalse(trial.valid);
     assert.strictEqual(trial.failure, "none stored");
+    assert.strictEqual(trial.lastText, "Done.");
   });
 
   it("fails a child dispatched on another model", () => {

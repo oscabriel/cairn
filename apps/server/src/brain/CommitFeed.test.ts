@@ -264,6 +264,24 @@ const subagentEvents = (events: ReadonlyArray<HarnessEvent>) =>
     Predicate.isTagged(event, "SubagentUpdated") ? [event] : []
   );
 
+/** Sets the parent's one registry item, with one completed settlement once it is settled. */
+const setSettledItem = (
+  brain: Brain["Service"],
+  parentConversation: Fixture["parentConversation"],
+  status: string,
+  delivered: number
+) =>
+  commit(brain, async (tx) => {
+    const registry = await tx.doc(SubagentsDoc, parentConversation);
+
+    registry.items["brief-1"] = {
+      threadId: CHILD,
+      status,
+      delivered,
+      settlements: status === "settled" ? [{ outcome: "completed" }] : [],
+    };
+  });
+
 describe("CommitFeed subagent events", () => {
   it.live(
     "a child's creating commit names its parent, and each registry status change is one SubagentUpdated",
@@ -343,6 +361,42 @@ describe("CommitFeed subagent events", () => {
           assert.deepStrictEqual(updates, [
             [PARENT, CHILD, "working"],
             [PARENT, CHILD, "settled"],
+          ]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a settled child counts as working until its settlement is delivered, then SubagentTallyUpdated settles it",
+    () =>
+      withBrain(({ brain, events, parentConversation }) =>
+        Effect.gen(function* () {
+          const tallies = Effect.map(Ref.get(events), (all) =>
+            all.flatMap((event) =>
+              Predicate.isTagged(event, "SubagentUpdated") ||
+              Predicate.isTagged(event, "SubagentTallyUpdated")
+                ? [[event._tag, event.tally.working, event.tally.settled]]
+                : []
+            )
+          );
+
+          yield* setSettledItem(brain, parentConversation, "working", 0);
+          yield* setSettledItem(brain, parentConversation, "settled", 0);
+          yield* setSettledItem(brain, parentConversation, "settled", 1);
+          yield* waitFor(
+            Effect.map(tallies, (found) =>
+              found.length >= 3 ? Option.some(true) : Option.none()
+            )
+          );
+          // The same tally again is no event.
+          yield* setSettledItem(brain, parentConversation, "settled", 1);
+          yield* Effect.sleep(Duration.millis(200));
+
+          assert.deepStrictEqual(yield* tallies, [
+            ["SubagentUpdated", 1, 0],
+            ["SubagentUpdated", 1, 0],
+            ["SubagentTallyUpdated", 0, 1],
           ]);
         })
       ),

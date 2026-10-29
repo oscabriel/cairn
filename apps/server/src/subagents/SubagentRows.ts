@@ -6,8 +6,9 @@
 // that exists already is left as it is. The row takes its project from the parent's row, its
 // branch and worktree from the child's own worktree when it has one (else the parent's row's), its
 // title from the brief's description, its model from the dispatch record, its mode from the
-// child's link, and a `lineage` naming the parent and the root. Hiding it from the sidebar,
-// tallies and settle refusals are the shell's (4C).
+// child's link, and a `lineage` naming the parent and the root. The sidebar hides a row with a
+// lineage (`isSubagentThread`), the projector sets its parent's tally from the registry, and the
+// shell refuses to settle, snooze, pin or archive it, or to settle its parent while it works.
 
 import { CommandId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelRef } from "@cairn/protocol/Models";
@@ -15,7 +16,16 @@ import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { ChildWorktree } from "@cairn/protocol/Subagents";
 import type { ThreadLineage } from "@cairn/protocol/Subagents";
 import type { ConversationId, Cursor } from "@earendil-works/pi-durable";
-import { Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
+import {
+  Cause,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+  Stream,
+} from "effect";
 
 import { Brain } from "../brain/Brain.ts";
 import type { BrainSession } from "../brain/Brain.ts";
@@ -264,13 +274,19 @@ export const SubagentRows = Layer.effectDiscard(
         ? onEnsured(event)
         : Effect.void
     ).pipe(
+      // The brain's shutdown interrupts the fiber with its scope: that end is expected, and only
+      // an end the scope did not ask for (the event stream failed or completed) is a warning.
       Effect.onExit((exit) =>
-        Effect.logWarning("subagent row fiber ended").pipe(
-          Effect.annotateLogs({
-            event: "subagent_rows_ended",
-            exit: exit._tag,
-          })
-        )
+        Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+          ? Effect.logDebug("subagent row fiber stopped with the brain").pipe(
+              Effect.annotateLogs({ event: "subagent_rows_stopped" })
+            )
+          : Effect.logWarning("subagent row fiber ended").pipe(
+              Effect.annotateLogs({
+                event: "subagent_rows_ended",
+                exit: exit._tag,
+              })
+            )
       ),
       Effect.forkScoped({ startImmediately: true })
     );

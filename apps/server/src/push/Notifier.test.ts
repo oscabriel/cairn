@@ -33,6 +33,7 @@ import { EventStore } from "../shell/EventStore.ts";
 import {
   emptyActivityPatch,
   ThreadActivityUpdate,
+  ThreadCreate,
 } from "../shell/ShellCommands.ts";
 import type { ThreadActivityPatch } from "../shell/ShellCommands.ts";
 import { ShellStoreLayer } from "../shell/ShellLayer.ts";
@@ -48,6 +49,7 @@ import {
   MAX_MESSAGE_BYTES,
   Notifier,
   PushMessage,
+  watchedTree,
 } from "./Notifier.ts";
 import { Presence } from "./Presence.ts";
 import { PushEndpointRule, PushSubscriptions } from "./PushSubscriptions.ts";
@@ -248,6 +250,48 @@ const withNotifier = <A, E, R>(
     );
   });
 
+describe(watchedTree, () => {
+  const root = testThreadId(901);
+  const child = testThreadId(902);
+  const grandchild = testThreadId(903);
+  const loopA = testThreadId(904);
+  const loopB = testThreadId(905);
+  const elsewhere = testThreadId(906);
+
+  const parents = new Map([
+    [child, root],
+    [grandchild, child],
+    [loopA, loopB],
+    [loopB, loopA],
+  ]);
+
+  const watchedWhen = (onScreen: ReadonlyArray<ThreadId>) =>
+    watchedTree(
+      (threadId: ThreadId) => Effect.succeed(onScreen.includes(threadId)),
+      (threadId: ThreadId) =>
+        Effect.succeed(Option.fromUndefinedOr(parents.get(threadId)))
+    );
+
+  it.effect(
+    "is true while a page shows the thread or any ancestor, never a descendant, and ends a loop",
+    () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(
+          [
+            yield* watchedWhen([grandchild])(grandchild),
+            yield* watchedWhen([child])(grandchild),
+            yield* watchedWhen([root])(grandchild),
+            yield* watchedWhen([grandchild])(root),
+            yield* watchedWhen([])(grandchild),
+            yield* watchedWhen([elsewhere])(loopA),
+            yield* watchedWhen([loopB])(loopA),
+          ],
+          [true, true, true, false, false, false, true]
+        );
+      })
+  );
+});
+
 const messagesTo = (attempts: ReadonlyArray<Attempt>, endpoint: string) =>
   attempts.flatMap((attempt) =>
     attempt.endpoint === `https://push.test/${endpoint}` &&
@@ -263,6 +307,55 @@ const attemptTimes = (attempts: ReadonlyArray<Attempt>, name: string) =>
   );
 
 describe(Notifier, () => {
+  it.effect(
+    "never pushes a subagent's run end, nor counts it in the badge: its result reaches its parent as a note",
+    () => {
+      const service = fakePushService(() => 201);
+
+      return withNotifier(
+        service,
+        Effect.gen(function* () {
+          yield* subscribe("phone");
+          const sink = yield* EventSink;
+          const project = createProject(1);
+          const parent = testThreadId(1);
+          const child = testThreadId(2);
+
+          yield* sink.commitCommand(project.command);
+          yield* sink.commitCommand(createThread(project.projectId, 1));
+          yield* sink.commitCommand(
+            ThreadCreate.make({
+              ...createThread(project.projectId, 2),
+              title: "Child",
+              lineage: Option.some({
+                parentThreadId: parent,
+                relationshipToParent: "subagent",
+                rootThreadId: parent,
+              }),
+            })
+          );
+
+          yield* runOnce(child, { startedAt: NOW - 60_000, endedAt: NOW });
+          yield* runOnce(child, {
+            startedAt: NOW - 30_000,
+            endedAt: NOW,
+            failed: true,
+          });
+          yield* runOnce(parent, { startedAt: NOW - 60_000, endedAt: NOW });
+          yield* waitUntil(() => service.attempts.length >= 1);
+
+          assert.deepStrictEqual(
+            messagesTo(service.attempts, "phone").map((message) => [
+              message.title,
+              message.badge,
+            ]),
+            [["Thread 1", 1]]
+          );
+        })
+      );
+    }
+  );
+
   it.effect("pushes a run that ran over 20 s once to every device", () => {
     const service = fakePushService(() => 201);
 

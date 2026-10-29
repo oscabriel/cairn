@@ -26,8 +26,16 @@ import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
-import { NO_SUBAGENT_FAULTS, SubagentFaults } from "../brain/SubagentFaults.ts";
-import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
+import {
+  NO_SUBAGENT_CRASHES,
+  NO_SUBAGENT_FAULTS,
+  SubagentCrashes,
+  SubagentFaults,
+} from "../brain/SubagentFaults.ts";
+import type {
+  SubagentCrashHooks,
+  SubagentFaultSet,
+} from "../brain/SubagentFaults.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
@@ -129,13 +137,14 @@ const NO_WORKSPACES: ChildWorkspaceAccess = {
     ),
 };
 
-/** The tools and tasks with `faults` planted, as one extension. */
+/** The tools and tasks with `faults` and `crashes` planted, as one extension. */
 const build = (
   faults: SubagentFaultSet,
   tuning: SubagentToolOptions,
   workspaces: ChildWorkspaceAccess,
   briefFaults: BriefFaultHooks,
-  roles: RoleAccess
+  roles: RoleAccess,
+  crashes: SubagentCrashHooks
 ) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
@@ -151,6 +160,7 @@ const build = (
     maxLivePerBrain: tuning.maxLivePerBrain,
     questionTtlMillis: tuning.questionTtlMillis,
     questionWindowMillis: tuning.questionWindowMillis,
+    crashAt: crashes.at,
   });
 
   const tools = subagentToolSet(faults, tasks, roles, tuning);
@@ -175,18 +185,20 @@ const build = (
 
 /**
  * The subagents extension with `faults` planted, making children's workspaces with `workspaces`;
- * the conformance suite's mutation check uses it, and a test that needs a question to expire soon
- * passes `tuning`.
+ * the conformance suite's mutation check uses it, a test that needs a question to expire soon
+ * passes `tuning`, and a judge brain's `crashes` kill it at its crash points.
  */
 export const subagentsExtension = (
   faults: SubagentFaultSet,
   workspaces: ChildWorkspaceAccess,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
   briefFaults: BriefFaultHooks = NO_BRIEF_FAULTS,
-  roles: RoleAccess = NO_ROLES
+  roles: RoleAccess = NO_ROLES,
+  crashes: SubagentCrashHooks = NO_SUBAGENT_CRASHES
 ): CairnExtension => ({
   order: ExtensionOrder.subagents,
-  extension: build(faults, tuning, workspaces, briefFaults, roles).extension,
+  extension: build(faults, tuning, workspaces, briefFaults, roles, crashes)
+    .extension,
 });
 
 /**
@@ -198,7 +210,8 @@ const hostTasks = build(
   DEFAULT_TOOL_OPTIONS,
   NO_WORKSPACES,
   NO_BRIEF_FAULTS,
-  NO_ROLES
+  NO_ROLES,
+  NO_SUBAGENT_CRASHES
 ).tasks;
 
 /**
@@ -227,35 +240,36 @@ export const answerBrief =
  * admits the same input and the other gets that submission back, a crash between this commit and
  * the seam's submit included. A `reject` input to a busy child gets no reporter: the seam's submit
  * refuses it with `thread_busy`, and a reporter that still finds the child busy drops its input.
- * Nothing for a thread that is not a subagent.
+ * Nothing for a thread that is not a subagent. True when this call committed the reporter, so a
+ * judge brain's `steer-recorded` crash point fires only in the window it names.
  */
 export const steerReporter = (
   session: Pick<Session, "commit" | "snapshot">,
   conversationId: ConversationId,
   input: InputSubmissionDraft
-): Effect.Effect<void, DurableCallError> =>
+): Effect.Effect<boolean, DurableCallError> =>
   durable("subagents.steer", async (context) => {
     const link = await session.snapshot(ChildDoc, conversationId, context);
     const { requestId } = input;
 
     if (!isLinked(link) || requestId === undefined) {
-      return;
+      return false;
     }
 
     const parent = conversationOf(link.parentConversationId);
 
-    await session.commit(async (tx) => {
+    return await session.commit(async (tx) => {
       const registry = await tx.doc(SubagentsDoc, parent);
       const item = registry.items[link.key];
 
       if (item === undefined || item.inputs[requestId] !== undefined) {
-        return;
+        return false;
       }
 
       const live = await tx.doc(LiveDoc, conversationId);
 
       if (input.whenBusy === "reject" && live.run !== undefined) {
-        return;
+        return false;
       }
 
       // A settled child works again: its parent is listed for the brain's count.
@@ -291,6 +305,8 @@ export const steerReporter = (
 
       item.inputs[requestId] = taskId;
       item.status = "working";
+
+      return true;
     }, context);
   });
 
@@ -331,9 +347,9 @@ export class Subagents extends Context.Service<
     ).pipe(Layer.provide(RoleAliases.layerNoDeps));
 
   /**
-   * The extension with the faults `SubagentFaults` and `BriefFaults` name (none, unless a test or a
-   * judge brain plants some) and briefs that live as long as `BriefTtl` says (a week), making
-   * children's worktrees with `ChildWorkspaces`.
+   * The extension with the faults `SubagentFaults` and `BriefFaults` name and the crash points
+   * `SubagentCrashes` plants (none, unless a test or a judge brain plants some), and briefs that
+   * live as long as `BriefTtl` says (a week), making children's worktrees with `ChildWorkspaces`.
    */
   static readonly layer = Layer.effect(
     Subagents,
@@ -341,6 +357,7 @@ export class Subagents extends Context.Service<
       const faults = yield* SubagentFaults;
       const briefFaults = yield* BriefFaults;
       const briefTtlMillis = yield* BriefTtl;
+      const crashes = yield* SubagentCrashes;
 
       const workspaces = workspaceAccess(
         yield* ChildWorkspaces,
@@ -353,7 +370,8 @@ export class Subagents extends Context.Service<
           workspaces,
           { ...DEFAULT_TOOL_OPTIONS, briefTtlMillis },
           briefFaults,
-          roleAccess(yield* RoleAliases, yield* Effect.context())
+          roleAccess(yield* RoleAliases, yield* Effect.context()),
+          crashes
         ),
       });
     })

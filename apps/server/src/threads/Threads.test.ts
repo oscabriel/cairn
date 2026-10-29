@@ -28,6 +28,7 @@ import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
+import { testThreadId } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import { StopHooks } from "./StopHooks.ts";
@@ -294,6 +295,104 @@ describe("thread commands", () => {
         assert.include(yield* Ref.get(stopped), threadId);
       })
     )
+  );
+
+  it.live(
+    "Stop all runs the stop hooks of the children the harness stopped; a settled child and a working grandchild under it keep their sessions",
+    () =>
+      withThread((threadId, projectId) =>
+        Effect.gen(function* () {
+          const seam = yield* HarnessSeam;
+          const store = yield* ScriptedStore;
+
+          const settledChild = testThreadId(70_001);
+          const grandchild = testThreadId(70_002);
+          const workingChild = testThreadId(70_003);
+
+          for (const child of [settledChild, grandchild, workingChild]) {
+            yield* seam.ensureThread({
+              threadId: child,
+              projectId,
+              model: { provider: "faux", modelId: "small" },
+              thinkingLevel: "off",
+              cwd: "/tmp",
+              instructions: Option.none(),
+              runtimeMode: "full-access",
+            });
+          }
+
+          /** Links `child` under `parent` in the scripted registry, with `status`. */
+          const link = (
+            parent: ThreadId,
+            key: string,
+            child: ThreadId,
+            status: "working" | "settled"
+          ) => {
+            const found = store.threads.get(child);
+
+            store.threads.get(parent)?.subagents.set(key, {
+              threadId: child,
+              conversationId: found?.conversationId ?? 0,
+              anchorTaskId: 0,
+              briefApprovalId: `brief-${key}`,
+              description: key,
+              dispatch: {},
+              isolation: "shared",
+              status,
+              wake: "answer",
+              settlements: [],
+              delivered: 0,
+              questions: new Map(),
+              inputs: new Map(),
+              runs: [],
+            });
+          };
+
+          link(threadId, "settled", settledChild, "settled");
+          link(threadId, "working", workingChild, "working");
+          link(settledChild, "grand", grandchild, "working");
+
+          for (const child of [grandchild, workingChild]) {
+            yield* seam.submit(child, {
+              requestId: "work",
+              content: [{ type: "text", text: "work" }],
+              entry: Option.none(),
+              whenBusy: "followUp",
+            });
+            yield* eventually(liveState(child), isRunning);
+          }
+
+          yield* Ref.set(stopped, []);
+
+          yield* (yield* Threads).stop({
+            threadId,
+            clearQueue: false,
+            subagents: Option.some("keep"),
+          });
+
+          assert.deepStrictEqual(yield* Ref.get(stopped), [threadId]);
+
+          yield* Ref.set(stopped, []);
+
+          yield* (yield* Threads).stop({
+            threadId,
+            clearQueue: true,
+            subagents: Option.some("stop"),
+          });
+
+          assert.deepStrictEqual(yield* Ref.get(stopped), [
+            threadId,
+            workingChild,
+          ]);
+          assert.deepStrictEqual(
+            [
+              isRunning(yield* liveState(workingChild)),
+              isRunning(yield* liveState(grandchild)),
+            ],
+            [false, true]
+          );
+        })
+      )
   );
 
   it.live("stop with clear withdraws the queued inputs too", () =>

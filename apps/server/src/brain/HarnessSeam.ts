@@ -27,7 +27,7 @@ import type {
 } from "@cairn/protocol/Policy";
 import { RuntimeRequestKind, ApprovalStatus } from "@cairn/protocol/Policy";
 import { RunFailureClass } from "@cairn/protocol/Shell";
-import { SubagentStatus } from "@cairn/protocol/Subagents";
+import { SubagentStatus, SubagentTally } from "@cairn/protocol/Subagents";
 import type { SubagentStopPolicy } from "@cairn/protocol/Subagents";
 import type {
   FullEntry,
@@ -280,13 +280,28 @@ export const UsageUpdated = Schema.TaggedStruct("UsageUpdated", {
 /**
  * A child in a parent's `cairn.subagents` registry changed status: started (`working`), asking or
  * held by an approval (`waiting`), or done with its latest input (`settled`). `threadId` is the
- * parent's, so the event lands on the row that owns the child.
+ * parent's, so the event lands on the row that owns the child. `tally` is the parent's whole
+ * registry counted after the commit (`tallyOfRegistry`), so a consumer sets it, never counts it.
  */
 export const SubagentUpdated = Schema.TaggedStruct("SubagentUpdated", {
   threadId: ThreadId,
   child: ThreadId,
   status: SubagentStatus,
+  tally: SubagentTally,
 });
+
+/**
+ * A parent's tally changed with no child's status changing: a settlement was delivered (its note
+ * and wake landed), so a child counted as working while its result was on the way now counts as
+ * settled. `tally` is the registry counted after the commit, as SubagentUpdated's is.
+ */
+export const SubagentTallyUpdated = Schema.TaggedStruct(
+  "SubagentTallyUpdated",
+  {
+    threadId: ThreadId,
+    tally: SubagentTally,
+  }
+);
 
 /** The crash-loop guard parked a task; `retry` runs it again. */
 export const TaskParked = Schema.TaggedStruct("TaskParked", {
@@ -317,6 +332,7 @@ export const HarnessEvent = Schema.Union([
   RuntimeRequestUpdated,
   UsageUpdated,
   SubagentUpdated,
+  SubagentTallyUpdated,
   TaskParked,
   CompactionStarted,
   CompactionEnded,
@@ -345,11 +361,16 @@ export class HarnessSeam extends Context.Service<
       threadId: ThreadId,
       input: HarnessTurnInput
     ): Effect.Effect<SubmissionRef, HarnessError>;
-    /** Stops the run; queued inputs stay unless `clearQueue`, and queued notes are placed. */
+    /**
+     * Stops the run; queued inputs stay unless `clearQueue`, and queued notes are placed. With
+     * `subagents: "stop"` it stops each working child too, and theirs in turn (a settled child, and
+     * anything under it, is left as it is); the descendants it stopped, nearest first (none for
+     * `keep`), so the caller runs their stop hooks and no others.
+     */
     stop(
       threadId: ThreadId,
       options: StopOptions
-    ): Effect.Effect<void, HarnessError>;
+    ): Effect.Effect<ReadonlyArray<ThreadId>, HarnessError>;
     /** Takes back one queued input; false when it already reached the transcript. */
     withdraw(
       threadId: ThreadId,

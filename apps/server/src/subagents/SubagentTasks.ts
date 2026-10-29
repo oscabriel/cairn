@@ -140,7 +140,10 @@ import {
   readNote,
 } from "../brain/NoteAdmission.ts";
 import { classifyRunFailure } from "../brain/RunFailure.ts";
-import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
+import type {
+  SubagentCrashPoint,
+  SubagentFaultSet,
+} from "../brain/SubagentFaults.ts";
 import {
   BRIEF_ANSWER_ENTRY,
   NO_RESULT_ERROR,
@@ -1530,6 +1533,8 @@ export interface TaskDependencies {
   readonly questionTtlMillis: number;
   /** How long its parent's model may hold that question (ADR 0027). */
   readonly questionWindowMillis: number;
+  /** A judge brain's crash points (`SubagentCrashes`); production's do nothing. */
+  readonly crashAt: (point: SubagentCrashPoint) => void;
 }
 
 /** A stored brief task's input, whatever version stored it. */
@@ -1627,12 +1632,20 @@ const taskRouteIo = (
 /** The task definitions, closed over the extension's faults and the child's agent change. */
 export const subagentTaskSet = (dependencies: TaskDependencies) => {
   const {
+    crashAt,
     faults,
     settleDelayMillis,
     briefFaults,
     questionTtlMillis,
     questionWindowMillis,
   } = dependencies;
+
+  /**
+   * A submit's request id: `requestId` itself, or with `freshIds` planted one minted again on every
+   * attempt, so a rerun after a crash submits again (the kill judge's broken control).
+   */
+  const submitId = (requestId: string, now: number) =>
+    faults.freshIds ? `${requestId}-${String(now)}` : requestId;
 
   /**
    * While a child works, its pending records set its registry status: `waiting` while any is
@@ -2108,6 +2121,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       await sleep(delay);
     }
 
+    crashAt("reporter-answered");
+
     const child = conversationOf(input.child);
     const result = await readResult(runtime, child, context);
 
@@ -2150,7 +2165,13 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         let submission: Submission;
 
         try {
-          submission = await child.submit(draftOf(input), context);
+          submission = await child.submit(
+            {
+              ...draftOf(input),
+              requestId: submitId(input.requestId, runtime.now()),
+            },
+            context
+          );
 
           if (input.requestId === SubagentRequestIds.brief(input.key)) {
             briefFaults.at("submitted");
@@ -2181,6 +2202,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           return;
         }
 
+        crashAt("reporter-submitted");
+
         await deliverAndSettle(
           runtime,
           input,
@@ -2194,6 +2217,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const { input } = task;
         const { seq } = task.state.checkpoint;
         const nudge = SubagentRequestIds.nudge(input.childThreadId, seq);
+
+        crashAt("nudge-marked");
 
         const child = await runtime.conversation(
           conversationOf(input.child),
@@ -2209,12 +2234,14 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const submission = await child.submit(
           {
             type: "input",
-            requestId: nudge,
+            requestId: submitId(nudge, runtime.now()),
             content: NUDGE_TEXT,
             whenBusy: "followUp",
           },
           context
         );
+
+        crashAt("nudge-submitted");
 
         await deliverAndSettle(
           runtime,
@@ -2369,6 +2396,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const { settlement, quiet } = task.state.checkpoint;
         const parent = runtime.conversationId;
 
+        crashAt("reporter-settled");
+
         // A reporter that mints its ids per attempt lands every rerun again (a planted fault).
         const fresh = runtime.now();
 
@@ -2459,6 +2488,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const { settlement, wakes } = task.state.checkpoint;
         const parent = runtime.conversationId;
 
+        crashAt("reporter-noted");
+
         if (wakes.length > 0) {
           const conversation = await runtime.conversation(parent, context);
 
@@ -2467,7 +2498,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             await conversation?.submit(
               {
                 type: "input",
-                requestId: wake.requestId,
+                requestId: submitId(wake.requestId, runtime.now()),
                 content: wake.text,
                 whenBusy: "followUp",
               },
@@ -2475,6 +2506,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             );
           }
         }
+
+        crashAt("reporter-woken");
 
         await runtime.commit(async (tx) => {
           const registry = await tx.doc(SubagentsDoc, parent);

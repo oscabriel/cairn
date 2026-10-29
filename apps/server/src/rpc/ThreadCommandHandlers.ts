@@ -148,10 +148,11 @@ const requestIdOf = (requestId: RpcMessage.RequestId) =>
 
 /**
  * A phase 2 input this brain cannot act on yet: `thread.respond`'s `revise` (briefs, 4A),
- * `accept_sample` and `launch` (5A), and `thread.stop`'s `subagents: "stop"` (4C). `reason` and
- * `answers` are recorded (1A); `accept_for_thread` and `thread.configure`'s `runtimeMode` are
- * handled (ADR 0031). Refused, so nothing is silently dropped; the package that builds each lifts
- * its refusal and turns its test in `ThreadCommandHandlers.test.ts` around.
+ * `accept_sample` and `launch` (5A). `reason` and `answers` are recorded (1A); `accept_for_thread`
+ * and `thread.configure`'s `runtimeMode` are handled (ADR 0031), and `thread.stop`'s
+ * `subagents: "stop"` stops the working children too (Stop all, ADR 0028). Refused, so nothing is
+ * silently dropped; the package that builds each lifts its refusal and turns its test in
+ * `ThreadCommandHandlers.test.ts` around.
  */
 const notYet = (field: string, requestId: Option.Option<string>) =>
   new InvalidInput({
@@ -238,20 +239,16 @@ export const threadCommandHandlers = Effect.gen(function* () {
         })
       ),
     stop: (input: StopInput, requestId: Option.Option<string>) =>
-      Option.contains(input.subagents, "stop")
-        ? Effect.fail(notYet("subagents", requestId))
-        : threads.stop(input).pipe(
-            Effect.catchTags({
-              HarnessError: (failure) =>
-                Effect.fail(
-                  fromHarnessError(failure, input.threadId, requestId)
-                ),
-              LaunchStoreError: (failure) =>
-                Effect.fail(
-                  new Unavailable({ message: failure.message, requestId })
-                ),
-            })
-          ),
+      threads.stop(input).pipe(
+        Effect.catchTags({
+          HarnessError: (failure) =>
+            Effect.fail(fromHarnessError(failure, input.threadId, requestId)),
+          LaunchStoreError: (failure) =>
+            Effect.fail(
+              new Unavailable({ message: failure.message, requestId })
+            ),
+        })
+      ),
     withdraw: (input: WithdrawInput, requestId: Option.Option<string>) =>
       threads
         .withdraw(input)

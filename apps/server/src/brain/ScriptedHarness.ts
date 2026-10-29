@@ -47,6 +47,7 @@
 import { Buffer } from "node:buffer";
 
 import { isWiderThan, narrowerMode } from "@cairn/client-logic/EffectiveMode";
+import { tallyOf } from "@cairn/client-logic/SubagentTally";
 import {
   ApprovalId,
   ConversationId,
@@ -64,6 +65,7 @@ import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
   MAX_SUBAGENT_DEPTH,
+  NO_SUBAGENTS,
   SUBAGENT_RESULT_ENTRY,
 } from "@cairn/protocol/Subagents";
 import type {
@@ -166,6 +168,7 @@ import {
   RunStarted,
   RunTerminal,
   RuntimeRequestUpdated,
+  SubagentTallyUpdated,
   SubagentUpdated,
   ThreadEnsured,
 } from "./HarnessSeam.ts";
@@ -1311,6 +1314,8 @@ const layerNoDeps = Layer.effectContext(
     const faults = yield* SubagentFaults;
     const briefTtlMillis = yield* BriefTtl;
     const events = yield* PubSub.unbounded<HarnessEvent>();
+    /** Each parent's last published tally, as JSON. */
+    const tallies = new Map<ThreadId, string>();
     // One mutation at a time, as pi-durable's Session line.
     const line = yield* Semaphore.make(1);
 
@@ -1427,6 +1432,8 @@ const layerNoDeps = Layer.effectContext(
               threadId: parent.threadId,
               child: child.threadId,
               status,
+              // Counted when the change commits (`commit`), after every write it holds.
+              tally: NO_SUBAGENTS,
             })
           );
         }
@@ -2110,6 +2117,7 @@ const layerNoDeps = Layer.effectContext(
           threadId: parent.threadId,
           child: childThreadId,
           status: "working",
+          tally: NO_SUBAGENTS,
         })
       );
       newReporter(
@@ -2751,6 +2759,23 @@ const layerNoDeps = Layer.effectContext(
       reporter: () => Effect.void,
     };
 
+    /** A parent's tally as its registry stands. */
+    const tallyNow = (threadId: ThreadId) =>
+      Option.match(Option.fromUndefinedOr(store.threads.get(threadId)), {
+        onNone: () => NO_SUBAGENTS,
+        onSome: (parent) =>
+          tallyOf(
+            [...parent.subagents.values()].map((item) => ({
+              status: item.status,
+              latest: Option.map(
+                Option.fromUndefinedOr(item.settlements.at(-1)),
+                (last) => last.outcome
+              ),
+              undelivered: item.delivered < item.settlements.length,
+            }))
+          ),
+      });
+
     /** Publishes what one critical section changed and starts the work it created. */
     const commit = Effect.fn("ScriptedHarness.commit")(function* (
       changes: Changes
@@ -2761,7 +2786,36 @@ const layerNoDeps = Layer.effectContext(
         yield* SubscriptionRef.set(ref, currentView(thread));
       }
 
-      yield* PubSub.publishAll(events, changes.events);
+      // A child's status event carries its parent's tally as the change leaves the registry, as
+      // pi-durable's commit feed counts it after the commit; a parent whose tally changed with no
+      // child's status (a settlement delivered) gets SubagentTallyUpdated.
+      const published = changes.events.map((event) => {
+        if (!Predicate.isTagged(event, "SubagentUpdated")) {
+          return event;
+        }
+
+        const tally = tallyNow(event.threadId);
+
+        tallies.set(event.threadId, JSON.stringify(tally));
+
+        return SubagentUpdated.make({ ...event, tally });
+      });
+
+      for (const thread of changes.touched) {
+        if (thread.subagents.size > 0) {
+          const tally = tallyNow(thread.threadId);
+          const counted = JSON.stringify(tally);
+
+          if (tallies.get(thread.threadId) !== counted) {
+            tallies.set(thread.threadId, counted);
+            published.push(
+              SubagentTallyUpdated.make({ threadId: thread.threadId, tally })
+            );
+          }
+        }
+      }
+
+      yield* PubSub.publishAll(events, published);
 
       for (const thread of changes.runs) {
         yield* starters.run(thread);
@@ -3724,7 +3778,7 @@ const layerNoDeps = Layer.effectContext(
     const stop = (
       threadId: ThreadId,
       options: StopOptions
-    ): Effect.Effect<void, HarnessError> =>
+    ): Effect.Effect<ReadonlyArray<ThreadId>, HarnessError> =>
       Effect.gen(function* () {
         const thread = yield* find(threadId);
         const fiber = runs.get(threadId);
@@ -3788,22 +3842,32 @@ const layerNoDeps = Layer.effectContext(
           })
         );
 
-        // Stop all: every working child stops too, and their own children with them.
-        if (options.subagents === "stop") {
-          for (const item of thread.subagents.values()) {
-            const child = store.threads.get(item.threadId);
+        // Stop all: every working child stops too, and their own children with them; an idle
+        // child, and anything under it, is left as it is. The children stopped, nearest first.
+        const stopped: Array<ThreadId> = [];
 
-            if (
-              child !== undefined &&
-              (Option.isSome(child.run) || child.queue.length > 0)
-            ) {
-              yield* stop(child.threadId, {
+        if (options.subagents !== "stop") {
+          return stopped;
+        }
+
+        for (const item of thread.subagents.values()) {
+          const child = store.threads.get(item.threadId);
+
+          if (
+            child !== undefined &&
+            (Option.isSome(child.run) || child.queue.length > 0)
+          ) {
+            stopped.push(
+              child.threadId,
+              ...(yield* stop(child.threadId, {
                 clearQueue: true,
                 subagents: "stop",
-              });
-            }
+              }))
+            );
           }
         }
+
+        return stopped;
       }).pipe(Effect.withSpan("ScriptedHarness.stop"));
 
     /** `subagent_stop`: stops one child's run and withdraws its queue. */

@@ -39,6 +39,7 @@ import {
   isSubagentThread,
   pendingSubagentRequests,
   sidebarRowThreadId,
+  subagentDescendants,
   subagentRequestOf,
 } from "./SubagentRollup.ts";
 import type { RollupRow } from "./SubagentRollup.ts";
@@ -270,6 +271,29 @@ describe("subagent request rollup", () => {
     assert.strictEqual(requests.get(loopA.id), "approval");
     assert.strictEqual(requests.get(id("missing")), "input");
     assert.strictEqual(requests.size, 2);
+  });
+});
+
+describe("a thread's subagents, for Stop all", () => {
+  it("lists every descendant nearest first, and walks a loop once", () => {
+    const root = top("root");
+    const child = subagentOf("child", root.id);
+    const sibling = subagentOf("sibling", root.id);
+    const grandchild = subagentOf("grandchild", child.id, root.id);
+    const loopA = subagentOf("loop-a", id("loop-b"));
+    const loopB = subagentOf("loop-b", loopA.id);
+
+    const threads = [grandchild, root, child, sibling, loopA, loopB];
+
+    assert.deepStrictEqual(
+      subagentDescendants(root.id, threads).map((thread) => thread.title),
+      ["child", "sibling", "grandchild"]
+    );
+    assert.deepStrictEqual(subagentDescendants(grandchild.id, threads), []);
+    assert.deepStrictEqual(
+      subagentDescendants(loopA.id, threads).map((thread) => thread.title),
+      ["loop-b"]
+    );
   });
 });
 

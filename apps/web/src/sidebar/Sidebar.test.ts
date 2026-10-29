@@ -135,6 +135,51 @@ const issued = (...intents: ReadonlyArray<Intent>) =>
 const config = { update, view };
 
 describe("the sidebar", () => {
+  it("hides a subagent's row and marks its parent's row current while the subagent is open", () => {
+    const child = ThreadShell.make({
+      ...thread(4, "Count the files", "2026-10-22T11:30:00Z"),
+      lineage: Option.some({
+        parentThreadId: bridges.id,
+        relationshipToParent: "subagent",
+        rootThreadId: bridges.id,
+      }),
+    });
+
+    const base = sidebarWith(Option.some(child));
+
+    const model: Model = {
+      ...base,
+      context: {
+        ...base.context,
+        shell: Option.some(
+          ShellSnapshot.make({
+            snapshotSequence: 8,
+            projects: [project],
+            threads: [bridges, research, kickoff, child],
+          })
+        ),
+      },
+    };
+
+    Scene.scene(
+      config,
+      Scene.given(model),
+      Scene.Mount.resolve(ListMotion, Message.CompletedMotion()),
+      Scene.Mount.resolve(ScrollFade, Message.CompletedScrollFade()),
+      Scene.expectAll(Scene.all.testId("sidebar-row-card")).toHaveCount(3),
+      Scene.expect(row(child)).toBeAbsent(),
+      Scene.expect(
+        Scene.within(row(bridges), Scene.selector('[aria-current="page"]'))
+      ).toExist(),
+      Scene.expect(
+        Scene.within(row(research), Scene.selector('[aria-current="page"]'))
+      ).toBeAbsent(),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
+
   it("lists active threads as cards and settled ones behind the shelf", () => {
     Scene.scene(
       config,

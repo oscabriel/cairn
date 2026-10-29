@@ -57,6 +57,10 @@ export const faultsOf = (
 ): SubagentFaultSet => ({
   dropNote: mutations.has("drop_note"),
   deliverTwice: mutations.has("deliver_twice"),
+  // A kill judge's fault: without a crash it delivers once, so no scenario can catch it.
+  freshIds: false,
+  // The kill judge's steer control; a mutation of its own is not needed for the scenarios.
+  seamOwnIds: false,
   wakeStoppedParent: mutations.has("wake_stopped_parent"),
   routeApprovalToParent: mutations.has("route_approval_to_parent"),
 });

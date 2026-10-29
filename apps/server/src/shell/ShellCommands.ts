@@ -8,7 +8,10 @@
 // fields; project ids derive from the command id; deleting a project tombstones its threads in the
 // same commit; and the server's own commands (create, activity, workspace, auto-settle, snooze
 // expiry, message sent, project registration) sit beside the client's in one union. A message the
-// user sends clears the manual settle state and ends a snooze (dispatchMessage).
+// user sends clears the manual settle state and ends a snooze (dispatchMessage). A subagent's row
+// (one with a `lineage`) is never settled, snoozed, pinned or archived, since its parent's row
+// holds it, and a parent is not settled, by hand or by the sweep, while a child works or asks or
+// its result is still on the way (ADR 0028).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -27,6 +30,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { hasLiveChildren } from "@cairn/client-logic/SubagentTally";
 import {
   CommandId,
   DisplayText,
@@ -105,6 +109,11 @@ export const ThreadActivityPatch = Schema.Struct({
   runtimeMode: patchField(ThreadShell.fields.runtimeMode),
   /** The spend ledger's figure (`usage/SpendLedger.ts`); a cache, so it never moves `updatedAt`. */
   spend: patchField(ThreadShell.fields.spend),
+  /**
+   * The children's tally, counted from the parent's registry (ADR 0028); derived like `spend`, so
+   * it never moves `updatedAt` either: a child's progress does not reorder its parent.
+   */
+  subagents: patchField(ThreadShell.fields.subagents),
 });
 
 /** A thread activity patch. */
@@ -132,6 +141,7 @@ export const emptyActivityPatch: ThreadActivityPatch = {
   thinkingLevel: Option.none(),
   runtimeMode: Option.none(),
   spend: Option.none(),
+  subagents: Option.none(),
 };
 
 /** Updates the fields of a thread row derived from pi-durable (the shell projector's command). */
@@ -627,6 +637,14 @@ const settleBlocker = (shell: ThreadShell): Option.Option<string> => {
     );
   }
 
+  // A parent stays on the shelf while a child works or asks: its result or question is still to
+  // come (ADR 0028).
+  if (hasLiveChildren(shell.subagents)) {
+    return Option.some(
+      "the thread's subagents are still working. Let them finish or Stop all, then settle."
+    );
+  }
+
   return Option.none();
 };
 
@@ -697,11 +715,14 @@ const applyPatch = (
 
   const changed = !sameThreadShell(next, shell);
   const spend = Option.getOrElse(patch.spend, () => shell.spend);
+  const subagents = Option.getOrElse(patch.subagents, () => shell.subagents);
 
-  // A spend figure is derived from the ledger: it changes the row but is not activity.
+  // A spend figure and a tally are derived caches: they change the row but are not activity.
   return {
     ...row,
-    shell: changed ? { ...next, spend, updatedAt: now } : { ...shell, spend },
+    shell: changed
+      ? { ...next, spend, subagents, updatedAt: now }
+      : { ...shell, spend, subagents },
   };
 };
 
@@ -810,6 +831,32 @@ const unarchivedThread = (
           `thread ${threadId} is archived. Unarchive it first.`
         )
       : Result.succeed(row)
+  );
+
+/**
+ * Refuses a shelf change (settle, snooze, pin, archive) to a subagent's row: it has no place in
+ * the sidebar, and its parent's row holds it (ADR 0028).
+ */
+const ownShelf = (
+  command: ServerShellCommand,
+  row: ThreadRow
+): Result.Result<ThreadRow, ShellCommandRejection> =>
+  Option.isSome(row.shell.lineage)
+    ? invalid(
+        command,
+        "threadId",
+        `thread ${row.shell.id} is a subagent, and its parent's row holds it. Settle, snooze, pin or archive the parent instead.`
+      )
+    : Result.succeed(row);
+
+/** An unarchived thread whose shelf the user may change: not a subagent's. */
+const shelvedThread = (
+  command: ServerShellCommand,
+  state: ShellCommandState,
+  threadId: ThreadId
+): Result.Result<ThreadRow, ShellCommandRejection> =>
+  Result.flatMap(unarchivedThread(command, state, threadId), (row) =>
+    ownShelf(command, row)
   );
 
 /**
@@ -968,7 +1015,7 @@ export const planShellCommand = (
 
     ThreadSettle: (settleCommand) =>
       Result.flatMap(
-        unarchivedThread(command, state, settleCommand.threadId),
+        shelvedThread(command, state, settleCommand.threadId),
         (row) =>
           Option.match(settleBlocker(row.shell), {
             onSome: (detail) => conflict(command, "thread_busy", detail),
@@ -1000,45 +1047,42 @@ export const planShellCommand = (
       ),
 
     ThreadSnooze: (snooze) =>
-      Result.flatMap(
-        unarchivedThread(command, state, snooze.threadId),
-        (row) => {
-          if (!isAfter(snooze.until, now)) {
-            return invalid(
-              command,
-              "until",
-              "the wake time is not in the future. Pick a later time."
-            );
-          }
-
-          if (Option.isSome(row.shell.pendingRuntimeRequest)) {
-            return conflict(
-              command,
-              "thread_busy",
-              "the thread is waiting on an approval or a question. Answer it before snoozing."
-            );
-          }
-
-          if (row.shell.queueLength > 0) {
-            return conflict(
-              command,
-              "thread_busy",
-              "the thread has a queued message. Send it or withdraw it before snoozing."
-            );
-          }
-
-          // Always restamp, even for the same wake time: a snooze after a failure woke the thread
-          // means "I saw it, not now".
-          return threadPlan(
-            withShell(row, {
-              snoozedUntil: Option.some(snooze.until),
-              snoozedAt: Option.some(now),
-              updatedAt: now,
-            }),
-            "thread.snoozed"
+      Result.flatMap(shelvedThread(command, state, snooze.threadId), (row) => {
+        if (!isAfter(snooze.until, now)) {
+          return invalid(
+            command,
+            "until",
+            "the wake time is not in the future. Pick a later time."
           );
         }
-      ),
+
+        if (Option.isSome(row.shell.pendingRuntimeRequest)) {
+          return conflict(
+            command,
+            "thread_busy",
+            "the thread is waiting on an approval or a question. Answer it before snoozing."
+          );
+        }
+
+        if (row.shell.queueLength > 0) {
+          return conflict(
+            command,
+            "thread_busy",
+            "the thread has a queued message. Send it or withdraw it before snoozing."
+          );
+        }
+
+        // Always restamp, even for the same wake time: a snooze after a failure woke the thread
+        // means "I saw it, not now".
+        return threadPlan(
+          withShell(row, {
+            snoozedUntil: Option.some(snooze.until),
+            snoozedAt: Option.some(now),
+            updatedAt: now,
+          }),
+          "thread.snoozed"
+        );
+      }),
 
     ThreadUnsnooze: (wake) =>
       Result.flatMap(unarchivedThread(command, state, wake.threadId), (row) =>
@@ -1046,7 +1090,7 @@ export const planShellCommand = (
       ),
 
     ThreadPin: (pin) =>
-      Result.flatMap(unarchivedThread(command, state, pin.threadId), (row) => {
+      Result.flatMap(shelvedThread(command, state, pin.threadId), (row) => {
         const { shell } = row;
         const alreadyPinned = Option.isSome(shell.pinnedAt);
         const wasSettled = Option.contains(shell.settledOverride, "settled");
@@ -1145,17 +1189,24 @@ export const planShellCommand = (
       }),
 
     ThreadArchive: (archive) =>
-      Result.flatMap(liveThread(command, state, archive.threadId), (row) =>
-        Option.isSome(row.shell.archivedAt)
-          ? conflict(
-              command,
-              "stale_state",
-              `thread ${archive.threadId} is already archived.`
-            )
-          : threadPlan(
-              withShell(row, { archivedAt: Option.some(now), updatedAt: now }),
-              "thread.archived"
-            )
+      Result.flatMap(
+        Result.flatMap(liveThread(command, state, archive.threadId), (row) =>
+          ownShelf(command, row)
+        ),
+        (row) =>
+          Option.isSome(row.shell.archivedAt)
+            ? conflict(
+                command,
+                "stale_state",
+                `thread ${archive.threadId} is already archived.`
+              )
+            : threadPlan(
+                withShell(row, {
+                  archivedAt: Option.some(now),
+                  updatedAt: now,
+                }),
+                "thread.archived"
+              )
       ),
 
     ThreadUnarchive: (unarchive) =>
@@ -1204,16 +1255,26 @@ export const planShellCommand = (
       ),
 
     ThreadAutoSettle: (auto) =>
-      Result.flatMap(unarchivedThread(command, state, auto.threadId), (row) =>
-        Option.isSome(row.shell.settledOverride) ||
-        isAfter(row.shell.updatedAt, auto.snapshotAt)
-          ? conflict(
-              command,
-              "stale_state",
-              `thread ${auto.threadId} changed after the settlement sweep read it.`
-            )
-          : threadPlan(settle(row, now, auto.settledAt), "thread.settled")
-      ),
+      Result.flatMap(shelvedThread(command, state, auto.threadId), (row) => {
+        if (
+          Option.isSome(row.shell.settledOverride) ||
+          isAfter(row.shell.updatedAt, auto.snapshotAt)
+        ) {
+          return conflict(
+            command,
+            "stale_state",
+            `thread ${auto.threadId} changed after the settlement sweep read it.`
+          );
+        }
+
+        // A tally moves no `updatedAt`, so a child that started after the sweep read the row is
+        // caught here.
+        return Option.match(settleBlocker(row.shell), {
+          onSome: (detail) => conflict(command, "thread_busy", detail),
+          onNone: () =>
+            threadPlan(settle(row, now, auto.settledAt), "thread.settled"),
+        });
+      }),
 
     ThreadMessageSent: (sent) =>
       Result.flatMap(liveThread(command, state, sent.threadId), (row) =>

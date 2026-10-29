@@ -9,10 +9,13 @@
 // run that ended (failed, or ran longer than 20 seconds) while no visible page reported showing the
 // thread in the last 30 seconds is pushed once, claimed in `notified_runs` under the thread and the
 // run's end time. Executor's needs-sign-in push is sent once until the link is signed in again.
+// A subagent's run end is never pushed (its result reaches its parent as a note, ADR 0028), and a
+// push is suppressed while a visible page shows its thread or any ancestor of it (`isWatchedTree`).
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
 import type { ThreadShell } from "@cairn/protocol/Shell";
+import { MAX_SUBAGENT_DEPTH } from "@cairn/protocol/Subagents";
 import {
   Clock,
   Context,
@@ -136,7 +139,8 @@ export const runEndToPush = (
   now: DateTime.Utc,
   settings: Pick<NotifierSettings, "minRunDuration" | "staleAfter">
 ): Option.Option<RunEnd> => {
-  if (Option.isSome(thread.activeRunId)) {
+  // A subagent's run end reaches its parent as a note, not the user's phone.
+  if (Option.isSome(thread.activeRunId) || Option.isSome(thread.lineage)) {
     return Option.none();
   }
 
@@ -216,6 +220,42 @@ export const runMessage = (
     badge,
   };
 };
+
+/** How many ancestors the presence check walks: the subagent depth cap, with room to spare. */
+const ANCESTOR_HOPS = MAX_SUBAGENT_DEPTH + 2;
+
+/**
+ * True while a visible page shows `threadId` or any of its ancestors: a subagent's request shows on
+ * every ancestor's thread (ADR 0027), so a page on any of them has it in front of the user.
+ * `parentOf` names a thread's parent; a missing row or a loop ends the walk.
+ */
+export const watchedTree =
+  <E, R>(
+    isWatched: (threadId: ThreadId) => Effect.Effect<boolean, E, R>,
+    parentOf: (
+      threadId: ThreadId
+    ) => Effect.Effect<Option.Option<ThreadId>, E, R>
+  ) =>
+  (threadId: ThreadId): Effect.Effect<boolean, E, R> =>
+    Effect.gen(function* () {
+      const seen = new Set<ThreadId>();
+      let current = Option.some(threadId);
+
+      while (
+        Option.isSome(current) &&
+        !seen.has(current.value) &&
+        seen.size <= ANCESTOR_HOPS
+      ) {
+        if (yield* isWatched(current.value)) {
+          return true;
+        }
+
+        seen.add(current.value);
+        current = yield* parentOf(current.value);
+      }
+
+      return false;
+    });
 
 /** Executor's needs-sign-in push. */
 export const executorSignInMessage = (badge: number): PushMessage => ({
@@ -418,11 +458,26 @@ export class Notifier extends Context.Service<
           return rows.length > 0;
         });
 
+      // A subagent's row is hidden and its result reaches its parent: it never counts.
       const badgeCount = threads.listLive.pipe(
         Effect.map(
-          (rows) => rows.filter((row) => hasUnseenResult(row.shell)).length
+          (rows) =>
+            rows.filter(
+              (row) =>
+                Option.isNone(row.shell.lineage) && hasUnseenResult(row.shell)
+            ).length
         ),
         Effect.orElseSucceed(() => 0)
+      );
+
+      const isWatchedTree = watchedTree(
+        (threadId) => presence.isWatched(threadId),
+        (threadId) =>
+          threads.get(threadId).pipe(
+            Effect.map(Option.flatMap((row) => row.shell.lineage)),
+            Effect.map(Option.map((lineage) => lineage.parentThreadId)),
+            Effect.orElseSucceed(() => Option.none<ThreadId>())
+          )
       );
 
       /** Starts `message`'s delivery without waiting for it. */
@@ -449,7 +504,7 @@ export class Notifier extends Context.Service<
             return;
           }
 
-          if (yield* presence.isWatched(threadId)) {
+          if (yield* isWatchedTree(threadId)) {
             yield* claim(end.value.key, Option.some(threadId), "suppressed");
 
             return;

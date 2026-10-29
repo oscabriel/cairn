@@ -22,6 +22,12 @@ import {
   SettingsLive,
   withCatalog,
 } from "./AppLayer.ts";
+import {
+  judgeSubagentCrashes,
+  NO_SUBAGENT_FAULTS,
+  SubagentCrashes,
+  SubagentFaults,
+} from "./brain/SubagentFaults.ts";
 import { ServerConfig } from "./Config.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
@@ -89,6 +95,33 @@ const JudgeReach = Layer.mergeAll(
   ).pipe(Layer.provide(NodeServices.layer))
 );
 
+// Subagent crash points for judges/subagent-durability.ts: `CAIRN_JUDGE_FAULT=subagent:<point>` (or
+// `subagent:<point>*<times>`) kills the brain at that point of a delivery, counted in a marker in
+// the data folder; `CAIRN_JUDGE_SUBAGENT_FAULTS=freshIds` (or `deliverTwice`, or `seamOwnIds`)
+// plants the broken delivery its controls run against. Unset, neither plants anything.
+const JudgeSubagents = Layer.unwrap(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    const planted = (process.env.CAIRN_JUDGE_SUBAGENT_FAULTS ?? "").split(",");
+
+    return Layer.mergeAll(
+      Layer.succeed(
+        SubagentCrashes,
+        judgeSubagentCrashes(
+          process.env.CAIRN_JUDGE_FAULT ?? "",
+          path.join(config.dataDir, "subagent-fault-fired")
+        )
+      ),
+      Layer.succeed(SubagentFaults, {
+        ...NO_SUBAGENT_FAULTS,
+        freshIds: planted.includes("freshIds"),
+        seamOwnIds: planted.includes("seamOwnIds"),
+        deliverTwice: planted.includes("deliverTwice"),
+      })
+    );
+  })
+);
+
 // pi-durable over the scripted faux model (JudgeModel: a judge drives tool calls and long replies
 // from the message text), with the judge tools installed through the seam.
 const Harness = real
@@ -112,6 +145,7 @@ const JudgeLayer = AppLayer.pipe(
   Layer.provide(SettingsLive),
   Layer.provide(ReachLive),
   Layer.provide(JudgeReach),
+  Layer.provide(JudgeSubagents),
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(real ? BridgeProvider.layer : BridgeProvider.layerOff),
   Layer.provide(ExecutorLink.layerFake),

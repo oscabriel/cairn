@@ -251,11 +251,24 @@ export class Threads extends Context.Service<
           return;
         }
 
-        yield* seam.stop(input.threadId, {
+        const subagents = Option.getOrElse(
+          input.subagents,
+          () => "keep" as const
+        );
+
+        const descendants = yield* seam.stop(input.threadId, {
           clearQueue: input.clearQueue,
-          subagents: Option.getOrElse(input.subagents, () => "keep" as const),
+          subagents,
         });
+
         yield* stopHooks.run(input.threadId);
+
+        // Stop all stopped those descendants' runs too, so each gets its own hooks (a child on the
+        // bridge holds a Claude Code session of its own); a settled child the harness left alone,
+        // and a working one under it, keep theirs.
+        yield* Effect.forEach(descendants, (child) => stopHooks.run(child), {
+          discard: true,
+        });
       });
 
       const withdraw = Effect.fn("Threads.withdraw")(function* (

@@ -12,16 +12,30 @@
 //             hits (WCAG 2.5.5's size; the tokens' `--hit-target`);
 //   overflow  no text paints outside a box that holds it: past a box that shows its overflow
 //             (a spill), or cut by one that hides it without an ellipsis (a clip). A box that
-//             scrolls, or truncates with an ellipsis on purpose, is allowed;
+//             scrolls, or truncates with an ellipsis on purpose, is allowed, and words for
+//             assistive technology only (`sr-only`) are not painted, so not judged;
 //   focus     every element Tab reaches shows a focus ring (an outline, or a shadow, on itself or
 //             on the field shell around it) that it does not show unfocused, unless it is the
 //             catalogue's forced-focus specimen (`data-focus`);
-//   hscroll   the page does not scroll sideways (judged at 390 px; reported at 1,440).
+//   hscroll   the page does not scroll sideways (judged at 390 px; reported at 1,440);
+//   tone      what a primitive's meaning names is the colour it computes to: a destructive menu
+//             item and its glyph in `--tone-failed`, a field's leading glyph in `--ink-3`;
+//   still     opening each live disclosure (fold, phase, previous agents) moves nothing above it
+//             and nothing in its own header line, by more than 0.5 px (then it is folded again);
+//             the shapes inside a glyph are not watched, since the chevron turns in place;
+//   sheet     at 390 px, "Open sheet" opens the sheet over the page as a bottom sheet the width
+//             of the screen, focus moves into it, its controls are touch targets, Escape closes
+//             it and focus returns to the button that opened it.
+// A rule that checked nothing on a page fails that page, so a selector that stops matching cannot
+// pass by looking at nothing.
+//
 // Then the controls: one page at 390 px in graphite dark with one violation planted in a real
 // primitive (an icon button shrunk to 24 px, a chip whose label spills out of it, a card title cut
-// without an ellipsis, a button with its outline removed, a block 600 px wide), each of which must
-// fail its rule at the planted element. Prints one JSON line and exits 0 when every clean page
-// passes every rule and every plant is caught.
+// without an ellipsis, a button with its outline removed, a block 600 px wide, a destructive menu
+// item drawn in ink-1 as the old wiring drew it, a disclosure header that grows when it opens, the
+// sheet's close button shrunk to 24 px), each of which must fail its rule at the planted element.
+// Prints one JSON line on stdout (the Vite server's own logging goes to stderr) and exits 0 when
+// every clean page passes every rule and every plant is caught.
 
 import { once } from "node:events";
 import { mkdir } from "node:fs/promises";
@@ -62,7 +76,15 @@ const HIT_TARGET_PX = 44;
 /** How far text may pass its box before it counts, px: subpixel rounding. */
 const OVERFLOW_TOLERANCE_PX = 1;
 
-const RULES = ["touch", "overflow", "focus", "hscroll"] as const;
+const RULES = [
+  "touch",
+  "overflow",
+  "focus",
+  "hscroll",
+  "tone",
+  "still",
+  "sheet",
+] as const;
 
 type Rule = (typeof RULES)[number];
 
@@ -196,6 +218,17 @@ const overflowRule = (tolerance: number): RuleRun => {
       continue;
     }
 
+    // Words for assistive technology only (`sr-only`: a 1 px box that clips them) are never painted.
+    const holder = parent.getBoundingClientRect();
+
+    if (
+      holder.width <= 1 &&
+      holder.height <= 1 &&
+      getComputedStyle(parent).overflow === "hidden"
+    ) {
+      continue;
+    }
+
     checked += 1;
 
     for (
@@ -280,6 +313,160 @@ const hscrollRule = (): Array<Violation> => {
       ),
     },
   ];
+};
+
+/** Elements whose meaning names a colour token, against the colour that token computes to. */
+const toneRule = (): RuleRun => {
+  const EXPECTED: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      '[role="menuitem"][data-variant="destructive"]',
+      "--tone-failed",
+      "destructive menu item",
+    ],
+    [
+      '[role="menuitem"][data-variant="destructive"] svg',
+      "--tone-failed",
+      "destructive menu item's glyph",
+    ],
+    ['[data-slot="field-shell"] > svg', "--ink-3", "field's leading glyph"],
+  ];
+
+  // oxlint-disable-next-line unicorn/consistent-function-scoping -- runs in the page
+  const tokenColour = (scope: Element, token: string): string => {
+    const probe = document.createElement("span");
+
+    probe.style.setProperty("color", `var(${token})`);
+    scope.append(probe);
+    const colour = getComputedStyle(probe).color;
+
+    probe.remove();
+
+    return colour;
+  };
+
+  let checked = 0;
+
+  const violations = EXPECTED.flatMap(([selector, token, what]) =>
+    [...document.querySelectorAll(selector)].flatMap((element) => {
+      checked += 1;
+
+      const actual = getComputedStyle(element).color;
+      const expected = tokenColour(element.parentElement ?? element, token);
+
+      return actual === expected
+        ? []
+        : [
+            {
+              state:
+                element.closest<HTMLElement>("[data-look-state]")?.dataset
+                  .lookState ?? "page",
+              element: what,
+              detail: `computes ${actual}, ${token} is ${expected}`,
+              planted: element.closest("[data-planted]") !== null,
+            },
+          ];
+    })
+  );
+
+  return { checked, violations };
+};
+
+/**
+ * Opens each live disclosure and checks that nothing above it, and nothing in its header line,
+ * moved; then folds it again. Async: it waits two frames for each render.
+ */
+const stillRule = async (tolerance: number): Promise<RuleRun> => {
+  // oxlint-disable-next-line unicorn/consistent-function-scoping -- runs in the page
+  const frames = async (): Promise<void> => {
+    // oxlint-disable-next-line promise/avoid-new -- in the page a frame is only a callback
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+    });
+  };
+
+  const triggers = [
+    ...document.querySelectorAll<HTMLElement>("[data-look-live-disclosure]"),
+  ];
+
+  const found: Array<Violation> = [];
+  let checked = 0;
+
+  for (const trigger of triggers) {
+    const specimen = trigger.closest("[data-look-state]") ?? document.body;
+
+    trigger.scrollIntoView({ block: "center" });
+    await frames();
+
+    const { top } = trigger.getBoundingClientRect();
+
+    // The chevron turns in place on purpose: its box stays put, but its path's box turns with it,
+    // so the shapes inside a glyph are not watched.
+    const watched = [
+      trigger,
+      ...[...trigger.querySelectorAll("*")].filter(
+        (element) => element.parentElement?.closest("svg") === null
+      ),
+      ...[...specimen.querySelectorAll("*")].filter(
+        (element) =>
+          !trigger.contains(element) &&
+          element.getBoundingClientRect().bottom <= top + tolerance
+      ),
+    ];
+
+    const before = watched.map((element) => element.getBoundingClientRect());
+    const was = trigger.getAttribute("aria-expanded");
+
+    trigger.click();
+    await frames();
+
+    const toggled = trigger.getAttribute("aria-expanded") !== was;
+
+    const moved = watched.flatMap((element, index) => {
+      const from = before[index];
+      const to = element.getBoundingClientRect();
+
+      if (from === undefined) {
+        return [];
+      }
+
+      const by = Math.max(
+        Math.abs(from.top - to.top),
+        Math.abs(from.left - to.left),
+        Math.abs(from.width - to.width),
+        Math.abs(from.height - to.height)
+      );
+
+      return by > tolerance ? [{ element, by }] : [];
+    });
+
+    if (toggled) {
+      trigger.click();
+      await frames();
+    }
+
+    checked += 1;
+
+    const [first] = moved;
+
+    if (!toggled || first !== undefined) {
+      found.push({
+        state:
+          trigger.closest<HTMLElement>("[data-look-state]")?.dataset
+            .lookState ?? "page",
+        element: `disclosure "${(trigger.textContent ?? "").trim().slice(0, 40)}"`,
+        detail: toggled
+          ? `opening it moved ${String(moved.length)} element(s) at or above its header, the first (${first?.element.tagName.toLowerCase() ?? ""}) by ${first?.by.toFixed(1) ?? "0"} px`
+          : "a click did not toggle it",
+        planted: trigger.closest("[data-planted]") !== null,
+      });
+    }
+  }
+
+  return { checked, violations: found };
 };
 
 /** The focused element's ring: shown focused, and not shown blurred unless forced. */
@@ -386,6 +573,147 @@ const focusRule = async (page: Page): Promise<Checked> => {
   return { checked: stops, violations: found };
 };
 
+/** The open sheet over the page: where it sits, where focus is, and its controls' sizes. */
+const sheetProbe = () => {
+  const panel = document.querySelector('[data-testid="look-live-sheet"]');
+
+  if (panel === null) {
+    return null;
+  }
+
+  const rect = panel.getBoundingClientRect();
+
+  return {
+    focusInside: panel.contains(document.activeElement),
+    bottom: rect.bottom,
+    width: rect.width,
+    viewportWidth: document.documentElement.clientWidth,
+    viewportHeight: window.innerHeight,
+    planted: document.querySelector("#look-planted-sheet") !== null,
+    controls: [
+      ...panel.querySelectorAll("button, a[href], input, textarea"),
+    ].map((control) => {
+      const box = control.getBoundingClientRect();
+
+      return {
+        name: (
+          control.getAttribute("aria-label") ??
+          control.textContent ??
+          ""
+        ).trim(),
+        width: box.width,
+        height: box.height,
+      };
+    }),
+  };
+};
+
+const SheetProbe = Schema.NullOr(
+  Schema.Struct({
+    focusInside: Schema.Boolean,
+    bottom: Schema.Finite,
+    width: Schema.Finite,
+    viewportWidth: Schema.Finite,
+    viewportHeight: Schema.Finite,
+    planted: Schema.Boolean,
+    controls: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        width: Schema.Finite,
+        height: Schema.Finite,
+      })
+    ),
+  })
+);
+
+const decodeSheetProbe = Schema.decodeUnknownSync(SheetProbe);
+
+/** Whether the focused element is the catalogue's "Open sheet" button. */
+const focusOnOpener = (): boolean =>
+  document.activeElement?.closest('[data-testid="look-open-sheet"]') !== null &&
+  document.activeElement !== null;
+
+/** Opens the sheet over the page and holds it to the sheet rule; leaves it closed. */
+const sheetRule = async (page: Page): Promise<Checked> => {
+  const found: Array<Violation> = [];
+
+  const fail = (element: string, detail: string, planted = false) =>
+    found.push({ state: "sheet/live", element, detail, planted });
+
+  await page.click('[data-testid="look-open-sheet"]');
+
+  const opened = await page
+    .locator('[data-testid="look-live-sheet"]')
+    .waitFor({ state: "visible", timeout: 5000 })
+    .then(
+      () => true,
+      () => false
+    );
+
+  if (!opened) {
+    fail("sheet", "Open sheet did not open it");
+
+    return { checked: 0, violations: found };
+  }
+
+  await page.evaluate(
+    "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))"
+  );
+
+  const probe = decodeSheetProbe(await page.evaluate(sheetProbe));
+
+  if (probe === null) {
+    fail("sheet", "the sheet left the page while open");
+
+    return { checked: 0, violations: found };
+  }
+
+  if (!probe.focusInside) {
+    fail("sheet", "focus did not move into the sheet");
+  }
+
+  if (
+    Math.abs(probe.bottom - probe.viewportHeight) > 1 ||
+    Math.abs(probe.width - probe.viewportWidth) > 1
+  ) {
+    fail(
+      "sheet",
+      `not a bottom sheet: bottom ${probe.bottom.toFixed(1)} of ${String(probe.viewportHeight)}, width ${probe.width.toFixed(1)} of ${String(probe.viewportWidth)}`
+    );
+  }
+
+  for (const control of probe.controls) {
+    if (
+      control.width + 0.5 < HIT_TARGET_PX ||
+      control.height + 0.5 < HIT_TARGET_PX
+    ) {
+      fail(
+        `button "${control.name}"`,
+        `${control.width.toFixed(1)} by ${control.height.toFixed(1)} px`,
+        probe.planted
+      );
+    }
+  }
+
+  await page.keyboard.press("Escape");
+
+  const closed = await page
+    .locator('[data-testid="look-live-sheet"]')
+    .waitFor({ state: "detached", timeout: 5000 })
+    .then(
+      () => true,
+      () => false
+    );
+
+  if (!closed) {
+    fail("sheet", "Escape did not close it");
+  } else if (!decodeBoolean(await page.evaluate(focusOnOpener))) {
+    fail("sheet", "focus did not return to Open sheet");
+  }
+
+  return { checked: probe.controls.length, violations: found };
+};
+
 // ---------------------------------------------------------------------------------------------
 // Plants: one violation per rule, put into a real primitive on the page.
 
@@ -395,6 +723,9 @@ const PLANTS = [
   "overflow-clip",
   "focus",
   "hscroll",
+  "tone",
+  "still",
+  "sheet",
 ] as const;
 
 type Plant = (typeof PLANTS)[number];
@@ -405,6 +736,9 @@ const RULE_OF_PLANT: Readonly<Record<Plant, Rule>> = {
   "overflow-clip": "overflow",
   focus: "focus",
   hscroll: "hscroll",
+  tone: "tone",
+  still: "still",
+  sheet: "sheet",
 };
 
 // Each plant is sent to the page on its own, so each names its target in full.
@@ -508,12 +842,64 @@ const plantWide = (): boolean => {
   return true;
 };
 
+/** A destructive menu item drawn in ink-1, as the old wiring drew it (the tone on its inner span). */
+const plantTone = (): boolean => {
+  const item = document.querySelector<HTMLElement>(
+    '[role="menuitem"][data-variant="destructive"]'
+  );
+
+  if (item === null) {
+    return false;
+  }
+
+  item.dataset.planted = "";
+  item.classList.remove("text-tone-failed");
+  item.classList.add("text-ink-1");
+
+  return true;
+};
+
+/** A disclosure header that grows by 16 px when it opens, pushing its own line down. */
+const plantStill = (): boolean => {
+  const trigger = document.querySelector<HTMLElement>(
+    "[data-look-live-disclosure]"
+  );
+
+  if (trigger === null) {
+    return false;
+  }
+
+  const style = document.createElement("style");
+
+  trigger.dataset.planted = "";
+  style.textContent =
+    '[data-planted][aria-expanded="true"] { padding-top: 16px !important; }';
+  document.head.append(style);
+
+  return true;
+};
+
+/** The sheet's close button shrunk to 24 px. */
+const plantSheet = (): boolean => {
+  const style = document.createElement("style");
+
+  style.id = "look-planted-sheet";
+  style.textContent =
+    '[data-testid="look-live-sheet"] button[aria-label="Close"] { min-width: 0 !important; min-height: 0 !important; width: 24px !important; height: 24px !important; }';
+  document.head.append(style);
+
+  return document.querySelector('[data-testid="look-open-sheet"]') !== null;
+};
+
 const PLANT_IN: Readonly<Record<Plant, () => boolean>> = {
   touch: plantTouch,
   "overflow-spill": plantSpill,
   "overflow-clip": plantClip,
   focus: plantFocus,
   hscroll: plantWide,
+  tone: plantTone,
+  still: plantStill,
+  sheet: plantSheet,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -589,6 +975,14 @@ const judgePage = async (
 
   const hscroll = decodeViolations(await page.evaluate(hscrollRule));
   const focus = await focusRule(page);
+  const tone = decodeChecked(await page.evaluate(toneRule));
+
+  const still = decodeChecked(
+    await page.evaluate(stillRule, OVERFLOW_TOLERANCE_PX / 2)
+  );
+
+  const sheet =
+    width === 390 ? await sheetRule(page) : { checked: 0, violations: [] };
 
   return {
     look,
@@ -600,26 +994,40 @@ const judgePage = async (
       overflow: overflow.violations,
       focus: focus.violations,
       hscroll,
+      tone: tone.violations,
+      still: still.violations,
+      sheet: sheet.violations,
     },
     checked: {
       touch: touch.checked,
       overflow: overflow.checked,
       focus: focus.checked,
       hscroll: 1,
+      tone: tone.checked,
+      still: still.checked,
+      sheet: sheet.checked,
     },
   };
 };
 
-/** The rules a page is held to: hscroll is judged on the phone only. */
+/** The rules judged at a width: touch, hscroll and the sheet on the phone only. */
+const judgedAt = (rule: Rule, width: Width): boolean =>
+  width === 390 || !["touch", "hscroll", "sheet"].includes(rule);
+
+/** The rules a page fails: one broken, or one that checked nothing where it is judged. */
 const failedRules = (result: PageResult): ReadonlyArray<Rule> =>
   RULES.filter(
     (rule) =>
-      result.violations[rule].length > 0 &&
-      (rule !== "hscroll" || result.width === 390)
+      judgedAt(rule, result.width) &&
+      (result.violations[rule].length > 0 || result.checked[rule] === 0)
   );
 
 const main = async () => {
   const port = await freePort();
+
+  // The foldkit Vite plugin logs its dev-tools connections with `console.log`; stdout carries only
+  // this judge's JSON line, so everything else the server says goes to stderr.
+  console.log = console.error;
 
   const vite = await createViteServer({
     configFile: path.join(root, "apps/web/vite.config.ts"),
@@ -691,6 +1099,7 @@ const main = async () => {
         rule,
         violations: result.violations[rule].slice(0, 8),
         count: result.violations[rule].length,
+        checked: result.checked[rule],
       }))
     );
 
@@ -716,18 +1125,25 @@ const main = async () => {
           ])
         ),
         failures,
-        // Per page, the fewest over the pages: controls sized, text nodes placed, Tab stops probed.
+        // Per page, the fewest over the pages where the rule is judged: controls sized, text nodes
+        // placed, Tab stops probed, colours resolved, disclosures opened, sheet controls sized.
         checked: Object.fromEntries(
-          (["touch", "overflow", "focus"] as const).map((rule) => [
-            rule,
-            Math.min(
-              ...clean.flatMap((result) =>
-                rule !== "touch" || result.width === 390
-                  ? [result.checked[rule]]
-                  : []
-              )
-            ),
-          ])
+          RULES.flatMap((rule) =>
+            rule === "hscroll"
+              ? []
+              : [
+                  [
+                    rule,
+                    Math.min(
+                      ...clean.flatMap((result) =>
+                        judgedAt(rule, result.width)
+                          ? [result.checked[rule]]
+                          : []
+                      )
+                    ),
+                  ],
+                ]
+          )
         ),
         hscrollAt1440: clean.flatMap((result) =>
           result.width === 1440 && result.violations.hscroll.length > 0

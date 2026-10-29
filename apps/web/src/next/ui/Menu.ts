@@ -4,6 +4,10 @@
 // item `data-active` and a disabled one `aria-disabled` with `data-disabled`; the classes key on
 // those, so both forms look alike. On a coarse pointer every item is a full touch target and key
 // hints are hidden.
+//
+// A destructive item's tone is in its own class string (`menuItemClass`), not keyed on an
+// attribute: @foldkit/ui's `ItemConfig` carries only a class and content, so the item element
+// itself can carry no `data-variant` for a class to key on.
 
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type { GroupHeading, ItemConfig } from "@foldkit/ui/menu";
@@ -22,13 +26,25 @@ import {
 export const MENU_POPUP_CLASS =
   "flex max-w-[calc(100vw-2rem)] min-w-[min(12rem,calc(100vw-2rem))] flex-col rounded-(--radius-medium) border border-stroke-1 bg-surface-overlay p-(--space-1) text-ink-1 shadow-(--elevation-3) outline-none";
 
-/** The class string of one item. */
-export const MENU_ITEM_CLASS = classNames(
-  "flex min-h-8 w-full cursor-pointer select-none items-center gap-(--space-2) rounded-(--radius-small) px-(--space-2) py-(--space-1) text-start text-ink-1 hover:bg-select-2 data-active:bg-select-2 data-hover:bg-select-2 data-[variant=destructive]:text-tone-failed data-disabled:cursor-not-allowed data-disabled:opacity-50 [&_svg]:text-ink-2 data-[variant=destructive]:[&_svg]:text-current",
+const MENU_ITEM_BASE = classNames(
+  "flex min-h-8 w-full cursor-pointer select-none items-center gap-(--space-2) rounded-(--radius-small) px-(--space-2) py-(--space-1) text-start hover:bg-select-2 data-active:bg-select-2 data-hover:bg-select-2 data-disabled:cursor-not-allowed data-disabled:opacity-50",
   TYPE.ui,
   HIT_HEIGHT,
   FOCUS_RING_INSET
 );
+
+/** An item's ink: its label and its glyph. A destructive item draws both in the failed tone. */
+const MENU_ITEM_INK = {
+  plain: "text-ink-1 [&_svg]:text-ink-2",
+  destructive: "text-tone-failed [&_svg]:text-current",
+} as const;
+
+/** The class string of one item, destructive or not. */
+export const menuItemClass = (isDestructive: boolean): string =>
+  classNames(
+    MENU_ITEM_BASE,
+    isDestructive ? MENU_ITEM_INK.destructive : MENU_ITEM_INK.plain
+  );
 
 /** The class string of a group's heading. */
 export const MENU_GROUP_LABEL_CLASS = classNames(
@@ -83,7 +99,7 @@ export const menuItem = <Message>(
   h: HtmlBuilder<Message>,
   look: MenuItemLook
 ): ItemConfig => ({
-  className: MENU_ITEM_CLASS,
+  className: menuItemClass(look.isDestructive),
   content: itemContent(h, look),
 });
 
@@ -125,8 +141,12 @@ const panelItem = <Message>(
       h.Type("button"),
       h.Role("menuitem"),
       ...onlyIf(item.isActive, h.DataAttribute("active", "")),
+      ...onlyIf(
+        item.look.isDestructive,
+        h.DataAttribute("variant", "destructive")
+      ),
       ...click,
-      h.Class(MENU_ITEM_CLASS),
+      h.Class(menuItemClass(item.look.isDestructive)),
     ],
     [itemContent(h, item.look)]
   );

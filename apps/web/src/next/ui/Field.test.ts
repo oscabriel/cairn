@@ -76,8 +76,11 @@ describe("the next field", () => {
       ),
       Scene.expect(Scene.selector("#bad-hint")).not.toExist(),
       Scene.expect(
-        Scene.selector('[data-slot="field-shell"][aria-invalid="true"]')
-      ).toHaveAttr("aria-invalid", "true"),
+        Scene.selector('[data-slot="field-shell"][data-invalid]')
+      ).toHaveClass("data-invalid:border-tone-failed"),
+      Scene.expect(
+        Scene.selector('[data-slot="field-shell"][aria-invalid]')
+      ).not.toExist(),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
@@ -90,6 +93,12 @@ describe("the next field", () => {
       given,
       Scene.expect(Scene.label("Send back with")).toHaveAttr("rows", "3"),
       Scene.expect(Scene.label("Send back with")).toBeDisabled(),
+      Scene.expect(
+        Scene.selector('[data-slot="field-shell"][data-disabled]')
+      ).toExist(),
+      Scene.expect(
+        Scene.selector('[data-slot="field-shell"][aria-disabled]')
+      ).not.toExist(),
       Scene.expect(Scene.selector('[data-slot="field-shell"]')).toHaveClass(
         "has-[:focus-visible]:outline-stroke-focus"
       ),

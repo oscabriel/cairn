@@ -59,7 +59,7 @@ export interface RowContent {
 }
 
 const ROW =
-  "group/row relative flex w-full min-w-0 items-center gap-(--space-1) rounded-(--radius-small) pe-(--space-1) text-ink-1 hover:bg-select-1 has-[[data-hover]]:bg-select-1 has-[[aria-current=true]]:bg-select-3 has-[[aria-current=true]]:hover:bg-select-4";
+  "group/row relative flex w-full min-w-0 items-center gap-(--space-1) rounded-(--radius-small) pe-(--space-1) text-ink-1 hover:bg-select-1 has-[[data-hover]]:bg-select-1 has-[[aria-current=true]]:bg-select-3 has-[[aria-current=true]]:hover:bg-select-4 has-[[data-slot=row-main][aria-disabled=true]]:hover:bg-transparent";
 
 const MAIN = classNames(
   "flex min-h-9 min-w-0 flex-1 cursor-pointer items-center gap-(--space-2) rounded-(--radius-small) px-(--space-2) py-(--space-1) text-start",

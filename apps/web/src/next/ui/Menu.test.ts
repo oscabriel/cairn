@@ -8,7 +8,7 @@ import { Option } from "effect";
 import * as Scene from "foldkit/scene";
 
 import { kbd } from "./Kbd.ts";
-import { MENU_ITEM_CLASS, menuItem, menuPanel } from "./Menu.ts";
+import { menuItem, menuPanel } from "./Menu.ts";
 import type { MenuItemLook } from "./Menu.ts";
 import { appOf, expectSent, given, sent } from "./SceneFixture.ts";
 import { tooltipBubble, tooltipToView } from "./Tooltip.ts";
@@ -70,7 +70,6 @@ const app = appOf((h) => [
     panel: [],
     isVisible: false,
   }),
-  menuItem(h, look("Copy")).content,
 ]);
 
 describe("the next menu panel", () => {
@@ -111,15 +110,25 @@ describe("the next menu panel", () => {
     );
   });
 
-  it("draws a destructive item in the failed tone and items as touch targets", () => {
+  it("draws a destructive item in the failed tone on the item itself, and items as touch targets", () => {
     Scene.scene(
       app,
       given,
-      Scene.expect(Scene.selector('[data-variant="destructive"]')).toHaveText(
-        "Archive"
+      Scene.expect(Scene.role("menuitem", { name: "Archive" })).toHaveAttr(
+        "data-variant",
+        "destructive"
       ),
       Scene.expect(Scene.role("menuitem", { name: "Archive" })).toHaveClass(
-        "data-[variant=destructive]:text-tone-failed"
+        "text-tone-failed"
+      ),
+      Scene.expect(Scene.role("menuitem", { name: "Archive" })).not.toHaveClass(
+        "text-ink-1"
+      ),
+      Scene.expect(Scene.role("menuitem", { name: "Move" })).toHaveClass(
+        "text-ink-1"
+      ),
+      Scene.expect(Scene.role("menuitem", { name: "Move" })).not.toHaveClass(
+        "text-tone-failed"
       ),
       Scene.expect(Scene.role("menuitem", { name: "Archive" })).toHaveClass(
         "pointer-coarse:min-h-(--hit-target)"
@@ -130,25 +139,27 @@ describe("the next menu panel", () => {
     );
   });
 
-  it("gives @foldkit/ui's menu the same item class", () => {
+  it("gives @foldkit/ui's menu item the tone in its own class, since that item takes no attribute", () => {
     Scene.scene(
-      app,
+      appOf((h) =>
+        [look("Archive", true), look("Copy")].map((each) =>
+          h.div(
+            [
+              h.DataAttribute("testid", each.label),
+              h.Class(menuItem(h, each).className ?? ""),
+            ],
+            [menuItem(h, each).content]
+          )
+        )
+      ),
       given,
-      Scene.expect(Scene.text("Copy")).toHaveClass("truncate")
-    );
-    Scene.scene(
-      appOf((h) => [
-        h.div(
-          [
-            h.DataAttribute("testid", "item"),
-            h.Class(menuItem(h, look("Copy")).className ?? ""),
-          ],
-          []
-        ),
-      ]),
-      given,
-      Scene.expect(Scene.testId("item")).toHaveClass(
-        MENU_ITEM_CLASS.split(" ")[0] ?? ""
+      Scene.expect(Scene.testId("Archive")).toHaveClass("text-tone-failed"),
+      Scene.expect(Scene.testId("Archive")).not.toHaveClass("text-ink-1"),
+      Scene.expect(Scene.testId("Copy")).toHaveClass("text-ink-1"),
+      Scene.expect(Scene.testId("Copy")).not.toHaveClass("text-tone-failed"),
+      Scene.inside(
+        Scene.testId("Copy"),
+        Scene.expect(Scene.text("Copy")).toHaveClass("truncate")
       ),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);

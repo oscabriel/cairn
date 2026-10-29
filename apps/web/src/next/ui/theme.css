@@ -1,0 +1,55 @@
+/*
+ * The design token colour names and the animations the `next` utilities name, for the two style
+ * sheets that build them: utilities.css (the primitives, shipped in the chunk that imports them) and
+ * catalogue/catalogue.css (the dev-only look catalogue's own classes). The colour list is the same
+ * list as styles.css's `@theme inline`, and a name added to one is added to the other.
+ */
+@theme inline {
+  --color-ink-1: var(--ink-1);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-surface-ground: var(--surface-ground);
+  --color-surface-rail: var(--surface-rail);
+  --color-surface-sidebar: var(--surface-sidebar);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-stroke-1: var(--stroke-1);
+  --color-stroke-2: var(--stroke-2);
+  --color-stroke-focus: var(--stroke-focus);
+  --color-select-1: var(--select-1);
+  --color-select-2: var(--select-2);
+  --color-select-3: var(--select-3);
+  --color-select-4: var(--select-4);
+  --color-select-5: var(--select-5);
+  --color-accent-fill: var(--accent-fill);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-text: var(--accent-text);
+  --color-accent-wash: var(--accent-wash);
+  --color-tone-working: var(--tone-working);
+  --color-tone-working-wash: var(--tone-working-wash);
+  --color-tone-waiting: var(--tone-waiting);
+  --color-tone-waiting-wash: var(--tone-waiting-wash);
+  --color-tone-failed: var(--tone-failed);
+  --color-tone-failed-wash: var(--tone-failed-wash);
+  --color-tone-done: var(--tone-done);
+  --color-tone-done-wash: var(--tone-done-wash);
+  --color-scrim: var(--scrim);
+
+  /* Tailwind's own animations, inlined: the entry CSS declares a theme variable only when a classic
+     view uses it, so these chunk utilities must not lean on one. */
+  --animate-spin: spin 1s linear infinite;
+  --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes pulse {
+    50% {
+      opacity: 0.5;
+    }
+  }
+}

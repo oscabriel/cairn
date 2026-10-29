@@ -8,9 +8,11 @@ import { Option } from "effect";
 import * as Scene from "foldkit/scene";
 
 import { chip, toggleChip } from "./Chip.ts";
+import { markOfTone } from "./Glyph.ts";
 import { appOf, expectSent, given, sent } from "./SceneFixture.ts";
 import { statusChip, statusOfLabel } from "./StatusChip.ts";
 import { TONES, toneOfThreadTone } from "./Tone.ts";
+import type { Tone } from "./Tone.ts";
 
 const app = appOf((h) => [
   chip(
@@ -38,7 +40,7 @@ const app = appOf((h) => [
     { glyph: Option.none(), label: "Done", count: Option.none() }
   ),
   ...TONES.map((tone) =>
-    statusChip(h, statusOfLabel({ word: tone, tone: "muted" }), [
+    statusChip(h, { tone, mark: markOfTone(tone), word: tone }, [
       h.DataAttribute("testid", `status-${tone}`),
     ])
   ),
@@ -108,6 +110,41 @@ describe("the status chip", () => {
         Scene.expect(Scene.selector('[data-glyph="failed"]')).toExist()
       ),
       Scene.expect(Scene.testId("failed")).toHaveClass("text-tone-failed"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("draws each tone on its own wash with its own mark", () => {
+    const expected = {
+      neutral: ["idle", "bg-select-2"],
+      accent: ["info", "bg-accent-wash"],
+      working: ["busy", "bg-tone-working-wash"],
+      waiting: ["needs", "bg-tone-waiting-wash"],
+      failed: ["failed", "bg-tone-failed-wash"],
+      done: ["done", "bg-tone-done-wash"],
+    } as const satisfies Record<Tone, readonly [string, string]>;
+
+    Scene.scene(
+      app,
+      given,
+      ...TONES.flatMap((tone) => [
+        Scene.expect(Scene.testId(`status-${tone}`)).toHaveAttr(
+          "data-tone",
+          tone
+        ),
+        Scene.expect(Scene.testId(`status-${tone}`)).toHaveClass(
+          expected[tone][1]
+        ),
+        Scene.inside(
+          Scene.testId(`status-${tone}`),
+          Scene.expect(
+            Scene.selector(`[data-glyph="${expected[tone][0]}"]`)
+          ).toExist()
+        ),
+        Scene.expect(Scene.testId(`status-${tone}`)).toHaveText(tone),
+      ]),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

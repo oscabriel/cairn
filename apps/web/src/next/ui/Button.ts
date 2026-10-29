@@ -6,7 +6,12 @@
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import * as FoldkitButton from "@foldkit/ui/button";
 import { Option } from "effect";
-import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
+import type {
+  Attribute,
+  ChildAttribute,
+  Html,
+  HtmlBuilder,
+} from "foldkit/html";
 
 import type { Child } from "../../ui/Child.ts";
 import { classNames } from "../../ui/ClassNames.ts";
@@ -90,8 +95,11 @@ export interface ButtonConfig<Message> {
   readonly isPressed: Option.Option<boolean>;
   /** The accessible name when the label alone does not say what the button does. */
   readonly ariaLabel: Option.Option<string>;
-  /** More attributes: test ids, hooks, `data-hover` and `data-focus` in the catalogue. */
-  readonly attributes: ReadonlyArray<Attribute<Message>>;
+  /**
+   * More attributes: test ids, hooks, `data-hover` and `data-focus` in the catalogue, or a
+   * Submodel's bundle (a dialog's `closeButton`).
+   */
+  readonly attributes: ReadonlyArray<Attribute<Message> | ChildAttribute>;
 }
 
 /** A regular secondary button with no click. Spread over it to configure one. */
@@ -110,7 +118,7 @@ export const buttonDefaults = <Message>(): ButtonConfig<Message> => ({
 export const buttonAttributes = <Message>(
   h: HtmlBuilder<Message>,
   config: ButtonConfig<Message>
-): ReadonlyArray<Attribute<Message>> => [
+): ReadonlyArray<Attribute<Message> | ChildAttribute> => [
   h.DataAttribute("slot", "button"),
   ...Option.match(config.isPressed, {
     onNone: () => [],

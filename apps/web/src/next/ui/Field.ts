@@ -67,7 +67,7 @@ export interface ControlConfig<Message> {
 }
 
 const SHELL = classNames(
-  "flex min-w-0 items-center gap-(--space-2) rounded-(--radius-small) border border-stroke-2 bg-surface-sunken px-(--space-2) text-ink-1 hover:border-stroke-focus/60 data-hover:border-stroke-focus/60 aria-invalid:border-tone-failed aria-disabled:cursor-not-allowed aria-disabled:opacity-50 [&>[data-glyph]]:text-ink-3",
+  "flex min-w-0 items-center gap-(--space-2) rounded-(--radius-small) border border-stroke-2 bg-surface-sunken px-(--space-2) text-ink-1 hover:border-stroke-focus/60 data-hover:border-stroke-focus/60 data-invalid:border-tone-failed data-disabled:cursor-not-allowed data-disabled:opacity-50 [&>[data-glyph]]:text-ink-3 [&>svg]:text-ink-3",
   FOCUS_WITHIN_RING,
   FEEDBACK_MOTION
 );
@@ -131,8 +131,8 @@ const frame = <Message>(
       h.div(
         [
           h.DataAttribute("slot", "field-shell"),
-          ...onlyIf(Option.isSome(field.error), h.AriaInvalid(true)),
-          ...onlyIf(field.isDisabled, h.AriaDisabled(true)),
+          ...onlyIf(Option.isSome(field.error), h.DataAttribute("invalid", "")),
+          ...onlyIf(field.isDisabled, h.DataAttribute("disabled", "")),
           ...field.shellAttributes,
           h.Class(classNames(SHELL, shellAlign)),
         ],

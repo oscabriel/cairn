@@ -3,6 +3,7 @@
 // and theme from the address.
 
 import "../../tokens.css";
+import "./catalogue.css";
 import { Runtime } from "foldkit";
 
 import { initialOf, Model, update, view } from "./Catalogue.ts";

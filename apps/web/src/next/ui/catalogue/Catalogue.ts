@@ -10,9 +10,10 @@
 // `data-focus` hooks. The production build never includes this page: its only entry is
 // `apps/web/index.html`, and `Budget.test.ts` fails if any emitted file carries the catalogue.
 
-import { THREAD_LABELS } from "@cairn/client-logic/ThreadState";
+import { HOLD_LABELS, THREAD_LABELS } from "@cairn/client-logic/ThreadState";
+import * as Dialog from "@foldkit/ui/dialog";
 import { Option, Schema } from "effect";
-import type { Update } from "foldkit";
+import { Update } from "foldkit";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 import { defineMessageUnion } from "foldkit/message";
 import { Copy, Ellipsis, Inbox, Plus, Search, Settings, X } from "lucide";
@@ -26,6 +27,7 @@ import type { ButtonConfig, ButtonSize } from "../Button.ts";
 import { card, cardText, recordLines } from "../Card.ts";
 import { chip, toggleChip } from "../Chip.ts";
 import { TYPE, WEIGHT_STRONG } from "../Classes.ts";
+import { disclosure } from "../Disclosure.ts";
 import { divider, labelledDivider } from "../Divider.ts";
 import { emptyState } from "../EmptyState.ts";
 import { fieldDefaults, inputField, textareaField } from "../Field.ts";
@@ -39,8 +41,12 @@ import type { MenuItemLook, PanelItem } from "../Menu.ts";
 import { meter, progress } from "../Meter.ts";
 import { row, rowDefaults } from "../Row.ts";
 import type { RowConfig, RowContent } from "../Row.ts";
-import { sheet } from "../Sheet.ts";
+import { sheet, sheetToView } from "../Sheet.ts";
 import { statusChip, statusOfLabel } from "../StatusChip.ts";
+import { STEP_STATES, stepper, stepsPill, stepWord } from "../Stepper.ts";
+import type { Step } from "../Stepper.ts";
+import { tally } from "../Tally.ts";
+import type { TallyPart } from "../Tally.ts";
 import { TONES, TONE_TEXT } from "../Tone.ts";
 import type { Tone } from "../Tone.ts";
 import { tooltipBubble } from "../Tooltip.ts";
@@ -63,8 +69,10 @@ export const Model = Schema.Struct({
   theme: Theme,
   /** The toggle chips that are pressed. */
   filters: Schema.Array(Schema.String),
-  /** The live sheet, opened over the page by its button. */
-  isSheetOpen: Schema.Boolean,
+  /** The live sheet over the page: @foldkit/ui's dialog, opened by its button. */
+  sheetDialog: Dialog.Model,
+  /** The live disclosures that are open, by id. */
+  openDisclosures: Schema.Array(Schema.String),
   /** What the live field holds. */
   answer: Schema.String,
 });
@@ -78,7 +86,8 @@ export const Message = defineMessageUnion({
   ChoseTheme: { theme: Theme },
   ToggledFilter: { filter: Schema.String },
   OpenedSheet: {},
-  ClosedSheet: {},
+  GotSheetDialogMessage: { message: Dialog.Message },
+  ToggledDisclosure: { id: Schema.String, isOpen: Schema.Boolean },
   TypedAnswer: { value: Schema.String },
 });
 
@@ -86,6 +95,38 @@ export const Message = defineMessageUnion({
 export type Message = typeof Message.Type;
 
 type Return = Update.Return<Model, Message>;
+
+/** The live sheet's dialog id. */
+const LIVE_SHEET_ID = "look-sheet-live";
+
+/** The dialog's Opened and Closed change nothing here: its own model says whether it is open. */
+const keepModel = (): Update.Step<Model, Message> => (model) => ({ model });
+
+const readSheetDialog = (model: Model) => Option.some(model.sheetDialog);
+
+const writeSheetDialog = (model: Model, sheetDialog: Dialog.Model): Model => ({
+  ...model,
+  sheetDialog,
+});
+
+const toGotSheetDialogMessage = (message: Dialog.Message): Message =>
+  Message.GotSheetDialogMessage({ message });
+
+const foldSheetDialog = Update.foldChild({
+  update: Dialog.update,
+  read: readSheetDialog,
+  write: writeSheetDialog,
+  toParentMessage: toGotSheetDialogMessage,
+  foldOutMessage: keepModel,
+});
+
+const openSheetDialog = Update.foldChildStep({
+  update: Dialog.open,
+  read: readSheetDialog,
+  write: writeSheetDialog,
+  toParentMessage: toGotSheetDialogMessage,
+  foldOutMessage: keepModel,
+});
 
 const decodeLook = Schema.decodeUnknownOption(Look);
 
@@ -105,7 +146,8 @@ export const initialOf = (search: string): Model => {
       () => "dark" as const
     ),
     filters: ["Open"],
-    isSheetOpen: false,
+    sheetDialog: Dialog.init({ id: LIVE_SHEET_ID }),
+    openDisclosures: ["look-disclosure-phase"],
     answer: "",
   };
 };
@@ -123,8 +165,17 @@ export const update = (model: Model, message: Message): Return =>
           : [...model.filters, filter],
       },
     }),
-    OpenedSheet: () => ({ model: { ...model, isSheetOpen: true } }),
-    ClosedSheet: () => ({ model: { ...model, isSheetOpen: false } }),
+    OpenedSheet: () => openSheetDialog(model),
+    GotSheetDialogMessage: ({ message: dialogMessage }) =>
+      foldSheetDialog(model, dialogMessage),
+    ToggledDisclosure: ({ id, isOpen }) => ({
+      model: {
+        ...model,
+        openDisclosures: isOpen
+          ? [...model.openDisclosures.filter((each) => each !== id), id]
+          : model.openDisclosures.filter((each) => each !== id),
+      },
+    }),
     TypedAnswer: ({ value }) => ({ model: { ...model, answer: value } }),
   });
 
@@ -367,6 +418,14 @@ const statusChips = (h: H): Html =>
       "status-chip/labels",
       "every thread label",
       Object.values(THREAD_LABELS).map((label) =>
+        statusChip(h, statusOfLabel(label))
+      )
+    ),
+    specimen(
+      h,
+      "status-chip/holds",
+      "every hold label",
+      Object.values(HOLD_LABELS).map((label) =>
         statusChip(h, statusOfLabel(label))
       )
     ),
@@ -621,7 +680,7 @@ const sheets = (h: H, model: Model): Html =>
       specimen(
         h,
         "sheet/contained",
-        "open in a pane: bottom sheet on the phone, docked panel from sm",
+        "open in a pane, nothing closes it: bottom sheet on the phone, floating from sm, docked from lg",
         [
           h.div(
             [
@@ -637,7 +696,6 @@ const sheets = (h: H, model: Model): Html =>
               sheet(
                 h,
                 {
-                  placement: "contained",
                   id: "look-sheet-contained",
                   title: "Steps",
                   onClose: Option.none(),
@@ -659,29 +717,27 @@ const sheets = (h: H, model: Model): Html =>
       specimen(h, "sheet/live", "over the page, opened by a button", [
         buttonOf(
           h,
-          { onClick: Option.some(Message.OpenedSheet()) },
+          {
+            onClick: Option.some(Message.OpenedSheet()),
+            attributes: [h.DataAttribute("testid", "look-open-sheet")],
+          },
           "Open sheet"
         ),
-        model.isSheetOpen
-          ? sheet(
+        h.submodel({
+          slotId: "look-sheet-live",
+          model: model.sheetDialog,
+          view: Dialog.view,
+          viewInputs: {
+            toView: sheetToView(
               h,
-              {
-                placement: "viewport",
-                id: "look-sheet-live",
-                title: "Criteria",
-                onClose: Option.some(Message.ClosedSheet()),
-                attributes: [h.DataAttribute("testid", "look-live-sheet")],
-              },
-              [cardText(h, "Tap the scrim or Close to dismiss.")],
-              [
-                buttonOf(
-                  h,
-                  { onClick: Option.some(Message.ClosedSheet()) },
-                  "Close"
-                ),
-              ]
-            )
-          : h.empty,
+              "Criteria",
+              [cardText(h, "Escape, the scrim or Close dismisses it.")],
+              [buttonOf(h, { variant: "primary" }, "Done")],
+              [h.DataAttribute("testid", "look-live-sheet")]
+            ),
+          },
+          toParentMessage: toGotSheetDialogMessage,
+        }),
       ]),
     ],
     true
@@ -879,6 +935,219 @@ const dividers = (h: H): Html =>
     ),
   ]);
 
+const TALLY: ReadonlyArray<TallyPart> = [
+  { count: 4, word: "agents", tone: "neutral" },
+  { count: 2, word: "working", tone: "working" },
+  { count: 0, word: "failed", tone: "failed" },
+  { count: 1, word: "done", tone: "done" },
+];
+
+const STEPS: ReadonlyArray<Step> = [
+  { title: "Read the workflows note", state: "done", meta: Option.some("1m") },
+  {
+    title: "Port deriveWorkflowGroups",
+    state: "done",
+    meta: Option.some("6m"),
+  },
+  { title: "Port the panel's tests", state: "working", meta: Option.none() },
+  { title: "Run the steps judge", state: "todo", meta: Option.none() },
+  { title: "Draw the phone sheet", state: "todo", meta: Option.none() },
+];
+
+const FAILED_STEPS: ReadonlyArray<Step> = [
+  ...STEPS.slice(0, 2),
+  { title: "Port the panel's tests", state: "failed", meta: Option.some("2m") },
+];
+
+const tallies = (h: H): Html =>
+  section(h, "tally", "Tally", [
+    specimen(
+      h,
+      "tally/parts",
+      "counts with their words, empty parts left out",
+      [tally(h, TALLY)]
+    ),
+    specimen(h, "tally/total", "a total only, even at zero", [
+      tally(h, [{ count: 0, word: "agents", tone: "neutral" }]),
+      tally(h, [
+        { count: 12, word: "tool calls", tone: "neutral" },
+        { count: 3, word: "edits", tone: "neutral" },
+        { count: 1, word: "approval", tone: "waiting" },
+      ]),
+    ]),
+  ]);
+
+const steppers = (h: H): Html =>
+  section(h, "stepper", "Stepper", [
+    specimen(
+      h,
+      "stepper/states",
+      "every step state: to do, working, done, failed",
+      [
+        stepper(
+          h,
+          "Every step state",
+          STEP_STATES.map((state) => ({
+            title: `A step ${stepWord(state)}`,
+            state,
+            meta: Option.none(),
+          }))
+        ),
+      ],
+      "flex flex-col"
+    ),
+    specimen(
+      h,
+      "stepper/pill",
+      "the steps pill: working, failed, done, to do, opening the sheet",
+      [
+        stepsPill(h, STEPS, Option.none()),
+        stepsPill(h, FAILED_STEPS, Option.none()),
+        stepsPill(
+          h,
+          STEPS.map((step) => ({ ...step, state: "done" as const })),
+          Option.none()
+        ),
+        stepsPill(
+          h,
+          STEPS.map((step) => ({ ...step, state: "todo" as const })),
+          Option.none()
+        ),
+        stepsPill(h, STEPS, Option.some(Message.OpenedSheet())),
+      ]
+    ),
+  ]);
+
+const disclosures = (h: H, model: Model): Html => {
+  const live = (
+    id: string,
+    title: string,
+    glyphOf: Option.Option<Html>,
+    tallyOf: Option.Option<Html>,
+    body: ReadonlyArray<Html>
+  ) =>
+    disclosure(
+      h,
+      {
+        id,
+        isOpen: model.openDisclosures.includes(id),
+        onToggle: (isOpen) => Message.ToggledDisclosure({ id, isOpen }),
+        isDisabled: false,
+        attributes: [h.DataAttribute("look-live-disclosure", "")],
+      },
+      { glyph: glyphOf, title, tally: tallyOf, body }
+    );
+
+  const still = (
+    title: string,
+    config: {
+      readonly isOpen: boolean;
+      readonly isDisabled: boolean;
+      readonly attributes: ReadonlyArray<Attribute<Message>>;
+    }
+  ) =>
+    disclosure(
+      h,
+      {
+        id: `look-disclosure-${title.toLowerCase()}`,
+        onToggle: () => Message.ChoseTheme({ theme: model.theme }),
+        ...config,
+      },
+      {
+        glyph: Option.none(),
+        title,
+        tally: Option.some(tally(h, TALLY.slice(0, 2))),
+        body: [cardText(h, "The body, below the header.")],
+      }
+    );
+
+  return section(
+    h,
+    "disclosure",
+    "Disclosure",
+    [
+      specimen(
+        h,
+        "disclosure/live",
+        "fold, phase and previous agents, live: opening one moves nothing above it",
+        [
+          h.p(
+            [h.Class(classNames("text-ink-2", TYPE.body))],
+            ["Text above the folds stays where it is."]
+          ),
+          live(
+            "look-disclosure-fold",
+            "Worked for 4m 12s",
+            Option.none(),
+            Option.some(tally(h, TALLY)),
+            [
+              rowOf(h, {}, { title: "Read packages/client-logic" }),
+              rowOf(h, {}, { title: "Edited Steps.ts" }),
+            ]
+          ),
+          live(
+            "look-disclosure-phase",
+            "Build",
+            Option.some(
+              h.span(
+                [h.Class(TONE_TEXT.working)],
+                [statusGlyph(h, "busy", "regular")]
+              )
+            ),
+            Option.some(stepsPill(h, STEPS, Option.none())),
+            [stepper(h, "Build steps", STEPS)]
+          ),
+          live(
+            "look-disclosure-previous",
+            "Previous agents",
+            Option.none(),
+            Option.some(
+              tally(h, [{ count: 3, word: "agents", tone: "neutral" }])
+            ),
+            [
+              rowOf(
+                h,
+                {},
+                {
+                  leading: Option.some(avatar(h, "@scout", "small", "accent")),
+                  title: "@scout read the reach note",
+                }
+              ),
+            ]
+          ),
+        ],
+        "flex flex-col gap-(--space-1)"
+      ),
+      specimen(
+        h,
+        "disclosure/states",
+        "folded, open, hover, focus, disabled",
+        [
+          still("Folded", { isOpen: false, isDisabled: false, attributes: [] }),
+          still("Open", { isOpen: true, isDisabled: false, attributes: [] }),
+          still("Hover", {
+            isOpen: false,
+            isDisabled: false,
+            attributes: [HOVER(h)],
+          }),
+          still("Focus", {
+            isOpen: false,
+            isDisabled: false,
+            attributes: [FOCUS(h)],
+          }),
+          still("Disabled", {
+            isOpen: false,
+            isDisabled: true,
+            attributes: [],
+          }),
+        ],
+        "flex flex-col gap-(--space-1)"
+      ),
+    ],
+    true
+  );
+};
+
 const kbds = (h: H): Html =>
   section(h, "kbd", "Key hint", [
     specimen(h, "kbd/key", "one key", [kbd(h, "K"), kbd(h, "Enter")]),
@@ -1056,6 +1325,9 @@ export const view = (model: Model, h: H): Html =>
               menus(h),
               cards(h),
               sheets(h, model),
+              disclosures(h, model),
+              tallies(h),
+              steppers(h),
               tooltips(h),
               fields(h, model),
               banners(h),

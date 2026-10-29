@@ -31,7 +31,8 @@ export class RequestRecords extends Context.Service<
     /**
      * Every `cairn.approvals` record of the thread, oldest first. Never fails: a thread with no
      * conversation, a read that fails or one that takes over five seconds reads as no records, so
-     * a push is left for the next event or the sweep rather than sent with the wrong words.
+     * a push is left for the next event or the sweep rather than sent with the wrong words (the
+     * notifier reads again on the next event when a row that says a request waits read as none).
      */
     of(threadId: ThreadId): Effect.Effect<ReadonlyArray<ApprovalRecord>>;
   }

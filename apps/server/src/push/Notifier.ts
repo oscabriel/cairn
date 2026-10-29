@@ -15,8 +15,9 @@
 // user can answer, once per request and one notification per thread (`ask:<threadId>`), worded
 // from the thread's records (`RequestRecords`); a sweep every 30 seconds pushes a request whose
 // first push was suppressed or missed once it is 60 seconds old and unwatched, and reminds once 15
-// minutes after its last push. The badge counts threads with an unseen result or a request.
+// minutes after its last push. The badge is `@cairn/client-logic/Badge`'s, the count the page shows.
 
+import { badgeOf, hasPendingRequest } from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ApprovalRecord } from "@cairn/protocol/Policy";
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
@@ -45,7 +46,6 @@ import { endpointHost, PushSubscriptions } from "./PushSubscriptions.ts";
 import type { PushStoreError } from "./PushSubscriptions.ts";
 import {
   followUpDue,
-  hasPendingRequest,
   lateKey,
   newestRequest,
   remindKey,
@@ -211,18 +211,6 @@ export const runEndToPush = (
   });
 };
 
-/** True when the thread has a result the user has not opened since it arrived. */
-export const hasUnseenResult = (thread: ThreadShell): boolean =>
-  Option.isNone(thread.activeRunId) &&
-  Option.match(thread.latestRunCompletedAt, {
-    onNone: () => false,
-    onSome: (completed) =>
-      Option.match(thread.lastVisitedAt, {
-        onNone: () => true,
-        onSome: (visited) => DateTime.isGreaterThan(completed, visited),
-      }),
-  });
-
 /** The push for a run end. */
 export const runMessage = (
   thread: ThreadShell,
@@ -309,16 +297,30 @@ export const requestMessage = (
   badge,
 });
 
+/** A row's request signature: its oldest pending request and count, which change as requests do. */
+const requestSignature = (thread: ThreadShell): string =>
+  `${Option.match(thread.pendingRuntimeRequest, {
+    onNone: () => "",
+    onSome: (request) => request.id,
+  })}/${String(thread.pendingCount)}`;
+
 /**
- * The app icon's badge: threads that need the user, each counted once, for an unseen result or a
- * request waiting. A subagent's result reaches its parent, so only its requests count.
+ * The claim key of a follow-up. A late push for a request with no first decision (its event was
+ * missed) claims the first key, so the event path replaying that event later finds it taken.
  */
-export const badgeOf = (threads: ReadonlyArray<ThreadShell>): number =>
-  threads.filter(
-    (thread) =>
-      (Option.isNone(thread.lineage) && hasUnseenResult(thread)) ||
-      hasPendingRequest(thread)
-  ).length;
+const followUpKey = (
+  request: ApprovalRecord,
+  due: FollowUp,
+  claims: ReadonlyMap<string, Claim>
+): string => {
+  if (due === "remind") {
+    return remindKey(request.id);
+  }
+
+  return claims.has(requestKey(request.id))
+    ? lateKey(request.id)
+    : requestKey(request.id);
+};
 
 /** The kind of shell event a run end arrives in. */
 const RUN_EVENT = "thread.activity-updated";
@@ -682,6 +684,10 @@ export class Notifier extends Context.Service<
       // read, so the events of a busy thread with a request waiting do not read them again.
       const readAt = new Map<ThreadId, string>();
 
+      // The signature each row had when the sweep found every request on it reminded, so nothing
+      // more is owed: the sweep does not read its records again until the signature changes.
+      const spentAt = new Map<ThreadId, string>();
+
       const pushRequests = Effect.fn("Notifier.pushRequests")(
         function* (event: StoredShellEvent) {
           if (!isRunEvent(event) || event.aggregateKind !== "thread") {
@@ -702,19 +708,21 @@ export class Notifier extends Context.Service<
           }
 
           const thread = row.value.shell;
-
-          const signature = `${Option.match(thread.pendingRuntimeRequest, {
-            onNone: () => "",
-            onSome: (request) => request.id,
-          })}/${String(thread.pendingCount)}`;
+          const signature = requestSignature(thread);
 
           if (readAt.get(threadId) === signature) {
             return;
           }
 
-          readAt.set(threadId, signature);
+          // A row that says a request waits but reads as no records is a failed read: the next
+          // event reads again.
+          const read = yield* records.of(threadId);
 
-          const open = requestsToPush(yield* records.of(threadId));
+          if (read.length > 0) {
+            readAt.set(threadId, signature);
+          }
+
+          const open = requestsToPush(read);
 
           if (open.length === 0) {
             return;
@@ -759,6 +767,12 @@ export class Notifier extends Context.Service<
         thread: ThreadShell,
         now: number
       ) {
+        const signature = requestSignature(thread);
+
+        if (spentAt.get(thread.id) === signature) {
+          return;
+        }
+
         const open = requestsToPush(yield* records.of(thread.id));
 
         if (open.length === 0) {
@@ -790,13 +804,17 @@ export class Notifier extends Context.Service<
           ).map((due: FollowUp) => ({ request, due }))
         );
 
+        if (open.every((request) => claims.has(remindKey(request.id)))) {
+          spentAt.set(thread.id, signature);
+        }
+
         if (owed.length === 0 || (yield* requestsWatched(thread.id, open))) {
           return;
         }
 
         const won = yield* Effect.filter(owed, ({ request, due }) =>
           claim(
-            due === "late" ? lateKey(request.id) : remindKey(request.id),
+            followUpKey(request, due, claims),
             Option.some(thread.id),
             "sent"
           )
@@ -817,6 +835,8 @@ export class Notifier extends Context.Service<
         for (const row of rows) {
           if (hasPendingRequest(row.shell)) {
             yield* sweepThread(row.shell, now);
+          } else {
+            spentAt.delete(row.shell.id);
           }
         }
       }).pipe(

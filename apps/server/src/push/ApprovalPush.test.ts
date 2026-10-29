@@ -19,6 +19,7 @@ import {
   Option,
   Schema,
 } from "effect";
+import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
 import { Database } from "../db/Database.ts";
@@ -558,6 +559,48 @@ describe("approval push", () => {
   );
 
   it.effect(
+    "counts a project thread once in the badge, however many of its subagents ask",
+    () => {
+      const service = fakePushService();
+      const table = recordTable();
+
+      return withNotifier(
+        service,
+        table,
+        Effect.gen(function* () {
+          const parent = yield* makeThread(1);
+          const escalating = yield* makeThread(2, Option.some(parent));
+          const routed = yield* makeThread(3, Option.some(parent));
+          const at = yield* now;
+
+          const escalated = escalatedQuestion(
+            "q-1",
+            at - 30_000,
+            at,
+            question("Database", "Which database?"),
+            escalating
+          );
+
+          yield* showRequests(table, routed, [
+            pendingQuestion("q-2", at, question("Scope", "All files?"), {
+              route: "parent",
+            }),
+          ]);
+          yield* showRequests(table, escalating, [escalated.child]);
+          yield* showRequests(table, parent, [escalated.mirror]);
+          yield* waitUntil(() => service.messages.length >= 1);
+          yield* idle;
+
+          assert.deepStrictEqual(
+            service.messages.map((message) => [message.body, message.badge]),
+            [["Thread 2 asks: Database: Which database?", 1]]
+          );
+        })
+      );
+    }
+  );
+
+  it.effect(
     "sends nothing again after a restart, and owes the late push across it",
     () => {
       const service = fakePushService();
@@ -602,6 +645,12 @@ describe("approval push", () => {
 
         assert.strictEqual(service.messages.length, 1);
 
+        // The brain crashed after its pushes but before the cursor moved past their events, so the
+        // restart replays them: only the claims stop a second push.
+        yield* SqlClient.SqlClient.use(
+          (sql) => sql`UPDATE push_cursor SET sequence = 0 WHERE id = 1`
+        );
+
         // The brain restarts 2 minutes later, when the page's report is stale: the first push stays sent, and
         // the suppressed request is owed its late push, once.
         yield* TestClock.adjust(Duration.minutes(2));
@@ -619,6 +668,63 @@ describe("approval push", () => {
           service.messages.map((message) => message.title),
           ["Thread 1", "Thread 2"]
         );
+      }).pipe(Effect.provide(StoreLayer));
+    }
+  );
+  it.effect(
+    "pushes a missed request once, late, though its event is replayed after",
+    () => {
+      const service = fakePushService();
+      const table = recordTable();
+
+      const runNotifier = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              Notifier.layerNoDeps.pipe(
+                Layer.provide(Layer.merge(service.layer, table.layer))
+              )
+            );
+
+            yield* idle;
+
+            return yield* body.pipe(Effect.provideContext(context));
+          })
+        );
+
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(NOW);
+        yield* subscribePhone;
+
+        const threadId = yield* makeThread(1);
+
+        yield* showRequests(table, threadId, [
+          pendingRecord("tool-1", yield* now),
+        ]);
+
+        // The first start begins at the log's end, so the request's event is missed; the sweep
+        // pushes it once it is a minute old.
+        yield* TestClock.adjust(Duration.minutes(2));
+        yield* runNotifier(
+          Effect.gen(function* () {
+            yield* Notifier.use((notifier) => notifier.sweep);
+            yield* waitUntil(() => service.messages.length >= 1);
+            yield* Notifier.use((notifier) => notifier.settle);
+          })
+        );
+
+        // The event comes back (the cursor rewound): the sweep's claim stops a second push.
+        yield* SqlClient.SqlClient.use(
+          (sql) => sql`UPDATE push_cursor SET sequence = 0 WHERE id = 1`
+        );
+        yield* runNotifier(
+          Effect.gen(function* () {
+            yield* idle;
+            yield* Notifier.use((notifier) => notifier.settle);
+          })
+        );
+
+        assert.deepStrictEqual(bodies(service), ["Approve bash: pnpm test"]);
       }).pipe(Effect.provide(StoreLayer));
     }
   );

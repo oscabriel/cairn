@@ -494,9 +494,10 @@ if want 3; then
     say "    then lock the phone and wait up to a minute and a half."
     note "A page that shows the thread holds the push back; it goes once no page has shown it for a minute."
     step "A notification should arrive: the thread's title, then ${BOLD}Color: ...${RESET}"
-    step "Tap it. Cairn should open that thread with the question card; answer it there."
+    step "Tap it. Cairn should open that thread with the question card. Before answering, go back to"
+    say "    the home screen: the app icon should still show its badge. Then answer the question in Cairn."
     if confirm "Did the push arrive on the locked phone in the question's words, and open the thread"; then
-      if confirm "Did the app icon show a badge while the question waited"; then
+      if confirm "Did the app icon show a badge while the question waited, before and after Cairn opened"; then
         record 3 "approval-push=pass badge=pass"
       else
         record 3 "approval-push=pass badge=fail"

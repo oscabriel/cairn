@@ -1,8 +1,8 @@
 // What the root tells the push toggle, built from what the root already holds: the epoch and its
 // client, the VAPID key from that epoch's `session.hello`, the thread on screen, and the badge
-// count (threads whose latest result the user has not opened, as the sidebar computes it).
+// count (`@cairn/client-logic/Badge`, the rule the push's notifier counts with).
 
-import { hasUnseenCompletion } from "@cairn/client-logic/Sidebar";
+import { badgeOf } from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { Hello } from "@cairn/protocol/Rpc";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
@@ -27,7 +27,7 @@ export const pushContextOf = (inputs: PushInputs): PushContext => ({
   threadId: inputs.openThreadId,
   badge: Option.match(inputs.shell, {
     onNone: () => 0,
-    onSome: (shell) => shell.threads.filter(hasUnseenCompletion).length,
+    onSome: (shell) => badgeOf(shell.threads),
   }),
 });
 

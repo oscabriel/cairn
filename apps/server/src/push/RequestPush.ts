@@ -30,10 +30,6 @@ export const remindKey = (approvalId: string): string =>
 /** The tag every approval push of one thread shares, so a newer one replaces the older. */
 export const requestTag = (threadId: string): string => `ask:${threadId}`;
 
-/** True when the row says a request waits on the thread, so its records are worth reading. */
-export const hasPendingRequest = (thread: ThreadShell): boolean =>
-  thread.pendingCount > 0 || Option.isSome(thread.pendingRuntimeRequest);
-
 /**
  * The requests a push may be about, in card order: pending and routed to the user. The child's
  * side of an escalated question (`escalatedAt` set, no `mirrorOf`) is left out, because the parent

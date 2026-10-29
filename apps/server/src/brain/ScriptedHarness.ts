@@ -806,7 +806,11 @@ const layerNoDeps = Layer.effectContext(
           const conversationId = ConversationId.make(thread.conversationId);
 
           yield* publish(thread, [
-            ThreadEnsured.make({ threadId: input.threadId, conversationId }),
+            ThreadEnsured.make({
+              threadId: input.threadId,
+              conversationId,
+              parent: Option.none(),
+            }),
           ]);
 
           return { threadId: input.threadId, conversationId, created: true };

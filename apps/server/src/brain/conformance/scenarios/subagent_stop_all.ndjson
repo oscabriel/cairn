@@ -1,0 +1,18 @@
+{"type":"transcript_start","scenario":"subagent_stop_all","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Index the docs","brief":"Build an index of the docs folder."}}]}
+{"type":"model","label":"p2","thread":"parent","hold":true,"text":"never seen"}
+{"type":"model","label":"c1","thread":"child1","hold":true,"text":"never seen either"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"expect_view","path":["running"],"equals":true,"thread":"child1"}
+{"type":"input","step":"stop_all"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$child1","status":"interrupted"}}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"settle","ms":300}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":1}
+{"type":"expect_view","path":["running"],"equals":false}
+{"type":"expect_view","path":["running"],"equals":false,"thread":"child1"}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Index the docs\" (thread $child1) was stopped.\n<subagent_result>\n\n</subagent_result>\nDivergence: not reported","images":0,"toolCalls":[],"toolName":null,"isError":null}}

@@ -4,10 +4,11 @@
 // reports how it went, which the mutation check and the drift goldens also use.
 //
 // A run plays the scenario's lines in order. The harness's events are logged as they arrive, and a
-// client built on @cairn/client-logic's ThreadView follows the thread stream exactly as the web
-// client does (a refused frame means a fresh subscription). Expectations wait up to a timeout for
-// the log or the client's normalized view to show what the line says, so the suite judges what a
-// client would see, not internal state.
+// client built on @cairn/client-logic's ThreadView follows each thread's stream exactly as the web
+// client does (a refused frame means a fresh subscription): the scenario's own thread from its
+// ensure, and each subagent from the event that first names it (ThreadAliases). Expectations wait
+// up to a timeout for the log or a client's normalized view to show what the line says, so the
+// suite judges what a client would see, not internal state.
 
 import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
@@ -31,13 +32,14 @@ import type { describe, it } from "vitest";
 
 import { HarnessEvent } from "../HarnessSeam.ts";
 import type {
+  ApprovalAnswerInput,
   HarnessError,
   HarnessSeam,
   HarnessTurnInput,
 } from "../HarnessSeam.ts";
 import { FAUX_MODEL } from "../ModelSource.ts";
 import type { Mutation, MutationState } from "./Mutations.ts";
-import { breakSeam } from "./Mutations.ts";
+import { breakSeam, faultsOf } from "./Mutations.ts";
 import {
   jsonContains,
   jsonEquals,
@@ -47,6 +49,11 @@ import {
 } from "./Normalize.ts";
 import { responseScript } from "./ResponseScript.ts";
 import type { MakeTarget } from "./Targets.ts";
+import {
+  threadAliasesOf,
+  PARENT_ALIAS,
+  resolveAliases,
+} from "./ThreadAliases.ts";
 import type {
   InputLine,
   ModelLine,
@@ -81,7 +88,7 @@ export interface ScenarioOutcome {
   readonly scenario: string;
   /** None when every line passed. */
   readonly failure: Option.Option<string>;
-  /** The masked events and final view, for the drift goldens. */
+  /** The masked events and final views, for the drift goldens. */
   readonly record: Json;
 }
 
@@ -100,14 +107,31 @@ const decodeApprovalId = Schema.decodeEffect(ApprovalId);
 const isModelLine = (line: TranscriptLine): line is ModelLine =>
   line.type === "model";
 
+/** A masked event: a JSON object. */
+interface Masked {
+  readonly [key: string]: Json;
+}
+
 /** An event with ids and times masked, for the goldens; none for noisy bookkeeping events. */
-const maskEvent = (event: HarnessEvent): Option.Option<Json> =>
-  Match.value(event).pipe(
+const maskEvent = (
+  event: HarnessEvent,
+  aliasOf: (threadId: ThreadId) => string
+): Option.Option<Masked> => {
+  const masked = Match.value(event).pipe(
     Match.tagsExhaustive({
-      ThreadEnsured: () => Option.some<Json>({ event: "ThreadEnsured" }),
-      RunStarted: () => Option.some<Json>({ event: "RunStarted" }),
+      ThreadEnsured: (found) =>
+        Option.some<Masked>(
+          Option.match(found.parent, {
+            onNone: () => ({ event: "ThreadEnsured" }),
+            onSome: (parent) => ({
+              event: "ThreadEnsured",
+              parent: aliasOf(parent),
+            }),
+          })
+        ),
+      RunStarted: () => Option.some<Masked>({ event: "RunStarted" }),
       RunTerminal: (found) =>
-        Option.some<Json>({
+        Option.some<Masked>({
           event: found._tag,
           status: found.status,
           failure: Option.match(found.failure, {
@@ -116,22 +140,36 @@ const maskEvent = (event: HarnessEvent): Option.Option<Json> =>
           }),
         }),
       MessageCommitted: (found) =>
-        Option.some<Json>({
+        Option.some<Masked>({
           event: found._tag,
           role: found.role,
           text: found.text,
         }),
-      QueueChanged: () => Option.none<Json>(),
+      QueueChanged: () => Option.none<Masked>(),
       RuntimeRequestUpdated: (found) =>
-        Option.some<Json>({ event: found._tag, status: found.status }),
-      UsageUpdated: () => Option.none<Json>(),
-      TaskParked: () => Option.none<Json>(),
+        Option.some<Masked>({ event: found._tag, status: found.status }),
+      UsageUpdated: () => Option.none<Masked>(),
+      SubagentUpdated: (found) =>
+        Option.some<Masked>({
+          event: found._tag,
+          child: aliasOf(found.child),
+          status: found.status,
+        }),
+      TaskParked: () => Option.none<Masked>(),
       CompactionStarted: () =>
-        Option.some<Json>({ event: "CompactionStarted" }),
+        Option.some<Masked>({ event: "CompactionStarted" }),
       CompactionEnded: (found) =>
-        Option.some<Json>({ event: found._tag, failed: found.failed }),
+        Option.some<Masked>({ event: found._tag, failed: found.failed }),
     })
   );
+
+  const thread = aliasOf(event.threadId);
+
+  // The scenario's own thread stays unnamed, so single-thread goldens read as they always did.
+  return thread === PARENT_ALIAS
+    ? masked
+    : Option.map(masked, (found) => ({ thread, ...found }));
+};
 
 const describeLine = (index: number, line: TranscriptLine) =>
   `line ${index + 1} (${JSON.stringify(line)})`;
@@ -159,34 +197,66 @@ const turnInput = (line: InputLine): HarnessTurnInput => {
   };
 };
 
+/** The answer a respond line gives: its decision and reason, and a question's custom answer. */
+const answerOf = (line: InputLine): ApprovalAnswerInput => ({
+  decision: line.decision ?? "accept",
+  reason: Option.fromUndefinedOr(line.reason),
+  answers: Option.map(Option.fromUndefinedOr(line.answer), (custom) => [
+    { index: 0, picks: [], custom },
+  ]),
+});
+
 /** Waits until `check` finds nothing wrong, or fails with its last complaint. */
-const eventually = (
+const eventually = <A>(
   timeout: Duration.Duration,
   where: string,
-  check: Effect.Effect<Option.Option<string>>
+  check: Effect.Effect<Result.Result<A, string>>
 ) =>
   Effect.gen(function* () {
     const deadline =
       (yield* Clock.currentTimeMillis) + Duration.toMillis(timeout);
 
-    let complaint = yield* check;
+    let outcome = yield* check;
 
-    while (Option.isSome(complaint)) {
+    while (Result.isFailure(outcome)) {
       if ((yield* Clock.currentTimeMillis) > deadline) {
         return yield* new ScenarioFailure({
-          message: `${where}: ${complaint.value}`,
+          message: `${where}: ${outcome.failure}`,
         });
       }
 
       yield* Effect.sleep(POLL);
-      complaint = yield* check;
+      outcome = yield* check;
     }
 
-    return yield* Effect.void;
+    return outcome.success;
+  });
+
+/** A check that holds or names what it saw instead. */
+const holds = (complaint: Option.Option<string>) =>
+  Option.match(complaint, {
+    onNone: () => Result.succeedNone,
+    onSome: (text) => Result.fail(text),
   });
 
 const fromSeam = (where: string) => (failure: HarnessError) =>
   new ScenarioFailure({ message: `${where}: ${failure.message}` });
+
+/** Applies one stream item to a client's view; a refused frame fails the follow. */
+const applyFrame =
+  (client: Ref.Ref<Option.Option<ThreadViewState>>) =>
+  (item: ThreadStreamItem) =>
+    Effect.gen(function* () {
+      const next = applyThreadStreamItem(yield* Ref.get(client), item);
+
+      if (Result.isFailure(next)) {
+        return yield* new ScenarioFailure({
+          message: next.failure.message,
+        });
+      }
+
+      return yield* Ref.set(client, Option.some(next.success));
+    });
 
 /** Runs one scenario against one harness. Never fails: a failure is in the outcome. */
 export const runScenario = (
@@ -196,10 +266,22 @@ export const runScenario = (
 ): Effect.Effect<ScenarioOutcome> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const script = yield* responseScript(scenario.lines.filter(isModelLine));
-      const target = yield* makeTarget(script);
+      const aliases = threadAliasesOf(THREAD_ID);
+
+      const script = yield* responseScript(
+        scenario.lines.filter(isModelLine),
+        aliases
+      );
+
+      const target = yield* makeTarget(script, faultsOf(options.mutations));
       const events: Array<HarnessEvent> = [];
-      const client = yield* Ref.make(Option.none<ThreadViewState>());
+
+      // One client per thread the scenario met, each holding the view it follows.
+      const views = new Map<
+        ThreadId,
+        Ref.Ref<Option.Option<ThreadViewState>>
+      >();
+
       const submissions = new Map<string, SubmissionId>();
       const feeds: Array<Fiber.Fiber<void>> = [];
       const mutationState: MutationState = { inputs: new Map() };
@@ -225,27 +307,33 @@ export const runScenario = (
         return seam;
       });
 
-      const applyFrame = (item: ThreadStreamItem) =>
+      const clientOf = Effect.fnUntraced(function* (threadId: ThreadId) {
+        const existing = views.get(threadId);
+
+        if (existing !== undefined) {
+          return existing;
+        }
+
+        const created = yield* Ref.make(Option.none<ThreadViewState>());
+
+        views.set(threadId, created);
+
+        return created;
+      });
+
+      // A client following one thread: a refused frame or an ended stream means a fresh
+      // subscription. The scenario's own thread waits for its ensure and stands down for a
+      // `subscribe` line; a subagent is followed from the event that named it.
+      const follow = (seam: HarnessSeam["Service"], threadId: ThreadId) =>
         Effect.gen(function* () {
-          const next = applyThreadStreamItem(yield* Ref.get(client), item);
+          const client = yield* clientOf(threadId);
+          const own = threadId === THREAD_ID;
 
-          if (Result.isFailure(next)) {
-            return yield* new ScenarioFailure({
-              message: next.failure.message,
-            });
-          }
-
-          return yield* Ref.set(client, Option.some(next.success));
-        });
-
-      // A client following the thread: a refused frame or an ended stream means a fresh subscription.
-      const follow = (seam: HarnessSeam["Service"]) =>
-        Effect.gen(function* () {
-          if (progress.ensured && !progress.subscribed) {
+          if (!own || (progress.ensured && !progress.subscribed)) {
             yield* Ref.set(client, Option.none());
             yield* seam
-              .watch(THREAD_ID)
-              .pipe(Stream.runForEach(applyFrame), Effect.ignore);
+              .watch(threadId)
+              .pipe(Stream.runForEach(applyFrame(client)), Effect.ignore);
           }
 
           yield* Effect.sleep(POLL);
@@ -257,14 +345,25 @@ export const runScenario = (
         feeds.push(
           yield* seam.events.pipe(
             Stream.runForEach((event) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 events.push(event);
+
+                const child = aliases.learn(event);
+
+                if (Option.isSome(child)) {
+                  feeds.push(
+                    yield* follow(seam, child.value).pipe(Effect.forkScoped)
+                  );
+                }
               })
             ),
             Effect.forkScoped
-          ),
-          yield* follow(seam).pipe(Effect.forkScoped)
+          )
         );
+
+        for (const threadId of aliases.threads()) {
+          feeds.push(yield* follow(seam, threadId).pipe(Effect.forkScoped));
+        }
 
         // Let the subscriptions start, then let the harness run what a restart left.
         yield* Effect.sleep(Duration.millis(30));
@@ -279,9 +378,32 @@ export const runScenario = (
         yield* startFeeds;
       });
 
-      const normalized = Effect.map(Ref.get(client), (state) =>
-        Option.map(state, (found) => normalizeView(found.view))
-      );
+      const normalized = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const client = views.get(threadId);
+
+          if (client === undefined) {
+            return Option.none<Json>();
+          }
+
+          return Option.map(yield* Ref.get(client), (state) =>
+            normalizeView(state.view)
+          );
+        });
+
+      /** The thread an alias names, once the harness reported it. */
+      const threadOf = (where: string, alias: string | undefined) =>
+        eventually(
+          options.timeout,
+          where,
+          Effect.sync(() =>
+            Option.match(aliases.idOf(alias ?? PARENT_ALIAS), {
+              onNone: () =>
+                Result.fail(`no thread is known as ${alias ?? PARENT_ALIAS}`),
+              onSome: (found) => Result.succeed(found),
+            })
+          )
+        );
 
       const ensure = (where: string) =>
         Effect.flatMap(seamNow, (seam) =>
@@ -303,9 +425,10 @@ export const runScenario = (
       ) {
         const seam = yield* seamNow;
         const expect = line.expect ?? {};
+        const threadId = yield* threadOf(where, line.thread);
 
         const result = yield* Effect.result(
-          seam.submit(THREAD_ID, turnInput(line))
+          seam.submit(threadId, turnInput(line))
         );
 
         if (Result.isFailure(result)) {
@@ -345,6 +468,7 @@ export const runScenario = (
         line: InputLine
       ) {
         const seam = yield* seamNow;
+        const threadId = yield* threadOf(where, line.thread);
         const submissionId = submissions.get(line.requestId ?? "");
 
         if (submissionId === undefined) {
@@ -354,7 +478,7 @@ export const runScenario = (
         }
 
         const result = yield* seam
-          .withdraw(THREAD_ID, submissionId)
+          .withdraw(threadId, submissionId)
           .pipe(Effect.mapError(fromSeam(where)));
 
         const expected = line.expect?.withdrawn;
@@ -368,45 +492,118 @@ export const runScenario = (
         return yield* Effect.void;
       });
 
+      /** The oldest pending approval in a thread's client view, waited for. */
+      const pendingIn = (where: string, threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const client = yield* clientOf(threadId);
+
+          const found = yield* eventually(
+            options.timeout,
+            where,
+            Effect.map(Ref.get(client), (state) =>
+              Option.match(
+                Option.flatMap(state, (view) =>
+                  Option.fromUndefinedOr(pendingApprovalIds(view.view)[0])
+                ),
+                {
+                  onNone: () =>
+                    Result.fail("no pending approval in the client's view"),
+                  onSome: (id) => Result.succeed(id),
+                }
+              )
+            )
+          );
+
+          return yield* decodeApprovalId(found).pipe(
+            Effect.mapError(
+              () => new ScenarioFailure({ message: `${where}: no approval id` })
+            )
+          );
+        });
+
       const respondStep = Effect.fn("Conformance.respond")(function* (
         where: string,
         line: InputLine
       ) {
         const seam = yield* seamNow;
-
-        const pending = Effect.map(Ref.get(client), (state) =>
-          Option.flatMap(state, (found) =>
-            Option.fromUndefinedOr(pendingApprovalIds(found.view)[0])
-          )
-        );
-
-        yield* eventually(
-          options.timeout,
-          where,
-          Effect.map(pending, (found) =>
-            Option.isSome(found)
-              ? Option.none()
-              : Option.some("no pending approval in the client's view")
-          )
-        );
-
-        const approval = yield* pending;
-
-        const approvalId = yield* decodeApprovalId(
-          Option.getOrElse(approval, () => "")
-        ).pipe(
-          Effect.mapError(
-            () => new ScenarioFailure({ message: `${where}: no approval id` })
-          )
-        );
+        const threadId = yield* threadOf(where, line.thread);
+        const approvalId = yield* pendingIn(where, threadId);
 
         yield* seam
-          .respond(THREAD_ID, approvalId, {
-            decision: line.decision ?? "accept",
-            reason: Option.fromUndefinedOr(line.reason),
-            answers: Option.none(),
-          })
+          .respond(threadId, approvalId, answerOf(line))
           .pipe(Effect.mapError(fromSeam(where)));
+      });
+
+      // Each thread's oldest pending record, then every answer at once.
+      const respondRaceStep = Effect.fn("Conformance.respondRace")(function* (
+        where: string,
+        line: InputLine
+      ) {
+        const seam = yield* seamNow;
+
+        const targets = yield* Effect.forEach(line.threads ?? [], (alias) =>
+          Effect.gen(function* () {
+            const threadId = yield* threadOf(where, alias);
+
+            return { threadId, approvalId: yield* pendingIn(where, threadId) };
+          })
+        );
+
+        yield* Effect.forEach(
+          targets,
+          ({ threadId, approvalId }) =>
+            seam
+              .respond(threadId, approvalId, answerOf(line))
+              .pipe(Effect.mapError(fromSeam(where))),
+          { concurrency: "unbounded", discard: true }
+        );
+      });
+
+      const stopStep =
+        (clearQueue: boolean, subagents: "keep" | "stop") =>
+        (where: string, line: InputLine) =>
+          Effect.gen(function* () {
+            const seam = yield* seamNow;
+            const threadId = yield* threadOf(where, line.thread);
+
+            yield* seam
+              .stop(threadId, { clearQueue, subagents })
+              .pipe(Effect.mapError(fromSeam(where)));
+          });
+
+      const modeStep = Effect.fn("Conformance.mode")(function* (
+        where: string,
+        line: InputLine
+      ) {
+        const setMode = yield* target.setMode;
+
+        if (Option.isNone(setMode)) {
+          return yield* new ScenarioFailure({
+            message: `${where}: this harness cannot set a permission mode yet`,
+          });
+        }
+
+        const threadId = yield* threadOf(where, line.thread);
+
+        const result = yield* Effect.result(
+          setMode.value(threadId, line.mode ?? "full-access")
+        );
+
+        const expected = line.expect?.error;
+
+        if (Result.isFailure(result)) {
+          return expected === result.failure.reason
+            ? yield* Effect.void
+            : yield* new ScenarioFailure({
+                message: `${where}: mode failed with ${result.failure.reason}: ${result.failure.message}`,
+              });
+        }
+
+        return expected === undefined
+          ? yield* Effect.void
+          : yield* new ScenarioFailure({
+              message: `${where}: mode succeeded, expected ${expected}`,
+            });
       });
 
       const inputSteps: Record<
@@ -442,13 +639,14 @@ export const runScenario = (
         subscribe: () =>
           Effect.gen(function* () {
             const seam = yield* seamNow;
+            const client = yield* clientOf(THREAD_ID);
 
             progress.subscribed = true;
 
             yield* Stream.unwrap(
               Effect.as(seam.whenEnsured(THREAD_ID), seam.watch(THREAD_ID))
             ).pipe(
-              Stream.runForEach(applyFrame),
+              Stream.runForEach(applyFrame(client)),
               Effect.ignore,
               Effect.forkScoped
             );
@@ -457,20 +655,13 @@ export const runScenario = (
         message: submitStep,
         steer: submitStep,
         follow_up: submitStep,
-        stop: (where) =>
-          Effect.flatMap(seamNow, (seam) =>
-            seam
-              .stop(THREAD_ID, { clearQueue: false })
-              .pipe(Effect.mapError(fromSeam(where)))
-          ),
-        stop_clear: (where) =>
-          Effect.flatMap(seamNow, (seam) =>
-            seam
-              .stop(THREAD_ID, { clearQueue: true })
-              .pipe(Effect.mapError(fromSeam(where)))
-          ),
+        stop: stopStep(false, "keep"),
+        stop_clear: stopStep(true, "keep"),
+        stop_all: stopStep(false, "stop"),
         withdraw: withdrawStep,
         respond: respondStep,
+        respond_race: respondRaceStep,
+        mode: modeStep,
         compact: (where) =>
           Effect.flatMap(seamNow, (seam) =>
             seam
@@ -482,47 +673,69 @@ export const runScenario = (
 
       const findEvent = (expected: Json) =>
         Effect.sync(() => {
+          const wanted = resolveAliases(expected, aliases);
+
           const found = events.findIndex(
             (event, at) =>
-              at >= progress.cursor &&
-              jsonContains(expected, encodeEvent(event))
+              at >= progress.cursor && jsonContains(wanted, encodeEvent(event))
           );
 
           if (found === -1) {
-            return Option.some(
+            return Result.fail(
               `no such event after position ${progress.cursor}; seen ${JSON.stringify(events.slice(progress.cursor).map((event) => event._tag))}`
             );
           }
 
           progress.cursor = found + 1;
 
-          return Option.none<string>();
+          return Result.succeedNone;
         });
 
       const countEvents = (expected: Json, count: number) =>
         Effect.sync(() => {
+          const wanted = resolveAliases(expected, aliases);
+
           const counted = events.filter((event) =>
-            jsonContains(expected, encodeEvent(event))
+            jsonContains(wanted, encodeEvent(event))
           ).length;
 
-          return counted === count
-            ? Option.none<string>()
-            : Option.some(`counted ${counted}`);
+          return holds(
+            counted === count
+              ? Option.none()
+              : Option.some(`counted ${counted}`)
+          );
         });
 
-      const viewAt = (path: ReadonlyArray<string | number>, equals: Json) =>
-        Effect.map(normalized, (view) => {
+      const viewAt = (
+        alias: string | undefined,
+        path: ReadonlyArray<string | number>,
+        equals: Json
+      ) =>
+        Effect.gen(function* () {
+          const threadId = aliases.idOf(alias ?? PARENT_ALIAS);
+
+          if (Option.isNone(threadId)) {
+            return Result.fail(
+              `no thread is known as ${alias ?? PARENT_ALIAS}`
+            );
+          }
+
+          const view = yield* normalized(threadId.value);
+
           if (Option.isNone(view)) {
-            return Option.some("the client has no snapshot");
+            return Result.fail("the client has no snapshot");
           }
 
           const value = valueAt(view.value, path);
 
-          if (Option.isSome(value) && jsonEquals(value.value, equals)) {
-            return Option.none<string>();
+          if (
+            Option.isSome(value) &&
+            jsonEquals(value.value, resolveAliases(equals, aliases))
+          ) {
+            return Result.succeedNone;
           }
 
-          return Option.some(
+          return Result.fail(
             `found ${JSON.stringify(Option.getOrNull(value))} in ${JSON.stringify(view.value)}`
           );
         });
@@ -548,7 +761,7 @@ export const runScenario = (
               eventually(
                 options.timeout,
                 where,
-                viewAt(found.path, found.equals)
+                viewAt(found.thread, found.path, found.equals)
               ),
           })
         );
@@ -563,7 +776,35 @@ export const runScenario = (
         })
       );
 
-      const finalView = yield* normalized;
+      const aliasOf = (threadId: ThreadId) =>
+        Option.getOrElse(aliases.aliasOf(threadId), () => "unknown");
+
+      // Each thread's events in the order they came, the scenario's own first, so a golden does
+      // not depend on how two threads' work interleaved.
+      const order = aliases.threads();
+
+      const ranked = events
+        .map((event, at) => ({
+          event,
+          at,
+          rank: order.indexOf(event.threadId),
+        }))
+        .toSorted((a, b) => a.rank - b.rank || a.at - b.at);
+
+      const children: { [alias: string]: Json } = {};
+
+      for (const threadId of order.slice(1)) {
+        children[aliasOf(threadId)] = Option.getOrNull(
+          yield* normalized(threadId)
+        );
+      }
+
+      const record = {
+        events: ranked.flatMap(({ event }) =>
+          Option.toArray(maskEvent(event, aliasOf))
+        ),
+        view: Option.getOrNull(yield* normalized(THREAD_ID)),
+      };
 
       return {
         scenario: scenario.name,
@@ -571,10 +812,7 @@ export const runScenario = (
           onFailure: (failure) => Option.some(failure.message),
           onSuccess: () => Option.none<string>(),
         }),
-        record: {
-          events: events.flatMap((event) => Option.toArray(maskEvent(event))),
-          view: Option.getOrNull(finalView),
-        },
+        record: order.length > 1 ? { ...record, children } : record,
       };
     })
   );

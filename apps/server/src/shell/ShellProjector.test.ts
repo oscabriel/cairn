@@ -708,6 +708,7 @@ describe("the shell projector", () => {
             ThreadEnsured.make({
               threadId: THREAD,
               conversationId: ConversationId.make(1),
+              parent: Option.none(),
             })
           );
 

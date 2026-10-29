@@ -12,6 +12,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import type { ThreadId } from "@cairn/protocol/Ids";
+import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Context, Effect, Exit, Layer, Option, Ref, Scope } from "effect";
 
 import { ExecutorLink } from "../../executor/ExecutorLink.ts";
@@ -22,6 +24,7 @@ import { BrainConfig } from "../BrainConfig.ts";
 import { ExtensionSet } from "../ExtensionSet.ts";
 import { FauxModels } from "../FauxModels.ts";
 import { HarnessSeam } from "../HarnessSeam.ts";
+import type { HarnessError } from "../HarnessSeam.ts";
 import { ModelSource } from "../ModelSource.ts";
 import { PiDurableHarness } from "../PiDurableHarness.ts";
 import {
@@ -30,6 +33,8 @@ import {
   ScriptedModel,
   ScriptedStore,
 } from "../ScriptedHarness.ts";
+import { SubagentFaults } from "../SubagentFaults.ts";
+import type { SubagentFaultSet } from "../SubagentFaults.ts";
 import {
   conformanceTools,
   scriptedConformanceTools,
@@ -44,17 +49,30 @@ export interface ConformanceTarget {
   readonly resume: Effect.Effect<void>;
   /** Closes the instance and opens another over the same store, not yet resumed. */
   readonly restart: Effect.Effect<void>;
+  /**
+   * Sets a thread's permission mode, refusing a child's widening (ADR 0031); none where the
+   * harness has no way to set one yet.
+   */
+  readonly setMode: Effect.Effect<Option.Option<SetMode>>;
 }
+
+/** Sets one thread's permission mode. */
+export type SetMode = (
+  threadId: ThreadId,
+  mode: RuntimeMode
+) => Effect.Effect<void, HarnessError>;
 
 /** One open instance of a harness. */
 interface Instance {
   readonly seam: HarnessSeam["Service"];
   readonly resume: Effect.Effect<void>;
+  readonly setMode: Option.Option<SetMode>;
 }
 
-/** Builds a target over a scenario's script, for the scope of one scenario. */
+/** Builds a target over a scenario's script and planted delivery faults, for one scenario. */
 export type MakeTarget = (
-  script: ResponseScript
+  script: ResponseScript,
+  faults: SubagentFaultSet
 ) => Effect.Effect<ConformanceTarget, never, Scope.Scope>;
 
 /** Answers more requests than any scenario makes; each takes the script's next answer. */
@@ -78,6 +96,7 @@ const restartable = Effect.fnUntraced(function* (
   return {
     seam: Effect.map(Ref.get(current), ({ instance }) => instance.seam),
     resume: Effect.flatMap(Ref.get(current), ({ instance }) => instance.resume),
+    setMode: Effect.map(Ref.get(current), ({ instance }) => instance.setMode),
     restart: Effect.gen(function* () {
       const { scope } = yield* Ref.get(current);
 
@@ -88,6 +107,7 @@ const restartable = Effect.fnUntraced(function* (
 });
 
 /** The pi-durable side. */
+// The subagent faults reach pi-durable with the subagents extension; until then it plants none.
 export const piDurableTarget: MakeTarget = (script) =>
   Effect.gen(function* () {
     const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-conformance-"));
@@ -124,38 +144,50 @@ export const piDurableTarget: MakeTarget = (script) =>
           Array.from(
             { length: FAUX_STEPS },
             () => async (_request, options) =>
-              await run(script.next(Option.fromUndefinedOr(options?.signal)))
+              await run(
+                script.next(
+                  Option.fromUndefinedOr(options?.signal),
+                  Option.none()
+                )
+              )
           )
         );
 
         return {
           seam: Context.get(context, HarnessSeam),
           resume: Context.get(context, Brain).resume.pipe(Effect.orDie),
+          // A thread's permission mode reaches the seam with `ThreadAgentChange.runtimeMode`.
+          setMode: Option.none(),
         };
       }).pipe(Effect.orDie)
     );
   });
 
 /** The scripted side. */
-export const scriptedTarget: MakeTarget = (script) =>
+export const scriptedTarget: MakeTarget = (script, faults) =>
   Effect.gen(function* () {
     const store = yield* Layer.build(ScriptedStore.layer);
 
     const model = Layer.succeed(
       ScriptedModel,
-      ScriptedModel.of({ answer: () => script.next(Option.none()) })
+      ScriptedModel.of({
+        answer: (request) =>
+          script.next(Option.none(), Option.some(request.threadId)),
+      })
     );
 
     const layer = ScriptedHarness.layerNoDeps.pipe(
       Layer.provide(Layer.succeedContext(store)),
       Layer.provide(model),
-      Layer.provide(scriptedConformanceTools)
+      Layer.provide(scriptedConformanceTools),
+      Layer.provide(Layer.succeed(SubagentFaults, faults))
     );
 
     return yield* restartable(
       Effect.map(Layer.build(layer), (context) => ({
         seam: Context.get(context, HarnessSeam),
         resume: Context.get(context, ScriptedBoot).resume,
+        setMode: Option.none(),
       }))
     );
   });

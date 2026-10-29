@@ -241,6 +241,8 @@ export const applyHarnessEvent = (
 ): ThreadProjection =>
   Match.valueTags(event, {
     ThreadEnsured: () => projection,
+    // A parent's tally of its children is derived at the row's next reconcile.
+    SubagentUpdated: () => projection,
     RunStarted: (started) =>
       withFields(
         { ...projection, outcome: Option.none() },

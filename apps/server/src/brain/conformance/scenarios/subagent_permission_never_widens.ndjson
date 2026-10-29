@@ -1,0 +1,26 @@
+{"type":"transcript_start","scenario":"subagent_permission_never_widens","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Tidy the imports","brief":"Sort the imports in src."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"ca","name":"act","arguments":{"what":"sort a.ts"}}]}
+{"type":"model","label":"c2","thread":"child1","hold":true,"toolCalls":[{"id":"cb","name":"act","arguments":{"what":"sort b.ts"}}]}
+{"type":"model","label":"c3","thread":"child1","text":"Sorted both files."}
+{"type":"model","label":"p3","thread":"parent","text":"Imports are tidy."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"mode","reason":null}],"thread":"child1"}
+{"type":"input","step":"mode","mode":"approval-required"}
+{"type":"input","step":"mode","thread":"child1","mode":"full-access","expect":{"error":"invalid_input"}}
+{"type":"input","step":"mode","thread":"child1","mode":"auto-accept-edits","expect":{"error":"invalid_input"}}
+{"type":"release","label":"c2"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$child1","kind":"tool-call","status":"pending"}}
+{"type":"expect_view","path":["pendingApprovals"],"equals":1,"thread":"child1"}
+{"type":"settle","ms":200}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":1}
+{"type":"input","step":"respond","thread":"child1","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"mode","reason":null},{"status":"accepted","decidedBy":"user","reason":null}],"thread":"child1"}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"Imports are tidy.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

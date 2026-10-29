@@ -1,0 +1,19 @@
+{"type":"transcript_start","scenario":"subagent_result_parent_stopped","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Find the slow test","brief":"Find the slowest unit test."}}]}
+{"type":"model","label":"p2","thread":"parent","hold":true,"text":"never seen"}
+{"type":"model","label":"c1","thread":"child1","hold":true,"text":"The slowest is parse.test.ts."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"input","step":"stop"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"interrupted"}}
+{"type":"release","label":"c1"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"settle","ms":300}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":1}
+{"type":"expect_view","path":["running"],"equals":false}
+{"type":"expect_view","path":["queueLength"],"equals":0}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"delegate it","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["subagent_spawn"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"The brief is waiting for the user's Go. You will be told when it is answered.","images":0,"toolCalls":[],"toolName":"subagent_spawn","isError":false},{"kind":"cairn.brief-answer","role":"user","text":"The user approved the brief \"Find the slow test\"; subagent thread $child1 started.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Find the slow test\" (thread $child1) completed.\n<subagent_result>\nThe slowest is parse.test.ts.\n</subagent_result>\nDivergence: not reported","images":0,"toolCalls":[],"toolName":null,"isError":null}]}

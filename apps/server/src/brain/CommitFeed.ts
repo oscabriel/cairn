@@ -463,6 +463,7 @@ const publicationEvents = (
           ThreadEnsured.make({
             threadId: threadId.value,
             conversationId: ConversationId.make(change.conversationId),
+            parent: Option.none(),
           })
         );
       }

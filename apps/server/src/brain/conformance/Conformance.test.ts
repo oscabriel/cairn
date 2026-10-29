@@ -60,7 +60,7 @@ const subagentNames = scenarios.flatMap((scenario) =>
 
 const PENDING: Readonly<Record<Side, ReadonlySet<string>>> = {
   "pi-durable": new Set(subagentNames),
-  scripted: new Set(subagentNames),
+  scripted: new Set(),
 };
 
 const TARGETS: Readonly<Record<Side, MakeTarget>> = {

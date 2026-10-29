@@ -31,6 +31,7 @@ import {
   ScriptedBoot,
   ScriptedHarness,
   ScriptedModel,
+  ScriptedModes,
   ScriptedStore,
 } from "../ScriptedHarness.ts";
 import { SubagentFaults } from "../SubagentFaults.ts";
@@ -187,7 +188,9 @@ export const scriptedTarget: MakeTarget = (script, faults) =>
       Effect.map(Layer.build(layer), (context) => ({
         seam: Context.get(context, HarnessSeam),
         resume: Context.get(context, ScriptedBoot).resume,
-        setMode: Option.none(),
+        setMode: Option.some((threadId, mode) =>
+          Context.get(context, ScriptedModes).set(threadId, mode)
+        ),
       }))
     );
   });

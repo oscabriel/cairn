@@ -3,9 +3,10 @@
 // from the shape MonoCode's parser and its test read (`rate_limit.primary_window` and
 // `secondary_window` with `used_percent`, `limit_window_seconds`, `reset_at` in epoch seconds),
 // with the neighbouring fields the Codex backend sends (`plan_type`, `allowed`, `limit_reached`,
-// `reset_after_seconds`, `credits`). Files named `changed-*` are shapes the endpoint might drift to;
-// each must read as unreadable, never as a number. The first live read after the login adds its
-// body here.
+// `reset_after_seconds`, `credits`). Files named `no-windows-*` are a plan that answered with no
+// windows, read as unsupported. Files named `changed-*` are shapes the endpoint might drift to; each
+// must read as unreadable, never as a number. The first live read after the user's Codex login
+// (`ops/wizards/phase-2.sh 1`) adds its body here, with the tokens and account id removed.
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -26,12 +27,16 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import type { HttpClientRequest } from "effect/http";
 import { TestClock } from "effect/testing";
 
-import { CodexAccess, parseCodexCredential } from "./CodexAccess.ts";
+import {
+  CodexAccess,
+  CodexAccessError,
+  parseCodexCredential,
+} from "../models/CodexAccess.ts";
 import {
   CODEX_PROVIDER,
   CODEX_USAGE_URL,
   CodexUsage,
-  MAX_BODY_LENGTH,
+  MAX_BODY_BYTES,
   readingOf,
   readUsageBody,
 } from "./CodexUsage.ts";
@@ -84,6 +89,9 @@ describe("reading recorded usage bodies", () => {
     ],
     // Zero is a reading, not a missing one; a null reset is unknown.
     ["fresh-window-no-reset.json", [["five_hour", "Session", 0, null, false]]],
+    // A plan with no windows answers so; it is not a changed shape.
+    ["no-windows-free-plan.json", []],
+    ["no-windows-both-null.json", []],
   ];
 
   it.each(readable.map(([file, expected]) => ({ file, expected })))(
@@ -104,7 +112,7 @@ describe("reading recorded usage bodies", () => {
   );
 
   it("has changed shapes to judge", () => {
-    assert.isAtLeast(changed.length, 10);
+    assert.isAtLeast(changed.length, 8);
   });
 
   it.each(changed)("reads %s as unreadable", (file) => {
@@ -114,7 +122,7 @@ describe("reading recorded usage bodies", () => {
   it("reads a body past the size bound as unreadable, even when it would decode", () => {
     const padded = body("plus-two-windows.json").replace(
       '"plan_type": "plus"',
-      `"plan_type": "${"x".repeat(MAX_BODY_LENGTH)}"`
+      `"plan_type": "${"x".repeat(MAX_BODY_BYTES)}"`
     );
 
     assert.isTrue(Option.isNone(readUsageBody(padded)));
@@ -147,10 +155,22 @@ describe("reading recorded usage bodies", () => {
 
 // --- The service over a fake endpoint ---
 
+/** Marks an answer whose body never ends. */
+const ENDLESS = Symbol("endless");
+
 interface Answer {
   readonly status: number;
-  readonly body: string;
+  /** A text body, or `ENDLESS` for a body that never ends. */
+  readonly body: string | typeof ENDLESS;
 }
+
+/** A body that sends 64 KiB chunks for as long as it is read. */
+const endlessBody = () =>
+  new ReadableStream<Uint8Array>({
+    pull: (controller) => {
+      controller.enqueue(new Uint8Array(64 * 1024).fill(0x20));
+    },
+  });
 
 /** One request the reader sent, with the two headers it must carry. */
 interface Sent {
@@ -193,25 +213,42 @@ const clientOver = (endpoint: Endpoint) =>
         return yield* Effect.never;
       }
 
+      const { body: text, status } = answer.value;
+
       return HttpClientResponse.fromWeb(
         request,
-        new Response(answer.value.body, { status: answer.value.status })
+        new Response(text === ENDLESS ? endlessBody() : text, { status })
       );
     })
   );
 
-const signedIn = Layer.effect(
-  CodexAccess,
-  Effect.map(
-    parseCodexCredential({
-      access: "test-access-token",
-      accountId: "acct_test",
-    }),
-    (credential) => ({ credential: Effect.succeedSome(credential) })
-  ).pipe(Effect.orDie)
+const testCredential = parseCodexCredential({
+  access: "test-access-token",
+  accountId: "acct_test",
+}).pipe(Effect.orDie);
+
+const accessOf = (credential: CodexAccess["Service"]["credential"]) =>
+  Layer.succeed(CodexAccess, CodexAccess.of({ credential }));
+
+const signedIn = Layer.unwrap(
+  Effect.map(testCredential, (credential) =>
+    accessOf(Effect.succeedSome(credential))
+  )
 );
 
-const usageOver = (endpoint: Endpoint, access: Layer.Layer<never>) =>
+/** A login the test signs in and out of while the reader runs. */
+const togglingAccess = (held: Ref.Ref<boolean>) =>
+  Layer.unwrap(
+    Effect.map(testCredential, (credential) =>
+      accessOf(
+        Effect.map(Ref.get(held), (on) =>
+          on ? Option.some(credential) : Option.none()
+        )
+      )
+    )
+  );
+
+const usageOver = (endpoint: Endpoint, access: Layer.Layer<CodexAccess>) =>
   CodexUsage.layerNoDeps.pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, clientOver(endpoint))),
     Layer.provide(access)
@@ -244,16 +281,7 @@ describe("the Codex usage reader", () => {
 
         assert.deepStrictEqual(Option.getOrNull(rows), []);
         assert.deepStrictEqual(yield* Ref.get(endpoint.requests), []);
-      }).pipe(
-        Effect.provide(
-          usageOver(
-            endpoint,
-            Layer.succeed(CodexAccess, {
-              credential: Effect.succeedNone,
-            })
-          )
-        )
-      );
+      }).pipe(Effect.provide(usageOver(endpoint, CodexAccess.layerSignedOut)));
     })
   );
 
@@ -281,6 +309,7 @@ describe("the Codex usage reader", () => {
           const [row] = Option.getOrThrow(rows);
 
           assert.strictEqual(row?.provider, CODEX_PROVIDER);
+          assert.strictEqual(row?.reading, "read");
           assert.deepStrictEqual(
             row?.windows.map((window) => [window.id, window.used]),
             [
@@ -315,6 +344,7 @@ describe("the Codex usage reader", () => {
 
           assert.strictEqual(readingOf(reading), "unreadable");
           assert.strictEqual(rows.length, 1);
+          assert.strictEqual(rows[0]?.reading, "unreadable");
           assert.deepStrictEqual(rows[0]?.windows, []);
           assert.isTrue(Option.isSome(rows[0]?.checkedAt ?? Option.none()));
         }).pipe(Effect.provide(usageOver(endpoint, signedIn)));
@@ -419,6 +449,156 @@ describe("the Codex usage reader", () => {
             [false, false]
           );
         }).pipe(Effect.provide(usageOver(endpoint, signedIn)));
+      })
+  );
+
+  it.effect("shows a plan with no windows as unsupported, not unreadable", () =>
+    Effect.gen(function* () {
+      const endpoint = yield* makeEndpoint;
+
+      yield* Ref.set(
+        endpoint.next,
+        Option.some({ status: 200, body: body("no-windows-free-plan.json") })
+      );
+
+      yield* Effect.gen(function* () {
+        const usage = yield* CodexUsage;
+
+        yield* watchUntil((state) => state === "unsupported");
+
+        const rows = Option.getOrThrow(yield* usage.watch.pipe(Stream.runHead));
+
+        assert.deepStrictEqual(
+          rows.map((row) => [row.provider, row.reading, row.windows]),
+          [[CODEX_PROVIDER, "unsupported", []]]
+        );
+      }).pipe(Effect.provide(usageOver(endpoint, signedIn)));
+    })
+  );
+
+  it.effect(
+    "stops reading an answer one chunk past the bound and calls it unreadable",
+    () =>
+      Effect.gen(function* () {
+        const endpoint = yield* makeEndpoint;
+
+        // A body that never ends: a read that held it whole would never finish.
+        yield* Ref.set(
+          endpoint.next,
+          Option.some<Answer>({ status: 200, body: ENDLESS })
+        );
+
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
+
+          yield* usage.read;
+
+          const after = yield* usage.current;
+
+          assert.strictEqual(after.state, "unreadable");
+          assert.include(
+            Option.getOrElse(after.reason, () => ""),
+            `longer than ${MAX_BODY_BYTES} bytes`
+          );
+        }).pipe(Effect.provide(usageOver(endpoint, signedIn)));
+      })
+  );
+
+  it.effect(
+    "shows a login that could not be refreshed as a failed read, not as signed out",
+    () =>
+      Effect.gen(function* () {
+        const endpoint = yield* makeEndpoint;
+
+        const refused = accessOf(
+          Effect.fail(
+            new CodexAccessError({
+              message: "the Codex access token is stale and its refresh failed",
+              reason: "refresh_failed",
+            })
+          )
+        );
+
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
+
+          yield* usage.read;
+
+          const after = yield* usage.current;
+
+          const rows = Option.getOrThrow(
+            yield* usage.watch.pipe(Stream.runHead)
+          );
+
+          assert.strictEqual(after.state, "failed");
+          assert.include(
+            Option.getOrElse(after.reason, () => ""),
+            "refresh failed"
+          );
+          assert.deepStrictEqual(
+            rows.map((row) => row.reading),
+            ["unreadable"]
+          );
+          assert.deepStrictEqual(yield* Ref.get(endpoint.requests), []);
+        }).pipe(Effect.provide(usageOver(endpoint, refused)));
+      })
+  );
+
+  it.effect(
+    "holds a refused turn's limit that names no reset for an hour, not just until the next read",
+    () =>
+      Effect.gen(function* () {
+        const endpoint = yield* makeEndpoint;
+
+        yield* TestClock.setTime(1_793_170_000_000);
+
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
+
+          const spentIds = Effect.map(usage.current, (reading) =>
+            reading.windows
+              .filter((window) => window.exhausted)
+              .map((window) => window.id)
+          );
+
+          yield* usage.read;
+          yield* usage.observeLimit(Option.none());
+          // The read the refusal starts, and one more: the endpoint does not show it spent yet.
+          yield* usage.read;
+          assert.deepStrictEqual(yield* spentIds, ["seven_day"]);
+
+          yield* TestClock.adjust(Duration.minutes(30));
+          yield* usage.read;
+          assert.deepStrictEqual(yield* spentIds, ["seven_day"]);
+
+          yield* TestClock.adjust(Duration.minutes(31));
+          yield* usage.read;
+          assert.deepStrictEqual(yield* spentIds, []);
+        }).pipe(Effect.provide(usageOver(endpoint, signedIn)));
+      })
+  );
+
+  it.effect(
+    "does not count a read made while signed out as fresh, so a sign-in reads at the next watcher",
+    () =>
+      Effect.gen(function* () {
+        const endpoint = yield* makeEndpoint;
+        const held = yield* Ref.make(false);
+
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
+
+          yield* usage.read;
+          assert.strictEqual((yield* usage.current).state, "signed_out");
+
+          yield* Ref.set(held, true);
+          yield* TestClock.adjust(Duration.seconds(10));
+
+          const reading = yield* watchUntil((state) => state === "read");
+
+          assert.strictEqual(reading.state, "read");
+          assert.strictEqual((yield* Ref.get(endpoint.requests)).length, 1);
+        }).pipe(Effect.provide(usageOver(endpoint, togglingAccess(held))));
       })
   );
 

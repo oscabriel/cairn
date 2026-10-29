@@ -1,18 +1,22 @@
 // Codex's plan windows, read from ChatGPT's usage endpoint (`wham/usage`) with the Codex login
 // Cairn holds (ADR 0037). The endpoint is undocumented, so the body goes through a Schema decode and
 // any shape the decode does not know reads as "unreadable": a meter that says it cannot read the
-// plan beats one that shows a wrong number. Reads run only while a client watches, on the bridge's
-// cadence (a watcher arriving after `STALE_PROBE` starts one, then one every `PROBE_EVERY`), one at a
-// time, and once after a turn reports a spent Codex limit.
+// plan beats one that shows a wrong number. A plan that answers with no windows at all (a free plan's
+// `rate_limit: null`, or both windows null) reads as "unsupported". Reads run only while a client
+// watches, on the bridge's cadence (a watcher arriving after `STALE_PROBE` starts one, then one every
+// `PROBE_EVERY`), one at a time, and once after a turn reports a spent Codex limit (`CodexSignals`).
 //
 // Ported from hardbeat920/monocode src-tauri/src/pi_usage.rs at
 // 26465c620977f3951d0a532a0f7db32c3c179007: the endpoint, the `Authorization` and
 // `ChatGPT-Account-Id` headers, the field names (`rate_limit.primary_window`, `secondary_window`,
-// `used_percent`, `limit_window_seconds`, `reset_at`), the bounded body, and the rules that a
-// window's length must be whole minutes and two windows may not claim the same length. Changed: an
-// Effect Schema decode instead of serde lookups, windows named by their length (a weekly primary is
-// never called a session), a spent window or a refused turn marks it exhausted, and the token comes
-// from Cairn's own login instead of pi's `auth.json`, which this code never reads.
+// `used_percent`, `limit_window_seconds`, `reset_at`), the body read only up to its bound plus one
+// byte, and the rules that a window's length must be whole minutes and two windows may not claim the
+// same length. Changed: an Effect Schema decode instead of serde lookups, windows named by their
+// length (a weekly primary is never called a session), a `used_percent` above 100 shown as 100 and
+// spent (MonoCode rejects it as an unexpected shape; over-use past the cap is a spent window, not a
+// changed shape), a plan with no windows read as unsupported rather than an error, a spent window or
+// a refused turn marks it exhausted, and the token comes from Cairn's own login instead of pi's
+// `auth.json`, which this code never reads.
 //
 // MIT License
 //
@@ -37,7 +41,11 @@
 // SOFTWARE.
 
 import { PROBE_EVERY, STALE_PROBE } from "@cairn/bridge/ClaudeUsage";
-import type { PlanWindow, ProviderUsage } from "@cairn/protocol/Usage";
+import type {
+  PlanWindow,
+  ProviderUsage,
+  UsageReading,
+} from "@cairn/protocol/Usage";
 import {
   Clock,
   Context,
@@ -55,8 +63,9 @@ import {
 } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
-import { CodexAccess } from "./CodexAccess.ts";
-import type { CodexCredential } from "./CodexAccess.ts";
+import { CodexAccess } from "../models/CodexAccess.ts";
+import type { CodexCredential } from "../models/CodexAccess.ts";
+import { UNSTATED_LIMIT_MS } from "../models/ModelHealth.ts";
 
 /** The provider id Codex models run under, and the one its usage row carries. */
 export const CODEX_PROVIDER = "openai-codex";
@@ -67,8 +76,11 @@ export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 /** How long one read may take, request to last byte. */
 export const READ_TIMEOUT = Duration.seconds(10);
 
-/** A body longer than this (in UTF-16 units) is not a usage answer and reads as unreadable. */
-export const MAX_BODY_LENGTH = 1024 * 1024;
+/**
+ * A body longer than this many bytes is not a usage answer and reads as unreadable. The read stops
+ * at the first chunk past it, so a longer answer is never held whole.
+ */
+export const MAX_BODY_BYTES = 1024 * 1024;
 
 const SESSION_MINS = 5 * 60;
 
@@ -90,11 +102,14 @@ const WhamWindow = Schema.Struct({
 
 /** The parts of the endpoint's answer Cairn reads; every other field is ignored. */
 const WhamUsage = Schema.Struct({
-  rate_limit: Schema.Struct({
-    limit_reached: Schema.optionalKey(Schema.Boolean),
-    primary_window: Schema.optionalKey(Schema.NullOr(WhamWindow)),
-    secondary_window: Schema.optionalKey(Schema.NullOr(WhamWindow)),
-  }),
+  /** Null for a plan with no rate-limit windows (a free plan). */
+  rate_limit: Schema.NullOr(
+    Schema.Struct({
+      limit_reached: Schema.optionalKey(Schema.Boolean),
+      primary_window: Schema.optionalKey(Schema.NullOr(WhamWindow)),
+      secondary_window: Schema.optionalKey(Schema.NullOr(WhamWindow)),
+    })
+  ),
 });
 
 const decodeWhamUsage = Schema.decodeOption(Schema.fromJsonString(WhamUsage));
@@ -163,26 +178,41 @@ const fullestIndex = (
 };
 
 /**
- * The plan windows in a `wham/usage` body, shortest first; none when the body is not a shape this
- * reader knows: not JSON, longer than `MAX_BODY_LENGTH`, no `rate_limit`, a field of another type,
- * a window whose length is not whole minutes, no window at all, or two windows of the same length.
+ * The plan windows in a `wham/usage` body, shortest first; an empty list when the plan answered
+ * with no windows (`rate_limit: null`, or both windows sent as null). None when the body is not a
+ * shape this reader knows: not JSON, longer than `MAX_BODY_BYTES`, no `rate_limit` key, a field of
+ * another type, a window whose length is not whole minutes, no window key at all, or two windows of
+ * the same length.
  */
 export const readUsageBody = (
   body: string
 ): Option.Option<ReadonlyArray<CodexWindow>> => {
-  if (body.length > MAX_BODY_LENGTH) {
+  // A string's UTF-16 length never exceeds its UTF-8 byte count.
+  if (body.length > MAX_BODY_BYTES) {
     return Option.none();
   }
 
   return Option.flatMap(decodeWhamUsage(body), ({ rate_limit: limits }) => {
+    if (limits === null) {
+      return Option.some([]);
+    }
+
     const raw = [limits.primary_window, limits.secondary_window].flatMap(
       (window) => (window === undefined || window === null ? [] : [window])
     );
 
     const lengths = new Set(raw.map((window) => window.limit_window_seconds));
 
-    if (raw.length === 0 || lengths.size !== raw.length) {
+    if (lengths.size !== raw.length) {
       return Option.none();
+    }
+
+    // Both windows sent as null is a plan with none; windows missing or under another key is a
+    // changed shape.
+    if (raw.length === 0) {
+      return limits.primary_window === null && limits.secondary_window === null
+        ? Option.some([])
+        : Option.none();
     }
 
     const windows = raw
@@ -225,6 +255,8 @@ export type CodexUsageState =
   | "signed_out"
   /** The last read decoded. */
   | "read"
+  /** The endpoint answered that this plan has no windows. */
+  | "unsupported"
   /** The endpoint answered with a shape this reader does not know. */
   | "unreadable"
   /** The last read got no answer, or a refusal; earlier windows stay, with their old time. */
@@ -239,10 +271,16 @@ export interface CodexUsageReading {
   /** Why the last read did not decode or failed, in words safe to log. */
   readonly reason: Option.Option<string>;
   /**
-   * A turn reported a spent Codex limit: the window it names stays exhausted until a read after
-   * `until` (or, with no reset time, the next read) says otherwise.
+   * A turn reported a spent Codex limit: the window it names stays exhausted until `until` (the
+   * reset the turn named or, naming none, `UNSTATED_LIMIT_MS` after it, as `ModelHealth` holds it),
+   * unless a read in between already shows a spent window.
    */
-  readonly limit: Option.Option<{ readonly until: Option.Option<number> }>;
+  readonly limit: Option.Option<{
+    /** The reset the refused turn named, which picks the window; none picks the fullest. */
+    readonly resetsAt: Option.Option<number>;
+    /** When the mark lapses. */
+    readonly until: number;
+  }>;
 }
 
 /** Before any read: no login is known. */
@@ -258,34 +296,36 @@ export const INITIAL_READING: CodexUsageReading = {
 type ReadOutcome =
   | { readonly kind: "signed_out" }
   | { readonly kind: "body"; readonly body: string }
+  | { readonly kind: "too_long" }
   | { readonly kind: "failed"; readonly reason: string };
 
-/** The window a refusal names: the one resetting nearest `until`, else the fullest. */
+/** The window a refusal names: the one resetting nearest `resetsAt`, else the fullest. */
 const limitedIndex = (
   windows: ReadonlyArray<CodexWindow>,
-  until: Option.Option<number>
-) =>
-  Option.match(until, {
-    onNone: () => fullestIndex(windows),
-    onSome: (at) => {
-      let nearest = Option.none<{ index: number; distance: number }>();
+  resetsAt: Option.Option<number>
+) => {
+  if (Option.isNone(resetsAt)) {
+    return fullestIndex(windows);
+  }
 
-      for (const [index, window] of windows.entries()) {
-        if (Option.isSome(window.resetsAt)) {
-          const distance = Math.abs(window.resetsAt.value - at);
+  const until = resetsAt.value;
+  let nearest = Option.none<{ index: number; distance: number }>();
 
-          if (!Option.exists(nearest, (best) => best.distance <= distance)) {
-            nearest = Option.some({ index, distance });
-          }
-        }
+  for (const [index, window] of windows.entries()) {
+    if (Option.isSome(window.resetsAt)) {
+      const distance = Math.abs(window.resetsAt.value - until);
+
+      if (!Option.exists(nearest, (best) => best.distance <= distance)) {
+        nearest = Option.some({ index, distance });
       }
+    }
+  }
 
-      return Option.match(nearest, {
-        onNone: () => fullestIndex(windows),
-        onSome: (best) => best.index,
-      });
-    },
+  return Option.match(nearest, {
+    onNone: () => fullestIndex(windows),
+    onSome: (best) => best.index,
   });
+};
 
 const markLimited = (
   windows: ReadonlyArray<CodexWindow>,
@@ -293,8 +333,8 @@ const markLimited = (
 ): ReadonlyArray<CodexWindow> =>
   Option.match(limit, {
     onNone: () => windows,
-    onSome: ({ until }) => {
-      const spent = limitedIndex(windows, until);
+    onSome: ({ resetsAt }) => {
+      const spent = limitedIndex(windows, resetsAt);
 
       return windows.map((window, index) =>
         index === spent ? { ...window, exhausted: true } : window
@@ -316,24 +356,41 @@ const applyOutcome = (
     return { ...current, state: "failed", reason: Option.some(outcome.reason) };
   }
 
+  const unreadable = (reason: string): CodexUsageReading => ({
+    ...current,
+    state: "unreadable",
+    windows: [],
+    checkedAt: Option.some(now),
+    reason: Option.some(reason),
+  });
+
+  if (outcome.kind === "too_long") {
+    return unreadable(
+      `the usage answer is longer than ${MAX_BODY_BYTES} bytes`
+    );
+  }
+
   return Option.match(readUsageBody(outcome.body), {
-    onNone: (): CodexUsageReading => ({
-      ...current,
-      state: "unreadable",
-      windows: [],
-      checkedAt: Option.some(now),
-      reason: Option.some(
-        "the usage answer has a shape this reader does not know"
-      ),
-    }),
+    onNone: () =>
+      unreadable("the usage answer has a shape this reader does not know"),
     onSome: (windows): CodexUsageReading => {
-      // The endpoint agrees once it shows a spent window; a limit with a reset time holds until
-      // that time passes, one without holds only until this read.
+      if (windows.length === 0) {
+        return {
+          state: "unsupported",
+          windows: [],
+          checkedAt: Option.some(now),
+          reason: Option.none(),
+          limit: Option.none(),
+        };
+      }
+
+      // The endpoint agrees once it shows a spent window; until then a refused turn's limit holds
+      // until its time passes.
       const agrees = windows.some((window) => window.exhausted);
 
       const limit = Option.filter(
         current.limit,
-        ({ until }) => !agrees && Option.exists(until, (at) => now < at)
+        ({ until }) => !agrees && now < until
       );
 
       return {
@@ -347,14 +404,37 @@ const applyOutcome = (
   });
 };
 
-/** The reading after a turn reported a spent Codex limit resetting at `until`. */
+/**
+ * The reading after a turn, at `now`, reported a spent Codex limit resetting at `resetsAt`; a limit
+ * naming no reset holds for `UNSTATED_LIMIT_MS`.
+ */
 const applyLimit = (
   current: CodexUsageReading,
-  until: Option.Option<number>
+  resetsAt: Option.Option<number>,
+  now: number
 ): CodexUsageReading => {
-  const limit = Option.some({ until });
+  const limit = Option.some({
+    resetsAt,
+    until: Option.getOrElse(resetsAt, () => now + UNSTATED_LIMIT_MS),
+  });
 
   return { ...current, windows: markLimited(current.windows, limit), limit };
+};
+
+/**
+ * Whether the row's windows can be read (`ProviderUsage.reading`): a plan with no windows is
+ * unsupported; a failed read with windows from before still shows them; without any it reads as
+ * unreadable.
+ */
+export const readingOf = (reading: CodexUsageReading): UsageReading => {
+  if (reading.state === "unsupported") {
+    return "unsupported";
+  }
+
+  return reading.state === "read" ||
+    (reading.state === "failed" && reading.windows.length > 0)
+    ? "read"
+    : "unreadable";
 };
 
 /**
@@ -369,6 +449,7 @@ export const toProviderUsage = (
     : [
         {
           provider: CODEX_PROVIDER,
+          reading: readingOf(reading),
           windows: reading.windows.map((window): PlanWindow => ({
             id: window.id,
             label: window.label,
@@ -383,16 +464,6 @@ export const toProviderUsage = (
           ),
         },
       ];
-
-/**
- * Whether the row's windows can be read, in the words `ProviderUsage.reading` will carry: a failed
- * read with windows from before still shows them; without any it reads as unreadable.
- */
-export const readingOf = (reading: CodexUsageReading): "read" | "unreadable" =>
-  reading.state === "read" ||
-  (reading.state === "failed" && reading.windows.length > 0)
-    ? "read"
-    : "unreadable";
 
 // --- The service ---
 
@@ -410,7 +481,8 @@ export class CodexUsage extends Context.Service<
     readonly read: Effect.Effect<void>;
     /**
      * Marks the window a refused turn names as exhausted (the one resetting nearest `resetsAt`,
-     * epoch milliseconds, else the fullest) and starts one read.
+     * epoch milliseconds, else the fullest) until that reset, or for `UNSTATED_LIMIT_MS` when the
+     * turn named none, and starts one read.
      */
     observeLimit(resetsAt: Option.Option<number>): Effect.Effect<void>;
   }
@@ -451,7 +523,27 @@ export class CodexUsage extends Context.Service<
             } satisfies ReadOutcome;
           }
 
-          const body = yield* response.text;
+          // Stops at the first chunk past the bound: a longer answer is never held whole.
+          const chunks = yield* response.stream.pipe(
+            Stream.mapAccum(
+              () => 0,
+              (total, chunk: Uint8Array) => {
+                const next = total + chunk.length;
+
+                return [next, [{ chunk, total: next }]] as const;
+              }
+            ),
+            Stream.takeUntil(({ total }) => total > MAX_BODY_BYTES),
+            Stream.runCollect
+          );
+
+          if ((chunks.at(-1)?.total ?? 0) > MAX_BODY_BYTES) {
+            return { kind: "too_long" } satisfies ReadOutcome;
+          }
+
+          const body = yield* Stream.fromIterable(
+            chunks.map(({ chunk }) => chunk)
+          ).pipe(Stream.decodeText, Stream.mkString);
 
           return { kind: "body", body } satisfies ReadOutcome;
         }).pipe(
@@ -475,14 +567,25 @@ export class CodexUsage extends Context.Service<
       const runRead = Effect.gen(function* () {
         const started = yield* Clock.currentTimeMillis;
 
-        yield* Ref.set(lastStartedAt, Option.some(started));
-
-        const credential = yield* access.credential;
-
-        const outcome = yield* Option.match(credential, {
-          onNone: () => Effect.succeed<ReadOutcome>({ kind: "signed_out" }),
-          onSome: fetchBody,
-        });
+        const outcome = yield* access.credential.pipe(
+          Effect.matchEffect({
+            onFailure: (error) =>
+              Effect.succeed<ReadOutcome>({
+                kind: "failed",
+                reason: error.message,
+              }),
+            onSuccess: Option.match({
+              onNone: () => Effect.succeed<ReadOutcome>({ kind: "signed_out" }),
+              // Only a read that went for the endpoint counts as fresh: after a sign-in, the
+              // next watcher reads at once.
+              onSome: (credential: CodexCredential) =>
+                Effect.andThen(
+                  Ref.set(lastStartedAt, Option.some(started)),
+                  fetchBody(credential)
+                ),
+            }),
+          })
+        );
 
         const ended = yield* Clock.currentTimeMillis;
 
@@ -565,8 +668,10 @@ export class CodexUsage extends Context.Service<
       const observeLimit = Effect.fn("CodexUsage.observeLimit")(function* (
         resetsAt: Option.Option<number>
       ) {
+        const now = yield* Clock.currentTimeMillis;
+
         yield* SubscriptionRef.update(ref, (current) =>
-          applyLimit(current, resetsAt)
+          applyLimit(current, resetsAt, now)
         );
         yield* readInBackground;
       });
@@ -597,7 +702,7 @@ export class CodexUsage extends Context.Service<
     })
   );
 
-  /** Over the global `fetch`; the login comes from whatever `CodexAccess` the root provides. */
+  /** Over the global `fetch`; the login comes from the `CodexAccess` the root chooses. */
   static readonly layer = CodexUsage.layerNoDeps.pipe(
     Layer.provide(FetchHttpClient.layer)
   );

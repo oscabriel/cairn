@@ -1,5 +1,5 @@
-// The settings page's Messages: what the user changed, what the brain answered, and the plan
-// windows' stream.
+// The settings page's Messages: what the user changed, what the brain answered, the plan windows'
+// stream, and the `next` views' chunk.
 
 import { ExecutorStatus } from "@cairn/protocol/Executor";
 import { ModelCatalog, ProviderStatus } from "@cairn/protocol/Models";
@@ -27,6 +27,10 @@ export const Message = defineMessageUnion({
   SelectedClientSetting: { key: ChoiceSettingKey, value: Schema.String },
   /** The device switched between light and dark while the theme follows it. */
   ChangedColorScheme: {},
+  /** The `next` views' chunk loaded, so the app can draw with them. */
+  LoadedNextFrame: {},
+  /** The `next` views' chunk could not be fetched; the classic views keep drawing the app. */
+  FailedNextFrame: {},
 
   /** One section's answer for `epoch`. */
   ReceivedServerSettings: { epoch: Schema.Int, settings: ServerSettings },

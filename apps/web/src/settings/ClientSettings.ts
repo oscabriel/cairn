@@ -1,9 +1,10 @@
 // Ported from github.com/pingdotgg/t3code, packages/contracts/src/settings.ts (ClientSettingsSchema,
 // its defaults and the font size bounds) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the field
 // names, literal sets, bounds and defaults of the settings Cairn offers. Changed: only the fields
-// Cairn's settings page shows, plus the theme t3code keeps elsewhere; saved in localStorage under
-// `cairn:client-settings:v1`, and a saved value that does not decode yields the defaults instead of
-// an error; applying a setting writes the attributes `index.html` starts with.
+// Cairn's settings page shows, plus the theme t3code keeps elsewhere and Cairn's own `ui` (which set
+// of views draws the app, ADR 0040, set by `?ui=next` or `?ui=classic` in the address); saved in
+// localStorage under `cairn:client-settings:v1`, and a saved value that does not decode yields the
+// defaults instead of an error; applying a setting writes the attributes `index.html` starts with.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -56,6 +57,11 @@ export const ChatWidth = Schema.Literals(["comfortable", "wide", "full"]);
 /** How a diff is laid out. */
 export const DiffLayout = Schema.Literals(["stacked", "split"]);
 
+/** Which set of views draws the app: the frozen classic views or the `next` fork (ADR 0040). */
+export const Ui = Schema.Literals(["classic", "next"]);
+
+export type Ui = typeof Ui.Type;
+
 const sizeBetween = (minimum: number, maximum: number) =>
   Schema.Int.check(Schema.isBetween({ minimum, maximum }));
 
@@ -103,6 +109,7 @@ export const ClientSettings = Schema.Struct({
   diffLayout: DiffLayout.pipe(
     Schema.withDecodingDefault(Effect.succeed("stacked" as const))
   ),
+  ui: Ui.pipe(Schema.withDecodingDefault(Effect.succeed("classic" as const))),
 });
 
 export type ClientSettings = typeof ClientSettings.Type;
@@ -175,6 +182,7 @@ export const ChoiceSettingKey = Schema.Literals([
   "fontSizeCode",
   "chatWidth",
   "diffLayout",
+  "ui",
 ]);
 
 export type ChoiceSettingKey = typeof ChoiceSettingKey.Type;
@@ -190,6 +198,8 @@ const decodeTheme = Schema.decodeUnknownOption(Theme);
 const decodeChatWidth = Schema.decodeUnknownOption(ChatWidth);
 
 const decodeDiffLayout = Schema.decodeUnknownOption(DiffLayout);
+
+const decodeUi = Schema.decodeUnknownOption(Ui);
 
 const sizeFromText = <S extends Schema.Codec<number, number>>(size: S) =>
   Schema.decodeUnknownOption(
@@ -237,6 +247,7 @@ export const chooseSetting = (
     Match.when("fontSizeCode", (field) => set(field, decodeCodeSize(value))),
     Match.when("chatWidth", (field) => set(field, decodeChatWidth(value))),
     Match.when("diffLayout", (field) => set(field, decodeDiffLayout(value))),
+    Match.when("ui", (field) => set(field, decodeUi(value))),
     Match.exhaustive
   );
 };
@@ -247,6 +258,26 @@ export const toggleSetting = (
   key: BooleanSettingKey,
   isChecked: boolean
 ): ClientSettings => ({ ...settings, [key]: isChecked });
+
+/**
+ * The views the address asks for: `?ui=next` or `?ui=classic` in `search` (a location's query,
+ * with or without its `?`); none when the address names neither, so the saved choice stands.
+ */
+export const uiFromSearch = (search: string): Option.Option<Ui> =>
+  Option.flatMap(
+    Option.fromNullishOr(new URLSearchParams(search).get("ui")),
+    decodeUi
+  );
+
+/** The settings with the address's `ui` choice, when it names one; otherwise `settings` itself. */
+export const withSearchUi = (
+  settings: ClientSettings,
+  search: string
+): ClientSettings =>
+  Option.match(uiFromSearch(search), {
+    onNone: () => settings,
+    onSome: (ui) => (ui === settings.ui ? settings : { ...settings, ui }),
+  });
 
 /** Whether the page should be dark, given the device's preference. */
 export const isDark = (theme: Theme, prefersDark: boolean): boolean =>
@@ -272,4 +303,11 @@ export const applyClientSettings = (
     root.style.setProperty("--font-size-code", `${settings.fontSizeCode}px`);
     root.style.setProperty("--diffs-font-size", `${settings.fontSizeCode}px`);
     root.dataset.chatWidth = settings.chatWidth;
+
+    // Only `next` marks the document, so the classic views' document stays as it was before the fork.
+    if (settings.ui === "next") {
+      root.dataset.ui = "next";
+    } else {
+      delete root.dataset.ui;
+    }
   });

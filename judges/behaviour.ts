@@ -4,7 +4,12 @@
 // over a real in-process brain (judges/fixtures/parity/CairnApp.ts) seeded with t3code's imported
 // thread. Each check prints one line; the run ends with one JSON line.
 //
-//   node judges/behaviour.ts [--only <check,...>] [--out <dir>] [--strict]
+//   node judges/behaviour.ts [--only <check,...>] [--out <dir>] [--strict] [--ui classic|next]
+//
+// `--ui next` (look track L0, ADR 0040) runs every check on the `next` views: each page the judge
+// opens carries `?ui=next`, and before a check's body runs the page must show the `next` frame
+// (`#root[data-ui="next"]`); the report is `behaviour-next.json`. With `--ui classic`, the default,
+// a page showing the `next` frame fails its check instead, so classic runs stay classic.
 //
 // Checks:
 //   footer-<width>   the composer footer's blocks (full, icon-only, hidden) and its overflow button
@@ -69,8 +74,39 @@ const { values } = parseArgs({
       ),
     },
     strict: { type: "boolean", default: false },
+    ui: { type: "string", default: "classic" },
   },
 });
+
+if (values.ui !== "classic" && values.ui !== "next") {
+  throw new Error(`--ui is classic or next, not ${values.ui}`);
+}
+
+const { ui } = values;
+
+/** `url` as the judge opens it: with `?ui=next` when judging the `next` views. */
+const withUi = (url: string): string => {
+  if (ui === "classic") {
+    return url;
+  }
+
+  const opened = new URL(url);
+
+  opened.searchParams.set("ui", "next");
+
+  return opened.href;
+};
+
+/** Fails unless the page shows the views this run judges. */
+const expectUi = async (page: Page) => {
+  const frames = page.locator('#root[data-ui="next"]');
+
+  if (ui === "next") {
+    await frames.waitFor({ state: "attached", timeout: 15_000 });
+  } else if ((await frames.count()) > 0) {
+    throw new Error("the page shows the next views on a classic run");
+  }
+};
 
 const only = new Set(values.only?.split(","));
 
@@ -123,6 +159,8 @@ const app = await startCairn({
   threadTitle: exported.title,
   entries: importT3Thread(exported).entries,
 });
+
+const threadUrl = withUi(app.threadUrl);
 
 const desktop = (width: number): BrowserContextOptions => ({
   viewport: { width, height: 900 },
@@ -178,6 +216,8 @@ const check = async (
         await editor(page).waitFor({ state: "visible", timeout: 15_000 });
       });
 
+    await expectUi(page);
+
     const detail = await body(page);
 
     record(name, passes(detail), detail);
@@ -232,7 +272,7 @@ const value = async (page: Page) => await editor(page).inputValue();
 const chromiumBrowser = await chromium.launch();
 
 try {
-  const hero = `${app.origin}/`;
+  const hero = withUi(`${app.origin}/`);
 
   // Footer folding against t3code's readings at the same widths.
   for (const [width, file] of [
@@ -546,7 +586,7 @@ try {
     chromiumBrowser,
     "drafts-separate",
     desktop(1440),
-    app.threadUrl,
+    threadUrl,
     async (page) => {
       await editor(page).click();
       await page.keyboard.type("a thread draft");
@@ -556,7 +596,7 @@ try {
 
       const heroValue = await value(page);
 
-      await page.goto(app.threadUrl, { waitUntil: "networkidle" });
+      await page.goto(threadUrl, { waitUntil: "networkidle" });
       await editor(page).waitFor({ state: "visible" });
       await page.waitForTimeout(800);
 
@@ -774,8 +814,9 @@ if (wanted("soft-keyboard")) {
     const page = await context.newPage();
 
     try {
-      await page.goto(app.threadUrl, { waitUntil: "networkidle" });
+      await page.goto(threadUrl, { waitUntil: "networkidle" });
       await editor(page).waitFor({ state: "visible", timeout: 15_000 });
+      await expectUi(page);
       await editor(page).tap();
       await page.evaluate(() => {
         globalThis.dispatchEvent(new CustomEvent("cairn-judge-keyboard"));
@@ -813,12 +854,15 @@ const passing = results.filter((result) => result.pass).length;
 mkdirSync(values.out, { recursive: true });
 
 writeFileSync(
-  path.join(values.out, "behaviour.json"),
-  `${JSON.stringify({ judge: "behaviour", passing, checks: results.length, results }, null, 2)}\n`
+  path.join(
+    values.out,
+    ui === "next" ? "behaviour-next.json" : "behaviour.json"
+  ),
+  `${JSON.stringify({ judge: "behaviour", ui, passing, checks: results.length, results }, null, 2)}\n`
 );
 
 console.log(
-  JSON.stringify({ judge: "behaviour", checks: results.length, passing })
+  JSON.stringify({ judge: "behaviour", ui, checks: results.length, passing })
 );
 
 // Exits outright: a handle the full run leaves open (not one `--only` subsets leave) kept the

@@ -1,0 +1,462 @@
+/*
+ * The `next` views' design tokens (ADR 0040, plan look track L2, surfaces note "Tokens and where
+ * they live"). Every colour, size, duration, layer and shadow the `next` views use is named here;
+ * views use only these names (judges/contrast.test.ts fails on a palette utility or a colour
+ * literal anywhere else in `next/`).
+ *
+ * Sources (ideas and values only, no text carried): MonoCode, `hardbeat920/monocode` `26465c62`
+ * (MIT), `src/styles/index.css`: the one ink at fixed strengths, the selection ladder 8/10/12/15/20
+ * dark and 5/6/7/10/14 light, strokes at 7 and 4 percent, and the 120 and 160 ms durations.
+ * HumanLayer, `humanlayer/humanlayer` `f16f286` (Apache-2.0): the named surface set, names only.
+ *
+ * Scope. Everything sits under `[data-ui="next"]`, which marks two elements: <html>, where
+ * ClientSettings sets it, and #root, where `next/Frame.ts` sets it. The classic views never see it.
+ * The theme is the `dark` class ClientSettings puts on <html>, so each dark rule names both forms:
+ * `.dark[data-ui="next"]` for <html> itself and `.dark [data-ui="next"]` for #root, and the two
+ * resolve to the same values (the judge checks). `data-look` goes beside `data-ui` on both.
+ *
+ * Candidates. The look is not chosen yet (round 0, ~/Developer/agent-artifacts/cairn/v2/look/
+ * round-0/). Three candidate value sets share one set of names, picked by `data-look` on the same
+ * element:
+ *
+ *   graphite  the default (no `data-look`): closest to today's look, a neutral near-black and
+ *             zinc ground with t3code's blue primary.
+ *   ink       MonoCode's ink and ladder: one ink at fixed strengths over a cool ground, strokes at
+ *             7 and 4 percent, a five-step selection ladder, and no colour but the status tones.
+ *   stone     warm stone ground with HumanLayer's named surfaces (the redesign sketch), a clay
+ *             accent and softer status tones.
+ *
+ * Names. The contrast judge pairs tokens by family, so a new token joins its pairs by its name:
+ *
+ *   --surface-*         opaque grounds. Every text token is read on every surface.
+ *   --ink-1..3          text: primary, secondary, faint (timestamps, counts).
+ *   --select-1..5       the selection ladder, translucent over a surface: hover, pressed, selected,
+ *                       selected and hovered, dragged. Every text token is read on every step over
+ *                       every surface. --ink-3 must hold AA over --select-5, so it sits close to
+ *                       --ink-2 in every candidate.
+ *   --stroke-1, -2      hairlines and control borders. They have no contrast floor, so no
+ *                       control relies on its stroke alone for its boundary: a control also has
+ *                       a ladder or wash ground, an accent fill, or a visible label (WCAG 1.4.11
+ *                       asks 3:1 only of what identifies the control).
+ *   --stroke-focus      the focus ring: 3:1 on every surface, every ladder step and every wash.
+ *   --accent-fill       the one action fill; --accent-ink is text on it (4.5:1), and the fill
+ *                       itself holds 3:1 on every surface. (Classic's `--accent` is a hover
+ *                       ground; the bridge below points it at the ladder.)
+ *   --accent-text       the accent as text (links), read like any text token.
+ *   --accent-wash       a translucent accent ground; every ink and --accent-text are read on it.
+ *   --tone-<state>      the status tones (working, waiting, failed, done) as text and glyph, read
+ *                       like any text token; --tone-<state>-wash is the chip ground, with its
+ *                       tone and every ink read on it over every surface, and its tone and
+ *                       --ink-1 under each ladder step too (a chip on a selected row).
+ *   --scrim, --shadow-color   no text sits on them.
+ *
+ * A status is never colour alone: each tone ships with its word and its glyph (surfaces note).
+ *
+ * Every candidate defines every colour name in both themes; the judge fails a candidate missing
+ * one. Each candidate block declares its full set, so the cascade order between candidates and
+ * themes never decides a colour.
+ */
+
+/* Shape, type, space, motion, layers and elevation: shared by every candidate, which may override
+   the radii. */
+[data-ui="next"] {
+  /* Tailwind's `@theme` in styles.css declares --font-sans and --font-mono; these follow them. */
+  --font-ui: var(
+    --font-sans,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif
+  );
+  --font-code: var(
+    --font-mono,
+    ui-monospace,
+    "SF Mono",
+    Menlo,
+    Consolas,
+    monospace
+  );
+
+  /* Type: six steps. Four carry text (small, ui, body, title); `micro` is for tabular counts and
+     key hints only, so text is 12 px or more; `display` is the hero's one line. The prompt and
+     code sizes follow the font-size settings ClientSettings writes onto <html>. */
+  --text-micro: 0.6875rem;
+  --text-micro-leading: 1rem;
+  --text-small: 0.75rem;
+  --text-small-leading: 1.125rem;
+  --text-ui: 0.8125rem;
+  --text-ui-leading: 1.25rem;
+  --text-body: 0.875rem;
+  --text-body-leading: 1.5rem;
+  --text-title: 1rem;
+  --text-title-leading: 1.5rem;
+  --text-display: 1.375rem;
+  --text-display-leading: 1.75rem;
+  --text-prompt: var(--font-size-prompt, 0.875rem);
+  --text-code: var(--font-size-code, 0.8125rem);
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 600;
+
+  /* Space: a 4 px step. */
+  --space-0-5: 0.125rem;
+  --space-1: 0.25rem;
+  --space-1-5: 0.375rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  /* The smallest hit target on a coarse pointer, in px so the interface font-size setting
+     (12 to 20 px on <html>) cannot shrink it under 44 px. */
+  --hit-target: max(44px, 2.75rem);
+  /* The transcript and composer column. */
+  --lane-width: 46rem;
+
+  /* Radii. */
+  --radius-small: 0.375rem;
+  --radius-medium: 0.625rem;
+  --radius-large: 0.875rem;
+  --radius-round: 999px;
+
+  /* Motion: one curve, three durations (MonoCode: feedback 120 ms, reorder 160 ms). */
+  --duration-feedback: 120ms;
+  --duration-move: 160ms;
+  --duration-panel: 240ms;
+  --ease-motion: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Layers: the one z-order scale. */
+  --layer-base: 0;
+  --layer-raised: 1;
+  --layer-sticky: 10;
+  --layer-panel: 20;
+  --layer-scrim: 30;
+  --layer-sheet: 40;
+  --layer-popover: 50;
+  --layer-toast: 60;
+  --layer-tooltip: 70;
+
+  /* Elevation: three steps, coloured by the theme's --shadow-color. */
+  --elevation-1: 0 1px 2px
+    color-mix(in srgb, var(--shadow-color) 12%, transparent);
+  --elevation-2:
+    0 12px 28px -18px color-mix(in srgb, var(--shadow-color) 40%, transparent),
+    0 1px 2px color-mix(in srgb, var(--shadow-color) 8%, transparent);
+  --elevation-3:
+    0 24px 56px -20px color-mix(in srgb, var(--shadow-color) 55%, transparent),
+    0 2px 6px color-mix(in srgb, var(--shadow-color) 12%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-ui="next"] {
+    --duration-feedback: 0ms;
+    --duration-move: 0ms;
+    --duration-panel: 0ms;
+  }
+}
+
+/* Graphite, light: the default. */
+[data-ui="next"],
+[data-ui="next"][data-look="graphite"] {
+  color-scheme: light;
+  --surface-ground: #fcfcfc;
+  --surface-rail: #f2f2f3;
+  --surface-sidebar: #f8f8f9;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f4f4f5;
+  --surface-overlay: #ffffff;
+  --ink-1: #27272a;
+  --ink-2: #52525b;
+  --ink-3: #5f5f67;
+  --stroke-1: #e4e4e7;
+  --stroke-2: #d4d4d8;
+  --stroke-focus: #1b4ed8;
+  --select-1: color-mix(in srgb, #18181b 3%, transparent);
+  --select-2: color-mix(in srgb, #18181b 5%, transparent);
+  --select-3: color-mix(in srgb, #18181b 6%, transparent);
+  --select-4: color-mix(in srgb, #18181b 8%, transparent);
+  --select-5: color-mix(in srgb, #18181b 10%, transparent);
+  --accent-fill: #1b4ed8;
+  --accent-ink: #ffffff;
+  --accent-text: #1b4ed8;
+  --accent-wash: color-mix(in srgb, #1b4ed8 8%, transparent);
+  --tone-working: #1c4cd2;
+  --tone-working-wash: color-mix(in srgb, #1d4ed8 8%, transparent);
+  --tone-waiting: #954707;
+  --tone-waiting-wash: color-mix(in srgb, #f59e0b 10%, transparent);
+  --tone-failed: #b21b1b;
+  --tone-failed-wash: color-mix(in srgb, #ef4444 8%, transparent);
+  --tone-done: #036649;
+  --tone-done-wash: color-mix(in srgb, #10b981 8%, transparent);
+  --scrim: color-mix(in srgb, #000000 32%, transparent);
+  --shadow-color: #000000;
+}
+
+/* Graphite, dark. */
+.dark[data-ui="next"],
+.dark [data-ui="next"],
+.dark[data-ui="next"][data-look="graphite"],
+.dark [data-ui="next"][data-look="graphite"] {
+  color-scheme: dark;
+  --surface-ground: #0a0a0a;
+  --surface-rail: #050505;
+  --surface-sidebar: #111111;
+  --surface-raised: #141414;
+  --surface-sunken: #0f0f0f;
+  --surface-overlay: #191919;
+  --ink-1: #f5f5f5;
+  --ink-2: #b0b0b0;
+  --ink-3: #999999;
+  --stroke-1: color-mix(in srgb, #ffffff 6%, transparent);
+  --stroke-2: color-mix(in srgb, #ffffff 10%, transparent);
+  --stroke-focus: #6b93f5;
+  --select-1: color-mix(in srgb, #ffffff 3%, transparent);
+  --select-2: color-mix(in srgb, #ffffff 4%, transparent);
+  --select-3: color-mix(in srgb, #ffffff 6%, transparent);
+  --select-4: color-mix(in srgb, #ffffff 8%, transparent);
+  --select-5: color-mix(in srgb, #ffffff 10%, transparent);
+  --accent-fill: #346bf1;
+  --accent-ink: #ffffff;
+  --accent-text: #7ea4fa;
+  --accent-wash: color-mix(in srgb, #346bf1 16%, transparent);
+  --tone-working: #6aaafa;
+  --tone-working-wash: color-mix(in srgb, #3b82f6 16%, transparent);
+  --tone-waiting: #fbbf24;
+  --tone-waiting-wash: color-mix(in srgb, #f59e0b 14%, transparent);
+  --tone-failed: #f98181;
+  --tone-failed-wash: color-mix(in srgb, #ef4444 16%, transparent);
+  --tone-done: #34d399;
+  --tone-done-wash: color-mix(in srgb, #10b981 14%, transparent);
+  --scrim: color-mix(in srgb, #000000 60%, transparent);
+  --shadow-color: #000000;
+}
+
+/* Ink, shape: MonoCode's two radii. */
+[data-ui="next"][data-look="ink"] {
+  --radius-small: 0.25rem;
+  --radius-medium: 0.375rem;
+  --radius-large: 0.75rem;
+}
+
+/* Ink, light: one ink at fixed strengths, ladder 5/6/7/10/14. */
+[data-ui="next"][data-look="ink"] {
+  color-scheme: light;
+  --surface-ground: #fafafa;
+  --surface-rail: #efeff0;
+  --surface-sidebar: #f4f4f5;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f2f2f3;
+  --surface-overlay: #ffffff;
+  --ink-1: color-mix(in srgb, #14161a 92%, transparent);
+  --ink-2: color-mix(in srgb, #14161a 72%, transparent);
+  --ink-3: color-mix(in srgb, #14161a 66%, transparent);
+  --stroke-1: color-mix(in srgb, #14161a 4%, transparent);
+  --stroke-2: color-mix(in srgb, #14161a 7%, transparent);
+  --stroke-focus: color-mix(in srgb, #14161a 72%, transparent);
+  --select-1: color-mix(in srgb, #14161a 5%, transparent);
+  --select-2: color-mix(in srgb, #14161a 6%, transparent);
+  --select-3: color-mix(in srgb, #14161a 7%, transparent);
+  --select-4: color-mix(in srgb, #14161a 10%, transparent);
+  --select-5: color-mix(in srgb, #14161a 14%, transparent);
+  --accent-fill: #14161a;
+  --accent-ink: #fafafa;
+  --accent-text: #14161a;
+  --accent-wash: color-mix(in srgb, #14161a 6%, transparent);
+  --tone-working: #254fa0;
+  --tone-working-wash: color-mix(in srgb, #2b5bb5 8%, transparent);
+  --tone-waiting: #744900;
+  --tone-waiting-wash: color-mix(in srgb, #c88a12 10%, transparent);
+  --tone-failed: #9c241b;
+  --tone-failed-wash: color-mix(in srgb, #b02a20 8%, transparent);
+  --tone-done: #135f34;
+  --tone-done-wash: color-mix(in srgb, #1d7342 8%, transparent);
+  --scrim: color-mix(in srgb, #14161a 30%, transparent);
+  --shadow-color: #14161a;
+}
+
+/* Ink, dark: ladder 8/10/12/15/20. */
+.dark[data-ui="next"][data-look="ink"],
+.dark [data-ui="next"][data-look="ink"] {
+  color-scheme: dark;
+  --surface-ground: #111317;
+  --surface-rail: #0c0e11;
+  --surface-sidebar: #15171c;
+  --surface-raised: #1a1d22;
+  --surface-sunken: #0e1013;
+  --surface-overlay: #1e2127;
+  --ink-1: color-mix(in srgb, #e3e7ee 94%, transparent);
+  --ink-2: color-mix(in srgb, #e3e7ee 76%, transparent);
+  --ink-3: color-mix(in srgb, #e3e7ee 71%, transparent);
+  --stroke-1: color-mix(in srgb, #e3e7ee 4%, transparent);
+  --stroke-2: color-mix(in srgb, #e3e7ee 7%, transparent);
+  --stroke-focus: color-mix(in srgb, #e3e7ee 70%, transparent);
+  --select-1: color-mix(in srgb, #e3e7ee 8%, transparent);
+  --select-2: color-mix(in srgb, #e3e7ee 10%, transparent);
+  --select-3: color-mix(in srgb, #e3e7ee 12%, transparent);
+  --select-4: color-mix(in srgb, #e3e7ee 15%, transparent);
+  --select-5: color-mix(in srgb, #e3e7ee 20%, transparent);
+  --accent-fill: #e3e7ee;
+  --accent-ink: #111317;
+  --accent-text: #e3e7ee;
+  --accent-wash: color-mix(in srgb, #e3e7ee 8%, transparent);
+  --tone-working: #b2ccf3;
+  --tone-working-wash: color-mix(in srgb, #8fb3ea 12%, transparent);
+  --tone-waiting: #e9c98a;
+  --tone-waiting-wash: color-mix(in srgb, #e3ba6a 12%, transparent);
+  --tone-failed: #f8b9b0;
+  --tone-failed-wash: color-mix(in srgb, #ef8f85 12%, transparent);
+  --tone-done: #a9d8b8;
+  --tone-done-wash: color-mix(in srgb, #8fcca3 12%, transparent);
+  --scrim: color-mix(in srgb, #000000 60%, transparent);
+  --shadow-color: #000000;
+}
+
+/* Stone, shape: HumanLayer's 6, 10, 14 rounded a step up. */
+[data-ui="next"][data-look="stone"] {
+  --radius-small: 0.375rem;
+  --radius-medium: 0.625rem;
+  --radius-large: 1rem;
+}
+
+/* Stone, light: paper and clay. */
+[data-ui="next"][data-look="stone"] {
+  color-scheme: light;
+  --surface-ground: #f7f4f0;
+  --surface-rail: #ebe6df;
+  --surface-sidebar: #f1ece6;
+  --surface-raised: #fdfbf8;
+  --surface-sunken: #efebe5;
+  --surface-overlay: #fdfbf8;
+  --ink-1: #2a2420;
+  --ink-2: #4f473f;
+  --ink-3: #5d544b;
+  --stroke-1: color-mix(in srgb, #2a2420 9%, transparent);
+  --stroke-2: color-mix(in srgb, #2a2420 15%, transparent);
+  --stroke-focus: #a24f25;
+  --select-1: color-mix(in srgb, #2a2420 4%, transparent);
+  --select-2: color-mix(in srgb, #2a2420 6%, transparent);
+  --select-3: color-mix(in srgb, #2a2420 7%, transparent);
+  --select-4: color-mix(in srgb, #2a2420 9%, transparent);
+  --select-5: color-mix(in srgb, #2a2420 12%, transparent);
+  --accent-fill: #a24f25;
+  --accent-ink: #fdfbf8;
+  --accent-text: #85401e;
+  --accent-wash: color-mix(in srgb, #a24f25 9%, transparent);
+  --tone-working: #27518c;
+  --tone-working-wash: color-mix(in srgb, #2c5c9e 9%, transparent);
+  --tone-waiting: #774708;
+  --tone-waiting-wash: color-mix(in srgb, #c27a12 12%, transparent);
+  --tone-failed: #922e20;
+  --tone-failed-wash: color-mix(in srgb, #a93626 9%, transparent);
+  --tone-done: #255c2f;
+  --tone-done-wash: color-mix(in srgb, #2d6e38 9%, transparent);
+  --scrim: color-mix(in srgb, #2a2420 32%, transparent);
+  --shadow-color: #2a2420;
+}
+
+/* Stone, dark: the redesign sketch's warm ground. */
+.dark[data-ui="next"][data-look="stone"],
+.dark [data-ui="next"][data-look="stone"] {
+  color-scheme: dark;
+  --surface-ground: #1a1714;
+  --surface-rail: #131110;
+  --surface-sidebar: #1e1b18;
+  --surface-raised: #26221e;
+  --surface-sunken: #161310;
+  --surface-overlay: #29241f;
+  --ink-1: #ede7e0;
+  --ink-2: #c6bdb3;
+  --ink-3: #b0a69b;
+  --stroke-1: color-mix(in srgb, #fff0dc 8%, transparent);
+  --stroke-2: color-mix(in srgb, #fff0dc 13%, transparent);
+  --stroke-focus: #e2a47a;
+  --select-1: color-mix(in srgb, #fff0dc 4%, transparent);
+  --select-2: color-mix(in srgb, #fff0dc 6%, transparent);
+  --select-3: color-mix(in srgb, #fff0dc 8%, transparent);
+  --select-4: color-mix(in srgb, #fff0dc 10%, transparent);
+  --select-5: color-mix(in srgb, #fff0dc 12%, transparent);
+  --accent-fill: #d98e5f;
+  --accent-ink: #1a1714;
+  --accent-text: #e6a97f;
+  --accent-wash: color-mix(in srgb, #d98e5f 14%, transparent);
+  --tone-working: #a5c0e8;
+  --tone-working-wash: color-mix(in srgb, #8eaee0 14%, transparent);
+  --tone-waiting: #e8b775;
+  --tone-waiting-wash: color-mix(in srgb, #e2a95c 14%, transparent);
+  --tone-failed: #f3a99d;
+  --tone-failed-wash: color-mix(in srgb, #e88576 14%, transparent);
+  --tone-done: #9ecba4;
+  --tone-done-wash: color-mix(in srgb, #93c39a 14%, transparent);
+  --scrim: color-mix(in srgb, #000000 60%, transparent);
+  --shadow-color: #000000;
+}
+
+/* The bridge: the classic semantic names the shared utilities read (`bg-background`,
+   `text-muted-foreground`, `rounded-lg`...), so a classic region inside the `next` frame takes the
+   candidate's colours. The `--contrast-*` names are set straight from the tokens: the appearance
+   contrast boost does not apply in `next`.
+
+   `--surface-raised` is a classic name too (styles.css: a translucent card in light, a mix near
+   the background in dark, read by the classic composer's dark glass). The `next` token overrides
+   it on purpose with the candidate's opaque raised ground, the same value `--card` gets here.
+
+   The bridge is a stopgap until L6 and L7 replace the classic regions, and its pairs are not
+   judged: classic regions inside `next` are not held to AA. The fills point at text tones, so
+   white on `--destructive` or `--primary` text on a surface can fall under 4.5:1 (graphite dark:
+   white on `--destructive` is 2.77:1). `next` views read the tokens, never these names. */
+[data-ui="next"] {
+  --background: var(--surface-ground);
+  --foreground: var(--ink-1);
+  --card: var(--surface-raised);
+  --card-foreground: var(--ink-1);
+  --popover: var(--surface-overlay);
+  --popover-foreground: var(--ink-1);
+  --primary: var(--accent-fill);
+  --primary-foreground: var(--accent-ink);
+  --secondary: var(--select-2);
+  --secondary-foreground: var(--ink-1);
+  --muted: var(--select-1);
+  --muted-foreground: var(--ink-2);
+  --accent: var(--select-2);
+  --accent-foreground: var(--ink-1);
+  --border: var(--stroke-1);
+  --input: var(--stroke-2);
+  --ring: var(--stroke-focus);
+  --radius: var(--radius-medium);
+  --info: var(--tone-working);
+  --info-foreground: var(--tone-working);
+  --warning: var(--tone-waiting);
+  --warning-foreground: var(--tone-waiting);
+  --error: var(--tone-failed);
+  --error-foreground: var(--tone-failed);
+  --destructive: var(--tone-failed);
+  --destructive-foreground: var(--tone-failed);
+  --success: var(--tone-done);
+  --success-foreground: var(--tone-done);
+  --sidebar: var(--surface-sidebar);
+  --sidebar-foreground: var(--ink-1);
+  --sidebar-muted-foreground: var(--ink-2);
+  --sidebar-row-hover: var(--select-1);
+  --sidebar-row-active: var(--select-3);
+  --sidebar-row-selected: var(--select-3);
+  --sidebar-border: var(--stroke-1);
+  --contrast-foreground: var(--ink-1);
+  --contrast-muted-foreground: var(--ink-2);
+  --contrast-card-foreground: var(--ink-1);
+  --contrast-popover-foreground: var(--ink-1);
+  --contrast-accent-foreground: var(--ink-1);
+  --contrast-secondary-foreground: var(--ink-1);
+  --contrast-message-foreground: var(--ink-1);
+  --contrast-placeholder: var(--ink-3);
+  --contrast-secondary-label: var(--ink-2);
+  --contrast-icon-muted: var(--ink-3);
+  --contrast-border: var(--stroke-1);
+  --contrast-input: var(--stroke-2);
+  --contrast-sidebar-foreground: var(--ink-1);
+  --contrast-sidebar-muted-foreground: var(--ink-2);
+  --contrast-sidebar-border: var(--stroke-1);
+}

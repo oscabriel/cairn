@@ -2,7 +2,7 @@
 // catalog and the settings store that translate their failures into the protocol's `Unavailable`,
 // carrying the RPC request id. Also the `session.hello` defaults, from the same catalog.
 
-import { Unavailable } from "@cairn/protocol/Errors";
+import { InvalidInput, Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer, Option } from "effect";
 
@@ -57,16 +57,30 @@ export const SettingsGetHandler = CairnRpcs.toLayerHandler(
   })
 );
 
-/** `settings.update`: applies the present keys, returns the result. */
+/**
+ * `settings.update`: applies the present keys, returns the result. A role table that drops a
+ * built-in role or binds a role to a role is `InvalidInput` naming `roleBindings`.
+ */
 export const SettingsUpdateHandler = CairnRpcs.toLayerHandler(
   "settings.update",
   Effect.gen(function* () {
     const settings = yield* SettingsStore;
 
     return (patch, { requestId }) =>
-      settings
-        .update(patch)
-        .pipe(Effect.mapError(unavailable(String(requestId))));
+      settings.update(patch).pipe(
+        Effect.catchTags({
+          SettingsStoreError: (failure) =>
+            Effect.fail(unavailable(String(requestId))(failure)),
+          SettingsInvalid: (failure) =>
+            Effect.fail(
+              new InvalidInput({
+                message: failure.message,
+                field: Option.some(failure.field),
+                requestId: Option.some(String(requestId)),
+              })
+            ),
+        })
+      );
   })
 );
 

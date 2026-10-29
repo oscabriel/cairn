@@ -59,20 +59,22 @@ Decided by the user on 2026-10-27 (stage 1 of the backlog, then the thirty quest
 | Single node stop | Allowed; the script sees `null` | ADR 0012 (amended) |
 | Where a workflow runs | In the launching thread's run; a coordinator thread is a later spike | ADR 0012 (amended) |
 | Run on 1 first | A separate run, no cache | ADR 0032 |
-| Third typed-results provider | Codex login; `opencode-go/gpt-6-luna` the fallback | ADR 0037 |
-| Role table | `@worker` Opus 5.5 medium, `@scout` Sonnet 5.5 high, `@judge` `opencode-go/gpt-6-luna`, `@verifier` Codex `gpt-6-luna`; global, with a per-launch override | ADR 0035 |
+| Third typed-results provider | None: the user has no Codex subscription (2026-10-29). Typed results are judged on the bridge and OpenCode Go; Codex returns if a subscription does | ADR 0037 |
+| Role table | `@worker` Opus 5.5 medium, `@scout` Sonnet 5.5 high, `@judge` `opencode-go/gpt-6-luna`, `@verifier` `opencode-go/gpt-6-luna` (Codex until 2026-10-29, when the user said there is no subscription); global, with a per-launch override | ADR 0035 |
 | Claude in dollars | Labelled "at API list price" | ADR 0036 |
 | At a budget | Workflows abort running nodes and offer a raise; a goal's own subagents stop taking new work | ADR 0036 |
-| Codex usage endpoint | Used, with "unreadable" on change | ADR 0037 |
-| Caddy | Stays in Docker; reload with `docker exec`; add `stream_close_delay` | ADR 0038 |
-| `plans.gneiss.run` | Owner-only | ADR 0038 |
+| Codex usage endpoint | Built (3D) and judged on recorded bodies; the live read is shelved with the Codex login (2026-10-29) | ADR 0037 |
+| Caddy | Stays in Docker; reload with `docker exec`; add `stream_close_delay` (shelved with porch, 2026-10-29) | ADR 0038 |
+| `plans.gneiss.run` | Owner-only (shelved with porch, 2026-10-29) | ADR 0038 |
 | Artifacts | `~/Developer/agent-artifacts/<project>/` | reach note |
 | `ffgrep`, `fffind` | Beside `grep`, `find`; revisit after the daily-driver week | ADR 0039 |
-| Portals | 12 h, six at once | ADR 0038 |
+| Portals | 12 h, six at once (shelved with porch, 2026-10-29) | ADR 0038 |
 | Exa counter | Shared with the TUI | ADR 0039 |
 | New screens | Only in `next`; the phone on `next` before the gate | ADR 0040 |
 | Transcript list | The look track's first package, confirmed after the daily-driver day | ADR 0041 |
 | Themes | Tokens for dark and light; preview rounds in dark | ADR 0040 |
+| Look | Stone, chosen by the user from round 0 on 2026-10-29; graphite and ink are dropped | ADR 0040 |
+| Reach (porch) | Shelved by the user on 2026-10-29: porch is not a live project. The artifact and portal code stays, dormant, with its tools hidden while porch is missing; wizard stage 2 and 5G are dropped, and the phone reach target is not judged in phase 2 | ADR 0038 |
 
 ## 3. Waves
 
@@ -284,9 +286,9 @@ The coordinator-thread spike (workflows W9) is optional and not on the gate's pa
 
 | Target | Judge | First passes in |
 | --- | --- | --- |
-| Typed results (three providers) | `judges/typed-results.ts` | 2E (OpenCode Go), 4F (all three after the Codex login) |
+| Typed results (two providers; Codex shelved 2026-10-29) | `judges/typed-results.ts` | 2E (OpenCode Go), 4F (the bridge and OpenCode Go) |
 | Five-node workflow, two providers, from the phone | Workflows judge 6 and the phone run | 7B |
-| Artifact and portal load on the phone | `judges/reach.ts --live` and the nonce read-back | 5G |
+| Artifact and portal load on the phone | Shelved with porch (2026-10-29); not judged in phase 2 | none |
 | No child without an approved brief (ADR 0026) | Ledger conformance and `brief-go.sh` | 4A, 5A, 7B |
 | A child asks its parent (ADR 0027) | The routing scenario, then through the page | 4B, 6D |
 | Durability of everything new | `events-kill.sh`, `brief-go.sh`, `subagent-durability.ts`, the workflow matrix, `reach-restart.sh` | 1B, 4A, 4C, 4D, 3F |
@@ -299,8 +301,8 @@ The fan-out target (ten stones) is phase 3's.
 One script, `ops/wizards/phase-2.sh`, written with the `wizard` skill.
 
 1. **Finish the phase 1 gate.** Done on 2026-10-28, WebKit load included; the day chose the project rail.
-2. **Codex login.** Open the device-code link the wizard prints, from any device, and approve (about two minutes). Without it, the typed-results target runs on the recorded fallback.
-3. **Caddy and porch.** The wizard backs up `~/caddy/conf/Caddyfile`, then shows each edit before applying it: porch's `import` line, `stream_close_delay`, the compose mount, owner-only `plans.gneiss.run`. Confirm each; anyone you shared a plan link with will need to be on your login to open it.
+2. **Codex login.** Shelved: the user has no Codex subscription (2026-10-29). The wizard stage stays, optional.
+3. **Caddy and porch.** Shelved: porch is not a live project (2026-10-29). Nothing touches the Caddyfile or porch.
 4. **The design pass.** Preview rounds of the new look, published to `plans.gneiss.run`; approve or name changes. Each approved round freezes its screenshots.
 5. **Switch to `next`** on the phone and desktop when the rounds are done.
 6. **The gate on the phone.** Launch the five-node workflow and answer its launch approval; read the artifact and portal nonces; confirm an approval push arrives on the locked phone.

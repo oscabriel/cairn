@@ -248,7 +248,7 @@ _Avoid_: cost (for a plan's figure)
 
 **Model family**: The vendor a model comes from (Anthropic, OpenAI, Google, or other), whichever provider serves it. A judge or verifier on another family than the worker is the outside judge the kickoff asks for.
 
-**Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between). Each request counts once, by its last attempt, and a login or logout starts the provider over. Role resolution passes over a limited or failing provider.
+**Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between; such a streak lapses fifteen minutes after its newest failure, so one request can find out). Each request counts once, by its last attempt, and a login or logout starts the provider over. Role resolution passes over a limited or failing provider.
 
 **Budget**: The limits a brief or a workflow's launch carries (list-price dollars, tokens, turns, minutes, a plan window guard), with a warning line at 80% by default. Reaching it stops new work and asks for a raise.
 

@@ -9,10 +9,19 @@
 // run that ended (failed, or ran longer than 20 seconds) while no visible page reported showing the
 // thread in the last 30 seconds is pushed once, claimed in `notified_runs` under the thread and the
 // run's end time. Executor's needs-sign-in push is sent once until the link is signed in again.
+// A subagent's run end is never pushed (its result reaches its parent as a note, ADR 0028), and a
+// push is suppressed while a visible page shows its thread or any ancestor of it (`isWatchedTree`).
+// Approval push (briefs note B7, rules in `RequestPush.ts`): the same events push a request the
+// user can answer, once per request and one notification per thread (`ask:<threadId>`), worded
+// from the thread's records (`RequestRecords`); a sweep every 30 seconds pushes a request whose
+// first push was suppressed or missed once it is 60 seconds old and unwatched, and reminds once 15
+// minutes after its last push. The badge counts threads with an unseen result or a request.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
+import type { ApprovalRecord } from "@cairn/protocol/Policy";
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
 import type { ThreadShell } from "@cairn/protocol/Shell";
+import { MAX_SUBAGENT_DEPTH } from "@cairn/protocol/Subagents";
 import {
   Clock,
   Context,
@@ -34,6 +43,19 @@ import { isLiveThread, ThreadRows } from "../shell/ThreadRows.ts";
 import { Presence } from "./Presence.ts";
 import { endpointHost, PushSubscriptions } from "./PushSubscriptions.ts";
 import type { PushStoreError } from "./PushSubscriptions.ts";
+import {
+  followUpDue,
+  hasPendingRequest,
+  lateKey,
+  newestRequest,
+  remindKey,
+  requestBody,
+  requestKey,
+  requestsToPush,
+  requestTag,
+} from "./RequestPush.ts";
+import type { Claim, FollowUp, RequestPush } from "./RequestPush.ts";
+import { RequestRecords } from "./RequestRecords.ts";
 import { WebPush } from "./WebPush.ts";
 import type { PushResponse, SendOptions, WebPushError } from "./WebPush.ts";
 
@@ -45,7 +67,7 @@ export const PushMessage = Schema.Struct({
   tag: Schema.String,
   /** The same-origin path a tap opens. */
   url: Schema.String,
-  /** The app icon's badge: threads with a result the user has not seen. */
+  /** The app icon's badge: threads with a result the user has not seen or a request waiting. */
   badge: Schema.Int,
 });
 
@@ -68,6 +90,12 @@ export interface NotifierSettings {
   readonly ttl: Duration.Duration;
   /** How long `notified_runs` keeps a claim. */
   readonly claimRetention: Duration.Duration;
+  /** A request no push went out for is pushed once it is this old and no page shows it. */
+  readonly lateAfter: Duration.Duration;
+  /** A request still pending this long after its last push is pushed once more. */
+  readonly remindAfter: Duration.Duration;
+  /** How often the sweep looks for late pushes and reminders owed. */
+  readonly sweepEvery: Duration.Duration;
 }
 
 /** The notifier's settings; tests shorten them. */
@@ -81,6 +109,9 @@ export const NotifierSettings = Context.Reference<NotifierSettings>(
       retries: 2,
       ttl: Duration.hours(6),
       claimRetention: Duration.days(30),
+      lateAfter: Duration.seconds(60),
+      remindAfter: Duration.minutes(15),
+      sweepEvery: Duration.seconds(30),
     }),
   }
 );
@@ -136,7 +167,8 @@ export const runEndToPush = (
   now: DateTime.Utc,
   settings: Pick<NotifierSettings, "minRunDuration" | "staleAfter">
 ): Option.Option<RunEnd> => {
-  if (Option.isSome(thread.activeRunId)) {
+  // A subagent's run end reaches its parent as a note, not the user's phone.
+  if (Option.isSome(thread.activeRunId) || Option.isSome(thread.lineage)) {
     return Option.none();
   }
 
@@ -217,6 +249,42 @@ export const runMessage = (
   };
 };
 
+/** How many ancestors the presence check walks: the subagent depth cap, with room to spare. */
+const ANCESTOR_HOPS = MAX_SUBAGENT_DEPTH + 2;
+
+/**
+ * True while a visible page shows `threadId` or any of its ancestors: a subagent's request shows on
+ * every ancestor's thread (ADR 0027), so a page on any of them has it in front of the user.
+ * `parentOf` names a thread's parent; a missing row or a loop ends the walk.
+ */
+export const watchedTree =
+  <E, R>(
+    isWatched: (threadId: ThreadId) => Effect.Effect<boolean, E, R>,
+    parentOf: (
+      threadId: ThreadId
+    ) => Effect.Effect<Option.Option<ThreadId>, E, R>
+  ) =>
+  (threadId: ThreadId): Effect.Effect<boolean, E, R> =>
+    Effect.gen(function* () {
+      const seen = new Set<ThreadId>();
+      let current = Option.some(threadId);
+
+      while (
+        Option.isSome(current) &&
+        !seen.has(current.value) &&
+        seen.size <= ANCESTOR_HOPS
+      ) {
+        if (yield* isWatched(current.value)) {
+          return true;
+        }
+
+        seen.add(current.value);
+        current = yield* parentOf(current.value);
+      }
+
+      return false;
+    });
+
 /** Executor's needs-sign-in push. */
 export const executorSignInMessage = (badge: number): PushMessage => ({
   title: "Executor needs sign-in",
@@ -228,6 +296,29 @@ export const executorSignInMessage = (badge: number): PushMessage => ({
 
 /** The claim key of the needs-sign-in push. */
 export const EXECUTOR_SIGN_IN_KEY = "executor-sign-in";
+
+/** The push for a request waiting on a thread (`RequestPush.ts`). */
+export const requestMessage = (
+  push: RequestPush,
+  badge: number
+): PushMessage => ({
+  title: cutText(push.thread.title, TITLE_LIMIT),
+  body: cutText(requestBody(push), BODY_LIMIT),
+  tag: requestTag(push.thread.id),
+  url: `/t/${push.thread.id}`,
+  badge,
+});
+
+/**
+ * The app icon's badge: threads that need the user, each counted once, for an unseen result or a
+ * request waiting. A subagent's result reaches its parent, so only its requests count.
+ */
+export const badgeOf = (threads: ReadonlyArray<ThreadShell>): number =>
+  threads.filter(
+    (thread) =>
+      (Option.isNone(thread.lineage) && hasUnseenResult(thread)) ||
+      hasPendingRequest(thread)
+  ).length;
 
 /** The kind of shell event a run end arrives in. */
 const RUN_EVENT = "thread.activity-updated";
@@ -242,6 +333,16 @@ const decodeCursor = Schema.decodeUnknownEffect(CursorRows);
 const ChangeRows = Schema.Array(Schema.Struct({ changed: Schema.Int }));
 
 const decodeChanges = Schema.decodeUnknownEffect(ChangeRows);
+
+const ClaimRows = Schema.Array(
+  Schema.Struct({
+    key: Schema.String,
+    outcome: Schema.Literals(["sent", "suppressed"]),
+    created_at: Schema.Int,
+  })
+);
+
+const decodeClaims = Schema.decodeUnknownEffect(ClaimRows);
 
 const logStoreFailure = (failure: PushStoreError) =>
   Effect.logWarning("push store failed").pipe(
@@ -265,8 +366,13 @@ export class Notifier extends Context.Service<
     sendToAll(
       message: PushMessage
     ): Effect.Effect<ReadonlyArray<DeliveryOutcome>>;
-    /** Handles one shell event as the event loop does: pushes the run end its thread row shows. */
+    /**
+     * Handles one shell event as the event loop does: pushes the run end its thread row shows, and
+     * the requests waiting on it that no push was decided for yet.
+     */
     handleEvent(event: StoredShellEvent): Effect.Effect<void>;
+    /** One pass of the sweep: the late pushes and reminders owed now. */
+    readonly sweep: Effect.Effect<void>;
     /** Pushes "Executor needs sign-in" once, until `executorSignedIn` clears it. */
     readonly executorNeedsSignIn: Effect.Effect<void>;
     /** Executor works again: the next lapse pushes again. */
@@ -277,8 +383,8 @@ export class Notifier extends Context.Service<
 >()("cairn/server/push/Notifier") {
   /**
    * The notifier and its event loop, which starts with the layer and stops with its scope. Needs
-   * the shell store (`EventStore`, `ThreadRows`), `SqlClient`, `PushSubscriptions`, `WebPush` and
-   * `Presence`.
+   * the shell store (`EventStore`, `ThreadRows`), `SqlClient`, `PushSubscriptions`, `WebPush`,
+   * `Presence` and `RequestRecords`.
    */
   static readonly layerNoDeps = Layer.effect(
     Notifier,
@@ -289,6 +395,7 @@ export class Notifier extends Context.Service<
       const subscriptions = yield* PushSubscriptions;
       const webPush = yield* WebPush;
       const presence = yield* Presence;
+      const records = yield* RequestRecords;
       const settings = yield* NotifierSettings;
       const sends = yield* FiberSet.make<ReadonlyArray<DeliveryOutcome>>();
 
@@ -419,17 +526,25 @@ export class Notifier extends Context.Service<
         });
 
       const badgeCount = threads.listLive.pipe(
-        Effect.map(
-          (rows) => rows.filter((row) => hasUnseenResult(row.shell)).length
-        ),
+        Effect.map((rows) => badgeOf(rows.map((row) => row.shell))),
         Effect.orElseSucceed(() => 0)
+      );
+
+      const isWatchedTree = watchedTree(
+        (threadId) => presence.isWatched(threadId),
+        (threadId) =>
+          threads.get(threadId).pipe(
+            Effect.map(Option.flatMap((row) => row.shell.lineage)),
+            Effect.map(Option.map((lineage) => lineage.parentThreadId)),
+            Effect.orElseSucceed(() => Option.none<ThreadId>())
+          )
       );
 
       /** Starts `message`'s delivery without waiting for it. */
       const startSend = (message: PushMessage) =>
         FiberSet.run(sends, sendToAll(message)).pipe(Effect.asVoid);
 
-      const handleEvent = Effect.fn("Notifier.handleEvent")(
+      const pushRunEnd = Effect.fn("Notifier.pushRunEnd")(
         function* (event: StoredShellEvent) {
           if (!isRunEvent(event) || event.aggregateKind !== "thread") {
             return;
@@ -449,7 +564,7 @@ export class Notifier extends Context.Service<
             return;
           }
 
-          if (yield* presence.isWatched(threadId)) {
+          if (yield* isWatchedTree(threadId)) {
             yield* claim(end.value.key, Option.some(threadId), "suppressed");
 
             return;
@@ -480,6 +595,237 @@ export class Notifier extends Context.Service<
               )
             )
           )
+      );
+
+      /** The claims recorded under `keys`, by key. */
+      const claimsOf = (keys: ReadonlyArray<string>) =>
+        sql`
+          SELECT key, outcome, created_at FROM notified_runs WHERE ${sql.in("key", keys)}
+        `.pipe(
+          Effect.flatMap(decodeClaims),
+          Effect.map(
+            (rows) =>
+              new Map(
+                rows.map((row): readonly [string, Claim] => [
+                  row.key,
+                  { outcome: row.outcome, at: row.created_at },
+                ])
+              )
+          )
+        );
+
+      /**
+       * True while a visible page shows the thread, the home thread of any of `requests` (the child
+       * an escalated question came from), or an ancestor of either: the card shows on all of them.
+       */
+      const requestsWatched = Effect.fnUntraced(function* (
+        threadId: ThreadId,
+        requests: ReadonlyArray<ApprovalRecord>
+      ) {
+        const homes = new Set([
+          threadId,
+          ...requests.flatMap((request) =>
+            request.mirrorOf === null ? [] : [request.mirrorOf.threadId]
+          ),
+        ]);
+
+        for (const home of homes) {
+          if (yield* isWatchedTree(home)) {
+            return true;
+          }
+        }
+
+        return false;
+      });
+
+      /** The asking child's title, for an escalated question's mirror. */
+      const askerOf = (request: ApprovalRecord) =>
+        Option.match(Option.fromNullOr(request.mirrorOf), {
+          onNone: () => Effect.succeed(Option.none<string>()),
+          onSome: (mirror) =>
+            threads.get(mirror.threadId).pipe(
+              Effect.map(Option.map((row) => row.shell.title)),
+              Effect.orElseSucceed(() => Option.none<string>())
+            ),
+        });
+
+      /** One push for the newest of `won`, counting every request `open` on the thread. */
+      const sendRequestPush = Effect.fnUntraced(function* (
+        thread: ThreadShell,
+        won: ReadonlyArray<ApprovalRecord>,
+        open: ReadonlyArray<ApprovalRecord>,
+        reminder: boolean
+      ) {
+        const request = newestRequest(won);
+
+        if (Option.isNone(request)) {
+          return;
+        }
+
+        const asker = yield* askerOf(request.value);
+
+        yield* startSend(
+          requestMessage(
+            {
+              thread,
+              request: request.value,
+              count: open.length,
+              asker,
+              reminder,
+            },
+            yield* badgeCount
+          )
+        );
+      });
+
+      // The request signature (oldest pending id and count) each row had when its records were last
+      // read, so the events of a busy thread with a request waiting do not read them again.
+      const readAt = new Map<ThreadId, string>();
+
+      const pushRequests = Effect.fn("Notifier.pushRequests")(
+        function* (event: StoredShellEvent) {
+          if (!isRunEvent(event) || event.aggregateKind !== "thread") {
+            return;
+          }
+
+          const threadId = event.aggregateId;
+          const row = yield* threads.get(threadId);
+
+          if (
+            Option.isNone(row) ||
+            !isLiveThread(row.value) ||
+            !hasPendingRequest(row.value.shell)
+          ) {
+            readAt.delete(threadId);
+
+            return;
+          }
+
+          const thread = row.value.shell;
+
+          const signature = `${Option.match(thread.pendingRuntimeRequest, {
+            onNone: () => "",
+            onSome: (request) => request.id,
+          })}/${String(thread.pendingCount)}`;
+
+          if (readAt.get(threadId) === signature) {
+            return;
+          }
+
+          readAt.set(threadId, signature);
+
+          const open = requestsToPush(yield* records.of(threadId));
+
+          if (open.length === 0) {
+            return;
+          }
+
+          if (yield* requestsWatched(threadId, open)) {
+            for (const request of open) {
+              yield* claim(
+                requestKey(request.id),
+                Option.some(threadId),
+                "suppressed"
+              );
+            }
+
+            return;
+          }
+
+          const won = yield* Effect.filter(open, (request) =>
+            claim(requestKey(request.id), Option.some(threadId), "sent")
+          );
+
+          yield* sendRequestPush(thread, won, open, false);
+        },
+        (effect, event) =>
+          effect.pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("request push decision failed", cause).pipe(
+                Effect.annotateLogs({
+                  event: "push_request_decision_failed",
+                  sequence: event.sequence,
+                })
+              )
+            )
+          )
+      );
+
+      const handleEvent = (event: StoredShellEvent) =>
+        pushRunEnd(event).pipe(Effect.andThen(pushRequests(event)));
+
+      /** The late pushes and reminders one thread's requests are owed at `now`, as one push. */
+      const sweepThread = Effect.fnUntraced(function* (
+        thread: ThreadShell,
+        now: number
+      ) {
+        const open = requestsToPush(yield* records.of(thread.id));
+
+        if (open.length === 0) {
+          return;
+        }
+
+        const claims = yield* claimsOf(
+          open.flatMap((request) => [
+            requestKey(request.id),
+            lateKey(request.id),
+            remindKey(request.id),
+          ])
+        );
+
+        const owed = open.flatMap((request) =>
+          Option.toArray(
+            followUpDue(
+              request,
+              {
+                first: Option.fromUndefinedOr(
+                  claims.get(requestKey(request.id))
+                ),
+                late: Option.fromUndefinedOr(claims.get(lateKey(request.id))),
+                remind: claims.has(remindKey(request.id)),
+              },
+              now,
+              settings
+            )
+          ).map((due: FollowUp) => ({ request, due }))
+        );
+
+        if (owed.length === 0 || (yield* requestsWatched(thread.id, open))) {
+          return;
+        }
+
+        const won = yield* Effect.filter(owed, ({ request, due }) =>
+          claim(
+            due === "late" ? lateKey(request.id) : remindKey(request.id),
+            Option.some(thread.id),
+            "sent"
+          )
+        );
+
+        yield* sendRequestPush(
+          thread,
+          won.map(({ request }) => request),
+          open,
+          won.every(({ due }) => due === "remind")
+        );
+      });
+
+      const sweep = Effect.gen(function* () {
+        const rows = yield* threads.listLive;
+        const now = yield* Clock.currentTimeMillis;
+
+        for (const row of rows) {
+          if (hasPendingRequest(row.shell)) {
+            yield* sweepThread(row.shell, now);
+          }
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("request push sweep failed", cause).pipe(
+            Effect.annotateLogs({ event: "push_sweep_failed" })
+          )
+        ),
+        Effect.withSpan("Notifier.sweep")
       );
 
       const executorNeedsSignIn = Effect.gen(function* () {
@@ -581,12 +927,16 @@ export class Notifier extends Context.Service<
       );
 
       yield* Effect.forkScoped(loop);
+      yield* Effect.forkScoped(
+        sweep.pipe(Effect.repeat(Schedule.spaced(settings.sweepEvery)))
+      );
 
       const settle = FiberSet.awaitEmpty(sends);
 
       return Notifier.of({
         sendToAll: (message) => sendToAll(message),
         handleEvent,
+        sweep,
         executorNeedsSignIn,
         executorSignedIn,
         settle,

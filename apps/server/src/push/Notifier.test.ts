@@ -51,6 +51,7 @@ import {
 } from "./Notifier.ts";
 import { Presence } from "./Presence.ts";
 import { PushEndpointRule, PushSubscriptions } from "./PushSubscriptions.ts";
+import { RequestRecords } from "./RequestRecords.ts";
 import { WebPush } from "./WebPush.ts";
 
 /** 2026-10-22T12:00:00Z. */
@@ -103,7 +104,8 @@ const pushMigrations = { ...shellMigrations, "0005_Push": Push0005 };
 
 const StoreLayer = Layer.mergeAll(
   PushSubscriptions.layerNoDeps,
-  Presence.layer
+  Presence.layer,
+  RequestRecords.layerNone
 ).pipe(
   Layer.provideMerge(ShellStoreLayer),
   Layer.provideMerge(Database.layerTest(pushMigrations))

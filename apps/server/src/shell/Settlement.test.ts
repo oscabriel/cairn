@@ -1,3 +1,4 @@
+import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { ApprovalId } from "@cairn/protocol/Ids";
 import { BARE_ROW_FIELDS } from "@cairn/protocol/Shell";
 import type { ThreadShell } from "@cairn/protocol/Shell";
@@ -86,6 +87,18 @@ const row = (
 const settleAt = (thread: ThreadRow, autoSettleDays = 3) =>
   resolveAutoSettlementAt({ row: thread, nowMs: NOW, autoSettleDays });
 
+/** A parent's tally with one settled child, `delivered` of its one settlement. */
+const oneSettledChild = (delivered: number) =>
+  tallyOfRegistry({
+    items: {
+      "call-1": {
+        status: "settled",
+        settlements: [{ outcome: "completed" }],
+        delivered,
+      },
+    },
+  });
+
 describe(resolveAutoSettlementAt, () => {
   it("settles a thread quiet for longer than the window, at its last activity", () => {
     const completed = at(NOW - 4 * DAY);
@@ -162,6 +175,16 @@ describe(resolveAutoSettlementAt, () => {
           row({ subagents: { working: 0, asking: 0, settled: 2, failed: 1 } })
         )
       )
+    );
+  });
+
+  it("never settles a parent while a settled child's result is still on the way", () => {
+    assert.deepStrictEqual(
+      [
+        Option.isSome(settleAt(row({ subagents: oneSettledChild(0) }))),
+        Option.isSome(settleAt(row({ subagents: oneSettledChild(1) }))),
+      ],
+      [false, true]
     );
   });
 

@@ -158,6 +158,7 @@ const maskEvent = (
           child: aliasOf(found.child),
           status: found.status,
         }),
+      SubagentTallyUpdated: () => Option.none<Masked>(),
       TaskParked: () => Option.none<Masked>(),
       CompactionStarted: () =>
         Option.some<Masked>({ event: "CompactionStarted" }),

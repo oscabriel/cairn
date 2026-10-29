@@ -1,3 +1,4 @@
+import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import {
   ProjectCreate,
   ProjectDelete,
@@ -473,6 +474,68 @@ describe("subagents on the shelf", () => {
           }
 
           yield* commit(tally(0, 0));
+          yield* commit(
+            ThreadSettle.make({ commandId: nextCommandId(), threadId })
+          );
+
+          assert.deepStrictEqual(
+            (yield* thread(1)).settledOverride,
+            Option.some("settled")
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "refuses to settle a parent while a settled child's result is still on the way",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedChild;
+
+          /** The parent's tally as its registry reads, one child settled and `delivered` of 1. */
+          const fromRegistry = (delivered: number) =>
+            ThreadActivityUpdate.make({
+              commandId: nextCommandId(),
+              threadId,
+              patch: {
+                ...emptyActivityPatch,
+                subagents: Option.some(
+                  tallyOfRegistry({
+                    items: {
+                      "call-1": {
+                        status: "settled",
+                        settlements: [{ outcome: "completed" }],
+                        delivered,
+                      },
+                    },
+                  })
+                ),
+              },
+            });
+
+          yield* commit(fromRegistry(0));
+
+          const read = yield* thread(1);
+
+          assert.deepStrictEqual(
+            [
+              yield* refusal(
+                ThreadSettle.make({ commandId: nextCommandId(), threadId })
+              ),
+              yield* refusal(
+                ThreadAutoSettle.make({
+                  commandId: nextCommandId(),
+                  threadId,
+                  snapshotAt: read.updatedAt,
+                  settledAt: read.createdAt,
+                })
+              ),
+            ],
+            ["ShellCommandConflict", "ShellCommandConflict"]
+          );
+
+          yield* commit(fromRegistry(1));
           yield* commit(
             ThreadSettle.make({ commandId: nextCommandId(), threadId })
           );

@@ -8,6 +8,9 @@
 // - freshIds: the reporter mints a fresh request id for each submit it makes (the child's input,
 //   a nudge, a wake) on every attempt, so a rerun after a crash submits it again. Without a crash
 //   it delivers once: only the kill judge catches it.
+// - seamOwnIds: the seam submits a user's input under a request id of its own (`<id>-seam`), not
+//   the one its steer reporter submits under, so a subagent's steer is admitted twice. The kill
+//   judge's steer control.
 // - wakeStoppedParent: a parent the user stopped (or whose run failed) is woken anyway.
 // - routeApprovalToParent: a child's gated call is offered to the parent model, which may answer it.
 
@@ -20,6 +23,7 @@ export interface SubagentFaultSet {
   readonly dropNote: boolean;
   readonly deliverTwice: boolean;
   readonly freshIds: boolean;
+  readonly seamOwnIds: boolean;
   readonly wakeStoppedParent: boolean;
   readonly routeApprovalToParent: boolean;
 }
@@ -29,6 +33,7 @@ export const NO_SUBAGENT_FAULTS: SubagentFaultSet = {
   dropNote: false,
   deliverTwice: false,
   freshIds: false,
+  seamOwnIds: false,
   wakeStoppedParent: false,
   routeApprovalToParent: false,
 };

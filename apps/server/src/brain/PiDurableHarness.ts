@@ -109,7 +109,7 @@ import {
   piSubmissionId,
   piTaskId,
 } from "./PiIds.ts";
-import { SubagentCrashes } from "./SubagentFaults.ts";
+import { SubagentCrashes, SubagentFaults } from "./SubagentFaults.ts";
 import { WindowFrame, windowedProjector } from "./ThreadWindow.ts";
 import type { WindowedView } from "./ThreadWindow.ts";
 import { entryImages, projectEntry } from "./ThreadWire.ts";
@@ -284,6 +284,7 @@ const layerNoDeps = Layer.effect(
     const brain = yield* Brain;
     const feed = yield* CommitFeed;
     const crashes = yield* SubagentCrashes;
+    const faults = yield* SubagentFaults;
     const parked = yield* Parked;
     // A stop finishes here once it started aborting, whatever happens to its caller.
     const layerScope = yield* Effect.scope;
@@ -537,16 +538,27 @@ const layerNoDeps = Layer.effect(
       });
 
       // A user's input to a subagent gets its reporter first, so its result reaches the parent.
-      yield* steerReporter(session.harness, conversation.id, draft).pipe(
-        Effect.mapError(fromDurable(Option.some(threadId)))
-      );
-      crashes.at("steer-recorded");
+      const reported = yield* steerReporter(
+        session.harness,
+        conversation.id,
+        draft
+      ).pipe(Effect.mapError(fromDurable(Option.some(threadId))));
+
+      if (reported) {
+        crashes.at("steer-recorded");
+      }
+
+      // The kill judge's steer control: an id the steer's reporter does not submit under.
+      const submitted =
+        faults.seamOwnIds && draft.requestId !== undefined
+          ? { ...draft, requestId: `${draft.requestId}-seam` }
+          : draft;
 
       const record = yield* call(
         Option.some(threadId),
         "submit",
         async (context) => {
-          const submission = await conversation.submit(draft, context);
+          const submission = await conversation.submit(submitted, context);
 
           return await submission.status(context);
         }
@@ -743,12 +755,15 @@ const layerNoDeps = Layer.effect(
     /**
      * One thread's stop, in the caller's fiber: its aborts and cancellations, the notes its run left
      * queued, then with `subagents: "stop"` each child its registry names as working, queue
-     * cleared, and theirs in turn (ADR 0028). `keep` leaves them working.
+     * cleared, and theirs in turn (ADR 0028). `keep` leaves them working. A settled child is left as
+     * it is, its warm session kept, and so is anything under it: reaching a working grandchild
+     * through it would wake it with that grandchild's stopped result, since its last run completed
+     * and it is not halted. The descendants it stopped, nearest first.
      */
     const stopTree = (
       threadId: ThreadId,
       options: StopOptions
-    ): Effect.Effect<void, HarnessError> =>
+    ): Effect.Effect<ReadonlyArray<ThreadId>, HarnessError> =>
       Effect.gen(function* () {
         const session = yield* open(Option.some(threadId));
         const conversation = yield* conversationOf(session, threadId);
@@ -758,7 +773,7 @@ const layerNoDeps = Layer.effect(
         yield* placeAfterRun(threadId);
 
         if (options.subagents !== "stop") {
-          return;
+          return [];
         }
 
         const registry = yield* call(
@@ -772,20 +787,27 @@ const layerNoDeps = Layer.effect(
             )
         );
 
+        const stopped: Array<ThreadId> = [];
+
         for (const item of Object.values(registry?.items ?? {})) {
           const child = decodeThreadId(item.threadId);
 
           if (item.status !== "settled" && Option.isSome(child)) {
-            yield* stopTree(child.value, {
-              clearQueue: true,
-              subagents: "stop",
-            });
+            stopped.push(
+              child.value,
+              ...(yield* stopTree(child.value, {
+                clearQueue: true,
+                subagents: "stop",
+              }))
+            );
           }
         }
+
+        return stopped;
       });
 
     /**
-     * Stops a thread's run, and with Stop all its working children. The whole stop runs in the
+     * Stops a thread's run, and with Stop all its working descendants. The whole stop runs in the
      * harness's own scope and the caller only joins it: an abort mark is durable, so a caller that
      * goes away (a client disconnect interrupting the RPC) must not leave the records its run held
      * pending, nor the later children of a Stop all running. A crash in between is the boot

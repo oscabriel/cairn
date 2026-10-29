@@ -308,7 +308,7 @@ const attemptTimes = (attempts: ReadonlyArray<Attempt>, name: string) =>
 
 describe(Notifier, () => {
   it.effect(
-    "never pushes a subagent's run end: its result reaches its parent as a note",
+    "never pushes a subagent's run end, nor counts it in the badge: its result reaches its parent as a note",
     () => {
       const service = fakePushService(() => 201);
 
@@ -345,10 +345,11 @@ describe(Notifier, () => {
           yield* waitUntil(() => service.attempts.length >= 1);
 
           assert.deepStrictEqual(
-            messagesTo(service.attempts, "phone").map(
-              (message) => message.title
-            ),
-            ["Thread 1"]
+            messagesTo(service.attempts, "phone").map((message) => [
+              message.title,
+              message.badge,
+            ]),
+            [["Thread 1", 1]]
           );
         })
       );

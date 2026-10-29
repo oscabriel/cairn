@@ -5,8 +5,10 @@
 // within a 2 minute grace, not snoozed), the snooze that a failure wakes early, the inactivity rule
 // measured from the latest activity or snooze wake, and a sweep that commits a guarded
 // `ThreadAutoSettle` per thread. Changed: every pull request branch is gone, the sweep runs every 5
-// minutes, a second fiber ends snoozes when their time comes, and the inactivity window is one
-// server setting (`autoSettleDays`, 0 turns it off).
+// minutes, a second fiber ends snoozes when their time comes, the inactivity window is one server
+// setting (`autoSettleDays`, 0 turns it off), a subagent's row (one with a `lineage`) is never a
+// candidate, and a parent is not one while a child works or asks or its result is on the way
+// (ADR 0028; t3code has no subagents).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //

@@ -15,7 +15,8 @@
 //   kill at each step of a reporter's delivery, the brief's input to the child to the parent's wake.
 // - steer-recorded: after the brief's result, the user steers the child (`thread.send` on the
 //   child), and the kill lands between the steer reporter's commit and the seam's submit; the judge
-//   resends the steer under its request id.
+//   resends the steer under its request id. It asserts the kill landed there: none had fired when
+//   the steer was first sent, and it fired once.
 // - nudge-marked, nudge-submitted: a typed child ends without a result, and the kill lands around
 //   its one nudge.
 // - park: five kills at reporter-noted, so pi-durable's crash-loop guard parks the reporter; the
@@ -25,7 +26,10 @@
 //   and passes; with a kill after the child's input or the wake was submitted it must fail by
 //   delivering more than once. `deliverTwice`, the conformance suite's mutation (a reporter whose
 //   note and wake ids are minted fresh, twice): it must fail by delivering twice. Each must fail by
-//   that and by nothing else, or the judge proves nothing.
+//   that and by nothing else, or the judge proves nothing. `seamOwnIds` (control-steer-recorded),
+//   a seam that submits the steer under an id of its own rather than its reporter's: killed at
+//   steer-recorded, the reporter's resumed submit and the resent steer both land, so it must fail by
+//   the child receiving the steer twice.
 //
 // `--bridge` runs bridge-reporter-answered instead: parent and child on the Claude bridge
 // (`judge-main.ts --models real`, the model `--model` names), killed after the child's real answer
@@ -105,7 +109,7 @@ interface CaseSpec {
   readonly crash: Option.Option<string>;
   readonly errand: Errand;
   /** The broken reporter a control plants (`CAIRN_JUDGE_SUBAGENT_FAULTS`); none for a real case. */
-  readonly fault: Option.Option<"freshIds" | "deliverTwice">;
+  readonly fault: Option.Option<"freshIds" | "deliverTwice" | "seamOwnIds">;
   /** What the case must end in: a pass, or (a control) a double delivery and nothing else. */
   readonly expect: "pass" | "double";
   readonly bridge: boolean;
@@ -152,6 +156,12 @@ const FAUX_CASES: ReadonlyArray<CaseSpec> = [
   spec("control-reporter-woken", {
     crash: "reporter-woken",
     fault: Option.some("freshIds"),
+    expect: "double",
+  }),
+  spec("control-steer-recorded", {
+    crash: "steer-recorded",
+    errand: "steer",
+    fault: Option.some("seamOwnIds"),
     expect: "double",
   }),
   spec("control-deliver-twice", {
@@ -289,6 +299,17 @@ const makeBrain = (caseSpec: CaseSpec): Brain => {
       CAIRN_JUDGE_SUBAGENT_FAULTS: Option.getOrElse(caseSpec.fault, () => ""),
     },
   };
+};
+
+/** How many kills the brain's marker counts; 0 when none fired. */
+const firedCount = (brain: Brain) => {
+  try {
+    const fired = Math.trunc(Number(readFileSync(brain.marker, "utf-8")));
+
+    return Number.isFinite(fired) ? fired : 0;
+  } catch {
+    return 0;
+  }
 };
 
 /** Starts a life of the brain and waits until it is ready; the port it listens on. */
@@ -499,6 +520,8 @@ interface Plan {
   readonly launchRequest: RequestId;
   readonly steerRequest: RequestId;
   steered: boolean;
+  /** The kills that had fired when the judge first sent the steer; none before it was sent. */
+  firedAtSteer: Option.Option<number>;
 }
 
 /** What one quiet read found. */
@@ -543,6 +566,7 @@ const makePlan = Effect.gen(function* () {
     launchRequest: requestOf(yield* uuid7),
     steerRequest: requestOf(yield* uuid7),
     steered: false,
+    firedAtSteer: Option.none(),
   } satisfies Plan;
 });
 
@@ -601,6 +625,7 @@ const goOnBrief = (client: Client, plan: Plan, parentRow: ThreadShell) =>
 /** The user's steer, once the brief's result is delivered, under one request id in every life. */
 const steerOnce = (
   client: Client,
+  brain: Brain,
   caseSpec: CaseSpec,
   plan: Plan,
   item: SubagentRecord
@@ -613,6 +638,10 @@ const steerOnce = (
       item.delivered < 1
     ) {
       return false;
+    }
+
+    if (Option.isNone(plan.firedAtSteer)) {
+      plan.firedAtSteer = Option.some(firedCount(brain));
     }
 
     yield* client["thread.send"]({
@@ -632,7 +661,12 @@ const steerOnce = (
   });
 
 /** One read of the case: the reading, whether it is quiet, and a key that changes with progress. */
-const readCase = (client: Client, caseSpec: CaseSpec, plan: Plan) =>
+const readCase = (
+  client: Client,
+  brain: Brain,
+  caseSpec: CaseSpec,
+  plan: Plan
+) =>
   Effect.gen(function* () {
     const shell = yield* shellOf(client);
 
@@ -661,7 +695,7 @@ const readCase = (client: Client, caseSpec: CaseSpec, plan: Plan) =>
       return Option.none();
     }
 
-    if (yield* steerOnce(client, caseSpec, plan, item)) {
+    if (yield* steerOnce(client, brain, caseSpec, plan, item)) {
       return Option.none();
     }
 
@@ -733,7 +767,7 @@ const onePass = (
     while (true) {
       yield* Effect.sleep("250 millis");
 
-      const read = yield* readCase(client, caseSpec, plan);
+      const read = yield* readCase(client, brain, caseSpec, plan);
       const now = yield* Clock.currentTimeMillis;
 
       if (Option.isNone(read) || !read.value.quiet) {
@@ -821,17 +855,6 @@ const count = (
         },
       ];
 
-/** How many kills the brain's marker counts; 0 when none fired. */
-const firedCount = (brain: Brain) => {
-  try {
-    const fired = Math.trunc(Number(readFileSync(brain.marker, "utf-8")));
-
-    return Number.isFinite(fired) ? fired : 0;
-  } catch {
-    return 0;
-  }
-};
-
 const timesOf = (crash: Option.Option<string>) =>
   Option.match(crash, {
     onNone: () => 0,
@@ -849,6 +872,7 @@ const sameTally = (left: SubagentTally, right: SubagentTally) =>
 const judge = (
   caseSpec: CaseSpec,
   brain: Brain,
+  plan: Plan,
   reading: Reading,
   retried: number
 ): ReadonlyArray<Failure> => {
@@ -902,6 +926,18 @@ const judge = (
     failures.push({
       kind: "other",
       text: `the parent's tally is ${JSON.stringify(reading.parentRow.subagents)}, expected ${JSON.stringify(expectedTally)}`,
+    });
+  }
+
+  // A steer kill must land in the steer: none fired before the judge sent it.
+  if (
+    steer &&
+    Option.exists(caseSpec.crash, (crash) => crash.startsWith("steer-")) &&
+    !Option.contains(plan.firedAtSteer, 0)
+  ) {
+    failures.push({
+      kind: "other",
+      text: `the steer kill did not land in the steer: ${Option.getOrElse(plan.firedAtSteer, () => -1)} kills had fired when the steer was first sent`,
     });
   }
 
@@ -963,7 +999,7 @@ const runCase = (caseSpec: CaseSpec) =>
       const reading = yield* drive(brain, caseSpec, plan);
       const retried = yield* retriedAtBoot(brain);
 
-      return judge(caseSpec, brain, reading, retried);
+      return judge(caseSpec, brain, plan, reading, retried);
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.succeed<ReadonlyArray<Failure>>([

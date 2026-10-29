@@ -150,7 +150,6 @@ export const subagentRequestFor = (
 
 /**
  * Every subagent under `threadId`, nearest first (children, then theirs); a loop is walked once.
- * Stop all reaches each of them.
  */
 export const subagentDescendants = <
   T extends Pick<ThreadShell, "id" | "lineage">,

@@ -28,7 +28,7 @@ import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
-import { testCommandId, testThreadId } from "../shell/ShellTestKit.ts";
+import { testThreadId } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import { StopHooks } from "./StopHooks.ts";
@@ -298,36 +298,70 @@ describe("thread commands", () => {
   );
 
   it.live(
-    "Stop all runs the stop hooks of every subagent row under the thread; a stop that keeps them runs only the thread's",
+    "Stop all runs the stop hooks of the children the harness stopped; a settled child and a working grandchild under it keep their sessions",
     () =>
       withThread((threadId, projectId) =>
         Effect.gen(function* () {
-          const sink = yield* EventSink;
+          const seam = yield* HarnessSeam;
+          const store = yield* ScriptedStore;
 
-          const childRow = (n: number, parent: ThreadId) =>
-            ThreadCreate.make({
-              commandId: testCommandId(70_000 + n),
-              threadId: testThreadId(70_000 + n),
-              projectId,
-              title: `Child ${n}`,
-              provider: "faux",
-              modelId: "small",
-              thinkingLevel: "off",
-              runtimeMode: "full-access",
-              branch: Option.none(),
-              worktreePath: Option.none(),
-              lineage: Option.some({
-                parentThreadId: parent,
-                relationshipToParent: "subagent",
-                rootThreadId: threadId,
-              }),
-            });
-
-          const child = testThreadId(70_001);
+          const settledChild = testThreadId(70_001);
           const grandchild = testThreadId(70_002);
+          const workingChild = testThreadId(70_003);
 
-          yield* sink.commitCommand(childRow(1, threadId));
-          yield* sink.commitCommand(childRow(2, child));
+          for (const child of [settledChild, grandchild, workingChild]) {
+            yield* seam.ensureThread({
+              threadId: child,
+              projectId,
+              model: { provider: "faux", modelId: "small" },
+              thinkingLevel: "off",
+              cwd: "/tmp",
+              instructions: Option.none(),
+              runtimeMode: "full-access",
+            });
+          }
+
+          /** Links `child` under `parent` in the scripted registry, with `status`. */
+          const link = (
+            parent: ThreadId,
+            key: string,
+            child: ThreadId,
+            status: "working" | "settled"
+          ) => {
+            const found = store.threads.get(child);
+
+            store.threads.get(parent)?.subagents.set(key, {
+              threadId: child,
+              conversationId: found?.conversationId ?? 0,
+              anchorTaskId: 0,
+              briefApprovalId: `brief-${key}`,
+              description: key,
+              dispatch: {},
+              isolation: "shared",
+              status,
+              wake: "answer",
+              settlements: [],
+              delivered: 0,
+              questions: new Map(),
+              inputs: new Map(),
+              runs: [],
+            });
+          };
+
+          link(threadId, "settled", settledChild, "settled");
+          link(threadId, "working", workingChild, "working");
+          link(settledChild, "grand", grandchild, "working");
+
+          for (const child of [grandchild, workingChild]) {
+            yield* seam.submit(child, {
+              requestId: "work",
+              content: [{ type: "text", text: "work" }],
+              entry: Option.none(),
+              whenBusy: "followUp",
+            });
+            yield* eventually(liveState(child), isRunning);
+          }
+
           yield* Ref.set(stopped, []);
 
           yield* (yield* Threads).stop({
@@ -348,9 +382,15 @@ describe("thread commands", () => {
 
           assert.deepStrictEqual(yield* Ref.get(stopped), [
             threadId,
-            child,
-            grandchild,
+            workingChild,
           ]);
+          assert.deepStrictEqual(
+            [
+              isRunning(yield* liveState(workingChild)),
+              isRunning(yield* liveState(grandchild)),
+            ],
+            [false, true]
+          );
         })
       )
   );

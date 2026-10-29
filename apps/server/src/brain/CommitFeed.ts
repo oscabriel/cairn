@@ -14,16 +14,17 @@
 // - `cairn.approvals` changes: RuntimeRequestUpdated for each record whose status changed.
 // - `pi.usage` changes: UsageUpdated with the conversation's token totals.
 // - `cairn.subagents` changes: SubagentUpdated for each child whose status changed (ADR 0028),
-//   with the registry's tally after the commit. The last statuses live in memory only, so after a restart the first change to a parent's
-//   registry emits one for every child in it, changed or not: a consumer treats SubagentUpdated
-//   as idempotent (it sets a status, never counts transitions). Seeding the map from the document
-//   would read the state after the commit and hide the change it carries.
+//   with the registry's tally after the commit; SubagentTallyUpdated when only the tally changed
+//   (a settlement delivered). The last statuses live in memory only, so after a restart the first
+//   change to a parent's registry emits one for every child in it, changed or not: a consumer
+//   treats SubagentUpdated as idempotent (it sets a status, never counts transitions). Seeding the
+//   map from the document would read the state after the commit and hide the change it carries.
 //
-// Conversations that are not threads produce no events; a subagent is a thread, so it does. The listener is attached
-// through `Brain.subscribeCommits` while this layer builds, so before boot resumes the Harness, and
-// the brain attaches it to a reopened Session before resuming that one: no commit of a resumed task
-// goes unseen. Events never replay across a process restart, so the shell projector reconciles at
-// boot.
+// Conversations that are not threads produce no events; a subagent is a thread, so it does. The
+// listener is attached through `Brain.subscribeCommits` while this layer builds, so before boot
+// resumes the Harness, and the brain attaches it to a reopened Session before resuming that one:
+// no commit of a resumed task goes unseen. Events never replay across a process restart, so the
+// shell projector reconciles at boot.
 
 import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
@@ -76,6 +77,7 @@ import {
   RunStarted,
   RunTerminal,
   RuntimeRequestUpdated,
+  SubagentTallyUpdated,
   SubagentUpdated,
   ThreadEnsured,
   UsageUpdated,
@@ -151,6 +153,8 @@ interface FeedState {
   readonly approvals: Map<string, string>;
   /** Each child's last status, by `<parent conversation>:<registry key>`. */
   readonly subagents: Map<string, string>;
+  /** Each parent's last tally, as JSON. */
+  readonly tallies: Map<PiConversationId, string>;
 }
 
 const isRecord = (value: JsonValue | undefined): value is JsonObject =>
@@ -378,6 +382,14 @@ const subagentEvents = (
       }
     }
   }
+
+  const counted = JSON.stringify(tally);
+
+  if (events.length === 0 && state.tallies.get(conversationId) !== counted) {
+    events.push(SubagentTallyUpdated.make({ threadId, tally }));
+  }
+
+  state.tallies.set(conversationId, counted);
 
   return events;
 };
@@ -640,6 +652,7 @@ export class CommitFeed extends Context.Service<
         queueLengths: new Map(),
         approvals: new Map(),
         subagents: new Map(),
+        tallies: new Map(),
       };
 
       // Conversations this commit names that the feed has not met: read their metadata first.

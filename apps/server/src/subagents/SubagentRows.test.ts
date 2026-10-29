@@ -2,12 +2,25 @@
 // lineage, the parent's project and cwd, the brief's title and the dispatched model; a repeat, as
 // the fiber and the boot repair both answer the same child, leaves the one row, also when both
 // commit at once (the command id's receipt); a child whose parent has no row gets none. The fiber
-// and the boot repair over a real brain are in `brain/SubagentsPiDurable.test.ts`.
+// ends quietly when its scope closes and with a warning when the event stream ends under it. The
+// fiber and the boot repair over a real brain are in `brain/SubagentsPiDurable.test.ts`.
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Option } from "effect";
+import {
+  Effect,
+  Exit,
+  Layer,
+  Logger,
+  Option,
+  References,
+  Scope,
+  Stream,
+} from "effect";
 
+import { Brain } from "../brain/Brain.ts";
+import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
   createProject,
@@ -16,7 +29,7 @@ import {
   testThreadId,
 } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
-import { ensureChildRow } from "./SubagentRows.ts";
+import { ensureChildRow, SubagentRows } from "./SubagentRows.ts";
 import type { ChildRowSource } from "./SubagentRows.ts";
 
 const CHILD = ThreadId.make("01a185ff-18ee-7000-8000-000000000018");
@@ -155,6 +168,88 @@ describe("a subagent's shell row", () => {
         assert.lengthOf(
           (yield* rows.listLive).filter((found) => found.shell.id === CHILD),
           1
+        );
+      }).pipe(Effect.provide(ShellTestLayer))
+  );
+});
+
+const unsupported = (operation: string) =>
+  Effect.die(`the fake ${operation} is not used here`);
+
+/** A harness whose only part in use is `events`. */
+const harnessWith = (events: Stream.Stream<HarnessEvent>) =>
+  HarnessSeam.of({
+    ensureThread: () => unsupported("ensureThread"),
+    configure: () => unsupported("configure"),
+    submit: () => unsupported("submit"),
+    stop: () => unsupported("stop"),
+    withdraw: () => unsupported("withdraw"),
+    respond: () => unsupported("respond"),
+    write: () => unsupported("write"),
+    compact: () => unsupported("compact"),
+    watch: () => Stream.die("the fake watch is not used here"),
+    whenEnsured: () => unsupported("whenEnsured"),
+    history: () => unsupported("history"),
+    entry: () => unsupported("entry"),
+    entryImage: () => unsupported("entryImage"),
+    events,
+    inspect: Effect.succeed([]),
+    retry: () => unsupported("retry"),
+    capabilities: { durable: true, live: true },
+  });
+
+/** A brain that is there, so the fiber starts; nothing reaches its session here. */
+const presentBrain = Brain.of({
+  session: unsupported("session"),
+  sessions: Stream.never,
+  subscribeCommits: () => Effect.void,
+  resume: Effect.void,
+  now: () => 0,
+});
+
+/**
+ * Builds the SubagentRows fiber over `events` in a scope of its own, lets it run, then closes the
+ * scope with `exit`; the `event` annotation of each warning it logged.
+ */
+const warningsWhen = (
+  events: Stream.Stream<HarnessEvent>,
+  exit: Exit.Exit<unknown>
+) =>
+  Effect.gen(function* () {
+    const warned: Array<string> = [];
+
+    const capture = Logger.make((options) => {
+      if (options.logLevel === "Warn") {
+        warned.push(
+          String(options.fiber.getRef(References.CurrentLogAnnotations).event)
+        );
+      }
+    });
+
+    const scope = yield* Scope.make();
+
+    yield* Layer.buildWithScope(SubagentRows, scope).pipe(
+      Effect.provideService(HarnessSeam, harnessWith(events)),
+      Effect.provideService(Brain, presentBrain),
+      Effect.provide(Logger.layer([capture], { mergeWithExisting: false }))
+    );
+    yield* Effect.yieldNow;
+    yield* Scope.close(scope, exit);
+
+    return warned;
+  });
+
+describe("the subagent row fiber's end", () => {
+  it.effect(
+    "is quiet when the brain's scope closes, and a warning when the event stream ends under it",
+    () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(
+          [
+            yield* warningsWhen(Stream.never, Exit.void),
+            yield* warningsWhen(Stream.empty, Exit.void),
+          ],
+          [[], ["subagent_rows_ended"]]
         );
       }).pipe(Effect.provide(ShellTestLayer))
   );

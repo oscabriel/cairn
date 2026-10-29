@@ -37,6 +37,7 @@ import {
   RunStarted,
   RunTerminal,
   RuntimeRequestUpdated,
+  SubagentTallyUpdated,
   SubagentUpdated,
   TaskParked,
   ThreadEnsured,
@@ -1094,6 +1095,30 @@ describe("a parent's tally of its subagents", () => {
   );
 
   it.effect(
+    "a delivered settlement's SubagentTallyUpdated moves the child from working to settled",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedChild;
+
+          // Settled, with its result still on the way: counted as working.
+          yield* emit([updated("settled", { ...NO_SUBAGENTS, working: 1 })]);
+          yield* emit([
+            SubagentTallyUpdated.make({
+              threadId: THREAD,
+              tally: { ...NO_SUBAGENTS, settled: 1 },
+            }),
+          ]);
+
+          assert.deepStrictEqual((yield* shellOf(THREAD)).subagents, {
+            ...NO_SUBAGENTS,
+            settled: 1,
+          });
+        })
+      )
+  );
+
+  it.effect(
     "the boot reconcile counts a parent's registry when a lost event left its tally behind",
     () =>
       run(
@@ -1128,6 +1153,7 @@ describe("a parent's tally of its subagents", () => {
                               inputs: [],
                             },
                           ],
+                          delivered: 1,
                         },
                       },
                     },

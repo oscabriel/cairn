@@ -152,35 +152,36 @@ const hostTasks = build(
  * admits the same input and the other gets that submission back, a crash between this commit and
  * the seam's submit included. A `reject` input to a busy child gets no reporter: the seam's submit
  * refuses it with `thread_busy`, and a reporter that still finds the child busy drops its input.
- * Nothing for a thread that is not a subagent.
+ * Nothing for a thread that is not a subagent. True when this call committed the reporter, so a
+ * judge brain's `steer-recorded` crash point fires only in the window it names.
  */
 export const steerReporter = (
   session: Pick<Session, "commit" | "snapshot">,
   conversationId: ConversationId,
   input: InputSubmissionDraft
-): Effect.Effect<void, DurableCallError> =>
+): Effect.Effect<boolean, DurableCallError> =>
   durable("subagents.steer", async (context) => {
     const link = await session.snapshot(ChildDoc, conversationId, context);
     const { requestId } = input;
 
     if (!isLinked(link) || requestId === undefined) {
-      return;
+      return false;
     }
 
     const parent = conversationOf(link.parentConversationId);
 
-    await session.commit(async (tx) => {
+    return await session.commit(async (tx) => {
       const registry = await tx.doc(SubagentsDoc, parent);
       const item = registry.items[link.key];
 
       if (item === undefined || item.inputs[requestId] !== undefined) {
-        return;
+        return false;
       }
 
       const live = await tx.doc(LiveDoc, conversationId);
 
       if (input.whenBusy === "reject" && live.run !== undefined) {
-        return;
+        return false;
       }
 
       const taskId = await tx.createTask(
@@ -213,6 +214,8 @@ export const steerReporter = (
 
       item.inputs[requestId] = taskId;
       item.status = "working";
+
+      return true;
     }, context);
   });
 

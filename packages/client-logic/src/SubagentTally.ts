@@ -2,6 +2,9 @@
 // parent's `cairn.subagents` registry: `working` and `asking` count a child by its registry status
 // (`waiting` is asking: a question to the parent or the user, or an approval), and a settled child
 // counts as `failed` when its latest settlement failed, else `settled` (a stopped child is settled).
+// A settled child whose latest settlement is not yet delivered (its note and wake still to come)
+// counts as `working`: its parent is not settled, by hand or by the sweep, until the result lands
+// (subagents note section 4, the `settled` row).
 // Shared by the brain (the commit feed, the scripted harness and the shell projector's boot
 // reconcile, which all read the registry) and anything that reads a registry document.
 
@@ -17,10 +20,14 @@ import {
 } from "@cairn/protocol/Subagents";
 import { Option, Schema } from "effect";
 
-/** What the tally reads of one child: its status and how its latest settlement ended. */
+/**
+ * What the tally reads of one child: its status, how its latest settlement ended, and whether a
+ * settlement is still to be delivered (`delivered` below the settlements' count).
+ */
 export interface TallyChild {
   readonly status: SubagentStatus;
   readonly latest: Option.Option<SettlementOutcome>;
+  readonly undelivered: boolean;
 }
 
 /** The tally of `children`. */
@@ -31,7 +38,7 @@ export const tallyOf = (children: Iterable<TallyChild>): SubagentTally => {
   let failed = 0;
 
   for (const child of children) {
-    if (child.status === "working") {
+    if (child.status === "working" || child.undelivered) {
       working += 1;
     } else if (child.status === "waiting") {
       asking += 1;
@@ -55,6 +62,7 @@ const TallyItem = Schema.Struct({
   settlements: Schema.Array(
     Schema.Struct({ outcome: SettlementOutcomeSchema })
   ),
+  delivered: Schema.Int,
 });
 
 const decodeItem = Schema.decodeUnknownOption(TallyItem);
@@ -82,6 +90,7 @@ export const tallyOfRegistry = (
                 Option.fromUndefinedOr(found.settlements.at(-1)),
                 (last) => last.outcome
               ),
+              undelivered: found.delivered < found.settlements.length,
             }))
           )
         )

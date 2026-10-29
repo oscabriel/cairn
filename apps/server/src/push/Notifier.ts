@@ -458,9 +458,14 @@ export class Notifier extends Context.Service<
           return rows.length > 0;
         });
 
+      // A subagent's row is hidden and its result reaches its parent: it never counts.
       const badgeCount = threads.listLive.pipe(
         Effect.map(
-          (rows) => rows.filter((row) => hasUnseenResult(row.shell)).length
+          (rows) =>
+            rows.filter(
+              (row) =>
+                Option.isNone(row.shell.lineage) && hasUnseenResult(row.shell)
+            ).length
         ),
         Effect.orElseSucceed(() => 0)
       );

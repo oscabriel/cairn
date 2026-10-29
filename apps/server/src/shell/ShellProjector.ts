@@ -14,9 +14,10 @@
 //   as it stands then and recomputes `activity` over the result, so a field another writer changed
 //   in the meantime (a launch marking `idle` or `failed`) is never overwritten from a stale copy.
 //
-// The field mapping follows notes/server.md, "Shell store and the projector". A parent's `subagents`
-// tally is set from each SubagentUpdated, which carries the registry counted after its commit, and
-// the boot reconcile counts the registry again for every row with a child row (ADR 0028).
+// The field mapping follows notes/server.md, "Shell store and the projector". A parent's
+// `subagents` tally is set from each SubagentUpdated and SubagentTallyUpdated, which carry the
+// registry counted after their commit, and the boot reconcile counts the registry again for every
+// row with a child row (ADR 0028).
 //
 // For the durability judge only: `CAIRN_JUDGE_HOLD_PROJECTOR_MS` makes the projector log
 // `projector_holding` and wait that long before committing a run's end, so a `kill -9` can land
@@ -250,6 +251,8 @@ export const applyHarnessEvent = (
     // The parent's tally as the registry stands after the commit: set, never counted, so a repeat
     // after a restart changes nothing.
     SubagentUpdated: (updated) =>
+      withFields(projection, { subagents: updated.tally }),
+    SubagentTallyUpdated: (updated) =>
       withFields(projection, { subagents: updated.tally }),
     RunStarted: (started) =>
       withFields(
@@ -1031,14 +1034,23 @@ export class ShellProjector extends Context.Service<
         const targets = yield* all;
         let patched = 0;
 
-        // Rows with a child row, whose tally the registry may have moved past (the feed never
-        // replays a change a crash cut off).
+        // At boot, rows with a child row, whose tally the registry may have moved past (the feed
+        // never replays a change a crash cut off). A refresh reads no tally: while the brain runs,
+        // SubagentUpdated and SubagentTallyUpdated carry every change, and a parent's snapshot
+        // under the projector's lock on each subscribe would hold up every other row.
+        const boot = Option.isNone(only);
+
         const parents = new Set(
-          (yield* rows.listLive).flatMap((row) =>
-            Option.toArray(
-              Option.map(row.shell.lineage, (lineage) => lineage.parentThreadId)
-            )
-          )
+          boot
+            ? targets.flatMap((row) =>
+                Option.toArray(
+                  Option.map(
+                    row.shell.lineage,
+                    (lineage) => lineage.parentThreadId
+                  )
+                )
+              )
+            : []
         );
 
         for (const row of targets) {
@@ -1058,8 +1070,9 @@ export class ShellProjector extends Context.Service<
           const readMessage = withMessages && mayHaveMissed;
 
           const readTally =
-            parents.has(threadId) ||
-            !sameTally(row.shell.subagents, NO_SUBAGENTS);
+            boot &&
+            (parents.has(threadId) ||
+              !sameTally(row.shell.subagents, NO_SUBAGENTS));
 
           const view =
             readMessage || readTally

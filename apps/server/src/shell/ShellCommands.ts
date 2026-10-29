@@ -9,8 +9,9 @@
 // same commit; and the server's own commands (create, activity, workspace, auto-settle, snooze
 // expiry, message sent, project registration) sit beside the client's in one union. A message the
 // user sends clears the manual settle state and ends a snooze (dispatchMessage). A subagent's row
-// (one with a `lineage`) is never settled, snoozed, pinned or archived, since its parent's row holds
-// it, and a parent is not settled, by hand or by the sweep, while a child works or asks (ADR 0028).
+// (one with a `lineage`) is never settled, snoozed, pinned or archived, since its parent's row
+// holds it, and a parent is not settled, by hand or by the sweep, while a child works or asks or
+// its result is still on the way (ADR 0028).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //

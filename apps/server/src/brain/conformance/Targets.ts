@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ThreadId } from "@cairn/protocol/Ids";
+import type { Context as AiContext, Message } from "@earendil-works/pi-ai";
+import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { ProviderDoc } from "@earendil-works/pi-durable";
 import {
   Context,
@@ -38,6 +40,7 @@ import { Brain } from "../Brain.ts";
 import type { BrainSession } from "../Brain.ts";
 import { BrainConfig } from "../BrainConfig.ts";
 import { ThreadMeta } from "../CairnDocs.ts";
+import { messageText } from "../CommitFeed.ts";
 import { durable } from "../Durable.ts";
 import { ExtensionSet } from "../ExtensionSet.ts";
 import { FauxModels } from "../FauxModels.ts";
@@ -56,7 +59,7 @@ import {
   conformanceTools,
   scriptedConformanceTools,
 } from "./ConformanceTools.ts";
-import type { ResponseScript } from "./ResponseScript.ts";
+import type { ResponseScript, SeenRequest } from "./ResponseScript.ts";
 
 /** One harness under judgement. */
 export interface ConformanceTarget {
@@ -135,6 +138,24 @@ const threadOfSession = (
     return Option.fromUndefinedOr(known.get(sessionId));
   }).pipe(Effect.orElseSucceed(() => Option.none<ThreadId>()));
 
+/** The text of the first user message of `messages`; empty without one. */
+const firstInputOf = (messages: ReadonlyArray<Message>) => {
+  const first = messages.find((message) => message.role === "user");
+
+  return first === undefined ? "" : messageText(first);
+};
+
+/** What a faux request offered and asked first: the tools its transcript declares and its own. */
+const seenOf = (request: AiContext): SeenRequest => ({
+  tools: [
+    ...new Set([
+      ...getCurrentTools(request.messages).map((tool) => tool.name),
+      ...(request.tools ?? []).map((tool) => tool.name),
+    ]),
+  ],
+  firstInput: firstInputOf(request.messages),
+});
+
 /** A target whose instance `open` builds, rebuilt on restart inside the caller's scope. */
 const restartable = Effect.fnUntraced(function* (
   open: Effect.Effect<Instance, never, Scope.Scope>
@@ -162,37 +183,44 @@ const restartable = Effect.fnUntraced(function* (
   } satisfies ConformanceTarget;
 });
 
+/**
+ * The pi-durable brain the conformance suite runs over `dataDir`: the production seam, brain and
+ * extension set, the conformance tools and the subagents extension with `faults`, over pi-ai's faux
+ * provider. Subagent tests under `brain/` build on it too.
+ */
+export const piDurableLayer = (dataDir: string, faults: SubagentFaultSet) =>
+  PiDurableHarness.layer.pipe(
+    Layer.provide(
+      ExtensionSet.withExtra([
+        conformanceTools,
+        subagentsExtension(faults),
+      ]).pipe(
+        Layer.provide(ExecutorLink.layerDisabled),
+        Layer.provide(PiHost.layerEmpty),
+        Layer.provide(ModelHealth.layerTest),
+        Layer.provide(SettingsStore.layerTest),
+        Layer.provide(PiModelSource.layerFromModelSource)
+      )
+    ),
+    Layer.provideMerge(
+      ModelSource.layerFaux({
+        tokensPerSecond: 2000,
+        // No provider retries (a failed answer would take the next scripted one), and a
+        // compaction keeps only the newest context, so a short thread has something to compact.
+        settings: {
+          retry: { enabled: false },
+          compaction: { keepRecentTokens: 1 },
+        },
+      })
+    ),
+    Layer.provide(BrainConfig.layerFrom(dataDir))
+  );
+
 /** The pi-durable side, with the subagents extension and the faults the mutation check plants. */
 export const piDurableTarget: MakeTarget = (script, faults) =>
   Effect.gen(function* () {
     const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-conformance-"));
-
-    const layer = PiDurableHarness.layer.pipe(
-      Layer.provide(
-        ExtensionSet.withExtra([
-          conformanceTools,
-          subagentsExtension(faults),
-        ]).pipe(
-          Layer.provide(ExecutorLink.layerDisabled),
-          Layer.provide(PiHost.layerEmpty),
-          Layer.provide(ModelHealth.layerTest),
-          Layer.provide(SettingsStore.layerTest),
-          Layer.provide(PiModelSource.layerFromModelSource)
-        )
-      ),
-      Layer.provideMerge(
-        ModelSource.layerFaux({
-          tokensPerSecond: 2000,
-          // No provider retries (a failed answer would take the next scripted one), and a
-          // compaction keeps only the newest context, so a short thread has something to compact.
-          settings: {
-            retry: { enabled: false },
-            compaction: { keepRecentTokens: 1 },
-          },
-        })
-      ),
-      Layer.provide(BrainConfig.layerFrom(dataDir))
-    );
+    const layer = piDurableLayer(dataDir, faults);
 
     return yield* restartable(
       Effect.gen(function* () {
@@ -217,14 +245,15 @@ export const piDurableTarget: MakeTarget = (script, faults) =>
         faux.setResponses(
           Array.from(
             { length: FAUX_STEPS },
-            () => async (_request, options) =>
+            () => async (request, options) =>
               await run(
                 Effect.gen(function* () {
                   const thread = yield* askingThread(options?.sessionId);
 
                   return yield* script.next(
                     Option.fromUndefinedOr(options?.signal),
-                    thread
+                    thread,
+                    seenOf(request)
                   );
                 })
               )
@@ -248,7 +277,10 @@ export const scriptedTarget: MakeTarget = (script, faults) =>
       ScriptedModel,
       ScriptedModel.of({
         answer: (request) =>
-          script.next(Option.none(), Option.some(request.threadId)),
+          script.next(Option.none(), Option.some(request.threadId), {
+            tools: request.tools,
+            firstInput: firstInputOf(request.messages),
+          }),
       })
     );
 

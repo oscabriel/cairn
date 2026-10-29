@@ -76,6 +76,7 @@ The first column names the schema: the export that declares the union, or the ex
 | `SubagentQuestionState` | `pending` | Held | The parent's model has the child's question and has not answered or escalated it. |
 | `SubagentQuestionState` | `answered` | Ended | Answered, by the parent's model or by the user. |
 | `SubagentQuestionState` | `escalated` | Waiting on you | Escalated to the user, shown in the parent thread (ADR 0027). |
+| `SubagentQuestionState` | `cancelled` | Ended | The child's run that asked it was stopped, so nothing reads an answer (ADR 0029). |
 | `EscalationStatus` | `open` | Waiting on you | A child's escalated question waits for the user in the parent thread. |
 | `EscalationStatus` | `resolved` | Ended | Answered once, from either thread. |
 | `SettlementOutcome` | `completed` | Ended | The child answered its input; the note carries its summary, divergence and payload. |
@@ -299,6 +300,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `SubagentQuestionState` | `pending` | Not shown yet; the rollup and parent banner (6D). | None |
 | `SubagentQuestionState` | `answered` | Not shown yet; the settled-record line (6A). | None |
 | `SubagentQuestionState` | `escalated` | Not shown yet; the request card in the parent thread (6A, 6D). | None |
+| `SubagentQuestionState` | `cancelled` | Not shown yet; the settled-record line (6A). | None |
 | `EscalationStatus` | `open` | Not shown yet; the request card in the parent thread (6A, 6D). | None |
 | `EscalationStatus` | `resolved` | Not shown yet; the settled-record line (6A). | None |
 | `SettlementOutcome` | `completed` | Not shown yet; the subagent result row in the parent (6C). | None |

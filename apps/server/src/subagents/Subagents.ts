@@ -9,14 +9,15 @@
 // question's mirror in `answerApproval` (CairnDocs.ts), a child's mode is narrowed by its
 // ancestors' in `readPermissions` (Permissions.ts), and Stop all stops each working child.
 
+import { copyJson } from "@earendil-works/chord";
 import type {
   AgentChange,
   ConversationId,
   InputSubmissionDraft,
   Session,
 } from "@earendil-works/pi-durable";
-import { defineExtension } from "@earendil-works/pi-durable";
-import { Context, Effect, Layer, Predicate } from "effect";
+import { defineExtension, LiveDoc } from "@earendil-works/pi-durable";
+import { Context, Effect, Layer } from "effect";
 
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
@@ -25,7 +26,7 @@ import { NO_SUBAGENT_FAULTS, SubagentFaults } from "../brain/SubagentFaults.ts";
 import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
 import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
-import { subagentTaskSet } from "./SubagentTasks.ts";
+import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
 import type { SubagentTasks } from "./SubagentTasks.ts";
 import { childAgentOf, subagentToolSet } from "./SubagentTools.ts";
 
@@ -40,18 +41,18 @@ export const SUBAGENTS_ORDER = 650;
 
 /** The child's agent change, filled once the tools exist. */
 interface ChildAgentHolder {
-  agent: AgentChange;
+  agent: (typed: boolean) => AgentChange;
 }
 
 /** The tools and tasks with `faults` planted, as one extension. */
 const build = (faults: SubagentFaultSet) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
-  const child: ChildAgentHolder = { agent: {} };
+  const child: ChildAgentHolder = { agent: () => ({}) };
 
   const tasks: SubagentTasks = subagentTaskSet({
     faults,
-    childAgent: () => child.agent,
+    childAgent: (typed) => child.agent(typed),
   });
 
   const tools = subagentToolSet(faults, tasks);
@@ -85,14 +86,17 @@ const hostTasks = build(NO_SUBAGENT_FAULTS).tasks;
 /**
  * Gives a user's input to a subagent its reporter before it is submitted (ADR 0028): the input's
  * result then reaches the parent as a quiet note. Keyed by the input's request id in the child's
- * registry item, so a resend lands once; the reporter submits under the same request id, so
- * whichever submits first admits it and the other gets that submission back. Nothing for a thread
- * that is not a subagent.
+ * registry item, so a resend lands once. The reporter carries the whole draft (its text and images,
+ * its entry, its `whenBusy`) and submits under the same request id, so whichever submits first
+ * admits the same input and the other gets that submission back, a crash between this commit and
+ * the seam's submit included. A `reject` input to a busy child gets no reporter: the seam's submit
+ * refuses it with `thread_busy`, and a reporter that still finds the child busy drops its input.
+ * Nothing for a thread that is not a subagent.
  */
 export const steerReporter = (
   session: Pick<Session, "commit" | "snapshot">,
   conversationId: ConversationId,
-  input: Pick<InputSubmissionDraft, "requestId" | "whenBusy" | "content">
+  input: InputSubmissionDraft
 ): Effect.Effect<void, DurableCallError> =>
   durable("subagents.steer", async (context) => {
     const link = await session.snapshot(ChildDoc, conversationId, context);
@@ -104,17 +108,17 @@ export const steerReporter = (
 
     const parent = conversationOf(link.parentConversationId);
 
-    const text = Predicate.isString(input.content)
-      ? input.content
-      : input.content
-          .flatMap((part) => (part.type === "text" ? [part.text] : []))
-          .join("\n\n");
-
     await session.commit(async (tx) => {
       const registry = await tx.doc(SubagentsDoc, parent);
       const item = registry.items[link.key];
 
       if (item === undefined || item.inputs[requestId] !== undefined) {
+        return;
+      }
+
+      const live = await tx.doc(LiveDoc, conversationId);
+
+      if (input.whenBusy === "reject" && live.run !== undefined) {
         return;
       }
 
@@ -125,8 +129,18 @@ export const steerReporter = (
           child: conversationId,
           childThreadId: item.threadId,
           requestId,
-          text,
-          whenBusy: input.whenBusy === "steer" ? "steer" : "followUp",
+          content: inputPartsOf(input.content),
+          entry:
+            input.entry === undefined
+              ? null
+              : {
+                  kind: input.entry.kind,
+                  data:
+                    input.entry.data === undefined
+                      ? null
+                      : copyJson(input.entry.data),
+                },
+          whenBusy: input.whenBusy ?? "followUp",
           quiet: true,
         },
         {

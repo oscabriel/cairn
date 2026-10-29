@@ -75,7 +75,7 @@
       "thread": "child1",
       "event": "MessageCommitted",
       "role": "user",
-      "text": "Count the files\n\nCount the files in src.\n\nFinish by calling report with a payload that matches the result schema."
+      "text": "Count the files\n\nCount the files in src.\n\nFinish by calling submit_result with your result, which must match its schema, and how it differs from the brief."
     },
     {
       "thread": "child1",
@@ -101,7 +101,11 @@
       {
         "status": "settled",
         "settlements": 1,
-        "delivered": 1
+        "delivered": 1,
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
       }
     ],
     "transcript": [
@@ -207,7 +211,7 @@
         {
           "kind": "pi.user",
           "role": "user",
-          "text": "Count the files\n\nCount the files in src.\n\nFinish by calling report with a payload that matches the result schema.",
+          "text": "Count the files\n\nCount the files in src.\n\nFinish by calling submit_result with your result, which must match its schema, and how it differs from the brief.",
           "images": 0,
           "toolCalls": [],
           "toolName": null,
@@ -218,17 +222,17 @@
           "role": "assistant",
           "text": "",
           "images": 0,
-          "toolCalls": ["report"],
+          "toolCalls": ["submit_result"],
           "toolName": null,
           "isError": null
         },
         {
           "kind": "pi.tool-result",
           "role": "toolResult",
-          "text": "The payload does not match the result schema (attempt 1 of 3): Validation failed for tool \"report\":\n  - payload.count: must be integer\n\nReceived arguments:\n{\n  \"payload\": {\n    \"count\": \"many\"\n  }\n} Fix the payload and call report again.",
+          "text": "submit_result rejected (attempt 1 of 2):\n  - result.count: must be integer\nFix these and call submit_result again.",
           "images": 0,
           "toolCalls": [],
-          "toolName": "report",
+          "toolName": "submit_result",
           "isError": true
         },
         {
@@ -236,9 +240,18 @@
           "role": "assistant",
           "text": "",
           "images": 0,
-          "toolCalls": ["report"],
+          "toolCalls": ["report", "submit_result"],
           "toolName": null,
           "isError": null
+        },
+        {
+          "kind": "pi.tool-result",
+          "role": "toolResult",
+          "text": "Result accepted. Your work on this brief is done.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": "submit_result",
+          "isError": false
         },
         {
           "kind": "pi.tool-result",
@@ -250,7 +263,7 @@
           "isError": false
         }
       ],
-      "transcriptLength": 5,
+      "transcriptLength": 6,
       "queue": [],
       "queueLength": 0,
       "running": false,

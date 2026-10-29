@@ -14,7 +14,9 @@
 // - `subagent_reply` answers or escalates a child's `ask_parent` question; never an approval.
 // - `ask_parent` (child) records a question routed to the parent, offers it to the parent model as
 //   an input, and waits like a gated call; a parent run that ends with it open escalates it.
-// - `report` (child) checks a payload against the brief's schema: three attempts, first valid wins.
+// - `report` (child) finishes a brief with a summary, the divergence of a text result and a commit.
+//   A typed result goes through `submit_result` (models/ResultTool.ts), which a typed child's
+//   creating commit also offers: two attempts, the real schema in the request, first valid wins.
 //
 // The child's two tools are deferred, so only a child, whose creating commit adds them to its
 // `modelTools`, is offered them; the same change takes the parent's five away.
@@ -25,16 +27,15 @@ import {
   MAX_SUBAGENT_DEPTH,
 } from "@cairn/protocol/Subagents";
 import type { JsonValue } from "@earendil-works/chord";
-import { copyJson } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type, validateToolArguments } from "@earendil-works/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import type {
   AgentChange,
   ToolExecutionApi,
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import { defineTool } from "@earendil-works/pi-durable";
-import { Duration, Effect, Option, Predicate, Result } from "effect";
+import { Duration, Effect, Option, Result } from "effect";
 
 import {
   applyAnswer,
@@ -58,6 +59,7 @@ import {
   SubagentRequestIds,
   SubagentToolText,
 } from "../brain/SubagentText.ts";
+import { offerResultTool } from "../models/ResultTool.ts";
 import { briefOf, briefPayload } from "./Briefs.ts";
 import {
   conversationOf,
@@ -69,7 +71,6 @@ import {
   ChildDoc,
   isLinked,
   markQuestion,
-  REPORT_ATTEMPTS,
   SubagentsDoc,
 } from "./SubagentDocs.ts";
 import type {
@@ -91,6 +92,12 @@ const PARENT_RUN_ENDED = "The parent's run ended without answering.";
 
 /** Why a question to a halted parent goes straight to the user. */
 const PARENT_STOPPED = "The parent is stopped.";
+
+/** The most options an `ask_parent` question offers: the protocol's `Question`. */
+export const MAX_QUESTION_OPTIONS = 9;
+
+/** The longest question or option label: the protocol's `DisplayText`. */
+export const MAX_QUESTION_LENGTH = 4096;
 
 const said = (text: string): ToolExecutionResult => ({
   output: [{ type: "text", text }],
@@ -129,34 +136,6 @@ const childNamed = async (
     )
   );
 };
-
-/** Why a payload does not satisfy a schema; none when it does. */
-const payloadProblem = (
-  schema: JsonRecord,
-  payload: JsonValue
-): Option.Option<string> =>
-  Result.match(
-    Result.try({
-      try: () => {
-        validateToolArguments(
-          {
-            name: "report",
-            description: "The child's result.",
-            parameters: Type.Object({ payload: Type.Unsafe(schema) }),
-          },
-          {
-            type: "toolCall",
-            id: "report",
-            name: "report",
-            arguments: { payload },
-          }
-        );
-      },
-      catch: (cause) =>
-        Predicate.isError(cause) ? cause.message : String(cause),
-    }),
-    { onFailure: Option.some, onSuccess: () => Option.none() }
-  );
 
 /** The memo a `report` call keeps its verdict in, so a rerun answers the same. */
 const REPORT_MEMO = "cairn.subagent-report";
@@ -271,7 +250,7 @@ const answerOf = async (
   return said(
     renderAnswer(
       record.decidedBy?.kind === "thread" ? "parent" : "user",
-      Option.fromNullOr(record.answer?.answers?.[0]?.custom ?? null)
+      record.answer?.answers?.[0]
     )
   );
 };
@@ -459,7 +438,8 @@ export const subagentToolSet = (
             child: item.conversationId,
             childThreadId: item.threadId,
             requestId,
-            text: message.value,
+            content: message.value,
+            entry: null,
             whenBusy: args.mode === "steer" ? "steer" : "followUp",
             quiet: false,
           });
@@ -590,7 +570,12 @@ export const subagentToolSet = (
       const child = conversationOf(named.value.conversationId);
       const request = textOf(args.request);
       const escalation = textOf(args.escalate);
+      const answer = textOf(args.answer);
       const childThreadId = named.value.threadId;
+
+      if (Option.isNone(answer) && Option.isNone(escalation)) {
+        return refused(SubagentToolText.replyNeedsAnswer);
+      }
 
       const text = await api.commit(async (tx) => {
         const meta = await tx.doc(ThreadMeta, api.conversationId);
@@ -654,7 +639,7 @@ export const subagentToolSet = (
                     {
                       index: 0,
                       picks: [],
-                      custom: Option.getOrElse(textOf(args.answer), () => ""),
+                      custom: Option.getOrElse(answer, () => ""),
                     },
                   ])
                 : Option.none(),
@@ -708,6 +693,22 @@ export const subagentToolSet = (
         return refused("ask_parent needs a question. Call it again with one.");
       }
 
+      const options = (args.options ?? []).filter(
+        (label) => label.trim() !== ""
+      );
+
+      if (options.length > MAX_QUESTION_OPTIONS) {
+        return refused(SubagentToolText.tooManyOptions(MAX_QUESTION_OPTIONS));
+      }
+
+      if (
+        [question.value, ...options].some(
+          (text) => text.length > MAX_QUESTION_LENGTH
+        )
+      ) {
+        return refused(SubagentToolText.tooLong(MAX_QUESTION_LENGTH));
+      }
+
       const parent = conversationOf(link.value.parentConversationId);
       const approvalId = approvalIdOf(api.taskId);
       const meta = await api.snapshot(ThreadMeta, api.conversationId, context);
@@ -727,7 +728,7 @@ export const subagentToolSet = (
             toolTaskId: api.taskId,
             askedAt: api.now(),
             question: question.value,
-            options: args.options ?? [],
+            options,
           });
 
           const parentRegistry = await tx.doc(SubagentsDoc, parent);
@@ -824,13 +825,12 @@ export const subagentToolSet = (
   const report = defineTool({
     name: "report",
     description:
-      "Finish your brief: a summary of the result, how it differs from the brief (None if it does not), and the payload when the brief asked for a typed result.",
+      "Finish your brief: a summary of the result and how it differs from the brief (None if it does not). When the brief asked for a typed result, call submit_result with it as well.",
     parameters: Type.Object({
       summary: Type.String(),
       divergence: Type.String({
         description: "None, or how the result differs from the brief.",
       }),
-      payload: Type.Optional(Type.Unsafe<JsonValue>({})),
       commit: Type.Optional(Type.String()),
     }),
     replay: "safe",
@@ -854,9 +854,6 @@ export const subagentToolSet = (
         return refused(SubagentToolText.reportOutsideSubagent);
       }
 
-      const payload =
-        args.payload === undefined ? null : copyJson(args.payload);
-
       const verdict = await api.commit(async (tx): Promise<ReportVerdict> => {
         const child = await tx.doc(ChildDoc, api.conversationId);
 
@@ -868,41 +865,11 @@ export const subagentToolSet = (
           };
         }
 
-        child.attempts += 1;
-
-        const problem =
-          child.resultSchema === null
-            ? Option.none<string>()
-            : payloadProblem(child.resultSchema, payload);
-
-        if (Option.isSome(problem)) {
-          const attempt = child.attempts;
-
-          return attempt >= REPORT_ATTEMPTS
-            ? {
-                text: SubagentToolText.reportLastAttempt(
-                  attempt,
-                  REPORT_ATTEMPTS,
-                  problem.value
-                ),
-                isError: true,
-                terminate: true,
-              }
-            : {
-                text: SubagentToolText.reportRetry(
-                  attempt,
-                  REPORT_ATTEMPTS,
-                  problem.value
-                ),
-                isError: true,
-                terminate: false,
-              };
-        }
-
         child.report = {
           summary: Option.getOrElse(textOf(args.summary), () => ""),
           divergence: Option.getOrElse(textOf(args.divergence), () => "None"),
-          payload: child.resultSchema === null ? null : payload,
+          // A typed payload is `submit_result`'s, kept in `cairn.result`.
+          payload: null,
           commit: Option.getOrNull(textOf(args.commit)),
         };
 
@@ -923,9 +890,24 @@ export const subagentToolSet = (
   };
 };
 
-/** The tools a child's creating commit offers it: its two instead of a parent's five. */
-export const childAgentOf = (
-  tools: ReturnType<typeof subagentToolSet>
-): AgentChange => ({
-  modelTools: { remove: tools.parent, add: tools.child },
-});
+/** The tools `offerResultTool` adds: `modelTools` replaces the filter whole, so a spawn merges them. */
+const resultTools = (() => {
+  const offered = offerResultTool.modelTools;
+
+  return offered !== undefined && offered !== null && "add" in offered
+    ? (offered.add ?? [])
+    : [];
+})();
+
+/**
+ * The tools a child's creating commit offers it: its two instead of a parent's five, and
+ * `submit_result` for a typed brief (2E's rule).
+ */
+export const childAgentOf =
+  (tools: ReturnType<typeof subagentToolSet>) =>
+  (typed: boolean): AgentChange => ({
+    modelTools: {
+      remove: tools.parent,
+      add: typed ? [...tools.child, ...resultTools] : tools.child,
+    },
+  });

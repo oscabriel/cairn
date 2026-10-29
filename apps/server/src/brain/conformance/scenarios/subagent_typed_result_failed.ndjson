@@ -1,9 +1,9 @@
 {"type":"transcript_start","scenario":"subagent_typed_result_failed","version":1}
 {"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in src.","result_schema":{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}}}]}
 {"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
-{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"r1","name":"report","arguments":{"summary":"Counted.","divergence":"None","payload":{"total":0}}}]}
-{"type":"model","label":"c2","thread":"child1","toolCalls":[{"id":"r2","name":"report","arguments":{"summary":"Counted.","divergence":"None","payload":{"total":1}}}]}
-{"type":"model","label":"c3","thread":"child1","toolCalls":[{"id":"r3","name":"report","arguments":{"summary":"Counted.","divergence":"None","payload":{"total":2}}}]}
+{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"s1","name":"submit_result","arguments":{"result":{"total":0},"divergence":"None"}}]}
+{"type":"model","label":"c2","thread":"child1","toolCalls":[{"id":"s2","name":"submit_result","arguments":{"result":{"total":1},"divergence":"None"}}]}
+{"type":"model","label":"c3","thread":"child1","text":"There are 4 files; I could not fit the schema."}
 {"type":"model","label":"p3","thread":"parent","text":"The child could not report."}
 {"type":"input","step":"ensure"}
 {"type":"input","step":"message","requestId":"r1","text":"delegate it"}
@@ -12,8 +12,8 @@
 {"type":"input","step":"respond","decision":"accept"}
 {"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
 {"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
-{"type":"expect_view","path":["transcriptLength"],"equals":7,"thread":"child1"}
-{"type":"expect_view","path":["transcript",6,"isError"],"equals":true,"thread":"child1"}
+{"type":"expect_view","path":["transcriptLength"],"equals":6,"thread":"child1"}
+{"type":"expect_view","path":["transcript",4,"text"],"equals":"submit_result rejected (attempt 2 of 2):\n  - result.count: must have required properties count\nThe result was rejected twice; reply in plain text with what you found.","thread":"child1"}
 {"type":"expect_view","path":["running"],"equals":false,"thread":"child1"}
-{"type":"expect_view","path":["transcript",-3,"kind"],"equals":"cairn.subagent-result"}
+{"type":"expect_view","path":["transcript",-3],"equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) failed.\n<subagent_result>\nThere are 4 files; I could not fit the schema.\n</subagent_result>\nDivergence: not reported\nError: The result was rejected twice; reply in plain text with what you found.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"The child could not report.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

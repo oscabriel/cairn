@@ -147,7 +147,11 @@
       {
         "status": "settled",
         "settlements": 1,
-        "delivered": 1
+        "delivered": 1,
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
       }
     ],
     "transcript": [

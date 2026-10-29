@@ -13,15 +13,7 @@ import { ModelRef } from "@cairn/protocol/Models";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
 import type { ThreadLineage } from "@cairn/protocol/Subagents";
 import type { ConversationId, Cursor } from "@earendil-works/pi-durable";
-import {
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  Schema,
-  Stream,
-} from "effect";
+import { Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
 import type { BrainSession } from "../brain/Brain.ts";
@@ -39,7 +31,6 @@ import type { JsonRecord } from "./SubagentDocs.ts";
 /** How many conversations the boot repair reads per page. */
 const SCAN_PAGE = 200;
 
-/** How many conversations the boot repair reads per page. */
 /** What a child's row is made from, read from pi-durable. */
 export interface ChildRowSource {
   readonly threadId: ThreadId;
@@ -114,11 +105,11 @@ export const childRowSource = (
  * Makes a child's row once. Nothing for a child that has a row, or whose parent has none (a parent
  * deleted from the shell keeps its children out of it too).
  */
-export const ensureChildRow = (
-  rows: ThreadRows["Service"],
-  sink: EventSink["Service"]
-) =>
-  Effect.fn("SubagentRows.ensureChildRow")(function* (source: ChildRowSource) {
+export const ensureChildRow = Effect.fn("SubagentRows.ensureChildRow")(
+  function* (source: ChildRowSource) {
+    const rows = yield* ThreadRows;
+    const sink = yield* EventSink;
+
     if (Option.isSome(yield* rows.get(source.threadId))) {
       return false;
     }
@@ -155,7 +146,8 @@ export const ensureChildRow = (
     );
 
     return true;
-  });
+  }
+);
 
 /** Logs a row that could not be made (the boot repair tries again at the next boot): none then. */
 const logged = <A, E extends { readonly message: string }, R>(
@@ -187,7 +179,6 @@ export const repairSubagentRows = Effect.gen(function* () {
   }
 
   const session = yield* found.value.session;
-  const ensure = ensureChildRow(yield* ThreadRows, yield* EventSink);
   let after: Option.Option<Cursor> = Option.none();
   let made = 0;
 
@@ -204,7 +195,7 @@ export const repairSubagentRows = Effect.gen(function* () {
       const source = yield* childRowSource(session, conversation.id);
 
       for (const child of Option.toArray(source)) {
-        const createdNow = yield* logged(child.threadId, ensure(child));
+        const createdNow = yield* logged(child.threadId, ensureChildRow(child));
 
         if (Option.getOrElse(createdNow, () => false)) {
           made += 1;
@@ -220,50 +211,55 @@ export const repairSubagentRows = Effect.gen(function* () {
   );
 });
 
-/** The fiber that makes each child's row as its creating commit lands. */
-export class SubagentRows extends Context.Service<SubagentRows, object>()(
-  "cairn/server/subagents/SubagentRows"
-) {
-  /** Answers every `ThreadEnsured` naming a parent; off without pi-durable. */
-  static readonly layer = Layer.effect(
-    SubagentRows,
-    Effect.gen(function* () {
-      const harness = yield* HarnessSeam;
-      const brain = yield* Effect.serviceOption(Brain);
-      const ensure = ensureChildRow(yield* ThreadRows, yield* EventSink);
+/**
+ * The fiber that makes each child's row as its creating commit lands: it answers every
+ * `ThreadEnsured` naming a parent, for as long as the scope lives. Off without pi-durable. Leaves
+ * `HarnessSeam`, `ThreadRows` and `EventSink` to the composition root.
+ */
+export const SubagentRows = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const harness = yield* HarnessSeam;
+    const brain = yield* Effect.serviceOption(Brain);
+    const context = yield* Effect.context<ThreadRows | EventSink>();
 
-      if (Option.isNone(brain)) {
-        return SubagentRows.of({});
-      }
+    if (Option.isNone(brain)) {
+      return;
+    }
 
-      const onEnsured = (event: {
-        readonly threadId: ThreadId;
-        readonly conversationId: number;
-      }) =>
-        logged(
-          event.threadId,
-          Effect.gen(function* () {
-            const session = yield* brain.value.session;
+    const onEnsured = (event: {
+      readonly threadId: ThreadId;
+      readonly conversationId: number;
+    }) =>
+      logged(
+        event.threadId,
+        Effect.gen(function* () {
+          const session = yield* brain.value.session;
 
-            const source = yield* childRowSource(
-              session,
-              conversationOf(event.conversationId)
-            );
+          const source = yield* childRowSource(
+            session,
+            conversationOf(event.conversationId)
+          );
 
-            for (const child of Option.toArray(source)) {
-              yield* ensure(child);
-            }
+          for (const child of Option.toArray(source)) {
+            yield* ensureChildRow(child);
+          }
+        })
+      ).pipe(Effect.provideContext(context));
+
+    yield* Stream.runForEach(harness.events, (event) =>
+      Predicate.isTagged(event, "ThreadEnsured") && Option.isSome(event.parent)
+        ? onEnsured(event)
+        : Effect.void
+    ).pipe(
+      Effect.onExit((exit) =>
+        Effect.logWarning("subagent row fiber ended").pipe(
+          Effect.annotateLogs({
+            event: "subagent_rows_ended",
+            exit: exit._tag,
           })
-        );
-
-      yield* Stream.runForEach(harness.events, (event) =>
-        Predicate.isTagged(event, "ThreadEnsured") &&
-        Option.isSome(event.parent)
-          ? onEnsured(event)
-          : Effect.void
-      ).pipe(Effect.forkScoped({ startImmediately: true }));
-
-      return SubagentRows.of({});
-    })
-  );
-}
+        )
+      ),
+      Effect.forkScoped({ startImmediately: true })
+    );
+  })
+);

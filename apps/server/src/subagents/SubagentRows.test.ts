@@ -1,7 +1,8 @@
 // A subagent's shell row (SubagentRows.ts) over a migrated in-memory shell store: made once with its
 // lineage, the parent's project and cwd, the brief's title and the dispatched model; a repeat, as
-// the fiber and the boot repair both answer the same child, leaves the one row; a child whose
-// parent has no row gets none.
+// the fiber and the boot repair both answer the same child, leaves the one row, also when both
+// commit at once (the command id's receipt); a child whose parent has no row gets none. The fiber
+// and the boot repair over a real brain are in `brain/SubagentsPiDurable.test.ts`.
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
@@ -42,7 +43,7 @@ describe("a subagent's shell row", () => {
       yield* sink.commitCommand(project.command);
       yield* sink.commitCommand(createThread(project.projectId, 1));
 
-      const ensure = ensureChildRow(rows, sink);
+      const ensure = ensureChildRow;
       const parent = testThreadId(1);
 
       assert.isTrue(yield* ensure(sourceOf(parent)));
@@ -79,10 +80,7 @@ describe("a subagent's shell row", () => {
       yield* sink.commitCommand(project.command);
       yield* sink.commitCommand(createThread(project.projectId, 1));
 
-      yield* ensureChildRow(
-        rows,
-        sink
-      )({
+      yield* ensureChildRow({
         ...sourceOf(testThreadId(1)),
         model: Option.none(),
       });
@@ -96,13 +94,39 @@ describe("a subagent's shell row", () => {
 
   it.effect("is not made for a parent with no row", () =>
     Effect.gen(function* () {
-      const sink = yield* EventSink;
       const rows = yield* ThreadRows;
 
-      assert.isFalse(
-        yield* ensureChildRow(rows, sink)(sourceOf(testThreadId(9)))
-      );
+      assert.isFalse(yield* ensureChildRow(sourceOf(testThreadId(9))));
       assert.isTrue(Option.isNone(yield* rows.get(CHILD)));
     }).pipe(Effect.provide(ShellTestLayer))
+  );
+
+  it.effect(
+    "lands once when the fiber and the boot repair make it at the same time",
+    () =>
+      Effect.gen(function* () {
+        const sink = yield* EventSink;
+        const rows = yield* ThreadRows;
+        const project = createProject(1);
+
+        yield* sink.commitCommand(project.command);
+        yield* sink.commitCommand(createThread(project.projectId, 1));
+
+        // Both read no row before either commits; the second commit lands on the receipt of the
+        // first, since the command id is the child's thread id.
+        const made = yield* Effect.all(
+          [
+            ensureChildRow(sourceOf(testThreadId(1))),
+            ensureChildRow(sourceOf(testThreadId(1))),
+          ],
+          { concurrency: "unbounded" }
+        );
+
+        assert.isTrue(made.includes(true));
+        assert.lengthOf(
+          (yield* rows.listLive).filter((found) => found.shell.id === CHILD),
+          1
+        );
+      }).pipe(Effect.provide(ShellTestLayer))
   );
 });

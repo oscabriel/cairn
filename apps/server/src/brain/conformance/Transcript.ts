@@ -19,13 +19,19 @@
 // - `expect_event {event}`: the next event, after the previous match, that contains `event`.
 // - `expect_event_count {event, count}`: how many events so far contain `event`.
 // - `expect_view {path, equals}`: the client's normalized view at `path` reaches `equals`.
+// - `expect_request {index, includesTools?, excludesTools?, firstInput?}`: the `index`th model
+//   request a thread made (0 the first) offered every tool of `includesTools` and none of
+//   `excludesTools`, and its first user message reads `firstInput`. The harness reports the
+//   requests its model saw: pi-durable's faux provider its context, the scripted model its
+//   request.
 //
-// Threads (subagents, ADR 0028): `model`, `input` and `expect_view` lines take an optional `thread`
-// alias (`parent`, the default, or `child1`, `child2`, ... in the order the harness reports
-// children; see ThreadAliases). Expected events and tool arguments write `$<alias>` for an id.
-// Inputs for them: `respond` takes `answer` for a question; `respond_race {threads}` answers the
-// first pending record of each thread at once (a question answered from both threads);
-// `stop_all` stops the parent and its subagents; `mode {mode}` sets a thread's permission mode,
+// Threads (subagents, ADR 0028): `model`, `input`, `expect_view` and `expect_request` lines take an
+// optional `thread` alias (`parent`, the default, or `child1`, `child2`, ... in the order the
+// harness reports children; see ThreadAliases). Expected events and tool arguments write
+// `$<alias>` for an id. Inputs for them: `respond` takes `answer` (custom text) and `picks` (option
+// labels) for a question; `respond_race {threads}` answers the first pending record of each thread
+// at once (a question answered from both threads); `stop_all` stops the parent and its subagents;
+// `mode {mode}` sets a thread's permission mode,
 // with `expect.error` when it must be refused.
 //
 // The format follows the replay transcripts of t3code's provider testing
@@ -60,6 +66,8 @@ const inputFields = {
   reason: Schema.optionalKey(Schema.String),
   /** A question's answer, as the user's custom text. */
   answer: Schema.optionalKey(Schema.String),
+  /** A question's answer, as the option labels the user picked. */
+  picks: Schema.optionalKey(Schema.Array(Schema.String)),
   /** `respond_race`: the threads whose first pending records are answered at once. */
   threads: Schema.optionalKey(Schema.Array(Schema.String)),
   mode: Schema.optionalKey(RuntimeMode),
@@ -130,6 +138,14 @@ export const TranscriptLine = Schema.Union([
     thread: Schema.optionalKey(Schema.String),
     path: Schema.Array(PathSegment),
     equals: Json,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("expect_request"),
+    thread: Schema.optionalKey(Schema.String),
+    index: Schema.Int,
+    includesTools: Schema.optionalKey(Schema.Array(Schema.String)),
+    excludesTools: Schema.optionalKey(Schema.Array(Schema.String)),
+    firstInput: Schema.optionalKey(Schema.String),
   }),
 ]);
 

@@ -10,11 +10,19 @@
 //   note that it started. Decline and Send back reach the parent as a follow-up input, or as a note
 //   when the parent is halted. The briefs package (4A) moves Go into the answer itself.
 // - Reporter (`cairn.subagent-reporter`), one per input to a child (the brief, `subagent_send`, a
-//   user's steer typed into the child): `deliver` submits the input under its request id, mirrors
-//   the child's pending records into its registry status while it works, and settles once per run
-//   in one commit; `report` writes the settlement's note and decides the wake by the parent's
-//   state; `wake` submits the wake and marks the settlement delivered. Note and wake request ids
-//   derive from the child and the settlement's `seq`, so a rerun after `kill -9` lands each once.
+//   user's steer typed into the child): `deliver` submits the input under its request id (the
+//   whole input: its text and images, its entry, its `whenBusy`), mirrors the child's pending
+//   records into its registry status while it works, and settles once per run in one commit;
+//   `nudge` sends a typed child that ended without a result its one nudge (`NUDGE_TEXT`) and
+//   settles on that run; `report` writes the settlement's note and decides the wake by the
+//   parent's state; `wake` submits the wake and marks the settlement delivered. Nudge, note and
+//   wake request ids derive from the child and the settlement's `seq`, so a rerun after `kill -9`
+//   lands each once.
+//
+// A typed child's result is `submit_result`'s (models/ResultTool.ts): the settlement's payload and
+// divergence come from its `cairn.result` (`readResult`). A child whose run ends without one gets
+// the nudge while `nudgeDue` says so, and otherwise settles `failed`, with `CAP_TEXT` once its
+// attempts are spent. `report` carries the summary, the divergence of a text result and a commit.
 //
 // `SubagentFaults` breaks the delivery on purpose for the conformance suite's mutation check; the
 // production layer plants none.
@@ -32,12 +40,20 @@ import type {
   AgentChange,
   ConversationId,
   EntryId,
+  InputSubmissionDraft,
   NextTaskState,
   SettledSubmissionRecord,
+  Submission,
   TaskRuntime,
   Tx,
 } from "@earendil-works/pi-durable";
-import { configure, defineTask, LiveDoc } from "@earendil-works/pi-durable";
+import {
+  configure,
+  ConversationBusy,
+  defineTask,
+  InboxDoc,
+  LiveDoc,
+} from "@earendil-works/pi-durable";
 import { DateTime, Effect, Option, Predicate } from "effect";
 
 import {
@@ -59,6 +75,7 @@ import { classifyRunFailure } from "../brain/RunFailure.ts";
 import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
 import {
   BRIEF_ANSWER_ENTRY,
+  NO_RESULT_ERROR,
   renderBrief,
   renderBriefAnswer,
   renderQuestion,
@@ -66,6 +83,16 @@ import {
   renderWake,
   SubagentRequestIds,
 } from "../brain/SubagentText.ts";
+import { familyOf } from "../models/ModelFamily.ts";
+import {
+  CAP_TEXT,
+  MAX_RESULT_ATTEMPTS,
+  NUDGE_TEXT,
+  nudgeDue,
+  readAttemptState,
+  readResult,
+} from "../models/ResultTool.ts";
+import type { ResultState } from "../models/ResultTool.ts";
 import { briefOfPayload } from "./Briefs.ts";
 import {
   childThreadIdOf,
@@ -79,7 +106,6 @@ import {
   ChildDoc,
   isLinked,
   jsonRecordOf,
-  REPORT_ATTEMPTS,
   SubagentsDoc,
 } from "./SubagentDocs.ts";
 import type { SubagentItemState, SubagentsState } from "./SubagentDocs.ts";
@@ -94,7 +120,10 @@ export const BRIEF_TASK = "cairn.subagent-brief";
 /** The reporter task's name. */
 export const REPORTER_TASK = "cairn.subagent-reporter";
 
-/** Every subagent task name, for the boot repair that retries parked ones. */
+/**
+ * The subagent tasks that wait, for the boot repair that retries parked ones. The anchor completes
+ * in its first phase and waits on nothing, so the crash-loop guard never parks it.
+ */
 export const SUBAGENT_TASKS: ReadonlySet<string> = new Set([
   BRIEF_TASK,
   REPORTER_TASK,
@@ -129,7 +158,19 @@ export const Anchor = defineTask<null, { phase: "done" }, null>({
   },
 });
 
-/** One input to a child, as its reporter delivers it. */
+/** One content part of an input, as a task's input keeps it: plain JSON. */
+export type InputPartState =
+  | { [key: string]: JsonValue; type: "text"; text: string }
+  | { [key: string]: JsonValue; type: "image"; data: string; mimeType: string };
+
+/** The entry an input is placed as instead of `pi.user` (an attachment's author, say). */
+export interface InputEntryState {
+  [key: string]: JsonValue;
+  kind: string;
+  data: JsonValue;
+}
+
+/** One input to a child, as its reporter delivers it: the whole draft, so any submitter admits it. */
 export interface ReporterInput {
   [key: string]: JsonValue;
   /** The child's registry key (its brief's approval id). */
@@ -137,11 +178,55 @@ export interface ReporterInput {
   child: number;
   childThreadId: string;
   requestId: string;
-  text: string;
-  whenBusy: "steer" | "followUp";
+  /** Its text, or its text and image parts as the user sent them. */
+  content: string | Array<InputPartState>;
+  entry: InputEntryState | null;
+  whenBusy: "steer" | "followUp" | "reject";
   /** A user's own steer to the child: its result is a note, with no wake. */
   quiet: boolean;
 }
+
+/** `content` as a task input keeps it. */
+export const inputPartsOf = (
+  content: InputSubmissionDraft["content"]
+): string | Array<InputPartState> =>
+  Predicate.isString(content)
+    ? content
+    : content.map((part): InputPartState =>
+        part.type === "text"
+          ? { type: "text", text: part.text }
+          : { type: "image", data: part.data, mimeType: part.mimeType }
+      );
+
+/** The draft a reporter submits for `input`. */
+const draftOf = (input: ReporterInput): InputSubmissionDraft => {
+  const content = Predicate.isString(input.content)
+    ? input.content
+    : input.content.map((part) =>
+        part.type === "text"
+          ? { type: "text" as const, text: part.text }
+          : {
+              type: "image" as const,
+              data: part.data,
+              mimeType: part.mimeType,
+            }
+      );
+
+  return input.entry === null
+    ? {
+        type: "input",
+        requestId: input.requestId,
+        content,
+        whenBusy: input.whenBusy,
+      }
+    : {
+        type: "input",
+        requestId: input.requestId,
+        content,
+        whenBusy: input.whenBusy,
+        entry: { kind: input.entry.kind, data: input.entry.data },
+      };
+};
 
 /** One wake a reporter submits. */
 interface WakeState {
@@ -153,6 +238,7 @@ interface WakeState {
 /** Where a reporter stands. */
 type ReporterState =
   | { phase: "deliver" }
+  | { phase: "nudge"; seq: number }
   | { phase: "report"; settlement: SettlementState }
   | { phase: "wake"; settlement: SettlementState; wakes: Array<WakeState> };
 
@@ -210,15 +296,11 @@ interface InputEnd {
 /** How a settled input ended, in the run vocabulary, and the failure's words. */
 const endOf = (
   settled: SettledSubmissionRecord,
-  failedReport: boolean,
+  noResult: Option.Option<string>,
   now: number
 ): InputEnd => {
-  if (failedReport) {
-    return {
-      outcome: "failed",
-      error: `The payload did not match the result schema in ${REPORT_ATTEMPTS} attempts.`,
-      usageLimit: false,
-    };
+  if (Option.isSome(noResult)) {
+    return { outcome: "failed", error: noResult.value, usageLimit: false };
   }
 
   if (settled.status === "done") {
@@ -260,14 +342,29 @@ const settleUnlessWorking = (
   }
 };
 
-/** Whether a wake from any child is still queued in the parent (table reads). */
+/**
+ * Whether a wake from any child is still queued in the parent (table reads). Nothing is read while
+ * the parent's inbox holds no input. Otherwise each waking child's settlements are read newest
+ * first, and only until a wake that was placed: wakes are follow-ups, placed in order, so every
+ * older one was placed too. Reads stay bounded by what is queued, not by the parent's history.
+ */
 const wakeQueued = async (
   tx: Tx,
   parent: ConversationId,
   registry: Readonly<SubagentsState>
 ): Promise<boolean> => {
+  const inbox = await tx.doc(InboxDoc, parent);
+
+  if (!inbox.items.some((item) => item.mode !== "write")) {
+    return false;
+  }
+
   for (const item of Object.values(registry.items)) {
-    for (const mark of item.settlements) {
+    if (item.wake === "quiet") {
+      continue;
+    }
+
+    for (const mark of item.settlements.toReversed()) {
       // oxlint-disable-next-line no-await-in-loop -- a few reads, before any table write
       const found = await tx.submissionByRequest(
         parent,
@@ -277,10 +374,35 @@ const wakeQueued = async (
       if (found?.status === "queued") {
         return true;
       }
+
+      if (found !== undefined) {
+        break;
+      }
     }
   }
 
   return false;
+};
+
+/** How many entries after an input the turn count reads; a longer run counts this many. */
+const TURN_SCAN = 500;
+
+/** How many answers the child gave in the run that answered an input placed at `from`. */
+const turnsAfter = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  from: EntryId | undefined
+): Promise<number> => {
+  if (from === undefined) {
+    return 0;
+  }
+
+  const page = await tx.scanEntries(
+    { conversationId, minEntryId: from, order: "ascending" },
+    TURN_SCAN
+  );
+
+  return page.items.filter((entry) => entry.kind === "pi.assistant").length;
 };
 
 /** What starting a child needs from outside its commit: read once, before it. */
@@ -290,18 +412,25 @@ export interface StartReads {
     readonly depth: number;
     readonly rootThreadId: string;
   }>;
-  /** The model the parent runs on, recorded as the dispatch (no role is resolved yet). */
+  /**
+   * The model and thinking level the parent runs on: the child runs on them too, and its dispatch
+   * record names them (a brief names no role until 4A resolves one at Go).
+   */
   readonly model: Option.Option<{
     readonly provider: string;
     readonly modelId: string;
   }>;
+  readonly thinkingLevel: Option.Option<string>;
 }
 
 /** The parts of the extension a task builds with. */
 export interface TaskDependencies {
   readonly faults: SubagentFaultSet;
-  /** The agent change a child gets at creation: its tools instead of a parent's. */
-  readonly childAgent: () => AgentChange;
+  /**
+   * The agent change a child gets at creation: its tools instead of a parent's, and
+   * `submit_result` when its brief asked for a typed result.
+   */
+  readonly childAgent: (typed: boolean) => AgentChange;
 }
 
 /** The task definitions, closed over the extension's faults and the child's agent change. */
@@ -411,13 +540,17 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   /**
    * Settles one input once its run ended, in one commit: one settlement per run (an input another
    * reporter's run already answered settles nothing), built from the child's `report` when it made
-   * one, else from its last answer with `not reported`.
+   * one, else from its last answer with `not reported`. A typed child's payload and divergence are
+   * its accepted result (`result`, read before the commit); a typed child whose run completed
+   * without one is nudged once (`nudge` phase) while `nudgeDue` allows, and settles `failed`
+   * otherwise. `mayNudge` is false on the nudge's own run.
    */
   const settle = async (
     tx: Tx,
     parent: ConversationId,
     input: ReporterInput,
     settled: SettledSubmissionRecord,
+    result: Option.Option<ResultState>,
     now: number
   ): Promise<NextTaskState<ReporterState, null>> => {
     const child = conversationOf(input.child);
@@ -435,6 +568,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       settled.status === "unanswered" && settled.entry !== undefined
         ? await answerAfter(tx, child, settled.entry)
         : "";
+
+    const turns = await turnsAfter(tx, child, settled.entry);
 
     const registry = await tx.doc(SubagentsDoc, parent);
     const item = registry.items[input.key];
@@ -456,6 +591,16 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       }
     }
 
+    const link = await tx.doc(ChildDoc, child);
+
+    // A typed child whose run completed without a result: its attempts, from its transcript.
+    const missing =
+      link.resultSchema !== null &&
+      settled.status === "done" &&
+      Option.isNone(result)
+        ? Option.some(await readAttemptState(tx, child))
+        : Option.none();
+
     const live = await tx.doc(LiveDoc, child);
     const running = live.run !== undefined;
 
@@ -468,14 +613,19 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       return completed();
     }
 
-    const link = await tx.doc(ChildDoc, child);
+    const seq = item.settlements.length + 1;
+
+    if (Option.isSome(missing) && nudgeDue(missing.value)) {
+      return { status: "running", checkpoint: { phase: "nudge", seq } };
+    }
+
     const report = Option.fromNullOr(link.report);
 
-    const failedReport =
-      Option.isNone(report) && link.attempts >= REPORT_ATTEMPTS;
+    const noResult = Option.map(missing, (state) =>
+      state.used >= MAX_RESULT_ATTEMPTS ? CAP_TEXT : NO_RESULT_ERROR
+    );
 
-    const end = endOf(settled, failedReport, now);
-    const seq = item.settlements.length + 1;
+    const end = endOf(settled, noResult, now);
 
     const settlement: SettlementState = {
       subagent: input.childThreadId,
@@ -486,20 +636,24 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           answer === undefined ? cutShort : entryText(answer.model),
         onSome: (found) => found.summary,
       }),
-      divergence: Option.match(report, {
-        onNone: () => "not reported",
+      divergence: Option.match(result, {
+        onNone: () =>
+          Option.match(report, {
+            onNone: () => "not reported",
+            onSome: (found) => found.divergence,
+          }),
         onSome: (found) => found.divergence,
       }),
-      payload: Option.match(report, {
+      payload: Option.match(result, {
         onNone: () => null,
-        onSome: (found) => found.payload,
+        onSome: (found) => found.result,
       }),
       commit: Option.match(report, {
         onNone: () => null,
         onSome: (found) => found.commit,
       }),
       branch: null,
-      turns: { thisRun: 1, total: seq },
+      turns: { thisRun: turns, total: seq },
       error: end.error,
       usageLimit: end.usageLimit,
     };
@@ -511,12 +665,40 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       reportedAt: now,
     });
 
-    // The run's report and attempts are spent; the next run starts with none.
+    // The run's report is spent; the next run starts with none.
     link.report = null;
-    link.attempts = 0;
     settleUnlessWorking(item, running, unadmitted);
 
     return { status: "running", checkpoint: { phase: "report", settlement } };
+  };
+
+  /**
+   * Follows a child while `submission` runs, then settles it in one commit with the child's result,
+   * read once the run that could have written it ended.
+   */
+  const deliverAndSettle = async (
+    runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
+    input: ReporterInput,
+    submission: Submission,
+    context: Parameters<typeof runWait>[1]
+  ) => {
+    const stop = await followChild(runtime, input, context);
+    const settled = await withCleanup(submission.wait(context), stop);
+    const child = conversationOf(input.child);
+    const result = await readResult(runtime, child, context);
+
+    await runtime.commit(
+      async (tx) =>
+        await settle(
+          tx,
+          runtime.conversationId,
+          input,
+          settled,
+          result,
+          runtime.now()
+        ),
+      context
+    );
   };
 
   const Reporter = defineTask<ReporterInput, ReporterState, null>({
@@ -538,30 +720,64 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           return;
         }
 
+        let submission: Submission;
+
+        try {
+          submission = await child.submit(draftOf(input), context);
+        } catch (error) {
+          // A `reject` input the child refused as busy: the user was told `thread_busy`, so the
+          // input is dropped from the registry and a resend gets a reporter again.
+          if (!(error instanceof ConversationBusy)) {
+            throw error;
+          }
+
+          await runtime.commit(async (tx) => {
+            const registry = await tx.doc(SubagentsDoc, runtime.conversationId);
+
+            const item = registry.items[input.key];
+
+            if (item !== undefined) {
+              item.inputs = Object.fromEntries(
+                Object.entries(item.inputs).filter(
+                  ([requestId]) => requestId !== input.requestId
+                )
+              );
+            }
+
+            return completed();
+          }, context);
+
+          return;
+        }
+
+        await deliverAndSettle(runtime, input, submission, context);
+      },
+      nudge: async (task, runtime, context) => {
+        const { input } = task;
+        const { seq } = task.state.checkpoint;
+
+        const child = await runtime.conversation(
+          conversationOf(input.child),
+          context
+        );
+
+        if (child === undefined) {
+          await runtime.commit(() => completed(), context);
+
+          return;
+        }
+
         const submission = await child.submit(
           {
             type: "input",
-            requestId: input.requestId,
-            content: input.text,
-            whenBusy: input.whenBusy,
+            requestId: SubagentRequestIds.nudge(input.childThreadId, seq),
+            content: NUDGE_TEXT,
+            whenBusy: "followUp",
           },
           context
         );
 
-        const stop = await followChild(runtime, input, context);
-        const settled = await withCleanup(submission.wait(context), stop);
-
-        await runtime.commit(
-          async (tx) =>
-            await settle(
-              tx,
-              runtime.conversationId,
-              input,
-              settled,
-              runtime.now()
-            ),
-          context
-        );
+        await deliverAndSettle(runtime, input, submission, context);
       },
       report: async (task, runtime, context) => {
         const { input } = task;
@@ -743,7 +959,19 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       ownership: { kind: "task", taskId: anchor },
     });
 
-    await configure(tx, child.id, dependencies.childAgent());
+    const model = Option.getOrElse(reads.model, () => ({
+      provider: "unknown",
+      modelId: "unknown",
+    }));
+
+    // The child runs on what its dispatch record names (2D's rule): the parent's model for now.
+    await configure(tx, child.id, {
+      ...dependencies.childAgent(brief.value.resultSchema !== null),
+      ...Option.match(reads.model, {
+        onNone: () => ({}),
+        onSome: (found) => ({ model: { ...found } }),
+      }),
+    });
 
     const childThreadId = childThreadIdOf(now, child.id);
     const mode: RuntimeMode = narrowerMode(brief.value.mode, parentMode);
@@ -785,11 +1013,6 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         : jsonRecordOf(brief.value.resultSchema);
     link.permissionMode = mode;
 
-    const model = Option.getOrElse(reads.model, () => ({
-      provider: "unknown",
-      modelId: "unknown",
-    }));
-
     const registry = await tx.doc(SubagentsDoc, parent);
 
     const item: SubagentItemState = {
@@ -804,10 +1027,11 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           spec: `${model.provider}/${model.modelId}`,
           role: null,
           model: { provider: model.provider, modelId: model.modelId },
-          thinkingLevel: null,
+          thinkingLevel: Option.getOrNull(reads.thinkingLevel),
           via: "literal",
           skipped: [],
-          family: "other",
+          family: familyOf(model),
+          // Pricing needs the catalog, which 4A's dispatch reads through `RoleAliases.resolve`.
           priced: false,
         },
         previewed: null,
@@ -830,7 +1054,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       child: child.id,
       childThreadId,
       requestId: SubagentRequestIds.brief(approvalId),
-      text: renderBrief(brief.value),
+      content: renderBrief(brief.value),
+      entry: null,
       whenBusy: "followUp",
       quiet: false,
     });
@@ -929,6 +1154,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
                 })
               : Option.none(),
             model: Option.fromUndefinedOr(agent.model),
+            thinkingLevel: Option.some(agent.thinkingLevel),
           };
 
           await runtime.commit(async (tx) => {
@@ -940,10 +1166,12 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           return;
         }
 
+        // Declined, sent back, or expired unanswered (ADR 0030): the parent is told.
         const told =
-          Option.isSome(record) &&
-          (record.value.status === "declined" ||
-            record.value.status === "revised");
+          Option.isNone(record) ||
+          record.value.status === "declined" ||
+          record.value.status === "revised" ||
+          record.value.status === "expired";
 
         await runtime.commit(
           async (tx): Promise<NextTaskState<BriefState, null>> =>
@@ -967,10 +1195,17 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const brief = briefOfPayload(record?.payload ?? null);
 
         if (record !== undefined && Option.isSome(brief)) {
-          const text = renderBriefAnswer(brief.value.title, {
-            kind: record.status === "revised" ? "revised" : "declined",
-            reason: Option.fromNullOr(record.reason),
-          });
+          const reason = Option.fromNullOr(record.reason);
+
+          const text = renderBriefAnswer(
+            brief.value.title,
+            record.status === "expired"
+              ? { kind: "expired" }
+              : {
+                  kind: record.status === "revised" ? "revised" : "declined",
+                  reason,
+                }
+          );
 
           const requestId = SubagentRequestIds.briefAnswer(approvalId);
 

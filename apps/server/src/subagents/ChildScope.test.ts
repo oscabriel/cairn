@@ -1,10 +1,11 @@
 // The build scan of ADR 0034: per-scope layers under `subagents/` and `workflows/` are built only
-// through `ChildScope.build`. A direct `Layer.build`, `Layer.launch`, `Effect.provide` (of a layer
-// or anything else: `provideService` and `provideContext` take values and stay allowed),
-// `LayerMap.make`, or a `Layer.buildWithMemoMap` outside `ChildScope.ts` would build into the
-// inherited memo map and hand a child its parent's instance (`brain/MemoMapIsolation.test.ts`).
-// Comments are left out, so a module may name the rule. Tests are not scanned: they build their
-// own roots. The scan is first shown to catch planted violations, then run over both folders.
+// through `ChildScope.build`. A direct `Layer.build`, `Layer.buildWithScope`, `Layer.launch`,
+// `Effect.provide` (of a layer or anything else: `provideService` and `provideContext` take values
+// and stay allowed), `LayerMap.make`, or a `Layer.buildWithMemoMap` outside `ChildScope.ts` would
+// build into the inherited memo map and hand a child its parent's instance
+// (`brain/MemoMapIsolation.test.ts`). Comments are left out, so a module may name the rule. Tests
+// are not scanned: they build their own roots. The scan is first shown to catch planted
+// violations, then run over both folders.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -21,6 +22,7 @@ const REFUSED: ReadonlyArray<{
   readonly what: string;
 }> = [
   { pattern: /\bLayer\.build\b(?!WithMemoMap)/u, what: "Layer.build" },
+  { pattern: /\bLayer\.buildWithScope\b/u, what: "Layer.buildWithScope" },
   { pattern: /\bLayer\.launch\b/u, what: "Layer.launch" },
   {
     pattern: /\bEffect\.provide\b(?!Service|Context)/u,
@@ -83,6 +85,10 @@ describe("per-scope layers go through ChildScope.build", () => {
         false
       ),
       ["calls LayerMap.make"]
+    );
+    assert.deepStrictEqual(
+      violations("yield* Layer.buildWithScope(Lease.layer, scope);", false),
+      ["calls Layer.buildWithScope"]
     );
     assert.deepStrictEqual(violations("Layer.launch(App.layer);", false), [
       "calls Layer.launch",

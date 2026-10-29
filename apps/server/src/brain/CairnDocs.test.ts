@@ -424,7 +424,7 @@ describe("an answer to a record", () => {
 });
 
 describe("what a stop cancels", () => {
-  it("only records a run holds: no brief, criteria, escalated question or mirror", () => {
+  it("only records a run holds: an escalated question too, but no brief, criteria or mirror", () => {
     assert.deepStrictEqual(
       [
         record(),
@@ -438,7 +438,7 @@ describe("what a stop cancels", () => {
         }),
         record({ status: "accepted" }),
       ].map(heldByRun),
-      [true, true, false, false, false, false, false]
+      [true, true, false, false, true, false, false]
     );
   });
 

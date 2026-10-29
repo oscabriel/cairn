@@ -24,7 +24,7 @@ export const renderBrief = (brief: Brief): string => {
   if (brief.resultSchema !== null) {
     lines.push(
       "",
-      "Finish by calling report with a payload that matches the result schema."
+      "Finish by calling submit_result with your result, which must match its schema, and how it differs from the brief."
     );
   }
 
@@ -73,18 +73,43 @@ export const renderWake = (description: string): string =>
 export const renderQuestion = (description: string, question: string): string =>
   `Subagent "${description}" asks: ${question}\nAnswer with subagent_reply, or escalate it to the user.`;
 
+/** One question's answer as a record keeps it: the labels picked and any custom text. */
+export interface QuestionAnswerText {
+  readonly picks: ReadonlyArray<string>;
+  readonly custom: string | null;
+}
+
+/**
+ * The words of a question's answer: the picked labels, joined, then the custom text; none when
+ * the answer holds neither.
+ */
+export const answerWords = (
+  answer: QuestionAnswerText | undefined
+): Option.Option<string> => {
+  const parts: Array<string> = answer === undefined ? [] : [...answer.picks];
+
+  if (answer?.custom !== null && answer?.custom !== undefined) {
+    parts.push(answer.custom);
+  }
+
+  const words = parts.filter((part) => part.trim() !== "");
+
+  return words.length === 0 ? Option.none() : Option.some(words.join("; "));
+};
+
 /** What `ask_parent` returns once its question is answered. */
 export const renderAnswer = (
   by: "parent" | "user",
-  answer: Option.Option<string>
+  answer: QuestionAnswerText | undefined
 ): string =>
-  `The ${by} answered: ${Option.getOrElse(answer, () => "(no answer)")}`;
+  `The ${by} answered: ${Option.getOrElse(answerWords(answer), () => "(no answer)")}`;
 
 /** How the user answered a brief, as its parent reads it. */
 export type BriefAnswer =
   | { readonly kind: "go"; readonly childThreadId: string }
   | { readonly kind: "declined"; readonly reason: Option.Option<string> }
-  | { readonly kind: "revised"; readonly reason: Option.Option<string> };
+  | { readonly kind: "revised"; readonly reason: Option.Option<string> }
+  | { readonly kind: "expired" };
 
 /** `: <reason>` after an answer's verb, or nothing without one. */
 const withReason = (reason: Option.Option<string>) =>
@@ -100,6 +125,8 @@ export const renderBriefAnswer = (title: string, answer: BriefAnswer): string =>
         `The user declined the brief "${title}"${withReason(found.reason)}.`,
       revised: (found) =>
         `The user sent back the brief "${title}"${withReason(found.reason)}.`,
+      expired: () =>
+        `The brief "${title}" expired without an answer; nothing started.`,
     })
   );
 
@@ -158,13 +185,23 @@ export const SubagentToolText = {
   alreadyReported: "Already reported.",
   /** `report` accepted. */
   reported: "Reported.",
-  /** `report` whose payload missed the schema, with attempts left. */
-  reportRetry: (attempt: number, of: number, problem: string) =>
-    `The payload does not match the result schema (attempt ${attempt} of ${of}): ${problem} Fix the payload and call report again.`,
-  /** `report` whose payload missed the schema on the last attempt. */
-  reportLastAttempt: (attempt: number, of: number, problem: string) =>
-    `The payload does not match the result schema, and that was the last attempt (${attempt} of ${of}): ${problem}`,
+  /** `ask_parent` with more options than a question may offer. */
+  tooManyOptions: (max: number) =>
+    `ask_parent takes at most ${max} options. Call it again with fewer, or none for a free answer.`,
+  /** `ask_parent` with a question or an option longer than a card shows. */
+  tooLong: (max: number) =>
+    `ask_parent's question and each option may be at most ${max} characters. Call it again with shorter ones.`,
+  /** `subagent_reply` with neither an answer nor an escalation. */
+  replyNeedsAnswer:
+    "subagent_reply needs an answer, or escalate with the reason the user should answer. Call it again with one.",
 } as const;
+
+/**
+ * Why a typed child's settlement failed when it ended without a result: the cap's words once its
+ * attempts are spent, these otherwise.
+ */
+export const NO_RESULT_ERROR =
+  "The child ended without submitting the typed result its brief asked for.";
 
 /** The entry kind of a brief's answer in the parent's transcript. */
 export const BRIEF_ANSWER_ENTRY = "cairn.brief-answer";
@@ -182,4 +219,6 @@ export const SubagentRequestIds = {
   briefAnswer: (briefId: string) => `${briefId}-answer`,
   /** The brief's rendered input to the child. */
   brief: (briefId: string) => `${briefId}-input`,
+  /** The one nudge a typed child gets when the run of its `seq`th settlement ends without one. */
+  nudge: (child: string, seq: number) => `subagent-nudge-${child}-${seq}`,
 } as const;

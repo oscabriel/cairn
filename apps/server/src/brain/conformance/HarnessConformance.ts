@@ -199,13 +199,23 @@ const turnInput = (line: InputLine): HarnessTurnInput => {
   };
 };
 
-/** The answer a respond line gives: its decision and reason, and a question's custom answer. */
+/**
+ * The answer a respond line gives: its decision and reason, and a question's answer (its picked
+ * labels and custom text), when the line gives either.
+ */
 const answerOf = (line: InputLine): ApprovalAnswerInput => ({
   decision: line.decision ?? "accept",
   reason: Option.fromUndefinedOr(line.reason),
-  answers: Option.map(Option.fromUndefinedOr(line.answer), (custom) => [
-    { index: 0, picks: [], custom },
-  ]),
+  answers:
+    line.answer === undefined && line.picks === undefined
+      ? Option.none()
+      : Option.some([
+          {
+            index: 0,
+            picks: line.picks === undefined ? [] : [...line.picks],
+            custom: line.answer ?? null,
+          },
+        ]),
 });
 
 /** Waits until `check` finds nothing wrong, or fails with its last complaint. */
@@ -787,6 +797,54 @@ export const runScenario = (
           );
         });
 
+      /** What the `index`th request of a thread offered and asked, against a line's wants. */
+      const requestAt = (
+        alias: string | undefined,
+        index: number,
+        wants: {
+          readonly includesTools?: ReadonlyArray<string>;
+          readonly excludesTools?: ReadonlyArray<string>;
+          readonly firstInput?: string;
+        }
+      ) =>
+        Effect.sync(() => {
+          const threadId = aliases.idOf(alias ?? PARENT_ALIAS);
+
+          if (Option.isNone(threadId)) {
+            return Result.fail(
+              `no thread is known as ${alias ?? PARENT_ALIAS}`
+            );
+          }
+
+          const request = script.requestsOf(threadId.value).at(index);
+
+          if (request === undefined) {
+            return Result.fail(`no request ${index} was made`);
+          }
+
+          const missing = (wants.includesTools ?? []).filter(
+            (name) => !request.tools.includes(name)
+          );
+
+          const extra = (wants.excludesTools ?? []).filter((name) =>
+            request.tools.includes(name)
+          );
+
+          const input = resolveAliases(wants.firstInput ?? null, aliases);
+
+          if (
+            missing.length > 0 ||
+            extra.length > 0 ||
+            (wants.firstInput !== undefined && input !== request.firstInput)
+          ) {
+            return Result.fail(
+              `request ${index} offered ${JSON.stringify(request.tools)} and began ${JSON.stringify(request.firstInput)}`
+            );
+          }
+
+          return Result.succeedNone;
+        });
+
       const play = (where: string, line: TranscriptLine) =>
         Match.value(line).pipe(
           Match.discriminatorsExhaustive("type")({
@@ -809,6 +867,12 @@ export const runScenario = (
                 options.timeout,
                 where,
                 viewAt(found.thread, found.path, found.equals)
+              ),
+            expect_request: (found) =>
+              eventually(
+                options.timeout,
+                where,
+                requestAt(found.thread, found.index, found)
               ),
           })
         );

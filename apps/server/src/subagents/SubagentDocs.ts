@@ -24,9 +24,6 @@ import { defineDoc } from "@earendil-works/pi-durable";
 import { Option, Predicate } from "effect";
 import type { Schema } from "effect";
 
-/** How many times a child may call `report` with a payload its brief's schema refuses. */
-export const REPORT_ATTEMPTS = 3;
-
 /** A JSON object as a document holds it. */
 export interface JsonRecord {
   [key: string]: JsonValue;
@@ -100,7 +97,10 @@ export const SubagentsDoc = defineDoc<SubagentsState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
 });
 
-/** A child's first valid `report`: the protocol's `ChildReport` as plain JSON. */
+/**
+ * A child's first `report`: the protocol's `ChildReport` as plain JSON. `payload` stays null: a
+ * typed result is `submit_result`'s, in `cairn.result`.
+ */
 export interface ChildReportState {
   [key: string]: JsonValue;
   summary: string;
@@ -120,8 +120,8 @@ export interface ChildState {
   briefApprovalId: string;
   resultSchema: JsonRecord | null;
   /**
-   * `report` calls with a payload the schema refused since the last settlement; the reporter
-   * resets it with `report` when it settles the run that used them.
+   * Always 0: a typed result's attempts are derived from the child's transcript
+   * (`readAttemptState`, models/ResultTool.ts), never kept as a counter.
    */
   attempts: number;
   report: ChildReportState | null;

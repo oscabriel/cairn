@@ -3182,7 +3182,12 @@
                     "properties": {
                       "state": {
                         "type": "string",
-                        "enum": ["pending", "answered", "escalated"]
+                        "enum": [
+                          "pending",
+                          "answered",
+                          "escalated",
+                          "cancelled"
+                        ]
                       },
                       "escalatedAt": {
                         "anyOf": [

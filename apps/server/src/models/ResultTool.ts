@@ -100,6 +100,26 @@ export const NUDGE_TEXT =
 export const CAP_TEXT =
   "The result was rejected twice; reply in plain text with what you found.";
 
+/**
+ * What `submit_result` returns, word for word: the scripted harness answers its calls with the
+ * same texts, so the conformance goldens hold both to them.
+ */
+export const ResultToolText = {
+  /** A thread whose brief named no result schema. */
+  notTyped:
+    "submit_result: this thread was not asked for a typed result. Answer in plain text.",
+  /** The accepted call. */
+  accepted: "Result accepted. Your work on this brief is done.",
+  /** A call after the accepted one. */
+  already:
+    "A result was already accepted; this call changes nothing. Your work on this brief is done.",
+  /** A call past the cap. */
+  capped: `submit_result: ${CAP_TEXT}`,
+  /** A refused value, with pi-ai's error lines and what to do next. */
+  rejected: (attempt: number, errors: string) =>
+    `submit_result rejected (attempt ${String(attempt)} of ${String(MAX_RESULT_ATTEMPTS)}):\n${errors}\n${attempt < MAX_RESULT_ATTEMPTS ? "Fix these and call submit_result again." : CAP_TEXT}`,
+} as const;
+
 // Documents.
 
 /** `cairn.result` as the document holds it: the protocol's `ResultDocument` as plain JSON. */
@@ -706,9 +726,7 @@ export const RESULT_TOOL = defineTool({
 
     if (Option.isNone(schema)) {
       return {
-        output: text(
-          "submit_result: this thread was not asked for a typed result. Answer in plain text."
-        ),
+        output: text(ResultToolText.notTyped),
         isError: true,
       };
     }
@@ -756,7 +774,7 @@ export const RESULT_TOOL = defineTool({
 
     if (decided.kind === "accepted") {
       return {
-        output: text("Result accepted. Your work on this brief is done."),
+        output: text(ResultToolText.accepted),
         structuredOutput: decided.value,
         control: { terminate: true },
       };
@@ -764,27 +782,18 @@ export const RESULT_TOOL = defineTool({
 
     if (decided.kind === "already") {
       return {
-        output: text(
-          "A result was already accepted; this call changes nothing. Your work on this brief is done."
-        ),
+        output: text(ResultToolText.already),
         structuredOutput: decided.value,
         control: { terminate: true },
       };
     }
 
     if (decided.kind === "capped") {
-      return { output: text(`submit_result: ${CAP_TEXT}`), isError: true };
+      return { output: text(ResultToolText.capped), isError: true };
     }
 
-    const next =
-      decided.attempt < MAX_RESULT_ATTEMPTS
-        ? "Fix these and call submit_result again."
-        : CAP_TEXT;
-
     return {
-      output: text(
-        `submit_result rejected (attempt ${String(decided.attempt)} of ${String(MAX_RESULT_ATTEMPTS)}):\n${decided.errors}\n${next}`
-      ),
+      output: text(ResultToolText.rejected(decided.attempt, decided.errors)),
       isError: true,
     };
   },

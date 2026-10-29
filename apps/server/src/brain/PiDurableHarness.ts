@@ -392,7 +392,9 @@ const layerNoDeps = Layer.effect(
 
             const meta = await tx.doc(ThreadMeta, record.id);
 
-            // Created now, so a thread stream can always watch them.
+            // Created now, so a thread stream can always watch them. A thread created before the
+            // registry was written here has none until its first child starts, and a stream
+            // opened before that shows it only once the client resubscribes (4C, 6).
             await tx.doc(Approvals, record.id);
             await tx.doc(SubagentsDoc, record.id);
             // The mode gated tools read at call time (ADR 0031).
@@ -710,57 +712,66 @@ const layerNoDeps = Layer.effect(
     );
 
     /**
-     * Stops a thread's run. The aborts and the cancellations run in the harness's own scope and the
-     * caller only joins them: an abort mark is durable, so a caller that goes away (a client
-     * disconnect interrupting the RPC) must not leave the records its run held pending. A crash in
-     * between is the boot repair's (`cancelAbandonedApprovalsAtBoot`). `subagents: "stop"` then
-     * stops each child its registry names as working, queue cleared, and theirs in turn; `keep`
-     * leaves them working (ADR 0028).
+     * One thread's stop, in the caller's fiber: its aborts and cancellations, the notes its run left
+     * queued, then with `subagents: "stop"` each child its registry names as working, queue
+     * cleared, and theirs in turn (ADR 0028). `keep` leaves them working.
      */
-    const stop: (
+    const stopTree = (
       threadId: ThreadId,
       options: StopOptions
-    ) => Effect.Effect<void, HarnessError> = Effect.fn("PiDurableHarness.stop")(
-      function* (threadId: ThreadId, options: StopOptions) {
+    ): Effect.Effect<void, HarnessError> =>
+      Effect.gen(function* () {
         const session = yield* open(Option.some(threadId));
         const conversation = yield* conversationOf(session, threadId);
 
-        const stopping = yield* abortAndCancel(
-          session,
-          threadId,
-          conversation,
-          options
-        ).pipe(
-          // The notes the stopped run left queued enter the transcript now (ADR 0028).
-          Effect.andThen(placeAfterRun(threadId)),
-          Effect.forkIn(layerScope)
+        yield* abortAndCancel(session, threadId, conversation, options);
+        // The notes the stopped run left queued enter the transcript now (ADR 0028).
+        yield* placeAfterRun(threadId);
+
+        if (options.subagents !== "stop") {
+          return;
+        }
+
+        const registry = yield* call(
+          Option.some(threadId),
+          "subagents.read",
+          async (context) =>
+            await session.harness.snapshot(
+              SubagentsDoc,
+              conversation.id,
+              context
+            )
         );
 
-        yield* Fiber.join(stopping);
+        for (const item of Object.values(registry?.items ?? {})) {
+          const child = decodeThreadId(item.threadId);
 
-        // Stop all: every working child stops too, and its own children with it (ADR 0028).
-        if (options.subagents === "stop") {
-          const registry = yield* call(
-            Option.some(threadId),
-            "subagents.read",
-            async (context) =>
-              await session.harness.snapshot(
-                SubagentsDoc,
-                conversation.id,
-                context
-              )
-          );
-
-          for (const item of Object.values(registry?.items ?? {})) {
-            const child = decodeThreadId(item.threadId);
-
-            if (item.status !== "settled" && Option.isSome(child)) {
-              yield* stop(child.value, { clearQueue: true, subagents: "stop" });
-            }
+          if (item.status !== "settled" && Option.isSome(child)) {
+            yield* stopTree(child.value, {
+              clearQueue: true,
+              subagents: "stop",
+            });
           }
         }
-      }
-    );
+      });
+
+    /**
+     * Stops a thread's run, and with Stop all its working children. The whole stop runs in the
+     * harness's own scope and the caller only joins it: an abort mark is durable, so a caller that
+     * goes away (a client disconnect interrupting the RPC) must not leave the records its run held
+     * pending, nor the later children of a Stop all running. A crash in between is the boot
+     * repair's (`cancelAbandonedApprovalsAtBoot`).
+     */
+    const stop = Effect.fn("PiDurableHarness.stop")(function* (
+      threadId: ThreadId,
+      options: StopOptions
+    ) {
+      const stopping = yield* stopTree(threadId, options).pipe(
+        Effect.forkIn(layerScope)
+      );
+
+      return yield* Fiber.join(stopping);
+    });
 
     const withdraw = Effect.fn("PiDurableHarness.withdraw")(function* (
       threadId: ThreadId,

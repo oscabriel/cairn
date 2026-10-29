@@ -148,11 +148,15 @@ export const SubagentStatus = Schema.Literals([
 
 export type SubagentStatus = typeof SubagentStatus.Type;
 
-/** Where a child's `ask_parent` question stands, from the parent's side. */
+/**
+ * Where a child's `ask_parent` question stands, from the parent's side; `cancelled` once the
+ * child's run that asked it was stopped (ADR 0029).
+ */
 export const SubagentQuestionState = Schema.Literals([
   "pending",
   "answered",
   "escalated",
+  "cancelled",
 ]);
 
 export type SubagentQuestionState = typeof SubagentQuestionState.Type;

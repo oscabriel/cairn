@@ -9,8 +9,8 @@
 // - `approvals`: approval records by age, with their status and tool; `pendingApprovals`.
 // - `decisions`: the same records' status, who decided (the `decidedBy` kind) and the reason.
 // - `model`: the thread's model.
-// - `subagents`: on a parent with children only, each child's registry status, its settlements and
-//   the last one delivered, by thread id.
+// - `subagents`: on a parent with children only, each child's registry status, its settlements,
+//   the last one delivered and the model its dispatch record names, by thread id.
 
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";
@@ -153,6 +153,12 @@ export const normalizeView = (view: ConversationView): Json => {
             status: item.status ?? null,
             settlements: isList(item.settlements) ? item.settlements.length : 0,
             delivered: item.delivered ?? null,
+            model:
+              isRecord(item.dispatch) &&
+              isRecord(item.dispatch.resolved) &&
+              isRecord(item.dispatch.resolved.model)
+                ? item.dispatch.resolved.model
+                : null,
           }))
       : [];
 

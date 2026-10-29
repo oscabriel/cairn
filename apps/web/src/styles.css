@@ -2461,3 +2461,7 @@ code {
 /* Cairn: project tones arrive as data, so Tailwind can't see them in the source. t3code's palette, from
  * apps/web/src/projectIconColors.ts at fe27e8e3. */
 @source inline("text-{amber,blue,cyan,emerald,fuchsia,gray,green,indigo,lime,orange,pink,purple,red,rose,sky,teal,violet,yellow}-600 dark:text-{amber,blue,cyan,emerald,fuchsia,gray,green,indigo,lime,orange,pink,purple,red,rose,sky,teal,violet,yellow}-400");
+
+/* Cairn: the `next` primitives (next/ui) carry their own utilities, built by next/ui/utilities.css into
+ * the chunks that import them, so the entry CSS every classic page loads does not grow with them. */
+@source not "./next/ui";

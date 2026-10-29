@@ -39,6 +39,12 @@ const LAZY_FOLDERS = [
   "src/settings/",
 ];
 
+/** The dev-only look catalogue's folder, as a manifest key starts. */
+const LOOK_CATALOGUE_FOLDER = "src/next/ui/catalogue/";
+
+/** The attribute only the look catalogue's view writes (`data-look-catalogue`). */
+const LOOK_CATALOGUE_MARKER = "look-catalogue";
+
 const ManifestChunk = Schema.Struct({
   file: Schema.String,
   isEntry: Schema.optionalKey(Schema.Boolean),
@@ -168,6 +174,23 @@ describe("the bundle budget", () => {
 
         assert.isAtMost(entryJs, ENTRY_JS_BUDGET, "entry JS gzip bytes");
         assert.isAtMost(entryCss, ENTRY_CSS_BUDGET, "entry CSS gzip bytes");
+
+        // The look catalogue (`next/ui/catalogue`, `/__look`) is for the dev server only: no
+        // chunk comes from its folder and no emitted file carries its marker.
+        assert.deepStrictEqual(
+          Object.keys(manifest).filter((key) =>
+            key.startsWith(LOOK_CATALOGUE_FOLDER)
+          ),
+          [],
+          "manifest entries from the look catalogue"
+        );
+        assert.deepStrictEqual(
+          [...files].flatMap(([file, text]) =>
+            text.includes(LOOK_CATALOGUE_MARKER) ? [file] : []
+          ),
+          [],
+          "emitted files carrying the look catalogue"
+        );
 
         for (const [key] of lazy) {
           assert.notInclude(

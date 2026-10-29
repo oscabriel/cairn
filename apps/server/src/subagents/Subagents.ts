@@ -58,6 +58,7 @@ const build = (faults: SubagentFaultSet, tuning: SubagentToolOptions) => {
   const tasks: SubagentTasks = subagentTaskSet({
     faults,
     childAgent: (typed) => child.agent(typed),
+    settleDelayMillis: tuning.settleDelayMillis,
   });
 
   const tools = subagentToolSet(faults, tasks, tuning);

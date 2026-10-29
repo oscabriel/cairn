@@ -433,7 +433,10 @@ describe("subagents over a pi-durable brain", () => {
             fauxAssistantMessage("I counted src: 4 files."),
             fauxAssistantMessage("Noted."),
           ],
-          tuning: { questionTtlMillis: QUESTION_TTL_MILLIS },
+          tuning: {
+            ...DEFAULT_TOOL_OPTIONS,
+            questionTtlMillis: QUESTION_TTL_MILLIS,
+          },
         },
         (child) =>
           Effect.gen(function* () {

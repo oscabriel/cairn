@@ -198,11 +198,18 @@ interface AskedQuestion {
 export interface SubagentToolOptions {
   /** How long a child's question waits before it expires: a gated call's day. */
   readonly questionTtlMillis: number;
+  /**
+   * How long a reporter waits, once its input's run ended, before it settles, by whether its
+   * input is quiet: none in production. A test delays the waking reporters to make a quiet one
+   * settle a shared run first.
+   */
+  readonly settleDelayMillis: (quiet: boolean) => number;
 }
 
 /** The tools' production options. */
 export const DEFAULT_TOOL_OPTIONS: SubagentToolOptions = {
   questionTtlMillis: GATED_APPROVAL_TTL_MILLIS,
+  settleDelayMillis: () => 0,
 };
 
 /** The pending record of a child's question to its parent (ADR 0027), in the child's ledger. */

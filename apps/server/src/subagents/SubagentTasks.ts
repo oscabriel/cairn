@@ -32,7 +32,8 @@
 //   user's steer typed into the child): `deliver` submits the input under its request id (the
 //   whole input: its text and images, its entry, its `whenBusy`), mirrors the child's pending
 //   records into its registry status while it works, and settles once per run in one commit (a
-//   run that answered several inputs wakes the parent unless all of them were a user's steers);
+//   run that ended several inputs, a nudge's included, settles them all and wakes the parent
+//   unless all of them were a user's steers; its mark lists their request ids);
 //   `nudge` sends a typed child that ended without a result its one nudge (`NUDGE_TEXT`) and
 //   settles on that run; `report` writes the settlement's note and decides the wake by the
 //   parent's state; `wake` submits the wake and marks the settlement delivered. Nudge, note and
@@ -48,6 +49,8 @@
 // `SubagentFaults` breaks the delivery on purpose for the conformance suite's mutation check; the
 // production layer plants none.
 
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { narrowerMode } from "@cairn/client-logic/EffectiveMode";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
 import {
@@ -61,11 +64,14 @@ import type {
   Agent,
   AgentChange,
   ConversationId,
+  Cursor,
   EntryId,
   InputSubmissionDraft,
   NextTaskState,
   SettledSubmissionRecord,
   Submission,
+  SubmissionRecord,
+  TaskRecord,
   TaskRuntime,
   Tx,
 } from "@earendil-works/pi-durable";
@@ -212,19 +218,89 @@ export interface ReporterInput {
   quiet: boolean;
 }
 
-/** What a settling reporter reads about the run it settles, from every input that run answered. */
+/** What a settling reporter reads about the run it settles, from every input that run ended. */
 interface RunInputs {
   /**
    * Whether the run goes without a wake: `input` is quiet (a user's own steer) and so is every
-   * other input it answered. Only the first reporter to settle a run decides its wake, so a
-   * user's steer and the parent's send answered together still wake the parent.
+   * other input it ended. The first reporter to settle a run settles it for all of them, so a
+   * user's steer and the parent's send ended together still wake the parent.
    */
   readonly quiet: boolean;
-  /** The earliest entry an input it answered was placed as. */
+  /** The earliest entry an input it ended was placed as. */
   readonly from: EntryId | undefined;
+  /** The request ids (registry keys) of every reporter whose input the run ended, `input`'s first. */
+  readonly inputs: Array<string>;
 }
 
-/** The run `settled` ended, over every input `answerEntry` answered (table reads only). */
+/** Whether two settled submissions ended in one run (table records only). */
+const sameRun = (
+  mine: SettledSubmissionRecord,
+  other: SubmissionRecord | undefined
+): boolean => {
+  if (other?.type !== "input") {
+    return false;
+  }
+
+  if (mine.status === "done") {
+    return other.status === "done" && other.answer === mine.answer;
+  }
+
+  // A failed or stopped run settles every input it placed in one commit, with one reason and
+  // detail and no answer to compare; an input never placed (withdrawn) ran in no run.
+  return (
+    mine.type === "input" &&
+    mine.entry !== undefined &&
+    other.status === "unanswered" &&
+    other.entry !== undefined &&
+    other.reason === mine.reason &&
+    JSON.stringify(other.detail ?? null) === JSON.stringify(mine.detail ?? null)
+  );
+};
+
+/**
+ * The submission a peer reporter waits on now: its own input, or in the `nudge` phase the nudge
+ * it sent, whose run may be the one being settled. None for a reporter that settled already.
+ */
+const peerSubmission = async (
+  tx: Tx,
+  child: ConversationId,
+  requestId: string,
+  task: TaskRecord<JsonValue, JsonValue, JsonValue> | undefined
+): Promise<SubmissionRecord | undefined> => {
+  if (task === undefined) {
+    return undefined;
+  }
+
+  const { state } = task;
+
+  if (state.status === "completing" || state.status === "terminal") {
+    return undefined;
+  }
+
+  const checkpoint = isJsonRecord(state.checkpoint) ? state.checkpoint : {};
+  const reporter = isJsonRecord(task.input) ? task.input : {};
+
+  if (checkpoint.phase === "nudge") {
+    return Predicate.isNumber(checkpoint.seq) &&
+      Predicate.isString(reporter.childThreadId)
+      ? await tx.submissionByRequest(
+          child,
+          SubagentRequestIds.nudge(reporter.childThreadId, checkpoint.seq)
+        )
+      : undefined;
+  }
+
+  return checkpoint.phase === "deliver"
+    ? await tx.submissionByRequest(child, requestId)
+    : undefined;
+};
+
+/**
+ * The run `settled` ended, over every input it ended (table reads only): another reporter's input
+ * belongs to it when its current submission (its own input, or the nudge it sent) was answered by
+ * the same answer, or, for a run that ended without one, was placed and ended with the same reason.
+ * A reporter that already settled is left out: its run's mark lists it.
+ */
 const runInputs = async (
   tx: Tx,
   input: ReporterInput,
@@ -232,54 +308,56 @@ const runInputs = async (
   others: ReadonlyArray<string>,
   settled: SettledSubmissionRecord
 ): Promise<RunInputs> => {
-  const answerEntry =
-    settled.type === "input" && settled.status === "done"
-      ? settled.answer
-      : null;
-
   let { quiet } = input;
   let from = settled.entry;
-
-  if (answerEntry === null) {
-    return { quiet, from };
-  }
-
+  const inputs = [input.requestId];
   const child = conversationOf(input.child);
 
+  if (settled.status === "unanswered" && settled.entry === undefined) {
+    return { quiet, from, inputs };
+  }
+
   for (const requestId of others) {
-    // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
-    const submission = await tx.submissionByRequest(child, requestId);
     const taskId = item.inputs[requestId];
 
-    if (
-      submission?.status === "done" &&
-      submission.answer === answerEntry &&
-      taskId !== undefined
-    ) {
-      if (from === undefined || submission.entry < from) {
+    if (taskId === undefined) {
+      continue;
+    }
+
+    // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+    const task = await tx.task(taskOf(taskId));
+    // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+    const submission = await peerSubmission(tx, child, requestId, task);
+
+    if (submission !== undefined && sameRun(settled, submission)) {
+      if (
+        submission.entry !== undefined &&
+        (from === undefined || submission.entry < from)
+      ) {
         from = submission.entry;
       }
 
-      // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
-      const task = await tx.task(taskOf(taskId));
       const reporter = isJsonRecord(task?.input) ? task.input : {};
 
       if (reporter.quiet === false) {
         quiet = false;
       }
+
+      inputs.push(requestId);
     }
   }
 
-  return { quiet, from };
+  return { quiet, from, inputs };
 };
 
-/** The most entries `resultOfRun` reads from the start of the run it settles. */
-const RESULT_SCAN = 2000;
+/** How many entries `resultOfRun` reads per page. */
+const RESULT_PAGE = 256;
 
 /**
- * `accepted` when the run being settled accepted it: an accepted `submit_result` lies at or after
- * `from`, the run's first input (table reads, bounded). A typed result goes to the parent once,
- * with its run; the child's later runs settle without it.
+ * `accepted` when the run being settled accepted it: an accepted `submit_result` (not a later
+ * call answered `already`) lies at or after `from`, the run's first input (table reads, paged to
+ * the end of the transcript). A typed result goes to the parent once, with its run; the child's
+ * later runs settle without it, and so does an input that ran in no run.
  */
 const resultOfRun = async (
   tx: Tx,
@@ -288,17 +366,27 @@ const resultOfRun = async (
   accepted: Option.Option<ResultState>
 ): Promise<Option.Option<ResultState>> => {
   if (Option.isNone(accepted) || from === undefined) {
-    return accepted;
+    return Option.none();
   }
 
-  const page = await tx.scanEntries(
-    { conversationId: child, minEntryId: from, order: "ascending" },
-    RESULT_SCAN
-  );
+  // Pages are read one after another: each cursor comes from the page before.
+  const scan = async (cursor?: Cursor): Promise<boolean> => {
+    const page = await tx.scanEntries(
+      { conversationId: child, minEntryId: from, order: "ascending" },
+      RESULT_PAGE,
+      cursor
+    );
 
-  return page.items.some((entry) => Option.contains(markOf(entry), "accepted"))
-    ? accepted
-    : Option.none();
+    if (
+      page.items.some((entry) => Option.contains(markOf(entry), "accepted"))
+    ) {
+      return true;
+    }
+
+    return page.next === undefined ? false : await scan(page.next);
+  };
+
+  return (await scan()) ? accepted : Option.none();
 };
 
 /** `content` as a task input keeps it. */
@@ -596,11 +684,13 @@ export interface TaskDependencies {
    * `submit_result` when its brief asked for a typed result.
    */
   readonly childAgent: (typed: boolean) => AgentChange;
+  /** How long a reporter waits before it settles, by whether its input is quiet (tests only). */
+  readonly settleDelayMillis: (quiet: boolean) => number;
 }
 
 /** The task definitions, closed over the extension's faults and the child's agent change. */
 export const subagentTaskSet = (dependencies: TaskDependencies) => {
-  const { faults } = dependencies;
+  const { faults, settleDelayMillis } = dependencies;
 
   /**
    * While a child works, its pending records set its registry status: `waiting` while any is
@@ -703,8 +793,9 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   };
 
   /**
-   * Settles one input once its run ended, in one commit: one settlement per run (an input another
-   * reporter's run already answered settles nothing), built from the child's `report` when it made
+   * Settles one input once its run ended, in one commit: one settlement per run, answered or not
+   * (an input whose run another reporter settled, as that settlement's mark lists, settles
+   * nothing), built from the child's `report` when it made
    * one, else from its last answer with `not reported`. A typed child's payload and divergence are
    * its accepted result (`accepted`, read before the commit), on the settlement of the run that
    * accepted it only; a typed child whose run completed without one is nudged once (`nudge` phase)
@@ -778,9 +869,13 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     const live = await tx.doc(LiveDoc, child);
     const running = live.run !== undefined;
 
+    // A run settles once: whichever of its inputs' reporters settles first lists them all.
     if (
-      answerEntry !== null &&
-      item.settlements.some((mark) => mark.answerEntry === answerEntry)
+      item.settlements.some(
+        (mark) =>
+          mark.inputs.includes(input.requestId) ||
+          (answerEntry !== null && mark.answerEntry === answerEntry)
+      )
     ) {
       settleUnlessWorking(item, running, unadmitted);
 
@@ -841,6 +936,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       outcome: end.outcome,
       answerEntry,
       reportedAt: now,
+      inputs: run.inputs,
     });
 
     // The run's report is spent; the next run starts with none.
@@ -865,6 +961,12 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   ) => {
     const stop = await followChild(runtime, input, context);
     const settled = await withCleanup(submission.wait(context), stop);
+    const delay = settleDelayMillis(input.quiet);
+
+    if (delay > 0) {
+      await sleep(delay);
+    }
+
     const child = conversationOf(input.child);
     const result = await readResult(runtime, child, context);
 
@@ -1233,8 +1335,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       inputs: {},
     };
 
-    registry.items[approvalId] = item;
-
+    // The first reporter is recorded in `item.inputs` before the item enters the draft: a later
+    // change to the plain object, once it is in the registry, would not be committed.
     await newReporter(tx, item, {
       key: approvalId,
       child: child.id,
@@ -1246,6 +1348,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       quiet: false,
     });
 
+    registry.items[approvalId] = item;
     record.started = { childThreadId };
 
     await applyNote(

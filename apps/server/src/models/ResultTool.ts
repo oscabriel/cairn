@@ -146,6 +146,26 @@ export const ResultDoc = defineDoc<ResultState>({
   checkpointWhen: () => false,
 });
 
+/** `cairn.result-call` state: whether this tool call is the one that accepted the result. */
+interface AcceptingCallState {
+  [key: string]: JsonValue;
+  accepted: boolean;
+}
+
+/**
+ * `cairn.result-call` on a `submit_result` call's own task, written in the commit that accepts
+ * the result: a rerun of that call (a crash before its answer reached the transcript) answers
+ * accepted again, while another call answers `already`. Never on the wire.
+ */
+const AcceptingCallDoc = defineDoc<AcceptingCallState>({
+  kind: "cairn.result-call",
+  version: 1,
+  scope: "task",
+  initial: () => ({ accepted: false }),
+  // Written once.
+  checkpointWhen: () => false,
+});
+
 const decodeChildSchema = Schema.decodeUnknownOption(
   Schema.Struct({ resultSchema: Schema.NullOr(JsonObject) })
 );
@@ -540,8 +560,11 @@ export const validateResult = (
 
 // Attempts, from the transcript.
 
-/** What one transcript entry says about the result: a call's verdict, or the nudge. */
-export type ResultMark = "rejected" | "accepted" | "nudge";
+/**
+ * What one transcript entry says about the result: a call's verdict (`already` for a call after
+ * one was accepted, which accepts nothing), or the nudge.
+ */
+export type ResultMark = "rejected" | "accepted" | "already" | "nudge";
 
 /** Where a child stands on its result, derived from its transcript's marks in order. */
 export interface AttemptState {
@@ -565,7 +588,7 @@ export const attemptStateOf = (marks: Iterable<ResultMark>): AttemptState => {
     if (mark === "rejected") {
       called = true;
       used += 1;
-    } else if (!nudged) {
+    } else if (mark === "nudge" && !nudged) {
       nudged = true;
 
       if (!called) {
@@ -613,7 +636,17 @@ export const markOf = (entry: EntryRecord): Option.Option<ResultMark> => {
     message.role === "toolResult" &&
     message.toolName === RESULT_TOOL_NAME
   ) {
-    return Option.some(message.isError ? "rejected" : "accepted");
+    if (message.isError) {
+      return Option.some("rejected");
+    }
+
+    const said = message.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("");
+
+    return Option.some(
+      said.trim() === ResultToolText.already ? "already" : "accepted"
+    );
   }
 
   return UserEntry.is(entry) && textOf(message).trim() === NUDGE_TEXT
@@ -760,14 +793,25 @@ export const RESULT_TOOL = defineTool({
       const document = await tx.doc(ResultDoc, api.conversationId);
 
       // A rerun, or a second call of the same round (whose results reach the transcript only
-      // when the round ends): the first accepted value stands.
+      // when the round ends): the first accepted value stands. A rerun of the accepting call
+      // answers accepted again, so the transcript marks the run that accepted it even when a
+      // crash lost its first answer; any other call says `already` (`markOf`).
       if (document.attempts > 0) {
-        return { kind: "already", value: { ...document } };
+        const call = await tx.doc(AcceptingCallDoc, api.taskId);
+
+        return {
+          kind: call.accepted ? "accepted" : "already",
+          value: { ...document },
+        };
       }
 
       document.result = copyJson(verdict.success.result);
       document.divergence = verdict.success.divergence;
       document.attempts = attempt;
+
+      const call = await tx.doc(AcceptingCallDoc, api.taskId);
+
+      call.accepted = true;
 
       return { kind: "accepted", value: { ...document } };
     }, context);

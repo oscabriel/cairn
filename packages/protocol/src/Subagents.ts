@@ -184,12 +184,17 @@ export const DispatchRecord = Schema.Struct({
 
 export type DispatchRecord = typeof DispatchRecord.Type;
 
-/** One delivered settlement, as the registry keeps it: the answer is an entry id, never its text. */
+/**
+ * One delivered settlement, as the registry keeps it: the answer is an entry id, never its text.
+ * `inputs` are the request ids (keys of the record's `inputs`) of every input the settled run
+ * answered or ended, so a run that settled several inputs, a failed one included, settles once.
+ */
 export const SettlementMark = Schema.Struct({
   seq: PositiveInt,
   outcome: SettlementOutcome,
   answerEntry: Schema.NullOr(EntryId),
   reportedAt: EpochMillis,
+  inputs: Schema.Array(Schema.String),
 });
 
 export type SettlementMark = typeof SettlementMark.Type;

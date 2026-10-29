@@ -36,6 +36,8 @@ export interface SettlementMarkState {
   outcome: SettlementOutcome;
   answerEntry: number | null;
   reportedAt: number;
+  /** The request ids of every input the settled run answered or ended. */
+  inputs: Array<string>;
 }
 
 /** Where a child's question stands, from the parent's side. */

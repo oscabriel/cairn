@@ -9,8 +9,24 @@
 // again, nearest the reader first, while Place.ts keeps the character being read where it was.
 //
 // Replaces @foldkit/ui's virtual list (github.com/foldkit/foldkit, packages/ui/src/virtualList at
-// 0.169.0), whose Model, Message and Mount split this keeps in outline. MIT License, Copyright (c)
-// 2025 Devin Jameson; the notice is in View.ts.
+// 0.169.0), whose Model, Message and Mount split this keeps in outline.
+//
+// MIT License. Copyright (c) 2025 Devin Jameson
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or
+// substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+// NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { Predicate, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
@@ -18,13 +34,18 @@ import { defineTaggedUnion } from "foldkit/schema";
 /**
  * The judges' broken controls (judges/transcript-scroll.ts), off in the app: `estimate` lays out
  * rows the list never drew at an estimated height, `reflow` keeps the raw `scrollTop` through a
- * width change, and `anchor` lets a change above the reader move what they see.
+ * width change, `anchor` lets a change above the reader move what they see, and `extend` draws the
+ * window around the reported `scrollTop` rather than the reader's row, which lags a render behind
+ * history joining above, and `bookmark` keeps only the reader's row through a width change, not the
+ * character being read.
  */
 export const BrokenControl = Schema.Literals([
   "none",
   "estimate",
   "reflow",
   "anchor",
+  "extend",
+  "bookmark",
 ]);
 
 export type BrokenControl = typeof BrokenControl.Type;

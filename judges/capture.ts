@@ -1365,12 +1365,21 @@ const enterHeroState = async (
   await page.waitForTimeout(800);
 };
 
+/**
+ * The transcript's drawn rows. The list also draws rows off-screen to measure them, hidden copies
+ * that carry the same hooks, so row locators go through the scroller's own row children.
+ */
+const DRAWN_ROW =
+  '[data-testid="timeline-scroll"] > [data-virtual-list-item-key]';
+
 /** Brings a thread page into `state`. */
 const enterThreadState = async (page: Page, state: ThreadState) => {
-  const folds = page.locator('[data-timeline-row-kind="turn-fold"]');
+  const folds = page.locator(
+    `${DRAWN_ROW} [data-timeline-row-kind="turn-fold"]`
+  );
 
   await page
-    .locator("[data-timeline-row-kind]")
+    .locator(`${DRAWN_ROW} [data-timeline-row-kind]`)
     .last()
     .waitFor({ state: "attached", timeout: 20_000 });
   await page.waitForTimeout(1500);
@@ -1393,7 +1402,7 @@ const enterThreadState = async (page: Page, state: ThreadState) => {
 
   if (state === "thread-changed-files") {
     // The card may sit in a turn the list has not rendered yet: scroll up until it appears.
-    const card = page.locator("[data-changed-files-state]");
+    const card = page.locator(`${DRAWN_ROW} [data-changed-files-state]`);
 
     for (let step = 0; step < 40 && (await card.count()) === 0; step += 1) {
       await folds.first().evaluate((element) => {

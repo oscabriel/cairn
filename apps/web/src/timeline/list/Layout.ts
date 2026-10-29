@@ -6,9 +6,27 @@
 // keeps what the reader sees still). Inside the range, rows within `max(800 px, viewport)` of the
 // viewport are drawn and the rest are parked at their frozen height, after MonoCode's measured
 // history (github.com/hardbeat920/monocode, src/features/sessions/ui/useMeasuredHistory.ts at
-// 26465c620977f3951d0a532a0f7db32c3c179007; MIT, the notice is in Place.ts). Changed: rows
-// are windowed by height arithmetic rather than detached one by one, and history the reader has
-// not reached is measured off-screen ahead of time rather than all mounted at once.
+// 26465c620977f3951d0a532a0f7db32c3c179007). Changed: rows are windowed by height arithmetic
+// rather than detached one by one, around the reader's row rather than the scroll position, and
+// history the reader has not reached is measured off-screen ahead of time rather than all mounted
+// at once.
+//
+// MIT License. Copyright (c) 2026 Nick
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or
+// substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+// NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { Option, Predicate } from "effect";
 
@@ -122,6 +140,41 @@ interface Windowed {
   readonly totalHeight: number;
 }
 
+const rowIndexOf = (rows: Rows, start: number, key: string): number =>
+  key === "" ? -1 : rows.keys.indexOf(key, start);
+
+/**
+ * Where the viewport's top falls in the range as laid out now: the end's, or the reader's row at
+ * its offset. The reported `scrollTop` lags a render behind rows joining above the reader (Place.ts
+ * corrects it after the render), so a window drawn around it can leave the reader's own row parked
+ * once a batch taller than the buffer joins; the row's laid-out offset already counts the batch.
+ */
+const topOf = (
+  model: Model,
+  rows: Rows,
+  start: number,
+  heights: ReadonlyArray<number>,
+  endTop: number
+): number => {
+  const { place } = model;
+
+  if (!Predicate.isTagged(place, "Row")) {
+    return Math.max(0, endTop);
+  }
+
+  const row = rowIndexOf(rows, start, place.key);
+
+  if (row === -1 || model.broken === "extend") {
+    return model.scrollTop;
+  }
+
+  const above = heights
+    .slice(0, row - start)
+    .reduce((sum, height) => sum + height, 0);
+
+  return Math.max(0, above - place.offset);
+};
+
 const windowOf = (model: Model, rows: Rows): Windowed => {
   const viewport = viewportOf(model);
   const buffer = bufferOf(viewport);
@@ -138,9 +191,7 @@ const windowOf = (model: Model, rows: Rows): Windowed => {
 
   const totalHeight = heights.reduce((sum, height) => sum + height, 0);
 
-  const top = Predicate.isTagged(model.place, "End")
-    ? Math.max(0, totalHeight - viewport)
-    : model.scrollTop;
+  const top = topOf(model, rows, start, heights, totalHeight - viewport);
 
   const windowTop = top - buffer;
   const windowBottom = top + viewport + buffer;

@@ -2,14 +2,18 @@
 // short one) shown through the real transcript submodel, with buttons to switch threads and to
 // stream replies at the end of the long one. No brain, no socket: the thread views are built here.
 //
-// Two more buttons change thread A above the reader: `insert-above` puts a turn in front of a prompt
-// a few rows above the first visible row, as an escalated question's card lands; `arrive` lands a
+// More buttons change thread A above the reader: `insert-above` puts a turn in front of a prompt a
+// few rows above the first visible row, as an escalated question's card lands; `arrive` lands a
 // checkpoint for a settled turn above it, so that turn's answer gains its changed-files card late.
+// `insert-far` and `arrive-far` make the same changes far enough above that the rows they touch
+// are parked, so the list measures them off-screen before they take room.
 //
-// `?broken=` turns on one of the list's broken controls (ListModel.ts), so the judge can show a
+// `?broken=` turns on one of the list's broken controls (list/Model.ts), so the judge can show a
 // check fails without what it guards: `estimate` lays rows the list never drew out at an estimate
-// (the range check), `reflow` keeps the raw `scrollTop` through a width change (the reflow check),
-// and `anchor` lets a change above the reader move what they see (insert-above and arrive).
+// (the range check), `reflow` keeps the raw `scrollTop` through a width change and `bookmark` only
+// the reader's row (the reflow check), `anchor` lets a change above the reader move what they see
+// (the insert and arrive checks), and `extend` windows the list around the lagging `scrollTop`
+// (the extend check).
 
 import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";
 import { ManagedResource, Runtime, Subscription, Update } from "foldkit";
@@ -64,8 +68,8 @@ const Message = defineMessageUnion({
   GotTimelineMessage: { message: TimelineMessage },
   ClickedThread: { id: Schema.Literals(["a", "b"]) },
   ClickedStream: { on: Schema.Boolean },
-  ClickedInsertAbove: {},
-  ClickedArrive: {},
+  ClickedInsertAbove: { far: Schema.Boolean },
+  ClickedArrive: { far: Schema.Boolean },
   Ticked: {},
 });
 
@@ -73,7 +77,13 @@ type Message = typeof Message.Type;
 
 const LONG_TURNS = 700;
 
-const Broken = Schema.Literals(["estimate", "reflow", "anchor"]);
+const Broken = Schema.Literals([
+  "estimate",
+  "reflow",
+  "anchor",
+  "extend",
+  "bookmark",
+]);
 
 const broken: BrokenControl = Option.getOrElse(
   Schema.decodeUnknownOption(Broken)(
@@ -87,6 +97,9 @@ const FIRST_ADDED_ID = 1_000_000;
 
 /** How many rows above the first visible one a change lands, at least: wholly off screen. */
 const ROWS_ABOVE = 3;
+
+/** How many rows above the first visible one a far change lands, at least: parked, not drawn. */
+const ROWS_FAR_ABOVE = 60;
 
 const TICK = Duration.millis(40);
 
@@ -152,11 +165,12 @@ const updateChild = (model: Model, message: TimelineMessage): Return => {
 
 /**
  * The turn a change lands in: the prompt (`prompt`) or answer (`answer`) of thread A's first
- * original turn at least `ROWS_ABOVE` rows above the first visible row, walking up.
+ * original turn at least `rowsAbove` rows above the first visible row, walking up.
  */
 const turnAbove = (
   model: Model,
-  wanted: "prompt" | "answer"
+  wanted: "prompt" | "answer",
+  rowsAbove: number
 ): Option.Option<number> => {
   const { place } = model.timeline.ui.list;
 
@@ -173,7 +187,7 @@ const turnAbove = (
 
   const first = items.findIndex((item) => item.id === place.key);
 
-  for (let index = first - ROWS_ABOVE; index >= 0; index -= 1) {
+  for (let index = first - rowsAbove; index >= 0; index -= 1) {
     const item = items[index];
 
     if (item?.kind === "message") {
@@ -198,9 +212,10 @@ const turnAbove = (
 const landAbove = (
   model: Model,
   wanted: "prompt" | "answer",
+  far: boolean,
   change: (state: Model["a"], turn: number, id: number) => Model["a"]
 ): Return =>
-  Option.match(turnAbove(model, wanted), {
+  Option.match(turnAbove(model, wanted, far ? ROWS_FAR_ABOVE : ROWS_ABOVE), {
     onNone: () => ({ model }),
     onSome: (turn) => ({
       model: {
@@ -276,8 +291,9 @@ const update = (model: Model, message: Message): Return =>
             },
           }
         : { model: { ...model, streaming: on } },
-    ClickedInsertAbove: () => landAbove(model, "prompt", insertTurn),
-    ClickedArrive: () => landAbove(model, "answer", landCheckpoint),
+    ClickedInsertAbove: ({ far }) =>
+      landAbove(model, "prompt", far, insertTurn),
+    ClickedArrive: ({ far }) => landAbove(model, "answer", far, landCheckpoint),
     Ticked: () =>
       model.streaming && model.current === "a" ? tick(model) : { model },
   });
@@ -331,9 +347,21 @@ const view = (model: Model, h: HtmlBuilder<Message>): Html =>
             h,
             "insert-above",
             "Insert above",
-            Message.ClickedInsertAbove()
+            Message.ClickedInsertAbove({ far: false })
           ),
-          button(h, "arrive", "Arrive", Message.ClickedArrive()),
+          button(h, "arrive", "Arrive", Message.ClickedArrive({ far: false })),
+          button(
+            h,
+            "insert-far",
+            "Insert far",
+            Message.ClickedInsertAbove({ far: true })
+          ),
+          button(
+            h,
+            "arrive-far",
+            "Arrive far",
+            Message.ClickedArrive({ far: true })
+          ),
           h.span(
             [
               h.DataAttribute("testid", "landed"),

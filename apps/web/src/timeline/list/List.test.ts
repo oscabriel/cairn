@@ -110,6 +110,35 @@ describe("the scroll range", () => {
     assert.strictEqual(layoutOf(model, rowsOf(100)).probe[0], 33);
   });
 
+  it("keeps the reader's row drawn when history taller than the window joins above it", () => {
+    const model = listOf({
+      heights: heightsFor(12, 100),
+      place: Place.Row({ key: "r12", offset: 0 }),
+      scrollTop: 0,
+    });
+
+    // Twelve rows of 250 px, 3,000 px against a 1,000 px viewport and buffer, land before Place.ts
+    // has moved `scrollTop` down by them.
+    const joined = update(
+      model,
+      Message.MeasuredRows({
+        width: 800,
+        rows: Array.from({ length: 12 }, (_, index) => ({
+          key: `r${String(index)}`,
+          height: 250,
+        })),
+        offScreen: true,
+      })
+    );
+
+    const rows = rowsOf(100);
+
+    assert.strictEqual(layoutOf(joined, rows).start, 0);
+    assert.include(drawnIndices(joined, rows), 12);
+    // Windowed around the lagging `scrollTop` instead, the reader's row is parked behind a gap.
+    assert.notInclude(drawnIndices({ ...joined, broken: "extend" }, rows), 12);
+  });
+
   it("lays every row out at an estimate under the broken `estimate` control", () => {
     const model = listOf({ heights: heightsFor(90, 100), broken: "estimate" });
     const layout = layoutOf(model, rowsOf(100));

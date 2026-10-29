@@ -320,7 +320,9 @@ const bind = (
     }
 
     if (reflowed) {
-      if (broken() !== "reflow" && !restoreGlyph()) {
+      const control = broken();
+
+      if (control !== "reflow" && (control === "bookmark" || !restoreGlyph())) {
         restoreRow();
       }
 
@@ -584,6 +586,9 @@ const bind = (
   }
 
   emit(Message.Resized({ width, height }));
+  // A gesture cut short by the last release (a thread switch within the settle delay) never
+  // settled, and a list that thinks the reader scrolls measures nothing off-screen.
+  emit(Message.SettledScroll());
 
   if (!following) {
     scheduleCapture();

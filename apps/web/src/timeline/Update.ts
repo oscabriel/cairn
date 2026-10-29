@@ -1,9 +1,8 @@
 // The transcript's update, and the two calls the thread page makes into it: `switchThread` when the
 // routed thread changes (the old thread's list and open folds are kept, the new one's restored)
 // and `afterView` after the page's view changed shape (a first snapshot or a page of history: the
-// list forgets the heights of rows that are gone; ListPlace.ts keeps what is on screen still).
-// Per-thread scroll memory
-// follows t3code's `rememberTimelinePosition` (github.com/pingdotgg/t3code,
+// list forgets the heights of rows that are gone; list/Place.ts keeps what is on screen still).
+// Per-thread scroll memory follows t3code's `rememberTimelinePosition` (github.com/pingdotgg/t3code,
 // apps/web/src/components/chat/timelineScrollAnchoring.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92) by keeping each thread's whole list Model.
 

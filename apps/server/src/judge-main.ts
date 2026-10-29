@@ -13,7 +13,12 @@ import { Effect, Layer } from "effect";
 
 import { JudgeModel } from "../../../judges/fixtures/JudgeModel.ts";
 import { JudgeTools } from "../../../judges/fixtures/JudgeTools.ts";
-import { AppLayer, PiDurableBrain, withCatalog } from "./AppLayer.ts";
+import {
+  AppLayer,
+  ModelHealthLive,
+  PiDurableBrain,
+  withCatalog,
+} from "./AppLayer.ts";
 import { ServerConfig } from "./Config.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
@@ -75,6 +80,7 @@ const Harness = real
 
 const JudgeLayer = AppLayer.pipe(
   Layer.provide(Harness),
+  Layer.provide(ModelHealthLive),
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(real ? BridgeProvider.layer : BridgeProvider.layerOff),
   Layer.provide(ExecutorLink.layerFake),

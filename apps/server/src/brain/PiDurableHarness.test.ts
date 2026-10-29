@@ -30,6 +30,7 @@ import {
 import type { Scope } from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
@@ -57,7 +58,8 @@ const harnessLayer = (dataDir: string) =>
     Layer.provide(
       ExtensionSet.withExtra([conformanceTools]).pipe(
         Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty)
+        Layer.provide(PiHost.layerEmpty),
+        Layer.provide(ModelHealth.layerTest)
       )
     ),
     Layer.provideMerge(

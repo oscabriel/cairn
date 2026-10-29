@@ -54,6 +54,7 @@ import { HttpLive } from "./http/Http.ts";
 import { Identity, IdentityRefused, USER_HEADER } from "./http/Identity.ts";
 import { BootJson } from "./http/Static.ts";
 import { PeerPath } from "./load/PeerPath.ts";
+import { ModelHealth } from "./models/ModelHealth.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { PushLayer } from "./push/PushLayer.ts";
@@ -292,6 +293,7 @@ const GatedApp = Layer.mergeAll(
   Layer.provideMerge(ThreadsLive),
   Layer.provideMerge(PushLayer),
   Layer.provide(SettingsStore.layerNoDeps),
+  Layer.provide(ModelHealth.layerTest),
   Layer.provideMerge(
     ShellLayer.pipe(
       Layer.provideMerge(ProjectorSignals.layer),
@@ -429,6 +431,7 @@ const brainFor = (dataDir: string) =>
   }).pipe(
     Layer.provideMerge(ExecutorLink.layerDisabled),
     Layer.provide(PiHost.layerEmpty),
+    Layer.provide(ModelHealth.layerNoDeps),
     Layer.provideMerge(
       ShellLayer.pipe(
         Layer.provideMerge(ProjectorSignals.layer),

@@ -45,6 +45,8 @@ import {
 import { SqlClient } from "effect/sql";
 
 import { usageLimitOf } from "../brain/RunFailure.ts";
+import { Database } from "../db/Database.ts";
+import { migrations } from "../db/Migrations.ts";
 
 /** Transient failures that turn a provider failing when they fall inside `STREAK_WINDOW_MS`. */
 export const STREAK = 3;
@@ -674,5 +676,10 @@ export class ModelHealth extends Context.Service<
 
       return ModelHealth.of({ record, stateOf, all, reset });
     })
+  );
+
+  /** Over a fresh migrated in-memory `cairn.sqlite`, for tests and judges that build a brain. */
+  static readonly layerTest = ModelHealth.layerNoDeps.pipe(
+    Layer.provide(Database.layerTest(migrations))
   );
 }

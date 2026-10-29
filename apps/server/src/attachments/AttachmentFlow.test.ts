@@ -36,6 +36,7 @@ import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ShellLayer } from "../shell/ShellLayer.ts";
 import { TurnContent, textStage } from "../threads/TurnContent.ts";
@@ -111,7 +112,8 @@ const stack = (dir: string) => {
         extraExtensions: [log],
       }).pipe(
         Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty)
+        Layer.provide(PiHost.layerEmpty),
+        Layer.provide(ModelHealth.layerTest)
       );
     })
   );

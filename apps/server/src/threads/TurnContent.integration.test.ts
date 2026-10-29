@@ -43,6 +43,7 @@ import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { projectIdFor } from "../shell/ShellCommands.ts";
@@ -83,7 +84,8 @@ const stack = (dir: string, userSkills: string) =>
         models: ModelSource.layerFaux({ tokensPerSecond: 5000, settings: {} }),
       }).pipe(
         Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty)
+        Layer.provide(PiHost.layerEmpty),
+        Layer.provide(ModelHealth.layerTest)
       )
     ),
     Layer.provideMerge(

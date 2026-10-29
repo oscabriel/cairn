@@ -79,6 +79,7 @@ const { HarnessSettings } = await import(`${src}/models/HarnessSettings.ts`);
 const { HarnessBoot, PiDurableBrain } = await import(`${src}/AppLayer.ts`);
 const { HarnessSeam } = await import(`${src}/brain/HarnessSeam.ts`);
 const { PiHost } = await import(`${src}/pi-host/PiHost.ts`);
+const { ModelHealth } = await import(`${src}/models/ModelHealth.ts`);
 const { ThreadId, ProjectId } = await import("@cairn/protocol/Ids");
 const { OAuthStore } = await import(`${src}/models/OAuthStore.ts`);
 const { Database } = await import(`${src}/db/Database.ts`);
@@ -107,6 +108,8 @@ const models = PiModelSource.layerNoDeps.pipe(
 // enabled, loaded from the agent dir under the throwaway data dir.
 const brain = PiDurableBrain({ models }).pipe(
   Layer.provide(PiHost.layer),
+  // The store the health feed records into, in memory: this judge watches the agent dir.
+  Layer.provide(ModelHealth.layerTest),
   Layer.provide(config)
 );
 

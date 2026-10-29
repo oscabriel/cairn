@@ -3,6 +3,11 @@
 // `InvalidInput` on `provider`. A second sign-in while one runs is `Conflict` (`limit_reached`), and
 // a brain that keeps no sign-ins answers the stream with one `Failed` step (`unavailable`) and
 // `providers.logout` with `Unavailable`. No answer carries a token.
+//
+// A sign-in that was stored (its `SignedIn` step) and a logout that succeeded each reset the
+// provider's `ModelHealth`: a new login mends a broken one and may lift a limit, so the old record
+// says nothing about it. A reset that cannot be written is logged, never answered: the credential
+// change it follows did happen.
 
 import {
   Conflict,
@@ -11,10 +16,11 @@ import {
   Unavailable,
 } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Effect, Layer, Option, Predicate, Stream } from "effect";
 
 import { CodexLogin } from "../models/CodexLogin.ts";
 import { CODEX_PROVIDER } from "../models/CredentialStore.ts";
+import { ModelHealth } from "../models/ModelHealth.ts";
 
 const notSignedInHere = (provider: string, requestId: string) =>
   new InvalidInput({
@@ -23,15 +29,35 @@ const notSignedInHere = (provider: string, requestId: string) =>
     requestId: Option.some(requestId),
   });
 
+/** Forgets `provider`'s health after its credential changed; a failed write is only logged. */
+const resetHealth = (health: ModelHealth["Service"], provider: string) =>
+  health.reset(provider).pipe(
+    Effect.catchTag("ModelHealthError", (failure) =>
+      Effect.logWarning("model health not reset after a login change").pipe(
+        Effect.annotateLogs({
+          event: "model_health_reset_failed",
+          provider,
+          cause: failure.message,
+        })
+      )
+    )
+  );
+
 /** `providers.login.start`: the sign-in's steps, until it signs in or fails. */
 export const LoginStartHandler = CairnRpcs.toLayerHandler(
   "providers.login.start",
   Effect.gen(function* () {
     const login = yield* CodexLogin;
+    const health = yield* ModelHealth;
 
     return ({ provider }, { requestId }) =>
       provider === CODEX_PROVIDER
         ? login.start.pipe(
+            Stream.tap((step) =>
+              Predicate.isTagged(step, "SignedIn")
+                ? resetHealth(health, provider)
+                : Effect.void
+            ),
             Stream.mapError(
               (busy) =>
                 new Conflict({
@@ -61,11 +87,12 @@ export const LogoutHandler = CairnRpcs.toLayerHandler(
   "providers.logout",
   Effect.gen(function* () {
     const login = yield* CodexLogin;
+    const health = yield* ModelHealth;
 
     return ({ provider }, { requestId }) =>
       provider === CODEX_PROVIDER
         ? login.logout.pipe(
-            Effect.asVoid,
+            Effect.andThen(resetHealth(health, provider)),
             Effect.mapError((failure) =>
               failure.reason === "unavailable"
                 ? new Unavailable({
@@ -82,7 +109,7 @@ export const LogoutHandler = CairnRpcs.toLayerHandler(
   })
 );
 
-/** Every handler this module owns. Needs `CodexLogin`. */
+/** Every handler this module owns. Needs `CodexLogin` and `ModelHealth`. */
 export const LoginHandlers = Layer.mergeAll(
   LoginStartHandler,
   LoginCancelHandler,

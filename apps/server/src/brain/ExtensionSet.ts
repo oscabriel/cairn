@@ -13,6 +13,7 @@ import { CodeMode } from "./CodeMode.ts";
 import { CodingTools } from "./CodingTools.ts";
 import { Extensions } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
+import { ModelHealthFeed } from "./ModelHealthExtension.ts";
 
 const production: ReadonlyArray<
   Effect.Effect<
@@ -24,6 +25,7 @@ const production: ReadonlyArray<
     | ExecutorExtension
     | BridgeCwd
     | PiHost
+    | ModelHealthFeed
   >
 > = [
   CodingTools.useSync((tools) => tools.extension),
@@ -32,6 +34,7 @@ const production: ReadonlyArray<
   ExecutorExtension.useSync((executor) => executor.extension),
   BridgeCwd.useSync((bridgeCwd) => bridgeCwd.extension),
   PiHost.useSync((host) => host.extension),
+  ModelHealthFeed.useSync((feed) => feed.extension),
   ProviderRequestLog.useSync((log) => log.extension),
 ];
 
@@ -39,13 +42,16 @@ const production: ReadonlyArray<
 // `main.ts` only, the fake in dev and judge brains, the disabled one in tests. `BridgeCwd.layer`
 // is the same reference `AppLayer` gives the bridge stop hook, so the memo map builds one. `PiHost`
 // is left to the composition root too: `PiHost.layer` (the user's pi packages) in `main.ts`,
-// `PiHost.layerEmpty` (the same empty `cairn.pi-tools` extension) everywhere else.
+// `PiHost.layerEmpty` (the same empty `cairn.pi-tools` extension) everywhere else. So is
+// `ModelHealth`, which the health feed records into: `PiDurableBrain` gives it the app's one
+// `ModelHealthLive`, and tests a fresh in-memory one (`ModelHealth.layerTest`).
 const dependencies = Layer.mergeAll(
   CodingTools.layer,
   CodeMode.layer,
   ProviderRequestLog.layer,
   ExecutorExtension.layer,
-  BridgeCwd.layer
+  BridgeCwd.layer,
+  ModelHealthFeed.layer
 );
 
 /** The installed set: production extensions, plus any a composition root adds (judges). */

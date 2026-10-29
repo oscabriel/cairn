@@ -22,6 +22,7 @@ import {
 } from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import {
@@ -46,7 +47,8 @@ const harness = PiDurableHarness.layer.pipe(
   Layer.provideMerge(
     ExtensionSet.layer.pipe(
       Layer.provide(ExecutorLink.layerDisabled),
-      Layer.provide(PiHost.layerEmpty)
+      Layer.provide(PiHost.layerEmpty),
+      Layer.provide(ModelHealth.layerTest)
     )
   ),
   Layer.provideMerge(
@@ -270,13 +272,18 @@ describe("coding tools", () => {
             "cairn.bridge-cwd",
             "cairn-provider-request-log",
             "cairn.pi-tools",
+            "cairn.model-health",
           ]
         );
       }).pipe(
         Effect.provide(
           ExtensionSet.layer.pipe(
             Layer.provide(ExecutorLink.layerDisabled),
-            Layer.provide(PiHost.layerEmpty)
+            Layer.provide(PiHost.layerEmpty),
+            Layer.provide(ModelHealth.layerTest),
+            Layer.provide(
+              ModelSource.layerFaux({ tokensPerSecond: 4000, settings: {} })
+            )
           )
         )
       )

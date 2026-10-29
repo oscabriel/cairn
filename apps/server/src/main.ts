@@ -6,7 +6,12 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
-import { AppLayer, DatabaseLive, PiDurableBrain } from "./AppLayer.ts";
+import {
+  AppLayer,
+  DatabaseLive,
+  ModelHealthLive,
+  PiDurableBrain,
+} from "./AppLayer.ts";
 import { UploadKeyFromFile } from "./attachments/UploadTokens.ts";
 import { ServerConfig } from "./Config.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
@@ -49,6 +54,8 @@ const PiTools = PiHost.layer;
 
 const MainLayer = AppLayer.pipe(
   Layer.provide(Harness),
+  // The same reference `AppLayer` uses, so the brain's health feed and the login RPCs share one store.
+  Layer.provide(ModelHealthLive),
   Layer.provide(PiTools),
   Layer.provide(BridgeProvider.layer),
   Layer.provide(Executor),

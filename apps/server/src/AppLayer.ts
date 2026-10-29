@@ -42,6 +42,7 @@ import { HttpLive } from "./http/Http.ts";
 import { BootData } from "./load/BootData.ts";
 import { PeerPath } from "./load/PeerPath.ts";
 import { MemoryWatch } from "./MemoryWatch.ts";
+import { ModelHealth } from "./models/ModelHealth.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { FileSearch } from "./projects/FileSearch.ts";
@@ -104,6 +105,15 @@ export const DatabaseLive = Layer.unwrap(
 /** The shell store with settlement and the default projector signals, over the database. */
 const ShellLive = ShellLayer.pipe(Layer.provideMerge(DatabaseLive));
 
+/**
+ * Each provider's health over the database. One reference, which `AppLayer` uses (the login RPCs
+ * reset it) and each entry point gives `PiDurableBrain` (its `model-health` extension records into
+ * it), so the memo map builds one store whose memory both see.
+ */
+export const ModelHealthLive = ModelHealth.layerNoDeps.pipe(
+  Layer.provide(DatabaseLive)
+);
+
 /** Folders, the scratch project, worktrees and file search, over git. */
 const ProjectsLive = Layer.mergeAll(
   FolderRules.layer,
@@ -155,7 +165,8 @@ export const withCatalog = <E, R>(models: Layer.Layer<ModelSource, E, R>) =>
 /**
  * pi-durable behind the harness seam, with the given models and extension set (the production
  * set unless a judge adds its tools) and the durable event reactors (`ReactorSet.ts`). Boot resumes
- * it after the repairs. The models layer is also
+ * it after the repairs. `ModelHealth`, which the set's health feed records into, is left to the
+ * entry point: `ModelHealthLive`, the reference `AppLayer` uses, so one store serves both. The models layer is also
  * exposed, so the app's catalog and title model read the same runtime the harness does.
  */
 export const PiDurableBrain = <Models = never>(options: {
@@ -266,5 +277,5 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(ThreadsLive),
   Layer.provideMerge(PushLayer),
   Layer.provide(SettingsStore.layerNoDeps),
-  Layer.provideMerge(ShellLive)
+  Layer.provideMerge(Layer.merge(ShellLive, ModelHealthLive))
 );

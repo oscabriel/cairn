@@ -10,7 +10,12 @@ import { parseArgs } from "node:util";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Layer } from "effect";
 
-import { AppLayer, PiDurableBrain, ScriptedBrain } from "./AppLayer.ts";
+import {
+  AppLayer,
+  ModelHealthLive,
+  PiDurableBrain,
+  ScriptedBrain,
+} from "./AppLayer.ts";
 import { ServerConfig } from "./Config.ts";
 import { DevDemo } from "./DevDemo.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
@@ -43,6 +48,7 @@ const App =
 
 const DevLayer = App.pipe(
   Layer.provide(PiHost.layerEmpty),
+  Layer.provide(ModelHealthLive),
   Layer.provide(ExecutorLink.layerFake),
   Layer.provide(Identity.layerLoopbackOwner),
   Layer.provide(ServerConfig.layerLocal),

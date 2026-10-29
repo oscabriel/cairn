@@ -39,7 +39,7 @@ const BaseHandlers = CairnRpcs.toLayer(
 /**
  * The handlers of `CairnRpcs`, as the layer each socket's RPC server reads. Needs `SessionHello`,
  * the shell store (`ShellStream`, `EventSink`), the `HarnessSeam`, the model catalog
- * (`PiModelSource`), `SettingsStore`, and the project and thread services.
+ * (`PiModelSource`), `SettingsStore`, `ModelHealth`, and the project and thread services.
  */
 export const HandlersLayer = Layer.mergeAll(
   BaseHandlers,

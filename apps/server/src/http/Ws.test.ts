@@ -29,6 +29,7 @@ import { RpcClient, RpcSerialization } from "effect/rpc";
 import { AppLayer, ScriptedBrain } from "../AppLayer.ts";
 import { ServerConfig } from "../Config.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { ReachMachine } from "../reach/ReachLayer.ts";
 import {
   Identity,
   IdentityRefused,
@@ -70,6 +71,7 @@ const TestIdentity = Layer.succeed(
 
 const TestServer = AppLayer.pipe(
   Layer.provide(ScriptedBrain),
+  Layer.provide(ReachMachine.layerTest),
   Layer.provide(ExecutorLink.layerDisabled),
   Layer.provide(TestIdentity),
   Layer.provide(

@@ -43,6 +43,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { ArtifactFaults } from "./ArtifactFaults.ts";
 import { checkPublish, PorchClient } from "./PorchClient.ts";
 import type { PorchError } from "./PorchClient.ts";
 
@@ -225,6 +226,7 @@ export class ArtifactPublisher extends Context.Service<
       const porch = yield* PorchClient;
       const sql = yield* SqlClient.SqlClient;
       const fs = yield* FileSystem.FileSystem;
+      const faults = yield* ArtifactFaults;
 
       const publish = Effect.fn("ArtifactPublisher.publish")(function* (
         input: PublishInput
@@ -369,6 +371,8 @@ export class ArtifactPublisher extends Context.Service<
           }
         }
 
+        yield* faults.after("claim");
+
         const receipt = yield* porch.publish(input.source, project).pipe(
           Effect.tapError((error) =>
             // A refusal changed nothing, so a fresh claim gives the key back. Anything else (a
@@ -389,6 +393,8 @@ export class ArtifactPublisher extends Context.Service<
               : Effect.void
           )
         );
+
+        yield* faults.after("porch");
 
         const publishedAt = yield* Clock.currentTimeMillis;
 

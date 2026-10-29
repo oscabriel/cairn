@@ -11,6 +11,7 @@ import {
   DatabaseLive,
   ModelHealthLive,
   PiDurableBrain,
+  ReachLive,
   SettingsLive,
 } from "./AppLayer.ts";
 import { UploadKeyFromFile } from "./attachments/UploadTokens.ts";
@@ -26,6 +27,9 @@ import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { VapidKeyFromFile } from "./push/Vapid.ts";
+import { PorchClient } from "./reach/PorchClient.ts";
+import { portalSettingsLayer } from "./reach/Portals.ts";
+import { PortalUnits } from "./reach/PortalUnits.ts";
 
 // Cairn's own OAuth store (Codex sign-in, ADR 0037) over the same `cairn.sqlite`, holding the
 // OAuth lock. One reference, given to the models and the app alike, so the memo map builds one
@@ -59,6 +63,12 @@ const MainLayer = AppLayer.pipe(
   Layer.provide(ModelHealthLive),
   // The same reference `AppLayer` uses, so the `roles` tool and the settings RPCs share one store.
   Layer.provide(SettingsLive),
+  // The same reference `AppLayer` uses, so the `cairn.reach` tools and the reach RPCs share one
+  // portal store, over the user's porch and `cairn-portal-*` units; a unit gets PATH and the locale.
+  Layer.provide(ReachLive),
+  Layer.provide(PorchClient.layer),
+  Layer.provide(PortalUnits.layer),
+  Layer.provide(portalSettingsLayer(process.env)),
   Layer.provide(PiTools),
   Layer.provide(BridgeProvider.layer),
   Layer.provide(Executor),

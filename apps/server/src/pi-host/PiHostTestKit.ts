@@ -24,6 +24,7 @@ import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiConfig } from "../models/PiConfig.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
+import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { PiHost } from "./PiHost.ts";
 import type { InstanceScope, PiHostPolicy } from "./PiHostPolicy.ts";
 
@@ -154,6 +155,7 @@ export const brainLayer = <E>(
     Layer.provide(ExecutorLink.layerDisabled),
     Layer.provide(ModelHealth.layerTest),
     Layer.provide(SettingsStore.layerTest),
+    Layer.provide(ReachServicesTest),
     Layer.provide(PiModelSource.layerFromModelSource)
   );
 

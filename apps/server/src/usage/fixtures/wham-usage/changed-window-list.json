@@ -1,0 +1,19 @@
+{
+  "plan_type": "plus",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "windows": [
+      {
+        "kind": "session",
+        "used_percent": 23,
+        "limit_window_seconds": 18000
+      },
+      {
+        "kind": "weekly",
+        "used_percent": 41,
+        "limit_window_seconds": 604800
+      }
+    ]
+  }
+}

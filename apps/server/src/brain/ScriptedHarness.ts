@@ -103,6 +103,12 @@ import {
   SubscriptionRef,
 } from "effect";
 
+import {
+  ASK_USER_TOOL,
+  askUserResult,
+  QUESTION_TTL_MILLIS,
+  questionAskOf,
+} from "../approvals/AskUser.ts";
 import { familyOf } from "../models/ModelFamily.ts";
 import {
   attemptStateOf,
@@ -387,6 +393,8 @@ interface SubagentItem {
     readonly outcome: SettlementOutcome;
     readonly answerEntry: number | null;
     readonly reportedAt: number;
+    /** The request ids of every input the settled run ended. */
+    readonly inputs: ReadonlyArray<string>;
   }>;
   delivered: number;
   readonly questions: Map<
@@ -608,7 +616,10 @@ const subagentItem = (item: SubagentItem): JsonValue => ({
   worktree: null,
   status: item.status,
   wake: item.wake,
-  settlements: item.settlements.map((mark) => ({ ...mark })),
+  settlements: item.settlements.map((mark) => ({
+    ...mark,
+    inputs: [...mark.inputs],
+  })),
   delivered: item.delivered,
   questions: Object.fromEntries(
     [...item.questions].map(([id, question]) => [id, { ...question }])
@@ -790,9 +801,10 @@ const lastSpokenIn = (thread: ScriptedThread): string => {
 };
 
 /**
- * `accepted` when the run being settled accepted it: an accepted `submit_result` lies after
- * `from`, the run's first input. A typed result goes to the parent once, with its run; the child's
- * later runs settle without it.
+ * `accepted` when the run being settled accepted it: an accepted `submit_result` (not a later
+ * call answered `already`) lies after `from`, the run's first input. A typed result goes to the
+ * parent once, with its run; the child's later runs settle without it, and so does an input that
+ * ran in no run.
  */
 const resultOfRun = <A>(
   child: ScriptedThread,
@@ -800,7 +812,7 @@ const resultOfRun = <A>(
   accepted: Option.Option<A>
 ): Option.Option<A> =>
   Option.isNone(from)
-    ? accepted
+    ? Option.none()
     : Option.filter(accepted, () =>
         child.entries.some(
           (entry) =>
@@ -1948,21 +1960,34 @@ const layerNoDeps = Layer.effectContext(
         item.settledRuns.add(runId);
       }
 
-      // Every input the run answered: its wake follows all of them, not only the first reporter
-      // to settle, and its typed result is the one it accepted after its first input.
+      // Every input the run ended, answered or not: its wake follows all of them, not only the
+      // first reporter to settle, and its typed result is the one it accepted after its first
+      // input. A reporter in its nudge phase waits on its nudge, which this run may have answered;
+      // one that settled already belongs to the run it settled.
       const shared = [...store.reporters.values()].flatMap((other) => {
-        const found = child.byRequest.get(other.requestId);
+        const waitsOn =
+          other.phase === "nudge"
+            ? SubagentRequestIds.nudge(child.threadId, other.nudgeSeq)
+            : other.requestId;
+
+        const found = child.byRequest.get(waitsOn);
 
         return other.child === child.threadId &&
           other.id !== reporter.id &&
+          (other.phase === "deliver" || other.phase === "nudge") &&
           found !== undefined &&
-          found.status === "done" &&
           Option.exists(found.ended, (ended) =>
             Option.exists(end.runId, (runId) =>
               Option.contains(ended.runId, runId)
             )
           )
-          ? [{ quiet: other.quiet, placedAs: found.placedAs }]
+          ? [
+              {
+                quiet: other.quiet,
+                placedAs: found.placedAs,
+                requestId: other.requestId,
+              },
+            ]
           : [];
       });
 
@@ -2074,6 +2099,7 @@ const layerNoDeps = Layer.effectContext(
           Option.map(answered, (found) => found.id)
         ),
         reportedAt: at,
+        inputs: [reporter.requestId, ...shared.map((other) => other.requestId)],
       });
       link.report = Option.none();
       reporter.settlement = Option.some(settlement);
@@ -2745,6 +2771,67 @@ const layerNoDeps = Layer.effectContext(
         });
       });
 
+    /**
+     * `ask_user`: questions for the user (briefs note, section 4), a `user-input` record with the
+     * questions frozen in its payload, waited on like a gate; the answers come back numbered.
+     */
+    const askUserTool = (thread: ScriptedThread, call: ToolCall) =>
+      Effect.gen(function* () {
+        const ask = questionAskOf(call.arguments);
+
+        if (Result.isFailure(ask)) {
+          return refused(ask.failure);
+        }
+
+        const taskId = taskOf(thread, call);
+        const approvalId = approvalIdOf(taskId);
+
+        yield* locked((askedAt, changes) =>
+          Effect.sync(() => {
+            if (thread.approvals.has(approvalId)) {
+              return;
+            }
+
+            thread.approvals.set(approvalId, {
+              id: approvalId,
+              toolTaskId: taskId,
+              tool: ASK_USER_TOOL,
+              kind: "user-input",
+              summary: ask.success.summary,
+              status: "pending",
+              askedAt,
+              expiresAt: askedAt + QUESTION_TTL_MILLIS,
+              answeredAt: null,
+              run: null,
+              executorRequestId: null,
+              ...UNDECIDED,
+              payload: ask.success.payload,
+            });
+            changes.touched.add(thread);
+            changes.events.push(
+              RuntimeRequestUpdated.make({
+                threadId: thread.threadId,
+                id: ApprovalId.make(approvalId),
+                kind: "user-input",
+                status: "pending",
+              })
+            );
+            recordsChanged(thread, changes);
+          })
+        );
+
+        const settled = yield* settledRecord(thread, approvalId);
+
+        return Option.match(settled, {
+          onNone: () =>
+            refused("The questions were cancelled. Nothing was answered."),
+          onSome: (record): ToolOutcome => ({
+            ...askUserResult(record, ask.success.questions),
+            terminate: false,
+          }),
+        });
+      });
+
     /** `report`: a child's summary, divergence and commit; the first one of a run stands. */
     const reportTool = (thread: ScriptedThread, call: ToolCall) =>
       locked((_at, _changes) =>
@@ -3032,6 +3119,10 @@ const layerNoDeps = Layer.effectContext(
       call: ToolCall
     ): Effect.Effect<ToolOutcome> => {
       const isChild = Option.isSome(thread.link);
+
+      if (call.name === ASK_USER_TOOL) {
+        return askUserTool(thread, call);
+      }
 
       if (!isChild) {
         const handler = parentTools.get(call.name);

@@ -34,6 +34,16 @@
 // `mode {mode}` sets a thread's permission mode,
 // with `expect.error` when it must be refused.
 //
+// Devices (a request answered from another device): `open_device {device, thread?}` opens one more
+// client on a thread under a name ("phone", "laptop"), following its stream as a second page does.
+// `look {device}` remembers the oldest pending record that device's card shows. `respond` and
+// `expect_view` take `device` to act on or read that client; `respond {stale: true}` answers the
+// record the device last looked at, even if it is settled by now (a card left open while another
+// device answered). `respond` takes `answers` (each `{index, picks, custom}`) for a full answer to
+// a question record, and `expect.error` when the answer must be refused. A device's view also
+// holds what its client reads from the records: `card`, the requests its card offers in order, and
+// `lines`, the transcript line each settled record became.
+//
 // The format follows the replay transcripts of t3code's provider testing
 // (github.com/pingdotgg/t3code, packages/provider-testing/src/replayTranscript.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92), format ideas only.
@@ -44,6 +54,13 @@ import { Result, Schema } from "effect";
 const { Json } = Schema;
 
 const PathSegment = Schema.Union([Schema.String, Schema.Int]);
+
+/** One question's answer as a respond line writes it. */
+const AnswerLine = Schema.Struct({
+  index: Schema.Int,
+  picks: Schema.Array(Schema.String),
+  custom: Schema.NullOr(Schema.String),
+});
 
 const ToolCallLine = Schema.Struct({
   id: Schema.String,
@@ -68,6 +85,12 @@ const inputFields = {
   answer: Schema.optionalKey(Schema.String),
   /** A question's answer, as the option labels the user picked. */
   picks: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** A question record's full answers, by question index. */
+  answers: Schema.optionalKey(Schema.Array(AnswerLine)),
+  /** The named client (`open_device`) a line acts through. */
+  device: Schema.optionalKey(Schema.String),
+  /** `respond`: answer the record the device last looked at, settled or not. */
+  stale: Schema.optionalKey(Schema.Boolean),
   /** `respond_race`: the threads whose first pending records are answered at once. */
   threads: Schema.optionalKey(Schema.Array(Schema.String)),
   mode: Schema.optionalKey(RuntimeMode),
@@ -119,6 +142,8 @@ export const TranscriptLine = Schema.Union([
       "mode",
       "compact",
       "restart",
+      "open_device",
+      "look",
     ]),
   }),
   Schema.Struct({ type: Schema.Literal("crash") }),
@@ -136,6 +161,7 @@ export const TranscriptLine = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("expect_view"),
     thread: Schema.optionalKey(Schema.String),
+    device: Schema.optionalKey(Schema.String),
     path: Schema.Array(PathSegment),
     equals: Json,
   }),

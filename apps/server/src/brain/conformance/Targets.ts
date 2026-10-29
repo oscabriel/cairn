@@ -35,6 +35,7 @@ import { ModelHealth } from "../../models/ModelHealth.ts";
 import { PiModelSource } from "../../models/PiModelSource.ts";
 import { SettingsStore } from "../../models/SettingsStore.ts";
 import { PiHost } from "../../pi-host/PiHost.ts";
+import { ReachServicesTest } from "../../reach/ReachLayer.ts";
 import { subagentsExtension } from "../../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../../subagents/SubagentTools.ts";
@@ -206,6 +207,7 @@ export const piDurableLayer = (
         Layer.provide(PiHost.layerEmpty),
         Layer.provide(ModelHealth.layerTest),
         Layer.provide(SettingsStore.layerTest),
+        Layer.provide(ReachServicesTest),
         Layer.provide(PiModelSource.layerFromModelSource)
       )
     ),
@@ -223,57 +225,66 @@ export const piDurableLayer = (
     Layer.provide(BrainConfig.layerFrom(dataDir))
   );
 
-/** The pi-durable side, with the subagents extension and the faults the mutation check plants. */
-export const piDurableTarget: MakeTarget = (script, faults) =>
-  Effect.gen(function* () {
-    const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-conformance-"));
-    const layer = piDurableLayer(dataDir, faults);
+/**
+ * The pi-durable side, with the subagents extension, the faults the mutation check plants and
+ * `tuning` (a test that orders the reporters of a shared run passes its own).
+ */
+export const piDurableTargetWith =
+  (tuning: SubagentToolOptions): MakeTarget =>
+  (script, faults) =>
+    Effect.gen(function* () {
+      const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-conformance-"));
+      const layer = piDurableLayer(dataDir, faults, tuning);
 
-    return yield* restartable(
-      Effect.gen(function* () {
-        const context = yield* Layer.build(layer);
-        const { faux } = Context.get(context, FauxModels);
-        const brain = Context.get(context, Brain);
-        const run = Effect.runPromiseWith(yield* Effect.context());
-        const known = new Map<string, ThreadId>();
+      return yield* restartable(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(layer);
+          const { faux } = Context.get(context, FauxModels);
+          const brain = Context.get(context, Brain);
+          const run = Effect.runPromiseWith(yield* Effect.context());
+          const known = new Map<string, ThreadId>();
 
-        // The asking thread, from the request's provider session id.
-        const askingThread = (sessionId: string | undefined) =>
-          Effect.gen(function* () {
-            const session = yield* Effect.option(brain.session);
+          // The asking thread, from the request's provider session id.
+          const askingThread = (sessionId: string | undefined) =>
+            Effect.gen(function* () {
+              const session = yield* Effect.option(brain.session);
 
-            if (sessionId === undefined || Option.isNone(session)) {
-              return Option.none<ThreadId>();
-            }
+              if (sessionId === undefined || Option.isNone(session)) {
+                return Option.none<ThreadId>();
+              }
 
-            return yield* threadOfSession(session.value, known, sessionId);
-          });
+              return yield* threadOfSession(session.value, known, sessionId);
+            });
 
-        faux.setResponses(
-          Array.from(
-            { length: FAUX_STEPS },
-            () => async (request, options) =>
-              await run(
-                Effect.gen(function* () {
-                  const thread = yield* askingThread(options?.sessionId);
+          faux.setResponses(
+            Array.from(
+              { length: FAUX_STEPS },
+              () => async (request, options) =>
+                await run(
+                  Effect.gen(function* () {
+                    const thread = yield* askingThread(options?.sessionId);
 
-                  return yield* script.next(
-                    Option.fromUndefinedOr(options?.signal),
-                    thread,
-                    seenOf(request)
-                  );
-                })
-              )
-          )
-        );
+                    return yield* script.next(
+                      Option.fromUndefinedOr(options?.signal),
+                      thread,
+                      seenOf(request)
+                    );
+                  })
+                )
+            )
+          );
 
-        return {
-          seam: Context.get(context, HarnessSeam),
-          resume: brain.resume.pipe(Effect.orDie),
-        };
-      }).pipe(Effect.orDie)
-    );
-  });
+          return {
+            seam: Context.get(context, HarnessSeam),
+            resume: brain.resume.pipe(Effect.orDie),
+          };
+        }).pipe(Effect.orDie)
+      );
+    });
+
+/** The pi-durable side with the production tuning. */
+export const piDurableTarget: MakeTarget =
+  piDurableTargetWith(DEFAULT_TOOL_OPTIONS);
 
 /** The scripted side. */
 export const scriptedTarget: MakeTarget = (script, faults) =>

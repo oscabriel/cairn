@@ -11,6 +11,10 @@
 //
 // `bash` gets the brain's environment without `CAIRN_*`: pi-durable's default execution inherits
 // `process.env` whole, so `prepare` turns inheritance off and passes the filtered copy instead.
+// On git 2.54 or later, `prepare` also adds a process-local hook that puts a `Cairn-Thread: <thread
+// id>` trailer on every commit the call makes (CommitTrailer.ts), so landings, checkpoints and
+// diffs name their thread without the database. The layer asks git's version once at boot and logs
+// `commit_trailer_skipped` when it is older; commits made outside `bash` carry no trailer.
 // A `bash` call without a timeout stops after 120 seconds, and a model may ask for at most 600
 // (T16), so a hung command cannot hold its thread's turn forever.
 // The search tools run `rg` and `fd` as argv arrays, with no shell between the model and the process.
@@ -30,9 +34,17 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { Array as Arr, Context, Effect, Layer } from "effect";
+import { Array as Arr, Context, Effect, Layer, Option } from "effect";
 
+import { Git } from "../git/Git.ts";
 import { threadProcessEnv } from "./Arms.ts";
+import {
+  MIN_TRAILER_GIT,
+  parseGitVersion,
+  supportsTrailer,
+  threadOfCall,
+  withTrailerHook,
+} from "./CommitTrailer.ts";
 import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
 import { gatedTool } from "./Permissions.ts";
@@ -215,16 +227,33 @@ const boundedBash = (bash: ReturnType<typeof createBashTool>) => ({
     ),
 });
 
-/** `bash` as the brain runs it: bounded, with a Cairn-free environment, gated by the mode. */
-export const gatedBash = () =>
+/** How the brain's `bash` is built. */
+export interface BashOptions {
+  /** Add the `Cairn-Thread` commit trailer hook to every call (git 2.54 or later). */
+  readonly trailer: boolean;
+}
+
+/** The options `gatedBash` takes when given none: the trailer on. */
+const TRAILER_ON: BashOptions = { trailer: true };
+
+/**
+ * `bash` as the brain runs it: bounded, with a Cairn-free environment, gated by the mode, and with
+ * the commit trailer hook unless `options.trailer` is off.
+ */
+export const gatedBash = (options: BashOptions = TRAILER_ON) =>
   gatedTool(
     boundedBash(
       createBashTool({
-        prepare: (execution) => {
-          execution.env = {
-            ...threadProcessEnv(process.env),
-            ...execution.env,
-          };
+        prepare: async (execution, api, context) => {
+          const env = { ...threadProcessEnv(process.env), ...execution.env };
+
+          const thread = options.trailer
+            ? await threadOfCall(api, context)
+            : Option.none();
+
+          execution.env = Option.isSome(thread)
+            ? withTrailerHook(env, thread.value)
+            : env;
           execution.inheritEnv = false;
         },
       })
@@ -234,7 +263,7 @@ export const gatedBash = () =>
   );
 
 /** The coding tools, with `read` replay-safe and the writers gated by the thread's mode. */
-const codingTools = (images: ImageProcessor) => {
+const codingTools = (images: ImageProcessor, bash: BashOptions) => {
   const read = createReadTool({ images });
 
   return defineExtension({
@@ -248,7 +277,7 @@ const codingTools = (images: ImageProcessor) => {
         (args) =>
           `edit ${args.path} (${args.edits.length} ${args.edits.length === 1 ? "change" : "changes"})`
       ),
-      gatedBash(),
+      gatedBash(bash),
       grep,
       find,
       ls,
@@ -261,19 +290,50 @@ export class CodingTools extends Context.Service<
   CodingTools,
   { readonly extension: CairnExtension }
 >()("cairn/server/brain/CodingTools") {
-  static readonly layer = Layer.effect(
+  /** Over the ambient `Git`, asked for its version once to decide the commit trailer. */
+  static readonly layerNoDeps = Layer.effect(
     CodingTools,
     Effect.gen(function* () {
+      const git = yield* Git;
+
       const images = yield* Effect.promise(
         async () => await createNodePhotonImages()
       );
 
+      // A git that cannot run reports its failure here, and the trailer stays off.
+      const output = yield* git
+        .run("CodingTools.gitVersion", ".", ["version"])
+        .pipe(
+          Effect.map((result) => result.stdout),
+          Effect.catchTag("GitError", (failure) =>
+            Effect.succeed(failure.message)
+          )
+        );
+
+      const trailer = Option.exists(parseGitVersion(output), supportsTrailer);
+
+      if (!trailer) {
+        yield* Effect.logWarning(
+          `commit trailer off: it needs git ${String(MIN_TRAILER_GIT.major)}.${String(MIN_TRAILER_GIT.minor)} or later`
+        ).pipe(
+          Effect.annotateLogs({
+            event: "commit_trailer_skipped",
+            git: output.trim(),
+          })
+        );
+      }
+
       return CodingTools.of({
         extension: {
           order: ExtensionOrder.codingTools,
-          extension: codingTools(images),
+          extension: codingTools(images, { trailer }),
         },
       });
     })
+  );
+
+  /** With Node's git. */
+  static readonly layer = CodingTools.layerNoDeps.pipe(
+    Layer.provide(Git.layer)
   );
 }

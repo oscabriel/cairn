@@ -12,7 +12,16 @@
 // - `subagents`: on a parent with children only, each child's registry status, its settlements,
 //   the last one delivered, where its questions to the parent stand and the model its dispatch
 //   record names, by thread id.
+//
+// A named device's view (`normalizeDeviceView`) adds what its client reads from the records
+// through `PendingRequests`: `card`, the requests the card offers in order (tool, body, "i/N"),
+// and `lines`, each settled record's transcript line (status, words, a question's answers).
 
+import {
+  approvalRecordsOf,
+  pendingRequests,
+  settledLines,
+} from "@cairn/client-logic/PendingRequests";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";
 import type { Schema } from "effect";
@@ -95,8 +104,8 @@ const normalizeEntry = (entry: ConversationView["entries"][number]) => {
   };
 };
 
-/** The normalized view of a client's projected view. */
-export const normalizeView = (view: ConversationView): Json => {
+/** The fields of a normalized view. */
+const viewFields = (view: ConversationView) => {
   const transcript = view.entries
     .filter((entry) => entry.kind !== HIDDEN_ENTRY_KIND)
     .map(normalizeEntry);
@@ -188,6 +197,31 @@ export const normalizeView = (view: ConversationView): Json => {
     decisions,
     model: isRecord(agent) && isRecord(agent.model) ? agent.model : null,
   };
+};
+
+/** The normalized view of a client's projected view. */
+export const normalizeView = (view: ConversationView): Json => viewFields(view);
+
+/** A named device's normalized view: the thread's, with its card and settled lines. */
+export const normalizeDeviceView = (view: ConversationView): Json => {
+  const records = approvalRecordsOf(view.docs["cairn.approvals"]);
+
+  const card = pendingRequests(records).map((request) => ({
+    tool: request.record.tool,
+    body: request.body._tag,
+    position: request.position,
+    total: request.total,
+  }));
+
+  const lines = settledLines(records).map((line) => ({
+    status: line.status,
+    text: line.text,
+    answers: line.answers.map(
+      (answered) => `${answered.header}: ${answered.text}`
+    ),
+  }));
+
+  return { ...viewFields(view), card, lines };
 };
 
 /** The ids of pending approvals in a client's view, oldest first. */

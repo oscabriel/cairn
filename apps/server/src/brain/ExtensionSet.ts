@@ -4,12 +4,14 @@
 
 import { Effect, Layer } from "effect";
 
+import { askUserExtension } from "../approvals/AskUserTool.ts";
 import { ProviderRequestLog } from "../attachments/ProviderRequestExtension.ts";
 import { ExecutorExtension } from "../executor/ExecutorExtension.ts";
 import { ResultTool } from "../models/ResultTool.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
 import { RolesTool } from "../models/RolesExtension.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
+import { ReachTools } from "../reach/ReachExtension.ts";
 import { skillExtensionSources } from "../skills/SkillsLayer.ts";
 import { BridgeCwd } from "./BridgeCwdExtension.ts";
 import { CodeMode } from "./CodeMode.ts";
@@ -31,6 +33,7 @@ const production: ReadonlyArray<
     | ModelHealthFeed
     | RolesTool
     | ResultTool
+    | ReachTools
   >
 > = [
   CodingTools.useSync((tools) => tools.extension),
@@ -42,6 +45,8 @@ const production: ReadonlyArray<
   ModelHealthFeed.useSync((feed) => feed.extension),
   RolesTool.useSync((roles) => roles.extension),
   ResultTool.useSync((results) => results.extension),
+  ReachTools.useSync((reach) => reach.extension),
+  Effect.succeed(askUserExtension(ExtensionOrder.askUser)),
   ProviderRequestLog.useSync((log) => log.extension),
 ];
 
@@ -54,7 +59,10 @@ const production: ReadonlyArray<
 // `ModelHealthLive`, and tests a fresh in-memory one (`ModelHealth.layerTest`). The `roles` tool's
 // `RoleAliases` leaves `SettingsStore` (and `ModelHealth`) to the root as well: `SettingsLive` in
 // the entry points, `SettingsStore.layerTest` in tests. It reads the Claude plan's windows from
-// `BridgeProvider`, a reference the deployed root provides.
+// `BridgeProvider`, a reference the deployed root provides. The `cairn.reach` tools read
+// `Artifacts` and `PortalTools`, which the root gives too (`ReachLive` in `AppLayer.ts`, the same
+// reference its handlers and boot repairs use; `ReachServicesTest` in tests), so one porch client
+// and one portal store serve the tools and the RPCs.
 const dependencies = Layer.mergeAll(
   CodingTools.layer,
   CodeMode.layer,
@@ -65,7 +73,8 @@ const dependencies = Layer.mergeAll(
   RolesTool.layerAt(ExtensionOrder.roles).pipe(
     Layer.provide(RoleAliases.layerNoDeps)
   ),
-  ResultTool.layer
+  ResultTool.layer,
+  ReachTools.layerAt(ExtensionOrder.reach)
 );
 
 /** The installed set: production extensions, plus any a composition root adds (judges). */

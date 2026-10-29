@@ -316,6 +316,38 @@ const stalls: FakeScript = (io) =>
     return yield* Effect.never;
   });
 
+/**
+ * Calls `mark` and writes the call's entry 110 ms later. Claude Code writes its transcript on a
+ * 100 ms timer, after it has emitted the event and called the tool (spike 10); pi commits the stamp
+ * on `done` and then runs the tool, so a `done` that went first left a window where a `kill -9`
+ * stranded the stamp.
+ */
+const writesLate: FakeScript = (io) =>
+  Effect.gen(function* () {
+    yield* io.nextPrompt;
+    yield* io.emit(initEvent(SCRIPT_SESSION, ["mark"]));
+    yield* io.emitUnwritten(
+      ...toolTurn("m1", "u1", "toolu_1", "mark", { line: "a" })
+    );
+    yield* Effect.sleep("110 millis");
+    yield* io.record(
+      SCRIPT_SESSION,
+      entry("u1", "assistant", { uses: ["toolu_1"] })
+    );
+
+    return yield* Effect.never;
+  });
+
+/** Calls `mark` and never writes the call's entry. */
+const neverWrites: FakeScript = (io) =>
+  Effect.gen(function* () {
+    yield* io.nextPrompt;
+    yield* io.emit(initEvent(SCRIPT_SESSION, ["mark"]));
+    yield* io.emitUnwritten(...toolTurn("m1", "u1", "toolu_1", "mark"));
+
+    return yield* Effect.never;
+  });
+
 describe("tool calls", () => {
   it.effect(
     "keep a held query alive when the generation's invocation ends, and deliver the result into it",
@@ -400,6 +432,70 @@ describe("tool calls", () => {
         ]);
       }).pipe(Effect.provide(bridge([script])));
     }
+  );
+
+  it.effect(
+    "hold a tool call back from pi until Claude Code has written the entry its stamp names",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* ClaudeSdkScripts;
+        const writtenAtDone = yield* Ref.make(Option.none<boolean>());
+
+        const fiber = yield* Effect.forkChild(
+          call([system, user("mark it")]).pipe(
+            Effect.tap(() =>
+              Effect.gen(function* () {
+                const chain =
+                  (yield* Ref.get(fake.sessions)).get(SCRIPT_SESSION) ?? [];
+
+                yield* Ref.set(
+                  writtenAtDone,
+                  Option.some(chain.some((found) => found.uuid === "u1"))
+                );
+              })
+            )
+          )
+        );
+
+        yield* until(Effect.map(runs, (started) => started.length === 1));
+        yield* settle;
+        yield* TestClock.adjust("60 millis");
+        yield* settle;
+
+        const early = yield* Ref.get(writtenAtDone);
+
+        yield* TestClock.adjust("200 millis");
+
+        const held = yield* Fiber.join(fiber);
+
+        expect([
+          early,
+          yield* Ref.get(writtenAtDone),
+          held.stopReason,
+          Option.map(stampOf(held), (stamp) => stamp.ccUuid),
+        ]).toStrictEqual([
+          Option.none(),
+          Option.some(true),
+          "toolUse",
+          Option.some("u1"),
+        ]);
+      }).pipe(Effect.provide(bridge([writesLate])))
+  );
+
+  it.effect(
+    "deliver a tool call anyway when its entry never reaches the transcript",
+    () =>
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(call([system, user("mark it")]));
+
+        yield* until(Effect.map(runs, (started) => started.length === 1));
+        yield* settle;
+        yield* TestClock.adjust("2 seconds");
+
+        const held = yield* Fiber.join(fiber);
+
+        expect(held.stopReason).toBe("toolUse");
+      }).pipe(Effect.provide(bridge([neverWrites])))
   );
 
   it.effect(
@@ -1208,10 +1304,11 @@ describe("resume", () => {
           prompt.includes("[assistant]\nhello"),
           prompt.endsWith("</conversation-history>\nagain"),
         ]).toStrictEqual([true, true, true, true]);
+        // The only transcript is the one the new child's Claude Code wrote itself.
         expect([
           yield* Ref.get(fake.forks),
           [...(yield* Ref.get(fake.sessions)).keys()],
-        ]).toStrictEqual([[], []]);
+        ]).toStrictEqual([[], [FORKED]]);
       }).pipe(Effect.provide(bridge([script])));
     }
   );

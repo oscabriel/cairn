@@ -31,11 +31,14 @@
 // Bridge windows (`--bridge`, the real Claude bridge on Haiku through `judge-main.ts --models real`,
 // a few cents each, never run by default): bridge-streaming (`kill -9` while Claude's reply
 // streams), bridge-tool-parked (while a `bash` call is held in the bridge), bridge-answer (after
-// the `bash` result is committed, while Claude writes its answer), bridge-approval-parked (while
+// the `bash` result is committed, while Claude writes its answer), bridge-tool-ran (a few
+// milliseconds after `bash` ran, inside Claude Code's 100 ms transcript write window, where a
+// stamp committed ahead of its entry made the resume rebuild cold), bridge-approval-parked (while
 // `gate` waits; accepted after the restart). They add J2's and J9's checks: the marker or `mark`
 // effect exactly once, an interrupted result for the parked `bash` call, every `claude` child of the
 // killed brain gone within 2 s and none outside the unit's cgroup, the first reply after the restart
-// keeping the prompt cache (`cacheRead > 0` and `cacheRead >= 10 * cacheWrite`), and, last, a clean
+// keeping the prompt cache (`cacheRead > 0` and `cacheRead >= 10 * cacheWrite`; a run also lists the
+// bridge's cold rebuilds after the kill, which name a miss's cause), and, last, a clean
 // restart and a stop with the thread's child alive that leave no `claude` outside the cgroup.
 // `judges/claude-kill.sh` runs the first three by their J2 names. The
 // brain uses the real home (Claude Code's login, pi's models, read only) and a scratch folder under
@@ -102,6 +105,7 @@ import type { FileSystem } from "effect";
 import {
   Cause,
   Clock,
+  DateTime,
   Deferred,
   Duration,
   Effect,
@@ -159,6 +163,7 @@ const BRIDGE_WINDOWS = [
   "bridge-streaming",
   "bridge-tool-parked",
   "bridge-answer",
+  "bridge-tool-ran",
   "bridge-approval-parked",
 ] as const;
 
@@ -742,6 +747,8 @@ const ModelMessage = Schema.Struct({
   usage: Schema.optionalKey(
     Schema.Struct({ cacheRead: Schema.Finite, cacheWrite: Schema.Finite })
   ),
+  /** When the model call began, in epoch milliseconds on the brain's clock. */
+  timestamp: Schema.optionalKey(Schema.Finite),
 });
 
 const decodeModel = Schema.decodeUnknownOption(ModelMessage);
@@ -893,7 +900,19 @@ const isQuiet = (row: Option.Option<ThreadShell>) =>
 
 const sameView = Schema.toEquivalence(ConversationView);
 
-const sameShell = Schema.toEquivalence(ShellSnapshot);
+/**
+ * Two shells hold the same rows. The cursor is left out: the server skips a thread row identical to
+ * the one it last sent (`skipUnchangedThreadShells`), which leaves a live client's sequence behind a
+ * fresh snapshot's with nothing else apart. Since phase 2's wave 2 a bridge turn often ends on
+ * such a row (measured: the follower at 12, the fresh client at 13, the rows equal), so comparing
+ * the cursor failed about half the bridge windows.
+ */
+const sameShell = Schema.toEquivalence(
+  Schema.Struct({
+    projects: ShellSnapshot.fields.projects,
+    threads: ShellSnapshot.fields.threads,
+  })
+);
 
 // The window's verdict.
 
@@ -907,6 +926,7 @@ interface Expectation {
 type Reported =
   | number
   | null
+  | ReadonlyArray<string>
   | { readonly cacheRead: number; readonly cacheWrite: number }
   | { readonly childrenBefore: number; readonly orphans: number };
 
@@ -1362,22 +1382,36 @@ const gateAccepted = (context: RunContext, entries: ReadonlyArray<Entry>) =>
     return yield* Effect.void;
   });
 
-/**
- * A bridge window's kill: `kill -9` with a `claude` child alive, then J9's checks (every child gone
- * within 2 s, none outside the unit's cgroup) and the restart measured. Records how many replies
- * were committed before it, for the cache check.
- */
-const bridgeCrash = (context: RunContext) =>
+/** What a bridge kill is judged against: the `claude` children and every process of the unit. */
+interface BridgeAim {
+  readonly children: ReadonlyArray<Unit.Process>;
+  readonly before: ReadonlyArray<Unit.Process>;
+}
+
+/** Reads the unit's `claude` children and processes, ahead of a kill that must land at once. */
+const bridgeAim = (context: RunContext) =>
   Effect.gen(function* () {
-    const { brain, measures } = context;
-    const children = yield* claudeChildren(brain.unit);
+    const children = yield* claudeChildren(context.brain.unit);
 
     if (children.length === 0) {
       return yield* fail("no claude child in the unit before the kill");
     }
 
+    const before = yield* Unit.snapshot(context.brain.unit);
+
+    return { children, before } satisfies BridgeAim;
+  });
+
+/**
+ * A bridge window's kill: `kill -9` with a `claude` child alive, then J9's checks (every child gone
+ * within 2 s, none outside the unit's cgroup) and the restart measured. Records how many replies
+ * were committed before it, for the cache check.
+ */
+const bridgeKill = (context: RunContext, aim: BridgeAim) =>
+  Effect.gen(function* () {
+    const { brain, measures } = context;
+    const { children, before } = aim;
     const committed = entriesOf(yield* viewOf(context.follower));
-    const before = yield* Unit.snapshot(brain.unit);
     const restart = yield* crash(brain);
 
     const gone = yield* goneWithin(
@@ -1403,6 +1437,10 @@ const bridgeCrash = (context: RunContext) =>
 
     return { committed };
   });
+
+/** Aims, then kills: the usual bridge kill, where a few tens of milliseconds do not matter. */
+const bridgeCrash = (context: RunContext) =>
+  Effect.flatMap(bridgeAim(context), (aim) => bridgeKill(context, aim));
 
 /** Runs `move` on the unit and counts the `claude` processes from before it left outside it. */
 const orphansAfter = (
@@ -1456,18 +1494,85 @@ const j9Moves = (context: RunContext) =>
  * J2: the first reply after the restart kept the prompt cache. That reply is the first one whose id
  * was not committed before the kill, so a follower that lagged the store cannot point it at a
  * pre-kill reply.
+ *
+ * A miss is a Cairn bug until shown otherwise, so the check stays strict; the run names the cause
+ * it can see. `coldRebuilds` lists the bridge's fresh sessions other than a first turn (a resume it
+ * could not make, such as `transcript-missing`: the stamp named an entry Claude Code had not
+ * written when the kill landed, which spike 10 measured and the done gate closed; the 2026-10-28
+ * nightly's bridge-answer miss, 19,680 read and 22,375 written, has this shape),
+ * `stampsNotWritten` counts replies the gate let through unwritten, and `resumeDrops` lists the
+ * transcript entries a resume cut off with `resumeSessionAt` (which resends the history without
+ * its cache breakpoints). A miss with none of them, where the read stops at the tools and system
+ * prompt, is the case to look at the cache provider for, and its note says so.
  */
 const cacheKept = (
   context: RunContext,
   entries: ReadonlyArray<Entry>,
   committed: ReadonlyArray<Entry>
 ) =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
+    const events = yield* Events.read(context.brain.events);
+
+    const coldRebuilds = events
+      .filter(Events.named("claude fresh session"))
+      .flatMap(({ fields: { reason } }) =>
+        Predicate.isString(reason) && reason !== "first-turn" ? [reason] : []
+      );
+
+    const stampsNotWritten = events.filter(
+      Events.named("claude_stamp_not_written")
+    ).length;
+
+    const resumeDrops = events
+      .filter(Events.named("claude_resume"))
+      .flatMap(({ fields: { after } }) =>
+        Predicate.isString(after) && after !== "" ? [after] : []
+      );
+
+    context.measures.extra.coldRebuilds = coldRebuilds;
+    context.measures.extra.stampsNotWritten = stampsNotWritten;
+    context.measures.extra.resumeDrops = resumeDrops;
+
+    if (coldRebuilds.length > 0) {
+      context.measures.notes.push(
+        `the bridge rebuilt the session cold: ${coldRebuilds.join(", ")}`
+      );
+    }
+
+    if (resumeDrops.length > 0) {
+      context.measures.notes.push(
+        `a resume cut entries off the transcript: ${resumeDrops.join("; ")}`
+      );
+    }
+
     const before = new Set(committed.map((entry) => entry.id));
+
+    // The follower can lag the store at the kill: a reply committed a few milliseconds before it
+    // (the bridge-tool-ran window) is missing from `committed`. So the reply must also have begun
+    // after the restarted brain was listening, when the log says when that was.
+    const restartedAt = Option.map(
+      Option.fromUndefinedOr(events.filter(Events.named("listening"))[1]),
+      ({ at }) => DateTime.toEpochMillis(at)
+    );
+
+    const afterRestart = (entry: Entry) =>
+      Option.match(restartedAt, {
+        onNone: () => true,
+        onSome: (at) =>
+          Option.exists(modelOf(entry), (message) =>
+            Option.exists(
+              Option.fromUndefinedOr(message.timestamp),
+              (began) => began >= at
+            )
+          ),
+      });
 
     const usage = Option.flatMap(
       Option.fromUndefinedOr(
-        entries.find((entry) => isReply(entry) && !before.has(entry.id))
+        entries.find(
+          (entry) =>
+            isReply(entry) && !before.has(entry.id) && afterRestart(entry)
+        )
       ),
       (entry) =>
         Option.flatMap(modelOf(entry), (message) =>
@@ -1480,6 +1585,18 @@ const cacheKept = (
       usage,
       (found) => found.cacheRead > 0 && found.cacheRead >= 10 * found.cacheWrite
     );
+
+    if (
+      !context.measures.checks.cacheKept &&
+      Option.isSome(usage) &&
+      coldRebuilds.length === 0 &&
+      stampsNotWritten === 0 &&
+      resumeDrops.length === 0
+    ) {
+      context.measures.notes.push(
+        "the cache missed on a clean resume: no cause the bridge can see, look at provider-side eviction"
+      );
+    }
   });
 
 const markerOnce = (context: RunContext) =>
@@ -2229,6 +2346,52 @@ const plans: Readonly<Record<WindowName, Plan>> = {
         );
 
         return yield* bridgeCrash(context);
+      }),
+    verdict: (context, entries, committed) =>
+      Effect.gen(function* () {
+        yield* markerOnce(context);
+        yield* cacheKept(context, entries, committed);
+      }),
+  },
+  "bridge-tool-ran": {
+    bridge: true,
+    message: (brain) =>
+      bridgeMessage(
+        `Use bash to run exactly this command, once: echo ran >> ${markerOf(brain)}. Never run it a second time, even if it reports an error or an interruption. Then write the numbers from one to fifty in words, one per line.`
+      ),
+    expect: { marks: [], userEntries: 1 },
+    run: (context) =>
+      Effect.gen(function* () {
+        // Aim inside Claude Code's transcript write window: pi runs a tool right after it commits
+        // the call's stamped reply, and Claude Code writes the call's entry up to about 110 ms
+        // after emitting it (spike 10). Everything the kill is judged against is read first, so
+        // the kill lands a few milliseconds after the command ran.
+        yield* until(
+          "a claude child",
+          Effect.map(
+            claudeChildren(context.brain.unit).pipe(
+              Effect.orElseSucceed(() => [])
+            ),
+            (children) => children.length > 0
+          ),
+          "180 seconds"
+        );
+
+        const aim = yield* bridgeAim(context);
+        const marker = markerOf(context.brain);
+
+        yield* Effect.gen(function* () {
+          while (markerLines(marker) === 0) {
+            yield* Effect.sleep("2 millis");
+          }
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: "180 seconds",
+            orElse: () => fail("timed out waiting for the bash command to run"),
+          })
+        );
+
+        return yield* bridgeKill(context, aim);
       }),
     verdict: (context, entries, committed) =>
       Effect.gen(function* () {

@@ -45,6 +45,7 @@ import {
   Stream,
 } from "effect";
 
+import { DoneGate } from "./ClaudeDoneGate.ts";
 import type { ClaudeEvent, RateLimitInfo } from "./ClaudeEvents.ts";
 import type {
   AbortKind,
@@ -163,6 +164,8 @@ interface Child {
   permit: boolean;
   turn: Option.Option<Deferred.Deferred<TurnOutcome>>;
   heldWait: Option.Option<Deferred.Deferred<true>>;
+  /** The current turn's gate in front of pi's sink: it holds a reply's `done` until the entry is written. */
+  doneGate: Option.Option<DoneGate>;
   lastActivity: number;
   quietUntil: number;
 }
@@ -176,6 +179,18 @@ interface ChildHolder {
 const STAMP_WAIT_ATTEMPTS = 10;
 
 const STAMP_WAIT_INTERVAL = Duration.millis(200);
+
+/**
+ * How long a reply's `done` waits for Claude Code to write the entry its stamp names. Claude Code
+ * flushes its transcript every 100 ms; spike 10 saw the entry 109 to 122 ms after its event. So the
+ * first look is at once (a fake, or a flush already done), the second 100 ms later, then every 20 ms
+ * for about a second, after which `done` goes on anyway with a warning.
+ */
+const DONE_WAIT_FIRST = Duration.millis(100);
+
+const DONE_WAIT_INTERVAL = Duration.millis(20);
+
+const DONE_WAIT_ATTEMPTS = 47;
 
 /**
  * How long a killed child gets to answer its interrupt before it is closed anyway: a wedged child
@@ -338,6 +353,101 @@ export const openConversation = Effect.fnUntraced(function* (
       }
     });
 
+  /**
+   * Whether `uuid` is in the transcript of `sessionId` within `attempts` looks, the first at once
+   * and each later one `pause(attempt)` after the one before.
+   */
+  const entryWritten = (
+    sessionId: string,
+    uuid: string,
+    cwd: string,
+    attempts: number,
+    pause: (attempt: number) => Duration.Duration
+  ) =>
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (attempt > 0) {
+          yield* Effect.sleep(pause(attempt));
+        }
+
+        const entries = yield* sdk
+          .entries(sessionId, cwd)
+          .pipe(Effect.orElseSucceed(() => []));
+
+        if (entries.some((entry) => entry.uuid === uuid)) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+
+  /** Waits, briefly, until `uuid` is in the transcript of `sessionId`; gives up quietly. */
+  const stampWritten = (sessionId: string, uuid: string, cwd: string) =>
+    Effect.asVoid(
+      entryWritten(
+        sessionId,
+        uuid,
+        cwd,
+        STAMP_WAIT_ATTEMPTS,
+        () => STAMP_WAIT_INTERVAL
+      )
+    );
+
+  /**
+   * Lets the turn's held `done` through once Claude Code has written the entry the reply's stamp
+   * names, so every stamp pi commits names an entry a resume can find. The gate opens whatever
+   * happens: an entry that never shows costs a warning (and, after a crash, a cold rebuild), never
+   * the reply.
+   */
+  const releaseDone = (child: Child) =>
+    Option.match(
+      Option.filter(child.doneGate, (gate) => gate.holding),
+      {
+        onNone: () => Effect.void,
+        onSome: (gate) =>
+          Effect.gen(function* () {
+            const sessionId = Option.orElse(
+              child.ccSessionId,
+              () => child.stream.sessionId
+            );
+
+            if (
+              Option.isNone(sessionId) ||
+              Option.isNone(child.stream.lastUuid)
+            ) {
+              return;
+            }
+
+            const written = yield* entryWritten(
+              sessionId.value,
+              child.stream.lastUuid.value,
+              child.cwd,
+              DONE_WAIT_ATTEMPTS,
+              (attempt) =>
+                attempt === 1 ? DONE_WAIT_FIRST : DONE_WAIT_INTERVAL
+            );
+
+            if (!written) {
+              yield* Effect.logWarning("claude stamp not written").pipe(
+                Effect.annotateLogs({
+                  event: "claude_stamp_not_written",
+                  sessionId: deps.piSessionId,
+                  ccSessionId: sessionId.value,
+                  ccUuid: child.stream.lastUuid.value,
+                })
+              );
+            }
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                gate.release();
+              })
+            )
+          ),
+      }
+    );
+
   const settleTurn = (child: Child, outcome: TurnOutcome) =>
     Effect.gen(function* () {
       const { turn } = child;
@@ -468,6 +578,7 @@ export const openConversation = Effect.fnUntraced(function* (
       } else if (effect.kind === "api-retry") {
         child.quietUntil = now() + effect.delayMs;
       } else if (effect.kind === "ended") {
+        yield* releaseDone(child);
         yield* endTurn(child, effect.end);
       } else if (
         effect.kind === "unattached-result" &&
@@ -728,6 +839,7 @@ export const openConversation = Effect.fnUntraced(function* (
         permit: false,
         turn: Option.none(),
         heldWait: Option.none(),
+        doneGate: Option.none(),
         lastActivity: now(),
         quietUntil: 0,
       };
@@ -782,26 +894,13 @@ export const openConversation = Effect.fnUntraced(function* (
       child.permit = true;
       child.lastActivity = now();
       child.pendingResults.clear();
-      child.stream.begin(call.sink, now());
+      const gate = new DoneGate(call.sink);
+
+      child.doneGate = Option.some(gate);
+      child.stream.begin(gate, now());
       bindSignal(call.signal);
 
       return { turn, child } satisfies Routed;
-    });
-
-  /** Waits, briefly, until `uuid` is in the transcript of `sessionId`; gives up quietly. */
-  const stampWritten = (sessionId: string, uuid: string, cwd: string) =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < STAMP_WAIT_ATTEMPTS; attempt += 1) {
-        const entries = yield* sdk
-          .entries(sessionId, cwd)
-          .pipe(Effect.orElseSucceed(() => []));
-
-        if (entries.some((entry) => entry.uuid === uuid)) {
-          return;
-        }
-
-        yield* Effect.sleep(STAMP_WAIT_INTERVAL);
-      }
     });
 
   /** The prompt blocks of a resumed session and where it cuts. */
@@ -845,6 +944,19 @@ export const openConversation = Effect.fnUntraced(function* (
           : [];
 
       const cut = answered === undefined ? found.stamp.ccUuid : answered.uuid;
+
+      yield* Effect.logInfo("claude resume").pipe(
+        Effect.annotateLogs({
+          event: "claude_resume",
+          sessionId: deps.piSessionId,
+          ccSessionId: found.stamp.ccSessionId,
+          answered: answered !== undefined,
+          after: entries
+            .slice(entries.findIndex((entry) => entry.uuid === cut) + 1)
+            .map((entry) => entry.role)
+            .join(","),
+        })
+      );
 
       // `resumeSessionAt` makes Claude Code resend the history without the prompt cache's
       // breakpoints (measured: a 22K-token prefix rewritten on every resume), so it is passed only

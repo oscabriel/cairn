@@ -37,6 +37,7 @@ import type { SettlementOutcome } from "@cairn/protocol/Subagents";
 import type { JsonValue } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
 import type {
+  Agent,
   AgentChange,
   ConversationId,
   EntryId,
@@ -420,7 +421,7 @@ export interface StartReads {
     readonly provider: string;
     readonly modelId: string;
   }>;
-  readonly thinkingLevel: Option.Option<string>;
+  readonly thinkingLevel: Option.Option<Agent["thinkingLevel"]>;
 }
 
 /** The parts of the extension a task builds with. */
@@ -964,12 +965,17 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       modelId: "unknown",
     }));
 
-    // The child runs on what its dispatch record names (2D's rule): the parent's model for now.
+    // The child runs on what its dispatch record names (2D's rule): the parent's model and
+    // thinking level, until 4A resolves a brief's role here.
     await configure(tx, child.id, {
       ...dependencies.childAgent(brief.value.resultSchema !== null),
       ...Option.match(reads.model, {
         onNone: () => ({}),
         onSome: (found) => ({ model: { ...found } }),
+      }),
+      ...Option.match(reads.thinkingLevel, {
+        onNone: () => ({}),
+        onSome: (level) => ({ thinkingLevel: level }),
       }),
     });
 

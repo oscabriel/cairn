@@ -173,6 +173,19 @@ export class Subagents extends Context.Service<
     readonly extension: CairnExtension;
   }
 >()("cairn/server/subagents/Subagents") {
+  /**
+   * The extension with `faults` planted and `tuning`, for a test brain (the conformance suite's
+   * `piDurableLayer`) once the production set carries `Subagents`.
+   */
+  static readonly layerWith = (
+    faults: SubagentFaultSet,
+    tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
+  ) =>
+    Layer.succeed(
+      Subagents,
+      Subagents.of({ extension: subagentsExtension(faults, tuning) })
+    );
+
   /** The extension with the faults `SubagentFaults` names: none, unless a test plants some. */
   static readonly layer = Layer.effect(
     Subagents,

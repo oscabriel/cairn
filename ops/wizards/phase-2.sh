@@ -188,7 +188,7 @@ finish() {
 # phase 2 brain is deployed. Other packages add their stages here, one focused task each.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=1
+TOTAL_STAGES=2
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
@@ -219,7 +219,7 @@ judge() {
   return "$status"
 }
 
-banner "Cairn phase 2: sign-ins and the gate"
+banner "Cairn phase 2: sign-ins, machine setup and the gate"
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
 if want 1; then
@@ -248,6 +248,230 @@ if want 1; then
     note "If the login cannot be had, the recorded fallback is opencode-go/gpt-6-luna (ADR 0037)."
     record 1 "codex=fail"
     SKIPPED+=("stage 1: the Codex sign-in (ops/wizards/phase-2.sh 1), or accept the opencode-go/gpt-6-luna fallback")
+  fi
+  pause
+fi
+
+# ── 2 ─────────────────────────────────────────────────────────────────────
+# Caddy and porch (ADR 0038, docs/phase-2/notes/reach.md R2). Every file edit is computed by
+# ops/wizards/reach-edits.ts, shown as a diff, and applied only on yes; the Caddyfile is edited as
+# a candidate beside the live file, validated and fmt-checked inside the live container, and only
+# then installed and reloaded. porch import is never run.
+if want 2; then
+  stage "Caddy and porch: artifacts and portals (ADR 0038)"
+  say "Cairn publishes artifacts and opens portals through porch, behind your Docker Caddy."
+  say "Each edit is shown as a diff first; nothing changes until you answer yes."
+  warn "plans.gneiss.run becomes owner-only: anyone you shared a plan link with needs your login."
+  note "Cairn never runs porch import: it rewrites hand-written routes and drops their forward_auth."
+
+  CADDY_DIR=~/caddy
+  CADDYFILE=$CADDY_DIR/conf/Caddyfile
+  COMPOSE=$CADDY_DIR/docker-compose.yml
+  PORCH_CFG=${XDG_CONFIG_HOME:-$HOME/.config}/porchlight
+  SNIPPETS=$PORCH_CFG/caddy
+  ARTIFACTS=~/Developer/agent-artifacts
+  RELOAD='docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile'
+  STAMP=$(date +%Y%m%d-%H%M%S)
+  REACH_OK=1
+  CLOSE_DELAY=not-run
+  DOCTOR_RESULT=not-run
+  PROBE_RESULT=not-run
+  GUARD_RESULT=not-run
+  in_caddy() { docker exec caddy caddy "$@"; }
+
+  # apply_edit EDIT FILE: computes EDIT on FILE, shows the diff, and writes it back on yes.
+  # Answers 0 when FILE now holds the edit (or needed none), 1 when it was declined or refused.
+  apply_edit() {
+    local edit=$1 file=$2 next="$2.reach-next"
+    if ! node ops/wizards/reach-edits.ts "$edit" "$file" "$next" --snippets "$SNIPPETS"; then
+      rm -f "$next"
+      warn "$edit: not applied (the reason is above). Edit $file by hand, then re-run stage 2."
+      return 1
+    fi
+    if cmp -s "$file" "$next"; then
+      rm -f "$next"
+      return 0
+    fi
+    printf '\n'
+    diff -u "$file" "$next" | tail -n +3 || true
+    printf '\n'
+    if confirm "Apply this $edit edit to $file"; then
+      cat "$next" >"$file"
+      rm -f "$next"
+      return 0
+    fi
+    rm -f "$next"
+    warn "$edit declined"
+    return 1
+  }
+
+  # 2a. Backups, before anything is touched.
+  if [[ ! -f $CADDYFILE || ! -f $COMPOSE ]]; then
+    warn "No $CADDYFILE or $COMPOSE: this stage expects the Docker Caddy in ~/caddy."
+    REACH_OK=0
+  elif [[ $(docker inspect -f '{{.State.Running}}' caddy 2>/dev/null || echo false) != true ]]; then
+    warn "The caddy container is not running; start it (cd ~/caddy && docker compose up -d) and re-run."
+    REACH_OK=0
+  else
+    cp "$CADDYFILE" "$CADDYFILE.bak-before-porch-$STAMP"
+    cp "$COMPOSE" "$COMPOSE.bak-before-porch-$STAMP"
+    printf '  %s✓ backed up%s %s and %s (.bak-before-porch-%s)\n' "$GREEN" "$RESET" "$CADDYFILE" "$COMPOSE" "$STAMP"
+  fi
+
+  # 2b. The porch binary, built from your porchlight checkout.
+  if ((REACH_OK)) && ! command -v porch >/dev/null 2>&1; then
+    say ""
+    say "porch is not on your PATH. It builds from your porchlight checkout into ~/.local/bin/porch"
+    say "(about 80 MB, a Bun single-file binary; the brain's PATH already holds ~/.local/bin):"
+    say "    ${BOLD}cd ~/Developer/projects/porchlight && bun build --compile packages/cli/src/cli.ts --outfile ~/.local/bin/porch${RESET}"
+    if confirm "Build porch now"; then
+      (cd ~/Developer/projects/porchlight && bun build --compile packages/cli/src/cli.ts --outfile ~/.local/bin/porch) || REACH_OK=0
+    else
+      REACH_OK=0
+    fi
+  fi
+  if ((REACH_OK)) && ! porch --version >/dev/null 2>&1; then
+    warn "porch --version did not answer."
+    REACH_OK=0
+  fi
+
+  # 2c. porch init: the machine config and an empty snippet. It does not edit the Caddyfile.
+  if ((REACH_OK)) && [[ ! -f $PORCH_CFG/config.json ]]; then
+    say ""
+    say "porch init writes $PORCH_CFG/config.json and its snippet folder $SNIPPETS:"
+    note "Its check \"Caddyfile imports the snippet\" fails until this stage adds the import lines."
+    say "    ${BOLD}porch init --domain gneiss.run --artifacts $ARTIFACTS --caddyfile $CADDYFILE --reload '$RELOAD'${RESET}"
+    if confirm "Run porch init"; then
+      porch init --domain gneiss.run --artifacts "$ARTIFACTS" --caddyfile "$CADDYFILE" --reload "$RELOAD" </dev/null || REACH_OK=0
+    else
+      REACH_OK=0
+    fi
+  fi
+  if ((REACH_OK)); then
+    note "porch's dev port range, clear of your dev table (3001 to 3032), Cairn's 3774 to 3777 and Executor's 4400:"
+    apply_edit porch-ports "$PORCH_CFG/config.json" || true
+  fi
+
+  # 2d. The compose mount, so the container sees porch's snippet at the same path.
+  if ((REACH_OK)); then
+    if apply_edit compose-mount "$COMPOSE" && ! docker exec caddy test -d "$SNIPPETS"; then
+      warn "Recreating the caddy container drops every open connection once (about a second)."
+      if confirm "Recreate it now (docker compose up -d in ~/caddy)"; then
+        (cd "$CADDY_DIR" && docker compose up -d) || REACH_OK=0
+      fi
+    fi
+    if ! docker exec caddy test -f "$SNIPPETS/porches.caddy"; then
+      warn "The caddy container cannot see $SNIPPETS/porches.caddy yet."
+      REACH_OK=0
+    fi
+  fi
+
+  # 2e. The Caddyfile: owner-only guard, the @plans rename, porch's imports, stream_close_delay.
+  if ((REACH_OK)); then
+    CANDIDATE=$CADDY_DIR/conf/Caddyfile.reach-candidate
+    cp "$CADDYFILE" "$CANDIDATE"
+    GUARD_IN=0
+    IMPORT_IN=0
+    for edit in owner-only rename-plans import stream-close-delay; do
+      if apply_edit "$edit" "$CANDIDATE"; then
+        [[ $edit == owner-only ]] && GUARD_IN=1
+        [[ $edit == import ]] && IMPORT_IN=1
+      fi
+    done
+    if ((IMPORT_IN && !GUARD_IN)); then
+      # porch's portals and artifacts would be served to the whole tailnet with no owner check.
+      warn "porch's import without the owner-only guard would open every portal and artifact to the tailnet; the live Caddyfile is unchanged."
+      GUARD_RESULT=declined
+      REACH_OK=0
+    elif cmp -s "$CADDYFILE" "$CANDIDATE"; then
+      note "The Caddyfile already holds every edit you accepted."
+    elif ! in_caddy validate --config /etc/caddy/Caddyfile.reach-candidate --adapter caddyfile; then
+      warn "Caddy refused the candidate; the live Caddyfile is unchanged."
+      REACH_OK=0
+    elif ! in_caddy fmt /etc/caddy/Caddyfile.reach-candidate | diff -q - "$CANDIDATE" >/dev/null; then
+      warn "The candidate is not caddy fmt clean; the live Caddyfile is unchanged."
+      REACH_OK=0
+    elif confirm "Install the candidate as the live Caddyfile and reload Caddy"; then
+      cat "$CANDIDATE" >"$CADDYFILE"
+      in_caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || REACH_OK=0
+    else
+      REACH_OK=0
+    fi
+    rm -f "$CANDIDATE"
+  fi
+
+  # 2f. The outside judges: the live close delay, porch doctor, and a probe page read back.
+  if ((REACH_OK)); then
+    if judge caddy-reload-live node judges/caddy-reload.ts --live; then
+      CLOSE_DELAY=pass
+    else
+      CLOSE_DELAY=fail
+      REACH_OK=0
+    fi
+
+    set +e
+    DOCTOR=$(porch doctor --json)
+    set -e
+    printf '%s\n' "$DOCTOR" >"$RUNS/porch-doctor.json"
+    DOCTOR_FAILS=$(printf '%s' "$DOCTOR" | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>{try{const c=JSON.parse(s);console.log(c.filter((x)=>!x.ok).map((x)=>`${x.name}: ${x.detail}`).join("\n"))}catch{console.log("porch doctor printed no JSON")}})')
+    if [[ -z $DOCTOR_FAILS ]]; then
+      DOCTOR_RESULT=clean
+    else
+      DOCTOR_RESULT=fail
+      REACH_OK=0
+      warn "porch doctor:"
+      while IFS= read -r line; do note "  $line"; done <<<"$DOCTOR_FAILS"
+    fi
+
+    NONCE=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+    PROBE_DIR=$(mktemp -d)
+    PROBE_NAME=porch-probe-$NONCE.html
+    printf '<!doctype html><title>porch probe</title><p>%s</p>\n' "$NONCE" >"$PROBE_DIR/$PROBE_NAME"
+    PROBE_RESULT=fail
+    # Cairn's own rule: never publish over a file porch did not put there.
+    if [[ -e $ARTIFACTS/cairn/$PROBE_NAME ]]; then
+      warn "$ARTIFACTS/cairn/$PROBE_NAME already exists; not publishing over it."
+    elif porch publish "$PROBE_DIR/$PROBE_NAME" --project cairn --json >"$RUNS/porch-probe.json"; then
+      URL=https://plans.gneiss.run/cairn/$PROBE_NAME
+      set +e
+      STATUS=$(curl -sS -D "$PROBE_DIR/headers" -o "$PROBE_DIR/body" -w '%{http_code}' "$URL")
+      set -e
+      if [[ $STATUS == 200 ]] && grep -q "$NONCE" "$PROBE_DIR/body" && grep -qi '^cache-control: *no-cache' "$PROBE_DIR/headers"; then
+        PROBE_RESULT=pass
+      else
+        note "From the Beelink the probe answered $STATUS (403 means this machine is not admitted as you)."
+        step "On your phone, open ${BOLD}$URL${RESET}"
+        ask PROBE_SEEN "Type the code the page shows:"
+        [[ $PROBE_SEEN == "$NONCE" ]] && PROBE_RESULT=pass
+      fi
+      # The guard, from the Beelink itself: Cairn refuses loopback peers, so through 127.0.0.1 the
+      # probe must answer 403 in any letter case. A 200 means the guard lets that host past it.
+      GUARD_RESULT=pass
+      for host in plans.gneiss.run PLANS.gneiss.run; do
+        set +e
+        GUARD_STATUS=$(curl -sk -o /dev/null -w '%{http_code}' --resolve plans.gneiss.run:443:127.0.0.1 -H "Host: $host" "$URL")
+        set -e
+        if [[ $GUARD_STATUS != 403 ]]; then
+          warn "Host: $host through 127.0.0.1 answered $GUARD_STATUS, not 403: the owner-only guard does not hold."
+          GUARD_RESULT=fail
+        fi
+      done
+      # porch has no unpublish; its registry keeps a record of the probe, which is harmless.
+      rm -f "$ARTIFACTS/cairn/$PROBE_NAME"
+    fi
+    rm -rf "$PROBE_DIR"
+    [[ $PROBE_RESULT == pass ]] || REACH_OK=0
+    [[ $GUARD_RESULT == pass ]] || REACH_OK=0
+  fi
+
+  if ((REACH_OK)); then
+    record 2 "reach=pass close_delay=$CLOSE_DELAY doctor=$DOCTOR_RESULT probe=$PROBE_RESULT guard=$GUARD_RESULT backup=$STAMP"
+    printf '  %s✓ porch and Caddy are ready for artifacts and portals%s\n' "$GREEN" "$RESET"
+  else
+    record 2 "reach=fail close_delay=$CLOSE_DELAY doctor=$DOCTOR_RESULT probe=$PROBE_RESULT guard=$GUARD_RESULT backup=$STAMP"
+    note "Backups: $CADDYFILE.bak-before-porch-$STAMP and $COMPOSE.bak-before-porch-$STAMP."
+    note "To put one back: cat <backup> > <file>, then $RELOAD"
+    SKIPPED+=("stage 2: Caddy and porch (ops/wizards/phase-2.sh 2)")
   fi
   pause
 fi

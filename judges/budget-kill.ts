@@ -8,9 +8,9 @@
 //   node judges/budget-kill.ts [--case kills|no-stop|no-boot]... [--early N] [--keep]
 //
 // Checks on the last life's report:
-// - overshoot: the scope's spend passed its line by at most one response per running child: the
-//   response that crossed it, plus one in flight per child (ten children, the largest response's
-//   price measured from the store);
+// - overshoot: the scope's spend passed its line by at most one response per running child (ten
+//   children, the largest response's price measured from the store): the crossing response's part
+//   past the line plus at most one in flight per other child;
 // - restarted: no child answered after the restart (each child's answered responses at the last
 //   boot, before the Harness resumed, equal its answered responses at the end; a response an abort
 //   cut off is the end of a stopped run, not a new one);
@@ -20,11 +20,15 @@
 //   the row reads below its line, and a child sent more work answers.
 //
 // Cases (default: all three):
-// - kills: the real guard; every check passes.
+// - kills: the real guard; every check passes, and one kill landed inside the guard's stop pass
+//   (the crash window the judge exists for). A run whose kills all missed that window (an early kill
+//   after the crossing and before the first stop) is run again, up to three times in all, and fails
+//   with `window` if none landed.
 // - no-stop: a broken control whose guard stops nothing, halts nothing and has no gate. It must fail
 //   by overshoot.
-// - no-boot: a broken control without the guard's boot repair. It must fail by a child running
-//   after the restart.
+// - no-boot: a broken control whose last life boots without the guard's boot repair (earlier lives
+//   read the book and halt nothing), killed at the start of the stop pass. It must fail by a child
+//   running after the restart.
 //
 // Prints one JSON line per case and a summary; exits 0 when kills passes and each control fails for
 // its reason. No network, no secrets, $0.
@@ -83,6 +87,7 @@ const FailureKind = Schema.Literals([
   "row",
   "push",
   "raise",
+  "window",
   "other",
 ]);
 
@@ -211,13 +216,14 @@ type Raise = typeof Raise.Type;
 const check = (report: Report, raise: Raise): ReadonlyArray<Failure> => {
   const failures: Array<Failure> = [];
   const overshoot = report.spentMicros - report.limitMicros;
-  // The response that crossed the line, plus one per running child in flight when it did.
-  const allowed = (report.children + 1) * report.maxResponseMicros;
+  // One response per running child: the crossing one's part past the line and one in flight per
+  // other child.
+  const allowed = report.children * report.maxResponseMicros;
 
   if (overshoot > allowed) {
     failures.push({
       kind: "overshoot",
-      text: `spent ${report.spentMicros} micros against a line of ${report.limitMicros}: ${overshoot} over, more than the crossing response and one per running child (${allowed})`,
+      text: `spent ${report.spentMicros} micros against a line of ${report.limitMicros}: ${overshoot} over, more than one response per running child (${allowed})`,
     });
   }
 
@@ -327,9 +333,14 @@ const runCase = Effect.fn("budget-kill.case")(function* (spec: CaseSpec) {
     ).pipe(Effect.orElseSucceed(() => "exited"));
 
     if (seen === "stopping") {
-      // Somewhere inside the stop pass: the guard staggers its stops by STAGGER_MS each.
+      // Somewhere inside the stop pass: the guard staggers its stops by STAGGER_MS each. The no-boot
+      // control dies at its start, so children are still running for a restart to show.
       yield* Effect.sleep(
-        Duration.millis(yield* Random.nextIntBetween(0, STAGGER_MS * CHILDREN))
+        Duration.millis(
+          spec.control === "no-boot"
+            ? 0
+            : yield* Random.nextIntBetween(0, STAGGER_MS * CHILDREN)
+        )
       );
       killedStopping = true;
       crossed = true;
@@ -378,7 +389,7 @@ const runCase = Effect.fn("budget-kill.case")(function* (spec: CaseSpec) {
     limitMicros: report.limitMicros,
     spentMicros: report.spentMicros,
     overshootMicros: report.spentMicros - report.limitMicros,
-    allowedMicros: (report.children + 1) * report.maxResponseMicros,
+    allowedMicros: report.children * report.maxResponseMicros,
     responseMicros: report.maxResponseMicros,
     stoppedNotices: report.stoppedNotices,
     stoppedPushes: report.stoppedPushes,
@@ -387,6 +398,54 @@ const runCase = Effect.fn("budget-kill.case")(function* (spec: CaseSpec) {
     seconds: Math.round((Date.now() - started) / 100) / 10,
     failures,
     dir: values.keep ? dir : "removed",
+  };
+});
+
+/** How many times the kills case runs before it gives up on landing a kill in the stop pass. */
+const WINDOW_ATTEMPTS = 3;
+
+/** Whether a run's kills landed one inside the guard's stop pass. */
+const landedInStop = (result: { readonly killedStopping?: boolean }) =>
+  result.killedStopping === true;
+
+/**
+ * The real case, run again while it passes without a kill in the stop pass; failing with `window`
+ * when no attempt landed one.
+ */
+const runWithWindow = Effect.fn("budget-kill.window")(function* (
+  spec: CaseSpec
+) {
+  let result = yield* runCase(spec);
+
+  for (
+    let attempt = 1;
+    result.pass && !landedInStop(result) && attempt < WINDOW_ATTEMPTS;
+    attempt += 1
+  ) {
+    yield* Console.log(
+      JSON.stringify({
+        case: spec.name,
+        attempt,
+        note: "no kill landed inside the stop pass; running again",
+      })
+    );
+    result = yield* runCase(spec);
+  }
+
+  if (!result.pass || landedInStop(result)) {
+    return result;
+  }
+
+  return {
+    ...result,
+    pass: false,
+    failures: [
+      ...result.failures,
+      {
+        kind: "window" as const,
+        text: `no kill landed inside the guard's stop pass in ${WINDOW_ATTEMPTS} attempts`,
+      },
+    ],
   };
 });
 
@@ -417,7 +476,9 @@ const program = Effect.gen(function* () {
       continue;
     }
 
-    const result = yield* runCase(spec.value);
+    const result = Option.isNone(spec.value.mustFail)
+      ? yield* runWithWindow(spec.value)
+      : yield* runCase(spec.value);
 
     yield* Console.log(JSON.stringify(result));
 

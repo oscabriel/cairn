@@ -2,7 +2,9 @@
 // at its line once (queues cleared), writes the stopped notice and a raise once and pushes once,
 // writes a warning once past the warning line, leaves a `drain` scope's threads running, halts
 // instead of stopping at boot (so nothing resumes scheduling before the Harness does), and re-reads
-// a scope when its raise is answered.
+// a scope when its raise is answered. A raise accepted that leaves the scope at its line is a new
+// epoch at the line, acted on again, and a scope declared past its line is acted on whether or not
+// the caller passed its transitions on.
 
 import { ApprovalId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
@@ -129,7 +131,7 @@ describe("the budget guard", () => {
             key,
             to.maxTokens,
           ]),
-          [[`${CHILD} 0`, 200]]
+          [[`${CHILD} 0`, 210]]
         );
 
         const pushes = yield* Ref.get(guard.pushes);
@@ -220,6 +222,122 @@ describe("the budget guard", () => {
         );
         assert.isTrue(
           Option.isNone(yield* budgets.gate(CHILD, "bash", Option.none()))
+        );
+      }).pipe(Effect.provide(GuardWorld))
+  );
+
+  it.live(
+    "acts again when an accepted raise leaves the scope at its line, proposing past what was spent",
+    () =>
+      Effect.gen(function* () {
+        yield* withThreads([[2, 1]]);
+        yield* scope(100, "stop");
+        yield* (yield* Budgets).load;
+
+        const budgets = yield* Budgets;
+        const guard = yield* GuardScript;
+        const sources = yield* SourcesScript;
+
+        yield* spend(2, CHILD, 250);
+
+        assert.isTrue(
+          yield* eventually(
+            Effect.map(Ref.get(sources.raises), (map) => map.has(`${CHILD} 0`))
+          )
+        );
+        // Already spent past double the line: the raise proposes the spend plus one more line.
+        assert.strictEqual(
+          (yield* Ref.get(sources.raises)).get(`${CHILD} 0`)?.maxTokens,
+          350
+        );
+
+        // The user accepts a raise to 200 (an older proposal): still at the line at epoch 1.
+        yield* scope(200, "stop", 1);
+        yield* PubSub.publish(
+          guard.events,
+          RuntimeRequestUpdated.make({
+            threadId: CHILD,
+            id: ApprovalId.make("budget-raise-0"),
+            kind: "tool-call",
+            status: "accepted",
+          })
+        );
+
+        assert.isTrue(
+          yield* eventually(
+            Effect.map(Ref.get(sources.raises), (map) => map.has(`${CHILD} 1`))
+          )
+        );
+        assert.strictEqual(
+          (yield* Ref.get(sources.raises)).get(`${CHILD} 1`)?.maxTokens,
+          450
+        );
+
+        const notices = yield* Ref.get(sources.notices);
+
+        assert.include(
+          notices.get(`${CHILD} budget-stopped-1`)?.text ?? "",
+          "stopped at 250 of 200 tokens"
+        );
+        assert.isTrue(
+          Result.isFailure(yield* Effect.result(budgets.admit(CHILD)))
+        );
+
+        // More spend at the same epoch asks nothing more.
+        yield* spend(2, CHILD, 10);
+        yield* Effect.sleep(Duration.millis(100));
+
+        assert.deepStrictEqual(
+          [...(yield* Ref.get(sources.raises)).keys()].toSorted(),
+          [`${CHILD} 0`, `${CHILD} 1`]
+        );
+        assert.strictEqual((yield* Ref.get(guard.pushes)).length, 2);
+      }).pipe(Effect.provide(GuardWorld))
+  );
+
+  it.live(
+    "acts on a scope declared past its line, through the guard or on the next evaluation",
+    () =>
+      Effect.gen(function* () {
+        yield* withThreads([
+          [2, 1],
+          [3, 1],
+        ]);
+        yield* spend(2, CHILD, 150);
+        yield* spend(3, GRANDCHILD, 150);
+
+        const budgets = yield* Budgets;
+        const guard = yield* GuardScript;
+        const sources = yield* SourcesScript;
+
+        // Through the guard: acted on at once.
+        yield* (yield* BudgetGuard).declare(CHILD, tokenBudget(100), "stop");
+
+        assert.isTrue(
+          (yield* Ref.get(sources.notices)).has(`${CHILD} budget-stopped-0`)
+        );
+        assert.deepStrictEqual(
+          (yield* Ref.get(guard.stops)).map((stop) => stop.threadId),
+          [CHILD]
+        );
+
+        // Straight on `Budgets`, its transitions dropped: the next evaluation acts.
+        yield* budgets.declare(GRANDCHILD, tokenBudget(100), "drain");
+
+        assert.isFalse(
+          (yield* Ref.get(sources.notices)).has(
+            `${GRANDCHILD} budget-stopped-0`
+          )
+        );
+
+        yield* spend(3, GRANDCHILD, 1);
+
+        assert.isTrue(
+          yield* eventually(
+            Effect.map(Ref.get(sources.notices), (map) =>
+              map.has(`${GRANDCHILD} budget-stopped-0`)
+            )
+          )
         );
       }).pipe(Effect.provide(GuardWorld))
   );

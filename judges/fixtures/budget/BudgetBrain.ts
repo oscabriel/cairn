@@ -9,8 +9,10 @@
 //
 //   node judges/fixtures/budget/BudgetBrain.ts --dir <run> [--final] [--control no-stop|no-boot]
 //
-// Each life: the ledger's reconcile, the budget guard's boot repair (halt a stopped scope before the
-// Harness resumes; `--control no-boot` skips it), the declared budget, then the Harness resumes
+// Each life boots in the order the brain's boot repairs must: the ledger's reconcile, the budget
+// guard's boot repair (halt a stopped scope before anything can start scheduling; under `--control
+// no-boot` earlier lives only read the book and the last life has no repair), then the repairs that retry parked tasks (pi-durable's `retryTask` resumes
+// scheduling), the budget declared in the first life only, then the Harness resumes
 // and every child's input is submitted (request id `work-<n>`, so a killed life's input lands
 // once). A life that boots with the scope past its line prints `exhausted` before the Harness
 // resumes. The guard's first stop prints `stopping`; each later stop in that pass waits
@@ -59,6 +61,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { retryParkedApprovalWaits } from "../../../apps/server/src/Boot.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import { BudgetGate } from "../../../apps/server/src/brain/BudgetGateExtension.ts";
@@ -92,6 +95,7 @@ import {
   testThreadId,
 } from "../../../apps/server/src/shell/ShellTestKit.ts";
 import { ThreadRows } from "../../../apps/server/src/shell/ThreadRows.ts";
+import { retryParkedSubagentTasks } from "../../../apps/server/src/subagents/SubagentRepairs.ts";
 import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
 import { BudgetBook } from "../../../apps/server/src/usage/BudgetBook.ts";
 import { BudgetGuard } from "../../../apps/server/src/usage/BudgetGuard.ts";
@@ -519,15 +523,30 @@ const program = Effect.gen(function* () {
   yield* ensureThreads;
   yield* ledger.reconcile;
 
-  if (!noBoot) {
+  if (noBoot) {
+    // The control: the last life boots with no budget repair at all, so its book is empty (only the
+    // repair reads it), as a brain whose boot repairs left it out would. Earlier lives read the book
+    // without halting, so the line is crossed and the stop pass starts.
+    if (!values.final) {
+      yield* budgets.load;
+    }
+  } else {
     yield* (yield* BudgetGuard).boot;
   }
 
-  yield* budgets.declare(
-    SCOPE,
-    budgetOf(Number(values["budget-children"])),
-    "stop"
-  );
+  // After the budget repair, as in the brain's boot: these may resume scheduling.
+  yield* retryParkedApprovalWaits.repair;
+  yield* retryParkedSubagentTasks.pipe(Effect.orDie);
+
+  // Declared once, in the first life; later lives read it from the documents through the guard's
+  // boot repair, as the brain does, so a brain without the repair has an empty book after a restart.
+  if (Option.isNone(yield* (yield* BudgetSources).scopeOf(SCOPE))) {
+    yield* budgets.declare(
+      SCOPE,
+      budgetOf(Number(values["budget-children"])),
+      "stop"
+    );
+  }
 
   const atBoot = yield* responseCounts;
 

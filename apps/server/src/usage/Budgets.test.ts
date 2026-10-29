@@ -111,16 +111,29 @@ describe("where a scope stands", () => {
     );
   });
 
-  it("raises the reached limit only, doubled", () => {
+  it("raises the reached limit only, doubled when that clears the spend", () => {
     const budget: Budget = {
       ...tokenBudget(1000),
       maxListMicros: Micros.make(50_000),
     };
 
-    const raised = raisedBudget(budget, Option.some("tokens"));
+    const raised = raisedBudget(budget, {
+      reached: Option.some("tokens"),
+      spent: spent(1000, 20_000),
+    });
 
     assert.strictEqual(raised.maxTokens, 2000);
     assert.strictEqual(raised.maxListMicros, 50_000);
+  });
+
+  it("raises past what was already spent, by one more of the old line", () => {
+    const raised = raisedBudget(tokenBudget(1000), {
+      reached: Option.some("tokens"),
+      spent: spent(2500),
+    });
+
+    assert.strictEqual(raised.maxTokens, 3500);
+    assert.strictEqual(standingOf(raised, spent(2500)).state, "within");
   });
 
   it("formats figures as people read them", () => {

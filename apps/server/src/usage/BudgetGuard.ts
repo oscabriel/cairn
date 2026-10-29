@@ -6,32 +6,58 @@
 // - At the line: in `stop` mode every thread of the scope's subtree is stopped, queue cleared (its
 //   children are in the subtree, so each is stopped by itself); in `drain` mode nothing running is
 //   touched, and the gate and `Budgets.admit` refuse new subagent work. Then a `budget_stopped`
-//   notice ("stopped at $X of $Y"), a pending `budget_raise` approval proposing the reached limits
-//   doubled, and a push. The row's `budget` word follows through the ledger.
+//   notice ("stopped at $X of $Y"), a pending `budget_raise` approval proposing each reached limit
+//   raised to the larger of double the line and what was spent plus one more line, and a push. The row's `budget` word follows through the ledger.
 // - A raise answered (`budget-raise-*` settled) re-reads that scope from its documents; accepted,
-//   the scope stands below its line again and its children can be sent work again.
+//   the scope stands below its line again and its children can be sent work again. A raise accepted
+//   that leaves the scope at its line (more was spent than it added) is a new epoch at the line, so
+//   the guard acts again: a new notice and a new raise.
 // - A child that starts (`SubagentUpdated` working) is read as a scope of its own (its brief's).
 //
-// Each notice is written once under a request id keyed by the scope's epoch (its count of accepted
-// raises), and the push goes out only when this guard wrote the notice: a crash between the two
-// loses the push, never doubles it. Stops are idempotent.
+// The guard acts on a scope at its line once per epoch (its count of accepted raises), and records
+// the epoch in the book when it has; an evaluation that finds a scope at its line at an epoch not
+// acted on reports it again, so a declared scope or a failed step is acted on by the next one.
+// Each notice is written once under a request id keyed by the epoch, and the push goes out only
+// when this guard wrote the notice: a crash between the two loses the push, never doubles it. Stops
+// are idempotent.
 //
-// `boot` is the boot repair, run after the spend reconcile and before the Harness resumes: it
-// rebuilds the book from the documents and, for each scope at its line in `stop` mode, marks its
-// runs aborted and withdraws their queued inputs without starting scheduling, so a guard killed
-// while stopping does not let a stopped child run again after the restart.
+// The ledger's changes are coalesced: while the guard works, the threads of every change that
+// arrives are gathered, and the next pass evaluates them once, so a burst of responses costs one
+// lineage read and one roll-up per scope, and the guard never falls behind the line.
+//
+// `boot` is the boot repair, run after the spend reconcile and before any repair that can start
+// scheduling (pi-durable's `retryTask` resumes it: the parked approval waits and subagent tasks) and
+// before the Harness resumes: it rebuilds the book from the documents and, for each scope at its
+// line in `stop` mode, marks its runs aborted, withdraws their queued inputs and cancels the
+// approvals they held, without starting scheduling, so a guard killed while stopping does not let
+// a stopped child run again after the restart, and the gate has a full book from the first call.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
-import { Context, Effect, Layer, Option, Predicate, Stream } from "effect";
+import type { Budget } from "@cairn/protocol/Spend";
+import {
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Queue,
+  Stream,
+} from "effect";
 
 import { BudgetSources } from "../brain/BudgetSources.ts";
+import type { BudgetSourceError } from "../brain/BudgetSources.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { cutText, hasUnseenResult, Notifier } from "../push/Notifier.ts";
 import type { PushMessage } from "../push/Notifier.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { BudgetBook } from "./BudgetBook.ts";
-import type { Parents, ScopeLimit, ScopeStanding } from "./BudgetBook.ts";
+import type {
+  BudgetMode,
+  Parents,
+  ScopeLimit,
+  ScopeStanding,
+} from "./BudgetBook.ts";
 import {
   Budgets,
   limitText,
@@ -41,6 +67,7 @@ import {
 } from "./Budgets.ts";
 import type { Transition } from "./Budgets.ts";
 import { SpendLedger } from "./SpendLedger.ts";
+import type { SpendLedgerError } from "./SpendLedger.ts";
 
 /** The prefix of the request id a raise's approval carries. */
 const RAISE_PREFIX = "budget-raise-";
@@ -85,9 +112,30 @@ export const membersOf = (
 };
 
 /** What the guard does next for one event: evaluate threads, or re-read one scope. */
-type Work =
+export type Work =
   | { readonly kind: "evaluate"; readonly threads: ReadonlyArray<ThreadId> }
   | { readonly kind: "refresh"; readonly threadId: ThreadId };
+
+/**
+ * One pass over a batch of work: each scope to re-read once, then every thread to evaluate,
+ * together.
+ */
+export const coalesce = (batch: ReadonlyArray<Work>) => {
+  const refresh = new Set<ThreadId>();
+  const evaluate = new Set<ThreadId>();
+
+  for (const work of batch) {
+    if (work.kind === "refresh") {
+      refresh.add(work.threadId);
+    } else {
+      for (const threadId of work.threads) {
+        evaluate.add(threadId);
+      }
+    }
+  }
+
+  return { refresh: [...refresh], evaluate: [...evaluate] };
+};
 
 /** The work an event asks for, if any. */
 const workOf = (event: HarnessEvent): Option.Option<Work> => {
@@ -116,6 +164,15 @@ export class BudgetGuard extends Context.Service<
       transitions: ReadonlyArray<Transition>,
       live: boolean
     ): Effect.Effect<void>;
+    /**
+     * Gives `threadId`'s subtree a budget of its own (`Budgets.declare`, a goal's) and acts at once
+     * on where it stands: a scope declared already past its line is stopped and told so.
+     */
+    declare(
+      threadId: ThreadId,
+      budget: Budget,
+      mode: BudgetMode
+    ): Effect.Effect<void, BudgetSourceError | SpendLedgerError>;
   }
 >()("cairn/server/usage/BudgetGuard") {
   /**
@@ -243,7 +300,7 @@ export class BudgetGuard extends Context.Service<
 
         yield* notify(limit, "stopped", stoppedText(limit, standing));
 
-        const to = raisedBudget(limit.budget, standing.reached);
+        const to = raisedBudget(limit.budget, standing);
 
         const summary = `Raise the budget to ${limitText(
           to,
@@ -251,6 +308,9 @@ export class BudgetGuard extends Context.Service<
         )}?`;
 
         yield* sources.askRaise(limit, to, summary);
+
+        // Last, so a step that failed above is acted on again by the next evaluation.
+        yield* book.markActed(limit.threadId, limit.epoch);
       });
 
       const act = Effect.fn("BudgetGuard.act")(
@@ -277,14 +337,17 @@ export class BudgetGuard extends Context.Service<
         )
       );
 
-      const handle = (work: Work) =>
+      const pass = (batch: ReadonlyArray<Work>) =>
         Effect.gen(function* () {
-          const transitions =
-            work.kind === "evaluate"
-              ? yield* budgets.evaluate(work.threads)
-              : yield* budgets.refresh(work.threadId);
+          const { refresh, evaluate } = coalesce(batch);
 
-          yield* act(transitions, true);
+          for (const threadId of refresh) {
+            yield* act(yield* budgets.refresh(threadId), true);
+          }
+
+          if (evaluate.length > 0) {
+            yield* act(yield* budgets.evaluate(evaluate), true);
+          }
         }).pipe(
           Effect.catchTags({
             SpendLedgerError: (failure) =>
@@ -304,6 +367,9 @@ export class BudgetGuard extends Context.Service<
           })
         );
 
+      // The feed only gathers; the worker takes everything gathered at each pass (module header).
+      const work = yield* Queue.unbounded<Work>();
+
       yield* Stream.merge(
         ledger.changes.pipe(
           Stream.map((threads): Work => ({ kind: "evaluate", threads }))
@@ -311,9 +377,26 @@ export class BudgetGuard extends Context.Service<
         seam.events.pipe(
           Stream.map(workOf),
           Stream.filter(Option.isSome),
-          Stream.map((work) => work.value)
+          Stream.map((found) => found.value)
         )
-      ).pipe(Stream.runForEach(handle), Effect.forkScoped);
+      ).pipe(
+        Stream.runForEach((item) => Queue.offer(work, item)),
+        Effect.forkScoped
+      );
+
+      yield* Queue.takeAll(work).pipe(
+        Effect.flatMap(pass),
+        Effect.forever,
+        Effect.forkScoped
+      );
+
+      const declare = Effect.fn("BudgetGuard.declare")(function* (
+        threadId: ThreadId,
+        budget: Budget,
+        mode: BudgetMode
+      ) {
+        yield* act(yield* budgets.declare(threadId, budget, mode), true);
+      });
 
       const boot = Effect.gen(function* () {
         const transitions = yield* budgets.load;
@@ -339,10 +422,13 @@ export class BudgetGuard extends Context.Service<
         Effect.withSpan("BudgetGuard.boot")
       );
 
-      return BudgetGuard.of({ boot, act });
+      return BudgetGuard.of({ boot, act, declare });
     })
   );
 }
 
-/** The boot repair `BootRepairs.ts` lists after the spend reconcile. */
+/**
+ * The boot repair `BootRepairs.ts` lists right after the spend reconcile, both ahead of
+ * `cancel abandoned approvals` and every repair that retries parked tasks (module header).
+ */
 export const budgetBootRepair = BudgetGuard.use((guard) => guard.boot);

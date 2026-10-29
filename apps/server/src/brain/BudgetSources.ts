@@ -13,13 +13,16 @@
 // it, so a stop or the boot repair never cancels it; the user answers it like any approval.
 //
 // `notice` writes a display-only notice (`cairn.notice`) under a request id, once, in a host commit
-// that never starts a run: on an idle thread it lands at once, on a running one it is queued for the
-// next boundary (or placed by the stop), as notes are (`NoteAdmission.ts`). It answers whether
-// this call wrote it, so the guard pushes at most once per notice.
+// that never starts a run. Nothing the model reads changes, so it lands at once, mid-run too, as
+// pi-durable admits a display-only write; only behind a queued reset does it wait, admitted as a
+// note is (`NoteAdmission.ts`). It answers whether this call wrote it, so the guard pushes at most
+// once per notice.
 //
 // `halt` is the guard's boot half: before the Harness resumes, it marks the runs of a stopped
 // scope aborted and withdraws their queued inputs, neither of which starts scheduling, so a scope
-// stopped before a crash does not run again after it.
+// stopped before a crash does not run again after it. Then it cancels the approvals those runs
+// held (`cancelAbandonedApprovals`, as the live stop's `cancelHeld` does), so none stays pending
+// for a run that will never wait on it.
 
 import {
   ConversationId as StoredConversationId,
@@ -36,16 +39,22 @@ import type {
   Harness,
   JsonObject,
 } from "@earendil-works/pi-durable";
-import { defineDoc, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
+import { defineDoc, InboxDoc } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
 
-import { ChildDoc, isLinked, SubagentsDoc } from "../subagents/SubagentDocs.ts";
+import {
+  ChildDoc,
+  isJsonRecord,
+  isLinked,
+  SubagentsDoc,
+} from "../subagents/SubagentDocs.ts";
 import { hasLimits } from "../usage/BudgetBook.ts";
 import type { BudgetMode, ScopeLimit } from "../usage/BudgetBook.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
 import {
   Approvals,
+  cancelAbandonedApprovals,
   ThreadMeta,
   ThreadReceipt,
   UNDECIDED,
@@ -54,7 +63,7 @@ import type { ApprovalRecord, JsonRecord } from "./CairnDocs.ts";
 import { RUN_TASK } from "./CommitFeed.ts";
 import { durable } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
-import { placeQueuedWrites, readNote } from "./NoteAdmission.ts";
+import { applyNote, hasQueuedReset, readNote } from "./NoteAdmission.ts";
 import { piConversationId } from "./PiIds.ts";
 
 /** The tool name a raise record carries. */
@@ -76,7 +85,7 @@ export class BudgetSourceError extends Schema.TaggedError<BudgetSourceError>()(
   }
 ) {}
 
-/** A completed child and the role it was dispatched as, for estimates. */
+/** A completed child and the role name its dispatch resolved, for estimates. */
 export interface ChildSample {
   readonly role: string;
   readonly threadId: ThreadId;
@@ -455,12 +464,10 @@ export class BudgetSources extends Context.Service<
                 return false;
               }
 
-              const live = await tx.doc(LiveDoc, id);
               const inbox = await tx.doc(InboxDoc, id);
 
-              if (live.run === undefined) {
-                await placeQueuedWrites(tx, id, inbox, reads.head);
-
+              // Display-only: appended at once, mid-run too, as pi-durable admits one.
+              if (!hasQueuedReset(inbox)) {
                 const appended = await tx.appendEntry(id, draft);
 
                 await tx.createSubmission({
@@ -474,14 +481,7 @@ export class BudgetSources extends Context.Service<
                 return true;
               }
 
-              const queued = await tx.createSubmission({
-                conversationId: id,
-                requestId,
-                type: "write",
-                status: "queued",
-              });
-
-              inbox.items.push({ id: queued.id, mode: "write", entry: draft });
+              await applyNote(tx, id, requestId, reads, draft);
 
               return true;
             }, context)
@@ -500,15 +500,24 @@ export class BudgetSources extends Context.Service<
           );
 
           for (const item of Object.values(registry?.items ?? {})) {
-            const { spec } = item.dispatch;
+            const { resolved } = item.dispatch;
+            const role = isJsonRecord(resolved) ? resolved.role : null;
             const threadId = decodeThreadId(item.threadId);
+
+            // A child that failed or was stopped says nothing of what its role's work costs.
+            const completed =
+              item.settlements.length > 0 &&
+              item.settlements.every(
+                (settled) => settled.outcome === "completed"
+              );
 
             if (
               item.status === "settled" &&
-              Predicate.isString(spec) &&
+              completed &&
+              Predicate.isString(role) &&
               Option.isSome(threadId)
             ) {
-              found.push({ role: spec, threadId: threadId.value });
+              found.push({ role, threadId: threadId.value });
             }
           }
         }
@@ -574,6 +583,16 @@ export class BudgetSources extends Context.Service<
                 )
             ).pipe(Effect.mapError(failed("BudgetSources.halt")));
           }
+        }
+
+        // The approvals the aborted runs held: their tasks are under abort marks now.
+        for (const id of conversations) {
+          yield* cancelAbandonedApprovals(
+            open.harness,
+            piConversationId(StoredConversationId.make(id)),
+            brain.now(),
+            "boot"
+          ).pipe(Effect.mapError(failed("BudgetSources.halt")));
         }
 
         return marked;

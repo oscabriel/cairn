@@ -107,6 +107,22 @@ export const noteEntry = (note: NoteDraft) => ({
 export type NoteEntry = ReturnType<typeof noteEntry>;
 
 /**
+ * A display-only entry (a notice): kind and data, nothing the model reads. pi-durable appends one
+ * at once even mid-run (harness/inbox.js `isDisplayOnly`), unless a reset is queued.
+ */
+export interface DisplayEntry {
+  [key: string]: JsonValue;
+  kind: string;
+  data: JsonValue;
+}
+
+/** Whether a reset (a `head: "self"` write) is queued, as pi-durable's `hasQueuedReset` reads it. */
+export const hasQueuedReset = (inbox: InboxState): boolean =>
+  inbox.items.some(
+    (item) => item.mode === "write" && item.entry.head === "self"
+  );
+
+/**
  * The table reads one note's admission needs, read before the transaction's first table write
  * (pi-durable refuses a table read after one): the submission an earlier admission of the same
  * request id left, and the conversation's head marker.
@@ -137,7 +153,7 @@ export const applyNote = async (
   conversationId: ConversationId,
   requestId: string,
   reads: NoteReads,
-  draft: NoteEntry
+  draft: NoteEntry | DisplayEntry
 ): Promise<void> => {
   if (reads.existing !== undefined) {
     return;

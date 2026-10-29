@@ -105,12 +105,15 @@ export const lineOf = (
 interface BookState {
   readonly limits: ReadonlyMap<ThreadId, ScopeLimit>;
   readonly standings: ReadonlyMap<ThreadId, ScopeStanding>;
+  /** The epoch at which the guard last acted on each scope at its line. */
+  readonly acted: ReadonlyMap<ThreadId, number>;
   readonly parents: Parents;
 }
 
 const EMPTY: BookState = {
   limits: new Map(),
   standings: new Map(),
+  acted: new Map(),
   parents: new Map(),
 };
 
@@ -120,8 +123,16 @@ export class BudgetBook extends Context.Service<
   {
     /** Sets (or raises) a scope; its standing is kept until the next evaluation. */
     set(limit: ScopeLimit): Effect.Effect<void>;
-    /** Forgets a scope. */
+    /** Forgets a scope, with its standing and the epoch the guard acted on. */
     remove(threadId: ThreadId): Effect.Effect<void>;
+    /**
+     * Records that the guard acted on a scope at its line at `epoch` (stopped it, wrote its notice,
+     * asked its raise). An evaluation that finds the scope still at its line at a later epoch (a
+     * raise accepted that did not clear what was spent) reports it again, so the guard acts again.
+     */
+    markActed(threadId: ThreadId, epoch: number): Effect.Effect<void>;
+    /** The epoch the guard last acted on `threadId`'s scope at its line, if it has. */
+    actedOf(threadId: ThreadId): Effect.Effect<Option.Option<number>>;
     /** Every scope. */
     readonly limits: Effect.Effect<ReadonlyArray<ScopeLimit>>;
     /** The scope `threadId` heads, if any. */
@@ -162,11 +173,13 @@ export class BudgetBook extends Context.Service<
         yield* Ref.update(state, (current) => {
           const limits = new Map(current.limits);
           const standings = new Map(current.standings);
+          const acted = new Map(current.acted);
 
           limits.delete(threadId);
           standings.delete(threadId);
+          acted.delete(threadId);
 
-          return { ...current, limits, standings };
+          return { ...current, limits, standings, acted };
         });
       });
 
@@ -200,6 +213,15 @@ export class BudgetBook extends Context.Service<
       return BudgetBook.of({
         set,
         remove,
+        markActed: (threadId, epoch) =>
+          Ref.update(state, (current) => ({
+            ...current,
+            acted: new Map(current.acted).set(threadId, epoch),
+          })),
+        actedOf: (threadId) =>
+          Effect.map(Ref.get(state), (current) =>
+            Option.fromUndefinedOr(current.acted.get(threadId))
+          ),
         limits: Effect.map(Ref.get(state), (current) => [
           ...current.limits.values(),
         ]),

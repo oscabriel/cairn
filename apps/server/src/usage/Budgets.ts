@@ -10,11 +10,13 @@
 //   declared one, raised by each accepted `budget_raise` approval. `load` rebuilds the in-memory
 //   `BudgetBook` from them at boot; `refresh` re-reads one scope when a raise is answered.
 // - `evaluate` reads each covering scope's spend from the ledger (a roll-up over the lineage
-//   subtree) and returns the scopes whose state moved; the guard acts on those. Spend lands only
-//   when a response completes, so a scope passes its line by at most one response per running
-//   conversation before the gate and the guard stop it.
-// - An estimate is the median and 90th percentile of completed children's spend per role, and
-//   none below five samples: "no estimate yet" is never a made-up figure.
+//   subtree) and returns the scopes the guard must act on: those whose state moved, and those at
+//   their line at an epoch the guard has not acted on (a raise accepted that did not clear what was
+//   already spent). Spend lands only when a response completes, so a scope passes its line by at
+//   most one response per running conversation before the gate and the guard stop it.
+// - An estimate is the median and 90th percentile of the spend of completed children dispatched as
+//   one role (`resolved.role` of their dispatch record), and none below five samples: "no estimate
+//   yet" is never a made-up figure.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Micros, SpendScope } from "@cairn/protocol/Spend";
@@ -183,16 +185,27 @@ export const refusalText = (covering: Covering, delegating: boolean) => {
 
   return delegating || limit.mode === "drain"
     ? `Budget reached for thread ${limit.threadId} (${figure}), so no new subagent work starts. Finish with what you have, or ask the user to approve the raise.`
-    : `Budget reached for thread ${limit.threadId} (${figure}), so this work stops here. Reply in plain text with what you have; no more tool calls run.`;
+    : `Budget reached for thread ${limit.threadId} (${figure}), so this work stops here. Hand in what you have: call submit_result if you were asked for a typed result, otherwise reply in plain text. No other tool calls run.`;
 };
 
-/** The budget a raise proposes: every reached limit doubled (all of them when none is), the rest kept. */
+/**
+ * The line a raise proposes for one limit at `max` with `spent` already spent: double it, or, when
+ * the scope already spent past double (a drain scope's children finishing), what was spent plus one
+ * more of the old line, so an accepted raise always leaves room to work.
+ */
+const raisedLine = (max: number, spent: number) =>
+  Math.max(max * 2, spent + max);
+
+/**
+ * The budget a raise proposes: every reached limit raised (all of them when none is) by
+ * `raisedLine`, the rest kept.
+ */
 export const raisedBudget = (
   budget: Budget,
-  reached: Option.Option<BudgetLimit>
+  standing: Pick<ScopeStanding, "reached" | "spent">
 ): Budget => {
   const raises = (limit: BudgetLimit) =>
-    Option.match(reached, {
+    Option.match(standing.reached, {
       onNone: () => true,
       onSome: (which) => which === limit,
     });
@@ -202,11 +215,16 @@ export const raisedBudget = (
     maxListMicros:
       budget.maxListMicros === null || !raises("dollars")
         ? budget.maxListMicros
-        : Micros.make(Math.max(budget.maxListMicros * 2, 10_000)),
+        : Micros.make(
+            Math.max(
+              raisedLine(budget.maxListMicros, standing.spent.listMicros),
+              10_000
+            )
+          ),
     maxTokens:
       budget.maxTokens === null || !raises("tokens")
         ? budget.maxTokens
-        : budget.maxTokens * 2,
+        : raisedLine(budget.maxTokens, standing.spent.tokens),
   };
 };
 
@@ -254,7 +272,10 @@ export const estimateOf = (
   });
 };
 
-/** One scope whose state moved in an evaluation. */
+/**
+ * One scope the guard must act on: its state moved, or it stands at its line at an epoch the guard
+ * has not acted on.
+ */
 export interface Transition {
   readonly limit: ScopeLimit;
   readonly before: ScopeStanding;
@@ -313,7 +334,11 @@ export class Budgets extends Context.Service<
       ReadonlyArray<Transition>,
       BudgetSourceError | SpendLedgerError
     >;
-    /** Gives `threadId`'s subtree a budget of its own (a goal), kept in the thread's documents. */
+    /**
+     * Gives `threadId`'s subtree a budget of its own (a goal), kept in the thread's documents.
+     * Returns the transitions for the guard to act on: callers use `BudgetGuard.declare`, which
+     * does. Transitions nobody acted on are reported again by the next evaluation.
+     */
     declare(
       threadId: ThreadId,
       budget: Budget,
@@ -322,13 +347,15 @@ export class Budgets extends Context.Service<
       ReadonlyArray<Transition>,
       BudgetSourceError | SpendLedgerError
     >;
-    /** Evaluates every scope covering these threads; returns the ones whose state moved. */
+    /** Evaluates every scope covering these threads; returns the ones the guard must act on. */
     evaluate(
       threads: ReadonlyArray<ThreadId>
     ): Effect.Effect<ReadonlyArray<Transition>, SpendLedgerError>;
     /**
      * Refuses new work under `threadId` (a spawn from it, a send to it) when a scope covering it is
-     * at its line. Creates nothing either way, so a rerun asks again.
+     * at its line. Creates nothing either way, so a rerun asks again. The gate refuses the
+     * delegating tool calls; a brief approved after its scope reached the line is refused here, by
+     * the brief task's Go path before the commit that creates the child.
      */
     admit(threadId: ThreadId): Effect.Effect<void, BudgetExhausted>;
     /**
@@ -340,7 +367,7 @@ export class Budgets extends Context.Service<
       tool: string,
       target: Option.Option<ThreadId>
     ): Effect.Effect<Option.Option<string>>;
-    /** A role's estimate from its completed children; none below five. */
+    /** A role's estimate from its completed children (by role name); none below five. */
     estimate(
       role: string
     ): Effect.Effect<
@@ -383,7 +410,13 @@ export class Budgets extends Context.Service<
 
           const before = yield* book.stand(limit.threadId, after);
 
-          if (before.state !== after.state) {
+          // At the line at an epoch not acted on: a raise accepted that did not clear the spend, or
+          // a declared scope whose first transitions nobody acted on.
+          const unacted =
+            after.state === "exhausted" &&
+            !Option.contains(yield* book.actedOf(limit.threadId), limit.epoch);
+
+          if (before.state !== after.state || unacted) {
             moved.push({ limit, before, after });
           }
         }

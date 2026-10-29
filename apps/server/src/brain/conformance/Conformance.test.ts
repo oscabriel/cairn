@@ -94,9 +94,6 @@ const options = {
   mutations: new Set<Mutation>(),
 };
 
-/** The timeout a pending scenario runs at: it is expected to fail, so it need not wait long. */
-const PENDING_TIMEOUT = Duration.millis(1500);
-
 registerHarnessConformance(
   runner,
   "pi-durable harness",
@@ -121,10 +118,8 @@ describe.each(SIDES)("%s harness, pending scenarios", (side) => {
         const outcomes = yield* Effect.forEach(
           pendingOn(side),
           (scenario) =>
-            runScenario(scenario, TARGETS[side], {
-              ...options,
-              timeout: PENDING_TIMEOUT,
-            }),
+            // At the suite's own timeout, so a scenario that passes there is not counted failing.
+            runScenario(scenario, TARGETS[side], options),
           { concurrency: 6 }
         );
 

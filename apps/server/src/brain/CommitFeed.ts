@@ -14,6 +14,10 @@
 // - `cairn.approvals` changes: RuntimeRequestUpdated for each record whose status changed.
 // - `pi.usage` changes: UsageUpdated with the conversation's token totals.
 // - `cairn.subagents` changes: SubagentUpdated for each child whose status changed (ADR 0028).
+//   The last statuses live in memory only, so after a restart the first change to a parent's
+//   registry emits one for every child in it, changed or not: a consumer treats SubagentUpdated
+//   as idempotent (it sets a status, never counts transitions). Seeding the map from the document
+//   would read the state after the commit and hide the change it carries.
 //
 // Conversations that are not threads produce no events; a subagent is a thread, so it does. The listener is attached
 // through `Brain.subscribeCommits` while this layer builds, so before boot resumes the Harness, and

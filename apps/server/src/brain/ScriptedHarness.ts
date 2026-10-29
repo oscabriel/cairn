@@ -13,7 +13,7 @@
 // - A failed answer ends the run as failed and leaves the queue for the next input.
 // - A request id is admitted once per thread. Tools run in call order; a tool may ask for approval.
 // - A note (a write the model reads) is placed at once on an idle thread and at the next boundary
-//   of a running one, ahead of queued inputs; a stop places it too.
+//   of a running one, ahead of queued inputs; a run that ends by a stop or a failure places it too.
 // - State lives in `ScriptedStore`, which outlives a harness instance: a new instance over the same
 //   store is a restart, and resumes an interrupted run by asking the model again.
 // - `whenEnsured` subscribes to the events before it looks in the store, so an ensure that lands in
@@ -157,6 +157,7 @@ import {
   renderWake,
   SPAWN_WAITING,
   SubagentRequestIds,
+  SubagentToolText,
 } from "./SubagentText.ts";
 import { entryImages, projectEntry, wireProjector } from "./ThreadWire.ts";
 
@@ -913,7 +914,9 @@ const said = (text: string): ToolOutcome => ({
 /** A refusal naming a subagent this thread does not own. */
 const notYours = (call: ToolCall) =>
   refused(
-    `No subagent ${Option.getOrElse(textArgument(call, "subagent"), () => "(none)")} belongs to this thread. Check the thread id with subagent_status.`
+    SubagentToolText.notYours(
+      Option.getOrElse(textArgument(call, "subagent"), () => "(none)")
+    )
   );
 
 /**
@@ -935,11 +938,18 @@ const statusTool = (thread: ScriptedThread, call: ToolCall) =>
       );
 
       return [
-        `${item.threadId} "${item.description}": ${item.status}${asking ? ", a question is waiting" : ""}`,
+        SubagentToolText.statusLine(
+          item.threadId,
+          item.description,
+          item.status,
+          asking
+        ),
       ];
     });
 
-    return lines.length === 0 ? said("No subagents.") : said(lines.join("\n"));
+    return lines.length === 0
+      ? said(SubagentToolText.noSubagents)
+      : said(lines.join("\n"));
   });
 
 /** Starts a run's fiber and a reporter's fiber; filled in once the harness defines both. */
@@ -2226,14 +2236,18 @@ const layerNoDeps = Layer.effectContext(
             return said(SPAWN_WAITING);
           }
 
-          const live = [...thread.subagents.values()].filter(
-            (item) => item.status !== "settled"
+          // Briefs still waiting for Go count too: Go starts each without asking again.
+          const proposed = [...thread.approvals.values()].filter(
+            (record) => record.kind === "brief" && record.status === "pending"
           ).length;
 
+          const live =
+            [...thread.subagents.values()].filter(
+              (item) => item.status !== "settled"
+            ).length + proposed;
+
           if (live >= MAX_LIVE_CHILDREN) {
-            return refused(
-              `This thread already has ${live} subagents working, the most it may have. Wait for one to report, then spawn again.`
-            );
+            return refused(SubagentToolText.capReached(live));
           }
 
           const brief = briefOf(
@@ -2326,18 +2340,16 @@ const layerNoDeps = Layer.effectContext(
             ) ?? questions.at(Option.isSome(request) ? 0 : -1);
 
           if (record === undefined) {
-            return refused(
-              `Subagent ${child.threadId} has no question waiting for its parent. Its approvals are the user's to answer.`
-            );
+            return refused(SubagentToolText.noQuestionWaiting(child.threadId));
           }
 
           if (record.status !== "pending") {
-            return said("already_settled");
+            return said(SubagentToolText.replyAlreadySettled);
           }
 
           if (record.escalatedAt !== null) {
             return refused(
-              `The question ${record.id} from subagent ${child.threadId} was escalated to the user, whose answer settles it.`
+              SubagentToolText.replyAfterEscalation(record.id, child.threadId)
             );
           }
 
@@ -2348,12 +2360,12 @@ const layerNoDeps = Layer.effectContext(
               thread,
               child,
               record.id,
-              `The parent escalated: ${escalation.value}`,
+              SubagentToolText.parentEscalated(escalation.value),
               at,
               changes
             );
 
-            return said("escalated");
+            return said(SubagentToolText.replyEscalated);
           }
 
           const outcome = answerRecord(
@@ -2381,7 +2393,11 @@ const layerNoDeps = Layer.effectContext(
             changes
           );
 
-          return said(outcome === "answered" ? "settled" : "already_settled");
+          return said(
+            outcome === "answered"
+              ? SubagentToolText.replySettled
+              : SubagentToolText.replyAlreadySettled
+          );
         })
       );
 
@@ -2422,7 +2438,7 @@ const layerNoDeps = Layer.effectContext(
             );
           }
 
-          return said(`Sent to subagent ${child.threadId}.`);
+          return said(SubagentToolText.sent(child.threadId));
         })
       );
 
@@ -2500,10 +2516,10 @@ const layerNoDeps = Layer.effectContext(
         const settled = yield* settledRecord(thread, approvalId);
 
         return Option.match(settled, {
-          onNone: () => refused("The question was cancelled."),
+          onNone: () => refused(SubagentToolText.questionCancelled),
           onSome: (record) => {
             if (record.status !== "accepted") {
-              return refused(`The question was ${record.status}.`);
+              return refused(SubagentToolText.questionEnded(record.status));
             }
 
             const custom = Option.fromNullOr(
@@ -2528,16 +2544,14 @@ const layerNoDeps = Layer.effectContext(
           const run = Option.getOrUndefined(thread.run);
 
           if (link === undefined || run === undefined) {
-            return refused(
-              "report is for a subagent's run. Answer in plain text instead."
-            );
+            return refused(SubagentToolText.reportOutsideSubagent);
           }
 
           if (
             Option.exists(link.report, (found) => found.runId === run.runId)
           ) {
             return {
-              text: "Already reported.",
+              text: SubagentToolText.alreadyReported,
               isError: false,
               terminate: true,
             };
@@ -2567,14 +2581,22 @@ const layerNoDeps = Layer.effectContext(
               });
 
               return {
-                text: `The payload does not match the result schema, and that was the last attempt (${attempt} of ${REPORT_ATTEMPTS}): ${problem.value}`,
+                text: SubagentToolText.reportLastAttempt(
+                  attempt,
+                  REPORT_ATTEMPTS,
+                  problem.value
+                ),
                 isError: true,
                 terminate: true,
               };
             }
 
             return refused(
-              `The payload does not match the result schema (attempt ${attempt} of ${REPORT_ATTEMPTS}): ${problem.value} Fix the payload and call report again.`
+              SubagentToolText.reportRetry(
+                attempt,
+                REPORT_ATTEMPTS,
+                problem.value
+              )
             );
           }
 
@@ -2589,7 +2611,11 @@ const layerNoDeps = Layer.effectContext(
             commit: textArgument(call, "commit"),
           });
 
-          return { text: "Reported.", isError: false, terminate: true };
+          return {
+            text: SubagentToolText.reported,
+            isError: false,
+            terminate: true,
+          };
         })
       );
 
@@ -2691,9 +2717,7 @@ const layerNoDeps = Layer.effectContext(
           )
         );
 
-        return said(
-          `Stopped subagent ${child.threadId}. Uncommitted paths: none.`
-        );
+        return said(SubagentToolText.stopped(child.threadId));
       });
 
     /** The parent's five subagent tools by name (subagents note, section 2). */

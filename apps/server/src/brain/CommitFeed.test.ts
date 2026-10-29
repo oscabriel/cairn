@@ -2,7 +2,8 @@
 // parent on its ThreadEnsured (from `cairn.child`, written in the creating commit) and turns each
 // status change in a parent's `cairn.subagents` into one SubagentUpdated, and a note written with
 // `model` content reaches the next model request while a display-only write does not. The
-// documents are committed here by hand, as the subagents extension will commit them.
+// documents are committed here by hand, as the subagents extension will commit them. A note left
+// queued by a stopped or failed run is placed when that run ends, ahead of any later note.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +15,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { Message } from "@earendil-works/pi-ai";
-import { defineDoc } from "@earendil-works/pi-durable";
+import { defineDoc, InboxDoc } from "@earendil-works/pi-durable";
 import type { Tx } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -181,6 +182,57 @@ const commit = (brain: Brain["Service"], change: (tx: Tx) => Promise<void>) =>
       await harness.commit(change, BACKGROUND_CONTEXT);
     });
   });
+
+/** The `data.seq` of every subagent result note in the parent's transcript, in entry order. */
+const noteSeqs = (
+  brain: Brain["Service"],
+  conversationId: Fixture["parentConversation"]
+) =>
+  Effect.gen(function* () {
+    const { harness } = yield* Effect.orDie(brain.session);
+
+    return yield* Effect.promise(
+      async () =>
+        await harness.commit(async (tx) => {
+          const page = await tx.scanEntries(
+            { conversationId, order: "ascending" },
+            100
+          );
+
+          return page.items.flatMap((entry) =>
+            entry.kind === "cairn.subagent-result" &&
+            Predicate.isObject(entry.data) &&
+            "seq" in entry.data
+              ? [entry.data.seq]
+              : []
+          );
+        }, BACKGROUND_CONTEXT)
+    );
+  });
+
+/** The number of inputs queued in the parent's `pi.inbox`. */
+const queuedInputCount = (
+  brain: Brain["Service"],
+  conversationId: Fixture["parentConversation"]
+) =>
+  Effect.gen(function* () {
+    const { harness } = yield* Effect.orDie(brain.session);
+
+    const inbox = yield* Effect.promise(
+      async () =>
+        await harness.snapshot(InboxDoc, conversationId, BACKGROUND_CONTEXT)
+    );
+
+    return (inbox?.items ?? []).filter((item) => item.mode !== "write").length;
+  });
+
+/** A subagent result note with sequence number `seq`. */
+const resultNote = (seq: number) => ({
+  requestId: `subagent-note-x-${seq}`,
+  kind: "cairn.subagent-result",
+  data: { seq },
+  model: [{ type: "text" as const, text: `NOTE ${seq}` }],
+});
 
 /** Waits until `count` reaches `least`. */
 const atLeast = (count: Effect.Effect<number>, least: number) =>
@@ -506,6 +558,132 @@ describe("CommitFeed subagent events", () => {
             "NOTE child done",
             "two",
           ]);
+        })
+      ),
+    30_000
+  );
+  it.live(
+    "a note queued during a run that is stopped is placed by the stop, ahead of a later note, its follow-up still queued",
+    () =>
+      withBrain(({ seam, brain, faux, events, parentConversation }) =>
+        Effect.gen(function* () {
+          const run = Effect.runPromiseWith(yield* Effect.context());
+
+          // The only request hangs until the stop aborts it.
+          faux.setResponses([
+            async (_request, options) =>
+              await run(
+                Effect.as(
+                  Effect.callback<boolean>((resume) => {
+                    options?.signal?.addEventListener(
+                      "abort",
+                      () => {
+                        resume(Effect.succeed(true));
+                      },
+                      { once: true }
+                    );
+                  }),
+                  fauxAssistantMessage("stopped")
+                )
+              ),
+          ]);
+
+          const count = (tag: "RunStarted" | "RunTerminal") =>
+            Effect.map(
+              Ref.get(events),
+              (all) =>
+                all.filter(
+                  (event) =>
+                    Predicate.isTagged(event, tag) && event.threadId === PARENT
+                ).length
+            );
+
+          yield* seam.submit(PARENT, input("r1", "one"));
+          yield* atLeast(count("RunStarted"), 1);
+          yield* seam.submit(PARENT, input("r2", "two"));
+          yield* seam.write(PARENT, resultNote(1));
+
+          assert.deepStrictEqual(
+            yield* noteSeqs(brain, parentConversation),
+            []
+          );
+
+          yield* seam.stop(PARENT, { clearQueue: false, subagents: "keep" });
+          yield* atLeast(count("RunTerminal"), 1);
+
+          assert.deepStrictEqual(
+            yield* noteSeqs(brain, parentConversation),
+            [1]
+          );
+
+          yield* seam.write(PARENT, resultNote(2));
+          yield* Effect.sleep(Duration.millis(300));
+
+          assert.deepStrictEqual(
+            yield* noteSeqs(brain, parentConversation),
+            [1, 2]
+          );
+          assert.strictEqual(
+            yield* queuedInputCount(brain, parentConversation),
+            1
+          );
+          assert.strictEqual(yield* count("RunStarted"), 1);
+        })
+      ),
+    30_000
+  );
+  it.live(
+    "a note queued during a run that fails is placed once the run ends, its follow-up still queued",
+    () =>
+      withBrain(({ seam, brain, faux, events, parentConversation }) =>
+        Effect.gen(function* () {
+          const release = yield* Deferred.make<boolean>();
+          const run = Effect.runPromiseWith(yield* Effect.context());
+
+          faux.setResponses([
+            async () =>
+              await run(
+                Effect.as(
+                  Deferred.await(release),
+                  fauxAssistantMessage("", {
+                    stopReason: "error",
+                    errorMessage: "400 bad request",
+                  })
+                )
+              ),
+          ]);
+
+          const failed = Effect.map(
+            Ref.get(events),
+            (all) =>
+              all.filter(
+                (event) =>
+                  Predicate.isTagged(event, "RunTerminal") &&
+                  event.threadId === PARENT &&
+                  event.status === "failed"
+              ).length
+          );
+
+          yield* seam.submit(PARENT, input("r1", "one"));
+          yield* seam.submit(PARENT, input("r2", "two"));
+          yield* seam.write(PARENT, resultNote(1));
+          yield* Deferred.succeed(release, true);
+          yield* atLeast(failed, 1);
+
+          yield* waitFor(
+            Effect.map(noteSeqs(brain, parentConversation), (seqs) =>
+              seqs.length > 0 ? Option.some(seqs) : Option.none()
+            )
+          );
+
+          assert.deepStrictEqual(
+            yield* noteSeqs(brain, parentConversation),
+            [1]
+          );
+          assert.strictEqual(
+            yield* queuedInputCount(brain, parentConversation),
+            1
+          );
         })
       ),
     30_000

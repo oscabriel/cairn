@@ -6,6 +6,10 @@
 // - stop keeps the queue (`abortTask` on the run task); `clearQueue` aborts the conversation, which
 //   also withdraws queued inputs (plan D16). A run that handed over to its next generation between
 //   the read and the abort (a tool round ended) is followed to the successor, a few times at most.
+// - Notes: a note written during a run waits in `pi.inbox` for its boundary. pi-durable's abort and
+//   a failed run keep queued writes there, so the stop, every RunTerminal that did not complete and
+//   the next note on an idle thread place them first, keeping notes in the order they were written
+//   (ADR 0028). Queued inputs stay queued, and nothing here starts a run.
 // - watch: a fresh projected snapshot, then ops; after a reopen of the Session the stream carries
 //   on with a new snapshot of the new Session, because a snapshot is legal at any point.
 // - whenEnsured: subscribes to this process's ensures, then reads the receipt, so an ensure that
@@ -35,9 +39,14 @@ import type {
   Conversation,
   ConversationId as PiConversationId,
   ConversationView as PiConversationView,
+  EntryDraft,
+  EntryId as PiEntryId,
+  InboxState,
   InputSubmissionDraft,
+  JsonObject,
   LiveState,
   TaskId as PiTaskId,
+  Tx,
 } from "@earendil-works/pi-durable";
 import {
   ConversationBusy,
@@ -51,9 +60,11 @@ import {
   Fiber,
   Layer,
   Option,
+  Predicate,
   PubSub,
   Queue,
   Ref,
+  Result,
   Schema,
   Stream,
 } from "effect";
@@ -160,6 +171,60 @@ const fromUnavailable =
 const fromWire =
   (threadId: Option.Option<ThreadId>) => (error: ThreadWireError) =>
     failure("internal", threadId, error.message);
+
+/**
+ * A queued write's entry: pi-durable admits it as an `EntryDraft` and stores it as plain JSON
+ * (harness/inbox.d.ts, `InboxItem`), so its kind is the one field to check.
+ */
+const isEntryDraft = (entry: JsonObject): entry is JsonObject & EntryDraft =>
+  Predicate.isString(entry.kind);
+
+/**
+ * Places every write still queued in an idle conversation's `pi.inbox`, in order, as the write half
+ * of pi-durable's boundary does (harness/inbox.js, `applyBoundary`): each is appended and its
+ * submission placed, and a head write that reaches before the active range settles `stale`. Queued
+ * inputs stay. `head` is the conversation's latest head marker, read before the commit's first table
+ * write. A stop, a failed run and pi-durable's abort keep writes queued, so a note written during
+ * a run that never reached its boundary is placed here (ADR 0028).
+ */
+const placeQueuedWrites = async (
+  tx: Tx,
+  conversationId: PiConversationId,
+  inbox: InboxState,
+  head: PiEntryId | undefined
+) => {
+  let active = head;
+  const placed: Array<number> = [];
+
+  for (const [index, item] of inbox.items.entries()) {
+    if (item.mode !== "write" || !isEntryDraft(item.entry)) {
+      continue;
+    }
+
+    placed.push(index);
+
+    const draft = item.entry;
+    const target = draft.head;
+
+    if (Predicate.isNumber(target) && active !== undefined && target < active) {
+      tx.settleSubmission(item.id, { status: "unanswered", reason: "stale" });
+      continue;
+    }
+
+    // oxlint-disable-next-line no-await-in-loop -- writes land in the order they were queued
+    const entry = await tx.appendEntry(conversationId, draft);
+
+    if (target !== undefined) {
+      active = target === "self" ? entry.id : target;
+    }
+
+    tx.placeSubmission(item.id, entry.id);
+  }
+
+  for (const index of placed.toReversed()) {
+    inbox.items.splice(index, 1);
+  }
+};
 
 /**
  * How many generations a stop follows when the run hands over between its read and its abort. A
@@ -603,6 +668,61 @@ const layerNoDeps = Layer.effect(
     );
 
     /**
+     * Places the notes a stopped or failed run left queued, in one host commit, if the thread is
+     * idle; a running thread places them at its next boundary. Never starts a run.
+     */
+    const placeLeftWrites = Effect.fn("PiDurableHarness.placeLeftWrites")(
+      function* (threadId: ThreadId) {
+        const session = yield* open(Option.some(threadId));
+        const conversationId = yield* conversationIdOf(session, threadId);
+
+        yield* call(Option.some(threadId), "place-writes", async (context) => {
+          await session.harness.commit(async (tx) => {
+            const marker = await tx.latestHeadMarker(conversationId);
+            const live = await tx.doc(LiveDoc, conversationId);
+            const inbox = await tx.doc(InboxDoc, conversationId);
+
+            if (
+              live.run === undefined &&
+              inbox.items.some((item) => item.mode === "write")
+            ) {
+              await placeQueuedWrites(tx, conversationId, inbox, marker?.head);
+            }
+          }, context);
+        });
+      }
+    );
+
+    /** `placeLeftWrites` after a stop or a failed run; a failure is logged, never raised. */
+    const placeAfterRun = Effect.fn("PiDurableHarness.placeAfterRun")(
+      function* (threadId: ThreadId) {
+        const placed = yield* Effect.result(placeLeftWrites(threadId));
+
+        if (Result.isFailure(placed)) {
+          yield* Effect.logWarning("queued notes stay queued").pipe(
+            Effect.annotateLogs({
+              event: "place_writes_failed",
+              threadId,
+              cause: placed.failure.message,
+            })
+          );
+        }
+      }
+    );
+
+    // A run that failed, or ended by a stop the stop itself did not see out (it outran the wait),
+    // leaves its queued notes in `pi.inbox`: place them once its RunTerminal commits.
+    yield* feed.events.pipe(
+      Stream.filter(
+        (event) =>
+          Predicate.isTagged(event, "RunTerminal") &&
+          event.status !== "completed"
+      ),
+      Stream.runForEach((event) => placeAfterRun(event.threadId)),
+      Effect.forkIn(layerScope)
+    );
+
+    /**
      * Stops a thread's run. The aborts and the cancellations run in the harness's own scope and the
      * caller only joins them: an abort mark is durable, so a caller that goes away (a client
      * disconnect interrupting the RPC) must not leave the records its run held pending. A crash in
@@ -622,7 +742,11 @@ const layerNoDeps = Layer.effect(
         threadId,
         conversation,
         options
-      ).pipe(Effect.forkIn(layerScope));
+      ).pipe(
+        // The notes the stopped run left queued enter the transcript now (ADR 0028).
+        Effect.andThen(placeAfterRun(threadId)),
+        Effect.forkIn(layerScope)
+      );
 
       return yield* Fiber.join(stopping);
     });
@@ -714,9 +838,10 @@ const layerNoDeps = Layer.effect(
      * commit, because pi-durable's admission treats a model write on an idle conversation with
      * queued inputs as a boundary: it would place them and start a run (a parent the user stopped
      * with a follow-up or a wake still queued would restart on a child's note, against ADR 0028).
-     * So an idle conversation appends the note at once and leaves its queue alone; a running one,
-     * or one with a reset queued, queues the note for the next boundary, where writes go ahead of
-     * inputs and `abort` keeps them. The request id makes it land once, as `submit`'s does.
+     * So on an idle conversation it first places the writes a stopped or failed run left queued,
+     * then appends the note, and leaves queued inputs alone; a running one queues the note for the
+     * next boundary, where writes go ahead of inputs. The request id makes it land once, as
+     * `submit`'s does.
      */
     const write = Effect.fn("PiDurableHarness.write")(function* (
       threadId: ThreadId,
@@ -769,14 +894,13 @@ const layerNoDeps = Layer.effect(
             return;
           }
 
+          const marker = await tx.latestHeadMarker(conversationId);
           const live = await tx.doc(LiveDoc, conversationId);
           const inbox = await tx.doc(InboxDoc, conversationId);
 
-          const resetQueued = inbox.items.some(
-            (item) => item.mode === "write" && item.entry.head === "self"
-          );
+          if (live.run === undefined) {
+            await placeQueuedWrites(tx, conversationId, inbox, marker?.head);
 
-          if (live.run === undefined && !resetQueued) {
             const appended = await tx.appendEntry(conversationId, draft);
 
             await tx.createSubmission({

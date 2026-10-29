@@ -1,7 +1,7 @@
-// Scene tests for the look catalogue: it opens in the look and theme its address names (graphite
-// in dark otherwise), its switches change both, it has a section for every primitive, its live
-// specimens work (a toggle chip, the field, the disclosures, and the sheet over the page through
-// @foldkit/ui's dialog), and every state has a name a judge can point at.
+// Scene tests for the look catalogue: it opens in the theme its address names (dark otherwise),
+// its switch changes it, it offers no look switch (one look, Stone revised), it has a section for
+// every primitive, its live specimens work (a toggle chip, the field, the disclosures, and the sheet
+// over the page through @foldkit/ui's dialog), and every state has a name a judge can point at.
 
 import { assert, describe, it } from "@effect/vitest";
 import * as Dialog from "@foldkit/ui/dialog";
@@ -33,33 +33,25 @@ const PRIMITIVES = [
 ];
 
 describe("the look catalogue", () => {
-  it("opens in the look and theme its address names, else graphite in dark", () => {
-    assert.include(initialOf("?look=stone&theme=light"), {
-      look: "stone",
-      theme: "light",
-    });
-    assert.include(initialOf(""), { look: "graphite", theme: "dark" });
-    assert.include(initialOf("?look=neon&theme=dim"), {
-      look: "graphite",
-      theme: "dark",
-    });
+  it("opens in the theme its address names, else dark", () => {
+    assert.include(initialOf("?theme=light"), { theme: "light" });
+    assert.include(initialOf(""), { theme: "dark" });
+    assert.include(initialOf("?theme=dim"), { theme: "dark" });
+    assert.notProperty(initialOf("?look=stone&theme=light"), "look");
   });
 
-  it("switches look and theme on the next root, and dark by the dark class", () => {
+  it("switches theme by the dark class, and has no look switch", () => {
     Scene.scene(
       { update, view },
       Scene.given(initialOf("")),
-      Scene.expect(Scene.selector('[data-ui="next"]')).toHaveAttr(
-        "data-look",
-        "graphite"
+      Scene.expect(Scene.selector('[data-ui="next"]')).not.toHaveAttr(
+        "data-look"
       ),
+      Scene.expect(
+        Scene.selector('[role="group"][aria-label="Look"]')
+      ).not.toExist(),
       Scene.expect(Scene.selector("[data-look-catalogue]")).toHaveClass("dark"),
-      Scene.click(Scene.testId("look-choose-ink")),
       Scene.click(Scene.testId("look-theme-light")),
-      Scene.expect(Scene.selector('[data-ui="next"]')).toHaveAttr(
-        "data-look",
-        "ink"
-      ),
       Scene.expect(Scene.selector('[data-ui="next"]')).toHaveAttr(
         "data-theme",
         "light"
@@ -67,11 +59,11 @@ describe("the look catalogue", () => {
       Scene.expect(Scene.selector("[data-look-catalogue]")).not.toHaveClass(
         "dark"
       ),
-      Scene.expect(Scene.testId("look-choose-ink")).toHaveAttr(
+      Scene.expect(Scene.testId("look-theme-light")).toHaveAttr(
         "aria-pressed",
         "true"
       ),
-      Scene.expect(Scene.testId("look-choose-graphite")).toHaveAttr(
+      Scene.expect(Scene.testId("look-theme-dark")).toHaveAttr(
         "aria-pressed",
         "false"
       ),

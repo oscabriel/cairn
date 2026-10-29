@@ -1,6 +1,6 @@
 // Contrast judge (plan look track L2, surfaces note "Tokens and where they live", ADR 0040): every
-// text and background pair `apps/web/src/next/tokens.css` names meets WCAG AA in both themes for
-// every candidate look, and the `next` views use no colour but the tokens.
+// text and background pair `apps/web/src/next/tokens.css` names meets WCAG AA in both themes of the
+// one look (Stone revised, plan look track L2b), and the `next` views use no colour but the tokens.
 //
 // The pairs come from the token names (the families tokens.css's header lists), so a token added
 // to a family joins its pairs without editing this file. Text is 4.5:1 (WCAG 1.4.3, AA for normal
@@ -22,7 +22,10 @@
 // `next/` outside tokens.css. The token forms `text-(--ink-2)` and `text-[color:var(--ink-2)]`
 // pass. Comments and tests are skipped.
 //
-// `CONTRAST_REPORT=1` prints each candidate's lowest text and non-text ratios.
+// The look candidates and their `data-look` switch are gone (L2b): a rule naming any selector but
+// the next frame's, `data-look` among them, fails the scope check.
+//
+// `CONTRAST_REPORT=1` prints each theme's lowest text and non-text ratios.
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -153,22 +156,15 @@ type Element = "html" | "root";
 
 const ELEMENTS: ReadonlyArray<Element> = ["html", "root"];
 
-/** What a selector applies to: a candidate (`default` when no `data-look`) and a theme. */
-interface Scope {
-  readonly look: string;
-  readonly theme: Theme;
-}
-
-/** A selector's scope and the elements it matches. */
+/** A selector's theme and the elements it matches. */
 interface Target {
-  readonly scope: Scope;
+  readonly theme: Theme;
   readonly elements: ReadonlyArray<Element>;
 }
 
-const SELECTOR =
-  /^(?:(?<dark>\.dark)(?<descendant>\s+)?)?\[data-ui="next"\](?:\[data-look="(?<look>[a-z-]+)"\])?$/u;
+const SELECTOR = /^(?:(?<dark>\.dark)(?<descendant>\s+)?)?\[data-ui="next"\]$/u;
 
-/** The scope a selector names and what it matches, or undefined when tokens.css should not hold it. */
+/** The theme a selector names and what it matches, or undefined when tokens.css should not hold it. */
 const targetOf = (selector: string): Target | undefined => {
   const match = SELECTOR.exec(selector);
 
@@ -176,15 +172,13 @@ const targetOf = (selector: string): Target | undefined => {
     return undefined;
   }
 
-  const look = match.groups?.look ?? "default";
-
   if (match.groups?.dark === undefined) {
-    return { scope: { look, theme: "light" }, elements: ELEMENTS };
+    return { theme: "light", elements: ELEMENTS };
   }
 
   // `.dark[data-ui]` is <html> itself; `.dark [data-ui]` is a descendant, so #root only.
   return {
-    scope: { look, theme: "dark" },
+    theme: "dark",
     elements: match.groups.descendant === undefined ? ["html"] : ["root"],
   };
 };
@@ -194,17 +188,16 @@ const targetOf = (selector: string): Target | undefined => {
 const COLOUR_TOKEN =
   /^--(?:surface-|ink-|stroke-|select-|tone-|accent-(?:fill|ink|text|wash)$|scrim$|shadow-color$)/u;
 
-/** The parsed file: candidates in source order, and the declarations each scope resolves to. */
+/** The parsed file: the declarations each theme resolves to. */
 interface Tokens {
-  readonly looks: ReadonlyArray<string>;
   readonly unscoped: ReadonlyArray<string>;
   readonly wrappedColours: ReadonlyArray<string>;
   readonly declared: (
-    scope: Scope,
+    theme: Theme,
     element?: Element
   ) => ReadonlyMap<string, string>;
   readonly resolved: (
-    scope: Scope,
+    theme: Theme,
     element?: Element
   ) => ReadonlyMap<string, string>;
 }
@@ -222,12 +215,6 @@ const readTokens = (text: string): Tokens => {
       })
     );
 
-  const looks = [
-    ...new Set(
-      scoped.map(({ scope }) => scope.look).filter((look) => look !== "default")
-    ),
-  ];
-
   const unscoped = rules.flatMap((rule) =>
     rule.selectors.filter((selector) => targetOf(selector) === undefined)
   );
@@ -240,48 +227,37 @@ const readTokens = (text: string): Tokens => {
         .filter((name) => COLOUR_TOKEN.test(name))
     );
 
-  // The declarations one exact scope's rules hold on one element, later rules winning.
+  // The declarations one theme's own rules hold on one element, later rules winning.
   const declared = (
-    scope: Scope,
+    theme: Theme,
     element: Element = "root"
   ): ReadonlyMap<string, string> =>
     new Map(
       scoped
         .filter(
-          (entry) =>
-            entry.scope.look === scope.look &&
-            entry.scope.theme === scope.theme &&
-            entry.elements.includes(element)
+          (entry) => entry.theme === theme && entry.elements.includes(element)
         )
         .flatMap(({ rule }) => rule.declarations)
     );
 
-  // The cascade for an element with `data-look` set to `scope.look`, by specificity: the default
-  // light rules (0,1,0), then the default dark and the look's light rules (0,2,0, in source order;
-  // every look block follows the default ones), then the look's dark rules (0,3,0). Both dark
-  // forms have the same specificity, so <html> and #root follow the same order.
+  // The cascade by specificity: the light rules (0,1,0), then, in dark, the dark rules (0,2,0).
+  // Both dark forms have the same specificity, so <html> and #root follow the same order.
   const resolved = (
-    scope: Scope,
+    theme: Theme,
     element: Element = "root"
   ): ReadonlyMap<string, string> => {
-    const layers: Array<Scope> = [{ look: "default", theme: "light" }];
+    const values = new Map(declared("light", element));
 
-    if (scope.theme === "dark") {
-      layers.push({ look: "default", theme: "dark" });
-    }
-
-    if (scope.look !== "default") {
-      layers.push({ look: scope.look, theme: "light" });
-
-      if (scope.theme === "dark") {
-        layers.push({ look: scope.look, theme: "dark" });
+    if (theme === "dark") {
+      for (const [name, value] of declared("dark", element)) {
+        values.set(name, value);
       }
     }
 
-    return new Map(layers.flatMap((layer) => [...declared(layer, element)]));
+    return values;
   };
 
-  return { looks, unscoped, wrappedColours, declared, resolved };
+  return { unscoped, wrappedColours, declared, resolved };
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -496,15 +472,15 @@ interface Judged extends Pair {
   readonly ratio: number;
 }
 
-/** Every pair of one candidate in one theme, with its ratio. */
-const judge = (tokens: Tokens, scope: Scope): ReadonlyArray<Judged> => {
-  const values = tokens.resolved(scope);
+/** Every pair of one theme, with its ratio. */
+const judge = (tokens: Tokens, theme: Theme): ReadonlyArray<Judged> => {
+  const values = tokens.resolved(theme);
 
   const colour = (name: string): Rgba => {
     const value = values.get(name);
 
     if (value === undefined) {
-      throw new Error(`${scope.look} ${scope.theme} has no ${name}`);
+      throw new Error(`${theme} has no ${name}`);
     }
 
     return evaluate(value, values);
@@ -531,12 +507,12 @@ const judge = (tokens: Tokens, scope: Scope): ReadonlyArray<Judged> => {
 };
 
 /** The pairs under their floor, as readable lines. */
-const failures = (tokens: Tokens, scope: Scope): ReadonlyArray<string> =>
-  judge(tokens, scope)
+const failures = (tokens: Tokens, theme: Theme): ReadonlyArray<string> =>
+  judge(tokens, theme)
     .filter((pair) => pair.ratio < pair.floor)
     .map(
       (pair) =>
-        `${scope.look} ${scope.theme}: ${pair.text} on ${pair.ground.join(" + ")} is ${pair.ratio.toFixed(2)}, under ${pair.floor}`
+        `${theme}: ${pair.text} on ${pair.ground.join(" + ")} is ${pair.ratio.toFixed(2)}, under ${pair.floor}`
     );
 
 const THEMES: ReadonlyArray<Theme> = ["light", "dark"];
@@ -562,6 +538,33 @@ const plant = (
 
   return `${text.slice(0, at)}${name}: ${value}${text.slice(end)}`;
 };
+
+const SCANNED = /\.(?:ts|css|html)$/u;
+
+const nextFiles = (directory: string): ReadonlyArray<string> =>
+  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(directory, entry.name);
+
+    if (entry.isDirectory()) {
+      return nextFiles(entryPath);
+    }
+
+    return SCANNED.test(entry.name) &&
+      !entry.name.endsWith(".test.ts") &&
+      entryPath !== tokensPath
+      ? [entryPath]
+      : [];
+  });
+
+/** The file's text without block, HTML and line comments. */
+const withoutComments = (text: string): string =>
+  text
+    .replaceAll(/\/\*[\s\S]*?\*\//gu, "")
+    .replaceAll(/<!--[\s\S]*?-->/gu, "")
+    .replaceAll(/(?<before>^|[^:"'`\\])\/\/.*$/gmu, "$<before>");
+
+/** A look switch: a `data-look` attribute or selector, or a view writing one. */
+const LOOK_SWITCH = /data-look(?![\w-])|DataAttribute\(\s*["']look["']/u;
 
 const tokensText = readFileSync(tokensPath, "utf-8");
 
@@ -602,79 +605,78 @@ describe("contrast of the next tokens", () => {
     assert.deepStrictEqual(tokens.wrappedColours, []);
   });
 
-  it("offers three candidates, each defining every colour name in both themes", () => {
-    assert.deepStrictEqual(tokens.looks, ["graphite", "ink", "stone"]);
+  it("defines every colour name in both themes, and offers no look switch", () => {
+    const light = colourNames(tokens.declared("light"));
 
-    const expected = colourNames(
-      tokens.declared({ look: "default", theme: "light" })
+    assert.isAbove(light.length, 30);
+    assert.deepStrictEqual(colourNames(tokens.declared("dark")), light);
+
+    // One look: no `data-look` in tokens.css or anywhere in next/ (the catalogue's
+    // `data-look-state` and `data-look-catalogue` name specimens, not a look).
+    const switches = [tokensPath, ...nextFiles(nextDirectory)].flatMap(
+      (file) =>
+        LOOK_SWITCH.test(withoutComments(readFileSync(file, "utf-8")))
+          ? [path.relative(root, file)]
+          : []
     );
 
-    assert.isAbove(expected.length, 30);
+    assert.deepStrictEqual(switches, []);
 
-    for (const look of tokens.looks) {
-      for (const theme of THEMES) {
-        assert.deepStrictEqual(
-          colourNames(tokens.declared({ look, theme })),
-          expected,
-          `${look} ${theme}`
-        );
-      }
-    }
+    // A candidate block put back is a rule outside the next frame's scopes.
+    const candidate = readTokens(
+      `${tokensText}\n[data-ui="next"][data-look="ink"] {\n  --ink-1: #000000;\n}\n`
+    );
+
+    assert.deepStrictEqual(candidate.unscoped, [
+      '[data-ui="next"][data-look="ink"]',
+    ]);
+    assert.isTrue(LOOK_SWITCH.test('h.DataAttribute("look", model.look)'));
+    assert.isTrue(LOOK_SWITCH.test('[data-look="stone"] .row'));
+    assert.isFalse(LOOK_SWITCH.test('h.DataAttribute("look-state", state)'));
   });
 
-  it("draws graphite when no candidate is set", () => {
+  it("resolves the same values on <html> and #root, in both themes", () => {
     for (const theme of THEMES) {
       assert.deepStrictEqual(
-        tokens.resolved({ look: "default", theme }),
-        tokens.resolved({ look: "graphite", theme })
+        tokens.resolved(theme, "html"),
+        tokens.resolved(theme, "root"),
+        theme
       );
-    }
-  });
-
-  it("resolves the same values on <html> and #root, in both themes, for every candidate", () => {
-    for (const look of ["default", ...tokens.looks]) {
-      for (const theme of THEMES) {
-        assert.deepStrictEqual(
-          tokens.resolved({ look, theme }, "html"),
-          tokens.resolved({ look, theme }, "root"),
-          `${look} ${theme}`
-        );
-      }
     }
 
     // A dark rule naming only the descendant form leaves <html> on the light values.
     const rootOnly = readTokens(
-      tokensText.replace('.dark[data-ui="next"][data-look="stone"],\n', "")
+      tokensText.replace('.dark[data-ui="next"],\n', "")
     );
 
     assert.notDeepEqual(
-      rootOnly.resolved({ look: "stone", theme: "dark" }, "html"),
-      rootOnly.resolved({ look: "stone", theme: "dark" }, "root")
+      rootOnly.resolved("dark", "html"),
+      rootOnly.resolved("dark", "root")
     );
   });
 
-  it("meets AA for every named pair, in both themes, for every candidate", () => {
+  it("meets AA for every named pair, in both themes", () => {
     const report: Array<string> = [];
 
-    const found = tokens.looks.flatMap((look) =>
-      THEMES.flatMap((theme) => {
-        const judged = judge(tokens, { look, theme });
+    const found = THEMES.flatMap((theme) => {
+      const judged = judge(tokens, theme);
 
-        const lowest = (floor: number): Judged | undefined =>
-          judged
-            .filter((pair) => pair.floor === floor)
-            .toSorted((a, b) => a.ratio - b.ratio)[0];
+      const lowest = (floor: number): Judged | undefined =>
+        judged
+          .filter((pair) => pair.floor === floor)
+          .toSorted((a, b) => a.ratio - b.ratio)[0];
 
-        const text = lowest(TEXT_RATIO);
-        const nonText = lowest(NON_TEXT_RATIO);
+      const text = lowest(TEXT_RATIO);
+      const nonText = lowest(NON_TEXT_RATIO);
 
-        report.push(
-          `${look} ${theme}: ${judged.length} pairs; lowest text ${text?.ratio.toFixed(2)} (${text?.text} on ${text?.ground.join(" + ")}); lowest non-text ${nonText?.ratio.toFixed(2)} (${nonText?.text} on ${nonText?.ground.join(" + ")})`
-        );
+      report.push(
+        `${theme}: ${judged.length} pairs; lowest text ${text?.ratio.toFixed(2)} (${text?.text} on ${text?.ground.join(" + ")}); lowest non-text ${nonText?.ratio.toFixed(2)} (${nonText?.text} on ${nonText?.ground.join(" + ")})`
+      );
 
-        return failures(tokens, { look, theme });
-      })
-    );
+      assert.isAbove(judged.length, 700, theme);
+
+      return failures(tokens, theme);
+    });
 
     if (process.env.CONTRAST_REPORT === "1") {
       console.log(report.join("\n"));
@@ -687,50 +689,45 @@ describe("contrast of the next tokens", () => {
     const faint = readTokens(
       plant(
         tokensText,
-        '.dark [data-ui="next"],',
+        '.dark [data-ui="next"] {',
         "--ink-3",
-        "color-mix(in srgb, #f5f5f5 40%, transparent)"
+        "color-mix(in srgb, #f2f2f0 40%, transparent)"
       )
     );
 
-    const found = failures(faint, { look: "graphite", theme: "dark" });
+    const found = failures(faint, "dark");
 
     assert.isAbove(found.length, 0);
     assert.isTrue(found.every((line) => line.includes("--ink-3 on")));
-    assert.deepStrictEqual(
-      failures(faint, { look: "graphite", theme: "light" }),
-      []
-    );
+    assert.deepStrictEqual(failures(faint, "light"), []);
 
     const faintLight = readTokens(
       plant(
         tokensText,
-        '[data-look="stone"] {\n  color-scheme: light',
+        '[data-ui="next"] {\n  color-scheme: light',
         "--ink-2",
-        "color-mix(in srgb, #2a2420 40%, transparent)"
+        "color-mix(in srgb, #111111 40%, transparent)"
       )
     );
 
-    assert.isAbove(
-      failures(faintLight, { look: "stone", theme: "light" }).length,
-      0
-    );
+    assert.isAbove(failures(faintLight, "light").length, 0);
 
+    // The first --tone-done-wash is the light block's, so light loses a name dark keeps.
     const missing = readTokens(
       tokensText.replace(/^ {2}--tone-done-wash:.*$/mu, "")
     );
 
     assert.notDeepEqual(
-      colourNames(missing.declared({ look: "default", theme: "light" })),
-      colourNames(missing.declared({ look: "ink", theme: "light" }))
+      colourNames(missing.declared("light")),
+      colourNames(missing.declared("dark"))
     );
 
     const unreadable = readTokens(
-      plant(tokensText, '.dark [data-ui="next"],', "--ink-1", "oklch(0.9 0 0)")
+      plant(tokensText, '.dark [data-ui="next"] {', "--ink-1", "oklch(0.9 0 0)")
     );
 
     assert.throws(() => {
-      judge(unreadable, { look: "graphite", theme: "dark" });
+      judge(unreadable, "dark");
     });
   });
 });
@@ -806,30 +803,6 @@ const FORBIDDEN: ReadonlyArray<RegExp> = [
   /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{3,4})(?![\w-])/giu,
   /(?<![\w-])(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch|color)\(/giu,
 ];
-
-const SCANNED = /\.(?:ts|css|html)$/u;
-
-const nextFiles = (directory: string): ReadonlyArray<string> =>
-  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const entryPath = path.join(directory, entry.name);
-
-    if (entry.isDirectory()) {
-      return nextFiles(entryPath);
-    }
-
-    return SCANNED.test(entry.name) &&
-      !entry.name.endsWith(".test.ts") &&
-      entryPath !== tokensPath
-      ? [entryPath]
-      : [];
-  });
-
-/** The file's text without block, HTML and line comments. */
-const withoutComments = (text: string): string =>
-  text
-    .replaceAll(/\/\*[\s\S]*?\*\//gu, "")
-    .replaceAll(/<!--[\s\S]*?-->/gu, "")
-    .replaceAll(/(?<before>^|[^:"'`\\])\/\/.*$/gmu, "$<before>");
 
 /** The forbidden colours in a file's code. */
 const coloursIn = (text: string): ReadonlyArray<string> => {

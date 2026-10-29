@@ -1,8 +1,7 @@
-// The look catalogue (`/__look`, dev builds only): every `next` primitive in every state, under one
-// of the three look candidates in dark or light, picked by the switches at its top or by `?look=`
-// and `?theme=` in its address. It is the page `judges/look-rules.ts` judges at 390 and 1,440 px
-// and the one the look tool screenshots; it draws with the design tokens only, so a token change
-// shows here first.
+// The look catalogue (`/__look`, dev builds only): every `next` primitive in every state, in the
+// one look (Stone revised) in dark or light, picked by the switch at its top or by `?theme=` in its
+// address. It is the page `judges/look-rules.ts` judges at 390 and 1,440 px and the one the look
+// tool screenshots; it draws with the design tokens only, so a token change shows here first.
 //
 // Each primitive has its section (`data-testid="look-<primitive>"`) and each state its specimen
 // (`data-look-state="<primitive>/<state>"`), so a judge or a screenshot can name one. Hover and
@@ -51,21 +50,14 @@ import { TONES, TONE_TEXT } from "../Tone.ts";
 import type { Tone } from "../Tone.ts";
 import { tooltipBubble } from "../Tooltip.ts";
 
-/** A look candidate (`next/tokens.css`). */
-export const Look = Schema.Literals(["graphite", "ink", "stone"]);
-
-/** A look candidate. */
-export type Look = typeof Look.Type;
-
 /** A theme: the `dark` class or its absence. */
 export const Theme = Schema.Literals(["dark", "light"]);
 
 /** A theme. */
 export type Theme = typeof Theme.Type;
 
-/** The catalogue's state: the look and theme it draws in, and what its live specimens hold. */
+/** The catalogue's state: the theme it draws in, and what its live specimens hold. */
 export const Model = Schema.Struct({
-  look: Look,
   theme: Theme,
   /** The toggle chips that are pressed. */
   filters: Schema.Array(Schema.String),
@@ -80,9 +72,8 @@ export const Model = Schema.Struct({
 /** The catalogue's state. */
 export type Model = typeof Model.Type;
 
-/** What the catalogue's switches and live specimens send. */
+/** What the catalogue's switch and live specimens send. */
 export const Message = defineMessageUnion({
-  ChoseLook: { look: Look },
   ChoseTheme: { theme: Theme },
   ToggledFilter: { filter: Schema.String },
   OpenedSheet: {},
@@ -91,7 +82,7 @@ export const Message = defineMessageUnion({
   TypedAnswer: { value: Schema.String },
 });
 
-/** What the catalogue's switches and live specimens send. */
+/** What the catalogue's switch and live specimens send. */
 export type Message = typeof Message.Type;
 
 type Return = Update.Return<Model, Message>;
@@ -128,19 +119,13 @@ const openSheetDialog = Update.foldChildStep({
   foldOutMessage: keepModel,
 });
 
-const decodeLook = Schema.decodeUnknownOption(Look);
-
 const decodeTheme = Schema.decodeUnknownOption(Theme);
 
-/** The catalogue as an address asks for it: `?look=` and `?theme=`, else graphite in dark. */
+/** The catalogue as an address asks for it: `?theme=`, else dark. */
 export const initialOf = (search: string): Model => {
   const query = new URLSearchParams(search);
 
   return {
-    look: Option.getOrElse(
-      decodeLook(query.get("look")),
-      () => "graphite" as const
-    ),
     theme: Option.getOrElse(
       decodeTheme(query.get("theme")),
       () => "dark" as const
@@ -152,10 +137,9 @@ export const initialOf = (search: string): Model => {
   };
 };
 
-/** The catalogue's update: switches set the look and theme; live specimens keep their state. */
+/** The catalogue's update: the switch sets the theme; live specimens keep their state. */
 export const update = (model: Model, message: Message): Return =>
   Message.match<Return>(message, {
-    ChoseLook: ({ look }) => ({ model: { ...model, look } }),
     ChoseTheme: ({ theme }) => ({ model: { ...model, theme } }),
     ToggledFilter: ({ filter }) => ({
       model: {
@@ -1230,8 +1214,6 @@ const empties = (h: H): Html =>
 // ---------------------------------------------------------------------------------------------
 // The page
 
-const LOOKS: ReadonlyArray<Look> = Look.literals;
-
 const THEMES: ReadonlyArray<Theme> = Theme.literals;
 
 const switches = (h: H, model: Model): Html =>
@@ -1245,26 +1227,6 @@ const switches = (h: H, model: Model): Html =>
       h.h1(
         [h.Class(classNames("me-auto text-ink-1", TYPE.title, WEIGHT_STRONG))],
         ["Look catalogue"]
-      ),
-      h.div(
-        [
-          h.Role("group"),
-          h.AriaLabel("Look"),
-          h.Class("flex flex-wrap gap-(--space-1)"),
-        ],
-        LOOKS.map((look) =>
-          buttonOf(
-            h,
-            {
-              variant: "ghost",
-              size: "small",
-              isPressed: Option.some(model.look === look),
-              onClick: Option.some(Message.ChoseLook({ look })),
-              attributes: [h.DataAttribute("testid", `look-choose-${look}`)],
-            },
-            look
-          )
-        )
       ),
       h.div(
         [
@@ -1289,7 +1251,7 @@ const switches = (h: H, model: Model): Html =>
     ]
   );
 
-/** The catalogue: the switches, then every primitive's section, in the chosen look and theme. */
+/** The catalogue: the theme switch, then every primitive's section, in the chosen theme. */
 export const view = (model: Model, h: H): Html =>
   h.div(
     [
@@ -1300,7 +1262,6 @@ export const view = (model: Model, h: H): Html =>
       h.div(
         [
           h.DataAttribute("ui", "next"),
-          h.DataAttribute("look", model.look),
           h.DataAttribute("theme", model.theme),
           h.Class(
             "min-h-dvh bg-surface-ground font-(family-name:--font-ui) text-ink-1"

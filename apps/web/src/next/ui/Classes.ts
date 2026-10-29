@@ -1,6 +1,6 @@
 // Class strings every `next` primitive shares: the type steps, the focus ring, the touch target and
 // the feedback motion. Each names design tokens only (`next/tokens.css`), so a primitive takes the
-// look's values and never a candidate's: switching `data-look` changes every primitive at once.
+// look's values and a change to a token changes every primitive at once.
 //
 // Forced states. The look catalogue (`catalogue/`) shows hover and focus without a pointer or a
 // keyboard, so every primitive that has those states also keys them on `data-hover` and

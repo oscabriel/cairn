@@ -43,9 +43,31 @@ const measured = (
   const sized = atWidth(model, width);
   const changed = rows.filter((row) => sized.heights[row.key] !== row.height);
 
-  // Rows measured off-screen join the range; not under a gesture, which they would move.
-  if (changed.length === 0 || (offScreen && sized.scrolling)) {
+  if (changed.length === 0) {
     return sized;
+  }
+
+  // Rows measured off-screen join the range; not under a gesture, which they would move. The view
+  // counted a row drawn off-screen as current once drawn, so a row whose measurement is dropped
+  // here loses its height to `stale`: laid out as before, and measured again once the gesture ends.
+  if (offScreen && sized.scrolling) {
+    const dropped = new Set(
+      changed.flatMap((row) =>
+        sized.heights[row.key] === undefined ? [] : [row.key]
+      )
+    );
+
+    return dropped.size === 0
+      ? sized
+      : modifyFields(sized, {
+          stale: (stale) =>
+            overlay(
+              stale,
+              Record.filter(sized.heights, (_, key) => dropped.has(key))
+            ),
+          heights: (heights) =>
+            Record.filter(heights, (_, key) => !dropped.has(key)),
+        });
   }
 
   return modifyFields(sized, {

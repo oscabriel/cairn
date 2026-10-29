@@ -137,6 +137,9 @@ interface Windowed {
   readonly first: number;
   readonly last: number;
   readonly top: number;
+  /** The bottom of the drawn window, in px from the range's top. */
+  readonly windowBottom: number;
+  readonly buffer: number;
   readonly totalHeight: number;
 }
 
@@ -222,7 +225,18 @@ const windowOf = (model: Model, rows: Rows): Windowed => {
     offsetTop += height;
   }
 
-  return { start, known, heights, drawn, first, last, top, totalHeight };
+  return {
+    start,
+    known,
+    heights,
+    drawn,
+    first,
+    last,
+    top,
+    windowBottom,
+    buffer,
+    totalHeight,
+  };
 };
 
 /** The drawn rows in order, with the parked rows between them merged into gaps. */
@@ -262,16 +276,32 @@ const slotsOf = (
   return slots;
 };
 
-/** Rows in the range to measure again (holes, stale or changed), nearest the window first. */
+/**
+ * Rows in the range to measure again (holes, stale or changed), nearest the window first. A row
+ * that changed more than a buffer below the drawn window waits until the reader nears it: its
+ * height moves nothing the reader sees, and the live reply, parked while the reader is in history,
+ * would otherwise be drawn off-screen again on every streaming tick.
+ */
 const refreshOf = (
   model: Model,
   rows: Rows,
   range: Windowed
 ): ReadonlyArray<number> => {
+  const offsets: Array<number> = [];
+  let offsetTop = 0;
+
+  for (const height of range.heights) {
+    offsets.push(offsetTop);
+    offsetTop += height;
+  }
+
+  const farBelow = (index: number): boolean =>
+    (offsets[index - range.start] ?? 0) > range.windowBottom + range.buffer;
+
   const wanted = (index: number): boolean =>
     range.drawn[index - range.start] !== true &&
     (model.heights[rows.keys[index] ?? ""] === undefined ||
-      !rows.current(index));
+      (!rows.current(index) && !farBelow(index)));
 
   const probe: Array<number> = [];
 

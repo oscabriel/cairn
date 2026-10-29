@@ -36,8 +36,9 @@ import { defineTaggedUnion } from "foldkit/schema";
  * rows the list never drew at an estimated height, `reflow` keeps the raw `scrollTop` through a
  * width change, `anchor` lets a change above the reader move what they see, and `extend` draws the
  * window around the reported `scrollTop` rather than the reader's row, which lags a render behind
- * history joining above, and `bookmark` keeps only the reader's row through a width change, not the
- * character being read.
+ * history joining above, `bookmark` keeps only the reader's row through a width change, not the
+ * character being read, and `wheel` stops following on any wheel or key input up, even input a
+ * nested scroller takes or that cannot move the list.
  */
 export const BrokenControl = Schema.Literals([
   "none",
@@ -46,6 +47,7 @@ export const BrokenControl = Schema.Literals([
   "anchor",
   "extend",
   "bookmark",
+  "wheel",
 ]);
 
 export type BrokenControl = typeof BrokenControl.Type;

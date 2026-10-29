@@ -6,14 +6,16 @@
 // few rows above the first visible row, as an escalated question's card lands; `arrive` lands a
 // checkpoint for a settled turn above it, so that turn's answer gains its changed-files card late.
 // `insert-far` and `arrive-far` make the same changes far enough above that the rows they touch
-// are parked, so the list measures them off-screen before they take room.
+// are parked, so the list measures them off-screen before they take room; `remove-far` takes a
+// parked turn out, so only a gap's height changes.
 //
 // `?broken=` turns on one of the list's broken controls (list/Model.ts), so the judge can show a
 // check fails without what it guards: `estimate` lays rows the list never drew out at an estimate
 // (the range check), `reflow` keeps the raw `scrollTop` through a width change and `bookmark` only
 // the reader's row (the reflow check), `anchor` lets a change above the reader move what they see
-// (the insert and arrive checks), and `extend` windows the list around the lagging `scrollTop`
-// (the extend check).
+// (the insert and arrive checks), `extend` windows the list around the lagging `scrollTop`
+// (the extend check), and `wheel` stops following on any wheel up, even one a nested scroller
+// takes (the nested-wheel check).
 
 import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";
 import { ManagedResource, Runtime, Subscription, Update } from "foldkit";
@@ -41,6 +43,7 @@ import {
   growReply,
   insertTurn,
   landCheckpoint,
+  removeTurn,
   startReply,
   streamedReply,
   syntheticThread,
@@ -58,7 +61,7 @@ const Model = Schema.Struct({
   frame: Schema.Int,
   /** The next id for an entry the harness adds above the reader. */
   nextId: Schema.Int,
-  /** How many changes `insert-above` and `arrive` made. */
+  /** How many changes the buttons that change thread A above the reader made. */
   landed: Schema.Int,
 });
 
@@ -70,6 +73,7 @@ const Message = defineMessageUnion({
   ClickedStream: { on: Schema.Boolean },
   ClickedInsertAbove: { far: Schema.Boolean },
   ClickedArrive: { far: Schema.Boolean },
+  ClickedRemoveFar: {},
   Ticked: {},
 });
 
@@ -83,6 +87,7 @@ const Broken = Schema.Literals([
   "anchor",
   "extend",
   "bookmark",
+  "wheel",
 ]);
 
 const broken: BrokenControl = Option.getOrElse(
@@ -294,6 +299,10 @@ const update = (model: Model, message: Message): Return =>
     ClickedInsertAbove: ({ far }) =>
       landAbove(model, "prompt", far, insertTurn),
     ClickedArrive: ({ far }) => landAbove(model, "answer", far, landCheckpoint),
+    ClickedRemoveFar: () =>
+      landAbove(model, "prompt", true, (state, turn) =>
+        removeTurn(state, turn)
+      ),
     Ticked: () =>
       model.streaming && model.current === "a" ? tick(model) : { model },
   });
@@ -362,6 +371,7 @@ const view = (model: Model, h: HtmlBuilder<Message>): Html =>
             "Arrive far",
             Message.ClickedArrive({ far: true })
           ),
+          button(h, "remove-far", "Remove far", Message.ClickedRemoveFar()),
           h.span(
             [
               h.DataAttribute("testid", "landed"),

@@ -34,7 +34,7 @@ import { childAttributes } from "foldkit/html";
 import { layoutOf } from "./Layout.ts";
 import type { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
-import { ObserveList, PROBE, PROBE_KEY, ROW_KEY } from "./Place.ts";
+import { GAP, ObserveList, PROBE, PROBE_KEY, ROW_KEY } from "./Place.ts";
 
 /** What the list's owner passes. */
 export interface ViewInputs<Item extends object> {
@@ -53,6 +53,12 @@ const REMEMBERED_LISTS = 24;
 /**
  * Per list, the item each row was last drawn from (on screen or off). A parked row whose item is
  * no longer that one changed since it was measured, so it is measured again.
+ *
+ * A row counts as current once drawn, before its measurement lands. That holds because every
+ * drawn row's measurement reaches the Model: on screen it is always taken, and off screen one
+ * dropped under a gesture moves the row's height to `stale` (Update.ts), so the layout measures it
+ * again whatever this map says. Module state, as the view has no other place to keep items between
+ * renders; it is bounded to `REMEMBERED_LISTS` lists, and a test that renders the list shares it.
  */
 const drawnItems = new Map<string, Map<string, object>>();
 
@@ -149,6 +155,7 @@ export const view = <Item extends object>() =>
         ? row(slot.index)
         : h.keyed("div")(`gap:${slot.key}`, [
             h.Role("presentation"),
+            h.DataAttribute(GAP, "true"),
             h.Style({ height: `${slot.height}px` }),
           ])
     );

@@ -243,6 +243,29 @@ describe("measuring off-screen", () => {
 
     assert.deepStrictEqual(layoutOf(changedFar, rows).probe, [5]);
   });
+
+  it("waits to measure a row that changed far below the reader until the reader nears it", () => {
+    const model = listOf({
+      heights: heightsFor(0, 100),
+      place: Place.Row({ key: "r10", offset: 0 }),
+      scrollTop: 1000,
+    });
+
+    // The window ends at 3,000 px; a row changed up to a buffer below it (4,000 px) is measured.
+    const rows = rowsOf(100, new Set([35, 45, 95]));
+
+    assert.deepStrictEqual(layoutOf(model, rows).probe, [35]);
+
+    const nearer = listOf({
+      ...model,
+      place: Place.Row({ key: "r70", offset: 0 }),
+      scrollTop: 7000,
+    });
+
+    // The window ends at 9,000 px: row 95, parked at 9,500, is within a buffer of it.
+
+    assert.include(layoutOf(nearer, rows).probe, 95);
+  });
 });
 
 const measured = (offScreen: boolean, width = 800) =>
@@ -273,6 +296,33 @@ describe("measurements", () => {
     assert.deepStrictEqual(update(settled, measured(true)).heights, {
       r1: 120,
     });
+  });
+
+  it("dropped under a gesture leave a measured row stale, so it is measured again after", () => {
+    // The reader at row 29, so row 1 is parked: drawn off-screen to be measured, it counts as
+    // current in the view however its measurement fared.
+    const model = listOf({
+      heights: heightsFor(0, 30),
+      place: Place.Row({ key: "r29", offset: 0 }),
+      scrollTop: 2900,
+      scrolling: true,
+    });
+
+    const rows = rowsOf(30);
+    const dropped = update(model, measured(true));
+
+    assert.isUndefined(dropped.heights.r1);
+    assert.deepStrictEqual(dropped.stale, { r1: ROW_PX });
+    // Laid out as before, so the range holds under the gesture.
+    assert.strictEqual(layoutOf(dropped, rows).totalHeight, 30 * ROW_PX);
+
+    const settled = update(dropped, Message.SettledScroll());
+
+    assert.notInclude(
+      layoutOf(update(model, Message.SettledScroll()), rows).probe,
+      1
+    );
+    assert.include(layoutOf(settled, rows).probe, 1);
   });
 
   it("land at once from rows on screen, even during a gesture", () => {

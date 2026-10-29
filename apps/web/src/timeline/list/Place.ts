@@ -12,6 +12,12 @@
 //   scroll, is put back where it was. The row anchor alone keeps the row's top, which loses the
 //   line being read once the row rewraps.
 // - Off-screen measurements taken during a gesture wait for it to settle (Update.ts).
+// - Wheel or key input up stops following before its first scroll, but only when it can move the
+//   scroller away from its end: the scroller overflows and is not at its top, no element between
+//   the input's target and the scroller can take the scroll itself, and the wheel is not a pinch.
+//   Input that cannot move it produces no scroll event to start following again. The target check
+//   is a port of github.com/pingdotgg/t3code, apps/web/src/components/chat/timelineScrollTarget.ts
+//   (`isTimelineScrollTarget`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (#5566), MIT.
 //
 // The glyph bookmark is a port of github.com/hardbeat920/monocode,
 // src/features/sessions/ui/useReplyReflowAnchor.ts at 26465c620977f3951d0a532a0f7db32c3c179007.
@@ -49,6 +55,9 @@ export const PROBE_KEY = "probe-key";
 
 /** The off-screen container's marker attribute. */
 export const PROBE = "list-probe";
+
+/** A gap's marker attribute: the stretch of parked rows it stands for. */
+export const GAP = "list-gap";
 
 /** How close to the end still counts as at the end, in px. */
 const END_THRESHOLD_PX = 1;
@@ -98,6 +107,9 @@ const initialAnchor = (scroller: HTMLElement): Option.Option<Anchor> =>
     }))
   );
 
+const isGap = (element: Element): boolean =>
+  element instanceof HTMLElement && element.dataset.listGap !== undefined;
+
 const keyOf = (element: Element): string =>
   element instanceof HTMLElement
     ? (element.dataset.virtualListItemKey ?? "")
@@ -122,6 +134,64 @@ const characterAt = (
   }
 
   return Option.none();
+};
+
+/**
+ * True when input at `target` moving `direction` (-1 up, 1 down) scrolls `scroller` rather than an
+ * element inside it: no element between them overflows and can still scroll that way, or stops
+ * the scroll chaining out of it (`overscroll-behavior`).
+ */
+const scrollsList = (
+  target: EventTarget | null,
+  scroller: HTMLElement,
+  direction: number
+): boolean => {
+  if (
+    !(target instanceof Element) ||
+    !scroller.contains(target) ||
+    direction === 0
+  ) {
+    return false;
+  }
+
+  for (
+    let element: Element | null = target;
+    element !== null && element !== scroller;
+    element = element.parentElement
+  ) {
+    const style = getComputedStyle(element);
+
+    if (style.overflowY === "auto" || style.overflowY === "scroll") {
+      const canScroll =
+        direction < 0
+          ? element.scrollTop > 0
+          : element.scrollTop < element.scrollHeight - element.clientHeight;
+
+      if (
+        canScroll ||
+        style.overscrollBehaviorY === "contain" ||
+        style.overscrollBehaviorY === "none"
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+};
+
+/**
+ * The caret at a point, where the engine has `caretRangeFromPoint` (Chromium and WebKit; Firefox,
+ * not a target, has only `caretPositionFromPoint` and keeps no bookmark). The judge's bookmark and
+ * MonoCode read the caret this way.
+ */
+const caretAt = (x: number, y: number): Option.Option<Range> => {
+  if (!("caretRangeFromPoint" in document)) {
+    return Option.none();
+  }
+
+  // oxlint-disable-next-line typescript/no-deprecated -- the caret API every target engine has
+  return Option.fromNullishOr(document.caretRangeFromPoint(x, y));
 };
 
 const glyphRect = (node: Text, offset: number): Option.Option<DOMRect> => {
@@ -160,6 +230,9 @@ const bind = (
   const drawnRows = () =>
     scroller.querySelectorAll<HTMLElement>(`:scope > [data-${ROW_KEY}]`);
 
+  const gaps = () =>
+    scroller.querySelectorAll<HTMLElement>(`:scope > [data-${GAP}]`);
+
   const rowByKey = (key: string): Option.Option<HTMLElement> =>
     Option.fromNullishOr(
       scroller.querySelector<HTMLElement>(
@@ -188,7 +261,7 @@ const bind = (
 
   const shiftBy = (delta: number) => {
     if (Math.abs(delta) >= 0.5) {
-      setTop(scroller.scrollTop + delta);
+      setTop(Math.round(scroller.scrollTop + delta));
     }
   };
 
@@ -220,17 +293,19 @@ const bind = (
 
     for (const offsetY of BOOKMARK_OFFSETS) {
       for (const fraction of BOOKMARK_FRACTIONS) {
-        // The judge's bookmark and MonoCode read the caret this way, and WebKit, the phone's engine,
-        // has it; `caretPositionFromPoint` is the newer form.
-        // oxlint-disable-next-line typescript/no-deprecated -- the caret API every engine here has
-        const range = document.caretRangeFromPoint(
+        const caret = caretAt(
           box.left + box.width * fraction,
           box.top + offsetY
         );
 
-        const node = range?.startContainer;
+        if (Option.isNone(caret)) {
+          continue;
+        }
 
-        if (range === null || !(node instanceof Text) || node.length === 0) {
+        const range = caret.value;
+        const node = range.startContainer;
+
+        if (!(node instanceof Text) || node.length === 0) {
           continue;
         }
 
@@ -390,12 +465,16 @@ const bind = (
     report(!own);
   };
 
-  // Input says a gesture started before its first scroll event does: a wheel or key that moves up
-  // stops following at once, so pinning the end cannot cancel the scroll it starts, and any input
-  // that scrolls stops off-screen measuring before the range can change under it (MonoCode's
-  // `manualScroll`).
+  /** True when the scroller overflows and is not at its top, so a scroll up moves it. */
+  const canScrollUp = () =>
+    scroller.scrollHeight > scroller.clientHeight + 1 && scroller.scrollTop > 0;
+
+  // Input says a gesture started before its first scroll event does: a wheel or key that moves the
+  // scroller up stops following at once, so pinning the end cannot cancel the scroll it starts, and
+  // any input that scrolls stops off-screen measuring before the range can change under it
+  // (MonoCode's `manualScroll`).
   const onInput = (up: boolean) => {
-    if (up && following) {
+    if (up && following && (canScrollUp() || broken() === "wheel")) {
       following = false;
       anchor = readAnchor();
     }
@@ -404,13 +483,28 @@ const bind = (
     report(true);
   };
 
+  /**
+   * Input moving `direction` at `target` that the list should hear: input a nested scroller takes,
+   * or a pinch, leaves the list where it is (t3code #5566). The `wheel` control hears all of it.
+   */
+  const hears = (target: EventTarget | null, direction: number): boolean =>
+    broken() === "wheel" || scrollsList(target, scroller, direction);
+
   const onWheel = (event: WheelEvent) => {
-    onInput(event.deltaY < 0);
+    const direction = Math.sign(event.deltaY);
+
+    if (!event.ctrlKey && hears(event.target, direction)) {
+      onInput(direction < 0);
+    }
   };
 
   const onKey = (event: KeyboardEvent) => {
     if (SCROLL_KEYS.has(event.key)) {
-      onInput(UP_KEYS.has(event.key));
+      const up = UP_KEYS.has(event.key);
+
+      if (hears(event.target, up ? -1 : 1)) {
+        onInput(up);
+      }
     }
   };
 
@@ -479,7 +573,11 @@ const bind = (
     for (const entry of entries) {
       if (entry.target === scroller) {
         reflowed ||= resized();
-      } else if (entry.target.isConnected && observed.has(entry.target)) {
+      } else if (
+        entry.target.isConnected &&
+        observed.has(entry.target) &&
+        !isGap(entry.target)
+      ) {
         rows.push({
           key: keyOf(entry.target),
           height: entry.target.getBoundingClientRect().height,
@@ -494,8 +592,10 @@ const bind = (
     }
   });
 
+  // Gaps are observed too: a gap shrinks when a parked row leaves the list, a change of its
+  // `style` alone that no childList record reports, and the reader is kept through it.
   const observeRows = () => {
-    const current = new Set<Element>(drawnRows());
+    const current = new Set<Element>([...drawnRows(), ...gaps()]);
 
     for (const row of observed) {
       if (!current.has(row)) {

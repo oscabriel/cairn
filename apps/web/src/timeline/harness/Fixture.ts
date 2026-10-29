@@ -364,6 +364,25 @@ export const insertTurn = (
   };
 };
 
+/** Turn `turn` of a synthetic thread taken out whole, as rows leave the list above the reader. */
+export const removeTurn = (
+  state: ThreadViewState,
+  turn: number
+): ThreadViewState => {
+  const first = userEntryIdOf(turn);
+
+  return {
+    ...state,
+    seq: state.seq + 1,
+    view: {
+      ...state.view,
+      entries: state.view.entries.filter(
+        (entry) => entry.id < first || entry.id >= first + 4
+      ),
+    },
+  };
+};
+
 /**
  * A checkpoint for turn `turn` landing after the turn settled, as a late line arrives in a settled
  * row: the turn's answer gains its changed-files card.

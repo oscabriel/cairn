@@ -453,3 +453,50 @@ Protocol and document shapes beyond the plan, accepted by the integrator:
 ### Left for the user
 
 - Nothing to do now; nothing is deployed by this integration. **When deploying**: the `cairn.subagents` extension appends one `pi.system` entry to every conversation once, so deploy while no thread is mid-tool, as before; subagents then become live on the deployed brain, with a child's worktree under the data folder when its brief asks for one.
+
+## Look track L2 integration
+
+Integrated on 2026-10-29 on `main`.
+
+### Packages
+
+| Package   | Branch      | Commit    | Status                                 |
+| --------- | ----------- | --------- | -------------------------------------- |
+| L2 Tokens | `phase2/L2` | `8d588ff` | done and approved, merged as `5071132` |
+
+L2 merged with `--no-ff` with no conflict: two new files, `apps/web/src/next/tokens.css` and `judges/contrast.test.ts`. The hand-offs and this note are the next commit.
+
+### Integration judges
+
+L2's block names no judge "at integration"; these rerun its judge and L0's on the merged `main` with the hand-offs applied.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 398 s: fmt, lint, typecheck, 1,975 tests (10 more than wave 3's completion: `judges/contrast.test.ts`). No dependency changed. `Budget.test.ts` green. |
+| `judges/contrast.test.ts` (in `pnpm check`) | pass | 10 of 10; 726 pairs per candidate and theme, all AA; lowest text 4.51 (stone dark `--ink-3` on `--surface-overlay` + `--select-5`), lowest non-text 3.67. The package's planted runs (a 40 percent ink, a palette utility, `bg-[red]` in `next/`) each failed it. |
+| `vite build`, with and without the seam edits | pass | The entry CSS is byte-identical (`index-zvzowL-O.css`, 231.99 kB, 34.50 kB gzip), so the theme names add nothing to classic. The tokens ship as the next chunk's `Frame-*.css`, 8.70 kB (2.25 kB gzip); the entry JS grew 30 B (its preload list names the new CSS). |
+| Chromium probe over the parity fixture (temporary script, removed) | pass | On `?ui=next`, `#root` resolves `--ink-1` to `#f5f5f5` in dark and `#27272a` in light (graphite); on classic, `--ink-1` and `--select-1` are unset and the page loads one stylesheet fewer. |
+| `node judges/behaviour.ts --ui next --strict` | pass | 22 of 22. |
+| `node judges/behaviour.ts --strict` (classic) | pass | 22 of 22. |
+| Real-model judges | not run | None needed. $0. |
+
+### Hand-offs applied
+
+- **`apps/web/src/next/Frame.ts`**: `import "./tokens.css";` as its first import. Classic never loads the chunk, and nothing in classic carries `data-ui`, so the tokens apply nowhere there.
+- **`apps/web/src/styles.css`**: the integrator's answer to L2's Tailwind question is to register the names. `@theme inline` gains `--color-<name>: var(--<name>)` for the inks, surfaces (ground, rail, sidebar, sunken, overlay), strokes and focus ring, the five ladder steps, the accent (`accent-fill`, `accent-ink`, `accent-text`, `accent-wash`) and the four tones with their washes, so `next` views write `text-ink-2`, `bg-select-1` or `border-stroke-1`. `--color-surface-raised` was already classic's and serves both. The arbitrary-property form (`text-(--ink-2)`) still works for the size, space, duration and layer tokens.
+- **`data-look`**: set nowhere, so graphite draws. Once the user chooses, the winner's values become the default blocks and the other candidates go, or a `look` client setting sets `data-look` on both `<html>` and `#root` beside `data-ui` (in `ClientSettings.applyClientSettings` and `Frame.ts`).
+- **`GLOSSARY.md`**: "Design token" and "Look" (with its candidates). L2's other proposed wordings ("Tokens (next)", "Look candidate", "Candidate (look)") are folded into those two.
+
+### Rules later packages follow
+
+- **`next` draws only with design tokens.** `judges/contrast.test.ts` fails any palette utility, arbitrary colour or colour literal in `next/` outside `tokens.css`, and holds every text pair to AA; a new token joins its pairs there.
+- **Tokens scope to `[data-ui="next"]`**, and dark to `.dark [data-ui="next"]` and `.dark[data-ui="next"]`; the bridge maps classic's semantic names onto them, so a classic region inside the next frame takes the look but is not held to AA.
+
+### What differs from the plan
+
+- The package's own deviations stand as accepted: tokens scope to `[data-ui="next"]` rather than `:root[data-ui="next"]`; the accent fill is `--accent-fill` (classic's `--accent` is a hover ground); font and easing tokens are `--font-ui`, `--font-code` and `--ease-motion`; the appearance contrast boost does not reach inside `next`; `--stroke-2` has no 3:1 floor, since no control relies on its stroke alone; the type scale has six steps; the palette lint lives in `contrast.test.ts` rather than a file of its own.
+- Three look candidates rather than one chosen set: the plan expected the design pass to have chosen values first. Round 0 is published at `plans.gneiss.run/cairn/v2/look/round-0/`; its generator stays scratch until L5 builds the look tool.
+
+### Left for the user
+
+- **Choose a look** in round 0 at `https://plans.gneiss.run/cairn/v2/look/round-0/` (graphite, ink or stone). Until then `?ui=next` draws graphite. Nothing is deployed by this integration.

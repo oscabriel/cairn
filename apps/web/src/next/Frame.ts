@@ -9,6 +9,7 @@
 // the composer, transcript, diff and settings (L7), then phase 2's surfaces (wave 6). This file is
 // integrator-only after L0.
 
+import "./tokens.css";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import type { Message } from "../Message.ts";

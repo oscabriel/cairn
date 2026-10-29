@@ -212,6 +212,10 @@ _Avoid_: plugin
 
 **Next (views)**: The forked set of views the `ui` client setting picks (`?ui=next` sets it, `?ui=classic` returns), drawn in `next/Frame.ts` over the same Model and update as the classic views and loaded as its own chunk (ADR 0040). Classic is the default and stays unchanged.
 
+**Design token**: A named value in `next/tokens.css` (a surface, ink, stroke, selection ladder step, accent, status tone, radius, space, type step, duration, layer or shadow) that the `next` views use in place of any literal colour or palette utility, in dark and light. `judges/contrast.test.ts` holds every text pair to WCAG AA and fails any other colour in `next/`. _Avoid_: token alone where Spend's model tokens could be meant; say design token or the token's name.
+
+**Look**: The set of design token values the `next` views draw with. Until the user chooses, three look candidates (graphite, the default; ink; stone) share one set of names in `next/tokens.css`, picked by `data-look` beside `data-ui`; the user picks one in a look round. _Avoid_: theme (that is dark or light), skin.
+
 **Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.
 
 **Projection**: The client's view of a thread: pi-durable's conversation with brain-only documents and Claude stamps removed, image data replaced by references and long strings cut.

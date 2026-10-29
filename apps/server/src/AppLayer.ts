@@ -25,6 +25,7 @@ import { ModelSource } from "./brain/ModelSource.ts";
 import { PiDurableHarness } from "./brain/PiDurableHarness.ts";
 import { ReactorSet } from "./brain/ReactorSet.ts";
 import { ScriptedHarness } from "./brain/ScriptedHarness.ts";
+import { SpendFeed } from "./brain/SpendFeed.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
@@ -70,6 +71,7 @@ import { ThreadTitles } from "./threads/ThreadTitles.ts";
 import { TitleModel } from "./threads/TitleModel.ts";
 import { TurnContentLive } from "./threads/TurnContentStages.ts";
 import { ClaudeSignals } from "./usage/ClaudeSignals.ts";
+import { SpendLedger } from "./usage/SpendLedger.ts";
 
 /**
  * How boot hands the harness its work after the repairs. pi-durable does not resume on open, so
@@ -191,7 +193,7 @@ export const PiDurableBrain = <Models = never>(options: {
     )
   );
 
-  return Layer.mergeAll(resume, ReactorSet.layer).pipe(
+  return Layer.mergeAll(resume, ReactorSet.layer, SpendFeed.layer).pipe(
     Layer.provideMerge(PiDurableHarness.layer),
     Layer.provide(
       options.extraExtensions === undefined
@@ -210,7 +212,8 @@ export const PiDurableBrain = <Models = never>(options: {
  */
 export const ScriptedBrain = Layer.mergeAll(
   Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
-  EventReactors.layerOff
+  EventReactors.layerOff,
+  SpendFeed.layerOff
 ).pipe(
   Layer.provideMerge(ScriptedHarness.layer),
   Layer.provideMerge(Skills.local),
@@ -275,6 +278,7 @@ export const AppLayer = Layer.mergeAll(
   ),
   Layer.provide(ShellProjector.layer.pipe(Layer.provide(ClaudeSignals))),
   Layer.provideMerge(ThreadsLive),
+  Layer.provideMerge(SpendLedger.layerNoDeps),
   Layer.provideMerge(PushLayer),
   Layer.provide(SettingsStore.layerNoDeps),
   Layer.provideMerge(Layer.merge(ShellLive, ModelHealthLive))

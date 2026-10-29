@@ -19,6 +19,7 @@ import { PushHandlers } from "./PushHandlers.ts";
 import { sessionHandlers } from "./SessionHandlers.ts";
 import { ShellHandlers } from "./ShellHandlers.ts";
 import { SkillHandlers } from "./SkillHandlers.ts";
+import { SpendHandlers } from "./SpendHandlers.ts";
 import { stubHandlers } from "./StubHandlers.ts";
 import { ThreadCommandHandlers } from "./ThreadCommandHandlers.ts";
 import { ThreadStreamHandlers } from "./ThreadStreamHandlers.ts";
@@ -55,5 +56,6 @@ export const HandlersLayer = Layer.mergeAll(
   PushHandlers,
   DiffHandlers.layer,
   EventHandlers,
+  SpendHandlers,
   LoginHandlers.pipe(Layer.provide(CodexLogin.layer))
 );

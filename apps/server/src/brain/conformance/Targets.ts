@@ -39,10 +39,7 @@ import { PiModelSource } from "../../models/PiModelSource.ts";
 import { SettingsStore } from "../../models/SettingsStore.ts";
 import { PiHost } from "../../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../../reach/ReachLayer.ts";
-import {
-  subagentsExtension,
-  workspaceAccess,
-} from "../../subagents/Subagents.ts";
+import { Subagents } from "../../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../../subagents/SubagentTools.ts";
 import { ChildWorkspaces } from "../../workspaces/ChildWorkspaces.ts";
@@ -206,8 +203,8 @@ export const childWorkspacesAt = (dataDir: string) =>
 
 /**
  * The pi-durable brain the conformance suite runs over `dataDir`: the production seam, brain and
- * extension set, the conformance tools and the subagents extension with `faults` (and `tuning`, for a
- * test that needs a question to expire soon), making children's workspaces under `dataDir`
+ * extension set (its `Subagents` given `faults`, and `tuning` for a test that needs a question to
+ * expire soon) and the conformance tools, making children's workspaces under `dataDir`
  * (`ChildWorkspaces`, also provided), over pi-ai's faux provider. Subagent tests under `brain/`
  * build on it too.
  */
@@ -218,19 +215,8 @@ export const piDurableLayer = (
 ) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
-      Layer.unwrap(
-        Effect.gen(function* () {
-          const workspaces = workspaceAccess(
-            yield* ChildWorkspaces,
-            yield* Effect.context()
-          );
-
-          return ExtensionSet.withExtra([
-            conformanceTools,
-            subagentsExtension(faults, workspaces, tuning),
-          ]);
-        })
-      ).pipe(
+      ExtensionSet.withExtra([conformanceTools]).pipe(
+        Layer.provide(Subagents.layerWith(faults, tuning)),
         Layer.provide(ExecutorLink.layerDisabled),
         Layer.provide(PiHost.layerEmpty),
         Layer.provide(ModelHealth.layerTest),

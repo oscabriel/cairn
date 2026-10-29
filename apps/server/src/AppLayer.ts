@@ -62,6 +62,8 @@ import { ShellProjector } from "./shell/ShellProjector.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
 import { Skills } from "./skills/SkillsLayer.ts";
+import { SubagentRows } from "./subagents/SubagentRows.ts";
+import { Subagents } from "./subagents/Subagents.ts";
 import { BranchNames } from "./threads/BranchNames.ts";
 import { bridgeStopHook } from "./threads/BridgeStopHook.ts";
 import { LaunchStore } from "./threads/LaunchStore.ts";
@@ -154,6 +156,20 @@ const ProjectsLive = Layer.mergeAll(
 );
 
 /**
+ * The subagents extension (3A) over the app's child workspaces: `ChildWorkspacesLive`, its
+ * worktrees and git are the references `ProjectsLive` uses, so the memo map builds one
+ * `ChildWorkspaces` for the brief task's `prepare` and the boot repair. `SubagentFaults` keeps its
+ * default, no faults.
+ */
+const SubagentsLive = Subagents.layer.pipe(
+  Layer.provide(ChildWorkspacesLive),
+  Layer.provide(Worktrees.layerNoDeps),
+  Layer.provide(Git.layer),
+  Layer.provide(NodeServices.layer),
+  Layer.provide(DatabaseLive)
+);
+
+/**
  * Thread launch and thread commands, with their stages, stop hooks and the title model that the
  * `titleModel` server setting names.
  */
@@ -228,6 +244,7 @@ export const PiDurableBrain = <Models = never>(options: {
         ? ExtensionSet.layer
         : ExtensionSet.withExtra(options.extraExtensions)
     ),
+    Layer.provide(SubagentsLive),
     Layer.provideMerge(Skills.live),
     Layer.provideMerge(options.models),
     Layer.provide(BrainConfigLive)
@@ -287,7 +304,8 @@ export const AppLayer = Layer.mergeAll(
   HttpLive,
   Boot,
   ExecutorSignInPush,
-  MemoryWatch.pipe(Layer.provide(NodeServices.layer))
+  MemoryWatch.pipe(Layer.provide(NodeServices.layer)),
+  SubagentRows
 ).pipe(
   Layer.provide(HandlersLayer),
   Layer.provide(BootData),

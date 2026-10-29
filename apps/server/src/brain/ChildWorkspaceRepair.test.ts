@@ -18,6 +18,7 @@ import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../reach/ReachLayer.ts";
+import { Subagents } from "../subagents/Subagents.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import {
   cairnWorktrees,
@@ -34,27 +35,33 @@ import { HarnessSeam } from "./HarnessSeam.ts";
 import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 
-const harness = PiDurableHarness.layer.pipe(
-  Layer.provideMerge(
-    ExtensionSet.layer.pipe(
-      Layer.provide(ExecutorLink.layerDisabled),
-      Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest),
-      Layer.provide(SettingsStore.layerTest),
-      Layer.provide(ReachServicesTest),
-      Layer.provide(PiModelSource.layerFromModelSource)
+/**
+ * The brain over the children's workspaces `workspaces`, which its subagents extension makes
+ * children in too.
+ */
+const harnessOver = (workspaces: ReturnType<typeof workspacesAt>) =>
+  PiDurableHarness.layer.pipe(
+    Layer.provideMerge(
+      ExtensionSet.layer.pipe(
+        Layer.provide(Subagents.layer.pipe(Layer.provide(workspaces))),
+        Layer.provide(ExecutorLink.layerDisabled),
+        Layer.provide(PiHost.layerEmpty),
+        Layer.provide(ModelHealth.layerTest),
+        Layer.provide(SettingsStore.layerTest),
+        Layer.provide(ReachServicesTest),
+        Layer.provide(PiModelSource.layerFromModelSource)
+      )
+    ),
+    Layer.provideMerge(
+      ModelSource.layerFaux({
+        tokensPerSecond: 4000,
+        settings: { retry: { enabled: false } },
+      })
+    ),
+    Layer.provide(
+      BrainConfig.layerFrom(mkdtempSync(path.join(tmpdir(), "cairn-repair-")))
     )
-  ),
-  Layer.provideMerge(
-    ModelSource.layerFaux({
-      tokensPerSecond: 4000,
-      settings: { retry: { enabled: false } },
-    })
-  ),
-  Layer.provide(
-    BrainConfig.layerFrom(mkdtempSync(path.join(tmpdir(), "cairn-repair-")))
-  )
-);
+  );
 
 const Platform = Layer.mergeAll(Git.layer, NodeServices.layer);
 
@@ -68,6 +75,7 @@ describe("the child workspace boot repair", () => {
       const parent = thread(60);
       const landed = thread(61);
       const lost = thread(62);
+      const workspacesLayer = workspacesAt(data);
 
       yield* Effect.gen(function* () {
         const seam = yield* HarnessSeam;
@@ -104,7 +112,11 @@ describe("the child workspace boot repair", () => {
           yield* hasBranch(repo, Option.getOrThrow(dropped.worktree).branch)
         );
         assert.deepStrictEqual(yield* orphansOf(repo, data), []);
-      }).pipe(Effect.provide(Layer.mergeAll(harness, workspacesAt(data))));
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(harnessOver(workspacesLayer), workspacesLayer)
+        )
+      );
     }).pipe(Effect.scoped, Effect.provide(Platform))
   );
 });

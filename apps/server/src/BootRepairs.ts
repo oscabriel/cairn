@@ -23,6 +23,10 @@ import type { ExecutorSweep } from "./executor/ExecutorSweep.ts";
 import { CheckpointCapture } from "./git/CheckpointCapture.ts";
 import type { Portals } from "./reach/Portals.ts";
 import { portalReconcile, startPortalSweep } from "./reach/ReachRepair.ts";
+import type { EventSink } from "./shell/EventSink.ts";
+import type { ThreadRows } from "./shell/ThreadRows.ts";
+import { retryParkedSubagentTasks } from "./subagents/SubagentRepairs.ts";
+import { repairSubagentRows } from "./subagents/SubagentRows.ts";
 import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
 import { reconcileSpendAtBoot } from "./usage/SpendLedger.ts";
 import type { SpendLedger } from "./usage/SpendLedger.ts";
@@ -63,17 +67,21 @@ export const bootRepairs: ReadonlyArray<
     | CheckpointCapture
     | ChildWorkspaces
     | EventReactors
+    | EventSink
     | ExecutorSweep
     | HarnessSeam
     | Portals
     | SpendLedger
     | ThreadLaunch
+    | ThreadRows
   >
 > = [
   sweepAttachmentUploads,
   bootRepair("executor-sweep", sweepUnfinishedExecutorRequests),
   bootRepair("cancel abandoned approvals", cancelAbandonedApprovalsAtBoot),
   retryParkedApprovalWaits,
+  bootRepair("subagent rows", repairSubagentRows),
+  bootRepair("retry parked subagent tasks", retryParkedSubagentTasks),
   bootRepair("child workspace repair", repairChildWorkspacesAtBoot),
   bootRepair(
     "resume interrupted launches",

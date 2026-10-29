@@ -50,7 +50,11 @@ import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
-import { subagentsExtension, workspaceAccess } from "../subagents/Subagents.ts";
+import {
+  Subagents,
+  subagentsExtension,
+  workspaceAccess,
+} from "../subagents/Subagents.ts";
 import type { ChildWorkspaceAccess } from "../subagents/SubagentTasks.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
@@ -138,22 +142,26 @@ const brainAt = (
 ) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
-      Layer.unwrap(
-        Effect.gen(function* () {
-          const workspaces = workspaceAccess(
-            yield* ChildWorkspaces,
-            yield* Effect.context()
-          );
+      ExtensionSet.layer.pipe(
+        Layer.provide(
+          Layer.effect(
+            Subagents,
+            Effect.gen(function* () {
+              const workspaces = workspaceAccess(
+                yield* ChildWorkspaces,
+                yield* Effect.context()
+              );
 
-          return ExtensionSet.withExtra([
-            subagentsExtension(
-              NO_SUBAGENT_FAULTS,
-              access(workspaces),
-              DEFAULT_TOOL_OPTIONS
-            ),
-          ]);
-        })
-      ).pipe(
+              return Subagents.of({
+                extension: subagentsExtension(
+                  NO_SUBAGENT_FAULTS,
+                  access(workspaces),
+                  DEFAULT_TOOL_OPTIONS
+                ),
+              });
+            })
+          )
+        ),
         Layer.provide(ExecutorLink.layerDisabled),
         Layer.provide(PiHost.layerEmpty),
         Layer.provide(ModelHealth.layerTest),

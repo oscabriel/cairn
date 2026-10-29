@@ -16,6 +16,8 @@ export const ExtensionOrder = {
   context: 400,
   codemode: 500,
   executor: 600,
+  /** `cairn.subagents`: the seven subagent tools and the anchor, brief and reporter tasks (ADR 0028). */
+  subagents: 650,
   bridgeCwd: 700,
   /** `cairn.reach`: the artifact tools (3E) and the portal tools (3F); 750 is the provider request log's. */
   reach: 760,

@@ -13,6 +13,7 @@ import { RolesTool } from "../models/RolesExtension.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachTools } from "../reach/ReachExtension.ts";
 import { skillExtensionSources } from "../skills/SkillsLayer.ts";
+import { Subagents } from "../subagents/Subagents.ts";
 import { BridgeCwd } from "./BridgeCwdExtension.ts";
 import { CodeMode } from "./CodeMode.ts";
 import { CodingTools } from "./CodingTools.ts";
@@ -34,12 +35,14 @@ const production: ReadonlyArray<
     | RolesTool
     | ResultTool
     | ReachTools
+    | Subagents
   >
 > = [
   CodingTools.useSync((tools) => tools.extension),
   CodeMode.useSync((codemode) => codemode.extension),
   ...skillExtensionSources,
   ExecutorExtension.useSync((executor) => executor.extension),
+  Subagents.useSync((subagents) => subagents.extension),
   BridgeCwd.useSync((bridgeCwd) => bridgeCwd.extension),
   PiHost.useSync((host) => host.extension),
   ModelHealthFeed.useSync((feed) => feed.extension),
@@ -62,7 +65,9 @@ const production: ReadonlyArray<
 // `BridgeProvider`, a reference the deployed root provides. The `cairn.reach` tools read
 // `Artifacts` and `PortalTools`, which the root gives too (`ReachLive` in `AppLayer.ts`, the same
 // reference its handlers and boot repairs use; `ReachServicesTest` in tests), so one porch client
-// and one portal store serve the tools and the RPCs.
+// and one portal store serve the tools and the RPCs. `Subagents` is the root's as well:
+// `Subagents.layer` over the root's `ChildWorkspaces` in the entry points, `Subagents.layerWith`
+// with planted faults in a test brain.
 const dependencies = Layer.mergeAll(
   CodingTools.layer,
   CodeMode.layer,

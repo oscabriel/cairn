@@ -35,6 +35,7 @@ import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../reach/ReachLayer.ts";
+import { Subagents } from "../subagents/Subagents.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { Approvals, cancelAbandonedApprovalsAtBoot } from "./CairnDocs.ts";
@@ -65,6 +66,7 @@ const harnessLayer = (dataDir: string) =>
         Layer.provide(ModelHealth.layerTest),
         Layer.provide(SettingsStore.layerTest),
         Layer.provide(ReachServicesTest),
+        Layer.provide(Subagents.layerTest),
         Layer.provide(PiModelSource.layerFromModelSource)
       )
     ),

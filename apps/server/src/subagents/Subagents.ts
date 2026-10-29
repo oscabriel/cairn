@@ -21,6 +21,7 @@ import { Context, Effect, Layer, Result } from "effect";
 
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
+import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { NO_SUBAGENT_FAULTS, SubagentFaults } from "../brain/SubagentFaults.ts";
 import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
@@ -38,12 +39,6 @@ import type { SubagentToolOptions } from "./SubagentTools.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const SUBAGENTS_EXTENSION = "cairn.subagents";
-
-/**
- * Where the extension installs: after Executor (600), before the bridge's cwd (700). Until the
- * integrator adds `subagents: 650` to `ExtensionOrder`, the key lives here.
- */
-export const SUBAGENTS_ORDER = 650;
 
 /** The child's agent change, filled once the tools exist. */
 interface ChildAgentHolder {
@@ -123,7 +118,7 @@ export const subagentsExtension = (
   workspaces: ChildWorkspaceAccess,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
 ): CairnExtension => ({
-  order: SUBAGENTS_ORDER,
+  order: ExtensionOrder.subagents,
   extension: build(faults, tuning, workspaces).extension,
 });
 
@@ -257,5 +252,13 @@ export class Subagents extends Context.Service<
         extension: subagentsExtension(faults, workspaces),
       });
     })
+  );
+
+  /**
+   * For tests that build the production extension set: no faults, and children's workspaces under
+   * a fresh temporary data folder (`ChildWorkspaces.layerTest`).
+   */
+  static readonly layerTest = Subagents.layer.pipe(
+    Layer.provide(ChildWorkspaces.layerTest)
   );
 }

@@ -30,6 +30,7 @@ import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../reach/ReachLayer.ts";
+import { Subagents } from "../subagents/Subagents.ts";
 import { COMMIT_OPTIONS } from "../threads/ThreadsTestKit.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import {
@@ -52,6 +53,7 @@ const harness = PiDurableHarness.layer.pipe(
       Layer.provide(ModelHealth.layerTest),
       Layer.provide(SettingsStore.layerTest),
       Layer.provide(ReachServicesTest),
+      Layer.provide(Subagents.layerTest),
       Layer.provide(PiModelSource.layerFromModelSource)
     )
   ),

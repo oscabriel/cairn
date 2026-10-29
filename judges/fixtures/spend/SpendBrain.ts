@@ -6,13 +6,15 @@
 // `kill -9`s it again and again; the last life runs every turn, waits for the ledger, then writes
 // `report.json` and exits.
 //
-//   node judges/fixtures/spend/SpendBrain.ts --dir <run> --turns N [--control]
+//   node judges/fixtures/spend/SpendBrain.ts --dir <run> --turns N [--control] [--retry-parked]
 //
 // - Boot: the ledger's reconcile (the boot repair), then the Harness resumes.
 // - Producer: turn n goes to thread n % 4 with request id `turn-<n>`, so a turn a killed life
 //   already admitted is not admitted twice; each round waits for its four threads.
 // - Truth, computed here and not by the ledger: each conversation's `pi.usage` tokens, and each of
 //   its own assistant responses priced alone with pi-ai's `calculateCost` at the twin's catalog.
+// - `--retry-parked` (the last life): retries every task the crash-loop guard parked before the
+//   Harness resumes, so five kills that land on one request do not leave its turn parked.
 // - `--control`: the broken control, a ledger that adds each response it reads and, at boot,
 //   catches up by adding every response again (its cursor lived in memory), so each life counts
 //   what earlier lives counted once more.
@@ -86,6 +88,7 @@ const { values } = parseArgs({
     dir: { type: "string" },
     turns: { type: "string", default: "48" },
     control: { type: "boolean", default: false },
+    "retry-parked": { type: "boolean", default: false },
   },
 });
 
@@ -248,6 +251,9 @@ const SpendLayer = values.control
           recordCall: () => Effect.die("the control records no calls"),
           rollup: () => Effect.die("the control has no roll-up"),
           flush: Effect.void,
+          changes: Stream.empty,
+          touch: () => Effect.void,
+          parents: Effect.succeed(new Map()),
         })
       )
     )
@@ -359,6 +365,34 @@ const bootControl = Effect.fnUntraced(function* (
     ),
     Effect.forkScoped
   );
+});
+
+/**
+ * The last life's boot: runs again every task the crash-loop guard parked. Five kills that land
+ * while a thread waits on its request park its generation (`restart_limit`), and nothing else in
+ * this brain retries it, so without this the last life would wait for a turn that never runs.
+ */
+const retryParked = Effect.gen(function* () {
+  const brain = yield* Brain;
+  const session = yield* brain.session;
+
+  const inspection = yield* durable(
+    "judge.inspect",
+    async (context) => await session.harness.inspect(context)
+  );
+
+  let retried = 0;
+
+  for (const { record, state } of inspection.tasks) {
+    if (state.kind === "blocked" && state.reason === "restart_limit") {
+      yield* durable("judge.retry", async (context) => {
+        await session.harness.retryTask(record.id, context);
+      });
+      retried += 1;
+    }
+  }
+
+  return retried;
 });
 
 /** Every turn, a round of four at a time; an admitted turn is not admitted again. */
@@ -538,6 +572,13 @@ const program = Effect.gen(function* () {
     const report = yield* SpendLedger.use((ledger) => ledger.reconcile);
 
     yield* Console.error(JSON.stringify({ reconcile: report }));
+  }
+
+  if (values["retry-parked"]) {
+    writeFileSync(
+      path.join(dir, "retried.json"),
+      JSON.stringify(yield* retryParked)
+    );
   }
 
   yield* brain.resume;

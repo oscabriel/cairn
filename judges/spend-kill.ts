@@ -2,9 +2,13 @@
 // (`fixtures/spend/SpendBrain.ts`, Cairn's `Brain`, spend feed, ledger and shell store over a scratch
 // directory, never the deployed unit) runs turns on four threads while the judge `kill -9`s it,
 // again and again, each kill a random 100 to 1,500 ms after the brain says it is producing. The last
-// life runs every turn and writes its report.
+// life retries every task the kills parked (five kills on one request park it), runs every turn and
+// writes its report.
 //
-//   node judges/spend-kill.ts [--case kills|control]... [--kills N] [--turns N] [--keep]
+//   node judges/spend-kill.ts [--case kills|control]... [--kills N] [--turns N] [--quick] [--keep]
+//
+// `--quick` kills 50 to 150 ms after the brain says it is producing, so five kills land on one
+// request and pi-durable parks it; `retriedParked` in the result counts what the last life retried.
 //
 // Cases (default: both):
 // - kills: 12 kills over 48 turns, the real ledger.
@@ -53,6 +57,8 @@ const { values } = parseArgs({
     kills: { type: "string" },
     turns: { type: "string", default: "48" },
     keep: { type: "boolean", default: false },
+    // Kills 50 to 150 ms after producing, so several land on one request and park it.
+    quick: { type: "boolean", default: false },
   },
 });
 
@@ -105,12 +111,22 @@ const Report = Schema.Struct({
 const decodeReport = Schema.decodeUnknownEffect(Schema.fromJsonString(Report));
 
 /** Starts one life of the judge brain. */
-const startBrain = (dir: string, spec: CaseSpec, turns: number) =>
+const startBrain = (
+  dir: string,
+  spec: CaseSpec,
+  turns: number,
+  last: boolean
+) =>
   Effect.sync(() => {
     const args = [brainScript, "--dir", dir, "--turns", String(turns)];
 
     if (spec.control) {
       args.push("--control");
+    }
+
+    // The last life retries what the kills parked: five kills on one request park it for good.
+    if (last) {
+      args.push("--retry-parked");
     }
 
     return spawn(process.execPath, args, {
@@ -312,7 +328,7 @@ const runCase = Effect.fn("spend-kill.case")(function* (spec: CaseSpec) {
   let landed = 0;
 
   for (let life = 0; life < kills; life += 1) {
-    const child = yield* startBrain(dir, spec, turns);
+    const child = yield* startBrain(dir, spec, turns, false);
 
     const ready = yield* Effect.result(
       waitForLine(child, "producing", "60 seconds")
@@ -329,14 +345,16 @@ const runCase = Effect.fn("spend-kill.case")(function* (spec: CaseSpec) {
       };
     }
 
-    const delay = yield* Random.nextIntBetween(100, 1500);
+    const delay = values.quick
+      ? yield* Random.nextIntBetween(50, 150)
+      : yield* Random.nextIntBetween(100, 1500);
 
     yield* Effect.sleep(Duration.millis(delay));
     yield* killHard(child);
     landed += 1;
   }
 
-  const last = yield* startBrain(dir, spec, turns);
+  const last = yield* startBrain(dir, spec, turns, true);
   const done = yield* Effect.result(waitForLine(last, "done", "180 seconds"));
 
   yield* killHard(last);
@@ -356,6 +374,13 @@ const runCase = Effect.fn("spend-kill.case")(function* (spec: CaseSpec) {
   }
 
   const report = yield* decodeReport(readFileSync(reportFile, "utf-8"));
+  const retriedFile = path.join(dir, "retried.json");
+
+  // Tasks the kills parked, which the last life ran again.
+  const retriedParked = existsSync(retriedFile)
+    ? Number(readFileSync(retriedFile, "utf-8"))
+    : 0;
+
   const failures = check(spec, report);
 
   if (!values.keep) {
@@ -370,6 +395,7 @@ const runCase = Effect.fn("spend-kill.case")(function* (spec: CaseSpec) {
     case: spec.name,
     pass: failures.length === 0,
     kills: landed,
+    retriedParked,
     turns,
     responses: Object.values(report.truth).reduce(
       (sum, truth) => sum + truth.responses,

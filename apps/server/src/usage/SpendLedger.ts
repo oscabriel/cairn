@@ -22,13 +22,16 @@
 //   `INSERT OR IGNORE` under `(source, key, model_key)`: a call repeated after a crash writes once,
 //   and a call whose answer was lost writes nothing (lost, never doubled).
 // - Each thread row's `spend` (its own and its lineage subtree's) follows the ledger, at most one
-//   commit per thread per 50 ms.
+//   commit per thread per 50 ms. Its `budget` word is the `BudgetBook`'s, when the root gives one.
+// - `changes` tells the budget guard which threads' rows moved, after they are written, so a
+//   roll-up it then reads includes them.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { ThreadId as ThreadIdSchema } from "@cairn/protocol/Ids";
 import type { ModelRef } from "@cairn/protocol/Models";
 import { Micros, PriceBasis, SpendSummary } from "@cairn/protocol/Spend";
 import type {
+  BudgetState,
   ModelSpend,
   Spend,
   SpendScope,
@@ -44,6 +47,7 @@ import {
   Match,
   Option,
   Predicate,
+  PubSub,
   Queue,
   Schema,
   Semaphore,
@@ -72,6 +76,8 @@ import {
   ThreadActivityUpdate,
 } from "../shell/ShellCommands.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
+import { BudgetBook } from "./BudgetBook.ts";
+import type { Parents } from "./BudgetBook.ts";
 
 /** At most one spend commit per thread row inside this window. */
 export const SPEND_WINDOW = Duration.millis(50);
@@ -603,6 +609,15 @@ export class SpendLedger extends Context.Service<
     ): Effect.Effect<Spend, SpendLedgerError | SpendScopeNotFound>;
     /** Applies every reading taken so far and commits pending thread figures now (tests, judges). */
     readonly flush: Effect.Effect<void>;
+    /**
+     * The threads whose rows changed, after each change is written: a reading applied, a call
+     * recorded, a reconcile. Each subscriber sees changes after it joined.
+     */
+    readonly changes: Stream.Stream<ReadonlyArray<ThreadId>>;
+    /** Brings these threads' row figures up to date again, as after a change (a budget moved). */
+    touch(threads: ReadonlyArray<ThreadId>): Effect.Effect<void>;
+    /** Every live thread's parent, from the thread rows' lineage. */
+    readonly parents: Effect.Effect<Parents, SpendLedgerError>;
   }
 >()("cairn/server/usage/SpendLedger") {
   /**
@@ -617,6 +632,20 @@ export class SpendLedger extends Context.Service<
       const models = yield* ModelSource;
       const sink = yield* EventSink;
       const threadRows = yield* ThreadRows;
+      // The budget word of each row; `none` everywhere when the root has no budgets.
+      const book = yield* Effect.serviceOption(BudgetBook);
+      const changeHub = yield* PubSub.unbounded<ReadonlyArray<ThreadId>>();
+
+      const announce = (threads: ReadonlyArray<ThreadId>) =>
+        threads.length === 0
+          ? Effect.void
+          : PubSub.publish(changeHub, threads).pipe(Effect.asVoid);
+
+      const budgetWord = (threadId: ThreadId) =>
+        Option.match(book, {
+          onNone: () => Effect.succeed<BudgetState>("none"),
+          onSome: (found) => found.rowState(threadId),
+        });
 
       const lock = yield* Semaphore.make(1);
       const dirty = new Set<ThreadId>();
@@ -724,6 +753,7 @@ export class SpendLedger extends Context.Service<
 
           yield* replaceRows(reading, threadId, rows, reading.seq);
           yield* markDirty(threadId);
+          yield* announce(Option.toArray(threadId));
         },
         Effect.catchTags({
           SqlError: (cause) =>
@@ -790,8 +820,11 @@ export class SpendLedger extends Context.Service<
               continue;
             }
 
-            const summary = summaryOf(
-              yield* rowsOfThreads(subtreeOf(threadId, children))
+            const word = yield* budgetWord(threadId);
+
+            const summary = Option.map(
+              summaryOf(yield* rowsOfThreads(subtreeOf(threadId, children))),
+              (figure): SpendSummary => ({ ...figure, budget: word })
             );
 
             if (sameSummary(summary, row.value.shell.spend)) {
@@ -915,12 +948,14 @@ export class SpendLedger extends Context.Service<
 
         dirty.clear();
 
-        const changed = yield* publish(threads);
+        const published = yield* publish(threads);
+
+        yield* announce(threads);
 
         const report: SpendReconcileReport = {
           conversations: readings.length,
           rebuilt,
-          threads: changed,
+          threads: published,
         };
 
         yield* Effect.logInfo("spend ledger reconciled").pipe(
@@ -993,6 +1028,7 @@ export class SpendLedger extends Context.Service<
           }
 
           yield* markDirty(call.threadId);
+          yield* announce(Option.toArray(call.threadId));
         },
         Effect.catchTag("SqlError", (cause) =>
           Effect.fail(
@@ -1099,7 +1135,44 @@ export class SpendLedger extends Context.Service<
         yield* lock.withPermits(1)(flushThreads);
       });
 
-      return SpendLedger.of({ reconcile, recordCall, rollup, flush });
+      const touch = Effect.fn("SpendLedger.touch")(function* (
+        threads: ReadonlyArray<ThreadId>
+      ) {
+        for (const threadId of threads) {
+          yield* markDirty(Option.some(threadId));
+        }
+      });
+
+      const parents = lineage.pipe(
+        Effect.map(
+          (rows): Parents =>
+            new Map(
+              rows.flatMap((row) =>
+                row.parent === null ? [] : [[row.id, row.parent] as const]
+              )
+            )
+        ),
+        Effect.catchTags({
+          SqlError: (cause) =>
+            Effect.fail(
+              failed("SpendLedger.rollup", "read the thread lineage")(cause)
+            ),
+          SchemaError: (cause) =>
+            Effect.fail(
+              failed("SpendLedger.rollup", "read the thread lineage")(cause)
+            ),
+        })
+      );
+
+      return SpendLedger.of({
+        reconcile,
+        recordCall,
+        rollup,
+        flush,
+        changes: Stream.fromPubSub(changeHub),
+        touch,
+        parents,
+      });
     })
   );
 }

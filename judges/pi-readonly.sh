@@ -80,6 +80,7 @@ const { HarnessBoot, PiDurableBrain } = await import(`${src}/AppLayer.ts`);
 const { HarnessSeam } = await import(`${src}/brain/HarnessSeam.ts`);
 const { PiHost } = await import(`${src}/pi-host/PiHost.ts`);
 const { ModelHealth } = await import(`${src}/models/ModelHealth.ts`);
+const { SettingsStore } = await import(`${src}/models/SettingsStore.ts`);
 const { ThreadId, ProjectId } = await import("@cairn/protocol/Ids");
 const { OAuthStore } = await import(`${src}/models/OAuthStore.ts`);
 const { Database } = await import(`${src}/db/Database.ts`);
@@ -110,6 +111,8 @@ const brain = PiDurableBrain({ models }).pipe(
   Layer.provide(PiHost.layer),
   // The store the health feed records into, in memory: this judge watches the agent dir.
   Layer.provide(ModelHealth.layerTest),
+  // The settings the roles tool reads its table from, in memory as well.
+  Layer.provide(SettingsStore.layerTest),
   Layer.provide(config)
 );
 

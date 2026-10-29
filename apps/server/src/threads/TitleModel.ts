@@ -1,7 +1,9 @@
 // The cheap model that names threads and branches (plan D43): one short request outside any
 // conversation, never through the Claude bridge, so a ten-token answer never starts a `claude`
 // child. Its callers always have a fallback, so this service never fails: no model, a failed
-// request or an empty answer all read as none.
+// request or an empty answer all read as none. Each answered call is recorded in the spend ledger
+// under its caller's key, when the brain has a ledger (ADR 0036), so a call repeated after a crash
+// counts once; a ledger that cannot write only logs.
 
 import type { ModelRef } from "@cairn/protocol/Models";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -17,6 +19,8 @@ import {
 
 import { ModelSource } from "../brain/ModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
+import { SpendLedger } from "../usage/SpendLedger.ts";
+import type { MeteredCall } from "../usage/SpendLedger.ts";
 
 /** How long one naming request may take before the caller falls back. */
 export const TITLE_MODEL_TIMEOUT = Duration.seconds(20);
@@ -50,11 +54,35 @@ export const decodeJsonAnswer = <S extends Schema.Codec<unknown, unknown>>(
   );
 };
 
+/** Records an answered call in the ledger, when there is one; a failed write only logs. */
+const meter = (
+  ledger: Option.Option<SpendLedger["Service"]>,
+  call: MeteredCall,
+  message: AssistantMessage
+) =>
+  Option.match(ledger, {
+    onNone: () => Effect.void,
+    onSome: (found) =>
+      found.recordCall(call, message).pipe(
+        Effect.catchTag("SpendLedgerError", (failure) =>
+          Effect.logWarning("title model spend not recorded").pipe(
+            Effect.annotateLogs({
+              event: "title_model_spend_failed",
+              source: call.source,
+              error: failure.message,
+            })
+          )
+        )
+      ),
+  });
+
 /** Asks `model` one question through `models`, with the timeout; none on any failure. */
 const completeOn = Effect.fn("TitleModel.complete")(function* (
   models: (typeof ModelSource)["Service"],
+  ledger: Option.Option<SpendLedger["Service"]>,
   model: ModelRef,
-  prompt: string
+  prompt: string,
+  call: MeteredCall
 ) {
   if (model.provider === BRIDGE_PROVIDER) {
     return Option.none<string>();
@@ -83,6 +111,10 @@ const completeOn = Effect.fn("TitleModel.complete")(function* (
       Effect.option
     );
 
+  if (Option.isSome(answer)) {
+    yield* meter(ledger, call, answer.value);
+  }
+
   return Option.filter(
     Option.map(
       Option.filter(
@@ -100,8 +132,14 @@ const completeOn = Effect.fn("TitleModel.complete")(function* (
 export class TitleModel extends Context.Service<
   TitleModel,
   {
-    /** The model's text answer to `prompt`; none when no model is set or the request failed. */
-    complete(prompt: string): Effect.Effect<Option.Option<string>>;
+    /**
+     * The model's text answer to `prompt`; none when no model is set or the request failed. The
+     * call's spend is recorded under `call`.
+     */
+    complete(
+      prompt: string,
+      call: MeteredCall
+    ): Effect.Effect<Option.Option<string>>;
   }
 >()("cairn/server/threads/TitleModel") {
   /** No model: every caller uses its fallback (a slug of the message). */
@@ -112,31 +150,38 @@ export class TitleModel extends Context.Service<
 
   /**
    * Asks `model` through `ModelSource`, with a timeout. The Claude bridge is refused, so it falls
-   * back instead. Needs `ModelSource`.
+   * back instead. Needs `ModelSource`; records into `SpendLedger` when one is provided.
    */
   static readonly layerFixed = (model: ModelRef) =>
     Layer.effect(
       TitleModel,
-      ModelSource.useSync((models) =>
-        TitleModel.of({
-          complete: (prompt) => completeOn(models, model, prompt),
-        })
-      )
+      Effect.gen(function* () {
+        const models = yield* ModelSource;
+        const ledger = yield* Effect.serviceOption(SpendLedger);
+
+        return TitleModel.of({
+          complete: (prompt, call) =>
+            completeOn(models, ledger, model, prompt, call),
+        });
+      })
     );
 
   /**
    * The model named by the `titleModel` server setting, read at each request, so a change applies
    * to the next title without a restart. No setting, or a settings read that fails, uses the
-   * fallback. Needs `ModelSource` and `SettingsStore`.
+   * fallback. Needs `ModelSource` and `SettingsStore`; records into `SpendLedger` when one is
+   * provided.
    */
   static readonly layerFromSettings = Layer.effect(
     TitleModel,
     Effect.gen(function* () {
       const models = yield* ModelSource;
       const settings = yield* SettingsStore;
+      const ledger = yield* Effect.serviceOption(SpendLedger);
 
       const complete = Effect.fn("TitleModel.completeFromSettings")(function* (
-        prompt: string
+        prompt: string,
+        call: MeteredCall
       ) {
         const chosen = yield* settings.get.pipe(
           Effect.map((current) => current.titleModel),
@@ -147,7 +192,7 @@ export class TitleModel extends Context.Service<
           return Option.none<string>();
         }
 
-        return yield* completeOn(models, chosen.value, prompt);
+        return yield* completeOn(models, ledger, chosen.value, prompt, call);
       });
 
       return TitleModel.of({ complete });

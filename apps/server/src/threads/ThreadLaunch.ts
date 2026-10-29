@@ -352,7 +352,7 @@ export class ThreadLaunch extends Context.Service<
         oldBranch: string,
         message: string
       ) {
-        const desired = yield* branchNames.generate(message);
+        const desired = yield* branchNames.generate(threadId, message);
 
         const renamed = yield* worktrees.renameBranch(
           worktreePath,
@@ -397,7 +397,10 @@ export class ThreadLaunch extends Context.Service<
         row: LaunchRow,
         placeholder: string
       ) {
-        const title = yield* titles.generate(row.input.initialMessage.text);
+        const title = yield* titles.generate(
+          row.input.threadId,
+          row.input.initialMessage.text
+        );
 
         if (Option.isNone(title)) {
           return;

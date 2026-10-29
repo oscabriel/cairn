@@ -23,6 +23,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import type { ThreadId } from "@cairn/protocol/Ids";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
 import { sanitizeBranchFragment } from "../projects/Worktrees.ts";
@@ -66,8 +67,11 @@ export const slugBranchName = (message: string) =>
 export class BranchNames extends Context.Service<
   BranchNames,
   {
-    /** A branch name for the work `message` asks for: the model's, else a slug of the message. */
-    generate(message: string): Effect.Effect<string>;
+    /**
+     * A branch name for the work `message` asks for in thread `threadId`: the model's, else a slug
+     * of the message. The call's spend is recorded once per thread.
+     */
+    generate(threadId: ThreadId, message: string): Effect.Effect<string>;
   }
 >()("cairn/server/threads/BranchNames") {
   /** Over the ambient `TitleModel`. */
@@ -77,9 +81,14 @@ export class BranchNames extends Context.Service<
       const model = yield* TitleModel;
 
       const generate = Effect.fn("BranchNames.generate")(function* (
+        threadId: ThreadId,
         message: string
       ) {
-        const answer = yield* model.complete(buildBranchNamePrompt(message));
+        const answer = yield* model.complete(buildBranchNamePrompt(message), {
+          source: "branch-name",
+          key: threadId,
+          threadId: Option.some(threadId),
+        });
 
         const fromModel = Option.flatMap(answer, (text) =>
           Option.map(decodeJsonAnswer(BranchAnswer, text), (decoded) =>

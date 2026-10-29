@@ -100,6 +100,8 @@ export const ThreadActivityPatch = Schema.Struct({
   modelId: patchField(ThreadShell.fields.modelId),
   thinkingLevel: patchField(ThreadShell.fields.thinkingLevel),
   runtimeMode: patchField(ThreadShell.fields.runtimeMode),
+  /** The spend ledger's figure (`usage/SpendLedger.ts`); a cache, so it never moves `updatedAt`. */
+  spend: patchField(ThreadShell.fields.spend),
 });
 
 /** A thread activity patch. */
@@ -126,6 +128,7 @@ export const emptyActivityPatch: ThreadActivityPatch = {
   modelId: Option.none(),
   thinkingLevel: Option.none(),
   runtimeMode: Option.none(),
+  spend: Option.none(),
 };
 
 /** Updates the fields of a thread row derived from pi-durable (the shell projector's command). */
@@ -690,8 +693,13 @@ const applyPatch = (
   };
 
   const changed = !sameThreadShell(next, shell);
+  const spend = Option.getOrElse(patch.spend, () => shell.spend);
 
-  return { ...row, shell: changed ? { ...next, updatedAt: now } : shell };
+  // A spend figure is derived from the ledger: it changes the row but is not activity.
+  return {
+    ...row,
+    shell: changed ? { ...next, spend, updatedAt: now } : { ...shell, spend },
+  };
 };
 
 const planProjectCreate = (

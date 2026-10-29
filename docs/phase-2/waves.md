@@ -500,3 +500,55 @@ L2's block names no judge "at integration"; these rerun its judge and L0's on th
 ### Left for the user
 
 - **Choose a look** in round 0 at `https://plans.gneiss.run/cairn/v2/look/round-0/` (graphite, ink or stone). Until then `?ui=next` draws graphite. Nothing is deployed by this integration.
+
+## Look track L1 integration
+
+Integrated on 2026-10-29 on `main`, after L1's third review round.
+
+### Packages
+
+| Package | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| L1 Measured transcript list | `phase2/L1` | `5148064` | done and approved, merged as `8cde02e` |
+
+L1 merged with `--no-ff` with no conflict. It replaces `@foldkit/ui`'s virtual list with the transcript's own measured list in `apps/web/src/timeline/list` (ADR 0041, accepted), folds `FollowEnd.ts` into `list/Place.ts`, and carries its `judges/capture.ts` changes (below). The hand-offs and this note are the next commit.
+
+Both blocking findings of the round that left L1 out (in the L0 and L1 note) are closed. A row's off-screen copy is drawn from its own cache slot (`itemToOffScreenView`, a second per-thread keyed lazy), so dropping the measuring box no longer strips the live row's listeners and Mounts; a new `probeClick` check clicks a fold that came in from the box. `scrollUp` now judges what the reader sees (the first visible row changed, or moved more than 1 px) and only reports `scrollTop` changes.
+
+### Integration judges
+
+L1's block names no judge "at integration"; these rerun its judges on the merged `main` with the hand-offs applied, each under the judge lock.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 368 s: fmt, lint, typecheck, 1,994 tests (19 more than L2's integration: L1's `List.test.ts` and the timeline tests). No dependency changed; `pnpm install --frozen-lockfile` was a no-op. |
+| `node judges/transcript-scroll.ts` | pass | `KNOWN_FAILING` empty, every check true. 2,100 rows, 328 elements on load and after the range walk; follow 0 px over 358 frames; 0 long tasks; range 6,400 px up and down with 0 px range steps and 0 reversals; reflow worst 0.5 px (at 390 px); insert-above, arrive, insert-far, arrive-far and remove-far 0 anchor moves (worst offset shift 0.7 px); extend 18,149 and 18,573 px joined at 1,440 and 390 px, 0 key changes; range-after-reflow (400 ms) 0 px steps; at-once reflow reported, not judged: 216 px steps, 6 `scrollTop` reversals, 0 content reversals; nested-wheel end 0 px, pill hidden; scroll-up 0 anchor moves, 0 `scrollTop` changes; probe-click 12 rows in the box, 0 listeners lost, `turn-fold:turn:2761` opened. |
+| `transcript-scroll.ts --broken estimate` | fails, as it should | range (305 px steps), arrive, extend, rangeAfterReflow and probeClick fail. |
+| Package's own controls and mutation (on `5148064`) | each fails its checks | anchor: reflow, insertAbove, arrive, insertFar, arriveFar, removeFar, extend; wheel: nestedWheel; estimate: range, arrive, extend, rangeAfterReflow, probeClick, longTasks; reflow: reflow; bookmark: reflow, longTasks; extend: extend. The shared lazy slot put back fails probeClick with 5 live listener removals and the fold closed (restored by trap, not committed). Over 14 clean runs the package saw one pill miss at 69 px (not seen in the next 10) and one longTasks miss at 51 ms under load 9.8 (ok on rerun). |
+| `node judges/typing.ts chromium` | pass | 1,200 of 1,200 keys, match, IME ok, menus ok (path, skill, slash command); 0 slow views (the package saw 6, max 19.8 ms). |
+| `node judges/behaviour.ts --strict` (classic) | pass | 22 of 22. |
+| `node judges/behaviour.ts --ui next --strict` | pass | 22 of 22. |
+| `node judges/capture.ts cairn --group thread` | pass | All thread states entered, including 390 thread-turn, thread-fold-open and thread-changed-files; no "no turn-fold row" log; exit 0 in 79 s. |
+| Real-model judges | not run | None needed. $0. |
+
+### Hand-offs applied
+
+- **`judges/capture.ts`**, taken as is from the branch: `enterThreadState` scrolls Cairn's `[data-testid="timeline-scroll"]` up in 600 px steps (at most 40) until a drawn turn-fold appears, for thread-turn, thread-fold-open and thread-changed-files (the changed-files search uses the same helper); thread-end returns early and is captured as loaded; row locators skip only the off-screen probe copies, with `sel:not([data-list-probe] sel)`, so t3code's half (which has no `timeline-scroll` test id) finds its rows as on `main` before.
+- **`docs/phase-2/backlog.md`**: the "Carried in from stage 2" transcript bullet is marked fixed by L1; `KNOWN_FAILING` is empty.
+- **`GLOSSARY.md`**: "Measured list".
+
+### Rules later packages follow
+
+- **The transcript's rows go through `timeline/list`.** A row view must be safe to draw twice (once in the off-screen measuring box, once in the list); its off-screen copy comes from `itemToOffScreenView`, never the list's own lazy slot. 6C's subagent rows build on it.
+- **`transcript-scroll.ts` keeps `KNOWN_FAILING` empty**, and a change to the list keeps every `--broken` control failing its checks.
+
+### What differs from the plan
+
+- The package's deviations stand as accepted: `FollowEnd.ts` is gone and following lives in `list/Place.ts` (the surfaces note had kept FollowEnd as the follow mount), so one Mount owns `scrollTop`; history the list never drew is measured off-screen ahead of the reader rather than mounted at once as MonoCode does; MonoCode's pause counter for sliding panes is not built, since nothing slides yet; the broken controls are a `broken` field on the list Model, shown as `data-broken` only when set; the probe-click check fires its own scroll event after setting `scrollTop`, matching the reviewer's probe; listener removals count only for elements still connected afterwards.
+- A row coming on screen is now rendered twice (box and list) where the list used to reuse the box's copy; typing stays at 1,200 of 1,200.
+- Typing ran on Chromium only; WebKit is L7's gate.
+- The at-once reflow case (a range walk starting in the same frame as a width change) still steps the range by up to 216 px. ADR 0041 records it as a measured cost; 400 ms after the change the range holds at 0 px.
+
+### Left for the user
+
+- Nothing to do now; nothing is deployed by this integration. On the next deploy the classic transcript scrolls on the measured list, so the daily-driver day is when to watch for content moving under you.

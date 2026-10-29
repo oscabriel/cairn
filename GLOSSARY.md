@@ -216,6 +216,8 @@ _Avoid_: plugin
 
 **Look**: The set of design token values the `next` views draw with. Until the user chooses, three look candidates (graphite, the default; ink; stone) share one set of names in `next/tokens.css`, picked by `data-look` beside `data-ui`; the user picks one in a look round. _Avoid_: theme (that is dark or light), skin.
 
+**Measured list**: The transcript's own scroll list (`timeline/list`, ADR 0041). A row counts in the scroll range only once it has been measured (history it never drew is measured off-screen first), parked rows keep frozen heights, the first visible row keeps its offset through any change above it, and a glyph bookmark keeps the reader's place through width changes. _Avoid_: virtual list (that was `@foldkit/ui`'s, which estimated heights).
+
 **Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.
 
 **Projection**: The client's view of a thread: pi-durable's conversation with brain-only documents and Claude stamps removed, image data replaced by references and long strings cut.

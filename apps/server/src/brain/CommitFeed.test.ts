@@ -1,0 +1,338 @@
+// The pi-durable seam's subagent additions, over a real Harness: the commit feed names a child's
+// parent on its ThreadEnsured (from `cairn.child`, written in the creating commit) and turns each
+// status change in a parent's `cairn.subagents` into one SubagentUpdated, and a note written with
+// `model` content reaches the next model request while a display-only write does not. The
+// documents are committed here by hand, as the subagents extension will commit them.
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
+import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
+import type { JsonValue } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import type { Message } from "@earendil-works/pi-ai";
+import { defineDoc } from "@earendil-works/pi-durable";
+import type { Tx } from "@earendil-works/pi-durable";
+import { assert, describe, it } from "@effect/vitest";
+import {
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Ref,
+  Stream,
+} from "effect";
+import type { Scope } from "effect";
+
+import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { ModelHealth } from "../models/ModelHealth.ts";
+import { PiHost } from "../pi-host/PiHost.ts";
+import { Brain } from "./Brain.ts";
+import { BrainConfig } from "./BrainConfig.ts";
+import { ThreadMeta } from "./CairnDocs.ts";
+import { messageText } from "./CommitFeed.ts";
+import { ExtensionSet } from "./ExtensionSet.ts";
+import { FauxModels } from "./FauxModels.ts";
+import { HarnessSeam } from "./HarnessSeam.ts";
+import type { HarnessEvent } from "./HarnessSeam.ts";
+import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
+import { PiDurableHarness } from "./PiDurableHarness.ts";
+import { piConversationId } from "./PiIds.ts";
+
+const PARENT = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d1");
+
+const CHILD = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d2");
+
+const PROJECT = ProjectId.make("commit-feed-test");
+
+/** `cairn.child` as the subagents extension writes it; only the parent matters here. */
+interface ChildState {
+  [key: string]: JsonValue;
+  parentThreadId: string;
+}
+
+const ChildDoc = defineDoc<ChildState>({
+  kind: CHILD_DOCUMENT,
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ parentThreadId: "" }),
+  checkpointWhen: () => false,
+});
+
+/** `cairn.subagents` as the subagents extension writes it; the feed reads id and status. */
+interface SubagentsState {
+  [key: string]: JsonValue;
+  items: { [key: string]: JsonValue };
+}
+
+const SubagentsDoc = defineDoc<SubagentsState>({
+  kind: SUBAGENTS_DOCUMENT,
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ items: {} }),
+  checkpointWhen: () => false,
+});
+
+const harnessLayer = (dataDir: string) =>
+  PiDurableHarness.layer.pipe(
+    Layer.provide(
+      ExtensionSet.layer.pipe(
+        Layer.provide(ExecutorLink.layerDisabled),
+        Layer.provide(PiHost.layerEmpty),
+        Layer.provide(ModelHealth.layerTest)
+      )
+    ),
+    Layer.provideMerge(
+      ModelSource.layerFaux({
+        tokensPerSecond: 2000,
+        settings: { retry: { enabled: false } },
+      })
+    ),
+    Layer.provide(BrainConfig.layerFrom(dataDir))
+  );
+
+/** Polls `find` until it finds something, for up to ten seconds. */
+const waitFor = <A>(find: Effect.Effect<Option.Option<A>>) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const found = yield* find;
+
+      if (Option.isSome(found)) {
+        return found.value;
+      }
+
+      yield* Effect.sleep(Duration.millis(50));
+    }
+
+    return yield* Effect.die("waited ten seconds for nothing");
+  });
+
+interface Fixture {
+  readonly seam: HarnessSeam["Service"];
+  readonly brain: Brain["Service"];
+  readonly faux: FauxModels["Service"]["faux"];
+  readonly events: Ref.Ref<ReadonlyArray<HarnessEvent>>;
+  readonly parentConversation: ReturnType<typeof piConversationId>;
+}
+
+/** Runs `body` over a fresh brain with the parent thread ensured. */
+const withBrain = <A, E>(
+  body: (fixture: Fixture) => Effect.Effect<A, E, Scope.Scope>
+) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-commit-feed-"))),
+    (dataDir) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(harnessLayer(dataDir));
+          const seam = Context.get(context, HarnessSeam);
+          const brain = Context.get(context, Brain);
+          const { faux } = Context.get(context, FauxModels);
+          const events = yield* Ref.make<ReadonlyArray<HarnessEvent>>([]);
+
+          yield* seam.events.pipe(
+            Stream.runForEach((event) =>
+              Ref.update(events, (all) => [...all, event])
+            ),
+            Effect.forkScoped
+          );
+          yield* brain.resume;
+
+          const { conversationId } = yield* seam.ensureThread({
+            threadId: PARENT,
+            projectId: PROJECT,
+            model: FAUX_MODEL,
+            thinkingLevel: "off",
+            cwd: process.cwd(),
+            instructions: Option.none(),
+          });
+
+          return yield* body({
+            seam,
+            brain,
+            faux,
+            events,
+            parentConversation: piConversationId(conversationId),
+          });
+        })
+      ).pipe(Effect.orDie),
+    (dataDir) =>
+      Effect.sync(() => {
+        rmSync(dataDir, { recursive: true, force: true });
+      })
+  );
+
+/** One host commit, as the subagents extension's tasks make them. */
+const commit = (brain: Brain["Service"], change: (tx: Tx) => Promise<void>) =>
+  Effect.gen(function* () {
+    const { harness } = yield* Effect.orDie(brain.session);
+
+    yield* Effect.promise(async () => {
+      await harness.commit(change, BACKGROUND_CONTEXT);
+    });
+  });
+
+const subagentEvents = (events: ReadonlyArray<HarnessEvent>) =>
+  events.flatMap((event) =>
+    Predicate.isTagged(event, "SubagentUpdated") ? [event] : []
+  );
+
+describe("CommitFeed subagent events", () => {
+  it.live(
+    "a child's creating commit names its parent, and each registry status change is one SubagentUpdated",
+    () =>
+      withBrain(({ brain, events, parentConversation }) =>
+        Effect.gen(function* () {
+          yield* commit(brain, async (tx) => {
+            const child = await tx.createConversation({
+              ownership: { kind: "ownerless" },
+            });
+
+            const meta = await tx.doc(ThreadMeta, child.id);
+
+            meta.threadId = CHILD;
+            meta.projectId = PROJECT;
+
+            const link = await tx.doc(ChildDoc, child.id);
+
+            link.parentThreadId = PARENT;
+          });
+
+          const ensured = yield* waitFor(
+            Effect.map(Ref.get(events), (all) =>
+              Option.fromUndefinedOr(
+                all.find(
+                  (event) =>
+                    Predicate.isTagged(event, "ThreadEnsured") &&
+                    event.threadId === CHILD
+                )
+              )
+            )
+          );
+
+          assert.deepStrictEqual(
+            Predicate.isTagged(ensured, "ThreadEnsured")
+              ? ensured.parent
+              : Option.none(),
+            Option.some(PARENT)
+          );
+
+          const setItem = (status: string, delivered: number) =>
+            commit(brain, async (tx) => {
+              const registry = await tx.doc(SubagentsDoc, parentConversation);
+
+              registry.items["brief-1"] = {
+                threadId: CHILD,
+                status,
+                delivered,
+              };
+            });
+
+          yield* setItem("working", 0);
+          yield* waitFor(
+            Effect.map(Ref.get(events), (all) =>
+              subagentEvents(all).length >= 1
+                ? Option.some(true)
+                : Option.none()
+            )
+          );
+
+          // Another field changed, the status did not: no event.
+          yield* setItem("working", 1);
+          yield* setItem("settled", 1);
+          yield* waitFor(
+            Effect.map(Ref.get(events), (all) =>
+              subagentEvents(all).length >= 2
+                ? Option.some(true)
+                : Option.none()
+            )
+          );
+          yield* Effect.sleep(Duration.millis(200));
+
+          const updates = subagentEvents(yield* Ref.get(events)).map(
+            (event) => [event.threadId, event.child, event.status]
+          );
+
+          assert.deepStrictEqual(updates, [
+            [PARENT, CHILD, "working"],
+            [PARENT, CHILD, "settled"],
+          ]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a note's model content reaches the next request, once per request id, and a display entry does not",
+    () =>
+      withBrain(({ seam, faux, events }) =>
+        Effect.gen(function* () {
+          const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+          const run = Effect.runPromiseWith(yield* Effect.context());
+
+          faux.setResponses([
+            async (request) =>
+              await run(
+                Effect.as(
+                  Ref.set(
+                    seen,
+                    request.messages.flatMap((message: Message) =>
+                      message.role === "user" ? [messageText(message)] : []
+                    )
+                  ),
+                  fauxAssistantMessage("read it")
+                )
+              ),
+          ]);
+
+          const note = {
+            requestId: "subagent-note-x-1",
+            kind: "cairn.subagent-result",
+            data: { seq: 1 },
+            model: [{ type: "text" as const, text: "NOTE child done" }],
+          };
+
+          yield* seam.write(PARENT, note);
+          yield* seam.write(PARENT, note);
+          yield* seam.write(PARENT, {
+            requestId: "display-1",
+            kind: "cairn.checkpoint",
+            data: { turn: 1 },
+          });
+          yield* seam.submit(PARENT, {
+            requestId: "wake-1",
+            content: [{ type: "text", text: "wake" }],
+            entry: Option.none(),
+            whenBusy: "followUp",
+          });
+
+          yield* waitFor(
+            Effect.map(Ref.get(events), (all) =>
+              all.some(
+                (event) =>
+                  Predicate.isTagged(event, "RunTerminal") &&
+                  event.threadId === PARENT
+              )
+                ? Option.some(true)
+                : Option.none()
+            )
+          );
+
+          assert.deepStrictEqual(yield* Ref.get(seen), [
+            "NOTE child done",
+            "wake",
+          ]);
+        })
+      ),
+    30_000
+  );
+});

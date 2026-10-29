@@ -334,7 +334,7 @@ const program = Effect.gen(function* () {
       if (Step.$is("StopWhenToolRuns")(step)) {
         yield* poll(toolRunning, 60_000);
         yield* Effect.sleep(Duration.millis(800));
-        yield* seam.stop(threadId, { clearQueue: false });
+        yield* seam.stop(threadId, { clearQueue: false, subagents: "keep" });
       }
 
       yield* poll(

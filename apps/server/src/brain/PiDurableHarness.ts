@@ -30,6 +30,7 @@ import {
   ThreadOpsItem,
   ThreadSnapshotItem,
 } from "@cairn/protocol/Thread";
+import type { Message } from "@earendil-works/pi-ai";
 import type {
   AgentChange,
   Conversation,
@@ -82,6 +83,7 @@ import type {
   HistoryQuery,
   LiveThreadState,
   PassiveEntry,
+  PassiveNote,
   StopOptions,
   ThreadAgentChange,
   ThreadFrame,
@@ -604,7 +606,9 @@ const layerNoDeps = Layer.effect(
      * Stops a thread's run. The aborts and the cancellations run in the harness's own scope and the
      * caller only joins them: an abort mark is durable, so a caller that goes away (a client
      * disconnect interrupting the RPC) must not leave the records its run held pending. A crash in
-     * between is the boot repair's (`cancelAbandonedApprovalsAtBoot`).
+     * between is the boot repair's (`cancelAbandonedApprovalsAtBoot`). `subagents: "stop"`
+     * reaches a thread's children once they exist here (the subagents extension); until then a
+     * thread has none, so `keep` and `stop` stop the same run.
      */
     const stop = Effect.fn("PiDurableHarness.stop")(function* (
       threadId: ThreadId,
@@ -704,19 +708,38 @@ const layerNoDeps = Layer.effect(
       });
     });
 
+    /**
+     * A write never starts a run; pi-durable places it at once on an idle conversation and at the
+     * next boundary of a running one, writes ahead of inputs, and `abort` keeps it. A note's
+     * `model` content is a user message the model reads there.
+     */
     const write = Effect.fn("PiDurableHarness.write")(function* (
       threadId: ThreadId,
-      entry: PassiveEntry
+      entry: PassiveEntry | PassiveNote
     ) {
       const session = yield* open(Option.some(threadId));
       const conversation = yield* conversationOf(session, threadId);
+
+      const model: Array<Message> =
+        "model" in entry
+          ? [
+              {
+                role: "user",
+                content: [...entry.model],
+                timestamp: brain.now(),
+              },
+            ]
+          : [];
 
       yield* call(Option.some(threadId), "write", async (context) => {
         await conversation.submit(
           {
             type: "write",
             requestId: entry.requestId,
-            entry: { kind: entry.kind, data: entry.data },
+            entry:
+              model.length > 0
+                ? { kind: entry.kind, data: entry.data, model }
+                : { kind: entry.kind, data: entry.data },
           },
           context
         );

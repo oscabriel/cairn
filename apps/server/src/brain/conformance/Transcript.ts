@@ -18,7 +18,9 @@
 // - `release {label}`, `settle {ms}`.
 // - `expect_event {event}`: the next event, after the previous match, that contains `event`.
 // - `expect_event_count {event, count}`: how many events so far contain `event`.
-// - `expect_view {path, equals}`: the client's normalized view at `path` reaches `equals`.
+// - `expect_view {path, equals}`: the client's normalized view at `path` reaches `equals`; with
+//   `match: "includes"`, the array at `path` holds an element equal to `equals`, wherever it lies
+//   (two settlements whose order depends on which reporter commits first).
 // - `expect_request {index, includesTools?, excludesTools?, firstInput?}`: the `index`th model
 //   request a thread made (0 the first) offered every tool of `includesTools` and none of
 //   `excludesTools`, and its first user message reads `firstInput`. The harness reports the
@@ -164,6 +166,7 @@ export const TranscriptLine = Schema.Union([
     device: Schema.optionalKey(Schema.String),
     path: Schema.Array(PathSegment),
     equals: Json,
+    match: Schema.optionalKey(Schema.Literals(["equals", "includes"])),
   }),
   Schema.Struct({
     type: Schema.Literal("expect_request"),

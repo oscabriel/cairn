@@ -909,7 +909,8 @@ export const runScenario = (
         alias: string | undefined,
         device: string | undefined,
         path: ReadonlyArray<string | number>,
-        equals: Json
+        equals: Json,
+        match: "equals" | "includes"
       ) =>
         Effect.gen(function* () {
           const threadId = aliases.idOf(alias ?? PARENT_ALIAS);
@@ -942,10 +943,16 @@ export const runScenario = (
 
           const value = valueAt(view.value, path);
 
-          if (
-            Option.isSome(value) &&
-            jsonEquals(value.value, resolveAliases(equals, aliases))
-          ) {
+          const wanted = resolveAliases(equals, aliases);
+
+          const found = Option.exists(value, (at) =>
+            match === "includes"
+              ? Array.isArray(at) &&
+                at.some((element: Json) => jsonEquals(element, wanted))
+              : jsonEquals(at, wanted)
+          );
+
+          if (found) {
             return Result.succeedNone;
           }
 
@@ -1023,7 +1030,13 @@ export const runScenario = (
               eventually(
                 options.timeout,
                 where,
-                viewAt(found.thread, found.device, found.path, found.equals)
+                viewAt(
+                  found.thread,
+                  found.device,
+                  found.path,
+                  found.equals,
+                  found.match ?? "equals"
+                )
               ),
             expect_request: (found) =>
               eventually(

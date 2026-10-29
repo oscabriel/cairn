@@ -76,6 +76,7 @@ import type {
   ConversationId,
   Cursor,
   EntryId,
+  EntryQuery,
   EntryRecord,
   InputSubmissionDraft,
   LiveState,
@@ -258,16 +259,19 @@ interface RunSpan {
   /**
    * The run's key in the registry's run marks: `answer:<entry>` for an answered run (every input it
    * answered names that answer); for one that ended unanswered `run:<submission>`, its first input,
-   * when a reporter saw the run live (`observedRuns`), else `end:<entry>`, its terminal entry;
-   * `input:<submission>` for an input that ran in no run, or whose run was never seen live and
-   * whose end is not in the transcript; such an input settles alone.
+   * when a reporter saw the run live (`observedRuns`), else `end:<entry>`, its own end (its
+   * terminal entry, or the entry before the next run's first input); `input:<submission>` for an
+   * input that ran in no run, or whose run was never seen live and has no end of its own in the
+   * transcript yet; such an input settles alone. A run seen live only partly is the limit `runOf`
+   * names.
    */
   readonly key: string;
   /** The submission's placed entry, when it was placed. */
   readonly start: EntryId | undefined;
   /**
-   * The run's last entry: its answer (with the results of the tool round it ended on), or its
-   * terminal entry; none when not found.
+   * The run's last entry: its answer (with the results of the tool round it ended on); for an
+   * unanswered run its terminal entry, or the entry before the next run's first input, or the
+   * transcript's last entry when nothing came after it; none when not found.
    */
   readonly end: EntryId | undefined;
 }
@@ -318,17 +322,39 @@ const mayEnd = (entry: EntryRecord): boolean => {
 };
 
 /**
- * The terminal entry of the run an unanswered input placed at `from` was in (table reads): the
- * first assistant message at or after it that asks for no tool and that the run does not go on
- * from (a retried error is followed by the retry). None past `RUN_SCAN` entries, or for a run that
- * ended with no entry of its own (a stop between tools, a failure before any answer).
+ * How a placed input of the child stands against an unanswered run being bounded: one of its
+ * inputs; another run's (a run ends before the next run's first input); or, for a run no reporter
+ * saw live, one that ended alike and that no reporter saw live either, which is the run's own only
+ * if the run's terminal entry comes after it.
  */
-const terminalAfter = async (
+type Standing = "member" | "foreign" | "maybe";
+
+/** The extent of an unanswered run, from one of its inputs. */
+interface Extent {
+  /** Its terminal entry: an assistant message that asks for no tool. None for a run that ended with no entry of its own (a stop between tools, a failure before any answer). */
+  readonly terminal: EntryId | undefined;
+  /** Its last entry: its terminal entry, or the entry before the next run's first input. */
+  readonly last: EntryId;
+  /** Whether that end is the run's own (a terminal entry or the next run's input), not the end of the transcript as read now. */
+  readonly bounded: boolean;
+}
+
+/**
+ * The extent of the unanswered run an input placed at `from` was in (table reads). The run goes on
+ * up to its terminal entry, the first assistant message at or after `from` that asks for no tool
+ * and that the run does not go on from (a retried error is followed by the retry), and never past
+ * the first input placed after `from` that another run took (`standing`): a run that ended with no
+ * entry of its own ends on the entry before that input. Unbounded past `RUN_SCAN` entries.
+ */
+const runExtent = async (
   tx: Tx,
   child: ConversationId,
-  from: EntryId
-): Promise<EntryId | undefined> => {
+  from: EntryId,
+  standing: (entry: EntryId) => Standing
+): Promise<Extent | undefined> => {
   let candidate: EntryId | undefined;
+  let last = from;
+  let maybeBefore: EntryId | undefined;
   let read = 0;
   let cursor: Cursor | undefined;
 
@@ -344,17 +370,42 @@ const terminalAfter = async (
     for (const entry of page.items) {
       // oxlint-disable-next-line no-await-in-loop -- entries are read in order
       if (candidate !== undefined && !(await midRun(tx, entry))) {
-        return candidate;
+        return { terminal: candidate, last: candidate, bounded: true };
+      }
+
+      const place = entry.id === from ? "member" : standing(entry.id);
+
+      if (place === "foreign") {
+        return {
+          terminal: undefined,
+          last: maybeBefore ?? last,
+          bounded: true,
+        };
+      }
+
+      if (place === "maybe" && maybeBefore === undefined) {
+        maybeBefore = last;
       }
 
       candidate = mayEnd(entry) ? entry.id : undefined;
+      last = entry.id;
     }
 
     read += page.items.length;
     cursor = page.next;
   } while (cursor !== undefined && read < RUN_SCAN);
 
-  return cursor === undefined ? candidate : undefined;
+  if (cursor !== undefined) {
+    return undefined;
+  }
+
+  if (candidate !== undefined) {
+    return { terminal: candidate, last: candidate, bounded: true };
+  }
+
+  return maybeBefore === undefined
+    ? { terminal: undefined, last, bounded: false }
+    : { terminal: undefined, last: maybeBefore, bounded: true };
 };
 
 /**
@@ -431,12 +482,69 @@ const observedRuns = async (
   return runs;
 };
 
-/** The run `submission` was ended by (table reads), with the runs its reporters saw live. */
+/** What every run identity of a child is read against: the runs seen live, and its placed inputs. */
+interface RunContext {
+  /** The runs its reporters saw live (`observedRuns`). */
+  readonly observed: ReadonlyArray<ReadonlyArray<number>>;
+  /** Each input the registry knows (a reporter's or a nudge's) by the entry it was placed as. */
+  readonly placed: ReadonlyMap<EntryId, SubmissionRecord>;
+}
+
+/** Whether `a` and `b` ended unanswered alike: the same reason and detail. */
+const endedAlike = (a: SubmissionRecord, b: SubmissionRecord): boolean =>
+  a.status === "unanswered" &&
+  b.status === "unanswered" &&
+  a.reason === b.reason &&
+  JSON.stringify(a.detail ?? null) === JSON.stringify(b.detail ?? null);
+
+/**
+ * A child's run context (table reads): the runs its reporters saw live, and every input its
+ * registry item knows (each reporter's request, each nudge's) that was placed, by its entry.
+ */
+const runContext = async (
+  tx: Tx,
+  child: ConversationId,
+  item: SubagentItemState
+): Promise<RunContext> => {
+  const requestIds = new Set([
+    ...Object.keys(item.inputs),
+    ...item.runs.flatMap((mark) =>
+      mark.phase === "nudge"
+        ? [SubagentRequestIds.nudge(item.threadId, mark.seq)]
+        : []
+    ),
+  ]);
+
+  const placed = new Map<EntryId, SubmissionRecord>();
+
+  for (const requestId of requestIds) {
+    // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+    const submission = await tx.submissionByRequest(child, requestId);
+
+    if (submission?.entry !== undefined) {
+      placed.set(submission.entry, submission);
+    }
+  }
+
+  return { observed: await observedRuns(tx, item), placed };
+};
+
+/**
+ * The run `submission` was ended by (table reads). An unanswered run is bounded by its terminal
+ * entry or by the next run's first input (`runExtent`), so a late reporter never reads a later
+ * run's entries as its own. Another input stands in the run when the run's reporters saw it live
+ * there; for a run none saw live, when it ended alike, no reporter saw it live either, and the
+ * run's terminal entry comes after it.
+ *
+ * The limit: a reporter records its run from `pi.live` watch callbacks. A steer placed and then
+ * stopped (or failed) before any reporter's watch recorded it stands in no seen run, so it settles
+ * as a run of its own: the parent gets one note more. 4C's subagent-durability judge holds a case.
+ */
 const runOf = async (
   tx: Tx,
   child: ConversationId,
   submission: SubmissionRecord,
-  observed: ReadonlyArray<ReadonlyArray<number>>
+  context: RunContext
 ): Promise<RunSpan> => {
   const alone = {
     key: `input:${submission.id}`,
@@ -460,16 +568,35 @@ const runOf = async (
     return alone;
   }
 
-  const terminal = await terminalAfter(tx, child, submission.entry);
-  const seen = observed.find((run) => run.includes(submission.id));
+  const seen = context.observed.find((run) => run.includes(submission.id));
+
+  const standing = (entry: EntryId): Standing => {
+    const other = context.placed.get(entry);
+
+    if (other === undefined || other.id === submission.id) {
+      return "member";
+    }
+
+    if (seen !== undefined) {
+      return seen.includes(other.id) ? "member" : "foreign";
+    }
+
+    return context.observed.some((run) => run.includes(other.id)) ||
+      !endedAlike(submission, other)
+      ? "foreign"
+      : "maybe";
+  };
+
+  const extent = await runExtent(tx, child, submission.entry, standing);
+  const end = extent?.last;
 
   if (seen !== undefined) {
-    return { key: `run:${seen[0]}`, start: submission.entry, end: terminal };
+    return { key: `run:${seen[0]}`, start: submission.entry, end };
   }
 
-  return terminal === undefined
-    ? alone
-    : { key: `end:${terminal}`, start: submission.entry, end: terminal };
+  return extent?.bounded === true
+    ? { key: `end:${extent.last}`, start: submission.entry, end }
+    : alone;
 };
 
 /**
@@ -577,7 +704,7 @@ const peerInRun = async (
   mine: RunSpan,
   settled: SettledSubmissionRecord,
   peer: PeerWait,
-  observed: ReadonlyArray<ReadonlyArray<number>>
+  context: RunContext
 ): Promise<boolean> =>
   (peer.submission.status === "done" ||
     peer.submission.status === "unanswered") &&
@@ -585,7 +712,7 @@ const peerInRun = async (
     mine,
     settled,
     peer.submission,
-    await runOf(tx, child, peer.submission, observed)
+    await runOf(tx, child, peer.submission, context)
   );
 
 /**
@@ -602,7 +729,7 @@ const runInputs = async (
   own: NudgeMarkState | undefined,
   settled: SettledSubmissionRecord,
   mine: RunSpan,
-  observed: ReadonlyArray<ReadonlyArray<number>>
+  context: RunContext
 ): Promise<RunInputs> => {
   const child = conversationOf(input.child);
   const inputs = [current];
@@ -630,7 +757,7 @@ const runInputs = async (
     const joined =
       peer !== undefined &&
       // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
-      (await peerInRun(tx, child, mine, settled, peer, observed));
+      (await peerInRun(tx, child, mine, settled, peer, context));
 
     if (joined) {
       add(peer.waitsOn);
@@ -822,14 +949,36 @@ const entryText = (model: ReadonlyArray<Message> | undefined) => {
   return message === undefined ? "" : messageText(message);
 };
 
-/** The newest answer after `after` in a child's transcript (table read), for a run cut short. */
+/** A scan of a child's entries from `from` (when given) up to `until` (when given), in `order`. */
+const entriesBetween = (
+  conversationId: ConversationId,
+  from: EntryId | undefined,
+  until: EntryId | undefined,
+  order: "ascending" | "descending"
+): EntryQuery => {
+  if (from === undefined) {
+    return until === undefined
+      ? { conversationId, order }
+      : { conversationId, maxEntryId: until, order };
+  }
+
+  return until === undefined
+    ? { conversationId, minEntryId: from, order }
+    : { conversationId, minEntryId: from, maxEntryId: until, order };
+};
+
+/**
+ * The newest answer after `after` and up to `until` (the run's end, when known) in a child's
+ * transcript (table read), for a run cut short.
+ */
 const answerAfter = async (
   tx: Tx,
   conversationId: ConversationId,
-  after: EntryId
+  after: EntryId,
+  until: EntryId | undefined
 ): Promise<string> => {
   const page = await tx.scanEntries(
-    { conversationId, minEntryId: after, order: "descending" },
+    entriesBetween(conversationId, after, until, "descending"),
     50
   );
 
@@ -975,14 +1124,15 @@ const TURN_SCAN = 500;
 const turnsAfter = async (
   tx: Tx,
   conversationId: ConversationId,
-  from: EntryId | undefined
+  from: EntryId | undefined,
+  until: EntryId | undefined
 ): Promise<number> => {
   if (from === undefined) {
     return 0;
   }
 
   const page = await tx.scanEntries(
-    { conversationId, minEntryId: from, order: "ascending" },
+    entriesBetween(conversationId, from, until, "ascending"),
     TURN_SCAN
   );
 
@@ -1021,10 +1171,11 @@ const turnsTotal = async (
 /** The newest answer in a child's transcript that says something (table read); empty for none. */
 const lastSpoken = async (
   tx: Tx,
-  conversationId: ConversationId
+  conversationId: ConversationId,
+  until: EntryId | undefined
 ): Promise<string> => {
   const page = await tx.scanEntries(
-    { conversationId, order: "descending" },
+    entriesBetween(conversationId, undefined, until, "descending"),
     50
   );
 
@@ -1298,16 +1449,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     const answer =
       answerEntry === null ? undefined : await tx.entry(answerEntry);
 
-    const cutShort =
-      settled.status === "unanswered" && settled.entry !== undefined
-        ? await answerAfter(tx, child, settled.entry)
-        : "";
-
-    const turns = await turnsAfter(tx, child, settled.entry);
     const total = await turnsTotal(tx, child);
-
-    // A typed result's summary when the run ended on `submit_result` with no words of its own.
-    const spoken = Option.isSome(accepted) ? await lastSpoken(tx, child) : "";
 
     const registry = await tx.doc(SubagentsDoc, parent);
     const item = registry.items[input.key];
@@ -1319,8 +1461,22 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     const unadmitted = await anyUnadmitted(tx, child, item, input.requestId);
     const live = await tx.doc(LiveDoc, child);
     const running = live.run !== undefined;
-    const observed = await observedRuns(tx, item);
-    const mine = await runOf(tx, child, settled, observed);
+    const context = await runContext(tx, child, item);
+    const mine = await runOf(tx, child, settled, context);
+
+    // The run's own entries only, up to its end: a reporter that settles late never reads a later
+    // run's words or turns.
+    const cutShort =
+      settled.status === "unanswered" && settled.entry !== undefined
+        ? await answerAfter(tx, child, settled.entry, mine.end)
+        : "";
+
+    const turns = await turnsAfter(tx, child, settled.entry, mine.end);
+
+    // A typed result's summary when the run ended on `submit_result` with no words of its own.
+    const spoken = Option.isSome(accepted)
+      ? await lastSpoken(tx, child, mine.end)
+      : "";
 
     // A run settles once: whichever of its reporters gets here first marks it. A nudge mark names
     // the inputs whose run its nudge's run settles: the child still works on the nudge, and the
@@ -1352,7 +1508,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       own,
       settled,
       mine,
-      observed
+      context
     );
 
     const link = await tx.doc(ChildDoc, child);

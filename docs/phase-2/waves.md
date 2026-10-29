@@ -273,6 +273,8 @@ Each branch merged with `--no-ff` in the order B to H, all from `631afb3` (wave 
 
 **3A is left out.** Its review holds one blocking finding: when a quiet reporter (the user's steer of an idle child) and a waking reporter (the parent's `subagent_send`) end on the same child run, pi-durable settles both inputs with that run's one answer, `settle` settles each answer once, and the reporter that commits first decides `quiet`. If that is the user's steer, the parent never wakes for its own send (reproduced 5 of 5 on pi-durable; the scripted harness has the same flaw and also disagrees with pi-durable in the followUp case). ADR 0028 allows only a stop to lose a wake. 3A's hand-offs (the `subagents: 650` order key, `Subagents` in the production set, the subagent boot repairs, `SubagentRows`, ADR 0034 accepted, `SubagentQuestionState.cancelled`, `ThreadCreate.lineage`, the glossary's subagent anchor, child scope and brief task) wait for its fix and come with its merge. So does 3B's last hand-off: the spawn calls `ChildWorkspaces.prepare` before it commits the child's receipt and gives the child that cwd.
 
+**3A's next round (`7e30337`) is left out too.** It fixes the first wake finding for untyped runs: a mark records the inputs its run ended, and the first reporter to settle a run groups its peers, so the user's quiet steer no longer hides the parent's send. Its review holds a new blocking finding on the nudge path, in both harnesses. A settle that sends the nudge to a typed child records no mark for the run's other inputs, so which reporter commits first still decides the outcome. In the probe, a typed child is steered by the user during its brief run, ends without `submit_result`, then accepts the nudge. The scripted harness never wakes the parent. Pi-durable, depending on reporter order, settles the run twice: either `failed` with a wake and then the real result as a quiet note, or a spurious quiet `failed` note first. With the nudge run not held, it delivers `{"count":4}` twice. The fix asked for binds the run's inputs to the nudge in the commit that sends it and adds the scenario on both harnesses under both reporter orders. 3A's hand-offs and 3B's spawn step stay held, unchanged; `phase2/3A` and its worktree stay for the next round.
+
 ### Integration judges
 
 | Judge | Result | Numbers |
@@ -319,7 +321,7 @@ Each branch merged with `--no-ff` in the order B to H, all from `631afb3` (wave 
 
 ### What differs from the plan
 
-- **3A left out** (above); wave 3's "subagents live" is not yet live.
+- **3A left out** (above), twice; wave 3's "subagents live" is not yet live.
 - **3B**: the spawn's workspace step is built and judged on its own (temp-repo tests, the kill between the intent row and `git worktree add`, the boot repair over a real pi-durable brain); nothing calls it until 3A merges.
 - **3C** added a third scenario, `question_across_restart`, beyond the two the block names. The card is wave 6.
 - **3D**: `CodexAccess.ts` sits in `models/` (S42 keeps pi-ai's runtime imports there); a failed read clears the windows rather than greying them; the live read is the user's (below).

@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 import type { ThreadId } from "@cairn/protocol/Ids";
+import type { ApprovalDecision, RuntimeMode } from "@cairn/protocol/Policy";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import type { TranscriptContext } from "@earendil-works/pi-ai";
@@ -25,10 +26,23 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, FileSystem, Layer, Option } from "effect";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+} from "effect";
 import { SqlClient } from "effect/sql";
 
-import { ThreadMeta } from "../brain/CairnDocs.ts";
+import {
+  answerApproval,
+  Approvals,
+  ThreadMeta,
+  writeMode,
+} from "../brain/CairnDocs.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { Git } from "../git/Git.ts";
@@ -138,11 +152,15 @@ const openHarness = (
   steps: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0]
 ) => Effect.acquireRelease(harnessOver(root, steps), closeHarness);
 
-/** Starts one turn of a conversation in `cwd`, named `threadId` unless none is given. */
+/**
+ * Starts one turn of a conversation in `cwd`, named `threadId` unless none is given, in `mode`
+ * (the default, full access, unless given). Answers the conversation's id.
+ */
 const submitTurn = (
   harness: OpenHarness,
   cwd: string,
-  threadId: Option.Option<ThreadId>
+  threadId: Option.Option<ThreadId>,
+  mode: Option.Option<RuntimeMode> = Option.none()
 ) =>
   Effect.promise(async () => {
     const conversation = await harness.createConversation(
@@ -155,6 +173,10 @@ const submitTurn = (
 
             meta.threadId = threadId.value;
           }
+
+          if (Option.isSome(mode)) {
+            await writeMode(tx, id, mode.value);
+          }
         },
       },
       context
@@ -164,7 +186,61 @@ const submitTurn = (
       { type: "input", content: "go", requestId: "r1" },
       context
     );
+
+    return conversation.id;
   });
+
+type ConversationId = Effect.Success<ReturnType<typeof submitTurn>>;
+
+/** The conversation's approval records, by id. */
+const approvalsOf = (harness: OpenHarness, conversationId: ConversationId) =>
+  Effect.promise(
+    async () => await harness.snapshot(Approvals, conversationId, context)
+  ).pipe(Effect.map((doc) => Object.values(doc?.items ?? {})));
+
+/** Waits (at most ten seconds) for a pending approval of `tool`, and answers its id. */
+const pendingApproval = (
+  harness: OpenHarness,
+  conversationId: ConversationId,
+  tool: string
+) =>
+  Effect.gen(function* () {
+    for (;;) {
+      const pending = (yield* approvalsOf(harness, conversationId)).find(
+        (record) => record.tool === tool && record.status === "pending"
+      );
+
+      if (pending !== undefined) {
+        return pending.id;
+      }
+
+      yield* Effect.sleep(Duration.millis(20));
+    }
+  }).pipe(Effect.timeout(Duration.seconds(10)), Effect.orDie);
+
+/** The user's answer to one approval. */
+const answer = (
+  harness: OpenHarness,
+  conversationId: ConversationId,
+  approvalId: string,
+  decision: ApprovalDecision
+) =>
+  Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+
+    return yield* answerApproval(
+      harness,
+      conversationId,
+      approvalId,
+      {
+        decision,
+        by: { kind: "user" },
+        reason: Option.none(),
+        answers: Option.none(),
+      },
+      now
+    );
+  }).pipe(Effect.orDie);
 
 const waitIdle = (harness: OpenHarness) =>
   Effect.promise(async () => {
@@ -272,6 +348,162 @@ describe("the portal tools", () => {
         assert.include(seen[0], "works only in a Cairn thread");
         assert.strictEqual(yield* units.starts, 0);
         assert.deepStrictEqual(yield* rowStates, []);
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  );
+
+  it.live(
+    "Supervised: portal_open starts nothing until its approval is accepted, and portal_close asks too",
+    () =>
+      Effect.gen(function* () {
+        const { dirs, units, layer } = yield* stage();
+        const seen: Array<string> = [];
+
+        yield* Effect.gen(function* () {
+          const harness = yield* openHarness(dirs.root, [
+            fauxAssistantMessage(
+              fauxToolCall("portal_open", {
+                command: "python3 -m http.server $PORT --bind 127.0.0.1",
+              }),
+              { stopReason: "toolUse" }
+            ),
+            (transcript) => {
+              seen.push(lastToolResult(transcript));
+
+              return fauxAssistantMessage(
+                fauxToolCall("portal_close", { name: "feat-login" }),
+                { stopReason: "toolUse" }
+              );
+            },
+            (transcript) => {
+              seen.push(lastToolResult(transcript));
+
+              return fauxAssistantMessage("done");
+            },
+          ]);
+
+          const conversationId = yield* submitTurn(
+            harness,
+            dirs.repo,
+            Option.some(testThreadId(1)),
+            Option.some("approval-required")
+          );
+
+          const openAsk = yield* pendingApproval(
+            harness,
+            conversationId,
+            "portal_open"
+          );
+
+          assert.strictEqual(yield* units.starts, 0);
+          assert.deepStrictEqual(yield* rowStates, []);
+
+          const [record] = yield* approvalsOf(harness, conversationId);
+          assert.include(record?.summary, "feat-login--repo");
+          assert.include(record?.summary, "python3 -m http.server");
+
+          assert.strictEqual(
+            yield* answer(harness, conversationId, openAsk, "accept"),
+            "answered"
+          );
+
+          const closeAsk = yield* pendingApproval(
+            harness,
+            conversationId,
+            "portal_close"
+          );
+
+          assert.lengthOf(yield* units.running, 1);
+          assert.deepStrictEqual(yield* rowStates, [
+            { name: "feat-login--repo", state: "open" },
+          ]);
+
+          yield* answer(harness, conversationId, closeAsk, "accept");
+          yield* waitIdle(harness);
+
+          assert.lengthOf(seen, 2);
+          assert.include(seen[0], "Portal feat-login--repo is open");
+          assert.include(seen[1], "Portal feat-login--repo is closed");
+          assert.deepStrictEqual(yield* units.running, []);
+        }).pipe(Effect.provide(layer));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    30_000
+  );
+
+  it.live(
+    "auto-accept edits: a declined portal_open starts nothing and says why",
+    () =>
+      Effect.gen(function* () {
+        const { dirs, units, layer } = yield* stage();
+        const seen: Array<string> = [];
+
+        yield* Effect.gen(function* () {
+          const harness = yield* openHarness(dirs.root, [
+            fauxAssistantMessage(
+              fauxToolCall("portal_open", { command: "rm -rf ~" }),
+              { stopReason: "toolUse" }
+            ),
+            (transcript) => {
+              seen.push(lastToolResult(transcript));
+
+              return fauxAssistantMessage("done");
+            },
+          ]);
+
+          const conversationId = yield* submitTurn(
+            harness,
+            dirs.repo,
+            Option.some(testThreadId(1)),
+            Option.some("auto-accept-edits")
+          );
+
+          const ask = yield* pendingApproval(
+            harness,
+            conversationId,
+            "portal_open"
+          );
+
+          yield* answer(harness, conversationId, ask, "decline");
+          yield* waitIdle(harness);
+
+          assert.lengthOf(seen, 1);
+          assert.include(
+            seen[0],
+            "Not run: the approval for this call was declined"
+          );
+          assert.strictEqual(yield* units.starts, 0);
+          assert.deepStrictEqual(yield* rowStates, []);
+        }).pipe(Effect.provide(layer));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    30_000
+  );
+
+  it.live("full access opens at once and writes no approval record", () =>
+    Effect.gen(function* () {
+      const { dirs, units, layer } = yield* stage();
+
+      yield* Effect.gen(function* () {
+        const harness = yield* openHarness(dirs.root, [
+          fauxAssistantMessage(
+            fauxToolCall("portal_open", {
+              command: "python3 -m http.server $PORT --bind 127.0.0.1",
+            }),
+            { stopReason: "toolUse" }
+          ),
+          fauxAssistantMessage("done"),
+        ]);
+
+        const conversationId = yield* submitTurn(
+          harness,
+          dirs.repo,
+          Option.some(testThreadId(1)),
+          Option.some("full-access")
+        );
+
+        yield* waitIdle(harness);
+
+        assert.strictEqual(yield* units.starts, 1);
+        assert.deepStrictEqual(yield* approvalsOf(harness, conversationId), []);
       }).pipe(Effect.provide(layer));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   );

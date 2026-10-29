@@ -18,7 +18,10 @@
 // - matrix: `CAIRN_JUDGE_FAULT=portal:after-<step>` kills the brain after each step of an open
 //   (row, porch, unit, probe, open), twice per step: once the open is rerun after the restart (it
 //   must end open, serving the page), once it is not (the boot repair, with no grace, ends it, and
-//   a close follows). Each run must leave no unit, no portal porch and no live row behind.
+//   a close follows). Then `portal:after-close-<step>` kills the brain after each step of a close
+//   (row marked removed, unit stopped, porch removed), twice per step: once the close is rerun after
+//   the restart, once it is left to the boot repair; either way the portal must end removed. Each
+//   run must leave no unit, no portal porch and no live row behind.
 // - control: the same restart with each server a child of the brain (`--inline`), as a dev server
 //   started with `bash` would be. Its page must stop answering through the kill, or the judge
 //   proves nothing.
@@ -85,6 +88,8 @@ const NAME = "main--judge";
 const THREAD = "0199f0c2-6a4e-7d4c-8a6b-0000000a0001";
 
 const STEPS = ["row", "porch", "unit", "probe", "open"] as const;
+
+const CLOSE_STEPS = ["row", "unit", "porch"] as const;
 
 const UNIT_PREFIX = `cairn-judge-portal-${String(process.pid)}-`;
 
@@ -741,6 +746,64 @@ const judge = Effect.gen(function* () {
       })
     );
 
+  /** One cell of the close kill matrix: the brain dies after `step` of a close. */
+  const closeCell = (step: (typeof CLOSE_STEPS)[number], rerun: boolean) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const dataDir = path.join(
+          dirs.base,
+          `close-${step}-${rerun ? "rerun" : "repair"}`
+        );
+
+        const brain = yield* startBrain(dataDir, {
+          fault: Option.some(`portal:after-close-${step}`),
+          graceMs: 120_000,
+          inline: false,
+        });
+
+        const { row, served } = yield* openServed(brain);
+        const first = yield* close(brain, row.id);
+
+        yield* waitFor(
+          `${brain.unit} back after the fault`,
+          Effect.map(Unit.restarts(brain.unit), (count) => count > 0),
+          "30 seconds"
+        );
+        yield* waitFor(
+          `${brain.unit} ready after the fault`,
+          health(brain),
+          "60 seconds"
+        );
+
+        // 0 when the close is left to the boot repair.
+        const again = rerun ? (yield* close(brain, row.id)).status : 0;
+
+        // The restarted brain's boot repair (and the rerun, if any) must leave the portal removed:
+        // no unit, no porch, no live row, and the name falls to the catch-all 404.
+        const left = yield* leftovers(brain);
+        const fallback = yield* page;
+        yield* Unit.stop(brain.unit);
+
+        const pass =
+          served &&
+          first.status !== 200 &&
+          (!rerun || again === 200) &&
+          fallback.status === 404 &&
+          clean(left);
+
+        return {
+          step: `close-${step}`,
+          rerun,
+          pass,
+          served,
+          firstStatus: first.status,
+          rerunStatus: again,
+          nameAfter: fallback.status,
+          left,
+        };
+      })
+    );
+
   const results: Array<{ readonly name: string; readonly pass: boolean }> = [];
 
   if (cases.includes("restart")) {
@@ -764,7 +827,22 @@ const judge = Effect.gen(function* () {
       }
     }
 
-    results.push({ name: "matrix", pass: passed === STEPS.length * 2 });
+    for (const step of CLOSE_STEPS) {
+      for (const rerun of [true, false]) {
+        const cell = yield* closeCell(step, rerun);
+
+        if (cell.pass) {
+          passed += 1;
+        }
+
+        yield* Console.log(JSON.stringify({ case: "matrix", ...cell }));
+      }
+    }
+
+    results.push({
+      name: "matrix",
+      pass: passed === (STEPS.length + CLOSE_STEPS.length) * 2,
+    });
   }
 
   if (cases.includes("control")) {

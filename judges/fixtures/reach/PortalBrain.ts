@@ -14,7 +14,7 @@
 //     --control-port N --unit-prefix P --first-port N --last-port N [--grace-ms N] [--inline]
 //
 // `CAIRN_JUDGE_FAULT=portal:after-<step>` kills this process with SIGKILL right after that step of
-// an open, once per data folder (a marker file remembers it), so the restarted life runs clean.
+// an open or a close (`close-row`, `close-unit`, `close-porch`), once per data folder (a marker file remembers it), so the restarted life runs clean.
 // `--inline` is the broken control: each portal's server is a child of this process, in the
 // brain's own cgroup, as a dev server started with `bash` would be, instead of its own unit.
 

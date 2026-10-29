@@ -9,22 +9,29 @@
 // 1. claim the row `opening` with a port Cairn picked (the installed porch has no lease command;
 //    the `portals_live_port` index keeps two live portals off one port, and a stopped portal's
 //    port is never handed to another, since its porch still points there);
-// 2. register the porch `<name>` → `http://127.0.0.1:<port>`. porch refuses `exists` for a porch
-//    already there, whose upstream Cairn cannot read back, so that answer re-registers it;
+// 2. register the porch `<name>` → `http://127.0.0.1:<port>`, unless a rerun on the same port finds
+//    it listed (each porch change reloads Caddy, cutting every portal's WebSockets). porch refuses
+//    `exists` for a porch already there, whose upstream Cairn cannot read back, so that answer
+//    re-registers it; a row that moves to a new port loses its old porch first;
 // 3. start the unit `<prefix><id>`, unless it already runs;
 // 4. probe the port until the server answers HTTP (on a timeout the row stays `opening`, for the
 //    agent to retry or close, and the error carries the end of the unit's journal);
 // 5. mark the row `open`.
 //
-// A judge brain plants a crash after any step through `PortalFaults` (`judges/reach-restart.sh`).
+// Every write that moves a row is conditional on the row as it was read (its state and
+// `updated_at`), and a write that makes a portal live also on the limit, so a claim, a close and a
+// sweep racing over one row never act on a stale copy: the loser reads again or leaves it. A judge
+// brain plants a crash after any step of an open or a close through `PortalFaults`
+// (`judges/reach-restart.sh`).
 //
-// A portal ends by `close` (unit stopped, porch removed, row `removed`), by its time-to-live (the
-// unit's `RuntimeMaxSec` stops it even while the brain is down; the sweep marks the row `stopped`,
-// `expired`), by its unit exiting (`stopped`, `exited`), or by its thread being archived or deleted
-// (closed by the sweep). `stopped` keeps the porch, the port and the command, so the name shows
-// porch's dark page and `start` runs the same portal again. An `opening` row left past the grace
-// (above the longest readiness wait) is ended by the sweep unless its server answers. Settling a thread closes nothing. Six portals may be
-// open at once; a seventh is refused naming the oldest.
+// A portal ends by `close` (the row `removed` first, then its unit stopped and porch removed, so a
+// crash anywhere in between still ends removed), by its time-to-live (the unit's `RuntimeMaxSec`
+// stops it even while the brain is down; the sweep marks the row `stopped`, `expired`), by its unit
+// exiting (`stopped`, `exited`), or by its thread being archived or deleted (closed by the sweep).
+// `stopped` keeps the porch, the port and the command, so the name shows porch's dark page and
+// `start` runs the same portal again. An `opening` row left past the grace (above the longest
+// readiness wait) is ended by the sweep unless its server answers. Settling a thread closes
+// nothing. Six portals may be open at once; a seventh is refused naming the oldest.
 //
 // `reconcile` is the boot repair: rows whose unit is gone become `stopped` (`lost`), an `opening`
 // row whose unit answers becomes `open`, an `opening` row left past the grace becomes `stopped`,
@@ -132,18 +139,24 @@ export const portalSettingsLayer = (
   });
 };
 
-/** The steps of opening a portal, in order; a fault names the step it crashes after. */
+/**
+ * The steps of opening a portal, in order, then those of closing one (`close-<step>`: the row
+ * marked removed, the unit stopped, the porch removed); a fault names the step it crashes after.
+ */
 export const PortalStep = Schema.Literals([
   "row",
   "porch",
   "unit",
   "probe",
   "open",
+  "close-row",
+  "close-unit",
+  "close-porch",
 ]);
 
 export type PortalStep = typeof PortalStep.Type;
 
-/** A hook that runs after each step of an open; a judge brain's kills itself there. */
+/** A hook that runs after each step of an open or a close; a judge brain kills itself there. */
 export interface PortalFaultHooks {
   after(step: PortalStep): Effect.Effect<void>;
 }
@@ -161,7 +174,8 @@ const decodeStep = Schema.decodeUnknownOption(PortalStep);
 
 /**
  * The step a judge brain's `CAIRN_JUDGE_FAULT` names, `portal:after-<step>` (such as
- * `portal:after-unit`); none for any other value, which belongs to another fault family.
+ * `portal:after-unit` or `portal:after-close-row`); none for any other value, which belongs to
+ * another fault family.
  */
 export const portalFaultStep = (spec: string): Option.Option<PortalStep> =>
   spec.startsWith("portal:after-")
@@ -170,7 +184,7 @@ export const portalFaultStep = (spec: string): Option.Option<PortalStep> =>
 
 /**
  * A judge brain's faults (`judges/reach-restart.sh`): for `spec` a `portal:after-<step>`, the
- * brain kills itself with SIGKILL right after that step of an open, as a `kill -9` there would,
+ * brain kills itself with SIGKILL right after that step of an open or a close, as a `kill -9` there would,
  * once per `marker` file, so the life systemd restarts runs clean. Any other `spec` plants none.
  * Judge brains only: production and dev roots never provide it.
  */
@@ -289,7 +303,9 @@ const StoredPortal = Schema.Struct({
   thread_id: Schema.String,
   name: Schema.String,
   url: Schema.String,
-  port: Schema.NullOr(Schema.Int),
+  // Inside Cairn a port is an Option from here on (S22): a host row without one is refused where
+  // it is used (`portOf`), never read as port 0.
+  port: Schema.OptionFromNullOr(Schema.Int),
   command: Schema.String,
   cwd: Schema.String,
   state: Schema.Literals(["opening", "open", "stopped", "removed"]),
@@ -319,7 +335,7 @@ const rowOf = (stored: StoredPortal) =>
     threadId: stored.thread_id,
     name: stored.name,
     url: stored.url,
-    port: Option.fromNullOr(stored.port),
+    port: stored.port,
     command: stored.command,
     cwd: stored.cwd,
     state: stored.state,
@@ -455,18 +471,35 @@ const write = (
     Effect.mapError(storeFailure(operation, portal))
   );
 
-/** Runs a write that a unique index may refuse; answers whether it went in. */
-const writeUnlessTaken = (
+/**
+ * Runs a conditional write ending `RETURNING id`; answers whether it changed a row. A write whose
+ * condition no longer holds (another writer moved the row first), or that a unique index refused,
+ * changed nothing.
+ */
+const writeIf = (
   operation: string,
   portal: string,
-  statement: Effect.Effect<unknown, SqlError.SqlError>
+  statement: Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>
 ) =>
   statement.pipe(
-    Effect.as(true),
+    Effect.map((rows) => rows.length > 0),
     Effect.catchTag("SqlError", (cause) =>
       Predicate.isTagged(cause.reason, "UniqueViolation")
         ? Effect.succeed(false)
         : Effect.fail(storeFailure(operation, portal)(cause))
+    )
+  );
+
+/** A host row's port; a row without one is refused rather than served on port 0. */
+const portOf = (operation: string, stored: StoredPortal) =>
+  Effect.fromOption(stored.port).pipe(
+    Effect.mapError(() =>
+      fail(
+        operation,
+        "store",
+        stored.name,
+        `The portals row of ${stored.name} holds no port, which a host portal must. Close it and open it again.`
+      )
     )
   );
 
@@ -559,6 +592,15 @@ export class Portals extends Context.Service<
       const sweeper = yield* FiberSet.make();
       let sweeping = false;
 
+      /** Removes a porch; one already gone is fine. */
+      const removePorch = (name: string) =>
+        porch.remove(name).pipe(
+          Effect.asVoid,
+          Effect.catchTag("PorchError", (failure) =>
+            failure.reason === "missing" ? Effect.void : Effect.fail(failure)
+          )
+        );
+
       const byId = (operation: string, id: string) =>
         Effect.map(
           query(operation, id, sql`SELECT * FROM portals WHERE id = ${id}`),
@@ -602,10 +644,7 @@ export class Portals extends Context.Service<
             except,
             sql`SELECT * FROM portals WHERE state <> 'removed' AND port IS NOT NULL AND id <> ${except}`
           ),
-          (rows) =>
-            new Set(
-              rows.flatMap((row) => (row.port === null ? [] : [row.port]))
-            )
+          (rows) => new Set(rows.flatMap((row) => Option.toArray(row.port)))
         );
 
       /** A free port: `preferred` when it still is, else the first in the range. */
@@ -674,19 +713,29 @@ export class Portals extends Context.Service<
         return `${high.toString(16).padStart(8, "0")}${low.toString(16).padStart(8, "0")}`;
       });
 
+      /** The live-portal count a claim's write compares against the limit, `except`'s row aside. */
+      const liveCount = (except: string) =>
+        sql`(SELECT COUNT(*) FROM portals WHERE state IN ('opening', 'open') AND id <> ${except})`;
+
       /**
        * Step 1: the row this open runs on, `opening`, holding a port. A live row of the name from
        * this thread is reused: `open` and still running is returned as done; `opening` continues;
-       * `stopped`, or `open` with its unit gone, is restarted with the new command.
+       * `stopped`, or `open` with its unit gone, is restarted with the new command. Every write is
+       * conditional on the row as read (and a write that makes a portal live, on the limit), so a
+       * claim that loses a race to another claim, a close or a sweep reads again. `samePort` says
+       * the row's porch, if it has one, already points at its port.
        */
       const claim = Effect.fnUntraced(function* (
         input: OpenInput,
         url: string
       ): Effect.fn.Return<
-        { readonly stored: StoredPortal; readonly done: boolean },
+        {
+          readonly stored: StoredPortal;
+          readonly done: boolean;
+          readonly samePort: boolean;
+        },
         PortalFailure
       > {
-        // A claim that loses a race for its name or port to another claim reads again.
         for (let attempt = 1; attempt <= CLAIM_ATTEMPTS; attempt += 1) {
           const held = yield* liveByName("open", input.name);
           const now = yield* Clock.currentTimeMillis;
@@ -711,37 +760,54 @@ export class Portals extends Context.Service<
             ) {
               // A rerun of the same open (after a crash, or a server that answered late). Its
               // grace starts again, so no sweep ends the probe this rerun is about to run.
-              yield* write(
+              const renewed = yield* writeIf(
                 "open",
                 input.name,
-                sql`UPDATE portals SET updated_at = ${now} WHERE id = ${row.id} AND state = 'opening'`
+                sql`
+                  UPDATE portals SET updated_at = ${now}
+                  WHERE id = ${row.id} AND state = 'opening' AND updated_at = ${row.updated_at}
+                  RETURNING id
+                `
               );
 
-              return { stored: yield* mustGet("open", row.id), done: false };
+              if (renewed) {
+                return {
+                  stored: yield* mustGet("open", row.id),
+                  done: false,
+                  samePort: true,
+                };
+              }
+
+              continue;
             }
 
             if (row.state === "opening") {
-              // The agent fixed its command after `not-ready`: the old process goes, and the row
-              // keeps its port and lifetime but runs the new command.
-              yield* units
-                .stop(row.unit)
-                .pipe(Effect.mapError(unitFailure("open", input.name)));
-
-              const changed = yield* writeUnlessTaken(
+              // The agent fixed its command after `not-ready`: the row keeps its port and
+              // lifetime but runs the new command, and the old process goes once the row says so.
+              const changed = yield* writeIf(
                 "open",
                 input.name,
                 sql`
                   UPDATE portals SET command = ${input.command}, cwd = ${input.cwd},
                     updated_at = ${now}
-                  WHERE id = ${row.id} AND state = 'opening'
+                  WHERE id = ${row.id} AND state = 'opening' AND updated_at = ${row.updated_at}
+                  RETURNING id
                 `
               );
 
-              if (changed) {
-                return { stored: yield* mustGet("open", row.id), done: false };
+              if (!changed) {
+                continue;
               }
 
-              continue;
+              yield* units
+                .stop(row.unit)
+                .pipe(Effect.mapError(unitFailure("open", input.name)));
+
+              return {
+                stored: yield* mustGet("open", row.id),
+                done: false,
+                samePort: true,
+              };
             }
 
             if (
@@ -750,20 +816,22 @@ export class Portals extends Context.Service<
                 .isActive(row.unit)
                 .pipe(Effect.mapError(unitFailure("open", input.name))))
             ) {
-              return { stored: row, done: true };
+              return { stored: row, done: true, samePort: true };
             }
 
             // Stopped, or open with its process gone: run it again, on its old port if still free.
             yield* refuseOverLimit("open", input.name, row.id);
 
-            const port = yield* pickPort(
-              "open",
-              input.name,
-              row.id,
-              Option.fromNullOr(row.port)
-            );
+            const port = yield* pickPort("open", input.name, row.id, row.port);
 
-            const restarted = yield* writeUnlessTaken(
+            // On a new port the old porch points at the wrong place: it goes before the row moves,
+            // so a porch that lists the name always points at its row's port (a kill in between
+            // leaves a row without its porch, which the boot repair puts back).
+            if (!Option.contains(row.port, port)) {
+              yield* removePorch(row.name);
+            }
+
+            const restarted = yield* writeIf(
               "open",
               input.name,
               sql`
@@ -771,12 +839,18 @@ export class Portals extends Context.Service<
                   state = 'opening', port = ${port}, command = ${input.command}, cwd = ${input.cwd},
                   ttl_hours = ${input.ttlHours}, opened_at = ${now}, expires_at = ${expiresAt},
                   stopped_at = NULL, stop_reason = NULL, updated_at = ${now}
-                WHERE id = ${row.id} AND state = ${row.state}
+                WHERE id = ${row.id} AND state = ${row.state} AND updated_at = ${row.updated_at}
+                  AND ${liveCount(row.id)} < ${MAX_OPEN_PORTALS}
+                RETURNING id
               `
             );
 
             if (restarted) {
-              return { stored: yield* mustGet("open", row.id), done: false };
+              return {
+                stored: yield* mustGet("open", row.id),
+                done: false,
+                samePort: Option.contains(row.port, port),
+              };
             }
 
             continue;
@@ -787,23 +861,30 @@ export class Portals extends Context.Service<
           const id = yield* mintId;
           const port = yield* pickPort("open", input.name, id, Option.none());
 
-          const inserted = yield* writeUnlessTaken(
+          // The limit is part of the write, so two opens at once cannot make a seventh.
+          const inserted = yield* writeIf(
             "open",
             input.name,
             sql`
               INSERT INTO portals (
                 id, thread_id, name, url, port, command, cwd, state, arms, unit, ttl_hours,
                 opened_at, expires_at, updated_at
-              ) VALUES (
+              )
+              SELECT
                 ${id}, ${input.threadId}, ${input.name}, ${url}, ${port}, ${input.command},
                 ${input.cwd}, 'opening', 'host', ${`${settings.unitPrefix}${id}`},
                 ${input.ttlHours}, ${now}, ${expiresAt}, ${now}
-              )
+              WHERE ${liveCount("")} < ${MAX_OPEN_PORTALS}
+              RETURNING id
             `
           );
 
           if (inserted) {
-            return { stored: yield* mustGet("open", id), done: false };
+            return {
+              stored: yield* mustGet("open", id),
+              done: false,
+              samePort: false,
+            };
           }
         }
 
@@ -817,8 +898,11 @@ export class Portals extends Context.Service<
       });
 
       /** Step 2: the porch in front of the row's port. */
-      const register = Effect.fnUntraced(function* (stored: StoredPortal) {
-        const upstream = `http://127.0.0.1:${String(stored.port ?? 0)}`;
+      const register = Effect.fnUntraced(function* (
+        operation: string,
+        stored: StoredPortal
+      ) {
+        const upstream = `http://127.0.0.1:${String(yield* portOf(operation, stored))}`;
 
         yield* porch.add(stored.name, upstream).pipe(
           // Registered before (a rerun, or a stopped portal's porch): its upstream may be an older
@@ -850,6 +934,7 @@ export class Portals extends Context.Service<
         }
 
         const host = `${stored.name}.${domain}`;
+        const port = yield* portOf("open", stored);
 
         yield* units
           .start({
@@ -858,7 +943,7 @@ export class Portals extends Context.Service<
             command: stored.command,
             env: {
               ...settings.env,
-              PORT: String(stored.port ?? 0),
+              PORT: String(port),
               HOST: "127.0.0.1",
               PORCH_HOST: host,
               PORCH_URL: stored.url,
@@ -880,7 +965,7 @@ export class Portals extends Context.Service<
         readyPath: string,
         timeout: Duration.Duration
       ) {
-        const port = stored.port ?? 0;
+        const port = yield* portOf("open", stored);
 
         const deadline =
           (yield* Clock.currentTimeMillis) + Duration.toMillis(timeout);
@@ -938,7 +1023,17 @@ export class Portals extends Context.Service<
         const { stored } = claimed;
 
         yield* faults.after("row");
-        yield* register(stored);
+
+        // Each porch add or remove reloads Caddy, which cuts every portal's WebSockets: a rerun on
+        // the same port whose porch is there already leaves it be.
+        const porched =
+          claimed.samePort &&
+          (yield* porch.list).some((row) => row.name === stored.name);
+
+        if (!porched) {
+          yield* register("open", stored);
+        }
+
         yield* faults.after("porch");
         yield* launch(stored, machine.domain);
         yield* faults.after("unit");
@@ -956,6 +1051,11 @@ export class Portals extends Context.Service<
         const opened = yield* mustGet("open", stored.id);
 
         if (opened.state !== "open") {
+          // Its unit may have started after the close or sweep stopped the old one: it goes too.
+          yield* units
+            .stop(opened.unit)
+            .pipe(Effect.mapError(unitFailure("open", input.name)));
+
           return yield* fail(
             "open",
             "not-ready",
@@ -971,7 +1071,7 @@ export class Portals extends Context.Service<
             event: "portal_open",
             portal: opened.id,
             name: opened.name,
-            port: opened.port ?? 0,
+            port: Option.getOrNull(opened.port),
           })
         );
 
@@ -1012,7 +1112,11 @@ export class Portals extends Context.Service<
         });
       });
 
-      /** Marks a live row `stopped` with `reason`; a row no longer live is left as it is. */
+      /**
+       * Marks a live row `stopped` with `reason`, only if it is still the row the caller read (same
+       * state, same `updated_at`): a claim that restarted or renewed it since wins. Answers whether
+       * it changed the row; a caller stops the unit only then.
+       */
       const markStopped = (
         operation: string,
         stored: StoredPortal,
@@ -1021,42 +1125,58 @@ export class Portals extends Context.Service<
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
 
-          yield* write(
+          const changed = yield* writeIf(
             operation,
             stored.name,
             sql`
               UPDATE portals SET state = 'stopped', stopped_at = ${now}, stop_reason = ${reason},
                 updated_at = ${now}
-              WHERE id = ${stored.id} AND state IN ('opening', 'open')
+              WHERE id = ${stored.id} AND state = ${stored.state}
+                AND updated_at = ${stored.updated_at}
+              RETURNING id
             `
           );
 
-          yield* Effect.logInfo("portal stopped").pipe(
-            Effect.annotateLogs({
-              event: "portal_stopped",
-              portal: stored.id,
-              name: stored.name,
-              reason,
-            })
+          if (changed) {
+            yield* Effect.logInfo("portal stopped").pipe(
+              Effect.annotateLogs({
+                event: "portal_stopped",
+                portal: stored.id,
+                name: stored.name,
+                reason,
+              })
+            );
+          }
+
+          return changed;
+        });
+
+      /** Marks an `opening` row `open`, only if it is still the row the caller read. */
+      const markOpen = (operation: string, stored: StoredPortal) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+
+          return yield* writeIf(
+            operation,
+            stored.name,
+            sql`
+              UPDATE portals SET state = 'open', updated_at = ${now}
+              WHERE id = ${stored.id} AND state = 'opening' AND updated_at = ${stored.updated_at}
+              RETURNING id
+            `
           );
         });
 
-      const removePorch = (name: string) =>
-        porch.remove(name).pipe(
-          Effect.asVoid,
-          Effect.catchTag("PorchError", (failure) =>
-            failure.reason === "missing" ? Effect.void : Effect.fail(failure)
-          )
-        );
-
+      /**
+       * Closes a portal: the row is marked `removed` first, then the unit is stopped and the porch
+       * removed, so a crash anywhere in between ends removed (the boot repair stops units and
+       * removes portal porches no live row names) and never comes back as a stopped portal. Run
+       * again on a removed row, it finishes what a crash left; a porch whose name a newer portal
+       * holds is that portal's and stays.
+       */
       const closeStored = (operation: string, stored: StoredPortal) =>
         Effect.gen(function* () {
           if (stored.state !== "removed") {
-            yield* units
-              .stop(stored.unit)
-              .pipe(Effect.mapError(unitFailure(operation, stored.name)));
-            yield* removePorch(stored.name);
-
             const now = yield* Clock.currentTimeMillis;
 
             yield* write(
@@ -1065,10 +1185,24 @@ export class Portals extends Context.Service<
               sql`
                 UPDATE portals SET state = 'removed', stopped_at = COALESCE(stopped_at, ${now}),
                   stop_reason = 'closed', updated_at = ${now}
-                WHERE id = ${stored.id}
+                WHERE id = ${stored.id} AND state <> 'removed'
               `
             );
+          }
 
+          yield* faults.after("close-row");
+          yield* units
+            .stop(stored.unit)
+            .pipe(Effect.mapError(unitFailure(operation, stored.name)));
+          yield* faults.after("close-unit");
+
+          if (Option.isNone(yield* liveByName(operation, stored.name))) {
+            yield* removePorch(stored.name);
+          }
+
+          yield* faults.after("close-porch");
+
+          if (stored.state !== "removed") {
             yield* Effect.logInfo("portal closed").pipe(
               Effect.annotateLogs({
                 event: "portal_closed",
@@ -1117,6 +1251,13 @@ export class Portals extends Context.Service<
         return yield* Effect.forEach(stored, (row) => toRow("list", row));
       });
 
+      /** Whether a row's server answers on its port; a row without one does not. */
+      const answersOn = (row: StoredPortal) =>
+        Option.match(row.port, {
+          onNone: () => Effect.succeed(false),
+          onSome: (port) => units.answers(port, "/"),
+        });
+
       const liveRows = (operation: string) =>
         query(
           operation,
@@ -1139,25 +1280,25 @@ export class Portals extends Context.Service<
 
           const pastGrace = row.updated_at + grace <= now;
 
+          // Each change is made only if the row is still as read; its unit is stopped only then.
           if (row.expires_at <= now) {
-            yield* units.stop(row.unit).pipe(Effect.mapError(toUnit));
-            yield* markStopped("reconcile", row, "expired");
-            stopped += 1;
-          } else if (row.state === "open") {
-            if (!active) {
-              yield* markStopped("reconcile", row, "lost");
+            if (yield* markStopped("reconcile", row, "expired")) {
+              yield* units.stop(row.unit).pipe(Effect.mapError(toUnit));
               stopped += 1;
             }
-          } else if (active && (yield* units.answers(row.port ?? 0, "/"))) {
-            yield* write(
-              "reconcile",
-              row.name,
-              sql`UPDATE portals SET state = 'open', updated_at = ${now} WHERE id = ${row.id} AND state = 'opening'`
-            );
-            opened += 1;
-          } else if (pastGrace) {
+          } else if (row.state === "open") {
+            if (!active && (yield* markStopped("reconcile", row, "lost"))) {
+              stopped += 1;
+            }
+          } else if (active && (yield* answersOn(row))) {
+            if (yield* markOpen("reconcile", row)) {
+              opened += 1;
+            }
+          } else if (
+            pastGrace &&
+            (yield* markStopped("reconcile", row, "lost"))
+          ) {
             yield* units.stop(row.unit).pipe(Effect.mapError(toUnit));
-            yield* markStopped("reconcile", row, "lost");
             stopped += 1;
           }
         }
@@ -1205,11 +1346,11 @@ export class Portals extends Context.Service<
         }
 
         const unporched = kept.filter(
-          (row) => row.port !== null && !present.has(row.name)
+          (row) => Option.isSome(row.port) && !present.has(row.name)
         );
 
         for (const row of unporched) {
-          yield* register(row);
+          yield* register("reconcile", row);
         }
 
         const report: PortalRepairReport = {
@@ -1237,10 +1378,14 @@ export class Portals extends Context.Service<
         for (const row of yield* liveRows("sweep")) {
           const toUnit = unitFailure("sweep", row.name);
 
+          // Each change is made only if the row is still as read (a claim may have restarted or
+          // renewed it since), and a unit is stopped only after its row's change took effect.
           if (row.expires_at <= now) {
-            yield* units.stop(row.unit).pipe(Effect.mapError(toUnit));
-            yield* markStopped("sweep", row, "expired");
-            stopped += 1;
+            if (yield* markStopped("sweep", row, "expired")) {
+              yield* units.stop(row.unit).pipe(Effect.mapError(toUnit));
+              stopped += 1;
+            }
+
             continue;
           }
 
@@ -1254,21 +1399,18 @@ export class Portals extends Context.Service<
             .pipe(Effect.mapError(toUnit));
 
           if (!active) {
-            yield* markStopped("sweep", row, "exited");
-            stopped += 1;
+            if (yield* markStopped("sweep", row, "exited")) {
+              stopped += 1;
+            }
           } else if (row.state === "opening") {
             // Past the grace, as the boot repair does: open if its server answers, else ended, so
             // a server that never answers does not hold a slot until its lifetime.
-            if (yield* units.answers(row.port ?? 0, "/")) {
-              yield* write(
-                "sweep",
-                row.name,
-                sql`UPDATE portals SET state = 'open', updated_at = ${now} WHERE id = ${row.id} AND state = 'opening'`
-              );
-              opened += 1;
-            } else {
+            if (yield* answersOn(row)) {
+              if (yield* markOpen("sweep", row)) {
+                opened += 1;
+              }
+            } else if (yield* markStopped("sweep", row, "lost")) {
               yield* units.stop(row.unit).pipe(Effect.mapError(toUnit));
-              yield* markStopped("sweep", row, "lost");
               stopped += 1;
             }
           }

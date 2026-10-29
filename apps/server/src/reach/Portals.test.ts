@@ -67,6 +67,12 @@ const STEPS: ReadonlyArray<PortalStep> = [
   "open",
 ];
 
+const CLOSE_STEPS: ReadonlyArray<PortalStep> = [
+  "close-row",
+  "close-unit",
+  "close-porch",
+];
+
 const openInput = (name: string, threadId = THREAD_A): OpenInput => ({
   threadId,
   name,
@@ -80,7 +86,8 @@ const openInput = (name: string, threadId = THREAD_A): OpenInput => ({
 /** A fresh fake porch, fake systemd and store, and the `Portals` layer over them. */
 const stageWith = (
   faults: PortalFaultHooks,
-  settings: Option.Option<PortalConfig>
+  settings: Option.Option<PortalConfig>,
+  wrapUnits: (units: PortalUnits["Service"]) => PortalUnits["Service"]
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -97,7 +104,7 @@ const stageWith = (
 
     const layer = Portals.layerNoDeps.pipe(
       Layer.provideMerge(Layer.succeed(PorchClient, porch.client)),
-      Layer.provideMerge(Layer.succeed(PortalUnits, units.units)),
+      Layer.provideMerge(Layer.succeed(PortalUnits, wrapUnits(units.units))),
       Layer.provideMerge(Database.layerTest(migrations)),
       Layer.provide(Layer.succeed(PortalFaults, faults)),
       Layer.provide(
@@ -125,10 +132,13 @@ const onStage = <A, E>(
     Portals | PortalUnits | PorchClient | SqlClient.SqlClient
   >,
   faults: PortalFaultHooks = NO_FAULTS,
-  settings: Option.Option<PortalConfig> = Option.none()
+  settings: Option.Option<PortalConfig> = Option.none(),
+  wrapUnits: (units: PortalUnits["Service"]) => PortalUnits["Service"] = (
+    units
+  ) => units
 ) =>
   Effect.gen(function* () {
-    const s = yield* stageWith(faults, settings);
+    const s = yield* stageWith(faults, settings, wrapUnits);
 
     return yield* body(s).pipe(Effect.provide(s.layer));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
@@ -215,10 +225,14 @@ describe("portal names", () => {
 });
 
 describe("judge faults", () => {
-  it("parse only portal:after-<step>", () => {
+  it("parse only portal:after-<step>, of an open or a close", () => {
     assert.deepStrictEqual(
       portalFaultStep("portal:after-unit"),
       Option.some("unit")
+    );
+    assert.deepStrictEqual(
+      portalFaultStep("portal:after-close-row"),
+      Option.some("close-row")
     );
     assert.isTrue(Option.isNone(portalFaultStep("portal:after-nope")));
     assert.isTrue(Option.isNone(portalFaultStep("events:after-commit")));
@@ -573,6 +587,65 @@ describe("the kill matrix", () => {
   }
 });
 
+describe("the close kill matrix", () => {
+  for (const step of CLOSE_STEPS) {
+    for (const rerun of [true, false]) {
+      it.effect(
+        `a crash after ${step}, ${rerun ? "closed again" : "left to the boot repair"}: removed, nothing left`,
+        () =>
+          onStage(
+            ({ units }) =>
+              Effect.gen(function* () {
+                const portals = yield* Portals;
+                const row = yield* portals.open(openInput("main--cairn"));
+
+                const crashed = yield* Effect.exit(portals.close(row.id));
+                assert.isTrue(Exit.isFailure(crashed));
+
+                yield* portals.reconcile;
+
+                if (rerun) {
+                  const closed = yield* portals.close(row.id);
+                  assert.strictEqual(closed.state, "removed");
+                }
+
+                assert.deepStrictEqual(yield* units.running, []);
+                assert.deepStrictEqual(yield* portalPorches, []);
+                assert.deepStrictEqual(yield* rowStates, [
+                  {
+                    name: "main--cairn",
+                    state: "removed",
+                    stop_reason: "closed",
+                  },
+                ]);
+              }),
+            crashOnceAfter(step)
+          )
+      );
+    }
+  }
+
+  it.effect(
+    "closing a removed portal again leaves the porch of a newer portal of the name",
+    () =>
+      onStage(({ units }) =>
+        Effect.gen(function* () {
+          const portals = yield* Portals;
+          const first = yield* portals.open(openInput("main--cairn"));
+          yield* portals.close(first.id);
+
+          const second = yield* portals.open(openInput("main--cairn"));
+          yield* portals.close(first.id);
+
+          assert.deepStrictEqual(yield* portalPorches, ["main--cairn"]);
+          assert.deepStrictEqual(yield* units.running, [
+            `${PREFIX}${second.id}`,
+          ]);
+        })
+      )
+  );
+});
+
 describe("settings", () => {
   it.effect(
     "are the composition root's, not the calling fiber's: units and ports follow them",
@@ -834,6 +907,133 @@ describe("reconcile and sweep", () => {
           );
         })
       )
+  );
+
+  it.effect(
+    "sweep: a rerun of the same open restarts the grace, without touching the porch",
+    () =>
+      onStage(({ units, porch }) =>
+        Effect.gen(function* () {
+          const portals = yield* Portals;
+          yield* units.setAnswering(false);
+
+          const notReady = {
+            ...openInput("main--cairn"),
+            readyTimeout: Duration.zero,
+          };
+
+          assert.isTrue(
+            Result.isFailure(yield* Effect.result(portals.open(notReady)))
+          );
+
+          // Just under the three-minute grace, the agent runs the same open again.
+          yield* TestClock.adjust(Duration.seconds(170));
+          const reloads = yield* porch.reloads;
+
+          assert.isTrue(
+            Result.isFailure(yield* Effect.result(portals.open(notReady)))
+          );
+          assert.strictEqual(yield* porch.reloads, reloads);
+
+          // Past the first open's grace, inside the rerun's: left alone.
+          yield* TestClock.adjust(Duration.seconds(30));
+          assert.strictEqual((yield* portals.sweep).stopped, 0);
+          assert.deepStrictEqual(
+            (yield* rowStates).map((stored) => stored.state),
+            ["opening"]
+          );
+          assert.lengthOf(yield* units.running, 1);
+          assert.strictEqual(yield* units.starts, 1);
+
+          // Past the rerun's grace too: ended.
+          yield* TestClock.adjust(Duration.minutes(3));
+          assert.strictEqual((yield* portals.sweep).stopped, 1);
+          assert.deepStrictEqual(yield* units.running, []);
+        })
+      )
+  );
+
+  it.effect(
+    "sweep: a row a claim renewed after the sweep read it is neither stopped nor its unit",
+    () => {
+      // Runs once, inside the sweep's own readiness probe: what a rerun's claim landing between
+      // the sweep's read and its write does to the row.
+      const between = { run: Effect.void };
+
+      return onStage(
+        ({ units }) =>
+          Effect.gen(function* () {
+            const portals = yield* Portals;
+            const sql = yield* SqlClient.SqlClient;
+            yield* units.setAnswering(false);
+
+            yield* Effect.result(
+              portals.open({
+                ...openInput("main--cairn"),
+                readyTimeout: Duration.zero,
+              })
+            );
+
+            yield* TestClock.adjust(Duration.minutes(4));
+
+            between.run = Effect.suspend(() => {
+              between.run = Effect.void;
+
+              return sql`UPDATE portals SET updated_at = updated_at + 240000`.pipe(
+                Effect.orDie,
+                Effect.asVoid
+              );
+            });
+
+            assert.strictEqual((yield* portals.sweep).stopped, 0);
+            assert.deepStrictEqual(
+              (yield* rowStates).map((stored) => stored.state),
+              ["opening"]
+            );
+            assert.lengthOf(yield* units.running, 1);
+          }),
+        NO_FAULTS,
+        Option.none(),
+        (units) => ({
+          ...units,
+          answers: (port, readyPath) =>
+            Effect.suspend(() => between.run).pipe(
+              Effect.andThen(units.answers(port, readyPath))
+            ),
+        })
+      );
+    }
+  );
+
+  it.effect("a row without a port is refused, never served on port 0", () =>
+    onStage(({ units }) =>
+      Effect.gen(function* () {
+        const portals = yield* Portals;
+        const sql = yield* SqlClient.SqlClient;
+        yield* units.setAnswering(false);
+
+        yield* Effect.result(
+          portals.open({
+            ...openInput("main--cairn"),
+            readyTimeout: Duration.zero,
+          })
+        );
+
+        yield* sql`UPDATE portals SET port = NULL`;
+        yield* units.setAnswering(true);
+
+        const rerun = yield* Effect.result(
+          portals.open(openInput("main--cairn"))
+        );
+
+        assert.isTrue(
+          Result.isFailure(rerun) &&
+            rerun.failure instanceof PortalError &&
+            rerun.failure.reason === "store"
+        );
+        assert.isFalse((yield* portals.reconcile).porchesRestored > 0);
+      })
+    )
   );
 
   it.effect("sweep: a lifetime ends a portal even while its unit runs", () =>

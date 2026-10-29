@@ -8,6 +8,13 @@
 // the agent names it): the branch git reports for the folder, `main` outside a repository or on a
 // detached head, and the repository's folder name (a worktree counts as its main checkout).
 // `portal_close` is safe too, being idempotent, and `portal_list` only reads.
+//
+// `portal_open` runs a shell command and `portal_close` stops a process, so both are gated by the
+// thread's mode (ADR 0031) as commands: auto-accept edits and Supervised ask first, through the
+// same approval record and wait as the gated `bash`. Neither carries `gatedTool`'s effect mark:
+// both are idempotent by name, so a rerun after a kill must run again, not report "may have run".
+// A rerun finds the call's record (keyed by its tool task) and waits on it, or goes on if it was
+// accepted. `portal_list` only reads and never asks.
 
 import path from "node:path";
 
@@ -32,7 +39,18 @@ import {
   Schema,
 } from "effect";
 
-import { ThreadMeta } from "../brain/CairnDocs.ts";
+import {
+  approvalLedger,
+  settlementText,
+  ThreadMeta,
+} from "../brain/CairnDocs.ts";
+import type { ApprovalLedgerError } from "../brain/CairnDocs.ts";
+import {
+  callAsks,
+  cutSummary,
+  GATED_APPROVAL_TTL_MILLIS,
+  readPermissions,
+} from "../brain/Permissions.ts";
 import { Git } from "../git/Git.ts";
 import type { PorchError } from "./PorchClient.ts";
 import {
@@ -92,6 +110,50 @@ const placeOf = async (api: ToolExecutionApi, context: ToolContext) => {
     cwd: Option.filter(Option.fromUndefinedOr(agent.cwd), (cwd) => cwd !== ""),
   };
 };
+
+/**
+ * Asks before `tool` runs when the thread's mode asks for commands and "Allow for this thread" has
+ * not covered it: records this call's approval and waits for its answer. Answers the refusal the
+ * model reads, or none when the call may run. Never fails.
+ */
+const askFirst = (
+  api: ToolExecutionApi,
+  context: ToolContext,
+  tool: string,
+  summary: string
+) =>
+  Effect.gen(function* () {
+    const permissions = yield* Effect.promise(
+      async () => await readPermissions(api, context)
+    );
+
+    if (!callAsks(permissions, tool, "command")) {
+      return Option.none<string>();
+    }
+
+    const ledger = approvalLedger(api);
+
+    yield* ledger.ask({
+      tool,
+      kind: "tool-call",
+      summary: cutSummary(summary),
+      ttlMillis: GATED_APPROVAL_TTL_MILLIS,
+      payload: Option.none(),
+      acceptedBy: Option.none(),
+    });
+
+    const settlement = yield* ledger.awaitSettlement;
+
+    return settlement.status === "accepted"
+      ? Option.none<string>()
+      : Option.some(
+          `Not run: the approval for this call was ${settlementText(settlement)}.`
+        );
+  }).pipe(
+    Effect.catchTag("ApprovalLedgerError", (failure: ApprovalLedgerError) =>
+      Effect.succeedSome(`${failure.message} Nothing ran.`)
+    )
+  );
 
 /** The portal tools, for the reach extension. */
 export class PortalTools extends Context.Service<
@@ -191,10 +253,22 @@ export class PortalTools extends Context.Service<
           return await run(
             Effect.gen(function* () {
               const parts = yield* nameParts(cwd);
+              const name = portalName(args.name ?? parts.branch, parts.project);
+
+              const refused = yield* askFirst(
+                api,
+                context,
+                PORTAL_OPEN_TOOL,
+                `Open portal ${name}: run \`${args.command}\` in ${cwd}`
+              );
+
+              if (Option.isSome(refused)) {
+                return refusal(refused.value);
+              }
 
               const row = yield* portals.open({
                 threadId,
-                name: portalName(args.name ?? parts.branch, parts.project),
+                name,
                 command: args.command,
                 cwd,
                 ttlHours: args.ttlHours ?? DEFAULT_PORTAL_TTL_HOURS,
@@ -264,6 +338,17 @@ export class PortalTools extends Context.Service<
                 return refusal(
                   `This thread has no portal named ${args.name}. portal_list shows its portals.`
                 );
+              }
+
+              const refused = yield* askFirst(
+                api,
+                context,
+                PORTAL_CLOSE_TOOL,
+                `Close portal ${found.value.name} (${found.value.url}): stop \`${found.value.command}\``
+              );
+
+              if (Option.isSome(refused)) {
+                return refusal(refused.value);
               }
 
               const row = yield* portals.close(found.value.id);

@@ -149,10 +149,12 @@ export const subagentRequestFor = (
   Option.fromUndefinedOr(requests.get(threadId));
 
 /**
- * The descendants of `threadId` whose requests count, nearest first: what the parent's banner
- * lists ("Subagent needs approval").
+ * Every subagent under `threadId`, nearest first (children, then theirs); a loop is walked once.
+ * Stop all reaches each of them.
  */
-export const childrenAsking = <T extends RollupRow>(
+export const subagentDescendants = <
+  T extends Pick<ThreadShell, "id" | "lineage">,
+>(
   threadId: ThreadId,
   threads: ReadonlyArray<T>
 ): ReadonlyArray<T> => {
@@ -174,23 +176,32 @@ export const childrenAsking = <T extends RollupRow>(
 
   const seen = new Set<ThreadId>([threadId]);
   const pending: Array<ThreadId> = [threadId];
-  const asking: Array<T> = [];
+  const found: Array<T> = [];
 
   for (const parent of pending) {
     for (const child of children.get(parent) ?? []) {
       if (!seen.has(child.id)) {
         seen.add(child.id);
         pending.push(child.id);
-
-        if (Option.isSome(subagentRequestOf(child))) {
-          asking.push(child);
-        }
+        found.push(child);
       }
     }
   }
 
-  return asking;
+  return found;
 };
+
+/**
+ * The descendants of `threadId` whose requests count, nearest first: what the parent's banner
+ * lists ("Subagent needs approval").
+ */
+export const childrenAsking = <T extends RollupRow>(
+  threadId: ThreadId,
+  threads: ReadonlyArray<T>
+): ReadonlyArray<T> =>
+  subagentDescendants(threadId, threads).filter((child) =>
+    Option.isSome(subagentRequestOf(child))
+  );
 
 /** The banner's title over the asking children: approval when all ask for one, else input or you. */
 export const childInputsTitle = (

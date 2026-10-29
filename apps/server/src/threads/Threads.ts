@@ -4,6 +4,7 @@
 // thread launches follows the launch to its end. Stop keeps queued inputs unless asked to clear
 // them (plan D16), then runs the stop hooks; a stop during the launch cancels the launch.
 
+import { subagentDescendants } from "@cairn/client-logic/SubagentRollup";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type {
   ConfigureInput,
@@ -218,6 +219,27 @@ export class Threads extends Context.Service<
           )
         );
 
+      /** Every subagent under `threadId` that has a row, nearest first; none when rows fail. */
+      const descendantsOf = (threadId: ThreadId) =>
+        threadRows.listLive.pipe(
+          Effect.map((rows) =>
+            subagentDescendants(
+              threadId,
+              rows.map((row) => row.shell)
+            ).map((child) => child.id)
+          ),
+          Effect.catchTag("ShellStoreError", (failure) =>
+            Effect.logWarning("subagents' stop hooks skipped").pipe(
+              Effect.annotateLogs({
+                event: "stop_all_hooks_skipped",
+                threadId,
+                error: failure.message,
+              }),
+              Effect.as([])
+            )
+          )
+        );
+
       const send = Effect.fn("Threads.send")(function* (
         input: SendInput,
         from: string
@@ -251,11 +273,26 @@ export class Threads extends Context.Service<
           return;
         }
 
+        const subagents = Option.getOrElse(
+          input.subagents,
+          () => "keep" as const
+        );
+
         yield* seam.stop(input.threadId, {
           clearQueue: input.clearQueue,
-          subagents: Option.getOrElse(input.subagents, () => "keep" as const),
+          subagents,
         });
         yield* stopHooks.run(input.threadId);
+
+        // Stop all stopped every descendant's run too, so each gets its own hooks (a child on the
+        // bridge holds a Claude Code session of its own).
+        if (subagents === "stop") {
+          yield* Effect.forEach(
+            yield* descendantsOf(input.threadId),
+            (child) => stopHooks.run(child),
+            { discard: true }
+          );
+        }
       });
 
       const withdraw = Effect.fn("Threads.withdraw")(function* (

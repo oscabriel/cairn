@@ -23,8 +23,16 @@ import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
-import { NO_SUBAGENT_FAULTS, SubagentFaults } from "../brain/SubagentFaults.ts";
-import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
+import {
+  NO_SUBAGENT_CRASHES,
+  NO_SUBAGENT_FAULTS,
+  SubagentCrashes,
+  SubagentFaults,
+} from "../brain/SubagentFaults.ts";
+import type {
+  SubagentCrashHooks,
+  SubagentFaultSet,
+} from "../brain/SubagentFaults.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
@@ -77,11 +85,12 @@ const NO_WORKSPACES: ChildWorkspaceAccess = {
     ),
 };
 
-/** The tools and tasks with `faults` planted, as one extension. */
+/** The tools and tasks with `faults` and `crashes` planted, as one extension. */
 const build = (
   faults: SubagentFaultSet,
   tuning: SubagentToolOptions,
-  workspaces: ChildWorkspaceAccess
+  workspaces: ChildWorkspaceAccess,
+  crashes: SubagentCrashHooks
 ) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
@@ -92,6 +101,7 @@ const build = (
     childAgent: (typed) => child.agent(typed),
     workspaces,
     settleDelayMillis: tuning.settleDelayMillis,
+    crashAt: crashes.at,
   });
 
   const tools = subagentToolSet(faults, tasks, tuning);
@@ -110,16 +120,17 @@ const build = (
 
 /**
  * The subagents extension with `faults` planted, making children's workspaces with `workspaces`;
- * the conformance suite's mutation check uses it, and a test that needs a question to expire soon
- * passes `tuning`.
+ * the conformance suite's mutation check uses it, a test that needs a question to expire soon
+ * passes `tuning`, and a judge brain's `crashes` kill it at its crash points.
  */
 export const subagentsExtension = (
   faults: SubagentFaultSet,
   workspaces: ChildWorkspaceAccess,
-  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
+  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
+  crashes: SubagentCrashHooks = NO_SUBAGENT_CRASHES
 ): CairnExtension => ({
   order: ExtensionOrder.subagents,
-  extension: build(faults, tuning, workspaces).extension,
+  extension: build(faults, tuning, workspaces, crashes).extension,
 });
 
 /**
@@ -129,7 +140,8 @@ export const subagentsExtension = (
 const hostTasks = build(
   NO_SUBAGENT_FAULTS,
   DEFAULT_TOOL_OPTIONS,
-  NO_WORKSPACES
+  NO_WORKSPACES,
+  NO_SUBAGENT_CRASHES
 ).tasks;
 
 /**
@@ -235,13 +247,15 @@ export class Subagents extends Context.Service<
     );
 
   /**
-   * The extension with the faults `SubagentFaults` names (none, unless a test plants some), making
-   * children's worktrees with `ChildWorkspaces`.
+   * The extension with the faults `SubagentFaults` names and the crash points `SubagentCrashes`
+   * plants (none, unless a test or a judge brain plants some), making children's worktrees with
+   * `ChildWorkspaces`.
    */
   static readonly layer = Layer.effect(
     Subagents,
     Effect.gen(function* () {
       const faults = yield* SubagentFaults;
+      const crashes = yield* SubagentCrashes;
 
       const workspaces = workspaceAccess(
         yield* ChildWorkspaces,
@@ -249,7 +263,12 @@ export class Subagents extends Context.Service<
       );
 
       return Subagents.of({
-        extension: subagentsExtension(faults, workspaces),
+        extension: subagentsExtension(
+          faults,
+          workspaces,
+          DEFAULT_TOOL_OPTIONS,
+          crashes
+        ),
       });
     })
   );

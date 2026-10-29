@@ -1,8 +1,8 @@
 // The phase 2 inputs this brain cannot act on yet are refused with `InvalidInput` naming the field,
 // and reach no service. Each package that builds one lifts its guard and turns its test here around:
-// 4A `revise`, 5A `accept_sample` and `launch`, 4C `subagents`. 1A lifted `reason` and `answers`;
-// permission modes lifted `runtimeMode` (all but `auto`, which is not offered) and
-// `accept_for_thread`.
+// 4A `revise`, 5A `accept_sample` and `launch`. 1A lifted `reason` and `answers`; permission
+// modes lifted `runtimeMode` (all but `auto`, which is not offered) and `accept_for_thread`; 4C
+// lifted `thread.stop`'s `subagents: "stop"` (Stop all).
 
 import { InvalidInput } from "@cairn/protocol/Errors";
 import { ApprovalId } from "@cairn/protocol/Ids";
@@ -116,14 +116,14 @@ describe("thread commands not handled yet", () => {
   );
 
   it.effect(
-    "refuses Stop all on a thread's subagents, and stops one that keeps them",
+    "passes Stop all on a thread's subagents, and a stop that keeps them",
     () =>
       Effect.gen(function* () {
         reached.length = 0;
 
         const handlers = yield* threadCommandHandlers;
 
-        const refused = yield* outcome(
+        const stopped = yield* outcome(
           handlers.stop(
             { threadId, clearQueue: false, subagents: Option.some("stop") },
             requestId
@@ -138,8 +138,8 @@ describe("thread commands not handled yet", () => {
         );
 
         assert.deepStrictEqual(
-          [refused, kept, reached],
-          ["subagents", "ok", ["stop"]]
+          [stopped, kept, reached],
+          ["ok", "ok", ["stop", "stop"]]
         );
       }).pipe(Effect.provide(TestLayer))
   );

@@ -47,6 +47,7 @@
 import { Buffer } from "node:buffer";
 
 import { isWiderThan, narrowerMode } from "@cairn/client-logic/EffectiveMode";
+import { tallyOf } from "@cairn/client-logic/SubagentTally";
 import {
   ApprovalId,
   ConversationId,
@@ -63,6 +64,7 @@ import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
   MAX_SUBAGENT_DEPTH,
+  NO_SUBAGENTS,
   SUBAGENT_RESULT_ENTRY,
 } from "@cairn/protocol/Subagents";
 import type {
@@ -1310,6 +1312,8 @@ const layerNoDeps = Layer.effectContext(
               threadId: parent.threadId,
               child: child.threadId,
               status,
+              // Counted when the change commits (`commit`), after every write it holds.
+              tally: NO_SUBAGENTS,
             })
           );
         }
@@ -1923,6 +1927,7 @@ const layerNoDeps = Layer.effectContext(
           threadId: parent.threadId,
           child: childThreadId,
           status: "working",
+          tally: NO_SUBAGENTS,
         })
       );
       newReporter(
@@ -2408,7 +2413,34 @@ const layerNoDeps = Layer.effectContext(
         yield* SubscriptionRef.set(ref, currentView(thread));
       }
 
-      yield* PubSub.publishAll(events, changes.events);
+      // A child's status event carries its parent's tally as the change leaves the registry, as
+      // pi-durable's commit feed counts it after the commit.
+      yield* PubSub.publishAll(
+        events,
+        changes.events.map((event) =>
+          Predicate.isTagged(event, "SubagentUpdated")
+            ? SubagentUpdated.make({
+                ...event,
+                tally: Option.match(
+                  Option.fromUndefinedOr(store.threads.get(event.threadId)),
+                  {
+                    onNone: () => NO_SUBAGENTS,
+                    onSome: (parent) =>
+                      tallyOf(
+                        [...parent.subagents.values()].map((item) => ({
+                          status: item.status,
+                          latest: Option.map(
+                            Option.fromUndefinedOr(item.settlements.at(-1)),
+                            (last) => last.outcome
+                          ),
+                        }))
+                      ),
+                  }
+                ),
+              })
+            : event
+        )
+      );
 
       for (const thread of changes.runs) {
         yield* starters.run(thread);

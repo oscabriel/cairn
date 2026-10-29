@@ -13,8 +13,8 @@
 // - `pi.inbox` changes: QueueChanged when the number of queued inputs changed.
 // - `cairn.approvals` changes: RuntimeRequestUpdated for each record whose status changed.
 // - `pi.usage` changes: UsageUpdated with the conversation's token totals.
-// - `cairn.subagents` changes: SubagentUpdated for each child whose status changed (ADR 0028).
-//   The last statuses live in memory only, so after a restart the first change to a parent's
+// - `cairn.subagents` changes: SubagentUpdated for each child whose status changed (ADR 0028),
+//   with the registry's tally after the commit. The last statuses live in memory only, so after a restart the first change to a parent's
 //   registry emits one for every child in it, changed or not: a consumer treats SubagentUpdated
 //   as idempotent (it sets a status, never counts transitions). Seeding the map from the document
 //   would read the state after the commit and hide the change it carries.
@@ -25,6 +25,7 @@
 // goes unseen. Events never replay across a process restart, so the shell projector reconciles at
 // boot.
 
+import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import {
   ApprovalId,
@@ -341,7 +342,10 @@ const liveEvents = (
   return [runEnd(state, threadId, current, ended, now)];
 };
 
-/** SubagentUpdated for each child in a parent's registry whose status changed. */
+/**
+ * SubagentUpdated for each child in a parent's registry whose status changed, each carrying the
+ * registry's tally after the commit.
+ */
 const subagentEvents = (
   state: FeedState,
   threadId: ThreadId,
@@ -349,6 +353,7 @@ const subagentEvents = (
   items: JsonObject
 ): Array<HarnessEvent> => {
   const events: Array<HarnessEvent> = [];
+  const tally = tallyOfRegistry({ items });
 
   for (const [key, item] of Object.entries(items)) {
     if (isRecord(item)) {
@@ -367,6 +372,7 @@ const subagentEvents = (
             threadId,
             child: child.value,
             status: status.value,
+            tally,
           })
         );
       }

@@ -25,6 +25,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import { hasLiveChildren } from "@cairn/client-logic/SubagentTally";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import {
   Context,
@@ -152,7 +153,10 @@ export const isAutoSettlementCandidate = (
     !isThreadBusy(shell) &&
     shell.queueLength === 0 &&
     !threadHasQueuedTurnStart(shell, nowMs) &&
-    !isSnoozed(shell, nowMs)
+    !isSnoozed(shell, nowMs) &&
+    // A subagent's row is its parent's to shelve, and a parent waits for its children (ADR 0028).
+    Option.isNone(shell.lineage) &&
+    !hasLiveChildren(shell.subagents)
   );
 };
 

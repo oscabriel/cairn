@@ -28,6 +28,7 @@ import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
+import { testCommandId, testThreadId } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import { StopHooks } from "./StopHooks.ts";
@@ -294,6 +295,64 @@ describe("thread commands", () => {
         assert.include(yield* Ref.get(stopped), threadId);
       })
     )
+  );
+
+  it.live(
+    "Stop all runs the stop hooks of every subagent row under the thread; a stop that keeps them runs only the thread's",
+    () =>
+      withThread((threadId, projectId) =>
+        Effect.gen(function* () {
+          const sink = yield* EventSink;
+
+          const childRow = (n: number, parent: ThreadId) =>
+            ThreadCreate.make({
+              commandId: testCommandId(70_000 + n),
+              threadId: testThreadId(70_000 + n),
+              projectId,
+              title: `Child ${n}`,
+              provider: "faux",
+              modelId: "small",
+              thinkingLevel: "off",
+              runtimeMode: "full-access",
+              branch: Option.none(),
+              worktreePath: Option.none(),
+              lineage: Option.some({
+                parentThreadId: parent,
+                relationshipToParent: "subagent",
+                rootThreadId: threadId,
+              }),
+            });
+
+          const child = testThreadId(70_001);
+          const grandchild = testThreadId(70_002);
+
+          yield* sink.commitCommand(childRow(1, threadId));
+          yield* sink.commitCommand(childRow(2, child));
+          yield* Ref.set(stopped, []);
+
+          yield* (yield* Threads).stop({
+            threadId,
+            clearQueue: false,
+            subagents: Option.some("keep"),
+          });
+
+          assert.deepStrictEqual(yield* Ref.get(stopped), [threadId]);
+
+          yield* Ref.set(stopped, []);
+
+          yield* (yield* Threads).stop({
+            threadId,
+            clearQueue: true,
+            subagents: Option.some("stop"),
+          });
+
+          assert.deepStrictEqual(yield* Ref.get(stopped), [
+            threadId,
+            child,
+            grandchild,
+          ]);
+        })
+      )
   );
 
   it.live("stop with clear withdraws the queued inputs too", () =>

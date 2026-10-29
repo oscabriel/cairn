@@ -84,13 +84,14 @@ const ANCESTOR_HOPS = MAX_SUBAGENT_DEPTH + 2;
  * The permissions a tool call runs under, read once at call time: the thread's own allow list, and
  * its mode narrowed by every ancestor's (ADR 0031), found by walking each subagent's `cairn.child`
  * up to the thread the user opened. A parent narrowed after the spawn so narrows its child's next
- * gated call.
+ * gated call. `from` reads another conversation's (an ancestor's) through the same `api`.
  */
 export const readPermissions = async (
   api: Pick<ToolExecutionApi, "snapshot" | "conversationId">,
-  context: ChordContext
+  context: ChordContext,
+  from: ToolExecutionApi["conversationId"] = api.conversationId
 ): Promise<ThreadPermissions> => {
-  const doc = await api.snapshot(Permissions, api.conversationId, context);
+  const doc = await api.snapshot(Permissions, from, context);
 
   const own =
     doc === undefined
@@ -98,7 +99,7 @@ export const readPermissions = async (
       : { mode: doc.mode, allow: [...doc.allow] };
 
   let { mode } = own;
-  let { conversationId } = api;
+  let conversationId = from;
 
   for (let hop = 0; hop < ANCESTOR_HOPS; hop += 1) {
     // Each hop reads the parent the last one named.
@@ -120,6 +121,29 @@ export const readPermissions = async (
   }
 
   return { mode, allow: own.allow };
+};
+
+/**
+ * The widest mode a subagent may be set to (ADR 0031): its parent's effective mode. None for a
+ * thread the user opened, which any mode fits. `thread.configure` refuses a mode wider than it.
+ */
+export const parentCeiling = async (
+  api: Pick<ToolExecutionApi, "snapshot" | "conversationId">,
+  context: ChordContext
+): Promise<Option.Option<RuntimeMode>> => {
+  const link = await api.snapshot(ChildDoc, api.conversationId, context);
+
+  if (!isLinked(link)) {
+    return Option.none();
+  }
+
+  const parent = await readPermissions(
+    api,
+    context,
+    piConversationId(ConversationId.make(link.parentConversationId))
+  );
+
+  return Option.some(parent.mode);
 };
 
 /** The memo a gated tool commits right before its effect. Prefixed: hooks share the task's memos. */

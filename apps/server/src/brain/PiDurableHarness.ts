@@ -20,6 +20,7 @@
 
 import { Buffer } from "node:buffer";
 
+import { isWiderThan } from "@cairn/client-logic/EffectiveMode";
 import {
   ApprovalId,
   ConversationId,
@@ -101,12 +102,14 @@ import type {
 } from "./HarnessSeam.ts";
 import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
 import { Parked } from "./Parked.ts";
+import { parentCeiling } from "./Permissions.ts";
 import {
   piConversationId,
   piEntryId,
   piSubmissionId,
   piTaskId,
 } from "./PiIds.ts";
+import { SubagentCrashes } from "./SubagentFaults.ts";
 import { WindowFrame, windowedProjector } from "./ThreadWindow.ts";
 import type { WindowedView } from "./ThreadWindow.ts";
 import { entryImages, projectEntry } from "./ThreadWire.ts";
@@ -280,6 +283,7 @@ const layerNoDeps = Layer.effect(
   Effect.gen(function* () {
     const brain = yield* Brain;
     const feed = yield* CommitFeed;
+    const crashes = yield* SubagentCrashes;
     const parked = yield* Parked;
     // A stop finishes here once it started aborting, whatever happens to its caller.
     const layerScope = yield* Effect.scope;
@@ -442,6 +446,30 @@ const layerNoDeps = Layer.effect(
       const session = yield* open(Option.some(threadId));
       const conversation = yield* conversationOf(session, threadId);
 
+      // A subagent's mode never widens past its parent's effective mode (ADR 0031).
+      for (const mode of Option.toArray(change.runtimeMode)) {
+        const ceiling = yield* call(
+          Option.some(threadId),
+          "permissions.ceiling",
+          async (context) =>
+            await parentCeiling(
+              {
+                snapshot: session.harness.snapshot.bind(session.harness),
+                conversationId: conversation.id,
+              },
+              context
+            )
+        );
+
+        if (Option.isSome(ceiling) && isWiderThan(mode, ceiling.value)) {
+          return yield* failure(
+            "invalid_input",
+            Option.some(threadId),
+            `A subagent's permission mode cannot be wider than its parent's (${ceiling.value}). Choose ${ceiling.value} or a narrower mode.`
+          );
+        }
+      }
+
       if (Option.isSome(change.cwd) || Option.isSome(change.runtimeMode)) {
         const run = yield* liveRun(session, threadId, conversation.id);
 
@@ -512,6 +540,7 @@ const layerNoDeps = Layer.effect(
       yield* steerReporter(session.harness, conversation.id, draft).pipe(
         Effect.mapError(fromDurable(Option.some(threadId)))
       );
+      crashes.at("steer-recorded");
 
       const record = yield* call(
         Option.some(threadId),

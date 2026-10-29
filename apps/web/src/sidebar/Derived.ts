@@ -15,6 +15,7 @@ import type {
 import {
   isSubagentThread,
   pendingSubagentRequests,
+  sidebarRowThreadId,
   subagentRequestFor,
 } from "@cairn/client-logic/SubagentRollup";
 import type { SubagentRequest } from "@cairn/client-logic/SubagentRollup";
@@ -29,6 +30,7 @@ import {
   resolveSnoozePresets,
 } from "@cairn/client-logic/ThreadSettled";
 import type { SnoozePreset } from "@cairn/client-logic/ThreadSettled";
+import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
 import { Array, DateTime, Option } from "effect";
 
@@ -149,6 +151,15 @@ export const subagentRequestOf = (
   thread: ThreadShell
 ): Option.Option<SubagentRequest> =>
   subagentRequestFor(requestsOf(model), thread.id);
+
+/**
+ * The row that stands for the open thread: itself, or for an open subagent its nearest ancestor
+ * the sidebar lists, which is then shown as current (ADR 0028).
+ */
+export const activeRowOf = (model: Model): Option.Option<ThreadId> =>
+  Option.map(model.context.openThreadId, (threadId) =>
+    sidebarRowThreadId(threadId, threadsOf(model))
+  );
 
 /** A thread's shelf now. */
 export const sectionOfThread = (

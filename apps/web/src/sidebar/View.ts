@@ -68,6 +68,7 @@ import {
 } from "./Classes.ts";
 import { contextMenuView } from "./ContextMenu.ts";
 import {
+  activeRowOf,
   findProject,
   findThread,
   isSearching,
@@ -169,7 +170,7 @@ const row = (
     project: findProject(model, thread.projectId),
     section,
     nowMs: model.nowMs,
-    isActive: Option.contains(model.context.openThreadId, thread.id),
+    isActive: Option.contains(activeRowOf(model), thread.id),
     renaming: Option.flatMap(model.renaming, (renaming) =>
       renaming.threadId === thread.id
         ? Option.some(renaming.title)
@@ -396,7 +397,7 @@ const searchResults = (h: H, model: Model): Html => {
         project: findProject(model, thread.projectId),
         index,
         isHighlighted: index === model.activeSearchIndex,
-        isActive: Option.contains(model.context.openThreadId, thread.id),
+        isActive: Option.contains(activeRowOf(model), thread.id),
         isSettled: settled.has(thread.id),
         query: model.search,
         nowMs: model.nowMs,

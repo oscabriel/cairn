@@ -14,12 +14,15 @@
 //   as it stands then and recomputes `activity` over the result, so a field another writer changed
 //   in the meantime (a launch marking `idle` or `failed`) is never overwritten from a stale copy.
 //
-// The field mapping follows notes/server.md, "Shell store and the projector".
+// The field mapping follows notes/server.md, "Shell store and the projector". A parent's `subagents`
+// tally is set from each SubagentUpdated, which carries the registry counted after its commit, and
+// the boot reconcile counts the registry again for every row with a child row (ADR 0028).
 //
 // For the durability judge only: `CAIRN_JUDGE_HOLD_PROJECTOR_MS` makes the projector log
 // `projector_holding` and wait that long before committing a run's end, so a `kill -9` can land
 // after pi-durable committed the run and before the shell did. Unset, nothing waits.
 
+import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import type { ApprovalId, TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";
@@ -29,6 +32,7 @@ import type {
   RunFailureClass,
   ThreadActivity,
 } from "@cairn/protocol/Shell";
+import { NO_SUBAGENTS, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import {
   Array as Arr,
@@ -90,6 +94,7 @@ export type DerivedFields = Pick<
   | "latestVisibleMessage"
   | "latestUserMessageAt"
   | "parkedTaskIds"
+  | "subagents"
 >;
 
 /** How the newest run this projection saw ended. */
@@ -145,6 +150,7 @@ export const projectionOf = (
     latestVisibleMessage: shell.latestVisibleMessage,
     latestUserMessageAt: shell.latestUserMessageAt,
     parkedTaskIds: shell.parkedTaskIds,
+    subagents: shell.subagents,
   },
   changed: {},
   outcome: Option.none(),
@@ -241,8 +247,10 @@ export const applyHarnessEvent = (
 ): ThreadProjection =>
   Match.valueTags(event, {
     ThreadEnsured: () => projection,
-    // Nothing yet: 4C derives a parent row's tally of its children from these events.
-    SubagentUpdated: () => projection,
+    // The parent's tally as the registry stands after the commit: set, never counted, so a repeat
+    // after a restart changes nothing.
+    SubagentUpdated: (updated) =>
+      withFields(projection, { subagents: updated.tally }),
     RunStarted: (started) =>
       withFields(
         { ...projection, outcome: Option.none() },
@@ -410,6 +418,8 @@ export const reconcileProjection = (
 
 const { fields: shellFields } = ThreadShell;
 
+const sameTally = Schema.toEquivalence(shellFields.subagents);
+
 const same = {
   activity: Schema.toEquivalence(shellFields.activity),
   activeRunId: Schema.toEquivalence(shellFields.activeRunId),
@@ -424,6 +434,7 @@ const same = {
   pendingCount: Schema.toEquivalence(shellFields.pendingCount),
   latestVisibleMessage: Schema.toEquivalence(shellFields.latestVisibleMessage),
   parkedTaskIds: Schema.toEquivalence(shellFields.parkedTaskIds),
+  subagents: Schema.toEquivalence(shellFields.subagents),
 };
 
 const diff = <A>(
@@ -522,6 +533,7 @@ export const patchFor = (
       row.parkedTaskIds,
       fields.parkedTaskIds
     ),
+    subagents: diff(same.subagents, row.subagents, fields.subagents),
   };
 
   const changes: ReadonlyArray<boolean> = [
@@ -540,6 +552,7 @@ export const patchFor = (
     Option.isSome(patch.latestVisibleMessage),
     Option.isSome(patch.latestUserMessageAt),
     Option.isSome(patch.parkedTaskIds),
+    Option.isSome(patch.subagents),
   ];
 
   return changes.includes(true) ? Option.some(patch) : Option.none();
@@ -982,20 +995,20 @@ export class ShellProjector extends Context.Service<
         }
       });
 
-      /** The newest message of a thread whose row may have missed it, from a fresh snapshot. */
-      const latestMessage = (threadId: ThreadId) =>
+      /** A fresh snapshot of a thread's view; none when it cannot be read within two seconds. */
+      const snapshotOf = (threadId: ThreadId) =>
         harness.watch(threadId).pipe(
           Stream.take(1),
           Stream.runHead,
           Effect.map((frame) =>
             Option.flatMap(frame, (item) =>
               Predicate.isTagged(item, "Snapshot")
-                ? latestMessageOf(item.view)
+                ? Option.some(item.view)
                 : Option.none()
             )
           ),
           Effect.timeout("2 seconds"),
-          Effect.orElseSucceed(() => Option.none<LatestVisibleMessage>())
+          Effect.orElseSucceed(() => Option.none<ConversationView>())
         );
 
       const reconcileThreads = Effect.fnUntraced(function* (
@@ -1018,6 +1031,16 @@ export class ShellProjector extends Context.Service<
         const targets = yield* all;
         let patched = 0;
 
+        // Rows with a child row, whose tally the registry may have moved past (the feed never
+        // replays a change a crash cut off).
+        const parents = new Set(
+          (yield* rows.listLive).flatMap((row) =>
+            Option.toArray(
+              Option.map(row.shell.lineage, (lineage) => lineage.parentThreadId)
+            )
+          )
+        );
+
         for (const row of targets) {
           const threadId = row.shell.id;
           const state = Option.fromUndefinedOr(live.get(threadId));
@@ -1032,8 +1055,25 @@ export class ShellProjector extends Context.Service<
           const mayHaveMissed =
             BUSY.has(row.shell.activity) || Option.isSome(state);
 
-          if (withMessages && mayHaveMissed) {
-            const message = yield* latestMessage(threadId);
+          const readMessage = withMessages && mayHaveMissed;
+
+          const readTally =
+            parents.has(threadId) ||
+            !sameTally(row.shell.subagents, NO_SUBAGENTS);
+
+          const view =
+            readMessage || readTally
+              ? yield* snapshotOf(threadId)
+              : Option.none<ConversationView>();
+
+          if (readTally && Option.isSome(view)) {
+            projection = withFields(projection, {
+              subagents: tallyOfRegistry(view.value.docs[SUBAGENTS_DOCUMENT]),
+            });
+          }
+
+          if (readMessage) {
+            const message = Option.flatMap(view, latestMessageOf);
 
             if (Option.isSome(message)) {
               projection = withFields(projection, {

@@ -9,8 +9,10 @@
 // - `text <n>` streams a reply of `n` words (at the layer's tokens per second);
 // - after the last step the model answers `done`.
 //
-// Any other message is answered `ok`. The answer never depends on the clock, so a rerun after a
-// crash asks for the same step again.
+// A message whose first line is not a script may carry one on a later line (a subagent's brief is
+// its title, a blank line, then its task): that line alone is the script. Any other message is
+// answered `ok`. The answer never depends on the clock, so a rerun after a crash asks for the same
+// step again.
 
 import type {
   AssistantMessage,
@@ -91,9 +93,16 @@ export const answer = (context: TranscriptContext): AssistantMessage => {
     return fauxAssistantMessage("ok");
   }
 
-  const text = textOf(prompt).trim();
+  const whole = textOf(prompt).trim();
 
-  if (!text.startsWith(SCRIPT_PREFIX)) {
+  const text = whole.startsWith(SCRIPT_PREFIX)
+    ? whole
+    : (whole
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.startsWith(SCRIPT_PREFIX)) ?? "");
+
+  if (text === "") {
     return fauxAssistantMessage("ok");
   }
 

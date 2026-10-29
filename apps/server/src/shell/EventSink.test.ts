@@ -21,6 +21,7 @@ import {
   emptyActivityPatch,
   ThreadActivityUpdate,
   ThreadAutoSettle,
+  ThreadCreate,
   ThreadMessageSent,
 } from "./ShellCommands.ts";
 import type { ServerShellCommand } from "./ShellCommands.ts";
@@ -407,6 +408,155 @@ describe("thread inbox commands", () => {
           );
         })
       )
+  );
+});
+
+/** Sets thread 1's tally of working and asking children. */
+const tally = (working: number, asking: number) =>
+  ThreadActivityUpdate.make({
+    commandId: nextCommandId(),
+    threadId,
+    patch: {
+      ...emptyActivityPatch,
+      subagents: Option.some({ working, asking, settled: 0, failed: 0 }),
+    },
+  });
+
+describe("subagents on the shelf", () => {
+  /** Thread 2, a subagent of thread 1. */
+  const seedChild = Effect.gen(function* () {
+    const projectId = yield* seed;
+
+    yield* commit(
+      ThreadCreate.make({
+        ...createThread(projectId, 2),
+        lineage: Option.some({
+          parentThreadId: threadId,
+          relationshipToParent: "subagent",
+          rootThreadId: threadId,
+        }),
+      })
+    );
+  });
+
+  it.effect(
+    "refuses to settle a parent, by hand or by the sweep, while a child works or asks",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedChild;
+
+          for (const [working, asking] of [
+            [1, 0],
+            [0, 1],
+          ] as const) {
+            yield* commit(tally(working, asking));
+
+            const read = yield* thread(1);
+
+            assert.deepStrictEqual(
+              [
+                yield* refusal(
+                  ThreadSettle.make({ commandId: nextCommandId(), threadId })
+                ),
+                yield* refusal(
+                  ThreadAutoSettle.make({
+                    commandId: nextCommandId(),
+                    threadId,
+                    snapshotAt: read.updatedAt,
+                    settledAt: read.createdAt,
+                  })
+                ),
+              ],
+              ["ShellCommandConflict", "ShellCommandConflict"]
+            );
+          }
+
+          yield* commit(tally(0, 0));
+          yield* commit(
+            ThreadSettle.make({ commandId: nextCommandId(), threadId })
+          );
+
+          assert.deepStrictEqual(
+            (yield* thread(1)).settledOverride,
+            Option.some("settled")
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "refuses to settle, snooze, pin or archive a subagent's own row: its parent's row holds it",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedChild;
+
+          const child = testThreadId(2);
+          const read = yield* thread(2);
+
+          const refused = yield* Effect.forEach(
+            [
+              ThreadSettle.make({
+                commandId: nextCommandId(),
+                threadId: child,
+              }),
+              ThreadSnooze.make({
+                commandId: nextCommandId(),
+                threadId: child,
+                until: DateTime.makeUnsafe(60_000),
+              }),
+              ThreadPin.make({ commandId: nextCommandId(), threadId: child }),
+              ThreadArchive.make({
+                commandId: nextCommandId(),
+                threadId: child,
+              }),
+              ThreadAutoSettle.make({
+                commandId: nextCommandId(),
+                threadId: child,
+                snapshotAt: read.updatedAt,
+                settledAt: read.createdAt,
+              }),
+            ],
+            refusal
+          );
+
+          assert.deepStrictEqual(refused, [
+            "ShellCommandInvalid",
+            "ShellCommandInvalid",
+            "ShellCommandInvalid",
+            "ShellCommandInvalid",
+            "ShellCommandInvalid",
+          ]);
+
+          const after = yield* thread(2);
+
+          assert.deepStrictEqual(
+            [after.settledOverride, after.pinnedAt, after.archivedAt],
+            [Option.none(), Option.none(), Option.none()]
+          );
+        })
+      )
+  );
+
+  it.effect("a tally moves no `updatedAt`", () =>
+    run(
+      Effect.gen(function* () {
+        yield* seedChild;
+
+        const before = yield* thread(1);
+
+        yield* TestClock.adjust(Duration.seconds(1));
+        yield* commit(tally(1, 0));
+
+        const after = yield* thread(1);
+
+        assert.deepStrictEqual(
+          [after.subagents.working, after.updatedAt],
+          [1, before.updatedAt]
+        );
+      })
+    )
   );
 });
 

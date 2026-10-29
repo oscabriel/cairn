@@ -11,6 +11,7 @@ import {
   TaskId,
 } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
+import { NO_SUBAGENTS } from "@cairn/protocol/Subagents";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -36,6 +37,7 @@ import {
   RunStarted,
   RunTerminal,
   RuntimeRequestUpdated,
+  SubagentUpdated,
   TaskParked,
   ThreadEnsured,
   UsageUpdated,
@@ -45,7 +47,11 @@ import { EventSink } from "./EventSink.ts";
 import { EventStore } from "./EventStore.ts";
 import { ProjectorSignals } from "./ProjectorSignals.ts";
 import type { ProjectorSignal } from "./ProjectorSignals.ts";
-import { emptyActivityPatch, ThreadActivityUpdate } from "./ShellCommands.ts";
+import {
+  emptyActivityPatch,
+  ThreadActivityUpdate,
+  ThreadCreate,
+} from "./ShellCommands.ts";
 import {
   applyHarnessEvent,
   FAILURE_TEXT,
@@ -1009,6 +1015,138 @@ describe("the shell projector", () => {
           assert.strictEqual(ended.pendingCount, 0);
 
           // A second reconcile finds nothing to change.
+          assert.strictEqual((yield* projector.reconcile).patched, 0);
+        })
+      )
+  );
+});
+
+/** Thread 2, a subagent of thread 1, changed status; its parent's tally is `tally`. */
+const updated = (
+  status: "working" | "waiting" | "settled",
+  tally: typeof NO_SUBAGENTS
+) =>
+  SubagentUpdated.make({
+    threadId: THREAD,
+    child: testThreadId(2),
+    status,
+    tally,
+  });
+
+describe("a parent's tally of its subagents", () => {
+  /** Thread 2, a subagent of thread 1. */
+  const seedChild = Effect.gen(function* () {
+    const sink = yield* EventSink;
+    const project = createProject(1);
+
+    yield* sink.commitCommand(project.command);
+    yield* sink.commitCommand(createThread(project.projectId, 1));
+    yield* sink.commitCommand(
+      ThreadCreate.make({
+        ...createThread(project.projectId, 2),
+        lineage: Option.some({
+          parentThreadId: THREAD,
+          relationshipToParent: "subagent",
+          rootThreadId: THREAD,
+        }),
+      })
+    );
+  });
+
+  it.effect(
+    "sets the tally each SubagentUpdated carries, and a repeat after a restart changes nothing",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedChild;
+
+          yield* emit([updated("working", { ...NO_SUBAGENTS, working: 1 })]);
+
+          assert.deepStrictEqual((yield* shellOf(THREAD)).subagents, {
+            ...NO_SUBAGENTS,
+            working: 1,
+          });
+
+          yield* emit([
+            updated("waiting", { ...NO_SUBAGENTS, asking: 1 }),
+            updated("settled", { ...NO_SUBAGENTS, failed: 1 }),
+          ]);
+
+          const settled = yield* shellOf(THREAD);
+
+          assert.deepStrictEqual(settled.subagents, {
+            ...NO_SUBAGENTS,
+            failed: 1,
+          });
+
+          // The tally is a cache like spend: it moves no `updatedAt`.
+          const before = yield* activityEvents(THREAD);
+
+          yield* emit([updated("settled", { ...NO_SUBAGENTS, failed: 1 })]);
+
+          assert.strictEqual(yield* activityEvents(THREAD), before);
+          assert.deepStrictEqual(
+            (yield* shellOf(THREAD)).updatedAt,
+            settled.updatedAt
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "the boot reconcile counts a parent's registry when a lost event left its tally behind",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedChild;
+
+          const fake = yield* FakeHarness;
+          const projector = yield* ShellProjector;
+
+          // The row says the child works; the registry, read at boot, says it settled.
+          yield* emit([updated("working", { ...NO_SUBAGENTS, working: 1 })]);
+
+          yield* Ref.set(
+            fake.views,
+            new Map([
+              [
+                THREAD,
+                {
+                  ...finishedView,
+                  docs: {
+                    "cairn.subagents": {
+                      items: {
+                        "call-1": {
+                          threadId: testThreadId(2),
+                          status: "settled",
+                          settlements: [
+                            {
+                              seq: 1,
+                              outcome: "completed",
+                              answerEntry: null,
+                              reportedAt: 0,
+                              inputs: [],
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                },
+              ],
+            ])
+          );
+
+          yield* projector.reconcile;
+
+          assert.deepStrictEqual((yield* shellOf(THREAD)).subagents, {
+            ...NO_SUBAGENTS,
+            settled: 1,
+          });
+          assert.deepStrictEqual(
+            (yield* shellOf(testThreadId(2))).subagents,
+            NO_SUBAGENTS
+          );
           assert.strictEqual((yield* projector.reconcile).patched, 0);
         })
       )

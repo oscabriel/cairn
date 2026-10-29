@@ -137,6 +137,34 @@ describe(resolveAutoSettlementAt, () => {
     }
   });
 
+  it("never settles a subagent's row, nor a parent whose child works or asks; settled children do not hold it", () => {
+    const parent = testThreadId(1);
+
+    const blocked: ReadonlyArray<Partial<ThreadShell>> = [
+      {
+        lineage: Option.some({
+          parentThreadId: parent,
+          relationshipToParent: "subagent",
+          rootThreadId: parent,
+        }),
+      },
+      { subagents: { working: 1, asking: 0, settled: 2, failed: 0 } },
+      { subagents: { working: 0, asking: 1, settled: 0, failed: 0 } },
+    ];
+
+    for (const shell of blocked) {
+      assert.isTrue(Option.isNone(settleAt(row(shell))), JSON.stringify(shell));
+    }
+
+    assert.isTrue(
+      Option.isSome(
+        settleAt(
+          row({ subagents: { working: 0, asking: 0, settled: 2, failed: 1 } })
+        )
+      )
+    );
+  });
+
   it("counts a snooze's end as activity", () => {
     const woke = at(NOW - 1 * DAY);
 

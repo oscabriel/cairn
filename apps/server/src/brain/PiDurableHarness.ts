@@ -68,6 +68,7 @@ import {
 
 import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { steerReporter } from "../subagents/Subagents.ts";
+import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession, BrainUnavailable } from "./Brain.ts";
@@ -126,6 +127,7 @@ const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
   Permissions,
   SubagentsDoc,
   ChildDoc,
+  WorkflowsDoc,
 ];
 
 const encoder = new TextEncoder();

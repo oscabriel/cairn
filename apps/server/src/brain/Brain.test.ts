@@ -27,6 +27,7 @@ import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
+import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
@@ -88,6 +89,7 @@ const brainLayer = (dataDir: string, failNext: { value: boolean }) => {
     Layer.provide(PiHost.layerEmpty),
     Layer.provide(ModelHealth.layerTest),
     Layer.provide(SettingsStore.layerTest),
+    Layer.provide(ReachServicesTest),
     Layer.provide(PiModelSource.layerFromModelSource),
     Layer.provideMerge(
       ModelSource.layerFaux({

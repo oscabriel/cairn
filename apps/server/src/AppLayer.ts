@@ -52,6 +52,7 @@ import { ScratchProject } from "./projects/ScratchProject.ts";
 import { Worktrees } from "./projects/Worktrees.ts";
 import { ExecutorSignInPush } from "./push/ExecutorSignInPush.ts";
 import { PushLayer } from "./push/PushLayer.ts";
+import { ReachServices } from "./reach/ReachLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHelloWithModels } from "./rpc/ModelHandlers.ts";
 import { SessionHelloWithPush } from "./rpc/PushHandlers.ts";
@@ -72,6 +73,8 @@ import { TitleModel } from "./threads/TitleModel.ts";
 import { TurnContentLive } from "./threads/TurnContentStages.ts";
 import { ClaudeSignals } from "./usage/ClaudeSignals.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
+import { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
+import { ChildWorkspaceStore } from "./workspaces/ChildWorkspaceStore.ts";
 
 /**
  * How boot hands the harness its work after the repairs. pi-durable does not resume on open, so
@@ -124,11 +127,26 @@ export const SettingsLive = SettingsStore.layerNoDeps.pipe(
   Layer.provide(DatabaseLive)
 );
 
-/** Folders, the scratch project, worktrees and file search, over git. */
+/**
+ * Artifacts, portals, the portal tools and the reach lister over the database (`ReachLayer.ts`).
+ * One reference, which `AppLayer` uses (the reach RPCs, the portal boot repairs and close hook) and
+ * each entry point gives `PiDurableBrain` (the `cairn.reach` tools), so the memo map builds one
+ * portal store. The porch (`PorchClient`) and the units (`PortalUnits`), with `PortalSettings`, are
+ * the entry point's.
+ */
+export const ReachLive = ReachServices.pipe(Layer.provide(DatabaseLive));
+
+/** Child workspaces (3B): the plan store and worktrees under the data folder, over the database. */
+const ChildWorkspacesLive = ChildWorkspaces.layerNoDeps.pipe(
+  Layer.provide(ChildWorkspaceStore.layerNoDeps)
+);
+
+/** Folders, the scratch project, worktrees, child workspaces and file search, over git. */
 const ProjectsLive = Layer.mergeAll(
   FolderRules.layer,
   ScratchProject.layerNoDeps,
-  FileSearch.layerNoDeps
+  FileSearch.layerNoDeps,
+  ChildWorkspacesLive
 ).pipe(
   Layer.provideMerge(Worktrees.layerNoDeps),
   Layer.provideMerge(Git.layer),
@@ -175,7 +193,8 @@ export const withCatalog = <E, R>(models: Layer.Layer<ModelSource, E, R>) =>
 /**
  * pi-durable behind the harness seam, with the given models and extension set (the production
  * set unless a judge adds its tools) and the durable event reactors (`ReactorSet.ts`). Boot resumes
- * it after the repairs. `ModelHealth`, which the set's health feed records into, is left to the
+ * it after the repairs. The `cairn.reach` tools' `Artifacts` and `PortalTools` are the entry
+ * point's too: `ReachLive`, as `AppLayer` uses. `ModelHealth`, which the set's health feed records into, is left to the
  * entry point: `ModelHealthLive`, the reference `AppLayer` uses, so one store serves both; so is
  * `SettingsStore` (`SettingsLive`), which the `roles` tool reads. The models layer is also
  * exposed, so the app's catalog and title model read the same runtime the harness does.
@@ -260,7 +279,9 @@ const CheckpointEntriesLive = Layer.effect(
 /**
  * Everything but the entry point's choices. Needs `ServerConfig`, `Identity`, the platform's
  * `FileSystem`, a harness (`HarnessSeam` and `HarnessBoot`) and its models (`ModelSource` and the
- * picker's `PiModelSource`): `PiDurableBrain` and `ScriptedBrain` provide all four.
+ * picker's `PiModelSource`): `PiDurableBrain` and `ScriptedBrain` provide all four. Also the porch
+ * and portal units (`PorchClient`, `PortalUnits`): the real ones in `main.ts`, a fake porch in
+ * judge and dev brains (`ReachMachine` in `ReachLayer.ts`).
  */
 export const AppLayer = Layer.mergeAll(
   HttpLive,
@@ -289,6 +310,7 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(ThreadsLive),
   Layer.provideMerge(SpendLedger.layerNoDeps),
   Layer.provideMerge(PushLayer),
+  Layer.provideMerge(ReachLive),
   Layer.provide(SettingsLive),
   Layer.provideMerge(Layer.merge(ShellLive, ModelHealthLive))
 );

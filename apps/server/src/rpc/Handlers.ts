@@ -15,8 +15,10 @@ import { EventHandlers } from "./EventHandlers.ts";
 import { ExecutorHandlers } from "./ExecutorHandlers.ts";
 import { LoginHandlers } from "./LoginHandlers.ts";
 import { ModelHandlers } from "./ModelHandlers.ts";
+import { PortalHandlers } from "./PortalHandlers.ts";
 import { ProjectHandlers } from "./ProjectHandlers.ts";
 import { PushHandlers } from "./PushHandlers.ts";
+import { ReachHandlers } from "./ReachHandlers.ts";
 import { RoleHandlers } from "./RoleHandlers.ts";
 import { sessionHandlers } from "./SessionHandlers.ts";
 import { ShellHandlers } from "./ShellHandlers.ts";
@@ -44,7 +46,8 @@ const BaseHandlers = CairnRpcs.toLayer(
  * the shell store (`ShellStream`, `EventSink`), the `HarnessSeam`, the model catalog
  * (`PiModelSource`), `SettingsStore`, `ModelHealth`, and the project and thread services. The
  * `roles.check` handler's `RoleAliases` reads the Claude plan's windows from `BridgeProvider`, a
- * reference the deployed root provides.
+ * reference the deployed root provides. The reach handlers read `Artifacts`, `ReachLister` and
+ * `Portals` (`ReachLive`), over porch.
  */
 export const HandlersLayer = Layer.mergeAll(
   BaseHandlers,
@@ -61,6 +64,8 @@ export const HandlersLayer = Layer.mergeAll(
   DiffHandlers.layer,
   EventHandlers,
   SpendHandlers,
+  PortalHandlers,
   RoleHandlers.pipe(Layer.provide(RoleAliases.layerNoDeps)),
+  ReachHandlers,
   LoginHandlers.pipe(Layer.provide(CodexLogin.layer))
 );

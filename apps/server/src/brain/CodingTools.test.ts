@@ -26,6 +26,7 @@ import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
+import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import {
   ScriptSlots,
@@ -52,6 +53,7 @@ const harness = PiDurableHarness.layer.pipe(
       Layer.provide(PiHost.layerEmpty),
       Layer.provide(ModelHealth.layerTest),
       Layer.provide(SettingsStore.layerTest),
+      Layer.provide(ReachServicesTest),
       Layer.provide(PiModelSource.layerFromModelSource)
     )
   ),
@@ -276,9 +278,11 @@ describe("coding tools", () => {
             "cairn-executor",
             "cairn.bridge-cwd",
             "cairn-provider-request-log",
+            "cairn.reach",
             "cairn.pi-tools",
             "cairn.model-health",
             "cairn.roles",
+            "cairn.ask-user",
             "cairn.results",
           ]
         );
@@ -289,6 +293,7 @@ describe("coding tools", () => {
             Layer.provide(PiHost.layerEmpty),
             Layer.provide(ModelHealth.layerTest),
             Layer.provide(SettingsStore.layerTest),
+            Layer.provide(ReachServicesTest),
             Layer.provide(PiModelSource.layerFromModelSource),
             Layer.provide(
               ModelSource.layerFaux({ tokensPerSecond: 4000, settings: {} })

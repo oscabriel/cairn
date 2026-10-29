@@ -47,6 +47,7 @@ import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
+import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { projectIdFor } from "../shell/ShellCommands.ts";
 import { ShellLayer } from "../shell/ShellLayer.ts";
@@ -92,7 +93,8 @@ const stack = (dir: string, userSkills: string) =>
         Layer.provide(ExecutorLink.layerDisabled),
         Layer.provide(PiHost.layerEmpty),
         Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest)
+        Layer.provide(SettingsStore.layerTest),
+        Layer.provide(ReachServicesTest)
       )
     ),
     Layer.provideMerge(

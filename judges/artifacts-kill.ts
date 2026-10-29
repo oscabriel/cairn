@@ -12,6 +12,10 @@
 //
 // Cases, each its own page:
 // - stage: killed after the staged copy is written, before porch runs; the rerun publishes.
+// - claim: killed after `ArtifactPublisher` inserted its claim, before porch; the rerun publishes
+//   under the held claim.
+// - porch: killed after porch published, before the row was filled in (a page served, its row
+//   unfilled); the rerun fills it in.
 // - publish: killed after porch published and the row was filled in; the rerun is `changed: false`.
 // - restore: published, revoked, then killed after the republish cleared `revoked_at` and before
 //   the copy porch will not write is restored (a live row with nothing served); the rerun restores.
@@ -21,9 +25,7 @@
 // the torn one, not the end state, which is the control: without the rerun the case would fail),
 // then that the rerun ends right: one row for the page, served bytes equal to the source's (or
 // nothing served after a revoke), and no stray file in the artifacts or staging folder. Prints one
-// line per check and a JSON summary; exits 0 on a pass. ArtifactPublisher's own windows
-// (`artifact:after-claim`, `artifact:after-porch`) join as cases once that file reads
-// `ArtifactFaults`.
+// line per check and a JSON summary; exits 0 on a pass.
 
 import { spawn } from "node:child_process";
 import {
@@ -283,6 +285,52 @@ const cases = {
     yield* rerun(
       "stage",
       yield* runLife({ action: "publish", name, ...fault("stage", name) })
+    );
+    live.add(name);
+    yield* endState(name, "live");
+  }),
+  claim: Effect.gen(function* () {
+    const name = "claim.html";
+    write(name, "<p>claim</p>\n");
+
+    yield* killedLife(
+      "claim",
+      yield* runLife({ action: "publish", name, ...fault("claim", name) })
+    );
+
+    const torn = (yield* rowsNow).filter((row) => row.name === name);
+    yield* record(
+      "claim: torn state (a claim with no hash, nothing served)",
+      torn.length === 1 && torn[0]?.hash === null && !existsSync(served(name)),
+      JSON.stringify(torn)
+    );
+
+    yield* rerun(
+      "claim",
+      yield* runLife({ action: "publish", name, ...fault("claim", name) })
+    );
+    live.add(name);
+    yield* endState(name, "live");
+  }),
+  porch: Effect.gen(function* () {
+    const name = "porch.html";
+    write(name, "<p>porch</p>\n");
+
+    yield* killedLife(
+      "porch",
+      yield* runLife({ action: "publish", name, ...fault("porch", name) })
+    );
+
+    const torn = (yield* rowsNow).filter((row) => row.name === name);
+    yield* record(
+      "porch: torn state (served, the row's hash not filled in)",
+      torn.length === 1 && torn[0]?.hash === null && existsSync(served(name)),
+      JSON.stringify(torn)
+    );
+
+    yield* rerun(
+      "porch",
+      yield* runLife({ action: "publish", name, ...fault("porch", name) })
     );
     live.add(name);
     yield* endState(name, "live");

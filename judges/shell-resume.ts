@@ -56,6 +56,7 @@ import { ServerConfig } from "../apps/server/src/Config.ts";
 import { ExecutorLink } from "../apps/server/src/executor/ExecutorLink.ts";
 import { Identity, USER_HEADER } from "../apps/server/src/http/Identity.ts";
 import { Tailscale } from "../apps/server/src/http/Tailscale.ts";
+import { ReachMachine } from "../apps/server/src/reach/ReachLayer.ts";
 import { EventSink } from "../apps/server/src/shell/EventSink.ts";
 import {
   emptyActivityPatch,
@@ -194,6 +195,7 @@ const ServerLayer = Layer.unwrap(
 
     return AppLayer.pipe(
       Layer.provide(ScriptedBrain),
+      Layer.provide(ReachMachine.layerTest),
       Layer.provide(ExecutorLink.layerDisabled),
       Layer.provide(Identity.layerNoDeps),
       Layer.provide(

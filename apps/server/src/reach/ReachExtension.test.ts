@@ -33,6 +33,7 @@ import { ArtifactPublisher } from "./ArtifactPublisher.ts";
 import { Artifacts } from "./Artifacts.ts";
 import { THREAD_A } from "./ArtifactScenarios.ts";
 import { makeFakePorch, PorchClient } from "./PorchClient.ts";
+import { PortalTools } from "./PortalTools.ts";
 import {
   ARTIFACT_LIST_TOOL,
   ARTIFACT_PUBLISH_TOOL,
@@ -111,6 +112,9 @@ const runThread = (
     const tools = Context.get(
       yield* Layer.build(
         ReachTools.layerAt(780).pipe(
+          Layer.provide(
+            Layer.succeed(PortalTools, PortalTools.of({ tools: [] }))
+          ),
           Layer.provide(Artifacts.layer),
           Layer.provide(ArtifactPublisher.layer),
           Layer.provide(Layer.succeed(PorchClient, fake.client)),

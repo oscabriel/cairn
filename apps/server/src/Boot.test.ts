@@ -59,6 +59,11 @@ import { ModelHealth } from "./models/ModelHealth.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { PushLayer } from "./push/PushLayer.ts";
+import {
+  ReachMachine,
+  ReachServices,
+  ReachServicesTest,
+} from "./reach/ReachLayer.ts";
 import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { EventSink } from "./shell/EventSink.ts";
@@ -296,7 +301,12 @@ const GatedApp = Layer.mergeAll(
   Layer.provideMerge(SpendLedger.layerNoDeps),
   Layer.provideMerge(PushLayer),
   Layer.provide(SettingsStore.layerNoDeps),
-  Layer.provide(ModelHealth.layerTest),
+  Layer.provideMerge(
+    Layer.merge(
+      ReachServices.pipe(Layer.provide(ReachMachine.layerTest)),
+      ModelHealth.layerTest
+    )
+  ),
   Layer.provideMerge(
     ShellLayer.pipe(
       Layer.provideMerge(ProjectorSignals.layer),
@@ -438,6 +448,7 @@ const brainFor = (dataDir: string) =>
     Layer.provide(PiHost.layerEmpty),
     Layer.provide(ModelHealth.layerNoDeps),
     Layer.provide(SettingsStore.layerNoDeps),
+    Layer.provide(ReachServicesTest),
     Layer.provideMerge(
       ShellLayer.pipe(
         Layer.provideMerge(ProjectorSignals.layer),

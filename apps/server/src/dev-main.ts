@@ -14,6 +14,7 @@ import {
   AppLayer,
   ModelHealthLive,
   PiDurableBrain,
+  ReachLive,
   SettingsLive,
   ScriptedBrain,
 } from "./AppLayer.ts";
@@ -24,6 +25,7 @@ import { Identity } from "./http/Identity.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
+import { judgePortalSettings, ReachMachine } from "./reach/ReachLayer.ts";
 
 const { values } = parseArgs({
   options: { models: { type: "string", default: "scripted" } },
@@ -51,6 +53,17 @@ const DevLayer = App.pipe(
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(ModelHealthLive),
   Layer.provide(SettingsLive),
+  // Portals as `cairn-dev-portal-*` units on ports 38200 to 38299, apart from production's and the
+  // judges'; artifacts and portal porches go to a fake porch in a temp folder.
+  Layer.provide(ReachLive),
+  Layer.provide(ReachMachine.layerFakePorch),
+  Layer.provide(
+    judgePortalSettings(
+      "cairn-dev-portal-",
+      100,
+      process.env.PATH ?? "/usr/bin:/bin"
+    )
+  ),
   Layer.provide(ExecutorLink.layerFake),
   Layer.provide(Identity.layerLoopbackOwner),
   Layer.provide(ServerConfig.layerLocal),

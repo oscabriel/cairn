@@ -40,6 +40,7 @@ import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
+import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { ShellLayer } from "../shell/ShellLayer.ts";
 import { TurnContent, textStage } from "../threads/TurnContent.ts";
 import { attachmentStage } from "./AttachmentStage.ts";
@@ -120,7 +121,8 @@ const stack = (dir: string) => {
         Layer.provide(ExecutorLink.layerDisabled),
         Layer.provide(PiHost.layerEmpty),
         Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest)
+        Layer.provide(SettingsStore.layerTest),
+        Layer.provide(ReachServicesTest)
       );
     })
   );

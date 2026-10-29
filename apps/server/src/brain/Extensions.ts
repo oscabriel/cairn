@@ -17,10 +17,14 @@ export const ExtensionOrder = {
   codemode: 500,
   executor: 600,
   bridgeCwd: 700,
+  /** `cairn.reach`: the artifact tools (3E) and the portal tools (3F); 750 is the provider request log's. */
+  reach: 760,
   piTools: 800,
   modelHealth: 850,
   /** `cairn.roles`: the `roles` tool over the role table (ADR 0035). */
   roles: 860,
+  /** `cairn.ask-user`: the `ask_user` tool, questions for the user as user-input records. */
+  askUser: 870,
   judge: 900,
   /** `cairn.results`: declares each child's result schema in `beforeRequest`; `submit_result`. */
   results: 950,

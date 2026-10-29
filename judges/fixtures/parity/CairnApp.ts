@@ -62,6 +62,7 @@ import {
 } from "../../../apps/server/src/brain/ScriptedHarness.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
+import { ReachMachine } from "../../../apps/server/src/reach/ReachLayer.ts";
 import { Identity } from "../../../apps/server/src/http/Identity.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import {
@@ -249,6 +250,7 @@ export const startCairn = async (seed: CairnSeed): Promise<CairnApp> => {
   const App = seedLayer(seed, workspace).pipe(
     Layer.provideMerge(AppLayer),
     Layer.provideMerge(Harness),
+    Layer.provide(ReachMachine.layerTest),
     Layer.provide(ExecutorLink.layerDisabled),
     Layer.provide(Identity.layerLoopbackOwner),
     Layer.provide(

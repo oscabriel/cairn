@@ -6,6 +6,7 @@
 // `CAIRN_ORIGIN` (default `http://127.0.0.1`) and `X-Cairn-User` equal to `CAIRN_OWNER` (default
 // `owner@loopback`), exactly as Caddy would.
 
+import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
@@ -17,6 +18,7 @@ import {
   AppLayer,
   ModelHealthLive,
   PiDurableBrain,
+  ReachLive,
   SettingsLive,
   withCatalog,
 } from "./AppLayer.ts";
@@ -31,6 +33,8 @@ import {
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { observabilityLayer } from "./Observability.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
+import { judgePortalFaults } from "./reach/Portals.ts";
+import { judgePortalSettings, ReachMachine } from "./reach/ReachLayer.ts";
 
 // `--models real` runs pi's model runtime with the bridge (the bridge windows of judges/durability.ts); the default is
 // the judge's faux model.
@@ -62,6 +66,29 @@ const JudgeTailnet = Layer.unwrap(
   })
 );
 
+// Portals as units of the judge's own (`cairn-judge-portal-<pid>-`, ports 38100 to 38199), which its
+// reconcile and sweep keep to, so production portals are never touched; artifacts and portal
+// porches go to a fake porch in a temp folder. `CAIRN_JUDGE_FAULT=portal:after-<step>` kills the
+// brain once after that step, with its marker in the data folder.
+const JudgeReach = Layer.mergeAll(
+  ReachMachine.layerFakePorch,
+  judgePortalSettings(
+    `cairn-judge-portal-${String(process.pid)}-`,
+    0,
+    process.env.PATH ?? "/usr/bin:/bin"
+  ),
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const config = yield* ServerConfig;
+
+      return judgePortalFaults(
+        process.env.CAIRN_JUDGE_FAULT ?? "",
+        path.join(config.dataDir, "portal-fault-fired")
+      );
+    })
+  ).pipe(Layer.provide(NodeServices.layer))
+);
+
 // pi-durable over the scripted faux model (JudgeModel: a judge drives tool calls and long replies
 // from the message text), with the judge tools installed through the seam.
 const Harness = real
@@ -83,6 +110,8 @@ const JudgeLayer = AppLayer.pipe(
   Layer.provide(Harness),
   Layer.provide(ModelHealthLive),
   Layer.provide(SettingsLive),
+  Layer.provide(ReachLive),
+  Layer.provide(JudgeReach),
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(real ? BridgeProvider.layer : BridgeProvider.layerOff),
   Layer.provide(ExecutorLink.layerFake),

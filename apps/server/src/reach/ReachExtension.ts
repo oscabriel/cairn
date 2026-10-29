@@ -1,7 +1,7 @@
 // The `cairn.reach` extension (ADR 0038, docs/phase-2/notes/reach.md R3 to R5): the tools an agent
-// uses to put its work in front of the user. This is its artifact half: `artifact_publish`,
-// `artifact_list` and `artifact_revoke`, over `Artifacts`. The portal tools (3F) join the same
-// extension, so the installed set gains one name for both.
+// uses to put its work in front of the user: the artifact tools `artifact_publish`,
+// `artifact_list` and `artifact_revoke`, over `Artifacts`, and the portal tools (`PortalTools`:
+// `portal_open`, `portal_close`, `portal_list`), so the installed set gains one name for both.
 //
 // Each tool reads its thread from `cairn.thread-meta` and its folder from the conversation's
 // `pi.agent` cwd, and answers the model in words while the transcript gets `ArtifactDetails`. All
@@ -26,6 +26,7 @@ import { ThreadMeta } from "../brain/CairnDocs.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { artifactIdOf } from "./ArtifactPublisher.ts";
 import { Artifacts, outcomeOf } from "./Artifacts.ts";
+import { PortalTools } from "./PortalTools.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const REACH_EXTENSION = "cairn.reach";
@@ -91,7 +92,7 @@ const lineOf = (row: ArtifactRow) =>
 const answerWith = (failure: { readonly message: string }) =>
   Effect.succeed(toolError(failure.message));
 
-/** The `cairn.reach` extension, over `Artifacts`. */
+/** The `cairn.reach` extension, over `Artifacts` and `PortalTools`. */
 export class ReachTools extends Context.Service<
   ReachTools,
   {
@@ -99,12 +100,16 @@ export class ReachTools extends Context.Service<
     readonly extension: CairnExtension;
   }
 >()("cairn/server/reach/ReachExtension/ReachTools") {
-  /** Over `Artifacts`. Installs at `order`; production passes `ExtensionOrder.reach`. */
+  /**
+   * Over `Artifacts` and `PortalTools`. Installs at `order`; production passes
+   * `ExtensionOrder.reach`.
+   */
   static readonly layerAt = (order: number) =>
     Layer.effect(
       ReachTools,
       Effect.gen(function* () {
         const artifacts = yield* Artifacts;
+        const portals = yield* PortalTools;
         const run = yield* FiberSet.makeRuntimePromise();
 
         const publish = defineTool({
@@ -272,7 +277,7 @@ export class ReachTools extends Context.Service<
             order,
             extension: defineExtension({
               name: REACH_EXTENSION,
-              tools: [publish, list, revoke],
+              tools: [publish, list, revoke, ...portals.tools],
             }),
           },
         });

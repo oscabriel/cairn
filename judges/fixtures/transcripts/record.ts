@@ -54,6 +54,7 @@ import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
 import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
+import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
 
 const { values } = parseArgs({
   options: {
@@ -404,6 +405,7 @@ const Brain = PiDurableBrain({
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(ModelHealth.layerTest),
   Layer.provide(SettingsStore.layerTest),
+  Layer.provide(ReachServicesTest),
   Layer.provide(ServerConfig.layerWith({ dataDir })),
   Layer.provide(NodeServices.layer),
   Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error"))

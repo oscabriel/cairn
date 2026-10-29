@@ -21,6 +21,13 @@
 // park its tasks, then `thread.retryTask` finishes the turn), sigterm-six (six clean restarts while
 // `slow` runs park nothing).
 //
+// Gated windows (ADR 0031): a thread in Supervised calls the real `bash`, which asks first, so
+// each kill lands somewhere in the gated wrapper. gated-bash-wait (while `bash` waits for its
+// approval; accepted after the restart, the command runs once), gated-bash-after-mark (accepted,
+// then the kill lands while the command sleeps before its effect), gated-bash-after-effect
+// (accepted, then the kill lands after the command wrote its effect). Each checks that the command
+// started exactly once, and the two after the mark that the rerun said "may have run".
+//
 // Bridge windows (`--bridge`, the real Claude bridge on Haiku through `judge-main.ts --models real`,
 // a few cents each, never run by default): bridge-streaming (`kill -9` while Claude's reply
 // streams), bridge-tool-parked (while a `bash` call is held in the bridge), bridge-answer (after
@@ -83,6 +90,7 @@ import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import type { TaskId } from "@cairn/protocol/Ids";
 import { CommandId, ProjectId, RequestId, ThreadId } from "@cairn/protocol/Ids";
+import type { RuntimeMode } from "@cairn/protocol/Policy";
 import type { CairnRpcs } from "@cairn/protocol/Rpc";
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import type { ThreadShell } from "@cairn/protocol/Shell";
@@ -129,6 +137,9 @@ const WINDOWS = [
   "mid-tool",
   "between-tool-and-result",
   "approval-parked",
+  "gated-bash-wait",
+  "gated-bash-after-mark",
+  "gated-bash-after-effect",
   "mid-commit",
   "send-in-flight",
   "mid-upload",
@@ -373,6 +384,9 @@ const startBrain = (
     const project = path.join(dir, "project");
 
     mkdirSync(project);
+    // The brain opens `cairn.sqlite` (model health) before its store makes the data folder, so a
+    // fresh folder must exist first.
+    mkdirSync(path.join(dir, "data"));
     unitCount += 1;
 
     const port = yield* attempt(
@@ -840,7 +854,7 @@ const launch = (client: Client, brain: Brain, plan: Plan) =>
           ? { provider: "claude-bridge", modelId: values.model }
           : { provider: "faux", modelId: "scripted" },
       thinkingLevel: "off" as const,
-      runtimeMode: "full-access" as const,
+      runtimeMode: plan.mode ?? "full-access",
       workspace:
         plan.worktree === true
           ? {
@@ -1237,6 +1251,8 @@ type RunNeeds =
 
 interface Plan {
   readonly env?: Readonly<Record<string, string>>;
+  /** The thread's permission mode; full access unless named. */
+  readonly mode?: RuntimeMode;
   /** Unit properties over `Unit.brainProperties`. */
   readonly properties?: Readonly<Record<string, string>>;
   readonly expect: Expectation;
@@ -1485,6 +1501,65 @@ const noWatchdog = (context: RunContext) =>
     context.measures.checks.noWatchdog = stalled === 0;
   });
 
+/** The file a gated window's `bash` command appends one line to each time it starts. */
+const bashRunsOf = (brain: Brain) => path.join(brain.project, "bash-runs.log");
+
+/**
+ * A turn calling the real `bash` once: a line in `bashRunsOf`, then `steps`, where `EFFECTS_FILE`
+ * names the effects log `mark` writes. The judge model's script splits on `;`, so the command
+ * chains with `&&`.
+ */
+const gatedBashMessage = (steps: string) => (brain: Brain) => {
+  const command = `echo started >> ${bashRunsOf(brain)} && ${steps.replaceAll("EFFECTS_FILE", brain.effects)}`;
+
+  return `${SCRIPT_PREFIX} tool bash ${JSON.stringify({ command })}; text 5`;
+};
+
+/** The gated windows' common verdict: the command started once, and a rerun said "may have run". */
+const bashOnce =
+  (mayHaveRun: boolean) =>
+  (context: RunContext, entries: ReadonlyArray<Entry>) =>
+    Effect.gen(function* () {
+      const starts = markerLines(bashRunsOf(context.brain));
+
+      const said = resultTexts(entries).some((text) =>
+        text.includes(MAY_HAVE_RUN)
+      );
+
+      context.measures.extra.bashStarts = starts;
+      context.measures.checks.bashStartedOnce = starts === 1;
+      context.measures.checks.mayHaveRunAsExpected = said === mayHaveRun;
+
+      if (starts !== 1 || said !== mayHaveRun) {
+        return yield* fail(
+          `bash started ${starts} times; "may have run" ${said ? "said" : "not said"}`
+        );
+      }
+
+      return yield* Effect.void;
+    });
+
+/** Waits for the gated `bash` to ask, accepts it, then kills once `aim` holds. */
+const acceptThenKillWhen =
+  (
+    what: string,
+    aim: (context: RunContext) => Effect.Effect<boolean, WindowFailed>
+  ) =>
+  (context: RunContext) =>
+    Effect.gen(function* () {
+      yield* until(
+        "bash's approval",
+        Effect.map(
+          pendingApproval(context.follower, context.threadId),
+          Option.isSome
+        ),
+        "60 seconds"
+      );
+      yield* accept(context);
+
+      return yield* killWhen(what, aim)(context);
+    });
+
 const GATE_TASK =
   'Call the gate tool once with summary "durability". After it returns, call the mark tool once with label "gated". Never call either tool a second time, even after an error or an interruption. Then answer with the single word done.';
 
@@ -1540,6 +1615,55 @@ const plans: Readonly<Record<WindowName, Plan>> = {
         return { committed };
       }),
     verdict: gateAccepted,
+  },
+  "gated-bash-wait": {
+    mode: "approval-required",
+    message: gatedBashMessage(`echo '{"label":"bash-wait"}' >> EFFECTS_FILE`),
+    expect: { marks: ["bash-wait"], userEntries: 1 },
+    run: (context) =>
+      Effect.gen(function* () {
+        yield* until(
+          "bash's approval",
+          Effect.map(
+            pendingApproval(context.follower, context.threadId),
+            Option.isSome
+          ),
+          "60 seconds"
+        );
+        yield* Effect.sleep("300 millis");
+
+        const committed = entriesOf(yield* viewOf(context.follower));
+        const restart = yield* crash(context.brain);
+
+        yield* measureRestart(context, restart);
+        yield* accept(context);
+
+        return { committed };
+      }),
+    verdict: bashOnce(false),
+  },
+  "gated-bash-after-mark": {
+    mode: "approval-required",
+    message: gatedBashMessage(
+      `sleep 8 && echo '{"label":"bash-mark"}' >> EFFECTS_FILE`
+    ),
+    // The effect never ran in this process; a sleep the restart left behind may still write it.
+    expect: { marks: [], userEntries: 1 },
+    run: acceptThenKillWhen("bash to start", ({ brain }) =>
+      Effect.sync(() => markerLines(bashRunsOf(brain)) >= 1)
+    ),
+    verdict: bashOnce(true),
+  },
+  "gated-bash-after-effect": {
+    mode: "approval-required",
+    message: gatedBashMessage(
+      `echo '{"label":"bash-effect"}' >> EFFECTS_FILE && sleep 30`
+    ),
+    expect: { marks: ["bash-effect"], userEntries: 1 },
+    run: acceptThenKillWhen("bash's effect", ({ brain }) =>
+      Effect.sync(() => (effectCounts(brain).get("bash-effect") ?? 0) >= 1)
+    ),
+    verdict: bashOnce(true),
   },
   "mid-commit": {
     message: script("text 20"),

@@ -1,8 +1,8 @@
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/runtimeModeConfig.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the four modes in t3code's order with their labels
 // and descriptions. Changed: icons are named by their lucide icon name instead of React components,
-// and every mode but full access is marked as applying in a later phase, because Phase 1 enforces
-// no approvals (plan D37).
+// and Auto is marked as applying in a later phase: Cairn enforces Supervised, Auto-accept edits and
+// Full access (ADR 0031), and Auto waits for a decider.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -47,13 +47,13 @@ export const runtimeModePresentation: Readonly<
     label: "Supervised",
     description: "Ask before commands and file changes.",
     icon: "lock",
-    isEnforced: false,
+    isEnforced: true,
   },
   "auto-accept-edits": {
     label: "Auto-accept edits",
     description: "Auto-approve edits, ask before other actions.",
     icon: "pen-line",
-    isEnforced: false,
+    isEnforced: true,
   },
   auto: {
     label: "Auto",

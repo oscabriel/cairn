@@ -1,0 +1,100 @@
+{
+  "events": [
+    {
+      "event": "ThreadEnsured"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "set up the service"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Postgres, on staging and production."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    }
+  ],
+  "view": {
+    "transcript": [
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "set up the service",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["ask_user"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "The user answered:\n1. Database: Postgres\n2. Targets: staging, production",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "ask_user",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Postgres, on staging and production.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      }
+    ],
+    "transcriptLength": 4,
+    "queue": [],
+    "queueLength": 0,
+    "running": false,
+    "approvals": [
+      {
+        "status": "accepted",
+        "tool": "ask_user"
+      }
+    ],
+    "pendingApprovals": 0,
+    "decisions": [
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      }
+    ],
+    "model": {
+      "provider": "faux",
+      "modelId": "scripted"
+    }
+  }
+}

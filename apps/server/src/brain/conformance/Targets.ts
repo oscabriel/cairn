@@ -28,6 +28,7 @@ import {
   Scope,
 } from "effect";
 
+import { askUserExtension } from "../../approvals/AskUserTool.ts";
 import { ExecutorLink } from "../../executor/ExecutorLink.ts";
 import { ModelHealth } from "../../models/ModelHealth.ts";
 import { PiModelSource } from "../../models/PiModelSource.ts";
@@ -78,6 +79,12 @@ export type MakeTarget = (
   script: ResponseScript,
   faults: SubagentFaultSet
 ) => Effect.Effect<ConformanceTarget, never, Scope.Scope>;
+
+/**
+ * Where `ask_user` installs here until the production extension set carries it (it then comes with
+ * `ExtensionSet` and this extra goes): after the conformance tools, at a key nothing else holds.
+ */
+const ASK_USER_ORDER = 910;
 
 /** Answers more requests than any scenario makes; each takes the script's next answer. */
 const FAUX_STEPS = 64;
@@ -169,7 +176,10 @@ export const piDurableTarget: MakeTarget = (script) =>
 
     const layer = PiDurableHarness.layer.pipe(
       Layer.provide(
-        ExtensionSet.withExtra([conformanceTools]).pipe(
+        ExtensionSet.withExtra([
+          conformanceTools,
+          askUserExtension(ASK_USER_ORDER),
+        ]).pipe(
           Layer.provide(ExecutorLink.layerDisabled),
           Layer.provide(PiHost.layerEmpty),
           Layer.provide(ModelHealth.layerTest),

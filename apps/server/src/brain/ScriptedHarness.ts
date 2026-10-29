@@ -99,6 +99,12 @@ import {
   SubscriptionRef,
 } from "effect";
 
+import {
+  ASK_USER_TOOL,
+  askUserResult,
+  QUESTION_TTL_MILLIS,
+  questionAskOf,
+} from "../approvals/AskUser.ts";
 import type {
   ApprovalRecord,
   ApprovalSettlement,
@@ -2549,6 +2555,67 @@ const layerNoDeps = Layer.effectContext(
         });
       });
 
+    /**
+     * `ask_user`: questions for the user (briefs note, section 4), a `user-input` record with the
+     * questions frozen in its payload, waited on like a gate; the answers come back numbered.
+     */
+    const askUserTool = (thread: ScriptedThread, call: ToolCall) =>
+      Effect.gen(function* () {
+        const ask = questionAskOf(call.arguments);
+
+        if (Result.isFailure(ask)) {
+          return refused(ask.failure);
+        }
+
+        const taskId = taskOf(thread, call);
+        const approvalId = approvalIdOf(taskId);
+
+        yield* locked((askedAt, changes) =>
+          Effect.sync(() => {
+            if (thread.approvals.has(approvalId)) {
+              return;
+            }
+
+            thread.approvals.set(approvalId, {
+              id: approvalId,
+              toolTaskId: taskId,
+              tool: ASK_USER_TOOL,
+              kind: "user-input",
+              summary: ask.success.summary,
+              status: "pending",
+              askedAt,
+              expiresAt: askedAt + QUESTION_TTL_MILLIS,
+              answeredAt: null,
+              run: null,
+              executorRequestId: null,
+              ...UNDECIDED,
+              payload: ask.success.payload,
+            });
+            changes.touched.add(thread);
+            changes.events.push(
+              RuntimeRequestUpdated.make({
+                threadId: thread.threadId,
+                id: ApprovalId.make(approvalId),
+                kind: "user-input",
+                status: "pending",
+              })
+            );
+            recordsChanged(thread, changes);
+          })
+        );
+
+        const settled = yield* settledRecord(thread, approvalId);
+
+        return Option.match(settled, {
+          onNone: () =>
+            refused("The questions were cancelled. Nothing was answered."),
+          onSome: (record): ToolOutcome => ({
+            ...askUserResult(record, ask.success.questions),
+            terminate: false,
+          }),
+        });
+      });
+
     /** `report`: a child's result, checked against its brief's schema; the first valid one wins. */
     const reportTool = (thread: ScriptedThread, call: ToolCall) =>
       locked((_at, _changes) =>
@@ -2751,6 +2818,10 @@ const layerNoDeps = Layer.effectContext(
       call: ToolCall
     ): Effect.Effect<ToolOutcome> => {
       const isChild = Option.isSome(thread.link);
+
+      if (call.name === ASK_USER_TOOL) {
+        return askUserTool(thread, call);
+      }
 
       if (!isChild) {
         const handler = parentTools.get(call.name);

@@ -44,6 +44,7 @@ import { breakSeam, faultsOf } from "./Mutations.ts";
 import {
   jsonContains,
   jsonEquals,
+  normalizeDeviceView,
   normalizeView,
   pendingApprovalIds,
   valueAt,
@@ -904,7 +905,7 @@ export const runScenario = (
             named === undefined
               ? yield* normalized(threadId.value)
               : Option.map(yield* Ref.get(named.view), (state) =>
-                  normalizeView(state.view)
+                  normalizeDeviceView(state.view)
                 );
 
           if (Option.isNone(view)) {

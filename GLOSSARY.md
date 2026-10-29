@@ -74,6 +74,14 @@ _Avoid_: child agent, worker (except as a role alias)
 
 _Avoid_: using it for a thread's settle state, which is **Settle**
 
+**Note**: A transcript entry the model reads but that starts no run (a passive write with model content), such as a subagent's settlement in its parent. An idle thread places it at once, a running one at its next boundary ahead of queued inputs, and a stop keeps it.
+
+**Wake**: The separate input that follows a note when the parent should act on it. A quiet spawn, a user's own steer to the child, a usage-limit failure, or a parent the user stopped or whose run failed gets the note without a wake. At most one wake waits in a running parent's queue.
+
+**Reporter**: The task that delivers one input to a subagent and its result back to the parent, under request ids derived from the child and the settlement's seq, so each lands once across a restart.
+
+**Mirror**: The record that escalating a subagent's question places in its parent. An answer from either thread settles both, once.
+
 **Goal**: A thread with stated criteria that owns the subagents and stones working toward them. Still a thread: same transcript, sidebar row and composer. Its criteria are met only when an outside judge says so.
 
 _Avoid_: task, epic, project (for the goal)
@@ -95,6 +103,10 @@ _Avoid_: pipeline, DAG, job
 **Role**: A name such as `@worker`, `@scout`, `@judge` or `@verifier` that briefs and workflows use instead of a model. It resolves to a concrete model when the child is created, and the child keeps that model.
 
 _Avoid_: alias (alone), agent type
+
+**Role table**: The global table from each role to its binding, in the server settings, seeded from ADR 0035's defaults. Built-in roles cannot be dropped.
+
+**Binding**: One role's entry in the role table: a model, an optional thinking level and up to four fallbacks, tried in order at dispatch only, past a provider that is limited or failing. A binding names a model, never another role. A launch may override bindings for its own children.
 
 ## Seams and services
 
@@ -234,9 +246,11 @@ _Avoid_: prompt, modal, panel
 
 **Parked**: A task pi-durable stopped running after the brain crashed 5 times in a row while it ran without progress. It shows in the UI with a retry; a task waiting on a pending approval is retried at boot by itself.
 
-**Permission mode**: A thread's rule for which tool calls need an approval, after t3code's modes. Full access, the default, asks for none.
+**Permission mode**: A thread's rule for which tool calls need an approval, after t3code's modes, kept in `cairn.permissions` and read by each gated tool at call time. Full access, the default, asks for none; Auto-accept edits asks before commands and Executor calls; Supervised asks before everything but reads. Auto is listed for later. A thread may also allow one tool for the rest of its life (Allow for this thread). A subagent's mode is never wider than its parent's.
 
 _Avoid_: approval policy, trust level
+
+**Effect mark**: The memo a gated tool commits right before its effect, so a rerun after a crash that finds it reports the call may have run and never repeats it.
 
 **Plan window**: One rate-limit window of a subscription plan (five hours, seven days), with how much of it is used and when it resets. Unknown is shown as unknown, never as zero. A provider whose windows could not be read says `unreadable`; one that has none to read (OpenCode Go, an API key login) says `unsupported`, so an empty list never means two things.
 
@@ -246,6 +260,8 @@ _Avoid_: approval policy, trust level
 
 _Avoid_: cost (for a plan's figure)
 
+**Spend ledger**: The derived cache of each conversation's `pi.usage` in `cairn.sqlite`, priced one response at a time and rebuilt from `pi.usage` at boot when it drifts. A kill never counts a response twice.
+
 **Model family**: The vendor a model comes from (Anthropic, OpenAI, Google, or other), whichever provider serves it. A judge or verifier on another family than the worker is the outside judge the kickoff asks for.
 
 **Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between; such a streak lapses fifteen minutes after its newest failure, so one request can find out). Each request counts once, by its last attempt, and a login or logout starts the provider over. Role resolution passes over a limited or failing provider.
@@ -254,7 +270,7 @@ _Avoid_: cost (for a plan's figure)
 
 ## Results
 
-**Artifact**: An HTML page or folder an agent publishes to a private `gneiss.run` URL.
+**Artifact**: An HTML page or folder an agent publishes to a private `gneiss.run` URL. Cairn publishes only over pages it published itself: a file in the artifacts folder with no row in Cairn's artifacts table is the user's and is never overwritten.
 
 _Avoid_: page, report (for the published thing)
 
@@ -263,6 +279,14 @@ _Avoid_: page, report (for the published thing)
 **Porch**: The user's tool (porchlight) that names private `gneiss.run` URLs and renders them into Caddy. Cairn publishes artifacts and opens portals by calling it.
 
 _Avoid_: preview, tunnel
+
+**Result tool**: `submit_result`, the tool a subagent ends with: a typed value checked against its brief's result schema, plus its divergence (the envelope `{ result, divergence }`). A child gets two attempts.
+
+**Typed result**: The value a subagent hands back through the result tool, kept in its `cairn.result`.
+
+**Nudge**: The one input a subagent gets when its run ends without a result, asking it to call the result tool. It counts as an attempt when it comes before any call.
+
+**Divergence**: What a subagent says it did differently from its brief, carried beside its result.
 
 **Verification**: A project's own launch, drive, evidence and cleanup recipe under `.cairn/verify/`, which an outside judge runs against a result.
 

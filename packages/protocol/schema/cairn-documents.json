@@ -197,7 +197,7 @@
                                             },
                                             "spec": {
                                               "type": "string",
-                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             "rubric": {
                                               "type": "string",
@@ -302,7 +302,7 @@
                                           },
                                           "spec": {
                                             "type": "string",
-                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           "rubric": {
                                             "type": "string",
@@ -363,7 +363,7 @@
                               "anyOf": [
                                 {
                                   "type": "string",
-                                  "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                  "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                 },
                                 {
                                   "type": "null"
@@ -690,7 +690,7 @@
                                 "properties": {
                                   "spec": {
                                     "type": "string",
-                                    "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                    "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                   },
                                   "label": {
                                     "type": "string",
@@ -862,7 +862,7 @@
                                     "properties": {
                                       "spec": {
                                         "type": "string",
-                                        "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                        "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                       },
                                       "readonly": {
                                         "type": "boolean"
@@ -1327,7 +1327,7 @@
                                             },
                                             "spec": {
                                               "type": "string",
-                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             "rubric": {
                                               "type": "string",
@@ -1432,7 +1432,7 @@
                                           },
                                           "spec": {
                                             "type": "string",
-                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           "rubric": {
                                             "type": "string",
@@ -2338,7 +2338,7 @@
                         },
                         "spec": {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "rubric": {
                           "type": "string",
@@ -2443,7 +2443,7 @@
                                 },
                                 "spec": {
                                   "type": "string",
-                                  "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                  "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                 },
                                 "rubric": {
                                   "type": "string",
@@ -2606,7 +2606,7 @@
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "readonly": {
                           "type": "boolean"
@@ -2939,7 +2939,7 @@
                       "anyOf": [
                         {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         {
                           "type": "null"
@@ -2951,7 +2951,7 @@
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "role": {
                           "anyOf": [
@@ -3478,7 +3478,7 @@
                                             },
                                             "spec": {
                                               "type": "string",
-                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             "rubric": {
                                               "type": "string",
@@ -3583,7 +3583,7 @@
                                           },
                                           "spec": {
                                             "type": "string",
-                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           "rubric": {
                                             "type": "string",
@@ -3644,7 +3644,7 @@
                               "anyOf": [
                                 {
                                   "type": "string",
-                                  "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                  "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                 },
                                 {
                                   "type": "null"
@@ -3971,7 +3971,7 @@
                                 "properties": {
                                   "spec": {
                                     "type": "string",
-                                    "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                    "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                   },
                                   "label": {
                                     "type": "string",
@@ -4143,7 +4143,7 @@
                                     "properties": {
                                       "spec": {
                                         "type": "string",
-                                        "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                        "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                       },
                                       "readonly": {
                                         "type": "boolean"
@@ -4608,7 +4608,7 @@
                                             },
                                             "spec": {
                                               "type": "string",
-                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             "rubric": {
                                               "type": "string",
@@ -4713,7 +4713,7 @@
                                           },
                                           "spec": {
                                             "type": "string",
-                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           "rubric": {
                                             "type": "string",
@@ -5592,7 +5592,7 @@
                         "anyOf": [
                           {
                             "type": "string",
-                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                           },
                           {
                             "type": "null"

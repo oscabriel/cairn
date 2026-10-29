@@ -23,6 +23,8 @@ import {
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
+import { PiModelSource } from "../models/PiModelSource.ts";
+import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import {
@@ -48,7 +50,9 @@ const harness = PiDurableHarness.layer.pipe(
     ExtensionSet.layer.pipe(
       Layer.provide(ExecutorLink.layerDisabled),
       Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest)
+      Layer.provide(ModelHealth.layerTest),
+      Layer.provide(SettingsStore.layerTest),
+      Layer.provide(PiModelSource.layerFromModelSource)
     )
   ),
   Layer.provideMerge(
@@ -274,6 +278,8 @@ describe("coding tools", () => {
             "cairn-provider-request-log",
             "cairn.pi-tools",
             "cairn.model-health",
+            "cairn.roles",
+            "cairn.results",
           ]
         );
       }).pipe(
@@ -282,6 +288,8 @@ describe("coding tools", () => {
             Layer.provide(ExecutorLink.layerDisabled),
             Layer.provide(PiHost.layerEmpty),
             Layer.provide(ModelHealth.layerTest),
+            Layer.provide(SettingsStore.layerTest),
+            Layer.provide(PiModelSource.layerFromModelSource),
             Layer.provide(
               ModelSource.layerFaux({ tokensPerSecond: 4000, settings: {} })
             )

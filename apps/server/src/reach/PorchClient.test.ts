@@ -13,8 +13,6 @@ import { SqlClient } from "effect/sql";
 
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
-import { Artifacts0010 } from "../db/migrations/0010Artifacts.ts";
-import { Portals0011 } from "../db/migrations/0011Portals.ts";
 import { ArtifactPublisher } from "./ArtifactPublisher.ts";
 import {
   makeFakePorch,
@@ -33,11 +31,7 @@ const DOMAIN = "example.test";
 
 const THREAD = ThreadId.make("0199f0c2-6a4e-7d4c-8a6b-00000000c003");
 
-const reachDatabase = Database.layerTest({
-  ...migrations,
-  "0010_Artifacts": Artifacts0010,
-  "0011_Portals": Portals0011,
-});
+const reachDatabase = Database.layerTest(migrations);
 
 /** The hash column of every artifacts row named `name`. */
 const hashesOf = (name: string) =>

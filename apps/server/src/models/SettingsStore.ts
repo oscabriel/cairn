@@ -23,6 +23,9 @@ import { Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql";
 
+import { Database } from "../db/Database.ts";
+import { migrations } from "../db/Migrations.ts";
+
 /** The settings table could not be read or written. Nothing changed; retry. */
 export class SettingsStoreError extends Schema.TaggedError<SettingsStoreError>()(
   "SettingsStoreError",
@@ -384,5 +387,10 @@ export class SettingsStore extends Context.Service<
 
       return SettingsStore.of({ get, update });
     })
+  );
+
+  /** Over a fresh migrated in-memory `cairn.sqlite`, for tests and judges that build a brain. */
+  static readonly layerTest = SettingsStore.layerNoDeps.pipe(
+    Layer.provide(Database.layerTest(migrations))
   );
 }

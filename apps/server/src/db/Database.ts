@@ -162,7 +162,24 @@ export class Database extends Context.Service<
         return Database.of({ filename, backup });
       })
     ).pipe(
-      Layer.provideMerge(SqliteClient.layer({ filename: options.filename }))
+      Layer.provideMerge(SqliteClient.layer({ filename: options.filename })),
+      // SQLite creates the file but not its folder: a first boot on a fresh data directory makes it.
+      Layer.provide(
+        Layer.effectDiscard(
+          options.filename === ":memory:"
+            ? Effect.void
+            : Effect.gen(function* () {
+                const fileSystem = yield* FileSystem.FileSystem;
+
+                yield* fileSystem.makeDirectory(
+                  path.dirname(options.filename),
+                  {
+                    recursive: true,
+                  }
+                );
+              }).pipe(Effect.mapError(openError(options.filename, "open")))
+        )
+      )
     );
 
   /** `layerNoDeps` with Node's file system. */

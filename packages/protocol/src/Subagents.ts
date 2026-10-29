@@ -302,7 +302,10 @@ export const RESULT_DOCUMENT = "cairn.result";
 export const ResultDocument = Schema.Struct({
   result: Schema.Json,
   divergence: DisplayText,
-  /** Calls to `submit_result` up to and including the valid one. */
+  /**
+   * Attempts used up to and including the valid call: calls to `submit_result`, and a nudge sent
+   * before any call.
+   */
   attempts: PositiveInt,
 });
 

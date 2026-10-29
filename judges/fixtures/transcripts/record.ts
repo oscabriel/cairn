@@ -52,6 +52,7 @@ import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
 import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
+import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 
 const { values } = parseArgs({
@@ -402,6 +403,7 @@ const Brain = PiDurableBrain({
   Layer.provide(ExecutorLink.layerDisabled),
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(ModelHealth.layerTest),
+  Layer.provide(SettingsStore.layerTest),
   Layer.provide(ServerConfig.layerWith({ dataDir })),
   Layer.provide(NodeServices.layer),
   Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error"))

@@ -62,6 +62,7 @@ import {
   Schema,
 } from "effect";
 
+import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 
 /** The extension's name in pi-durable's registry. */
@@ -866,35 +867,34 @@ export class ResultTool extends Context.Service<
     readonly extension: CairnExtension;
   }
 >()("cairn/server/models/ResultTool") {
-  /** The extension at `order` (the integrator's key in `ExtensionOrder`). */
-  static readonly layerAt = (order: number) =>
-    Layer.succeed(
-      ResultTool,
-      ResultTool.of({
-        extension: {
-          order,
-          extension: defineExtension({
-            name: RESULTS_EXTENSION,
-            tools: [RESULT_TOOL],
-            hooks: [
-              hook(GenerationTask, {
-                beforeRequest: async (request, api, context) => {
-                  const child = await api.snapshot(
-                    ChildSchemaDoc,
-                    api.conversationId,
-                    context
-                  );
+  /** The extension at `ExtensionOrder.results`. */
+  static readonly layer = Layer.succeed(
+    ResultTool,
+    ResultTool.of({
+      extension: {
+        order: ExtensionOrder.results,
+        extension: defineExtension({
+          name: RESULTS_EXTENSION,
+          tools: [RESULT_TOOL],
+          hooks: [
+            hook(GenerationTask, {
+              beforeRequest: async (request, api, context) => {
+                const child = await api.snapshot(
+                  ChildSchemaDoc,
+                  api.conversationId,
+                  context
+                );
 
-                  return Option.getOrUndefined(
-                    Option.map(resultSchemaOf(child), (schema) => ({
-                      messages: declareSchema(request.messages, schema),
-                    }))
-                  );
-                },
-              }),
-            ],
-          }),
-        },
-      })
-    );
+                return Option.getOrUndefined(
+                  Option.map(resultSchemaOf(child), (schema) => ({
+                    messages: declareSchema(request.messages, schema),
+                  }))
+                );
+              },
+            }),
+          ],
+        }),
+      },
+    })
+  );
 }

@@ -24,7 +24,7 @@ export const BUILT_IN_ROLES = ["@worker", "@scout", "@judge", "@verifier"];
  */
 export const RoleSpec = Schema.String.check(
   Schema.isPattern(
-    /^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$/u
+    /^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$/u
   )
 ).pipe(Schema.brand("RoleSpec"));
 
@@ -118,6 +118,8 @@ export type ResolvedRole = typeof ResolvedRole.Type;
 /** `roles.check` input: the specs a brief or workflow plan names. */
 export const RolesCheckInput = Schema.Struct({
   specs: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(64)),
+  /** A launch card's role overrides (the proposed `roleOverrides` or the user's `LaunchEdits`). */
+  overrides: Schema.optionalKey(RoleOverrides),
 });
 
 export type RolesCheckInput = typeof RolesCheckInput.Type;

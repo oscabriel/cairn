@@ -11,6 +11,7 @@ import {
   DatabaseLive,
   ModelHealthLive,
   PiDurableBrain,
+  SettingsLive,
 } from "./AppLayer.ts";
 import { UploadKeyFromFile } from "./attachments/UploadTokens.ts";
 import { ServerConfig } from "./Config.ts";
@@ -56,6 +57,8 @@ const MainLayer = AppLayer.pipe(
   Layer.provide(Harness),
   // The same reference `AppLayer` uses, so the brain's health feed and the login RPCs share one store.
   Layer.provide(ModelHealthLive),
+  // The same reference `AppLayer` uses, so the `roles` tool and the settings RPCs share one store.
+  Layer.provide(SettingsLive),
   Layer.provide(PiTools),
   Layer.provide(BridgeProvider.layer),
   Layer.provide(Executor),

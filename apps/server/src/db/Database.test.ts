@@ -85,4 +85,19 @@ describe(Database, () => {
       assert.deepStrictEqual(integrity, [{ integrity_check: "ok" }]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   );
+
+  it.live("makes a missing data folder on a first boot", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const directory = yield* fileSystem.makeTempDirectoryScoped();
+      const filename = path.join(directory, "fresh", "data", "cairn.sqlite");
+
+      const tables = yield* tableNames.pipe(
+        Effect.provide(Database.layer({ filename, migrations: shellOnly }))
+      );
+
+      assert.include(tables, "threads");
+      assert.isTrue(yield* fileSystem.exists(filename));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  );
 });

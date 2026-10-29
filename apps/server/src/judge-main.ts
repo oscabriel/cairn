@@ -17,6 +17,7 @@ import {
   AppLayer,
   ModelHealthLive,
   PiDurableBrain,
+  SettingsLive,
   withCatalog,
 } from "./AppLayer.ts";
 import { ServerConfig } from "./Config.ts";
@@ -81,6 +82,7 @@ const Harness = real
 const JudgeLayer = AppLayer.pipe(
   Layer.provide(Harness),
   Layer.provide(ModelHealthLive),
+  Layer.provide(SettingsLive),
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(real ? BridgeProvider.layer : BridgeProvider.layerOff),
   Layer.provide(ExecutorLink.layerFake),

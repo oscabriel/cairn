@@ -11869,6 +11869,87 @@
               "minLength": 1
             },
             "maxItems": 64
+          },
+          "overrides": {
+            "type": "object",
+            "patternProperties": {
+              "^@[a-z0-9-]{1,24}$": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "object",
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                        "minLength": 1
+                      },
+                      "modelId": {
+                        "type": "string",
+                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                        "minLength": 1
+                      }
+                    },
+                    "required": ["provider", "modelId"],
+                    "additionalProperties": true
+                  },
+                  "thinkingLevel": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "fallbacks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                          "minLength": 1
+                        },
+                        "modelId": {
+                          "type": "string",
+                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                          "minLength": 1
+                        }
+                      },
+                      "required": ["provider", "modelId"],
+                      "additionalProperties": true
+                    },
+                    "maxItems": 4
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["model", "thinkingLevel", "fallbacks", "note"],
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
           }
         },
         "required": ["specs"],
@@ -11902,7 +11983,7 @@
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "role": {
                           "anyOf": [
@@ -13578,7 +13659,7 @@
                         },
                         "spec": {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "rubric": {
                           "type": "string",

@@ -8,14 +8,8 @@ import { SqlClient } from "effect/sql";
 
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
-import { Artifacts0010 } from "../db/migrations/0010Artifacts.ts";
-import { Portals0011 } from "../db/migrations/0011Portals.ts";
 
-const DbLayer = Database.layerTest({
-  ...migrations,
-  "0010_Artifacts": Artifacts0010,
-  "0011_Portals": Portals0011,
-});
+const DbLayer = Database.layerTest(migrations);
 
 const portal = (
   id: string,

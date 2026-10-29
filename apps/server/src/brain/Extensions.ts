@@ -19,7 +19,11 @@ export const ExtensionOrder = {
   bridgeCwd: 700,
   piTools: 800,
   modelHealth: 850,
+  /** `cairn.roles`: the `roles` tool over the role table (ADR 0035). */
+  roles: 860,
   judge: 900,
+  /** `cairn.results`: declares each child's result schema in `beforeRequest`; `submit_result`. */
+  results: 950,
 } as const;
 
 /** One extension and where it installs. */

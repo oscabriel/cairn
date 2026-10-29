@@ -565,8 +565,17 @@ const viewOf = (
   thread: ScriptedThread,
   parentConversation: Option.Option<number>
 ): PiConversationView => {
-  // The cairn.* documents a thread has, as pi-durable keeps them: only once there is one.
-  const cairnDocs: Array<readonly [string, JsonRecord]> = [];
+  // The cairn.* documents a thread has, as pi-durable keeps them: only once there is one. A
+  // thread's permissions are written when it is created, so they are always there.
+  const cairnDocs: Array<readonly [string, JsonRecord]> = [
+    [
+      "cairn.permissions",
+      {
+        mode: thread.permissions.mode,
+        allow: [...thread.permissions.allow],
+      },
+    ],
+  ];
 
   if (thread.approvals.size > 0) {
     cairnDocs.push(["cairn.approvals", { items: approvalItems(thread) }]);

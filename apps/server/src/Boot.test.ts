@@ -39,6 +39,7 @@ import {
   PiDurableBrain,
   ScriptedBrain,
   ThreadsLive,
+  withCatalog,
 } from "./AppLayer.ts";
 import { retryParkedApprovalWaits, runBoot } from "./Boot.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
@@ -429,11 +430,14 @@ const PROJECT = createProject(1);
 
 const brainFor = (dataDir: string) =>
   PiDurableBrain({
-    models: ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} }),
+    models: withCatalog(
+      ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} })
+    ),
   }).pipe(
     Layer.provideMerge(ExecutorLink.layerDisabled),
     Layer.provide(PiHost.layerEmpty),
     Layer.provide(ModelHealth.layerNoDeps),
+    Layer.provide(SettingsStore.layerNoDeps),
     Layer.provideMerge(
       ShellLayer.pipe(
         Layer.provideMerge(ProjectorSignals.layer),

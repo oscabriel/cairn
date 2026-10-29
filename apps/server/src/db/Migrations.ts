@@ -21,6 +21,8 @@ import { ExecutorSignal0006 } from "./migrations/0006ExecutorSignal.ts";
 import { OAuthCredentials0007 } from "./migrations/0007OAuthCredentials.ts";
 import { ModelHealth0008 } from "./migrations/0008ModelHealth.ts";
 import { Spend0009 } from "./migrations/0009Spend.ts";
+import { Artifacts0010 } from "./migrations/0010Artifacts.ts";
+import { Portals0011 } from "./migrations/0011Portals.ts";
 
 /** Every cairn.sqlite migration, keyed <NNNN>_<Name>; one id space. */
 export const migrations: MigrationRecord = {
@@ -33,4 +35,6 @@ export const migrations: MigrationRecord = {
   "0007_OAuthCredentials": OAuthCredentials0007,
   "0008_ModelHealth": ModelHealth0008,
   "0009_Spend": Spend0009,
+  "0010_Artifacts": Artifacts0010,
+  "0011_Portals": Portals0011,
 };

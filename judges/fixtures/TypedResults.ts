@@ -272,7 +272,7 @@ const ChildForJudge = defineDoc<{
 
 /** The `results` extension at the order key the brain gives it. */
 const typedExtension = Effect.map(
-  Layer.build(ResultTool.layerAt(950)),
+  Layer.build(ResultTool.layer),
   (built) => Context.get(built, ResultTool).extension.extension
 );
 

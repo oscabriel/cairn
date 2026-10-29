@@ -22,6 +22,8 @@ import { PiDurableHarness } from "../brain/PiDurableHarness.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiConfig } from "../models/PiConfig.ts";
+import { PiModelSource } from "../models/PiModelSource.ts";
+import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "./PiHost.ts";
 import type { InstanceScope, PiHostPolicy } from "./PiHostPolicy.ts";
 
@@ -150,7 +152,9 @@ export const brainLayer = <E>(
 ) => {
   const extensions = ExtensionSet.layer.pipe(
     Layer.provide(ExecutorLink.layerDisabled),
-    Layer.provide(ModelHealth.layerTest)
+    Layer.provide(ModelHealth.layerTest),
+    Layer.provide(SettingsStore.layerTest),
+    Layer.provide(PiModelSource.layerFromModelSource)
   );
 
   return PiDurableHarness.layer.pipe(

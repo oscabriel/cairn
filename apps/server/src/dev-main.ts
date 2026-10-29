@@ -14,6 +14,7 @@ import {
   AppLayer,
   ModelHealthLive,
   PiDurableBrain,
+  SettingsLive,
   ScriptedBrain,
 } from "./AppLayer.ts";
 import { ServerConfig } from "./Config.ts";
@@ -49,6 +50,7 @@ const App =
 const DevLayer = App.pipe(
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(ModelHealthLive),
+  Layer.provide(SettingsLive),
   Layer.provide(ExecutorLink.layerFake),
   Layer.provide(Identity.layerLoopbackOwner),
   Layer.provide(ServerConfig.layerLocal),

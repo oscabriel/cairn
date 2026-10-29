@@ -39,7 +39,6 @@ import { Console, Duration, Effect, Exit, Layer } from "effect";
 
 import { Database } from "../apps/server/src/db/Database.ts";
 import { migrations } from "../apps/server/src/db/Migrations.ts";
-import { Artifacts0010 } from "../apps/server/src/db/migrations/0010Artifacts.ts";
 import { ArtifactPublisher } from "../apps/server/src/reach/ArtifactPublisher.ts";
 import {
   PorchClient,
@@ -245,9 +244,7 @@ const contract = Effect.gen(function* () {
 
   const layer = ArtifactPublisher.layer.pipe(
     Layer.provideMerge(PorchClient.layer),
-    Layer.provideMerge(
-      Database.layerTest({ ...migrations, "0010_Artifacts": Artifacts0010 })
-    ),
+    Layer.provideMerge(Database.layerTest(migrations)),
     Layer.provideMerge(NodeServices.layer),
     Layer.provide(
       Layer.succeed(PorchSettings, {

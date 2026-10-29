@@ -14,6 +14,8 @@ import { Effect, Layer, Option, Result, Stream } from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
+import { PiModelSource } from "../models/PiModelSource.ts";
+import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { ExtensionSet } from "./ExtensionSet.ts";
@@ -26,7 +28,9 @@ const harness = PiDurableHarness.layer.pipe(
     ExtensionSet.layer.pipe(
       Layer.provide(ExecutorLink.layerDisabled),
       Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest)
+      Layer.provide(ModelHealth.layerTest),
+      Layer.provide(SettingsStore.layerTest),
+      Layer.provide(PiModelSource.layerFromModelSource)
     )
   ),
   Layer.provideMerge(

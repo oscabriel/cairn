@@ -1,9 +1,10 @@
 // `roles.check` over the stubs, as `Handlers.ts` layers them, against the faux brain's catalog and a
 // migrated in-memory `cairn.sqlite`: a spec the faux model can take resolves; a seeded role whose
 // provider this brain does not have is blocked with the model it passed over; an unknown role is
-// blocked as unbound; a failed read of the table answers `Unavailable`.
+// blocked as unbound; a launch's override resolves a role the table cannot; a failed read of the
+// table answers `Unavailable`.
 
-import { RoleCheck } from "@cairn/protocol/Roles";
+import { RoleCheck, RoleName } from "@cairn/protocol/Roles";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
@@ -105,6 +106,29 @@ describe("roles.check", () => {
             skipped: [],
           })
         );
+      })
+    )
+  );
+
+  it.effect("previews a launch's role overrides ahead of the table", () =>
+    run(
+      Roles,
+      Effect.gen(function* () {
+        const client = yield* makeClient;
+
+        const [judge] = yield* client["roles.check"]({
+          specs: ["@judge"],
+          overrides: {
+            [RoleName.make("@judge")]: {
+              model: { provider: "faux", modelId: "scripted" },
+              thinkingLevel: null,
+              fallbacks: [],
+              note: null,
+            },
+          },
+        });
+
+        assert.strictEqual(judge?.resolution._tag, "Resolved");
       })
     )
   );

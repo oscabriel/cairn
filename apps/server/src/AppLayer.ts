@@ -116,6 +116,14 @@ export const ModelHealthLive = ModelHealth.layerNoDeps.pipe(
   Layer.provide(DatabaseLive)
 );
 
+/**
+ * The server settings over the database. One reference, which `AppLayer` uses and each entry point
+ * gives `PiDurableBrain` (the `roles` tool reads the role table from it).
+ */
+export const SettingsLive = SettingsStore.layerNoDeps.pipe(
+  Layer.provide(DatabaseLive)
+);
+
 /** Folders, the scratch project, worktrees and file search, over git. */
 const ProjectsLive = Layer.mergeAll(
   FolderRules.layer,
@@ -168,7 +176,8 @@ export const withCatalog = <E, R>(models: Layer.Layer<ModelSource, E, R>) =>
  * pi-durable behind the harness seam, with the given models and extension set (the production
  * set unless a judge adds its tools) and the durable event reactors (`ReactorSet.ts`). Boot resumes
  * it after the repairs. `ModelHealth`, which the set's health feed records into, is left to the
- * entry point: `ModelHealthLive`, the reference `AppLayer` uses, so one store serves both. The models layer is also
+ * entry point: `ModelHealthLive`, the reference `AppLayer` uses, so one store serves both; so is
+ * `SettingsStore` (`SettingsLive`), which the `roles` tool reads. The models layer is also
  * exposed, so the app's catalog and title model read the same runtime the harness does.
  */
 export const PiDurableBrain = <Models = never>(options: {
@@ -280,6 +289,6 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(ThreadsLive),
   Layer.provideMerge(SpendLedger.layerNoDeps),
   Layer.provideMerge(PushLayer),
-  Layer.provide(SettingsStore.layerNoDeps),
+  Layer.provide(SettingsLive),
   Layer.provideMerge(Layer.merge(ShellLive, ModelHealthLive))
 );

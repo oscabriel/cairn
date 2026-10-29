@@ -6,12 +6,15 @@ import { Effect, Layer } from "effect";
 
 import { ProviderRequestLog } from "../attachments/ProviderRequestExtension.ts";
 import { ExecutorExtension } from "../executor/ExecutorExtension.ts";
+import { ResultTool } from "../models/ResultTool.ts";
+import { RoleAliases } from "../models/RoleAliases.ts";
+import { RolesTool } from "../models/RolesExtension.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { skillExtensionSources } from "../skills/SkillsLayer.ts";
 import { BridgeCwd } from "./BridgeCwdExtension.ts";
 import { CodeMode } from "./CodeMode.ts";
 import { CodingTools } from "./CodingTools.ts";
-import { Extensions } from "./Extensions.ts";
+import { ExtensionOrder, Extensions } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
 import { ModelHealthFeed } from "./ModelHealthExtension.ts";
 
@@ -26,6 +29,8 @@ const production: ReadonlyArray<
     | BridgeCwd
     | PiHost
     | ModelHealthFeed
+    | RolesTool
+    | ResultTool
   >
 > = [
   CodingTools.useSync((tools) => tools.extension),
@@ -35,6 +40,8 @@ const production: ReadonlyArray<
   BridgeCwd.useSync((bridgeCwd) => bridgeCwd.extension),
   PiHost.useSync((host) => host.extension),
   ModelHealthFeed.useSync((feed) => feed.extension),
+  RolesTool.useSync((roles) => roles.extension),
+  ResultTool.useSync((results) => results.extension),
   ProviderRequestLog.useSync((log) => log.extension),
 ];
 
@@ -44,14 +51,21 @@ const production: ReadonlyArray<
 // is left to the composition root too: `PiHost.layer` (the user's pi packages) in `main.ts`,
 // `PiHost.layerEmpty` (the same empty `cairn.pi-tools` extension) everywhere else. So is
 // `ModelHealth`, which the health feed records into: `PiDurableBrain` gives it the app's one
-// `ModelHealthLive`, and tests a fresh in-memory one (`ModelHealth.layerTest`).
+// `ModelHealthLive`, and tests a fresh in-memory one (`ModelHealth.layerTest`). The `roles` tool's
+// `RoleAliases` leaves `SettingsStore` (and `ModelHealth`) to the root as well: `SettingsLive` in
+// the entry points, `SettingsStore.layerTest` in tests. It reads the Claude plan's windows from
+// `BridgeProvider`, a reference the deployed root provides.
 const dependencies = Layer.mergeAll(
   CodingTools.layer,
   CodeMode.layer,
   ProviderRequestLog.layer,
   ExecutorExtension.layer,
   BridgeCwd.layer,
-  ModelHealthFeed.layer
+  ModelHealthFeed.layer,
+  RolesTool.layerAt(ExtensionOrder.roles).pipe(
+    Layer.provide(RoleAliases.layerNoDeps)
+  ),
+  ResultTool.layer
 );
 
 /** The installed set: production extensions, plus any a composition root adds (judges). */

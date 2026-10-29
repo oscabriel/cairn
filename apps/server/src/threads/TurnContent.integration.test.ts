@@ -44,6 +44,8 @@ import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
+import { PiModelSource } from "../models/PiModelSource.ts";
+import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { projectIdFor } from "../shell/ShellCommands.ts";
@@ -81,11 +83,16 @@ const stack = (dir: string, userSkills: string) =>
     Layer.provideMerge(SkillCatalog.layerProjectOnly(userSkills)),
     Layer.provideMerge(
       PiDurableBrain({
-        models: ModelSource.layerFaux({ tokensPerSecond: 5000, settings: {} }),
+        models: PiModelSource.layerFromModelSource.pipe(
+          Layer.provideMerge(
+            ModelSource.layerFaux({ tokensPerSecond: 5000, settings: {} })
+          )
+        ),
       }).pipe(
         Layer.provide(ExecutorLink.layerDisabled),
         Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest)
+        Layer.provide(ModelHealth.layerTest),
+        Layer.provide(SettingsStore.layerTest)
       )
     ),
     Layer.provideMerge(

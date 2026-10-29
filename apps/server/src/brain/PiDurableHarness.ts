@@ -37,6 +37,7 @@ import {
 import type {
   AgentChange,
   Conversation,
+  ConversationDocToken,
   ConversationId as PiConversationId,
   ConversationView as PiConversationView,
   EntryDraft,
@@ -76,13 +77,13 @@ import { BrainStore } from "./BrainStore.ts";
 import {
   answerApproval,
   Approvals,
+  Permissions,
   cancelStoppedApprovals,
   refusalText,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
 } from "./CairnDocs.ts";
-import type { ApprovalsState } from "./CairnDocs.ts";
 import { CommitFeed, RUN_TASK } from "./CommitFeed.ts";
 import { durable, errorText, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
@@ -116,7 +117,15 @@ const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
 type Writable<A> = { -readonly [K in keyof A]: A[K] };
 
-const APPROVALS_KIND = Approvals.definition.kind;
+/**
+ * The `cairn.*` documents the thread stream carries beside pi-durable's own view documents: every
+ * `cairn.*` kind of `VISIBLE_DOCUMENTS` that a token exists for. A package that defines another
+ * visible document adds its token here, and the stream watches it with no other edit.
+ */
+const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
+  Approvals,
+  Permissions,
+];
 
 const encoder = new TextEncoder();
 
@@ -974,35 +983,55 @@ const layerNoDeps = Layer.effect(
                 })
             );
 
-            // `cairn.approvals` is not one of pi-durable's built-in view documents; the stream adds it.
-            const approvals = yield* Effect.acquireRelease(
-              call(
-                Option.some(threadId),
-                "watch-approvals",
-                async (context) =>
-                  await session.harness.watchDoc(
-                    Approvals,
-                    conversation.id,
-                    context
-                  )
-              ),
-              (handle) =>
-                Effect.promise(async () => {
-                  await handle?.stop();
-                })
+            // The `cairn.*` documents are not among pi-durable's built-in view documents; the
+            // stream watches each one beside the conversation and adds it to the view.
+            const docWatches = yield* Effect.forEach(
+              STREAM_DOCUMENTS,
+              (token) =>
+                Effect.acquireRelease(
+                  call(
+                    Option.some(threadId),
+                    `watch-${token.definition.kind}`,
+                    async (context) =>
+                      await session.harness.watchDoc(
+                        token,
+                        conversation.id,
+                        context
+                      )
+                  ),
+                  (handle) =>
+                    Effect.promise(async () => {
+                      await handle?.stop();
+                    })
+                ).pipe(
+                  Effect.map((handle) => ({
+                    kind: token.definition.kind,
+                    handle: Option.fromUndefinedOr(handle),
+                  }))
+                )
             );
 
             const projector = windowedProjector();
 
             let latest = watch.value;
-            let latestApprovals = approvals?.value ?? null;
 
-            const withApprovals = (): PiConversationView =>
-              latestApprovals === null
+            // Each watched document's newest value; a document that does not exist yet is absent.
+            const latestDocs = new Map<string, Readonly<JsonObject>>();
+
+            for (const { kind, handle } of docWatches) {
+              for (const value of Option.toArray(handle)) {
+                if (value.value !== null) {
+                  latestDocs.set(kind, value.value);
+                }
+              }
+            }
+
+            const withDocs = (): PiConversationView =>
+              latestDocs.size === 0
                 ? latest
                 : {
                     ...latest,
-                    docs: { ...latest.docs, [APPROVALS_KIND]: latestApprovals },
+                    docs: { ...latest.docs, ...Object.fromEntries(latestDocs) },
                   };
 
             // A window (ThreadWindow.ts) leaves older entries out; with none left out, pi-durable
@@ -1025,7 +1054,7 @@ const layerNoDeps = Layer.effect(
               });
 
             const first = yield* Effect.fromResult(
-              projector.snapshot(withApprovals())
+              projector.snapshot(withDocs())
             ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
 
             yield* Queue.offer(queue, yield* snapshotItem(first, watch.value));
@@ -1041,17 +1070,26 @@ const layerNoDeps = Layer.effect(
               })
             );
 
-            approvals?.start(
-              handOff((value: Readonly<ApprovalsState> | null) => {
-                latestApprovals = value;
-                Queue.offerUnsafe(ticks, true);
-              })
-            );
+            for (const { kind, handle } of docWatches) {
+              for (const docWatch of Option.toArray(handle)) {
+                docWatch.start(
+                  handOff((value: Readonly<JsonObject> | null) => {
+                    if (value === null) {
+                      latestDocs.delete(kind);
+                    } else {
+                      latestDocs.set(kind, value);
+                    }
+
+                    Queue.offerUnsafe(ticks, true);
+                  })
+                );
+              }
+            }
 
             yield* Queue.take(ticks).pipe(
               Effect.flatMap(() =>
                 Effect.gen(function* () {
-                  const current = withApprovals();
+                  const current = withDocs();
 
                   const frame = yield* Effect.fromResult(
                     projector.advance(current)

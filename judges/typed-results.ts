@@ -32,6 +32,14 @@
 // with the total cost. The trial cwd is seeded with the files the task names (`PROBE_FILES`). Exit 0
 // when every model run passes every trial and both controls fail. A model the runtime does not
 // have, or a provider with no credential, prints a skipped line and fails the run.
+//
+// Not yet stable at 100 percent through children (hand-offs, not a pass). Three full runs after
+// the cwd was seeded: every OpenCode Go and bridge model 24 of 24, the fallback gpt-6-luna 23 of
+// 24, so run 2 failed. The integrator decides whether the target for children is 100 percent or a
+// measured rate. The miss was a typed child that called 3A's `report` through code mode, said
+// `submit_result` was not available and never submitted: `report` pre-empts the typed result,
+// which 3A owns (don't offer `report` to typed children, or keep it from ending the run while a
+// typed result is due).
 
 import {
   mkdirSync,

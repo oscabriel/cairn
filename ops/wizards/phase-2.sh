@@ -188,7 +188,7 @@ finish() {
 # phase 2 brain is deployed. Other packages add their stages here, one focused task each.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=2
+TOTAL_STAGES=3
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
@@ -472,6 +472,47 @@ if want 2; then
     note "Backups: $CADDYFILE.bak-before-porch-$STAMP and $COMPOSE.bak-before-porch-$STAMP."
     note "To put one back: cat <backup> > <file>, then $RELOAD"
     SKIPPED+=("stage 2: Caddy and porch (ops/wizards/phase-2.sh 2)")
+  fi
+  pause
+fi
+
+# ── 3 ─────────────────────────────────────────────────────────────────────
+# Approval push (briefs note B7, plan 4G): a request waiting on a thread reaches the locked phone
+# once, in the request's own words, and a tap opens its thread. The notifier's rules are judged on
+# loopback first (judges/push.ts --fake, no device, no model); the phone is the part only you see.
+if want 3; then
+  stage "iPhone: an approval push on the locked phone"
+  say "When a thread asks you something and no screen shows it, Cairn pushes it to your phone."
+  note "Needs the phase 2 brain deployed and this phone subscribed (phase 1, stage 2)."
+  step "First, the rules on loopback (about 25 seconds, no model, no device)."
+  if judge push-requests node judges/push.ts --fake; then
+    say ""
+    step "On the MacBook, open Cairn, start a thread with a cheap model (claude-haiku-5-5) and send:"
+    say "    ${BOLD}Use the ask_user tool to ask me one question with the header Color: which colour"
+    say "    do I like, red or blue? Then wait for my answer.${RESET}"
+    step "When the question card shows, switch the MacBook to another thread (or close the tab),"
+    say "    then lock the phone and wait up to a minute and a half."
+    note "A page that shows the thread holds the push back; it goes once no page has shown it for a minute."
+    step "A notification should arrive: the thread's title, then ${BOLD}Color: ...${RESET}"
+    step "Tap it. Cairn should open that thread with the question card. Before answering, go back to"
+    say "    the home screen: the app icon should still show its badge. Then answer the question in Cairn."
+    if confirm "Did the push arrive on the locked phone in the question's words, and open the thread"; then
+      if confirm "Did the app icon show a badge while the question waited, before and after Cairn opened"; then
+        record 3 "approval-push=pass badge=pass"
+      else
+        record 3 "approval-push=pass badge=fail"
+        SKIPPED+=("stage 3: the push arrived but the app icon showed no badge")
+      fi
+      printf '  %s✓ approval push reaches the phone%s\n' "$GREEN" "$RESET"
+    else
+      ask PUSH_NOTES "What happened instead:"
+      record 3 "approval-push=fail notes=$PUSH_NOTES"
+      SKIPPED+=("stage 3: the approval push on the phone ($PUSH_NOTES); run it again with ops/wizards/phase-2.sh 3")
+    fi
+  else
+    warn "The loopback check failed (see $RUNS/push-requests.jsonl); the phone check would prove nothing yet."
+    record 3 "approval-push=fail judge"
+    SKIPPED+=("stage 3: judges/push.ts --fake failed (ops/wizards/phase-2.sh 3)")
   fi
   pause
 fi

@@ -1,12 +1,15 @@
 /* oxlint-disable typescript/no-unsafe-argument, typescript/no-unsafe-assignment, typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-return, typescript/strict-boolean-expressions, anti-slop/no-runtime-typeof, unicorn/require-post-message-target-origin -- a plain service worker script: the project has no WebWorker lib types for `self` or push events, so the payload is checked with typeof, and a Client's postMessage takes no target origin */
 // Ported from cairn-v1, apps/web/public/sw.js at 1a5cd4a (itself extended from spike 5's worker,
 // which iOS accepted from the installed PWA). Changed: the badge count is the push's `badge` field
-// (threads with a result not yet seen) instead of v1's pending approvals, and the icon lives under
-// `/icons/`.
+// (threads with a result not yet seen or a request waiting) instead of v1's pending approvals, and
+// the icon lives under `/icons/`.
 //
 // Cairn's service worker handles push and notificationclick only. It has no fetch handler, so every
 // load goes to the network and a deploy can never leave a stale shell behind (ADR 0021). Every push
-// is shown (iOS drops a subscription that receives pushes it does not show), collapsed by its tag.
+// is shown (iOS drops a subscription that receives pushes it does not show), collapsed by its tag:
+// `thread:<id>` for a run's end, `ask:<id>` for the requests waiting on a thread, so a newer request
+// replaces the older and its body counts them. A replacing push alerts again (`renotify`), or a
+// second request, a late push or the reminder would land silently under the first.
 
 self.addEventListener("install", () => {
   void self.skipWaiting();
@@ -68,11 +71,16 @@ self.addEventListener("push", (event) => {
   const title =
     typeof data.title === "string" && data.title !== "" ? data.title : "Cairn";
 
+  // A tag must be a non-empty string for `renotify`: the browser refuses `renotify` without one.
+  const tag =
+    typeof data.tag === "string" && data.tag !== "" ? data.tag : undefined;
+
   event.waitUntil(
     Promise.all([
       self.registration.showNotification(title, {
         body: typeof data.body === "string" ? data.body : "",
-        tag: typeof data.tag === "string" ? data.tag : undefined,
+        tag,
+        renotify: tag !== undefined,
         icon: "/icons/icon-192.png",
         data: { url: pathOf(data.url) },
       }),

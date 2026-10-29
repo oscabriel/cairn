@@ -32,6 +32,7 @@
 // approvals they held, without starting scheduling, so a guard killed while stopping does not let
 // a stopped child run again after the restart, and the gate has a full book from the first call.
 
+import { badgeOf } from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { Budget } from "@cairn/protocol/Spend";
 import {
@@ -48,7 +49,7 @@ import { BudgetSources } from "../brain/BudgetSources.ts";
 import type { BudgetSourceError } from "../brain/BudgetSources.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
-import { cutText, hasUnseenResult, Notifier } from "../push/Notifier.ts";
+import { cutText, Notifier } from "../push/Notifier.ts";
 import type { PushMessage } from "../push/Notifier.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { BudgetBook } from "./BudgetBook.ts";
@@ -191,9 +192,7 @@ export class BudgetGuard extends Context.Service<
       const threadRows = yield* ThreadRows;
 
       const badge = threadRows.listLive.pipe(
-        Effect.map(
-          (rows) => rows.filter((row) => hasUnseenResult(row.shell)).length
-        ),
+        Effect.map((rows) => badgeOf(rows.map((row) => row.shell))),
         Effect.orElseSucceed(() => 0)
       );
 

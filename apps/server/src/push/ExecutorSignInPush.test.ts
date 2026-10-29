@@ -34,6 +34,7 @@ describe("the Executor sign-in push", () => {
       const notifier = Layer.succeed(Notifier, {
         sendToAll: () => Effect.succeed([]),
         handleEvent: () => Effect.void,
+        sweep: Effect.void,
         executorNeedsSignIn: note("needs"),
         executorSignedIn: note("signed-in"),
         settle: Effect.void,

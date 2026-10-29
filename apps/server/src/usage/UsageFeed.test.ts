@@ -19,7 +19,8 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { BridgeProvider } from "../models/BridgeProvider.ts";
 import { CodexAccess, parseCodexCredential } from "../models/CodexAccess.ts";
-import { CODEX_PROVIDER, CodexUsage } from "./CodexUsage.ts";
+import { CODEX_PROVIDER } from "../models/CredentialStore.ts";
+import { CodexUsage } from "./CodexUsage.ts";
 import { UsageFeed } from "./UsageFeed.ts";
 
 const SESSION_AND_WEEK = JSON.stringify({

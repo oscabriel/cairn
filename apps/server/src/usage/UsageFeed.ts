@@ -1,8 +1,9 @@
 // Plan windows for `usage.subscribe`: each frame is every provider's usage, replaced whole. Two
 // sources fill it: the Claude bridge (its probe and the `rate_limit_event`s of its turns, merged by
 // `ClaudeUsage`) and Codex (ChatGPT's usage endpoint, read by `CodexUsage` with Cairn's Codex
-// login). API-key providers have no windows. OpenCode Go has no row yet: the wave 6 meter (6G)
-// decides whether a ready OpenCode Go provider shows as `unsupported` here or in the meter itself.
+// login). API-key providers have no windows. OpenCode Go has no row yet (an integrator hand-off of
+// package 3D): its row would be `unsupported`, as the protocol and glossary say, once the feed knows
+// whether OpenCode Go is ready.
 // A subscriber counts as a watcher of each source, which keeps its cadence going while a page shows
 // the meter and reads at once when the last reading is stale. A source that is off (the bridge
 // disabled, no Codex login) adds no row; with every source off the stream says "no providers" once
@@ -54,18 +55,12 @@ export class UsageFeed extends Context.Service<
   );
 
   /**
-   * The feed over one `codex` reader, which `CodexSignals` feeds too, so a refused Codex turn marks
-   * the window this feed shows. Needs `BridgeProvider` and the `HarnessSeam`.
+   * The deployed feed over one `CodexUsage.layer`, which `CodexSignals` feeds too, so a refused
+   * Codex turn marks the window this feed shows; the Codex login is read when the brain holds one
+   * (`CodexAccess.layerIfHeld`; judge and dev brains, which provide no `OAuthStore`, are signed
+   * out). Needs `BridgeProvider` and the `HarnessSeam`.
    */
-  static readonly layerOver = <E, R>(codex: Layer.Layer<CodexUsage, E, R>) =>
-    Layer.merge(UsageFeed.layerNoDeps, CodexSignals).pipe(Layer.provide(codex));
-
-  /**
-   * The deployed feed: `layerOver` one `CodexUsage.layer`, over the Codex login when the brain
-   * holds one (`CodexAccess.layerIfHeld`; judge and dev brains, which provide no `OAuthStore`, are
-   * signed out).
-   */
-  static readonly layer = UsageFeed.layerOver(
-    CodexUsage.layer.pipe(Layer.provide(CodexAccess.layerIfHeld))
+  static readonly layer = Layer.merge(UsageFeed.layerNoDeps, CodexSignals).pipe(
+    Layer.provide(CodexUsage.layer.pipe(Layer.provide(CodexAccess.layerIfHeld)))
   );
 }

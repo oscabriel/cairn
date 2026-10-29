@@ -1,6 +1,6 @@
 // A refused Codex turn marks its window spent on the Codex meter at once: faux `RunTerminal` events
 // on a fake harness, into the real `CodexUsage` over a fake endpoint. A Claude or OpenCode Go limit,
-// and a Codex run that failed for another reason, leave the meter alone. `UsageFeed.layerOver` gives
+// and a Codex run that failed for another reason, leave the meter alone. `UsageFeed.layer` gives
 // the signal and the feed one reader, so the feed's Codex row shows the spent window.
 
 import { RunId } from "@cairn/protocol/Ids";
@@ -288,7 +288,8 @@ describe("the usage feed with Codex signals", () => {
         assert.deepStrictEqual(spentOnFeed(marked), ["five_hour"]);
       }).pipe(
         Effect.provide(
-          UsageFeed.layerOver(Usage).pipe(
+          Layer.merge(UsageFeed.layerNoDeps, CodexSignals).pipe(
+            Layer.provide(Usage),
             Layer.provideMerge(FakeHarness),
             Layer.provide(BridgeProvider.layerOff)
           )

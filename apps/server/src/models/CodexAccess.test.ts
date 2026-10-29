@@ -24,8 +24,8 @@ import {
 
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
-import { CodexAccess, REFRESH_MARGIN } from "./CodexAccess.ts";
-import type { CodexRefresh } from "./CodexAccess.ts";
+import { CodexAccess, CodexRefresh, REFRESH_MARGIN } from "./CodexAccess.ts";
+import type { CodexRefreshFn } from "./CodexAccess.ts";
 import { CODEX_PROVIDER } from "./CredentialStore.ts";
 import { OAuthStore } from "./OAuthStore.ts";
 
@@ -54,7 +54,7 @@ const credential = (
 
 /** A refresh that rotates `rt_n` to `rt_n+1` and counts its calls; or refuses. */
 const fakeRefresh =
-  (calls: Ref.Ref<number>, refuse: boolean): CodexRefresh =>
+  (calls: Ref.Ref<number>, refuse: boolean): CodexRefreshFn =>
   async (current) => {
     const count = Effect.runSync(Ref.updateAndGet(calls, (n) => n + 1));
 
@@ -68,10 +68,11 @@ const fakeRefresh =
   };
 
 /** The store and the access over it, on one database and lock. */
-const accessOn = (lock: string, refresh: CodexRefresh) =>
+const accessOn = (lock: string, refresh: CodexRefreshFn) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
-      CodexAccess.layerWith(refresh).pipe(
+      CodexAccess.layer.pipe(
+        Layer.provide(Layer.succeed(CodexRefresh, refresh)),
         Layer.provideMerge(OAuthStore.layerWith(lock))
       )
     );

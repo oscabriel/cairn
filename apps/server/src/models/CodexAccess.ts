@@ -79,10 +79,34 @@ export class CodexAccessError extends Schema.TaggedError<CodexAccessError>()(
 ) {}
 
 /** Exchanges a stale credential for a fresh one; pi-ai's `OAuthAuth.refresh`. */
-export type CodexRefresh = (
+export type CodexRefreshFn = (
   credential: OAuthCredential,
   signal: AbortSignal
 ) => Promise<OAuthCredential>;
+
+/**
+ * How a stale Codex token is renewed: pi-ai's Codex OAuth refresh unless a test provides a fake.
+ */
+export const CodexRefresh = Context.Reference<CodexRefreshFn>(
+  "cairn/server/models/CodexAccess/CodexRefresh",
+  {
+    defaultValue: () => {
+      // pi-ai's Codex provider always has OAuth auth; without it a stale token cannot be renewed.
+      const oauth: Option.Option<OAuthAuth> = Option.fromUndefinedOr(
+        openaiCodexProvider().auth.oauth
+      );
+
+      return Option.match(oauth, {
+        onNone: (): CodexRefreshFn => async () =>
+          await Promise.reject(new Error("pi-ai has no Codex OAuth")),
+        onSome:
+          (flow): CodexRefreshFn =>
+          async (credential, signal) =>
+            await flow.refresh(credential, signal),
+      });
+    },
+  }
+);
 
 const storage = (cause: OAuthStoreError) =>
   new CodexAccessError({
@@ -112,124 +136,105 @@ export class CodexAccess extends Context.Service<
       CodexAccessError
     >;
   }
->()("cairn/server/usage/CodexAccess") {
+>()("cairn/server/models/CodexAccess") {
   /** No Codex login: judge and dev brains, and tests that read no Codex windows. */
   static readonly layerSignedOut = Layer.succeed(
     CodexAccess,
     CodexAccess.of({ credential: Effect.succeedNone })
   );
 
-  /** Over the brain's `OAuthStore`, refreshing a stale token with `refresh`. For tests. */
-  static readonly layerWith = (refresh: CodexRefresh) =>
-    Layer.effect(
-      CodexAccess,
-      Effect.gen(function* () {
-        const store = yield* OAuthStore;
+  /** Over the brain's `OAuthStore`, refreshing a stale token through `CodexRefresh`. */
+  static readonly layer = Layer.effect(
+    CodexAccess,
+    Effect.gen(function* () {
+      const store = yield* OAuthStore;
+      const refresh = yield* CodexRefresh;
 
-        // Under the store's permit: re-checked there, so concurrent reads refresh once.
-        const refreshed = store
-          .modify(CODEX_PROVIDER, (latest) =>
-            Effect.gen(function* () {
-              if (Option.isNone(latest)) {
-                return Option.none<OAuthCredential>();
-              }
+      // Under the store's permit: re-checked there, so concurrent reads refresh once.
+      const refreshed = store
+        .modify(CODEX_PROVIDER, (latest) =>
+          Effect.gen(function* () {
+            if (Option.isNone(latest)) {
+              return Option.none<OAuthCredential>();
+            }
 
-              const now = yield* Clock.currentTimeMillis;
+            const now = yield* Clock.currentTimeMillis;
 
-              if (!needsRefresh(latest.value, now)) {
-                return Option.none<OAuthCredential>();
-              }
+            if (!needsRefresh(latest.value, now)) {
+              return Option.none<OAuthCredential>();
+            }
 
-              const next = yield* Effect.tryPromise({
-                try: async () =>
-                  await refresh(
-                    latest.value,
-                    AbortSignal.timeout(Duration.toMillis(REFRESH_TIMEOUT))
-                  ),
-                // OpenAI's answer can quote the request; only the fact is kept.
-                catch: () =>
-                  new CodexAccessError({
-                    message:
-                      "the Codex access token is stale and its refresh failed; sign in to Codex again if this persists",
-                    reason: "refresh_failed",
-                  }),
-              });
+            const next = yield* Effect.tryPromise({
+              try: async () =>
+                await refresh(
+                  latest.value,
+                  AbortSignal.timeout(Duration.toMillis(REFRESH_TIMEOUT))
+                ),
+              // OpenAI's answer can quote the request; only the fact is kept.
+              catch: () =>
+                new CodexAccessError({
+                  message:
+                    "the Codex access token is stale and its refresh failed; sign in to Codex again if this persists",
+                  reason: "refresh_failed",
+                }),
+            });
 
-              return Option.some(next);
-            })
+            return Option.some(next);
+          })
+        )
+        .pipe(
+          Effect.catchTag("OAuthStoreError", (cause) =>
+            Effect.fail(storage(cause))
           )
-          .pipe(
-            Effect.catchTag("OAuthStoreError", (cause) =>
-              Effect.fail(storage(cause))
+        );
+
+      const credential = Effect.gen(function* () {
+        if (!store.held) {
+          return Option.none<CodexCredential>();
+        }
+
+        const stored = yield* store
+          .read(CODEX_PROVIDER)
+          .pipe(Effect.mapError(storage));
+
+        if (Option.isNone(stored)) {
+          return Option.none<CodexCredential>();
+        }
+
+        const now = yield* Clock.currentTimeMillis;
+
+        const current = needsRefresh(stored.value, now)
+          ? yield* refreshed
+          : stored;
+
+        if (Option.isNone(current)) {
+          return Option.none<CodexCredential>();
+        }
+
+        const account = decodeAccountOf(current.value);
+
+        if (Option.isNone(account)) {
+          return Option.none<CodexCredential>();
+        }
+
+        const { accountId } = account.value;
+        const { access } = current.value;
+
+        return Option.some(
+          yield* parseCodexCredential({ access, accountId }).pipe(
+            Effect.mapError(
+              () =>
+                new CodexAccessError({
+                  message:
+                    "the stored Codex login cannot go into a request header; sign in to Codex again",
+                  reason: "malformed",
+                })
             )
-          );
+          )
+        );
+      }).pipe(Effect.withSpan("CodexAccess.credential"));
 
-        const credential = Effect.gen(function* () {
-          if (!store.held) {
-            return Option.none<CodexCredential>();
-          }
-
-          const stored = yield* store
-            .read(CODEX_PROVIDER)
-            .pipe(Effect.mapError(storage));
-
-          if (Option.isNone(stored)) {
-            return Option.none<CodexCredential>();
-          }
-
-          const now = yield* Clock.currentTimeMillis;
-
-          const current = needsRefresh(stored.value, now)
-            ? yield* refreshed
-            : stored;
-
-          if (Option.isNone(current)) {
-            return Option.none<CodexCredential>();
-          }
-
-          const account = decodeAccountOf(current.value);
-
-          if (Option.isNone(account)) {
-            return Option.none<CodexCredential>();
-          }
-
-          const { accountId } = account.value;
-          const { access } = current.value;
-
-          return Option.some(
-            yield* parseCodexCredential({ access, accountId }).pipe(
-              Effect.mapError(
-                () =>
-                  new CodexAccessError({
-                    message:
-                      "the stored Codex login cannot go into a request header; sign in to Codex again",
-                    reason: "malformed",
-                  })
-              )
-            )
-          );
-        }).pipe(Effect.withSpan("CodexAccess.credential"));
-
-        return CodexAccess.of({ credential });
-      })
-    );
-
-  /** The deployed brain's: over its `OAuthStore`, refreshing through pi-ai's Codex OAuth. */
-  static readonly layer = Layer.unwrap(
-    Effect.sync(() => {
-      // pi-ai's Codex provider always has OAuth auth; without it a stale token cannot be renewed.
-      const oauth: Option.Option<OAuthAuth> = Option.fromUndefinedOr(
-        openaiCodexProvider().auth.oauth
-      );
-
-      return CodexAccess.layerWith(
-        Option.match(oauth, {
-          onNone: () => async () =>
-            await Promise.reject(new Error("pi-ai has no Codex OAuth")),
-          onSome: (flow) => async (credential, signal) =>
-            await flow.refresh(credential, signal),
-        })
-      );
+      return CodexAccess.of({ credential });
     })
   );
 

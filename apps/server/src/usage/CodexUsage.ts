@@ -9,14 +9,18 @@
 // Ported from hardbeat920/monocode src-tauri/src/pi_usage.rs at
 // 26465c620977f3951d0a532a0f7db32c3c179007: the endpoint, the `Authorization` and
 // `ChatGPT-Account-Id` headers, the field names (`rate_limit.primary_window`, `secondary_window`,
-// `used_percent`, `limit_window_seconds`, `reset_at`), the body read only up to its bound plus one
-// byte, and the rules that a window's length must be whole minutes and two windows may not claim the
-// same length. Changed: an Effect Schema decode instead of serde lookups, windows named by their
-// length (a weekly primary is never called a session), a `used_percent` above 100 shown as 100 and
-// spent (MonoCode rejects it as an unexpected shape; over-use past the cap is a spent window, not a
-// changed shape), a plan with no windows read as unsupported rather than an error, a spent window or
-// a refused turn marks it exhausted, and the token comes from Cairn's own login instead of pi's
-// `auth.json`, which this code never reads.
+// `used_percent`, `limit_window_seconds`, `reset_at`), the body read only up to a bound, redirects
+// refused (a redirect reads as a failed read, never as a page followed), a `User-Agent` naming the
+// reader (`cairn` where MonoCode sends `monocode`), and the rules that a window's length must be
+// whole minutes and two windows may not claim the same length. Changed: the read stops at the first
+// chunk past the bound rather than one byte past it; `reset_at` must be epoch seconds before the
+// year 2286 and a window at most 366 days long (a body in milliseconds or another unit is a changed
+// shape, never a reset centuries away); an Effect Schema decode instead of serde lookups; windows
+// named by their length (a weekly primary is never called a session); a `used_percent` above 100
+// shown as 100 and spent (MonoCode rejects it as an unexpected shape; over-use past the cap is a
+// spent window, not a changed shape); a plan with no windows read as unsupported rather than an
+// error; a spent window or a refused turn marks it exhausted; and the token comes from Cairn's own
+// login instead of pi's `auth.json`, which this code never reads.
 //
 // MIT License
 //
@@ -65,10 +69,8 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { CodexAccess } from "../models/CodexAccess.ts";
 import type { CodexCredential } from "../models/CodexAccess.ts";
+import { CODEX_PROVIDER } from "../models/CredentialStore.ts";
 import { UNSTATED_LIMIT_MS } from "../models/ModelHealth.ts";
-
-/** The provider id Codex models run under, and the one its usage row carries. */
-export const CODEX_PROVIDER = "openai-codex";
 
 /** ChatGPT's usage endpoint for the signed-in account. Undocumented; read behind a decode. */
 export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -82,6 +84,15 @@ export const READ_TIMEOUT = Duration.seconds(10);
  */
 export const MAX_BODY_BYTES = 1024 * 1024;
 
+/** The `User-Agent` a read sends, so the endpoint's owner can tell this reader from a browser. */
+export const USER_AGENT = "cairn";
+
+/** The longest window the reader accepts, in seconds: a plan window longer than a year is a changed unit. */
+const MAX_WINDOW_SECONDS = 366 * 24 * 60 * 60;
+
+/** `reset_at` at or past this is not epoch seconds (it would be after the year 2286): a changed unit. */
+const MAX_RESET_SECONDS = 10_000_000_000;
+
 const SESSION_MINS = 5 * 60;
 
 const WEEK_MINS = 7 * 24 * 60;
@@ -93,10 +104,16 @@ const WhamWindow = Schema.Struct({
   used_percent: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   limit_window_seconds: Schema.Int.check(
     Schema.isGreaterThan(0),
+    Schema.isLessThanOrEqualTo(MAX_WINDOW_SECONDS),
     Schema.isMultipleOf(60)
   ),
   reset_at: Schema.optionalKey(
-    Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0)))
+    Schema.NullOr(
+      Schema.Int.check(
+        Schema.isGreaterThan(0),
+        Schema.isLessThan(MAX_RESET_SECONDS)
+      )
+    )
   ),
 });
 
@@ -437,33 +454,56 @@ export const readingOf = (reading: CodexUsageReading): UsageReading => {
     : "unreadable";
 };
 
+/** A window on the wire; none when its reset is not a time a `DateTime` can hold. */
+const toPlanWindow = (window: CodexWindow): Option.Option<PlanWindow> =>
+  Option.match(window.resetsAt, {
+    onNone: () => Option.some(Option.none<DateTime.Utc>()),
+    onSome: (at) => Option.map(DateTime.make(at), Option.some),
+  }).pipe(
+    Option.map((resetsAt): PlanWindow => ({
+      id: window.id,
+      label: window.label,
+      used: Option.some(window.usedPercent / 100),
+      resetsAt,
+      exhausted: window.exhausted,
+    }))
+  );
+
 /**
  * The Codex row for `usage.subscribe`: none while signed out. An unreadable answer is a row with no
- * windows and a check time; a failed read keeps the last windows and their old check time.
+ * windows and a check time; a failed read keeps the last windows and their old check time. Total: a
+ * window whose time cannot be built reads as unreadable, so no reading can break the feed.
  */
 export const toProviderUsage = (
   reading: CodexUsageReading
-): ReadonlyArray<ProviderUsage> =>
-  reading.state === "signed_out"
-    ? []
-    : [
-        {
-          provider: CODEX_PROVIDER,
-          reading: readingOf(reading),
-          windows: reading.windows.map((window): PlanWindow => ({
-            id: window.id,
-            label: window.label,
-            used: Option.some(window.usedPercent / 100),
-            resetsAt: Option.map(window.resetsAt, (at) =>
-              DateTime.makeUnsafe(at)
-            ),
-            exhausted: window.exhausted,
-          })),
-          checkedAt: Option.map(reading.checkedAt, (at) =>
-            DateTime.makeUnsafe(at)
-          ),
-        },
-      ];
+): ReadonlyArray<ProviderUsage> => {
+  if (reading.state === "signed_out") {
+    return [];
+  }
+
+  const checkedAt = Option.flatMap(reading.checkedAt, (at) =>
+    DateTime.make(at)
+  );
+
+  const windows = Option.all(reading.windows.map(toPlanWindow));
+
+  return [
+    Option.match(windows, {
+      onNone: (): ProviderUsage => ({
+        provider: CODEX_PROVIDER,
+        reading: "unreadable",
+        windows: [],
+        checkedAt,
+      }),
+      onSome: (built): ProviderUsage => ({
+        provider: CODEX_PROVIDER,
+        reading: readingOf(reading),
+        windows: built,
+        checkedAt,
+      }),
+    }),
+  ];
+};
 
 // --- The service ---
 
@@ -511,10 +551,16 @@ export class CodexUsage extends Context.Service<
             HttpClientRequest.setHeaders({
               accept: "application/json",
               "chatgpt-account-id": credential.accountId,
+              "user-agent": USER_AGENT,
             })
           );
 
-          const response = yield* client.execute(request);
+          // A redirect is answered as it comes (a 3xx, so a failed read), never followed to a page.
+          const response = yield* client.execute(request).pipe(
+            Effect.provideService(FetchHttpClient.RequestInit, {
+              redirect: "manual",
+            })
+          );
 
           if (response.status !== 200) {
             return {
@@ -569,11 +615,13 @@ export class CodexUsage extends Context.Service<
 
         const outcome = yield* access.credential.pipe(
           Effect.matchEffect({
+            // A login that could not be read or refreshed counts as a read, so watchers arriving
+            // inside `STALE_PROBE` do not retry a dead refresh; the tick tries again.
             onFailure: (error) =>
-              Effect.succeed<ReadOutcome>({
+              Effect.as(Ref.set(lastStartedAt, Option.some(started)), {
                 kind: "failed",
                 reason: error.message,
-              }),
+              } satisfies ReadOutcome),
             onSuccess: Option.match({
               onNone: () => Effect.succeed<ReadOutcome>({ kind: "signed_out" }),
               // Only a read that went for the endpoint counts as fresh: after a sign-in, the
@@ -605,39 +653,43 @@ export class CodexUsage extends Context.Service<
         );
       });
 
-      const read = Effect.gen(function* () {
-        const fresh = yield* Deferred.make<true>();
+      // Installing the Deferred and forking the read that completes it happen together, so an
+      // interrupted caller never leaves a Deferred nobody completes; only the wait is interruptible.
+      const read = Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const fresh = yield* Deferred.make<true>();
 
-        const [flight, mine] = yield* Ref.modify(
-          inFlight,
-          (
-            current
-          ): readonly [
-            readonly [Deferred.Deferred<true>, boolean],
-            Option.Option<Deferred.Deferred<true>>,
-          ] =>
-            Option.isSome(current)
-              ? [[current.value, false], current]
-              : [[fresh, true], Option.some(fresh)]
-        );
-
-        if (mine) {
-          // In the layer's scope, so a caller that stops waiting never cancels a read others joined.
-          yield* Effect.forkIn(
-            runRead.pipe(
-              Effect.ensuring(
-                Effect.andThen(
-                  Ref.set(inFlight, Option.none()),
-                  Deferred.succeed(fresh, true)
-                )
-              )
-            ),
-            scope
+          const [flight, mine] = yield* Ref.modify(
+            inFlight,
+            (
+              current
+            ): readonly [
+              readonly [Deferred.Deferred<true>, boolean],
+              Option.Option<Deferred.Deferred<true>>,
+            ] =>
+              Option.isSome(current)
+                ? [[current.value, false], current]
+                : [[fresh, true], Option.some(fresh)]
           );
-        }
 
-        yield* Deferred.await(flight);
-      });
+          if (mine) {
+            // In the layer's scope, so a caller that stops waiting never cancels a read others joined.
+            yield* Effect.forkIn(
+              runRead.pipe(
+                Effect.ensuring(
+                  Effect.andThen(
+                    Ref.set(inFlight, Option.none()),
+                    Deferred.succeed(fresh, true)
+                  )
+                )
+              ),
+              scope
+            );
+          }
+
+          yield* restore(Deferred.await(flight));
+        })
+      );
 
       const readInBackground = Effect.asVoid(Effect.forkIn(read, scope));
 
@@ -695,7 +747,9 @@ export class CodexUsage extends Context.Service<
       return CodexUsage.of({
         current: SubscriptionRef.get(ref),
         changes,
-        watch: Stream.map(changes, toProviderUsage),
+        // A reading that changes nothing on the wire (a signed-out tick, the same failure again)
+        // sends no frame.
+        watch: changes.pipe(Stream.map(toProviderUsage), Stream.changes),
         read,
         observeLimit,
       });

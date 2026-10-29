@@ -4,6 +4,7 @@ import { Effect, Layer, Option } from "effect";
 import { FauxModels } from "../brain/FauxModels.ts";
 import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { scriptedAnswer } from "../brain/ScriptedHarness.ts";
+import { testThreadId } from "../shell/ShellTestKit.ts";
 import {
   BranchNames,
   buildBranchNamePrompt,
@@ -16,6 +17,9 @@ import {
   ThreadTitles,
 } from "./ThreadTitles.ts";
 import { TitleModel } from "./TitleModel.ts";
+
+/** The thread every naming call is made for. */
+const THREAD = testThreadId(1);
 
 const Faux = ModelSource.layerFaux({ tokensPerSecond: 10_000, settings: {} });
 
@@ -66,13 +70,13 @@ describe("ThreadTitles and BranchNames", () => {
           '```json\n{"title": "Login page fix", "needsRefinement": false}\n```'
         );
         assert.deepStrictEqual(
-          yield* (yield* ThreadTitles).generate("Fix the login page"),
+          yield* (yield* ThreadTitles).generate(THREAD, "Fix the login page"),
           Option.some("Login page fix")
         );
 
         yield* answer('{"branch": "Fix/Login Page"}');
         assert.strictEqual(
-          yield* (yield* BranchNames).generate("Fix the login page"),
+          yield* (yield* BranchNames).generate(THREAD, "Fix the login page"),
           "fix/login-page"
         );
       }).pipe(Effect.provide(naming(TitleModel.layerFixed(FAUX_MODEL))))
@@ -84,23 +88,30 @@ describe("ThreadTitles and BranchNames", () => {
       Effect.gen(function* () {
         yield* answer("not json at all and no braces");
         assert.strictEqual(
-          yield* (yield* BranchNames).generate("Add a dark mode toggle"),
+          yield* (yield* BranchNames).generate(
+            THREAD,
+            "Add a dark mode toggle"
+          ),
           "add-a-dark-mode-toggle"
         );
 
         // A title answer that is not the JSON asked for keeps the placeholder (T34).
         yield* answer("I can't help name this thread.");
         assert.isTrue(
-          Option.isNone(yield* (yield* ThreadTitles).generate("Anything"))
+          Option.isNone(
+            yield* (yield* ThreadTitles).generate(THREAD, "Anything")
+          )
         );
       }).pipe(
         Effect.andThen(
           Effect.gen(function* () {
             assert.isTrue(
-              Option.isNone(yield* (yield* ThreadTitles).generate("Anything"))
+              Option.isNone(
+                yield* (yield* ThreadTitles).generate(THREAD, "Anything")
+              )
             );
             assert.strictEqual(
-              yield* (yield* BranchNames).generate("Two words"),
+              yield* (yield* BranchNames).generate(THREAD, "Two words"),
               "two-words"
             );
           }).pipe(
@@ -117,7 +128,9 @@ describe("ThreadTitles and BranchNames", () => {
         Effect.andThen(
           Effect.gen(function* () {
             assert.isTrue(
-              Option.isNone(yield* (yield* ThreadTitles).generate("Anything"))
+              Option.isNone(
+                yield* (yield* ThreadTitles).generate(THREAD, "Anything")
+              )
             );
           }).pipe(
             Effect.provide(

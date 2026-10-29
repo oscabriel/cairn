@@ -24,6 +24,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import type { ThreadId } from "@cairn/protocol/Ids";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
 import { decodeJsonAnswer, TitleModel } from "./TitleModel.ts";
@@ -121,8 +122,14 @@ export const placeholderTitle = (message: string) =>
 export class ThreadTitles extends Context.Service<
   ThreadTitles,
   {
-    /** A model title for a thread whose first message is `message`; none when the model gave none. */
-    generate(message: string): Effect.Effect<Option.Option<string>>;
+    /**
+     * A model title for thread `threadId` whose first message is `message`; none when the model
+     * gave none. The call's spend is recorded once per thread.
+     */
+    generate(
+      threadId: ThreadId,
+      message: string
+    ): Effect.Effect<Option.Option<string>>;
   }
 >()("cairn/server/threads/ThreadTitles") {
   /** Over the ambient `TitleModel`. */
@@ -132,13 +139,18 @@ export class ThreadTitles extends Context.Service<
       const model = yield* TitleModel;
 
       const generate = Effect.fn("ThreadTitles.generate")(function* (
+        threadId: ThreadId,
         message: string
       ) {
         if (message.trim() === "") {
           return Option.none<string>();
         }
 
-        const answer = yield* model.complete(buildThreadTitlePrompt(message));
+        const answer = yield* model.complete(buildThreadTitlePrompt(message), {
+          source: "thread-title",
+          key: threadId,
+          threadId: Option.some(threadId),
+        });
 
         // An answer that is not the JSON asked for (a refusal, prose) gives no title, so the
         // placeholder stays instead of the model's words becoming the title (T34).

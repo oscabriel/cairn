@@ -77,6 +77,7 @@ import {
 import { ThreadRows } from "./shell/ThreadRows.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
+import { SpendLedger } from "./usage/SpendLedger.ts";
 
 const unsupported = (operation: string) =>
   Effect.die(`the fake harness does not ${operation}`);
@@ -291,6 +292,7 @@ const GatedApp = Layer.mergeAll(
   Layer.provide(Health.layer),
   Layer.provide(ShellProjector.layer),
   Layer.provideMerge(ThreadsLive),
+  Layer.provideMerge(SpendLedger.layerNoDeps),
   Layer.provideMerge(PushLayer),
   Layer.provide(SettingsStore.layerNoDeps),
   Layer.provide(ModelHealth.layerTest),

@@ -52,6 +52,7 @@ import {
   piEntryId,
 } from "../../../apps/server/src/brain/PiIds.ts";
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
+import { SpendFeed } from "../../../apps/server/src/brain/SpendFeed.ts";
 import {
   ScriptedHarness,
   ScriptedModel,
@@ -226,7 +227,8 @@ export const startCairn = async (seed: CairnSeed): Promise<CairnApp> => {
 
   const Harness = Layer.mergeAll(
     Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
-    EventReactors.layerOff
+    EventReactors.layerOff,
+    SpendFeed.layerOff
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),
     Layer.provideMerge(ScriptedStore.layer),

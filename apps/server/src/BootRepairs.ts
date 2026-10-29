@@ -20,6 +20,8 @@ import { sweepUnfinishedExecutorRequests } from "./executor/ExecutorSweep.ts";
 import type { ExecutorSweep } from "./executor/ExecutorSweep.ts";
 import { CheckpointCapture } from "./git/CheckpointCapture.ts";
 import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
+import { reconcileSpendAtBoot } from "./usage/SpendLedger.ts";
+import type { SpendLedger } from "./usage/SpendLedger.ts";
 
 /** One repair: a name for the log and the effect. */
 export interface BootRepair<R> {
@@ -57,6 +59,7 @@ export const bootRepairs: ReadonlyArray<
     | EventReactors
     | ExecutorSweep
     | HarnessSeam
+    | SpendLedger
     | ThreadLaunch
   >
 > = [
@@ -72,6 +75,7 @@ export const bootRepairs: ReadonlyArray<
     "checkpoint repair",
     CheckpointCapture.use((capture) => capture.repair)
   ),
+  bootRepair("spend reconcile", reconcileSpendAtBoot),
   startEventReactors,
 ];
 

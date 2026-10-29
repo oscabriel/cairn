@@ -57,6 +57,7 @@ import {
   ScriptedTools,
   scriptedAnswer,
 } from "../apps/server/src/brain/ScriptedHarness.ts";
+import { SpendFeed } from "../apps/server/src/brain/SpendFeed.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
 import { ExecutorLink } from "../apps/server/src/executor/ExecutorLink.ts";
 import { Identity } from "../apps/server/src/http/Identity.ts";
@@ -146,7 +147,8 @@ const FastModel = Layer.succeed(
 
 const Harness = Layer.mergeAll(
   Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
-  EventReactors.layerOff
+  EventReactors.layerOff,
+  SpendFeed.layerOff
 ).pipe(
   Layer.provideMerge(ScriptedHarness.layerNoDeps),
   Layer.provide(ScriptedStore.layer),

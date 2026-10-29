@@ -19,9 +19,11 @@ import type {
   Tx,
 } from "@earendil-works/pi-durable";
 import { DEFAULT_RESTART_LIMIT } from "@earendil-works/pi-durable";
+import { Option } from "effect";
 
 import { RUN_TASK } from "../brain/CommitFeed.ts";
 import { piConversationId, piTaskId } from "../brain/PiIds.ts";
+import { EscalationWhy } from "../brain/SubagentText.ts";
 import type { SubagentItemState, SubagentsState } from "./SubagentDocs.ts";
 
 /** A stored conversation id as pi-durable types it. */
@@ -32,16 +34,16 @@ export const conversationOf = (id: number): PiConversationId =>
 export const taskOf = (id: number) => piTaskId(TaskId.make(id));
 
 /**
- * Whether a parent is halted (table read): its newest run ended by a stop or a failure, or the
- * crash-loop guard parked it (cut off `DEFAULT_RESTART_LIMIT` times in a row; Cairn sets no other
- * limit), and no input started another since. A halted parent gets a child's note but no wake, and
- * its child's questions go to the user, since nothing restarts a thread the user stopped and a
- * parked run waits for a retry (ADR 0028).
+ * Why a parent cannot take a child's result or question now (table reads): its newest run ended by
+ * a stop or a failure, or the crash-loop guard parked it (cut off `DEFAULT_RESTART_LIMIT` times in
+ * a row), and no input started another since. None while it runs or idles after a completed run.
+ * Nothing restarts a thread the user stopped and a parked run waits for a retry, so a halted
+ * parent is not woken and its child's questions go to the user (ADR 0027, ADR 0028).
  */
-export const parentHalted = async (
+export const parentHalt = async (
   tx: Tx,
   conversationId: PiConversationId
-): Promise<boolean> => {
+): Promise<Option.Option<string>> => {
   const page = await tx.scanTasks(
     { conversationId, kind: RUN_TASK, order: "descending" },
     1
@@ -50,19 +52,27 @@ export const parentHalted = async (
   const [last] = page.items;
 
   if (last === undefined) {
-    return false;
+    return Option.none();
   }
 
   if (last.state.status === "terminal") {
-    return last.state.outcome.status !== "completed";
+    return last.state.outcome.status === "completed"
+      ? Option.none()
+      : Option.some(EscalationWhy.parentStopped);
   }
 
-  return (
-    last.state.status !== "completing" &&
+  return last.state.status !== "completing" &&
     !last.abortRequested &&
     (last.restarts ?? 0) >= DEFAULT_RESTART_LIMIT
-  );
+    ? Option.some(EscalationWhy.parentParked)
+    : Option.none();
 };
+
+/** Whether a parent is halted (`parentHalt`): the wake rule's read. */
+export const parentHalted = async (
+  tx: Tx,
+  conversationId: PiConversationId
+): Promise<boolean> => Option.isSome(await parentHalt(tx, conversationId));
 
 const hex = (value: number, width: number) =>
   value.toString(16).padStart(width, "0").slice(-width);

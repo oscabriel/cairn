@@ -106,15 +106,17 @@ import { DateTime, Effect, Option, Predicate, Result } from "effect";
 import { needsDecision } from "../approvals/NeedsDecision.ts";
 import {
   endUnanswered,
-  PLACED_MEMO,
+  placedMemoOf,
   questionRecord,
-  RELAYED_QUESTION_TOOL,
+  relayedAsk,
   routeQuestion,
 } from "../approvals/QuestionRoute.ts";
 import type { RouteIo } from "../approvals/QuestionRoute.ts";
 import {
   Approvals,
+  expirePending,
   Permissions,
+  RELAYED_QUESTION_TOOL,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
@@ -1348,9 +1350,6 @@ export interface TaskDependencies {
   readonly questionWindowMillis: number;
 }
 
-/** The longest question a relayed answer carries: the protocol's `DisplayText`, its ending kept. */
-const MAX_RELAYED_QUESTION = 4096;
-
 /** The answer entry of a settled input, when a run answered it. */
 const answerEntryOf = (settled: SettledSubmissionRecord) =>
   settled.type === "input" && settled.status === "done" ? settled.answer : null;
@@ -1362,8 +1361,8 @@ const taskRouteIo = (
 ): RouteIo => ({
   observer: runtime,
   now: () => runtime.now(),
-  placedAt: async (candidate) =>
-    await runtime.memo(PLACED_MEMO, candidate, context),
+  placedAt: async (approvalId, candidate) =>
+    await runtime.memo(placedMemoOf(approvalId), candidate, context),
   conversation: async (id) => await runtime.conversation(id, context),
   commitDocs: async (change) => {
     await runtime.commit(async (tx) => {
@@ -1477,6 +1476,48 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     };
   };
 
+  /**
+   * Resolves once the question `approvalId` in the child's ledger left `pending`, committing
+   * `expired` (decided by expiry) when its `expiresAt` comes first.
+   */
+  const settledOrExpired = async (
+    runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
+    child: ConversationId,
+    approvalId: string,
+    context: Parameters<typeof runWait>[1]
+  ): Promise<void> => {
+    const approvals = await runtime.snapshot(Approvals, child, context);
+    const record = approvals?.items[approvalId];
+
+    if (record === undefined || record.status !== "pending") {
+      return;
+    }
+
+    const remaining = Math.max(0, record.expiresAt - runtime.now());
+
+    const found = await runWait(
+      awaitDoc(runtime, Approvals, child, (value) => {
+        const current = value?.items[approvalId];
+
+        return current === undefined || current.status !== "pending"
+          ? Option.some(true)
+          : Option.none();
+      }).pipe(Effect.timeoutOption(remaining), Effect.map(Option.flatten)),
+      context
+    );
+
+    if (Option.isNone(found)) {
+      await runtime.commit(async (tx) => {
+        const ledger = await tx.doc(Approvals, child);
+        const expiring = ledger.items[approvalId];
+
+        if (expiring !== undefined) {
+          expirePending(expiring, runtime.now());
+        }
+      }, context);
+    }
+  };
+
   /** What the relay reads of the run it may turn into a question. */
   interface RelayedRun {
     readonly input: ReporterInput;
@@ -1529,7 +1570,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       seq
     );
 
-    const question = asked.trim().slice(-MAX_RELAYED_QUESTION);
+    const { question, options } = relayedAsk(asked);
     const { items } = await tx.doc(Approvals, conversationOf(input.child));
 
     items[approvalId] ??= questionRecord(
@@ -1540,7 +1581,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         source: "answer",
         askedAt: relayed.now,
         question,
-        options: [],
+        options,
       },
       questionTtlMillis
     );
@@ -1935,16 +1976,9 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const child = conversationOf(input.child);
         const registry = await runtime.snapshot(SubagentsDoc, parent, context);
 
-        const settled = runWait(
-          awaitDoc(runtime, Approvals, child, (value) => {
-            const record = value?.items[approvalId];
-
-            return record === undefined || record.status !== "pending"
-              ? Option.some(record?.status ?? "cancelled")
-              : Option.none();
-          }),
-          context
-        );
+        // Settled by an answer, a decline or a cancellation, or expired at its expiry, as
+        // `ask_parent`'s ledger and the brief task expire theirs.
+        const settled = settledOrExpired(runtime, child, approvalId, context);
 
         await routeQuestion(
           taskRouteIo(runtime, context),
@@ -1987,7 +2021,14 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         // Unanswered: the run's own answer is its result after all, once.
         await runtime.commit(
           async (tx): Promise<NextTaskState<ReporterState, null>> => {
+            // Table reads first.
             const live = await tx.doc(LiveDoc, child);
+            const current = await tx.doc(SubagentsDoc, parent);
+            const item = current.items[input.key];
+
+            const unadmitted =
+              item !== undefined &&
+              (await anyUnadmitted(tx, child, item, input.requestId));
 
             await endUnanswered(tx, {
               parentConversationId: parent,
@@ -1995,9 +2036,6 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
               approvalId,
               now: runtime.now(),
             });
-
-            const current = await tx.doc(SubagentsDoc, parent);
-            const item = current.items[input.key];
 
             const mark = item?.runs.find(
               (found) => found.phase === "nudge" && found.seq === seq
@@ -2018,10 +2056,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
               inputs: [...markInputs(item, mark)],
             });
             item.runs.push({ run: mark.run, phase: "settled", seq: next });
-
-            if (live.run === undefined) {
-              setStatus(item, "settled");
-            }
+            settleUnlessWorking(item, live.run !== undefined, unadmitted);
 
             return {
               status: "running",

@@ -22,7 +22,7 @@
 
 import { assert, describe, it } from "@effect/vitest";
 
-import { needsDecision } from "./NeedsDecision.ts";
+import { decisionOptions, needsDecision } from "./NeedsDecision.ts";
 
 const PLAN_STEPS = [
   "Waiting on worker #293632. When it reports, I'll:\n1. Read its diff and rerun `pnpm check`, `pnpm test` and the messaging e2e tests.\n2. Compare the after screenshots against the before ones.\n3. Run a review, then `workspace submit`.",
@@ -69,6 +69,30 @@ describe(needsDecision, () => {
     "reads a plain result as no decision (%i)",
     (_index, text) => {
       assert.isFalse(needsDecision(text));
+    }
+  );
+});
+
+/** Cairn's own: the options a relayed question offers as picks, from the list an answer ends with. */
+const OPTIONS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+  ["Which folder should I count?\n1. src\n2. lib", ["src", "lib"]],
+  ["Pick one:\n1) fast\n2) safe\n3) both", ["fast", "safe", "both"]],
+  ["Which one?\n1. src\n2. lib\n\n", ["src", "lib"]],
+  ["Which one?\n2. src\n3. lib", []],
+  ["Which one?\n1. src\n3. lib", []],
+  ["Which one?\n1. src", []],
+  ["Which one?\n1. src\n2. lib\nTell me.", []],
+  ["Which folder, src or lib?", []],
+  ["", []],
+];
+
+describe(decisionOptions, () => {
+  it.each(
+    OPTIONS.map(([text, options], index) => [index, text, options] as const)
+  )(
+    "reads the trailing numbered list as options (%i)",
+    (_index, text, options) => {
+      assert.deepStrictEqual(decisionOptions(text), options);
     }
   );
 });

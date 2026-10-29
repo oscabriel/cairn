@@ -23,6 +23,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
 
+import { EscalationsDoc } from "../subagents/SubagentDocs.ts";
 import {
   answerApproval,
   applyAnswer,
@@ -32,6 +33,7 @@ import {
   copyRecord,
   heldByRun,
   migrateApprovals,
+  RELAYED_QUESTION_TOOL,
   UNDECIDED,
 } from "./CairnDocs.ts";
 import type {
@@ -570,5 +572,158 @@ describe("what a stop cancels", () => {
           rmSync(root, { recursive: true, force: true });
         }
       })
+  );
+});
+
+describe("a question a child's final answer became", () => {
+  it.live(
+    "a stop cancels it whether or not a run held it, and the boot repair leaves it to its reporter",
+    () =>
+      Effect.promise(async () => {
+        const root = mkdtempSync(path.join(tmpdir(), "cairn-approvals-relay-"));
+        const file = path.join(root, "brain.sqlite");
+
+        try {
+          await withSession(file, async (session) => {
+            // The reporter that waits on it is a live task of another conversation (the parent).
+            const conversationId = await session.commit(async (tx) => {
+              const conversation = await tx.createConversation({
+                ownership: { kind: "ownerless" },
+              });
+
+              const reporter = Number(
+                await tx.createTask(
+                  IdleTask,
+                  {},
+                  {
+                    conversationId: conversation.id,
+                    ownership: { kind: "conversation" },
+                  }
+                )
+              );
+
+              const doc = await tx.doc(Approvals, conversation.id);
+
+              doc.items["subagent-answer-1"] = record({
+                id: "subagent-answer-1",
+                toolTaskId: reporter,
+                tool: RELAYED_QUESTION_TOOL,
+                route: "parent",
+              });
+
+              return conversation.id;
+            }, context);
+
+            assert.deepStrictEqual(
+              await Effect.runPromise(
+                cancelAbandonedApprovals(session, conversationId, 1500, "boot")
+              ),
+              []
+            );
+
+            // A stop of the child with no run: nothing it stopped held the record.
+            assert.deepStrictEqual(
+              await Effect.runPromise(
+                cancelStoppedApprovals(session, conversationId, [], 1600)
+              ),
+              ["subagent-answer-1"]
+            );
+
+            const after = await session.snapshot(
+              Approvals,
+              conversationId,
+              context
+            );
+
+            assert.deepInclude(after?.items["subagent-answer-1"], {
+              status: "cancelled",
+              decidedBy: { kind: "system", why: "run-stopped" },
+            });
+          });
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      })
+  );
+});
+
+describe("an escalated question's mirror", () => {
+  it.live("is answered only through an open escalation entry", () =>
+    Effect.promise(async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "cairn-approvals-mirror-"));
+      const file = path.join(root, "brain.sqlite");
+
+      try {
+        await withSession(file, async (session) => {
+          const mirror = record({
+            id: "esc-5-call-9",
+            toolTaskId: 0,
+            mirrorOf: { threadId: "child-thread", approvalId: "call-9" },
+          });
+
+          const entry = {
+            childThreadId: "child-thread",
+            kind: "user-input" as const,
+            payload: null,
+            askedAt: 1000,
+            escalatedAt: 1100,
+            why: "The parent's run ended without settling it.",
+          };
+
+          const conversationId = await session.commit(async (tx) => {
+            const conversation = await tx.createConversation({
+              ownership: { kind: "ownerless" },
+            });
+
+            const doc = await tx.doc(Approvals, conversation.id);
+
+            doc.items[mirror.id] = copyRecord(mirror);
+
+            return conversation.id;
+          }, context);
+
+          const answer = async () =>
+            await Effect.runPromise(
+              answerApproval(
+                session,
+                conversationId,
+                mirror.id,
+                byUser("accept"),
+                1500
+              )
+            );
+
+          // No entry: it was never escalated here.
+          assert.strictEqual(await answer(), "not_found");
+
+          await session.commit(async (tx) => {
+            const index = await tx.doc(EscalationsDoc, conversationId);
+
+            index.items["call-9"] = { ...entry, status: "resolved" };
+          }, context);
+
+          // A resolved entry: the question already ended.
+          assert.strictEqual(await answer(), "not_found");
+
+          await session.commit(async (tx) => {
+            const index = await tx.doc(EscalationsDoc, conversationId);
+
+            index.items["call-9"] = { ...entry, status: "open" };
+          }, context);
+
+          assert.strictEqual(await answer(), "answered");
+
+          const after = await session.snapshot(
+            Approvals,
+            conversationId,
+            context
+          );
+
+          assert.strictEqual(after?.items[mirror.id]?.status, "accepted");
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    })
   );
 });

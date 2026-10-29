@@ -1,0 +1,17 @@
+{"type":"transcript_start","scenario":"ask_parent_window_across_restart","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in one folder."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"cq","name":"ask_parent","arguments":{"question":"Which folder?"}}]}
+{"type":"model","label":"p3","thread":"parent","hold":true,"text":"never seen"}
+{"type":"model","label":"p4","thread":"parent","hold":true,"text":"never seen"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_view","path":["subagents",0,"questions"],"equals":["pending"]}
+{"type":"expect_event","event":{"_tag":"RunStarted","threadId":"$parent"}}
+{"type":"settle","ms":2000}
+{"type":"input","step":"restart"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"user-input","status":"pending"}}
+{"type":"expect_view","path":["escalations"],"equals":[{"status":"open","why":"The parent did not answer within 5 seconds."}]}

@@ -121,6 +121,9 @@ const liveOf = (parent: ConversationId) =>
 /** How the fiber is set up in a test. */
 type Fiber = "none" | "running";
 
+/** Whether the user archives the parent thread after Go and before the child asks. */
+type Before = "ask" | "archive-then-ask";
+
 /** What a test body gets: the parent's conversation, the injected events and the held run. */
 interface Asked {
   readonly parent: ConversationId;
@@ -134,12 +137,15 @@ type Services = Scope.Scope | Brain | HarnessSeam | ThreadRows | EventSink;
 
 /**
  * Over a fresh brain and shell: the parent spawns, the user says Go, and the child asks its parent
- * a question, which the parent's model is shown in a run held until `release`.
+ * a question, which the parent's model is shown in a run held until `release`. With
+ * `archive-then-ask` the user archives the parent between the Go and the child's question, and the
+ * test goes on once the question is asked, whether or not the parent's model was shown it.
  */
 const withQuestion = <A, E>(
   tuning: SubagentToolOptions,
   fiber: Fiber,
-  body: (asked: Asked) => Effect.Effect<A, E, Services>
+  body: (asked: Asked) => Effect.Effect<A, E, Services>,
+  before: Before = "ask"
 ) =>
   Effect.acquireUseRelease(
     Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-questions-"))),
@@ -184,6 +190,11 @@ const withQuestion = <A, E>(
           const { faux } = Context.get(context, FauxModels);
           const events = yield* Ref.make<ReadonlyArray<HarnessEvent>>([]);
           const gate = Promise.withResolvers<boolean>();
+          const childGate = Promise.withResolvers<boolean>();
+
+          if (before === "ask") {
+            childGate.resolve(true);
+          }
 
           yield* seam.events.pipe(
             Stream.runForEach((event) =>
@@ -210,14 +221,19 @@ const withQuestion = <A, E>(
               { stopReason: "toolUse" }
             ),
             fauxAssistantMessage("Waiting for Go."),
-            fauxAssistantMessage(
-              fauxToolCall(
-                "ask_parent",
-                { question: "Which folder?" },
-                { id: "cq" }
-              ),
-              { stopReason: "toolUse" }
-            ),
+            // The child asks once the test lets it.
+            async (): Promise<AssistantMessage> => {
+              await childGate.promise;
+
+              return fauxAssistantMessage(
+                fauxToolCall(
+                  "ask_parent",
+                  { question: "Which folder?" },
+                  { id: "cq" }
+                ),
+                { stopReason: "toolUse" }
+              );
+            },
             // The parent's model holds the question until the test lets it go.
             async (): Promise<AssistantMessage> => {
               await gate.promise;
@@ -267,6 +283,16 @@ const withQuestion = <A, E>(
             answers: Option.none(),
           });
 
+          if (before === "archive-then-ask") {
+            yield* sink.commitCommand(
+              ThreadArchive.make({
+                commandId: testCommandId(41),
+                threadId: PARENT,
+              })
+            );
+            childGate.resolve(true);
+          }
+
           // The parent's model was shown the question (asked, and the parent runs again).
           yield* waitFor(
             Effect.gen(function* () {
@@ -277,7 +303,8 @@ const withQuestion = <A, E>(
                 (item) => Object.keys(item.questions).length > 0
               );
 
-              return asked && live?.run !== undefined
+              return asked &&
+                (live?.run !== undefined || before === "archive-then-ask")
                 ? Option.some(true)
                 : Option.none();
             })
@@ -507,6 +534,18 @@ describe("question routing's automatic escalations", () => {
 
           yield* answeredInParent(parent, EscalationWhy.parentArchived);
         })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a question asked of a parent the user already archived goes to the user",
+    () =>
+      withQuestion(
+        LONG_WINDOW,
+        "running",
+        ({ parent }) => answeredInParent(parent, EscalationWhy.parentArchived),
+        "archive-then-ask"
       ),
     30_000
   );

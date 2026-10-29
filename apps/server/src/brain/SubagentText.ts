@@ -173,6 +173,9 @@ export const SubagentToolText = {
     `The question ${questionId} from subagent ${child} was escalated to the user, whose answer settles it.`,
   /** The reason an escalation by the parent carries to the user. */
   parentEscalated: (reason: string) => `The parent escalated: ${reason}`,
+  /** `subagent_reply` whose escalate reason is longer than an escalation shows. */
+  escalateTooLong: (max: number) =>
+    `subagent_reply's escalate reason may be at most ${max} characters. Call it again with a shorter one.`,
   /** `subagent_send` once the input is on its way. */
   sent: (child: string) => `Sent to subagent ${child}.`,
   /** `subagent_stop` once the child stopped. */

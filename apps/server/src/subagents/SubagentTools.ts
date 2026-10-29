@@ -43,7 +43,10 @@ import { Duration, Effect, Option, Result } from "effect";
 import {
   endUnanswered,
   escalateIn,
-  PLACED_MEMO,
+  MAX_ESCALATE_REASON,
+  MAX_QUESTION_LENGTH,
+  MAX_QUESTION_OPTIONS,
+  placedMemoOf,
   QUESTION_WINDOW_MILLIS,
   questionRecord,
   routeQuestion,
@@ -91,12 +94,6 @@ const BRIEF_TTL_MILLIS = 7 * 24 * 60 * 60 * 1000;
 
 /** The longest bounded wait `subagent_status` takes. */
 const MAX_WAIT_SECONDS = 600;
-
-/** The most options an `ask_parent` question offers: the protocol's `Question`. */
-export const MAX_QUESTION_OPTIONS = 9;
-
-/** The longest question or option label: the protocol's `DisplayText`. */
-export const MAX_QUESTION_LENGTH = 4096;
 
 const said = (text: string): ToolExecutionResult => ({
   output: [{ type: "text", text }],
@@ -214,8 +211,8 @@ export const routeIo = (
 ): RouteIo => ({
   observer: api,
   now: () => api.now(),
-  placedAt: async (candidate) =>
-    await api.memo(PLACED_MEMO, candidate, context),
+  placedAt: async (approvalId, candidate) =>
+    await api.memo(placedMemoOf(approvalId), candidate, context),
   conversation: async (id) => await api.conversation(id, context),
   commitDocs: async (change) => {
     await api.commit(change, context);
@@ -563,6 +560,15 @@ export const subagentToolSet = (
 
       if (Option.isNone(answer) && Option.isNone(escalation)) {
         return refused(SubagentToolText.replyNeedsAnswer);
+      }
+
+      if (
+        Option.exists(
+          escalation,
+          (reason) => reason.length > MAX_ESCALATE_REASON
+        )
+      ) {
+        return refused(SubagentToolText.escalateTooLong(MAX_ESCALATE_REASON));
       }
 
       const text = await api.commit(async (tx) => {

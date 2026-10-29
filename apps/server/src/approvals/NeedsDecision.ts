@@ -67,3 +67,38 @@ export const needsDecision = (text: string): boolean => {
       LETTERED.test(text),
   });
 };
+
+/** A top-level numbered item: its number and its label. */
+const NUMBERED_ITEM = /^(?<number>\d+)[.)]\s+(?<label>\S.*)$/u;
+
+/**
+ * The options an answer ends with (Cairn's own, not in the source): the labels of a trailing list
+ * of top-level items numbered `1` to `n` in order, without trailing emphasis marks. Empty when the
+ * answer does not end with such a list, its numbers do not run from 1, or it has one item.
+ */
+export const decisionOptions = (text: string): ReadonlyArray<string> => {
+  const items: Array<{ readonly number: number; readonly label: string }> = [];
+
+  for (const line of text.trim().split("\n").toReversed()) {
+    const item = NUMBERED_ITEM.exec(line.trimEnd());
+
+    if (item === null) {
+      break;
+    }
+
+    const number = item.groups?.number ?? "";
+
+    items.unshift({
+      number: Number(number),
+      label: bare(item.groups?.label ?? ""),
+    });
+
+    if (number === "1") {
+      break;
+    }
+  }
+
+  const inOrder = items.every((item, index) => item.number === index + 1);
+
+  return items.length >= 2 && inOrder ? items.map((item) => item.label) : [];
+};

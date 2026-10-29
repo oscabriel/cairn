@@ -111,8 +111,11 @@ import {
 } from "../approvals/AskUser.ts";
 import { needsDecision } from "../approvals/NeedsDecision.ts";
 import {
+  MAX_ESCALATE_REASON,
+  MAX_QUESTION_LENGTH,
+  MAX_QUESTION_OPTIONS,
   questionRecord,
-  RELAYED_QUESTION_TOOL,
+  relayedAsk,
 } from "../approvals/QuestionRoute.ts";
 import { familyOf } from "../models/ModelFamily.ts";
 import {
@@ -140,8 +143,11 @@ import {
   approvalIdOf,
   cancelRecord,
   copyRecord,
+  expirePending,
   heldByRun,
+  RELAYED_QUESTION_TOOL,
   refusalText,
+  relayedQuestion,
   settlementOf,
   UNDECIDED,
 } from "./CairnDocs.ts";
@@ -661,12 +667,6 @@ const offeredTools = (thread: ScriptedThread): ReadonlyArray<string> =>
         ? [...CHILD_TOOLS]
         : [...CHILD_TOOLS, RESULT_TOOL_NAME],
   });
-
-/** The most options an `ask_parent` question offers: the protocol's `Question`. */
-const MAX_QUESTION_OPTIONS = 9;
-
-/** The longest question or option label: the protocol's `DisplayText`. */
-const MAX_QUESTION_LENGTH = 4096;
 
 /** The longest bounded wait `subagent_status` takes, as on pi-durable. */
 const MAX_WAIT_SECONDS = 600;
@@ -2241,8 +2241,7 @@ const layerNoDeps = Layer.effectContext(
           tool: RELAYED_QUESTION_TOOL,
           source: "answer",
           askedAt: at,
-          question: asked.trim().slice(-MAX_QUESTION_LENGTH),
-          options: [],
+          ...relayedAsk(asked),
         },
         RECORD_TTL_MILLIS
       );
@@ -2668,6 +2667,101 @@ const layerNoDeps = Layer.effectContext(
         );
       });
 
+    /**
+     * Ends the parent's side of a child's question that ended unanswered (cancelled by a stop, or
+     * expired), in the caller's critical section: its pending mirror in the parent takes `end`,
+     * the registry marks it `cancelled` and its escalation entry resolves (ADR 0027). Nothing for a
+     * record that is not a question to the parent.
+     */
+    const endParentSide = (
+      thread: ScriptedThread,
+      record: ApprovalRecord,
+      at: number,
+      changes: Changes,
+      end: (mirror: ApprovalRecord) => void
+    ) => {
+      if (
+        record.kind !== "user-input" ||
+        (record.route !== "parent" && record.escalatedAt === null)
+      ) {
+        return;
+      }
+
+      for (const { parent, item } of Option.toArray(linkOf(thread))) {
+        const mirrorId = `esc-${thread.conversationId}-${record.id}`;
+        const mirror = parent.approvals.get(mirrorId);
+
+        if (mirror?.status === "pending") {
+          const ended = copyRecord(mirror);
+
+          end(ended);
+          ended.answeredAt = at;
+          parent.approvals.set(mirrorId, ended);
+          changes.events.push(
+            RuntimeRequestUpdated.make({
+              threadId: parent.threadId,
+              id: ApprovalId.make(mirrorId),
+              kind: ended.kind,
+              status: ended.status,
+            })
+          );
+        }
+
+        const mark = item.questions.get(record.id);
+
+        if (mark?.state !== "answered") {
+          item.questions.set(record.id, {
+            state: "cancelled",
+            escalatedAt: mark?.escalatedAt ?? null,
+          });
+        }
+
+        const escalation = parent.escalations.get(record.id);
+
+        if (escalation !== undefined) {
+          parent.escalations.set(record.id, {
+            ...escalation,
+            status: "resolved",
+          });
+        }
+
+        parent.offered.delete(`${thread.threadId}:${record.id}`);
+        changes.touched.add(parent);
+      }
+    };
+
+    /** Expires a record still pending at its expiry, in the caller's critical section. */
+    const expireRecord = (
+      thread: ScriptedThread,
+      approvalId: string,
+      at: number,
+      changes: Changes
+    ) => {
+      const found = thread.approvals.get(approvalId);
+
+      if (found?.status !== "pending") {
+        return;
+      }
+
+      const expired = copyRecord(found);
+
+      expirePending(expired, at);
+      thread.approvals.set(approvalId, expired);
+      endParentSide(thread, expired, at, changes, (mirror) => {
+        expirePending(mirror, at);
+      });
+      changes.touched.add(thread);
+      changes.events.push(
+        RuntimeRequestUpdated.make({
+          threadId: thread.threadId,
+          id: ApprovalId.make(approvalId),
+          kind: expired.kind,
+          status: expired.status,
+        })
+      );
+      recordsChanged(thread, changes);
+    };
+
     /** Waits until a record leaves `pending`; none when the instance closes first. */
     const settledRecord = (thread: ScriptedThread, approvalId: string) =>
       awaitThread(thread, () =>
@@ -2735,12 +2829,25 @@ const layerNoDeps = Layer.effectContext(
         }
 
         // A question the child's final answer became: answered, the child gets the answer as the
-        // run's next input; otherwise the run's own answer settles as its result after all.
+        // run's next input; otherwise (expired at its expiry, declined or cancelled) the run's own
+        // answer settles as its result after all.
         if (reporter.phase === "ask") {
           for (const asked of Option.toArray(reporter.asked)) {
-            yield* settledRecord(child, asked.approvalId);
+            const expiresAt =
+              child.approvals.get(asked.approvalId)?.expiresAt ?? 0;
+
+            const remaining = Math.max(0, expiresAt - (yield* now));
+
+            const settled = yield* settledRecord(child, asked.approvalId).pipe(
+              Effect.timeoutOption(Duration.millis(remaining))
+            );
+
             yield* locked((at, changes) =>
               Effect.sync(() => {
+                if (Option.isNone(settled)) {
+                  expireRecord(child, asked.approvalId, at, changes);
+                }
+
                 questionAnswered(reporter, child, asked, at, changes);
               })
             );
@@ -3006,6 +3113,17 @@ const layerNoDeps = Layer.effectContext(
             Option.isNone(textArgument(call, "escalate"))
           ) {
             return refused(SubagentToolText.replyNeedsAnswer);
+          }
+
+          if (
+            Option.exists(
+              textArgument(call, "escalate"),
+              (reason) => reason.length > MAX_ESCALATE_REASON
+            )
+          ) {
+            return refused(
+              SubagentToolText.escalateTooLong(MAX_ESCALATE_REASON)
+            );
           }
 
           // The child's questions for its parent, whatever their status: a second call, or a
@@ -3428,9 +3546,12 @@ const layerNoDeps = Layer.effectContext(
               changes.events.push(queueChanged(thread));
             }
 
-            const held = Option.isSome(thread.run)
-              ? [...thread.approvals.values()].filter(heldByRun)
-              : [];
+            // A question the thread's final answer became ends with any stop, run or not.
+            const held = [...thread.approvals.values()].filter(
+              (record) =>
+                relayedQuestion(record) ||
+                (Option.isSome(thread.run) && heldByRun(record))
+            );
 
             endRun(thread, "interrupted", Option.none(), at, changes);
 
@@ -3452,55 +3573,14 @@ const layerNoDeps = Layer.effectContext(
 
             // A question to the parent ends with the call that asked it: its mirror in the parent
             // is cancelled too, and the parent's registry marks it (ADR 0027).
-            for (const { parent, item } of Option.toArray(linkOf(thread))) {
-              for (const record of held) {
-                if (
-                  record.kind !== "user-input" ||
-                  (record.route !== "parent" && record.escalatedAt === null)
-                ) {
-                  continue;
-                }
-
-                const mirrorId = `esc-${thread.conversationId}-${record.id}`;
-                const mirror = parent.approvals.get(mirrorId);
-
-                if (mirror?.status === "pending") {
-                  const cancelled = copyRecord(mirror);
-
-                  cancelRecord(cancelled, at, "run-stopped");
-                  parent.approvals.set(mirrorId, cancelled);
-                  changes.touched.add(parent);
-                  changes.events.push(
-                    RuntimeRequestUpdated.make({
-                      threadId: parent.threadId,
-                      id: ApprovalId.make(mirrorId),
-                      kind: cancelled.kind,
-                      status: cancelled.status,
-                    })
-                  );
-                }
-
-                item.questions.set(record.id, {
-                  state: "cancelled",
-                  escalatedAt:
-                    item.questions.get(record.id)?.escalatedAt ?? null,
-                });
-
-                const escalation = parent.escalations.get(record.id);
-
-                if (escalation !== undefined) {
-                  parent.escalations.set(record.id, {
-                    ...escalation,
-                    status: "resolved",
-                  });
-                }
-
-                parent.offered.delete(`${thread.threadId}:${record.id}`);
-                changes.touched.add(parent);
-              }
+            for (const record of held) {
+              endParentSide(thread, record, at, changes, (mirror) => {
+                cancelRecord(mirror, at, "run-stopped");
+              });
             }
 
             if (held.length > 0) {
+              changes.touched.add(thread);
               recordsChanged(thread, changes);
             }
           })

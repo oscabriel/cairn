@@ -73,17 +73,20 @@ import {
   EscalationWhy,
   renderQuestion,
   SubagentRequestIds,
+  SubagentToolText,
 } from "../brain/SubagentText.ts";
 import { EventStore } from "../shell/EventStore.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
-import { conversationOf, taskOf } from "../subagents/Delivery.ts";
+import { conversationOf, parentHalt, taskOf } from "../subagents/Delivery.ts";
 import {
   ChildDoc,
   EscalationsDoc,
+  isLinked,
   markQuestion,
   SubagentsDoc,
 } from "../subagents/SubagentDocs.ts";
 import { awaitDoc } from "../subagents/Waits.ts";
+import { decisionOptions } from "./NeedsDecision.ts";
 
 /** How long a parent's model may hold a question it was shown before the user gets it. */
 export const QUESTION_WINDOW_MILLIS = 15 * 60 * 1000;
@@ -228,8 +231,36 @@ export const endUnanswered = async (
   }
 };
 
-/** The `tool` of a question record a child's final answer became: no tool asked it. */
-export const RELAYED_QUESTION_TOOL = "subagent_answer";
+/** The most options a child's question offers: the protocol's `Question`. */
+export const MAX_QUESTION_OPTIONS = 9;
+
+/** The longest question or option label: the protocol's `DisplayText`. */
+export const MAX_QUESTION_LENGTH = 4096;
+
+/**
+ * The longest reason a parent's `subagent_reply` may escalate with: its `why` in the parent's
+ * `cairn.escalations` (`SubagentToolText.parentEscalated`) stays within `DisplayText`.
+ */
+export const MAX_ESCALATE_REASON =
+  MAX_QUESTION_LENGTH - SubagentToolText.parentEscalated("").length;
+
+/**
+ * The question a final answer that asks for a decision becomes (the relay): the answer, its ending
+ * kept within `MAX_QUESTION_LENGTH`, and the numbered options it ends with as the question's
+ * options, so the card offers them as picks (none past `MAX_QUESTION_OPTIONS` or too long a label).
+ */
+export const relayedAsk = (answer: string) => {
+  const options = decisionOptions(answer);
+
+  return {
+    question: answer.trim().slice(-MAX_QUESTION_LENGTH),
+    options:
+      options.length <= MAX_QUESTION_OPTIONS &&
+      options.every((label) => label.length <= MAX_QUESTION_LENGTH)
+        ? options
+        : [],
+  };
+};
 
 /** A question a child puts to its parent, as its record freezes it. */
 export interface AskedQuestion {
@@ -281,39 +312,6 @@ export const questionRecord = (
 });
 
 /**
- * Why a parent cannot take a question now (table reads): its newest run ended by a stop or a
- * failure, or the crash-loop guard parked it (cut off `DEFAULT_RESTART_LIMIT` times in a row), and
- * no input started another since. None while it runs or idles after a completed run.
- */
-export const parentHalt = async (
-  tx: Tx,
-  conversationId: PiConversationId
-): Promise<Option.Option<string>> => {
-  const page = await tx.scanTasks(
-    { conversationId, kind: RUN_TASK, order: "descending" },
-    1
-  );
-
-  const [last] = page.items;
-
-  if (last === undefined) {
-    return Option.none();
-  }
-
-  if (last.state.status === "terminal") {
-    return last.state.outcome.status === "completed"
-      ? Option.none()
-      : Option.some(EscalationWhy.parentStopped);
-  }
-
-  return last.state.status !== "completing" &&
-    !last.abortRequested &&
-    (last.restarts ?? 0) >= DEFAULT_RESTART_LIMIT
-    ? Option.some(EscalationWhy.parentParked)
-    : Option.none();
-};
-
-/**
  * Escalates, inside the caller's transaction, every question a parent's children still route to
  * it, with `why`: the parent can no longer settle them. Returns how many it escalated.
  */
@@ -354,8 +352,11 @@ export interface RouteIo {
   readonly observer: DocumentObserver;
   /** The Harness clock. */
   readonly now: () => number;
-  /** The question's placement time: the first value given wins, kept across reruns (a memo). */
-  readonly placedAt: (candidate: number) => Promise<number>;
+  /**
+   * The placement time of question `approvalId`: the first value given wins, kept across reruns (a
+   * memo named by `placedMemoOf`, so each question of a task that asks more than one keeps its own).
+   */
+  readonly placedAt: (approvalId: string, candidate: number) => Promise<number>;
   readonly conversation: (
     id: PiConversationId
   ) => Promise<ConversationHandle | undefined>;
@@ -363,8 +364,13 @@ export interface RouteIo {
   readonly commitDocs: (change: (tx: Tx) => Promise<void>) => Promise<void>;
 }
 
-/** The memo a route keeps its question's placement time in. */
-export const PLACED_MEMO = "cairn.question-placed";
+/**
+ * The memo a route keeps one question's placement time in. A memo lasts its task's whole life, and
+ * a reporter relays a question from each final answer that asks one, so the name carries the
+ * question's id.
+ */
+export const placedMemoOf = (approvalId: string) =>
+  `cairn.question-placed:${approvalId}`;
 
 /** One question to route. */
 export interface Route {
@@ -479,7 +485,7 @@ const windowPassed = async (
       return await untilCut(signal);
     }
 
-    const placedAt = await io.placedAt(io.now());
+    const placedAt = await io.placedAt(route.approvalId, io.now());
     const wait = Math.max(0, placedAt + route.windowMillis - io.now());
 
     await sleep(wait, undefined, { signal });
@@ -676,13 +682,6 @@ const escalateForThread = (
     return escalated;
   });
 
-/** A parked parent's reason, read in the transaction; none for any other state. */
-const parkedOnly = async (tx: Tx, parent: PiConversationId) =>
-  Option.filter(
-    await parentHalt(tx, parent),
-    (why) => why === EscalationWhy.parentParked
-  );
-
 /**
  * Whether the crash-loop guard parked the parent's run (table reads): the parked task is the run's
  * task, or a task the run owns (a tool call), so the run waits for a Retry. A parked background
@@ -707,6 +706,40 @@ const runParked = (taskId: number) => async (tx: Tx) => {
     : Option.none<string>();
 };
 
+/** The statuses a parked task keeps: it waits for a Retry without ending. */
+const PARKABLE = ["pending", "running"] as const;
+
+/**
+ * A parked parent's reason for the start scan (table reads), as `TaskParked` decides it: a task of
+ * the parent's that the crash-loop guard cut off `DEFAULT_RESTART_LIMIT` times, which is its run's
+ * task or one the run owns (`runParked`). None for any other state.
+ */
+const parkedOnly = async (
+  tx: Tx,
+  parent: PiConversationId
+): Promise<Option.Option<string>> => {
+  for (const status of PARKABLE) {
+    // oxlint-disable-next-line no-await-in-loop -- table reads, one status at a time
+    const page = await tx.scanTasks(
+      { conversationId: parent, status, abortRequested: false },
+      SCAN_PAGE
+    );
+
+    for (const task of page.items) {
+      if ((task.restarts ?? 0) >= DEFAULT_RESTART_LIMIT) {
+        // oxlint-disable-next-line no-await-in-loop -- table reads, until one is found
+        const why = await runParked(Number(task.id))(tx);
+
+        if (Option.isSome(why)) {
+          return why;
+        }
+      }
+    }
+  }
+
+  return Option.none();
+};
+
 /** Why the shell row of `threadId` no longer holds questions: archived or deleted. */
 const goneWhy = (threadId: ThreadId) =>
   Effect.gen(function* () {
@@ -722,6 +755,44 @@ const goneWhy = (threadId: ThreadId) =>
         ? Option.some(EscalationWhy.parentArchived)
         : Option.none();
     });
+  });
+
+/** The thread of `childThreadId`'s parent, when it is a subagent's thread. */
+const parentThreadOf = (session: BrainSession, childThreadId: ThreadId) =>
+  durable("questions.parent-of", async (context) => {
+    const receipt = await session.harness.snapshot(
+      ThreadReceipt,
+      childThreadId,
+      context
+    );
+
+    if (
+      receipt === null ||
+      receipt === undefined ||
+      receipt.conversationId < 1
+    ) {
+      return Option.none<ThreadId>();
+    }
+
+    const link = await session.harness.snapshot(
+      ChildDoc,
+      conversationOf(receipt.conversationId),
+      context
+    );
+
+    if (!isLinked(link)) {
+      return Option.none<ThreadId>();
+    }
+
+    const meta = await session.harness.snapshot(
+      ThreadMeta,
+      conversationOf(link.parentConversationId),
+      context
+    );
+
+    return meta === null || meta === undefined
+      ? Option.none<ThreadId>()
+      : Option.some(ThreadId.make(meta.threadId));
   });
 
 /** Logs an escalation pass that failed; the next event or the next start tries again. */
@@ -861,6 +932,30 @@ export const QuestionRoutes = Layer.effectDiscard(
         );
       }).pipe((effect) => logged(threadId, effect));
 
+    // A child asks a parent the user already archived or deleted: the route offered it to the
+    // parent's model, which cannot see the user's answer there, so it goes to the user (and the
+    // route withdraws the input if it is still queued).
+    const onAsked = (childThreadId: ThreadId) =>
+      Effect.gen(function* () {
+        const session = yield* brain.value.session;
+        const parent = yield* parentThreadOf(session, childThreadId);
+
+        for (const threadId of Option.toArray(parent)) {
+          const gone = yield* goneWhy(threadId);
+
+          if (Option.isSome(gone)) {
+            yield* escalateForThread(
+              session,
+              threadId,
+              async () => await Promise.resolve(gone),
+              yield* now
+            );
+          }
+        }
+      }).pipe(Effect.provideContext(context), (effect) =>
+        logged(childThreadId, effect)
+      );
+
     const subscription = yield* store.subscribe;
 
     yield* Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(
@@ -878,11 +973,17 @@ export const QuestionRoutes = Layer.effectDiscard(
       Effect.forkScoped({ startImmediately: true })
     );
 
-    yield* Stream.runForEach(harness.events, (event) =>
-      Predicate.isTagged(event, "TaskParked")
-        ? onParked(event.threadId, event.taskId)
-        : Effect.void
-    ).pipe(Effect.forkScoped({ startImmediately: true }));
+    yield* Stream.runForEach(harness.events, (event) => {
+      if (Predicate.isTagged(event, "TaskParked")) {
+        return onParked(event.threadId, event.taskId);
+      }
+
+      return Predicate.isTagged(event, "RuntimeRequestUpdated") &&
+        event.kind === "user-input" &&
+        event.status === "pending"
+        ? onAsked(event.threadId)
+        : Effect.void;
+    }).pipe(Effect.forkScoped({ startImmediately: true }));
 
     yield* logged("all", escalateStrandedQuestions).pipe(
       Effect.provideContext(context),

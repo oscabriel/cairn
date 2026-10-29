@@ -33,6 +33,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer, Option } from "effect";
 
+import { ExtensionOrder } from "../../../apps/server/src/brain/Extensions.ts";
 import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
 import { Database } from "../../../apps/server/src/db/Database.ts";
 import { migrations } from "../../../apps/server/src/db/Migrations.ts";
@@ -161,7 +162,7 @@ export const runScenario = (resolveAt: ResolveAt) =>
     });
 
     const services = yield* Layer.build(
-      RolesTool.layerNoDeps.pipe(
+      RolesTool.layerAt(ExtensionOrder.judge).pipe(
         Layer.provideMerge(RoleAliases.layerNoDeps),
         Layer.provideMerge(SettingsStore.layerNoDeps),
         Layer.provide(ModelHealth.layerNoDeps),

@@ -1,7 +1,8 @@
 // `roles.check`: the brief card's preview of each role a brief or workflow plan names (ADR 0035),
 // resolved against the table, the catalog, provider health and the plan windows as they are now.
 // Writes nothing. A failed read of the table or the catalog answers `Unavailable`, carrying the
-// request id.
+// request id. The 1.0 `RolesCheckInput` carries specs only, so a launch's role overrides are not
+// previewed yet; the integrator is asked for an optional `overrides` field to pass through.
 
 import { Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";

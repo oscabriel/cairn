@@ -42,9 +42,13 @@ export class SettingsInvalid extends Schema.TaggedError<SettingsInvalid>()(
   }
 ) {}
 
-/** Whether a model reference names a role instead of a model: a binding may never point at one. */
+/**
+ * Whether a model reference names a role instead of a model: a binding may never point at one. Only
+ * the provider slot is read, because real model ids start with `@` too (every
+ * `cloudflare-workers-ai` model is `@cf/...`).
+ */
 export const isAliasRef = (model: ModelRef): boolean =>
-  model.provider.startsWith("@") || model.modelId.startsWith("@");
+  model.provider.startsWith("@");
 
 /** What a role table breaks, if anything: a missing built-in role, or a binding naming a role. */
 export interface RoleTableProblem {

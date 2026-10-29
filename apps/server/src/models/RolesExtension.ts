@@ -13,7 +13,6 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Context, Effect, FiberSet, Layer, Option } from "effect";
 
-import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { RoleAliases, rolesText } from "./RoleAliases.ts";
 
@@ -34,10 +33,7 @@ export class RolesTool extends Context.Service<
     readonly extension: CairnExtension;
   }
 >()("cairn/server/models/RolesExtension/RolesTool") {
-  /**
-   * Over `RoleAliases`. Installs at `order`, the key the integrator gives it in `ExtensionOrder`;
-   * the default is the judge key, for tests that install it alone.
-   */
+  /** Over `RoleAliases`. Installs at `order`; production passes `ExtensionOrder.roles`. */
   static readonly layerAt = (order: number) =>
     Layer.effect(
       RolesTool,
@@ -101,7 +97,4 @@ export class RolesTool extends Context.Service<
         });
       })
     );
-
-  /** At the judge key, for tests and judges that install the tool alone. */
-  static readonly layerNoDeps = RolesTool.layerAt(ExtensionOrder.judge);
 }

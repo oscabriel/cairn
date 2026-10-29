@@ -4,9 +4,14 @@
 // literal specs; an unbound role failing the check; the family warning; a binding that names a
 // role refused by the store and passed over by the resolver; levels held to the model. Then the
 // service over a migrated in-memory `cairn.sqlite`, real `ModelHealth` and the picker's catalog:
-// the seeded table, a health limit and a spent Claude window passed over, the same spec resolving
-// differently after the table changes, and a `RoleError` that lists what resolves now.
+// the seeded table, a health limit passed over, the same spec resolving differently after the table
+// changes, and a `RoleError` that lists what resolves now (with a launch's overrides applied). Then
+// the Claude plan's windows through `BridgeProvider` over a fixed `ClaudeUsage` reading: a spent
+// window passes the bridge over until its reset (or, unstated, for `UNSTATED_LIMIT_MS`), a
+// `seven_day_<model>` window stops only its model, and `monthly_spend` stops nothing.
 
+import { ClaudeUsage, INITIAL_READING } from "@cairn/bridge/ClaudeUsage";
+import type { UsageWindow } from "@cairn/bridge/ClaudeUsage";
 import type { ModelRef } from "@cairn/protocol/Models";
 import type {
   RoleBinding,
@@ -17,12 +22,26 @@ import type {
 import { DEFAULT_ROLE_TABLE, RoleCheck, RoleName } from "@cairn/protocol/Roles";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { assert, describe, it } from "@effect/vitest";
-import { DateTime, Effect, Layer, Option, Result, Schema } from "effect";
+import {
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 
 import { ModelSource } from "../brain/ModelSource.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
-import { HealthOutcome, ModelHealth } from "./ModelHealth.ts";
+import { BridgeProvider } from "./BridgeProvider.ts";
+import {
+  HealthOutcome,
+  ModelHealth,
+  UNSTATED_LIMIT_MS,
+} from "./ModelHealth.ts";
 import type { HealthState } from "./ModelHealth.ts";
 import { PiModelSource } from "./PiModelSource.ts";
 import type { RoleWorld } from "./RoleAliases.ts";
@@ -69,6 +88,10 @@ const makeModels = () => {
     fauxProvider({
       provider: "openai-codex",
       models: [{ id: "gpt-6-luna", reasoning: true, cost: PRICE }],
+    }),
+    fauxProvider({
+      provider: "cloudflare-workers-ai",
+      models: [{ id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }],
     }),
   ];
 
@@ -327,6 +350,24 @@ describe("resolving against a world", () => {
     );
   });
 
+  it("takes a model whose id starts with @, which is not a role", () => {
+    const llama = ref(
+      "cloudflare-workers-ai",
+      "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+    );
+
+    const table = {
+      ...DEFAULT_ROLE_TABLE,
+      [RoleName.make("@advisor")]: binding(llama),
+    };
+
+    assert.deepStrictEqual(
+      resolvedOrFail(worldOf({ table }), "@advisor").model,
+      llama
+    );
+    assert.deepStrictEqual(roleTableProblems(table), []);
+  });
+
   it("passes over a binding that names a role, and the store refuses such a table", () => {
     const aliased = binding(ref("@worker", "x"), [LUNA_ON_GO]);
 
@@ -519,6 +560,36 @@ describe("the role alias service", () => {
     }).pipe(Effect.provide(ServiceLayer))
   );
 
+  it.effect("lists the roles that resolve with the launch's overrides", () =>
+    Effect.gen(function* () {
+      const roles = yield* RoleAliases;
+
+      const overrides: RoleOverrides = {
+        [RoleName.make("@advisor")]: {
+          model: ref("opencode-go", "beam-free"),
+          thinkingLevel: null,
+          fallbacks: [],
+          note: null,
+        },
+        [RoleName.make("@worker")]: {
+          model: ref("opencode-go", "no-such-model"),
+          thinkingLevel: null,
+          fallbacks: [],
+          note: null,
+        },
+      };
+
+      const failure = yield* Effect.flip(
+        roles.resolve("@reviewer", Option.some(overrides))
+      );
+
+      assert.include(
+        failure.message,
+        "Roles that resolve now: @scout, @judge, @verifier, @advisor;"
+      );
+    }).pipe(Effect.provide(ServiceLayer))
+  );
+
   it.effect("checks without writing anything", () =>
     Effect.gen(function* () {
       const roles = yield* RoleAliases;
@@ -557,5 +628,139 @@ describe("the role alias service", () => {
         })
       );
     }).pipe(Effect.provide(ServiceLayer))
+  );
+});
+
+const HOUR_MS = 60 * 60_000;
+
+/** A spent plan window, observed at time zero. */
+const spentWindow = (
+  id: string,
+  resetsAt: Option.Option<number>
+): UsageWindow => ({
+  id,
+  kind: id === "monthly_spend" ? "monthly" : "weekly",
+  label: id,
+  windowDurationMins: Option.none(),
+  usedPercent: 100,
+  resetsAt,
+  observedAt: 0,
+  exhausted: true,
+});
+
+/** The service with a bridge whose `ClaudeUsage` always answers `windows`, read at time zero. */
+const withWindows = (windows: ReadonlyArray<UsageWindow>) => {
+  const reading = {
+    ...INITIAL_READING,
+    state: "limited" as const,
+    windows,
+    checkedAt: Option.some(0),
+  };
+
+  const usage = ClaudeUsage.of({
+    current: Effect.succeed(reading),
+    changes: Stream.make(reading),
+    watch: Stream.empty,
+    observe: () => Effect.void,
+    probe: Effect.void,
+  });
+
+  return ServiceLayer.pipe(
+    Layer.provide(
+      Layer.succeed(BridgeProvider, {
+        claude: Option.none(),
+        usage: Option.some(usage),
+      })
+    )
+  );
+};
+
+const SONNET_ON_BRIDGE = ref("claude-bridge", "claude-sonnet-5-5");
+
+const OPUS_ON_BRIDGE = ref("claude-bridge", "claude-opus-5-5");
+
+/** Each spec's resolved model, or the reason and what it passed over. */
+const outcomes = (specs: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const roles = yield* RoleAliases;
+    const checks = yield* roles.check(specs, Option.none());
+
+    return checks.map((check) =>
+      Resolution.match(check.resolution, {
+        Resolved: ({ resolved }) => key(resolved.model),
+        Unresolved: ({ reason, skipped }) =>
+          `${reason}: ${skipped.map((skip) => `${key(skip.model)} ${skip.reason}`).join(", ")}`,
+      })
+    );
+  });
+
+describe("the Claude plan's windows", () => {
+  it.effect("pass the bridge over while a spent window has not reset", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(yield* outcomes(["@scout"]), [
+        `no_ready_model: ${key(SONNET_ON_BRIDGE)} limited`,
+      ]);
+
+      yield* TestClock.adjust(HOUR_MS - 1);
+
+      assert.deepStrictEqual(yield* outcomes(["@scout"]), [
+        `no_ready_model: ${key(SONNET_ON_BRIDGE)} limited`,
+      ]);
+
+      // At the named reset the stale reading stops counting, with no new probe.
+      yield* TestClock.adjust(1);
+
+      assert.deepStrictEqual(yield* outcomes(["@scout"]), [
+        key(SONNET_ON_BRIDGE),
+      ]);
+    }).pipe(
+      Effect.provide(
+        withWindows([spentWindow("five_hour", Option.some(HOUR_MS))])
+      )
+    )
+  );
+
+  it.effect("hold a spent window with no reset for the unstated span", () =>
+    Effect.gen(function* () {
+      yield* TestClock.adjust(UNSTATED_LIMIT_MS - 1);
+
+      assert.deepStrictEqual(yield* outcomes(["@scout"]), [
+        `no_ready_model: ${key(SONNET_ON_BRIDGE)} limited`,
+      ]);
+
+      yield* TestClock.adjust(1);
+
+      assert.deepStrictEqual(yield* outcomes(["@scout"]), [
+        key(SONNET_ON_BRIDGE),
+      ]);
+    }).pipe(
+      Effect.provide(withWindows([spentWindow("five_hour", Option.none())]))
+    )
+  );
+
+  it.effect("stop only the model a seven_day_<model> window names", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(yield* outcomes(["@worker", "@scout"]), [
+        `no_ready_model: ${key(OPUS_ON_BRIDGE)} limited`,
+        key(SONNET_ON_BRIDGE),
+      ]);
+    }).pipe(
+      Effect.provide(
+        withWindows([spentWindow("seven_day_opus", Option.some(HOUR_MS))])
+      )
+    )
+  );
+
+  it.effect("ignore a spent monthly_spend", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(yield* outcomes(["@worker", "@scout"]), [
+        key(OPUS_ON_BRIDGE),
+        key(SONNET_ON_BRIDGE),
+      ]);
+    }).pipe(
+      Effect.provide(
+        withWindows([spentWindow("monthly_spend", Option.some(HOUR_MS))])
+      )
+    )
   );
 });

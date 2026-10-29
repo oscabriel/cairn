@@ -201,4 +201,39 @@ describe("the server settings", () => {
         assert.deepStrictEqual(settings.roleBindings, DEFAULT_ROLE_TABLE);
       }).pipe(Effect.provide(TestLayer))
   );
+
+  it.effect("accepts a binding to a model whose id starts with @", () =>
+    Effect.gen(function* () {
+      const store = yield* SettingsStore;
+
+      const cloudflare = {
+        provider: "cloudflare-workers-ai",
+        modelId: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      };
+
+      const table = {
+        ...DEFAULT_ROLE_TABLE,
+        [RoleName.make("@advisor")]: {
+          model: cloudflare,
+          thinkingLevel: Option.none(),
+          fallbacks: [cloudflare],
+          note: Option.none(),
+        },
+      };
+
+      const settings = yield* store.update({
+        autoSettleDays: Option.none(),
+        titleModel: Option.none(),
+        bridgeEnabled: Option.none(),
+        bridgeGenerationCap: Option.none(),
+        roleBindings: Option.some(table),
+        defaultBudget: Option.none(),
+      });
+
+      assert.deepStrictEqual(
+        settings.roleBindings[RoleName.make("@advisor")]?.model,
+        cloudflare
+      );
+    }).pipe(Effect.provide(TestLayer))
+  );
 });

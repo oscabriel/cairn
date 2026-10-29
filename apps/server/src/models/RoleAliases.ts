@@ -51,12 +51,21 @@ import {
   SkippedModel,
 } from "@cairn/protocol/Roles";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { Context, Data, Effect, Layer, Option, Result, Schema } from "effect";
+import {
+  Clock,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Option,
+  Result,
+  Schema,
+} from "effect";
 
 import { ModelSource } from "../brain/ModelSource.ts";
 import { BridgeProvider } from "./BridgeProvider.ts";
 import { familyOf, sameFamily } from "./ModelFamily.ts";
-import { ModelHealth } from "./ModelHealth.ts";
+import { ModelHealth, UNSTATED_LIMIT_MS } from "./ModelHealth.ts";
 import type { HealthState } from "./ModelHealth.ts";
 import { ModelPrice, priceLabel, priceOf } from "./ModelPrice.ts";
 import { clampThinking, PiModelSource } from "./PiModelSource.ts";
@@ -381,20 +390,27 @@ const resolvedOf = (check: RoleCheck): Option.Option<ResolvedRole> =>
   });
 
 /**
- * Each of `specs` resolved now, or with none every role in the table, built-ins first, each with
- * its resolved model's list price.
+ * Each of `specs` resolved now, or with none every role in the table and in `overrides`, built-ins
+ * first, each resolved with `overrides` over the table and given its model's list price.
  */
 export const rolesIn = (
   world: RoleWorld,
-  specs: Option.Option<ReadonlyArray<string>> = Option.none()
+  specs: Option.Option<ReadonlyArray<string>> = Option.none(),
+  overrides: Option.Option<RoleOverrides> = Option.none()
 ): ReadonlyArray<RoleRow> => {
   const named = Option.getOrElse(specs, () =>
-    Object.keys(world.table).toSorted(
-      (a, b) => rankOf(a) - rankOf(b) || a.localeCompare(b)
-    )
+    [
+      ...new Set([
+        ...Object.keys(world.table),
+        ...Option.match(overrides, {
+          onNone: () => [],
+          onSome: (given) => Object.keys(given),
+        }),
+      ]),
+    ].toSorted((a, b) => rankOf(a) - rankOf(b) || a.localeCompare(b))
   );
 
-  return checkIn(world, named).map((check) => ({
+  return checkIn(world, named, overrides).map((check) => ({
     check,
     price: Option.map(resolvedOf(check), (found) =>
       priceLabel(priceOf(found.model, world.catalog))
@@ -468,13 +484,17 @@ export class RoleError extends Schema.TaggedError<RoleError>()("RoleError", {
   skipped: Schema.Array(SkippedModel),
 }) {}
 
-/** The text of a `RoleError` for `text`: why, what was passed over, and the specs that resolve now. */
+/**
+ * The text of a `RoleError` for `text`: why, what was passed over, and the roles that resolve now
+ * with the launch's `overrides` applied.
+ */
 const roleErrorOf = (
   world: RoleWorld,
   text: string,
-  failure: Unresolved
+  failure: Unresolved,
+  overrides: Option.Option<RoleOverrides>
 ): RoleError => {
-  const ready = rolesIn(world)
+  const ready = rolesIn(world, Option.none(), overrides)
     .filter((row) => Resolution.guards.Resolved(row.check.resolution))
     .map((row) => row.check.spec);
 
@@ -520,20 +540,43 @@ const unavailable =
       cause,
     });
 
-/** Whether a Claude plan window that applies to `modelId` is spent. */
-const windowSpentFor = (
-  windows: ReadonlyArray<{
-    readonly id: string;
-    readonly usedPercent: number;
-    readonly exhausted: boolean;
-  }>,
-  modelId: string
+/** The parts of a Claude plan window that say whether it is spent now. */
+export interface PlanWindowReading {
+  readonly id: string;
+  readonly usedPercent: number;
+  readonly exhausted: boolean;
+  /** When the window resets, in epoch milliseconds; none when Claude did not say. */
+  readonly resetsAt: Option.Option<number>;
+  /** When the reading that set this window was taken, in epoch milliseconds. */
+  readonly observedAt: number;
+}
+
+/**
+ * Whether a Claude plan window that applies to `modelId` is spent at `now`. A spent window counts
+ * only until its `resetsAt`, or, when Claude named no reset, for `UNSTATED_LIMIT_MS` after it was
+ * observed, as `ModelHealth` holds an unstated limit: the usage service probes only while someone
+ * watches or a bridge turn runs, so a reading taken before the reset would otherwise hold every
+ * bridge candidate limited, and keep the turns that would refresh it from running.
+ */
+export const windowSpentFor = (
+  windows: ReadonlyArray<PlanWindowReading>,
+  modelId: string,
+  now: number
 ): boolean =>
   windows.some((window) => {
     const spent = window.exhausted || window.usedPercent >= 100;
 
     // `monthly_spend` is extra usage past the plan; spending it does not stop the plan's windows.
     if (!spent || window.id === "monthly_spend") {
+      return false;
+    }
+
+    const until = Option.getOrElse(
+      window.resetsAt,
+      () => window.observedAt + UNSTATED_LIMIT_MS
+    );
+
+    if (now >= until) {
       return false;
     }
 
@@ -576,8 +619,9 @@ export class RoleAliases extends Context.Service<
 >()("cairn/server/models/RoleAliases") {
   /**
    * Over `SettingsStore`, `PiModelSource`, the brain's `ModelSource` and `ModelHealth`. Reads the
-   * Claude plan's windows from `BridgeProvider` when one is provided; without it only
-   * `ModelHealth` marks the bridge limited.
+   * Claude plan's windows from `BridgeProvider`, a reference that defaults to no bridge: build it
+   * where the root's `BridgeProvider.layer` is in context, or only `ModelHealth` marks the bridge
+   * limited.
    */
   static readonly layerNoDeps = Layer.effect(
     RoleAliases,
@@ -586,9 +630,9 @@ export class RoleAliases extends Context.Service<
       const catalog = yield* PiModelSource;
       const source = yield* ModelSource;
       const health = yield* ModelHealth;
-      const bridge = yield* Effect.serviceOption(BridgeProvider);
-
-      const claudeUsage = Option.flatMap(bridge, (provided) => provided.usage);
+      // A reference whose default is off: a root that composes no bridge sees no plan windows, so
+      // the root that runs the bridge must build this layer where `BridgeProvider.layer` is given.
+      const claudeUsage = (yield* BridgeProvider).usage;
 
       const world = Effect.gen(function* () {
         const current = yield* settings.get;
@@ -600,6 +644,8 @@ export class RoleAliases extends Context.Service<
         const states = new Map(
           (yield* health.all).map((report) => [report.provider, report.state])
         );
+
+        const now = yield* Clock.currentTimeMillis;
 
         const windows = yield* Option.match(claudeUsage, {
           onNone: () => Effect.succeed([]),
@@ -625,7 +671,7 @@ export class RoleAliases extends Context.Service<
           health: (provider) => states.get(provider) ?? "unknown",
           planLimited: (model) =>
             model.provider === BRIDGE_PROVIDER &&
-            windowSpentFor(windows, model.modelId),
+            windowSpentFor(windows, model.modelId, now),
         };
 
         return found;
@@ -642,7 +688,7 @@ export class RoleAliases extends Context.Service<
         const result = resolveIn(now, spec, overrides);
 
         if (Result.isFailure(result)) {
-          return yield* roleErrorOf(now, spec, result.failure);
+          return yield* roleErrorOf(now, spec, result.failure, overrides);
         }
 
         return result.success;

@@ -13,7 +13,8 @@
 //   newer work.
 // - `subagent_reply` answers or escalates a child's `ask_parent` question; never an approval.
 // - `ask_parent` (child) records a question routed to the parent, offers it to the parent model as
-//   an input, and waits like a gated call; a parent run that ends with it open escalates it.
+//   an input, and waits like a gated call; a parent run that ends with it open escalates it, and
+//   a question that expires unanswered ends its parent's mirror and registry mark too.
 // - `report` (child) finishes a brief with a summary, the divergence of a text result and a commit.
 //   A typed result goes through `submit_result` (models/ResultTool.ts), which a typed child's
 //   creating commit also offers: two attempts, the real schema in the request, first valid wins.
@@ -63,6 +64,7 @@ import { offerResultTool } from "../models/ResultTool.ts";
 import { briefOf, briefPayload } from "./Briefs.ts";
 import {
   conversationOf,
+  endUnanswered,
   escalateIn,
   parentHalted,
   setStatus,
@@ -86,12 +88,6 @@ const BRIEF_TTL_MILLIS = 7 * 24 * 60 * 60 * 1000;
 
 /** The longest bounded wait `subagent_status` takes. */
 const MAX_WAIT_SECONDS = 600;
-
-/** Why the parent's run ended a question's offer without an answer. */
-const PARENT_RUN_ENDED = "The parent's run ended without answering.";
-
-/** Why a question to a halted parent goes straight to the user. */
-const PARENT_STOPPED = "The parent is stopped.";
 
 /** The most options an `ask_parent` question offers: the protocol's `Question`. */
 export const MAX_QUESTION_OPTIONS = 9;
@@ -196,8 +192,22 @@ interface AskedQuestion {
   readonly options: ReadonlyArray<string>;
 }
 
+/** What a test may tune in the tools; production keeps the defaults. */
+export interface SubagentToolOptions {
+  /** How long a child's question waits before it expires: a gated call's day. */
+  readonly questionTtlMillis: number;
+}
+
+/** The tools' production options. */
+export const DEFAULT_TOOL_OPTIONS: SubagentToolOptions = {
+  questionTtlMillis: GATED_APPROVAL_TTL_MILLIS,
+};
+
 /** The pending record of a child's question to its parent (ADR 0027), in the child's ledger. */
-const questionRecord = (asked: AskedQuestion): ApprovalRecord => ({
+const questionRecord = (
+  asked: AskedQuestion,
+  ttlMillis: number
+): ApprovalRecord => ({
   id: asked.approvalId,
   toolTaskId: asked.toolTaskId,
   tool: "ask_parent",
@@ -205,7 +215,7 @@ const questionRecord = (asked: AskedQuestion): ApprovalRecord => ({
   summary: asked.question,
   status: "pending",
   askedAt: asked.askedAt,
-  expiresAt: asked.askedAt + GATED_APPROVAL_TTL_MILLIS,
+  expiresAt: asked.askedAt + ttlMillis,
   answeredAt: null,
   run: null,
   executorRequestId: null,
@@ -255,10 +265,11 @@ const answerOf = async (
   );
 };
 
-/** The tools, closed over the extension's faults and tasks. */
+/** The tools, closed over the extension's faults, tasks and options. */
 export const subagentToolSet = (
   faults: SubagentFaultSet,
-  tasks: SubagentTasks
+  tasks: SubagentTasks,
+  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
 ) => {
   const spawn = defineTool({
     name: "subagent_spawn",
@@ -300,17 +311,13 @@ export const subagentToolSet = (
       const task = textOf(args.brief);
 
       if (Option.isNone(description) || Option.isNone(task)) {
-        return refused(
-          "subagent_spawn needs a description (5 to 10 words) and a brief. Call it again with both."
-        );
+        return refused(SubagentToolText.spawnNeedsBrief);
       }
 
       const own = await api.snapshot(ChildDoc, api.conversationId, context);
 
       if (isLinked(own) && own.depth >= MAX_SUBAGENT_DEPTH) {
-        return refused(
-          `This thread is a subagent at depth ${own.depth}, the deepest one may be, so it cannot start subagents. Do the work here or report back.`
-        );
+        return refused(SubagentToolText.depthReached(own.depth));
       }
 
       const permissions = await readPermissions(api, context);
@@ -420,9 +427,7 @@ export const subagentToolSet = (
       }
 
       if (Option.isNone(message)) {
-        return refused(
-          "subagent_send needs a message. Call it again with one."
-        );
+        return refused(SubagentToolText.sendNeedsMessage);
       }
 
       const requestId = `subagent-send-${api.taskId}`;
@@ -526,7 +531,7 @@ export const subagentToolSet = (
 
       // The stopped run's held records can never be answered now (ADR 0029).
       await Effect.runPromise(
-        cancelAbandonedApprovals(api, child, api.now()).pipe(
+        cancelAbandonedApprovals(api, child, api.now(), "run-stopped").pipe(
           Effect.catchTag("DurableCallError", (failure) =>
             Effect.logWarning("stopped subagent left approvals pending").pipe(
               Effect.annotateLogs({
@@ -620,7 +625,6 @@ export const subagentToolSet = (
             parentConversationId: api.conversationId,
             childConversationId: child,
             approvalId: record.id,
-            why: SubagentToolText.parentEscalated(escalation.value),
             now: api.now(),
           });
 
@@ -684,13 +688,11 @@ export const subagentToolSet = (
       const question = textOf(args.question);
 
       if (Option.isNone(link)) {
-        return refused(
-          "ask_parent is for a subagent's run. Ask the user in plain text instead."
-        );
+        return refused(SubagentToolText.askOutsideSubagent);
       }
 
       if (Option.isNone(question)) {
-        return refused("ask_parent needs a question. Call it again with one.");
+        return refused(SubagentToolText.askNeedsQuestion);
       }
 
       const options = (args.options ?? []).filter(
@@ -723,13 +725,16 @@ export const subagentToolSet = (
         const { items } = await tx.doc(Approvals, api.conversationId);
 
         if (items[approvalId] === undefined) {
-          items[approvalId] = questionRecord({
-            approvalId,
-            toolTaskId: api.taskId,
-            askedAt: api.now(),
-            question: question.value,
-            options,
-          });
+          items[approvalId] = questionRecord(
+            {
+              approvalId,
+              toolTaskId: api.taskId,
+              askedAt: api.now(),
+              question: question.value,
+              options,
+            },
+            tuning.questionTtlMillis
+          );
 
           const parentRegistry = await tx.doc(SubagentsDoc, parent);
           const item = parentRegistry.items[link.value.key];
@@ -758,7 +763,6 @@ export const subagentToolSet = (
             parentConversationId: parent,
             childConversationId: api.conversationId,
             approvalId,
-            why: PARENT_STOPPED,
             now: api.now(),
           });
 
@@ -810,7 +814,6 @@ export const subagentToolSet = (
                 parentConversationId: parent,
                 childConversationId: api.conversationId,
                 approvalId,
-                why: PARENT_RUN_ENDED,
                 now: api.now(),
               });
             }, context);
@@ -818,7 +821,22 @@ export const subagentToolSet = (
         }
       }
 
-      return await answerOf(api, approvalId, await settled, context);
+      const settlement = await settled;
+
+      // A question that ended unanswered (its record expired) ends its parent's side too: each
+      // pending mirror takes the record's status and the registry stops counting it as open.
+      if (settlement.status !== "accepted") {
+        await api.commit(async (tx) => {
+          await endUnanswered(tx, {
+            parentConversationId: parent,
+            childConversationId: api.conversationId,
+            approvalId,
+            now: api.now(),
+          });
+        }, context);
+      }
+
+      return await answerOf(api, approvalId, settlement, context);
     },
   });
 

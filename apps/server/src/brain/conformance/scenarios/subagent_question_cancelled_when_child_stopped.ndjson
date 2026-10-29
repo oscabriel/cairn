@@ -18,6 +18,7 @@
 {"type":"expect_view","path":["pendingApprovals"],"equals":0}
 {"type":"expect_view","path":["approvals",-1],"equals":{"status":"cancelled","tool":"ask_parent"}}
 {"type":"expect_view","path":["pendingApprovals"],"equals":0,"thread":"child1"}
+{"type":"expect_view","path":["subagents",0,"questions"],"equals":["cancelled"]}
 {"type":"expect_view","path":["decisions"],"equals":[{"status":"cancelled","decidedBy":"system","reason":null}],"thread":"child1"}
 {"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
 {"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"The child was stopped.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

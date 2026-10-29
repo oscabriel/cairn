@@ -36,6 +36,8 @@ import { PiModelSource } from "../../models/PiModelSource.ts";
 import { SettingsStore } from "../../models/SettingsStore.ts";
 import { PiHost } from "../../pi-host/PiHost.ts";
 import { subagentsExtension } from "../../subagents/Subagents.ts";
+import { DEFAULT_TOOL_OPTIONS } from "../../subagents/SubagentTools.ts";
+import type { SubagentToolOptions } from "../../subagents/SubagentTools.ts";
 import { Brain } from "../Brain.ts";
 import type { BrainSession } from "../Brain.ts";
 import { BrainConfig } from "../BrainConfig.ts";
@@ -185,15 +187,20 @@ const restartable = Effect.fnUntraced(function* (
 
 /**
  * The pi-durable brain the conformance suite runs over `dataDir`: the production seam, brain and
- * extension set, the conformance tools and the subagents extension with `faults`, over pi-ai's faux
- * provider. Subagent tests under `brain/` build on it too.
+ * extension set, the conformance tools and the subagents extension with `faults` (and `tuning`, for a
+ * test that needs a question to expire soon), over pi-ai's faux provider. Subagent tests under
+ * `brain/` build on it too.
  */
-export const piDurableLayer = (dataDir: string, faults: SubagentFaultSet) =>
+export const piDurableLayer = (
+  dataDir: string,
+  faults: SubagentFaultSet,
+  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
+) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
       ExtensionSet.withExtra([
         conformanceTools,
-        subagentsExtension(faults),
+        subagentsExtension(faults, tuning),
       ]).pipe(
         Layer.provide(ExecutorLink.layerDisabled),
         Layer.provide(PiHost.layerEmpty),

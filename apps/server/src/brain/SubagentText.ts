@@ -191,10 +191,40 @@ export const SubagentToolText = {
   /** `ask_parent` with a question or an option longer than a card shows. */
   tooLong: (max: number) =>
     `ask_parent's question and each option may be at most ${max} characters. Call it again with shorter ones.`,
+  /** `subagent_spawn` missing its description or its brief. */
+  spawnNeedsBrief:
+    "subagent_spawn needs a description (5 to 10 words) and a brief. Call it again with both.",
+  /** `subagent_spawn` whose `result_schema` is not a JSON object. */
+  resultSchemaNotObject:
+    "subagent_spawn's result_schema must be a JSON Schema object. Pass an object, or leave it out for a text result.",
+  /** `subagent_spawn` called by a subagent already at the deepest depth. */
+  depthReached: (depth: number) =>
+    `This thread is a subagent at depth ${depth}, the deepest one may be, so it cannot start subagents. Do the work here or report back.`,
+  /** `subagent_send` with no message. */
+  sendNeedsMessage: "subagent_send needs a message. Call it again with one.",
+  /** `ask_parent` outside a subagent's run. */
+  askOutsideSubagent:
+    "ask_parent is for a subagent's run. Ask the user in plain text instead.",
+  /** `ask_parent` with no question. */
+  askNeedsQuestion: "ask_parent needs a question. Call it again with one.",
   /** `subagent_reply` with neither an answer nor an escalation. */
   replyNeedsAnswer:
     "subagent_reply needs an answer, or escalate with the reason the user should answer. Call it again with one.",
 } as const;
+
+/** Why a child's question reached the user without the parent model escalating it (ADR 0027). */
+export const EscalationWhy = {
+  /** The parent's run that was shown the question ended without answering it. */
+  parentRunEnded: "The parent's run ended without answering.",
+  /** The parent is stopped or failed, so no run of its own will read the question. */
+  parentStopped: "The parent is stopped.",
+} as const;
+
+/**
+ * A typed child's settlement summary when it never called `report` and its last answer holds no
+ * text (it ended on the `submit_result` call): the payload line of the note carries the result.
+ */
+export const TYPED_RESULT_SUMMARY = "The child submitted its typed result.";
 
 /**
  * Why a typed child's settlement failed when it ended without a result: the cap's words once its

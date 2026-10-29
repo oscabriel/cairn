@@ -28,7 +28,12 @@ import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
 import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
 import type { SubagentTasks } from "./SubagentTasks.ts";
-import { childAgentOf, subagentToolSet } from "./SubagentTools.ts";
+import {
+  childAgentOf,
+  DEFAULT_TOOL_OPTIONS,
+  subagentToolSet,
+} from "./SubagentTools.ts";
+import type { SubagentToolOptions } from "./SubagentTools.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const SUBAGENTS_EXTENSION = "cairn.subagents";
@@ -45,7 +50,7 @@ interface ChildAgentHolder {
 }
 
 /** The tools and tasks with `faults` planted, as one extension. */
-const build = (faults: SubagentFaultSet) => {
+const build = (faults: SubagentFaultSet, tuning: SubagentToolOptions) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
   const child: ChildAgentHolder = { agent: () => ({}) };
@@ -55,7 +60,7 @@ const build = (faults: SubagentFaultSet) => {
     childAgent: (typed) => child.agent(typed),
   });
 
-  const tools = subagentToolSet(faults, tasks);
+  const tools = subagentToolSet(faults, tasks, tuning);
 
   child.agent = childAgentOf(tools);
 
@@ -69,19 +74,23 @@ const build = (faults: SubagentFaultSet) => {
   };
 };
 
-/** The subagents extension with `faults` planted; the conformance suite's mutation check uses it. */
+/**
+ * The subagents extension with `faults` planted; the conformance suite's mutation check uses it,
+ * and a test that needs a question to expire soon passes `tuning`.
+ */
 export const subagentsExtension = (
-  faults: SubagentFaultSet
+  faults: SubagentFaultSet,
+  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
 ): CairnExtension => ({
   order: SUBAGENTS_ORDER,
-  extension: build(faults).extension,
+  extension: build(faults, tuning).extension,
 });
 
 /**
  * The task definitions host code creates tasks from. pi-durable runs a task by its registered name,
  * so the installed extension's code runs it, faults included.
  */
-const hostTasks = build(NO_SUBAGENT_FAULTS).tasks;
+const hostTasks = build(NO_SUBAGENT_FAULTS, DEFAULT_TOOL_OPTIONS).tasks;
 
 /**
  * Gives a user's input to a subagent its reporter before it is submitted (ADR 0028): the input's

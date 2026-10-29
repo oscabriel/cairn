@@ -10,7 +10,8 @@
 // - `decisions`: the same records' status, who decided (the `decidedBy` kind) and the reason.
 // - `model`: the thread's model.
 // - `subagents`: on a parent with children only, each child's registry status, its settlements,
-//   the last one delivered and the model its dispatch record names, by thread id.
+//   the last one delivered, where its questions to the parent stand and the model its dispatch
+//   record names, by thread id.
 
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";
@@ -153,6 +154,16 @@ export const normalizeView = (view: ConversationView): Json => {
             status: item.status ?? null,
             settlements: isList(item.settlements) ? item.settlements.length : 0,
             delivered: item.delivered ?? null,
+            // Where each of its questions to the parent stands, sorted: ids differ by harness.
+            questions: isRecord(item.questions)
+              ? Object.values(item.questions)
+                  .map((question) =>
+                    isRecord(question) && Predicate.isString(question.state)
+                      ? question.state
+                      : "unreadable"
+                  )
+                  .toSorted()
+              : [],
             model:
               isRecord(item.dispatch) &&
               isRecord(item.dispatch.resolved) &&

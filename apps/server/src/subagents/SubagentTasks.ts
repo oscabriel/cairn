@@ -83,6 +83,7 @@ import {
   renderSettlement,
   renderWake,
   SubagentRequestIds,
+  TYPED_RESULT_SUMMARY,
 } from "../brain/SubagentText.ts";
 import { familyOf } from "../models/ModelFamily.ts";
 import {
@@ -406,6 +407,56 @@ const turnsAfter = async (
   return page.items.filter((entry) => entry.kind === "pi.assistant").length;
 };
 
+/** The most entries a child's total turn count reads; a longer history counts this many. */
+const TOTAL_TURN_SCAN = 4 * TURN_SCAN;
+
+/** How many answers a child gave over its whole transcript (table reads, bounded). */
+const turnsTotal = async (
+  tx: Tx,
+  conversationId: ConversationId
+): Promise<number> => {
+  let total = 0;
+  let read = 0;
+  let cursor: Parameters<Tx["scanEntries"]>[2];
+
+  do {
+    // Each page continues from the last one's cursor.
+    // oxlint-disable-next-line no-await-in-loop
+    const page = await tx.scanEntries(
+      { conversationId, order: "ascending" },
+      TURN_SCAN,
+      cursor
+    );
+
+    total += page.items.filter((entry) => entry.kind === "pi.assistant").length;
+    read += page.items.length;
+    cursor = page.next;
+  } while (cursor !== undefined && read < TOTAL_TURN_SCAN);
+
+  return total;
+};
+
+/** The newest answer in a child's transcript that says something (table read); empty for none. */
+const lastSpoken = async (
+  tx: Tx,
+  conversationId: ConversationId
+): Promise<string> => {
+  const page = await tx.scanEntries(
+    { conversationId, order: "descending" },
+    50
+  );
+
+  for (const entry of page.items) {
+    const text = entry.kind === "pi.assistant" ? entryText(entry.model) : "";
+
+    if (text.trim() !== "") {
+      return text;
+    }
+  }
+
+  return "";
+};
+
 /** What starting a child needs from outside its commit: read once, before it. */
 export interface StartReads {
   /** The parent's own link, when the parent is itself a subagent. */
@@ -571,6 +622,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         : "";
 
     const turns = await turnsAfter(tx, child, settled.entry);
+    const total = await turnsTotal(tx, child);
+
+    // A typed result's summary when the run ended on `submit_result` with no words of its own.
+    const spoken = Option.isSome(result) ? await lastSpoken(tx, child) : "";
 
     const registry = await tx.doc(SubagentsDoc, parent);
     const item = registry.items[input.key];
@@ -628,15 +683,19 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     const end = endOf(settled, noResult, now);
 
+    const worded = Option.match(report, {
+      onNone: () => (answer === undefined ? cutShort : entryText(answer.model)),
+      onSome: (found) => found.summary,
+    });
+
+    const typedSummary = spoken.trim() === "" ? TYPED_RESULT_SUMMARY : spoken;
+
     const settlement: SettlementState = {
       subagent: input.childThreadId,
       seq,
       outcome: end.outcome,
-      summary: Option.match(report, {
-        onNone: () =>
-          answer === undefined ? cutShort : entryText(answer.model),
-        onSome: (found) => found.summary,
-      }),
+      summary:
+        worded.trim() === "" && Option.isSome(result) ? typedSummary : worded,
       divergence: Option.match(result, {
         onNone: () =>
           Option.match(report, {
@@ -654,7 +713,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         onSome: (found) => found.commit,
       }),
       branch: null,
-      turns: { thisRun: turns, total: seq },
+      turns: { thisRun: turns, total },
       error: end.error,
       usageLimit: end.usageLimit,
     };

@@ -8,7 +8,10 @@
 //   other;
 // - a user's input to the child whose reporter submits first (the brain dying between the steer's
 //   commit and the seam's own submit) still reaches the child whole: its image and its entry, and
-//   the client's resend lands on the same submission.
+//   the client's resend lands on the same submission;
+// - a child's question escalated when the parent's run ends, then left unanswered until it
+//   expires (a short TTL here, a day in production), ends in the parent too: its mirror expires
+//   and the registry stops counting the question open.
 //
 // Kept under `brain/`, where pi-durable may be imported in a test (S42).
 
@@ -17,7 +20,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { ConversationId, ThreadId } from "@cairn/protocol/Ids";
-import { ApprovalId } from "@cairn/protocol/Ids";
+import {
+  ApprovalId,
+  ConversationId as ConversationIdOf,
+} from "@cairn/protocol/Ids";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
@@ -41,9 +47,13 @@ import {
   testThreadId,
 } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
+import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { repairSubagentRows, SubagentRows } from "../subagents/SubagentRows.ts";
 import { steerReporter } from "../subagents/Subagents.ts";
+import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
+import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
 import { Brain } from "./Brain.ts";
+import { Approvals } from "./CairnDocs.ts";
 import { piDurableLayer } from "./conformance/Targets.ts";
 import { durable } from "./Durable.ts";
 import { FauxModels } from "./FauxModels.ts";
@@ -52,12 +62,16 @@ import type { HarnessEvent } from "./HarnessSeam.ts";
 import { FAUX_MODEL } from "./ModelSource.ts";
 import { piConversationId } from "./PiIds.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
+import { SubagentToolText } from "./SubagentText.ts";
 
 /** A 1x1 PNG. */
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 const PARENT = testThreadId(1);
+
+/** A child's question's lifetime here: long enough to escalate first, short enough to wait out. */
+const QUESTION_TTL_MILLIS = 2000;
 
 /** The entry a user's attachment input is placed as. */
 const STEER_ENTRY = { kind: "cairn.test-attachment", data: { by: "user" } };
@@ -93,12 +107,45 @@ interface StartedChild {
   readonly conversationId: ConversationId;
 }
 
+/** The parent's spawn and its answer while the brief waits for Go. */
+const SPAWN_RESPONSES = [
+  fauxAssistantMessage(
+    fauxToolCall(
+      "subagent_spawn",
+      {
+        description: "Count the files",
+        brief: "Count the files in src.",
+      },
+      { id: "call_1" }
+    ),
+    { stopReason: "toolUse" }
+  ),
+  fauxAssistantMessage("Waiting for Go."),
+];
+
+/** The model's answers in order: the spawn, then the child's first answer and what follows. */
+const ANSWER_RESPONSES = [
+  ...SPAWN_RESPONSES,
+  fauxAssistantMessage("src has 4 files."),
+  fauxAssistantMessage("Noted."),
+  fauxAssistantMessage("The image shows one pixel."),
+];
+
+/** How a test's brain is set up. */
+interface ChildSetup {
+  /** Adds the `SubagentRows` fiber. */
+  readonly withRows: boolean;
+  /** The faux model's answers, in the order the threads ask. */
+  readonly responses: ReadonlyArray<ReturnType<typeof fauxAssistantMessage>>;
+  readonly tuning: SubagentToolOptions;
+}
+
 /**
  * Over a fresh brain and shell: the parent's row, a spawn the user approves, and the child's
- * first answer settled. `withRows` adds the `SubagentRows` fiber.
+ * first input settled.
  */
-const withChild = <A, E>(
-  withRows: boolean,
+const withStarted = <A, E>(
+  setup: ChildSetup,
   body: (
     child: StartedChild
   ) => Effect.Effect<
@@ -112,10 +159,15 @@ const withChild = <A, E>(
     (dataDir) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const brainLayer = piDurableLayer(dataDir, NO_SUBAGENT_FAULTS);
+          const brainLayer = piDurableLayer(
+            dataDir,
+            NO_SUBAGENT_FAULTS,
+            setup.tuning
+          );
+
           const base = Layer.merge(brainLayer, ShellTestLayer);
 
-          const layer = withRows
+          const layer = setup.withRows
             ? Layer.merge(base, SubagentRows.pipe(Layer.provide(base)))
             : base;
 
@@ -138,23 +190,7 @@ const withChild = <A, E>(
           yield* sink.commitCommand(project.command);
           yield* sink.commitCommand(createThread(project.projectId, 1));
 
-          faux.setResponses([
-            fauxAssistantMessage(
-              fauxToolCall(
-                "subagent_spawn",
-                {
-                  description: "Count the files",
-                  brief: "Count the files in src.",
-                },
-                { id: "call_1" }
-              ),
-              { stopReason: "toolUse" }
-            ),
-            fauxAssistantMessage("Waiting for Go."),
-            fauxAssistantMessage("src has 4 files."),
-            fauxAssistantMessage("Noted."),
-            fauxAssistantMessage("The image shows one pixel."),
-          ]);
+          faux.setResponses([...setup.responses]);
 
           yield* brain.resume;
           yield* seam.ensureThread({
@@ -212,6 +248,26 @@ const withChild = <A, E>(
       Effect.sync(() => {
         rmSync(dataDir, { recursive: true, force: true });
       })
+  );
+
+/** `withStarted` over the plain spawn and answer, with the production tools. */
+const withChild = <A, E>(
+  withRows: boolean,
+  body: (
+    child: StartedChild
+  ) => Effect.Effect<
+    A,
+    E,
+    Scope.Scope | Brain | HarnessSeam | ThreadRows | EventSink
+  >
+) =>
+  withStarted(
+    {
+      withRows,
+      responses: ANSWER_RESPONSES,
+      tuning: DEFAULT_TOOL_OPTIONS,
+    },
+    body
   );
 
 /** The child's row, once it exists. */
@@ -352,6 +408,98 @@ describe("subagents over a pi-durable brain", () => {
             1
           );
         })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a child's escalated question that expires settles its mirror and its registry question",
+    () =>
+      withStarted(
+        {
+          withRows: false,
+          responses: [
+            ...SPAWN_RESPONSES,
+            fauxAssistantMessage(
+              fauxToolCall(
+                "ask_parent",
+                { question: "Which folder?" },
+                { id: "cq" }
+              ),
+              { stopReason: "toolUse" }
+            ),
+            // The parent's run that is shown the question ends without answering: escalated.
+            fauxAssistantMessage("I cannot say."),
+            fauxAssistantMessage("I counted src: 4 files."),
+            fauxAssistantMessage("Noted."),
+          ],
+          tuning: { questionTtlMillis: QUESTION_TTL_MILLIS },
+        },
+        (child) =>
+          Effect.gen(function* () {
+            const brain = yield* Brain;
+            const { harness } = yield* Effect.orDie(brain.session);
+
+            const read = durable("test.read", async (context) => {
+              const link = await harness.snapshot(
+                ChildDoc,
+                piConversationId(child.conversationId),
+                context
+              );
+
+              const parent = piConversationId(
+                ConversationIdOf.make(link?.parentConversationId ?? 0)
+              );
+
+              return {
+                approvals: await harness.snapshot(Approvals, parent, context),
+                registry: await harness.snapshot(SubagentsDoc, parent, context),
+              };
+            });
+
+            const { approvals, registry } = yield* read;
+            const records = Object.values(approvals?.items ?? {});
+
+            const mirrors = records.filter(
+              (record) => record.mirrorOf !== null
+            );
+
+            assert.deepStrictEqual(
+              mirrors.map((mirror) => [mirror.status, mirror.decidedBy]),
+              [["expired", { kind: "expiry" }]]
+            );
+            assert.lengthOf(
+              records.filter((record) => record.status === "pending"),
+              0
+            );
+            assert.deepStrictEqual(
+              Object.values(registry?.items ?? {}).flatMap((item) =>
+                Object.values(item.questions).map((question) => [
+                  question.state,
+                  question.escalatedAt === null,
+                ])
+              ),
+              [["cancelled", false]]
+            );
+
+            // The child read why it got no answer, and went on.
+            const results = (yield* entriesOf(child.conversationId)).filter(
+              (entry) => entry.kind === "pi.tool-result"
+            );
+
+            assert.deepStrictEqual(
+              results.flatMap((entry) =>
+                (entry.model ?? []).flatMap((message) =>
+                  message.role === "toolResult"
+                    ? message.content.flatMap((part) =>
+                        part.type === "text" ? [part.text] : []
+                      )
+                    : []
+                )
+              ),
+              [SubagentToolText.questionEnded("expired")]
+            );
+          })
       ),
     30_000
   );

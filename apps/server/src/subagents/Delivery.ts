@@ -15,13 +15,14 @@ import type {
   ConversationId as PiConversationId,
   Tx,
 } from "@earendil-works/pi-durable";
+import { DEFAULT_RESTART_LIMIT } from "@earendil-works/pi-durable";
 import { Option } from "effect";
 
 import { Approvals, copyRecord, ThreadMeta } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { RUN_TASK } from "../brain/CommitFeed.ts";
 import { piConversationId, piTaskId } from "../brain/PiIds.ts";
-import { markQuestion } from "./SubagentDocs.ts";
+import { ChildDoc, markQuestion, SubagentsDoc } from "./SubagentDocs.ts";
 import type { SubagentItemState, SubagentsState } from "./SubagentDocs.ts";
 
 /** A stored conversation id as pi-durable types it. */
@@ -32,9 +33,11 @@ export const conversationOf = (id: number): PiConversationId =>
 export const taskOf = (id: number) => piTaskId(TaskId.make(id));
 
 /**
- * Whether a parent is halted (table read): its newest run ended by a stop or a failure, and no
- * input started another since. A halted parent gets a child's note but no wake, and its child's
- * questions go to the user, since nothing restarts a thread the user stopped (ADR 0028).
+ * Whether a parent is halted (table read): its newest run ended by a stop or a failure, or the
+ * crash-loop guard parked it (cut off `DEFAULT_RESTART_LIMIT` times in a row; Cairn sets no other
+ * limit), and no input started another since. A halted parent gets a child's note but no wake, and
+ * its child's questions go to the user, since nothing restarts a thread the user stopped and a
+ * parked run waits for a retry (ADR 0028).
  */
 export const parentHalted = async (
   tx: Tx,
@@ -47,10 +50,18 @@ export const parentHalted = async (
 
   const [last] = page.items;
 
+  if (last === undefined) {
+    return false;
+  }
+
+  if (last.state.status === "terminal") {
+    return last.state.outcome.status !== "completed";
+  }
+
   return (
-    last !== undefined &&
-    last.state.status === "terminal" &&
-    last.state.outcome.status !== "completed"
+    last.state.status !== "completing" &&
+    !last.abortRequested &&
+    (last.restarts ?? 0) >= DEFAULT_RESTART_LIMIT
   );
 };
 
@@ -119,13 +130,15 @@ export const setStatus = (item: SubagentItemState, status: SubagentStatus) => {
   }
 };
 
-/** Where one escalation happens: the child's question and the parent that mirrors it. */
+/**
+ * Where one escalation happens: the child's question and the parent that mirrors it. Why it
+ * reached the user (the parent escalated, its run ended, or it is stopped) is not kept yet: the
+ * parent's `cairn.escalations` index that records it is the question-routing package's (4B).
+ */
 export interface EscalationTarget {
   readonly parentConversationId: PiConversationId;
   readonly childConversationId: PiConversationId;
   readonly approvalId: string;
-  /** Why it reached the user: the parent escalated, its run ended, or it is stopped. */
-  readonly why: string;
   readonly now: number;
 }
 
@@ -186,4 +199,59 @@ export const escalateIn = async (
   );
 
   return true;
+};
+
+/**
+ * Ends the parent's side of a child's question that settled without an answer (its record
+ * expired), inside the caller's transaction: every pending mirror of it in the parent takes the
+ * record's status and decider, and the parent's registry marks the question `cancelled`, so the
+ * parent stops waiting on the user and `subagent_status` stops reporting it open. A record still
+ * pending or accepted, or a question the registry already closed, is left as it is. Writes
+ * documents only.
+ */
+export const endUnanswered = async (
+  tx: Tx,
+  target: EscalationTarget
+): Promise<void> => {
+  const { items } = await tx.doc(Approvals, target.childConversationId);
+  const record = items[target.approvalId];
+
+  if (
+    record === undefined ||
+    record.status === "pending" ||
+    record.status === "accepted"
+  ) {
+    return;
+  }
+
+  const meta = await tx.doc(ThreadMeta, target.childConversationId);
+  const parent = await tx.doc(Approvals, target.parentConversationId);
+
+  for (const mirror of Object.values(parent.items)) {
+    if (
+      mirror.status === "pending" &&
+      mirror.mirrorOf?.threadId === meta.threadId &&
+      mirror.mirrorOf.approvalId === target.approvalId
+    ) {
+      mirror.status = record.status;
+      mirror.answeredAt = target.now;
+      mirror.decidedBy =
+        record.decidedBy === null ? null : { ...record.decidedBy };
+    }
+  }
+
+  const registry = await tx.doc(SubagentsDoc, target.parentConversationId);
+  const link = await tx.doc(ChildDoc, target.childConversationId);
+  const state = registry.items[link.key]?.questions[target.approvalId]?.state;
+
+  if (state === "pending" || state === "escalated") {
+    await markQuestion(
+      tx,
+      target.parentConversationId,
+      target.childConversationId,
+      target.approvalId,
+      "cancelled",
+      Option.none()
+    );
+  }
 };

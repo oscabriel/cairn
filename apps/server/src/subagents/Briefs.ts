@@ -11,6 +11,7 @@ import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { Option, Result, Schema } from "effect";
 
+import { SubagentToolText } from "../brain/SubagentText.ts";
 import { jsonRecordOf } from "./SubagentDocs.ts";
 import type { JsonRecord } from "./SubagentDocs.ts";
 
@@ -39,9 +40,7 @@ export const briefOf = (
   const schema = Option.map(args.resultSchema, jsonRecordOf);
 
   if (Option.isSome(schema) && schema.value === null) {
-    return Result.fail(
-      "subagent_spawn's result_schema must be a JSON Schema object. Pass an object, or leave it out for a text result."
-    );
+    return Result.fail(SubagentToolText.resultSchemaNotObject);
   }
 
   return Result.succeed({

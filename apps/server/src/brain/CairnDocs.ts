@@ -1181,12 +1181,14 @@ const abandonedTask = async (tx: Tx, taskId: number): Promise<boolean> => {
 
 /**
  * Cancels, in one transaction, every record of one conversation that a run held and whose tool
- * task is abandoned (`abandonedTask`), with `decidedBy` system `boot`. Returns the ids.
+ * task is abandoned (`abandonedTask`), with `decidedBy` system `why`: `boot` for the boot repair,
+ * `run-stopped` for a stop that cancels after its abort (`subagent_stop`). Returns the ids.
  */
 export const cancelAbandonedApprovals = (
   session: Pick<Session, "commit">,
   conversationId: ConversationId,
-  now: number
+  now: number,
+  why: CancelWhy
 ): Effect.Effect<ReadonlyArray<string>, DurableCallError> =>
   durable(
     "approvals.cancel-abandoned",
@@ -1204,10 +1206,10 @@ export const cancelAbandonedApprovals = (
         );
 
         for (const record of cancelled) {
-          cancelRecord(record, now, "boot");
+          cancelRecord(record, now, why);
         }
 
-        await cancelLinkedQuestions(tx, conversationId, cancelled, now, "boot");
+        await cancelLinkedQuestions(tx, conversationId, cancelled, now, why);
 
         return cancelled.map((record) => record.id);
       }, context)
@@ -1256,7 +1258,8 @@ export const cancelAbandonedApprovalsAtBoot = Effect.gen(function* () {
         const ids = yield* cancelAbandonedApprovals(
           harness,
           conversation.id,
-          brain.now()
+          brain.now(),
+          "boot"
         );
 
         cancelled += ids.length;

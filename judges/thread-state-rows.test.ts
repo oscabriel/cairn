@@ -400,8 +400,8 @@ const CASES = {
       quoted: false,
     }
   ),
-  // A cancelled question went with the child's stopped run: the parent's mirror is cancelled too, so
-  // the parent asks nothing of the user and its child counts as settled.
+  // A cancelled question ended unanswered (the child's run stopped, or its record expired): the
+  // parent's mirror ended too, so the parent asks nothing of the user and its child counts as settled.
   "SubagentQuestionState cancelled": row(tally({ settled: 1 }), {
     not: [...ENDED, "active"],
     word: Option.none(),

@@ -118,6 +118,7 @@
         "status": "settled",
         "settlements": 1,
         "delivered": 1,
+        "questions": [],
         "model": {
           "provider": "faux",
           "modelId": "scripted"
@@ -173,7 +174,7 @@
       {
         "kind": "cairn.subagent-result",
         "role": "user",
-        "text": "Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\n\n</subagent_result>\nDivergence: None\nPayload: {\"count\":4}",
+        "text": "Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\nThere are 4 files.\n</subagent_result>\nDivergence: None\nPayload: {\"count\":4}",
         "images": 0,
         "toolCalls": [],
         "toolName": null,

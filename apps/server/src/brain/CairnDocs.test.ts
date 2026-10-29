@@ -511,7 +511,7 @@ describe("what a stop cancels", () => {
 
             // Run B's tool task is live and unmarked, so its record still waits.
             const abandoned = await Effect.runPromise(
-              cancelAbandonedApprovals(session, conversationId, 1600)
+              cancelAbandonedApprovals(session, conversationId, 1600, "boot")
             );
 
             assert.deepStrictEqual(abandoned, ["call-gone"]);

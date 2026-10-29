@@ -153,6 +153,7 @@
         "status": "settled",
         "settlements": 1,
         "delivered": 1,
+        "questions": ["answered"],
         "model": {
           "provider": "faux",
           "modelId": "scripted"

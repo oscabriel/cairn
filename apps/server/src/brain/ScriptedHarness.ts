@@ -58,6 +58,7 @@ import type { Brief, RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
+  MAX_SUBAGENT_DEPTH,
   SUBAGENT_RESULT_ENTRY,
 } from "@cairn/protocol/Subagents";
 import type {
@@ -163,6 +164,7 @@ import { classifyRunFailure } from "./RunFailure.ts";
 import { SubagentFaults } from "./SubagentFaults.ts";
 import {
   BRIEF_ANSWER_ENTRY,
+  EscalationWhy,
   NO_RESULT_ERROR,
   renderAnswer,
   renderBrief,
@@ -173,6 +175,7 @@ import {
   SPAWN_WAITING,
   SubagentRequestIds,
   SubagentToolText,
+  TYPED_RESULT_SUMMARY,
 } from "./SubagentText.ts";
 import { entryImages, projectEntry, wireProjector } from "./ThreadWire.ts";
 
@@ -608,8 +611,7 @@ const viewOf = (
   parentConversation: Option.Option<number>
 ): PiConversationView => {
   // The cairn.* documents a thread has, as pi-durable keeps them: only once there is one. A
-  // thread's permissions and subagent registry are written when it is created, so they are always
-  // there.
+  // thread's permissions are written when it is created, so they are always there.
   const cairnDocs: Array<readonly [string, JsonRecord]> = [
     [
       "cairn.permissions",
@@ -624,15 +626,18 @@ const viewOf = (
     cairnDocs.push(["cairn.approvals", { items: approvalItems(thread) }]);
   }
 
-  // Written at ensure on pi-durable, so every thread has its registry, empty until a child starts.
-  cairnDocs.push([
-    "cairn.subagents",
-    {
-      items: Object.fromEntries(
-        [...thread.subagents].map(([key, item]) => [key, subagentItem(item)])
-      ),
-    },
-  ]);
+  // Written at ensure on pi-durable, so a thread the host ensured has its registry, empty until a
+  // child starts; a subagent, which ensure never made, has one only once it starts a child.
+  if (Option.isNone(thread.link) || thread.subagents.size > 0) {
+    cairnDocs.push([
+      "cairn.subagents",
+      {
+        items: Object.fromEntries(
+          [...thread.subagents].map(([key, item]) => [key, subagentItem(item)])
+        ),
+      },
+    ]);
+  }
 
   if (thread.escalations.size > 0) {
     cairnDocs.push([
@@ -730,6 +735,24 @@ const lastAnswerAfter = (
     : Option.some({ id: found.id, text: messageText(message) });
 };
 
+/** The newest answer of a thread that says something; empty for none. */
+const lastSpokenIn = (thread: ScriptedThread): string => {
+  for (const entry of thread.entries.toReversed()) {
+    const message = entry.model?.[0];
+
+    const text =
+      entry.kind === "pi.assistant" && message !== undefined
+        ? messageText(message)
+        : "";
+
+    if (text.trim() !== "") {
+      return text;
+    }
+  }
+
+  return "";
+};
+
 /** How many answers a thread gave after the entry `after` (its whole transcript without one). */
 const answersAfter = (thread: ScriptedThread, after: Option.Option<number>) => {
   const floor = Option.getOrElse(after, () => 0);
@@ -795,9 +818,7 @@ const briefOf = (
   const resultSchema = isJsonValue(schema) ? copyJson(schema) : null;
 
   if (schema !== undefined && !isJsonRecord(resultSchema)) {
-    return Result.fail(
-      "subagent_spawn's result_schema must be a JSON Schema object. Pass an object, or leave it out for a text result."
-    );
+    return Result.fail(SubagentToolText.resultSchemaNotObject);
   }
 
   return Result.succeed({
@@ -1387,7 +1408,7 @@ const layerNoDeps = Layer.effectContext(
             parent,
             child,
             offered.approvalId,
-            "The parent's run ended without answering.",
+            EscalationWhy.parentRunEnded,
             at,
             changes
           );
@@ -1480,7 +1501,7 @@ const layerNoDeps = Layer.effectContext(
             parent,
             child,
             record.id,
-            "The parent is stopped.",
+            EscalationWhy.parentStopped,
             at,
             changes
           );
@@ -1914,18 +1935,25 @@ const layerNoDeps = Layer.effectContext(
 
       const { result } = link;
 
+      const worded = Option.match(report, {
+        onNone: () =>
+          Option.match(answered, {
+            onNone: () => "",
+            onSome: (found) => found.text,
+          }),
+        onSome: (found) => found.summary,
+      });
+
+      // A typed result's summary when the run ended on `submit_result` with no words of its own.
+      const spoken = lastSpokenIn(child);
+      const typedSummary = spoken.trim() === "" ? TYPED_RESULT_SUMMARY : spoken;
+
       const settlement: SubagentSettlement = {
         subagent: child.threadId,
         seq,
         outcome,
-        summary: Option.match(report, {
-          onNone: () =>
-            Option.match(answered, {
-              onNone: () => "",
-              onSome: (found) => found.text,
-            }),
-          onSome: (found) => found.summary,
-        }),
+        summary:
+          worded.trim() === "" && Option.isSome(result) ? typedSummary : worded,
         divergence: Option.match(result, {
           onNone: () =>
             Option.match(report, {
@@ -1944,7 +1972,7 @@ const layerNoDeps = Layer.effectContext(
         branch: null,
         turns: {
           thisRun: answersAfter(child, submission.placedAs),
-          total: seq,
+          total: answersAfter(child, Option.none()),
         },
         error:
           outcome === "failed"
@@ -2303,9 +2331,13 @@ const layerNoDeps = Layer.effectContext(
           const task = textArgument(call, "brief");
 
           if (Option.isNone(description) || Option.isNone(task)) {
-            return refused(
-              "subagent_spawn needs a description (5 to 10 words) and a brief. Call it again with both."
-            );
+            return refused(SubagentToolText.spawnNeedsBrief);
+          }
+
+          for (const link of Option.toArray(thread.link)) {
+            if (link.depth >= MAX_SUBAGENT_DEPTH) {
+              return refused(SubagentToolText.depthReached(link.depth));
+            }
           }
 
           const briefId = `brief-${taskOf(thread, call)}`;
@@ -2499,9 +2531,7 @@ const layerNoDeps = Layer.effectContext(
           }
 
           if (Option.isNone(message)) {
-            return refused(
-              "subagent_send needs a message. Call it again with one."
-            );
+            return refused(SubagentToolText.sendNeedsMessage);
           }
 
           const { item, child } = named.value;
@@ -2533,10 +2563,12 @@ const layerNoDeps = Layer.effectContext(
       Effect.gen(function* () {
         const question = textArgument(call, "question");
 
+        if (Option.isNone(thread.link)) {
+          return refused(SubagentToolText.askOutsideSubagent);
+        }
+
         if (Option.isNone(question)) {
-          return refused(
-            "ask_parent needs a question. Call it again with one."
-          );
+          return refused(SubagentToolText.askNeedsQuestion);
         }
 
         const options = Option.getOrElse(

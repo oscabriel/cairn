@@ -8,7 +8,7 @@
 // - `running`: whether `pi.live` has a run.
 // - `approvals`: approval records by age, with their status and tool; `pendingApprovals`.
 // - `decisions`: the same records' status, who decided (the `decidedBy` kind) and the reason.
-// - `model`: the thread's model.
+// - `model` and `thinkingLevel`: the thread's model and level, as its `pi.agent` holds them.
 // - `subagents`: on a parent with children only, each child's registry status, its settlements,
 //   the last one delivered, where its questions to the parent stand and the model its dispatch
 //   record names, by thread id.
@@ -196,6 +196,10 @@ const viewFields = (view: ConversationView) => {
       .length,
     decisions,
     model: isRecord(agent) && isRecord(agent.model) ? agent.model : null,
+    thinkingLevel:
+      isRecord(agent) && Predicate.isString(agent.thinkingLevel)
+        ? agent.thinkingLevel
+        : null,
   };
 };
 

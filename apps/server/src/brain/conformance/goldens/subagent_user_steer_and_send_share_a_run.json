@@ -346,7 +346,8 @@
     "model": {
       "provider": "faux",
       "modelId": "scripted"
-    }
+    },
+    "thinkingLevel": "off"
   },
   "children": {
     "child1": {
@@ -425,7 +426,8 @@
       "model": {
         "provider": "faux",
         "modelId": "scripted"
-      }
+      },
+      "thinkingLevel": "off"
     }
   }
 }

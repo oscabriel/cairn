@@ -40,6 +40,7 @@ import type {
 import { defineTool, LiveDoc } from "@earendil-works/pi-durable";
 import { Duration, Effect, Option, Predicate, Result } from "effect";
 
+import { BRIEF_TTL_MILLIS } from "../brain/BriefTtl.ts";
 import {
   applyAnswer,
   approvalIdOf,
@@ -82,11 +83,8 @@ import type {
   JsonRecord,
   SubagentItemState,
 } from "./SubagentDocs.ts";
-import type { SubagentTasks } from "./SubagentTasks.ts";
+import type { RoleAccess, SubagentTasks } from "./SubagentTasks.ts";
 import { awaitDoc, runWait } from "./Waits.ts";
-
-/** Days a brief stays answerable (ADR 0030), in milliseconds. */
-const BRIEF_TTL_MILLIS = 7 * 24 * 60 * 60 * 1000;
 
 /** The longest bounded wait `subagent_status` takes. */
 const MAX_WAIT_SECONDS = 600;
@@ -204,12 +202,15 @@ export interface SubagentToolOptions {
    * settle a shared run first.
    */
   readonly settleDelayMillis: (quiet: boolean) => number;
+  /** How long a brief stays answerable before it expires and its parent is told: a week. */
+  readonly briefTtlMillis: number;
 }
 
 /** The tools' production options. */
 export const DEFAULT_TOOL_OPTIONS: SubagentToolOptions = {
   questionTtlMillis: GATED_APPROVAL_TTL_MILLIS,
   settleDelayMillis: () => 0,
+  briefTtlMillis: BRIEF_TTL_MILLIS,
 };
 
 /** The pending record of a child's question to its parent (ADR 0027), in the child's ledger. */
@@ -278,6 +279,7 @@ const answerOf = async (
 export const subagentToolSet = (
   faults: SubagentFaultSet,
   tasks: SubagentTasks,
+  roles: RoleAccess,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
 ) => {
   const spawn = defineTool({
@@ -313,6 +315,12 @@ export const subagentToolSet = (
             "answer (the default) wakes you when the child reports; quiet only leaves the note.",
         })
       ),
+      role: Type.Optional(
+        Type.String({
+          description:
+            "The role the child runs as (@worker, @scout; the roles tool lists them) or provider/modelId[:level]. Leave it out to run the child on your own model.",
+        })
+      ),
     }),
     replay: "safe",
     execute: async (args, api, context) => {
@@ -339,6 +347,7 @@ export const subagentToolSet = (
           isolation: textOf(args.isolation),
           resultSchema: Option.fromUndefinedOr(args.result_schema),
           wake: textOf(args.wake),
+          role: textOf(args.role),
         },
         permissions.mode
       );
@@ -349,7 +358,23 @@ export const subagentToolSet = (
 
       const approvalId = approvalIdOf(api.taskId);
 
-      const asked = await api.commit(async (tx) => {
+      const asked = await api.snapshot(Approvals, api.conversationId, context);
+
+      // A role is checked at the ask, so the card never offers Go on one nothing ready answers to;
+      // it resolves again at Go, which decides (ADR 0035). A replayed call that already asked is
+      // not checked again: its brief is pending whatever the role's readiness is now.
+      if (
+        brief.success.role !== null &&
+        asked?.items[approvalId] === undefined
+      ) {
+        const resolved = await roles.resolve(brief.success.role);
+
+        if (Result.isFailure(resolved)) {
+          return refused(SubagentToolText.roleRefused(resolved.failure));
+        }
+      }
+
+      const committed = await api.commit(async (tx) => {
         const approvals = await tx.doc(Approvals, api.conversationId);
 
         // A replayed call finds its brief before the cap, which may have filled since.
@@ -383,7 +408,7 @@ export const subagentToolSet = (
           summary: description.value,
           status: "pending",
           askedAt,
-          expiresAt: askedAt + BRIEF_TTL_MILLIS,
+          expiresAt: askedAt + tuning.briefTtlMillis,
           answeredAt: null,
           run: null,
           executorRequestId: null,
@@ -405,7 +430,7 @@ export const subagentToolSet = (
         return Option.none<number>();
       }, context);
 
-      return Option.match(asked, {
+      return Option.match(committed, {
         onNone: () => said(SPAWN_WAITING),
         onSome: (live) => refused(SubagentToolText.capReached(live)),
       });

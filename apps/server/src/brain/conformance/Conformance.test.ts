@@ -31,6 +31,7 @@ import {
   piDurableTarget,
   piDurableTargetWith,
   scriptedTarget,
+  scriptedTargetWith,
 } from "./Targets.ts";
 import type { MakeTarget } from "./Targets.ts";
 import { parseTranscript } from "./Transcript.ts";
@@ -38,7 +39,7 @@ import type { Scenario } from "./Transcript.ts";
 
 const here = import.meta.dirname;
 
-const scenarios: ReadonlyArray<Scenario> = readdirSync(
+const allScenarios: ReadonlyArray<Scenario> = readdirSync(
   path.join(here, "scenarios")
 )
   .filter((name) => name.endsWith(".ndjson"))
@@ -48,6 +49,22 @@ const scenarios: ReadonlyArray<Scenario> = readdirSync(
       parseTranscript(readFileSync(path.join(here, "scenarios", name), "utf-8"))
     )
   );
+
+/**
+ * Scenarios that wait for a brief to expire. They run on both harnesses with briefs that live
+ * `SHORT_BRIEF_TTL_MILLIS` (below), not a week, so they are kept out of the suite's other runs.
+ */
+const BRIEF_EXPIRY_SCENARIOS: ReadonlySet<string> = new Set([
+  "subagent_brief_expired",
+  "subagent_brief_expired_across_restart",
+]);
+
+/** A brief's lifetime in the expiry scenarios: long enough to look at it, short enough to wait. */
+const SHORT_BRIEF_TTL_MILLIS = 1000;
+
+const scenarios = allScenarios.filter(
+  (scenario) => !BRIEF_EXPIRY_SCENARIOS.has(scenario.name)
+);
 
 /** The subagent scenario groups (ADR 0028), which the subagent mutations are judged on. */
 const isSubagentScenario = (scenario: Scenario) =>
@@ -64,7 +81,9 @@ type Side = "pi-durable" | "scripted";
  * settles and reports in single critical sections a crash line cannot split, so the windows
  * between the child's answer, the settlement and the report belong to 4C's
  * `judges/subagent-durability.ts`. `subagent_brief_declined` covers declined and revised briefs;
- * an expired brief (group 2's third case) belongs to 4A, which owns expiry.
+ * an expired brief (group 2's third case) is `subagent_brief_expired`, run below with a short
+ * brief lifetime. The kills around Go itself (inside the answering commit, mid-start, five in a row)
+ * are `judges/brief-go.sh`'s.
  */
 const PENDING: Readonly<Record<Side, ReadonlySet<string>>> = {
   "pi-durable": new Set(),
@@ -217,6 +236,69 @@ describe.each([
     );
   }
 );
+
+// A pending brief expires after its lifetime and its parent is told (ADR 0030); a Go after that
+// starts nothing. Both sides run with a one-second lifetime, and pi-durable's record is the golden.
+describe("brief expiry, with a short brief lifetime", () => {
+  const expiryTargets: Readonly<Record<Side, MakeTarget>> = {
+    "pi-durable": piDurableTargetWith({
+      ...DEFAULT_TOOL_OPTIONS,
+      briefTtlMillis: SHORT_BRIEF_TTL_MILLIS,
+    }),
+    scripted: scriptedTargetWith(SHORT_BRIEF_TTL_MILLIS),
+  };
+
+  it.live(
+    "every expiry scenario passes on both harnesses and matches its golden",
+    () =>
+      Effect.gen(function* () {
+        const expiry = allScenarios.filter((scenario) =>
+          BRIEF_EXPIRY_SCENARIOS.has(scenario.name)
+        );
+
+        assert.strictEqual(expiry.length, BRIEF_EXPIRY_SCENARIOS.size);
+
+        const failed: Array<string> = [];
+
+        for (const side of SIDES) {
+          for (const scenario of expiry) {
+            const outcome = yield* runScenario(
+              scenario,
+              expiryTargets[side],
+              options
+            );
+
+            for (const failure of Option.toArray(outcome.failure)) {
+              failed.push(`${side} ${scenario.name}: ${failure}`);
+            }
+
+            if (side !== "pi-durable") {
+              continue;
+            }
+
+            const file = path.join(here, "goldens", `${scenario.name}.json`);
+
+            if (process.env.CAIRN_UPDATE_GOLDENS === "1") {
+              writeFileSync(
+                file,
+                `${JSON.stringify(outcome.record, null, 2)}\n`
+              );
+            } else if (
+              !jsonEquals(
+                decodeGolden(readFileSync(file, "utf-8")),
+                outcome.record
+              )
+            ) {
+              failed.push(`${scenario.name}: drifted from its golden`);
+            }
+          }
+        }
+
+        assert.deepStrictEqual(failed, []);
+      }),
+    120_000
+  );
+});
 
 /** The side whose record a scenario's golden holds; none while no side passes it. */
 const goldenSide = (scenario: Scenario): Option.Option<Side> => {

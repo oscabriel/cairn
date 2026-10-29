@@ -1,0 +1,10 @@
+{"type":"transcript_start","scenario":"subagent_brief_schema_refused","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in the project root.","result_schema":{"anyOf":[{"type":"object"},{"type":"string"}]}}}]}
+{"type":"model","label":"p2","thread":"parent","text":"The schema was refused."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"settle","ms":200}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated"},"count":0}
+{"type":"expect_view","path":["transcript",2],"equals":{"kind":"pi.tool-result","role":"toolResult","text":"The result schema's root is a union. Wrap the alternatives in an object property, so the root is one object or type.","images":0,"toolCalls":[],"toolName":"subagent_spawn","isError":true}}
+{"type":"expect_view","path":["approvals"],"equals":[]}

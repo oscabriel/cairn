@@ -15,21 +15,33 @@ import type {
   ConversationId,
   InputSubmissionDraft,
   Session,
+  Tx,
 } from "@earendil-works/pi-durable";
 import { defineExtension, LiveDoc } from "@earendil-works/pi-durable";
-import { Context, Effect, Layer, Result } from "effect";
+import { Context, Effect, Layer, Option, Result } from "effect";
 
+import { BriefTtl } from "../brain/BriefTtl.ts";
+import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { NO_SUBAGENT_FAULTS, SubagentFaults } from "../brain/SubagentFaults.ts";
 import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
+import { ModelHealth } from "../models/ModelHealth.ts";
+import { RoleAliases } from "../models/RoleAliases.ts";
+import { SettingsStore } from "../models/SettingsStore.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
+import { BriefFaults, NO_BRIEF_FAULTS } from "./BriefFaults.ts";
+import type { BriefFaultHooks } from "./BriefFaults.ts";
 import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
 import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
-import type { ChildWorkspaceAccess, SubagentTasks } from "./SubagentTasks.ts";
+import type {
+  ChildWorkspaceAccess,
+  RoleAccess,
+  SubagentTasks,
+} from "./SubagentTasks.ts";
 import {
   childAgentOf,
   DEFAULT_TOOL_OPTIONS,
@@ -69,6 +81,37 @@ export const workspaceAccess = (
   };
 };
 
+/**
+ * `RoleAliases.resolve` for the spawn and the start task, which run outside Effect: the resolution,
+ * or the error's words for the parent. It runs with `context`, the layer's (S43).
+ */
+export const roleAccess = (
+  roles: RoleAliases["Service"],
+  context: Context.Context<never>
+): RoleAccess => {
+  const run = Effect.runPromiseWith(context);
+
+  return {
+    resolve: async (spec) =>
+      await run(
+        roles
+          .resolve(spec, Option.none())
+          .pipe(
+            Effect.result,
+            Effect.map(Result.mapError((error) => error.message))
+          )
+      ),
+  };
+};
+
+/** No roles: a brief that names one starts nothing. For tests whose briefs name none. */
+const NO_ROLES: RoleAccess = {
+  resolve: async () =>
+    await Promise.resolve(
+      Result.fail("This brain resolves no roles; leave role out.")
+    ),
+};
+
 /** No workspaces: for the host's copy of the task definitions, whose brief task never runs. */
 const NO_WORKSPACES: ChildWorkspaceAccess = {
   prepare: async () =>
@@ -81,7 +124,9 @@ const NO_WORKSPACES: ChildWorkspaceAccess = {
 const build = (
   faults: SubagentFaultSet,
   tuning: SubagentToolOptions,
-  workspaces: ChildWorkspaceAccess
+  workspaces: ChildWorkspaceAccess,
+  briefFaults: BriefFaultHooks,
+  roles: RoleAccess
 ) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
@@ -92,9 +137,11 @@ const build = (
     childAgent: (typed) => child.agent(typed),
     workspaces,
     settleDelayMillis: tuning.settleDelayMillis,
+    briefFaults,
+    roles,
   });
 
-  const tools = subagentToolSet(faults, tasks, tuning);
+  const tools = subagentToolSet(faults, tasks, roles, tuning);
 
   child.agent = childAgentOf(tools);
 
@@ -103,7 +150,13 @@ const build = (
     extension: defineExtension({
       name: SUBAGENTS_EXTENSION,
       tools: [...tools.parent, ...tools.child],
-      tasks: [tasks.Anchor, tasks.Brief, tasks.Reporter],
+      tasks: [
+        tasks.Anchor,
+        tasks.Brief,
+        tasks.StartChild,
+        tasks.BriefTell,
+        tasks.Reporter,
+      ],
     }),
   };
 };
@@ -116,10 +169,12 @@ const build = (
 export const subagentsExtension = (
   faults: SubagentFaultSet,
   workspaces: ChildWorkspaceAccess,
-  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
+  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
+  briefFaults: BriefFaultHooks = NO_BRIEF_FAULTS,
+  roles: RoleAccess = NO_ROLES
 ): CairnExtension => ({
   order: ExtensionOrder.subagents,
-  extension: build(faults, tuning, workspaces).extension,
+  extension: build(faults, tuning, workspaces, briefFaults, roles).extension,
 });
 
 /**
@@ -129,8 +184,28 @@ export const subagentsExtension = (
 const hostTasks = build(
   NO_SUBAGENT_FAULTS,
   DEFAULT_TOOL_OPTIONS,
-  NO_WORKSPACES
+  NO_WORKSPACES,
+  NO_BRIEF_FAULTS,
+  NO_ROLES
 ).tasks;
+
+/**
+ * What a brief's answer starts, for the answering commit (`answerApproval`'s `answered` hook,
+ * passed by `PiDurableHarness.respond`): Go creates the child's start task in the same transaction
+ * that accepts the brief (ADR 0030), and Decline or Send back the task that tells the parent.
+ * Nothing for any other record. `faults` is where a judge brain kills itself inside that commit;
+ * the tasks themselves run the installed extension's code, which carries its own.
+ */
+export const answerBrief =
+  (faults: BriefFaultHooks) =>
+  async (
+    tx: Tx,
+    parent: ConversationId,
+    record: ApprovalRecord
+  ): Promise<void> => {
+    await hostTasks.briefAnswered(tx, parent, record);
+    faults.at("go-commit");
+  };
 
 /**
  * Gives a user's input to a subagent its reporter before it is submitted (ADR 0028): the input's
@@ -229,19 +304,28 @@ export class Subagents extends Context.Service<
         );
 
         return Subagents.of({
-          extension: subagentsExtension(faults, workspaces, tuning),
+          extension: subagentsExtension(
+            faults,
+            workspaces,
+            tuning,
+            yield* BriefFaults,
+            roleAccess(yield* RoleAliases, yield* Effect.context())
+          ),
         });
       })
-    );
+    ).pipe(Layer.provide(RoleAliases.layerNoDeps));
 
   /**
-   * The extension with the faults `SubagentFaults` names (none, unless a test plants some), making
+   * The extension with the faults `SubagentFaults` and `BriefFaults` name (none, unless a test or a
+   * judge brain plants some) and briefs that live as long as `BriefTtl` says (a week), making
    * children's worktrees with `ChildWorkspaces`.
    */
   static readonly layer = Layer.effect(
     Subagents,
     Effect.gen(function* () {
       const faults = yield* SubagentFaults;
+      const briefFaults = yield* BriefFaults;
+      const briefTtlMillis = yield* BriefTtl;
 
       const workspaces = workspaceAccess(
         yield* ChildWorkspaces,
@@ -249,16 +333,26 @@ export class Subagents extends Context.Service<
       );
 
       return Subagents.of({
-        extension: subagentsExtension(faults, workspaces),
+        extension: subagentsExtension(
+          faults,
+          workspaces,
+          { ...DEFAULT_TOOL_OPTIONS, briefTtlMillis },
+          briefFaults,
+          roleAccess(yield* RoleAliases, yield* Effect.context())
+        ),
       });
     })
-  );
+  ).pipe(Layer.provide(RoleAliases.layerNoDeps));
 
   /**
-   * For tests that build the production extension set: no faults, and children's workspaces under
-   * a fresh temporary data folder (`ChildWorkspaces.layerTest`).
+   * For tests that build the production extension set: no faults, children's workspaces under a
+   * fresh temporary data folder (`ChildWorkspaces.layerTest`), and roles resolved over the test
+   * settings and health (`SettingsStore.layerTest`, `ModelHealth.layerTest`, the references such
+   * a test gives the extension set too, so it builds one of each) and the test's models.
    */
   static readonly layerTest = Subagents.layer.pipe(
-    Layer.provide(ChildWorkspaces.layerTest)
+    Layer.provide(ChildWorkspaces.layerTest),
+    Layer.provide(SettingsStore.layerTest),
+    Layer.provide(ModelHealth.layerTest)
   );
 }

@@ -39,6 +39,7 @@
     "model": {
       "provider": "faux",
       "modelId": "scripted"
-    }
+    },
+    "thinkingLevel": "off"
   }
 }

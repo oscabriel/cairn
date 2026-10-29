@@ -111,7 +111,9 @@ export type BriefAnswer =
   | { readonly kind: "revised"; readonly reason: Option.Option<string> }
   | { readonly kind: "expired" }
   /** Accepted, but the child's workspace could not be made (`why`), so nothing started. */
-  | { readonly kind: "noWorkspace"; readonly why: string };
+  | { readonly kind: "noWorkspace"; readonly why: string }
+  /** Accepted, but the brief's role resolved to no ready model at Go (`why`), so nothing started. */
+  | { readonly kind: "noModel"; readonly why: string };
 
 /** `: <reason>` after an answer's verb, or nothing without one. */
 const withReason = (reason: Option.Option<string>) =>
@@ -131,6 +133,8 @@ export const renderBriefAnswer = (title: string, answer: BriefAnswer): string =>
         `The brief "${title}" expired without an answer; nothing started.`,
       noWorkspace: (found) =>
         `The user approved the brief "${title}", but its workspace could not be made, so nothing started: ${found.why}`,
+      noModel: (found) =>
+        `The user approved the brief "${title}", but its role resolved to no ready model, so nothing started: ${found.why}`,
     })
   );
 
@@ -198,6 +202,12 @@ export const SubagentToolText = {
   /** `subagent_spawn` missing its description or its brief. */
   spawnNeedsBrief:
     "subagent_spawn needs a description (5 to 10 words) and a brief. Call it again with both.",
+  /** `subagent_spawn` whose `role` does not resolve now (`why`: what resolves instead). */
+  roleRefused: (why: string) =>
+    `subagent_spawn's role does not resolve now. ${why} Call it again with one of those, or leave role out to run the child on your own model.`,
+  /** `subagent_spawn` whose `role` is neither a role nor a model. */
+  roleInvalid: (role: string) =>
+    `subagent_spawn's role "${role}" is neither a role (@worker, @scout) nor provider/modelId[:level]. Call it again with one, or leave role out.`,
   /** `subagent_spawn` whose `result_schema` is not a JSON object. */
   resultSchemaNotObject:
     "subagent_spawn's result_schema must be a JSON Schema object. Pass an object, or leave it out for a text result.",

@@ -978,17 +978,32 @@ const settleLinked = async (
   );
 };
 
+/** What else an answer does, inside its transaction, to the record it just settled. */
+export type AnsweredHook = (
+  tx: Tx,
+  conversationId: ConversationId,
+  record: ApprovalRecord
+) => Promise<void>;
+
+/** An answer that does nothing more. */
+const noAnsweredHook: AnsweredHook = async () => {
+  await Promise.resolve();
+};
+
 /**
  * Answers one record from the host side, in one transaction (`applyAnswer`). "Allow for this
  * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit,
- * and an escalated question settles with its mirror (`settleLinked`).
+ * and an escalated question settles with its mirror (`settleLinked`). `answered` runs last inside
+ * the same transaction, for a record the answer moved out of `pending`: a brief's Go creates its
+ * child's start task there (ADR 0030), so the two land together or not at all.
  */
 export const answerApproval = (
   session: Pick<Session, "commit" | "snapshot">,
   conversationId: ConversationId,
   approvalId: string,
   answer: RecordAnswer,
-  now: number
+  now: number,
+  answered: AnsweredHook = noAnsweredHook
 ): Effect.Effect<AnswerOutcome, DurableCallError> =>
   durable("approvals.answer", async (context) => {
     const link = await session.snapshot(ChildDoc, conversationId, context);
@@ -1013,6 +1028,7 @@ export const answerApproval = (
       }
 
       await settleLinked(tx, conversationId, record, link, answer, now);
+      await answered(tx, conversationId, record);
 
       return outcome;
     }, context);

@@ -11,12 +11,14 @@ import path from "node:path";
 import { NodeServices } from "@effect/platform-node";
 import { Context, Effect, Layer } from "effect";
 
+import { QuestionRoutes } from "./approvals/QuestionRoute.ts";
 import { AttachmentsLayer } from "./attachments/AttachmentsLayer.ts";
 import { BootLayer } from "./Boot.ts";
 import { runBootRepairs } from "./BootRepairs.ts";
 import { Brain } from "./brain/Brain.ts";
 import { BrainConfig } from "./brain/BrainConfig.ts";
 import { BridgeCwd } from "./brain/BridgeCwdExtension.ts";
+import { BudgetSources } from "./brain/BudgetSources.ts";
 import { EventReactors } from "./brain/EventReactors.ts";
 import type { CairnExtension } from "./brain/Extensions.ts";
 import { ExtensionSet } from "./brain/ExtensionSet.ts";
@@ -73,8 +75,12 @@ import { Threads } from "./threads/Threads.ts";
 import { ThreadTitles } from "./threads/ThreadTitles.ts";
 import { TitleModel } from "./threads/TitleModel.ts";
 import { TurnContentLive } from "./threads/TurnContentStages.ts";
+import { BudgetBook } from "./usage/BudgetBook.ts";
+import { BudgetGuard } from "./usage/BudgetGuard.ts";
+import { Budgets } from "./usage/Budgets.ts";
 import { ClaudeSignals } from "./usage/ClaudeSignals.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
+import { WorkflowPlan } from "./workflows/WorkflowPlan.ts";
 import { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
 import { ChildWorkspaceStore } from "./workspaces/ChildWorkspaceStore.ts";
 
@@ -237,7 +243,12 @@ export const PiDurableBrain = <Models = never>(options: {
     )
   );
 
-  return Layer.mergeAll(resume, ReactorSet.layer, SpendFeed.layer).pipe(
+  return Layer.mergeAll(
+    resume,
+    ReactorSet.layer,
+    SpendFeed.layer,
+    BudgetSources.layer
+  ).pipe(
     Layer.provideMerge(PiDurableHarness.layer),
     Layer.provide(
       options.extraExtensions === undefined
@@ -258,7 +269,8 @@ export const PiDurableBrain = <Models = never>(options: {
 export const ScriptedBrain = Layer.mergeAll(
   Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
   EventReactors.layerOff,
-  SpendFeed.layerOff
+  SpendFeed.layerOff,
+  BudgetSources.layerNone
 ).pipe(
   Layer.provideMerge(ScriptedHarness.layer),
   Layer.provideMerge(Skills.local),
@@ -294,6 +306,17 @@ const CheckpointEntriesLive = Layer.effect(
 );
 
 /**
+ * Budgets (4E, ADR 0036) over one `BudgetBook`: `BudgetBook.layer` is the reference the brain's
+ * extension set gives the `cairn.budgets` gate (`ExtensionSet.ts`), so the memo map builds one book
+ * for the gate, the spend ledger (each row's budget word), `Budgets` and the guard. The guard's
+ * fiber acts on the ledger's readings; `BudgetSources` is the harness's (`PiDurableBrain` or
+ * `ScriptedBrain`).
+ */
+const BudgetsLive = BudgetGuard.layerNoDeps.pipe(
+  Layer.provideMerge(Budgets.layerNoDeps)
+);
+
+/**
  * Everything but the entry point's choices. Needs `ServerConfig`, `Identity`, the platform's
  * `FileSystem`, a harness (`HarnessSeam` and `HarnessBoot`) and its models (`ModelSource` and the
  * picker's `PiModelSource`): `PiDurableBrain` and `ScriptedBrain` provide all four. Also the porch
@@ -305,7 +328,9 @@ export const AppLayer = Layer.mergeAll(
   Boot,
   ExecutorSignInPush,
   MemoryWatch.pipe(Layer.provide(NodeServices.layer)),
-  SubagentRows
+  SubagentRows,
+  QuestionRoutes,
+  WorkflowPlan.layer
 ).pipe(
   Layer.provide(HandlersLayer),
   Layer.provide(BootData),
@@ -326,8 +351,10 @@ export const AppLayer = Layer.mergeAll(
   ),
   Layer.provide(ShellProjector.layer.pipe(Layer.provide(ClaudeSignals))),
   Layer.provideMerge(ThreadsLive),
+  Layer.provideMerge(BudgetsLive),
   Layer.provideMerge(SpendLedger.layerNoDeps),
   Layer.provideMerge(PushLayer),
+  Layer.provideMerge(BudgetBook.layer),
   Layer.provideMerge(ReachLive),
   Layer.provide(SettingsLive),
   Layer.provideMerge(Layer.merge(ShellLive, ModelHealthLive))

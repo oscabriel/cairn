@@ -5,14 +5,11 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 
+import { ExtensionOrder } from "../brain/Extensions.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
 import { NODE_TOOLS } from "./Prelude.ts";
 import { Workflows } from "./Workflows.ts";
-import {
-  WATCH_TASK,
-  WORKFLOWS_EXTENSION,
-  WORKFLOWS_ORDER,
-} from "./WorkflowTools.ts";
+import { WATCH_TASK, WORKFLOWS_EXTENSION } from "./WorkflowTools.ts";
 
 const NoRoles = Layer.succeed(
   RoleAliases,
@@ -28,7 +25,7 @@ describe("the workflows extension", () => {
     Effect.gen(function* () {
       const { extension } = yield* Workflows;
 
-      assert.strictEqual(extension.order, WORKFLOWS_ORDER);
+      assert.strictEqual(extension.order, ExtensionOrder.workflows);
       assert.strictEqual(extension.extension.name, WORKFLOWS_EXTENSION);
 
       const tools = extension.extension.tools ?? [];

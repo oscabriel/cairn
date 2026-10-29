@@ -68,7 +68,17 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Subagent anchor**: The background task a parent owns for each child. It owns the child's conversation, so the parent's run is never held open by its children (ADR 0028).
 
-**Brief task**: The parent's background task that waits for Go on a brief, makes the child's workspace, then starts the child in one commit.
+**Brief task**: The parent's background task that holds a pending brief's 7-day expiry; if no answer comes by then, it expires the brief and tells the parent.
+
+**Start task**: The parent's background task (`cairn.subagent-start`) that Go's commit creates: it resolves the brief's role at Go, makes the child's workspace, then creates and starts the child in one commit. When parked, it waits for a human Retry on the parent and is never retried at boot.
+
+**Tell task**: The parent's background task (`cairn.subagent-brief-tell`) that tells it of a Decline, a Send back, an expiry, or a Go whose child could not start.
+
+**Tally**: A parent row's count of its subagents (working, asking, settled, failed), from its registry. A settled child whose result is not yet delivered counts as working.
+
+**Stop all**: A parent row's stop that also stops each working subagent, and theirs in turn (`thread.stop` with `subagents: stop`); a settled child and anything under it are left as they are.
+
+**Crash point**: A named place in a subagent's delivery where a judge brain kills itself (`SubagentCrashes`), so the kill judge lands a `kill -9` inside each window. Production plants none.
 
 **Run mark**: A child run's mark in its parent's `cairn.subagents` document, `nudge` or `settled`, keyed by the run's identity (its answer, its first input, or the submission), so each child run settles once whichever reporter commits first.
 
@@ -101,6 +111,12 @@ _Avoid_: task, epic, project (for the goal)
 _Avoid_: pipeline, DAG, job
 
 **Dispatch ledger**: A workflow's record of every node it dispatched: the brief that approved it, its model and its cost. A replay reads it, and the steps panel shows it.
+
+**Node**: One `agent()` call of a workflow script, recorded as a row of the dispatch ledger: a child thread created from the role it resolved, with no subagent tools of its own and no sidebar row.
+
+**Workflow gate**: The `beforeTool` hook that lets a workflow script run only against an approved ledger row of its exact hash, rewrites it behind the prelude, and marks the code mode call (`GATE_MEMO`), so the node tools refuse every other caller.
+
+**Node watcher**: The background task (`cairn.workflow-watch`) that records a workflow node or script call that ended without settling: stopped, failed or finished.
 
 **Recipe**: A saved workflow script, named by its `meta.name`.
 
@@ -216,6 +232,10 @@ _Avoid_: plugin
 
 **Look**: The set of design token values the `next` views draw with. Until the user chooses, three look candidates (graphite, the default; ink; stone) share one set of names in `next/tokens.css`, picked by `data-look` beside `data-ui`; the user picks one in a look round. _Avoid_: theme (that is dark or light), skin.
 
+**Primitive (next)**: A view helper in `apps/web/src/next/ui/` (button, chip, status chip, row, card, menu, sheet, field, banner, meter...) drawn with design tokens only. A next view builds on primitives rather than raw classes.
+
+**Look catalogue**: The dev-only page at `/__look` (`apps/web/src/next/ui/catalogue`) that draws every next primitive in every state under each look and theme. `judges/look-rules.ts` judges it and the look rounds screenshot it; it is never in the production build.
+
 **Measured list**: The transcript's own scroll list (`timeline/list`, ADR 0041). A row counts in the scroll range only once it has been measured (history it never drew is measured off-screen first), parked rows keep frozen heights, the first visible row keeps its offset through any change above it, and a glyph bookmark keeps the reader's place through width changes. _Avoid_: virtual list (that was `@foldkit/ui`'s, which estimated heights).
 
 **Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.
@@ -232,7 +252,9 @@ _Avoid_: plugin
 
 **Outbox**: The browser's list of sends not yet acknowledged. It resends them after a reconnect, and the brain admits each one once.
 
-**Presence**: A device telling the brain whether Cairn is on screen and which thread it shows, so a push never fires for a thread the user is looking at.
+**Presence**: A device telling the brain whether Cairn is on screen and which thread it shows, so a push waits while the user is looking at that thread or one above it.
+
+**Approval push**: The push for a request waiting on a thread, in the request's own words, one notification per thread; held back while a page shows it, sent late once it has waited a minute unseen, and reminded once 15 minutes after the last push.
 
 ## Asking the user
 
@@ -250,9 +272,11 @@ _Avoid_: approve (for a brief), run
 
 **Decider**: Who settled an approval record: the user, a parent thread answering its child's question, the permission mode, a workflow's envelope, a judge, expiry, or the system (a stop or boot). Every record past pending names one.
 
-**Escalate**: To pass a child's question up from its parent to the user, because the parent chose to, its run ended, or 15 minutes passed. The user answers it in the parent thread, and either answer settles both records once.
+**Escalate**: To pass a child's question up from its parent to the user, because the parent chose to, the parent was stopped, failed or parked, the run that saw the question ended, the parent thread was archived or deleted, or 15 minutes passed after the parent's model saw it. The parent's `cairn.escalations` records each one and why. The user answers it in the parent thread, and either answer settles both records once.
 
 _Avoid_: forward, bubble up
+
+**Relayed question**: A subagent's final plain answer whose last line is a question or numbered options, turned into a question to its parent (source `answer`) instead of a result. It expires, and it ends when the child is stopped.
 
 **Criterion**: One stated, checkable condition of a goal or a brief, naming the outside judge that decides it. It is met only by a verdict recorded after it last changed.
 
@@ -286,6 +310,14 @@ _Avoid_: cost (for a plan's figure)
 
 **Budget**: The limits a brief or a workflow's launch carries (list-price dollars, tokens, turns, minutes, a plan window guard), with a warning line at 80% by default. Reaching it stops new work and asks for a raise.
 
+**Budget scope**: A thread and its lineage subtree under one budget. A subagent's comes from its brief; a goal's is declared.
+
+**Budget mode**: How a scope acts at its limit: `stop` (every thread of the scope stops, overshooting by at most one response per running child) or `drain` (no new subagent work starts; running children finish under their own budgets).
+
+**Budget guard**: What acts once per epoch when a scope crosses its warning line or its limit: a notice, a push, the stop or drain, and the raise.
+
+**Raise**: A `budget_raise` approval proposing the larger of double the line and the spend plus one line. Each accepted raise starts a new epoch.
+
 ## Results
 
 **Artifact**: An HTML page or folder an agent publishes to a private `gneiss.run` URL. Cairn publishes only over pages it published itself: a file in the artifacts folder with no row in Cairn's artifacts table is the user's and is never overwritten.
@@ -295,6 +327,8 @@ _Avoid_: page, report (for the published thing)
 **Portal**: A private `gneiss.run` URL in front of a running dev server, on the Beelink or in a stone. On the Beelink its server runs as its own systemd user unit (`cairn-portal-<id>`), so the page outlives a brain restart; a portal lives 12 hours and closes when its thread is archived.
 
 **Porch**: The user's tool (porchlight) that names private `gneiss.run` URLs and renders them into Caddy. Cairn publishes artifacts and opens portals by calling it.
+
+**Reach state**: What the brain knows of porch: unknown, ready, or not set up (the porch binary is missing or has no machine config). The portal reconcile and sweep record it and log it once at info; it is not a boot failure.
 
 _Avoid_: preview, tunnel
 

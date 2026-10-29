@@ -347,6 +347,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(cairn-mo
   --color-tone-failed-wash: var(--tone-failed-wash);
   --color-tone-done: var(--tone-done);
   --color-tone-done-wash: var(--tone-done-wash);
+  --color-scrim: var(--scrim);
   --color-message: var(--message-surface);
   --color-message-foreground: var(--contrast-message-foreground);
   --color-message-action: var(--message-action);

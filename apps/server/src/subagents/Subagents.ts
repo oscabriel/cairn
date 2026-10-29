@@ -53,6 +53,7 @@ import type {
 } from "./SubagentTasks.ts";
 import {
   childAgentOf,
+  nodeAgentOf,
   DEFAULT_TOOL_OPTIONS,
   subagentToolSet,
 } from "./SubagentTools.ts";
@@ -169,6 +170,7 @@ const build = (
 
   return {
     tasks,
+    tools,
     extension: defineExtension({
       name: SUBAGENTS_EXTENSION,
       tools: [...tools.parent, ...tools.child],
@@ -205,14 +207,22 @@ export const subagentsExtension = (
  * The task definitions host code creates tasks from. pi-durable runs a task by its registered name,
  * so the installed extension's code runs it, faults included.
  */
-const hostTasks = build(
+const host = build(
   NO_SUBAGENT_FAULTS,
   DEFAULT_TOOL_OPTIONS,
   NO_WORKSPACES,
   NO_BRIEF_FAULTS,
   NO_ROLES,
   NO_SUBAGENT_CRASHES
-).tasks;
+);
+
+const hostTasks = host.tasks;
+
+/**
+ * The agent change's tool filter for a workflow node's child (`nodeAgentOf`). pi-durable stores a
+ * filter by tool name, so the host copy's registrations name the installed extension's tools.
+ */
+export const nodeChildTools = nodeAgentOf(host.tools);
 
 /**
  * What a brief's answer starts, for the answering commit (`answerApproval`'s `answered` hook,

@@ -1,11 +1,13 @@
 // The boot repairs, in the order they run after the Harness opens and before the brain is marked
 // ready. A package hands off a `bootRepair(...)` entry and it is listed here: sweep unfinished
-// attachment uploads; `ExecutorSweep` declines unfinished `apr_` ids; cancel approval records a
-// stop left pending (the abort mark committed, the cancel not); `retryTask()` for tasks whose
-// approval is still pending; remove child workspaces whose spawn never landed; resume interrupted
-// launches from `thread_launches`; repair checkpoint refs; reconcile spend; reconcile portal rows,
-// units and porches, then start the portal sweep; then start the durable event reactors, last, so they run after every repair and before
-// resume and ready. Orphaned `claude` processes are only logged, by the bridge's boot lines
+// attachment uploads; `ExecutorSweep` declines unfinished `apr_` ids; make subagent rows; reconcile
+// spend, then load the budget book and halt the scopes past their line (4E), both before anything
+// that retries a parked task, since pi-durable's `retryTask` resumes scheduling; cancel approval
+// records a stop left pending (the abort mark committed, the cancel not); `retryTask()` for tasks
+// whose approval is still pending; retry parked subagent tasks; remove child workspaces whose spawn
+// never landed; resume interrupted launches from `thread_launches`; repair checkpoint refs;
+// reconcile portal rows, units and porches, then start the portal sweep; then start the durable
+// event reactors, last, so they run after every repair and before resume and ready. Orphaned `claude` processes are only logged, by the bridge's boot lines
 // (`BridgeProvider.ts`), not repaired here.
 
 import { Effect } from "effect";
@@ -28,6 +30,8 @@ import type { ThreadRows } from "./shell/ThreadRows.ts";
 import { retryParkedSubagentTasks } from "./subagents/SubagentRepairs.ts";
 import { repairSubagentRows } from "./subagents/SubagentRows.ts";
 import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
+import { budgetBootRepair } from "./usage/BudgetGuard.ts";
+import type { BudgetGuard } from "./usage/BudgetGuard.ts";
 import { reconcileSpendAtBoot } from "./usage/SpendLedger.ts";
 import type { SpendLedger } from "./usage/SpendLedger.ts";
 import type { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
@@ -64,6 +68,7 @@ export const bootRepair = <E, R>(
 export const bootRepairs: ReadonlyArray<
   BootRepair<
     | AttachmentStore
+    | BudgetGuard
     | CheckpointCapture
     | ChildWorkspaces
     | EventReactors
@@ -78,9 +83,11 @@ export const bootRepairs: ReadonlyArray<
 > = [
   sweepAttachmentUploads,
   bootRepair("executor-sweep", sweepUnfinishedExecutorRequests),
+  bootRepair("subagent rows", repairSubagentRows),
+  bootRepair("spend reconcile", reconcileSpendAtBoot),
+  bootRepair("budget boot repair", budgetBootRepair),
   bootRepair("cancel abandoned approvals", cancelAbandonedApprovalsAtBoot),
   retryParkedApprovalWaits,
-  bootRepair("subagent rows", repairSubagentRows),
   bootRepair("retry parked subagent tasks", retryParkedSubagentTasks),
   bootRepair("child workspace repair", repairChildWorkspacesAtBoot),
   bootRepair(
@@ -91,7 +98,6 @@ export const bootRepairs: ReadonlyArray<
     "checkpoint repair",
     CheckpointCapture.use((capture) => capture.repair)
   ),
-  bootRepair("spend reconcile", reconcileSpendAtBoot),
   portalReconcile,
   startPortalSweep,
   startEventReactors,

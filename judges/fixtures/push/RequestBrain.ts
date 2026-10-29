@@ -20,6 +20,7 @@ import {
   SettingsLive,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
+import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
 import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
 import {
@@ -146,7 +147,8 @@ const JudgeTools = Layer.succeed(
 const Harness = Layer.mergeAll(
   Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
   EventReactors.layerOff,
-  SpendFeed.layerOff
+  SpendFeed.layerOff,
+  BudgetSources.layerNone
 ).pipe(
   Layer.provideMerge(
     Layer.effectDiscard(ScriptedBoot.use((boot) => boot.resume)).pipe(

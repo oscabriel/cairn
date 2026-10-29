@@ -16,8 +16,12 @@ export const ExtensionOrder = {
   context: 400,
   codemode: 500,
   executor: 600,
+  /** `cairn.budgets`: the `beforeTool` gate that refuses delegating tools past a scope's line (ADR 0036). */
+  budgets: 640,
   /** `cairn.subagents`: the seven subagent tools and the anchor, brief and reporter tasks (ADR 0028). */
   subagents: 650,
+  /** cairn.workflows: the workflow node tools, their watcher task and the gate (ADR 0012 as amended). */
+  workflows: 660,
   bridgeCwd: 700,
   /** `cairn.reach`: the artifact tools (3E) and the portal tools (3F); 750 is the provider request log's. */
   reach: 760,

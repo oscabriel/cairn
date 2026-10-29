@@ -59,6 +59,8 @@ interface Identity {
   readonly threadId: string;
   readonly receipted: boolean;
   readonly cwd: string | null;
+  /** The tools the child's filter removes, by name. */
+  readonly removed: ReadonlyArray<string>;
 }
 
 /** Waits until the workflow row has ended (its watcher wrote it), at most `ms`. */
@@ -112,6 +114,15 @@ const childrenOf = async (brain: KitBrain): Promise<Map<string, number>> =>
     return found;
   }, context);
 
+/** The tool names a stored `modelTools` filter removes: none for a list or no filter. */
+const removedOf = (
+  filter:
+    | Array<string>
+    | { remove?: Array<string>; add?: Array<string> }
+    | undefined
+): ReadonlyArray<string> =>
+  filter === undefined || Array.isArray(filter) ? [] : (filter.remove ?? []);
+
 /** Each node child's thread identity and cwd, by its link's node id. */
 const identitiesOf = async (brain: KitBrain): Promise<Map<string, Identity>> =>
   await brain.harness.commit(async (tx) => {
@@ -145,6 +156,7 @@ const identitiesOf = async (brain: KitBrain): Promise<Map<string, Identity>> =>
         threadId: meta.threadId,
         receipted: receipt?.conversationId === conversation.id,
         cwd: agent.cwd ?? null,
+        removed: [...removedOf(agent.modelTools)],
       });
     }
 
@@ -709,6 +721,7 @@ return a;`)
         assert.strictEqual(identity?.threadId, node?.childThreadId);
         assert.isTrue(identity?.receipted);
         assert.strictEqual(identity?.cwd, KIT_CWD);
+        assert.include(identity?.removed ?? [], "subagent_spawn");
         assert.isNotNull(node?.submissionId ?? null);
       })
   );

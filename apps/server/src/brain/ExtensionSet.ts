@@ -14,7 +14,10 @@ import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachTools } from "../reach/ReachExtension.ts";
 import { skillExtensionSources } from "../skills/SkillsLayer.ts";
 import { Subagents } from "../subagents/Subagents.ts";
+import { BudgetBook } from "../usage/BudgetBook.ts";
+import { Workflows } from "../workflows/Workflows.ts";
 import { BridgeCwd } from "./BridgeCwdExtension.ts";
+import { BudgetGate } from "./BudgetGateExtension.ts";
 import { CodeMode } from "./CodeMode.ts";
 import { CodingTools } from "./CodingTools.ts";
 import { ExtensionOrder, Extensions } from "./Extensions.ts";
@@ -36,13 +39,17 @@ const production: ReadonlyArray<
     | ResultTool
     | ReachTools
     | Subagents
+    | Workflows
+    | BudgetGate
   >
 > = [
   CodingTools.useSync((tools) => tools.extension),
   CodeMode.useSync((codemode) => codemode.extension),
   ...skillExtensionSources,
   ExecutorExtension.useSync((executor) => executor.extension),
+  BudgetGate.useSync((gate) => gate.extension),
   Subagents.useSync((subagents) => subagents.extension),
+  Workflows.useSync((workflows) => workflows.extension),
   BridgeCwd.useSync((bridgeCwd) => bridgeCwd.extension),
   PiHost.useSync((host) => host.extension),
   ModelHealthFeed.useSync((feed) => feed.extension),
@@ -67,7 +74,10 @@ const production: ReadonlyArray<
 // reference its handlers and boot repairs use; `ReachServicesTest` in tests), so one porch client
 // and one portal store serve the tools and the RPCs. `Subagents` is the root's as well:
 // `Subagents.layer` over the root's `ChildWorkspaces` in the entry points, `Subagents.layerWith`
-// with planted faults in a test brain.
+// with planted faults in a test brain. The budget gate reads `BudgetBook.layer`, the reference
+// `AppLayer` gives the spend ledger, `Budgets` and the guard, so the memo map builds one book;
+// a test that builds this set alone gets an empty book of its own. The workflow tools resolve
+// roles through `RoleAliases.layerNoDeps`, as the `roles` tool does.
 const dependencies = Layer.mergeAll(
   CodingTools.layer,
   CodeMode.layer,
@@ -79,7 +89,9 @@ const dependencies = Layer.mergeAll(
     Layer.provide(RoleAliases.layerNoDeps)
   ),
   ResultTool.layer,
-  ReachTools.layerAt(ExtensionOrder.reach)
+  ReachTools.layerAt(ExtensionOrder.reach),
+  BudgetGate.layer.pipe(Layer.provide(BudgetBook.layer)),
+  Workflows.layer.pipe(Layer.provide(RoleAliases.layerNoDeps))
 );
 
 /** The installed set: production extensions, plus any a composition root adds (judges). */

@@ -70,19 +70,20 @@ import type {
 } from "../brain/CairnDocs.ts";
 import { ScriptSlots } from "../brain/CodeMode.ts";
 import { emit } from "../brain/Events.ts";
+import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import {
   cutSummary,
   GATED_APPROVAL_TTL_MILLIS,
   readPermissions,
 } from "../brain/Permissions.ts";
-import { offerResultTool } from "../models/ResultTool.ts";
 import {
   childThreadIdOf,
   conversationOf,
   taskOf,
 } from "../subagents/Delivery.ts";
 import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
+import { nodeChildTools } from "../subagents/Subagents.ts";
 import {
   AgentCall,
   ApproveCall,
@@ -132,12 +133,6 @@ import type { Caller, NodeEnding } from "./WorkflowNodes.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const WORKFLOWS_EXTENSION = "cairn.workflows";
-
-/**
- * Where the extension installs: after `cairn.subagents` (650), before the bridge's cwd (700). The
- * integrator moves it into `ExtensionOrder` as `workflows: 660` (hand-off).
- */
-export const WORKFLOWS_ORDER = 660;
 
 /** The watcher task's name. */
 export const WATCH_TASK = "cairn.workflow-watch";
@@ -368,8 +363,8 @@ const refusalOf = (
 
 /**
  * The agent change a node's child is created with: the role's model, the launching conversation's
- * cwd (so its file and shell tools have an environment, and the bridge a cwd), and the result tool
- * when typed.
+ * cwd (so its file and shell tools have an environment, and the bridge a cwd), no subagent tools
+ * (a node cannot spawn), and the result tool when typed (`nodeChildTools`).
  */
 const childAgentOf = (
   resolved: ResolvedNodeModel,
@@ -385,10 +380,7 @@ const childAgentOf = (
     onNone: () => ({}),
     onSome: (level) => ({ thinkingLevel: level }),
   }),
-  ...Option.match(Option.liftPredicate(typed, Boolean), {
-    onNone: () => ({}),
-    onSome: () => offerResultTool,
-  }),
+  ...nodeChildTools(typed),
 });
 
 /**
@@ -1439,7 +1431,7 @@ export const workflowExtension = (
   });
 
   return {
-    order: WORKFLOWS_ORDER,
+    order: ExtensionOrder.workflows,
     extension: defineExtension({
       name: WORKFLOWS_EXTENSION,
       tools: [begin, agent, verify, approve, phase, log, budget],

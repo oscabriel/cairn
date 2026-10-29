@@ -174,7 +174,7 @@ const GuardFakes = Layer.unwrap(
           Ref.update(record.stops, (stops) => [
             ...stops,
             { threadId, options },
-          ]),
+          ]).pipe(Effect.as([])),
         events: Stream.fromPubSub(record.events),
         capabilities: { durable: false, live: false },
       }),

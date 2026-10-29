@@ -17,7 +17,8 @@
 // once). A life that boots with the scope past its line prints `exhausted` before the Harness
 // resumes. The guard's first stop prints `stopping`; each later stop in that pass waits
 // `--stagger-ms` more, so a kill lands while it is stopping. `--control no-stop` stops nothing and
-// halts nothing, with no gate. Pushes are appended to `pushes.log` instead of sent.
+// halts nothing; the gate stays, as in production, and the children here never delegate. Pushes
+// are appended to `pushes.log` instead of sent.
 //
 // `--final` waits for every child to go idle, writes `report.json` (spend, the line, each child's
 // responses at boot and at the end, notices, the row's budget word, pushes), then answers the raise
@@ -64,7 +65,6 @@ import { SqlClient } from "effect/sql";
 import { retryParkedApprovalWaits } from "../../../apps/server/src/Boot.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
-import { BudgetGate } from "../../../apps/server/src/brain/BudgetGateExtension.ts";
 import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
 import { ThreadReceipt } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
@@ -200,17 +200,11 @@ const tickExtension: CairnExtension = {
   extension: defineExtension({ name: "judge.budget-tick", tools: [tick] }),
 };
 
-/** The extension set: production, `tick`, and the budget gate unless the control has none. */
-const Extensions = Layer.unwrap(
-  Effect.gen(function* () {
-    const gate = yield* BudgetGate;
-
-    return ExtensionSet.withExtra(
-      noStop ? [tickExtension] : [tickExtension, gate.extension]
-    );
-  })
-).pipe(
-  Layer.provide(BudgetGate.layer),
+/**
+ * The extension set: production, which carries the budget gate over the judge's `BudgetBook` (one
+ * book, by reference, as in `AppLayer`), and `tick`.
+ */
+const Extensions = ExtensionSet.withExtra([tickExtension]).pipe(
   Layer.provide(ExecutorLink.layerDisabled),
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(ModelHealth.layerTest),
@@ -255,9 +249,7 @@ const GuardSeam = Layer.effect(
 
           yield* Effect.sleep(Duration.times(STAGGER, n));
 
-          if (!noStop) {
-            yield* real.stop(threadId, options);
-          }
+          return noStop ? [] : yield* real.stop(threadId, options);
         }),
     });
   })

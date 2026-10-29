@@ -18,13 +18,11 @@ import { Context, Effect, FiberSet, Layer, Option, Schema } from "effect";
 import { BudgetBook, DELEGATING_TOOLS } from "../usage/BudgetBook.ts";
 import { gateDecision } from "../usage/Budgets.ts";
 import { ThreadMeta } from "./CairnDocs.ts";
+import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const BUDGETS_EXTENSION = "cairn.budgets";
-
-/** Its install order until `ExtensionOrder.budgets` takes it: before the subagent tools. */
-export const BUDGETS_ORDER = 640;
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
@@ -37,7 +35,7 @@ export class BudgetGate extends Context.Service<
   }
 >()("cairn/server/brain/BudgetGateExtension/BudgetGate") {
   /**
-   * Over the `BudgetBook` (the same one `Budgets` fills), at `BUDGETS_ORDER`. It needs nothing that
+   * Over the `BudgetBook` (the same one `Budgets` fills), at `ExtensionOrder.budgets`. It needs nothing that
    * needs the brain, so the brain's extension set can be built with it.
    */
   static readonly layer = Layer.effect(
@@ -106,7 +104,7 @@ export class BudgetGate extends Context.Service<
       });
 
       return BudgetGate.of({
-        extension: { order: BUDGETS_ORDER, extension },
+        extension: { order: ExtensionOrder.budgets, extension },
       });
     })
   );

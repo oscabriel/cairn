@@ -937,3 +937,17 @@ export const childAgentOf =
       add: typed ? [...tools.child, ...resultTools] : tools.child,
     },
   });
+
+/**
+ * The tools a workflow node's child is offered (4D's hand-off): none of a parent's five, so a node
+ * cannot spawn children, nor a child's two, since a node has no subagent parent to ask or report
+ * to; `submit_result` for a typed node.
+ */
+export const nodeAgentOf =
+  (tools: ReturnType<typeof subagentToolSet>) =>
+  (typed: boolean): AgentChange => ({
+    modelTools: {
+      remove: tools.parent,
+      add: typed ? resultTools : [],
+    },
+  });

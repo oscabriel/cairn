@@ -44,6 +44,7 @@ import {
   HarnessBoot,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
+import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
 import type { ImportedEntry } from "../../../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
@@ -229,7 +230,8 @@ export const startCairn = async (seed: CairnSeed): Promise<CairnApp> => {
   const Harness = Layer.mergeAll(
     Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
     EventReactors.layerOff,
-    SpendFeed.layerOff
+    SpendFeed.layerOff,
+    BudgetSources.layerNone
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),
     Layer.provideMerge(ScriptedStore.layer),

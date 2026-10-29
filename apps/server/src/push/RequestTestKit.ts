@@ -57,6 +57,7 @@ export const pendingBrief = (
           isolation: Option.none(),
           resultSchema: Option.none(),
           wake: Option.none(),
+          role: Option.none(),
         },
         "full-access"
       )

@@ -41,6 +41,14 @@ export interface ViewInputs<Item extends object> {
   readonly items: ReadonlyArray<Item>;
   readonly itemToKey: (item: Item) => string;
   readonly itemToView: (item: Item) => Html;
+  /**
+   * A row's off-screen copy, drawn in the measuring box. It must never return the same vnode
+   * object `itemToView` returns for that item: snabbdom tracks a vnode's DOM through its mutable
+   * `.elm`, so one vnode drawn in both places lets the probe box's removal run its destroy hooks
+   * against the live row (its listeners and Mounts). A memoized row needs its own cache slot here,
+   * as foldkit's lazy asks (one slot per position).
+   */
+  readonly itemToOffScreenView: (item: Item) => Html;
   /** A row's height before it is measured: only how many rows a list with nothing measured draws. */
   readonly itemToEstimatedHeightPx: (item: Item) => number;
   readonly className: string;
@@ -146,7 +154,7 @@ export const view = <Item extends object>() =>
       return h.keyed("div")(
         key,
         [h.DataAttribute(PROBE_KEY, key), h.Style({ display: "grid" })],
-        [inputs.itemToView(item)]
+        [inputs.itemToOffScreenView(item)]
       );
     };
 

@@ -34,13 +34,26 @@ export interface ViewInputs {
  */
 const rowLazies = new Map<string, ReturnType<typeof createKeyedLazy>>();
 
-const rowLazyFor = (threadId: string) =>
-  setRecent(
-    rowLazies,
+/**
+ * The same per thread for the rows' off-screen copies (list/View.ts's measuring box). A cached
+ * vnode is drawn at one position only, so a row and its off-screen copy never share one: sharing
+ * let the box's removal strip the live row's listeners and Mounts.
+ */
+const probeLazies = new Map<string, ReturnType<typeof createKeyedLazy>>();
+
+/** Where a row is drawn: in the list, or off-screen to be measured. */
+type RowPosition = "list" | "offScreen";
+
+const rowLazyFor = (threadId: string, position: RowPosition) => {
+  const lazies = position === "list" ? rowLazies : probeLazies;
+
+  return setRecent(
+    lazies,
     threadId,
-    // oxlint-disable-next-line foldkit/lazy-view-stable-references -- made once per thread and kept in `rowLazies`, so its cache lives as long as the thread stays recent
-    rowLazies.get(threadId) ?? createKeyedLazy()
+    // oxlint-disable-next-line foldkit/lazy-view-stable-references -- made once per thread and position and kept in its map, so its cache lives as long as the thread stays recent
+    lazies.get(threadId) ?? createKeyedLazy()
   );
+};
 
 const listView = List.view<ListItem>();
 
@@ -89,7 +102,8 @@ const itemView = (
   threadId: string,
   inputs: ViewInputs,
   transcript: Transcript,
-  item: ListItem
+  item: ListItem,
+  position: RowPosition
 ): Html => {
   const copied = copiedFor(model.copiedRowId, item.id);
 
@@ -104,7 +118,7 @@ const itemView = (
       : NO_CURSOR;
 
   return (
-    rowLazyFor(threadId)(item.id, renderRow, [
+    rowLazyFor(threadId, position)(item.id, renderRow, [
       h,
       item,
       threadId,
@@ -180,7 +194,17 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
             items: transcript.items,
             itemToKey: (item) => item.id,
             itemToView: (item) =>
-              itemView(h, model, threadId, inputs, transcript, item),
+              itemView(h, model, threadId, inputs, transcript, item, "list"),
+            itemToOffScreenView: (item) =>
+              itemView(
+                h,
+                model,
+                threadId,
+                inputs,
+                transcript,
+                item,
+                "offScreen"
+              ),
             itemToEstimatedHeightPx: (item) =>
               estimatedHeightOf(item, expandedUsers),
             className:

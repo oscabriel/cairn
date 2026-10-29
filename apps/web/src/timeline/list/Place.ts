@@ -17,14 +17,18 @@
 //   the input's target and the scroller can take the scroll itself, and the wheel is not a pinch.
 //   Input that cannot move it produces no scroll event to start following again. The target check
 //   is a port of github.com/pingdotgg/t3code, apps/web/src/components/chat/timelineScrollTarget.ts
-//   (`isTimelineScrollTarget`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (#5566), MIT.
+//   (`isTimelineScrollTarget`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (#5566). Changed: it
+//   is `scrollsList`, taking the scroll's sign rather than its delta, so key input uses it too; the
+//   pinch and the scroller's own overflow are checked by its callers here.
 //
 // The glyph bookmark is a port of github.com/hardbeat920/monocode,
 // src/features/sessions/ui/useReplyReflowAnchor.ts at 26465c620977f3951d0a532a0f7db32c3c179007.
 // Changed: it bookmarks any list row rather than an assistant reply, the list's own corrections are
 // told apart by the offset they set, and the pane-slide pause is left out (no panel slides yet).
 //
-// MIT License. Copyright (c) 2026 Nick
+// Both sources are MIT licensed:
+// MIT License. Copyright (c) 2026 T3 Tools Inc. (t3code)
+// MIT License. Copyright (c) 2026 Nick (MonoCode)
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
 // associated documentation files (the "Software"), to deal in the Software without restriction,

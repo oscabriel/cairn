@@ -15,7 +15,8 @@
 //              bottom and the pill stays hidden (`--broken wheel`, which stops following on any
 //              wheel up, as t3code did before #5566, fails it);
 //   scroll-up  a wheel up stops following: the pill shows and, while the reply keeps streaming, no
-//              frame moves `scrollTop` or the first visible row;
+//              frame changes the first visible row or moves it more than 1 px (`scrollTop` changes,
+//              the list holding the reader as a commit moves a parked row, are reported);
 //   expand     opening a turn fold, then the output of the tool row it revealed, moves no frame's
 //              `scrollTop` or the clicked control;
 //   pill       the pill brings the list back to its end, which it follows again;
@@ -48,7 +49,12 @@
 //              narrowed to 390 and, 400 ms on, the range gesture up: the range holds as in `range`.
 //              The same gesture started at once after the width change is reported, not checked:
 //              stale rows above the reader are corrected as they are drawn in the first frames
-//              (ADR 0041 records the window as a measured cost).
+//              (ADR 0041 records the window as a measured cost);
+//   probe-click  a fresh load at 1,440 px, 1,600 px up, the viewport narrowed to 1,000 so stale rows
+//              are drawn in the off-screen measuring box, and a 900 px scroll up the frame after it
+//              draws: the rows it held come into the list as it goes, and none loses a click
+//              listener while it stays, and a fold among them opens on a click (a row and its
+//              off-screen copy sharing one memoized vnode fails it).
 // It also reports the document's element count once the fresh load settled, and after the range
 // gesture. Prints one JSON line and exits 0 when every check passed, apart from the known failures
 // in `KNOWN_FAILING`, which it reports without failing on; a known failure that passes fails the
@@ -89,6 +95,8 @@ import { chromium } from "playwright";
 import type { Page } from "playwright";
 import { createServer as createViteServer } from "vite";
 
+import { BrokenControl } from "../apps/web/src/timeline/list/Model.ts";
+
 const { values } = parseArgs({
   options: {
     seconds: { type: "string", default: "6" },
@@ -96,6 +104,18 @@ const { values } = parseArgs({
     broken: { type: "string", default: "" },
   },
 });
+
+/** The harness's broken controls; any other `--broken` would run the healthy list unnoticed. */
+const BROKEN_CONTROLS: ReadonlyArray<string> = BrokenControl.literals.filter(
+  (control) => control !== "none"
+);
+
+if (values.broken !== "" && !BROKEN_CONTROLS.includes(values.broken)) {
+  process.stderr.write(
+    `judges/transcript-scroll.ts: --broken must be one of ${BROKEN_CONTROLS.join(", ")}; got ${JSON.stringify(values.broken)}.\n`
+  );
+  process.exit(2);
+}
 
 const SECONDS = Number(values.seconds);
 
@@ -237,6 +257,69 @@ window.__nested = () => {
 window.__unnest = () => {
   document.querySelector("[data-judge-nested]")?.remove();
   return true;
+};
+// Listener removals on elements that stay in the list: a row whose off-screen copy shared its
+// vnode lost its listeners when the measuring box went (the probe-click check). Removals from
+// elements on their way out are not counted, as those leave the document.
+window.__removals = [];
+window.__watchRemovals = false;
+const removeListener = EventTarget.prototype.removeEventListener;
+EventTarget.prototype.removeEventListener = function (type, ...rest) {
+  if (window.__watchRemovals && this instanceof Element && type === "click") {
+    window.__removals.push(this);
+  }
+  return removeListener.call(this, type, ...rest);
+};
+window.__liveRemovals = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  return window.__removals.filter(
+    (element) =>
+      element.isConnected &&
+      scroller !== null &&
+      scroller.contains(element) &&
+      element.closest("[data-list-probe]") === null
+  ).length;
+};
+// Once the measuring box next draws, the frame after it a scroll of 900 px up: a gesture that
+// starts while rows sit in the box, so the next render draws them in the list as the box goes.
+window.__armProbeScroll = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  window.__probed = [];
+  window.__probeScrolled = false;
+  window.__removals = [];
+  window.__watchRemovals = true;
+  if (scroller === null) return false;
+  const observer = new MutationObserver(() => {
+    const box = scroller.querySelector(":scope > [data-list-probe]");
+    if (box === null) return;
+    observer.disconnect();
+    requestAnimationFrame(() => {
+      window.__probed = [...box.children].map((row) => row.dataset.probeKey ?? "");
+      scroller.scrollTop -= 900;
+      // A reader's scroll is heard at the frame's start, before the observers that keep the place
+      // run; one set from here would be heard a frame late, after they put it back.
+      scroller.dispatchEvent(new Event("scroll"));
+      window.__probeScrolled = true;
+    });
+  });
+  observer.observe(scroller, { childList: true });
+  return true;
+};
+// A closed turn fold drawn in the list whose row was in the measuring box at the scroll, marked
+// and brought to the middle of the viewport (its element stays: it is drawn either way).
+window.__markProbedFold = () => {
+  const scroller = document.querySelector(${JSON.stringify(SCROLLER)});
+  if (scroller === null) return "";
+  const probed = new Set(window.__probed ?? []);
+  const fold = [...scroller.querySelectorAll(':scope > [data-virtual-list-item-key] [data-testid="turn-fold"]')].find(
+    (candidate) =>
+      probed.has(candidate.closest("[data-virtual-list-item-key]")?.dataset.virtualListItemKey ?? "") &&
+      candidate.getAttribute("aria-expanded") === "false"
+  );
+  if (fold === undefined) return "";
+  fold.dataset.probe = "probed-fold";
+  fold.scrollIntoView({ block: "center" });
+  return fold.closest("[data-virtual-list-item-key]")?.dataset.virtualListItemKey ?? "";
 };
 window.__twoFrames = () =>
   new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))));
@@ -544,15 +627,21 @@ const scrollUpPhase = async (page: Page) => {
 
   const pill = await pillVisible(page);
   const frames = await sampleFrames(page, 2500);
-  const firstKey = frames[0]?.firstKey ?? "";
+  const [first] = frames;
+  const firstKey = first?.firstKey ?? "";
 
   return {
     pill,
     frames: frames.length,
+    // Reported, not checked: a turn committing at the end can move a parked row's frozen height
+    // across the reader's place, and the list holds the reader by moving `scrollTop`.
     scrollTopChanges: changes(frames, (frame) => frame.scrollTop),
+    // What the reader sees, as in the land checks: a frame whose first visible row changed or sits
+    // more than 1 px (whole-px `scrollTop`) from where it was.
     anchorMoves:
-      changes(frames, (frame) => frame.firstOffset) +
-      frames.filter((frame) => frame.firstKey !== firstKey).length,
+      frames.filter(
+        (frame) => Math.abs(frame.firstOffset - (first?.firstOffset ?? 0)) > 1
+      ).length + frames.filter((frame) => frame.firstKey !== firstKey).length,
   };
 };
 
@@ -615,7 +704,11 @@ const pillPhase = async (page: Page) => {
   await click(page, "stream-off");
   await sleep(300);
 
-  return { maxDistancePx: maxDistance(frames), visibleAfter };
+  return {
+    maxDistancePx: maxDistance(frames),
+    framesOver1Px: frames.filter((frame) => frame.distance > 1).length,
+    visibleAfter,
+  };
 };
 
 const switchPhase = async (page: Page) => {
@@ -854,6 +947,73 @@ const rangeAfterReflowPhase = async (
   return { delayMs, ...up };
 };
 
+/** How far into history the probe-click check starts, and the width it narrows to. */
+const PROBE_CLICK_UP_PX = 1600;
+
+const PROBE_CLICK_WIDTH = 1000;
+
+/**
+ * A fresh load at 1,440 px, a wheel up into history and a rest, then the viewport narrowed so the
+ * stale rows near the reader are drawn in the measuring box, and in the frame after it first draws
+ * a scroll of 900 px up: the rows it held come on screen as it goes. Each must keep its listeners:
+ * none loses a click listener while it stays in the list, and a fold among them opens on a click.
+ */
+const probeClickPhase = async (page: Page, url: string) => {
+  await load(page, url);
+  await wheelUp(page, PROBE_CLICK_UP_PX);
+  await rest(page);
+
+  const armed = decodeBoolean(await page.evaluate("window.__armProbeScroll()"));
+
+  await page.setViewportSize({
+    width: PROBE_CLICK_WIDTH,
+    height: VIEWPORT.height,
+  });
+
+  // A list that never draws the box (`--broken estimate`) never scrolls: the check fails on it.
+  const scrolled = await page
+    .waitForFunction("window.__probeScrolled === true", undefined, {
+      timeout: 5000,
+    })
+    .then(
+      () => true,
+      () => false
+    );
+
+  await rest(page);
+  await sleep(500);
+
+  const probed = decodeNumber(
+    await page.evaluate("(window.__probed ?? []).length")
+  );
+
+  const liveRemovals = decodeNumber(
+    await page.evaluate("window.__liveRemovals()")
+  );
+
+  const foldKey = Schema.decodeUnknownSync(Schema.String)(
+    await page.evaluate("window.__markProbedFold()")
+  );
+
+  let opened = false;
+
+  if (foldKey !== "") {
+    await rest(page);
+    await page.click('[data-probe="probed-fold"]');
+    await sleep(300);
+    opened =
+      (await page.getAttribute(
+        '[data-probe="probed-fold"]',
+        "aria-expanded"
+      )) === "true";
+  }
+
+  await page.evaluate("window.__watchRemovals = false");
+  await page.setViewportSize(VIEWPORT);
+
+  return { armed: armed && scrolled, probed, liveRemovals, foldKey, opened };
+};
+
 /**
  * A fresh load at `width`, a wheel up to the top of the measured range, then a pause: history
  * joins above the reader, who must not move.
@@ -1009,6 +1169,7 @@ const run = async (page: Page, port: number) => {
   );
 
   const rangeAtReflow = await rangeAfterReflowPhase(page, url, 0);
+  const probeClick = await probeClickPhase(page, url);
 
   return {
     rows,
@@ -1031,6 +1192,7 @@ const run = async (page: Page, port: number) => {
     extend,
     rangeAfterReflow,
     rangeAtReflow,
+    probeClick,
   };
 };
 
@@ -1053,6 +1215,20 @@ const landed = (phase: {
   phase.landed &&
   phase.scrollTopShiftPx >= LAND_MIN_SHIFT_PX &&
   phase.anchorMoves === 0;
+
+/** Rows came from the measuring box into the list with their listeners: a fold among them opens. */
+const keptListeners = (phase: {
+  readonly armed: boolean;
+  readonly probed: number;
+  readonly liveRemovals: number;
+  readonly foldKey: string;
+  readonly opened: boolean;
+}): boolean =>
+  phase.armed &&
+  phase.probed > 0 &&
+  phase.liveRemovals === 0 &&
+  phase.foldKey !== "" &&
+  phase.opened;
 
 const main = async () => {
   const port = await freePort();
@@ -1093,10 +1269,7 @@ const main = async () => {
       result.nestedWheel.boxScrollTop < 1000 &&
       result.nestedWheel.maxDistancePx <= 1 &&
       !result.nestedWheel.pill,
-    scrollUp:
-      result.scrollUp.pill &&
-      result.scrollUp.scrollTopChanges === 0 &&
-      result.scrollUp.anchorMoves === 0,
+    scrollUp: result.scrollUp.pill && result.scrollUp.anchorMoves === 0,
     expand:
       result.expand.opened === 2 &&
       result.expand.scrollTopChanges === 0 &&
@@ -1116,6 +1289,7 @@ const main = async () => {
       result.extend.length === EXTEND_WIDTHS.length &&
       result.extend.every(extended),
     rangeAfterReflow: result.rangeAfterReflow.held,
+    probeClick: keptListeners(result.probeClick),
     errors: errors.length === 0,
   };
 

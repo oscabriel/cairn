@@ -18,6 +18,7 @@
 // a record (`answerApproval`) and cancels the records a stopped run held (`cancelStoppedApprovals`);
 // a boot repair cancels those a stop cut off by a crash left behind (`cancelAbandonedApprovals`).
 
+import { answersProblem } from "@cairn/client-logic/PendingRequests";
 import { TaskId } from "@cairn/protocol/Ids";
 import {
   APPROVALS_DOCUMENT,
@@ -25,6 +26,7 @@ import {
   ApprovalStatus,
   DEFAULT_RUNTIME_MODE,
   PERMISSIONS_DOCUMENT,
+  QuestionsPayload,
   RuntimeRequestKind,
 } from "@cairn/protocol/Policy";
 import type {
@@ -772,13 +774,15 @@ export interface RecordAnswer {
 /**
  * How an answer landed: it changed a pending record, the record was already settled, there is no
  * such record, or the record cannot take it (`answers` on a record that asked no questions,
- * `revise` on anything but a brief, or `revise` with no notes: Send back says what to change).
+ * answers that do not fit the questions asked, `revise` on anything but a brief, or `revise` with
+ * no notes: Send back says what to change).
  */
 export type AnswerOutcome =
   | "answered"
   | "already_settled"
   | "not_found"
   | "refused_answers"
+  | "refused_answers_invalid"
   | "refused_revise"
   | "refused_revise_reason";
 
@@ -790,6 +794,12 @@ export const refusalText = (
   if (outcome === "refused_answers") {
     return Option.some(
       `Approval ${approvalId} asked no questions, so it takes no answers. Answer it with a decision alone.`
+    );
+  }
+
+  if (outcome === "refused_answers_invalid") {
+    return Option.some(
+      `The answers to approval ${approvalId} do not fit its questions. Each answer names one question by its index, picks only that question's option labels (one unless it allows several), adds its own words only where the question allows them, and says something. Fix the answers and send them again.`
     );
   }
 
@@ -815,9 +825,23 @@ const STATUS_OF: Readonly<Record<ApprovalDecision, ApprovalStatus>> = {
   revise: "revised",
 };
 
-/** Whether a record asked questions, so it can take `answers`. */
-const asksQuestions = (record: ApprovalRecord) =>
-  record.payload?.type === "questions";
+const decodeQuestions = Schema.decodeUnknownOption(QuestionsPayload);
+
+/**
+ * How a record takes `answers`: none for a record that asked no questions, refused when they do
+ * not fit the questions it asked (`answersProblem`), fine otherwise.
+ */
+const answersFit = (
+  record: ApprovalRecord,
+  answers: ReadonlyArray<QuestionAnswer>
+): "fits" | "refused_answers" | "refused_answers_invalid" =>
+  Option.match(decodeQuestions(record.payload), {
+    onNone: () => "refused_answers",
+    onSome: (payload) =>
+      Option.isSome(answersProblem(payload.questions, answers))
+        ? "refused_answers_invalid"
+        : "fits",
+  });
 
 /**
  * Applies an answer to one record in place: the status, `answer`, `decidedBy`, `reason` and
@@ -834,8 +858,12 @@ export const applyAnswer = (
     return "already_settled";
   }
 
-  if (Option.isSome(answer.answers) && !asksQuestions(record)) {
-    return "refused_answers";
+  if (Option.isSome(answer.answers)) {
+    const fit = answersFit(record, answer.answers.value);
+
+    if (fit !== "fits") {
+      return fit;
+    }
   }
 
   if (answer.decision === "revise" && record.kind !== "brief") {

@@ -29,19 +29,20 @@
 //   cwd for a shared child), then starts the child in one commit (`startChild`): anchor, child
 //   conversation in that cwd with Cairn's thread identity and its `cairn.child` link, the registry
 //   item with its worktree, the first reporter and the parent's note that it started. A workspace
-//   that cannot be made starts nothing, and the parent is told why. Decline and Send back reach the parent as a follow-up input, or as a note
-//   when the parent is halted. The briefs package (4A) moves Go into the answer itself.
+//   that cannot be made starts nothing, and the parent is told why. Decline and Send back reach the
+//   parent as a follow-up input, or as a note when the parent is halted. The briefs package (4A)
+//   moves Go into the answer itself.
 // - Reporter (`cairn.subagent-reporter`), one per input to a child (the brief, `subagent_send`, a
 //   user's steer typed into the child): `deliver` submits the input under its request id (the
 //   whole input: its text and images, its entry, its `whenBusy`), mirrors the child's pending
 //   records into its registry status while it works, and settles the run that ended it once, in
 //   one commit. A run is keyed by its identity (its answer entry; when it ended unanswered, the
-//   entry of its first input, found in the committed transcript by who placed each input: a steer
-//   shares the `byTaskId` of the tool-calling entry before it), never by a failure's reason or
-//   detail; the first
-//   reporter to settle it gathers every live peer whose submission the same run ended and writes
-//   one settlement listing them all, with a run mark naming it, waking the parent unless all were
-//   a user's steers. A reporter whose run or input a mark already names settles nothing.
+//   entry of its first input, found in the committed transcript by how each input was placed: a
+//   steer shares the `byTaskId` of the tool-calling entry before it, and inputs one commit placed
+//   have adjacent ids), never by a failure's reason or detail; the first reporter to settle it
+//   gathers every live peer whose submission the same run ended and writes one settlement listing
+//   them all, with a run mark naming it, waking the parent unless all were a user's steers. A
+//   reporter whose run or input a mark already names settles nothing.
 //   `nudge` sends a typed child that ended without a result its one nudge (`NUDGE_TEXT`); the
 //   commit that decides it writes a `nudge` run mark listing every input the nudged run ended, so
 //   their reporters settle nothing and the nudge's run settles them all. `report` writes the
@@ -269,12 +270,18 @@ interface RunSpan {
   /**
    * The run's last entry: its answer (with the results of the tool round it ended on); for an
    * unanswered run its terminal entry, or the entry before the next run's first input, or the
-   * transcript's last entry when nothing came after it; none when not found.
+   * transcript's last entry when nothing came after it; none when not found within `RUN_SCAN`
+   * entries, or for an input that settles alone, and then reads of the run are unbounded.
    */
   readonly end: EntryId | undefined;
 }
 
-/** How many entries past an input its run's terminal entry is looked for; past it, it settles alone. */
+/**
+ * How many entries from an input its run's first input and terminal entry are looked for. An input
+ * whose run's first input lies further back settles alone. A run whose end lies further on keeps
+ * its `run:` key with no end, and its settlement reads its words, turns and typed result to the end
+ * of the transcript: unbounded, for a run longer than this.
+ */
 const RUN_SCAN = 4096;
 
 /** How many entries a run scan reads per page. */
@@ -359,13 +366,14 @@ const isInput = (
 
 /**
  * Whether the input `entry` goes on the run that wrote `before`, the nearest assistant message
- * before it with no reset between, read from pi-durable's committed attribution (every entry
- * carries `byTaskId`, the task whose commit appended it). A steer is placed by the generation that
- * called the tools, in the commit that ends its tool round (the `postTools` boundary), so it shares
- * that assistant entry's `byTaskId`. Anything else starts a run: an input `submit` placed (under the
- * submitter's task, or none), or one a final or failure boundary placed (after the run's answer or
- * failure, under a generation that called no tools after it). Cairn installs no `onYield`
- * continuation, whose user message would go on its answer's run.
+ * before it with no reset between, read from pi-durable's committed attribution (`byTaskId`, the
+ * task whose commit appended an entry; none for a commit outside a task, such as
+ * `Conversation.submit`'s). A steer is placed by the generation that called the tools, in the
+ * commit that ends its tool round (the `postTools` boundary), so it shares that assistant entry's
+ * `byTaskId`. Anything else starts a run: an input `submit` placed (attributed to no task), or one
+ * a final or failure boundary placed (after the run's answer or failure, under a generation that
+ * called no tools after it). Cairn installs no `onYield` continuation, whose user message would go
+ * on its answer's run.
  */
 const goesOn = (entry: EntryRecord, before: EntryRecord | undefined): boolean =>
   before !== undefined &&
@@ -375,15 +383,21 @@ const goesOn = (entry: EntryRecord, before: EntryRecord | undefined): boolean =>
 
 /**
  * Whether `entry` was placed in the same commit as `previous`, the input right before it with no
- * assistant message between: one boundary placing several inputs (a run's first inputs, or a tool
- * round's steers). Two inputs `submit` placed are never one placement, even from one task.
+ * assistant message between: one boundary placing several inputs. That is a run's first inputs (an
+ * idle `submit` that places the inputs a failed run kept with its own, a final boundary, a failure
+ * boundary) or a tool round's steers. pi-durable mints every id from one counter, on one commit line,
+ * and a boundary appends its inputs back to back, so one placement's inputs have adjacent ids and
+ * one attribution. Every commit that places an input then mints the generation that runs it (or
+ * the successor that goes on with a tool round's steers) before it ends, so inputs two commits
+ * placed are never adjacent, even under one task or none: two runs that each ended with no entry of
+ * their own are never read as one.
  */
 const placedWith = (
   entry: EntryRecord,
   previous: EntryRecord | undefined
 ): boolean =>
   previous !== undefined &&
-  entry.byTaskId !== undefined &&
+  entry.id - previous.id === 1 &&
   entry.byTaskId === previous.byTaskId;
 
 /**
@@ -473,8 +487,8 @@ const runStart = async (
  * up to its terminal entry, the first assistant message at or after `from` that asks for no tool
  * and that the run does not go on from (a retried error is followed by the retry), and never past
  * a reset or an input that does not go on the run (`goesOn`, `placedWith`), the next run's first:
- * a run that ended with no entry of its own ends on the entry before it. Unbounded past `RUN_SCAN`
- * entries.
+ * a run that ended with no entry of its own ends on the entry before it. None when it is not
+ * found within `RUN_SCAN` entries.
  */
 const runExtent = async (
   tx: Tx,

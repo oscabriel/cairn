@@ -152,9 +152,11 @@ describe.each(SIDES)("%s harness, pending scenarios", (side) => {
  * reporter settles; and a typed result a later run accepted before the earlier run's reporter
  * settled, an earlier run that was stopped with no entry of its own included; and a run a steer
  * joined, stopped after it accepted a typed result, so the result goes with that run's one
- * settlement whichever of its reporters settles first.
+ * settlement whichever of its reporters settles first; and a steer a failed run kept, placed with
+ * the next input in one commit, so that run settles once.
  */
 const SHARED_RUN_SCENARIOS: ReadonlySet<string> = new Set([
+  "subagent_kept_steer_shares_next_failed_run",
   "subagent_send_and_user_message_fail_alike_in_two_runs",
   "subagent_send_and_user_steer_share_a_run",
   "subagent_send_steer_shares_a_stopped_run",

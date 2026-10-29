@@ -1471,8 +1471,22 @@ const layerNoDeps = Layer.effectContext(
         return submission;
       }
 
-      // Idle: a run starts and takes the oldest queued input first (a failed run left them).
-      const [first] = thread.queue.splice(0, 1);
+      // Idle: a run starts with what pi-durable's final boundary places in this one commit (queue
+      // modes one at a time): the first queued steer and the first queued follow-up, in queue
+      // order, so an input a failed run kept goes in one run with the input that arrives next.
+      const firstOf = (mode: QueuedInput["mode"]) =>
+        thread.queue.findIndex((item) => item.mode === mode);
+
+      const picked = [firstOf("steer"), firstOf("followUp")]
+        .filter((index) => index !== -1)
+        .toSorted((a, b) => a - b);
+
+      const placing = picked.map((index) => thread.queue[index]);
+
+      for (const index of picked.toReversed()) {
+        thread.queue.splice(index, 1);
+      }
+
       const runId = nextId();
 
       thread.run = Option.some({ runId, inputs: [], segment: runId });
@@ -1484,8 +1498,13 @@ const layerNoDeps = Layer.effectContext(
         })
       );
 
-      if (first !== undefined) {
-        place(thread, first, at, changes);
+      for (const item of placing) {
+        if (item !== undefined) {
+          place(thread, item, at, changes);
+        }
+      }
+
+      if (placing.length > 0) {
         changes.events.push(queueChanged(thread));
       }
 

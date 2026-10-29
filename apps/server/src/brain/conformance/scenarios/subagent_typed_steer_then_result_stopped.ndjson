@@ -16,7 +16,6 @@
 {"type":"expect_view","path":["queue"],"thread":"child1","equals":[{"mode":"steer","text":"also count the tests"}]}
 {"type":"release","label":"c1"}
 {"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$child1","kind":"tool-call","status":"pending"}}
-{"type":"settle","ms":200}
 {"type":"input","step":"stop","thread":"child1"}
 {"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$child1","status":"interrupted"}}
 {"type":"settle","ms":1500}

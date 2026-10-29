@@ -1,6 +1,25 @@
-// The subagents' pi-durable tasks (ADR 0028, ADR 0030), after pi-durable's example 23 (background
-// subagents) and Ultimate's reporter: each a background task owned by the parent's conversation,
-// so a Stop on the parent ends neither them nor the children they serve.
+// Ported in intent from github.com/earendil-works/pi, packages/durable/test/examples/
+// 23-subagent-background.ts at 4a080252 (the anchor that owns a child conversation, the reporter
+// task the parent owns), and from github.com/HazAT/ultimate, extensions/subagents/server.ts at
+// 8b263386 (one reporter per input to a child, a child that ends without a report is not an empty
+// success). The code is rewritten for Cairn.
+//
+// MIT License. Copyright (c) 2025 Mario Zechner (pi). Copyright (c) 2026 Daniel Griesser
+// (Ultimate).
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute,
+// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions: The above copyright notice and this
+// permission notice shall be included in all copies or substantial portions of the Software. THE
+// SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+// LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// The subagents' pi-durable tasks (ADR 0028, ADR 0030): each a background task owned by the
+// parent's conversation, so a Stop on the parent ends neither them nor the children they serve.
 //
 // - Anchor (`cairn.subagent-anchor`) completes at once; a child conversation is owned by one, so
 //   the parent's run is never held by its children.
@@ -12,15 +31,17 @@
 // - Reporter (`cairn.subagent-reporter`), one per input to a child (the brief, `subagent_send`, a
 //   user's steer typed into the child): `deliver` submits the input under its request id (the
 //   whole input: its text and images, its entry, its `whenBusy`), mirrors the child's pending
-//   records into its registry status while it works, and settles once per run in one commit;
+//   records into its registry status while it works, and settles once per run in one commit (a
+//   run that answered several inputs wakes the parent unless all of them were a user's steers);
 //   `nudge` sends a typed child that ended without a result its one nudge (`NUDGE_TEXT`) and
 //   settles on that run; `report` writes the settlement's note and decides the wake by the
 //   parent's state; `wake` submits the wake and marks the settlement delivered. Nudge, note and
 //   wake request ids derive from the child and the settlement's `seq`, so a rerun after `kill -9`
 //   lands each once.
 //
-// A typed child's result is `submit_result`'s (models/ResultTool.ts): the settlement's payload and
-// divergence come from its `cairn.result` (`readResult`). A child whose run ends without one gets
+// A typed child's result is `submit_result`'s (models/ResultTool.ts): the payload and divergence of
+// the settlement of the run that accepted it come from its `cairn.result` (`readResult`); later
+// runs settle as an untyped child's do. A child whose run ends without one gets
 // the nudge while `nudgeDue` says so, and otherwise settles `failed`, with `CAP_TEXT` once its
 // attempts are spent. `report` carries the summary, the divergence of a text result and a commit.
 //
@@ -88,6 +109,7 @@ import {
 import { familyOf } from "../models/ModelFamily.ts";
 import {
   CAP_TEXT,
+  markOf,
   MAX_RESULT_ATTEMPTS,
   NUDGE_TEXT,
   nudgeDue,
@@ -102,10 +124,12 @@ import {
   parentHalted,
   setStatus,
   settlementOf,
+  taskOf,
 } from "./Delivery.ts";
 import type { SettlementState } from "./Delivery.ts";
 import {
   ChildDoc,
+  isJsonRecord,
   isLinked,
   jsonRecordOf,
   SubagentsDoc,
@@ -188,6 +212,95 @@ export interface ReporterInput {
   quiet: boolean;
 }
 
+/** What a settling reporter reads about the run it settles, from every input that run answered. */
+interface RunInputs {
+  /**
+   * Whether the run goes without a wake: `input` is quiet (a user's own steer) and so is every
+   * other input it answered. Only the first reporter to settle a run decides its wake, so a
+   * user's steer and the parent's send answered together still wake the parent.
+   */
+  readonly quiet: boolean;
+  /** The earliest entry an input it answered was placed as. */
+  readonly from: EntryId | undefined;
+}
+
+/** The run `settled` ended, over every input `answerEntry` answered (table reads only). */
+const runInputs = async (
+  tx: Tx,
+  input: ReporterInput,
+  item: SubagentItemState,
+  others: ReadonlyArray<string>,
+  settled: SettledSubmissionRecord
+): Promise<RunInputs> => {
+  const answerEntry =
+    settled.type === "input" && settled.status === "done"
+      ? settled.answer
+      : null;
+
+  let { quiet } = input;
+  let from = settled.entry;
+
+  if (answerEntry === null) {
+    return { quiet, from };
+  }
+
+  const child = conversationOf(input.child);
+
+  for (const requestId of others) {
+    // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+    const submission = await tx.submissionByRequest(child, requestId);
+    const taskId = item.inputs[requestId];
+
+    if (
+      submission?.status === "done" &&
+      submission.answer === answerEntry &&
+      taskId !== undefined
+    ) {
+      if (from === undefined || submission.entry < from) {
+        from = submission.entry;
+      }
+
+      // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+      const task = await tx.task(taskOf(taskId));
+      const reporter = isJsonRecord(task?.input) ? task.input : {};
+
+      if (reporter.quiet === false) {
+        quiet = false;
+      }
+    }
+  }
+
+  return { quiet, from };
+};
+
+/** The most entries `resultOfRun` reads from the start of the run it settles. */
+const RESULT_SCAN = 2000;
+
+/**
+ * `accepted` when the run being settled accepted it: an accepted `submit_result` lies at or after
+ * `from`, the run's first input (table reads, bounded). A typed result goes to the parent once,
+ * with its run; the child's later runs settle without it.
+ */
+const resultOfRun = async (
+  tx: Tx,
+  child: ConversationId,
+  from: EntryId | undefined,
+  accepted: Option.Option<ResultState>
+): Promise<Option.Option<ResultState>> => {
+  if (Option.isNone(accepted) || from === undefined) {
+    return accepted;
+  }
+
+  const page = await tx.scanEntries(
+    { conversationId: child, minEntryId: from, order: "ascending" },
+    RESULT_SCAN
+  );
+
+  return page.items.some((entry) => Option.contains(markOf(entry), "accepted"))
+    ? accepted
+    : Option.none();
+};
+
 /** `content` as a task input keeps it. */
 export const inputPartsOf = (
   content: InputSubmissionDraft["content"]
@@ -241,7 +354,7 @@ interface WakeState {
 type ReporterState =
   | { phase: "deliver" }
   | { phase: "nudge"; seq: number }
-  | { phase: "report"; settlement: SettlementState }
+  | { phase: "report"; settlement: SettlementState; quiet: boolean }
   | { phase: "wake"; settlement: SettlementState; wakes: Array<WakeState> };
 
 /** What a brief task waits on: its approval record in the parent's `cairn.approvals`. */
@@ -593,16 +706,18 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
    * Settles one input once its run ended, in one commit: one settlement per run (an input another
    * reporter's run already answered settles nothing), built from the child's `report` when it made
    * one, else from its last answer with `not reported`. A typed child's payload and divergence are
-   * its accepted result (`result`, read before the commit); a typed child whose run completed
-   * without one is nudged once (`nudge` phase) while `nudgeDue` allows, and settles `failed`
-   * otherwise. `mayNudge` is false on the nudge's own run.
+   * its accepted result (`accepted`, read before the commit), on the settlement of the run that
+   * accepted it only; a typed child whose run completed without one is nudged once (`nudge` phase)
+   * while `nudgeDue` allows (the transcript's nudge mark says when it was sent), and settles
+   * `failed` otherwise. A later run of a child whose result was already delivered settles as an
+   * untyped child's does.
    */
   const settle = async (
     tx: Tx,
     parent: ConversationId,
     input: ReporterInput,
     settled: SettledSubmissionRecord,
-    result: Option.Option<ResultState>,
+    accepted: Option.Option<ResultState>,
     now: number
   ): Promise<NextTaskState<ReporterState, null>> => {
     const child = conversationOf(input.child);
@@ -625,7 +740,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     const total = await turnsTotal(tx, child);
 
     // A typed result's summary when the run ended on `submit_result` with no words of its own.
-    const spoken = Option.isSome(result) ? await lastSpoken(tx, child) : "";
+    const spoken = Option.isSome(accepted) ? await lastSpoken(tx, child) : "";
 
     const registry = await tx.doc(SubagentsDoc, parent);
     const item = registry.items[input.key];
@@ -647,13 +762,16 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       }
     }
 
+    const run = await runInputs(tx, input, item, others, settled);
+    const result = await resultOfRun(tx, child, run.from, accepted);
+
     const link = await tx.doc(ChildDoc, child);
 
     // A typed child whose run completed without a result: its attempts, from its transcript.
     const missing =
       link.resultSchema !== null &&
       settled.status === "done" &&
-      Option.isNone(result)
+      Option.isNone(accepted)
         ? Option.some(await readAttemptState(tx, child))
         : Option.none();
 
@@ -729,7 +847,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     link.report = null;
     settleUnlessWorking(item, running, unadmitted);
 
-    return { status: "running", checkpoint: { phase: "report", settlement } };
+    return {
+      status: "running",
+      checkpoint: { phase: "report", settlement, quiet: run.quiet },
+    };
   };
 
   /**
@@ -841,7 +962,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       },
       report: async (task, runtime, context) => {
         const { input } = task;
-        const { settlement } = task.state.checkpoint;
+        const { settlement, quiet } = task.state.checkpoint;
         const parent = runtime.conversationId;
 
         // A reporter that mints its ids per attempt lands every rerun again (a planted fault).
@@ -906,7 +1027,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             }
 
             const wakes =
-              !input.quiet &&
+              !quiet &&
               item.wake === "answer" &&
               !settlement.usageLimit &&
               (faults.wakeStoppedParent || !halted) &&

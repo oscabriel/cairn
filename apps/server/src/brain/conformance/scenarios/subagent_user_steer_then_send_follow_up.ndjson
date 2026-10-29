@@ -1,0 +1,30 @@
+{"type":"transcript_start","scenario":"subagent_user_steer_then_send_follow_up","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in src."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","text":"src has 4 files."}
+{"type":"model","label":"p3","thread":"parent","text":"Noted: 4 files."}
+{"type":"model","label":"c2","thread":"child1","hold":true,"toolCalls":[{"id":"call_2","name":"echo","arguments":{"text":"counting"}}]}
+{"type":"model","label":"p4","thread":"parent","toolCalls":[{"id":"call_3","name":"subagent_send","arguments":{"subagent":"$child1","message":"Count the docs too.","mode":"followUp"}}]}
+{"type":"model","label":"p5","thread":"parent","text":"Asked for the docs."}
+{"type":"model","label":"c3","thread":"child1","text":"tests 2."}
+{"type":"model","label":"c4","thread":"child1","text":"docs 3."}
+{"type":"model","label":"p6","thread":"parent","text":"2 tests and 3 docs."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"message","thread":"child1","requestId":"u1","text":"also count the tests"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"input","step":"message","requestId":"r2","text":"ask it about the docs"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"release","label":"c2"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$child1","status":"completed"}}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"settle","ms":300}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":4}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"2 tests and 3 docs.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":3,"delivered":3,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"expect_view","path":["transcript"],"thread":"child1","equals":[{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in src.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"src has 4 files.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"also count the tests","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["echo"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"counting","images":0,"toolCalls":[],"toolName":"echo","isError":false},{"kind":"pi.assistant","role":"assistant","text":"tests 2.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"Count the docs too.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"docs 3.","images":0,"toolCalls":[],"toolName":null,"isError":null}]}

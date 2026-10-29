@@ -28,8 +28,12 @@
 //   run that answers it, settles once per run, then writes the note and, by the parent's state,
 //   the wake, each under ids derived from the child and the settlement's `seq`. Reporters live in
 //   the store, so a restart resumes them where they stood and every write lands once.
-// - Wakes obey the parent: none for a quiet spawn or a user's steer to the child, none for a
-//   parent the user stopped or whose run failed, at most one queued while the parent runs.
+// - Wakes obey the parent: none for a quiet spawn or a user's steer to the child (unless the run
+//   that answered it also answered the parent's own input), none for a parent the user stopped or
+//   whose run failed, at most one queued while the parent runs. A typed result goes with the
+//   settlement of the run that accepted it only.
+// - A final answer settles the inputs its run placed, and a queued input it places goes on in a
+//   new segment of the same run, as pi-durable's final boundary settles them.
 // - A child's `ask_parent` question goes to the parent model as an input; `subagent_reply`
 //   answers or escalates it, and a parent run that ends with it still open escalates it. An
 //   escalation writes the child's record and a mirror in the parent in one critical section, and
@@ -331,6 +335,12 @@ interface Run {
   /** The run's id: the first task id it got. */
   readonly runId: number;
   readonly inputs: Array<number>;
+  /**
+   * The id its inputs settle under. pi-durable settles a run's inputs with each final answer that
+   * places queued inputs and goes on with them (its `answer` ends the run and starts the next in
+   * one commit, which Cairn's events show as one run), so a new segment starts there.
+   */
+  segment: number;
 }
 
 interface Agent {
@@ -442,11 +452,37 @@ interface Reporter {
   readonly whenBusy: "steer" | "followUp";
   /** A user's own steer to the child: its result is a note with no wake. */
   readonly quiet: boolean;
+  /**
+   * Whether the run this reporter settled goes without a wake: only when every input that run
+   * answered was quiet, so a user's steer and the parent's send settled by one run still wake it.
+   */
+  quietRun: boolean;
   phase: "deliver" | "nudge" | "report" | "done";
   /** The seq a nudge was sent for, in the `nudge` phase. */
   nudgeSeq: number;
   settlement: Option.Option<SubagentSettlement>;
 }
+
+/** Settles the inputs the run's current segment placed, as the run's end leaves them. */
+const settleInputs = (
+  thread: ScriptedThread,
+  run: Run,
+  status: RunStatus,
+  failureInfo: Option.Option<RunFailureInfo>
+) => {
+  for (const id of run.inputs.splice(0)) {
+    const submission = thread.byId.get(id);
+
+    if (submission !== undefined) {
+      submission.status = status === "completed" ? "done" : "unanswered";
+      submission.ended = Option.some({
+        runId: Option.some(run.segment),
+        status,
+        failure: failureInfo,
+      });
+    }
+  }
+};
 
 /** Everything a scripted harness remembers; it outlives one instance, as a store does. */
 export class ScriptedStore extends Context.Service<
@@ -752,6 +788,25 @@ const lastSpokenIn = (thread: ScriptedThread): string => {
 
   return "";
 };
+
+/**
+ * `accepted` when the run being settled accepted it: an accepted `submit_result` lies after
+ * `from`, the run's first input. A typed result goes to the parent once, with its run; the child's
+ * later runs settle without it.
+ */
+const resultOfRun = <A>(
+  child: ScriptedThread,
+  from: Option.Option<number>,
+  accepted: Option.Option<A>
+): Option.Option<A> =>
+  Option.isNone(from)
+    ? accepted
+    : Option.filter(accepted, () =>
+        child.entries.some(
+          (entry) =>
+            entry.id > from.value && Option.contains(markOf(entry), "accepted")
+        )
+      );
 
 /** How many answers a thread gave after the entry `after` (its whole transcript without one). */
 const answersAfter = (thread: ScriptedThread, after: Option.Option<number>) => {
@@ -1286,7 +1341,7 @@ const layerNoDeps = Layer.effectContext(
       const [first] = thread.queue.splice(0, 1);
       const runId = nextId();
 
-      thread.run = Option.some({ runId, inputs: [] });
+      thread.run = Option.some({ runId, inputs: [], segment: runId });
       changes.events.push(
         RunStarted.make({
           threadId: thread.threadId,
@@ -1430,18 +1485,7 @@ const layerNoDeps = Layer.effectContext(
 
       const run = thread.run.value;
 
-      for (const id of run.inputs) {
-        const submission = thread.byId.get(id);
-
-        if (submission !== undefined) {
-          submission.status = status === "completed" ? "done" : "unanswered";
-          submission.ended = Option.some({
-            runId: Option.some(run.runId),
-            status,
-            failure: failureInfo,
-          });
-        }
-      }
+      settleInputs(thread, run, status, failureInfo);
 
       thread.run = Option.none();
       thread.halted = status !== "completed";
@@ -1459,7 +1503,11 @@ const layerNoDeps = Layer.effectContext(
       escalateUnanswered(thread, at, changes);
     };
 
-    /** At a final answer: notes first, then the next queued input (a steer first) or the end. */
+    /**
+     * At a final answer: notes first, then the next queued input (a steer first) or the end. Either
+     * way the inputs placed so far settle with this answer, as pi-durable's final boundary settles
+     * them (a new segment of the run takes the next input).
+     */
     const continueOrEnd = (
       thread: ScriptedThread,
       at: number,
@@ -1475,12 +1523,17 @@ const layerNoDeps = Layer.effectContext(
       const [next] =
         thread.queue.length > 0 ? thread.queue.splice(nextIndex, 1) : [];
 
-      if (next === undefined) {
+      if (next === undefined || Option.isNone(thread.run)) {
         endRun(thread, "completed", Option.none(), at, changes);
 
         return;
       }
 
+      const run = thread.run.value;
+
+      settleInputs(thread, run, "completed", Option.none());
+      run.segment = nextId();
+      changes.touched.add(thread);
       place(thread, next, at, changes);
       changes.events.push(queueChanged(thread));
     };
@@ -1610,6 +1663,7 @@ const layerNoDeps = Layer.effectContext(
         entry: input.entry,
         whenBusy: input.whenBusy,
         quiet,
+        quietRun: quiet,
         phase: "deliver",
         nudgeSeq: 0,
         settlement: Option.none(),
@@ -1894,6 +1948,34 @@ const layerNoDeps = Layer.effectContext(
         item.settledRuns.add(runId);
       }
 
+      // Every input the run answered: its wake follows all of them, not only the first reporter
+      // to settle, and its typed result is the one it accepted after its first input.
+      const shared = [...store.reporters.values()].flatMap((other) => {
+        const found = child.byRequest.get(other.requestId);
+
+        return other.child === child.threadId &&
+          other.id !== reporter.id &&
+          found !== undefined &&
+          found.status === "done" &&
+          Option.exists(found.ended, (ended) =>
+            Option.exists(end.runId, (runId) =>
+              Option.contains(ended.runId, runId)
+            )
+          )
+          ? [{ quiet: other.quiet, placedAs: found.placedAs }]
+          : [];
+      });
+
+      reporter.quietRun =
+        reporter.quiet && shared.every((other) => other.quiet);
+
+      const placed = [submission, ...shared].flatMap((other) =>
+        Option.toArray(other.placedAs)
+      );
+
+      const from =
+        placed.length === 0 ? Option.none() : Option.some(Math.min(...placed));
+
       // The report of the run being settled: a settlement spends it, so the next run has none.
       const { report } = link;
       const answered = lastAnswerAfter(child, submission.placedAs);
@@ -1933,7 +2015,8 @@ const layerNoDeps = Layer.effectContext(
           : Option.none()
       );
 
-      const { result } = link;
+      // A typed result goes to the parent once: with the run that accepted it.
+      const result = resultOfRun(child, from, link.result);
 
       const worded = Option.match(report, {
         onNone: () =>
@@ -2038,7 +2121,7 @@ const layerNoDeps = Layer.effectContext(
         }
 
         const wakes =
-          !reporter.quiet &&
+          !reporter.quietRun &&
           item.wake === "answer" &&
           !settlement.usageLimit &&
           (faults.wakeStoppedParent || !parent.halted);

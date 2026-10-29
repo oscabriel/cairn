@@ -24,22 +24,24 @@ export interface ChildServices<ROut> {
  * child alive at once owns its own instances, released when the caller's scope closes or `close`
  * runs first. A failed build releases what it had built.
  */
-const build = <ROut, E, RIn>(
+const build = Effect.fnUntraced(function* <ROut, E, RIn>(
   layer: Layer.Layer<ROut, E, RIn>
-): Effect.Effect<ChildServices<ROut>, E, RIn | Scope.Scope> =>
-  Effect.gen(function* () {
-    const scope = yield* Scope.fork(yield* Effect.scope);
+) {
+  const scope = yield* Scope.fork(yield* Effect.scope);
 
-    const context = yield* Layer.buildWithMemoMap(
-      layer,
-      yield* Layer.makeMemoMap,
-      scope
-    ).pipe(
-      Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause)))
-    );
+  const context = yield* Layer.buildWithMemoMap(
+    layer,
+    yield* Layer.makeMemoMap,
+    scope
+  ).pipe(Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))));
 
-    return { context, close: Scope.close(scope, Exit.void) };
-  });
+  const services: ChildServices<ROut> = {
+    context,
+    close: Scope.close(scope, Exit.void),
+  };
+
+  return services;
+});
 
 /** The one way to build a per-child layer (ADR 0034). */
 export const ChildScope = { build } as const;

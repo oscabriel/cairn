@@ -13,8 +13,10 @@
 //   newer work.
 // - `subagent_reply` answers or escalates a child's `ask_parent` question; never an approval.
 // - `ask_parent` (child) records a question routed to the parent, offers it to the parent model as
-//   an input, and waits like a gated call; a parent run that ends with it open escalates it, and
-//   a question that expires unanswered ends its parent's mirror and registry mark too.
+//   an input, and waits like a gated call; a parent run that ends with it open escalates it, as
+//   does a parent left idle after a failed or stopped run with the question still queued (it is
+//   withdrawn there), and a question that expires unanswered ends its parent's mirror and registry
+//   mark too.
 // - `report` (child) finishes a brief with a summary, the divergence of a text result and a commit.
 //   A typed result goes through `submit_result` (models/ResultTool.ts), which a typed child's
 //   creating commit also offers: two attempts, the real schema in the request, first valid wins.
@@ -35,8 +37,8 @@ import type {
   ToolExecutionApi,
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
-import { defineTool } from "@earendil-works/pi-durable";
-import { Duration, Effect, Option, Result } from "effect";
+import { defineTool, LiveDoc } from "@earendil-works/pi-durable";
+import { Duration, Effect, Option, Predicate, Result } from "effect";
 
 import {
   applyAnswer,
@@ -800,13 +802,57 @@ export const subagentToolSet = (
 
         if (submission !== undefined) {
           // The parent's run that placed the question ends: unanswered, it goes to the user.
-          const first = await Promise.race([
-            settled.then(() => "answered" as const),
-            submission.wait(context).then(
-              () => "ended" as const,
-              () => "answered" as const
-            ),
-          ]);
+          const answeredOrEnded = async () =>
+            await Promise.race([
+              settled.then(() => "answered" as const),
+              submission.wait(context).then(
+                () => "ended" as const,
+                () => "answered" as const
+              ),
+            ]);
+
+          // A parent whose run failed or stopped keeps the question queued (`afterFailedRun:
+          // "keep"`), where no run places it: withdrawn there, it goes to the user too.
+          const idle = new AbortController();
+
+          const parentIdle = async () => {
+            try {
+              await Effect.runPromise(
+                awaitDoc(api, LiveDoc, parent, (value) =>
+                  value?.run === undefined ? Option.some(value) : Option.none()
+                ).pipe(
+                  Effect.flatMap(
+                    Option.match({
+                      onNone: () => Effect.never,
+                      onSome: () => Effect.void,
+                    })
+                  )
+                ),
+                {
+                  signal: AbortSignal.any(
+                    [context.abortSignal, idle.signal].filter(
+                      Predicate.isNotUndefined
+                    )
+                  ),
+                }
+              );
+
+              return "idle" as const;
+            } catch {
+              // Cut off once the race is decided, or with the call: this side lost.
+              return "answered" as const;
+            }
+          };
+
+          let first = await Promise.race([answeredOrEnded(), parentIdle()]);
+
+          idle.abort();
+
+          if (first === "idle") {
+            const withdrawn = await submission.abort(context);
+
+            first = withdrawn === "aborted" ? "ended" : await answeredOrEnded();
+          }
 
           if (first === "ended") {
             await api.commit(async (tx) => {

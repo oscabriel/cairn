@@ -20,13 +20,16 @@ import {
 } from "effect";
 
 import { ModelSource } from "../brain/ModelSource.ts";
+import { CodexUsage } from "../usage/CodexUsage.ts";
 import { UsageFeed } from "../usage/UsageFeed.ts";
+import { providersOf } from "../usage/UsageTestKit.ts";
 import {
   BridgeExtraProviders,
   BridgeProvider,
   orphanClaudes,
   parseProcessStat,
 } from "./BridgeProvider.ts";
+import { CodexAccess } from "./CodexAccess.ts";
 import { BRIDGE_COMPACTION, HarnessSettings } from "./HarnessSettings.ts";
 import { PiConfig } from "./PiConfig.ts";
 import { ExtraProviders, PiModelSource } from "./PiModelSource.ts";
@@ -199,6 +202,13 @@ describe("pi's model runtime with the bridge", () => {
   );
 });
 
+/** The feed with Codex signed out, so its frames hold the bridge's rows alone. */
+const BridgeOnlyFeed = UsageFeed.layerNoDeps.pipe(
+  Layer.provide(CodexUsage.layer),
+  Layer.provide(CodexAccess.layerSignedOut),
+  Layer.provide(providersOf([]))
+);
+
 describe("the usage feed", () => {
   it.effect(
     "says there are no providers while the bridge is off, and stays open",
@@ -212,7 +222,7 @@ describe("the usage feed", () => {
         );
 
         assert.deepStrictEqual(first, [{ providers: [] }]);
-      }).pipe(Effect.provide(UsageFeed.layer))
+      }).pipe(Effect.provide(BridgeOnlyFeed))
   );
 
   it.live("reports the bridge's plan windows while it is on", () =>
@@ -247,8 +257,6 @@ describe("the usage feed", () => {
       assert.deepStrictEqual(windows, [
         ["claude-bridge", "five_hour", Option.some(0.25)],
       ]);
-    }).pipe(
-      Effect.provide(UsageFeed.layer.pipe(Layer.provideMerge(BridgeTest)))
-    )
+    }).pipe(Effect.provide(BridgeOnlyFeed.pipe(Layer.provideMerge(BridgeTest))))
   );
 });

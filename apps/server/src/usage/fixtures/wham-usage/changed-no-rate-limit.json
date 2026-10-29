@@ -1,0 +1,9 @@
+{
+  "plan_type": "plus",
+  "limits": {
+    "five_hour": {
+      "utilization": 0.23,
+      "resets_at": "2026-10-28T12:20:00Z"
+    }
+  }
+}

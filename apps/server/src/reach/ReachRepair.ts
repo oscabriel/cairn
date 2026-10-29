@@ -3,9 +3,12 @@
 //
 // - `portal reconcile`, after the Harness opens and before ready: rows, units and porches made to
 //   agree (`Portals.reconcile`). A brain killed mid-open leaves at most a row `opening`, a porch and
-//   a unit; the rerun of its tool finishes the portal, or this ends it.
+//   a unit; the rerun of its tool finishes the portal, or this ends it. Before the user installs
+//   porch (`ops/wizards/phase-2.sh 2`), the reconcile records the reach state `porch: not set up`,
+//   logged once at info, and succeeds: a missing porch is a state, not a boot failure
+//   (`ReachStatus.ts`). Any other failure is logged as `boot_repair_failed` and boot goes on.
 // - `start portal sweep`, after the reconcile: every minute, lifetimes, exited units and archived
-//   threads (`Portals.sweep`).
+//   threads (`Portals.sweep`). A sweep that meets a porch not set up records the same state.
 // - `stop portal sweep`, at SIGTERM: the sweep stops so nothing writes while the store closes. The
 //   units keep running, so every open portal answers through the restart.
 

@@ -36,7 +36,8 @@
 // `reconcile` is the boot repair: rows whose unit is gone become `stopped` (`lost`), an `opening`
 // row whose unit answers becomes `open`, an `opening` row left past the grace becomes `stopped`,
 // units and porches with no row are stopped and removed, and a row whose porch went missing gets
-// it back. Times are epoch milliseconds.
+// it back. A porch that is not set up yet (`ReachStatus.ts`) skips the porch half and is recorded as
+// the reach state, logged once; the sweep records it the same way. Times are epoch milliseconds.
 
 import path from "node:path";
 
@@ -70,6 +71,11 @@ import { PorchClient } from "./PorchClient.ts";
 import type { PorchError } from "./PorchClient.ts";
 import { PortalUnits } from "./PortalUnits.ts";
 import type { PortalUnitError } from "./PortalUnits.ts";
+import {
+  isPorchNotSetUp,
+  ReachStatus,
+  unlessPorchNotSetUp,
+} from "./ReachStatus.ts";
 
 // ── Settings and faults ──────────────────────────────────────────────────────────────────────────
 
@@ -578,7 +584,10 @@ export class Portals extends Context.Service<
     readonly stopSweeper: Effect.Effect<void>;
   }
 >()("cairn/server/reach/Portals") {
-  /** Over the ambient `PorchClient`, `PortalUnits` and `SqlClient`. */
+  /**
+   * Over the ambient `PorchClient`, `PortalUnits` and `SqlClient`; gives out its own `ReachStatus`
+   * beside it, which the reconcile and the sweep record porch's state in.
+   */
   static readonly layerNoDeps = Layer.effect(
     Portals,
     Effect.gen(function* () {
@@ -590,6 +599,7 @@ export class Portals extends Context.Service<
       const settings = yield* PortalSettings;
       const faults = yield* PortalFaults;
       const sweeper = yield* FiberSet.make();
+      const porchStatus = yield* ReachStatus;
       let sweeping = false;
 
       /** Removes a porch; one already gone is fine. */
@@ -1331,7 +1341,37 @@ export class Portals extends Context.Service<
         );
 
         const named = new Set(kept.map((row) => row.name));
-        const registered = yield* porch.list;
+
+        // Before the user installs porch there are no porches to agree with: the rows and units
+        // above are reconciled, and the porch half waits for the next boot after the wizard.
+        const listed = yield* unlessPorchNotSetUp(
+          porchStatus,
+          "portal reconcile",
+          porch.list
+        );
+
+        if (Option.isNone(listed)) {
+          const report: PortalRepairReport = {
+            ...NO_REPAIRS,
+            opened,
+            stopped,
+            unitsStopped: strays.length,
+          };
+
+          yield* Effect.logInfo("portals reconciled").pipe(
+            Effect.annotateLogs({
+              event: "portal_reconcile",
+              porch: "not set up",
+              ...report,
+            })
+          );
+
+          return report;
+        }
+
+        yield* porchStatus.porchReady;
+
+        const registered = listed.value;
         const present = new Set(registered.map((row) => row.name));
 
         const porches = registered.filter(
@@ -1442,6 +1482,11 @@ export class Portals extends Context.Service<
                 Effect.annotateLogs({ event: "portal_sweep", ...report })
               )
         ),
+        Effect.catchTag("PorchError", (failure) =>
+          isPorchNotSetUp(failure)
+            ? porchStatus.porchNotSetUp("portal sweep", failure)
+            : Effect.fail(failure)
+        ),
         Effect.catchCause((cause) =>
           Effect.logWarning("portal sweep failed").pipe(
             Effect.annotateLogs({
@@ -1496,7 +1541,7 @@ export class Portals extends Context.Service<
         stopSweeper,
       });
     })
-  );
+  ).pipe(Layer.provideMerge(ReachStatus.layer));
 
   /** With the real porch and systemd; needs `SqlClient`. */
   static readonly layer = this.layerNoDeps.pipe(

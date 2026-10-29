@@ -252,6 +252,34 @@ describe("judge faults", () => {
       assert.isFalse(yield* fs.exists(path.join(root, "unused")));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   );
+
+  it.effect(
+    "a marker that cannot be written plants nothing, so no life crash-loops",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+
+        const root = yield* fs.makeTempDirectoryScoped({
+          prefix: "cairn-portal-faults-",
+        });
+
+        // A marker in a folder that does not exist: the write fails, and the brain must live.
+        const hooks = yield* PortalFaults.pipe(
+          Effect.provide(
+            judgePortalFaults(
+              "portal:after-unit",
+              path.join(root, "missing", "fired")
+            )
+          )
+        );
+
+        for (const step of STEPS) {
+          yield* hooks.after(step);
+        }
+
+        assert.isFalse(yield* fs.exists(path.join(root, "missing")));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  );
 });
 
 describe("Portals.open", () => {
@@ -517,7 +545,7 @@ describe("the kill matrix", () => {
 
               yield* Effect.exit(portals.open(openInput("main--cairn")));
 
-              yield* TestClock.adjust(Duration.minutes(3));
+              yield* TestClock.adjust(Duration.minutes(4));
               yield* portals.reconcile;
 
               const [row] = yield* portals.list(Option.none());
@@ -628,6 +656,35 @@ describe("close and start", () => {
       )
   );
 
+  it.effect(
+    "a stopped portal keeps its port: a new portal gets another, so the old name stays dark",
+    () =>
+      onStage(({ units }) =>
+        Effect.gen(function* () {
+          const portals = yield* Portals;
+          const first = yield* portals.open(openInput("a--x"));
+
+          yield* units.exit(`${PREFIX}${first.id}`);
+          yield* portals.sweep;
+
+          const second = yield* portals.open(openInput("b--x"));
+
+          assert.deepStrictEqual(first.port, Option.some(3100));
+          assert.deepStrictEqual(second.port, Option.some(3101));
+          assert.deepStrictEqual(yield* portalPorches, ["a--x", "b--x"]);
+
+          // Started again, the stopped portal takes its own port back.
+          const again = yield* portals.start(first.id);
+          assert.deepStrictEqual(again.port, Option.some(3100));
+
+          // Closed for good, it gives the port back.
+          yield* portals.close(first.id);
+          const third = yield* portals.open(openInput("c--x"));
+          assert.deepStrictEqual(third.port, Option.some(3100));
+        })
+      )
+  );
+
   it.effect("the RPCs answer NotFound, and Conflict for a closed portal", () =>
     onStage(() =>
       Effect.gen(function* () {
@@ -688,6 +745,93 @@ describe("reconcile and sweep", () => {
           assert.deepStrictEqual(yield* rowStates, [
             { name: "main--cairn", state: "stopped", stop_reason: "lost" },
           ]);
+        })
+      )
+  );
+
+  it.effect(
+    "reconcile: a row whose porch went missing gets it back, so the rerun finds it served",
+    () =>
+      onStage(({ units }) =>
+        Effect.gen(function* () {
+          const portals = yield* Portals;
+          const porch = yield* PorchClient;
+          const row = yield* portals.open(openInput("main--cairn"));
+
+          // What a kill between register's remove and add leaves: the unit runs, the porch is gone.
+          yield* porch.remove("main--cairn");
+          assert.deepStrictEqual(yield* portalPorches, []);
+
+          const report = yield* portals.reconcile;
+
+          assert.strictEqual(report.porchesRestored, 1);
+          assert.deepStrictEqual(yield* portalPorches, ["main--cairn"]);
+
+          const rerun = yield* portals.open(openInput("main--cairn"));
+          assert.strictEqual(rerun.id, row.id);
+          assert.strictEqual(rerun.state, "open");
+          assert.strictEqual(yield* units.starts, 1);
+          assert.strictEqual((yield* portals.reconcile).porchesRestored, 0);
+        })
+      )
+  );
+
+  it.effect(
+    "sweep: an opening portal whose server never answers is ended past the grace, not at its lifetime",
+    () =>
+      onStage(({ units }) =>
+        Effect.gen(function* () {
+          const portals = yield* Portals;
+          yield* units.setAnswering(false);
+
+          const failed = yield* Effect.result(
+            portals.open({
+              ...openInput("main--cairn"),
+              readyTimeout: Duration.zero,
+            })
+          );
+
+          assert.isTrue(Result.isFailure(failed));
+          assert.lengthOf(yield* units.running, 1);
+
+          // Inside the grace a probe may be in flight: left alone.
+          yield* TestClock.adjust(Duration.minutes(2));
+          assert.strictEqual((yield* portals.sweep).stopped, 0);
+          assert.lengthOf(yield* units.running, 1);
+
+          yield* TestClock.adjust(Duration.minutes(2));
+          assert.strictEqual((yield* portals.sweep).stopped, 1);
+          assert.deepStrictEqual(yield* units.running, []);
+          assert.deepStrictEqual(yield* rowStates, [
+            { name: "main--cairn", state: "stopped", stop_reason: "lost" },
+          ]);
+        })
+      )
+  );
+
+  it.effect(
+    "sweep: an opening portal that answers past the grace is marked open",
+    () =>
+      onStage(({ units }) =>
+        Effect.gen(function* () {
+          const portals = yield* Portals;
+          yield* units.setAnswering(false);
+
+          yield* Effect.result(
+            portals.open({
+              ...openInput("main--cairn"),
+              readyTimeout: Duration.zero,
+            })
+          );
+
+          yield* units.setAnswering(true);
+          yield* TestClock.adjust(Duration.minutes(4));
+
+          assert.strictEqual((yield* portals.sweep).opened, 1);
+          assert.deepStrictEqual(
+            (yield* rowStates).map((stored) => stored.state),
+            ["open"]
+          );
         })
       )
   );

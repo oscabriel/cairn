@@ -35,7 +35,12 @@ import {
 import { ThreadMeta } from "../brain/CairnDocs.ts";
 import { Git } from "../git/Git.ts";
 import type { PorchError } from "./PorchClient.ts";
-import { DEFAULT_READY_TIMEOUT, portalName, Portals } from "./Portals.ts";
+import {
+  DEFAULT_READY_TIMEOUT,
+  MAX_READY_TIMEOUT,
+  portalName,
+  Portals,
+} from "./Portals.ts";
 import type { PortalError } from "./Portals.ts";
 
 /** `portal_open`. */
@@ -48,7 +53,7 @@ export const PORTAL_CLOSE_TOOL = "portal_close";
 export const PORTAL_LIST_TOOL = "portal_list";
 
 /** The longest a server may take to answer before `portal_open` gives up. */
-const MAX_READY_SECONDS = 120;
+const MAX_READY_SECONDS = Duration.toSeconds(MAX_READY_TIMEOUT);
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 

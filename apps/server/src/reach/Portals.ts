@@ -7,7 +7,8 @@
 // same portal, keyed by its name, and the tool built on it is `replay: "safe"`:
 //
 // 1. claim the row `opening` with a port Cairn picked (the installed porch has no lease command;
-//    the `portals_live_port` index keeps two live portals off one port);
+//    the `portals_live_port` index keeps two live portals off one port, and a stopped portal's
+//    port is never handed to another, since its porch still points there);
 // 2. register the porch `<name>` → `http://127.0.0.1:<port>`. porch refuses `exists` for a porch
 //    already there, whose upstream Cairn cannot read back, so that answer re-registers it;
 // 3. start the unit `<prefix><id>`, unless it already runs;
@@ -20,13 +21,15 @@
 // A portal ends by `close` (unit stopped, porch removed, row `removed`), by its time-to-live (the
 // unit's `RuntimeMaxSec` stops it even while the brain is down; the sweep marks the row `stopped`,
 // `expired`), by its unit exiting (`stopped`, `exited`), or by its thread being archived or deleted
-// (closed by the sweep). `stopped` keeps the porch and the command, so the name shows porch's dark
-// page and `start` runs the same portal again. Settling a thread closes nothing. Six portals may be
+// (closed by the sweep). `stopped` keeps the porch, the port and the command, so the name shows
+// porch's dark page and `start` runs the same portal again. An `opening` row left past the grace
+// (above the longest readiness wait) is ended by the sweep unless its server answers. Settling a thread closes nothing. Six portals may be
 // open at once; a seventh is refused naming the oldest.
 //
 // `reconcile` is the boot repair: rows whose unit is gone become `stopped` (`lost`), an `opening`
 // row whose unit answers becomes `open`, an `opening` row left past the grace becomes `stopped`,
-// and units and porches with no live row are stopped and removed. Times are epoch milliseconds.
+// units and porches with no row are stopped and removed, and a row whose porch went missing gets
+// it back. Times are epoch milliseconds.
 
 import path from "node:path";
 
@@ -83,32 +86,51 @@ export interface PortalConfig {
 /** The brain's variables a portal unit inherits: enough to find toolchains, nothing secret. */
 const INHERITED = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ"] as const;
 
-const inheritedEnv = (source: Readonly<Record<string, string>>) =>
-  Object.fromEntries(
-    INHERITED.flatMap((name) =>
-      source[name] === undefined ? [] : [[name, source[name]]]
-    )
-  );
+/**
+ * The longest a portal's server may take to answer (`portal_open`'s `readyTimeoutSec` bound). The
+ * opening grace stays above it, so neither the sweep nor the boot repair ends a probe in flight.
+ */
+export const MAX_READY_TIMEOUT = Duration.minutes(2);
+
+const DEFAULT_PORTAL_CONFIG: PortalConfig = {
+  unitPrefix: "cairn-portal-",
+  firstPort: 3100,
+  lastPort: 3699,
+  openingGrace: Duration.sum(MAX_READY_TIMEOUT, Duration.minutes(1)),
+  sweepEvery: Duration.minutes(1),
+  probeEvery: Duration.millis(250),
+  env: {},
+};
 
 /**
  * Portal settings. Ports 3100 to 3699 sit clear of the hand-written dev table (3001 to 3032), the
  * brain's 3774 to 3777 and Executor's 4400 (reach note, "Machine setup"). Read once, when `Portals`
- * is built, so the composition root decides them for every caller.
+ * is built, so the composition root decides them for every caller. The default hands a unit no
+ * variables of the brain's; a root gives them with `portalSettingsLayer`.
  */
 export const PortalSettings = Context.Reference<PortalConfig>(
   "cairn/server/reach/PortalSettings",
-  {
-    defaultValue: () => ({
-      unitPrefix: "cairn-portal-",
-      firstPort: 3100,
-      lastPort: 3699,
-      openingGrace: Duration.minutes(2),
-      sweepEvery: Duration.minutes(1),
-      probeEvery: Duration.millis(250),
-      env: inheritedEnv(threadProcessEnv(process.env)),
-    }),
-  }
+  { defaultValue: () => DEFAULT_PORTAL_CONFIG }
 );
+
+/**
+ * The default settings with the variables a unit inherits taken from `source`, the brain's
+ * environment, which the composition root passes once (S11): PATH and the locale, never `CAIRN_*`.
+ */
+export const portalSettingsLayer = (
+  source: Readonly<Record<string, string | undefined>>
+) => {
+  const allowed = threadProcessEnv(source);
+
+  return Layer.succeed(PortalSettings, {
+    ...DEFAULT_PORTAL_CONFIG,
+    env: Object.fromEntries(
+      INHERITED.flatMap((name) =>
+        allowed[name] === undefined ? [] : [[name, allowed[name]]]
+      )
+    ),
+  });
+};
 
 /** The steps of opening a portal, in order; a fault names the step it crashes after. */
 export const PortalStep = Schema.Literals([
@@ -172,7 +194,27 @@ export const judgePortalFaults = (spec: string, marker: string) =>
                 return;
               }
 
-              yield* fs.writeFileString(marker, step).pipe(Effect.ignore);
+              // Without its marker the fault would fire again in every life systemd restarts, a crash
+              // loop; a marker that cannot be written plants nothing.
+              const written = yield* fs.writeFileString(marker, step).pipe(
+                Effect.as(true),
+                Effect.catchTag("PlatformError", (cause) =>
+                  Effect.logError("judge fault marker not written").pipe(
+                    Effect.annotateLogs({
+                      event: "judge_fault_skipped",
+                      fault: spec,
+                      marker,
+                      cause: cause.message,
+                    }),
+                    Effect.as(false)
+                  )
+                )
+              );
+
+              if (!written) {
+                return;
+              }
+
               yield* Effect.logWarning("judge fault fired").pipe(
                 Effect.annotateLogs({ event: "judge_fault", fault: spec })
               );
@@ -460,6 +502,8 @@ export interface PortalRepairReport {
   readonly closed: number;
   readonly unitsStopped: number;
   readonly porchesRemoved: number;
+  /** Porches put back in front of a row that had lost its own. */
+  readonly porchesRestored: number;
 }
 
 const NO_REPAIRS: PortalRepairReport = {
@@ -468,6 +512,7 @@ const NO_REPAIRS: PortalRepairReport = {
   closed: 0,
   unitsStopped: 0,
   porchesRemoved: 0,
+  porchesRestored: 0,
 };
 
 type PortalFailure = PortalError | PorchError;
@@ -546,13 +591,16 @@ export class Portals extends Context.Service<
           return found.value;
         });
 
-      /** Ports live portals hold, other than `except`'s. */
+      /**
+       * Ports other portals hold, `except`'s aside: a live one's, and a stopped one's too, since
+       * its porch still points there for the dark page. Only a removed portal gives its port back.
+       */
       const heldPorts = (operation: string, except: string) =>
         Effect.map(
           query(
             operation,
             except,
-            sql`SELECT * FROM portals WHERE state IN ('opening', 'open') AND port IS NOT NULL AND id <> ${except}`
+            sql`SELECT * FROM portals WHERE state <> 'removed' AND port IS NOT NULL AND id <> ${except}`
           ),
           (rows) =>
             new Set(
@@ -661,8 +709,15 @@ export class Portals extends Context.Service<
               row.command === input.command &&
               row.cwd === input.cwd
             ) {
-              // A rerun of the same open (after a crash, or a server that answered late).
-              return { stored: row, done: false };
+              // A rerun of the same open (after a crash, or a server that answered late). Its
+              // grace starts again, so no sweep ends the probe this rerun is about to run.
+              yield* write(
+                "open",
+                input.name,
+                sql`UPDATE portals SET updated_at = ${now} WHERE id = ${row.id} AND state = 'opening'`
+              );
+
+              return { stored: yield* mustGet("open", row.id), done: false };
             }
 
             if (row.state === "opening") {
@@ -1125,16 +1180,20 @@ export class Portals extends Context.Service<
         }
 
         // A portal porch (a service porch whose name holds `--`) is kept while any row holds the
-        // name; `stopped` keeps it on purpose, for the dark page.
-        const named = new Set(
-          (yield* query(
-            "reconcile",
-            "*",
-            sql`SELECT * FROM portals WHERE state <> 'removed'`
-          )).map((row) => row.name)
+        // name; `stopped` keeps it on purpose, for the dark page. A row whose porch is missing (a
+        // kill between `register`'s remove and add) gets it back, so its name never falls to the
+        // catch-all 404.
+        const kept = yield* query(
+          "reconcile",
+          "*",
+          sql`SELECT * FROM portals WHERE state <> 'removed'`
         );
 
-        const porches = (yield* porch.list).filter(
+        const named = new Set(kept.map((row) => row.name));
+        const registered = yield* porch.list;
+        const present = new Set(registered.map((row) => row.name));
+
+        const porches = registered.filter(
           (row) =>
             row.kind === "service" &&
             isPortalName(row.name) &&
@@ -1145,12 +1204,21 @@ export class Portals extends Context.Service<
           yield* removePorch(row.name);
         }
 
+        const unporched = kept.filter(
+          (row) => row.port !== null && !present.has(row.name)
+        );
+
+        for (const row of unporched) {
+          yield* register(row);
+        }
+
         const report: PortalRepairReport = {
           ...NO_REPAIRS,
           opened,
           stopped,
           unitsStopped: strays.length,
           porchesRemoved: porches.length,
+          porchesRestored: unporched.length,
         };
 
         yield* Effect.logInfo("portals reconciled").pipe(
@@ -1163,6 +1231,7 @@ export class Portals extends Context.Service<
       const sweep = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const grace = Duration.toMillis(settings.openingGrace);
+        let opened = 0;
         let stopped = 0;
 
         for (const row of yield* liveRows("sweep")) {
@@ -1172,12 +1241,36 @@ export class Portals extends Context.Service<
             yield* units.stop(row.unit).pipe(Effect.mapError(toUnit));
             yield* markStopped("sweep", row, "expired");
             stopped += 1;
-          } else if (
-            (row.state === "open" || row.updated_at + grace <= now) &&
-            !(yield* units.isActive(row.unit).pipe(Effect.mapError(toUnit)))
-          ) {
+            continue;
+          }
+
+          // An `opening` row inside its grace may have a probe in flight: left to its open.
+          if (row.state === "opening" && row.updated_at + grace > now) {
+            continue;
+          }
+
+          const active = yield* units
+            .isActive(row.unit)
+            .pipe(Effect.mapError(toUnit));
+
+          if (!active) {
             yield* markStopped("sweep", row, "exited");
             stopped += 1;
+          } else if (row.state === "opening") {
+            // Past the grace, as the boot repair does: open if its server answers, else ended, so
+            // a server that never answers does not hold a slot until its lifetime.
+            if (yield* units.answers(row.port ?? 0, "/")) {
+              yield* write(
+                "sweep",
+                row.name,
+                sql`UPDATE portals SET state = 'open', updated_at = ${now} WHERE id = ${row.id} AND state = 'opening'`
+              );
+              opened += 1;
+            } else {
+              yield* units.stop(row.unit).pipe(Effect.mapError(toUnit));
+              yield* markStopped("sweep", row, "lost");
+              stopped += 1;
+            }
           }
         }
 
@@ -1196,12 +1289,12 @@ export class Portals extends Context.Service<
           yield* closeStored("sweep", row);
         }
 
-        return { ...NO_REPAIRS, stopped, closed: orphaned.length };
+        return { ...NO_REPAIRS, opened, stopped, closed: orphaned.length };
       }).pipe(Effect.withSpan("Portals.sweep"));
 
       const sweepLogged = sweep.pipe(
         Effect.tap((report) =>
-          report.stopped + report.closed === 0
+          report.opened + report.stopped + report.closed === 0
             ? Effect.void
             : Effect.logInfo("portals swept").pipe(
                 Effect.annotateLogs({ event: "portal_sweep", ...report })

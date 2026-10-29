@@ -313,6 +313,35 @@ describe("PorchClient real layer: receipts and refusals", () => {
     ).pipe(Effect.provide(NodeServices.layer))
   );
 
+  it.live(
+    "doctor's no-config refusal is no-config, though doctor may exit 1",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { bin } = yield* stubPorch(
+            JSON.stringify({
+              error: {
+                code: "no-config",
+                message: "No machine config. Run `porch init`.",
+              },
+            }),
+            1
+          );
+
+          const error = yield* Effect.flip(
+            Effect.gen(function* () {
+              const porch = yield* PorchClient;
+
+              return yield* porch.doctor;
+            }).pipe(Effect.provide(realLayer(bin)))
+          );
+
+          assert.strictEqual(error.reason, "no-config");
+          assert.include(error.message, "porch init");
+        })
+      ).pipe(Effect.provide(NodeServices.layer))
+  );
+
   it.live("doctor's failing checks are answers, not errors", () =>
     Effect.scoped(
       Effect.gen(function* () {

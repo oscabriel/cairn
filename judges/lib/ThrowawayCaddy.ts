@@ -5,7 +5,7 @@
 // or ports 80 and 443: every site binds 127.0.0.1 on a port the judge picked, and the admin API
 // listens on another.
 //
-//   const caddy = yield* ThrowawayCaddy.start({ conf, mounts: [root], waitPort })
+//   const caddy = yield* startCaddy({ conf, mounts: [root], waitPort, image })
 //
 // The container runs with `--rm` and is removed when the scope closes, and again on process exit.
 

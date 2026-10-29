@@ -270,7 +270,7 @@ export const clientScenarios: ReadonlyArray<PorchScenario<PorchClient>> = [
       );
 
       const remote = yield* refusal(
-        porch.add("judge-remote", "http://10.0.0.1:80"),
+        porch.add("remote--judge", "http://10.0.0.1:80"),
         "a remote upstream"
       );
 
@@ -313,15 +313,20 @@ export const clientScenarios: ReadonlyArray<PorchScenario<PorchClient>> = [
         `refused ${twice.reason}, expected exists`
       );
 
-      const reserved = yield* refusal(
-        porch.add("plans", "http://127.0.0.1:3102"),
-        "a reserved name"
-      );
+      // The owner-only guard covers only `plans` and `<a>--<b>`, so a name without `--` (porch's
+      // reserved names among them) is refused before porch runs, never served to the tailnet.
+      for (const open of ["plans", "myapp"]) {
+        const unguarded = yield* refusal(
+          porch.add(open, "http://127.0.0.1:3102"),
+          `a name without -- (${open})`
+        );
 
-      yield* expect(
-        reserved.reason === "reserved",
-        `refused ${reserved.reason}, expected reserved`
-      );
+        yield* expect(
+          unguarded.reason === "bad-input" &&
+            unguarded.message.includes("owner-only guard"),
+          `${open} refused ${unguarded.reason}, expected bad-input naming the guard`
+        );
+      }
 
       const removed = yield* porch.remove("main--judge");
       yield* expect(
@@ -542,6 +547,45 @@ export const publisherScenarios: ReadonlyArray<
           (yield* readTarget(stage, `${PROJECT}/claimed.html`)) ===
             "<p>claimed</p>\n",
           "the page is on disk"
+        );
+      })
+  ),
+  scenario(
+    "a dangling claim does not overwrite a file written at its target since",
+    (stage) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const publisher = yield* ArtifactPublisher;
+        const sql = yield* SqlClient.SqlClient;
+
+        const source = yield* writeSource(
+          stage,
+          "p7/dangling.html",
+          "<p>agent</p>\n"
+        );
+
+        // The claim committed and the brain died before porch ran; then someone wrote the file.
+        yield* sql`
+          INSERT INTO artifacts (id, thread_id, project_slug, name, claimed_at, updated_at)
+          VALUES (${artifactIdOf(PROJECT, "dangling.html")}, ${THREAD_A}, ${PROJECT}, ${"dangling.html"}, 1, 1)
+        `;
+        const hand = path.join(stage.artifacts, PROJECT, "dangling.html");
+        yield* fs.makeDirectory(path.dirname(hand), { recursive: true });
+        yield* fs.writeFileString(hand, "<p>written by hand</p>\n");
+
+        const error = yield* refusal(
+          publisher.publish({ threadId: THREAD_A, source, project: PROJECT }),
+          "the claiming thread's rerun over a hand-written file"
+        );
+
+        yield* expect(
+          Predicate.isTagged(error, "ArtifactPublishError") &&
+            error.reason === "unmanaged",
+          `refused ${error._tag}, expected ArtifactPublishError unmanaged`
+        );
+        yield* expect(
+          (yield* fs.readFileString(hand)) === "<p>written by hand</p>\n",
+          "the hand-written file is intact"
         );
       })
   ),

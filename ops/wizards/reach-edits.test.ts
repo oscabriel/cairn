@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   composeMount,
   importPorch,
+  ownerMatcherLine,
   ownerOnly,
   porchPorts,
   renamePlans,
@@ -113,12 +114,31 @@ describe("reach Caddyfile edits", () => {
     const site = lines.indexOf("*.gneiss.run {");
 
     expect(lines[site + 3]).toBe(
-      "\t@cairn_owner_only expression `{host} == 'plans.gneiss.run' || {host}.matches('^[a-z0-9-]+--[a-z0-9-]+\\\\.gneiss\\\\.run$')`"
+      "\t@cairn_owner_only expression `{host}.matches('(?i)^plans\\\\.gneiss\\\\.run$') || {host}.matches('(?i)^[a-z0-9-]+--[a-z0-9-]+\\\\.gneiss\\\\.run$')`"
     );
     expect(lines[site + 4]).toBe(
       "\tforward_auth @cairn_owner_only 127.0.0.1:3774 {"
     );
     expect(text).toContain("\t\theader_up X-Cairn-Peer {remote_host}\n");
+  });
+
+  it("replaces an older, case-sensitive guard in place", () => {
+    const legacy =
+      "\t@cairn_owner_only expression `{host} == 'plans.gneiss.run' || {host}.matches('^[a-z0-9-]+--[a-z0-9-]+\\\\.gneiss\\\\.run$')`";
+
+    // Replacer functions: the guard holds "$'", which a replacement string would expand.
+    const old = LIVE_CADDYFILE.replace(
+      "\t# Cairn brain",
+      () => `${legacy}\n\t# Cairn brain`
+    );
+
+    const { text, notes } = ok(ownerOnly(old));
+
+    expect(notes).toStrictEqual([
+      "owner-only guard now matches hosts in any letter case",
+    ]);
+    expect(text).toBe(old.replace(legacy, () => ownerMatcherLine("\t")));
+    expect(ok(ownerOnly(text)).text).toBe(text);
   });
 
   it("renames the hand-written @plans and leaves no @plans behind", () => {

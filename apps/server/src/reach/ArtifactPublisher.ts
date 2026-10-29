@@ -16,7 +16,10 @@
 //
 // A claim whose row still has no hash (the brain died before porch ran, or porch failed in a way
 // that keeps it) holds its key for its thread until that thread publishes again; listings filter
-// `hash IS NULL`. A revoked row still belongs to its thread, so another thread is refused `taken`.
+// `hash IS NULL`. Porch may never have run for it, so a target on disk is not proof of Cairn's
+// copy: the rerun goes ahead only when the target holds exactly the source's bytes (porch did copy
+// it), and is refused `unmanaged` otherwise. A revoked row still belongs to its thread, so another
+// thread is refused `taken`. Two fresh publishes of one key from the same thread both go ahead.
 //
 // The publish is idempotent per thread and source, so a tool built on it can be `replay: "safe"`.
 
@@ -157,6 +160,49 @@ const measure = (fs: FileSystem.FileSystem, source: string) =>
     return { kind, bytes };
   });
 
+/** The bytes of every file under `root` (or of `root` itself), keyed by relative path. */
+const contentsOf = (fs: FileSystem.FileSystem, root: string) =>
+  Effect.gen(function* () {
+    const info = yield* fs.stat(root);
+    const files = new Map<string, string>();
+
+    const digest = (file: string) =>
+      Effect.map(fs.readFile(file), (bytes) =>
+        createHash("sha256").update(bytes).digest("hex")
+      );
+
+    if (info.type !== "Directory") {
+      files.set("", yield* digest(root));
+
+      return files;
+    }
+
+    for (const entry of yield* fs.readDirectory(root, { recursive: true })) {
+      const child = path.join(root, entry);
+
+      if ((yield* fs.stat(child)).type === "File") {
+        files.set(entry, yield* digest(child));
+      }
+    }
+
+    return files;
+  });
+
+/**
+ * Whether `target` is exactly a copy of `source`: the same files with the same bytes, nothing
+ * more. Anything unreadable is not a copy.
+ */
+const isCopyOf = (fs: FileSystem.FileSystem, source: string, target: string) =>
+  Effect.gen(function* () {
+    const want = yield* contentsOf(fs, source);
+    const have = yield* contentsOf(fs, target);
+
+    return (
+      want.size === have.size &&
+      [...want].every(([file, hash]) => have.get(file) === hash)
+    );
+  }).pipe(Effect.orElseSucceed(() => false));
+
 /** Publishes artifacts through porch, refusing to overwrite anything Cairn did not publish. */
 export class ArtifactPublisher extends Context.Service<
   ArtifactPublisher,
@@ -257,42 +303,70 @@ export class ArtifactPublisher extends Context.Service<
           );
         }
 
-        // A revoked row's file is gone; one there now is somebody else's.
-        const owned = Option.isSome(held) && held.value.revoked_at === null;
+        const unmanaged = refuse(
+          "unmanaged",
+          `${project}/${name} already exists in the artifacts folder and Cairn did not publish it, so publishing would overwrite it. Publish under another name.`,
+          Option.none()
+        );
 
-        if (
-          !owned &&
-          (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => true)))
-        ) {
-          return yield* refuse(
-            "unmanaged",
-            `${project}/${name} already exists in the artifacts folder and Cairn did not publish it, so publishing would overwrite it. Publish under another name.`,
-            Option.none()
-          );
+        const exists = yield* fs
+          .exists(target)
+          .pipe(Effect.orElseSucceed(() => true));
+
+        if (exists) {
+          // A revoked row's file is gone; one there now is somebody else's. A claim porch never
+          // filled in proves nothing about the file on disk unless it is the source's own bytes.
+          const published = Option.isSome(held) && held.value.hash !== null;
+
+          const ours = Option.isSome(held) && held.value.revoked_at === null;
+
+          if (
+            !ours ||
+            (!published && !(yield* isCopyOf(fs, input.source, target)))
+          ) {
+            return yield* unmanaged;
+          }
         }
 
         const now = yield* Clock.currentTimeMillis;
-        const fresh = Option.isNone(held);
+        let fresh = Option.isNone(held);
 
         if (fresh) {
-          // The UNIQUE key turns a race with another thread's claim into `taken`; any other
-          // store failure is only a store failure.
-          yield* sql`
+          // The UNIQUE key turns a race with another claim into `taken`, unless the winner is
+          // this same thread; any other store failure is only a store failure.
+          const raced = yield* sql`
             INSERT INTO artifacts (id, thread_id, project_slug, name, claimed_at, updated_at)
             VALUES (${id}, ${input.threadId}, ${project}, ${name}, ${now}, ${now})
           `.pipe(
+            Effect.as(false),
             Effect.catchTag("SqlError", (cause) =>
-              Effect.fail(
-                Predicate.isTagged(cause.reason, "UniqueViolation")
-                  ? refuse(
-                      "taken",
-                      `Another thread claimed ${project}/${name} at the same moment. Publish under another name.`,
-                      Option.some(cause)
-                    )
-                  : storeFailure(cause)
-              )
+              Predicate.isTagged(cause.reason, "UniqueViolation")
+                ? Effect.succeed(true)
+                : Effect.fail(storeFailure(cause))
             )
           );
+
+          if (raced) {
+            const winner = yield* readRow.pipe(
+              Effect.catchTags({
+                SqlError: (cause) => Effect.fail(storeFailure(cause)),
+                SchemaError: (cause) => Effect.fail(storeFailure(cause)),
+              })
+            );
+
+            if (
+              Option.isNone(winner) ||
+              winner.value.thread_id !== input.threadId
+            ) {
+              return yield* refuse(
+                "taken",
+                `${project}/${name} was claimed at the same moment by another publish. Publish under another name.`,
+                Option.none()
+              );
+            }
+
+            fresh = false;
+          }
         }
 
         const receipt = yield* porch.publish(input.source, project).pipe(

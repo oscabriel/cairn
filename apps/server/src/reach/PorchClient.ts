@@ -349,6 +349,27 @@ const checkName = (operation: string, name: string) =>
         )
       );
 
+/** A portal name, `<branch>--<project>`, the only service porch name the owner-only guard covers. */
+const PORTAL_NAME = /^[a-z0-9-]+--[a-z0-9-]+$/u;
+
+/**
+ * Why `porch add <name>` would be refused before porch runs. Beyond one DNS label, the name must
+ * hold `--`: the Caddyfile's owner-only guard matches `plans` and `<a>--<b>` only, so a name
+ * without `--` would be served to the whole tailnet. It also keeps a porch name from ever equaling
+ * a hand-written matcher such as `@cairn`.
+ */
+const checkPortalName = (name: string) =>
+  Option.orElse(checkName("add", name), () =>
+    PORTAL_NAME.test(name)
+      ? Option.none<PorchError>()
+      : Option.some(
+          badInput(
+            "add",
+            `${name} is not a portal name (<branch>--<project>); the owner-only guard covers only names with "--", so any other name would be open to the whole tailnet.`
+          )
+        )
+  );
+
 const checkUpstream = (upstream: string) => {
   const port = Number(LOOPBACK_UPSTREAM.exec(upstream)?.groups?.port ?? "0");
 
@@ -559,7 +580,7 @@ export const makeFakePorch = Effect.fnUntraced(function* (
 
   const add = (name: string, upstream: string) =>
     Effect.gen(function* () {
-      const badName = checkName("add", name);
+      const badName = checkPortalName(name);
 
       if (Option.isSome(badName)) {
         return yield* badName.value;
@@ -692,7 +713,12 @@ export class PorchClient extends Context.Service<
       source: string,
       project: string
     ): Effect.Effect<PublishReceipt, PorchError>;
-    /** A service porch `<name>.<domain>` in front of `upstream` (`http://127.0.0.1:<port>`); reloads Caddy. */
+    /**
+     * A service porch `<name>.<domain>` in front of `upstream` (`http://127.0.0.1:<port>`); reloads
+     * Caddy. `name` must be a portal name, `<branch>--<project>`: the Caddyfile's owner-only guard
+     * (ops/wizards/reach-edits.ts) covers only names with `--`, so any other name would be served
+     * to the whole tailnet. Refused `bad-input` before porch runs.
+     */
     add(name: string, upstream: string): Effect.Effect<AddReceipt, PorchError>;
     /** Removes a porch; `missing` when there is none of that name. Reloads Caddy. */
     remove(name: string): Effect.Effect<RemoveReceipt, PorchError>;
@@ -798,7 +824,9 @@ export class PorchClient extends Context.Service<
         Effect.gen(function* () {
           const result = yield* run(operation, [...args, "--json"]);
 
-          if (!acceptExit(result.exitCode)) {
+          // A refusal body wins over an accepted exit code: `doctor` exits 1 both for failing
+          // checks and for `no-config`, and only the body tells them apart.
+          if (result.exitCode !== 0) {
             const refusal = decodeErrorBody(result.stdout);
 
             if (Option.isSome(refusal)) {
@@ -808,7 +836,9 @@ export class PorchClient extends Context.Service<
                 refusal.value.error.message
               );
             }
+          }
 
+          if (!acceptExit(result.exitCode)) {
             const detail = tail(
               result.stderr === "" ? result.stdout : result.stderr
             );
@@ -910,7 +940,7 @@ export class PorchClient extends Context.Service<
         name: string,
         upstream: string
       ) {
-        yield* refuseWith(checkName("add", name));
+        yield* refuseWith(checkPortalName(name));
         yield* refuseWith(checkUpstream(upstream));
 
         return yield* receipt("add", ["add", name, upstream], decodeAdd);

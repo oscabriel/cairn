@@ -276,6 +276,7 @@ if want 2; then
   CLOSE_DELAY=not-run
   DOCTOR_RESULT=not-run
   PROBE_RESULT=not-run
+  GUARD_RESULT=not-run
   in_caddy() { docker exec caddy caddy "$@"; }
 
   # apply_edit EDIT FILE: computes EDIT on FILE, shows the diff, and writes it back on yes.
@@ -369,10 +370,20 @@ if want 2; then
   if ((REACH_OK)); then
     CANDIDATE=$CADDY_DIR/conf/Caddyfile.reach-candidate
     cp "$CADDYFILE" "$CANDIDATE"
+    GUARD_IN=0
+    IMPORT_IN=0
     for edit in owner-only rename-plans import stream-close-delay; do
-      apply_edit "$edit" "$CANDIDATE" || true
+      if apply_edit "$edit" "$CANDIDATE"; then
+        [[ $edit == owner-only ]] && GUARD_IN=1
+        [[ $edit == import ]] && IMPORT_IN=1
+      fi
     done
-    if cmp -s "$CADDYFILE" "$CANDIDATE"; then
+    if ((IMPORT_IN && !GUARD_IN)); then
+      # porch's portals and artifacts would be served to the whole tailnet with no owner check.
+      warn "porch's import without the owner-only guard would open every portal and artifact to the tailnet; the live Caddyfile is unchanged."
+      GUARD_RESULT=declined
+      REACH_OK=0
+    elif cmp -s "$CADDYFILE" "$CANDIDATE"; then
       note "The Caddyfile already holds every edit you accepted."
     elif ! in_caddy validate --config /etc/caddy/Caddyfile.reach-candidate --adapter caddyfile; then
       warn "Caddy refused the candidate; the live Caddyfile is unchanged."
@@ -433,18 +444,31 @@ if want 2; then
         ask PROBE_SEEN "Type the code the page shows:"
         [[ $PROBE_SEEN == "$NONCE" ]] && PROBE_RESULT=pass
       fi
+      # The guard, from the Beelink itself: Cairn refuses loopback peers, so through 127.0.0.1 the
+      # probe must answer 403 in any letter case. A 200 means the guard lets that host past it.
+      GUARD_RESULT=pass
+      for host in plans.gneiss.run PLANS.gneiss.run; do
+        set +e
+        GUARD_STATUS=$(curl -sk -o /dev/null -w '%{http_code}' --resolve plans.gneiss.run:443:127.0.0.1 -H "Host: $host" "$URL")
+        set -e
+        if [[ $GUARD_STATUS != 403 ]]; then
+          warn "Host: $host through 127.0.0.1 answered $GUARD_STATUS, not 403: the owner-only guard does not hold."
+          GUARD_RESULT=fail
+        fi
+      done
       # porch has no unpublish; its registry keeps a record of the probe, which is harmless.
       rm -f "$ARTIFACTS/cairn/$PROBE_NAME"
     fi
     rm -rf "$PROBE_DIR"
     [[ $PROBE_RESULT == pass ]] || REACH_OK=0
+    [[ $GUARD_RESULT == pass ]] || REACH_OK=0
   fi
 
   if ((REACH_OK)); then
-    record 2 "reach=pass close_delay=$CLOSE_DELAY doctor=$DOCTOR_RESULT probe=$PROBE_RESULT backup=$STAMP"
+    record 2 "reach=pass close_delay=$CLOSE_DELAY doctor=$DOCTOR_RESULT probe=$PROBE_RESULT guard=$GUARD_RESULT backup=$STAMP"
     printf '  %s✓ porch and Caddy are ready for artifacts and portals%s\n' "$GREEN" "$RESET"
   else
-    record 2 "reach=fail close_delay=$CLOSE_DELAY doctor=$DOCTOR_RESULT probe=$PROBE_RESULT backup=$STAMP"
+    record 2 "reach=fail close_delay=$CLOSE_DELAY doctor=$DOCTOR_RESULT probe=$PROBE_RESULT guard=$GUARD_RESULT backup=$STAMP"
     note "Backups: $CADDYFILE.bak-before-porch-$STAMP and $COMPOSE.bak-before-porch-$STAMP."
     note "To put one back: cat <backup> > <file>, then $RELOAD"
     SKIPPED+=("stage 2: Caddy and porch (ops/wizards/phase-2.sh 2)")

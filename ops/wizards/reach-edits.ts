@@ -7,7 +7,10 @@
 // - `owner-only`: a site-level `forward_auth` to Cairn's `/_cairn/auth` for `plans.gneiss.run` and
 //   every `<branch>--<project>` portal name, so artifacts and portals are the owner's alone. A
 //   site-level directive runs before every `handle`, hand-written or porch's, so porch needs no
-//   guard setting of its own.
+//   guard setting of its own. The guard matches case-insensitively, as Caddy's `host` matchers
+//   do: a case-sensitive guard lets `Host: PLANS.gneiss.run` past it to a handle that still
+//   serves it. An older, case-sensitive guard is replaced in place. `judges/owner-guard.ts` runs
+//   it in a throwaway Caddy.
 // - `rename-plans`: the hand-written `@plans` matcher becomes `@owner_plans`. porch names its
 //   artifacts porch `plans`, and two `@plans` matchers in one site do not validate. The
 //   hand-written handle keeps serving the same folder with `Cache-Control: no-cache`; porch's
@@ -100,7 +103,7 @@ const blockEnd = (lines: ReadonlyArray<string>, start: number) => {
 const indentOf = (line: string) => /^\s*/u.exec(line)?.[0] ?? "";
 
 /** The site block's first and last line, found at the top level. */
-const siteBlock = (lines: ReadonlyArray<string>) => {
+const siteBlock = (lines: ReadonlyArray<string>, site: string = SITE) => {
   let depth = 0;
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -108,14 +111,14 @@ const siteBlock = (lines: ReadonlyArray<string>) => {
 
     if (
       depth === 0 &&
-      line.trim().startsWith(`${SITE} `) &&
+      line.trim().startsWith(`${site} `) &&
       line.trim().endsWith("{")
     ) {
       const end = blockEnd(lines, index);
 
       return end === -1
         ? Result.fail(
-            `the ${SITE} block opened on line ${String(index + 1)} never closes`
+            `the ${site} block opened on line ${String(index + 1)} never closes`
           )
         : Result.succeed({ start: index, end });
     }
@@ -123,7 +126,7 @@ const siteBlock = (lines: ReadonlyArray<string>) => {
     depth += braceDelta(line);
   }
 
-  return Result.fail(`no top-level "${SITE} {" block`);
+  return Result.fail(`no top-level "${site} {" block`);
 };
 
 /** The indentation of the site's own directives. */
@@ -145,26 +148,66 @@ const childIndent = (
 
 const splitLines = (text: string) => text.split("\n");
 
+/** Where the guard asks Cairn, and in which site block it goes. A judge points both elsewhere. */
+export interface OwnerOnlyOptions {
+  /** The site address line's first token. */
+  readonly site: string;
+  /** Cairn's `host:port` for `/_cairn/auth`. */
+  readonly auth: string;
+}
+
+/** The live site and Cairn's loopback port. */
+export const OWNER_ONLY_LIVE: OwnerOnlyOptions = {
+  site: SITE,
+  auth: "127.0.0.1:3774",
+};
+
+/**
+ * The guard's matcher line: `plans.<domain>` and `<a>--<b>.<domain>`, in any letter case. The
+ * backslashes are doubled for CEL's single-quoted string.
+ */
+export const ownerMatcherLine = (indent: string) => {
+  const escaped = DOMAIN.replaceAll(".", "\\\\.");
+
+  return `${indent}${OWNER_MATCHER} expression \`{host}.matches('(?i)^plans\\\\.${escaped}$') || {host}.matches('(?i)^[a-z0-9-]+--[a-z0-9-]+\\\\.${escaped}$')\``;
+};
+
 /** The owner-only guard for artifacts and portals. */
-export const ownerOnly = (text: string): Result.Result<Edited, string> => {
-  if (text.includes(OWNER_MATCHER)) {
+export const ownerOnly = (
+  text: string,
+  options: OwnerOnlyOptions = OWNER_ONLY_LIVE
+): Result.Result<Edited, string> => {
+  const lines = splitLines(text);
+
+  const existing = lines.findIndex((line) =>
+    line.trimStart().startsWith(`${OWNER_MATCHER} `)
+  );
+
+  if (existing !== -1) {
+    const line = lines[existing] ?? "";
+    const current = ownerMatcherLine(indentOf(line));
+
+    if (line === current) {
+      return Result.succeed({
+        text,
+        notes: ["owner-only guard already in place"],
+      });
+    }
+
     return Result.succeed({
-      text,
-      notes: ["owner-only guard already in place"],
+      text: lines.with(existing, current).join("\n"),
+      notes: ["owner-only guard now matches hosts in any letter case"],
     });
   }
 
-  const lines = splitLines(text);
-
-  return Result.map(siteBlock(lines), ({ start, end }) => {
+  return Result.map(siteBlock(lines, options.site), ({ start, end }) => {
     const indent = childIndent(lines, start, end);
-    const escaped = DOMAIN.replaceAll(".", "\\\\.");
 
     const guard = [
       `${indent}# Cairn (ADR 0038): artifacts and portals are the owner's alone. A site-level`,
       `${indent}# forward_auth runs before every handle below, hand-written or porch's.`,
-      `${indent}${OWNER_MATCHER} expression \`{host} == 'plans.${DOMAIN}' || {host}.matches('^[a-z0-9-]+--[a-z0-9-]+\\\\.${escaped}$')\``,
-      `${indent}forward_auth ${OWNER_MATCHER} 127.0.0.1:3774 {`,
+      ownerMatcherLine(indent),
+      `${indent}forward_auth ${OWNER_MATCHER} ${options.auth} {`,
       `${indent}\turi /_cairn/auth`,
       `${indent}\theader_up X-Cairn-Peer {remote_host}`,
       `${indent}\tlb_try_duration 3s`,

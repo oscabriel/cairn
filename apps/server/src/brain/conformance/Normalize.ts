@@ -12,6 +12,8 @@
 // - `subagents`: on a parent with children only, each child's registry status, its settlements,
 //   the last one delivered, where its questions to the parent stand and the model its dispatch
 //   record names, by thread id.
+// - `escalations`: on a parent with escalated child questions only, each `cairn.escalations`
+//   entry's status and why it reached the user, oldest first.
 //
 // A named device's view (`normalizeDeviceView`) adds what its client reads from the records
 // through `PendingRequests`: `card`, the requests the card offers in order (tool, body, "i/N"),
@@ -182,10 +184,36 @@ const viewFields = (view: ConversationView) => {
           }))
       : [];
 
-  const parentOnly = subagents.length > 0 ? { subagents } : {};
+  const index = view.docs["cairn.escalations"];
+
+  // A parent's escalated child questions, oldest first: where each stands and why it reached the
+  // user. Ids and times differ by harness.
+  const escalations =
+    isRecord(index) && isRecord(index.items)
+      ? Object.values(index.items)
+          .filter(isRecord)
+          .toSorted(
+            (a, b) => Number(a.escalatedAt ?? 0) - Number(b.escalatedAt ?? 0)
+          )
+          .map((entry) => ({
+            status: entry.status ?? null,
+            why: entry.why ?? null,
+          }))
+      : [];
+
+  // A parent's own fields lead, present only on a parent that has them.
+  const fields: Record<string, Json> = {};
+
+  if (subagents.length > 0) {
+    fields.subagents = subagents;
+  }
+
+  if (escalations.length > 0) {
+    fields.escalations = escalations;
+  }
 
   return {
-    ...parentOnly,
+    ...fields,
     transcript,
     transcriptLength: transcript.length,
     queue,

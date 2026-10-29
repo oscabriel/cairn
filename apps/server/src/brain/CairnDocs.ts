@@ -64,7 +64,12 @@ import {
   Stream,
 } from "effect";
 
-import { ChildDoc, isLinked, markQuestion } from "../subagents/SubagentDocs.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  isLinked,
+  markQuestion,
+} from "../subagents/SubagentDocs.ts";
 import type { ChildState } from "../subagents/SubagentDocs.ts";
 import { Brain } from "./Brain.ts";
 import { durable, handOff } from "./Durable.ts";
@@ -981,7 +986,8 @@ const settleLinked = async (
 /**
  * Answers one record from the host side, in one transaction (`applyAnswer`). "Allow for this
  * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit,
- * and an escalated question settles with its mirror (`settleLinked`).
+ * and an escalated question settles with its mirror (`settleLinked`). A parent's pending mirror is
+ * answered only through its open `cairn.escalations` entry, which the answer resolves.
  */
 export const answerApproval = (
   session: Pick<Session, "commit" | "snapshot">,
@@ -999,6 +1005,16 @@ export const answerApproval = (
 
       if (record === undefined) {
         return "not_found";
+      }
+
+      // A mirror is answered through its open escalation entry, which is also its authorization
+      // (ADR 0027): a pending mirror with none was never escalated here.
+      if (record.mirrorOf !== null && record.status === "pending") {
+        const index = await tx.doc(EscalationsDoc, conversationId);
+
+        if (index.items[record.mirrorOf.approvalId]?.status !== "open") {
+          return "not_found";
+        }
       }
 
       const outcome = applyAnswer(record, answer, now);

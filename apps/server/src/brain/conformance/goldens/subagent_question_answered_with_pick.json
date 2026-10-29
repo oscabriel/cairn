@@ -155,6 +155,12 @@
         }
       }
     ],
+    "escalations": [
+      {
+        "status": "resolved",
+        "why": "The parent's run ended without answering."
+      }
+    ],
     "transcript": [
       {
         "kind": "pi.user",

@@ -1245,6 +1245,10 @@
                                 "additionalProperties": true
                               },
                               "maxItems": 9
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["tool", "answer"]
                             }
                           },
                           "required": ["type", "questions"],
@@ -4598,6 +4602,10 @@
                                 "additionalProperties": true
                               },
                               "maxItems": 9
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": ["tool", "answer"]
                             }
                           },
                           "required": ["type", "questions"],

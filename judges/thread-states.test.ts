@@ -71,6 +71,7 @@ const MODULES = {
 const NOT_STATUSES = {
   AttachmentKind: "what an attachment is, fixed at upload",
   ApprovalDecision: "the user's answer, an input to `ApprovalStatus`",
+  QuestionSource: "where a question came from, fixed when it is asked",
   RuntimeMode: "the permission mode, a thread setting",
   ThinkingLevel: "a model setting",
   WhenBusy: "a send option",

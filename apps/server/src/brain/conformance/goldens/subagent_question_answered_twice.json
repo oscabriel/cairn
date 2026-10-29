@@ -160,6 +160,12 @@
         }
       }
     ],
+    "escalations": [
+      {
+        "status": "resolved",
+        "why": "The parent escalated: not mine to say"
+      }
+    ],
     "transcript": [
       {
         "kind": "pi.user",

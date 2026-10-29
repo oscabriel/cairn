@@ -92,6 +92,8 @@ const build = (
     childAgent: (typed) => child.agent(typed),
     workspaces,
     settleDelayMillis: tuning.settleDelayMillis,
+    questionTtlMillis: tuning.questionTtlMillis,
+    questionWindowMillis: tuning.questionWindowMillis,
   });
 
   const tools = subagentToolSet(faults, tasks, tuning);

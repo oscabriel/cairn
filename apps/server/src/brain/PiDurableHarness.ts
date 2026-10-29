@@ -66,7 +66,11 @@ import {
   Stream,
 } from "effect";
 
-import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  SubagentsDoc,
+} from "../subagents/SubagentDocs.ts";
 import { steerReporter } from "../subagents/Subagents.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
@@ -126,6 +130,7 @@ const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
   Permissions,
   SubagentsDoc,
   ChildDoc,
+  EscalationsDoc,
 ];
 
 const encoder = new TextEncoder();
@@ -397,6 +402,7 @@ const layerNoDeps = Layer.effect(
             // opened before that shows it only once the client resubscribes (4C, 6).
             await tx.doc(Approvals, record.id);
             await tx.doc(SubagentsDoc, record.id);
+            await tx.doc(EscalationsDoc, record.id);
             // The mode gated tools read at call time (ADR 0031).
             await writeMode(tx, record.id, input.runtimeMode);
 

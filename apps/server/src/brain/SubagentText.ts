@@ -222,6 +222,17 @@ export const EscalationWhy = {
   parentRunEnded: "The parent's run ended without answering.",
   /** The parent is stopped or failed, so no run of its own will read the question. */
   parentStopped: "The parent is stopped.",
+  /** The crash-loop guard parked the parent's run, which waits for a Retry. */
+  parentParked: "The parent's run is parked.",
+  /** The user archived the parent thread. */
+  parentArchived: "The parent thread was archived.",
+  /** The user deleted the parent thread. */
+  parentDeleted: "The parent thread was deleted.",
+  /** The parent's model saw the question and did not settle it within the window. */
+  parentSlow: (windowMillis: number) =>
+    windowMillis >= 60_000
+      ? `The parent did not answer within ${Math.round(windowMillis / 60_000)} minutes.`
+      : `The parent did not answer within ${Math.round(windowMillis / 1000)} seconds.`,
 } as const;
 
 /**
@@ -255,4 +266,12 @@ export const SubagentRequestIds = {
   brief: (briefId: string) => `${briefId}-input`,
   /** The one nudge a typed child gets when the run of its `seq`th settlement ends without one. */
   nudge: (child: string, seq: number) => `subagent-nudge-${child}-${seq}`,
+  /**
+   * The answer a child gets when the run of its `seq`th settlement ended on a question in its
+   * final answer (ADR 0027): the run goes on with it, as with a nudge.
+   */
+  answer: (child: string, seq: number) => `subagent-answer-${child}-${seq}`,
+  /** The question record a child's final answer became, for that run's mark `seq`. */
+  answerQuestion: (child: string, seq: number) =>
+    `subagent-ask-${child}-${seq}`,
 } as const;

@@ -8,11 +8,23 @@
 // - `cairn.child` (on the child) is written in the commit that creates it: the child's tools find
 //   their parent here, the permission gate narrows the child's mode by walking it, and the result
 //   tool reads the brief's schema from it.
+// - `cairn.escalations` (on the parent) indexes the child questions escalated to the user, by the
+//   child's approval id, written in the escalation commit beside the parent's mirror record
+//   (approvals/QuestionRoute.ts) and resolved when the question is answered or ends.
 
 import { DEFAULT_RUNTIME_MODE } from "@cairn/protocol/Policy";
-import type { RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
-import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
 import type {
+  RuntimeMode,
+  RuntimeRequestKind,
+  WakeMode,
+} from "@cairn/protocol/Policy";
+import {
+  CHILD_DOCUMENT,
+  ESCALATIONS_DOCUMENT,
+  SUBAGENTS_DOCUMENT,
+} from "@cairn/protocol/Subagents";
+import type {
+  EscalationStatus,
   SettlementOutcome,
   SubagentQuestionState,
   SubagentStatus,
@@ -193,6 +205,41 @@ export const ChildDoc = defineDoc<ChildState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
 
+/** One escalated child question in its parent's index: the protocol's `Escalation` as plain JSON. */
+export interface EscalationState {
+  [key: string]: JsonValue;
+  childThreadId: string;
+  kind: RuntimeRequestKind;
+  payload: JsonRecord | null;
+  askedAt: number;
+  escalatedAt: number;
+  /** Why it reached the user (`EscalationWhy`, or the parent's own reason). */
+  why: string;
+  status: EscalationStatus;
+}
+
+/** `cairn.escalations` state. */
+export interface EscalationsState {
+  [key: string]: JsonValue;
+  items: { [approvalId: string]: EscalationState };
+}
+
+/**
+ * `cairn.escalations`: a parent's index of its children's questions escalated to the user (ADR
+ * 0027), by the child's approval id. A `thread.respond` on the parent's mirror resolves through an
+ * open entry here.
+ */
+export const EscalationsDoc = defineDoc<EscalationsState>({
+  kind: ESCALATIONS_DOCUMENT,
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  // A fork is another thread, which escalated nothing.
+  fork: "initial",
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
+});
+
 /** Whether a stored `cairn.child` names a parent: the creating commit sets every field at once. */
 export const isLinked = (
   child: Readonly<ChildState> | undefined
@@ -201,8 +248,10 @@ export const isLinked = (
 
 /**
  * Records where a child's question stands in its parent's registry, inside the caller's
- * transaction (`at` is when it escalated, kept once set). `childConversationId` must be a
- * subagent's: `tx.doc` would create an empty link on any other conversation. Writes documents only.
+ * transaction (`at` is when it escalated, kept once set). A question answered or cancelled also
+ * resolves its open entry in the parent's `cairn.escalations`, so the index never shows a question
+ * that is no longer the user's. `childConversationId` must be a subagent's: `tx.doc` would create
+ * an empty link on any other conversation. Writes documents only.
  */
 export const markQuestion = async (
   tx: Tx,
@@ -221,6 +270,11 @@ export const markQuestion = async (
   const registry = await tx.doc(SubagentsDoc, parentConversationId);
   const item = registry.items[link.key];
 
+  // Only a question that was escalated has an entry: opening the index otherwise would create it.
+  const escalated =
+    (item?.questions[approvalId]?.escalatedAt ?? null) !== null ||
+    Option.isSome(at);
+
   if (item !== undefined) {
     item.questions[approvalId] = {
       state,
@@ -229,5 +283,14 @@ export const markQuestion = async (
         () => item.questions[approvalId]?.escalatedAt ?? null
       ),
     };
+  }
+
+  if (escalated && (state === "answered" || state === "cancelled")) {
+    const index = await tx.doc(EscalationsDoc, parentConversationId);
+    const entry = index.items[approvalId];
+
+    if (entry?.status === "open") {
+      entry.status = "resolved";
+    }
   }
 };

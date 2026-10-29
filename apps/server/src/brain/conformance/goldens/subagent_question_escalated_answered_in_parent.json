@@ -160,6 +160,12 @@
         }
       }
     ],
+    "escalations": [
+      {
+        "status": "resolved",
+        "why": "The parent escalated: the user knows the layout"
+      }
+    ],
     "transcript": [
       {
         "kind": "pi.user",

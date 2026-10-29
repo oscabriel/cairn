@@ -1,0 +1,16 @@
+/*
+ * The `next` primitives' utilities. styles.css leaves next/ui out of the entry's scan, so the classes
+ * the primitives write are built here, from this folder alone, and ship in the chunk that imports a
+ * primitive (Classes.ts imports this file, and every primitive imports Classes.ts). It cannot
+ * reference styles.css, whose `@source not` would leave this folder out here too, so it takes
+ * Tailwind's own theme by reference and registers the design token colour names from theme.css.
+ */
+@reference "tailwindcss";
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "./theme.css";
+@source "./";
+/* Only what the primitives write: the catalogue builds its own classes (catalogue/catalogue.css), and
+   tests and their fixture build none, so a chunk carries no class only they use. */
+@source not "./catalogue";
+@source not "./**/*.test.ts";
+@source not "./SceneFixture.ts";

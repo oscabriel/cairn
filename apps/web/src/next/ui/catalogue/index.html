@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- The look catalogue, for the look rounds and judges/look-rules.ts. Served by the Vite dev
+     server only, at /__look (vite.config.ts); the production build's single entry is
+     apps/web/index.html. -->
+<html lang="en" style="font-size: 16px; -webkit-font-smoothing: antialiased">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Look catalogue</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+      }
+    </style>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/next/ui/catalogue/Main.ts"></script>
+  </body>
+</html>

@@ -7,11 +7,11 @@
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { AgentDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
-import { Approvals } from "../brain/CairnDocs.ts";
+import { Approvals, ThreadMeta, ThreadReceipt } from "../brain/CairnDocs.ts";
 import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { PRELUDE_VERSION, rewriteScript } from "./Prelude.ts";
 import { ledgerProblems, WorkflowsDoc } from "./WorkflowDocs.ts";
@@ -19,6 +19,7 @@ import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
 import { parseWorkflowScript, scriptHash } from "./WorkflowScript.ts";
 import {
   codemodeResultText,
+  KIT_CWD,
   kitParts,
   KitLayer,
   openKit,
@@ -46,7 +47,18 @@ interface Outcome {
   readonly effects: ReadonlyArray<WorkEffect>;
   /** Conversations a node created, by the node id their `cairn.child` link names. */
   readonly children: ReadonlyMap<string, number>;
+  /** Each node child's thread identity and cwd, by node id. */
+  readonly identities: ReadonlyMap<string, Identity>;
+  /** The summaries of the thread's `approve` records. */
+  readonly approveSummaries: ReadonlyArray<string>;
   readonly problems: ReadonlyArray<string>;
+}
+
+/** A node child's thread identity: its meta's thread id, whether its receipt names it, its cwd. */
+interface Identity {
+  readonly threadId: string;
+  readonly receipted: boolean;
+  readonly cwd: string | null;
 }
 
 /** Waits until the workflow row has ended (its watcher wrote it), at most `ms`. */
@@ -95,6 +107,45 @@ const childrenOf = async (brain: KitBrain): Promise<Map<string, number>> =>
       if (link.parentConversationId === brain.root) {
         found.set(link.key, (found.get(link.key) ?? 0) + 1);
       }
+    }
+
+    return found;
+  }, context);
+
+/** Each node child's thread identity and cwd, by its link's node id. */
+const identitiesOf = async (brain: KitBrain): Promise<Map<string, Identity>> =>
+  await brain.harness.commit(async (tx) => {
+    const found = new Map<string, Identity>();
+    const page = await tx.scanConversations({}, 500);
+
+    for (const conversation of page.items) {
+      if (conversation.id === brain.root) {
+        continue;
+      }
+
+      // oxlint-disable-next-line no-await-in-loop
+      const link = await tx.doc(ChildDoc, conversation.id);
+
+      if (link.parentConversationId !== brain.root) {
+        continue;
+      }
+
+      // oxlint-disable-next-line no-await-in-loop
+      const meta = await tx.doc(ThreadMeta, conversation.id);
+      // oxlint-disable-next-line no-await-in-loop
+      const agent = await tx.doc(AgentDoc, conversation.id);
+
+      const receipt =
+        meta.threadId === ""
+          ? undefined
+          : // oxlint-disable-next-line no-await-in-loop
+            await tx.doc(ThreadReceipt, meta.threadId, { conversationId: 0 });
+
+      found.set(link.key, {
+        threadId: meta.threadId,
+        receipted: receipt?.conversationId === conversation.id,
+        cwd: agent.cwd ?? null,
+      });
     }
 
     return found;
@@ -222,6 +273,10 @@ const scenario = (
         row: Option.fromUndefinedOr(ledger.items[WF]),
         effects,
         children,
+        identities: await identitiesOf(brain),
+        approveSummaries: Object.values(approvals?.items ?? {}).flatMap(
+          (record) => (record.tool === "approve" ? [record.summary] : [])
+        ),
         problems,
       } satisfies Outcome;
     });
@@ -634,6 +689,88 @@ return a;`)
         reason: "script_error",
       });
       assert.isNotNull(row.result);
+    })
+  );
+
+  it.live(
+    "gives each node's child a thread identity and the launching thread's cwd",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* scenario(
+          workflow(`return await agent("node:a", { label: "a" });`)
+        );
+
+        assert.deepStrictEqual(outcome.problems, []);
+
+        const [node] = Object.values(Option.getOrThrow(outcome.row).nodes);
+        const identity = outcome.identities.get(node?.id ?? "");
+
+        assert.isNotNull(node?.childThreadId ?? null);
+        assert.strictEqual(identity?.threadId, node?.childThreadId);
+        assert.isTrue(identity?.receipted);
+        assert.strictEqual(identity?.cwd, KIT_CWD);
+        assert.isNotNull(node?.submissionId ?? null);
+      })
+  );
+
+  it.live(
+    "keeps the ledger decoding when a script passes a bad role, empty key or long label",
+    () =>
+      Effect.gen(function* () {
+        const long = "L".repeat(5000);
+
+        const outcome = yield* scenario(
+          // The dry run refuses these values, so the script passes them only when it runs live (a
+          // node's real answer is not the dry run's placeholder): what a script can always do.
+          workflow(`const x = await agent("node:x", { label: "x" });
+const live = !String(x).startsWith("(dry run");
+const a = await agent("node:a", { label: "a", role: live ? "reader" : "@worker" });
+const b = await agent("node:b", live ? { label: "${long}", key: "  ", effort: "", phase: "   " } : { label: "b" });
+const c = await agent("node:c", live ? { label: "c", effort: "loud" } : { label: "c" });
+return { a, b, c };`)
+        );
+
+        // The ledger still decodes as the protocol's document (the scenario's first check).
+        assert.deepStrictEqual(outcome.problems, []);
+
+        const nodes = Object.values(Option.getOrThrow(outcome.row).nodes);
+
+        // A bad role or effort writes no row; the script sees null and goes on.
+        assert.strictEqual(nodes.length, 2);
+
+        const b = nodes.find((node) => node.label.startsWith("L"));
+
+        assert.strictEqual(b?.state, "settled");
+        assert.isAtMost(b?.label.length ?? 0, 200);
+        assert.isNull(b?.key ?? null);
+        assert.isNull(b?.effort ?? null);
+        assert.isNull(b?.phase ?? null);
+        assert.include(outcome.result, '"a":null');
+        assert.include(outcome.result, '"c":null');
+        assert.deepStrictEqual(starts(outcome.effects), ["b", "x"]);
+      })
+  );
+
+  it.live("cuts an approve() summary and refuses more than nine options", () =>
+    Effect.gen(function* () {
+      const long = "S".repeat(5000);
+
+      const ten = JSON.stringify(
+        Array.from({ length: 10 }, (_, index) => `option ${String(index)}`)
+      );
+
+      const outcome = yield* scenario(
+        workflow(`await agent("node:a", { label: "a" });
+const many = await approve({ summary: "Pick", options: ${ten} });
+const ok = await approve({ summary: "${long}" });
+return { many, accepted: ok === null ? null : ok.accepted };`),
+        { answer: "accepted" }
+      );
+
+      assert.include(outcome.result, '"many":null');
+      assert.include(outcome.result, '"accepted":true');
+      assert.strictEqual(outcome.approveSummaries.length, 1);
+      assert.isAtMost(outcome.approveSummaries[0]?.length ?? 0, 4096);
     })
   );
 

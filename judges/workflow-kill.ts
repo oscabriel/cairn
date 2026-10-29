@@ -1,13 +1,15 @@
 // The workflow kill and node stop matrices (workflows note judges 1 and 2, plan 4D, ADR 0012 as
 // amended): a judge brain (`fixtures/workflows/WorkflowBrain.ts`, a pi-durable Harness over SQLite
 // in a scratch directory with Cairn's code mode, workflows and results extensions, never the
-// deployed unit) runs a workflow while the judge `kill -9`s it at named moments. Spike 3's seven
-// cases are carried over onto the real node tools and ledger, and extended.
+// deployed unit) runs a workflow while the judge `kill -9`s it at named moments. Spike 3's kill
+// cases are carried over onto the real node tools and ledger, and extended; its whole-workflow
+// `abort`, `decline` and five-kill park cases are not yet (see the package report).
 //
 //   node judges/workflow-kill.ts [--case <name>]... [--keep]
 //
 // Kill matrix: plain, kill-fanout, kill-before-nodes, kill-thrice, kill-after-reserve (child made,
-// input not yet sent), kill-in-settle (child answered, receipt not yet committed),
+// input not yet sent), kill-in-nudge (a typed child nudged and still answering it),
+// kill-in-settle (child answered, receipt not yet committed),
 // kill-between-approve-and-codemode, prelude (the gate's rewrite is what replays), approve (a kill
 // while the script's question waits), divergence (the stored start data changed between lives, as
 // a pi bump does), and control (a dispatch that ignores its row; it must fail by dispatching twice).
@@ -156,6 +158,17 @@ const CASES: ReadonlyArray<CaseSpec> = [
     }),
     life(),
   ]),
+  killCase(
+    "kill-in-nudge",
+    [
+      life(["--hold", "after-nudge:b:0"], {
+        line: "holding after-nudge b",
+        delayMs: 500,
+      }),
+      life(),
+    ],
+    "nudge.workflow"
+  ),
   killCase("kill-between-approve-and-codemode", [
     life(["--defer-run"], { line: "deferred", delayMs: 100 }),
     life(),

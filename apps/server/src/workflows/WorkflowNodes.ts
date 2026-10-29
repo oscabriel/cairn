@@ -62,6 +62,9 @@ export const ROW_RESULT_LIMIT_BYTES = 16_384;
 /** The longest one-line summary a row keeps. */
 const SUMMARY_LIMIT = 200;
 
+/** The protocol's `DisplayText` limit: the longest error or label a row may hold and still decode. */
+export const DISPLAY_TEXT_LIMIT = 4096;
+
 /** Entries of a child a settle reads to count its tool calls. */
 const TOOL_SCAN_LIMIT = 1000;
 
@@ -113,6 +116,10 @@ export const summaryOf = (text: string): string => {
     : line;
 };
 
+/** `text` cut to `limit` characters, marked when cut. */
+export const cutText = (text: string, limit = DISPLAY_TEXT_LIMIT): string =>
+  text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+
 /** What a row keeps of a result: the value, or a reference to its child when it is large. */
 const rowResultOf = (value: JsonValue, conversationId: number): JsonValue => {
   const written = JSON.stringify(value);
@@ -121,7 +128,7 @@ const rowResultOf = (value: JsonValue, conversationId: number): JsonValue => {
     ? copyJson(value)
     : {
         ref: `conversation-${String(conversationId)}`,
-        bytes: written.length,
+        bytes: Buffer.byteLength(written, "utf-8"),
       };
 };
 
@@ -265,13 +272,19 @@ export interface Answered {
   readonly submission: SubmissionId;
 }
 
-/** Submits `content` to the child under `requestId` (first submission wins) and waits for it. */
+/**
+ * Submits `content` to the child under `requestId` (first submission wins) and waits for it.
+ * `submitted` runs between the two (a judge's hold point; production passes nothing).
+ */
 export const askChild = async (
   api: ToolExecutionApi,
   child: ConversationId,
   content: string,
   requestId: string,
-  context: ChordContext
+  context: ChordContext,
+  submitted: (submission: SubmissionId) => Promise<void> = async () => {
+    await Promise.resolve();
+  }
 ): Promise<Result.Result<Answered, string>> => {
   const handle = await api.conversation(child, context);
 
@@ -283,6 +296,8 @@ export const askChild = async (
     { type: "input", content, requestId },
     context
   );
+
+  await submitted(submission.id);
 
   const settled = await submission.wait(context);
 
@@ -315,12 +330,18 @@ export interface TypedValue {
   readonly attempts: number;
 }
 
-/** The child's typed result, nudging it once when it ended without one (2E's rule). */
+/**
+ * The child's typed result, nudging it once when it ended without one (2E's rule). A rerun that
+ * finds the nudge already sent (a `kill -9` while the child answered it) asks again under the
+ * nudge's request id, which pi-durable answers with the first submission, so it waits for that
+ * answer instead of failing a child that is still working.
+ */
 export const typedResult = async (
   api: ToolExecutionApi,
   requestId: string,
   child: ConversationId,
-  context: ChordContext
+  context: ChordContext,
+  nudgeSubmitted?: (submission: SubmissionId) => Promise<void>
 ): Promise<Result.Result<TypedValue, string>> => {
   const first = await readResult(api, child, context);
 
@@ -336,7 +357,9 @@ export const typedResult = async (
     context
   );
 
-  if (!nudgeDue(attempts)) {
+  const asking = nudgeDue(attempts) || (attempts.nudged && !attempts.accepted);
+
+  if (!asking) {
     return Result.fail(
       "invalid_result: its child ended without a valid submit_result"
     );
@@ -347,7 +370,8 @@ export const typedResult = async (
     child,
     NUDGE_TEXT,
     nudgeRequestIdOf(requestId),
-    context
+    context,
+    nudgeSubmitted
   );
 
   if (Result.isFailure(nudged)) {
@@ -453,7 +477,7 @@ const applyEnding = (
 ) => {
   if (Result.isFailure(ending)) {
     node.state = "failed";
-    node.error = ending.failure;
+    node.error = cutText(ending.failure);
 
     return;
   }
@@ -572,8 +596,10 @@ export const endNode = async (
 
   node.error = stopped
     ? "stopped before it answered"
-    : (outcome.error?.message ??
-      `its task ended ${outcome.status} without settling`);
+    : cutText(
+        outcome.error?.message ??
+          `its task ended ${outcome.status} without settling`
+      );
 
   await emit(tx, {
     name: stopped ? "workflow.node.stopped" : "workflow.node.settled",
@@ -625,6 +651,16 @@ export const scriptEnding = async (
   };
 };
 
+/** The words pi-durable's code mode ends a script with when its replay cannot go on. */
+const REPLAY_ENDINGS = [
+  "The script cannot resume:",
+  "The script took a different path when resumed after a restart",
+] as const;
+
+/** Whether a script call's error text is code mode's replay ending, not the script's own error. */
+export const isReplayEnding = (text: string): boolean =>
+  REPLAY_ENDINGS.some((prefix) => text.includes(prefix));
+
 /** The row's state and outcome for how its script call ended. */
 const endingState = (
   ending: ScriptEnding
@@ -644,9 +680,7 @@ const endingState = (
     state: "failed",
     outcome: {
       kind: "partial",
-      reason: /diverg|replay|cannot resume/iu.test(ending.text)
-        ? "replay_diverged"
-        : "script_error",
+      reason: isReplayEnding(ending.text) ? "replay_diverged" : "script_error",
     },
   };
 };

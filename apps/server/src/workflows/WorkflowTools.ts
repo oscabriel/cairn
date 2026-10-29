@@ -30,9 +30,11 @@
 // Ported in intent from spike 3's `brain.ts` (the `agent` and `approve` nodes) and the workflows
 // probe's node-stop brain.
 
-import type { ThinkingLevel } from "@cairn/protocol/Models";
+import { ThinkingLevel } from "@cairn/protocol/Models";
 import type { ApprovalDecision, RuntimeMode } from "@cairn/protocol/Policy";
 import type { RoleOverrides } from "@cairn/protocol/Roles";
+import { RoleSpec } from "@cairn/protocol/Roles";
+import { MAX_SUBAGENT_DEPTH } from "@cairn/protocol/Subagents";
 import type { NodeRefusal } from "@cairn/protocol/Workflows";
 import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
@@ -41,6 +43,7 @@ import type {
   AgentChange,
   ConversationId,
   NextTaskState,
+  SubmissionId,
   ToolExecutionApi,
   ToolExecutionResult,
   Tx,
@@ -57,6 +60,7 @@ import {
   approvalLedger,
   Approvals,
   ThreadMeta,
+  ThreadReceipt,
   writeMode,
 } from "../brain/CairnDocs.ts";
 import type {
@@ -68,12 +72,17 @@ import { ScriptSlots } from "../brain/CodeMode.ts";
 import { emit } from "../brain/Events.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import {
+  cutSummary,
   GATED_APPROVAL_TTL_MILLIS,
   readPermissions,
 } from "../brain/Permissions.ts";
 import { offerResultTool } from "../models/ResultTool.ts";
-import { conversationOf, taskOf } from "../subagents/Delivery.ts";
-import { ChildDoc } from "../subagents/SubagentDocs.ts";
+import {
+  childThreadIdOf,
+  conversationOf,
+  taskOf,
+} from "../subagents/Delivery.ts";
+import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import {
   AgentCall,
   ApproveCall,
@@ -103,6 +112,7 @@ import {
   answerText,
   askChild,
   callerOf,
+  cutText,
   endedOutcome,
   endNode,
   endWorkflow,
@@ -138,6 +148,33 @@ export const LOG_LINE_LIMIT = 2000;
 /** The longest phase title the protocol carries. */
 const PHASE_TITLE_LIMIT = 120;
 
+/** The longest `key` a row keeps. */
+const KEY_LIMIT = 200;
+
+/** The most options a question may offer (the protocol's `Question`). */
+const MAX_APPROVE_OPTIONS = 9;
+
+const isRoleSpec = Schema.is(RoleSpec);
+
+const isThinkingLevel = Schema.is(ThinkingLevel);
+
+/** A script's optional text, trimmed and cut to `limit`; none when nothing is left. */
+const optionalText = (
+  text: Option.Option<string>,
+  limit: number
+): Option.Option<string> =>
+  Option.filter(
+    Option.map(text, (given) => given.trim().slice(0, limit).trim()),
+    (kept) => kept !== ""
+  );
+
+/** A node's label: the script's first line, cut, else the prompt's. */
+const labelOf = (label: Option.Option<string>, prompt: string): string =>
+  Option.getOrElse(
+    Option.filter(Option.map(label, summaryOf), (kept) => kept !== ""),
+    () => summaryOf(prompt)
+  );
+
 /** The verdict a `verify` node answers, as its child's `submit_result` schema. */
 export const VERDICT_SCHEMA: JsonRecord = {
   type: "object",
@@ -167,7 +204,7 @@ export type RoleResolver = (
 ) => Promise<Result.Result<ResolvedNodeModel, string>>;
 
 /** Where a judge may hold a node, so its `kill -9` lands there. */
-export type HoldPoint = "after-reserve" | "before-settle";
+export type HoldPoint = "after-reserve" | "after-nudge" | "before-settle";
 
 /** The broken controls the kill judge runs; production plants none. */
 export interface WorkflowFaultSet {
@@ -251,6 +288,13 @@ interface ReserveInput {
   readonly model: Result.Result<ResolvedNodeModel, string>;
   /** The launching thread's effective mode: the child's. */
   readonly mode: RuntimeMode;
+  /** The launching conversation's cwd, where the child works (shared checkout); none without one. */
+  readonly cwd: Option.Option<string>;
+  /** The launching thread's own `cairn.child` link, when it is itself a child. */
+  readonly parentLink: Option.Option<{
+    readonly depth: number;
+    readonly rootThreadId: string;
+  }>;
 }
 
 /** A row the reserve commit starts from, before its refusal or its child. */
@@ -322,12 +366,21 @@ const refusalOf = (
     : Option.none();
 };
 
-/** The agent change a node's child is created with: the role's model, and the result tool when typed. */
+/**
+ * The agent change a node's child is created with: the role's model, the launching conversation's
+ * cwd (so its file and shell tools have an environment, and the bridge a cwd), and the result tool
+ * when typed.
+ */
 const childAgentOf = (
   resolved: ResolvedNodeModel,
-  typed: boolean
+  typed: boolean,
+  cwd: Option.Option<string>
 ): AgentChange => ({
   model: { provider: resolved.provider, modelId: resolved.modelId },
+  ...Option.match(cwd, {
+    onNone: () => ({}),
+    onSome: (dir) => ({ cwd: dir }),
+  }),
   ...Option.match(resolved.thinkingLevel, {
     onNone: () => ({}),
     onSome: (level) => ({ thinkingLevel: level }),
@@ -338,7 +391,11 @@ const childAgentOf = (
   }),
 });
 
-/** Writes the child's `cairn.child` link, approvals and mode in the creating commit. */
+/**
+ * Writes the child's thread identity (`cairn.thread` receipt and `cairn.thread-meta`, as 3A's
+ * creating commit does, so spend, approvals and the shell can find it), its `cairn.child` link,
+ * approvals and mode in the creating commit.
+ */
 const linkChild = async (
   tx: Tx,
   parent: ConversationId,
@@ -346,18 +403,41 @@ const linkChild = async (
   link: {
     readonly nodeId: string;
     readonly approvalId: string;
+    readonly childThreadId: string;
     readonly schema: Option.Option<JsonRecord>;
     readonly mode: RuntimeMode;
+    readonly parentLink: ReserveInput["parentLink"];
   }
 ) => {
   const parentMeta = await tx.doc(ThreadMeta, parent);
+
+  const receipt = await tx.doc(ThreadReceipt, link.childThreadId, {
+    conversationId: 0,
+  });
+
+  receipt.conversationId = child;
+
+  const meta = await tx.doc(ThreadMeta, child);
+
+  meta.threadId = link.childThreadId;
+  meta.projectId = parentMeta.projectId;
+
   const doc = await tx.doc(ChildDoc, child);
 
   doc.key = link.nodeId;
   doc.parentThreadId = parentMeta.threadId;
   doc.parentConversationId = parent;
-  doc.rootThreadId = parentMeta.threadId;
-  doc.depth = 1;
+  doc.rootThreadId = Option.match(link.parentLink, {
+    onNone: () => parentMeta.threadId,
+    onSome: (found) => found.rootThreadId,
+  });
+  doc.depth = Math.min(
+    MAX_SUBAGENT_DEPTH,
+    Option.match(link.parentLink, {
+      onNone: () => 1,
+      onSome: (found) => found.depth + 1,
+    })
+  );
   doc.briefApprovalId = link.approvalId;
   doc.resultSchema = Option.getOrNull(link.schema);
   doc.permissionMode = link.mode;
@@ -365,6 +445,10 @@ const linkChild = async (
   await tx.doc(Approvals, child);
   await writeMode(tx, child, link.mode);
 };
+
+/** The refusal of a role that is no role spec: no row is written for it. */
+const roleProblem = (tool: string, role: string) =>
+  `${tool}(): role \`${summaryOf(role)}\` is not a role alias (\`@worker\`, \`@scout:high\`) or a \`provider/model\`.`;
 
 /** The prompt a node's child is sent. */
 const promptOf = (dispatch: Dispatch) =>
@@ -453,7 +537,7 @@ const refuseRow = async (
     state: "refused",
     refusal,
     endedAt: base.startedAt,
-    error,
+    error: error === null ? null : cutText(error),
   };
 
   row.nodes[node.id] = node;
@@ -466,6 +550,29 @@ const refuseRow = async (
   });
 
   return { kind: "ended", row: { ...node } };
+};
+
+/** Records the row's submission once its input is in: stage `submitted`, its submission id. */
+const markSubmitted = async (
+  api: ToolExecutionApi,
+  workflowId: string,
+  nodeId: string,
+  submission: SubmissionId,
+  context: ChordContext
+): Promise<void> => {
+  await api.commit(async (tx) => {
+    const ledger = await tx.doc(WorkflowsDoc, api.conversationId);
+    const node = ledger.items[workflowId]?.nodes[nodeId];
+
+    if (
+      node?.state === "running" &&
+      node.nestedTaskId === api.taskId &&
+      node.stage === "child_created"
+    ) {
+      node.stage = "submitted";
+      node.submissionId = submission;
+    }
+  }, context);
 };
 
 /** The tools, the watcher task and the gate, as one extension. */
@@ -532,6 +639,11 @@ export const workflowExtension = (
           },
           context
         );
+
+        // The script call ended, so its workflow takes no more nodes: its slots go.
+        if (nodeId === null) {
+          slots.delete(workflowId);
+        }
       },
     },
     abort: async (_task, runtime, context) => {
@@ -682,18 +794,27 @@ export const workflowExtension = (
     await configure(
       tx,
       child.id,
-      childAgentOf(resolved, Option.isSome(input.dispatch.schema))
+      childAgentOf(resolved, Option.isSome(input.dispatch.schema), input.cwd)
+    );
+
+    const childThreadId = childThreadIdOf(
+      base.startedAt ?? api.now(),
+      api.conversationId,
+      base.requestId
     );
 
     await linkChild(tx, api.conversationId, child.id, {
       nodeId: input.nodeId,
       approvalId: row.approvalId,
+      childThreadId,
       schema: input.dispatch.schema,
       mode: input.mode,
+      parentLink: input.parentLink,
     });
 
     const node: NodeItemState = {
       ...base,
+      childThreadId,
       briefId: row.approvalId,
       provider: resolved.provider,
       modelId: resolved.modelId,
@@ -751,18 +872,25 @@ export const workflowExtension = (
       const record = Option.fromUndefinedOr(approvals.items[row.approvalId]);
       const refusal = refusalOf(record, row, input);
 
+      if (Option.isSome(refusal)) {
+        // Only a role with no model carries the resolver's words; the other refusals speak for
+        // themselves.
+        const error =
+          refusal.value === "no_provider" && Result.isFailure(input.model)
+            ? input.model.failure
+            : null;
+
+        return await refuseRow(tx, row, base, refusal.value, error);
+      }
+
       if (Result.isFailure(input.model)) {
         return await refuseRow(
           tx,
           row,
           base,
-          Option.getOrElse(refusal, (): NodeRefusal => "no_provider"),
+          "no_provider",
           input.model.failure
         );
-      }
-
-      if (Option.isSome(refusal)) {
-        return await refuseRow(tx, row, base, refusal.value, null);
       }
 
       return await startChild(tx, api, row, base, input.model.success, input);
@@ -785,7 +913,16 @@ export const workflowExtension = (
       child,
       promptOf(dispatch),
       requestId,
-      context
+      context,
+      async (submission) => {
+        await markSubmitted(
+          api,
+          dispatch.workflowId,
+          row.id,
+          submission,
+          context
+        );
+      }
     );
 
     if (Result.isFailure(asked)) {
@@ -800,7 +937,15 @@ export const workflowExtension = (
       return Result.succeed({ value, answer, schemaAttempts: 0, submission });
     }
 
-    const typed = await typedResult(api, row.requestId, child, context);
+    const typed = await typedResult(
+      api,
+      row.requestId,
+      child,
+      context,
+      async () => {
+        await hold("after-nudge", dispatch.label);
+      }
+    );
 
     return Result.map(typed, (found) => ({
       value: found.value,
@@ -841,8 +986,23 @@ export const workflowExtension = (
           });
 
     const { mode } = await readPermissions(api, context);
+    const agent = await api.agent(context);
+    const link = await api.snapshot(ChildDoc, api.conversationId, context);
 
-    return { nodeId, caller, dispatch, model, mode };
+    return {
+      nodeId,
+      caller,
+      dispatch,
+      model,
+      mode,
+      cwd: Option.filter(
+        Option.fromUndefinedOr(agent.cwd),
+        (dir) => dir.trim() !== ""
+      ),
+      parentLink: isLinked(link)
+        ? Option.some({ depth: link.depth, rootThreadId: link.rootThreadId })
+        : Option.none(),
+    };
   };
 
   /** One node, from its reserve to its settle, holding one of its workflow's node slots. */
@@ -980,19 +1140,32 @@ export const workflowExtension = (
         return refused(schema.failure);
       }
 
+      const role = Option.getOrElse(given.role, () => DEFAULT_NODE_ROLE);
+      const effort = optionalText(given.effort, PHASE_TITLE_LIMIT);
+
+      if (!isRoleSpec(role)) {
+        return refused(roleProblem("agent", role));
+      }
+
+      if (Option.isSome(effort) && !isThinkingLevel(effort.value)) {
+        return refused(
+          `agent(): effort \`${summaryOf(effort.value)}\` is not one of off, minimal, low, medium, high, xhigh, max.`
+        );
+      }
+
       return await runNode(
         api,
         caller.success,
         {
           workflowId: given.workflowId,
           prompt: given.prompt,
-          label: Option.getOrElse(given.label, () => summaryOf(given.prompt)),
-          phase: given.phase,
-          role: Option.getOrElse(given.role, () => DEFAULT_NODE_ROLE),
+          label: labelOf(given.label, given.prompt),
+          phase: optionalText(given.phase, PHASE_TITLE_LIMIT),
+          role,
           schema: schema.success,
-          key: given.key,
+          key: optionalText(given.key, KEY_LIMIT),
           readonly: given.readonly,
-          effort: given.effort,
+          effort,
           verify: false,
         },
         context
@@ -1033,17 +1206,21 @@ export const workflowExtension = (
         () => "The result is correct and complete."
       );
 
+      const role = Option.getOrElse(given.role, () => DEFAULT_VERIFY_ROLE);
+
+      if (!isRoleSpec(role)) {
+        return refused(roleProblem("verify", role));
+      }
+
       return await runNode(
         api,
         caller.success,
         {
           workflowId: given.workflowId,
           prompt: verifyPrompt(claim, given.result),
-          label: Option.getOrElse(given.label, () =>
-            summaryOf(`Verify: ${claim}`)
-          ),
-          phase: given.phase,
-          role: Option.getOrElse(given.role, () => DEFAULT_VERIFY_ROLE),
+          label: labelOf(given.label, `Verify: ${claim}`),
+          phase: optionalText(given.phase, PHASE_TITLE_LIMIT),
+          role,
           schema: Option.some(VERDICT_SCHEMA),
           key: Option.none(),
           readonly: true,
@@ -1083,8 +1260,26 @@ export const workflowExtension = (
         return refused(caller.failure);
       }
 
+      const choices = Option.filter(
+        call.value.options,
+        (labels) => labels.length > 0
+      );
+
+      if (
+        Option.isSome(choices) &&
+        choices.value.length > MAX_APPROVE_OPTIONS
+      ) {
+        return refused(
+          `approve(): at most ${String(MAX_APPROVE_OPTIONS)} options, and this call gave ${String(choices.value.length)}.`
+        );
+      }
+
       const ledger = approvalLedger(api);
-      const request = approveRequest(call.value.summary, call.value.options);
+
+      const request = approveRequest(
+        cutSummary(call.value.summary.trim()),
+        Option.map(choices, (labels) => labels.map(summaryOf))
+      );
 
       const settlement = await Effect.runPromise(
         Effect.gen(function* () {

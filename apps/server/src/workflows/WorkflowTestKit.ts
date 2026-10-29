@@ -9,7 +9,8 @@
 // - A node's child is sent a prompt that opens `node:<label>` with flags: it first calls the judge's
 //   `work` tool (one effect, logged once per child, `ms=` long, deaf to an abort for `deaf=` ms),
 //   then answers. `typed` answers with `submit_result`, `lazy` ends without it the first time (so
-//   the nudge is due), `bad` submits an invalid value every time, `fail` ends its run with a
+//   the nudge is due; with `nudgems=` it first calls `pause` that long, so a kill lands while it
+//   answers the nudge), `bad` submits an invalid value every time, `fail` ends its run with a
 //   provider error, `text` (the default) answers `{"label":...}` as text.
 // - A `verify` node's child (its prompt opens "Check one claim") submits `verified`.
 //
@@ -17,6 +18,7 @@
 // dry-run (`WorkflowPlan`), its launch payload frozen in an accepted `brief` approval record, and an
 // `approved` row written beside it, in one host commit.
 
+import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
@@ -70,6 +72,9 @@ import type {
 /** The faux provider and model every conversation of the kit runs on. */
 export const KIT_MODEL = { provider: "faux", modelId: "kit" } as const;
 
+/** The kit root thread's cwd, which every node's child must work in too. */
+export const KIT_CWD = tmpdir();
+
 /** A spec the kit's resolver cannot resolve. */
 export const UNRESOLVABLE_ROLE = "@nobody";
 
@@ -78,6 +83,9 @@ export const RUN_PREFIX = "RUN:\n";
 
 /** The judge tool every node's child calls first. */
 export const WORK_TOOL = "work";
+
+/** A tool that only waits, with no effect: a lazy child's pause before it answers its nudge. */
+export const PAUSE_TOOL = "pause";
 
 /** Resolves every spec to the kit's model, except `UNRESOLVABLE_ROLE`. */
 export const kitResolver: RoleResolver = async (spec) =>
@@ -112,6 +120,7 @@ interface NodeFlags {
   readonly flags: ReadonlySet<string>;
   readonly ms: number;
   readonly deaf: number;
+  readonly nudgeMs: number;
 }
 
 const flagsOf = (prompt: string): Option.Option<NodeFlags> => {
@@ -135,6 +144,7 @@ const flagsOf = (prompt: string): Option.Option<NodeFlags> => {
     flags: new Set(words.filter((word) => !word.includes("="))),
     ms: number("ms"),
     deaf: number("deaf"),
+    nudgeMs: number("nudgems"),
   });
 };
 
@@ -197,7 +207,7 @@ export const respond = (context: ModelContext): AssistantMessage => {
     return fauxAssistantMessage(fauxText("I am not a node."));
   }
 
-  const { label, flags, ms, deaf } = node.value;
+  const { label, flags, ms, deaf, nudgeMs } = node.value;
   const worked = tools.some((message) => message.toolName === WORK_TOOL);
 
   const submitted = tools.filter(
@@ -231,6 +241,12 @@ export const respond = (context: ModelContext): AssistantMessage => {
       messageText(message).includes("submit_result") &&
       messageText(message) !== first
   );
+
+  const paused = tools.some((message) => message.toolName === PAUSE_TOOL);
+
+  if (flags.has("lazy") && nudged && nudgeMs > 0 && !paused) {
+    return call(PAUSE_TOOL, { ms: nudgeMs }, `pause-${label}`);
+  }
 
   if (flags.has("typed") || (flags.has("lazy") && nudged)) {
     return submitted === 0
@@ -295,6 +311,18 @@ const workExtension = (options: KitOptions) =>
           options.effect({ node, what: "done" });
 
           return { output: [{ type: "text", text: `worked on ${node}` }] };
+        },
+      }),
+      defineTool({
+        name: PAUSE_TOOL,
+        description: "Wait a while.",
+        parameters: Type.Object({ ms: Type.Number() }),
+        callers: ["model"],
+        replay: "safe",
+        execute: async ({ ms }) => {
+          await sleep(ms);
+
+          return { output: [{ type: "text", text: "paused" }] };
         },
       }),
     ],
@@ -372,7 +400,7 @@ export const openKit = async (
   );
 
   const root = await harness.root(context, {
-    agent: { model: { ...KIT_MODEL } },
+    agent: { model: { ...KIT_MODEL }, cwd: KIT_CWD },
   });
 
   return { harness, root: root.id };

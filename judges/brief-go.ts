@@ -20,7 +20,9 @@
 // - race: Go, Decline and Go at once: one answer takes effect.
 // - decline: Decline: nothing made, the parent told once.
 // - parked: killed at the top of the start five times in a row: the task parks, a clean boot does
-//   not retry it (ADR 0030), and a human Retry starts the child once.
+//   not retry it (ADR 0030), and a human Retry starts the child once. The parent holds a second
+//   brief pending throughout, so the boot's retry of parked approval waits reaches the parent too
+//   and must leave the start alone.
 // - control: the broken control, an answer that commits Go without its start, killed before a
 //   second commit would create it. Its brief is accepted and never starts, so the one-child check
 //   must fail on it, or the judge proves nothing.
@@ -275,10 +277,25 @@ const check = (
   }
 };
 
-/** Spawns a brief in `dir`, the parent's run ending normally. */
-const spawned = (dir: string, problems: Problems, die = false) =>
+/** Spawns a brief in `dir` (and a second one left pending, with `second`), the run ending normally. */
+const spawned = (
+  dir: string,
+  problems: Problems,
+  die = false,
+  second = false
+) =>
   Effect.gen(function* () {
-    const lived = yield* life(dir, "spawn", die ? ["--die"] : []);
+    const flags: Array<string> = [];
+
+    if (die) {
+      flags.push("--die");
+    }
+
+    if (second) {
+      flags.push("--second");
+    }
+
+    const lived = yield* life(dir, "spawn", flags);
 
     if (die) {
       killed(lived, problems);
@@ -369,7 +386,8 @@ const CASES: ReadonlyArray<Case> = [
       Effect.gen(function* () {
         const fault = ["--fault", "start", "--times", "5"];
 
-        yield* spawned(dir, problems);
+        // A second brief stays pending on the parent, so every boot's approval-wait retry reaches it.
+        yield* spawned(dir, problems, false, true);
 
         let lived = yield* life(dir, "go", fault);
         let kills = lived.killed ? 1 : 0;

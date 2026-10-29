@@ -3,9 +3,10 @@
 // models), and every text the model reads from `SubagentToolText`, which the scripted harness
 // writes too.
 //
-// - `subagent_spawn` records a brief (kind `brief`, its payload frozen) and its brief task in one
-//   commit, and returns at once; Go starts the child. It refuses past the caps: 8 children working
-//   or waiting for Go per parent, and depth 2.
+// - `subagent_spawn` records a brief (kind `brief`, its payload frozen) and its brief task (the
+//   brief's expiry) in one commit, and returns at once; Go's commit creates the start. It refuses
+//   past the caps: 8 children working or waiting for Go per parent, 32 across the brain
+//   (BrainCap.ts), and depth 2.
 // - `subagent_send` gives a child one more input through its own reporter.
 // - `subagent_status` lists each child's status, never its result (that arrives once, as a note),
 //   and with `wait_seconds` waits, bounded, until one reports or asks.
@@ -27,6 +28,7 @@
 import { ThreadId } from "@cairn/protocol/Ids";
 import {
   MAX_LIVE_CHILDREN,
+  MAX_LIVE_CHILDREN_PER_BRAIN,
   MAX_SUBAGENT_DEPTH,
 } from "@cairn/protocol/Subagents";
 import type { JsonValue } from "@earendil-works/chord";
@@ -64,6 +66,7 @@ import {
   SubagentToolText,
 } from "../brain/SubagentText.ts";
 import { offerResultTool } from "../models/ResultTool.ts";
+import { countLive, dropIdle, listParent } from "./BrainCap.ts";
 import { briefOf, briefPayload } from "./Briefs.ts";
 import {
   conversationOf,
@@ -83,6 +86,7 @@ import type {
   JsonRecord,
   SubagentItemState,
 } from "./SubagentDocs.ts";
+import { START_TASK } from "./SubagentTasks.ts";
 import type { RoleAccess, SubagentTasks } from "./SubagentTasks.ts";
 import { awaitDoc, runWait } from "./Waits.ts";
 
@@ -204,6 +208,8 @@ export interface SubagentToolOptions {
   readonly settleDelayMillis: (quiet: boolean) => number;
   /** How long a brief stays answerable before it expires and its parent is told: a week. */
   readonly briefTtlMillis: number;
+  /** How many children the whole brain may hold live (`MAX_LIVE_CHILDREN_PER_BRAIN`). */
+  readonly maxLivePerBrain: number;
 }
 
 /** The tools' production options. */
@@ -211,7 +217,13 @@ export const DEFAULT_TOOL_OPTIONS: SubagentToolOptions = {
   questionTtlMillis: GATED_APPROVAL_TTL_MILLIS,
   settleDelayMillis: () => 0,
   briefTtlMillis: BRIEF_TTL_MILLIS,
+  maxLivePerBrain: MAX_LIVE_CHILDREN_PER_BRAIN,
 };
+
+/** Why a spawn's commit refused: the parent's cap or the brain's, with the count it found. */
+type CapRefusal =
+  | { readonly cap: "parent"; readonly live: number }
+  | { readonly cap: "brain"; readonly live: number };
 
 /** The pending record of a child's question to its parent (ADR 0027), in the child's ledger. */
 const questionRecord = (
@@ -370,16 +382,22 @@ export const subagentToolSet = (
         const resolved = await roles.resolve(brief.success.role);
 
         if (Result.isFailure(resolved)) {
-          return refused(SubagentToolText.roleRefused(resolved.failure));
+          return refused(
+            resolved.failure.retry
+              ? SubagentToolText.roleUnchecked(resolved.failure.why)
+              : SubagentToolText.roleRefused(resolved.failure.why)
+          );
         }
       }
 
       const committed = await api.commit(async (tx) => {
+        // The brain's count reads tables, so it comes before the brief task is created.
+        const brain = await countLive(tx, START_TASK, null);
         const approvals = await tx.doc(Approvals, api.conversationId);
 
         // A replayed call finds its brief before the cap, which may have filled since.
         if (approvals.items[approvalId] !== undefined) {
-          return Option.none<number>();
+          return Option.none<CapRefusal>();
         }
 
         const registry = await tx.doc(SubagentsDoc, api.conversationId);
@@ -395,8 +413,15 @@ export const subagentToolSet = (
           ).length + proposed;
 
         if (live >= MAX_LIVE_CHILDREN) {
-          return Option.some(live);
+          return Option.some<CapRefusal>({ cap: "parent", live });
         }
+
+        if (brain.live >= tuning.maxLivePerBrain) {
+          return Option.some<CapRefusal>({ cap: "brain", live: brain.live });
+        }
+
+        await dropIdle(tx, brain, api.conversationId);
+        await listParent(tx, api.conversationId);
 
         const askedAt = api.now();
 
@@ -416,7 +441,8 @@ export const subagentToolSet = (
           payload: briefPayload(brief.success),
         };
 
-        // Go is answered by the user, never by a mode (ADR 0026); the brief task waits for it.
+        // Go is answered by the user, never by a mode (ADR 0026), and its commit creates the start;
+        // the brief task only expires the brief if no answer comes in time.
         await tx.createTask(
           tasks.Brief,
           { approvalId },
@@ -427,12 +453,17 @@ export const subagentToolSet = (
           }
         );
 
-        return Option.none<number>();
+        return Option.none<CapRefusal>();
       }, context);
 
       return Option.match(committed, {
         onNone: () => said(SPAWN_WAITING),
-        onSome: (live) => refused(SubagentToolText.capReached(live)),
+        onSome: (refusal) =>
+          refused(
+            refusal.cap === "parent"
+              ? SubagentToolText.capReached(refusal.live)
+              : SubagentToolText.brainCapReached(refusal.live)
+          ),
       });
     },
   });
@@ -472,6 +503,8 @@ export const subagentToolSet = (
         const item = registry.items[key];
 
         if (item !== undefined && item.inputs[requestId] === undefined) {
+          // A settled child works again: its parent is listed for the brain's count.
+          await listParent(tx, api.conversationId);
           await tasks.newReporter(tx, item, {
             key,
             child: item.conversationId,

@@ -18,7 +18,7 @@ import type {
   Tx,
 } from "@earendil-works/pi-durable";
 import { defineExtension, LiveDoc } from "@earendil-works/pi-durable";
-import { Context, Effect, Layer, Option, Result } from "effect";
+import { Context, Effect, Layer, Option, Predicate, Result } from "effect";
 
 import { BriefTtl } from "../brain/BriefTtl.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
@@ -32,6 +32,7 @@ import { ModelHealth } from "../models/ModelHealth.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
+import { listParent } from "./BrainCap.ts";
 import { BriefFaults, NO_BRIEF_FAULTS } from "./BriefFaults.ts";
 import type { BriefFaultHooks } from "./BriefFaults.ts";
 import { conversationOf } from "./Delivery.ts";
@@ -58,7 +59,7 @@ interface ChildAgentHolder {
 }
 
 /**
- * `ChildWorkspaces.prepare` for the brief task, which runs outside Effect: the child's cwd and
+ * `ChildWorkspaces.prepare` for the start task, which runs outside Effect: the child's cwd and
  * worktree, or the error's words for the parent. It runs with `context`, the layer's (S43), so the
  * faults a test plants (`ChildWorkspaceFaults`) and the tracer reach it.
  */
@@ -83,7 +84,9 @@ export const workspaceAccess = (
 
 /**
  * `RoleAliases.resolve` for the spawn and the start task, which run outside Effect: the resolution,
- * or the error's words for the parent. It runs with `context`, the layer's (S43).
+ * or why not, in the error's words for the parent. A `RoleError` is final (nothing ready answers to
+ * the spec); `RoleAliasesUnavailable` is a read that failed and says nothing about the role, so it
+ * is marked `retry`. It runs with `context`, the layer's (S43).
  */
 export const roleAccess = (
   roles: RoleAliases["Service"],
@@ -94,12 +97,15 @@ export const roleAccess = (
   return {
     resolve: async (spec) =>
       await run(
-        roles
-          .resolve(spec, Option.none())
-          .pipe(
-            Effect.result,
-            Effect.map(Result.mapError((error) => error.message))
+        roles.resolve(spec, Option.none()).pipe(
+          Effect.result,
+          Effect.map(
+            Result.mapError((error) => ({
+              retry: Predicate.isTagged(error, "RoleAliasesUnavailable"),
+              why: error.message,
+            }))
           )
+        )
       ),
   };
 };
@@ -108,11 +114,14 @@ export const roleAccess = (
 const NO_ROLES: RoleAccess = {
   resolve: async () =>
     await Promise.resolve(
-      Result.fail("This brain resolves no roles; leave role out.")
+      Result.fail({
+        retry: false,
+        why: "This brain resolves no roles; leave role out.",
+      })
     ),
 };
 
-/** No workspaces: for the host's copy of the task definitions, whose brief task never runs. */
+/** No workspaces: for the host's copy of the task definitions, whose start task never runs. */
 const NO_WORKSPACES: ChildWorkspaceAccess = {
   prepare: async () =>
     await Promise.resolve(
@@ -139,6 +148,7 @@ const build = (
     settleDelayMillis: tuning.settleDelayMillis,
     briefFaults,
     roles,
+    maxLivePerBrain: tuning.maxLivePerBrain,
   });
 
   const tools = subagentToolSet(faults, tasks, roles, tuning);
@@ -245,6 +255,9 @@ export const steerReporter = (
       if (input.whenBusy === "reject" && live.run !== undefined) {
         return;
       }
+
+      // A settled child works again: its parent is listed for the brain's count.
+      await listParent(tx, parent);
 
       const taskId = await tx.createTask(
         hostTasks.Reporter,

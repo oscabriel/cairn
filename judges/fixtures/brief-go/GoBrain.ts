@@ -2,8 +2,8 @@
 // set (the subagents extension with its Go commit, start, tell and expiry tasks) over pi-ai's faux
 // provider, a scratch data folder (its own `brain.sqlite` and `cairn.sqlite`, never the deployed
 // unit's) and a scratch git repository. Each run of this script is one life of the brain: it boots
-// (the child workspace repair and the parked subagent retry, as `BootRepairs.ts` orders them, then
-// the Harness resumes), does its step, waits for the brief to come to rest, prints its report as
+// (the production repairs that touch approvals, parked tasks and child workspaces, in
+// `BootRepairs.ts`'s order, then the Harness resumes), does its step, waits for the brief to come to rest, prints its report as
 // the last stdout line and exits. The orchestrator kills it, or it kills itself at a planted
 // window, and runs the next life over the same folder.
 //
@@ -12,6 +12,8 @@
 // Steps:
 // - `spawn`: the parent asks for a brief (a writing role, so Go makes a worktree); ends once the
 //   brief is pending and the parent's run is over. `--die` then kills the brain before any answer.
+//   `--second` asks for a second brief in the same answer, left pending for the whole run, so the
+//   parent always has a pending approval (the case the approval-wait boot repair acts on).
 // - `go`, `decline`: the user answers the brief.
 // - `race`: Go, Decline and Go at once, from three callers.
 // - `split`: the broken control. It answers Go with a plain answer that creates nothing, then
@@ -51,11 +53,13 @@ import {
   Schema,
 } from "effect";
 
+import { retryParkedApprovalWaits } from "../../../apps/server/src/Boot.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import {
   answerApproval,
   Approvals,
+  cancelAbandonedApprovalsAtBoot,
 } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { repairChildWorkspacesAtBoot } from "../../../apps/server/src/brain/ChildWorkspaceRepair.ts";
 import { messageText } from "../../../apps/server/src/brain/CommitFeed.ts";
@@ -102,6 +106,7 @@ const { values } = parseArgs({
     fault: { type: "string" },
     times: { type: "string", default: "1" },
     die: { type: "boolean", default: false },
+    second: { type: "boolean", default: false },
     wait: { type: "string", default: "30" },
   },
 });
@@ -126,6 +131,9 @@ const DELEGATE = "delegate it";
 
 /** The brief's title, its child's first line. */
 const TITLE = "Fix the readme";
+
+/** The second brief's title (`--second`), never answered. */
+const SECOND_TITLE = "Tidy the changelog";
 
 /**
  * How long a life waits for the brief to come to rest before it reports anyway (`--wait`, in
@@ -191,19 +199,33 @@ const answer = (request: TranscriptContext): AssistantMessage => {
       message.content.some((part) => part.type === "toolCall")
   );
 
+  const spawnCall = fauxToolCall(
+    "subagent_spawn",
+    {
+      description: TITLE,
+      brief: "Fix the typo in README.md.",
+      isolation: "worktree",
+    },
+    { id: "call_spawn" }
+  );
+
+  const secondCall = fauxToolCall(
+    "subagent_spawn",
+    {
+      description: SECOND_TITLE,
+      brief: "Sort the changelog's entries by date.",
+      isolation: "worktree",
+    },
+    { id: "call_spawn_second" }
+  );
+
   return asked
     ? fauxAssistantMessage("Noted.")
     : fauxAssistantMessage(
-        fauxToolCall(
-          "subagent_spawn",
-          {
-            description: TITLE,
-            brief: "Fix the typo in README.md.",
-            isolation: "worktree",
-          },
-          { id: "call_spawn" }
-        ),
-        { stopReason: "toolUse" }
+        values.second ? [spawnCall, secondCall] : spawnCall,
+        {
+          stopReason: "toolUse",
+        }
       );
 };
 
@@ -430,7 +452,11 @@ const respond = (approvalId: string, decision: "accept" | "decline") =>
 const program = Effect.gen(function* () {
   const brainService = yield* Brain;
 
-  // The boot repairs this judge needs, in `BootRepairs.ts`'s order, then the Harness resumes.
+  // The production boot repairs that touch approvals, parked tasks and child workspaces, in
+  // `BootRepairs.ts`'s order (the approval-wait retry among them, which a parent with a second brief
+  // pending reaches), then the Harness resumes.
+  yield* cancelAbandonedApprovalsAtBoot;
+  yield* retryParkedApprovalWaits.repair;
   yield* retryParkedSubagentTasks;
   yield* repairChildWorkspacesAtBoot;
   yield* brainService.resume;
@@ -453,11 +479,20 @@ const program = Effect.gen(function* () {
     });
 
     for (;;) {
-      const pending = (yield* briefsOf(parent)).find(
-        (record) => record.status === "pending"
+      const briefs = yield* briefsOf(parent);
+
+      const pending = briefs.find(
+        (record) => record.status === "pending" && record.summary === TITLE
       );
 
-      if (pending !== undefined) {
+      const secondReady =
+        !values.second ||
+        briefs.some(
+          (record) =>
+            record.status === "pending" && record.summary === SECOND_TITLE
+        );
+
+      if (pending !== undefined && secondReady) {
         writeFileSync(briefFile, pending.id);
         yield* Console.log(
           JSON.stringify({ event: "pending", id: pending.id })

@@ -1,5 +1,5 @@
-// In-memory waits on a conversation document, for the subagent tools and tasks: the brief task
-// waits for its answer, `ask_parent` for its question's, `subagent_status` for a child to report.
+// In-memory waits on a conversation document, for the subagent tools: `ask_parent` waits for its
+// question's answer, `subagent_status` for a child to report.
 // None is durable: a wait cut off by a restart is rerun by its task or replay-safe tool, which
 // finds what was decided meanwhile in the first value (ADR 0013). The shape follows the approval
 // ledger's wait (`approvalLedger` in brain/CairnDocs.ts): a watch whose listener only hands each

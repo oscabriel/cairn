@@ -81,14 +81,22 @@
       "status": "working"
     },
     {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Asked for the tests."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
       "event": "SubagentUpdated",
       "child": "child1",
       "status": "settled"
     },
     {
-      "event": "MessageCommitted",
-      "role": "assistant",
-      "text": "Asked for the tests."
+      "event": "RunStarted"
     },
     {
       "event": "MessageCommitted",

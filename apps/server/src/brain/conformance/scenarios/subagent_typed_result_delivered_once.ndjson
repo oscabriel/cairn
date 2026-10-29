@@ -5,7 +5,7 @@
 {"type":"model","label":"p3","thread":"parent","text":"4 files."}
 {"type":"model","label":"p4","thread":"parent","toolCalls":[{"id":"cs","name":"subagent_send","arguments":{"subagent":"$child1","message":"Count the tests too."}}]}
 {"type":"model","label":"p5","thread":"parent","text":"Asked for the tests."}
-{"type":"model","label":"c2","thread":"child1","text":"There are 9 tests."}
+{"type":"model","label":"c2","thread":"child1","hold":true,"text":"There are 9 tests."}
 {"type":"model","label":"p6","thread":"parent","text":"9 tests."}
 {"type":"input","step":"ensure"}
 {"type":"input","step":"message","requestId":"r1","text":"delegate it"}
@@ -17,6 +17,8 @@
 {"type":"expect_view","path":["transcript",-3],"equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\nThe child submitted its typed result.\n</subagent_result>\nDivergence: None\nPayload: {\"count\":4}","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"input","step":"message","requestId":"r2","text":"and the tests"}
 {"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"release","label":"c2"}
 {"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
 {"type":"settle","ms":300}
 {"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"9 tests.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

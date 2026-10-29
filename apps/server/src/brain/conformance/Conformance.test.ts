@@ -155,12 +155,14 @@ describe.each(SIDES)("%s harness, pending scenarios", (side) => {
 const SHARED_RUN_SCENARIOS: ReadonlySet<string> = new Set([
   "subagent_send_and_user_message_fail_alike_in_two_runs",
   "subagent_send_and_user_steer_share_a_run",
+  "subagent_send_steer_shares_a_stopped_run",
   "subagent_typed_brief_run_shares_user_steer",
   "subagent_typed_nudge_run_shares_user_steer",
   "subagent_typed_result_late_reporter",
   "subagent_user_message_and_send_fail_alike_in_two_runs",
   "subagent_user_steer_and_send_share_a_failed_run",
   "subagent_user_steer_and_send_share_a_run",
+  "subagent_user_steer_shares_a_stopped_run",
 ]);
 
 /** How long the reporter held back waits before it settles, so the other one settles first. */

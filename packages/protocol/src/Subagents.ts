@@ -199,26 +199,29 @@ export const SettlementMark = Schema.Struct({
 
 export type SettlementMark = typeof SettlementMark.Type;
 
-/** Where a child run stands in its parent's registry: nudged for its typed result, or settled. */
-export const RunMarkPhase = Schema.Literals(["nudge", "settled"]);
-
-export type RunMarkPhase = typeof RunMarkPhase.Type;
-
 /**
- * One child run, as its parent's registry keys it: `run` is the run's identity (its answer entry,
- * or for a run that ended unanswered its terminal entry), never a reason or a detail. A `nudge`
- * mark is written by the commit that sends a typed child its nudge and lists every input the
- * nudged run ended; a `settled` mark by the commit that settles a run, with every input (a nudge's
- * request id included) it ended. A reporter whose run or input a mark names settles nothing.
- * `seq` is the settlement's (for a nudge, the one its nudge's request id is derived from).
+ * One child run, as its parent's registry keys it: `run` is the run's identity (its answer entry;
+ * for a run that ended unanswered its first input, when a reporter saw the run live, else its
+ * terminal entry), never a reason or a detail. A `nudge` mark is written by the commit that sends a
+ * typed child its nudge and lists every input the nudged run ended, and whether all were quiet; a
+ * `settled` mark by the commit that settles a run, its inputs being its settlement's (the
+ * `SettlementMark` with the same `seq`). A reporter whose run or input a mark names settles
+ * nothing. `seq` is the settlement's (for a nudge, the one its nudge's request id is derived from).
  */
-export const RunMark = Schema.Struct({
-  run: Schema.String,
-  phase: RunMarkPhase,
-  seq: PositiveInt,
-  inputs: Schema.Array(Schema.String),
-  quiet: Schema.Boolean,
-});
+export const RunMark = Schema.Union([
+  Schema.Struct({
+    run: Schema.String,
+    phase: Schema.Literal("nudge"),
+    seq: PositiveInt,
+    inputs: Schema.Array(Schema.String),
+    quiet: Schema.Boolean,
+  }),
+  Schema.Struct({
+    run: Schema.String,
+    phase: Schema.Literal("settled"),
+    seq: PositiveInt,
+  }),
+]);
 
 export type RunMark = typeof RunMark.Type;
 

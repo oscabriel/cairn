@@ -3185,32 +3185,55 @@
                 "runs": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "properties": {
-                      "run": {
-                        "type": "string"
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "run": {
+                            "type": "string"
+                          },
+                          "phase": {
+                            "type": "string",
+                            "enum": ["nudge"]
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "inputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "quiet": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["run", "phase", "seq", "inputs", "quiet"],
+                        "additionalProperties": true
                       },
-                      "phase": {
-                        "type": "string",
-                        "enum": ["nudge", "settled"]
-                      },
-                      "seq": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 9007199254740991
-                      },
-                      "inputs": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "quiet": {
-                        "type": "boolean"
+                      {
+                        "type": "object",
+                        "properties": {
+                          "run": {
+                            "type": "string"
+                          },
+                          "phase": {
+                            "type": "string",
+                            "enum": ["settled"]
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["run", "phase", "seq"],
+                        "additionalProperties": true
                       }
-                    },
-                    "required": ["run", "phase", "seq", "inputs", "quiet"],
-                    "additionalProperties": true
+                    ]
                   }
                 },
                 "delivered": {

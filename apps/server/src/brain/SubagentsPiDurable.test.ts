@@ -11,12 +11,21 @@
 //   the client's resend lands on the same submission;
 // - a child's question escalated when the parent's run ends, then left unanswered until it
 //   expires (a short TTL here, a day in production), ends in the parent too: its mirror expires
-//   and the registry stops counting the question open.
+//   and the registry stops counting the question open;
+// - a worktree brief whose parent is outside any repository starts nothing: the parent is told why,
+//   and no child, registry item, worktree or plan row exists.
 //
 // Kept under `brain/`, where pi-durable may be imported in a test (S42).
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -49,11 +58,13 @@ import {
   testThreadId,
 } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
+import { childThreadIdOf } from "../subagents/Delivery.ts";
 import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { repairSubagentRows, SubagentRows } from "../subagents/SubagentRows.ts";
 import { steerReporter } from "../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
+import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import { Brain } from "./Brain.ts";
 import { Approvals } from "./CairnDocs.ts";
 import { piDurableLayer } from "./conformance/Targets.ts";
@@ -177,19 +188,27 @@ interface ChildSetup {
   readonly parentCwd?: string;
 }
 
-/**
- * Over a fresh brain and shell: the parent's row, a spawn the user approves, and the child's
- * first input settled.
- */
-const withStarted = <A, E>(
+/** What the test brain gives a test body. */
+type BrainServices =
+  | Scope.Scope
+  | Brain
+  | HarnessSeam
+  | ThreadRows
+  | EventSink
+  | ChildWorkspaces;
+
+/** What a test sees once the user said Go: the brain's events so far and its data dir. */
+interface Accepted {
+  readonly events: Ref.Ref<ReadonlyArray<HarnessEvent>>;
+  readonly dataDir: string;
+  /** The parent's conversation. */
+  readonly parent: ConversationId;
+}
+
+/** Over a fresh brain and shell: the parent's row, and a spawn the user approves. */
+const withAccepted = <A, E>(
   setup: ChildSetup,
-  body: (
-    child: StartedChild
-  ) => Effect.Effect<
-    A,
-    E,
-    Scope.Scope | Brain | HarnessSeam | ThreadRows | EventSink
-  >
+  body: (accepted: Accepted) => Effect.Effect<A, E, BrainServices>
 ) =>
   Effect.acquireUseRelease(
     Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-subagents-"))),
@@ -230,7 +249,8 @@ const withStarted = <A, E>(
           faux.setResponses([...setup.responses]);
 
           yield* brain.resume;
-          yield* seam.ensureThread({
+
+          const ensured = yield* seam.ensureThread({
             threadId: PARENT,
             projectId: project.projectId,
             model: FAUX_MODEL,
@@ -239,6 +259,7 @@ const withStarted = <A, E>(
             instructions: Option.none(),
             runtimeMode: "full-access",
           });
+
           yield* seam.submit(PARENT, {
             requestId: "r1",
             content: [{ type: "text", text: "delegate it" }],
@@ -260,25 +281,11 @@ const withStarted = <A, E>(
             answers: Option.none(),
           });
 
-          const child = yield* eventWhere(events, (event) =>
-            Predicate.isTagged(event, "ThreadEnsured") &&
-            Option.isSome(event.parent)
-              ? Option.some({
-                  threadId: event.threadId,
-                  conversationId: event.conversationId,
-                })
-              : Option.none()
-          );
-
-          yield* eventWhere(events, (event) =>
-            Predicate.isTagged(event, "SubagentUpdated") &&
-            event.child === child.threadId &&
-            event.status === "settled"
-              ? Option.some(true)
-              : Option.none()
-          );
-
-          return yield* body(child).pipe(Effect.provideContext(context));
+          return yield* body({
+            events,
+            dataDir,
+            parent: ensured.conversationId,
+          }).pipe(Effect.provideContext(context));
         })
       ).pipe(Effect.orDie),
     (dataDir) =>
@@ -287,16 +294,39 @@ const withStarted = <A, E>(
       })
   );
 
+/** `withAccepted`, then the child started and its first input settled. */
+const withStarted = <A, E>(
+  setup: ChildSetup,
+  body: (child: StartedChild) => Effect.Effect<A, E, BrainServices>
+) =>
+  withAccepted(setup, ({ events }) =>
+    Effect.gen(function* () {
+      const child = yield* eventWhere(events, (event) =>
+        Predicate.isTagged(event, "ThreadEnsured") &&
+        Option.isSome(event.parent)
+          ? Option.some({
+              threadId: event.threadId,
+              conversationId: event.conversationId,
+            })
+          : Option.none()
+      );
+
+      yield* eventWhere(events, (event) =>
+        Predicate.isTagged(event, "SubagentUpdated") &&
+        event.child === child.threadId &&
+        event.status === "settled"
+          ? Option.some(true)
+          : Option.none()
+      );
+
+      return yield* body(child);
+    })
+  );
+
 /** `withStarted` over the plain spawn and answer, with the production tools. */
 const withChild = <A, E>(
   withRows: boolean,
-  body: (
-    child: StartedChild
-  ) => Effect.Effect<
-    A,
-    E,
-    Scope.Scope | Brain | HarnessSeam | ThreadRows | EventSink
-  >
+  body: (child: StartedChild) => Effect.Effect<A, E, BrainServices>
 ) =>
   withStarted(
     {
@@ -635,6 +665,108 @@ describe("subagents over a pi-durable brain", () => {
         ({ dir }) =>
           Effect.sync(() => {
             rmSync(dir, { recursive: true, force: true });
+          })
+      ),
+    30_000
+  );
+  it.live(
+    "a worktree brief whose parent is outside any repository starts nothing, and says so",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() =>
+          realpathSync(mkdtempSync(path.join(tmpdir(), "cairn-norepo-")))
+        ),
+        (outside) =>
+          withAccepted(
+            {
+              withRows: true,
+              responses: WORKTREE_RESPONSES,
+              tuning: DEFAULT_TOOL_OPTIONS,
+              parentCwd: outside,
+            },
+            ({ events, dataDir, parent }) =>
+              Effect.gen(function* () {
+                // The parent is told why nothing started.
+                const told = yield* waitFor(
+                  Effect.map(entriesOf(parent), (entries) =>
+                    Option.fromUndefinedOr(
+                      entries.find((entry) =>
+                        JSON.stringify(entry.model ?? []).includes(
+                          "its workspace could not be made, so nothing started"
+                        )
+                      )
+                    )
+                  )
+                );
+
+                assert.include(
+                  JSON.stringify(told.model),
+                  "is not inside a git repository"
+                );
+
+                const brain = yield* Brain;
+                const { harness } = yield* Effect.orDie(brain.session);
+
+                const { registry, record } = yield* durable(
+                  "test.read",
+                  async (context) => {
+                    const conversation = piConversationId(parent);
+
+                    const approvals = await harness.snapshot(
+                      Approvals,
+                      conversation,
+                      context
+                    );
+
+                    const subagents = await harness.snapshot(
+                      SubagentsDoc,
+                      conversation,
+                      context
+                    );
+
+                    return {
+                      registry: subagents?.items ?? {},
+                      record: Object.values(approvals?.items ?? {}).find(
+                        (item) => item.tool === "subagent_spawn"
+                      ),
+                    };
+                  }
+                );
+
+                // The brief stays unstarted: no registry item, no child, no worktree, no plan row.
+                assert.strictEqual(record?.status, "accepted");
+                assert.strictEqual(record?.started, null);
+                assert.deepStrictEqual(Object.keys(registry), []);
+
+                assert.isTrue(
+                  (yield* Ref.get(events)).every(
+                    (event) =>
+                      !Predicate.isTagged(event, "ThreadEnsured") ||
+                      Option.isNone(event.parent)
+                  )
+                );
+
+                const worktrees = path.join(dataDir, "worktrees");
+
+                assert.deepStrictEqual(
+                  existsSync(worktrees) ? readdirSync(worktrees) : [],
+                  []
+                );
+
+                const workspaces = yield* ChildWorkspaces;
+
+                const child = childThreadIdOf(
+                  record?.answeredAt ?? 0,
+                  piConversationId(parent),
+                  record?.id ?? ""
+                );
+
+                assert.isTrue(Option.isNone(yield* workspaces.get(child)));
+              })
+          ),
+        (outside) =>
+          Effect.sync(() => {
+            rmSync(outside, { recursive: true, force: true });
           })
       ),
     30_000

@@ -52,21 +52,27 @@ interface ChildAgentHolder {
 
 /**
  * `ChildWorkspaces.prepare` for the brief task, which runs outside Effect: the child's cwd and
- * worktree, or the error's words for the parent.
+ * worktree, or the error's words for the parent. It runs with `context`, the layer's (S43), so the
+ * faults a test plants (`ChildWorkspaceFaults`) and the tracer reach it.
  */
 export const workspaceAccess = (
-  workspaces: ChildWorkspaces["Service"]
-): ChildWorkspaceAccess => ({
-  prepare: async (input) =>
-    await Effect.runPromise(
-      workspaces
-        .prepare(input)
-        .pipe(
-          Effect.result,
-          Effect.map(Result.mapError((error) => error.message))
-        )
-    ),
-});
+  workspaces: ChildWorkspaces["Service"],
+  context: Context.Context<never>
+): ChildWorkspaceAccess => {
+  const run = Effect.runPromiseWith(context);
+
+  return {
+    prepare: async (input) =>
+      await run(
+        workspaces
+          .prepare(input)
+          .pipe(
+            Effect.result,
+            Effect.map(Result.mapError((error) => error.message))
+          )
+      ),
+  };
+};
 
 /** No workspaces: for the host's copy of the task definitions, whose brief task never runs. */
 const NO_WORKSPACES: ChildWorkspaceAccess = {
@@ -222,7 +228,10 @@ export class Subagents extends Context.Service<
     Layer.effect(
       Subagents,
       Effect.gen(function* () {
-        const workspaces = workspaceAccess(yield* ChildWorkspaces);
+        const workspaces = workspaceAccess(
+          yield* ChildWorkspaces,
+          yield* Effect.context()
+        );
 
         return Subagents.of({
           extension: subagentsExtension(faults, workspaces, tuning),
@@ -238,7 +247,11 @@ export class Subagents extends Context.Service<
     Subagents,
     Effect.gen(function* () {
       const faults = yield* SubagentFaults;
-      const workspaces = workspaceAccess(yield* ChildWorkspaces);
+
+      const workspaces = workspaceAccess(
+        yield* ChildWorkspaces,
+        yield* Effect.context()
+      );
 
       return Subagents.of({
         extension: subagentsExtension(faults, workspaces),

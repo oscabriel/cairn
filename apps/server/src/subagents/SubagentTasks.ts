@@ -35,11 +35,12 @@
 //   user's steer typed into the child): `deliver` submits the input under its request id (the
 //   whole input: its text and images, its entry, its `whenBusy`), mirrors the child's pending
 //   records into its registry status while it works, and settles the run that ended it once, in
-//   one commit. A run is keyed by its identity (its answer entry, or its terminal entry when it
-//   ended unanswered), never by a failure's reason or detail; the first reporter to settle it
-//   gathers every live peer whose submission the same run ended and writes one run mark (and one
-//   settlement) listing them all, waking the parent unless all were a user's steers. A reporter
-//   whose run or input a mark already names settles nothing.
+//   one commit. A run is keyed by its identity (its answer entry; when it ended unanswered, its
+//   first input as a reporter saw the run live in `pi.live`, recorded in that reporter's
+//   checkpoint, else its terminal entry), never by a failure's reason or detail; the first
+//   reporter to settle it gathers every live peer whose submission the same run ended and writes
+//   one settlement listing them all, with a run mark naming it, waking the parent unless all were
+//   a user's steers. A reporter whose run or input a mark already names settles nothing.
 //   `nudge` sends a typed child that ended without a result its one nudge (`NUDGE_TEXT`); the
 //   commit that decides it writes a `nudge` run mark listing every input the nudged run ended, so
 //   their reporters settle nothing and the nudge's run settles them all. `report` writes the
@@ -77,6 +78,7 @@ import type {
   EntryId,
   EntryRecord,
   InputSubmissionDraft,
+  LiveState,
   NextTaskState,
   SettledSubmissionRecord,
   Submission,
@@ -152,6 +154,7 @@ import {
   isJsonRecord,
   isLinked,
   jsonRecordOf,
+  markInputs,
   SubagentsDoc,
 } from "./SubagentDocs.ts";
 import type {
@@ -254,9 +257,10 @@ interface RunInputs {
 interface RunSpan {
   /**
    * The run's key in the registry's run marks: `answer:<entry>` for an answered run (every input it
-   * answered names that answer), `end:<entry>` for one that ended unanswered (its terminal entry),
-   * `input:<submission>` for an input that ran in no run or whose run's end is not in the
-   * transcript; such an input settles alone.
+   * answered names that answer); for one that ended unanswered `run:<submission>`, its first input,
+   * when a reporter saw the run live (`observedRuns`), else `end:<entry>`, its terminal entry;
+   * `input:<submission>` for an input that ran in no run, or whose run was never seen live and
+   * whose end is not in the transcript; such an input settles alone.
    */
   readonly key: string;
   /** The submission's placed entry, when it was placed. */
@@ -274,12 +278,33 @@ const RUN_SCAN = 4096;
 /** How many entries a run scan reads per page. */
 const RUN_PAGE = 256;
 
-/** Entries a run goes on with after an assistant message: a retry, a tool round, a compaction. */
+/**
+ * Entries a run goes on with after an assistant message: a retry, a tool round. A compaction goes on
+ * with it only when its generation waited for it (`midRun`).
+ */
 const RUN_CONTINUES: ReadonlySet<string> = new Set([
   "pi.assistant",
   "pi.tool-result",
-  "pi.compaction",
 ]);
+
+/**
+ * Whether a run goes on with `entry` after an assistant message (table read): a retry or a tool
+ * round, or a compaction a generation owned and waited for (an overflow's). A conversation-owned
+ * compaction's summary is a write, placed while the child is idle, after the run's end.
+ */
+const midRun = async (tx: Tx, entry: EntryRecord): Promise<boolean> => {
+  if (RUN_CONTINUES.has(entry.kind)) {
+    return true;
+  }
+
+  if (entry.kind !== "pi.compaction" || entry.byTaskId === undefined) {
+    return false;
+  }
+
+  const task = await tx.task(entry.byTaskId);
+
+  return task?.owner !== undefined;
+};
 
 /** Whether `entry` is an assistant message that asks for no tool: a run may end on it. */
 const mayEnd = (entry: EntryRecord): boolean => {
@@ -317,7 +342,8 @@ const terminalAfter = async (
     );
 
     for (const entry of page.items) {
-      if (candidate !== undefined && !RUN_CONTINUES.has(entry.kind)) {
+      // oxlint-disable-next-line no-await-in-loop -- entries are read in order
+      if (candidate !== undefined && !(await midRun(tx, entry))) {
         return candidate;
       }
 
@@ -366,11 +392,51 @@ const answerEnd = async (
   return end;
 };
 
-/** The run `submission` was ended by (table reads). */
+/** The run a reporter's checkpoint says it saw live; none when it saw none. */
+const runSeen = (checkpoint: JsonValue): ReadonlyArray<number> => {
+  const run = isJsonRecord(checkpoint) ? checkpoint.run : undefined;
+
+  return Array.isArray(run) ? run.filter(Predicate.isNumber) : [];
+};
+
+/**
+ * The runs a child's reporters saw live (table reads): each the submission ids of a run's inputs
+ * as `pi.live` listed them, its first input first (`followRun`), read from the checkpoints of the
+ * reporters still waiting.
+ */
+const observedRuns = async (
+  tx: Tx,
+  item: SubagentItemState
+): Promise<ReadonlyArray<ReadonlyArray<number>>> => {
+  const runs: Array<ReadonlyArray<number>> = [];
+
+  for (const taskId of Object.values(item.inputs)) {
+    // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+    const task = await tx.task(taskOf(taskId));
+    const state = task?.state;
+
+    if (
+      state !== undefined &&
+      state.status !== "completing" &&
+      state.status !== "terminal"
+    ) {
+      const run = runSeen(state.checkpoint);
+
+      if (run.length > 0) {
+        runs.push(run);
+      }
+    }
+  }
+
+  return runs;
+};
+
+/** The run `submission` was ended by (table reads), with the runs its reporters saw live. */
 const runOf = async (
   tx: Tx,
   child: ConversationId,
-  submission: SubmissionRecord
+  submission: SubmissionRecord,
+  observed: ReadonlyArray<ReadonlyArray<number>>
 ): Promise<RunSpan> => {
   const alone = {
     key: `input:${submission.id}`,
@@ -395,6 +461,11 @@ const runOf = async (
   }
 
   const terminal = await terminalAfter(tx, child, submission.entry);
+  const seen = observed.find((run) => run.includes(submission.id));
+
+  if (seen !== undefined) {
+    return { key: `run:${seen[0]}`, start: submission.entry, end: terminal };
+  }
 
   return terminal === undefined
     ? alone
@@ -418,14 +489,17 @@ const inRun = (
       JSON.stringify(other.detail ?? null) ===
         JSON.stringify(settled.detail ?? null)));
 
+/** A nudge mark: the inputs of the run a nudge was sent for. */
+type NudgeMarkState = Extract<RunMarkState, { phase: "nudge" }>;
+
 /** The nudge mark a reporter in its `nudge` phase wrote for `seq`, listing `requestId`. */
 const nudgeMarkOf = (
   item: SubagentItemState,
   seq: number,
   requestId: string
-): RunMarkState | undefined =>
+): NudgeMarkState | undefined =>
   item.runs.findLast(
-    (mark) =>
+    (mark): mark is NudgeMarkState =>
       mark.phase === "nudge" &&
       mark.seq === seq &&
       mark.inputs.includes(requestId)
@@ -502,7 +576,8 @@ const peerInRun = async (
   child: ConversationId,
   mine: RunSpan,
   settled: SettledSubmissionRecord,
-  peer: PeerWait
+  peer: PeerWait,
+  observed: ReadonlyArray<ReadonlyArray<number>>
 ): Promise<boolean> =>
   (peer.submission.status === "done" ||
     peer.submission.status === "unanswered") &&
@@ -510,7 +585,7 @@ const peerInRun = async (
     mine,
     settled,
     peer.submission,
-    await runOf(tx, child, peer.submission)
+    await runOf(tx, child, peer.submission, observed)
   );
 
 /**
@@ -524,9 +599,10 @@ const runInputs = async (
   input: ReporterInput,
   item: SubagentItemState,
   current: string,
-  own: RunMarkState | undefined,
+  own: NudgeMarkState | undefined,
   settled: SettledSubmissionRecord,
-  mine: RunSpan
+  mine: RunSpan,
+  observed: ReadonlyArray<ReadonlyArray<number>>
 ): Promise<RunInputs> => {
   const child = conversationOf(input.child);
   const inputs = [current];
@@ -554,7 +630,7 @@ const runInputs = async (
     const joined =
       peer !== undefined &&
       // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
-      (await peerInRun(tx, child, mine, settled, peer));
+      (await peerInRun(tx, child, mine, settled, peer, observed));
 
     if (joined) {
       add(peer.waitsOn);
@@ -695,8 +771,8 @@ interface WakeState {
 
 /** Where a reporter stands. */
 type ReporterState =
-  | { phase: "deliver" }
-  | { phase: "nudge"; seq: number }
+  | { phase: "deliver"; run?: Array<number> }
+  | { phase: "nudge"; seq: number; run?: Array<number> }
   | { phase: "report"; settlement: SettlementState; quiet: boolean }
   | { phase: "wake"; settlement: SettlementState; wakes: Array<WakeState> };
 
@@ -1114,6 +1190,79 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   };
 
   /**
+   * While `submission` (the input a reporter waits on, or its nudge) is in a live run, records that
+   * run's inputs in the reporter's checkpoint, its first input first, as `pi.live` lists them: the
+   * run's identity, which a run ended without an answer has nowhere else (a stop in a tool call, a
+   * failure before any answer). Steers placed later in the same run are added as they come. Only
+   * while the reporter still waits in the phase it was started for (`nudgeSeq`).
+   */
+  const followRun = async (
+    runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
+    input: ReporterInput,
+    submission: Submission,
+    nudgeSeq: Option.Option<number>,
+    context: Parameters<typeof runWait>[1]
+  ) => {
+    const watch = await runtime.watchDoc(
+      LiveDoc,
+      conversationOf(input.child),
+      context
+    );
+
+    if (watch === undefined) {
+      return async () => {
+        await Promise.resolve();
+      };
+    }
+
+    let recorded: ReadonlyArray<number> = [];
+
+    const apply = async (value: Readonly<LiveState> | null) => {
+      const inputs = value?.run?.inputs ?? [];
+
+      if (
+        !inputs.includes(submission.id) ||
+        (inputs.length === recorded.length &&
+          inputs.every((id, index) => recorded[index] === id))
+      ) {
+        return;
+      }
+
+      const run = inputs.map(Number);
+
+      await runtime.commit((_tx, current) => {
+        const { checkpoint } = current.state;
+
+        const waiting = Option.match(nudgeSeq, {
+          onNone: () => checkpoint.phase === "deliver",
+          onSome: (seq) =>
+            checkpoint.phase === "nudge" && checkpoint.seq === seq,
+        });
+
+        return waiting &&
+          (checkpoint.phase === "deliver" || checkpoint.phase === "nudge")
+          ? { status: "running", checkpoint: { ...checkpoint, run } }
+          : undefined;
+      }, context);
+
+      recorded = run;
+    };
+
+    await apply(watch.value);
+    watch.start(async (value) => {
+      try {
+        await apply(value);
+      } catch (error) {
+        runtime.report(error);
+      }
+    });
+
+    return async () => {
+      await watch.stop();
+    };
+  };
+
+  /**
    * Settles the run that ended the submission a reporter waited on (`current`: its input, or the
    * nudge it sent), in one commit: one settlement per run, answered or not. The run is keyed by its
    * identity (`runOf`), and a run mark already naming that run or `current` (a peer settled the
@@ -1170,13 +1319,15 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     const unadmitted = await anyUnadmitted(tx, child, item, input.requestId);
     const live = await tx.doc(LiveDoc, child);
     const running = live.run !== undefined;
-    const mine = await runOf(tx, child, settled);
+    const observed = await observedRuns(tx, item);
+    const mine = await runOf(tx, child, settled, observed);
 
     // A run settles once: whichever of its reporters gets here first marks it. A nudge mark names
     // the inputs whose run its nudge's run settles: the child still works on the nudge, and the
     // nudge's reporter settles it then.
     const marked = item.runs.filter(
-      (mark) => mark.run === mine.key || mark.inputs.includes(current)
+      (mark) =>
+        mark.run === mine.key || markInputs(item, mark).includes(current)
     );
 
     if (marked.length > 0) {
@@ -1193,7 +1344,17 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       )
     );
 
-    const run = await runInputs(tx, input, item, current, own, settled, mine);
+    const run = await runInputs(
+      tx,
+      input,
+      item,
+      current,
+      own,
+      settled,
+      mine,
+      observed
+    );
+
     const link = await tx.doc(ChildDoc, child);
 
     const place = await resultPlace(tx, child, run.from, mine.end, accepted);
@@ -1280,13 +1441,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       inputs: run.inputs,
     });
 
-    item.runs.push({
-      run: mine.key,
-      phase: "settled",
-      seq,
-      inputs: [...run.inputs],
-      quiet: run.quiet,
-    });
+    item.runs.push({ run: mine.key, phase: "settled", seq });
 
     // The run's report is spent; the next run starts with none.
     link.report = null;
@@ -1310,8 +1465,21 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     context: Parameters<typeof runWait>[1],
     nudgeSeq: Option.Option<number>
   ) => {
-    const stop = await followChild(runtime, input, context);
-    const settled = await withCleanup(submission.wait(context), stop);
+    const unfollowChild = await followChild(runtime, input, context);
+
+    const unfollowRun = await followRun(
+      runtime,
+      input,
+      submission,
+      nudgeSeq,
+      context
+    );
+
+    const settled = await withCleanup(submission.wait(context), async () => {
+      await unfollowRun();
+      await unfollowChild();
+    });
+
     const delay = settleDelayMillis(input.quiet);
 
     if (delay > 0) {
@@ -1739,7 +1907,12 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       noteReads,
       noteEntry({
         kind: BRIEF_ANSWER_ENTRY,
-        data: { briefId: approvalId, decision: "accept", childThreadId },
+        data: {
+          briefId: approvalId,
+          decision: "accept",
+          started: true,
+          childThreadId,
+        },
         text: renderBriefAnswer(brief.value.title, {
           kind: "go",
           childThreadId,
@@ -1927,7 +2100,13 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
                 requestId,
                 noteEntry({
                   kind: BRIEF_ANSWER_ENTRY,
-                  data: { briefId: approvalId, decision: record.status },
+                  // Nothing started: a declined, revised or expired brief, or an accepted one whose
+                  // workspace could not be made.
+                  data: {
+                    briefId: approvalId,
+                    decision: record.status,
+                    started: false,
+                  },
                   text,
                   at: runtime.now(),
                 })

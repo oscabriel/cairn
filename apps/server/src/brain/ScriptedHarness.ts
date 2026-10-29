@@ -479,21 +479,35 @@ interface Reporter {
 /** The nudge mark `reporter` wrote for its nudge, listing the inputs of the run it nudged. */
 const nudgeMarkOf = (item: SubagentItem, reporter: Reporter) =>
   item.runs.findLast(
-    (mark) =>
+    (mark): mark is Extract<ScriptedRunMark, { phase: "nudge" }> =>
       mark.phase === "nudge" &&
       mark.seq === reporter.nudgeSeq &&
       mark.inputs.includes(reporter.requestId)
   );
 
-/** One run mark, as `cairn.subagents` keeps it (`RunMark`). */
-interface ScriptedRunMark {
-  /** The run's key: its segment. */
-  readonly run: string;
-  readonly phase: "nudge" | "settled";
-  readonly seq: number;
-  readonly inputs: ReadonlyArray<string>;
-  readonly quiet: boolean;
-}
+/**
+ * One run mark, as `cairn.subagents` keeps it (`RunMark`), keyed by the run's segment: a nudge mark
+ * with the nudged run's inputs, or a settled mark whose inputs are its settlement's.
+ */
+type ScriptedRunMark =
+  | {
+      readonly run: string;
+      readonly phase: "nudge";
+      readonly seq: number;
+      readonly inputs: ReadonlyArray<string>;
+      readonly quiet: boolean;
+    }
+  | { readonly run: string; readonly phase: "settled"; readonly seq: number };
+
+/** The inputs a run mark names: a nudge mark's own, a settled mark's settlement's. */
+const markInputs = (
+  item: SubagentItem,
+  mark: ScriptedRunMark
+): ReadonlyArray<string> =>
+  mark.phase === "nudge"
+    ? mark.inputs
+    : (item.settlements.find((settled) => settled.seq === mark.seq)?.inputs ??
+      []);
 
 /**
  * What a live peer reporter of `child` waits on, when the run segment `end` names ended it: its
@@ -687,7 +701,9 @@ const subagentItem = (item: SubagentItem): JsonValue => ({
     ...mark,
     inputs: [...mark.inputs],
   })),
-  runs: item.runs.map((mark) => ({ ...mark, inputs: [...mark.inputs] })),
+  runs: item.runs.map((mark) =>
+    mark.phase === "nudge" ? { ...mark, inputs: [...mark.inputs] } : { ...mark }
+  ),
   delivered: item.delivered,
   questions: Object.fromEntries(
     [...item.questions].map(([id, question]) => [id, { ...question }])
@@ -1887,7 +1903,12 @@ const layerNoDeps = Layer.effectContext(
         {
           requestId: SubagentRequestIds.briefAnswer(record.id),
           kind: BRIEF_ANSWER_ENTRY,
-          data: { briefId: record.id, decision: "accept", childThreadId },
+          data: {
+            briefId: record.id,
+            decision: "accept",
+            started: true,
+            childThreadId,
+          },
           text: renderBriefAnswer(brief.title, { kind: "go", childThreadId }),
         },
         at,
@@ -1929,7 +1950,11 @@ const layerNoDeps = Layer.effectContext(
           {
             requestId,
             kind: BRIEF_ANSWER_ENTRY,
-            data: { briefId: record.id, decision: record.status },
+            data: {
+              briefId: record.id,
+              decision: record.status,
+              started: false,
+            },
             text,
           },
           at,
@@ -2107,7 +2132,7 @@ const layerNoDeps = Layer.effectContext(
       // A run settles once: whichever of its reporters gets here first marks it. A nudge mark names
       // the inputs whose run its nudge's run settles; the nudge's reporter settles the child then.
       const marked = item.runs.filter(
-        (mark) => mark.run === key || mark.inputs.includes(current)
+        (mark) => mark.run === key || markInputs(item, mark).includes(current)
       );
 
       if (marked.length > 0) {
@@ -2228,7 +2253,7 @@ const layerNoDeps = Layer.effectContext(
         reportedAt: at,
         inputs,
       });
-      item.runs.push({ run: key, phase: "settled", seq, inputs, quiet });
+      item.runs.push({ run: key, phase: "settled", seq });
       link.report = Option.none();
       reporter.settlement = Option.some(settlement);
       reporter.phase = "report";

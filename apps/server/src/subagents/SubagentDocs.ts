@@ -13,7 +13,6 @@ import { DEFAULT_RUNTIME_MODE } from "@cairn/protocol/Policy";
 import type { RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
 import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
 import type {
-  RunMarkPhase,
   SettlementOutcome,
   SubagentQuestionState,
   SubagentStatus,
@@ -41,18 +40,39 @@ export interface SettlementMarkState {
   inputs: Array<string>;
 }
 
-/** One child run nudged or settled: the protocol's `RunMark` as plain JSON. */
-export interface RunMarkState {
-  [key: string]: JsonValue;
-  /** The run's identity: its answer entry, or its terminal entry for a run that ended unanswered. */
-  run: string;
-  phase: RunMarkPhase;
-  seq: number;
-  /** The request ids of every input the run ended (a nudge mark: the nudged run's). */
-  inputs: Array<string>;
-  /** Whether every one of them was a user's own steer: the run's settlement wakes no one. */
-  quiet: boolean;
-}
+/**
+ * One child run nudged or settled: the protocol's `RunMark` as plain JSON. `run` is the run's
+ * identity: its answer entry, or for a run that ended unanswered its first input (seen live) or
+ * its terminal entry.
+ */
+export type RunMarkState =
+  | {
+      [key: string]: JsonValue;
+      run: string;
+      phase: "nudge";
+      seq: number;
+      /** The request ids of every input the nudged run ended. */
+      inputs: Array<string>;
+      /** Whether every one of them was a user's own steer: the run's settlement wakes no one. */
+      quiet: boolean;
+    }
+  | {
+      [key: string]: JsonValue;
+      run: string;
+      phase: "settled";
+      /** Its settlement's, whose `inputs` are the run's. */
+      seq: number;
+    };
+
+/** The inputs a run mark names: a nudge mark's own, a settled mark's settlement's. */
+export const markInputs = (
+  item: SubagentItemState,
+  mark: RunMarkState
+): ReadonlyArray<string> =>
+  mark.phase === "nudge"
+    ? mark.inputs
+    : (item.settlements.find((settled) => settled.seq === mark.seq)?.inputs ??
+      []);
 
 /** Where a child's question stands, from the parent's side. */
 export interface QuestionMarkState {

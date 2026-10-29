@@ -220,7 +220,10 @@ export const piDurableLayer = (
     Layer.provide(
       Layer.unwrap(
         Effect.gen(function* () {
-          const workspaces = workspaceAccess(yield* ChildWorkspaces);
+          const workspaces = workspaceAccess(
+            yield* ChildWorkspaces,
+            yield* Effect.context()
+          );
 
           return ExtensionSet.withExtra([
             conformanceTools,

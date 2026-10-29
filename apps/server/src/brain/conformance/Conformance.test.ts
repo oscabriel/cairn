@@ -150,7 +150,9 @@ describe.each(SIDES)("%s harness, pending scenarios", (side) => {
  * The scenarios where a user's quiet input and a waking one reach a child close together: one run
  * ends both (answered, failed or nudged), or two runs each end one, alike, before the first run's
  * reporter settles; and a typed result a later run accepted before the earlier run's reporter
- * settled, an earlier run that was stopped with no entry of its own included.
+ * settled, an earlier run that was stopped with no entry of its own included; and a run a steer
+ * joined, stopped after it accepted a typed result, so the result goes with that run's one
+ * settlement whichever of its reporters settles first.
  */
 const SHARED_RUN_SCENARIOS: ReadonlySet<string> = new Set([
   "subagent_send_and_user_message_fail_alike_in_two_runs",
@@ -160,6 +162,7 @@ const SHARED_RUN_SCENARIOS: ReadonlySet<string> = new Set([
   "subagent_typed_nudge_run_shares_user_steer",
   "subagent_typed_result_after_stopped_run",
   "subagent_typed_result_late_reporter",
+  "subagent_typed_steer_then_result_stopped",
   "subagent_user_message_and_send_fail_alike_in_two_runs",
   "subagent_user_steer_and_send_share_a_failed_run",
   "subagent_user_steer_and_send_share_a_run",

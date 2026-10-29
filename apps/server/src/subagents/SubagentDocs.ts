@@ -42,8 +42,8 @@ export interface SettlementMarkState {
 
 /**
  * One child run nudged or settled: the protocol's `RunMark` as plain JSON. `run` is the run's
- * identity: its answer entry, or for a run that ended unanswered its first input (seen live) or
- * its terminal entry.
+ * identity: its answer entry, or for a run that ended unanswered the entry of its first input, read
+ * from the committed transcript.
  */
 export type RunMarkState =
   | {

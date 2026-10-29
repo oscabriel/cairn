@@ -201,8 +201,8 @@ export type SettlementMark = typeof SettlementMark.Type;
 
 /**
  * One child run, as its parent's registry keys it: `run` is the run's identity (its answer entry;
- * for a run that ended unanswered its first input, when a reporter saw the run live, else its
- * terminal entry), never a reason or a detail. A `nudge` mark is written by the commit that sends a
+ * for a run that ended unanswered the entry of its first input, read from the committed
+ * transcript), never a reason or a detail. A `nudge` mark is written by the commit that sends a
  * typed child its nudge and lists every input the nudged run ended, and whether all were quiet; a
  * `settled` mark by the commit that settles a run, its inputs being its settlement's (the
  * `SettlementMark` with the same `seq`). A reporter whose run or input a mark names settles

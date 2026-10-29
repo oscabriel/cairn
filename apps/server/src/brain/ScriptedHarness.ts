@@ -848,15 +848,21 @@ const pendingCalls = (thread: ScriptedThread): ReadonlyArray<ToolCall> => {
   );
 };
 
-/** The newest assistant entry after `after`, with its text. */
+/** Whether `entry` lies within `until` (a run's last entry; the whole transcript without one). */
+const within = (entry: EntryRecord, until: Option.Option<number>): boolean =>
+  !Option.exists(until, (last) => entry.id > last);
+
+/** The newest assistant entry after `after` and up to `until`, with its text. */
 const lastAnswerAfter = (
   thread: ScriptedThread,
-  after: Option.Option<number>
+  after: Option.Option<number>,
+  until: Option.Option<number>
 ): Option.Option<{ readonly id: number; readonly text: string }> => {
   const floor = Option.getOrElse(after, () => 0);
 
   const found = thread.entries.findLast(
-    (entry) => entry.kind === "pi.assistant" && entry.id > floor
+    (entry) =>
+      entry.kind === "pi.assistant" && entry.id > floor && within(entry, until)
   );
 
   const message = found?.model?.[0];
@@ -866,9 +872,16 @@ const lastAnswerAfter = (
     : Option.some({ id: found.id, text: messageText(message) });
 };
 
-/** The newest answer of a thread that says something; empty for none. */
-const lastSpokenIn = (thread: ScriptedThread): string => {
+/** The newest answer of a thread up to `until` that says something; empty for none. */
+const lastSpokenIn = (
+  thread: ScriptedThread,
+  until: Option.Option<number>
+): string => {
   for (const entry of thread.entries.toReversed()) {
+    if (!within(entry, until)) {
+      continue;
+    }
+
     const message = entry.model?.[0];
 
     const text =
@@ -910,12 +923,20 @@ const resultPlace = (
   return Option.exists(end, (last) => at > last) ? "after" : "in";
 };
 
-/** How many answers a thread gave after the entry `after` (its whole transcript without one). */
-const answersAfter = (thread: ScriptedThread, after: Option.Option<number>) => {
+/**
+ * How many answers a thread gave after the entry `after` (its whole transcript without one) and up
+ * to `until` (a run's last entry, when given).
+ */
+const answersAfter = (
+  thread: ScriptedThread,
+  after: Option.Option<number>,
+  until: Option.Option<number> = Option.none()
+) => {
   const floor = Option.getOrElse(after, () => 0);
 
   return thread.entries.filter(
-    (entry) => entry.kind === "pi.assistant" && entry.id > floor
+    (entry) =>
+      entry.kind === "pi.assistant" && entry.id > floor && within(entry, until)
   ).length;
 };
 
@@ -2152,7 +2173,15 @@ const layerNoDeps = Layer.effectContext(
 
       // The report of the run being settled: a settlement spends it, so the next run has none.
       const { report } = link;
-      const answered = lastAnswerAfter(child, submission.placedAs);
+
+      // The run's own entries only, up to its end, as pi-durable reads them: a reporter that settles
+      // late never takes a later run's words or turns.
+      const answered = lastAnswerAfter(
+        child,
+        submission.placedAs,
+        end.lastEntry
+      );
+
       const seq = item.settlements.length + 1;
       const where = resultPlace(child, run.from, end.lastEntry, link.result);
 
@@ -2205,7 +2234,7 @@ const layerNoDeps = Layer.effectContext(
       });
 
       // A typed result's summary when the run ended on `submit_result` with no words of its own.
-      const spoken = lastSpokenIn(child);
+      const spoken = lastSpokenIn(child, end.lastEntry);
       const typedSummary = spoken.trim() === "" ? TYPED_RESULT_SUMMARY : spoken;
 
       const settlement: SubagentSettlement = {
@@ -2231,7 +2260,7 @@ const layerNoDeps = Layer.effectContext(
         ),
         branch: null,
         turns: {
-          thisRun: answersAfter(child, submission.placedAs),
+          thisRun: answersAfter(child, submission.placedAs, end.lastEntry),
           total: answersAfter(child, Option.none()),
         },
         error:

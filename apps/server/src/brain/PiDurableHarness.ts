@@ -74,6 +74,7 @@ import {
   SubagentsDoc,
 } from "../subagents/SubagentDocs.ts";
 import { answerBrief, steerReporter } from "../subagents/Subagents.ts";
+import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession, BrainUnavailable } from "./Brain.ts";
@@ -136,6 +137,7 @@ const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
   SubagentsDoc,
   ChildDoc,
   EscalationsDoc,
+  WorkflowsDoc,
 ];
 
 const encoder = new TextEncoder();

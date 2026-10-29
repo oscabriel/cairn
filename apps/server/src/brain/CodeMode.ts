@@ -10,6 +10,10 @@
 // At most `MAX_WORKERS` scripts run at once across every thread. A script past that waits for a
 // slot instead of failing, and Stop (its abort signal) ends the wait (T16); a slot frees when a
 // script's result settles. There is no per-thread cap: the sandbox's `start` is not told the thread.
+// Workflow scripts (ADR 0012 as amended) hold their slot for their whole run, idle in `await`, so
+// they take theirs from a pool of their own, `MAX_WORKFLOW_WORKERS`: four long workflows must not
+// block every thread's code mode. `start` sees only the source, so the pool is chosen by it: the
+// gate's rewritten text (`isRewrittenWorkflow`), which is what a workflow's call stores and replays.
 //
 // Ported from cairn-v1, apps/server/src/Registry.ts at 1a5cd4a (the `codemode` block), with the
 // deadline moved from 30 minutes to none and the timeout guard added from spike 3's finding.
@@ -38,6 +42,7 @@ import {
   Semaphore,
 } from "effect";
 
+import { isRewrittenWorkflow } from "../workflows/Prelude.ts";
 import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
 
@@ -46,6 +51,9 @@ const MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
 
 /** Worker threads running scripts at once, across every thread. */
 const MAX_WORKERS = 4;
+
+/** Workflow scripts running at once, across every thread, beside `MAX_WORKERS`. */
+export const MAX_WORKFLOW_WORKERS = 8;
 
 /** Tokens the `codemode` section's tool declarations may use (pi's default is 3,000). */
 const INLINE_BUDGET = 1500;
@@ -124,33 +132,44 @@ const abortedWhileWaiting = (
   calls: [],
 });
 
-/** The worker sandbox, with `start` waiting for a script slot instead of refusing. */
+/** The run's result, giving its slot back to `slots` once it settles. */
+const held = async (
+  run: CodemodeRun,
+  slots: ScriptSlots
+): Promise<CodemodeResult> => {
+  try {
+    return await run.result;
+  } finally {
+    slots.release();
+  }
+};
+
+/**
+ * The worker sandbox, with `start` waiting for a script slot instead of refusing: a workflow
+ * script's from `workflowSlots`, any other script's from `slots`.
+ */
 export class WaitingSandbox extends CodemodeSandbox {
-  readonly #slots: ScriptSlots;
+  readonly #scripts: ScriptSlots;
+  readonly #workflows: ScriptSlots;
 
   constructor(
     options: ConstructorParameters<typeof CodemodeSandbox>[0],
-    slots: ScriptSlots
+    slots: ScriptSlots,
+    workflowSlots: ScriptSlots = new ScriptSlots(MAX_WORKFLOW_WORKERS)
   ) {
     super(options);
-    this.#slots = slots;
-  }
-
-  /** The run's result, giving its slot back once it settles. */
-  async #held(run: CodemodeRun): Promise<CodemodeResult> {
-    try {
-      return await run.result;
-    } finally {
-      this.#slots.release();
-    }
+    this.#scripts = slots;
+    this.#workflows = workflowSlots;
   }
 
   override start(code: string, options: CodemodeRunOptions): CodemodeRun {
-    if (this.#slots.tryTake()) {
+    const slots = isRewrittenWorkflow(code) ? this.#workflows : this.#scripts;
+
+    if (slots.tryTake()) {
       const run = super.start(code, options);
 
       return {
-        result: this.#held(run),
+        result: held(run, slots),
         get finished() {
           return run.finished;
         },
@@ -164,13 +183,13 @@ export class WaitingSandbox extends CodemodeSandbox {
     let started: CodemodeRun | undefined;
 
     const waitThenRun = async (): Promise<CodemodeResult> => {
-      if (!(await this.#slots.take(options.signal))) {
+      if (!(await slots.take(options.signal))) {
         return abortedWhileWaiting(options.signal);
       }
 
       started = super.start(code, options);
 
-      return await this.#held(started);
+      return await held(started, slots);
     };
 
     return {

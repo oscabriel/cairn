@@ -10,7 +10,8 @@
 // per-socket RPC server provides plain values, and the per-scope `Layer.build` calls (the web
 // connection, the conformance restart) build siblings, which a fork keeps apart. A subagent per
 // thread must build its scope with a fresh memo map, as `freshMemoMap` here does. The check is
-// first shown to catch the broken builds, then run over the one phase 2 must use.
+// first shown to catch the broken builds, then run over the one phase 2 must use, and over
+// `ChildScope.build` (ADR 0034), the one way `subagents/` and `workflows/` build per-scope layers.
 //
 // Ported from github.com/humanlayer/fold, packages/fold-core/test/Api/SessionIsolation.vi.test.ts
 // and packages/fold-core/src/Api/Provisioning.ts at 4bd8c58c4c644ad43df573c156ecdf8bddedd04d.
@@ -32,6 +33,8 @@
 
 import { assert, describe, it } from "@effect/vitest";
 import { Context, Effect, Layer, LayerMap, Scope } from "effect";
+
+import { ChildScope } from "../subagents/ChildScope.ts";
 
 /** A service the root builds once, as `Layer.launch` builds the app. */
 class Brain extends Context.Service<Brain, { readonly name: string }>()(
@@ -78,6 +81,10 @@ const freshMemoMap: Build = Effect.fnUntraced(function* () {
     yield* Effect.scope
   );
 });
+
+/** Phase 2's per-scope build (ADR 0034). */
+const childScope: Build = () =>
+  Effect.map(ChildScope.build(Subagent.layer), (built) => built.context);
 
 /** Builds `Subagent` with `build` in a scope of its own, opened inside `surroundings`. */
 const buildIn = Effect.fnUntraced(function* (
@@ -192,5 +199,69 @@ describe("per-scope layer builds", () => {
       Effect.gen(function* () {
         assert.deepStrictEqual(yield* leaks(freshMemoMap), []);
       })
+  );
+
+  it.effect("ChildScope.build passes the check", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(yield* leaks(childScope), []);
+    })
+  );
+
+  /** Two children opened at once beside a root that holds `Subagent`: how many instances exist. */
+  const twoChildrenAtOnce = Effect.fnUntraced(function* (build: Build) {
+    const app = yield* buildRoot(Layer.merge(Brain.layer, Subagent.layer));
+
+    const [first, second] = yield* Effect.all(
+      [
+        buildIn(build, app.memoMap, app.context),
+        buildIn(build, app.memoMap, app.context),
+      ],
+      { concurrency: 2 }
+    );
+
+    return new Set([
+      Context.get(app.context, Subagent),
+      Context.get(first, Subagent),
+      Context.get(second, Subagent),
+    ]).size;
+  });
+
+  it.effect(
+    "two children built at once through ChildScope.build each own an instance",
+    () =>
+      Effect.gen(function* () {
+        assert.strictEqual(yield* twoChildrenAtOnce(childScope), 3);
+      })
+  );
+
+  it.effect(
+    "the control: Layer.build hands both children the root's instance",
+    () =>
+      Effect.gen(function* () {
+        assert.strictEqual(yield* twoChildrenAtOnce(layerBuild), 1);
+      })
+  );
+
+  it.effect("a child's services are released when its close runs", () =>
+    Effect.gen(function* () {
+      let released = 0;
+
+      const counted = Layer.effect(
+        Subagent,
+        Effect.acquireRelease(
+          Effect.sync(() => Subagent.of({ name: "counted" })),
+          () =>
+            Effect.sync(() => {
+              released += 1;
+            })
+        )
+      );
+
+      const built = yield* ChildScope.build(counted);
+
+      assert.strictEqual(released, 0);
+      yield* built.close;
+      assert.strictEqual(released, 1);
+    })
   );
 });

@@ -1,0 +1,29 @@
+{"type":"transcript_start","scenario":"subagent_approval_not_routed","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Clean the build","brief":"Remove the build folder."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"cg","name":"gate","arguments":{}}]}
+{"type":"model","label":"p3","thread":"parent","toolCalls":[{"id":"cr","name":"subagent_reply","arguments":{"subagent":"$child1","answer":"yes"}}]}
+{"type":"model","label":"p4","thread":"parent","text":"Only you can approve that."}
+{"type":"model","label":"c2","thread":"child1","text":"Removed the build folder."}
+{"type":"model","label":"p5","thread":"parent","text":"The build folder is gone."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$child1","kind":"tool-call","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"waiting"}}
+{"type":"settle","ms":300}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":1}
+{"type":"expect_view","path":["pendingApprovals"],"equals":0}
+{"type":"expect_view","path":["pendingApprovals"],"equals":1,"thread":"child1"}
+{"type":"input","step":"message","requestId":"r2","text":"approve the child's call"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_view","path":["transcript",-2],"equals":{"kind":"pi.tool-result","role":"toolResult","text":"Subagent $child1 has no question waiting for its parent. Its approvals are the user's to answer.","images":0,"toolCalls":[],"toolName":"subagent_reply","isError":true}}
+{"type":"expect_view","path":["pendingApprovals"],"equals":1,"thread":"child1"}
+{"type":"input","step":"respond","thread":"child1","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}],"thread":"child1"}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"The build folder is gone.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":3}

@@ -248,7 +248,10 @@ export class Threads extends Context.Service<
           return;
         }
 
-        yield* seam.stop(input.threadId, { clearQueue: input.clearQueue });
+        yield* seam.stop(input.threadId, {
+          clearQueue: input.clearQueue,
+          subagents: Option.getOrElse(input.subagents, () => "keep" as const),
+        });
         yield* stopHooks.run(input.threadId);
       });
 

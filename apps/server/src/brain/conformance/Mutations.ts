@@ -6,27 +6,60 @@
 // - reorder_events: every two events swap places.
 // - lose_queued_input: every second input on a thread is acknowledged but never admitted.
 // - skip_snapshot: a thread stream starts with ops instead of its snapshot.
+//
+// The subagent mutations break delivery inside the harness, where no seam wrapper reaches, so
+// they travel to the target as SubagentFaults (see that module): drop_note, deliver_twice,
+// wake_stopped_parent, route_approval_to_parent. Each must fail at least two subagent scenarios.
 
 import { SubmissionId } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Effect, Option, Predicate, Stream } from "effect";
 
 import type { HarnessEvent, HarnessSeam } from "../HarnessSeam.ts";
+import type { SubagentFaultSet } from "../SubagentFaults.ts";
 
-/** One way to break the seam. */
-export type Mutation =
+/** One way to break the seam from outside. */
+export type SeamMutation =
   | "drop_run_terminal"
   | "reorder_events"
   | "lose_queued_input"
   | "skip_snapshot";
 
-/** Every mutation. */
-export const MUTATIONS: ReadonlyArray<Mutation> = [
+/** One way to break subagent delivery from inside the harness. */
+export type SubagentMutation =
+  | "drop_note"
+  | "deliver_twice"
+  | "wake_stopped_parent"
+  | "route_approval_to_parent";
+
+/** Any mutation. */
+export type Mutation = SeamMutation | SubagentMutation;
+
+/** Every seam mutation. */
+export const MUTATIONS: ReadonlyArray<SeamMutation> = [
   "drop_run_terminal",
   "reorder_events",
   "lose_queued_input",
   "skip_snapshot",
 ];
+
+/** Every subagent mutation. */
+export const SUBAGENT_MUTATIONS: ReadonlyArray<SubagentMutation> = [
+  "drop_note",
+  "deliver_twice",
+  "wake_stopped_parent",
+  "route_approval_to_parent",
+];
+
+/** The delivery faults a set of mutations plants. */
+export const faultsOf = (
+  mutations: ReadonlySet<Mutation>
+): SubagentFaultSet => ({
+  dropNote: mutations.has("drop_note"),
+  deliverTwice: mutations.has("deliver_twice"),
+  wakeStoppedParent: mutations.has("wake_stopped_parent"),
+  routeApprovalToParent: mutations.has("route_approval_to_parent"),
+});
 
 const isRunTerminal = Predicate.isTagged("RunTerminal");
 

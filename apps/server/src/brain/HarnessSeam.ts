@@ -23,6 +23,8 @@ import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import type { ApprovalDecision, QuestionAnswer } from "@cairn/protocol/Policy";
 import { RuntimeRequestKind, ApprovalStatus } from "@cairn/protocol/Policy";
 import { RunFailureClass } from "@cairn/protocol/Shell";
+import { SubagentStatus } from "@cairn/protocol/Subagents";
+import type { SubagentStopPolicy } from "@cairn/protocol/Subagents";
 import type {
   FullEntry,
   HistoryPage,
@@ -100,9 +102,20 @@ export interface InputEntry {
   readonly data: JsonValue;
 }
 
-/** A passive entry: it never starts a run, and is written once per `requestId`. */
+/** A passive entry: it never starts a run, and is written once per `requestId`. Display only. */
 export interface PassiveEntry extends InputEntry {
   readonly requestId: string;
+}
+
+/**
+ * A passive entry the model reads: a note, such as a subagent's result in its parent's transcript
+ * (ADR 0028). It never starts a run either, nor places a queued input: it is placed at once on an
+ * idle thread, whose queued inputs (left by a stop or a failed run) stay queued, and at the next
+ * boundary of a running one, ahead of queued inputs. A run that ends by a stop or a failure before
+ * that boundary places it too, so notes reach the transcript in the order they were written.
+ */
+export interface PassiveNote extends PassiveEntry {
+  readonly model: ReadonlyArray<TextContent>;
 }
 
 /** One turn of input as the model sees it, after Cairn's turn-content stages ran. */
@@ -120,9 +133,13 @@ export interface SubmissionRef {
   readonly status: "queued" | "placed" | "done" | "unanswered";
 }
 
-/** `stop` options: keep queued inputs (the default stop) or withdraw them too. */
+/**
+ * `stop` options: keep queued inputs (the default stop) or withdraw them too; leave the thread's
+ * working subagents running (`keep`, ADR 0028) or stop them as well (`stop`, the row's Stop all).
+ */
 export interface StopOptions {
   readonly clearQueue: boolean;
+  readonly subagents: SubagentStopPolicy;
 }
 
 /** `history` query: up to `limit` entries before `before`, returned oldest first. */
@@ -187,10 +204,14 @@ export const RunFailureInfo = Schema.Struct({
 
 export type RunFailureInfo = typeof RunFailureInfo.Type;
 
-/** A thread's conversation exists (first ensured, or seen again after a boot). */
+/**
+ * A thread's conversation exists (first ensured, or seen again after a boot). `parent` names the
+ * thread whose subagent it is, from the child's `cairn.child` written in the same commit.
+ */
 export const ThreadEnsured = Schema.TaggedStruct("ThreadEnsured", {
   threadId: ThreadId,
   conversationId: ConversationId,
+  parent: Schema.OptionFromNullOr(ThreadId),
 });
 
 /** A run took a thread's inputs. */
@@ -245,6 +266,17 @@ export const UsageUpdated = Schema.TaggedStruct("UsageUpdated", {
   outputTokens: NonNegativeInt,
 });
 
+/**
+ * A child in a parent's `cairn.subagents` registry changed status: started (`working`), asking or
+ * held by an approval (`waiting`), or done with its latest input (`settled`). `threadId` is the
+ * parent's, so the event lands on the row that owns the child.
+ */
+export const SubagentUpdated = Schema.TaggedStruct("SubagentUpdated", {
+  threadId: ThreadId,
+  child: ThreadId,
+  status: SubagentStatus,
+});
+
 /** The crash-loop guard parked a task; `retry` runs it again. */
 export const TaskParked = Schema.TaggedStruct("TaskParked", {
   threadId: ThreadId,
@@ -273,6 +305,7 @@ export const HarnessEvent = Schema.Union([
   QueueChanged,
   RuntimeRequestUpdated,
   UsageUpdated,
+  SubagentUpdated,
   TaskParked,
   CompactionStarted,
   CompactionEnded,
@@ -298,7 +331,7 @@ export class HarnessSeam extends Context.Service<
       threadId: ThreadId,
       input: HarnessTurnInput
     ): Effect.Effect<SubmissionRef, HarnessError>;
-    /** Stops the run; queued inputs stay unless `clearQueue`. */
+    /** Stops the run; queued inputs stay unless `clearQueue`, and queued notes are placed. */
     stop(
       threadId: ThreadId,
       options: StopOptions
@@ -317,10 +350,15 @@ export class HarnessSeam extends Context.Service<
       approvalId: ApprovalId,
       answer: ApprovalAnswerInput
     ): Effect.Effect<void, HarnessError>;
-    /** Appends a passive entry that never starts a run, idempotent by `requestId`. */
+    /**
+     * Appends a passive entry, idempotent by `requestId`; a note's `model` content enters the
+     * model's context. It never starts a run and never places queued inputs, even on an idle
+     * thread that still has some queued; on an idle thread, notes still queued from a stopped or
+     * failed run are placed ahead of it.
+     */
     write(
       threadId: ThreadId,
-      entry: PassiveEntry
+      entry: PassiveEntry | PassiveNote
     ): Effect.Effect<void, HarnessError>;
     /** Summarizes the thread's older context now. */
     compact(

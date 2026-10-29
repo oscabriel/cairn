@@ -1,0 +1,326 @@
+{
+  "events": [
+    {
+      "event": "ThreadEnsured"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "delegate it"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Waiting for Go."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "working"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "waiting"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "working"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "settled"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Subagent \"Tidy the imports\" reported; its result is in the note above."
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Imports are tidy."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "thread": "child1",
+      "event": "ThreadEnsured",
+      "parent": "parent"
+    },
+    {
+      "thread": "child1",
+      "event": "RunStarted"
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Tidy the imports\n\nSort the imports in src."
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "thread": "child1",
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "thread": "child1",
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "thread": "child1",
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Sorted both files."
+    },
+    {
+      "thread": "child1",
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    }
+  ],
+  "view": {
+    "subagents": [
+      {
+        "status": "settled",
+        "settlements": 1,
+        "delivered": 1
+      }
+    ],
+    "transcript": [
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "delegate it",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["subagent_spawn"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "The brief is waiting for the user's Go. You will be told when it is answered.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_spawn",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Waiting for Go.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.brief-answer",
+        "role": "user",
+        "text": "The user approved the brief \"Tidy the imports\"; subagent thread 0190f0c0-0000-7000-9000-000000000009 started.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.subagent-result",
+        "role": "user",
+        "text": "Subagent \"Tidy the imports\" (thread 0190f0c0-0000-7000-9000-000000000009) completed.\n<subagent_result>\nSorted both files.\n</subagent_result>\nDivergence: not reported",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "Subagent \"Tidy the imports\" reported; its result is in the note above.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Imports are tidy.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      }
+    ],
+    "transcriptLength": 8,
+    "queue": [],
+    "queueLength": 0,
+    "running": false,
+    "approvals": [
+      {
+        "status": "accepted",
+        "tool": "subagent_spawn"
+      }
+    ],
+    "pendingApprovals": 0,
+    "decisions": [
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      }
+    ],
+    "model": {
+      "provider": "faux",
+      "modelId": "scripted"
+    }
+  },
+  "children": {
+    "child1": {
+      "transcript": [
+        {
+          "kind": "pi.user",
+          "role": "user",
+          "text": "Tidy the imports\n\nSort the imports in src.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        },
+        {
+          "kind": "pi.assistant",
+          "role": "assistant",
+          "text": "",
+          "images": 0,
+          "toolCalls": ["act"],
+          "toolName": null,
+          "isError": null
+        },
+        {
+          "kind": "pi.tool-result",
+          "role": "toolResult",
+          "text": "accepted",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": "act",
+          "isError": false
+        },
+        {
+          "kind": "pi.assistant",
+          "role": "assistant",
+          "text": "",
+          "images": 0,
+          "toolCalls": ["act"],
+          "toolName": null,
+          "isError": null
+        },
+        {
+          "kind": "pi.tool-result",
+          "role": "toolResult",
+          "text": "accepted",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": "act",
+          "isError": false
+        },
+        {
+          "kind": "pi.assistant",
+          "role": "assistant",
+          "text": "Sorted both files.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        }
+      ],
+      "transcriptLength": 6,
+      "queue": [],
+      "queueLength": 0,
+      "running": false,
+      "approvals": [
+        {
+          "status": "accepted",
+          "tool": "act"
+        },
+        {
+          "status": "accepted",
+          "tool": "act"
+        }
+      ],
+      "pendingApprovals": 0,
+      "decisions": [
+        {
+          "status": "accepted",
+          "decidedBy": "mode",
+          "reason": null
+        },
+        {
+          "status": "accepted",
+          "decidedBy": "user",
+          "reason": null
+        }
+      ],
+      "model": {
+        "provider": "faux",
+        "modelId": "scripted"
+      }
+    }
+  }
+}

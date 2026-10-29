@@ -241,6 +241,8 @@ export const applyHarnessEvent = (
 ): ThreadProjection =>
   Match.valueTags(event, {
     ThreadEnsured: () => projection,
+    // Nothing yet: 4C derives a parent row's tally of its children from these events.
+    SubagentUpdated: () => projection,
     RunStarted: (started) =>
       withFields(
         { ...projection, outcome: Option.none() },

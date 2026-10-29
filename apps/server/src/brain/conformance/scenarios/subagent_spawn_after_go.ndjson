@@ -1,0 +1,24 @@
+{"type":"transcript_start","scenario":"subagent_spawn_after_go","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in the project root."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","text":"There are 3 files."}
+{"type":"model","label":"p3","thread":"parent","text":"The child counted 3 files."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"settle","ms":200}
+{"type":"expect_event_count","event":{"_tag":"ThreadEnsured"},"count":1}
+{"type":"expect_event_count","event":{"_tag":"SubagentUpdated"},"count":0}
+{"type":"expect_view","path":["approvals"],"equals":[{"status":"pending","tool":"subagent_spawn"}]}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"ThreadEnsured","parent":"$parent"}}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","threadId":"$parent","child":"$child1","status":"working"}}
+{"type":"expect_view","path":["transcript",0],"equals":{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in the project root.","images":0,"toolCalls":[],"toolName":null,"isError":null},"thread":"child1"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","threadId":"$parent","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_event_count","event":{"_tag":"ThreadEnsured"},"count":2}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in the project root.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"There are 3 files.","images":0,"toolCalls":[],"toolName":null,"isError":null}],"thread":"child1"}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"delegate it","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["subagent_spawn"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"The brief is waiting for the user's Go. You will be told when it is answered.","images":0,"toolCalls":[],"toolName":"subagent_spawn","isError":false},{"kind":"pi.assistant","role":"assistant","text":"Waiting for Go.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"cairn.brief-answer","role":"user","text":"The user approved the brief \"Count the files\"; subagent thread $child1 started.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\nThere are 3 files.\n</subagent_result>\nDivergence: not reported","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"Subagent \"Count the files\" reported; its result is in the note above.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"The child counted 3 files.","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":1,"delivered":1}]}
+{"type":"expect_view","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}

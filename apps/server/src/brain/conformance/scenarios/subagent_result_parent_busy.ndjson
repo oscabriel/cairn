@@ -1,0 +1,16 @@
+{"type":"transcript_start","scenario":"subagent_result_parent_busy","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Check the tests","brief":"Run the unit tests and say which fail."}}]}
+{"type":"model","label":"p2","thread":"parent","hold":true,"text":"Still working on my part."}
+{"type":"model","label":"c1","thread":"child1","text":"All tests pass."}
+{"type":"model","label":"p3","thread":"parent","text":"Good, all tests pass."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"release","label":"p2"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":1}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"delegate it","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["subagent_spawn"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"The brief is waiting for the user's Go. You will be told when it is answered.","images":0,"toolCalls":[],"toolName":"subagent_spawn","isError":false},{"kind":"pi.assistant","role":"assistant","text":"Still working on my part.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"cairn.brief-answer","role":"user","text":"The user approved the brief \"Check the tests\"; subagent thread $child1 started.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Check the tests\" (thread $child1) completed.\n<subagent_result>\nAll tests pass.\n</subagent_result>\nDivergence: not reported","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"Subagent \"Check the tests\" reported; its result is in the note above.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"Good, all tests pass.","images":0,"toolCalls":[],"toolName":null,"isError":null}]}

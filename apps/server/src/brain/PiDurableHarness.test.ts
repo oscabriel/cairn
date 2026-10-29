@@ -274,7 +274,7 @@ describe("PiDurableHarness stop", () => {
               .pipe(Effect.orDie)
           );
 
-          yield* seam.stop(THREAD_ID, { clearQueue: false });
+          yield* seam.stop(THREAD_ID, { clearQueue: false, subagents: "keep" });
 
           const [terminal] = yield* waitForEvents(events, "RunTerminal", 1);
 
@@ -330,7 +330,7 @@ describe("PiDurableHarness stop", () => {
           // its final boundary starts a new run for the queued follow-up.
           const aborted = yield* holdNextAbort(firstAnswer.open);
 
-          yield* seam.stop(THREAD_ID, { clearQueue: false });
+          yield* seam.stop(THREAD_ID, { clearQueue: false, subagents: "keep" });
 
           // The follow-up's run is the same run to Cairn: one RunTerminal, after its answer.
           const [terminal] = yield* waitForEvents(events, "RunTerminal", 1);
@@ -560,7 +560,7 @@ describe("PiDurableHarness stop, cut off between its abort and its cancellation"
             };
 
             const stopping = yield* seam
-              .stop(THREAD_ID, { clearQueue: false })
+              .stop(THREAD_ID, { clearQueue: false, subagents: "keep" })
               .pipe(Effect.forkChild);
 
             yield* marked.await;

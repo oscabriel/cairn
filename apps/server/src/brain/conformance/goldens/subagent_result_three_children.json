@@ -1,0 +1,499 @@
+{
+  "events": [
+    {
+      "event": "ThreadEnsured"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "delegate three"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Waiting for Go."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "working"
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child2",
+      "status": "working"
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child3",
+      "status": "working"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "settled"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Subagent \"Count files in a\" reported; its result is in the note above."
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child2",
+      "status": "settled"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child3",
+      "status": "settled"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Reading the first."
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Subagent \"Count files in b\" reported; its result is in the note above."
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "All three counted."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "thread": "child1",
+      "event": "ThreadEnsured",
+      "parent": "parent"
+    },
+    {
+      "thread": "child1",
+      "event": "RunStarted"
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Count files in a\n\nCount the files in a."
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "1 files."
+    },
+    {
+      "thread": "child1",
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "thread": "child2",
+      "event": "ThreadEnsured",
+      "parent": "parent"
+    },
+    {
+      "thread": "child2",
+      "event": "RunStarted"
+    },
+    {
+      "thread": "child2",
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Count files in b\n\nCount the files in b."
+    },
+    {
+      "thread": "child2",
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "2 files."
+    },
+    {
+      "thread": "child2",
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "thread": "child3",
+      "event": "ThreadEnsured",
+      "parent": "parent"
+    },
+    {
+      "thread": "child3",
+      "event": "RunStarted"
+    },
+    {
+      "thread": "child3",
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Count files in c\n\nCount the files in c."
+    },
+    {
+      "thread": "child3",
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "3 files."
+    },
+    {
+      "thread": "child3",
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    }
+  ],
+  "view": {
+    "subagents": [
+      {
+        "status": "settled",
+        "settlements": 1,
+        "delivered": 1
+      },
+      {
+        "status": "settled",
+        "settlements": 1,
+        "delivered": 1
+      },
+      {
+        "status": "settled",
+        "settlements": 1,
+        "delivered": 1
+      }
+    ],
+    "transcript": [
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "delegate three",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["subagent_spawn", "subagent_spawn", "subagent_spawn"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "The brief is waiting for the user's Go. You will be told when it is answered.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_spawn",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "The brief is waiting for the user's Go. You will be told when it is answered.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_spawn",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "The brief is waiting for the user's Go. You will be told when it is answered.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_spawn",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Waiting for Go.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.brief-answer",
+        "role": "user",
+        "text": "The user approved the brief \"Count files in a\"; subagent thread 0190f0c0-0000-7000-9000-00000000000d started.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.brief-answer",
+        "role": "user",
+        "text": "The user approved the brief \"Count files in b\"; subagent thread 0190f0c0-0000-7000-9000-000000000012 started.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.brief-answer",
+        "role": "user",
+        "text": "The user approved the brief \"Count files in c\"; subagent thread 0190f0c0-0000-7000-9000-000000000017 started.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.subagent-result",
+        "role": "user",
+        "text": "Subagent \"Count files in a\" (thread 0190f0c0-0000-7000-9000-00000000000d) completed.\n<subagent_result>\n1 files.\n</subagent_result>\nDivergence: not reported",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "Subagent \"Count files in a\" reported; its result is in the note above.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Reading the first.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.subagent-result",
+        "role": "user",
+        "text": "Subagent \"Count files in b\" (thread 0190f0c0-0000-7000-9000-000000000012) completed.\n<subagent_result>\n2 files.\n</subagent_result>\nDivergence: not reported",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.subagent-result",
+        "role": "user",
+        "text": "Subagent \"Count files in c\" (thread 0190f0c0-0000-7000-9000-000000000017) completed.\n<subagent_result>\n3 files.\n</subagent_result>\nDivergence: not reported",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "Subagent \"Count files in b\" reported; its result is in the note above.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "All three counted.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      }
+    ],
+    "transcriptLength": 16,
+    "queue": [],
+    "queueLength": 0,
+    "running": false,
+    "approvals": [
+      {
+        "status": "accepted",
+        "tool": "subagent_spawn"
+      },
+      {
+        "status": "accepted",
+        "tool": "subagent_spawn"
+      },
+      {
+        "status": "accepted",
+        "tool": "subagent_spawn"
+      }
+    ],
+    "pendingApprovals": 0,
+    "decisions": [
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      },
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      },
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      }
+    ],
+    "model": {
+      "provider": "faux",
+      "modelId": "scripted"
+    }
+  },
+  "children": {
+    "child1": {
+      "transcript": [
+        {
+          "kind": "pi.user",
+          "role": "user",
+          "text": "Count files in a\n\nCount the files in a.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        },
+        {
+          "kind": "pi.assistant",
+          "role": "assistant",
+          "text": "1 files.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        }
+      ],
+      "transcriptLength": 2,
+      "queue": [],
+      "queueLength": 0,
+      "running": false,
+      "approvals": [],
+      "pendingApprovals": 0,
+      "decisions": [],
+      "model": {
+        "provider": "faux",
+        "modelId": "scripted"
+      }
+    },
+    "child2": {
+      "transcript": [
+        {
+          "kind": "pi.user",
+          "role": "user",
+          "text": "Count files in b\n\nCount the files in b.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        },
+        {
+          "kind": "pi.assistant",
+          "role": "assistant",
+          "text": "2 files.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        }
+      ],
+      "transcriptLength": 2,
+      "queue": [],
+      "queueLength": 0,
+      "running": false,
+      "approvals": [],
+      "pendingApprovals": 0,
+      "decisions": [],
+      "model": {
+        "provider": "faux",
+        "modelId": "scripted"
+      }
+    },
+    "child3": {
+      "transcript": [
+        {
+          "kind": "pi.user",
+          "role": "user",
+          "text": "Count files in c\n\nCount the files in c.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        },
+        {
+          "kind": "pi.assistant",
+          "role": "assistant",
+          "text": "3 files.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        }
+      ],
+      "transcriptLength": 2,
+      "queue": [],
+      "queueLength": 0,
+      "running": false,
+      "approvals": [],
+      "pendingApprovals": 0,
+      "decisions": [],
+      "model": {
+        "provider": "faux",
+        "modelId": "scripted"
+      }
+    }
+  }
+}

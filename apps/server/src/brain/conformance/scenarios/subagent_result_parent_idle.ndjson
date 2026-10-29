@@ -1,0 +1,18 @@
+{"type":"transcript_start","scenario":"subagent_result_parent_idle","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"List the TODOs","brief":"List the TODO comments in src."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","hold":true,"text":"There are two TODOs."}
+{"type":"model","label":"p3","thread":"parent","text":"Two TODOs it is."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"expect_view","path":["running"],"equals":false}
+{"type":"release","label":"c1"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunStarted","threadId":"$parent"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":2}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"delegate it","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["subagent_spawn"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"The brief is waiting for the user's Go. You will be told when it is answered.","images":0,"toolCalls":[],"toolName":"subagent_spawn","isError":false},{"kind":"pi.assistant","role":"assistant","text":"Waiting for Go.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"cairn.brief-answer","role":"user","text":"The user approved the brief \"List the TODOs\"; subagent thread $child1 started.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"List the TODOs\" (thread $child1) completed.\n<subagent_result>\nThere are two TODOs.\n</subagent_result>\nDivergence: not reported","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"Subagent \"List the TODOs\" reported; its result is in the note above.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"Two TODOs it is.","images":0,"toolCalls":[],"toolName":null,"isError":null}]}

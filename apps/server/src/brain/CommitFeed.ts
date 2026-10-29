@@ -3,7 +3,8 @@
 // pi-durable calls it synchronously after each commit and it must not block or call back in. A
 // fiber turns each publication into Cairn's events, in commit order:
 //
-// - `cairn.thread-meta` set: ThreadEnsured (the creating commit of a thread).
+// - `cairn.thread-meta` set: ThreadEnsured (the creating commit of a thread), naming the parent a
+//   subagent's `cairn.child` (written in the same commit) links it to.
 // - `pi.live.run` appears: RunStarted; it goes away: RunTerminal, with the outcome of the run's
 //   last generation task (a run hands over between generation tasks, one per model request, so
 //   the run is `pi.live.run`, not one task), its failure classified.
@@ -12,8 +13,13 @@
 // - `pi.inbox` changes: QueueChanged when the number of queued inputs changed.
 // - `cairn.approvals` changes: RuntimeRequestUpdated for each record whose status changed.
 // - `pi.usage` changes: UsageUpdated with the conversation's token totals.
+// - `cairn.subagents` changes: SubagentUpdated for each child whose status changed (ADR 0028).
+//   The last statuses live in memory only, so after a restart the first change to a parent's
+//   registry emits one for every child in it, changed or not: a consumer treats SubagentUpdated
+//   as idempotent (it sets a status, never counts transitions). Seeding the map from the document
+//   would read the state after the commit and hide the change it carries.
 //
-// Conversations that are not threads (subagents later) produce no events. The listener is attached
+// Conversations that are not threads produce no events; a subagent is a thread, so it does. The listener is attached
 // through `Brain.subscribeCommits` while this layer builds, so before boot resumes the Harness, and
 // the brain attaches it to a reopened Session before resuming that one: no commit of a resumed task
 // goes unseen. Events never replay across a process restart, so the shell projector reconciles at
@@ -29,6 +35,11 @@ import {
   ThreadId,
 } from "@cairn/protocol/Ids";
 import { ApprovalStatus, RuntimeRequestKind } from "@cairn/protocol/Policy";
+import {
+  CHILD_DOCUMENT,
+  SUBAGENTS_DOCUMENT,
+  SubagentStatus,
+} from "@cairn/protocol/Subagents";
 import type { JsonValue } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
 import type {
@@ -64,6 +75,7 @@ import {
   RunStarted,
   RunTerminal,
   RuntimeRequestUpdated,
+  SubagentUpdated,
   ThreadEnsured,
   UsageUpdated,
 } from "./HarnessSeam.ts";
@@ -83,6 +95,8 @@ const decodeApprovalId = Schema.decodeUnknownOption(ApprovalId);
 const decodeApprovalStatus = Schema.decodeUnknownOption(ApprovalStatus);
 
 const decodeRequestKind = Schema.decodeUnknownOption(RuntimeRequestKind);
+
+const decodeSubagentStatus = Schema.decodeUnknownOption(SubagentStatus);
 
 /**
  * The text a message shows: its text blocks, joined. Thinking and tool calls are left out, and so
@@ -134,6 +148,8 @@ interface FeedState {
   readonly startedCompactions: Set<number>;
   readonly queueLengths: Map<PiConversationId, number>;
   readonly approvals: Map<string, string>;
+  /** Each child's last status, by `<parent conversation>:<registry key>`. */
+  readonly subagents: Map<string, string>;
 }
 
 const isRecord = (value: JsonValue | undefined): value is JsonObject =>
@@ -325,6 +341,41 @@ const liveEvents = (
   return [runEnd(state, threadId, current, ended, now)];
 };
 
+/** SubagentUpdated for each child in a parent's registry whose status changed. */
+const subagentEvents = (
+  state: FeedState,
+  threadId: ThreadId,
+  conversationId: PiConversationId,
+  items: JsonObject
+): Array<HarnessEvent> => {
+  const events: Array<HarnessEvent> = [];
+
+  for (const [key, item] of Object.entries(items)) {
+    if (isRecord(item)) {
+      const child = decodeThreadId(item.threadId);
+      const status = decodeSubagentStatus(item.status);
+      const at = `${conversationId}:${key}`;
+
+      if (
+        Option.isSome(child) &&
+        Option.isSome(status) &&
+        state.subagents.get(at) !== status.value
+      ) {
+        state.subagents.set(at, status.value);
+        events.push(
+          SubagentUpdated.make({
+            threadId,
+            child: child.value,
+            status: status.value,
+          })
+        );
+      }
+    }
+  }
+
+  return events;
+};
+
 /** The events of one document change. */
 const documentEvents = (
   state: FeedState,
@@ -369,6 +420,10 @@ const documentEvents = (
         outputTokens: totals.output,
       }),
     ];
+  }
+
+  if (kind === SUBAGENTS_DOCUMENT && isRecord(change.value?.items)) {
+    return subagentEvents(state, threadId, conversationId, change.value.items);
   }
 
   if (kind === "cairn.approvals" && isRecord(change.value?.items)) {
@@ -424,13 +479,60 @@ const conversationOf = (
   return Option.some(change.value.conversationId);
 };
 
+/** ThreadEnsured for each thread this commit created, naming a subagent's parent. */
+const ensuredEvents = (
+  state: FeedState,
+  publication: CommitPublication
+): Array<HarnessEvent> => {
+  const ensured: Array<HarnessEvent> = [];
+
+  // A subagent's link, written in the commit that creates it, names its parent.
+  const parents = new Map<PiConversationId, ThreadId>();
+
+  for (const change of publication.changes) {
+    if (
+      change.type === "document" &&
+      change.record.kind === CHILD_DOCUMENT &&
+      change.conversationId !== undefined
+    ) {
+      for (const parent of Option.toArray(
+        decodeThreadId(change.value?.parentThreadId)
+      )) {
+        parents.set(change.conversationId, parent);
+      }
+    }
+  }
+
+  for (const change of publication.changes) {
+    if (
+      change.type === "document" &&
+      change.record.kind === ThreadMeta.definition.kind &&
+      change.conversationId !== undefined
+    ) {
+      const threadId = decodeThreadId(change.value?.threadId);
+
+      if (Option.isSome(threadId)) {
+        state.threads.set(change.conversationId, threadId);
+        ensured.push(
+          ThreadEnsured.make({
+            threadId: threadId.value,
+            conversationId: ConversationId.make(change.conversationId),
+            parent: Option.fromUndefinedOr(parents.get(change.conversationId)),
+          })
+        );
+      }
+    }
+  }
+
+  return ensured;
+};
+
 /** Every harness event of one publication, in a fixed order. */
 const publicationEvents = (
   state: FeedState,
   publication: CommitPublication,
   now: number
 ): Array<HarnessEvent> => {
-  const ensured: Array<HarnessEvent> = [];
   const runs: Array<HarnessEvent> = [];
   const messages: Array<HarnessEvent> = [];
   const documents: Array<HarnessEvent> = [];
@@ -449,25 +551,7 @@ const publicationEvents = (
   }
 
   // Thread metadata first, so the rest of this commit can name its thread.
-  for (const change of publication.changes) {
-    if (
-      change.type === "document" &&
-      change.record.kind === ThreadMeta.definition.kind &&
-      change.conversationId !== undefined
-    ) {
-      const threadId = decodeThreadId(change.value?.threadId);
-
-      if (Option.isSome(threadId)) {
-        state.threads.set(change.conversationId, threadId);
-        ensured.push(
-          ThreadEnsured.make({
-            threadId: threadId.value,
-            conversationId: ConversationId.make(change.conversationId),
-          })
-        );
-      }
-    }
-  }
+  const ensured = ensuredEvents(state, publication);
 
   for (const change of publication.changes) {
     const threadId = Option.flatten(
@@ -549,6 +633,7 @@ export class CommitFeed extends Context.Service<
         startedCompactions: new Set(),
         queueLengths: new Map(),
         approvals: new Map(),
+        subagents: new Map(),
       };
 
       // Conversations this commit names that the feed has not met: read their metadata first.

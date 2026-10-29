@@ -9,6 +9,8 @@
 // - `approvals`: approval records by age, with their status and tool; `pendingApprovals`.
 // - `decisions`: the same records' status, who decided (the `decidedBy` kind) and the reason.
 // - `model`: the thread's model.
+// - `subagents`: on a parent with children only, each child's registry status, its settlements and
+//   the last one delivered, by thread id.
 
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";
@@ -135,8 +137,29 @@ export const normalizeView = (view: ConversationView): Json => {
   }));
 
   const agent = view.docs["pi.agent"];
+  const registry = view.docs["cairn.subagents"];
+
+  // A parent's children, by thread id: where each stands and how many results reached the parent.
+  const subagents =
+    isRecord(registry) && isRecord(registry.items)
+      ? Object.values(registry.items)
+          .filter(isRecord)
+          .toSorted((a, b) =>
+            JSON.stringify(a.threadId ?? null).localeCompare(
+              JSON.stringify(b.threadId ?? null)
+            )
+          )
+          .map((item) => ({
+            status: item.status ?? null,
+            settlements: isList(item.settlements) ? item.settlements.length : 0,
+            delivered: item.delivered ?? null,
+          }))
+      : [];
+
+  const parentOnly = subagents.length > 0 ? { subagents } : {};
 
   return {
+    ...parentOnly,
     transcript,
     transcriptLength: transcript.length,
     queue,

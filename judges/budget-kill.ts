@@ -24,7 +24,7 @@
 //   (the crash window the judge exists for). A run whose kills all missed that window (an early kill
 //   after the crossing and before the first stop) is run again, up to three times in all, and fails
 //   with `window` if none landed.
-// - no-stop: a broken control whose guard stops nothing, halts nothing and has no gate. It must fail
+// - no-stop: a broken control whose guard stops nothing and halts nothing (the gate stays). It must fail
 //   by overshoot.
 // - no-boot: a broken control whose last life boots without the guard's boot repair (earlier lives
 //   read the book and halt nothing), killed at the start of the stop pass. It must fail by a child

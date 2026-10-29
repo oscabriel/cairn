@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: `judges/brief-go.sh` over all ten windows (kills before, inside and after the commit, and a three-way race) and the five-kill parked case
 ---
 
@@ -12,3 +12,5 @@ If the start task parks after repeated crashes, it waits for a human Retry on th
 Decided by the user on 2026-10-27, from the phase 2 area notes.
 
 Gate evidence, on `phase2/4A` (2026-10-29): `judges/brief-go.sh` over the production seam, brain and subagents extension in a judge brain (a scratch data folder and git repository, never `cairn.service`), killed with SIGKILL. All ten windows pass with one worktree, one plan row, one child conversation, one first input and one answer to the parent, or none of them when the brief stays pending or is declined: no kill; killed with the brief pending, then Go; killed inside the Go commit (still pending, no start task); Go again after that; killed after the commit, after the worktree, after the creating commit and after the first input; Go, Decline and Go at once (accepted once); Decline. The five-kill case parks the start task (`restart_limit`), a clean boot leaves it parked, and Retry starts the child once; with the start task put back into the boot retry, that case fails. The broken control, Go committed without its start and the start left to a second commit, leaves an accepted brief that never starts, and fails the judge as it must. Faux model, $0. The status moves to accepted at integration.
+
+Accepted at the wave 4 integration (2026-10-29): `judges/brief-go.sh` reran on `main` after the merges, windows 10 of 10, the parked case passing, the control failing as it must. Faux model, $0.

@@ -552,3 +552,39 @@ L1's block names no judge "at integration"; these rerun its judges on the merged
 ### Left for the user
 
 - Nothing to do now; nothing is deployed by this integration. On the next deploy the classic transcript scrolls on the measured list, so the daily-driver day is when to watch for content moving under you.
+
+## Wave 4 and look track L3 integration
+
+Integrated on 2026-10-29 on `main`. Every package merged with `--no-ff`: 4A `73ffc09` as `32fe7fa`, 4B `3911764` as `6e076c4`, 4C `a07c70a` as `9e87d81`, 4D `5edcf33` as `25caeac`, 4E `37d4733` as `4de2e9d`, 4F `c00ca85` as `022dd71`, 4G `b95245a` as `a2abf81`, 4H `c535853` as `c38e1a1`, L3 `579aedc` as `b8682f5`. Conflicts kept both sides: 4A with 4B and 4C in `SubagentTasks.ts`, `SubagentTools.ts` (`questionRecord` now 4B's, in `QuestionRoute.ts`), `Subagents.ts` (`crashes` after `briefFaults` and `roles`), `CairnDocs.ts` and `PiDurableHarness.ts`; 4G's `Notifier.ts` badge (`badgeOf`). The hand-offs are `ab5deb5`; this note and the ADRs are the next commit.
+
+### Integration judges
+
+No block names a judge "at integration"; the brain's wiring changed, so these ran on `main` with the hand-offs, each under the judge lock.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 422 s: fmt, lint, typecheck, 2,244 tests. No dependency changed. |
+| `judge-main.ts` boot, fresh data folder | pass | Repairs in order: sweep uploads, executor sweep, subagent rows, spend reconcile, budget boot repair, cancel abandoned approvals, retry parked approval waits, retry parked subagent tasks, child workspace repair, resume launches, checkpoint repair, portal reconcile, portal sweep, event reactors; no `boot_repair_failed`; ready in 20 ms; `closing`, `closed` on SIGTERM. |
+| `node judges/durability.ts --no-page` | pass | 13 of 13; kill to up 1,280 to 1,542 ms; up to converged 5 to 19 ms; sigterm-six 3,168 to 3,171 ms. |
+| `judges/brief-go.sh` (ADR 0030) | pass | windows 10 of 10, parked true, control failed. $0. |
+| `node judges/subagent-durability.ts` (ADR 0028) | pass | faux 10 of 10, 5 controls failed rightly; `--bridge` on claude-haiku-5-5 passed in 11 s (Claude Code plan). |
+| `node judges/budget-kill.ts`, `judges/spend-kill.sh` (ADR 0036) | pass | J-budget kills 32,300 micros over against 39,500 allowed, both controls fail; J-spend 12 kills, 48 turns, 0 failures, control fails by double counts. $0. |
+| Package judges not rerun | as reported | 4B relay and mirror tests, 4D kill matrix and ledger suite, 4G `push.ts --fake`, L3 `look-rules.ts`: unit parts inside `pnpm check`. 4F's J-typed: 119 of 120 over three runs, gpt-6-luna 23 of 24 (about $0.05 a run). |
+
+### Hand-offs applied
+
+`ExtensionOrder` gains `budgets: 640` and `workflows: 660`; `ExtensionSet` installs `cairn.budgets` (over `BudgetBook.layer`, the reference `AppLayer` gives `SpendLedger`, `Budgets` and `BudgetGuard`, so the memo map builds one book) and `cairn.workflows`; `AppLayer` adds `QuestionRoutes`, the guard, `Budgets`, `WorkflowPlan`, and `BudgetSources` under each brain; boot repairs reordered as above (4E). 4A's `Boot.ts` skip of `HUMAN_RETRY_TASKS` and 4B's `QuestionSource` in `Policy.ts` are accepted. A workflow node's child no longer gets the subagent tools (`nodeChildTools`, ledger test fails without it). Six 4B goldens take 4A's `thinkingLevel`. ADRs 0027, 0028, 0030 and 0036 accepted. Glossary updated.
+
+### What differs from the plan
+
+- 4B: `answer_child` and `escalate` are actions of `subagent_reply`; only `escalate` takes a reason (accepted; the briefs note asked a reason of both). Window and park triggers are judged on pi-durable only.
+- 4D: judge 3 runs on pi-durable only; nodes share the launching cwd until 5A; whole-workflow abort, decline and park cases are not yet in the kill matrix.
+- 4E: J-budget's bound is N responses; its no-stop control now keeps the gate (it is in the production set), and still fails by overshoot.
+- 4H: until porch is set up the portal reconcile logs `reach_porch_not_set_up` once at info, not `boot_repair_failed`.
+- Held for later packages: `Budgets.admit` at Go in the start task, with a `budget` brief answer (5A or 5F); a boot retry for parked `cairn.workflow-watch` tasks (5B or 5C); a `HarnessSeam` one-document read for `RequestRecords` (4G); kill windows for the routing commits (4B, 4C); `report` pre-empting `submit_result` in typed children (3A owner, 4F); envelope modes, readonly nodes, writer worktrees (5A); list pricing and subtree usage of nodes (5B).
+
+### Left for the user
+
+- Decide 4F's target: J-typed through children stays at every trial (blocked on the `report` fix) or becomes a rate such as 23 of 24 per model over three runs. gpt-6-luna stands in for Codex.
+- Decide whether a supervised child's approval pushes under the root thread's tag with a "<child> asks:" prefix (4G pushes under the hidden child's today).
+- When deploying: no brief pending or just answered (4A's new start and tell tasks); `cairn.budgets` and `cairn.workflows` each append one `pi.system` entry to every conversation once; wizard stage 3 (approval push on the locked phone) waits for that deploy.

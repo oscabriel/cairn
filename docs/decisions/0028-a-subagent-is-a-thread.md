@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: phase 2's subagent scenario groups pass on both harnesses, and `judges/subagent-durability.ts` passes on a faux model and once on the bridge
 ---
 
@@ -12,3 +12,5 @@ A child's result is a closed settlement (outcome `completed`, `stopped` or `fail
 Stopping a parent does not stop its children; its row offers Stop all. A completion wakes the parent by default. Depth is capped at 2 and live children at 8 per parent until the fan-out judge measures them.
 
 Decided by the user on 2026-10-27, from the phase 2 area notes.
+
+Accepted at the wave 4 integration (2026-10-29). Gate evidence on `main` after the merges: the subagent scenario groups pass on both harnesses (green `pnpm check`); `node judges/subagent-durability.ts` passes 10 of 10 on the faux model with all 5 controls failing rightly (by double delivery only), and `--bridge` (bridge-reporter-answered) passes on claude-haiku-5-5 in 11 s, 2 lives and 1 kill, on the Claude Code plan.

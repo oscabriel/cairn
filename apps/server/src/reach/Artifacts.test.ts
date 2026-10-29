@@ -1,8 +1,11 @@
 // Artifacts over the fake porch: every artifact scenario (`ArtifactScenarios.ts`, the same ones
 // `judges/reach.ts` runs on the real binary) with its broken control failing, then what only the
 // service sees: the project slug, the size cap, the owner-only staging folder, a rerun after a
-// crash between the claim and porch, and `reach.list` with a portal row beside the artifacts.
+// crash between the claim and porch, the restore and revoke crash windows over a porch that
+// answers `changed: false` from its registry alone (as porch 0.0.0 does), the fault-spec parser,
+// and `reach.list` with a portal row beside the artifacts.
 
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { ProjectId } from "@cairn/protocol/Ids";
@@ -25,6 +28,7 @@ import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { Projects } from "../projects/Projects.ts";
+import { artifactFaultStep } from "./ArtifactFaults.ts";
 import { ArtifactPublisher, artifactIdOf } from "./ArtifactPublisher.ts";
 import { Artifacts, projectSlugOf } from "./Artifacts.ts";
 import {
@@ -35,12 +39,49 @@ import {
 } from "./ArtifactScenarios.ts";
 import type { ArtifactStage } from "./ArtifactScenarios.ts";
 import { makeFakePorch, PorchClient } from "./PorchClient.ts";
-import { ReachLister } from "./ReachList.ts";
+import type { PublishReceipt } from "./PorchClient.ts";
+import { ReachLister } from "./ReachLister.ts";
 
 const DOMAIN = "example.test";
 
+/**
+ * `client` answering as porch 0.0.0 does: a file whose bytes its registry already records for that
+ * source is `changed: false` without a look at the target, so nothing is copied back after a
+ * revoke. The fake on its own copies whenever the target is missing.
+ */
+const registryOnly = (
+  fs: FileSystem.FileSystem,
+  client: PorchClient["Service"]
+): PorchClient["Service"] => {
+  const recorded = new Map<string, PublishReceipt>();
+
+  return {
+    ...client,
+    publish: (source, project) =>
+      Effect.gen(function* () {
+        const bytes = yield* fs
+          .readFile(source)
+          .pipe(Effect.orElseSucceed(() => new Uint8Array()));
+
+        const hash = createHash("sha256").update(bytes).digest("hex");
+        const known = recorded.get(`${project}/${source}`);
+
+        if (known?.hash === hash) {
+          return { ...known, changed: false };
+        }
+
+        const receipt = yield* client.publish(source, project);
+        recorded.set(`${project}/${source}`, receipt);
+
+        return receipt;
+      }),
+  };
+};
+
 /** A fresh fake porch, thread folders and data folder under one temp root, and the layers. */
-const fakeStage = Effect.gen(function* () {
+const fakeStage = Effect.fnUntraced(function* (
+  options: { readonly registryOnly?: boolean } = {}
+) {
   const fs = yield* FileSystem.FileSystem;
 
   const made = yield* fs.makeTempDirectoryScoped({
@@ -72,12 +113,16 @@ const fakeStage = Effect.gen(function* () {
     cwd: dirs.cwd,
     otherCwd: dirs.otherCwd,
     outside: dirs.outside,
+    data: dirs.data,
   };
+
+  const client =
+    options.registryOnly === true ? registryOnly(fs, fake.client) : fake.client;
 
   const layer = ReachLister.layerNoDeps.pipe(
     Layer.provideMerge(Artifacts.layer),
     Layer.provideMerge(ArtifactPublisher.layer),
-    Layer.provideMerge(Layer.succeed(PorchClient, fake.client)),
+    Layer.provideMerge(Layer.succeed(PorchClient, client)),
     Layer.provideMerge(Projects.layerNoDeps),
     Layer.provideMerge(Database.layerTest(migrations)),
     Layer.provideMerge(ServerConfig.layerWith({ dataDir: dirs.data })),
@@ -100,7 +145,7 @@ describe("Artifacts over the fake porch", () => {
   it.live("holds every artifact scenario", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { stage, layer } = yield* fakeStage;
+        const { stage, layer } = yield* fakeStage();
 
         for (const each of artifactScenarios) {
           const exit = yield* Effect.exit(
@@ -119,7 +164,7 @@ describe("Artifacts over the fake porch", () => {
   it.live("the overwrite control fails: porch alone overwrites", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { stage, layer } = yield* fakeStage;
+        const { stage, layer } = yield* fakeStage();
 
         const exit = yield* Effect.exit(
           overwriteControl.run(stage).pipe(Effect.provide(layer))
@@ -135,7 +180,7 @@ describe("Artifacts over the fake porch", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { stage, layer, dirs } = yield* fakeStage;
+          const { stage, layer, dirs } = yield* fakeStage();
 
           yield* Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
@@ -200,10 +245,118 @@ describe("Artifacts over the fake porch", () => {
       ).pipe(Effect.provide(NodeServices.layer))
   );
 
+  it.live(
+    "restores a revoked page porch will not copy, and reruns over the restore window",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { stage, layer } = yield* fakeStage({ registryOnly: true });
+
+          yield* Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const sql = yield* SqlClient.SqlClient;
+            const artifacts = yield* Artifacts;
+
+            const served = path.join(
+              stage.artifacts,
+              SCENARIO_PROJECT,
+              "r.html"
+            );
+
+            yield* fs.writeFileString(
+              path.join(stage.cwd, "r.html"),
+              "<p>r</p>\n"
+            );
+
+            const first = yield* artifacts.publish(request(stage, "r.html"));
+            yield* artifacts.revoke(first.row.id, Option.some(THREAD_A));
+            assert.isFalse(yield* fs.exists(served));
+
+            // porch answers from its registry; Cairn puts the copy back.
+            const back = yield* artifacts.publish(request(stage, "r.html"));
+            assert.isTrue(back.changed);
+            assert.isTrue(Option.isNone(back.row.revokedAt));
+            assert.strictEqual(yield* fs.readFileString(served), "<p>r</p>\n");
+
+            // A crash after the row was cleared and before the restore: a live row, nothing served.
+            yield* fs.remove(served);
+            const rerun = yield* artifacts.publish(request(stage, "r.html"));
+            assert.isTrue(rerun.changed);
+            assert.strictEqual(yield* fs.readFileString(served), "<p>r</p>\n");
+
+            const rows = yield* sql<{
+              readonly n: number;
+            }>`SELECT COUNT(*) AS n FROM artifacts WHERE name = ${"r.html"}`;
+
+            assert.strictEqual(rows[0]?.n, 1);
+          }).pipe(Effect.provide(layer));
+        })
+      ).pipe(Effect.provide(NodeServices.layer))
+  );
+
+  it.live(
+    "reruns a revoke that crashed between removing the files and marking the row",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { stage, layer, dirs } = yield* fakeStage();
+
+          yield* Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const artifacts = yield* Artifacts;
+
+            const served = path.join(
+              stage.artifacts,
+              SCENARIO_PROJECT,
+              "v.html"
+            );
+
+            const staged = path.join(
+              dirs.data,
+              "artifacts",
+              THREAD_A,
+              SCENARIO_PROJECT,
+              "v.html"
+            );
+
+            yield* fs.writeFileString(
+              path.join(stage.cwd, "v.html"),
+              "<p>v</p>\n"
+            );
+
+            const published = yield* artifacts.publish(
+              request(stage, "v.html")
+            );
+
+            assert.isTrue(yield* fs.exists(staged));
+
+            // The files are gone and the row is still live, as a kill there leaves it.
+            yield* fs.remove(served);
+            yield* fs.remove(staged);
+            const live = yield* artifacts.list(Option.some(THREAD_A));
+            assert.isTrue(
+              live.some(
+                (row) => row.name === "v.html" && Option.isNone(row.revokedAt)
+              )
+            );
+
+            const revoked = yield* artifacts.revoke(
+              published.row.id,
+              Option.some(THREAD_A)
+            );
+
+            assert.isTrue(Option.isSome(revoked.revokedAt));
+            assert.isFalse(yield* fs.exists(served));
+            assert.isFalse(yield* fs.exists(staged));
+          }).pipe(Effect.provide(layer));
+        })
+      ).pipe(Effect.provide(NodeServices.layer))
+  );
+
   it.live("defaults the project to the thread's, or refuses without one", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { stage, layer } = yield* fakeStage;
+        const { stage, layer } = yield* fakeStage();
 
         yield* Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
@@ -259,7 +412,7 @@ describe("Artifacts over the fake porch", () => {
   it.live("reach.list answers artifacts and live portals, per thread", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { stage, layer } = yield* fakeStage;
+        const { stage, layer } = yield* fakeStage();
 
         yield* Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
@@ -343,6 +496,21 @@ describe("Artifacts.layerTest", () => {
       })
     ).pipe(Effect.provide(NodeServices.layer))
   );
+});
+
+describe(artifactFaultStep, () => {
+  it("reads artifact:after-<step> and nothing else", () => {
+    assert.deepStrictEqual(
+      artifactFaultStep("artifact:after-stage"),
+      Option.some("stage")
+    );
+    assert.deepStrictEqual(
+      artifactFaultStep("artifact:after-remove"),
+      Option.some("remove")
+    );
+    assert.isTrue(Option.isNone(artifactFaultStep("artifact:after-copy")));
+    assert.isTrue(Option.isNone(artifactFaultStep("portal:after-row")));
+  });
 });
 
 describe(projectSlugOf, () => {

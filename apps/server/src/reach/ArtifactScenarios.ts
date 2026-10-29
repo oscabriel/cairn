@@ -6,8 +6,9 @@
 // page's URL with the source's bytes on disk; the same bytes again are `changed: false` at the
 // same URL; an edit is `changed: true` at the same URL; another thread's name is refused; a file
 // Cairn did not publish is never overwritten; secrets, links out of the thread's folder and paths
-// outside it are refused before anything is copied; a revoke removes the page and a republish
-// brings it back. `overwriteControl` is the broken control: it publishes straight through porch
+// outside it are refused before anything is copied; a project that climbs is refused before it
+// names a path; a revoke removes the page, revoking again touches nothing, and a republish brings
+// it back. `overwriteControl` is the broken control: it publishes straight through porch
 // over a hand-written file, as Cairn would without its rule, and must fail.
 
 import path from "node:path";
@@ -30,6 +31,8 @@ export interface ArtifactStage {
   readonly otherCwd: string;
   /** A folder outside both threads' folders. */
   readonly outside: string;
+  /** The brain's data folder (`ServerConfig.dataDir`), which holds the staging folder. */
+  readonly data: string;
 }
 
 /** A scenario's check did not hold. */
@@ -58,8 +61,10 @@ const refusal = <A, E, R>(effect: Effect.Effect<A, E, R>, what: string) =>
 /** The project every scenario publishes under. */
 export const SCENARIO_PROJECT = "judge";
 
+/** The thread most scenarios publish from, in `ArtifactStage.cwd`. */
 export const THREAD_A = ThreadId.make("0199f0c2-6a4e-7d4c-8a6b-0000000a3e01");
 
+/** The other thread, in `ArtifactStage.otherCwd`, whose names collide with thread A's. */
 export const THREAD_B = ThreadId.make("0199f0c2-6a4e-7d4c-8a6b-0000000b3e02");
 
 /** One check; any unexpected failure becomes an `ArtifactScenarioFailure` naming it. */
@@ -277,6 +282,10 @@ export const artifactScenarios: ReadonlyArray<
         yield* write(stage.cwd, "gitty/index.html", "<p>x</p>\n");
         yield* write(stage.cwd, "gitty/.git/HEAD", "ref\n");
         yield* write(stage.cwd, "linky/index.html", "<p>x</p>\n");
+        yield* write(stage.cwd, ".git/config", "[remote]\n");
+        yield* write(stage.cwd, "node_modules/x/README.md", "x\n");
+        yield* write(stage.cwd, ".ssh/notes.html", "<p>k</p>\n");
+        yield* write(stage.cwd, "deep/.hidden/page.html", "<p>h</p>\n");
         const secret = yield* write(stage.outside, "secret.html", "<p>s</p>\n");
         yield* fs.symlink(secret, path.join(stage.cwd, "linky", "secret.html"));
         yield* fs.symlink(secret, path.join(stage.cwd, "escape.html"));
@@ -286,6 +295,10 @@ export const artifactScenarios: ReadonlyArray<
           ["gitty", "secret", "gitty/.git"],
           ["linky", "symlink", "linky/secret.html"],
           ["escape.html", "outside", "escape.html"],
+          [".git/config", "secret", ".git/config"],
+          ["node_modules/x/README.md", "secret", "node_modules/x/README.md"],
+          [".ssh/notes.html", "secret", ".ssh/notes.html"],
+          ["deep/.hidden/page.html", "secret", "deep/.hidden/page.html"],
           [secret, "outside", secret],
           ["../nothing-here.html", "missing", "../nothing-here.html"],
         ];
@@ -310,6 +323,10 @@ export const artifactScenarios: ReadonlyArray<
           "linky",
           "escape.html",
           "secret.html",
+          "config",
+          "README.md",
+          "notes.html",
+          "page.html",
         ]) {
           yield* expect(
             !(yield* servedExists(stage, name)),
@@ -367,6 +384,23 @@ export const artifactScenarios: ReadonlyArray<
           "revoking again still answers the revoked row"
         );
 
+        // Once revoked, a file at the target is somebody else's: revoking again leaves it.
+        const fs = yield* FileSystem.FileSystem;
+        const hand = "<p>the user's own gone.html</p>\n";
+
+        const handFile = yield* write(
+          path.join(stage.artifacts, SCENARIO_PROJECT),
+          "gone.html",
+          hand
+        );
+
+        yield* artifacts.revoke(published.row.id, Option.some(THREAD_A));
+        yield* expect(
+          (yield* readServed(stage, "gone.html")) === hand,
+          "revoking a revoked page again removed a file Cairn did not write"
+        );
+        yield* fs.remove(handFile);
+
         const listed = yield* artifacts.list(Option.some(THREAD_A));
         yield* expect(
           listed.some(
@@ -389,6 +423,44 @@ export const artifactScenarios: ReadonlyArray<
           "thread B's list does not show thread A's page"
         );
       })
+  ),
+  scenario("a climbing project is refused before any path is built", (stage) =>
+    Effect.gen(function* () {
+      const artifacts = yield* Artifacts;
+      const fs = yield* FileSystem.FileSystem;
+      yield* write(stage.cwd, "climb.html", "<p>climb</p>\n");
+
+      // Where the staging path would land if the project were joined in unchecked.
+      const threadStaging = path.join(stage.data, "artifacts", THREAD_A);
+      const planted = yield* write(stage.outside, "victim/keep.txt", "keep\n");
+      const climb = path.relative(threadStaging, stage.outside);
+
+      for (const project of ["../x", climb]) {
+        const error = yield* refusal(
+          artifacts.publish({
+            ...ask(stage, "climb.html", { name: "victim" }),
+            project: Option.some(project),
+          }),
+          `publishing under project ${project}`
+        );
+
+        yield* expect(
+          Predicate.isTagged(error, "ArtifactRefused") &&
+            error.reason === "project",
+          `project ${project} refused ${error._tag}${Predicate.isTagged(error, "ArtifactRefused") ? ` ${error.reason}` : ""}, expected ArtifactRefused project`
+        );
+      }
+
+      yield* expect(
+        (yield* fs.exists(planted)) &&
+          (yield* fs.readFileString(planted)) === "keep\n",
+        "the folder a climbing project names was removed or replaced"
+      );
+      yield* expect(
+        !(yield* fs.exists(path.join(stage.data, "artifacts", "x"))),
+        "a climbing project staged a copy outside the thread's staging folder"
+      );
+    })
   ),
 ];
 

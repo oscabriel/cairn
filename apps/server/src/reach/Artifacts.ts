@@ -4,26 +4,34 @@
 // owner-only guard. This service is what the `artifact_*` tools and the `reach.list` and
 // `artifact.revoke` RPCs call.
 //
-// Publishing checks the source before anything is copied: it must resolve (symlinks followed)
-// inside the thread's cwd, since publishing copies a file to a URL; a folder needs no `.env*`,
-// `.git` or `node_modules` anywhere in it and no symlink, and the whole is at most
-// `MAX_ARTIFACT_BYTES`. The source is then staged once at `<data>/artifacts/<thread>/<project>/
-// <name>` (owner-only folders), so porch always sees one stable source per thread and name: a
-// republish from the same thread updates the page in place, whatever path the agent wrote it at,
-// and `name` may differ from the source's basename. The staged copy is checked again, so a source
-// that changed between the check and the copy is still refused. The publish itself goes through
-// `ArtifactPublisher`, which refuses a name another thread holds and anything Cairn did not
-// publish, and records the row.
+// Publishing checks the request before any path is built from it: the project must be one slug
+// segment (`checkPublish`'s rule, so a climbing project never names a staging path), and the source
+// must resolve (symlinks followed) inside the thread's cwd, since publishing copies a file to a
+// URL. No folder on the way to it may be a dot folder or a `.env*`, `.git` or `node_modules`; a
+// folder source holds none of those anywhere and no symlink (the walk stops at the first), and the
+// whole is at most `MAX_ARTIFACT_BYTES`. The source is then staged once at
+// `<data>/artifacts/<thread>/<project>/<name>` (owner-only folders), so porch always sees one
+// stable source per thread and name: a republish from the same thread updates the page in place,
+// whatever path the agent wrote it at, and `name` may differ from the source's basename. The staged
+// copy is checked again (a link at its root included), so a source that changed between the check
+// and the copy is still refused. The publish itself goes through `ArtifactPublisher`, which
+// refuses a name another thread holds and anything Cairn did not publish, and records the row.
 //
 // Every step is idempotent for one thread and request, so the tools are `replay: "safe"`: a crash
-// mid-copy restages; a crash after porch republishes the same bytes (`changed: false`).
+// mid-copy restages; a crash after porch republishes the same bytes (`changed: false`); a crash
+// before a revoked page's copy is restored restores it on the rerun. `judges/artifacts-kill.ts`
+// kills a brain at each of these through `ArtifactFaults` and reruns the call.
 //
-// Revoking removes porch's copy from the artifacts folder and marks the row `revoked_at`; the row
-// keeps the name for its thread. The file is removed before the mark, and both steps repeat
-// harmlessly, so a crash between them is mended by revoking again. porch has no unpublish, so its
-// registry still records the page: republishing the same bytes answers `changed: false` without
-// copying (measured on porch 0.0.0 by `judges/reach.ts`), and the publish puts the staged copy
-// back itself when the target is missing.
+// Revoking removes porch's copy from the artifacts folder and the staged copy, then marks the row
+// `revoked_at`; the row keeps the name for its thread. The files are removed before the mark, so a
+// crash between them is mended by revoking again. A row already revoked is answered as it is,
+// with no file touched: its page is gone, and a file at its target now is somebody else's. porch
+// has no unpublish, so its registry still records the page: republishing the same bytes answers
+// `changed: false` without copying (measured on porch 0.0.0 by `judges/reach.ts`), and the
+// publish puts the staged copy back itself when the target is missing.
+//
+// The staged copies of a deleted thread stay under `<data>/artifacts/<thread>/` until thread
+// deletion gains a hook to remove them.
 
 import path from "node:path";
 
@@ -47,18 +55,20 @@ import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { Projects } from "../projects/Projects.ts";
+import { ArtifactFaults } from "./ArtifactFaults.ts";
 import { ArtifactPublisher } from "./ArtifactPublisher.ts";
 import type { ArtifactPublishError, Published } from "./ArtifactPublisher.ts";
 import type { PorchError } from "./PorchClient.ts";
-import { PorchClient } from "./PorchClient.ts";
+import { checkPublish, PorchClient } from "./PorchClient.ts";
 
 // ── Errors ───────────────────────────────────────────────────────────────────────────────────────
 
 /**
  * Why Cairn would not publish a source, before anything was copied. `outside`: it does not resolve
- * inside the thread's cwd. `secret`: a `.env*`, `.git` or `node_modules` entry. `symlink`: a link
- * inside a folder. `missing`: nothing there. `too-large`: over `MAX_ARTIFACT_BYTES`. `name`: not a
- * usable page name. `project`: no project to publish under. `no-cwd`: the thread has no folder.
+ * inside the thread's cwd. `secret`: a `.env*`, `.git` or `node_modules` entry, or a dot folder on
+ * the way to it. `symlink`: a link inside a folder, or a source swapped for one. `missing`: nothing
+ * there. `too-large`: over `MAX_ARTIFACT_BYTES`. `name`: not a usable page name. `project`: no
+ * project to publish under, or one that is not a slug. `no-cwd`: the thread has no folder.
  */
 export class ArtifactRefused extends Schema.TaggedError<ArtifactRefused>()(
   "ArtifactRefused",
@@ -240,6 +250,14 @@ const storeFailure = (operation: string) => (cause: Error) =>
     cause,
   });
 
+/** The artifact row a revoke answers; a row that breaks the shape is a store failure. */
+const revokedRowOf = (stored: StoredRow) =>
+  rowOf(stored).pipe(
+    Effect.catchTag("SchemaError", (cause) =>
+      Effect.fail(storeFailure("artifact.revoke")(cause))
+    )
+  );
+
 const refuse = (
   reason: ArtifactRefused["reason"],
   at: string,
@@ -294,61 +312,74 @@ export class Artifacts extends Context.Service<
       const fs = yield* FileSystem.FileSystem;
       const config = yield* ServerConfig;
       const stagingRoot = path.join(config.dataDir, "artifacts");
+      const faults = yield* ArtifactFaults;
 
       /**
-       * Walks `root` (a file or a folder) and answers its kind and size, refusing secrets,
-       * symlinks and anything over the cap. `shown` names `root` in messages.
+       * Walks `root` (a file or a folder, its own path resolved) and answers its size, refusing
+       * secrets and symlinks and stopping past the cap. The walk checks each entry before it
+       * descends, so the first secret folder stops it unread. `shown` names `root` in messages.
        */
       const inspect = Effect.fnUntraced(function* (
-        given: string,
+        root: string,
         shown: string
       ) {
-        const root = yield* fs.realPath(given);
         const info = yield* fs.stat(root);
 
         if (info.type !== "Directory") {
-          return { folder: false, bytes: Number(info.size) };
+          return { bytes: Number(info.size) };
         }
 
         let bytes = 0;
+        const pending = [""];
 
-        for (const entry of (yield* fs.readDirectory(root, {
-          recursive: true,
-        })).toSorted()) {
-          const at = path.join(root, entry);
+        for (
+          let folder = pending.pop();
+          folder !== undefined;
+          folder = pending.pop()
+        ) {
+          for (const entry of (yield* fs.readDirectory(
+            path.join(root, folder)
+          )).toSorted()) {
+            const relative = path.join(folder, entry);
+            const at = path.join(root, relative);
 
-          if (entry.split(path.sep).some(isSecretSegment)) {
-            return yield* refuse(
-              "secret",
-              path.join(shown, entry),
-              `${path.join(shown, entry)} looks like a secret or a dependency folder (.env*, .git or node_modules), and publishing would put it at a URL. Publish a folder without it.`
-            );
-          }
+            if (isSecretSegment(entry)) {
+              return yield* refuse(
+                "secret",
+                path.join(shown, relative),
+                `${path.join(shown, relative)} looks like a secret or a dependency folder (.env*, .git or node_modules), and publishing would put it at a URL. Publish a folder without it.`
+              );
+            }
 
-          // A link anywhere in the chain resolves somewhere other than its own path.
-          if ((yield* fs.realPath(at)) !== at) {
-            return yield* refuse(
-              "symlink",
-              path.join(shown, entry),
-              `${path.join(shown, entry)} is a symbolic link. A published folder holds only real files; copy what it points to instead.`
-            );
-          }
+            // A link resolves somewhere other than its own path.
+            if ((yield* fs.realPath(at)) !== at) {
+              return yield* refuse(
+                "symlink",
+                path.join(shown, relative),
+                `${path.join(shown, relative)} is a symbolic link. A published folder holds only real files; copy what it points to instead.`
+              );
+            }
 
-          const child = yield* fs.stat(at);
+            const child = yield* fs.stat(at);
 
-          if (child.type === "File") {
-            bytes += Number(child.size);
-          }
+            if (child.type === "Directory") {
+              pending.push(relative);
+            } else if (child.type === "File") {
+              bytes += Number(child.size);
 
-          if (bytes > MAX_ARTIFACT_BYTES) {
-            break;
+              if (bytes > MAX_ARTIFACT_BYTES) {
+                return { bytes };
+              }
+            }
           }
         }
 
-        return { folder: true, bytes };
+        return { bytes };
       });
 
-      const projectFor = Effect.fnUntraced(function* (request: PublishRequest) {
+      const projectNamed = Effect.fnUntraced(function* (
+        request: PublishRequest
+      ) {
         if (Option.isSome(request.project)) {
           return request.project.value;
         }
@@ -376,6 +407,24 @@ export class Artifacts extends Context.Service<
         }
 
         return projectSlugOf(row.value.shell);
+      });
+
+      /** The project to publish under, refused unless it is one slug segment. */
+      const projectFor = Effect.fnUntraced(function* (
+        request: PublishRequest,
+        source: string
+      ) {
+        const project = yield* projectNamed(request);
+
+        if (Option.isSome(checkPublish(source, project))) {
+          return yield* refuse(
+            "project",
+            project,
+            `${project} is not a project slug: use lowercase letters, digits, ".", "_" and "-", starting with a letter or digit, up to 64 characters, and no "..".`
+          );
+        }
+
+        return project;
       });
 
       const publish = Effect.fn("Artifacts.publish")(function* (
@@ -435,15 +484,23 @@ export class Artifacts extends Context.Service<
           );
         }
 
-        if (isSecretSegment(path.basename(source))) {
+        // The source itself, and every folder between the thread's folder and it: `.git/config`,
+        // `node_modules/x/README.md` and anything under a dot folder (`.ssh/...`) stay off URLs.
+        const segments = path.relative(cwd, source).split(path.sep);
+
+        if (
+          isSecretSegment(path.basename(source)) ||
+          segments.some(isSecretSegment) ||
+          segments.slice(0, -1).some((segment) => segment.startsWith("."))
+        ) {
           return yield* refuse(
             "secret",
             request.path,
-            `${request.path} looks like a secret or a dependency folder (.env*, .git or node_modules), and publishing would put it at a URL.`
+            `${request.path} is or sits in a secret, dependency or hidden folder (.env*, .git, node_modules or a dot folder), and publishing would put it at a URL. Copy the page somewhere plain in the thread's folder first.`
           );
         }
 
-        const project = yield* projectFor(request);
+        const project = yield* projectFor(request, source);
 
         const tooLarge = (bytes: number) =>
           refuse(
@@ -468,6 +525,15 @@ export class Artifacts extends Context.Service<
         const folder = path.join(threadFolder, project);
         const staged = path.join(folder, name);
 
+        // The project and name are single checked segments; this holds the line if a check moves.
+        if (path.dirname(path.dirname(staged)) !== threadFolder) {
+          return yield* refuse(
+            "project",
+            project,
+            `${project}/${name} does not name a folder inside this thread's staging folder.`
+          );
+        }
+
         yield* Effect.gen(function* () {
           // The staging folder and each thread's are the owner's alone, whoever made them first.
           for (const owned of [stagingRoot, threadFolder]) {
@@ -485,8 +551,21 @@ export class Artifacts extends Context.Service<
           )
         );
 
-        // The copy is what porch publishes, so it is the copy that must hold no secret or link.
-        const copied = yield* inspect(staged, request.path).pipe(
+        // The copy is what porch publishes, so it is the copy that must hold no secret or link: a
+        // source swapped for a link after the check is copied as the link itself.
+        const copied = yield* Effect.gen(function* () {
+          const real = yield* fs.realPath(staged);
+
+          if (real !== path.join(yield* fs.realPath(folder), name)) {
+            return yield* refuse(
+              "symlink",
+              request.path,
+              `${request.path} became a symbolic link while it was copied. Publish a real file or folder.`
+            );
+          }
+
+          return yield* inspect(real, request.path);
+        }).pipe(
           Effect.catchTag(
             "PlatformError",
             filesFailure("artifact_publish", `read the staged ${name}`)
@@ -497,11 +576,15 @@ export class Artifacts extends Context.Service<
           return yield* tooLarge(copied.bytes);
         }
 
+        yield* faults.after("stage");
+
         const published = yield* publisher.publish({
           threadId: request.threadId,
           source: staged,
           project,
         });
+
+        yield* faults.after("publish");
 
         if (published.changed) {
           return published;
@@ -588,6 +671,11 @@ export class Artifacts extends Context.Service<
           return yield* notFound;
         }
 
+        // Already revoked: the page is gone, and a file at its target now is somebody else's.
+        if (held.value.revoked_at !== null) {
+          return yield* revokedRowOf(held.value);
+        }
+
         const machine = yield* porch.machine;
 
         const target = path.join(
@@ -596,15 +684,27 @@ export class Artifacts extends Context.Service<
           held.value.name
         );
 
-        // The key is Cairn's (the row says porch copied there), so the file at it is porch's copy.
-        yield* fs
-          .remove(target, { recursive: true, force: true })
-          .pipe(
-            Effect.catchTag(
-              "PlatformError",
-              filesFailure("artifact.revoke", `remove ${target}`)
-            )
-          );
+        const staged = path.join(
+          stagingRoot,
+          held.value.thread_id,
+          held.value.project_slug,
+          held.value.name
+        );
+
+        // The row is live, so the file at its key is porch's copy of Cairn's page. A rerun after a
+        // crash before the mark below removes nothing new: the row still says Cairn's copy.
+        for (const file of [target, staged]) {
+          yield* fs
+            .remove(file, { recursive: true, force: true })
+            .pipe(
+              Effect.catchTag(
+                "PlatformError",
+                filesFailure("artifact.revoke", `remove ${file}`)
+              )
+            );
+        }
+
+        yield* faults.after("remove");
 
         const now = yield* Clock.currentTimeMillis;
 
@@ -623,11 +723,7 @@ export class Artifacts extends Context.Service<
           return yield* notFound;
         }
 
-        return yield* rowOf(stored.value).pipe(
-          Effect.catchTag("SchemaError", (cause) =>
-            Effect.fail(storeFailure("artifact.revoke")(cause))
-          )
-        );
+        return yield* revokedRowOf(stored.value);
       });
 
       return Artifacts.of({ publish, list, revoke });

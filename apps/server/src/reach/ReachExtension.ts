@@ -30,10 +30,13 @@ import { Artifacts, outcomeOf } from "./Artifacts.ts";
 /** The extension's name in pi-durable's registry. */
 export const REACH_EXTENSION = "cairn.reach";
 
+/** The tool that publishes a file or folder from the thread's folder. */
 export const ARTIFACT_PUBLISH_TOOL = "artifact_publish";
 
+/** The tool that lists the thread's artifacts. */
 export const ARTIFACT_LIST_TOOL = "artifact_list";
 
+/** The tool that stops serving one of the thread's artifacts. */
 export const ARTIFACT_REVOKE_TOOL = "artifact_revoke";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);

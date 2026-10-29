@@ -14,7 +14,8 @@
 // Passes when:
 // - every artifact scenario (`apps/server/src/reach/ArtifactScenarios.ts`) holds on the real porch:
 //   publish, idempotent republish (`changed: false`, same URL), an edit in place, another thread
-//   refused, a hand-written page never overwritten, secrets and paths outside refused, revoke;
+//   refused, a hand-written page never overwritten, secrets and paths outside refused, a climbing
+//   project refused before it names a path, revoke (and revoking again touching nothing);
 // - through Caddy, the owner reads the last published bytes, a revoked page is gone, and the
 //   hand-written page reads as written;
 // - owner-only: a stranger is refused (403) on `plans.gneiss.run` in any letter case, while the
@@ -296,6 +297,7 @@ const judge = Effect.gen(function* () {
     cwd: dirs.threadA,
     otherCwd: dirs.threadB,
     outside: dirs.outside,
+    data: dirs.data,
   };
 
   const layer = Artifacts.layer.pipe(

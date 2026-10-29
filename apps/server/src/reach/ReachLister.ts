@@ -45,7 +45,7 @@ export class ReachLister extends Context.Service<
       threadId: Option.Option<ThreadId>
     ): Effect.Effect<ReachList, ArtifactsError>;
   }
->()("cairn/server/reach/ReachList/ReachLister") {
+>()("cairn/server/reach/ReachLister") {
   /** Over the ambient `Artifacts` and `SqlClient`. */
   static readonly layerNoDeps = Layer.effect(
     ReachLister,

@@ -10,7 +10,7 @@ import { Effect, Layer, Option } from "effect";
 
 import type { ArtifactsError } from "../reach/Artifacts.ts";
 import { Artifacts } from "../reach/Artifacts.ts";
-import { ReachLister } from "../reach/ReachList.ts";
+import { ReachLister } from "../reach/ReachLister.ts";
 import { publicText } from "./PublicText.ts";
 
 /** A store or folder failure, logged under `event` and answered without its cause. */

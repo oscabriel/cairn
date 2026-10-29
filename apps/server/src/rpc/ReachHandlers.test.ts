@@ -15,7 +15,7 @@ import {
   ArtifactsError,
 } from "../reach/Artifacts.ts";
 import { PorchError } from "../reach/PorchClient.ts";
-import { ReachLister } from "../reach/ReachList.ts";
+import { ReachLister } from "../reach/ReachLister.ts";
 import { ViewerTest } from "../shell/ShellTestKit.ts";
 import { ReachHandlers } from "./ReachHandlers.ts";
 import { stubHandlers } from "./StubHandlers.ts";

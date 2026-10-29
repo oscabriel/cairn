@@ -19,6 +19,7 @@ import type { Tx } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Context,
+  Deferred,
   Duration,
   Effect,
   Layer,
@@ -181,6 +182,22 @@ const commit = (brain: Brain["Service"], change: (tx: Tx) => Promise<void>) =>
     });
   });
 
+/** Waits until `count` reaches `least`. */
+const atLeast = (count: Effect.Effect<number>, least: number) =>
+  waitFor(
+    Effect.map(count, (found) =>
+      found >= least ? Option.some(true) : Option.none()
+    )
+  );
+
+/** A text input that queues behind a run. */
+const input = (requestId: string, text: string) => ({
+  requestId,
+  content: [{ type: "text" as const, text }],
+  entry: Option.none(),
+  whenBusy: "followUp" as const,
+});
+
 const subagentEvents = (events: ReadonlyArray<HarnessEvent>) =>
   events.flatMap((event) =>
     Predicate.isTagged(event, "SubagentUpdated") ? [event] : []
@@ -330,6 +347,164 @@ describe("CommitFeed subagent events", () => {
           assert.deepStrictEqual(yield* Ref.get(seen), [
             "NOTE child done",
             "wake",
+          ]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a note on a stopped thread with a queued follow-up is placed, places nothing queued and starts no run",
+    () =>
+      withBrain(({ seam, faux, events }) =>
+        Effect.gen(function* () {
+          const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+          const run = Effect.runPromiseWith(yield* Effect.context());
+
+          // The first request hangs until the stop aborts it; the next records what it read.
+          faux.setResponses([
+            async (_request, options) =>
+              await run(
+                Effect.as(
+                  Effect.callback<boolean>((resume) => {
+                    options?.signal?.addEventListener(
+                      "abort",
+                      () => {
+                        resume(Effect.succeed(true));
+                      },
+                      { once: true }
+                    );
+                  }),
+                  fauxAssistantMessage("stopped")
+                )
+              ),
+            async (request) =>
+              await run(
+                Effect.as(
+                  Ref.set(
+                    seen,
+                    request.messages.flatMap((message: Message) =>
+                      message.role === "user" ? [messageText(message)] : []
+                    )
+                  ),
+                  fauxAssistantMessage("read it")
+                )
+              ),
+          ]);
+
+          const runs = Effect.map(
+            Ref.get(events),
+            (all) =>
+              all.filter(
+                (event) =>
+                  Predicate.isTagged(event, "RunStarted") &&
+                  event.threadId === PARENT
+              ).length
+          );
+
+          const terminals = Effect.map(
+            Ref.get(events),
+            (all) =>
+              all.filter(
+                (event) =>
+                  Predicate.isTagged(event, "RunTerminal") &&
+                  event.threadId === PARENT
+              ).length
+          );
+
+          yield* seam.submit(PARENT, input("r1", "one"));
+          yield* atLeast(runs, 1);
+          yield* seam.submit(PARENT, input("r2", "two"));
+          yield* seam.stop(PARENT, { clearQueue: false, subagents: "keep" });
+          yield* atLeast(terminals, 1);
+
+          const note = {
+            requestId: "subagent-note-x-1",
+            kind: "cairn.subagent-result",
+            data: { seq: 1 },
+            model: [{ type: "text" as const, text: "NOTE child done" }],
+          };
+
+          yield* seam.write(PARENT, note);
+          yield* seam.write(PARENT, note);
+          yield* Effect.sleep(Duration.millis(300));
+
+          assert.strictEqual(yield* runs, 1);
+
+          // The user's next message places the queued follow-up; the note is already there.
+          yield* seam.submit(PARENT, input("r3", "three"));
+          yield* atLeast(terminals, 2);
+
+          const read = yield* Ref.get(seen);
+
+          assert.deepStrictEqual(
+            read.filter((text) => text === "NOTE child done"),
+            ["NOTE child done"]
+          );
+          assert.isTrue(read.includes("two"));
+          assert.isBelow(read.indexOf("NOTE child done"), read.indexOf("two"));
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a note written during a run waits for the next boundary and lands ahead of a queued follow-up",
+    () =>
+      withBrain(({ seam, faux, events }) =>
+        Effect.gen(function* () {
+          const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+          const release = yield* Deferred.make<boolean>();
+          const run = Effect.runPromiseWith(yield* Effect.context());
+
+          faux.setResponses([
+            async () =>
+              await run(
+                Effect.as(
+                  Deferred.await(release),
+                  fauxAssistantMessage("one done")
+                )
+              ),
+            async (request) =>
+              await run(
+                Effect.as(
+                  Ref.set(
+                    seen,
+                    request.messages.flatMap((message: Message) =>
+                      message.role === "user" ? [messageText(message)] : []
+                    )
+                  ),
+                  fauxAssistantMessage("read it")
+                )
+              ),
+          ]);
+
+          yield* seam.submit(PARENT, input("r1", "one"));
+          yield* seam.submit(PARENT, input("r2", "two"));
+          yield* seam.write(PARENT, {
+            requestId: "subagent-note-x-1",
+            kind: "cairn.subagent-result",
+            data: { seq: 1 },
+            model: [{ type: "text" as const, text: "NOTE child done" }],
+          });
+          yield* Deferred.succeed(release, true);
+
+          yield* waitFor(
+            Effect.map(Ref.get(events), (all) =>
+              all.some(
+                (event) =>
+                  Predicate.isTagged(event, "RunTerminal") &&
+                  event.threadId === PARENT
+              )
+                ? Option.some(true)
+                : Option.none()
+            )
+          );
+
+          assert.deepStrictEqual(yield* Ref.get(seen), [
+            "one",
+            "NOTE child done",
+            "two",
           ]);
         })
       ),

@@ -42,6 +42,7 @@
 
 import { Buffer } from "node:buffer";
 
+import { isWiderThan, narrowerMode } from "@cairn/client-logic/EffectiveMode";
 import {
   ApprovalId,
   ConversationId,
@@ -339,7 +340,9 @@ interface ChildLink {
   readonly briefApprovalId: string;
   readonly description: string;
   readonly resultSchema: JsonRecord | null;
+  /** Invalid payloads in the run `attemptsRun`; a new run starts again from none. */
   attempts: number;
+  attemptsRun: number;
   report: Option.Option<ChildReport>;
   /** The third invalid report's message, with its run. */
   failedReport: Option.Option<{
@@ -458,17 +461,6 @@ const failure = (
     retryable: false,
     threadId: Option.some(threadId),
   });
-
-/** How wide each permission mode is, narrowest first (t3code's `RuntimeMode` order). */
-const MODE_ORDER: ReadonlyArray<RuntimeMode> = [
-  "approval-required",
-  "auto-accept-edits",
-  "auto",
-  "full-access",
-];
-
-const narrower = (a: RuntimeMode, b: RuntimeMode): RuntimeMode =>
-  MODE_ORDER.indexOf(a) <= MODE_ORDER.indexOf(b) ? a : b;
 
 /** How many times a child may call `report` with a payload its schema refuses. */
 const REPORT_ATTEMPTS = 3;
@@ -924,7 +916,11 @@ const notYours = (call: ToolCall) =>
     `No subagent ${Option.getOrElse(textArgument(call, "subagent"), () => "(none)")} belongs to this thread. Check the thread id with subagent_status.`
   );
 
-/** `subagent_status`: each child's status, never its result (the result is the note). */
+/**
+ * `subagent_status`: each child's status, never its result (the result is the note). It answers
+ * at once and ignores `wait_seconds`: the bounded wait, and its early return when a note lands,
+ * are 3A's on pi-durable, and no scripted scenario blocks a parent in it.
+ */
 const statusTool = (thread: ScriptedThread, call: ToolCall) =>
   Effect.sync((): ToolOutcome => {
     const name = textArgument(call, "subagent");
@@ -1056,7 +1052,8 @@ const layerNoDeps = Layer.effectContext(
     const effectiveMode = (thread: ScriptedThread): RuntimeMode =>
       Option.match(linkOf(thread), {
         onNone: () => thread.mode,
-        onSome: ({ parent }) => narrower(thread.mode, effectiveMode(parent)),
+        onSome: ({ parent }) =>
+          narrowerMode(thread.mode, effectiveMode(parent)),
       });
 
     const setChildStatus = (
@@ -1322,7 +1319,11 @@ const layerNoDeps = Layer.effectContext(
       );
     };
 
-    /** A parent run that ends with a question it was shown still open escalates it. */
+    /**
+     * A parent run that ends with a question it was shown still open escalates it. A halted parent
+     * (stopped or failed) also escalates the questions still queued for it, withdrawn from its
+     * queue first, since no run will place them until the user writes again (ADR 0027).
+     */
     const escalateUnanswered = (
       parent: ScriptedThread,
       at: number,
@@ -1332,11 +1333,26 @@ const layerNoDeps = Layer.effectContext(
         const shown = parent.byRequest.get(offered.requestId);
         const child = store.threads.get(offered.child);
 
-        if (
-          shown !== undefined &&
-          shown.status !== "queued" &&
-          child !== undefined
-        ) {
+        if (shown === undefined || child === undefined) {
+          continue;
+        }
+
+        const queued = shown.status === "queued";
+
+        if (queued && parent.halted) {
+          const index = parent.queue.findIndex(
+            (item) => item.requestId === offered.requestId
+          );
+
+          if (index !== -1) {
+            parent.queue.splice(index, 1);
+            changes.events.push(queueChanged(parent));
+          }
+
+          endUnplaced(shown);
+        }
+
+        if (!queued || parent.halted) {
           escalate(
             parent,
             child,
@@ -1590,6 +1606,7 @@ const layerNoDeps = Layer.effectContext(
               ? null
               : copyRecordJson(brief.resultSchema),
           attempts: 0,
+          attemptsRun: 0,
           report: Option.none(),
           failedReport: Option.none(),
         }),
@@ -1774,6 +1791,24 @@ const layerNoDeps = Layer.effectContext(
       return outcome;
     };
 
+    /**
+     * Marks a child settled unless it still works: a run of its own, or a reporter whose input it
+     * has not admitted yet. A new input that started a run before an earlier settle landed keeps
+     * the child working.
+     */
+    const settledUnlessWorking = (child: ScriptedThread, changes: Changes) => {
+      const undelivered = [...store.reporters.values()].some(
+        (reporter) =>
+          reporter.child === child.threadId &&
+          reporter.phase === "deliver" &&
+          !child.byRequest.has(reporter.requestId)
+      );
+
+      if (Option.isNone(child.run) && !undelivered) {
+        setChildStatus(child, "settled", changes);
+      }
+    };
+
     /** Settles one reporter's input once its run ended: one settlement per run. */
     const settle = (
       reporter: Reporter,
@@ -1795,6 +1830,7 @@ const layerNoDeps = Layer.effectContext(
 
       if (Option.isSome(end.runId) && item.settledRuns.has(end.runId.value)) {
         reporter.phase = "done";
+        settledUnlessWorking(child, changes);
 
         return;
       }
@@ -1879,7 +1915,7 @@ const layerNoDeps = Layer.effectContext(
       reporter.settlement = Option.some(settlement);
       reporter.phase = "report";
       changes.touched.add(parent);
-      setChildStatus(child, "settled", changes);
+      settledUnlessWorking(child, changes);
     };
 
     /** Writes a settlement's note and, by the parent's state, its wake (ADR 0028). */
@@ -2183,6 +2219,13 @@ const layerNoDeps = Layer.effectContext(
             );
           }
 
+          const briefId = `brief-${taskOf(thread, call)}`;
+
+          // A replayed call finds its brief before the cap, which may have filled since.
+          if (thread.approvals.has(briefId)) {
+            return said(SPAWN_WAITING);
+          }
+
           const live = [...thread.subagents.values()].filter(
             (item) => item.status !== "settled"
           ).length;
@@ -2191,12 +2234,6 @@ const layerNoDeps = Layer.effectContext(
             return refused(
               `This thread already has ${live} subagents working, the most it may have. Wait for one to report, then spawn again.`
             );
-          }
-
-          const briefId = `brief-${taskOf(thread, call)}`;
-
-          if (thread.approvals.has(briefId)) {
-            return said(SPAWN_WAITING);
           }
 
           const brief = briefOf(
@@ -2270,23 +2307,37 @@ const layerNoDeps = Layer.effectContext(
           const { child } = named.value;
           const request = textArgument(call, "request");
 
-          const waiting = [...child.approvals.values()]
+          // The child's questions for its parent, whatever their status: a second call, or a
+          // replay after the answer committed, finds its question settled.
+          const questions = [...child.approvals.values()]
             .filter(
               (record) =>
-                record.status === "pending" &&
-                record.escalatedAt === null &&
                 (faults.routeApprovalToParent ||
-                  (record.route === "parent" &&
+                  ((record.route === "parent" || record.escalatedAt !== null) &&
                     record.kind === "user-input")) &&
                 (Option.isNone(request) || Option.contains(request, record.id))
             )
             .toSorted((a, b) => a.askedAt - b.askedAt);
 
-          const [record] = waiting;
+          const record =
+            questions.find(
+              (found) =>
+                found.status === "pending" && found.escalatedAt === null
+            ) ?? questions.at(Option.isSome(request) ? 0 : -1);
 
           if (record === undefined) {
             return refused(
               `Subagent ${child.threadId} has no question waiting for its parent. Its approvals are the user's to answer.`
+            );
+          }
+
+          if (record.status !== "pending") {
+            return said("already_settled");
+          }
+
+          if (record.escalatedAt !== null) {
+            return refused(
+              `The question ${record.id} from subagent ${child.threadId} was escalated to the user, whose answer settles it.`
             );
           }
 
@@ -2493,6 +2544,11 @@ const layerNoDeps = Layer.effectContext(
           }
 
           const payload = payloadOf(call);
+
+          if (link.attemptsRun !== run.runId) {
+            link.attemptsRun = run.runId;
+            link.attempts = 0;
+          }
 
           link.attempts += 1;
 
@@ -3295,7 +3351,7 @@ const layerNoDeps = Layer.effectContext(
           for (const { parent } of Option.toArray(linkOf(thread))) {
             const ceiling = effectiveMode(parent);
 
-            if (narrower(mode, ceiling) !== mode) {
+            if (isWiderThan(mode, ceiling)) {
               return yield* failure(
                 "invalid_input",
                 threadId,

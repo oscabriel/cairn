@@ -109,8 +109,9 @@ export interface PassiveEntry extends InputEntry {
 
 /**
  * A passive entry the model reads: a note, such as a subagent's result in its parent's transcript
- * (ADR 0028). It never starts a run either; it is placed at once on an idle thread and at the next
- * boundary of a running one, ahead of queued inputs, and a stop keeps it.
+ * (ADR 0028). It never starts a run either, nor places anything queued: it is placed at once on an
+ * idle thread, whose queued inputs (left by a stop or a failed run) stay queued, and at the next
+ * boundary of a running one, ahead of queued inputs; a stop keeps it.
  */
 export interface PassiveNote extends PassiveEntry {
   readonly model: ReadonlyArray<TextContent>;
@@ -349,8 +350,9 @@ export class HarnessSeam extends Context.Service<
       answer: ApprovalAnswerInput
     ): Effect.Effect<void, HarnessError>;
     /**
-     * Appends a passive entry that never starts a run, idempotent by `requestId`; a note's `model`
-     * content enters the model's context.
+     * Appends a passive entry, idempotent by `requestId`; a note's `model` content enters the
+     * model's context. It never starts a run and never places queued inputs, even on an idle
+     * thread that still has some queued.
      */
     write(
       threadId: ThreadId,

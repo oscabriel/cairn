@@ -30,7 +30,6 @@ import {
   ThreadOpsItem,
   ThreadSnapshotItem,
 } from "@cairn/protocol/Thread";
-import type { Message } from "@earendil-works/pi-ai";
 import type {
   AgentChange,
   Conversation,
@@ -43,6 +42,7 @@ import type {
 import {
   ConversationBusy,
   configure,
+  InboxDoc,
   LiveDoc,
 } from "@earendil-works/pi-durable";
 import {
@@ -709,40 +709,96 @@ const layerNoDeps = Layer.effect(
     });
 
     /**
-     * A write never starts a run; pi-durable places it at once on an idle conversation and at the
-     * next boundary of a running one, writes ahead of inputs, and `abort` keeps it. A note's
-     * `model` content is a user message the model reads there.
+     * A write never starts a run. A display-only entry goes through `submit`, which appends it at
+     * once whatever the conversation's state. A note (with `model`) is admitted here, in one host
+     * commit, because pi-durable's admission treats a model write on an idle conversation with
+     * queued inputs as a boundary: it would place them and start a run (a parent the user stopped
+     * with a follow-up or a wake still queued would restart on a child's note, against ADR 0028).
+     * So an idle conversation appends the note at once and leaves its queue alone; a running one,
+     * or one with a reset queued, queues the note for the next boundary, where writes go ahead of
+     * inputs and `abort` keeps them. The request id makes it land once, as `submit`'s does.
      */
     const write = Effect.fn("PiDurableHarness.write")(function* (
       threadId: ThreadId,
       entry: PassiveEntry | PassiveNote
     ) {
       const session = yield* open(Option.some(threadId));
-      const conversation = yield* conversationOf(session, threadId);
 
-      const model: Array<Message> =
-        "model" in entry
-          ? [
-              {
-                role: "user",
-                content: [...entry.model],
-                timestamp: brain.now(),
-              },
-            ]
-          : [];
+      if (!("model" in entry)) {
+        const conversation = yield* conversationOf(session, threadId);
+
+        yield* call(Option.some(threadId), "write", async (context) => {
+          await conversation.submit(
+            {
+              type: "write",
+              requestId: entry.requestId,
+              entry: { kind: entry.kind, data: entry.data },
+            },
+            context
+          );
+        });
+
+        return;
+      }
+
+      const conversationId = yield* conversationIdOf(session, threadId);
+
+      const draft = {
+        kind: entry.kind,
+        data: entry.data,
+        model: [
+          {
+            role: "user" as const,
+            content: entry.model.map((part) => ({
+              type: "text" as const,
+              text: part.text,
+            })),
+            timestamp: brain.now(),
+          },
+        ],
+      };
 
       yield* call(Option.some(threadId), "write", async (context) => {
-        await conversation.submit(
-          {
-            type: "write",
+        await session.harness.commit(async (tx) => {
+          const existing = await tx.submissionByRequest(
+            conversationId,
+            entry.requestId
+          );
+
+          if (existing !== undefined) {
+            return;
+          }
+
+          const live = await tx.doc(LiveDoc, conversationId);
+          const inbox = await tx.doc(InboxDoc, conversationId);
+
+          const resetQueued = inbox.items.some(
+            (item) => item.mode === "write" && item.entry.head === "self"
+          );
+
+          if (live.run === undefined && !resetQueued) {
+            const appended = await tx.appendEntry(conversationId, draft);
+
+            await tx.createSubmission({
+              conversationId,
+              requestId: entry.requestId,
+              type: "write",
+              status: "done",
+              entry: appended.id,
+            });
+
+            return;
+          }
+
+          const queued = await tx.createSubmission({
+            conversationId,
             requestId: entry.requestId,
-            entry:
-              model.length > 0
-                ? { kind: entry.kind, data: entry.data, model }
-                : { kind: entry.kind, data: entry.data },
-          },
-          context
-        );
+            type: "write",
+            status: "queued",
+          });
+
+          inbox.items.push({ id: queued.id, mode: "write", entry: draft });
+        }, context);
       });
     });
 

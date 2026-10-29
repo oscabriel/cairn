@@ -53,6 +53,13 @@ type Side = "pi-durable" | "scripted";
 /**
  * Scenarios each side does not pass yet. pi-durable passes the subagent groups once its subagents
  * extension lands; the scripted harness models them now.
+ *
+ * Two windows of the subagents note's groups are judged elsewhere. `subagent_result_once_with_crash`
+ * crashes while the child's answer and the parent's woken run are held; the scripted reporter
+ * settles and reports in single critical sections a crash line cannot split, so the windows
+ * between the child's answer, the settlement and the report belong to 4C's
+ * `judges/subagent-durability.ts`. `subagent_brief_declined` covers declined and revised briefs;
+ * an expired brief (group 2's third case) belongs to 4A, which owns expiry.
  */
 const subagentNames = scenarios.flatMap((scenario) =>
   isSubagentScenario(scenario) ? [scenario.name] : []

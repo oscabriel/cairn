@@ -3,7 +3,7 @@
 // under an open thread it docks below the transcript. The judges' data attributes live in the
 // sidebar's shell index. The sidebar, the composer and the chat header are lazy views over their own
 // slices of the Model, so a streamed token rebuilds only the transcript and a keystroke only the
-// composer.
+// composer. When the `ui` client setting is `next`, the `next` frame draws instead (ADR 0040).
 
 import type { Entry } from "@cairn/protocol/Thread";
 import { Equal, Option } from "effect";
@@ -14,6 +14,7 @@ import { retryDraftId } from "./composer/Update.ts";
 import * as Composer from "./composer/View.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
+import { nextFrameOf } from "./next/FrameLoad.ts";
 import * as Thread from "./page/thread/index.ts";
 import { view as pushView } from "./push/View.ts";
 import { AppRoute, draftRouter } from "./Route.ts";
@@ -307,8 +308,8 @@ const noticeBar = (model: Model, h: HtmlBuilder<Message>): Html =>
       ),
   });
 
-/** The app. */
-export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
+/** The app drawn with the classic views. */
+const classicView = (model: Model, h: HtmlBuilder<Message>): Document => ({
   title: "Cairn",
   body: h.div(
     [
@@ -336,3 +337,20 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
     ]
   ),
 });
+
+/**
+ * The app: the `next` frame (`next/Frame.ts`, ADR 0040) when the `ui` setting is `next` and its
+ * chunk has loaded, drawing the classic regions until `next` replaces them; the classic views
+ * otherwise.
+ */
+export const view = (model: Model, h: HtmlBuilder<Message>): Document =>
+  Option.match(nextFrameOf(model), {
+    onNone: () => classicView(model, h),
+    onSome: (frame) =>
+      frame(model, h, {
+        sidebarState: sidebarState(model.sidebar),
+        sidebar: () => sidebarLazy(sidebar, [h, model.sidebar]),
+        notice: () => noticeBar(model, h),
+        page: () => page(model, h),
+      }),
+  });

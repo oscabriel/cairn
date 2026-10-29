@@ -1,8 +1,8 @@
 {"type":"transcript_start","scenario":"subagent_typed_result_attempts","version":1}
 {"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in src.","result_schema":{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}}}]}
 {"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
-{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"r1","name":"report","arguments":{"summary":"Counted.","divergence":"None","payload":{"count":"many"}}}]}
-{"type":"model","label":"c2","thread":"child1","toolCalls":[{"id":"r2","name":"report","arguments":{"summary":"Counted.","divergence":"None","payload":{"count":4}}}]}
+{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"s1","name":"submit_result","arguments":{"result":{"count":"many"},"divergence":"None"}}]}
+{"type":"model","label":"c2","thread":"child1","toolCalls":[{"id":"r1","name":"report","arguments":{"summary":"Counted.","divergence":"None"}},{"id":"s2","name":"submit_result","arguments":{"result":{"count":4},"divergence":"None"}}]}
 {"type":"model","label":"p3","thread":"parent","text":"4 files."}
 {"type":"input","step":"ensure"}
 {"type":"input","step":"message","requestId":"r1","text":"delegate it"}
@@ -11,9 +11,12 @@
 {"type":"input","step":"respond","decision":"accept"}
 {"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
 {"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
-{"type":"expect_view","path":["transcript",0],"equals":{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in src.\n\nFinish by calling report with a payload that matches the result schema.","images":0,"toolCalls":[],"toolName":null,"isError":null},"thread":"child1"}
+{"type":"expect_request","thread":"child1","index":0,"includesTools":["ask_parent","report","submit_result"],"excludesTools":["subagent_spawn","subagent_send","subagent_status","subagent_stop","subagent_reply"],"firstInput":"Count the files\n\nCount the files in src.\n\nFinish by calling submit_result with your result, which must match its schema, and how it differs from the brief."}
+{"type":"expect_request","thread":"parent","index":0,"includesTools":["subagent_spawn","subagent_send","subagent_status","subagent_stop","subagent_reply"],"excludesTools":["ask_parent","report","submit_result"]}
+{"type":"expect_view","path":["transcript",0],"equals":{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in src.\n\nFinish by calling submit_result with your result, which must match its schema, and how it differs from the brief.","images":0,"toolCalls":[],"toolName":null,"isError":null},"thread":"child1"}
 {"type":"expect_view","path":["transcript",2,"isError"],"equals":true,"thread":"child1"}
-{"type":"expect_view","path":["transcript",4],"equals":{"kind":"pi.tool-result","role":"toolResult","text":"Reported.","images":0,"toolCalls":[],"toolName":"report","isError":false},"thread":"child1"}
-{"type":"expect_view","path":["transcriptLength"],"equals":5,"thread":"child1"}
+{"type":"expect_view","path":["transcript",2,"text"],"equals":"submit_result rejected (attempt 1 of 2):\n  - result.count: must be integer\nFix these and call submit_result again.","thread":"child1"}
+{"type":"expect_view","path":["transcript",3,"toolCalls"],"equals":["report","submit_result"],"thread":"child1"}
+{"type":"expect_view","path":["transcriptLength"],"equals":6,"thread":"child1"}
 {"type":"expect_view","path":["transcript",-3],"equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\nCounted.\n</subagent_result>\nDivergence: None\nPayload: {\"count\":4}","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"4 files.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

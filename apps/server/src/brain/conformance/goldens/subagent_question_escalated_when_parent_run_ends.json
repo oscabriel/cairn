@@ -147,7 +147,12 @@
       {
         "status": "settled",
         "settlements": 1,
-        "delivered": 1
+        "delivered": 1,
+        "questions": ["answered"],
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
       }
     ],
     "transcript": [
@@ -190,7 +195,7 @@
       {
         "kind": "cairn.brief-answer",
         "role": "user",
-        "text": "The user approved the brief \"Count the files\"; subagent thread 0190f0c0-0000-7000-9000-000000000009 started.",
+        "text": "The user approved the brief \"Count the files\"; subagent thread $child1 started.",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -217,7 +222,7 @@
       {
         "kind": "cairn.subagent-result",
         "role": "user",
-        "text": "Subagent \"Count the files\" (thread 0190f0c0-0000-7000-9000-000000000009) completed.\n<subagent_result>\ntest has 9 files.\n</subagent_result>\nDivergence: not reported",
+        "text": "Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\ntest has 9 files.\n</subagent_result>\nDivergence: not reported",
         "images": 0,
         "toolCalls": [],
         "toolName": null,

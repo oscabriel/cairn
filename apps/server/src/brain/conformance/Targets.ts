@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ThreadId } from "@cairn/protocol/Ids";
+import type { Context as AiContext, Message } from "@earendil-works/pi-ai";
+import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { ProviderDoc } from "@earendil-works/pi-durable";
 import {
   Context,
@@ -28,16 +30,27 @@ import {
   Scope,
 } from "effect";
 
+import { ServerConfig } from "../../Config.ts";
+import { Database } from "../../db/Database.ts";
+import { migrations } from "../../db/Migrations.ts";
 import { ExecutorLink } from "../../executor/ExecutorLink.ts";
 import { ModelHealth } from "../../models/ModelHealth.ts";
 import { PiModelSource } from "../../models/PiModelSource.ts";
 import { SettingsStore } from "../../models/SettingsStore.ts";
 import { PiHost } from "../../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../../reach/ReachLayer.ts";
+import {
+  subagentsExtension,
+  workspaceAccess,
+} from "../../subagents/Subagents.ts";
+import { DEFAULT_TOOL_OPTIONS } from "../../subagents/SubagentTools.ts";
+import type { SubagentToolOptions } from "../../subagents/SubagentTools.ts";
+import { ChildWorkspaces } from "../../workspaces/ChildWorkspaces.ts";
 import { Brain } from "../Brain.ts";
 import type { BrainSession } from "../Brain.ts";
 import { BrainConfig } from "../BrainConfig.ts";
 import { ThreadMeta } from "../CairnDocs.ts";
+import { messageText } from "../CommitFeed.ts";
 import { durable } from "../Durable.ts";
 import { ExtensionSet } from "../ExtensionSet.ts";
 import { FauxModels } from "../FauxModels.ts";
@@ -56,7 +69,7 @@ import {
   conformanceTools,
   scriptedConformanceTools,
 } from "./ConformanceTools.ts";
-import type { ResponseScript } from "./ResponseScript.ts";
+import type { ResponseScript, SeenRequest } from "./ResponseScript.ts";
 
 /** One harness under judgement. */
 export interface ConformanceTarget {
@@ -135,6 +148,24 @@ const threadOfSession = (
     return Option.fromUndefinedOr(known.get(sessionId));
   }).pipe(Effect.orElseSucceed(() => Option.none<ThreadId>()));
 
+/** The text of the first user message of `messages`; empty without one. */
+const firstInputOf = (messages: ReadonlyArray<Message>) => {
+  const first = messages.find((message) => message.role === "user");
+
+  return first === undefined ? "" : messageText(first);
+};
+
+/** What a faux request offered and asked first: the tools its transcript declares and its own. */
+const seenOf = (request: AiContext): SeenRequest => ({
+  tools: [
+    ...new Set([
+      ...getCurrentTools(request.messages).map((tool) => tool.name),
+      ...(request.tools ?? []).map((tool) => tool.name),
+    ]),
+  ],
+  firstInput: firstInputOf(request.messages),
+});
+
 /** A target whose instance `open` builds, rebuilt on restart inside the caller's scope. */
 const restartable = Effect.fnUntraced(function* (
   open: Effect.Effect<Instance, never, Scope.Scope>
@@ -162,81 +193,127 @@ const restartable = Effect.fnUntraced(function* (
   } satisfies ConformanceTarget;
 });
 
-/** The pi-durable side. */
-// The subagent faults reach pi-durable with the subagents extension; until then it plants none.
-export const piDurableTarget: MakeTarget = (script) =>
-  Effect.gen(function* () {
-    const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-conformance-"));
+/**
+ * Children's workspaces for a test brain over `dataDir`: worktrees under `<dataDir>/worktrees`, plan
+ * rows in a fresh migrated in-memory `cairn.sqlite`.
+ */
+export const childWorkspacesAt = (dataDir: string) =>
+  ChildWorkspaces.layer.pipe(
+    Layer.provide(Database.layerTest(migrations)),
+    Layer.provide(ServerConfig.layerWith({ dataDir })),
+    Layer.orDie
+  );
 
-    const layer = PiDurableHarness.layer.pipe(
-      Layer.provide(
-        ExtensionSet.withExtra([conformanceTools]).pipe(
-          Layer.provide(ExecutorLink.layerDisabled),
-          Layer.provide(PiHost.layerEmpty),
-          Layer.provide(ModelHealth.layerTest),
-          Layer.provide(SettingsStore.layerTest),
-          Layer.provide(ReachServicesTest),
-          Layer.provide(PiModelSource.layerFromModelSource)
-        )
-      ),
-      Layer.provideMerge(
-        ModelSource.layerFaux({
-          tokensPerSecond: 2000,
-          // No provider retries (a failed answer would take the next scripted one), and a
-          // compaction keeps only the newest context, so a short thread has something to compact.
-          settings: {
-            retry: { enabled: false },
-            compaction: { keepRecentTokens: 1 },
-          },
+/**
+ * The pi-durable brain the conformance suite runs over `dataDir`: the production seam, brain and
+ * extension set, the conformance tools and the subagents extension with `faults` (and `tuning`, for a
+ * test that needs a question to expire soon), making children's workspaces under `dataDir`
+ * (`ChildWorkspaces`, also provided), over pi-ai's faux provider. Subagent tests under `brain/`
+ * build on it too.
+ */
+export const piDurableLayer = (
+  dataDir: string,
+  faults: SubagentFaultSet,
+  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
+) =>
+  PiDurableHarness.layer.pipe(
+    Layer.provide(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const workspaces = workspaceAccess(
+            yield* ChildWorkspaces,
+            yield* Effect.context()
+          );
+
+          return ExtensionSet.withExtra([
+            conformanceTools,
+            subagentsExtension(faults, workspaces, tuning),
+          ]);
         })
-      ),
-      Layer.provide(BrainConfig.layerFrom(dataDir))
-    );
+      ).pipe(
+        Layer.provide(ExecutorLink.layerDisabled),
+        Layer.provide(PiHost.layerEmpty),
+        Layer.provide(ModelHealth.layerTest),
+        Layer.provide(SettingsStore.layerTest),
+        Layer.provide(ReachServicesTest),
+        Layer.provide(PiModelSource.layerFromModelSource)
+      )
+    ),
+    Layer.provideMerge(
+      ModelSource.layerFaux({
+        tokensPerSecond: 2000,
+        // No provider retries (a failed answer would take the next scripted one), and a
+        // compaction keeps only the newest context, so a short thread has something to compact.
+        settings: {
+          retry: { enabled: false },
+          compaction: { keepRecentTokens: 1 },
+        },
+      })
+    ),
+    Layer.provideMerge(childWorkspacesAt(dataDir)),
+    Layer.provide(BrainConfig.layerFrom(dataDir))
+  );
 
-    return yield* restartable(
-      Effect.gen(function* () {
-        const context = yield* Layer.build(layer);
-        const { faux } = Context.get(context, FauxModels);
-        const brain = Context.get(context, Brain);
-        const run = Effect.runPromiseWith(yield* Effect.context());
-        const known = new Map<string, ThreadId>();
+/**
+ * The pi-durable side, with the subagents extension, the faults the mutation check plants and
+ * `tuning` (a test that orders the reporters of a shared run passes its own).
+ */
+export const piDurableTargetWith =
+  (tuning: SubagentToolOptions): MakeTarget =>
+  (script, faults) =>
+    Effect.gen(function* () {
+      const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-conformance-"));
+      const layer = piDurableLayer(dataDir, faults, tuning);
 
-        // The asking thread, from the request's provider session id.
-        const askingThread = (sessionId: string | undefined) =>
-          Effect.gen(function* () {
-            const session = yield* Effect.option(brain.session);
+      return yield* restartable(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(layer);
+          const { faux } = Context.get(context, FauxModels);
+          const brain = Context.get(context, Brain);
+          const run = Effect.runPromiseWith(yield* Effect.context());
+          const known = new Map<string, ThreadId>();
 
-            if (sessionId === undefined || Option.isNone(session)) {
-              return Option.none<ThreadId>();
-            }
+          // The asking thread, from the request's provider session id.
+          const askingThread = (sessionId: string | undefined) =>
+            Effect.gen(function* () {
+              const session = yield* Effect.option(brain.session);
 
-            return yield* threadOfSession(session.value, known, sessionId);
-          });
+              if (sessionId === undefined || Option.isNone(session)) {
+                return Option.none<ThreadId>();
+              }
 
-        faux.setResponses(
-          Array.from(
-            { length: FAUX_STEPS },
-            () => async (_request, options) =>
-              await run(
-                Effect.gen(function* () {
-                  const thread = yield* askingThread(options?.sessionId);
+              return yield* threadOfSession(session.value, known, sessionId);
+            });
 
-                  return yield* script.next(
-                    Option.fromUndefinedOr(options?.signal),
-                    thread
-                  );
-                })
-              )
-          )
-        );
+          faux.setResponses(
+            Array.from(
+              { length: FAUX_STEPS },
+              () => async (request, options) =>
+                await run(
+                  Effect.gen(function* () {
+                    const thread = yield* askingThread(options?.sessionId);
 
-        return {
-          seam: Context.get(context, HarnessSeam),
-          resume: brain.resume.pipe(Effect.orDie),
-        };
-      }).pipe(Effect.orDie)
-    );
-  });
+                    return yield* script.next(
+                      Option.fromUndefinedOr(options?.signal),
+                      thread,
+                      seenOf(request)
+                    );
+                  })
+                )
+            )
+          );
+
+          return {
+            seam: Context.get(context, HarnessSeam),
+            resume: brain.resume.pipe(Effect.orDie),
+          };
+        }).pipe(Effect.orDie)
+      );
+    });
+
+/** The pi-durable side with the production tuning. */
+export const piDurableTarget: MakeTarget =
+  piDurableTargetWith(DEFAULT_TOOL_OPTIONS);
 
 /** The scripted side. */
 export const scriptedTarget: MakeTarget = (script, faults) =>
@@ -247,7 +324,10 @@ export const scriptedTarget: MakeTarget = (script, faults) =>
       ScriptedModel,
       ScriptedModel.of({
         answer: (request) =>
-          script.next(Option.none(), Option.some(request.threadId)),
+          script.next(Option.none(), Option.some(request.threadId), {
+            tools: request.tools,
+            firstInput: firstInputOf(request.messages),
+          }),
       })
     );
 

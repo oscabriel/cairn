@@ -195,17 +195,32 @@
       {
         "status": "settled",
         "settlements": 1,
-        "delivered": 1
+        "delivered": 1,
+        "questions": [],
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
       },
       {
         "status": "settled",
         "settlements": 1,
-        "delivered": 1
+        "delivered": 1,
+        "questions": [],
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
       },
       {
         "status": "settled",
         "settlements": 1,
-        "delivered": 1
+        "delivered": 1,
+        "questions": [],
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
       }
     ],
     "transcript": [
@@ -266,7 +281,7 @@
       {
         "kind": "cairn.brief-answer",
         "role": "user",
-        "text": "The user approved the brief \"Count files in a\"; subagent thread 0190f0c0-0000-7000-9000-00000000000d started.",
+        "text": "The user approved the brief \"Count files in a\"; subagent thread $child1 started.",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -275,7 +290,7 @@
       {
         "kind": "cairn.brief-answer",
         "role": "user",
-        "text": "The user approved the brief \"Count files in b\"; subagent thread 0190f0c0-0000-7000-9000-000000000012 started.",
+        "text": "The user approved the brief \"Count files in b\"; subagent thread $child2 started.",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -284,7 +299,7 @@
       {
         "kind": "cairn.brief-answer",
         "role": "user",
-        "text": "The user approved the brief \"Count files in c\"; subagent thread 0190f0c0-0000-7000-9000-000000000017 started.",
+        "text": "The user approved the brief \"Count files in c\"; subagent thread $child3 started.",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -293,7 +308,7 @@
       {
         "kind": "cairn.subagent-result",
         "role": "user",
-        "text": "Subagent \"Count files in a\" (thread 0190f0c0-0000-7000-9000-00000000000d) completed.\n<subagent_result>\n1 files.\n</subagent_result>\nDivergence: not reported",
+        "text": "Subagent \"Count files in a\" (thread $child1) completed.\n<subagent_result>\n1 files.\n</subagent_result>\nDivergence: not reported",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -320,7 +335,7 @@
       {
         "kind": "cairn.subagent-result",
         "role": "user",
-        "text": "Subagent \"Count files in b\" (thread 0190f0c0-0000-7000-9000-000000000012) completed.\n<subagent_result>\n2 files.\n</subagent_result>\nDivergence: not reported",
+        "text": "Subagent \"Count files in b\" (thread $child2) completed.\n<subagent_result>\n2 files.\n</subagent_result>\nDivergence: not reported",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -329,7 +344,7 @@
       {
         "kind": "cairn.subagent-result",
         "role": "user",
-        "text": "Subagent \"Count files in c\" (thread 0190f0c0-0000-7000-9000-000000000017) completed.\n<subagent_result>\n3 files.\n</subagent_result>\nDivergence: not reported",
+        "text": "Subagent \"Count files in c\" (thread $child3) completed.\n<subagent_result>\n3 files.\n</subagent_result>\nDivergence: not reported",
         "images": 0,
         "toolCalls": [],
         "toolName": null,

@@ -19,7 +19,10 @@
 // a boot repair cancels those a stop cut off by a crash left behind (`cancelAbandonedApprovals`).
 
 import { answersProblem } from "@cairn/client-logic/PendingRequests";
-import { TaskId } from "@cairn/protocol/Ids";
+import {
+  ConversationId as ProtocolConversationId,
+  TaskId,
+} from "@cairn/protocol/Ids";
 import {
   APPROVALS_DOCUMENT,
   APPROVALS_VERSION,
@@ -61,10 +64,12 @@ import {
   Stream,
 } from "effect";
 
+import { ChildDoc, isLinked, markQuestion } from "../subagents/SubagentDocs.ts";
+import type { ChildState } from "../subagents/SubagentDocs.ts";
 import { Brain } from "./Brain.ts";
 import { durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
-import { piTaskId } from "./PiIds.ts";
+import { piConversationId, piTaskId } from "./PiIds.ts";
 
 /** The creation receipt of one thread: the conversation it lives in, 0 until created. */
 export interface ThreadReceiptState {
@@ -896,50 +901,135 @@ export const applyAnswer = (
   return "answered";
 };
 
+/** A stored conversation id as pi-durable types it. */
+const piConversationOf = (id: number) =>
+  piConversationId(ProtocolConversationId.make(id));
+
+/**
+ * Settles, inside the answering transaction, what an answered record is linked to (ADR 0027): a
+ * parent's mirror settles the child's escalated question it mirrors, and a child's question settles
+ * every mirror of it in its parent, so an answer from either thread lands once and the other
+ * reports `already_settled`. A child's question also marks its parent's registry. `link` is the
+ * conversation's `cairn.child`, read before the transaction (it never changes once written).
+ */
+const settleLinked = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  record: ApprovalRecord,
+  link: Readonly<ChildState> | undefined,
+  answer: RecordAnswer,
+  now: number
+): Promise<void> => {
+  if (record.mirrorOf !== null) {
+    const { approvalId, threadId } = record.mirrorOf;
+
+    const receipt = await tx.doc(ThreadReceipt, threadId, {
+      conversationId: 0,
+    });
+
+    if (receipt.conversationId < 1) {
+      return;
+    }
+
+    const childId = piConversationOf(receipt.conversationId);
+    const childApprovals = await tx.doc(Approvals, childId);
+    const child = childApprovals.items[approvalId];
+
+    if (child !== undefined) {
+      applyAnswer(child, answer, now);
+    }
+
+    await markQuestion(
+      tx,
+      conversationId,
+      childId,
+      approvalId,
+      "answered",
+      Option.none()
+    );
+
+    return;
+  }
+
+  if (!isLinked(link) || record.kind !== "user-input") {
+    return;
+  }
+
+  const parentId = piConversationOf(link.parentConversationId);
+  const meta = await tx.doc(ThreadMeta, conversationId);
+  const parent = await tx.doc(Approvals, parentId);
+
+  for (const mirror of Object.values(parent.items)) {
+    if (
+      mirror.mirrorOf?.threadId === meta.threadId &&
+      mirror.mirrorOf.approvalId === record.id
+    ) {
+      applyAnswer(mirror, answer, now);
+    }
+  }
+
+  await markQuestion(
+    tx,
+    parentId,
+    conversationId,
+    record.id,
+    "answered",
+    Option.none()
+  );
+};
+
 /**
  * Answers one record from the host side, in one transaction (`applyAnswer`). "Allow for this
- * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit.
+ * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit,
+ * and an escalated question settles with its mirror (`settleLinked`).
  */
 export const answerApproval = (
-  session: Pick<Session, "commit">,
+  session: Pick<Session, "commit" | "snapshot">,
   conversationId: ConversationId,
   approvalId: string,
   answer: RecordAnswer,
   now: number
 ): Effect.Effect<AnswerOutcome, DurableCallError> =>
-  durable(
-    "approvals.answer",
-    async (context) =>
-      await session.commit(async (tx): Promise<AnswerOutcome> => {
-        const { items } = await tx.doc(Approvals, conversationId);
-        const record = items[approvalId];
+  durable("approvals.answer", async (context) => {
+    const link = await session.snapshot(ChildDoc, conversationId, context);
 
-        if (record === undefined) {
-          return "not_found";
-        }
+    return await session.commit(async (tx): Promise<AnswerOutcome> => {
+      const { items } = await tx.doc(Approvals, conversationId);
+      const record = items[approvalId];
 
-        const outcome = applyAnswer(record, answer, now);
+      if (record === undefined) {
+        return "not_found";
+      }
 
-        // "Allow for this thread" lands with the answer, so the next call of the tool runs at once.
-        if (outcome === "answered" && answer.decision === "accept_for_thread") {
-          await allowTool(tx, conversationId, record.tool);
-        }
+      const outcome = applyAnswer(record, answer, now);
 
+      if (outcome !== "answered") {
         return outcome;
-      }, context)
-  );
+      }
+
+      // "Allow for this thread" lands with the answer, so the next call of the tool runs at once.
+      if (answer.decision === "accept_for_thread") {
+        await allowTool(tx, conversationId, record.tool);
+      }
+
+      await settleLinked(tx, conversationId, record, link, answer, now);
+
+      return outcome;
+    }, context);
+  });
 
 /**
  * Whether a run holds this record: a pending tool call or question its own tool task waits on.
- * Briefs and criteria wait for the user with no run, and an escalated question or a mirror is
- * answered across threads, so a stop leaves those pending.
+ * Briefs and criteria wait for the user with no run, and a mirror (in a parent, of its child's
+ * escalated question) has no tool task of its own, so a stop leaves those pending. A child's
+ * question is held by the child's run even once escalated: stopping the child ends the
+ * `ask_parent` call that would read its answer, and `cancelLinkedQuestions` cancels its mirrors.
  */
 export const heldByRun = (record: ApprovalRecord) =>
   record.status === "pending" &&
   record.toolTaskId > 0 &&
   record.kind !== "brief" &&
   record.kind !== "criteria" &&
-  record.escalatedAt === null &&
   record.mirrorOf === null;
 
 /** A stored task id as pi-durable types it. */
@@ -957,6 +1047,63 @@ export const cancelRecord = (
   record.status = "cancelled";
   record.answeredAt = now;
   record.decidedBy = { kind: "system", why };
+};
+
+/**
+ * For the records just cancelled in `conversationId`, a subagent's questions to its parent: every
+ * mirror of them in the parent is cancelled too, and the parent's registry marks each question
+ * `cancelled`, inside the caller's transaction (ADR 0027, ADR 0029). Nothing for a conversation
+ * that is not a subagent: only `ask_parent` records are routed to a parent or escalated, so the
+ * child link is opened only when one was cancelled. Writes documents only.
+ */
+const cancelLinkedQuestions = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  cancelled: ReadonlyArray<ApprovalRecord>,
+  now: number,
+  why: CancelWhy
+): Promise<void> => {
+  const questions = cancelled.filter(
+    (record) =>
+      record.kind === "user-input" &&
+      (record.route === "parent" || record.escalatedAt !== null)
+  );
+
+  if (questions.length === 0) {
+    return;
+  }
+
+  const link = await tx.doc(ChildDoc, conversationId);
+
+  if (!isLinked(link)) {
+    return;
+  }
+
+  const parentId = piConversationOf(link.parentConversationId);
+  const meta = await tx.doc(ThreadMeta, conversationId);
+  const parent = await tx.doc(Approvals, parentId);
+
+  for (const question of questions) {
+    for (const mirror of Object.values(parent.items)) {
+      if (
+        mirror.status === "pending" &&
+        mirror.mirrorOf?.threadId === meta.threadId &&
+        mirror.mirrorOf.approvalId === question.id
+      ) {
+        cancelRecord(mirror, now, why);
+      }
+    }
+
+    // oxlint-disable-next-line no-await-in-loop -- document writes, in order
+    await markQuestion(
+      tx,
+      parentId,
+      conversationId,
+      question.id,
+      "cancelled",
+      Option.none()
+    );
+  }
 };
 
 /** How many owners up a tool task may sit below its run's task (a tool, a nested call). */
@@ -1020,6 +1167,14 @@ export const cancelStoppedApprovals = (
           cancelRecord(record, now, "run-stopped");
         }
 
+        await cancelLinkedQuestions(
+          tx,
+          conversationId,
+          cancelled,
+          now,
+          "run-stopped"
+        );
+
         return cancelled.map((record) => record.id);
       }, context)
   );
@@ -1054,12 +1209,14 @@ const abandonedTask = async (tx: Tx, taskId: number): Promise<boolean> => {
 
 /**
  * Cancels, in one transaction, every record of one conversation that a run held and whose tool
- * task is abandoned (`abandonedTask`), with `decidedBy` system `boot`. Returns the ids.
+ * task is abandoned (`abandonedTask`), with `decidedBy` system `why`: `boot` for the boot repair,
+ * `run-stopped` for a stop that cancels after its abort (`subagent_stop`). Returns the ids.
  */
 export const cancelAbandonedApprovals = (
   session: Pick<Session, "commit">,
   conversationId: ConversationId,
-  now: number
+  now: number,
+  why: CancelWhy
 ): Effect.Effect<ReadonlyArray<string>, DurableCallError> =>
   durable(
     "approvals.cancel-abandoned",
@@ -1077,8 +1234,10 @@ export const cancelAbandonedApprovals = (
         );
 
         for (const record of cancelled) {
-          cancelRecord(record, now, "boot");
+          cancelRecord(record, now, why);
         }
+
+        await cancelLinkedQuestions(tx, conversationId, cancelled, now, why);
 
         return cancelled.map((record) => record.id);
       }, context)
@@ -1127,7 +1286,8 @@ export const cancelAbandonedApprovalsAtBoot = Effect.gen(function* () {
         const ids = yield* cancelAbandonedApprovals(
           harness,
           conversation.id,
-          brain.now()
+          brain.now(),
+          "boot"
         );
 
         cancelled += ids.length;

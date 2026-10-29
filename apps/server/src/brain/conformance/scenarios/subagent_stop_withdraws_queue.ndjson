@@ -1,0 +1,32 @@
+{"type":"transcript_start","scenario":"subagent_stop_withdraws_queue","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in src."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","hold":true,"text":"src has 4 files."}
+{"type":"model","label":"p3","thread":"parent","toolCalls":[{"id":"cs","name":"subagent_send","arguments":{"subagent":"$child1","message":"Count the tests too."}}]}
+{"type":"model","label":"p4","thread":"parent","text":"Queued."}
+{"type":"model","label":"p5","thread":"parent","toolCalls":[{"id":"ct","name":"subagent_stop","arguments":{"subagent":"$child1"}},{"id":"cg","name":"gate","arguments":{"summary":"go on"}}]}
+{"type":"model","label":"p6","thread":"parent","text":"Stopped it."}
+{"type":"model","label":"p7","thread":"parent","text":"Noted."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"input","step":"message","requestId":"r2","text":"also the tests"}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"Queued.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["queueLength"],"equals":1,"thread":"child1"}
+{"type":"input","step":"message","requestId":"r3","text":"stop it"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$child1","status":"interrupted"}}
+{"type":"expect_view","path":["queueLength"],"equals":0,"thread":"child1"}
+{"type":"expect_view","path":["running"],"equals":false,"thread":"child1"}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in src.","images":0,"toolCalls":[],"toolName":null,"isError":null}],"thread":"child1"}
+{"type":"expect_view","path":["subagents",0,"settlements"],"equals":2}
+{"type":"settle","ms":300}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"Noted.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["subagents",0,"status"],"equals":"settled"}
+{"type":"expect_view","path":["transcript",11],"equals":{"kind":"pi.tool-result","role":"toolResult","text":"Stopped subagent $child1. Uncommitted paths: none.","images":0,"toolCalls":[],"toolName":"subagent_stop","isError":false}}
+{"type":"expect_view","path":["transcript",13,"kind"],"equals":"cairn.subagent-result"}
+{"type":"expect_view","path":["transcript",14,"kind"],"equals":"cairn.subagent-result"}
+{"type":"expect_view","path":["transcript",15],"equals":{"kind":"pi.assistant","role":"assistant","text":"Stopped it.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

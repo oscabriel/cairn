@@ -28,8 +28,12 @@
 //   run that answers it, settles once per run, then writes the note and, by the parent's state,
 //   the wake, each under ids derived from the child and the settlement's `seq`. Reporters live in
 //   the store, so a restart resumes them where they stood and every write lands once.
-// - Wakes obey the parent: none for a quiet spawn or a user's steer to the child, none for a
-//   parent the user stopped or whose run failed, at most one queued while the parent runs.
+// - Wakes obey the parent: none for a quiet spawn or a user's steer to the child (unless the run
+//   that answered it also answered the parent's own input), none for a parent the user stopped or
+//   whose run failed, at most one queued while the parent runs. A typed result goes with the
+//   settlement of the run that accepted it only.
+// - A final answer settles the inputs its run placed, and a queued input it places goes on in a
+//   new segment of the same run, as pi-durable's final boundary settles them.
 // - A child's `ask_parent` question goes to the parent model as an input; `subagent_reply`
 //   answers or escalates it, and a parent run that ends with it still open escalates it. An
 //   escalation writes the child's record and a mirror in the parent in one critical section, and
@@ -58,6 +62,7 @@ import type { Brief, RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
+  MAX_SUBAGENT_DEPTH,
   SUBAGENT_RESULT_ENTRY,
 } from "@cairn/protocol/Subagents";
 import type {
@@ -68,7 +73,6 @@ import type {
 import { ThreadOpsItem, ThreadSnapshotItem } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord";
 import { copyJson, isJsonValue } from "@earendil-works/chord";
-import { Type, validateToolArguments } from "@earendil-works/pi-ai";
 import type {
   AssistantMessage,
   ImageContent,
@@ -105,6 +109,20 @@ import {
   QUESTION_TTL_MILLIS,
   questionAskOf,
 } from "../approvals/AskUser.ts";
+import { familyOf } from "../models/ModelFamily.ts";
+import {
+  attemptStateOf,
+  CAP_TEXT,
+  canSubmit,
+  markOf,
+  MAX_RESULT_ATTEMPTS,
+  NUDGE_TEXT,
+  nudgeDue,
+  RESULT_TOOL_NAME,
+  ResultToolText,
+  validateResult,
+} from "../models/ResultTool.ts";
+import type { ResultState } from "../models/ResultTool.ts";
 import type {
   ApprovalRecord,
   ApprovalSettlement,
@@ -156,6 +174,8 @@ import { classifyRunFailure } from "./RunFailure.ts";
 import { SubagentFaults } from "./SubagentFaults.ts";
 import {
   BRIEF_ANSWER_ENTRY,
+  EscalationWhy,
+  NO_RESULT_ERROR,
   renderAnswer,
   renderBrief,
   renderBriefAnswer,
@@ -165,6 +185,7 @@ import {
   SPAWN_WAITING,
   SubagentRequestIds,
   SubagentToolText,
+  TYPED_RESULT_SUMMARY,
 } from "./SubagentText.ts";
 import { entryImages, projectEntry, wireProjector } from "./ThreadWire.ts";
 
@@ -174,6 +195,11 @@ type RunStatus = (typeof RunTerminal.Type)["status"];
 export interface ScriptedRequest {
   readonly threadId: ThreadId;
   readonly messages: ReadonlyArray<Message>;
+  /**
+   * The subagent tools the thread is offered: a parent's five, or a child's two and
+   * `submit_result` when its brief is typed. The scripted harness has no other per-thread tools.
+   */
+  readonly tools: ReadonlyArray<string>;
 }
 
 /** An answer of the scripted model with only text. */
@@ -291,6 +317,8 @@ interface QueuedInput {
 /** How the run that took a submission ended; `runId` none when it was withdrawn unplaced. */
 interface SubmissionEnd {
   readonly runId: Option.Option<number>;
+  /** The thread's last entry when the run's segment ended: the run's end, past which nothing is its. */
+  readonly lastEntry: Option.Option<number>;
   readonly status: RunStatus;
   readonly failure: Option.Option<RunFailureInfo>;
 }
@@ -315,6 +343,12 @@ interface Run {
   /** The run's id: the first task id it got. */
   readonly runId: number;
   readonly inputs: Array<number>;
+  /**
+   * The id its inputs settle under. pi-durable settles a run's inputs with each final answer that
+   * places queued inputs and goes on with them (its `answer` ends the run and starts the next in
+   * one commit, which Cairn's events show as one run), so a new segment starts there.
+   */
+  segment: number;
 }
 
 interface Agent {
@@ -328,7 +362,6 @@ interface ChildReport {
   readonly runId: number;
   readonly summary: string;
   readonly divergence: string;
-  readonly payload: JsonValue;
   readonly commit: Option.Option<string>;
 }
 
@@ -341,15 +374,9 @@ interface ChildLink {
   readonly briefApprovalId: string;
   readonly description: string;
   readonly resultSchema: JsonRecord | null;
-  /** Invalid payloads in the run `attemptsRun`; a new run starts again from none. */
-  attempts: number;
-  attemptsRun: number;
   report: Option.Option<ChildReport>;
-  /** The third invalid report's message, with its run. */
-  failedReport: Option.Option<{
-    readonly runId: number;
-    readonly message: string;
-  }>;
+  /** `cairn.result`: the first value `submit_result` accepted, kept for good. */
+  result: Option.Option<ResultState>;
 }
 
 /** One child in its parent's `cairn.subagents`. */
@@ -368,15 +395,23 @@ interface SubagentItem {
     readonly outcome: SettlementOutcome;
     readonly answerEntry: number | null;
     readonly reportedAt: number;
+    /** The request ids of every input the settled run ended. */
+    readonly inputs: ReadonlyArray<string>;
   }>;
   delivered: number;
   readonly questions: Map<
     string,
-    { state: "pending" | "answered" | "escalated"; escalatedAt: number | null }
+    {
+      state: "pending" | "answered" | "escalated" | "cancelled";
+      escalatedAt: number | null;
+    }
   >;
   readonly inputs: Map<string, number>;
-  /** Runs already settled, so two inputs answered by one run settle once. */
-  readonly settledRuns: Set<number>;
+  /**
+   * `cairn.subagents`' run marks: each run segment nudged or settled, so a run settles once and a
+   * nudged run's inputs are settled by the nudge's run.
+   */
+  readonly runs: Array<ScriptedRunMark>;
 }
 
 /** A question offered to this thread's model, by `<child>:<approvalId>`. */
@@ -430,9 +465,113 @@ interface Reporter {
   readonly whenBusy: "steer" | "followUp";
   /** A user's own steer to the child: its result is a note with no wake. */
   readonly quiet: boolean;
-  phase: "deliver" | "report" | "done";
+  /**
+   * Whether the run this reporter settled goes without a wake: only when every input that run
+   * answered was quiet, so a user's steer and the parent's send settled by one run still wake it.
+   */
+  quietRun: boolean;
+  phase: "deliver" | "nudge" | "report" | "done";
+  /** The seq a nudge was sent for, in the `nudge` phase; its nudge mark lists the run's inputs. */
+  nudgeSeq: number;
   settlement: Option.Option<SubagentSettlement>;
 }
+
+/** The nudge mark `reporter` wrote for its nudge, listing the inputs of the run it nudged. */
+const nudgeMarkOf = (item: SubagentItem, reporter: Reporter) =>
+  item.runs.findLast(
+    (mark): mark is Extract<ScriptedRunMark, { phase: "nudge" }> =>
+      mark.phase === "nudge" &&
+      mark.seq === reporter.nudgeSeq &&
+      mark.inputs.includes(reporter.requestId)
+  );
+
+/**
+ * One run mark, as `cairn.subagents` keeps it (`RunMark`), keyed by the run's segment: a nudge mark
+ * with the nudged run's inputs, or a settled mark whose inputs are its settlement's.
+ */
+type ScriptedRunMark =
+  | {
+      readonly run: string;
+      readonly phase: "nudge";
+      readonly seq: number;
+      readonly inputs: ReadonlyArray<string>;
+      readonly quiet: boolean;
+    }
+  | { readonly run: string; readonly phase: "settled"; readonly seq: number };
+
+/** The inputs a run mark names: a nudge mark's own, a settled mark's settlement's. */
+const markInputs = (
+  item: SubagentItem,
+  mark: ScriptedRunMark
+): ReadonlyArray<string> =>
+  mark.phase === "nudge"
+    ? mark.inputs
+    : (item.settlements.find((settled) => settled.seq === mark.seq)?.inputs ??
+      []);
+
+/**
+ * What a live peer reporter of `child` waits on, when the run segment `end` names ended it: its
+ * input, or the nudge it sent with that nudge's inputs.
+ */
+const peerOf = (
+  other: Reporter,
+  child: ScriptedThread,
+  item: SubagentItem,
+  end: SubmissionEnd
+) => {
+  const nudge = other.phase === "nudge" ? nudgeMarkOf(item, other) : undefined;
+
+  const waitsOn =
+    nudge === undefined
+      ? other.requestId
+      : SubagentRequestIds.nudge(child.threadId, other.nudgeSeq);
+
+  const found = child.byRequest.get(waitsOn);
+
+  if (
+    found === undefined ||
+    (other.phase !== "deliver" && nudge === undefined) ||
+    !Option.exists(found.ended, (ended) =>
+      Option.exists(end.runId, (runId) => Option.contains(ended.runId, runId))
+    )
+  ) {
+    return Option.none();
+  }
+
+  const inputs = [waitsOn];
+
+  if (nudge !== undefined) {
+    inputs.push(...nudge.inputs);
+  }
+
+  return Option.some({
+    inputs,
+    quiet: nudge === undefined ? other.quiet : nudge.quiet,
+    placedAs: found.placedAs,
+  });
+};
+
+/** Settles the inputs the run's current segment placed, as the run's end leaves them. */
+const settleInputs = (
+  thread: ScriptedThread,
+  run: Run,
+  status: RunStatus,
+  failureInfo: Option.Option<RunFailureInfo>
+) => {
+  for (const id of run.inputs.splice(0)) {
+    const submission = thread.byId.get(id);
+
+    if (submission !== undefined) {
+      submission.status = status === "completed" ? "done" : "unanswered";
+      submission.ended = Option.some({
+        runId: Option.some(run.segment),
+        lastEntry: Option.fromUndefinedOr(thread.entries.at(-1)?.id),
+        status,
+        failure: failureInfo,
+      });
+    }
+  }
+};
 
 /** Everything a scripted harness remembers; it outlives one instance, as a store does. */
 export class ScriptedStore extends Context.Service<
@@ -464,14 +603,39 @@ const failure = (
     threadId: Option.some(threadId),
   });
 
-/** How many times a child may call `report` with a payload its schema refuses. */
-const REPORT_ATTEMPTS = 3;
-
 /** A day: scripted records never expire on their own. */
 const RECORD_TTL_MILLIS = 86_400_000;
 
 /** The two tools a child has instead of a parent's five (subagents note, section 2). */
 const CHILD_TOOLS: ReadonlySet<string> = new Set(["ask_parent", "report"]);
+
+/** The parent's five subagent tools. */
+const PARENT_TOOLS: ReadonlyArray<string> = [
+  "subagent_spawn",
+  "subagent_send",
+  "subagent_status",
+  "subagent_stop",
+  "subagent_reply",
+];
+
+/** The subagent tools a thread is offered, as a request names them. */
+const offeredTools = (thread: ScriptedThread): ReadonlyArray<string> =>
+  Option.match(thread.link, {
+    onNone: () => PARENT_TOOLS,
+    onSome: (link) =>
+      link.resultSchema === null
+        ? [...CHILD_TOOLS]
+        : [...CHILD_TOOLS, RESULT_TOOL_NAME],
+  });
+
+/** The most options an `ask_parent` question offers: the protocol's `Question`. */
+const MAX_QUESTION_OPTIONS = 9;
+
+/** The longest question or option label: the protocol's `DisplayText`. */
+const MAX_QUESTION_LENGTH = 4096;
+
+/** The longest bounded wait `subagent_status` takes, as on pi-durable. */
+const MAX_WAIT_SECONDS = 600;
 
 /** A child's thread id, from a store counter: a valid UUIDv7 no other thread uses. */
 const childThreadIdOf = (n: number) =>
@@ -533,7 +697,13 @@ const subagentItem = (item: SubagentItem): JsonValue => ({
   worktree: null,
   status: item.status,
   wake: item.wake,
-  settlements: item.settlements.map((mark) => ({ ...mark })),
+  settlements: item.settlements.map((mark) => ({
+    ...mark,
+    inputs: [...mark.inputs],
+  })),
+  runs: item.runs.map((mark) =>
+    mark.phase === "nudge" ? { ...mark, inputs: [...mark.inputs] } : { ...mark }
+  ),
   delivered: item.delivered,
   questions: Object.fromEntries(
     [...item.questions].map(([id, question]) => [id, { ...question }])
@@ -553,13 +723,13 @@ const childDocument = (
   depth: link.depth,
   briefApprovalId: link.briefApprovalId,
   resultSchema: link.resultSchema,
-  attempts: link.attempts,
+  attempts: 0,
   report: Option.match(link.report, {
     onNone: () => null,
     onSome: (report) => ({
       summary: report.summary,
       divergence: report.divergence,
-      payload: report.payload,
+      payload: null,
       commit: Option.getOrNull(report.commit),
     }),
   }),
@@ -587,7 +757,9 @@ const viewOf = (
     cairnDocs.push(["cairn.approvals", { items: approvalItems(thread) }]);
   }
 
-  if (thread.subagents.size > 0) {
+  // Written at ensure on pi-durable, so a thread the host ensured has its registry, empty until a
+  // child starts; a subagent, which ensure never made, has one only once it starts a child.
+  if (Option.isNone(thread.link) || thread.subagents.size > 0) {
     cairnDocs.push([
       "cairn.subagents",
       {
@@ -676,15 +848,21 @@ const pendingCalls = (thread: ScriptedThread): ReadonlyArray<ToolCall> => {
   );
 };
 
-/** The newest assistant entry after `after`, with its text. */
+/** Whether `entry` lies within `until` (a run's last entry; the whole transcript without one). */
+const within = (entry: EntryRecord, until: Option.Option<number>): boolean =>
+  !Option.exists(until, (last) => entry.id > last);
+
+/** The newest assistant entry after `after` and up to `until`, with its text. */
 const lastAnswerAfter = (
   thread: ScriptedThread,
-  after: Option.Option<number>
+  after: Option.Option<number>,
+  until: Option.Option<number>
 ): Option.Option<{ readonly id: number; readonly text: string }> => {
   const floor = Option.getOrElse(after, () => 0);
 
   const found = thread.entries.findLast(
-    (entry) => entry.kind === "pi.assistant" && entry.id > floor
+    (entry) =>
+      entry.kind === "pi.assistant" && entry.id > floor && within(entry, until)
   );
 
   const message = found?.model?.[0];
@@ -692,6 +870,74 @@ const lastAnswerAfter = (
   return found === undefined || message === undefined
     ? Option.none()
     : Option.some({ id: found.id, text: messageText(message) });
+};
+
+/** The newest answer of a thread up to `until` that says something; empty for none. */
+const lastSpokenIn = (
+  thread: ScriptedThread,
+  until: Option.Option<number>
+): string => {
+  for (const entry of thread.entries.toReversed()) {
+    if (!within(entry, until)) {
+      continue;
+    }
+
+    const message = entry.model?.[0];
+
+    const text =
+      entry.kind === "pi.assistant" && message !== undefined
+        ? messageText(message)
+        : "";
+
+    if (text.trim() !== "") {
+      return text;
+    }
+  }
+
+  return "";
+};
+
+/**
+ * Where the child's accepted result lies against the run from `from` (its first input) to `end`
+ * (its last entry), as pi-durable's `resultPlace` says: in it, so its settlement carries it once;
+ * before it, delivered with an earlier run; after it, a later run's; or none yet.
+ */
+const resultPlace = (
+  child: ScriptedThread,
+  from: Option.Option<number>,
+  end: Option.Option<number>,
+  accepted: Option.Option<unknown>
+): "none" | "before" | "in" | "after" => {
+  if (Option.isNone(accepted)) {
+    return "none";
+  }
+
+  const at = child.entries.find((entry) =>
+    Option.contains(markOf(entry), "accepted")
+  )?.id;
+
+  if (Option.isNone(from) || at === undefined || at < from.value) {
+    return "before";
+  }
+
+  return Option.exists(end, (last) => at > last) ? "after" : "in";
+};
+
+/**
+ * How many answers a thread gave after the entry `after` (its whole transcript without one) and up
+ * to `until` (a run's last entry, when given).
+ */
+const answersAfter = (
+  thread: ScriptedThread,
+  after: Option.Option<number>,
+  until: Option.Option<number> = Option.none()
+) => {
+  const floor = Option.getOrElse(after, () => 0);
+
+  return thread.entries.filter(
+    (entry) =>
+      entry.kind === "pi.assistant" && entry.id > floor && within(entry, until)
+  ).length;
 };
 
 /** Starts the runs a restart interrupted; boot calls it once its subscribers are in place. */
@@ -750,9 +996,7 @@ const briefOf = (
   const resultSchema = isJsonValue(schema) ? copyJson(schema) : null;
 
   if (schema !== undefined && !isJsonRecord(resultSchema)) {
-    return Result.fail(
-      "subagent_spawn's result_schema must be a JSON Schema object. Pass an object, or leave it out for a text result."
-    );
+    return Result.fail(SubagentToolText.resultSchemaNotObject);
   }
 
   return Result.succeed({
@@ -830,46 +1074,12 @@ const settlementData = (settlement: SubagentSettlement): JsonValue => ({
 /** An `ask_parent` call's options, when it gave a list of labels. */
 const decodeOptions = Schema.decodeUnknownOption(Schema.Array(Schema.String));
 
-/** The JSON a `report` payload arrived as; null without one. */
-const payloadOf = (call: ToolCall): JsonValue => {
-  const payload: unknown = call.arguments.payload;
-
-  return isJsonValue(payload) ? copyJson(payload) : null;
-};
-
-/** Why a payload does not satisfy a schema; none when it does. */
-const payloadProblem = (
-  schema: JsonRecord,
-  payload: JsonValue
-): Option.Option<string> =>
-  Result.match(
-    Result.try({
-      try: () => {
-        validateToolArguments(
-          {
-            name: "report",
-            description: "The child's result.",
-            parameters: Type.Object({ payload: Type.Unsafe(schema) }),
-          },
-          {
-            type: "toolCall",
-            id: "report",
-            name: "report",
-            arguments: { payload },
-          }
-        );
-      },
-      catch: (cause) =>
-        Predicate.isError(cause) ? cause.message : String(cause),
-    }),
-    { onFailure: Option.some, onSuccess: () => Option.none() }
-  );
-
 /** Marks a submission withdrawn before any run placed it. */
 const endUnplaced = (submission: Submission) => {
   submission.status = "unanswered";
   submission.ended = Option.some({
     runId: Option.none(),
+    lastEntry: Option.none(),
     status: "interrupted",
     failure: Option.none(),
   });
@@ -929,38 +1139,48 @@ const notYours = (call: ToolCall) =>
     )
   );
 
+/** Whether any of `items` waits on a question to its parent. */
+const asking = (items: ReadonlyArray<SubagentItem>) =>
+  items.some((item) =>
+    [...item.questions.values()].some(
+      (question) => question.state === "pending"
+    )
+  );
+
+/** `subagent_status`'s text for `items`: one line per child, or the bare word without any. */
+const statusText = (items: ReadonlyArray<SubagentItem>) =>
+  items.length === 0
+    ? SubagentToolText.noSubagents
+    : items
+        .map((item) =>
+          SubagentToolText.statusLine(
+            item.threadId,
+            item.description,
+            item.status,
+            asking([item])
+          )
+        )
+        .join("\n");
+
+/** How many settlements `items` have had. */
+const settledCount = (items: ReadonlyArray<SubagentItem>) =>
+  items.reduce((sum, item) => sum + item.settlements.length, 0);
+
 /**
- * `subagent_status`: each child's status, never its result (the result is the note). It answers
- * at once and ignores `wait_seconds`: the bounded wait, and its early return when a note lands,
- * are 3A's on pi-durable, and no scripted scenario blocks a parent in it.
+ * The attempt state of a child, from its transcript's `submit_result` results and nudge: up to
+ * `through` when given (a run's last entry, so a later run's result does not count for it).
  */
-const statusTool = (thread: ScriptedThread, call: ToolCall) =>
-  Effect.sync((): ToolOutcome => {
-    const name = textArgument(call, "subagent");
-
-    const lines = [...thread.subagents.values()].flatMap((item) => {
-      if (Option.isSome(name) && !Option.contains(name, item.threadId)) {
-        return [];
-      }
-
-      const asking = [...item.questions.values()].some(
-        (question) => question.state === "pending"
-      );
-
-      return [
-        SubagentToolText.statusLine(
-          item.threadId,
-          item.description,
-          item.status,
-          asking
-        ),
-      ];
-    });
-
-    return lines.length === 0
-      ? said(SubagentToolText.noSubagents)
-      : said(lines.join("\n"));
-  });
+const attemptStateIn = (
+  thread: ScriptedThread,
+  through: Option.Option<number> = Option.none()
+) =>
+  attemptStateOf(
+    thread.entries.flatMap((entry) =>
+      Option.exists(through, (last) => entry.id > last)
+        ? []
+        : Option.toArray(markOf(entry))
+    )
+  );
 
 /** Starts a run's fiber and a reporter's fiber; filled in once the harness defines both. */
 interface Starters {
@@ -1251,11 +1471,25 @@ const layerNoDeps = Layer.effectContext(
         return submission;
       }
 
-      // Idle: a run starts and takes the oldest queued input first (a failed run left them).
-      const [first] = thread.queue.splice(0, 1);
+      // Idle: a run starts with what pi-durable's final boundary places in this one commit (queue
+      // modes one at a time): the first queued steer and the first queued follow-up, in queue
+      // order, so an input a failed run kept goes in one run with the input that arrives next.
+      const firstOf = (mode: QueuedInput["mode"]) =>
+        thread.queue.findIndex((item) => item.mode === mode);
+
+      const picked = [firstOf("steer"), firstOf("followUp")]
+        .filter((index) => index !== -1)
+        .toSorted((a, b) => a - b);
+
+      const placing = picked.map((index) => thread.queue[index]);
+
+      for (const index of picked.toReversed()) {
+        thread.queue.splice(index, 1);
+      }
+
       const runId = nextId();
 
-      thread.run = Option.some({ runId, inputs: [] });
+      thread.run = Option.some({ runId, inputs: [], segment: runId });
       changes.events.push(
         RunStarted.make({
           threadId: thread.threadId,
@@ -1264,8 +1498,13 @@ const layerNoDeps = Layer.effectContext(
         })
       );
 
-      if (first !== undefined) {
-        place(thread, first, at, changes);
+      for (const item of placing) {
+        if (item !== undefined) {
+          place(thread, item, at, changes);
+        }
+      }
+
+      if (placing.length > 0) {
         changes.events.push(queueChanged(thread));
       }
 
@@ -1377,7 +1616,7 @@ const layerNoDeps = Layer.effectContext(
             parent,
             child,
             offered.approvalId,
-            "The parent's run ended without answering.",
+            EscalationWhy.parentRunEnded,
             at,
             changes
           );
@@ -1399,18 +1638,7 @@ const layerNoDeps = Layer.effectContext(
 
       const run = thread.run.value;
 
-      for (const id of run.inputs) {
-        const submission = thread.byId.get(id);
-
-        if (submission !== undefined) {
-          submission.status = status === "completed" ? "done" : "unanswered";
-          submission.ended = Option.some({
-            runId: Option.some(run.runId),
-            status,
-            failure: failureInfo,
-          });
-        }
-      }
+      settleInputs(thread, run, status, failureInfo);
 
       thread.run = Option.none();
       thread.halted = status !== "completed";
@@ -1428,7 +1656,11 @@ const layerNoDeps = Layer.effectContext(
       escalateUnanswered(thread, at, changes);
     };
 
-    /** At a final answer: notes first, then the next queued input (a steer first) or the end. */
+    /**
+     * At a final answer: notes first, then the next queued input (a steer first) or the end. Either
+     * way the inputs placed so far settle with this answer, as pi-durable's final boundary settles
+     * them (a new segment of the run takes the next input).
+     */
     const continueOrEnd = (
       thread: ScriptedThread,
       at: number,
@@ -1444,12 +1676,17 @@ const layerNoDeps = Layer.effectContext(
       const [next] =
         thread.queue.length > 0 ? thread.queue.splice(nextIndex, 1) : [];
 
-      if (next === undefined) {
+      if (next === undefined || Option.isNone(thread.run)) {
         endRun(thread, "completed", Option.none(), at, changes);
 
         return;
       }
 
+      const run = thread.run.value;
+
+      settleInputs(thread, run, "completed", Option.none());
+      run.segment = nextId();
+      changes.touched.add(thread);
       place(thread, next, at, changes);
       changes.events.push(queueChanged(thread));
     };
@@ -1470,7 +1707,7 @@ const layerNoDeps = Layer.effectContext(
             parent,
             child,
             record.id,
-            "The parent is stopped.",
+            EscalationWhy.parentStopped,
             at,
             changes
           );
@@ -1579,7 +1816,9 @@ const layerNoDeps = Layer.effectContext(
         entry: input.entry,
         whenBusy: input.whenBusy,
         quiet,
+        quietRun: quiet,
         phase: "deliver",
+        nudgeSeq: 0,
         settlement: Option.none(),
       };
 
@@ -1630,10 +1869,8 @@ const layerNoDeps = Layer.effectContext(
             brief.resultSchema === null
               ? null
               : copyRecordJson(brief.resultSchema),
-          attempts: 0,
-          attemptsRun: 0,
           report: Option.none(),
-          failedReport: Option.none(),
+          result: Option.none(),
         }),
       };
 
@@ -1653,10 +1890,10 @@ const layerNoDeps = Layer.effectContext(
             spec,
             role: null,
             model: { ...parent.agent.model },
-            thinkingLevel: null,
+            thinkingLevel: parent.agent.thinkingLevel,
             via: "literal",
             skipped: [],
-            family: "other",
+            family: familyOf(parent.agent.model),
             priced: false,
           },
           previewed: null,
@@ -1669,7 +1906,7 @@ const layerNoDeps = Layer.effectContext(
         delivered: 0,
         questions: new Map(),
         inputs: new Map(),
-        settledRuns: new Set(),
+        runs: [],
       };
 
       parent.subagents.set(record.id, item);
@@ -1706,7 +1943,12 @@ const layerNoDeps = Layer.effectContext(
         {
           requestId: SubagentRequestIds.briefAnswer(record.id),
           kind: BRIEF_ANSWER_ENTRY,
-          data: { briefId: record.id, decision: "accept", childThreadId },
+          data: {
+            briefId: record.id,
+            decision: "accept",
+            started: true,
+            childThreadId,
+          },
           text: renderBriefAnswer(brief.title, { kind: "go", childThreadId }),
         },
         at,
@@ -1748,7 +1990,11 @@ const layerNoDeps = Layer.effectContext(
           {
             requestId,
             kind: BRIEF_ANSWER_ENTRY,
-            data: { briefId: record.id, decision: record.status },
+            data: {
+              briefId: record.id,
+              decision: record.status,
+              started: false,
+            },
             text,
           },
           at,
@@ -1822,16 +2068,75 @@ const layerNoDeps = Layer.effectContext(
      * the child working.
      */
     const settledUnlessWorking = (child: ScriptedThread, changes: Changes) => {
+      // A reporter in its nudge phase whose nudge is not admitted yet still works too.
       const undelivered = [...store.reporters.values()].some(
         (reporter) =>
           reporter.child === child.threadId &&
-          reporter.phase === "deliver" &&
-          !child.byRequest.has(reporter.requestId)
+          ((reporter.phase === "deliver" &&
+            !child.byRequest.has(reporter.requestId)) ||
+            (reporter.phase === "nudge" &&
+              !child.byRequest.has(
+                SubagentRequestIds.nudge(child.threadId, reporter.nudgeSeq)
+              )))
       );
 
       if (Option.isNone(child.run) && !undelivered) {
         setChildStatus(child, "settled", changes);
       }
+    };
+
+    /**
+     * Every input the run segment that ended `submission` (`current`, the input or nudge `reporter`
+     * waited on) ended: with the nudged run's inputs when it waited on a nudge, and each live peer
+     * whose own submission (its input, or the nudge it sent, with that nudge's inputs) the same
+     * segment ended, answered or not. `quiet` when all were; `from` is the earliest placed.
+     */
+    const runInputsOf = (
+      reporter: Reporter,
+      child: ScriptedThread,
+      item: SubagentItem,
+      current: string,
+      submission: Submission,
+      end: SubmissionEnd
+    ) => {
+      const own =
+        reporter.phase === "nudge" ? nudgeMarkOf(item, reporter) : undefined;
+
+      const inputs = [current];
+      let quiet = own === undefined ? reporter.quiet : own.quiet;
+      const placed = [...Option.toArray(submission.placedAs)];
+
+      const add = (requestIds: ReadonlyArray<string>) => {
+        for (const requestId of requestIds) {
+          if (!inputs.includes(requestId)) {
+            inputs.push(requestId);
+          }
+        }
+      };
+
+      add(own?.inputs ?? []);
+
+      for (const other of store.reporters.values()) {
+        const peer =
+          other.child === child.threadId && other.id !== reporter.id
+            ? peerOf(other, child, item, end)
+            : Option.none();
+
+        if (Option.isSome(peer)) {
+          add(peer.value.inputs);
+          quiet &&= peer.value.quiet;
+          placed.push(...Option.toArray(peer.value.placedAs));
+        }
+      }
+
+      return {
+        inputs,
+        quiet,
+        from:
+          placed.length === 0
+            ? Option.none<number>()
+            : Option.some(Math.min(...placed)),
+      };
     };
 
     /** Settles one reporter's input once its run ended: one settlement per run. */
@@ -1853,71 +2158,129 @@ const layerNoDeps = Layer.effectContext(
 
       const { link, parent, item } = linked.value;
 
-      if (Option.isSome(end.runId) && item.settledRuns.has(end.runId.value)) {
+      // The run's key: its segment, or the submission alone when it ran in no run.
+      const key = Option.match(end.runId, {
+        onNone: () => `input:${submission.id}`,
+        onSome: (runId) => `seg:${runId}`,
+      });
+
+      const current =
+        reporter.phase === "nudge"
+          ? SubagentRequestIds.nudge(child.threadId, reporter.nudgeSeq)
+          : reporter.requestId;
+
+      // A run settles once: whichever of its reporters gets here first marks it. A nudge mark names
+      // the inputs whose run its nudge's run settles; the nudge's reporter settles the child then.
+      const marked = item.runs.filter(
+        (mark) => mark.run === key || markInputs(item, mark).includes(current)
+      );
+
+      if (marked.length > 0) {
         reporter.phase = "done";
-        settledUnlessWorking(child, changes);
+
+        if (marked.some((mark) => mark.phase === "settled")) {
+          settledUnlessWorking(child, changes);
+        }
 
         return;
       }
 
-      for (const runId of Option.toArray(end.runId)) {
-        item.settledRuns.add(runId);
+      const run = runInputsOf(reporter, child, item, current, submission, end);
+      const { inputs, quiet } = run;
+
+      reporter.quietRun = quiet;
+
+      // The report of the run being settled: a settlement spends it, so the next run has none.
+      const { report } = link;
+
+      // The run's own entries only, up to its end, as pi-durable reads them: a reporter that settles
+      // late never takes a later run's words or turns.
+      const answered = lastAnswerAfter(
+        child,
+        submission.placedAs,
+        end.lastEntry
+      );
+
+      const seq = item.settlements.length + 1;
+      const where = resultPlace(child, run.from, end.lastEntry, link.result);
+
+      // A typed child whose run completed without a result, and none before it: nudged once while
+      // its attempts up to the run's end allow (the nudge's run settles the run's inputs), failed
+      // otherwise.
+      const missing =
+        link.resultSchema !== null &&
+        end.status === "completed" &&
+        (where === "none" || where === "after")
+          ? Option.some(attemptStateIn(child, end.lastEntry))
+          : Option.none();
+
+      if (Option.isSome(missing) && nudgeDue(missing.value)) {
+        item.runs.push({ run: key, phase: "nudge", seq, inputs, quiet });
+        reporter.nudgeSeq = seq;
+        reporter.phase = "nudge";
+
+        return;
       }
 
-      const sameRun = <A extends { readonly runId: number }>(
-        value: Option.Option<A>
-      ) =>
-        Option.filter(value, (found) =>
-          Option.contains(end.runId, found.runId)
-        );
-
-      const report = sameRun(link.report);
-      const failedReport = sameRun(link.failedReport);
-      const answered = lastAnswerAfter(child, submission.placedAs);
+      const noResult = Option.map(missing, (state) =>
+        state.used >= MAX_RESULT_ATTEMPTS ? CAP_TEXT : NO_RESULT_ERROR
+      );
 
       let outcome: SettlementOutcome = "completed";
 
       if (end.status === "interrupted") {
         outcome = "stopped";
-      } else if (end.status === "failed" || Option.isSome(failedReport)) {
+      } else if (end.status === "failed" || Option.isSome(noResult)) {
         outcome = "failed";
       }
 
-      const failureMessage = Option.orElse(
-        Option.map(failedReport, (found) => found.message),
-        () =>
-          end.status === "failed"
-            ? Option.some("The child's run failed before it answered.")
-            : Option.none()
+      const failureMessage = Option.orElse(noResult, () =>
+        end.status === "failed"
+          ? Option.some("The child's run failed before it answered.")
+          : Option.none()
       );
+
+      // A typed result goes to the parent once: with the run that accepted it.
+      const result = where === "in" ? link.result : Option.none();
+
+      const worded = Option.match(report, {
+        onNone: () =>
+          Option.match(answered, {
+            onNone: () => "",
+            onSome: (found) => found.text,
+          }),
+        onSome: (found) => found.summary,
+      });
+
+      // A typed result's summary when the run ended on `submit_result` with no words of its own.
+      const spoken = lastSpokenIn(child, end.lastEntry);
+      const typedSummary = spoken.trim() === "" ? TYPED_RESULT_SUMMARY : spoken;
 
       const settlement: SubagentSettlement = {
         subagent: child.threadId,
-        seq: item.settlements.length + 1,
+        seq,
         outcome,
-        summary: Option.match(report, {
+        summary:
+          worded.trim() === "" && Option.isSome(result) ? typedSummary : worded,
+        divergence: Option.match(result, {
           onNone: () =>
-            Option.match(answered, {
-              onNone: () => "",
-              onSome: (found) => found.text,
+            Option.match(report, {
+              onNone: () => "not reported",
+              onSome: (found) => found.divergence,
             }),
-          onSome: (found) => found.summary,
-        }),
-        divergence: Option.match(report, {
-          onNone: () => "not reported",
           onSome: (found) => found.divergence,
         }),
-        payload: Option.match(report, {
+        payload: Option.match(result, {
           onNone: () => null,
-          onSome: (found) => found.payload,
+          onSome: (found) => found.result,
         }),
         commit: Option.getOrNull(
           Option.flatMap(report, (found) => found.commit)
         ),
         branch: null,
         turns: {
-          thisRun: 1,
-          total: item.settlements.length + 1,
+          thisRun: answersAfter(child, submission.placedAs, end.lastEntry),
+          total: answersAfter(child, Option.none()),
         },
         error:
           outcome === "failed"
@@ -1936,7 +2299,10 @@ const layerNoDeps = Layer.effectContext(
           Option.map(answered, (found) => found.id)
         ),
         reportedAt: at,
+        inputs,
       });
+      item.runs.push({ run: key, phase: "settled", seq });
+      link.report = Option.none();
       reporter.settlement = Option.some(settlement);
       reporter.phase = "report";
       changes.touched.add(parent);
@@ -1982,7 +2348,7 @@ const layerNoDeps = Layer.effectContext(
         }
 
         const wakes =
-          !reporter.quiet &&
+          !reporter.quietRun &&
           item.wake === "answer" &&
           !settlement.usageLimit &&
           (faults.wakeStoppedParent || !parent.halted);
@@ -2096,6 +2462,38 @@ const layerNoDeps = Layer.effectContext(
         if (reporter.phase === "deliver") {
           const submission = yield* locked((at, changes) =>
             Effect.sync(() => admit(child, reporter, at, changes))
+          );
+
+          const end = yield* awaitThread(child, () => submission.ended);
+
+          yield* locked((at, changes) =>
+            Effect.sync(() => {
+              for (const found of Option.toArray(end)) {
+                settle(reporter, submission, found, at, changes);
+              }
+            })
+          );
+        }
+
+        // A typed child that ended without a result: its one nudge, and the run that answers it.
+        if (reporter.phase === "nudge") {
+          const submission = yield* locked((at, changes) =>
+            Effect.sync(() =>
+              admit(
+                child,
+                {
+                  requestId: SubagentRequestIds.nudge(
+                    child.threadId,
+                    reporter.nudgeSeq
+                  ),
+                  content: [{ type: "text", text: NUDGE_TEXT }],
+                  entry: Option.none(),
+                  whenBusy: "followUp",
+                },
+                at,
+                changes
+              )
+            )
           );
 
           const end = yield* awaitThread(child, () => submission.ended);
@@ -2243,9 +2641,13 @@ const layerNoDeps = Layer.effectContext(
           const task = textArgument(call, "brief");
 
           if (Option.isNone(description) || Option.isNone(task)) {
-            return refused(
-              "subagent_spawn needs a description (5 to 10 words) and a brief. Call it again with both."
-            );
+            return refused(SubagentToolText.spawnNeedsBrief);
+          }
+
+          for (const link of Option.toArray(thread.link)) {
+            if (link.depth >= MAX_SUBAGENT_DEPTH) {
+              return refused(SubagentToolText.depthReached(link.depth));
+            }
           }
 
           const briefId = `brief-${taskOf(thread, call)}`;
@@ -2340,6 +2742,13 @@ const layerNoDeps = Layer.effectContext(
           const { child } = named.value;
           const request = textArgument(call, "request");
 
+          if (
+            Option.isNone(textArgument(call, "answer")) &&
+            Option.isNone(textArgument(call, "escalate"))
+          ) {
+            return refused(SubagentToolText.replyNeedsAnswer);
+          }
+
           // The child's questions for its parent, whatever their status: a second call, or a
           // replay after the answer committed, finds its question settled.
           const questions = [...child.approvals.values()]
@@ -2432,9 +2841,7 @@ const layerNoDeps = Layer.effectContext(
           }
 
           if (Option.isNone(message)) {
-            return refused(
-              "subagent_send needs a message. Call it again with one."
-            );
+            return refused(SubagentToolText.sendNeedsMessage);
           }
 
           const { item, child } = named.value;
@@ -2466,10 +2873,29 @@ const layerNoDeps = Layer.effectContext(
       Effect.gen(function* () {
         const question = textArgument(call, "question");
 
+        if (Option.isNone(thread.link)) {
+          return refused(SubagentToolText.askOutsideSubagent);
+        }
+
         if (Option.isNone(question)) {
-          return refused(
-            "ask_parent needs a question. Call it again with one."
-          );
+          return refused(SubagentToolText.askNeedsQuestion);
+        }
+
+        const options = Option.getOrElse(
+          decodeOptions(call.arguments.options),
+          () => []
+        ).filter((label) => label.trim() !== "");
+
+        if (options.length > MAX_QUESTION_OPTIONS) {
+          return refused(SubagentToolText.tooManyOptions(MAX_QUESTION_OPTIONS));
+        }
+
+        if (
+          [question.value, ...options].some(
+            (text) => text.length > MAX_QUESTION_LENGTH
+          )
+        ) {
+          return refused(SubagentToolText.tooLong(MAX_QUESTION_LENGTH));
         }
 
         const approvalId = approvalIdOf(taskOf(thread, call));
@@ -2479,11 +2905,6 @@ const layerNoDeps = Layer.effectContext(
             if (thread.approvals.has(approvalId)) {
               return;
             }
-
-            const options = Option.getOrElse(
-              decodeOptions(call.arguments.options),
-              () => []
-            );
 
             const record: ApprovalRecord = {
               id: approvalId,
@@ -2541,14 +2962,10 @@ const layerNoDeps = Layer.effectContext(
               return refused(SubagentToolText.questionEnded(record.status));
             }
 
-            const custom = Option.fromNullOr(
-              record.answer?.answers?.[0]?.custom ?? null
-            );
-
             return said(
               renderAnswer(
                 record.decidedBy?.kind === "thread" ? "parent" : "user",
-                custom
+                record.answer?.answers?.[0]
               )
             );
           },
@@ -2616,7 +3033,7 @@ const layerNoDeps = Layer.effectContext(
         });
       });
 
-    /** `report`: a child's result, checked against its brief's schema; the first valid one wins. */
+    /** `report`: a child's summary, divergence and commit; the first one of a run stands. */
     const reportTool = (thread: ScriptedThread, call: ToolCall) =>
       locked((_at, _changes) =>
         Effect.sync((): ToolOutcome => {
@@ -2627,57 +3044,12 @@ const layerNoDeps = Layer.effectContext(
             return refused(SubagentToolText.reportOutsideSubagent);
           }
 
-          if (
-            Option.exists(link.report, (found) => found.runId === run.runId)
-          ) {
+          if (Option.isSome(link.report)) {
             return {
               text: SubagentToolText.alreadyReported,
               isError: false,
               terminate: true,
             };
-          }
-
-          const payload = payloadOf(call);
-
-          if (link.attemptsRun !== run.runId) {
-            link.attemptsRun = run.runId;
-            link.attempts = 0;
-          }
-
-          link.attempts += 1;
-
-          const problem =
-            link.resultSchema === null
-              ? Option.none<string>()
-              : payloadProblem(link.resultSchema, payload);
-
-          if (Option.isSome(problem)) {
-            const attempt = link.attempts;
-
-            if (attempt >= REPORT_ATTEMPTS) {
-              link.failedReport = Option.some({
-                runId: run.runId,
-                message: problem.value,
-              });
-
-              return {
-                text: SubagentToolText.reportLastAttempt(
-                  attempt,
-                  REPORT_ATTEMPTS,
-                  problem.value
-                ),
-                isError: true,
-                terminate: true,
-              };
-            }
-
-            return refused(
-              SubagentToolText.reportRetry(
-                attempt,
-                REPORT_ATTEMPTS,
-                problem.value
-              )
-            );
           }
 
           link.report = Option.some({
@@ -2687,7 +3059,6 @@ const layerNoDeps = Layer.effectContext(
               textArgument(call, "divergence"),
               () => "None"
             ),
-            payload: link.resultSchema === null ? null : payload,
             commit: textArgument(call, "commit"),
           });
 
@@ -2698,6 +3069,97 @@ const layerNoDeps = Layer.effectContext(
           };
         })
       );
+
+    /**
+     * `submit_result` (models/ResultTool.ts): the value checked against the brief's schema, two
+     * attempts counted from the transcript (a nudge before any call uses the first), the first
+     * valid one kept as the child's `cairn.result` and the run ended on it.
+     */
+    const submitResultTool = (thread: ScriptedThread, call: ToolCall) =>
+      locked((_at, _changes) =>
+        Effect.sync((): ToolOutcome => {
+          const link = Option.getOrUndefined(thread.link);
+
+          if (link?.resultSchema === null || link === undefined) {
+            return refused(ResultToolText.notTyped);
+          }
+
+          if (Option.isSome(link.result)) {
+            return {
+              text: ResultToolText.already,
+              isError: false,
+              terminate: true,
+            };
+          }
+
+          const state = attemptStateIn(thread);
+
+          if (!canSubmit(state)) {
+            return refused(ResultToolText.capped);
+          }
+
+          const attempt = state.used + 1;
+          const verdict = validateResult(link.resultSchema, call.arguments);
+
+          if (Result.isFailure(verdict)) {
+            return refused(ResultToolText.rejected(attempt, verdict.failure));
+          }
+
+          link.result = Option.some({
+            result: copyJson(verdict.success.result),
+            divergence: verdict.success.divergence,
+            attempts: attempt,
+          });
+
+          return {
+            text: ResultToolText.accepted,
+            isError: false,
+            terminate: true,
+          };
+        })
+      );
+
+    /**
+     * `subagent_status`: each child's status, never its result (the result is the note). With
+     * `wait_seconds` it waits, bounded, until a child settles again or asks.
+     */
+    const statusTool = (thread: ScriptedThread, call: ToolCall) =>
+      Effect.gen(function* () {
+        const name = textArgument(call, "subagent");
+
+        const chosen = () =>
+          [...thread.subagents.values()].filter(
+            (item) =>
+              Option.isNone(name) || Option.contains(name, item.threadId)
+          );
+
+        const current = chosen();
+        const requested: unknown = call.arguments.wait_seconds;
+
+        const seconds = Math.min(
+          MAX_WAIT_SECONDS,
+          Predicate.isNumber(requested) && requested > 0 ? requested : 0
+        );
+
+        if (seconds === 0 || current.length === 0 || asking(current)) {
+          return said(statusText(current));
+        }
+
+        const before = settledCount(current);
+
+        const later = yield* awaitThread(thread, () => {
+          const items = chosen();
+
+          return settledCount(items) > before || asking(items)
+            ? Option.some(items)
+            : Option.none();
+        }).pipe(
+          Effect.timeoutOption(Duration.seconds(seconds)),
+          Effect.map(Option.flatten)
+        );
+
+        return said(statusText(Option.getOrElse(later, chosen)));
+      });
 
     const stop = (
       threadId: ThreadId,
@@ -2746,6 +3208,46 @@ const layerNoDeps = Layer.effectContext(
                   status: cancelled.status,
                 })
               );
+            }
+
+            // A question to the parent ends with the call that asked it: its mirror in the parent
+            // is cancelled too, and the parent's registry marks it (ADR 0027).
+            for (const { parent, item } of Option.toArray(linkOf(thread))) {
+              for (const record of held) {
+                if (
+                  record.kind !== "user-input" ||
+                  (record.route !== "parent" && record.escalatedAt === null)
+                ) {
+                  continue;
+                }
+
+                const mirrorId = `esc-${thread.conversationId}-${record.id}`;
+                const mirror = parent.approvals.get(mirrorId);
+
+                if (mirror?.status === "pending") {
+                  const cancelled = copyRecord(mirror);
+
+                  cancelRecord(cancelled, at, "run-stopped");
+                  parent.approvals.set(mirrorId, cancelled);
+                  changes.touched.add(parent);
+                  changes.events.push(
+                    RuntimeRequestUpdated.make({
+                      threadId: parent.threadId,
+                      id: ApprovalId.make(mirrorId),
+                      kind: cancelled.kind,
+                      status: cancelled.status,
+                    })
+                  );
+                }
+
+                item.questions.set(record.id, {
+                  state: "cancelled",
+                  escalatedAt:
+                    item.questions.get(record.id)?.escalatedAt ?? null,
+                });
+                parent.offered.delete(`${thread.threadId}:${record.id}`);
+                changes.touched.add(parent);
+              }
             }
 
             if (held.length > 0) {
@@ -2837,6 +3339,10 @@ const layerNoDeps = Layer.effectContext(
           : askParentTool(thread, call);
       }
 
+      if (isChild && call.name === RESULT_TOOL_NAME) {
+        return submitResultTool(thread, call);
+      }
+
       return Effect.map(tools.run(call, toolApi(thread, call)), (result) => ({
         ...result,
         terminate: false,
@@ -2909,6 +3415,7 @@ const layerNoDeps = Layer.effectContext(
           const answer = yield* model.answer({
             threadId: thread.threadId,
             messages: contextOf(thread),
+            tools: offeredTools(thread),
           });
 
           yield* locked((at, changes) =>
@@ -3291,6 +3798,7 @@ const layerNoDeps = Layer.effectContext(
       const summary = yield* model.answer({
         threadId,
         messages: contextOf(thread),
+        tools: [],
       });
 
       return yield* locked((at, changes) =>

@@ -18,5 +18,5 @@
 {"type":"settle","ms":300}
 {"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":2}
 {"type":"expect_view","path":["transcript",-1],"equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\nsrc has 2 test files.\n</subagent_result>\nDivergence: not reported","images":0,"toolCalls":[],"toolName":null,"isError":null}}
-{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":2,"delivered":2}]}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":2,"delivered":2,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}
 {"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"Count the files\n\nCount the files in src.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"src has 4 files.","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"also count the tests","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"src has 2 test files.","images":0,"toolCalls":[],"toolName":null,"isError":null}],"thread":"child1"}

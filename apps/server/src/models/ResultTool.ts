@@ -29,7 +29,7 @@
 
 import type { ModelRef } from "@cairn/protocol/Models";
 import { JsonObject } from "@cairn/protocol/Policy";
-import { CHILD_DOCUMENT, RESULT_DOCUMENT } from "@cairn/protocol/Subagents";
+import { RESULT_DOCUMENT } from "@cairn/protocol/Subagents";
 import type { Context as ChordContext, JsonValue } from "@earendil-works/chord";
 import { copyJson } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
@@ -40,6 +40,7 @@ import type {
   ConversationId,
   Cursor,
   DocumentReader,
+  EntryId,
   EntryRecord,
   Tx,
 } from "@earendil-works/pi-durable";
@@ -64,6 +65,8 @@ import {
 
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { ChildDoc } from "../subagents/SubagentDocs.ts";
+import type { ChildState } from "../subagents/SubagentDocs.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const RESULTS_EXTENSION = "cairn.results";
@@ -98,6 +101,26 @@ export const NUDGE_TEXT =
 export const CAP_TEXT =
   "The result was rejected twice; reply in plain text with what you found.";
 
+/**
+ * What `submit_result` returns, word for word: the scripted harness answers its calls with the
+ * same texts, so the conformance goldens hold both to them.
+ */
+export const ResultToolText = {
+  /** A thread whose brief named no result schema. */
+  notTyped:
+    "submit_result: this thread was not asked for a typed result. Answer in plain text.",
+  /** The accepted call. */
+  accepted: "Result accepted. Your work on this brief is done.",
+  /** A call after the accepted one. */
+  already:
+    "A result was already accepted; this call changes nothing. Your work on this brief is done.",
+  /** A call past the cap. */
+  capped: `submit_result: ${CAP_TEXT}`,
+  /** A refused value, with pi-ai's error lines and what to do next. */
+  rejected: (attempt: number, errors: string) =>
+    `submit_result rejected (attempt ${String(attempt)} of ${String(MAX_RESULT_ATTEMPTS)}):\n${errors}\n${attempt < MAX_RESULT_ATTEMPTS ? "Fix these and call submit_result again." : CAP_TEXT}`,
+} as const;
+
 // Documents.
 
 /** `cairn.result` as the document holds it: the protocol's `ResultDocument` as plain JSON. */
@@ -124,25 +147,23 @@ export const ResultDoc = defineDoc<ResultState>({
   checkpointWhen: () => false,
 });
 
-/** The part of `cairn.child` this extension reads: the schema the brief named. */
-interface ChildSchemaState {
+/** `cairn.result-call` state: whether this tool call is the one that accepted the result. */
+interface AcceptingCallState {
   [key: string]: JsonValue;
-  resultSchema: JsonValue;
+  accepted: boolean;
 }
 
 /**
- * A read-only view of `cairn.child`, which the spawn writes (the subagents extension owns it).
- * Only `snapshot` reads go through this token, so its `initial` is never stored. Its version
- * must match the writer's: pi-durable refuses a stored record newer than the token, so this view
- * gives way to 3A's exported token when that lands.
+ * `cairn.result-call` on a `submit_result` call's own task, written in the commit that accepts
+ * the result: a rerun of that call (a crash before its answer reached the transcript) answers
+ * accepted again, while another call answers `already`. Never on the wire.
  */
-const ChildSchemaDoc = defineDoc<ChildSchemaState>({
-  kind: CHILD_DOCUMENT,
+const AcceptingCallDoc = defineDoc<AcceptingCallState>({
+  kind: "cairn.result-call",
   version: 1,
-  scope: "conversation",
-  history: "latest",
-  fork: "initial",
-  initial: () => ({ resultSchema: null }),
+  scope: "task",
+  initial: () => ({ accepted: false }),
+  // Written once.
   checkpointWhen: () => false,
 });
 
@@ -540,8 +561,11 @@ export const validateResult = (
 
 // Attempts, from the transcript.
 
-/** What one transcript entry says about the result: a call's verdict, or the nudge. */
-export type ResultMark = "rejected" | "accepted" | "nudge";
+/**
+ * What one transcript entry says about the result: a call's verdict (`already` for a call after
+ * one was accepted, which accepts nothing), or the nudge.
+ */
+export type ResultMark = "rejected" | "accepted" | "already" | "nudge";
 
 /** Where a child stands on its result, derived from its transcript's marks in order. */
 export interface AttemptState {
@@ -565,7 +589,7 @@ export const attemptStateOf = (marks: Iterable<ResultMark>): AttemptState => {
     if (mark === "rejected") {
       called = true;
       used += 1;
-    } else if (!nudged) {
+    } else if (mark === "nudge" && !nudged) {
       nudged = true;
 
       if (!called) {
@@ -613,7 +637,17 @@ export const markOf = (entry: EntryRecord): Option.Option<ResultMark> => {
     message.role === "toolResult" &&
     message.toolName === RESULT_TOOL_NAME
   ) {
-    return Option.some(message.isError ? "rejected" : "accepted");
+    if (message.isError) {
+      return Option.some("rejected");
+    }
+
+    const said = message.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("");
+
+    return Option.some(
+      said.trim() === ResultToolText.already ? "already" : "accepted"
+    );
   }
 
   return UserEntry.is(entry) && textOf(message).trim() === NUDGE_TEXT
@@ -623,17 +657,28 @@ export const markOf = (entry: EntryRecord): Option.Option<ResultMark> => {
 
 const SCAN_PAGE = 256;
 
-/** The attempt state of `conversationId`, read from its transcript inside `tx`. */
+/**
+ * The attempt state of `conversationId`, read from its transcript inside `tx`: up to `through` when
+ * given (a run's last entry, so a later run's result does not count for it), else all of it.
+ */
 export const readAttemptState = async (
   tx: Tx,
-  conversationId: ConversationId
+  conversationId: ConversationId,
+  through: Option.Option<EntryId> = Option.none()
 ): Promise<AttemptState> => {
   const marks: Array<ResultMark> = [];
 
   // Pages are read one after another: each cursor comes from the page before.
   const scan = async (cursor: Option.Option<Cursor>): Promise<AttemptState> => {
     const page = await tx.scanEntries(
-      { conversationId, order: "ascending" },
+      {
+        conversationId,
+        order: "ascending",
+        ...Option.match(through, {
+          onNone: () => ({}),
+          onSome: (maxEntryId) => ({ maxEntryId }),
+        }),
+      },
       SCAN_PAGE,
       Option.getOrUndefined(cursor)
     );
@@ -666,7 +711,7 @@ export const returnedModelOf = (
 
 // The tool.
 
-const resultSchemaOf = (value: Readonly<ChildSchemaState> | undefined) =>
+const resultSchemaOf = (value: Readonly<ChildState> | undefined) =>
   Option.flatMap(decodeChildSchema(value), (child): Option.Option<JsonObject> =>
     Option.fromNullOr(child.resultSchema)
   );
@@ -720,19 +765,13 @@ export const RESULT_TOOL = defineTool({
     return (Option.getOrUndefined(parsed) ?? args) as JsonObject;
   },
   execute: async (args, api, context) => {
-    const child = await api.snapshot(
-      ChildSchemaDoc,
-      api.conversationId,
-      context
-    );
+    const child = await api.snapshot(ChildDoc, api.conversationId, context);
 
     const schema = resultSchemaOf(child);
 
     if (Option.isNone(schema)) {
       return {
-        output: text(
-          "submit_result: this thread was not asked for a typed result. Answer in plain text."
-        ),
+        output: text(ResultToolText.notTyped),
         isError: true,
       };
     }
@@ -766,21 +805,32 @@ export const RESULT_TOOL = defineTool({
       const document = await tx.doc(ResultDoc, api.conversationId);
 
       // A rerun, or a second call of the same round (whose results reach the transcript only
-      // when the round ends): the first accepted value stands.
+      // when the round ends): the first accepted value stands. A rerun of the accepting call
+      // answers accepted again, so the transcript marks the run that accepted it even when a
+      // crash lost its first answer; any other call says `already` (`markOf`).
       if (document.attempts > 0) {
-        return { kind: "already", value: { ...document } };
+        const call = await tx.doc(AcceptingCallDoc, api.taskId);
+
+        return {
+          kind: call.accepted ? "accepted" : "already",
+          value: { ...document },
+        };
       }
 
       document.result = copyJson(verdict.success.result);
       document.divergence = verdict.success.divergence;
       document.attempts = attempt;
 
+      const call = await tx.doc(AcceptingCallDoc, api.taskId);
+
+      call.accepted = true;
+
       return { kind: "accepted", value: { ...document } };
     }, context);
 
     if (decided.kind === "accepted") {
       return {
-        output: text("Result accepted. Your work on this brief is done."),
+        output: text(ResultToolText.accepted),
         structuredOutput: decided.value,
         control: { terminate: true },
       };
@@ -788,27 +838,18 @@ export const RESULT_TOOL = defineTool({
 
     if (decided.kind === "already") {
       return {
-        output: text(
-          "A result was already accepted; this call changes nothing. Your work on this brief is done."
-        ),
+        output: text(ResultToolText.already),
         structuredOutput: decided.value,
         control: { terminate: true },
       };
     }
 
     if (decided.kind === "capped") {
-      return { output: text(`submit_result: ${CAP_TEXT}`), isError: true };
+      return { output: text(ResultToolText.capped), isError: true };
     }
 
-    const next =
-      decided.attempt < MAX_RESULT_ATTEMPTS
-        ? "Fix these and call submit_result again."
-        : CAP_TEXT;
-
     return {
-      output: text(
-        `submit_result rejected (attempt ${String(decided.attempt)} of ${String(MAX_RESULT_ATTEMPTS)}):\n${decided.errors}\n${next}`
-      ),
+      output: text(ResultToolText.rejected(decided.attempt, decided.errors)),
       isError: true,
     };
   },
@@ -880,7 +921,7 @@ export class ResultTool extends Context.Service<
             hook(GenerationTask, {
               beforeRequest: async (request, api, context) => {
                 const child = await api.snapshot(
-                  ChildSchemaDoc,
+                  ChildDoc,
                   api.conversationId,
                   context
                 );

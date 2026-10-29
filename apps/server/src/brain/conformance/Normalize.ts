@@ -9,8 +9,9 @@
 // - `approvals`: approval records by age, with their status and tool; `pendingApprovals`.
 // - `decisions`: the same records' status, who decided (the `decidedBy` kind) and the reason.
 // - `model`: the thread's model.
-// - `subagents`: on a parent with children only, each child's registry status, its settlements and
-//   the last one delivered, by thread id.
+// - `subagents`: on a parent with children only, each child's registry status, its settlements,
+//   the last one delivered, where its questions to the parent stand and the model its dispatch
+//   record names, by thread id.
 //
 // A named device's view (`normalizeDeviceView`) adds what its client reads from the records
 // through `PendingRequests`: `card`, the requests the card offers in order (tool, body, "i/N"),
@@ -162,6 +163,22 @@ const viewFields = (view: ConversationView) => {
             status: item.status ?? null,
             settlements: isList(item.settlements) ? item.settlements.length : 0,
             delivered: item.delivered ?? null,
+            // Where each of its questions to the parent stands, sorted: ids differ by harness.
+            questions: isRecord(item.questions)
+              ? Object.values(item.questions)
+                  .map((question) =>
+                    isRecord(question) && Predicate.isString(question.state)
+                      ? question.state
+                      : "unreadable"
+                  )
+                  .toSorted()
+              : [],
+            model:
+              isRecord(item.dispatch) &&
+              isRecord(item.dispatch.resolved) &&
+              isRecord(item.dispatch.resolved.model)
+                ? item.dispatch.resolved.model
+                : null,
           }))
       : [];
 

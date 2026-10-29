@@ -95,7 +95,12 @@
       {
         "status": "settled",
         "settlements": 1,
-        "delivered": 1
+        "delivered": 1,
+        "questions": [],
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
       }
     ],
     "transcript": [
@@ -138,7 +143,7 @@
       {
         "kind": "cairn.brief-answer",
         "role": "user",
-        "text": "The user approved the brief \"Summarize the log\"; subagent thread 0190f0c0-0000-7000-9000-000000000009 started.",
+        "text": "The user approved the brief \"Summarize the log\"; subagent thread $child1 started.",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -147,7 +152,7 @@
       {
         "kind": "cairn.subagent-result",
         "role": "user",
-        "text": "Subagent \"Summarize the log\" (thread 0190f0c0-0000-7000-9000-000000000009) completed.\n<subagent_result>\nThe build passed.\n</subagent_result>\nDivergence: not reported",
+        "text": "Subagent \"Summarize the log\" (thread $child1) completed.\n<subagent_result>\nThe build passed.\n</subagent_result>\nDivergence: not reported",
         "images": 0,
         "toolCalls": [],
         "toolName": null,

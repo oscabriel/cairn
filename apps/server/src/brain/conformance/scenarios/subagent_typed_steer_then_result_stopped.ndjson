@@ -1,0 +1,23 @@
+{"type":"transcript_start","scenario":"subagent_typed_steer_then_result_stopped","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in src.","result_schema":{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","hold":true,"toolCalls":[{"id":"call_2","name":"echo","arguments":{"text":"counting"}}]}
+{"type":"model","label":"c2","thread":"child1","toolCalls":[{"id":"s1","name":"submit_result","arguments":{"result":{"count":4},"divergence":"None"}},{"id":"call_3","name":"gate","arguments":{}}]}
+{"type":"model","label":"c3","thread":"child1","text":"never seen"}
+{"type":"model","label":"p3","thread":"parent","text":"The child was stopped."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"expect_view","path":["running"],"thread":"child1","equals":true}
+{"type":"input","step":"steer","thread":"child1","requestId":"u1","text":"also count the tests"}
+{"type":"expect_view","path":["queue"],"thread":"child1","equals":[{"mode":"steer","text":"also count the tests"}]}
+{"type":"release","label":"c1"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$child1","kind":"tool-call","status":"pending"}}
+{"type":"input","step":"stop","thread":"child1"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$child1","status":"interrupted"}}
+{"type":"settle","ms":1500}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":1,"delivered":1,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"expect_view","path":["transcript"],"match":"includes","equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) was stopped.\n<subagent_result>\nThe child submitted its typed result.\n</subagent_result>\nDivergence: None\nPayload: {\"count\":4}","images":0,"toolCalls":[],"toolName":null,"isError":null}}

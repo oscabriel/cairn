@@ -40,14 +40,10 @@ import type {
   ConversationDocToken,
   ConversationId as PiConversationId,
   ConversationView as PiConversationView,
-  EntryDraft,
-  EntryId as PiEntryId,
-  InboxState,
   InputSubmissionDraft,
   JsonObject,
   LiveState,
   TaskId as PiTaskId,
-  Tx,
 } from "@earendil-works/pi-durable";
 import {
   ConversationBusy,
@@ -70,6 +66,8 @@ import {
   Stream,
 } from "effect";
 
+import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
+import { steerReporter } from "../subagents/Subagents.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession, BrainUnavailable } from "./Brain.ts";
@@ -101,6 +99,7 @@ import type {
   ThreadAgentChange,
   ThreadFrame,
 } from "./HarnessSeam.ts";
+import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
 import { Parked } from "./Parked.ts";
 import {
   piConversationId,
@@ -125,6 +124,8 @@ type Writable<A> = { -readonly [K in keyof A]: A[K] };
 const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
   Approvals,
   Permissions,
+  SubagentsDoc,
+  ChildDoc,
 ];
 
 const encoder = new TextEncoder();
@@ -181,60 +182,6 @@ const fromUnavailable =
 const fromWire =
   (threadId: Option.Option<ThreadId>) => (error: ThreadWireError) =>
     failure("internal", threadId, error.message);
-
-/**
- * A queued write's entry: pi-durable admits it as an `EntryDraft` and stores it as plain JSON
- * (harness/inbox.d.ts, `InboxItem`), so its kind is the one field to check.
- */
-const isEntryDraft = (entry: JsonObject): entry is JsonObject & EntryDraft =>
-  Predicate.isString(entry.kind);
-
-/**
- * Places every write still queued in an idle conversation's `pi.inbox`, in order, as the write half
- * of pi-durable's boundary does (harness/inbox.js, `applyBoundary`): each is appended and its
- * submission placed, and a head write that reaches before the active range settles `stale`. Queued
- * inputs stay. `head` is the conversation's latest head marker, read before the commit's first table
- * write. A stop, a failed run and pi-durable's abort keep writes queued, so a note written during
- * a run that never reached its boundary is placed here (ADR 0028).
- */
-const placeQueuedWrites = async (
-  tx: Tx,
-  conversationId: PiConversationId,
-  inbox: InboxState,
-  head: PiEntryId | undefined
-) => {
-  let active = head;
-  const placed: Array<number> = [];
-
-  for (const [index, item] of inbox.items.entries()) {
-    if (item.mode !== "write" || !isEntryDraft(item.entry)) {
-      continue;
-    }
-
-    placed.push(index);
-
-    const draft = item.entry;
-    const target = draft.head;
-
-    if (Predicate.isNumber(target) && active !== undefined && target < active) {
-      tx.settleSubmission(item.id, { status: "unanswered", reason: "stale" });
-      continue;
-    }
-
-    // oxlint-disable-next-line no-await-in-loop -- writes land in the order they were queued
-    const entry = await tx.appendEntry(conversationId, draft);
-
-    if (target !== undefined) {
-      active = target === "self" ? entry.id : target;
-    }
-
-    tx.placeSubmission(item.id, entry.id);
-  }
-
-  for (const index of placed.toReversed()) {
-    inbox.items.splice(index, 1);
-  }
-};
 
 /**
  * How many generations a stop follows when the run hands over between its read and its abort. A
@@ -445,8 +392,11 @@ const layerNoDeps = Layer.effect(
 
             const meta = await tx.doc(ThreadMeta, record.id);
 
-            // Created now, so a thread stream can always watch it.
+            // Created now, so a thread stream can always watch them. A thread created before the
+            // registry was written here has none until its first child starts, and a stream
+            // opened before that shows it only once the client resubscribes (4C, 6).
             await tx.doc(Approvals, record.id);
+            await tx.doc(SubagentsDoc, record.id);
             // The mode gated tools read at call time (ADR 0031).
             await writeMode(tx, record.id, input.runtimeMode);
 
@@ -557,6 +507,11 @@ const layerNoDeps = Layer.effect(
           entry: { kind: entry.kind, data: entry.data },
         }),
       });
+
+      // A user's input to a subagent gets its reporter first, so its result reaches the parent.
+      yield* steerReporter(session.harness, conversation.id, draft).pipe(
+        Effect.mapError(fromDurable(Option.some(threadId)))
+      );
 
       const record = yield* call(
         Option.some(threadId),
@@ -757,28 +712,61 @@ const layerNoDeps = Layer.effect(
     );
 
     /**
-     * Stops a thread's run. The aborts and the cancellations run in the harness's own scope and the
-     * caller only joins them: an abort mark is durable, so a caller that goes away (a client
-     * disconnect interrupting the RPC) must not leave the records its run held pending. A crash in
-     * between is the boot repair's (`cancelAbandonedApprovalsAtBoot`). `subagents: "stop"`
-     * reaches a thread's children once they exist here (the subagents extension); until then a
-     * thread has none, so `keep` and `stop` stop the same run.
+     * One thread's stop, in the caller's fiber: its aborts and cancellations, the notes its run left
+     * queued, then with `subagents: "stop"` each child its registry names as working, queue
+     * cleared, and theirs in turn (ADR 0028). `keep` leaves them working.
+     */
+    const stopTree = (
+      threadId: ThreadId,
+      options: StopOptions
+    ): Effect.Effect<void, HarnessError> =>
+      Effect.gen(function* () {
+        const session = yield* open(Option.some(threadId));
+        const conversation = yield* conversationOf(session, threadId);
+
+        yield* abortAndCancel(session, threadId, conversation, options);
+        // The notes the stopped run left queued enter the transcript now (ADR 0028).
+        yield* placeAfterRun(threadId);
+
+        if (options.subagents !== "stop") {
+          return;
+        }
+
+        const registry = yield* call(
+          Option.some(threadId),
+          "subagents.read",
+          async (context) =>
+            await session.harness.snapshot(
+              SubagentsDoc,
+              conversation.id,
+              context
+            )
+        );
+
+        for (const item of Object.values(registry?.items ?? {})) {
+          const child = decodeThreadId(item.threadId);
+
+          if (item.status !== "settled" && Option.isSome(child)) {
+            yield* stopTree(child.value, {
+              clearQueue: true,
+              subagents: "stop",
+            });
+          }
+        }
+      });
+
+    /**
+     * Stops a thread's run, and with Stop all its working children. The whole stop runs in the
+     * harness's own scope and the caller only joins it: an abort mark is durable, so a caller that
+     * goes away (a client disconnect interrupting the RPC) must not leave the records its run held
+     * pending, nor the later children of a Stop all running. A crash in between is the boot
+     * repair's (`cancelAbandonedApprovalsAtBoot`).
      */
     const stop = Effect.fn("PiDurableHarness.stop")(function* (
       threadId: ThreadId,
       options: StopOptions
     ) {
-      const session = yield* open(Option.some(threadId));
-      const conversation = yield* conversationOf(session, threadId);
-
-      const stopping = yield* abortAndCancel(
-        session,
-        threadId,
-        conversation,
-        options
-      ).pipe(
-        // The notes the stopped run left queued enter the transcript now (ADR 0028).
-        Effect.andThen(placeAfterRun(threadId)),
+      const stopping = yield* stopTree(threadId, options).pipe(
         Effect.forkIn(layerScope)
       );
 
@@ -919,43 +907,7 @@ const layerNoDeps = Layer.effect(
 
       yield* call(Option.some(threadId), "write", async (context) => {
         await session.harness.commit(async (tx) => {
-          const existing = await tx.submissionByRequest(
-            conversationId,
-            entry.requestId
-          );
-
-          if (existing !== undefined) {
-            return;
-          }
-
-          const marker = await tx.latestHeadMarker(conversationId);
-          const live = await tx.doc(LiveDoc, conversationId);
-          const inbox = await tx.doc(InboxDoc, conversationId);
-
-          if (live.run === undefined) {
-            await placeQueuedWrites(tx, conversationId, inbox, marker?.head);
-
-            const appended = await tx.appendEntry(conversationId, draft);
-
-            await tx.createSubmission({
-              conversationId,
-              requestId: entry.requestId,
-              type: "write",
-              status: "done",
-              entry: appended.id,
-            });
-
-            return;
-          }
-
-          const queued = await tx.createSubmission({
-            conversationId,
-            requestId: entry.requestId,
-            type: "write",
-            status: "queued",
-          });
-
-          inbox.items.push({ id: queued.id, mode: "write", entry: draft });
+          await admitNote(tx, conversationId, entry.requestId, draft);
         }, context);
       });
     });

@@ -1,0 +1,27 @@
+{"type":"transcript_start","scenario":"subagent_typed_result_not_resent","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in src.","result_schema":{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"]}}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"s1","name":"submit_result","arguments":{"result":{"count":4},"divergence":"None"}}]}
+{"type":"model","label":"p3","thread":"parent","text":"4 files."}
+{"type":"model","label":"p4","thread":"parent","toolCalls":[{"id":"cs","name":"subagent_send","arguments":{"subagent":"$child1","message":"Count the tests too."}}]}
+{"type":"model","label":"p5","thread":"parent","text":"Asked for the tests."}
+{"type":"model","label":"c2","thread":"child1","hold":true,"toolCalls":[{"id":"s2","name":"submit_result","arguments":{"result":{"count":9},"divergence":"None"}}]}
+{"type":"model","label":"p6","thread":"parent","text":"9 tests."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_view","path":["transcript",-3],"equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\nThe child submitted its typed result.\n</subagent_result>\nDivergence: None\nPayload: {\"count\":4}","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"input","step":"message","requestId":"r2","text":"and the tests"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"release","label":"c2"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"settle","ms":300}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"9 tests.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":2,"delivered":2,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"expect_view","path":["transcript",-3],"equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) completed.\n<subagent_result>\n\n</subagent_result>\nDivergence: not reported","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["transcript",-1],"thread":"child1","equals":{"kind":"pi.tool-result","role":"toolResult","text":"A result was already accepted; this call changes nothing. Your work on this brief is done.","images":0,"toolCalls":[],"toolName":"submit_result","isError":false}}

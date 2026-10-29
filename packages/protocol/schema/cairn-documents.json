@@ -3164,10 +3164,76 @@
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 9007199254740991
+                      },
+                      "inputs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
                       }
                     },
-                    "required": ["seq", "outcome", "answerEntry", "reportedAt"],
+                    "required": [
+                      "seq",
+                      "outcome",
+                      "answerEntry",
+                      "reportedAt",
+                      "inputs"
+                    ],
                     "additionalProperties": true
+                  }
+                },
+                "runs": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "run": {
+                            "type": "string"
+                          },
+                          "phase": {
+                            "type": "string",
+                            "enum": ["nudge"]
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "inputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "quiet": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["run", "phase", "seq", "inputs", "quiet"],
+                        "additionalProperties": true
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "run": {
+                            "type": "string"
+                          },
+                          "phase": {
+                            "type": "string",
+                            "enum": ["settled"]
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": ["run", "phase", "seq"],
+                        "additionalProperties": true
+                      }
+                    ]
                   }
                 },
                 "delivered": {
@@ -3182,7 +3248,12 @@
                     "properties": {
                       "state": {
                         "type": "string",
-                        "enum": ["pending", "answered", "escalated"]
+                        "enum": [
+                          "pending",
+                          "answered",
+                          "escalated",
+                          "cancelled"
+                        ]
                       },
                       "escalatedAt": {
                         "anyOf": [
@@ -3222,6 +3293,7 @@
                 "status",
                 "wake",
                 "settlements",
+                "runs",
                 "delivered",
                 "questions",
                 "inputs"

@@ -6,7 +6,9 @@
 // A model line with a `thread` alias answers only that thread's requests; one without answers
 // whichever request comes next. A request from a thread the scenario has not learned yet waits a
 // moment for its alias, since the harness may ask before the runner has read the event naming it.
-// Tool arguments may write `$<alias>` for a thread id, resolved when the answer is given.
+// Tool arguments may write `$<alias>` for a thread id, resolved when the answer is given. Each
+// request is kept with the thread that made it (the tools it offered and its first user message),
+// so a scenario can judge what a child was sent.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -105,16 +107,27 @@ const aborted = (request: Option.Option<AbortSignal>) =>
     );
   });
 
+/** What one model request carried, as a scenario judges it. */
+export interface SeenRequest {
+  /** The names of the tools it offered. */
+  readonly tools: ReadonlyArray<string>;
+  /** The text of its first user message; empty without one. */
+  readonly firstInput: string;
+}
+
 /** The ordered answers of one scenario. */
 export interface ResponseScript {
   /**
-   * The next answer for a request from `thread` (none when the harness cannot say), once its hold
+   * The next answer for `request` from `thread` (none when the harness cannot say), once its hold
    * is released or `signal` aborts the request.
    */
   next(
     signal: Option.Option<AbortSignal>,
-    thread: Option.Option<ThreadId>
+    thread: Option.Option<ThreadId>,
+    request: SeenRequest
   ): Effect.Effect<AssistantMessage>;
+  /** The requests `thread` made so far, oldest first. */
+  requestsOf(thread: ThreadId): ReadonlyArray<SeenRequest>;
   /** Lets a held answer go; releasing one not taken yet lets it go when it is. */
   release(label: string): Effect.Effect<void>;
 }
@@ -161,11 +174,19 @@ export const responseScript = Effect.fnUntraced(function* (
       return aliases.aliasOf(thread.value);
     });
 
+  const seen: Array<{
+    readonly thread: Option.Option<ThreadId>;
+    readonly request: SeenRequest;
+  }> = [];
+
   const next = (
     signal: Option.Option<AbortSignal>,
-    thread: Option.Option<ThreadId>
+    thread: Option.Option<ThreadId>,
+    request: SeenRequest
   ) =>
     Effect.gen(function* () {
+      seen.push({ thread, request });
+
       const alias = yield* aliasOf(thread);
 
       // Taken in the same synchronous step it is found, so two askers never share one.
@@ -204,5 +225,10 @@ export const responseScript = Effect.fnUntraced(function* (
       { discard: true }
     );
 
-  return { next, release } satisfies ResponseScript;
+  const requestsOf = (thread: ThreadId) =>
+    seen.flatMap((found) =>
+      Option.contains(found.thread, thread) ? [found.request] : []
+    );
+
+  return { next, release, requestsOf } satisfies ResponseScript;
 });

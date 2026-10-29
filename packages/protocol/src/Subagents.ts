@@ -148,11 +148,15 @@ export const SubagentStatus = Schema.Literals([
 
 export type SubagentStatus = typeof SubagentStatus.Type;
 
-/** Where a child's `ask_parent` question stands, from the parent's side. */
+/**
+ * Where a child's `ask_parent` question stands, from the parent's side; `cancelled` once it ends
+ * unanswered: the child's run that asked it was stopped (ADR 0029), or its record expired.
+ */
 export const SubagentQuestionState = Schema.Literals([
   "pending",
   "answered",
   "escalated",
+  "cancelled",
 ]);
 
 export type SubagentQuestionState = typeof SubagentQuestionState.Type;
@@ -180,20 +184,53 @@ export const DispatchRecord = Schema.Struct({
 
 export type DispatchRecord = typeof DispatchRecord.Type;
 
-/** One delivered settlement, as the registry keeps it: the answer is an entry id, never its text. */
+/**
+ * One delivered settlement, as the registry keeps it: the answer is an entry id, never its text.
+ * `inputs` are the request ids (keys of the record's `inputs`) of every input the settled run
+ * answered or ended, so a run that settled several inputs, a failed one included, settles once.
+ */
 export const SettlementMark = Schema.Struct({
   seq: PositiveInt,
   outcome: SettlementOutcome,
   answerEntry: Schema.NullOr(EntryId),
   reportedAt: EpochMillis,
+  inputs: Schema.Array(Schema.String),
 });
 
 export type SettlementMark = typeof SettlementMark.Type;
 
 /**
+ * One child run, as its parent's registry keys it: `run` is the run's identity (its answer entry;
+ * for a run that ended unanswered the entry of its first input, read from the committed
+ * transcript), never a reason or a detail. A `nudge` mark is written by the commit that sends a
+ * typed child its nudge and lists every input the nudged run ended, and whether all were quiet; a
+ * `settled` mark by the commit that settles a run, its inputs being its settlement's (the
+ * `SettlementMark` with the same `seq`). A reporter whose run or input a mark names settles
+ * nothing. `seq` is the settlement's (for a nudge, the one its nudge's request id is derived from).
+ */
+export const RunMark = Schema.Union([
+  Schema.Struct({
+    run: Schema.String,
+    phase: Schema.Literal("nudge"),
+    seq: PositiveInt,
+    inputs: Schema.Array(Schema.String),
+    quiet: Schema.Boolean,
+  }),
+  Schema.Struct({
+    run: Schema.String,
+    phase: Schema.Literal("settled"),
+    seq: PositiveInt,
+  }),
+]);
+
+export type RunMark = typeof RunMark.Type;
+
+/**
  * One child in its parent's `cairn.subagents`, keyed by the spawn tool's approval id (stable
  * across reruns). `inputs` maps each input's request id to its reporter task, so a resent steer
- * lands once; `delivered` is the last settlement whose note and wake were written.
+ * lands once; `runs` marks each child run nudged or settled, so a run settles once whichever of
+ * its reporters gets there first; `delivered` is the last settlement whose note and wake were
+ * written.
  */
 export const SubagentRecord = Schema.Struct({
   threadId: ThreadId,
@@ -207,6 +244,7 @@ export const SubagentRecord = Schema.Struct({
   status: SubagentStatus,
   wake: WakeMode,
   settlements: Schema.Array(SettlementMark),
+  runs: Schema.Array(RunMark),
   delivered: NonNegativeInt,
   questions: Schema.Record(
     Schema.String,

@@ -8,7 +8,6 @@
 
 import type { JsonObject } from "@cairn/protocol/Policy";
 import type { JsonValue } from "@earendil-works/chord";
-import { copyJson } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
 import { createModels, Type } from "@earendil-works/pi-ai";
@@ -22,7 +21,6 @@ import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { Extension } from "@earendil-works/pi-durable";
 import {
   createRegistry,
-  defineDoc,
   defineExtension,
   defineTool,
   Harness,
@@ -40,6 +38,7 @@ import {
   ResultTool,
   returnedModelOf,
 } from "../models/ResultTool.ts";
+import { ChildDoc, jsonRecordOf } from "../subagents/SubagentDocs.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -86,20 +85,6 @@ const valid = {
 const PROVIDER = "faux";
 
 const MODEL = { provider: PROVIDER, modelId: "small" };
-
-/** The writer's view of `cairn.child`, as the spawn will write it: only the schema matters here. */
-const ChildForTest = defineDoc<{
-  [key: string]: JsonValue;
-  resultSchema: JsonValue;
-}>({
-  kind: "cairn.child",
-  version: 1,
-  scope: "conversation",
-  history: "latest",
-  fork: "initial",
-  initial: () => ({ resultSchema: null }),
-  checkpointWhen: () => false,
-});
 
 const call = (args: Record<string, JsonValue>, id: string) =>
   fauxAssistantMessage(fauxToolCall(RESULT_TOOL_NAME, args, { id }), {
@@ -234,9 +219,9 @@ const runChild = (
             : { model: MODEL },
           init: async (tx, id) => {
             if (Option.isSome(schema)) {
-              const child = await tx.doc(ChildForTest, id);
+              const child = await tx.doc(ChildDoc, id);
 
-              child.resultSchema = copyJson(schema.value);
+              child.resultSchema = jsonRecordOf(schema.value);
             }
           },
         },

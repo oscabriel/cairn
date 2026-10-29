@@ -1,0 +1,368 @@
+{
+  "events": [
+    {
+      "event": "ThreadEnsured"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "delegate it"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Waiting for Go."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "working"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "also the tests"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Queued."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "stop it"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "event": "SubagentUpdated",
+      "child": "child1",
+      "status": "settled"
+    },
+    {
+      "event": "RuntimeRequestUpdated",
+      "status": "accepted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Stopped it."
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Subagent \"Count the files\" reported; its result is in the note above."
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "Noted."
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "thread": "child1",
+      "event": "ThreadEnsured",
+      "parent": "parent"
+    },
+    {
+      "thread": "child1",
+      "event": "RunStarted"
+    },
+    {
+      "thread": "child1",
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "Count the files\n\nCount the files in src."
+    },
+    {
+      "thread": "child1",
+      "event": "RunTerminal",
+      "status": "interrupted",
+      "failure": null
+    }
+  ],
+  "view": {
+    "subagents": [
+      {
+        "status": "settled",
+        "settlements": 2,
+        "delivered": 2,
+        "questions": [],
+        "model": {
+          "provider": "faux",
+          "modelId": "scripted"
+        }
+      }
+    ],
+    "transcript": [
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "delegate it",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["subagent_spawn"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "The brief is waiting for the user's Go. You will be told when it is answered.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_spawn",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Waiting for Go.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.brief-answer",
+        "role": "user",
+        "text": "The user approved the brief \"Count the files\"; subagent thread $child1 started.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "also the tests",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["subagent_send"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "Sent to subagent $child1.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_send",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Queued.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "stop it",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": ["subagent_stop", "gate"],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "Stopped subagent $child1. Uncommitted paths: none.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "subagent_stop",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "accepted",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "gate",
+        "isError": false
+      },
+      {
+        "kind": "cairn.subagent-result",
+        "role": "user",
+        "text": "Subagent \"Count the files\" (thread $child1) was stopped.\n<subagent_result>\n\n</subagent_result>\nDivergence: not reported",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "cairn.subagent-result",
+        "role": "user",
+        "text": "Subagent \"Count the files\" (thread $child1) was stopped.\n<subagent_result>\n\n</subagent_result>\nDivergence: not reported",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Stopped it.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "Subagent \"Count the files\" reported; its result is in the note above.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "Noted.",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      }
+    ],
+    "transcriptLength": 18,
+    "queue": [],
+    "queueLength": 0,
+    "running": false,
+    "approvals": [
+      {
+        "status": "accepted",
+        "tool": "subagent_spawn"
+      },
+      {
+        "status": "accepted",
+        "tool": "gate"
+      }
+    ],
+    "pendingApprovals": 0,
+    "decisions": [
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      },
+      {
+        "status": "accepted",
+        "decidedBy": "user",
+        "reason": null
+      }
+    ],
+    "model": {
+      "provider": "faux",
+      "modelId": "scripted"
+    }
+  },
+  "children": {
+    "child1": {
+      "transcript": [
+        {
+          "kind": "pi.user",
+          "role": "user",
+          "text": "Count the files\n\nCount the files in src.",
+          "images": 0,
+          "toolCalls": [],
+          "toolName": null,
+          "isError": null
+        }
+      ],
+      "transcriptLength": 1,
+      "queue": [],
+      "queueLength": 0,
+      "running": false,
+      "approvals": [],
+      "pendingApprovals": 0,
+      "decisions": [],
+      "model": {
+        "provider": "faux",
+        "modelId": "scripted"
+      }
+    }
+  }
+}

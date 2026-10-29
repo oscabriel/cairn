@@ -52,6 +52,7 @@ import {
 import { responseScript } from "./ResponseScript.ts";
 import type { MakeTarget } from "./Targets.ts";
 import {
+  maskThreadIds,
   threadAliasesOf,
   PARENT_ALIAS,
   resolveAliases,
@@ -200,16 +201,22 @@ const turnInput = (line: InputLine): HarnessTurnInput => {
 };
 
 /**
- * The answer a respond line gives: its decision and reason, and a question's answers (in full, or
- * as one custom answer to the first question).
+ * The answer a respond line gives: its decision and reason, and a question's answers (in full, as
+ * the picked labels and custom text of the first question, or as one custom answer to it).
  */
 const answerOf = (line: InputLine): ApprovalAnswerInput => ({
   decision: line.decision ?? "accept",
   reason: Option.fromUndefinedOr(line.reason),
   answers: Option.orElse(Option.fromUndefinedOr(line.answers), () =>
-    Option.map(Option.fromUndefinedOr(line.answer), (custom) => [
-      { index: 0, picks: [], custom },
-    ])
+    line.answer === undefined && line.picks === undefined
+      ? Option.none()
+      : Option.some([
+          {
+            index: 0,
+            picks: line.picks === undefined ? [] : [...line.picks],
+            custom: line.answer ?? null,
+          },
+        ])
   ),
 });
 
@@ -568,6 +575,10 @@ export const runScenario = (
         return yield* Effect.void;
       });
 
+      // The records this run answered, by `<thread>:<id>`: a client view can lag the answer's
+      // commit, so the next respond must not take a record it already answered for a pending one.
+      const answered = new Set<string>();
+
       /** The client a line reads or acts through: a named device, or the thread's own client. */
       const clientFor = (where: string, line: InputLine) =>
         Effect.gen(function* () {
@@ -588,9 +599,10 @@ export const runScenario = (
           return { threadId, client: device.view };
         });
 
-      /** The oldest pending approval in a client's view, waited for. */
+      /** The oldest pending approval this run has not answered in a client's view, waited for. */
       const pendingIn = (
         where: string,
+        threadId: ThreadId,
         client: Ref.Ref<Option.Option<ThreadViewState>>
       ) =>
         Effect.gen(function* () {
@@ -600,7 +612,11 @@ export const runScenario = (
             Effect.map(Ref.get(client), (state) =>
               Option.match(
                 Option.flatMap(state, (view) =>
-                  Option.fromUndefinedOr(pendingApprovalIds(view.view)[0])
+                  Option.fromUndefinedOr(
+                    pendingApprovalIds(view.view).find(
+                      (id) => !answered.has(`${threadId}:${id}`)
+                    )
+                  )
                 ),
                 {
                   onNone: () =>
@@ -645,11 +661,16 @@ export const runScenario = (
         const approvalId =
           line.stale === true
             ? yield* lookedAt(where, line)
-            : yield* pendingIn(where, client);
+            : yield* pendingIn(where, threadId, client);
 
         const result = yield* Effect.result(
           seam.respond(threadId, approvalId, answerOf(line))
         );
+
+        // A refused answer leaves the record pending for the next respond.
+        if (Result.isSuccess(result)) {
+          answered.add(`${threadId}:${approvalId}`);
+        }
 
         const expected = line.expect?.error;
 
@@ -696,8 +717,8 @@ export const runScenario = (
         where: string,
         line: InputLine
       ) {
-        const { client } = yield* clientFor(where, line);
-        const approvalId = yield* pendingIn(where, client);
+        const { threadId, client } = yield* clientFor(where, line);
+        const approvalId = yield* pendingIn(where, threadId, client);
 
         looked.set(deviceKey(line.thread, line.device ?? ""), approvalId);
       });
@@ -714,9 +735,16 @@ export const runScenario = (
             const threadId = yield* threadOf(where, alias);
             const client = yield* clientOf(threadId);
 
-            return { threadId, approvalId: yield* pendingIn(where, client) };
+            return {
+              threadId,
+              approvalId: yield* pendingIn(where, threadId, client),
+            };
           })
         );
+
+        for (const { threadId, approvalId } of targets) {
+          answered.add(`${threadId}:${approvalId}`);
+        }
 
         yield* Effect.forEach(
           targets,
@@ -881,7 +909,8 @@ export const runScenario = (
         alias: string | undefined,
         device: string | undefined,
         path: ReadonlyArray<string | number>,
-        equals: Json
+        equals: Json,
+        match: "equals" | "includes"
       ) =>
         Effect.gen(function* () {
           const threadId = aliases.idOf(alias ?? PARENT_ALIAS);
@@ -914,16 +943,70 @@ export const runScenario = (
 
           const value = valueAt(view.value, path);
 
-          if (
-            Option.isSome(value) &&
-            jsonEquals(value.value, resolveAliases(equals, aliases))
-          ) {
+          const wanted = resolveAliases(equals, aliases);
+
+          const found = Option.exists(value, (at) =>
+            match === "includes"
+              ? Array.isArray(at) &&
+                at.some((element: Json) => jsonEquals(element, wanted))
+              : jsonEquals(at, wanted)
+          );
+
+          if (found) {
             return Result.succeedNone;
           }
 
           return Result.fail(
             `found ${JSON.stringify(Option.getOrNull(value))} in ${JSON.stringify(view.value)}`
           );
+        });
+
+      /** What the `index`th request of a thread offered and asked, against a line's wants. */
+      const requestAt = (
+        alias: string | undefined,
+        index: number,
+        wants: {
+          readonly includesTools?: ReadonlyArray<string>;
+          readonly excludesTools?: ReadonlyArray<string>;
+          readonly firstInput?: string;
+        }
+      ) =>
+        Effect.sync(() => {
+          const threadId = aliases.idOf(alias ?? PARENT_ALIAS);
+
+          if (Option.isNone(threadId)) {
+            return Result.fail(
+              `no thread is known as ${alias ?? PARENT_ALIAS}`
+            );
+          }
+
+          const request = script.requestsOf(threadId.value).at(index);
+
+          if (request === undefined) {
+            return Result.fail(`no request ${index} was made`);
+          }
+
+          const missing = (wants.includesTools ?? []).filter(
+            (name) => !request.tools.includes(name)
+          );
+
+          const extra = (wants.excludesTools ?? []).filter((name) =>
+            request.tools.includes(name)
+          );
+
+          const input = resolveAliases(wants.firstInput ?? null, aliases);
+
+          if (
+            missing.length > 0 ||
+            extra.length > 0 ||
+            (wants.firstInput !== undefined && input !== request.firstInput)
+          ) {
+            return Result.fail(
+              `request ${index} offered ${JSON.stringify(request.tools)} and began ${JSON.stringify(request.firstInput)}`
+            );
+          }
+
+          return Result.succeedNone;
         });
 
       const play = (where: string, line: TranscriptLine) =>
@@ -947,7 +1030,19 @@ export const runScenario = (
               eventually(
                 options.timeout,
                 where,
-                viewAt(found.thread, found.device, found.path, found.equals)
+                viewAt(
+                  found.thread,
+                  found.device,
+                  found.path,
+                  found.equals,
+                  found.match ?? "equals"
+                )
+              ),
+            expect_request: (found) =>
+              eventually(
+                options.timeout,
+                where,
+                requestAt(found.thread, found.index, found)
               ),
           })
         );
@@ -998,7 +1093,11 @@ export const runScenario = (
           onFailure: (failure) => Option.some(failure.message),
           onSuccess: () => Option.none<string>(),
         }),
-        record: order.length > 1 ? { ...record, children } : record,
+        // Texts name a child by alias: each harness mints child ids its own way.
+        record: maskThreadIds(
+          order.length > 1 ? { ...record, children } : record,
+          aliases
+        ),
       };
     })
   );

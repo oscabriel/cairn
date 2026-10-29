@@ -1,0 +1,23 @@
+{"type":"transcript_start","scenario":"subagent_status_wait_returns_on_settlement","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in src."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","hold":true,"text":"src has 4 files."}
+{"type":"model","label":"p3","thread":"parent","toolCalls":[{"id":"cw","name":"subagent_status","arguments":{"wait_seconds":120}}]}
+{"type":"model","label":"p4","thread":"parent","text":"It reported."}
+{"type":"model","label":"p5","thread":"parent","text":"src has 4 files."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"working"}}
+{"type":"input","step":"message","requestId":"r2","text":"wait for it"}
+{"type":"expect_event","event":{"_tag":"RunStarted","threadId":"$parent"}}
+{"type":"settle","ms":300}
+{"type":"expect_view","path":["running"],"equals":true}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["subagent_status"],"toolName":null,"isError":null}}
+{"type":"release","label":"c1"}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"src has 4 files.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["transcript",7],"equals":{"kind":"pi.tool-result","role":"toolResult","text":"$child1 \"Count the files\": settled","images":0,"toolCalls":[],"toolName":"subagent_status","isError":false}}
+{"type":"expect_view","path":["transcript",9],"equals":{"kind":"pi.assistant","role":"assistant","text":"It reported.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

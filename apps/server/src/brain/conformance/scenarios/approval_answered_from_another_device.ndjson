@@ -1,0 +1,30 @@
+{"type":"transcript_start","scenario":"approval_answered_from_another_device","version":1}
+{"type":"model","label":"m1","toolCalls":[{"id":"call_1","name":"gate","arguments":{}}]}
+{"type":"model","label":"m2","text":"the gate opened"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"open_device","device":"laptop"}
+{"type":"input","step":"open_device","device":"phone"}
+{"type":"input","step":"message","requestId":"r1","text":"open the gate"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"pending","kind":"tool-call"}}
+{"type":"expect_view","device":"laptop","path":["pendingApprovals"],"equals":1}
+{"type":"expect_view","device":"phone","path":["pendingApprovals"],"equals":1}
+{"type":"expect_view","device":"phone","path":["card"],"equals":[{"tool":"gate","body":"Approval","position":1,"total":1}]}
+{"type":"expect_view","device":"laptop","path":["lines"],"equals":[]}
+{"type":"input","step":"look","device":"laptop"}
+{"type":"input","step":"respond","device":"phone","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"accepted"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","device":"laptop","path":["pendingApprovals"],"equals":0}
+{"type":"expect_view","device":"laptop","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}
+{"type":"expect_view","device":"laptop","path":["card"],"equals":[]}
+{"type":"expect_view","device":"laptop","path":["lines"],"equals":[{"status":"accepted","text":"Approved by you","answers":[]}]}
+{"type":"input","step":"respond","device":"laptop","stale":true,"decision":"decline","reason":"not from the laptop"}
+{"type":"settle","ms":200}
+{"type":"expect_view","device":"laptop","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}
+{"type":"expect_view","device":"laptop","path":["card"],"equals":[]}
+{"type":"expect_view","device":"laptop","path":["lines"],"equals":[{"status":"accepted","text":"Approved by you","answers":[]}]}
+{"type":"expect_view","device":"phone","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"open the gate","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["gate"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"accepted","images":0,"toolCalls":[],"toolName":"gate","isError":false},{"kind":"pi.assistant","role":"assistant","text":"the gate opened","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","status":"accepted"},"count":1}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","status":"declined"},"count":0}
+{"type":"expect_event_count","event":{"_tag":"RunTerminal"},"count":1}

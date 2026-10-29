@@ -309,7 +309,10 @@ describe("an answer to a record", () => {
       {
         header: "Database",
         question: "Which one?",
-        options: [],
+        options: [
+          { label: "Postgres", description: null, recommended: true },
+          { label: "SQLite", description: null, recommended: false },
+        ],
         multiSelect: false,
         allowCustomAnswer: true,
       },
@@ -401,6 +404,32 @@ describe("an answer to a record", () => {
     assert.deepStrictEqual(question.answer?.answers, [
       { index: 0, picks: ["Postgres"], custom: null },
     ]);
+
+    // Answers must fit the questions asked: an option the question does not offer, two picks on a
+    // single-select question, a question that is not there, or an empty answer are all refused.
+    for (const misfit of [
+      [{ index: 0, picks: ["MySQL"], custom: null }],
+      [{ index: 0, picks: ["Postgres", "SQLite"], custom: null }],
+      [{ index: 1, picks: ["Postgres"], custom: null }],
+      [{ index: 0, picks: [], custom: " " }],
+      [
+        { index: 0, picks: ["Postgres"], custom: null },
+        { index: 0, picks: ["SQLite"], custom: null },
+      ],
+    ]) {
+      const misanswered = record({ payload: questions });
+
+      assert.strictEqual(
+        applyAnswer(
+          misanswered,
+          { ...byUser("accept"), answers: Option.some(misfit) },
+          1500
+        ),
+        "refused_answers_invalid",
+        JSON.stringify(misfit)
+      );
+      assert.strictEqual(misanswered.status, "pending");
+    }
 
     const brief = record({ kind: "brief" });
 

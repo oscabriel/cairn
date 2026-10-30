@@ -1,12 +1,14 @@
 import {
   AttachmentId,
+  ProjectId,
   RequestId,
   SubmissionId,
   ThreadId,
 } from "@cairn/protocol/Ids";
+import { ProjectShell } from "@cairn/protocol/Shell";
 import { ConversationView } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Option, Ref, Schema } from "effect";
+import { DateTime, Effect, Option, Ref, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Mount } from "foldkit";
 import * as Scene from "foldkit/scene";
@@ -44,7 +46,7 @@ import { Message, OutMessage } from "./Message.ts";
 import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { pickerRows } from "./Popovers.ts";
-import { contextChanged, inform, update } from "./Update.ts";
+import { contextChanged, inform, pickDraftProject, update } from "./Update.ts";
 import { view } from "./View.ts";
 
 const editor = Scene.testId("composer-editor");
@@ -52,6 +54,12 @@ const editor = Scene.testId("composer-editor");
 const menu = Scene.testId("composer-menu");
 
 const onThread = composerOn(ComposerTarget.Thread({ threadId }));
+
+/** The launch a send from `model` mints, if any. */
+const launchOf = (model: Model) =>
+  (
+    update(model, Message.ClickedSend({ alternate: false })).commands ?? []
+  ).find((command) => command.name === PrepareLaunch.name);
 
 /** The view's Mounts, acknowledged as the browser would run them. */
 const acknowledgeMounts = [
@@ -769,6 +777,47 @@ describe("composer sends", () => {
     ).find((command) => command.name === PrepareLaunch.name);
 
     assert.deepStrictEqual(launch?.args?.model, catalog.defaults.model);
+  });
+
+  it("launches a draft the shell gave a project in that project, not the most recently updated one", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b05";
+
+    const myr = ProjectShell.make({
+      ...project,
+      id: ProjectId.make("prj_myr"),
+      title: "myr",
+      workspaceRoot: "/home/user/myr",
+    });
+
+    const recent = ProjectShell.make({
+      ...project,
+      updatedAt: DateTime.makeUnsafe("2026-10-29T08:00:00Z"),
+    });
+
+    const target = ComposerTarget.Draft({ draftId });
+
+    const base = inform(composerOn(target), {
+      ...contextFor(target),
+      projects: [recent, myr],
+    }).model;
+
+    const unpicked = update(base, Message.ChangedDraft({ value: "go" })).model;
+
+    // Without the shell's pick the draft falls back to the most recently updated project.
+    assert.deepStrictEqual(
+      launchOf(unpicked)?.args?.projectId,
+      Option.some(recent.id)
+    );
+
+    const picked = update(
+      pickDraftProject(base, draftId, myr.id),
+      Message.ChangedDraft({ value: "go" })
+    ).model;
+
+    assert.deepStrictEqual(
+      launchOf(picked)?.args?.projectId,
+      Option.some(myr.id)
+    );
   });
 
   it.effect(

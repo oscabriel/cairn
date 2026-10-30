@@ -726,7 +726,10 @@ const writeNextShell = (model: Model, nextShell: NextShellModel): Model =>
     ? model
     : modifyFields(model, { nextShell: () => nextShell });
 
-/** What the `next` shell hands up: an item for the outbox (and where to go), or a path to open. */
+/**
+ * What the `next` shell hands up: an item for the outbox (and where to go), a path to open, or a
+ * new draft in the project the rail picked.
+ */
 const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
   NextShellOutMessage.match<Step>(outMessage, {
     RequestedOutbox:
@@ -749,6 +752,16 @@ const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
     RequestedNavigate:
       ({ url }) =>
       (model) => ({ model, commands: [NavigateInternal({ url })] }),
+    // The draft holds its project before its page opens, so the hero launches where the rail says.
+    RequestedProjectDraft:
+      ({ projectId, draftId }) =>
+      (model) => ({
+        model: writeComposer(
+          model,
+          Composer.pickDraftProject(model.composer, draftId, projectId)
+        ),
+        commands: [NavigateInternal({ url: draftRouter({ draftId }) })],
+      }),
   });
 
 /** The shell's update, once its chunk has loaded; no shell Message can come before. */

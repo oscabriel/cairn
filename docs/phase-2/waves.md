@@ -588,3 +588,44 @@ No block names a judge "at integration"; the brain's wiring changed, so these ra
 - Decide 4F's target: J-typed through children stays at every trial (blocked on the `report` fix) or becomes a rate such as 23 of 24 per model over three runs. gpt-6-luna stands in for Codex.
 - Decide whether a supervised child's approval pushes under the root thread's tag with a "<child> asks:" prefix (4G pushes under the hidden child's today).
 - When deploying: no brief pending or just answered (4A's new start and tell tasks); `cairn.budgets` and `cairn.workflows` each append one `pi.system` entry to every conversation once; wizard stage 3 (approval push on the locked phone) waits for that deploy.
+
+## Wave 5 and look track L2b integration
+
+Integrated on 2026-10-29 on `main`, each package with `--no-ff`: L2b `ca00ad5` as `34f6334`, 5H `6391627` as `0d64a27`, 5A `087d4e6` as `012d723`, 5B `dd48c19` as `6561b01`, 5C `03bba77` as `fd375ac`, 5D `594f28a` as `87f08a3`, 5E `23a73b3` as `fc293c9`, 5F `a5cd7ec` as `63da44a`, 5I `6da0161` as `789fe3c`. Conflicts kept both sides in `WorkflowTools.ts` (envelope cards, the meter and admission, stop polling, resume forks: `startChild` takes both `watch` and `forkAt`, and a waiting node's Go runs admission again and refuses `budget_spent` at the line), `WorkflowNodes.ts` (5C's hand-off: one `receiptOf` takes the meter's spend, `endNode` takes `readSpends`'s map and the watcher runs `applyMeter`, which owns `row.spent`), `WorkflowRepairs.ts` (5B's set, exported), `rpc/WorkflowHandlers.ts` (list, stop and stopNode in one layer), `workflow-kill.ts` (cards, parks and `stalled` together), and the answered hook (launch, brief, criteria). The meter's timers skip a node whose invocation ended. The hand-offs are `34e4445`.
+
+### Integration judges
+
+No block names a judge "at integration"; the brain's wiring changed, so these ran on `main`, under the judge lock. $0 throughout.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 424 s: fmt, lint, typecheck, 2,410 tests. No dependency changed. |
+| `judge-main.ts` boot | pass | 23 repairs in order, with retry parked workflow tasks after the subagent ones and scratch folder repair after the child workspace repair; 1 reactor; no `boot_repair_failed`; `closing`, `closed` on SIGTERM. |
+| `durability.ts --no-page` | pass | 13 of 13; kill to up 1,289 to 1,543 ms. |
+| `workflow-stop.sh` (5C, rerun per its hand-off) | pass | 12 of 12, stop-then-budget included; control-deaf fails by a 5,712 ms stop. |
+| `workflow-budget.ts` (5B) | pass | 7 of 7 kill cases; control-no-admission fails (24 dispatched, 12 after the line), control-no-stopper fails abort (+5.5 s). |
+| `workflow-kill.sh` (4D, 5A, 5D) | pass | 22 of 22 with envelope and park-watcher; control (duplicate), envelope-control (0 cards) and park-watcher-control (stalled) fail rightly. |
+| `brief-go.sh`, `goal-kill.ts` | pass | windows 10 of 10 and 5 of 5; both controls fail. |
+
+### Hand-offs applied
+
+`ExtensionOrder.goals` 670; `ExtensionSet` installs `cairn.goals` and gives `Workflows` the `WorkflowPushes.layer` that `AppLayer` drains through `WorkflowBudgetPush`; `ReactorSet` runs `workflowBudgetReactor`; the two boot repairs above; `HandlersLayer` adds `WorkflowHandlers` (over `Recipes`) and `GoalHandlers`; `PiDurableBrain` provides `WorkflowStops` and `GoalBook`, `ScriptedBrain` and the scripted judge brains their off layers (`GoalBook.layerOff` is new). `workflow_plan`'s description names recipes and resume's role (5D). `TitleModel` passes a `sessionId` (5F). 5H's protocol additions accepted; ADR 0026 amended with the project thread instead of a new ADR. One `BudgetBook`: `Subagents` and `BudgetGate` take the same `BudgetBook.layer` reference. Glossary and the plan's child approval push row updated.
+
+### Rules later packages follow
+
+- **One look.** No `data-look` anywhere in `next/` (`contrast.test.ts` fails it); `tokens.css` holds only the next frame's light and dark selectors.
+- **A wait in a node tool goes through `untilStopped`** (`stoppable`), and a `WorkflowFaultSet` literal carries `grantAll`, `ignoreBudget` and `deafToStop`. A scan of a node child's entries keeps only `entry.conversationId === child` (forks).
+- **`row.spent` is the meter's** (`applyMeter`); receipts take `readSpends`.
+
+### What differs from the plan
+
+- 5H: refresh is `thread.launch` with `replaces`; unarchive is refused while another thread is marked.
+- 5A: ADR 0032 stays proposed until wave 7's phone run; writer worktrees, readonly tool sets for node children and the B4 brief fields are not done.
+- 5B: `WorkflowBudget.test.ts`'s raise case was racy after the merge (the line now fired on node a's first response); it now answers the raise once the script's question is asked and its line is 6,000 tokens.
+- 5D: only built-in recipes launch by name; project recipes are proposed whole.
+- 5F: a failed verdict reads `failed`, not `open`.
+
+### Left for the user
+
+- Held for 6H: the `goal.mark` RPC (`MarkCriterionInput`, handler `GoalBook.mark`) and a projection of `ThreadShell.goal`; for 5A's owner: launching a project recipe by name. Goals' model judges are unmetered in production, since the brain's set has no `SpendLedger` in context.
+- When deploying: `cairn.goals` appends one `pi.system` entry per conversation; the budget reactor starts from now; the deployed role table keeps `@verifier` on Codex until rebound through `settings.update`.

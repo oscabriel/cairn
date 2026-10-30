@@ -13,6 +13,9 @@
 //   judge's steer control.
 // - wakeStoppedParent: a parent the user stopped (or whose run failed) is woken anyway.
 // - routeApprovalToParent: a child's gated call is offered to the parent model, which may answer it.
+// - freshQuestionIds: a child's `ask_parent` question is offered to its parent under a fresh request
+//   id on every attempt, so a rerun after a crash offers it again. Without a crash it routes once:
+//   only the kill judge's question control catches it.
 
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -26,6 +29,7 @@ export interface SubagentFaultSet {
   readonly seamOwnIds: boolean;
   readonly wakeStoppedParent: boolean;
   readonly routeApprovalToParent: boolean;
+  readonly freshQuestionIds: boolean;
 }
 
 /** No fault: the setting everything but the mutation check runs with. */
@@ -36,6 +40,7 @@ export const NO_SUBAGENT_FAULTS: SubagentFaultSet = {
   seamOwnIds: false,
   wakeStoppedParent: false,
   routeApprovalToParent: false,
+  freshQuestionIds: false,
 };
 
 /** The faults a harness plants in subagent delivery; none unless a test provides some. */
@@ -56,6 +61,20 @@ export const SubagentFaults = Context.Reference<SubagentFaultSet>(
  * - reporter-woken: the wake is submitted; the settlement is not marked delivered.
  * - nudge-marked: a typed child's nudge is decided and marked; the nudge is not submitted.
  * - nudge-submitted: the nudge is admitted to the child; the reporter still delivers.
+ * - question-recorded: a child's `ask_parent` question is recorded (its record, the parent's
+ *   registry mark); it is not offered to the parent.
+ * - question-routed: the question's input to the parent is admitted; the tool does not wait yet.
+ * - question-answered: the parent's `subagent_reply` answer is committed; the tool has not
+ *   returned, and the child's wait has not resumed.
+ * - question-escalated: the parent's `subagent_reply` escalation (the child's record turned to the
+ *   user, the parent's mirror and index entry) is committed; the tool has not returned.
+ * - relayed-asked: a child's final answer that ends in a question is relayed (ADR 0027): the
+ *   settling commit wrote its record and put the reporter in `ask`; it is not offered yet.
+ * - relayed-routed: the relayed question's input to the parent is admitted; the reporter does not
+ *   wait yet.
+ * - relayed-answered: the reporter's `answer` checkpoint is committed; the answer is not submitted
+ *   to the child.
+ * - relayed-answer-submitted: the answer is admitted to the child; the reporter still delivers.
  */
 export const SUBAGENT_CRASH_POINTS = [
   "steer-recorded",
@@ -66,6 +85,14 @@ export const SUBAGENT_CRASH_POINTS = [
   "reporter-woken",
   "nudge-marked",
   "nudge-submitted",
+  "question-recorded",
+  "question-routed",
+  "question-answered",
+  "question-escalated",
+  "relayed-asked",
+  "relayed-routed",
+  "relayed-answered",
+  "relayed-answer-submitted",
 ] as const;
 
 export type SubagentCrashPoint = (typeof SUBAGENT_CRASH_POINTS)[number];

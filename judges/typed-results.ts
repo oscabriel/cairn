@@ -5,7 +5,7 @@
 // the model under test with Cairn's production extensions, and 3A's reporter sends the one nudge.
 // `--path bare` runs them on a bare pi-durable Harness with the `results` extension instead.
 //
-//   node judges/typed-results.ts [--provider opencode-go,bridge,codex]
+//   node judges/typed-results.ts [--provider opencode-go,bridge[,codex]]
 //     [--models claude-haiku-5-5,deepseek-v4.1-flash,qwen3.8-flash,gpt-6-luna]
 //     [--bridge-model claude-haiku-5-5] [--trials 8] [--control v1,union] [--path children]
 //     [--deployed-port 3774] [--config ~/.config/cairn/cairn.json]
@@ -17,7 +17,9 @@
 // holds the task's facts is reported per model (`factsRight`) and does not fail the judge.
 //
 // Providers: OpenCode Go through pi's model runtime, read-only over `~/.pi/agent`; the bridge
-// through the real Agent SDK and the `claude` binary's login. Codex: only the deployed brain may
+// through the real Agent SDK and the `claude` binary's login. These two are the default: the user
+// has no Codex subscription (2026-10-29), so the Codex case runs only when `codex` is named. Codex:
+// only the deployed brain may
 // use the user's Codex sign-in (it holds the OAuth lock, ADR 0037), so the judge reads
 // `providers.status` from it on `--deployed-port` (read-only, no turn). Unless `openai-codex` is
 // ready there, the Codex case is blocked, printed with its reason, and the recorded fallback
@@ -33,13 +35,12 @@
 // when every model run passes every trial and both controls fail. A model the runtime does not
 // have, or a provider with no credential, prints a skipped line and fails the run.
 //
-// Not yet stable at 100 percent through children (hand-offs, not a pass). Three full runs after
-// the cwd was seeded: every OpenCode Go and bridge model 24 of 24, the fallback gpt-6-luna 23 of
-// 24, so run 2 failed. The integrator decides whether the target for children is 100 percent or a
-// measured rate. The miss was a typed child that called 3A's `report` through code mode, said
-// `submit_result` was not available and never submitted: `report` pre-empts the typed result,
-// which 3A owns (don't offer `report` to typed children, or keep it from ending the run while a
-// typed result is due).
+// Through children, 4F measured every OpenCode Go and bridge model 24 of 24 over three full runs
+// and gpt-6-luna 23 of 24: one child called `report` from code mode, said `submit_result` was not
+// available and never submitted. A nested call's `terminate` is dropped, so its run went on with
+// "Reported." as its only word. Since 5I a typed child's `report` answers with
+// `SubagentToolText.reportedTyped`, which sends it to `submit_result` as a direct tool call (the
+// numbers after the change are in the 5I commit and `docs/phase-2/waves.md`).
 
 import {
   mkdirSync,
@@ -90,7 +91,7 @@ import * as ProtocolClient from "./lib/ProtocolClient.ts";
 
 const { values } = parseArgs({
   options: {
-    provider: { type: "string", default: "opencode-go,bridge,codex" },
+    provider: { type: "string", default: "opencode-go,bridge" },
     models: {
       type: "string",
       default: "claude-haiku-5-5,deepseek-v4.1-flash,qwen3.8-flash,gpt-6-luna",

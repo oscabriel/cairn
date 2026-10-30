@@ -7,7 +7,13 @@
 //
 // - `tool <name> <json arguments>` calls a tool, for example `tool mark {"label":"a"}`;
 // - `text <n>` streams a reply of `n` words (at the layer's tokens per second);
+// - `say <json string>` replies with that string, newlines and all, for example
+//   `say "Which colour?"` (the subagent kill judge's child ends its answer in a question);
 // - after the last step the model answers `done`.
+//
+// In a tool step's arguments the string `$subagent` stands for the newest subagent the context says
+// started ("subagent thread <id> started", the brief's Go), so a parent can answer its child's
+// question (`subagent_reply`) without the judge knowing the child's id when it writes the script.
 //
 // A message whose first line is not a script may carry one on a later line (a subagent's brief is
 // its title, a blank line, then its task): that line alone is the script. Any other message is
@@ -39,13 +45,18 @@ const decodeArguments = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
 );
 
+const decodeSaid = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.String)
+);
+
 type Step =
   | {
       readonly kind: "tool";
       readonly name: string;
       readonly args: Record<string, Schema.Json>;
     }
-  | { readonly kind: "text"; readonly words: number };
+  | { readonly kind: "text"; readonly words: number }
+  | { readonly kind: "say"; readonly text: string };
 
 const parseStep = (source: string): Option.Option<Step> => {
   const trimmed = source.trim();
@@ -59,6 +70,15 @@ const parseStep = (source: string): Option.Option<Step> => {
       args === "" ? Option.some({}) : decodeArguments(args),
       (parsed) => ({ kind: "tool" as const, name, args: { ...parsed } })
     );
+  }
+
+  const say = /^say\s+(?<said>.+)$/su.exec(trimmed);
+
+  if (say !== null) {
+    return Option.map(decodeSaid(say.groups?.said ?? ""), (said) => ({
+      kind: "say" as const,
+      text: said,
+    }));
   }
 
   const text = /^text\s+(?<words>\d+)$/u.exec(trimmed);
@@ -83,9 +103,56 @@ const textOf = (message: Message): string => {
         .join("");
 };
 
-/** The answer to one request, from the newest user message and the replies already given to it. */
-export const answer = (context: TranscriptContext): AssistantMessage => {
-  const { messages } = context;
+/** What a tool step's `$subagent` stands for. */
+const SUBAGENT_PLACEHOLDER = "$subagent";
+
+const STARTED = /subagent thread (?<id>[0-9a-f-]{36}) started/gu;
+
+/** Every text part of a message, whatever its role. */
+const allTextOf = (message: Message): string =>
+  Predicate.isString(message.content)
+    ? message.content
+    : message.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("");
+
+/** The newest subagent the context says started, if any. */
+const newestSubagent = (
+  messages: ReadonlyArray<Message>
+): Option.Option<string> =>
+  Option.fromUndefinedOr(
+    messages
+      .flatMap((message) =>
+        [...allTextOf(message).matchAll(STARTED)].flatMap((found) =>
+          found.groups?.id === undefined ? [] : [found.groups.id]
+        )
+      )
+      .at(-1)
+  );
+
+/** `args` with every `$subagent` string replaced by `id`. */
+const withSubagent = (
+  args: Record<string, Schema.Json>,
+  id: Option.Option<string>
+): Record<string, Schema.Json> =>
+  Option.match(id, {
+    onNone: () => args,
+    onSome: (found) =>
+      Object.fromEntries(
+        Object.entries(args).map(([key, value]) => [
+          key,
+          value === SUBAGENT_PLACEHOLDER ? found : value,
+        ])
+      ),
+  });
+
+/**
+ * The answer to a request's messages, from the newest user message and the replies already given
+ * to it.
+ */
+export const answerTo = (
+  messages: ReadonlyArray<Message>
+): AssistantMessage => {
   const lastUser = messages.findLastIndex((message) => message.role === "user");
   const prompt = lastUser === -1 ? undefined : messages[lastUser];
 
@@ -128,14 +195,26 @@ export const answer = (context: TranscriptContext): AssistantMessage => {
 
   const { value } = step;
 
-  return value.kind === "tool"
-    ? fauxAssistantMessage(fauxToolCall(value.name, value.args), {
-        stopReason: "toolUse",
-      })
-    : fauxAssistantMessage(
-        Array.from({ length: value.words }, () => REPLY_WORD).join(" ")
-      );
+  if (value.kind === "tool") {
+    return fauxAssistantMessage(
+      fauxToolCall(
+        value.name,
+        withSubagent(value.args, newestSubagent(messages))
+      ),
+      { stopReason: "toolUse" }
+    );
+  }
+
+  return fauxAssistantMessage(
+    value.kind === "say"
+      ? value.text
+      : Array.from({ length: value.words }, () => REPLY_WORD).join(" ")
+  );
 };
+
+/** The answer to one request. */
+export const answer = (context: TranscriptContext): AssistantMessage =>
+  answerTo(context.messages);
 
 /** The scripted model over pi-ai's faux provider, streaming at `tokensPerSecond`. */
 export const JudgeModel = {

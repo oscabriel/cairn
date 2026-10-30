@@ -127,6 +127,7 @@ const FakeLayer = Layer.effectContext(
           })
         ),
       whenEnsured: () => unsupported("wait for threads"),
+      document: () => unsupported("read documents"),
       history: () => unsupported("page history"),
       entry: () => unsupported("read entries"),
       entryImage: () => unsupported("read images"),
@@ -976,9 +977,18 @@ describe("the shell projector", () => {
               runId: Option.some(RunId.make(10)),
               queueLength: 0,
               parkedTaskIds: [],
+              // A question whose event a crash lost: the row names it from its record.
               pendingApprovals: [
-                ApprovalId.make("apr_boot"),
-                ApprovalId.make("apr_boot_2"),
+                {
+                  id: ApprovalId.make("apr_boot"),
+                  kind: "user-input",
+                  askedAt: 1000,
+                },
+                {
+                  id: ApprovalId.make("apr_boot_2"),
+                  kind: "tool-call",
+                  askedAt: 2000,
+                },
               ],
             },
           ]);
@@ -1009,8 +1019,12 @@ describe("the shell projector", () => {
 
           assert.strictEqual(waiting.activity, "waiting");
           assert.deepStrictEqual(
-            Option.map(waiting.pendingRuntimeRequest, (request) => request.id),
-            Option.some(ApprovalId.make("apr_boot"))
+            Option.map(waiting.pendingRuntimeRequest, (request) => [
+              request.id,
+              request.kind,
+              DateTime.toEpochMillis(request.createdAt),
+            ]),
+            Option.some([ApprovalId.make("apr_boot"), "user-input", 1000])
           );
           assert.strictEqual(waiting.pendingCount, 2);
           assert.strictEqual(ended.pendingCount, 0);

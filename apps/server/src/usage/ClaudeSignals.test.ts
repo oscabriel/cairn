@@ -139,6 +139,7 @@ const FakeHarness = Layer.effectContext(
           compact: unsupported,
           watch: () => Stream.die("not used by this test"),
           whenEnsured: unsupported,
+          document: unsupported,
           history: unsupported,
           entry: unsupported,
           entryImage: unsupported,

@@ -3,7 +3,8 @@
 // rows' requests point at in a table the test edits, and the test clock driving the sweep. One push
 // per request; none while a page shows the thread or an ancestor; a late push 60 seconds after a
 // suppressed one; none when answered first; one tag per thread with a count; one reminder; no
-// duplicate after a restart; an escalated question pushed once, from the parent, naming the child.
+// duplicate after a restart; an escalated question pushed once, from the parent, naming the child;
+// a supervised child's approval pushed under its project thread, naming the child.
 
 import { ApprovalId, RunId } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
@@ -139,10 +140,11 @@ const nextCommandId = () => {
   return testCommandId(70_000 + counter);
 };
 
-/** Makes thread `n` in project `n`, a subagent of `parent` when given. */
+/** Makes thread `n` in project `n`, a subagent of `parent` when given, under `root` (or `parent`). */
 const makeThread = (
   n: number,
-  parent: Option.Option<ThreadId> = Option.none()
+  parent: Option.Option<ThreadId> = Option.none(),
+  root: Option.Option<ThreadId> = Option.none()
 ) =>
   Effect.gen(function* () {
     const sink = yield* EventSink;
@@ -155,7 +157,7 @@ const makeThread = (
         lineage: Option.map(parent, (parentThreadId) => ({
           parentThreadId,
           relationshipToParent: "subagent" as const,
-          rootThreadId: parentThreadId,
+          rootThreadId: Option.getOrElse(root, () => parentThreadId),
         })),
       })
     );
@@ -494,6 +496,68 @@ describe("approval push", () => {
           yield* idle;
 
           assert.strictEqual(service.messages.length, 1);
+        })
+      );
+    }
+  );
+
+  it.effect(
+    "pushes a supervised child's approval under its project thread, naming the child",
+    () => {
+      const service = fakePushService();
+      const table = recordTable();
+
+      return withNotifier(
+        service,
+        table,
+        Effect.gen(function* () {
+          const root = yield* makeThread(1);
+          const child = yield* makeThread(2, Option.some(root));
+
+          const grandchild = yield* makeThread(
+            3,
+            Option.some(child),
+            Option.some(root)
+          );
+
+          yield* showRequests(table, child, [
+            pendingRecord("tool-1", yield* now),
+          ]);
+          yield* waitUntil(() => service.messages.length >= 1);
+          yield* TestClock.adjust(Duration.seconds(5));
+          yield* showRequests(table, grandchild, [
+            pendingRecord("tool-2", yield* now),
+          ]);
+          yield* waitUntil(() => service.messages.length >= 2);
+          yield* idle;
+
+          // Neither hidden row is named: the root's title heads both, one tag collapses them, and
+          // a tap opens the root, whose card shows its subagents' requests.
+          assert.deepStrictEqual(
+            service.messages.map((message) => [
+              message.title,
+              message.body,
+              message.tag,
+              message.url,
+              message.badge,
+            ]),
+            [
+              [
+                "Thread 1",
+                "Thread 2 asks: Approve bash: pnpm test",
+                `ask:${root}`,
+                `/t/${root}`,
+                1,
+              ],
+              [
+                "Thread 1",
+                "Thread 3 asks: Approve bash: pnpm test",
+                `ask:${root}`,
+                `/t/${root}`,
+                1,
+              ],
+            ]
+          );
         })
       );
     }

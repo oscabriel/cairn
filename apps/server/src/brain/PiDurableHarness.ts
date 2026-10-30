@@ -123,7 +123,12 @@ import {
 import { SubagentCrashes, SubagentFaults } from "./SubagentFaults.ts";
 import { WindowFrame, windowedProjector } from "./ThreadWindow.ts";
 import type { WindowedView } from "./ThreadWindow.ts";
-import { entryImages, projectEntry } from "./ThreadWire.ts";
+import {
+  entryImages,
+  isStreamDocument,
+  projectDocument,
+  projectEntry,
+} from "./ThreadWire.ts";
 import type { ThreadWireError } from "./ThreadWire.ts";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
@@ -1206,6 +1211,43 @@ const layerNoDeps = Layer.effect(
         })
       );
 
+    /** One `cairn.*` document the stream carries, read once from a snapshot of its token. */
+    const document = Effect.fn("PiDurableHarness.document")(function* (
+      threadId: ThreadId,
+      kind: string
+    ) {
+      if (!isStreamDocument(kind)) {
+        return yield* failure(
+          "invalid_input",
+          Option.some(threadId),
+          `The thread stream does not carry ${kind}; read one of its cairn.* documents.`
+        );
+      }
+
+      const session = yield* open(Option.some(threadId));
+      const conversationId = yield* conversationIdOf(session, threadId);
+
+      const token = STREAM_DOCUMENTS.find(
+        (candidate) => candidate.definition.kind === kind
+      );
+
+      // A visible kind with no token here is one the stream does not watch on pi-durable yet.
+      if (token === undefined) {
+        return Option.none();
+      }
+
+      const value = yield* call(
+        Option.some(threadId),
+        `read-${kind}`,
+        async (context) =>
+          await session.harness.snapshot(token, conversationId, context)
+      );
+
+      return Option.flatMap(Option.fromNullishOr(value), (doc) =>
+        projectDocument(kind, doc)
+      );
+    });
+
     const whenEnsured = Effect.fn("PiDurableHarness.whenEnsured")(function* (
       threadId: ThreadId
     ) {
@@ -1447,7 +1489,11 @@ const layerNoDeps = Layer.effect(
 
           const pending = Object.values(approvals?.items ?? {})
             .filter((item) => item.status === "pending")
-            .map((item) => ApprovalId.make(item.id));
+            .map((item) => ({
+              id: ApprovalId.make(item.id),
+              kind: item.kind,
+              askedAt: item.askedAt,
+            }));
 
           states.push({
             threadId: threadId.value,
@@ -1502,6 +1548,7 @@ const layerNoDeps = Layer.effect(
       write,
       compact,
       watch: watchThread,
+      document,
       whenEnsured,
       history,
       entry,

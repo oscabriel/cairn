@@ -258,7 +258,7 @@
         {
           "kind": "pi.tool-result",
           "role": "toolResult",
-          "text": "Reported.",
+          "text": "Reported. Your brief also asks for a typed result: if submit_result has not accepted one, call it now with your result and its divergence from the brief. It is a direct tool call, not one of code mode's tools.",
           "images": 0,
           "toolCalls": [],
           "toolName": "report",

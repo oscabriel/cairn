@@ -416,25 +416,42 @@ const projectInbox = (doc: JsonRecord): JsonValue => {
   return { ...doc, items: projected };
 };
 
+/** One client-visible document, projected as the stream carries it. */
+const projectDoc = (kind: string, doc: JsonRecord): JsonValue =>
+  kind === "pi.inbox"
+    ? projectInbox(doc)
+    : projectValue(doc, {
+        mode: "stream",
+        images: 0,
+        imageRef: () => Option.none(),
+      });
+
 /** The client-visible documents of a view, projected. */
 const projectDocs = (docs: PiConversationView["docs"]) => {
   const visible: JsonRecord = {};
 
   for (const [kind, doc] of Object.entries(docs)) {
     if (VISIBLE.has(kind)) {
-      visible[kind] =
-        kind === "pi.inbox"
-          ? projectInbox(doc)
-          : projectValue(doc, {
-              mode: "stream",
-              images: 0,
-              imageRef: () => Option.none(),
-            });
+      visible[kind] = projectDoc(kind, doc);
     }
   }
 
   return visible;
 };
+
+/**
+ * One document of kind `kind`, projected as the stream carries it; none for a kind the stream
+ * never carries (`VISIBLE_DOCUMENTS`), so a one-document read cannot reach past the wire.
+ */
+export const projectDocument = (
+  kind: string,
+  doc: JsonRecord
+): Option.Option<JsonValue> =>
+  VISIBLE.has(kind) ? Option.some(projectDoc(kind, doc)) : Option.none();
+
+/** True for a `cairn.*` document kind the stream carries: what a one-document read may name. */
+export const isStreamDocument = (kind: string): boolean =>
+  kind.startsWith("cairn.") && VISIBLE.has(kind);
 
 const projectConversation = (record: PiConversationView["conversation"]) => {
   const conversation: JsonRecord = { id: record.id };

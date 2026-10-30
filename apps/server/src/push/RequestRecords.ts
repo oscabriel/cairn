@@ -2,22 +2,16 @@
 // request card reads them (briefs note B7). A shell row names only the oldest pending request and a
 // count, so the push's body (a brief's title, a question's header, a tool call's summary) and its
 // routing (a question still with the parent is not the user's) come from the records themselves.
-// They are read through the harness seam's first snapshot frame, the same projection a client
-// subscribes to, so both harnesses answer alike and the brain's pi-durable stays behind its seam.
+// They are read through the harness seam's one-document read (`HarnessSeam.document`), the
+// `cairn.approvals` document projected as a client's stream carries it, so both harnesses answer
+// alike, the brain's pi-durable stays behind its seam, and no stream (with its transcript
+// snapshot and document watches) is opened for a push decision.
 
 import { approvalRecordsOf } from "@cairn/client-logic/PendingRequests";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { APPROVALS_DOCUMENT } from "@cairn/protocol/Policy";
 import type { ApprovalRecord } from "@cairn/protocol/Policy";
-import {
-  Context,
-  Duration,
-  Effect,
-  Layer,
-  Match,
-  Option,
-  Stream,
-} from "effect";
+import { Context, Duration, Effect, Layer, Option } from "effect";
 
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 
@@ -37,7 +31,7 @@ export class RequestRecords extends Context.Service<
     of(threadId: ThreadId): Effect.Effect<ReadonlyArray<ApprovalRecord>>;
   }
 >()("cairn/server/push/RequestRecords") {
-  /** The records from the thread's first snapshot frame. Needs `HarnessSeam`. */
+  /** The records from the thread's `cairn.approvals` document. Needs `HarnessSeam`. */
   static readonly layer = Layer.effect(
     RequestRecords,
     Effect.gen(function* () {
@@ -45,18 +39,13 @@ export class RequestRecords extends Context.Service<
 
       const of = Effect.fn("RequestRecords.of")(
         function* (threadId: ThreadId) {
-          const first = yield* harness
-            .watch(threadId)
-            .pipe(Stream.runHead, Effect.timeoutOption(READ_TIMEOUT));
+          const document = yield* harness
+            .document(threadId, APPROVALS_DOCUMENT)
+            .pipe(Effect.timeoutOption(READ_TIMEOUT));
 
-          return Option.match(Option.flatten(first), {
-            onNone: () => [],
-            onSome: Match.valueTags({
-              Snapshot: (snapshot) =>
-                approvalRecordsOf(snapshot.view.docs[APPROVALS_DOCUMENT]),
-              Ops: () => [],
-            }),
-          });
+          return approvalRecordsOf(
+            Option.getOrUndefined(Option.flatten(document))
+          );
         },
         (effect, threadId) =>
           effect.pipe(

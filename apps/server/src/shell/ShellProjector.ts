@@ -25,7 +25,7 @@
 
 import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
-import type { ApprovalId, TaskId, ThreadId } from "@cairn/protocol/Ids";
+import type { TaskId, ThreadId } from "@cairn/protocol/Ids";
 import { ThreadShell } from "@cairn/protocol/Shell";
 import type {
   LatestVisibleMessage,
@@ -58,6 +58,7 @@ import type {
   HarnessError,
   HarnessEvent,
   LiveThreadState,
+  PendingApproval,
   RunFailureInfo,
 } from "../brain/HarnessSeam.ts";
 import { EventSink } from "./EventSink.ts";
@@ -362,7 +363,8 @@ export const applySignal = (
  * A thread's projection set from what pi-durable holds now. `live` is the thread's entry in
  * `inspect()`; none means no run, no queue, no approval and no parked task. A row that was busy
  * with no live run left ends now: the run ended while nothing watched it. An approval the row does
- * not name yet is shown as a tool call, because `inspect()` carries only its id.
+ * not name yet (its event was lost to a crash) is named from `inspect()`'s record: its kind and
+ * when it was asked.
  */
 export const reconcileProjection = (
   projection: ThreadProjection,
@@ -373,8 +375,8 @@ export const reconcileProjection = (
 
   const runId = Option.flatMap(live, (state) => state.runId);
 
-  const pendingIds = Option.match(live, {
-    onNone: (): ReadonlyArray<ApprovalId> => [],
+  const pending = Option.match(live, {
+    onNone: (): ReadonlyArray<PendingApproval> => [],
     onSome: (state) => state.pendingApprovals,
   });
 
@@ -382,12 +384,12 @@ export const reconcileProjection = (
     projection.approvals.map((approval) => [approval.id, approval])
   );
 
-  const approvals = pendingIds.map(
-    (id): PendingRuntimeRequest =>
-      known.get(id) ?? {
-        id,
-        kind: "tool-call",
-        createdAt: now,
+  const approvals = pending.map(
+    (found): PendingRuntimeRequest =>
+      known.get(found.id) ?? {
+        id: found.id,
+        kind: found.kind,
+        createdAt: DateTime.makeUnsafe(found.askedAt),
         origin: Option.none(),
       }
   );

@@ -106,6 +106,7 @@ const fakeHarness = (
     compact: () => unsupported("compact"),
     watch: () => Stream.die("the fake harness does not watch"),
     whenEnsured: () => unsupported("wait for threads"),
+    document: () => unsupported("read documents"),
     history: () => unsupported("page history"),
     entry: () => unsupported("read entries"),
     entryImage: () => unsupported("read images"),
@@ -226,7 +227,13 @@ describe("boot", () => {
             runId: Option.some(RunId.make(3)),
             queueLength: 0,
             parkedTaskIds: [TaskId.make(4), TaskId.make(5)],
-            pendingApprovals: [ApprovalId.make("apr_pending")],
+            pendingApprovals: [
+              {
+                id: ApprovalId.make("apr_pending"),
+                kind: "tool-call",
+                askedAt: 0,
+              },
+            ],
           },
           {
             threadId: testThreadId(2),
@@ -275,7 +282,13 @@ describe("boot", () => {
             runId: Option.none(),
             queueLength: 0,
             parkedTaskIds: [TaskId.make(4), TaskId.make(5)],
-            pendingApprovals: [ApprovalId.make("apr_second_brief")],
+            pendingApprovals: [
+              {
+                id: ApprovalId.make("apr_second_brief"),
+                kind: "brief",
+                askedAt: 0,
+              },
+            ],
           },
         ];
 

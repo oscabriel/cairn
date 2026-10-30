@@ -211,6 +211,14 @@ export const SubagentToolText = {
   alreadyReported: "Already reported.",
   /** `report` accepted. */
   reported: "Reported.",
+  /**
+   * `report` accepted from a typed child. A report from code mode is a nested call, whose
+   * `terminate` pi-durable drops, so the run goes on and this text sends the child to
+   * `submit_result`, which code mode cannot reach. Worded the same whatever the result's state, so
+   * a report beside `submit_result` in one step reads alike however the two calls interleave.
+   */
+  reportedTyped:
+    "Reported. Your brief also asks for a typed result: if submit_result has not accepted one, call it now with your result and its divergence from the brief. It is a direct tool call, not one of code mode's tools.",
   /** `ask_parent` with more options than a question may offer. */
   tooManyOptions: (max: number) =>
     `ask_parent takes at most ${max} options. Call it again with fewer, or none for a free answer.`,

@@ -2,7 +2,8 @@
 // provider is sent the child's envelope schema, a rejected call is attempt 1 and a valid second
 // call is kept with the run ended on it, a third call is refused even when valid, a nudge before
 // any call uses the first attempt, a thread with no schema is never offered the tool, a nested call
-// (another tool relaying through `executeTool`) never reaches it, the first of two valid calls in
+// (another tool relaying through `executeTool`, as code mode does) is refused with the words that
+// send it to a direct call, keeping nothing and using no attempt, the first of two valid calls in
 // one round stands, and a call after the accepted one is told so, not refused. Kept
 // under `brain/`, where pi-durable may be imported in a test (S42).
 
@@ -36,6 +37,7 @@ import {
   readResult,
   RESULT_TOOL_NAME,
   ResultTool,
+  ResultToolText,
   returnedModelOf,
 } from "../models/ResultTool.ts";
 import { ChildDoc, jsonRecordOf } from "../subagents/SubagentDocs.ts";
@@ -375,23 +377,36 @@ describe("the results extension under a Harness", () => {
     })
   );
 
-  it.live("never runs for a nested call", () =>
-    Effect.gen(function* () {
-      const { stored, calls, messages } = yield* runChild(
-        Option.some(REPORT),
-        [
-          relay({ result: valid, divergence: "None" }, "c1"),
-          say("I could not submit."),
-        ],
-        ["Report on the module."],
-        true
-      );
+  it.live(
+    "refuses a nested call with the way to call it directly, keeping nothing and using no attempt",
+    () =>
+      Effect.gen(function* () {
+        const { stored, calls, messages } = yield* runChild(
+          Option.some(REPORT),
+          [
+            relay({ result: valid, divergence: "None" }, "c1"),
+            call({ result: valid, divergence: "None" }, "c2"),
+          ],
+          ["Report on the module."],
+          true
+        );
 
-      assert.isTrue(Option.isNone(stored));
-      assert.strictEqual(calls, 2);
-      assert.lengthOf(submitText(messages), 0);
-      assert.include(textsOf(messages, RELAY_TOOL_NAME)[0], "tool_unavailable");
-    })
+        const relayed = textsOf(messages, RELAY_TOOL_NAME)[0] ?? "";
+
+        // The script sees the refusal (a schema tool's error reaches it as its diagnostics).
+        assert.include(relayed, ResultToolText.nested);
+        assert.notInclude(relayed, "tool_unavailable");
+
+        // The direct call that follows is the first attempt, and is kept.
+        assert.strictEqual(calls, 2);
+        assert.deepStrictEqual(submitText(messages), [ResultToolText.accepted]);
+        assert.strictEqual(
+          Option.map(stored, (found) => found.attempts).pipe(
+            Option.getOrElse(() => 0)
+          ),
+          1
+        );
+      })
   );
 
   it.live("keeps the first committed of two valid calls in one round", () =>

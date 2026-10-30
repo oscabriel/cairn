@@ -12,6 +12,7 @@ import {
   DryRunLimits,
   estimateRun,
   FALLBACK_NODE_TOKENS,
+  historyTokens,
   isLargeWorkflow,
   toLaunch,
   WorkflowPlan,
@@ -538,10 +539,47 @@ describe(estimateRun, () => {
         assert.isNull(estimate.listMicrosLow);
         assert.include(
           estimate.basis,
-          "@judge: no history, 20k to 100k tokens a node assumed"
+          "@judge: no history, 100k to 1M tokens a node assumed, cache reads included"
         );
       })
   );
+
+  it.effect(
+    "assumes enough for a no-history council: its 2026-10-30 run used about 2.74M tokens",
+    () =>
+      Effect.gen(function* () {
+        const run = yield* councilRun;
+        const estimate = estimateRun(run, []);
+
+        assert.strictEqual(estimate.nodes, 5);
+        assert.isAtLeast(estimate.tokensHigh, 2_500_000);
+        assert.isAtMost(estimate.tokensLow, 2_740_000 / 5);
+      })
+  );
+
+  it("counts a past node's cache reads in its history", () => {
+    // A total that leaves cache reads out, as a provider's own count may.
+    assert.strictEqual(
+      historyTokens({
+        input: 2000,
+        output: 1000,
+        cacheRead: 280_000,
+        cacheWrite: 17_000,
+        totalTokens: 3000,
+      }),
+      300_000
+    );
+    assert.strictEqual(
+      historyTokens({
+        input: 2000,
+        output: 1000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 4000,
+      }),
+      4000
+    );
+  });
 
   it.effect(
     "uses each role's quartiles from its last nodes, and dollars only when all are priced",

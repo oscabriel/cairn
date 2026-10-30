@@ -135,19 +135,44 @@ export interface DryRun {
  */
 export interface NodeHistory {
   readonly spec: RoleSpec;
+  /** Every token it used, cache reads and writes included (`historyTokens`). */
   readonly totalTokens: number;
   /** None when its model has no list price (ADR 0036). */
   readonly listMicros: Option.Option<number>;
 }
 
+/**
+ * A settled node's tokens for its history: its receipt's total, or the sum of its parts when that is
+ * more, so a provider whose total leaves out cache reads cannot shrink the estimate.
+ */
+export const historyTokens = (receipt: {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly totalTokens: number;
+}): number =>
+  Math.max(
+    receipt.totalTokens,
+    receipt.input + receipt.output + receipt.cacheRead + receipt.cacheWrite
+  );
+
 /** Settled nodes per role an estimate reads, newest last. */
 export const HISTORY_WINDOW = 20;
 
-/** Tokens a node of a role with no history is assumed to use, low and high. */
-export const FALLBACK_NODE_TOKENS = { low: 20_000, high: 100_000 } as const;
+/**
+ * Tokens a node of a role with no history is assumed to use, low and high, cache reads included: a
+ * node re-reads its context every turn, so most of its tokens are cache reads. The 2026-10-30
+ * council's nodes used 110k to 1.29M each (median about 300k).
+ */
+export const FALLBACK_NODE_TOKENS = { low: 100_000, high: 1_000_000 } as const;
 
-/** Above this many nodes, or this many estimated tokens, the card says "Large workflow". */
-export const LARGE_WORKFLOW = { nodes: 25, tokens: 1_500_000 } as const;
+/**
+ * Above this many nodes, or this many estimated tokens, the card says "Large workflow". Claude
+ * Code's line is 25 agents or 1.5M projected tokens; these estimates count cache reads, so the
+ * token line sits ten times higher, as the no-history node assumption does.
+ */
+export const LARGE_WORKFLOW = { nodes: 25, tokens: 15_000_000 } as const;
 
 /** What `toLaunch` needs besides the dry run. */
 export interface LaunchInput {
@@ -751,11 +776,16 @@ const quantile = (sorted: ReadonlyArray<number>, q: number) =>
     Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))
   ] ?? 0;
 
-const thousands = (tokens: number) => `${Math.round(tokens / 1000)}k`;
+/** "300k" or "1.3M". */
+const tokenText = (tokens: number) =>
+  tokens >= 1_000_000
+    ? `${Math.round(tokens / 100_000) / 10}M`
+    : `${Math.round(tokens / 1000)}k`;
 
 /**
  * The pre-launch estimate: each role's node count times the spread (first to third quartile) of
- * its last `HISTORY_WINDOW` settled nodes, or `FALLBACK_NODE_TOKENS` for a role with none. Dollars
+ * its last `HISTORY_WINDOW` settled nodes (`NodeHistory.totalTokens`, cache reads included), or
+ * `FALLBACK_NODE_TOKENS` for a role with none. Dollars
  * only when every role's history is priced. For an unbounded run it is the floor of the estimate.
  */
 export const estimateRun = (
@@ -780,7 +810,7 @@ export const estimateRun = (
       tokensHigh += share * FALLBACK_NODE_TOKENS.high;
       priced = false;
       notes.push(
-        `${spec}: no history, ${thousands(FALLBACK_NODE_TOKENS.low)} to ${thousands(FALLBACK_NODE_TOKENS.high)} tokens a node assumed`
+        `${spec}: no history, ${tokenText(FALLBACK_NODE_TOKENS.low)} to ${tokenText(FALLBACK_NODE_TOKENS.high)} tokens a node assumed, cache reads included`
       );
       continue;
     }
@@ -792,7 +822,7 @@ export const estimateRun = (
     tokensLow += share * quantile(tokens, 0.25);
     tokensHigh += share * quantile(tokens, 0.75);
     notes.push(
-      `${spec}: from its last ${samples.length} node${samples.length === 1 ? "" : "s"}`
+      `${spec}: from its last ${samples.length} node${samples.length === 1 ? "" : "s"}, cache reads included`
     );
 
     const micros = samples.flatMap((entry) => Option.toArray(entry.listMicros));

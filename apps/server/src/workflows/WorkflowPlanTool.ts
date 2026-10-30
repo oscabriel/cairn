@@ -61,7 +61,7 @@ import {
   SAMPLE_SIZE,
 } from "./WorkflowLaunch.ts";
 import { refused } from "./WorkflowNodes.ts";
-import { estimateRun, toLaunch } from "./WorkflowPlan.ts";
+import { estimateRun, historyTokens, toLaunch } from "./WorkflowPlan.ts";
 import type { DryRun, NodeHistory, PlanInput } from "./WorkflowPlan.ts";
 import type { RoleResolver } from "./WorkflowTools.ts";
 
@@ -155,7 +155,7 @@ const historyOf = async (
         : [
             {
               spec: role.spec,
-              totalTokens: node.receipt.totalTokens,
+              totalTokens: historyTokens(node.receipt),
               listMicros: Option.fromNullOr(node.receipt.listMicros),
             },
           ];

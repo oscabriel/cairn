@@ -5,9 +5,10 @@
 // does not grow.
 //
 // The shell is `next`'s own (L6, `shell/Layout.ts`): the project rail, the project's sidebar list, the
-// chat header, the hold banner and the scratch overlay. The page inside it is still drawn from the
-// classic regions (the transcript, the composer, the hero and settings pages) until L7 redraws
-// them, then phase 2's surfaces (wave 6). This file is integrator-only after L0.
+// chat header, the hold banner and the scratch overlay. The page inside it is `next`'s too (L7,
+// `page/Regions.ts`): the hero and the composer, the thread page and its transcript, the diff
+// toggle and the settings page, over the same Submodels as classic's; of the classic regions only
+// the notice bar is still drawn. This file is integrator-only after L0.
 
 import "./tokens.css";
 // The transcript's subagent rows (plan 6C), registered with the transcript as this chunk loads.
@@ -20,6 +21,7 @@ import { usageRouter } from "../Route.ts";
 import { view as requestCardView } from "./card/View.ts";
 import { view as rolesView } from "./meters/RolesView.ts";
 import { view as usageView } from "./meters/UsageView.ts";
+import * as Pages from "./page/Regions.ts";
 import { layout } from "./shell/Layout.ts";
 
 /** The request card's update and root hooks, held by `FrameLoad.ts` once this chunk loads. */
@@ -62,18 +64,14 @@ type H = HtmlBuilder<Message>;
  * gives the card its slot on the phone while a request shows (`next/card/card.css`). Siblings, so
  * the composer keeps its place in the tree and its Mounts.
  */
-const composerLane = (
-  model: Model,
-  h: H,
-  regions: Regions
-): ReadonlyArray<Html> => [
+const composerLane = (model: Model, h: H): ReadonlyArray<Html> => [
   h.submodel({
     slotId: "request-card",
     model: model.requestCard,
     view: requestCardView,
     toParentMessage: (message) => Message.GotRequestCardMessage({ message }),
   }),
-  regions.composer(),
+  Pages.dockedComposer(model, h),
 ];
 
 /** The role table, drawn in the settings page's slot (plan 6G). */
@@ -100,10 +98,10 @@ export const view = (model: Model, h: H, regions: Regions): Document => ({
   title: "Cairn",
   body: layout(model, h, {
     notice: regions.notice,
-    page: () => regions.page({ roleTable: () => roleTable(model, h) }),
-    thread: regions.thread,
-    threadControls: regions.threadControls,
-    composerLane: () => composerLane(model, h, regions),
+    page: () => Pages.page(model, h, { roleTable: () => roleTable(model, h) }),
+    thread: () => Pages.threadBody(model, h),
+    threadControls: () => Pages.threadControls(model, h),
+    composerLane: () => composerLane(model, h),
     usage: () => usagePage(model, h),
   }),
 });

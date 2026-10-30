@@ -2477,3 +2477,14 @@ code {
 /* Cairn: the meters (next/meters: the usage page and the role table) build their own utilities into
  * the `next` chunk the same way, through next/meters/meters.css. */
 @source not "./next/meters";
+
+/* Cairn: the `next` page (look track L7: next/composer and next/hero, next/timeline with next/page and
+ * next/diff, next/settings and next/push) builds its own utilities into the `next` chunk the same
+ * way, through composer.css, timeline.css and settings.css. */
+@source not "./next/composer";
+@source not "./next/hero";
+@source not "./next/timeline";
+@source not "./next/page";
+@source not "./next/diff";
+@source not "./next/settings";
+@source not "./next/push";

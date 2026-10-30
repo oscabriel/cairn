@@ -56,4 +56,17 @@ describe("the judge model", () => {
       { name: "subagent_reply", args: { subagent: "$subagent" } },
     ]);
   });
+
+  it("says a JSON string, newlines and all", () => {
+    const reply = answerTo([
+      user('Title\n\njudge: say "Pick one.\\nWhich colour?"'),
+    ]);
+
+    assert.deepStrictEqual(
+      reply.content.flatMap((part) =>
+        part.type === "text" ? [part.text] : []
+      ),
+      ["Pick one.\nWhich colour?"]
+    );
+  });
 });

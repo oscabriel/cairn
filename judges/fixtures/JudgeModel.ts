@@ -7,6 +7,8 @@
 //
 // - `tool <name> <json arguments>` calls a tool, for example `tool mark {"label":"a"}`;
 // - `text <n>` streams a reply of `n` words (at the layer's tokens per second);
+// - `say <json string>` replies with that string, newlines and all, for example
+//   `say "Which colour?"` (the subagent kill judge's child ends its answer in a question);
 // - after the last step the model answers `done`.
 //
 // In a tool step's arguments the string `$subagent` stands for the newest subagent the context says
@@ -43,13 +45,18 @@ const decodeArguments = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
 );
 
+const decodeSaid = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.String)
+);
+
 type Step =
   | {
       readonly kind: "tool";
       readonly name: string;
       readonly args: Record<string, Schema.Json>;
     }
-  | { readonly kind: "text"; readonly words: number };
+  | { readonly kind: "text"; readonly words: number }
+  | { readonly kind: "say"; readonly text: string };
 
 const parseStep = (source: string): Option.Option<Step> => {
   const trimmed = source.trim();
@@ -63,6 +70,15 @@ const parseStep = (source: string): Option.Option<Step> => {
       args === "" ? Option.some({}) : decodeArguments(args),
       (parsed) => ({ kind: "tool" as const, name, args: { ...parsed } })
     );
+  }
+
+  const say = /^say\s+(?<said>.+)$/su.exec(trimmed);
+
+  if (say !== null) {
+    return Option.map(decodeSaid(say.groups?.said ?? ""), (said) => ({
+      kind: "say" as const,
+      text: said,
+    }));
   }
 
   const text = /^text\s+(?<words>\d+)$/u.exec(trimmed);
@@ -179,17 +195,21 @@ export const answerTo = (
 
   const { value } = step;
 
-  return value.kind === "tool"
-    ? fauxAssistantMessage(
-        fauxToolCall(
-          value.name,
-          withSubagent(value.args, newestSubagent(messages))
-        ),
-        { stopReason: "toolUse" }
-      )
-    : fauxAssistantMessage(
-        Array.from({ length: value.words }, () => REPLY_WORD).join(" ")
-      );
+  if (value.kind === "tool") {
+    return fauxAssistantMessage(
+      fauxToolCall(
+        value.name,
+        withSubagent(value.args, newestSubagent(messages))
+      ),
+      { stopReason: "toolUse" }
+    );
+  }
+
+  return fauxAssistantMessage(
+    value.kind === "say"
+      ? value.text
+      : Array.from({ length: value.words }, () => REPLY_WORD).join(" ")
+  );
 };
 
 /** The answer to one request. */

@@ -68,6 +68,13 @@ export const SubagentFaults = Context.Reference<SubagentFaultSet>(
  *   returned, and the child's wait has not resumed.
  * - question-escalated: the parent's `subagent_reply` escalation (the child's record turned to the
  *   user, the parent's mirror and index entry) is committed; the tool has not returned.
+ * - relayed-asked: a child's final answer that ends in a question is relayed (ADR 0027): the
+ *   settling commit wrote its record and put the reporter in `ask`; it is not offered yet.
+ * - relayed-routed: the relayed question's input to the parent is admitted; the reporter does not
+ *   wait yet.
+ * - relayed-answered: the reporter's `answer` checkpoint is committed; the answer is not submitted
+ *   to the child.
+ * - relayed-answer-submitted: the answer is admitted to the child; the reporter still delivers.
  */
 export const SUBAGENT_CRASH_POINTS = [
   "steer-recorded",
@@ -82,6 +89,10 @@ export const SUBAGENT_CRASH_POINTS = [
   "question-routed",
   "question-answered",
   "question-escalated",
+  "relayed-asked",
+  "relayed-routed",
+  "relayed-answered",
+  "relayed-answer-submitted",
 ] as const;
 
 export type SubagentCrashPoint = (typeof SUBAGENT_CRASH_POINTS)[number];

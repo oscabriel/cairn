@@ -111,15 +111,7 @@ import {
   InboxDoc,
   LiveDoc,
 } from "@earendil-works/pi-durable";
-import {
-  DateTime,
-  Effect,
-  Function,
-  Option,
-  Predicate,
-  Result,
-  Schema,
-} from "effect";
+import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
 
 import { needsDecision } from "../approvals/NeedsDecision.ts";
 import {
@@ -1623,7 +1615,8 @@ const answerEntryOf = (settled: SettledSubmissionRecord) =>
 /** A route's view of a reporter task: its commits, its clock and its memo. */
 const taskRouteIo = (
   runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
-  context: Parameters<typeof runWait>[1]
+  context: Parameters<typeof runWait>[1],
+  crashAt: (point: SubagentCrashPoint) => void
 ): RouteIo => ({
   observer: runtime,
   now: () => runtime.now(),
@@ -1635,8 +1628,10 @@ const taskRouteIo = (
       await change(tx);
     }, context);
   },
-  // The kill judge's question windows are `ask_parent`'s; a relayed answer's route has none.
-  offered: Function.constVoid,
+  // The kill judge's window after a relayed question's offer to the parent is admitted.
+  offered: () => {
+    crashAt("relayed-routed");
+  },
 });
 
 /** The task definitions, closed over the extension's faults and the child's agent change. */
@@ -2272,6 +2267,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
         const parent = runtime.conversationId;
 
+        crashAt("relayed-asked");
+
         const child = conversationOf(input.child);
         const registry = await runtime.snapshot(SubagentsDoc, parent, context);
 
@@ -2280,7 +2277,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const settled = settledOrExpired(runtime, child, approvalId, context);
 
         await routeQuestion(
-          taskRouteIo(runtime, context),
+          taskRouteIo(runtime, context, crashAt),
           {
             parent,
             child,
@@ -2372,6 +2369,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const { seq, text } = task.state.checkpoint;
         const requestId = SubagentRequestIds.answer(input.childThreadId, seq);
 
+        crashAt("relayed-answered");
+
         const child = await runtime.conversation(
           conversationOf(input.child),
           context
@@ -2392,6 +2391,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           },
           context
         );
+
+        crashAt("relayed-answer-submitted");
 
         await deliverAndSettle(
           runtime,

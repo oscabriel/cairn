@@ -28,6 +28,11 @@
 //   after the parent's answer commit.
 // - escalate, question-escalated: the parent escalates the question instead; the judge answers
 //   the card in the parent thread as the user would. The kill lands after the escalation commit.
+// - relay, relayed-asked, relayed-routed, relayed-answered, relayed-answer-submitted: the child's
+//   final answer ends in a question (its brief says it, `say`), so its reporter relays it to the
+//   parent as a question of its own (ADR 0027) and the parent answers it with `subagent_reply`. The
+//   kill lands after the commit that puts the reporter in `ask`, after the offer to the parent is
+//   admitted, after the `answer` checkpoint, or after the answer is admitted to the child.
 // - control-*: the broken controls. `freshIds`, a reporter that mints a fresh request id for each
 //   submit on every attempt (`CAIRN_JUDGE_SUBAGENT_FAULTS=freshIds`): with no kill it delivers once
 //   and passes; with a kill after the child's input or the wake was submitted it must fail by
@@ -38,7 +43,9 @@
 //   steer-recorded, the reporter's resumed submit and the resent steer both land, so it must fail by
 //   the child receiving the steer twice. `freshQuestionIds` (control-question-routed), a route
 //   that offers the question under a fresh request id on every attempt: killed at question-routed,
-//   the rerun offers it again, so it must fail by the parent being asked twice.
+//   the rerun offers it again, so it must fail by the parent being asked twice;
+//   control-relayed-routed plants it in the reporter's relay, killed at relayed-routed, and must
+//   fail the same way.
 //
 // `--bridge` runs bridge-reporter-answered instead: parent and child on the Claude bridge
 // (`judge-main.ts --models real`, the model `--model` names), killed after the child's real answer
@@ -49,7 +56,7 @@
 // Per case it asserts: one child (one registry item, one child row); each input reached the child
 // once (the brief, and the steer or the nudge) and the child answered each once; for a question,
 // one question record settled accepted, the parent asked once and replying once, the child given
-// the answer once, and for an escalation one mirror and one index entry, both settled; one note per
+// the answer once (by `ask_parent`'s result, or for a relay as its next input), and for an escalation one mirror and one index entry, both settled; one note per
 // settlement, under its `seq`; one wake for a settlement that wakes and none for a steer's quiet
 // one; every settlement delivered; the parent's tally of its child; the kill fired as many times as
 // asked; for park, that a boot repair retried a parked subagent task. Prints one JSON line per case
@@ -115,7 +122,7 @@ const { values } = parseArgs({
 });
 
 /** What the parent asks its child to do. */
-type Errand = "plain" | "steer" | "nudge" | "question" | "escalate";
+type Errand = "plain" | "steer" | "nudge" | "question" | "escalate" | "relay";
 
 interface CaseSpec {
   readonly name: string;
@@ -178,6 +185,14 @@ const FAUX_CASES: ReadonlyArray<CaseSpec> = [
     crash: "question-escalated",
     errand: "escalate",
   }),
+  spec("relay", { errand: "relay" }),
+  spec("relayed-asked", { crash: "relayed-asked", errand: "relay" }),
+  spec("relayed-routed", { crash: "relayed-routed", errand: "relay" }),
+  spec("relayed-answered", { crash: "relayed-answered", errand: "relay" }),
+  spec("relayed-answer-submitted", {
+    crash: "relayed-answer-submitted",
+    errand: "relay",
+  }),
   spec("control-no-crash", { fault: Option.some("freshIds") }),
   spec("control-reporter-submitted", {
     crash: "reporter-submitted",
@@ -202,6 +217,12 @@ const FAUX_CASES: ReadonlyArray<CaseSpec> = [
   spec("control-question-routed", {
     crash: "question-routed",
     errand: "question",
+    fault: Option.some("freshQuestionIds"),
+    expect: "double",
+  }),
+  spec("control-relayed-routed", {
+    crash: "relayed-routed",
+    errand: "relay",
     fault: Option.some("freshQuestionIds"),
     expect: "double",
   }),
@@ -252,6 +273,17 @@ const questionOf = (errand: Errand) =>
       : { subagent: "$subagent", answer: ANSWER }
   )}`;
 
+/**
+ * The relay errand's child's final answer: a lead line, the parent's script on a line of its own,
+ * and a question last, so `needsDecision` relays it. No `;`, which ends a script step.
+ */
+const RELAYED_ANSWER = `Pick one for the count.\n${SCRIPT_PREFIX} tool subagent_reply ${JSON.stringify(
+  { subagent: "$subagent", answer: ANSWER }
+)}\nWhich colour?`;
+
+/** What a relayed question's answer reaches the child as, as `renderAnswer` begins it. */
+const RELAYED_ANSWER_LEAD = "The parent answered:";
+
 /** The input the parent is asked a question with, as `renderQuestion` begins it. */
 const QUESTION_LEAD = `Subagent "${DESCRIPTION}" asks:`;
 
@@ -261,18 +293,26 @@ const TYPED_SCHEMA = {
   required: ["count"],
 };
 
+/** The faux child's brief: its script line. */
+const briefOf = (errand: Errand): string => {
+  if (errand === "question" || errand === "escalate") {
+    return `${SCRIPT_PREFIX} tool ask_parent ${JSON.stringify({
+      question: questionOf(errand),
+    })}`;
+  }
+
+  return errand === "relay"
+    ? `${SCRIPT_PREFIX} say ${JSON.stringify(RELAYED_ANSWER)}`
+    : FAUX_TASK;
+};
+
 /** The parent's first message: spawn one child, then wait. */
 const parentMessage = (errand: Errand, bridge: boolean): string => {
   if (bridge) {
     return 'Call the subagent_spawn tool exactly once, with description "Name three colours" and brief "Reply with exactly three colour names, comma separated, and nothing else. Use no tools." After the tool returns, reply with the single word waiting.';
   }
 
-  const brief =
-    errand === "question" || errand === "escalate"
-      ? `${SCRIPT_PREFIX} tool ask_parent ${JSON.stringify({
-          question: questionOf(errand),
-        })}`
-      : FAUX_TASK;
+  const brief = briefOf(errand);
 
   const args =
     errand === "nudge"
@@ -1027,7 +1067,11 @@ const allAccepted = (what: string, statuses: ReadonlyArray<string>) =>
   );
 
 /** The errands whose child asks its parent a question. */
-const QUESTION_ERRANDS: ReadonlySet<Errand> = new Set(["question", "escalate"]);
+const QUESTION_ERRANDS: ReadonlySet<Errand> = new Set([
+  "question",
+  "escalate",
+  "relay",
+]);
 
 /** The inputs each errand gives the child: the brief, and the steer or the nudge. */
 const INPUTS: Readonly<Record<Errand, number>> = {
@@ -1036,6 +1080,8 @@ const INPUTS: Readonly<Record<Errand, number>> = {
   nudge: 2,
   question: 1,
   escalate: 1,
+  // The brief, then the relayed question's answer.
+  relay: 2,
 };
 
 /** The child's answers each errand expects; a question is a tool call of its own, then its answer. */
@@ -1045,6 +1091,8 @@ const ANSWERS: Readonly<Record<Errand, number>> = {
   nudge: 2,
   question: 2,
   escalate: 2,
+  // The answer that asked, then the one after the parent's answer.
+  relay: 2,
 };
 
 /**
@@ -1070,7 +1118,13 @@ const questionChecks = (
     text.startsWith(QUESTION_LEAD)
   ).length;
 
-  const given = toolResults(reading.childView, "ask_parent");
+  const given =
+    caseSpec.errand === "relay"
+      ? userTexts(reading.childView).filter((text) =>
+          text.startsWith(RELAYED_ANSWER_LEAD)
+        )
+      : toolResults(reading.childView, "ask_parent");
+
   const escalations = escalationsOf(reading.parentView);
 
   return [

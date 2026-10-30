@@ -2,7 +2,8 @@
 // (ThreadLaunchWorkspaceStrategy, lines 514 to 531; ThreadLaunchInput and its result, line 3154)
 // at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the three workspace strategies and the launch
 // command that creates a thread and sends its first message at once. Changed: the client mints the
-// thread id, the model is a pi-ai provider and model id, and the first message is a Cairn turn.
+// thread id, the model is a pi-ai provider and model id, the first message is a Cairn turn, and a
+// launch in a folder project makes or refreshes the project's one project thread.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -80,6 +81,14 @@ export const ThreadLaunchInput = Schema.Struct({
   runtimeMode: RuntimeMode,
   workspace: WorkspaceStrategy,
   initialMessage: TurnInput,
+  /**
+   * In a folder project, a launch makes the project thread (the user, 2026-10-29): the first one
+   * marks it, and a later one refreshes it, stopping and archiving the one it replaces. Naming the project
+   * thread the client saw makes the refresh refuse (`InvalidInput` on `replaces`) when another
+   * device moved the mark first; absent, it replaces whichever is current. Not allowed in the
+   * scratch project, where every launch is a scratch thread of its own.
+   */
+  replaces: Schema.optionalKey(ThreadId),
 });
 
 export type ThreadLaunchInput = typeof ThreadLaunchInput.Type;

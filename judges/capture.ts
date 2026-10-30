@@ -867,6 +867,7 @@ const shellFromFixture = (
       workspaceRoot: `/home/owner/Developer/projects/${title}`,
       repository: Option.none(),
       defaultModel: Option.none(),
+      projectThreadId: Option.none(),
       createdAt: time(now - 90 * DAY),
       updatedAt: time(now - 90 * DAY),
     })

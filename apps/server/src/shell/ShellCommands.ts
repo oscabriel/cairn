@@ -11,7 +11,10 @@
 // user sends clears the manual settle state and ends a snooze (dispatchMessage). A subagent's row
 // (one with a `lineage`) is never settled, snoozed, pinned or archived, since its parent's row
 // holds it, and a parent is not settled, by hand or by the sweep, while a child works or asks or
-// its result is still on the way (ADR 0028).
+// its result is still on the way (ADR 0028). A folder project has one project thread (the user,
+// 2026-10-29), marked on the project row: the create that makes it marks it, a refresh archives the
+// one it replaces and moves the mark in the same commit, and archiving or deleting the marked
+// thread clears the mark. Clearing a scratch thread deletes it and its subagents' rows.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -50,6 +53,7 @@ import { ThreadLineage } from "@cairn/protocol/Subagents";
 import { Array as Arr, DateTime, Match, Option, Result, Schema } from "effect";
 
 import type { ProjectRow } from "../projects/Projects.ts";
+import { isLiveThread } from "./ThreadRows.ts";
 import type { ThreadRow } from "./ThreadRows.ts";
 
 // Commands only the server issues.
@@ -78,6 +82,15 @@ export const ThreadCreate = Schema.TaggedStruct("ThreadCreate", {
   worktreePath: ThreadShell.fields.worktreePath,
   /** A subagent's parent and root (ADR 0028); absent for a thread the user launched. */
   lineage: Schema.optionalKey(Schema.OptionFromNullOr(ThreadLineage)),
+  /**
+   * Present for a launch in a folder project: the thread becomes the project thread. With no live
+   * project thread it marks it (first use); otherwise it refreshes it, archiving the old one in the
+   * same commit. `replaces`, when some, must name the current project thread, so a refresh racing
+   * another one is refused instead of archiving the thread the other made.
+   */
+  projectThread: Schema.optionalKey(
+    Schema.Struct({ replaces: Schema.OptionFromNullOr(ThreadId) })
+  ),
 });
 
 const patchField = <S extends Schema.Top>(schema: S) =>
@@ -323,8 +336,10 @@ export interface ShellCommandState {
   readonly workspaceOwner: Option.Option<ProjectRow>;
   /** The thread the command names. */
   readonly thread: Option.Option<ThreadRow>;
-  /** The project's threads that are not deleted, for project deletion. */
+  /** The project's threads that are not deleted, for project deletion and clearing a thread. */
   readonly projectThreads: ReadonlyArray<ThreadRow>;
+  /** The row the project's `projectThreadId` names, in any state, when the command reads it. */
+  readonly projectThread: Option.Option<ThreadRow>;
 }
 
 /** What the caller must load before planning a command. */
@@ -332,7 +347,12 @@ export interface ShellCommandTargets {
   readonly projectId: Option.Option<ProjectId>;
   readonly workspaceRoot: Option.Option<string>;
   readonly threadId: Option.Option<ThreadId>;
+  /** Load the project's threads (of `projectId`, or of the thread's own project). */
   readonly projectThreads: boolean;
+  /** With no `projectId`, load the project of the thread the command names. */
+  readonly threadProject: boolean;
+  /** Load the thread the project marks as its project thread. */
+  readonly projectThread: boolean;
 }
 
 const commandType = (command: ServerShellCommand) => command._tag;
@@ -382,6 +402,16 @@ const threadTarget = (command: {
   workspaceRoot: Option.none(),
   threadId: Option.some(command.threadId),
   projectThreads: false,
+  threadProject: false,
+  projectThread: false,
+});
+
+/** A thread command that may clear its project's mark, so it reads the thread's project too. */
+const markedThreadTarget = (command: {
+  readonly threadId: ThreadId;
+}): ShellCommandTargets => ({
+  ...threadTarget(command),
+  threadProject: true,
 });
 
 /** The rows `command` reads. */
@@ -393,6 +423,8 @@ export const commandTargets = (
     workspaceRoot: Option.none(),
     threadId: Option.none(),
     projectThreads: false,
+    threadProject: false,
+    projectThread: false,
   };
 
   return Match.valueTags(command, {
@@ -419,6 +451,7 @@ export const commandTargets = (
       ...none,
       projectId: Option.some(create.projectId),
       threadId: Option.some(create.threadId),
+      projectThread: create.projectThread !== undefined,
     }),
     ThreadRename: threadTarget,
     ThreadSettle: threadTarget,
@@ -430,9 +463,16 @@ export const commandTargets = (
     ThreadVisit: threadTarget,
     ThreadMarkUnread: threadTarget,
     ThreadSetAutoSettle: threadTarget,
-    ThreadArchive: threadTarget,
-    ThreadUnarchive: threadTarget,
-    ThreadDelete: threadTarget,
+    ThreadArchive: markedThreadTarget,
+    ThreadUnarchive: (unarchive) => ({
+      ...markedThreadTarget(unarchive),
+      projectThread: true,
+    }),
+    ThreadDelete: markedThreadTarget,
+    ThreadClear: (clear) => ({
+      ...markedThreadTarget(clear),
+      projectThreads: true,
+    }),
     ThreadActivityUpdate: threadTarget,
     ThreadWorkspaceUpdate: threadTarget,
     ThreadAutoSettle: threadTarget,
@@ -780,6 +820,7 @@ const planProjectCreate = (
     workspaceRoot: root.value,
     repository: input.repository,
     defaultModel: Option.none(),
+    projectThreadId: Option.none(),
     createdAt: state.now,
     updatedAt: state.now,
   };
@@ -858,6 +899,190 @@ const shelvedThread = (
   Result.flatMap(unarchivedThread(command, state, threadId), (row) =>
     ownShelf(command, row)
   );
+
+/** The project row with its mark cleared, when `threadId` is its project thread. */
+const unmarked = (
+  state: ShellCommandState,
+  threadId: ThreadId
+): Option.Option<ProjectRow> =>
+  Option.map(
+    Option.filter(
+      state.project,
+      (row) =>
+        Option.isNone(row.deletedAt) &&
+        Option.contains(row.shell.projectThreadId, threadId)
+    ),
+    (row) => ({
+      ...row,
+      shell: {
+        ...row.shell,
+        projectThreadId: Option.none(),
+        updatedAt: state.now,
+      },
+    })
+  );
+
+/**
+ * A plan that takes `threadId` out of the shell (archive, delete), clearing its project's mark in
+ * the same commit when it is the project thread.
+ */
+const leavingPlan = (
+  state: ShellCommandState,
+  row: ThreadRow,
+  type: ShellEventType
+): Planned =>
+  Result.succeed(
+    Option.match(unmarked(state, row.shell.id), {
+      onNone: (): ShellPlan => ({
+        events: [threadEvent(row.shell.id, type)],
+        projects: [],
+        threads: [row],
+      }),
+      onSome: (project): ShellPlan => ({
+        events: [
+          threadEvent(row.shell.id, type),
+          projectEvent(project.shell.id, "project.updated"),
+        ],
+        projects: [project],
+        threads: [row],
+      }),
+    })
+  );
+
+/**
+ * Brings an archived thread back. A top-level thread in a folder project comes back as its project
+ * thread, so the project keeps exactly one: marked again when the project has none live, refused
+ * when another one is (a refresh replaces the project thread; an unarchive does not).
+ */
+const unarchivePlan = (
+  command: ServerShellCommand,
+  state: ShellCommandState,
+  row: ThreadRow
+): Planned => {
+  const project = Option.filter(
+    state.project,
+    (candidate) =>
+      Option.isNone(candidate.deletedAt) &&
+      candidate.shell.kind !== "scratch" &&
+      candidate.shell.id === row.shell.projectId
+  );
+
+  if (Option.isSome(row.shell.lineage) || Option.isNone(project)) {
+    return threadPlan(row, "thread.unarchived");
+  }
+
+  const current = Option.filter(
+    state.projectThread,
+    (marked) =>
+      isLiveThread(marked) &&
+      marked.shell.id !== row.shell.id &&
+      Option.contains(project.value.shell.projectThreadId, marked.shell.id)
+  );
+
+  if (Option.isSome(current)) {
+    return invalid(
+      command,
+      "threadId",
+      `the project's thread is ${current.value.shell.id}, and a project has one. Open that one, or refresh it to start anew.`
+    );
+  }
+
+  const marked: ProjectRow = {
+    ...project.value,
+    shell: {
+      ...project.value.shell,
+      projectThreadId: Option.some(row.shell.id),
+      updatedAt: state.now,
+    },
+  };
+
+  return Result.succeed({
+    events: [
+      threadEvent(row.shell.id, "thread.unarchived"),
+      projectEvent(marked.shell.id, "project.updated"),
+    ],
+    projects: [marked],
+    threads: [row],
+  });
+};
+
+/**
+ * A new top-level thread in a folder project becomes its project thread: it is marked, and the live
+ * project thread it replaces (if any) is archived in the same commit, so the project never has two
+ * and never none between them. The launch stops the old one's run, queue and working children
+ * just before this commit, as an archive does; it leaves the sidebar.
+ */
+const planProjectThread = (
+  command: ServerShellCommand,
+  state: ShellCommandState,
+  project: ProjectRow,
+  created: ThreadRow,
+  replaces: Option.Option<ThreadId>
+): Planned => {
+  const { now } = state;
+
+  if (project.shell.kind === "scratch") {
+    return invalid(
+      command,
+      "projectId",
+      "the scratch project has no project thread; each of its threads is a scratch thread."
+    );
+  }
+
+  if (Option.isSome(created.shell.lineage)) {
+    return invalid(
+      command,
+      "lineage",
+      "a subagent cannot be its project's project thread; it is managed by its root."
+    );
+  }
+
+  const current = Option.filter(
+    state.projectThread,
+    (row) =>
+      isLiveThread(row) &&
+      Option.contains(project.shell.projectThreadId, row.shell.id)
+  );
+
+  if (
+    Option.isSome(replaces) &&
+    Option.isSome(current) &&
+    current.value.shell.id !== replaces.value
+  ) {
+    return invalid(
+      command,
+      "replaces",
+      `the project thread is now ${current.value.shell.id}, not ${replaces.value}: another refresh moved it. Open the project again before refreshing.`
+    );
+  }
+
+  const marked: ProjectRow = {
+    ...project,
+    shell: {
+      ...project.shell,
+      projectThreadId: Option.some(created.shell.id),
+      updatedAt: now,
+    },
+  };
+
+  const archived = Option.map(current, (row) =>
+    withShell(row, { archivedAt: Option.some(now), updatedAt: now })
+  );
+
+  return Result.succeed({
+    events: [
+      threadEvent(created.shell.id, "thread.created"),
+      ...Option.toArray(
+        Option.map(archived, (row) =>
+          threadEvent(row.shell.id, "thread.archived")
+        )
+      ),
+      projectEvent(project.shell.id, "project.updated"),
+    ],
+    projects: [marked],
+    threads: [created, ...Option.toArray(archived)],
+  });
+};
 
 /**
  * Plans `command` against the rows it reads. Returns the events and the rows to write, or the
@@ -949,61 +1174,75 @@ export const planShellCommand = (
       ),
 
     ThreadCreate: (create) =>
-      Result.flatMap(liveProject(command, state, create.projectId), () => {
-        if (Option.isSome(state.thread)) {
-          return conflict(
-            command,
-            "stale_state",
-            `thread ${create.threadId} already exists.`
-          );
+      Result.flatMap(
+        liveProject(command, state, create.projectId),
+        (project) => {
+          if (Option.isSome(state.thread)) {
+            return conflict(
+              command,
+              "stale_state",
+              `thread ${create.threadId} already exists.`
+            );
+          }
+
+          const shell: ThreadShell = {
+            id: create.threadId,
+            projectId: create.projectId,
+            title: create.title,
+            provider: create.provider,
+            modelId: create.modelId,
+            thinkingLevel: create.thinkingLevel,
+            runtimeMode: create.runtimeMode,
+            branch: create.branch,
+            worktreePath: create.worktreePath,
+            activity: "idle",
+            activeRunId: Option.none(),
+            latestRunRequestedAt: Option.none(),
+            latestRunStartedAt: Option.none(),
+            latestRunCompletedAt: Option.none(),
+            queueLength: 0,
+            lastError: Option.none(),
+            lastErrorClass: Option.none(),
+            usageLimitResetAt: Option.none(),
+            waitingFor: "none",
+            pendingRuntimeRequest: Option.none(),
+            latestVisibleMessage: Option.none(),
+            latestUserMessageAt: Option.none(),
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: Option.none(),
+            settledOverride: Option.none(),
+            settledAt: Option.none(),
+            unsettledAt: Option.none(),
+            snoozedUntil: Option.none(),
+            snoozedAt: Option.none(),
+            pinnedAt: Option.none(),
+            pinOrderKey: Option.none(),
+            activeOrderKey: Option.none(),
+            autoSettleDisabledAt: Option.none(),
+            lastVisitedAt: Option.none(),
+            parkedTaskIds: [],
+            ...BARE_ROW_FIELDS,
+            lineage: create.lineage ?? Option.none(),
+          };
+
+          const created: ThreadRow = {
+            shell,
+            deletedAt: Option.none(),
+            lastSnoozeWakeAt: Option.none(),
+          };
+
+          return create.projectThread === undefined
+            ? threadPlan(created, "thread.created")
+            : planProjectThread(
+                command,
+                state,
+                project,
+                created,
+                create.projectThread.replaces
+              );
         }
-
-        const shell: ThreadShell = {
-          id: create.threadId,
-          projectId: create.projectId,
-          title: create.title,
-          provider: create.provider,
-          modelId: create.modelId,
-          thinkingLevel: create.thinkingLevel,
-          runtimeMode: create.runtimeMode,
-          branch: create.branch,
-          worktreePath: create.worktreePath,
-          activity: "idle",
-          activeRunId: Option.none(),
-          latestRunRequestedAt: Option.none(),
-          latestRunStartedAt: Option.none(),
-          latestRunCompletedAt: Option.none(),
-          queueLength: 0,
-          lastError: Option.none(),
-          lastErrorClass: Option.none(),
-          usageLimitResetAt: Option.none(),
-          waitingFor: "none",
-          pendingRuntimeRequest: Option.none(),
-          latestVisibleMessage: Option.none(),
-          latestUserMessageAt: Option.none(),
-          createdAt: now,
-          updatedAt: now,
-          archivedAt: Option.none(),
-          settledOverride: Option.none(),
-          settledAt: Option.none(),
-          unsettledAt: Option.none(),
-          snoozedUntil: Option.none(),
-          snoozedAt: Option.none(),
-          pinnedAt: Option.none(),
-          pinOrderKey: Option.none(),
-          activeOrderKey: Option.none(),
-          autoSettleDisabledAt: Option.none(),
-          lastVisitedAt: Option.none(),
-          parkedTaskIds: [],
-          ...BARE_ROW_FIELDS,
-          lineage: create.lineage ?? Option.none(),
-        };
-
-        return threadPlan(
-          { shell, deletedAt: Option.none(), lastSnoozeWakeAt: Option.none() },
-          "thread.created"
-        );
-      }),
+      ),
 
     ThreadRename: (rename) =>
       Result.flatMap(liveThread(command, state, rename.threadId), (row) =>
@@ -1200,7 +1439,8 @@ export const planShellCommand = (
                 "stale_state",
                 `thread ${archive.threadId} is already archived.`
               )
-            : threadPlan(
+            : leavingPlan(
+                state,
                 withShell(row, {
                   archivedAt: Option.some(now),
                   updatedAt: now,
@@ -1217,21 +1457,71 @@ export const planShellCommand = (
               "stale_state",
               `thread ${unarchive.threadId} is not archived.`
             )
-          : threadPlan(
-              withShell(row, { archivedAt: Option.none(), updatedAt: now }),
-              "thread.unarchived"
+          : unarchivePlan(
+              command,
+              state,
+              withShell(row, { archivedAt: Option.none(), updatedAt: now })
             )
       ),
 
     ThreadDelete: (remove) =>
       Result.flatMap(liveThread(command, state, remove.threadId), (row) =>
-        threadPlan(
+        leavingPlan(
+          state,
           {
             ...withShell(row, { updatedAt: now }),
             deletedAt: Option.some(now),
           },
           "thread.deleted"
         )
+      ),
+
+    ThreadClear: (clear) =>
+      Result.flatMap(
+        liveThread(command, state, clear.threadId),
+        (row): Planned => {
+          const scratch = Option.exists(
+            state.project,
+            (project) => project.shell.kind === "scratch"
+          );
+
+          if (!scratch) {
+            return invalid(
+              command,
+              "threadId",
+              `thread ${clear.threadId} is not a scratch thread. Archive or delete it instead.`
+            );
+          }
+
+          if (Option.isSome(row.shell.lineage)) {
+            return invalid(
+              command,
+              "threadId",
+              `thread ${clear.threadId} is a subagent; clearing its scratch thread clears it.`
+            );
+          }
+
+          const cleared = [
+            row,
+            ...state.projectThreads.filter((thread) =>
+              Option.exists(
+                thread.shell.lineage,
+                (lineage) => lineage.rootThreadId === row.shell.id
+              )
+            ),
+          ] as const;
+
+          return Result.succeed({
+            events: Arr.map(cleared, (thread) =>
+              threadEvent(thread.shell.id, "thread.deleted")
+            ),
+            projects: [],
+            threads: cleared.map((thread): ThreadRow => ({
+              ...withShell(thread, { updatedAt: now }),
+              deletedAt: Option.some(now),
+            })),
+          });
+        }
       ),
 
     ThreadActivityUpdate: (update) =>

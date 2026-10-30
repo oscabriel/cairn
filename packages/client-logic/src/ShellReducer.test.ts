@@ -58,6 +58,7 @@ const project = ProjectShell.make({
   workspaceRoot: "/home/me/Developer/projects/cairn",
   repository: Option.some("oscabriel/cairn"),
   defaultModel: Option.none(),
+  projectThreadId: Option.none(),
   createdAt: at,
   updatedAt: at,
 });

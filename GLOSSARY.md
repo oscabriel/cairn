@@ -18,7 +18,7 @@ _Avoid_: sandbox, runner
 
 _Avoid_: workspace, repo (for the Cairn concept)
 
-**Scratch project**: The hidden project behind "no project": a fresh folder under Cairn's data directory, with no git repo, so its threads have no diffs. It can become a real project later.
+**Scratch project**: The hidden project behind "no project": a fresh folder under Cairn's data directory, with no git repo, so its threads have no diffs. It can become a real project later. It has no project thread; each of its threads is a scratch thread.
 
 **Owner**: The one Tailscale login Cairn admits (`oscabriel@github`), written to `~/.config/cairn/cairn.json` at install and compared exactly. Only the owner's untagged nodes get in.
 
@@ -31,6 +31,14 @@ _Avoid_: workspace, repo (for the Cairn concept)
 ## Conversations
 
 **Thread**: One conversation in the sidebar. Its arms are the project's checkout or its own git worktree on the Beelink.
+
+**Project thread**: A folder project's one long-lived thread, the one the user talks to (the user, 2026-10-29), marked on the project row (`projectThreadId`). The first launch in a project makes it; it lives on, compacted as it grows. Every top-level thread in a project comes from the first launch or a refresh.
+
+**Refresh**: Replacing a project thread with a new one: the launch that makes the new thread archives the old one and moves the mark in one commit, idempotent by its command id. The launch first stops the old thread's run, queue and working subagents, as an archive does; it leaves the sidebar and can still be opened, but unarchiving it is refused while another thread is the project thread. Unarchiving the project thread when the project has none marks it again.
+
+**Managed thread**: A thread whose lineage roots at a project thread (a subagent, a brief's child, a workflow node), listed under the project thread with its status. It can be opened and used fully (read, message, steer, stop, answer), though the default flow goes through the project thread.
+
+**Scratch thread**: A thread in the scratch project, for a one-off question: it runs in a throwaway folder of its own under the data directory. Clearing it stops its run and its subagents', deletes them from the shell and removes its folder; a boot repair removes any scratch folder whose thread is gone.
 
 **Turn**: One user message and everything the model did in answer to it, up to the next user message: its thoughts, tool calls and replies. The transcript folds a settled turn's work behind one row.
 

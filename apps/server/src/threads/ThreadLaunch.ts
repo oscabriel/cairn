@@ -9,7 +9,8 @@
 // clone tracking, submodules or scheduled tasks; the launch's request and the phase it reached
 // live in `thread_launches`, so boot resumes a launch a restart cut off, each phase idempotent;
 // the first message goes through `TurnContent` and the harness seam; scratch threads get their own
-// claimed folder.
+// claimed folder; a launch in a folder project makes its project thread, or refreshes it (the
+// thread row, the old one's archive and the project's mark in one shell commit).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -74,10 +75,12 @@ import {
   ThreadCreate,
   ThreadWorkspaceUpdate,
 } from "../shell/ShellCommands.ts";
-import { ThreadRows } from "../shell/ThreadRows.ts";
+import type { ShellCommandRejection } from "../shell/ShellCommands.ts";
+import { isLiveThread, ThreadRows } from "../shell/ThreadRows.ts";
 import { BranchNames } from "./BranchNames.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import type { LaunchRow, LaunchStoreError } from "./LaunchStore.ts";
+import { StopHooks } from "./StopHooks.ts";
 import { placeholderTitle, ThreadTitles } from "./ThreadTitles.ts";
 import { logTurnSubmitted, TurnContent } from "./TurnContent.ts";
 import type { TurnContentError } from "./TurnContent.ts";
@@ -142,6 +145,30 @@ const unavailable = (cause: { readonly message: string }) =>
     field: Option.none(),
   });
 
+/** The launch's answer to the shell store refusing its thread, the first time or on a resend. */
+const refused = (failure: ShellCommandRejection): LaunchError =>
+  Match.valueTags(failure, {
+    ShellTargetNotFound: (target) =>
+      new LaunchError({
+        message: target.message,
+        reason: "project_not_found",
+        field: Option.some("projectId"),
+      }),
+    ShellCommandConflict: (conflict) =>
+      new LaunchError({
+        message: conflict.message,
+        reason: "thread_exists",
+        field: Option.some("threadId"),
+      }),
+    ShellCommandInvalid: (invalid) =>
+      new LaunchError({
+        message: invalid.message,
+        reason: "invalid_input",
+        field: invalid.field,
+      }),
+    ProjectWorkspaceConflictError: unavailable,
+  });
+
 /** How a launch row is forgotten after its turn was submitted: a few tries, a moment apart. */
 const LAUNCH_ROW_REMOVE_RETRY = {
   times: 4,
@@ -195,7 +222,10 @@ export class ThreadLaunch extends Context.Service<
     cancel(threadId: ThreadId): Effect.Effect<boolean, LaunchStoreError>;
   }
 >()("cairn/server/threads/ThreadLaunch") {
-  /** Needs the shell store, `LaunchStore`, the projects services, `HarnessSeam` and `TurnContent`. */
+  /**
+   * Needs the shell store, `LaunchStore`, the projects services, `HarnessSeam`, `StopHooks` and
+   * `TurnContent`.
+   */
   static readonly layerNoDeps = Layer.effect(
     ThreadLaunch,
     Effect.gen(function* () {
@@ -208,6 +238,7 @@ export class ThreadLaunch extends Context.Service<
       const scratch = yield* ScratchProject;
       const worktrees = yield* Worktrees;
       const seam = yield* HarnessSeam;
+      const stopHooks = yield* StopHooks;
       const turns = yield* TurnContent;
       const titles = yield* ThreadTitles;
       const branchNames = yield* BranchNames;
@@ -835,6 +866,127 @@ export class ThreadLaunch extends Context.Service<
           { onlyIfMissing: true }
         );
 
+      const cancel = Effect.fn("ThreadLaunch.cancel")(function* (
+        threadId: ThreadId
+      ) {
+        yield* awaitAdmission(threadId);
+        yield* FiberMap.remove(running, threadId);
+
+        const found = yield* launches.byThread(threadId);
+
+        if (Option.isNone(found)) {
+          return false;
+        }
+
+        const row = found.value;
+
+        yield* FiberMap.remove(naming, `branch:${threadId}`);
+        yield* discardWorkspace(row).pipe(
+          Effect.catchTag("ShellStoreError", (failure) =>
+            Effect.logWarning("launch cleanup failed").pipe(
+              Effect.annotateLogs({
+                event: "launch_cleanup_failed",
+                threadId,
+                cause: failure.message,
+              })
+            )
+          )
+        );
+        yield* markFailed(row, STOPPED_BEFORE_START);
+        yield* launches.remove(row.input.commandId);
+        yield* Effect.logInfo("thread launch stopped").pipe(
+          Effect.annotateLogs({
+            event: "thread_launch_stopped",
+            threadId,
+            phase: row.phase,
+          })
+        );
+
+        return true;
+      });
+
+      /**
+       * The live project thread a launch in `input.projectId` would replace, read just before its
+       * commit; none when `replaces` names another (the commit refuses that launch).
+       */
+      const replacedBy = Effect.fnUntraced(function* (
+        input: ThreadLaunchInput
+      ) {
+        const project = yield* projects.get(input.projectId);
+
+        const marked = Option.flatMap(
+          project,
+          (row) => row.shell.projectThreadId
+        );
+
+        if (
+          Option.isNone(marked) ||
+          marked.value === input.threadId ||
+          (input.replaces !== undefined && input.replaces !== marked.value)
+        ) {
+          return Option.none<ThreadId>();
+        }
+
+        const row = yield* threadRows.get(marked.value);
+
+        return Option.isSome(row) && isLiveThread(row.value)
+          ? marked
+          : Option.none<ThreadId>();
+      });
+
+      /**
+       * Stops the project thread a refresh replaces, with its queue and working subagents, as
+       * `Threads.stop` does (that service sits above this one). Never fails the launch: a thread
+       * the brain never ensured has no run, and any other failure is logged.
+       */
+      const stopReplaced = (input: ThreadLaunchInput) =>
+        Effect.gen(function* () {
+          const replaced = yield* replacedBy(input);
+
+          if (Option.isNone(replaced)) {
+            return;
+          }
+
+          const threadId = replaced.value;
+
+          if (yield* cancel(threadId)) {
+            return;
+          }
+
+          const descendants = yield* seam.stop(threadId, {
+            clearQueue: true,
+            subagents: "stop",
+          });
+
+          yield* stopHooks.run(threadId);
+          yield* Effect.forEach(descendants, (child) => stopHooks.run(child), {
+            discard: true,
+          });
+          yield* Effect.logInfo("replaced project thread stopped").pipe(
+            Effect.annotateLogs({
+              event: "project_thread_replaced",
+              threadId,
+              by: input.threadId,
+            })
+          );
+        }).pipe(
+          Effect.catchTag("HarnessError", (failure) =>
+            failure.reason === "thread_not_found"
+              ? Effect.void
+              : Effect.fail(failure)
+          ),
+          Effect.tapError((failure) =>
+            Effect.logWarning("replaced project thread not stopped").pipe(
+              Effect.annotateLogs({
+                event: "project_thread_replace_stop_failed",
+                by: input.threadId,
+                reason: failure.message,
+              })
+            )
+          ),
+          Effect.ignore
+        );
+
       const launch = Effect.fn("ThreadLaunch.launch")(function* (
         input: ThreadLaunchInput,
         from: string
@@ -872,6 +1024,11 @@ export class ThreadLaunch extends Context.Service<
               reason: "invalid_input",
               field: Option.some("commandId"),
             });
+          }
+
+          // A refused first attempt (a stale `replaces`, say) answers its resend the same way.
+          if (Option.isSome(receipt.value.rejection)) {
+            return yield* refused(receipt.value.rejection.value);
           }
 
           return { threadId: input.threadId, resumed: true };
@@ -913,6 +1070,17 @@ export class ThreadLaunch extends Context.Service<
           });
         }
 
+        const scratchProject = project.value.shell.kind === "scratch";
+
+        if (scratchProject && input.replaces !== undefined) {
+          return yield* new LaunchError({
+            message:
+              "A scratch thread replaces nothing: the scratch project has no project thread. Launch it without `replaces`.",
+            reason: "invalid_input",
+            field: Option.some("replaces"),
+          });
+        }
+
         if (
           Predicate.isTagged(input.workspace, "Worktree") &&
           !(yield* worktrees.isRepository(project.value.shell.workspaceRoot))
@@ -942,58 +1110,49 @@ export class ThreadLaunch extends Context.Service<
               placeholderTitle(input.initialMessage.text)
             );
 
-            yield* sink
-              .commitCommand(
-                ThreadCreate.make({
-                  commandId: input.commandId,
-                  threadId: input.threadId,
-                  projectId: input.projectId,
-                  title,
-                  provider: input.model.provider,
-                  modelId: input.model.modelId,
-                  thinkingLevel: input.thinkingLevel,
-                  runtimeMode: input.runtimeMode,
-                  branch: Option.none(),
-                  worktreePath: Option.none(),
-                })
+            const thread = ThreadCreate.make({
+              commandId: input.commandId,
+              threadId: input.threadId,
+              projectId: input.projectId,
+              title,
+              provider: input.model.provider,
+              modelId: input.model.modelId,
+              thinkingLevel: input.thinkingLevel,
+              runtimeMode: input.runtimeMode,
+              branch: Option.none(),
+              worktreePath: Option.none(),
+            });
+
+            // Every top-level launch in a folder project is its project thread: the first marks
+            // it, a later one refreshes it. A scratch thread is one of many.
+            const create = scratchProject
+              ? thread
+              : ThreadCreate.make({
+                  ...thread,
+                  projectThread: {
+                    replaces: Option.fromUndefinedOr(input.replaces),
+                  },
+                });
+
+            // A refresh ends the old project thread's run as an archive does, before the commit
+            // that archives it: its run, queue and working subagents stop, so nothing keeps
+            // spending or asking out of sight. A kill in between leaves it stopped and still marked.
+            if (!scratchProject) {
+              yield* stopReplaced(input);
+            }
+
+            yield* sink.commitCommand(create).pipe(
+              Effect.mapError((failure) =>
+                Predicate.isTagged(failure, "ShellStoreError")
+                  ? unavailable(failure)
+                  : refused(failure)
+              ),
+              Effect.tapError(() =>
+                recorded
+                  ? launches.remove(input.commandId).pipe(Effect.ignore)
+                  : Effect.void
               )
-              .pipe(
-                Effect.catchTags({
-                  ShellStoreError: (failure) =>
-                    Effect.fail(unavailable(failure)),
-                  ShellTargetNotFound: (failure) =>
-                    Effect.fail(
-                      new LaunchError({
-                        message: failure.message,
-                        reason: "project_not_found",
-                        field: Option.some("projectId"),
-                      })
-                    ),
-                  ShellCommandConflict: (failure) =>
-                    Effect.fail(
-                      new LaunchError({
-                        message: failure.message,
-                        reason: "thread_exists",
-                        field: Option.some("threadId"),
-                      })
-                    ),
-                  ShellCommandInvalid: (failure) =>
-                    Effect.fail(
-                      new LaunchError({
-                        message: failure.message,
-                        reason: "invalid_input",
-                        field: failure.field,
-                      })
-                    ),
-                  ProjectWorkspaceConflictError: (failure) =>
-                    Effect.fail(unavailable(failure)),
-                }),
-                Effect.tapError(() =>
-                  recorded
-                    ? launches.remove(input.commandId).pipe(Effect.ignore)
-                    : Effect.void
-                )
-              );
+            );
 
             yield* sink
               .commitCommand(
@@ -1078,45 +1237,6 @@ export class ThreadLaunch extends Context.Service<
         }
 
         return admitted || Option.isSome(fiber);
-      });
-
-      const cancel = Effect.fn("ThreadLaunch.cancel")(function* (
-        threadId: ThreadId
-      ) {
-        yield* awaitAdmission(threadId);
-        yield* FiberMap.remove(running, threadId);
-
-        const found = yield* launches.byThread(threadId);
-
-        if (Option.isNone(found)) {
-          return false;
-        }
-
-        const row = found.value;
-
-        yield* FiberMap.remove(naming, `branch:${threadId}`);
-        yield* discardWorkspace(row).pipe(
-          Effect.catchTag("ShellStoreError", (failure) =>
-            Effect.logWarning("launch cleanup failed").pipe(
-              Effect.annotateLogs({
-                event: "launch_cleanup_failed",
-                threadId,
-                cause: failure.message,
-              })
-            )
-          )
-        );
-        yield* markFailed(row, STOPPED_BEFORE_START);
-        yield* launches.remove(row.input.commandId);
-        yield* Effect.logInfo("thread launch stopped").pipe(
-          Effect.annotateLogs({
-            event: "thread_launch_stopped",
-            threadId,
-            phase: row.phase,
-          })
-        );
-
-        return true;
       });
 
       return ThreadLaunch.of({

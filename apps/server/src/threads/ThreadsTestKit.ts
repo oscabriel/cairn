@@ -19,6 +19,7 @@ import type { SqlClient } from "effect/sql";
 
 import { AttachmentsLayer } from "../attachments/AttachmentsLayer.ts";
 import type { AttachmentStore } from "../attachments/AttachmentStore.ts";
+import type { HarnessSeam } from "../brain/HarnessSeam.ts";
 import {
   scriptedAnswer,
   ScriptedHarness,
@@ -33,11 +34,17 @@ import { Launches0002 } from "../db/migrations/0002Launches.ts";
 import { Attachments0003 } from "../db/migrations/0003Attachments.ts";
 import { Git } from "../git/Git.ts";
 import { FileSearch } from "../projects/FileSearch.ts";
+import { Projects } from "../projects/Projects.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
 import { Worktrees } from "../projects/Worktrees.ts";
+import { CommandReceipts } from "../shell/CommandReceipts.ts";
 import { EventSink } from "../shell/EventSink.ts";
+import { EventStore } from "../shell/EventStore.ts";
 import { projectIdFor } from "../shell/ShellCommands.ts";
 import { ShellStoreLayer } from "../shell/ShellLayer.ts";
+import { ShellSnapshot } from "../shell/ShellSnapshot.ts";
+import { ShellStream } from "../shell/ShellStream.ts";
+import { ThreadRows } from "../shell/ThreadRows.ts";
 import { BranchNames } from "./BranchNames.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import { StopHooks } from "./StopHooks.ts";
@@ -172,6 +179,49 @@ export const heldLaunchInserts = (
     })
   ).pipe(Layer.provide(LaunchStore.layerNoDeps));
 
+/** The migrations a thread test's database needs. */
+export const threadMigrations = {
+  "0001_Shell": Shell0001,
+  "0002_Launches": Launches0002,
+  "0003_Attachments": Attachments0003,
+};
+
+/** The shell store over a fresh, migrated in-memory database. */
+const testShell = ShellStoreLayer.pipe(
+  Layer.provideMerge(Database.layerTest(threadMigrations))
+);
+
+/**
+ * The shell store over the `cairn.sqlite` at `filename`, with `rows` as its thread rows (a kill
+ * fixture wraps their writes to die inside a commit), for `threadsTestLayer`'s `shell`.
+ */
+export const fileShell = (
+  filename: string,
+  rows: Layer.Layer<
+    ThreadRows,
+    never,
+    SqlClient.SqlClient
+  > = ThreadRows.layerNoDeps
+) =>
+  ShellStream.layerNoDeps.pipe(
+    Layer.provideMerge(ShellSnapshot.layerNoDeps),
+    Layer.provideMerge(
+      EventSink.layerNoDeps.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            EventStore.layerNoDeps,
+            CommandReceipts.layerNoDeps,
+            Projects.layerNoDeps,
+            rows
+          )
+        )
+      )
+    ),
+    Layer.provideMerge(
+      Database.layer({ filename, migrations: threadMigrations })
+    )
+  );
+
 /** Everything a thread test needs, over `dataDir`, the given title model and scripted model. */
 export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
   readonly dataDir: string;
@@ -191,22 +241,33 @@ export const threadsTestLayer = <T, E1, R1, M, E2, R2>(options: {
   >;
   /** Defaults to the real store; `heldLaunchInserts` holds its inserts. */
   readonly launchStore?: Layer.Layer<LaunchStore, never, SqlClient.SqlClient>;
+  /**
+   * The shell store and its database; defaults to `ShellStoreLayer` over a fresh in-memory one. A
+   * kill test passes one over a file, so the next process opens what the killed one left.
+   */
+  /**
+   * Another harness behind the seam (a pi-durable brain a test built), in place of the scripted
+   * one; the scripted services are still provided, unused.
+   */
+  readonly harness?: Layer.Layer<HarnessSeam>;
+  readonly shell?: Layer.Layer<
+    Layer.Success<typeof testShell>,
+    Layer.Error<typeof testShell>
+  >;
 }) => {
-  const shell = ShellStoreLayer.pipe(
-    Layer.provideMerge(
-      Database.layerTest({
-        "0001_Shell": Shell0001,
-        "0002_Launches": Launches0002,
-        "0003_Attachments": Attachments0003,
-      })
-    )
-  );
+  const shell = options.shell ?? testShell;
 
-  const harness = ScriptedHarness.layerNoDeps.pipe(
+  const scripted = ScriptedHarness.layerNoDeps.pipe(
     Layer.provideMerge(ScriptedStore.layer),
     Layer.provideMerge(ScriptedTools.layerEcho),
     Layer.provideMerge(options.model)
   );
+
+  // A given seam is merged last, so it is the `HarnessSeam` every service here reads.
+  const harness =
+    options.harness === undefined
+      ? scripted
+      : Layer.merge(scripted, options.harness);
 
   const projects = Layer.mergeAll(
     ScratchProject.layerNoDeps,

@@ -74,6 +74,8 @@ import {
   SubagentsDoc,
 } from "../subagents/SubagentDocs.ts";
 import { answerBrief, steerReporter } from "../subagents/Subagents.ts";
+import { GoalDoc } from "../verdicts/GoalDocs.ts";
+import { criteriaAnswered } from "../verdicts/Verdicts.ts";
 import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
@@ -90,6 +92,7 @@ import {
   ThreadReceipt,
   writeMode,
 } from "./CairnDocs.ts";
+import type { AnsweredHook } from "./CairnDocs.ts";
 import { CommitFeed, RUN_TASK } from "./CommitFeed.ts";
 import { durable, errorText, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
@@ -138,6 +141,7 @@ const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
   ChildDoc,
   EscalationsDoc,
   WorkflowsDoc,
+  GoalDoc,
 ];
 
 const encoder = new TextEncoder();
@@ -297,6 +301,14 @@ const layerNoDeps = Layer.effect(
     const parked = yield* Parked;
     // Where a judge brain kills itself inside a brief's Go commit; none elsewhere.
     const briefAnswered = answerBrief(yield* BriefFaults);
+
+    // What an answer starts or binds in its own commit: a brief's start or tell task (ADR 0030),
+    // an accepted criteria proposal's criteria (ADR 0026).
+    const answered: AnsweredHook = async (tx, conversationId, record) => {
+      await briefAnswered(tx, conversationId, record);
+      await criteriaAnswered(tx, conversationId, record);
+    };
+
     // A stop finishes here once it started aborting, whatever happens to its caller.
     const layerScope = yield* Effect.scope;
 
@@ -894,7 +906,7 @@ const layerNoDeps = Layer.effect(
         approvalId,
         { ...answer, by: { kind: "user" } },
         brain.now(),
-        briefAnswered
+        answered
       ).pipe(Effect.mapError(fromDurable(Option.some(threadId))));
 
       if (outcome === "not_found") {

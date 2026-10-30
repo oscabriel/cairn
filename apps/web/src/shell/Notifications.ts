@@ -3,9 +3,9 @@
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the favicon badge (a red disc with the count, "9+"
 // above nine) drawn on a canvas, swapped in for the page's icon and put back at zero, and what needs
 // the user (a question, an approval, a failure, a usage limit, an unseen completion). Changed: the
-// count is every thread that needs the user now, derived from the shell, not a queue of
-// notifications raised while the page was hidden; no desktop bridge, notification modes or sounds
-// (Web Push on the phone is a separate service).
+// count is every thread the shell lets the user reach that needs them now, derived from the shell,
+// not a queue of notifications raised while the page was hidden; no desktop bridge, notification
+// modes or sounds (Web Push on the phone is a separate service).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -25,14 +25,15 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { hasUnseenCompletion } from "@cairn/client-logic/PresentThreadShell";
+import { listedThreadsOf } from "@cairn/client-logic/ProjectThread";
 import {
-  isSubagentThread,
   pendingSubagentRequests,
   subagentRequestFor,
 } from "@cairn/client-logic/SubagentRollup";
 import type { SubagentRequest } from "@cairn/client-logic/SubagentRollup";
 import { threadStatus } from "@cairn/client-logic/ThreadState";
-import type { ThreadShell } from "@cairn/protocol/Shell";
+import type { ThreadId } from "@cairn/protocol/Ids";
+import type { ShellSnapshot, ThreadShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
 
 /**
@@ -57,21 +58,42 @@ export const needsAttention = (
 };
 
 /**
- * The favicon badge's count: threads with a sidebar row that need the user, the open one excepted.
- * A subagent has no row; its requests count on its ancestors.
+ * The favicon badge's count: the threads the shell lets the user reach that need them, the open
+ * one excepted. Those are each folder project's project thread and the threads it manages (the
+ * rows the sidebar lists, `listedThreadsOf`), and the scratch thread. A request counts once, on
+ * the thread that asks: its row is listed too, so the project thread's rolled-up mark is not
+ * counted again. The scratch thread's subagents have no row, so their requests count on it. A
+ * thread no list shows (an old top-level thread, an archived one) never counts: the user could
+ * not open it to clear the badge.
  */
 export const badgeCount = (
-  threads: ReadonlyArray<ThreadShell>,
-  openThreadId: Option.Option<string>
+  shell: Pick<ShellSnapshot, "projects" | "threads">,
+  openThreadId: Option.Option<ThreadId>,
+  scratchThreadId: Option.Option<ThreadId>
 ): number => {
-  const requests = pendingSubagentRequests(threads);
+  const listed = shell.projects
+    .filter((project) => project.kind === "folder")
+    .flatMap((project) => listedThreadsOf(project, shell.threads))
+    .map((thread) => ({ thread, request: Option.none<SubagentRequest>() }));
 
-  return threads.filter(
-    (thread) =>
+  const requests = pendingSubagentRequests(shell.threads);
+
+  const scratch = Option.toArray(
+    Option.flatMap(scratchThreadId, (threadId) =>
+      Option.fromUndefinedOr(
+        shell.threads.find((thread) => thread.id === threadId)
+      )
+    )
+  ).map((thread) => ({
+    thread,
+    request: subagentRequestFor(requests, thread.id),
+  }));
+
+  return [...listed, ...scratch].filter(
+    ({ thread, request }) =>
       Option.isNone(thread.archivedAt) &&
-      !isSubagentThread(thread) &&
       !Option.contains(openThreadId, thread.id) &&
-      needsAttention(thread, subagentRequestFor(requests, thread.id))
+      needsAttention(thread, request)
   ).length;
 };
 

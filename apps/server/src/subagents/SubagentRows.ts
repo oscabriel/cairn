@@ -5,7 +5,8 @@
 // child's thread id, so a repeat (the fiber after a crash, then the boot repair) lands once; a row
 // that exists already is left as it is. The row takes its project from the parent's row, its
 // branch and worktree from the child's own worktree when it has one (else the parent's row's), its
-// title from the brief's description, its model from the dispatch record, its mode from the
+// title from the brief's description, its model from the dispatch record (a workflow node, which
+// has no registry item, from its node in the parent's `cairn.workflows`), its mode from the
 // child's link, and a `lineage` naming the parent and the root. The sidebar hides a row with a
 // lineage (`isSubagentThread`), the projector sets its parent's tally from the registry, and the
 // shell refuses to settle, snooze, pin or archive it, or to settle its parent while it works.
@@ -20,6 +21,7 @@ import {
   SUBAGENTS_DOCUMENT,
 } from "@cairn/protocol/Subagents";
 import type { ThreadLineage } from "@cairn/protocol/Subagents";
+import { WORKFLOWS_DOCUMENT } from "@cairn/protocol/Workflows";
 import type { ConversationId, Cursor } from "@earendil-works/pi-durable";
 import {
   Cause,
@@ -41,6 +43,7 @@ import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
+import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
 import type { JsonRecord } from "./SubagentDocs.ts";
@@ -79,6 +82,51 @@ const dispatchedModel = (dispatch: JsonRecord | undefined) =>
     Option.filter((model) => model.provider !== "unknown")
   );
 
+/** The part of a parent's `cairn.workflows` a row reads: each node's child and model. */
+const NodeLedger = Schema.Struct({
+  items: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      nodes: Schema.Record(
+        Schema.String,
+        Schema.Struct({
+          childThreadId: Schema.NullOr(Schema.String),
+          provider: Schema.NullOr(Schema.String),
+          modelId: Schema.NullOr(Schema.String),
+        })
+      ),
+    })
+  ),
+});
+
+type NodeLedger = typeof NodeLedger.Type;
+
+const decodeLedger = Schema.decodeUnknownOption(NodeLedger);
+
+const decodeModel = Schema.decodeUnknownOption(ModelRef);
+
+/**
+ * The model a workflow node's child runs on: its node's resolved role, from the parent's
+ * `cairn.workflows` (`ledger`). None when no node names `threadId` as its child.
+ */
+export const workflowNodeModel = (
+  ledger: Option.Option<NodeLedger>,
+  threadId: ThreadId
+): Option.Option<ModelRef> =>
+  Option.flatMap(ledger, ({ items }) =>
+    Option.flatMap(
+      Option.fromUndefinedOr(
+        Object.values(items)
+          .flatMap((row) => Object.values(row.nodes))
+          .find((node) => node.childThreadId === threadId)
+      ),
+      (node) =>
+        decodeModel({ provider: node.provider, modelId: node.modelId }).pipe(
+          Option.filter((model) => model.provider !== "unknown")
+        )
+    )
+  );
+
 /** A child conversation's row source; none for a conversation that is not a subagent. */
 export const childRowSource = (
   session: BrainSession,
@@ -109,6 +157,12 @@ export const childRowSource = (
 
     const item = registry?.items[link.key];
 
+    const ledger = await session.harness.snapshot(
+      WorkflowsDoc,
+      conversationOf(link.parentConversationId),
+      context
+    );
+
     return Option.map(nonEmpty(meta?.threadId), (threadId) => ({
       threadId: ThreadId.make(threadId),
       lineage: {
@@ -117,7 +171,9 @@ export const childRowSource = (
         rootThreadId: ThreadId.make(link.rootThreadId),
       },
       title: Option.getOrElse(nonEmpty(item?.description), () => "Subagent"),
-      model: dispatchedModel(item?.dispatch),
+      model: Option.orElse(dispatchedModel(item?.dispatch), () =>
+        workflowNodeModel(decodeLedger(ledger), ThreadId.make(threadId))
+      ),
       runtimeMode: link.permissionMode,
       worktree: decodeWorktree(item?.worktree ?? null),
     }));
@@ -176,6 +232,8 @@ export const seamRowSource = Effect.fn("SubagentRows.seamRowSource")(function* (
       Option.flatMap(Option.fromUndefinedOr(items[key]), decodeItem)
   );
 
+  const ledger = yield* harness.document(parentThreadId, WORKFLOWS_DOCUMENT);
+
   return Option.some<ChildRowSource>({
     threadId,
     lineage: {
@@ -187,11 +245,14 @@ export const seamRowSource = Effect.fn("SubagentRows.seamRowSource")(function* (
       Option.flatMap(item, ({ description }) => nonEmpty(description)),
       () => "Subagent"
     ),
-    model: Option.flatMap(item, ({ dispatch }) =>
-      decodeDispatched(dispatch).pipe(
-        Option.map((found) => found.resolved.model),
-        Option.filter((model) => model.provider !== "unknown")
-      )
+    model: Option.orElse(
+      Option.flatMap(item, ({ dispatch }) =>
+        decodeDispatched(dispatch).pipe(
+          Option.map((found) => found.resolved.model),
+          Option.filter((model) => model.provider !== "unknown")
+        )
+      ),
+      () => workflowNodeModel(Option.flatMap(ledger, decodeLedger), threadId)
     ),
     runtimeMode: permissionMode,
     worktree: Option.flatMap(item, ({ worktree }) => decodeWorktree(worktree)),

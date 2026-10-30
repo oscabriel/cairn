@@ -12,3 +12,5 @@ Ported in intent from Ultimate's `server/events.ts` (HazAT/ultimate `8b263386`, 
 Decided by the user on 2026-10-27, from the phase 2 area notes.
 
 Evidence (7B, 2026-10-30): `judges/events-kill.sh` passes, 12 kills with 112 injected faults and 10 kills across a rotation, every (event, reactor) once, 200 tasks once, the in-memory control failing by duplicates. Its events no longer use `workflow.budget.soft`, which the production budget reactor (5B) now reads. Stays proposed: the second half, the gate workflow using events for its meter and push, is judged by the phone run on the deployed brain, which is the user's.
+
+Phone run (2026-10-30, deployed brain at `29cf38d`): the council ran from the phone, but whether its locked-phone approval push arrived is not yet recorded, so the gate's push half is unshown and the status stays proposed.

@@ -585,6 +585,7 @@ const syncSidebar: Step = (model) => {
     shell: model.shell,
     openThreadId: routedThreadId(model.route),
     openDraftId: routedDraftId(model.route),
+    scratchThreadId: model.nextShell.scratch.threadId,
     connection: model.connection.state._tag,
     drafts: sameDrafts(current.drafts, drafts) ? current.drafts : drafts,
   };
@@ -593,6 +594,7 @@ const syncSidebar: Step = (model) => {
     current.shell === context.shell &&
     Equal.equals(current.openThreadId, context.openThreadId) &&
     Equal.equals(current.openDraftId, context.openDraftId) &&
+    Equal.equals(current.scratchThreadId, context.scratchThreadId) &&
     current.connection === context.connection &&
     current.drafts === context.drafts;
 

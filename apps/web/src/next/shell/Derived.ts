@@ -4,6 +4,7 @@
 // Pure, so the views, the catalogue and the tests read the same answers.
 
 import {
+  listedThreadsOf,
   managedThreadsOf,
   projectThreadOf,
 } from "@cairn/client-logic/ProjectThread";
@@ -150,12 +151,7 @@ export const projectMarkOf = (
   project: ProjectShell,
   requests: ReadonlyMap<ThreadId, SubagentRequest>
 ): ProjectMark => {
-  const top = projectThreadFor(model, project);
-
-  const threads = Option.match(top, {
-    onNone: () => NO_THREADS,
-    onSome: (thread) => [thread, ...managedThreadsFor(model, thread)],
-  });
+  const threads = listedThreadsOf(project, threadsOf(model));
 
   const categories = new Set(
     threads.map(

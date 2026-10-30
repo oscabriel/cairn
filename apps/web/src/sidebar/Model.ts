@@ -39,6 +39,8 @@ export const SidebarContext = Schema.Struct({
   openThreadId: Schema.Option(ThreadId),
   /** The draft the route names, when it names one. */
   openDraftId: Schema.Option(Schema.String),
+  /** The scratch thread the next shell's overlay holds on this device, for the favicon badge. */
+  scratchThreadId: Schema.Option(ThreadId),
   /** The connection's state tag. */
   connection: ConnectionTag,
   drafts: Schema.Array(DraftSummary),
@@ -152,6 +154,7 @@ export const emptyContext: SidebarContext = {
   shell: Option.none(),
   openThreadId: Option.none(),
   openDraftId: Option.none(),
+  scratchThreadId: Option.none(),
   connection: "Connecting",
   drafts: [],
 };

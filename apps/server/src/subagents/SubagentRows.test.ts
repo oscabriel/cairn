@@ -4,8 +4,9 @@
 // commit at once (the command id's receipt); a child whose parent has no row gets none. The fiber
 // ends quietly when its scope closes and with a warning when the event stream ends under it.
 // Without pi-durable (the scripted harness) the fiber reads the child through the seam's documents
-// and makes the same row. The fiber and the boot repair over a real brain are in
-// `brain/SubagentsPiDurable.test.ts`.
+// and makes the same row; a workflow node's child, which has no registry item, takes its node's
+// model from the parent's `cairn.workflows`, not the parent's. The fiber and the boot repair over a
+// real brain are in `brain/SubagentsPiDurable.test.ts`.
 
 import { ConversationId, ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
@@ -297,6 +298,79 @@ const scriptedDocuments =
     return Effect.succeedNone;
   };
 
+/** A workflow node's child: its link, no registry item, and its node in the parent's ledger. */
+const workflowDocuments =
+  (parent: ThreadId) => (threadId: ThreadId, kind: string) => {
+    if (threadId === CHILD && kind === "cairn.child") {
+      return Effect.succeedSome({
+        key: "scout-1",
+        parentThreadId: parent,
+        parentConversationId: 1,
+        rootThreadId: parent,
+        depth: 1,
+        briefApprovalId: "brief-1",
+        resultSchema: null,
+        attempts: 0,
+        report: null,
+        permissionMode: "auto-accept-edits",
+      });
+    }
+
+    if (threadId === parent && kind === "cairn.workflows") {
+      return Effect.succeedSome({
+        items: {
+          "wf-1": {
+            nodes: {
+              "scout-1": {
+                childThreadId: CHILD,
+                provider: "claude-bridge",
+                modelId: "claude-sonnet-5-5",
+              },
+            },
+          },
+        },
+      });
+    }
+
+    return Effect.succeedNone;
+  };
+
+/** The row the fiber makes for `CHILD` over `documents`, waited for. */
+const rowThroughSeam = (
+  parent: ThreadId,
+  documents: HarnessSeam["Service"]["document"]
+) =>
+  Effect.gen(function* () {
+    const rows = yield* ThreadRows;
+    const scope = yield* Scope.make();
+
+    yield* Layer.buildWithScope(SubagentRows, scope).pipe(
+      Effect.provideService(HarnessSeam, {
+        ...harnessWith(
+          Stream.make(
+            ThreadEnsured.make({
+              threadId: CHILD,
+              conversationId: ConversationId.make(2),
+              parent: Option.some(parent),
+            })
+          )
+        ),
+        document: documents,
+      })
+    );
+
+    let row = yield* rows.get(CHILD);
+
+    for (let tries = 0; Option.isNone(row) && tries < 50; tries += 1) {
+      yield* Effect.sleep("10 millis");
+      row = yield* rows.get(CHILD);
+    }
+
+    yield* Scope.close(scope, Exit.void);
+
+    return Option.getOrThrow(row).shell;
+  });
+
 describe("a scripted subagent's shell row", () => {
   it.effect(
     "is made through the seam's documents when there is no pi-durable brain",
@@ -351,6 +425,24 @@ describe("a scripted subagent's shell row", () => {
         assert.strictEqual(shell.provider, "scripted");
         assert.strictEqual(shell.modelId, "echo");
         assert.strictEqual(shell.runtimeMode, "auto-accept-edits");
+      }).pipe(Effect.provide(ShellTestLayer))
+  );
+
+  it.effect(
+    "takes a workflow node's own model from its node, not the parent's",
+    () =>
+      Effect.gen(function* () {
+        const sink = yield* EventSink;
+        const project = createProject(1);
+        const parent = testThreadId(1);
+
+        yield* sink.commitCommand(project.command);
+        yield* sink.commitCommand(createThread(project.projectId, 1));
+
+        const shell = yield* rowThroughSeam(parent, workflowDocuments(parent));
+
+        assert.strictEqual(shell.provider, "claude-bridge");
+        assert.strictEqual(shell.modelId, "claude-sonnet-5-5");
       }).pipe(Effect.provide(ShellTestLayer))
   );
 });

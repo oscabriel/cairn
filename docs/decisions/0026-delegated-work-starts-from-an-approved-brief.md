@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: phase 2's five-node workflow, run from the phone, starts no subagent or stone without an approved brief, and a brief left pending across a brain restart is answered exactly once
 ---
 
@@ -27,3 +27,5 @@ The user decided that each folder project has one project thread, the long-lived
 Evidence (5H, wave 5): `ProjectThreadKill.test.ts` kills the brain with `kill -9` at three points of a refresh and finds exactly one project thread after boot and after the resend, while the two-commit control leaves none; `ProjectThread.test.ts` and `ProjectThreadLaunch.test.ts` hold the planner, the unarchive rule and the stale refresh, each failing under its mutation.
 
 Evidence (7B, 2026-10-30): on a judge brain, `judges/council-typed.ts --kill-in-pass-2` ran the council (five nodes, the bridge and OpenCode Go) from a planted approved launch through a `kill -9` in pass 2, each node dispatched once; `judges/brief-go.sh` 10 of 10 windows with the parked case. Stays proposed: the gate names the five-node workflow launched from the phone, which is the user's.
+
+Evidence (phone run): on 2026-10-30 at about 19:50 UTC the user, from the phone and on the deployed brain at `29cf38d`, had the project thread launch the council recipe and answered its launch card (`decidedBy` user); six nodes ran (Advisor 1 pass 2 rerun fresh) on two providers, the bridge and OpenCode Go, its nodes dispatched under the ledger rule that every row names an accepted brief (the ledger conformance in `pnpm check`); with the 7B judges above (`council-typed.ts --kill-in-pass-2`, `brief-go.sh` 10 of 10 for the brief pending across a restart), the gate passes.

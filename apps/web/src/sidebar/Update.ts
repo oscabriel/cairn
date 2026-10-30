@@ -660,10 +660,15 @@ const settleDerived = (model: Model): UpdateReturn => {
         )
       : { state: withPending.visits, visit: Option.none() };
 
-  const count = badgeCount(
-    threads,
-    Option.map(withPending.context.openThreadId, String)
-  );
+  const count = Option.match(withPending.context.shell, {
+    onNone: () => 0,
+    onSome: (shell) =>
+      badgeCount(
+        shell,
+        withPending.context.openThreadId,
+        withPending.context.scratchThreadId
+      ),
+  });
 
   const visited = modifyFields(withPending, {
     visits: () => planned.state,

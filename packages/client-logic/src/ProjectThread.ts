@@ -48,3 +48,19 @@ export const managedThreadsOf = <T extends ManagedRow>(
       )
     )
     .toSorted(newestFirst);
+
+/**
+ * The rows the sidebar lists under `project`: its project thread, then the threads it manages.
+ * None when the client holds no project thread for it.
+ */
+export const listedThreadsOf = <T extends ManagedRow>(
+  project: Pick<ProjectShell, "id" | "projectThreadId">,
+  threads: ReadonlyArray<T>
+): ReadonlyArray<T> =>
+  Option.match(projectThreadOf(project, threads), {
+    onNone: () => [],
+    onSome: (projectThread) => [
+      projectThread,
+      ...managedThreadsOf(projectThread.id, threads),
+    ],
+  });

@@ -15,10 +15,19 @@
 // role names. Prints one JSON line per node and a summary with the tokens and list-price cost (the
 // bridge's tokens are plan usage, unpriced). Exit 0 on a pass.
 //
+// `--kill-in-pass-2` is workflows note judge 6's kill on the same council (plan 7B): the brain runs
+// as a child of this judge over a SQLite store in a scratch directory, and the judge `kill -9`s it
+// two seconds after a pass 2 cross-examination's input is with its model, then opens a second life
+// on the same store, which resubmits the run under its request id and waits for the end. It passes
+// on the checks above, read by the last life, plus the kill having happened and no node past its
+// first attempt (each dispatched once across both lives).
+//
 // The user's decision of 2026-10-29 (no Codex subscription) makes this two providers. Models are
 // the cheapest that answer: Claude Haiku through the bridge, OpenCode Go's flash models.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -77,6 +86,7 @@ import type { RoleResolver } from "../apps/server/src/workflows/WorkflowTools.ts
 import {
   councilRoot,
   openCouncilBrain,
+  openCouncilStore,
 } from "./fixtures/workflows/CouncilBrain.ts";
 
 const { values } = parseArgs({
@@ -87,6 +97,12 @@ const { values } = parseArgs({
       default: "opencode-go/deepseek-v4.1-flash",
     },
     "judge-model": { type: "string", default: "opencode-go/qwen3.8-flash" },
+    "kill-in-pass-2": { type: "boolean", default: false },
+    // Internal to `--kill-in-pass-2`: one life of the brain over the store in `--dir`.
+    life: { type: "boolean", default: false },
+    // Internal: the life prints the pass 2 marker (the first life only).
+    mark: { type: "boolean", default: false },
+    dir: { type: "string" },
   },
 });
 
@@ -161,6 +177,7 @@ interface NodeLine {
   readonly model: string;
   readonly state: string;
   readonly schemaAttempts: number;
+  readonly attempt: number;
   readonly totalTokens: number;
   readonly listMicros: number | null;
   readonly error: string | null;
@@ -188,9 +205,23 @@ const print = (line: NodeLine | Summary) =>
 const ended = (row: WorkflowItemState | undefined) =>
   row !== undefined && ["finished", "failed", "stopped"].includes(row.state);
 
+/** The line a life prints when pass 2 is under way, before the node's label. */
+const PASS2_MARK = "pass2 ";
+
+/** A pass 2 cross-examination whose input is with its model: the moment the kill mode waits for. */
+const inPass2 = (row: WorkflowItemState | undefined) =>
+  Object.values(row?.nodes ?? {}).find(
+    (node) =>
+      node.label.includes("pass 2") &&
+      node.state === "running" &&
+      node.stage === "submitted"
+  );
+
 /** Polls the ledger until the row ended or the deadline passed; the row as it stands then. */
 const waitForEnd = (brain: KitBrain) =>
   Effect.gen(function* () {
+    let marked = false;
+
     const read = Effect.promise(async () => {
       const ledger = await brain.harness.snapshot(
         WorkflowsDoc,
@@ -207,6 +238,13 @@ const waitForEnd = (brain: KitBrain) =>
 
         if (ended(row)) {
           return row;
+        }
+
+        const pass2 = inPass2(row);
+
+        if (values.mark && !marked && pass2 !== undefined) {
+          marked = true;
+          process.stdout.write(`${PASS2_MARK}${pass2.label}\n`);
         }
 
         yield* Effect.sleep(Duration.seconds(1));
@@ -243,6 +281,7 @@ const lineOf = (node: NodeItemState): NodeLine => ({
   model: `${node.provider ?? ""}/${node.modelId ?? ""}`,
   state: node.state,
   schemaAttempts: node.schemaAttempts,
+  attempt: node.attempt,
   totalTokens: node.receipt?.totalTokens ?? 0,
   listMicros: node.receipt?.listMicros ?? null,
   error: node.error,
@@ -266,13 +305,29 @@ const runCouncil = Effect.gen(function* () {
     yield* Effect.context()
   );
 
-  const cwd = mkdtempSync(path.join(tmpdir(), "cairn-council-typed-"));
+  const lifeDir = values.dir;
 
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      rmSync(cwd, { recursive: true, force: true });
-    })
-  );
+  const cwd =
+    lifeDir === undefined
+      ? mkdtempSync(path.join(tmpdir(), "cairn-council-typed-"))
+      : path.join(lifeDir, "cwd");
+
+  if (lifeDir === undefined) {
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        rmSync(cwd, { recursive: true, force: true });
+      })
+    );
+  } else {
+    mkdirSync(cwd, { recursive: true });
+  }
+
+  const storage =
+    lifeDir === undefined
+      ? undefined
+      : yield* Effect.promise(
+          async () => await openCouncilStore(path.join(lifeDir, "store.sqlite"))
+        );
 
   const brain = yield* Effect.acquireRelease(
     Effect.promise(
@@ -291,7 +346,8 @@ const runCouncil = Effect.gen(function* () {
             results.extension.extension,
             bridgeCwd.extension.extension,
           ],
-          cwd
+          cwd,
+          storage
         )
     ),
     (open) =>
@@ -300,12 +356,21 @@ const runCouncil = Effect.gen(function* () {
       })
   );
 
-  yield* plant(
-    brain,
-    BUILT_IN_RECIPES.get("council") ?? "",
-    { ...plantDefaults(WF), args: ARGS },
-    context
+  const planted = yield* Effect.promise(
+    async () => await brain.harness.snapshot(WorkflowsDoc, brain.root, context)
   );
+
+  if (planted?.items[WF] === undefined) {
+    yield* plant(
+      brain,
+      BUILT_IN_RECIPES.get("council") ?? "",
+      { ...plantDefaults(WF), args: ARGS },
+      context
+    );
+  }
+
+  // A later life resumes the tasks the killed one left on the store.
+  brain.harness.resume();
 
   yield* Effect.promise(async () => {
     await runScript(brain, recipeReference("council"), "run-1", context);
@@ -334,6 +399,16 @@ const program = Effect.gen(function* () {
 
   if (row?.state !== "finished") {
     failures.push(`workflow ${row?.state ?? "missing"}`);
+  }
+
+  if (values.life) {
+    const again = nodes.filter((node) => node.attempt !== 1);
+
+    if (again.length > 0) {
+      failures.push(
+        `past a first attempt: ${again.map((node) => node.label).join(", ")}`
+      );
+    }
   }
 
   if (nodes.length !== 5) {
@@ -381,6 +456,135 @@ const program = Effect.gen(function* () {
   return nodes.length;
 });
 
+/** One life's arguments: this script over the store in `dir`, with the same role bindings. */
+const lifeArgs = (dir: string, mark: boolean) => {
+  const args = [
+    import.meta.filename,
+    "--life",
+    "--dir",
+    dir,
+    "--bridge-model",
+    values["bridge-model"],
+    "--advisor-model",
+    values["advisor-model"],
+    "--judge-model",
+    values["judge-model"],
+  ];
+
+  if (mark) {
+    args.push("--mark");
+  }
+
+  return args;
+};
+
+const startLife = (dir: string, stdout: "pipe" | "inherit") =>
+  Effect.sync(() =>
+    spawn(process.execPath, lifeArgs(dir, stdout === "pipe"), {
+      stdio: ["ignore", stdout, "inherit"],
+    })
+  );
+
+/** The label of the first pass 2 marker `child` prints, passing its other lines on; none if it exits first. */
+const waitForPass2 = (child: ChildProcess) =>
+  Effect.callback<Option.Option<string>>((resume) => {
+    let buffer = "";
+
+    const onData = (chunk: Buffer) => {
+      buffer += chunk.toString("utf-8");
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (line.startsWith(PASS2_MARK)) {
+          resume(Effect.succeedSome(line.slice(PASS2_MARK.length)));
+
+          return;
+        }
+
+        process.stdout.write(`${line}\n`);
+      }
+    };
+
+    const onExit = () => {
+      resume(Effect.succeedNone);
+    };
+
+    child.stdout?.on("data", onData);
+    child.once("exit", onExit);
+
+    return Effect.sync(() => {
+      child.stdout?.off("data", onData);
+      child.off("exit", onExit);
+    });
+  });
+
+/** The exit code of `child` once it is gone (1 for a signal). */
+const exitOf = (child: ChildProcess) =>
+  Effect.callback<number>((resume) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resume(Effect.succeed(child.exitCode ?? 1));
+
+      return;
+    }
+
+    child.once("exit", (code) => {
+      resume(Effect.succeed(code ?? 1));
+    });
+  });
+
+/** Judge 6's kill: the first life is `kill -9`ed in pass 2, the second finishes the council. */
+const killRun = Effect.gen(function* () {
+  const dir = mkdtempSync(path.join(tmpdir(), "cairn-council-kill-"));
+
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      rmSync(dir, { recursive: true, force: true });
+    })
+  );
+
+  const first = yield* startLife(dir, "pipe");
+
+  const marker = yield* waitForPass2(first).pipe(
+    Effect.timeoutOption(DEADLINE),
+    Effect.map(Option.flatten)
+  );
+
+  if (Option.isNone(marker)) {
+    first.kill("SIGKILL");
+
+    return yield* new CouncilTypedFailed({
+      message: "the first life ended or ran out of time before pass 2; no kill",
+    });
+  }
+
+  yield* Effect.sleep(Duration.seconds(2));
+
+  const live = first.exitCode === null && first.signalCode === null;
+
+  first.kill("SIGKILL");
+  yield* exitOf(first);
+  process.stdout.write(
+    `${JSON.stringify({ kill: "SIGKILL", after: marker.value, live })}\n`
+  );
+
+  if (!live) {
+    return yield* new CouncilTypedFailed({
+      message: "the first life had ended before the kill",
+    });
+  }
+
+  const code = yield* exitOf(yield* startLife(dir, "inherit"));
+
+  if (code !== 0) {
+    return yield* new CouncilTypedFailed({
+      message: `the second life failed (exit ${String(code)})`,
+    });
+  }
+
+  return 5;
+});
+
 const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-council-typed-data-"));
 
 const root = councilRoot();
@@ -409,24 +613,30 @@ const modelsLayer = PiModelSource.layer.pipe(
   Layer.orDie
 );
 
-NodeRuntime.runMain(
-  program.pipe(
-    Effect.scoped,
-    Effect.provide(
-      Layer.mergeAll(
-        modelsLayer,
-        CodeMode.layer,
-        ResultTool.layer,
-        WorkflowPlan.layer
-      ).pipe(
-        Layer.provideMerge(bridgeLayer),
-        Layer.provideMerge(NodeServices.layer),
-        // Logs go to stderr, so stdout carries only the JSON lines.
-        Layer.provideMerge(
-          Logger.layer([Logger.withConsoleError(Logger.formatSimple)])
-        )
+const lifeProgram = program.pipe(
+  Effect.scoped,
+  Effect.provide(
+    Layer.mergeAll(
+      modelsLayer,
+      CodeMode.layer,
+      ResultTool.layer,
+      WorkflowPlan.layer
+    ).pipe(
+      Layer.provideMerge(bridgeLayer),
+      Layer.provideMerge(NodeServices.layer),
+      // Logs go to stderr, so stdout carries only the JSON lines.
+      Layer.provideMerge(
+        Logger.layer([Logger.withConsoleError(Logger.formatSimple)])
       )
-    ),
+    )
+  )
+);
+
+NodeRuntime.runMain(
+  (values["kill-in-pass-2"] && !values.life
+    ? killRun.pipe(Effect.scoped)
+    : lifeProgram
+  ).pipe(
     Effect.ensuring(
       Effect.sync(() => {
         rmSync(dataDir, { recursive: true, force: true });

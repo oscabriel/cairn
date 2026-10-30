@@ -5,8 +5,9 @@
 //
 //   node judges/fixtures/events/EventsBrain.ts --dir <run> --total N [--faults] [--rotate] [--control]
 //
-// - Producer: event n is `workflow.node.refused` when n % 3 == 0, `workflow.budget.soft` when
-//   n % 4 == 0, else `workflow.node.settled`; the commit that emits it also records it in the judge
+// - Producer: event n is `workflow.node.refused` when n % 3 == 0, `workflow.node.stopped` when
+//   n % 4 == 0, else `workflow.node.settled` (never a budget event: the production budget reactor
+//   reads those, and a judge event is not a budget line); the commit that emits it also records it in the judge
 //   document, so the expected set is exactly what the log holds. With `--rotate` the first half is
 //   stamped in one month and the second half in the next, so the log rotates mid-run (the host's
 //   start opened the first log in the current month, so that is two rotations).
@@ -207,7 +208,7 @@ const reactors: ReadonlyArray<Reactor> = [
   reactor(
     "judge.spawn",
     {
-      events: ["workflow.node.settled", "workflow.budget.soft"],
+      events: ["workflow.node.settled", "workflow.node.stopped"],
       from: "start",
     },
     async (tx, event) => {
@@ -246,7 +247,7 @@ const nameOf = (n: number): EventName => {
     return "workflow.node.refused";
   }
 
-  return n % 4 === 0 ? "workflow.budget.soft" : "workflow.node.settled";
+  return n % 4 === 0 ? "workflow.node.stopped" : "workflow.node.settled";
 };
 
 /** Far ahead of any real clock, so both stamps rotate whatever month the judge runs in. */

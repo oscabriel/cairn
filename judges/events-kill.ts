@@ -66,7 +66,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
 const REACTOR_EVENTS = {
   "judge.count": ["workflow.node.settled", "workflow.node.refused"],
   "judge.meter": ["workflow.node.settled"],
-  "judge.spawn": ["workflow.node.settled", "workflow.budget.soft"],
+  "judge.spawn": ["workflow.node.settled", "workflow.node.stopped"],
 } satisfies Record<string, ReadonlyArray<string>>;
 
 /** What `EventsBrain.ts` writes to `report.json`. */

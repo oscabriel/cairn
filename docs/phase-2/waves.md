@@ -761,3 +761,20 @@ Judges on main, under the judge lock, $0, no model: `pnpm check` ok in 430 s, 2,
 - The JS ceiling went up from 300 KiB, not down: the frame's code now loads with the entry, one round trip fewer.
 - The classic sidebar's state (`sidebar/`) still runs for the shell's clock, the key bindings and visits; folding it into the shell is a later package. Diff and composer modules shared with `next` keep a few dead classic exports.
 - Still open from 6d: Settings' Follow-up behaviour and Send shortcut never reach the composer, so a phone cannot steer.
+
+## 7B the gate run
+
+Run on `main` on 2026-10-30 against judge brains, never `cairn.service`; Codex and reach are shelved (ADRs 0037, 0038), so typed results and the workflow are judged on two providers and there is no reach phone check. Gate page: `agent-artifacts/cairn/v2/phase-2-gate/`.
+
+| Judge | Result |
+| --- | --- |
+| `council-typed.ts --kill-in-pass-2` (workflows judge 6, new mode) | pass: the council on bridge Haiku and OpenCode Go flash models, `kill -9` two seconds into "Advisor 1 pass 2", a second life on the same SQLite store finished 5 of 5 nodes, each at attempt 1, schema attempts at most 2, both cross-examinations resumed; 121,150 tokens, $0.0155 list price (45,912 bridge tokens are plan usage). |
+| `ops/cairn/pi-bump-guard.sh` (judge 7, new) | `pi-bump-guard.test.ts` 5 of 5; with the busy check removed 3 fail. `deploy.sh` and `--check` call it. |
+| `typed-results.ts` (OpenCode Go, bridge) | pass: every model 8 of 8 within two attempts (38 at 1, 2 at 2); v1 control 0 of 8, union refused; $0.063. |
+| `events-kill.sh` | pass after a fixture fix: 12 kills, 112 faults; rotation 10 kills; control fails by duplicates. |
+| `workflow-kill.sh`, `brief-go.sh`, `subagent-durability.ts` | 22 of 22; 10 of 10 windows, parked; 21 of 21, 7 controls fail rightly. All $0. |
+
+- `events-kill.sh` had failed since 5B: its producer emitted `workflow.budget.soft`, which the production budget reactor (in `ReactorSet.withExtra`) now reads and cannot parse, so that reactor's lag stuck at 50. The judge now emits `workflow.node.stopped` instead.
+- The deploy guard refuses a change to the `@earendil-works/*` pins while any thread in `cairn.sqlite` is not `idle` or `failed`, since a workflow runs in its launching thread's run. Other deploys go: judge 6 shows a restart is survived.
+- ADRs 0026, 0032 and 0033 stay proposed with 7B evidence lines: each gate names the phone run on the deployed brain. 0037 stays proposed (no Codex). Total model cost of the gate run about $0.10 at list price.
+- Left for the user: the five-node council launched from the phone on the deployed brain (steps on the gate page), and the locked-phone push if `ops/wizards/phase-2.sh 3` has not recorded it.

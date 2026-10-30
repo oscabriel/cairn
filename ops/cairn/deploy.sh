@@ -12,7 +12,8 @@
 # live worktree back on the previous commit and reinstalls it, and the web app is built into
 # apps/web/dist.next and swapped in with one atomic rename, so the running brain never serves a
 # half-built dist. A deploy refuses while cairn-nightly.service runs, because the nightly matrix runs
-# from the same worktree. After deploy-check passes, the commit is written to
+# from the same worktree, and refuses a change to the pi pins while a thread is not settled
+# (ops/cairn/pi-bump-guard.sh: a pi bump ends a running workflow). After deploy-check passes, the commit is written to
 # ${XDG_STATE_HOME:-~/.local/state}/cairn/deployed.
 #
 # --check changes nothing: it resolves the commit, verifies that commit's unit file, says whether the
@@ -69,6 +70,7 @@ main() {
 		if [[ $nightly == active ]]; then
 			echo "cairn-nightly.service is running; a deploy would refuse"
 		fi
+		"$here/pi-bump-guard.sh" "$repo" "$(git -C "$live" rev-parse HEAD)" "$commit" || echo "a deploy would refuse (above)"
 		echo "unit: $(systemctl --user is-enabled cairn.service 2>/dev/null || true), $(systemctl --user is-active cairn.service 2>/dev/null || true)"
 		# The peak since this invocation started; journalctl _SYSTEMD_INVOCATION_ID=<id> -g brain_memory_peak times it.
 		echo "memory: $(systemctl --user show cairn.service -p InvocationID -p MemoryCurrent -p MemoryPeak -p MemoryHigh --value 2>/dev/null | paste -sd ' ' || true) (invocation, current, peak, high; bytes)"
@@ -87,6 +89,7 @@ main() {
 
 	local prev
 	prev=$(git -C "$live" rev-parse HEAD)
+	"$here/pi-bump-guard.sh" "$repo" "$prev" "$commit"
 
 	# Until the restart, any failure puts the live worktree back as it was.
 	restore() {

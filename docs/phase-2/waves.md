@@ -629,3 +629,40 @@ No block names a judge "at integration"; the brain's wiring changed, so these ra
 
 - Held for 6H: the `goal.mark` RPC (`MarkCriterionInput`, handler `GoalBook.mark`) and a projection of `ThreadShell.goal`; for 5A's owner: launching a project recipe by name. Goals' model judges are unmetered in production, since the brain's set has no `SpendLedger` in context.
 - When deploying: `cairn.goals` appends one `pi.system` entry per conversation; the budget reactor starts from now; the deployed role table keeps `@verifier` on Codex until rebound through `settings.update`.
+
+## Wave 6a and look track L5, L6 integration
+
+Integrated on 2026-10-30 on `main`, each package with `--no-ff`: L5 `b78b471` as `ca51ab5`, L6 `cea3592` as `be5f28a`, 6A `73fb9c6` as `1da962f`, 6C `37b3c76` as `4269a4c`, 6G `047f984` as `a1ce347`. Conflicts were the seam files (`Model.ts`, `Message.ts`, `Update.ts`, `TestFixtures.ts`, `styles.css`, `FrameLoad.ts`: kept every side), `View.ts`, `next/Frame.ts`, `CairnApp.ts` and the glossary. The hand-offs are `b50f7b8`.
+
+### Integration judges
+
+No block names a judge "at integration" and the brain's wiring did not change (6C's scripted row source and L6's favicon route only), so these judge the joined seams on `main`, under the judge lock. $0, no model.
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 426 s: fmt, lint, typecheck, 2,539 tests. No dependency changed. |
+| `behaviour.ts --strict`, `--ui next` and classic | pass | next 30 of 30 (shell, scratch, start, rail); classic 22 of 22. |
+| `surfaces.ts` (6A) | pass | 4 of 4: card-approval and card-question at 390 and 1,440 inside L6's chat column. |
+| `rows-subagent.ts` (6C) | pass | 14 of 14. |
+| `meters.ts` (6G) | pass | 4 of 4: the usage page in the shell, the role table in settings. |
+
+### Hand-offs applied
+
+`next/Frame.ts` passes L6's layout one set of regions: the page with 6G's `PageSlots` (the role table), a `composerLane` (6A's request card before the docked composer, siblings in the chat column, so `card.css` still gives the card the composer's slot on the phone) and a `usage` region drawn by `next/meters/UsageView.ts`; 6A's composer lane in the classic `page` was dropped, since the next frame no longer draws the thread through it. L6's placeholder `next/shell/Usage.ts` and its catalogue specimen are removed. `startCairn` takes `{ brain, shell }` options (6A, 6C, L6 each added a second argument). The scratch thread's page has no subagent rows. 6G's `utilities.css` fix (no bare `hidden`) covers 6C's Classes.ts finding: behaviour next passes with the card importing the primitives. Glossary: subagent row, way back, usage page.
+
+### Rules later packages follow
+
+- **Bundle.** Entry JS was 295,528 B gzip, over the 288 KiB ceiling; it is now 300 KiB until 7A deletes the classic views and lowers it. Entry CSS is 34,872 of 35,000 B: a next view builds its utilities into its own sheet (`@source not` in `styles.css`), never the entry.
+- **The frame's regions.** The next thread page is L6's chat column: header, hold, `thread`, then `composerLane`. A surface above the composer joins the lane; a surface inside a classic page takes a `PageSlots` field.
+
+### What differs from the plan
+
+- 6A: the card sits in the composer lane of L6's column, not the chat view's own module; "survives kill -9" is judged by a page reload. 6G's judge stays `judges/meters.ts`, not folded into `surfaces.ts`.
+- Held for a server package (6D or 6J): 6C's hand-off giving the not-halted tell's follow-up input a `cairn.brief-answer` entry, `TimelineEntries` reading it as a user message, and exporting `BRIEF_ANSWER_ENTRY` from the protocol. It changes conformance goldens and the brain's input entries, so it needs its own scenarios; until then a not-halted parent's unstarted brief reads Working.
+- Held for L7: carrying a closed card's typed words into the composer draft (needs a composer update capability). Held for 6B: Send back, `roles.check` on an unbound role, Run on 1 first.
+
+### Left for the user
+
+- Look round 2 (`plans.gneiss.run/cairn/v2/look/round-2/`) was taken before L6's shell merged, so its shots no longer match `main`. Round 3, published from `main` with the shell, is the one to approve; then the integrator runs `node judges/look.ts freeze 3` and commits `judges/look/frozen/round-3.json`, after which a `tokens.css` change fails `pnpm check` until a newer round is frozen.
+- On next, a project cannot be added yet (no add bubble on the rail).
+- When deploying: `@verifier` still binds Codex until rebound in the new Roles section in settings.

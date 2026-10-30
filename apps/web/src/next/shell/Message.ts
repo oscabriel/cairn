@@ -67,6 +67,17 @@ export const Message = defineMessageUnion({
   ClickedStopChild: { threadId: ThreadId },
   StoppedChild: { threadId: ThreadId },
   FailedStopChild: { threadId: ThreadId, message: Schema.String },
+  /**
+   * Stop on a workflow (6F): the whole of it, or one node when `nodeId` is some (the script sees
+   * `null` for it). `key` is the work panel's Stopping key (`stopKeyOf`).
+   */
+  ClickedStopWorkflow: {
+    threadId: ThreadId,
+    workflowId: Schema.String,
+    nodeId: Schema.Option(Schema.String),
+  },
+  StoppedWorkflow: { key: Schema.String },
+  FailedStopWorkflow: { key: Schema.String, message: Schema.String },
   ClickedDismissWorkFailure: {},
 });
 

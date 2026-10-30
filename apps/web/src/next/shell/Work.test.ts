@@ -138,6 +138,13 @@ const describeSent = (message: Message): string => {
     return `Stop:${message.threadId.slice(-4)}`;
   }
 
+  if (Predicate.isTagged(message, "ClickedStopWorkflow")) {
+    return `StopWorkflow:${message.workflowId}${Option.match(message.nodeId, {
+      onNone: () => "",
+      onSome: (node) => `/${node}`,
+    })}`;
+  }
+
   if (Predicate.isTagged(message, "ClickedMoreChildren")) {
     return `More:${message.group}`;
   }
@@ -611,9 +618,93 @@ describe("the work panel's workflows", () => {
       Scene.expectAll(
         Scene.all.selector('[data-testid="work-node"]')
       ).toHaveCount(2),
+      Scene.expect(
+        Scene.selector('[data-testid="work-node"][data-node-id="n-1"]')
+      ).toContainText("@worker · faux/kit"),
+      Scene.expect(Scene.testId("work-workflow")).toContainText(
+        "Nothing spent yet"
+      ),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
+    );
+  });
+
+  it("stops one live node, or the whole workflow, and shows Stopping until the stop answers", () => {
+    const inputs = inputsOf(9, [shellRow(9)], { "cairn.workflows": LEDGER });
+    const live = '[data-testid="work-node"][data-node-id="n-2"]';
+
+    Scene.scene(
+      appFor(inputs),
+      givenWork(),
+      // A settled node offers no Stop; the live one does.
+      Scene.expectAll(
+        Scene.all.selector('[data-testid="work-node-stop"]')
+      ).toHaveCount(1),
+      Scene.click(Scene.role("button", { name: "Stop alpha:2" })),
+      expectSent("StopWorkflow:wf-1/n-2"),
+      Scene.click(Scene.testId("work-workflow-stop")),
+      expectSent("StopWorkflow:wf-1/n-2,StopWorkflow:wf-1")
+    );
+
+    // While a stop is out, the node says so and offers no second Stop; so does the workflow.
+    Scene.scene(
+      appFor(inputs),
+      givenWork({ stoppingWork: ["wf-1/n-2"] }),
+      Scene.expect(Scene.selector(live)).toHaveAttr("data-stopping", "true"),
+      Scene.expect(Scene.selector(live)).toContainText("stopping"),
+      Scene.expect(Scene.testId("work-node-stop")).not.toExist()
+    );
+
+    Scene.scene(
+      appFor(inputs),
+      givenWork({ stoppingWork: ["wf-1"] }),
+      Scene.expect(Scene.testId("work-workflow-stop")).toContainText(
+        "Stopping"
+      ),
+      Scene.expect(Scene.selector(live)).toHaveAttr("data-stopping", "true")
+    );
+
+    const asked = update(
+      { ...initial, work: { ...initialWork, isOpen: true } },
+      Message.ClickedStopWorkflow({
+        threadId: rowId(9),
+        workflowId: "wf-1",
+        nodeId: Option.none(),
+      })
+    );
+
+    assert.deepStrictEqual(asked.model.work.stoppingWork, ["wf-1"]);
+    assert.strictEqual(asked.commands?.length, 1);
+
+    // Asked twice, one stop goes; the answer clears it, a failure says why.
+    const twice = update(
+      asked.model,
+      Message.ClickedStopWorkflow({
+        threadId: rowId(9),
+        workflowId: "wf-1",
+        nodeId: Option.none(),
+      })
+    );
+
+    assert.lengthOf(twice.commands ?? [], 0);
+
+    const stopped = update(
+      asked.model,
+      Message.StoppedWorkflow({ key: "wf-1" })
+    );
+
+    assert.deepStrictEqual(stopped.model.work.stoppingWork, []);
+
+    const failed = update(
+      asked.model,
+      Message.FailedStopWorkflow({ key: "wf-1", message: "Not reached." })
+    );
+
+    assert.deepStrictEqual(failed.model.work.stoppingWork, []);
+    assert.deepStrictEqual(
+      failed.model.work.failure,
+      Option.some("Not reached.")
     );
   });
 });

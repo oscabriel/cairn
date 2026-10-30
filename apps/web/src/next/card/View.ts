@@ -11,9 +11,12 @@
 //   the question takes the user's own words, then Back, Decline, and Next or Send. Send opens the
 //   undo bar.
 // - Brief (a subagent's brief or a workflow's launch; 6B): its fields in reading order and what its
-//   roles run on now, then Send back (a subagent's brief), Run on 1 first (a launch of more than
-//   one node), Decline and Go. While a role does not resolve, Go is blocked with a plain reason, a
-//   link to the role table in settings and Check again; Send back opens a notes field first.
+//   roles run on now, then Send back (a subagent's brief or a launch), Run on 1 first (a launch of
+//   more than one node), Decline and Go. While a role does not resolve, Go is blocked with a plain
+//   reason, a link to the role table in settings and Check again; Send back opens a notes field
+//   first. A launch (6F) leads with its numbers (`LaunchCard.ts`: nodes, the estimate, which is
+//   never a zero for an unknown, the budget, what Go covers), then what each call site runs as and
+//   its arguments, folded.
 // - Criteria: the criteria and their judges, then Decline and Approve.
 //
 // Decline opens a reason field first. A request answered elsewhere while it showed leaves a closed
@@ -30,13 +33,17 @@ import {
   takesSendBack,
 } from "@cairn/client-logic/BriefGo";
 import {
+  argsText,
+  callSiteRows,
+  launchNumbers,
+} from "@cairn/client-logic/LaunchCard";
+import {
   approvalDetail,
   briefLines,
   budgetRaiseLines,
   criterionText,
   requestKindWord,
   requestTitle,
-  workflowLines,
 } from "@cairn/client-logic/PendingCard";
 import type { CardLine } from "@cairn/client-logic/PendingCard";
 import type { PendingRequest } from "@cairn/client-logic/PendingRequests";
@@ -44,7 +51,7 @@ import { RequestBody } from "@cairn/client-logic/PendingRequests";
 import { deriveProgress } from "@cairn/client-logic/PendingUserInput";
 import type { Progress } from "@cairn/client-logic/PendingUserInput";
 import type { ApprovalId } from "@cairn/protocol/Ids";
-import type { Question } from "@cairn/protocol/Policy";
+import type { Brief, Question, WorkflowLaunch } from "@cairn/protocol/Policy";
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -638,11 +645,12 @@ const goBlockBar = (model: Model, h: H, request: PendingRequest): Html => {
   });
 };
 
-/** A brief's Send back: its notes field (required) and its two buttons. */
+/** A brief's or a launch's Send back: its notes field (required) and its two buttons. */
 const sendBackControls = (
   model: Model,
   h: H,
-  approvalId: ApprovalId
+  approvalId: ApprovalId,
+  hint: string
 ): CardParts => {
   const busy = Option.contains(model.sending, approvalId);
   const notes = model.notes[approvalId] ?? "";
@@ -656,9 +664,7 @@ const sendBackControls = (
             `request-card-notes-${approvalId}`,
             "What should change?"
           ),
-          hint: Option.some(
-            "The parent reads your notes and writes a new brief."
-          ),
+          hint: Option.some(hint),
         },
         {
           value: notes,
@@ -720,6 +726,92 @@ const goButton = (
   );
 };
 
+/** A launch's call sites: each one's label, then its phase, role, access and count. */
+const callSitesList = (h: H, launch: WorkflowLaunch): Html => {
+  const rows = callSiteRows(launch);
+
+  return rows.length === 0
+    ? h.empty
+    : h.ul(
+        [
+          h.DataAttribute("testid", "request-card-call-sites"),
+          h.AriaLabel("What each node runs as"),
+          h.Class(
+            "flex min-w-0 flex-col gap-(--space-1) border-t border-stroke-1 pt-(--space-2)"
+          ),
+        ],
+        rows.map((row) =>
+          h.li(
+            [
+              h.DataAttribute("testid", "request-card-call-site"),
+              h.DataAttribute("spec", row.spec),
+              h.Class("flex min-w-0 flex-col"),
+            ],
+            [
+              h.span(
+                [h.Class(classNames("min-w-0 text-ink-1", TYPE.ui))],
+                [row.label]
+              ),
+              h.span(
+                [
+                  h.Class(
+                    classNames("min-w-0 break-words text-ink-2", TYPE.small)
+                  ),
+                ],
+                [row.detail]
+              ),
+            ]
+          )
+        )
+      );
+};
+
+/** A launch's arguments, folded behind "Arguments"; nothing for none. */
+const argsBlock = (h: H, launch: WorkflowLaunch): Html =>
+  Option.match(argsText(launch.args), {
+    onNone: () => h.empty,
+    onSome: (text) =>
+      h.details(
+        [h.DataAttribute("testid", "request-card-args")],
+        [
+          h.summary(
+            [
+              h.DataAttribute("action", "show-args"),
+              h.Class(
+                classNames(
+                  "flex cursor-pointer items-center rounded-(--radius-small) text-ink-2 hover:text-ink-1",
+                  TYPE.small,
+                  HIT_HEIGHT,
+                  FOCUS_RING
+                )
+              ),
+            ],
+            ["Arguments"]
+          ),
+          h.pre([h.Class(MONO_BLOCK)], [text]),
+        ]
+      ),
+  });
+
+/** What the card shows of a brief or a launch before its block bar and its answer fields. */
+const briefFields = (
+  model: Model,
+  h: H,
+  request: PendingRequest,
+  payload: Brief | WorkflowLaunch
+): ReadonlyArray<Html> =>
+  payload.type === "workflow"
+    ? [
+        recordLines(h, [
+          ...launchNumbers(payload),
+          ...runsOn(model, request),
+          ["Does", payload.description],
+        ]),
+        callSitesList(h, payload),
+        argsBlock(h, payload),
+      ]
+    : [recordLines(h, [...briefLines(payload), ...runsOn(model, request)])];
+
 const briefBody = (
   model: Model,
   h: H,
@@ -727,19 +819,20 @@ const briefBody = (
   body: Extract<RequestBody, { readonly _tag: "Brief" }>
 ) => {
   const approvalId = request.record.id;
-
-  const fields =
-    body.payload.type === "workflow"
-      ? workflowLines(body.payload)
-      : briefLines(body.payload);
-
-  const lines = [...fields, ...runsOn(model, request)];
+  const fields = briefFields(model, h, request, body.payload);
 
   if (Option.contains(model.sendingBack, approvalId)) {
-    const sendBack = sendBackControls(model, h, approvalId);
+    const sendBack = sendBackControls(
+      model,
+      h,
+      approvalId,
+      body.payload.type === "workflow"
+        ? "The model reads your notes and proposes the workflow again. Nothing runs."
+        : "The parent reads your notes and writes a new brief."
+    );
 
     return {
-      body: [recordLines(h, lines), ...sendBack.body],
+      body: [...fields, ...sendBack.body],
       actions: sendBack.actions,
     };
   }
@@ -775,7 +868,7 @@ const briefBody = (
 
   return {
     body: [
-      recordLines(h, lines),
+      ...fields,
       isDeclining ? h.empty : goBlockBar(model, h, request),
       ...decline.body,
     ],

@@ -70,6 +70,8 @@ export const WorkState = Schema.Struct({
   shownActive: Schema.Int,
   shownPrevious: Schema.Int,
   stopping: Schema.Array(ThreadId),
+  /** Workflows and nodes a Stop was asked of and not yet answered, by `stopKeyOf`. */
+  stoppingWork: Schema.Array(Schema.String),
   /** Why the last Stop did not reach Cairn. */
   failure: Schema.Option(Schema.String),
 });
@@ -86,8 +88,19 @@ export const initialWork: WorkState = {
   shownActive: FIRST_CHILD_ROWS,
   shownPrevious: FIRST_CHILD_ROWS,
   stopping: [],
+  stoppingWork: [],
   failure: Option.none(),
 };
+
+/** The work panel's Stopping key of a whole workflow, or of one of its nodes. */
+export const stopKeyOf = (
+  workflowId: string,
+  nodeId: Option.Option<string>
+): string =>
+  Option.match(nodeId, {
+    onNone: () => workflowId,
+    onSome: (node) => `${workflowId}/${node}`,
+  });
 
 /** The `next` shell's Model. */
 export const Model = Schema.Struct({

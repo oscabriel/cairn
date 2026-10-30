@@ -1,6 +1,7 @@
 // The `next` shell's Commands: minting a project's first draft, a refresh's launch, a scratch
 // thread's turns and its clear, focusing the field an overlay opens with, and saving which scratch
-// thread this device holds, and stopping a child from the work panel. Each answers with one Message. A refresh is
+// thread this device holds, and stopping a child, a workflow or one of its nodes from the work
+// panel. Each answers with one Message. A refresh is
 // `thread.launch` with `replaces` (5H): the new project thread, the old one's archive and the moved
 // mark land in one shell commit. The scratch thread's first message launches it in the scratch
 // project (made here first, as the composer's projectless launch does); later ones are sends.
@@ -260,6 +261,52 @@ export const StopChild = Command.define("StopChild", {
         Effect.succeed(
           Message.FailedStopChild({
             threadId,
+            message:
+              "The connection dropped before Cairn answered. Stop again once it is back.",
+          })
+        )
+      )
+    ),
+});
+
+/**
+ * The work panel's Stop on a workflow (6F; ADR 0012 as amended): `workflow.stop` for the whole of
+ * it, `workflow.stopNode` for one node, which the script then reads as `null`. Either answers once
+ * the stop is marked; settled results stay. A call cut off by a dropped connection answers as a
+ * failure rather than ending the page (the request card's `whenCutOff`).
+ */
+export const StopWorkflow = Command.define("StopWorkflow", {
+  args: {
+    key: Schema.String,
+    threadId: ThreadId,
+    workflowId: Schema.String,
+    nodeId: Schema.Option(Schema.String),
+  },
+  messages: [Message.StoppedWorkflow, Message.FailedStopWorkflow],
+  execute: ({ key, threadId, workflowId, nodeId }) =>
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
+        Option.match(nodeId, {
+          onNone: () => client["workflow.stop"]({ threadId, workflowId }),
+          onSome: (node) =>
+            client["workflow.stopNode"]({ threadId, workflowId, nodeId: node }),
+        })
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: () => Message.StoppedWorkflow({ key }),
+        onFailure: (failure) =>
+          Message.FailedStopWorkflow({
+            key,
+            message: Predicate.isTagged(failure, "ResourceNotAvailable")
+              ? "Cairn is reconnecting. Stop again once it is back."
+              : failureMessage(failure, "The stop did not reach Cairn."),
+          }),
+      }),
+      Effect.catchCauseIf(Cause.hasInterruptsOnly, () =>
+        Effect.succeed(
+          Message.FailedStopWorkflow({
+            key,
             message:
               "The connection dropped before Cairn answered. Stop again once it is back.",
           })

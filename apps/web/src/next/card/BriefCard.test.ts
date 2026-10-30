@@ -57,7 +57,7 @@ const record = (fields: { readonly [key: string]: Json }): Json => ({
   ...fields,
 });
 
-const briefPayload = (role: string | null): Json => ({
+const briefPayload = (role: string | null) => ({
   type: "brief",
   title: "Count the files",
   task: "Count the TypeScript files under src.",
@@ -144,6 +144,14 @@ const context = (approvals: Json, hasClient = true) => ({
 const bId = ApprovalId.make("b-1");
 
 const wId = ApprovalId.make("w-1");
+
+/** A workflow node's own brief for `@judge`, carrying its launch's bindings. */
+const nodeBrief = (roleOverrides: Json): Json =>
+  record({
+    id: "n-1",
+    tool: "agent",
+    payload: { ...briefPayload("@judge"), roleOverrides },
+  });
 
 /** The card showing `approvals`, its first role check answered with `checks`. */
 const checked = (
@@ -389,8 +397,82 @@ describe("the brief card", () => {
     );
   });
 
-  it("neither checks nor blocks a workflow node's own brief, whose role its launch's overrides may bind", () => {
-    const nodeBrief = record({
+  it("sends a launch back with notes for its model, which runs nothing", () => {
+    const shown = checked(doc(launch(5)), wId, resolved("@scout"));
+
+    // Send back opens the notes field on the launch, as on a subagent's brief.
+    assert.isTrue(
+      Option.contains(
+        update(shown, Message.ClickedSendBack({ approvalId: wId })).model
+          .sendingBack,
+        wId
+      )
+    );
+
+    Scene.scene(
+      config,
+      Scene.given(shown),
+      Scene.click(Scene.role("button", { name: "Send back" })),
+      Scene.expect(
+        Scene.role("button", { name: "Run on 1 first" })
+      ).not.toExist(),
+      Scene.type(Scene.label("What should change?"), "two nodes, not five"),
+      Scene.click(Scene.role("button", { name: "Send back" })),
+      Scene.Command.expectExact(
+        RespondToRequest({
+          threadId,
+          approvalId: wId,
+          decision: "revise",
+          reason: Option.some("two nodes, not five"),
+          answers: Option.none(),
+        })
+      ),
+      Scene.Command.resolve(
+        RespondToRequest,
+        Message.SucceededRespond({ approvalId: wId })
+      )
+    );
+  });
+
+  it("checks a node's own brief with the launch's bindings it carries, and blocks Go on an unbound role", () => {
+    const binding = {
+      model: faux,
+      thinkingLevel: null,
+      fallbacks: [],
+      note: null,
+    };
+
+    const nId = ApprovalId.make("n-1");
+
+    // Bound by the launch: asked with the override, as the brain resolves it at Go.
+    const bound = inform(
+      initial,
+      context(doc(nodeBrief({ "@judge": binding })))
+    );
+
+    assert.deepStrictEqual(
+      asked(bound.commands),
+      asked([
+        CheckRoles({
+          approvalId: nId,
+          generation: 1,
+          specs: ["@judge"],
+          overrides: Option.some({ "@judge": binding }),
+        }),
+      ])
+    );
+
+    // A launch that binds nothing: the table alone, which binds no @judge here, so Go is blocked.
+    Scene.scene(
+      config,
+      Scene.given(checked(doc(nodeBrief({})), nId, unbound("@judge"))),
+      Scene.expect(Scene.testId("request-card-go-blocked")).toExist(),
+      Scene.expect(goButton).toBeDisabled()
+    );
+  });
+
+  it("neither checks nor blocks a workflow node's own brief written before it carried its launch's bindings", () => {
+    const olderNodeBrief = record({
       id: "n-1",
       tool: "agent",
       payload: briefPayload("@judge"),
@@ -398,7 +480,7 @@ describe("the brief card", () => {
 
     const nId = ApprovalId.make("n-1");
 
-    const shown = inform(initial, context(doc(nodeBrief)));
+    const shown = inform(initial, context(doc(olderNodeBrief)));
 
     assert.lengthOf(shown.commands ?? [], 0);
 
@@ -469,7 +551,7 @@ describe("the brief card", () => {
     assert.isTrue(Option.isSome(blank.model.failure));
   });
 
-  it("offers Run on 1 first on a launch of more than one node, and never Send back", () => {
+  it("offers Run on 1 first on a launch of more than one node, and Send back", () => {
     const launched = inform(initial, context(doc(launch(5))));
 
     assert.deepStrictEqual(
@@ -496,7 +578,18 @@ describe("the brief card", () => {
           })
         ).model
       ),
-      Scene.expect(Scene.role("button", { name: "Send back" })).not.toExist(),
+      Scene.expect(Scene.role("button", { name: "Send back" })).toExist(),
+      // The numbers first, an unknown cost never read as zero, then what each node runs as.
+      Scene.inside(
+        Scene.testId("request-card"),
+        Scene.expect(Scene.selector("dl")).toContainText(
+          "No estimate yet: cost unknown"
+        ),
+        Scene.expect(Scene.selector("dl")).not.toContainText("$0.00"),
+        Scene.expect(Scene.testId("request-card-call-site")).toContainText(
+          "@scout · reads only · depends on the data"
+        )
+      ),
       Scene.click(Scene.role("button", { name: "Run on 1 first" })),
       Scene.Command.expectExact(
         RespondToRequest({

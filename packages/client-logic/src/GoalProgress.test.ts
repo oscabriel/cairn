@@ -14,6 +14,9 @@ import {
   goalOf,
   goalProgress,
   goalTallyOf,
+  goalTallyShort,
+  goalTallyState,
+  goalTallyText,
   isGoal,
   judgeChip,
   judgeWarning,
@@ -201,6 +204,23 @@ const warned = (argv: ReadonlyArray<string>, expectExit = 0) =>
       timeoutSec: 60,
     })
   );
+
+describe("the goal chip's words", () => {
+  it("counts met criteria, says the failed ones, and sums the goal's state", () => {
+    const open = { total: 4, met: 2, failed: 0 };
+    const failing = { total: 4, met: 2, failed: 1 };
+    const done = { total: 3, met: 3, failed: 0 };
+
+    assert.strictEqual(goalTallyText(open), "2 of 4 met");
+    assert.strictEqual(goalTallyText(failing), "2 of 4 met, 1 not met");
+    assert.strictEqual(goalTallyShort(failing), "2/4 met");
+    assert.deepStrictEqual([open, failing, done].map(goalTallyState), [
+      "open",
+      "failed",
+      "met",
+    ]);
+  });
+});
 
 describe("the strip's chips and evidence", () => {
   it("names each judge, a command's argv whole", () => {

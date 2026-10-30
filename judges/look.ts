@@ -70,6 +70,7 @@ import {
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { SHELL_SEED, startCairn } from "./fixtures/parity/CairnApp.ts";
 import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
+import { clearGoal, seedGoal } from "./fixtures/surfaces/GoalBrain.ts";
 import {
   ALLOWANCE,
   CELL_CSS_PX,
@@ -165,6 +166,14 @@ interface LookState {
   /** Whether the state is also drawn in light. */
   readonly light: boolean;
   readonly enter: (page: Page, width: LookWidth) => Promise<void>;
+  /**
+   * What the state puts in the brain before its page opens, and takes out after its shot, so no
+   * other state draws it (the goal state's criteria).
+   */
+  readonly brain?: {
+    readonly put: (reach: Reach) => Promise<void>;
+    readonly take: (reach: Reach) => Promise<void>;
+  };
 }
 
 const editor = (page: Page) =>
@@ -338,6 +347,31 @@ const STATES: ReadonlyArray<LookState> = [
       await page.getByTestId("work-previous-toggle").click();
       await page
         .getByTestId("work-previous")
+        .waitFor({ state: "visible", timeout: 5000 });
+      await settle(page, 600);
+    },
+  },
+  {
+    name: "goal",
+    title: "The goal panel",
+    caption:
+      "The project thread as a goal: the header's chip counts its criteria, the sidebar row says 1/4 met, and the goal panel lists each criterion with its judge and verdict (a command met, a model of another family not met), Met and Not met only on the one the user judges. A column beside the chat at 1,440 px, a bottom sheet at 390 px.",
+    path: ({ app }) => new URL(app.threadUrl).pathname,
+    widths: [390, 1440],
+    light: true,
+    brain: {
+      put: async ({ app }) => {
+        await app.inBrain(seedGoal);
+      },
+      take: async ({ app }) => {
+        await app.inBrain(clearGoal);
+      },
+    },
+    enter: async (page) => {
+      await waitForThread(page);
+      await page.getByTestId("goal-chip").click();
+      await page
+        .getByTestId("goal-panel")
         .waitFor({ state: "visible", timeout: 5000 });
       await settle(page, 600);
     },
@@ -541,6 +575,8 @@ const takeShot = async (
   shotsDir: string,
   plant?: (page: Page) => Promise<void>
 ): Promise<{ record: ShotRecord; png: Buffer }> => {
+  await shot.state.brain?.put(reach);
+
   const opened = await openState(
     browser,
     reach,
@@ -587,6 +623,7 @@ const takeShot = async (
     };
   } finally {
     await opened.context.close();
+    await shot.state.brain?.take(reach);
   }
 };
 

@@ -5,6 +5,8 @@
 // launches the scratch thread, later ones are sends, and Clear deletes it. The work panel shows and
 // hides from the header, keeps its state across threads but starts each thread's child groups at
 // their first page, and stops one child at a time; a child shows Stopping until its row is at rest.
+// The goal panel shows and hides from the header's goal chip (one side panel at a time: opening it
+// closes the work panel, and the other way round), and sends one mark per criterion at a time.
 
 import { LINEAGE_PAGE } from "@cairn/client-logic/ThreadLineage";
 import { threadStatus } from "@cairn/client-logic/ThreadState";
@@ -22,6 +24,7 @@ import {
   PrepareRefresh,
   PrepareScratchClear,
   PrepareScratchTurn,
+  MarkCriterion,
   SaveScratch,
   StopChild,
 } from "./Command.ts";
@@ -36,7 +39,12 @@ import {
 } from "./Derived.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { FIRST_CHILD_ROWS } from "./Model.ts";
-import type { Model, ShellContext, WorkState } from "./Model.ts";
+import type {
+  GoalPanelState,
+  Model,
+  ShellContext,
+  WorkState,
+} from "./Model.ts";
 import { REFRESH_TEXT_ID } from "./Refresh.ts";
 import { SCRATCH_EDITOR_ID } from "./Scratch.ts";
 
@@ -276,6 +284,14 @@ const setWork = (
   model: modifyFields(model, { work: change }),
 });
 
+/** The goal panel with `change` applied. */
+const setGoal = (
+  model: Model,
+  change: (goal: GoalPanelState) => GoalPanelState
+): UpdateReturn => ({
+  model: modifyFields(model, { goal: change }),
+});
+
 /** The shell's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
@@ -459,8 +475,15 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     CompletedFocus: () => ({ model }),
 
-    ClickedWork: () =>
-      setWork(model, (work) => modifyFields(work, { isOpen: (open) => !open })),
+    ClickedWork: () => ({
+      model: modifyFields(model, {
+        work: (work) => modifyFields(work, { isOpen: (open) => !open }),
+        goal: (goal) =>
+          model.work.isOpen
+            ? goal
+            : modifyFields(goal, { isOpen: () => false }),
+      }),
+    }),
     ClickedCloseWork: () =>
       setWork(model, (work) => modifyFields(work, { isOpen: () => false })),
     ClickedPreviousChildren: () =>
@@ -509,5 +532,48 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedDismissWorkFailure: () =>
       setWork(model, (work) =>
         modifyFields(work, { failure: () => Option.none() })
+      ),
+
+    ClickedGoal: () => ({
+      model: modifyFields(model, {
+        goal: (goal) => modifyFields(goal, { isOpen: (open) => !open }),
+        work: (work) =>
+          model.goal.isOpen
+            ? work
+            : modifyFields(work, { isOpen: () => false }),
+      }),
+    }),
+    ClickedCloseGoal: () =>
+      setGoal(model, (goal) => modifyFields(goal, { isOpen: () => false })),
+    // One mark per criterion at a time; the goal document, not the answer, says where it stands.
+    ClickedMarkCriterion: ({ threadId, criterionId, ok }) =>
+      model.goal.marking.includes(criterionId)
+        ? { model }
+        : {
+            model: modifyFields(model, {
+              goal: (goal) =>
+                modifyFields(goal, {
+                  marking: (marking) => [...marking, criterionId],
+                  failure: () => Option.none(),
+                }),
+            }),
+            commands: [MarkCriterion({ threadId, criterionId, ok })],
+          },
+    MarkedCriterion: ({ criterionId }) =>
+      setGoal(model, (goal) =>
+        modifyFields(goal, {
+          marking: (marking) => marking.filter((id) => id !== criterionId),
+        })
+      ),
+    FailedMarkCriterion: ({ criterionId, message: text }) =>
+      setGoal(model, (goal) =>
+        modifyFields(goal, {
+          marking: (marking) => marking.filter((id) => id !== criterionId),
+          failure: () => Option.some(text),
+        })
+      ),
+    ClickedDismissGoalFailure: () =>
+      setGoal(model, (goal) =>
+        modifyFields(goal, { failure: () => Option.none() })
       ),
   });

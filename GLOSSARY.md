@@ -84,6 +84,10 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Subagent steps**: A child's steps in the work panel, read from its own row and records, never model text: "You said go", "Started" (in a worktree or the project's checkout), "Working on it", "Said what it did", each done, now, to do, failed or stopped. The header's button counts them ("2/4 steps").
 
+**Goal chip**: The chat header's button on a goal thread (`next` only), counting its criteria as the verdict writer left them ("2 of 4 met, 1 not met"; "2/4" on the phone). It opens the goal panel. The project thread's sidebar row carries the same tally ("2/4 met").
+
+**Goal panel**: The panel the goal chip opens: the objective, the progress line, and each criterion with its state, the judge that decides it and the verdict's evidence. Only a criterion the user judges offers Met and Not met, which send `goal.mark`; the state changes only when the verdict writer records it. A column beside the chat column from 1,024 px, a bottom sheet below.
+
 **Asked its parent**: A subagent row's state while the child's question is with its parent's model (ADR 0027), so the user is not asked yet and nothing above it lights.
 
 **Subagent anchor**: The background task a parent owns for each child. It owns the child's conversation, so the parent's run is never held open by its children (ADR 0028).

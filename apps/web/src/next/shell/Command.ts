@@ -1,6 +1,7 @@
 // The `next` shell's Commands: minting a project's first draft, a refresh's launch, a scratch
 // thread's turns and its clear, focusing the field an overlay opens with, and saving which scratch
-// thread this device holds, and stopping a child from the work panel. Each answers with one Message. A refresh is
+// thread this device holds, stopping a child from the work panel, and the user's mark on a goal's
+// criterion from the goal panel. Each answers with one Message. A refresh is
 // `thread.launch` with `replaces` (5H): the new project thread, the old one's archive and the moved
 // mark land in one shell commit. The scratch thread's first message launches it in the scratch
 // project (made here first, as the composer's projectless launch does); later ones are sends.
@@ -262,6 +263,47 @@ export const StopChild = Command.define("StopChild", {
             threadId,
             message:
               "The connection dropped before Cairn answered. Stop again once it is back.",
+          })
+        )
+      )
+    ),
+});
+
+/**
+ * The user's own verdict on one criterion a user judge decides (`goal.mark`, plan 6H): the verdict
+ * writer records it, and the goal document the thread stream carries says where the criterion
+ * stands. A call cut off by a dropped connection answers as a failure, as `StopChild`'s does.
+ */
+export const MarkCriterion = Command.define("MarkCriterion", {
+  args: { threadId: ThreadId, criterionId: Schema.String, ok: Schema.Boolean },
+  messages: [Message.MarkedCriterion, Message.FailedMarkCriterion],
+  execute: ({ threadId, criterionId, ok }) =>
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
+        client["goal.mark"]({
+          threadId,
+          criterionId,
+          ok,
+          note: Option.none(),
+        })
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: () => Message.MarkedCriterion({ criterionId }),
+        onFailure: (failure) =>
+          Message.FailedMarkCriterion({
+            criterionId,
+            message: Predicate.isTagged(failure, "ResourceNotAvailable")
+              ? "Cairn is reconnecting. Mark it again once it is back."
+              : failureMessage(failure, "The mark did not reach Cairn."),
+          }),
+      }),
+      Effect.catchCauseIf(Cause.hasInterruptsOnly, () =>
+        Effect.succeed(
+          Message.FailedMarkCriterion({
+            criterionId,
+            message:
+              "The connection dropped before Cairn answered. Mark it again once it is back.",
           })
         )
       )

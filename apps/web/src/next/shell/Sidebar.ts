@@ -2,8 +2,13 @@
 // project thread on top (the only thread the user talks to), and under it a running list of the
 // threads it manages (subagents, brief children, workflow nodes), newest first, each with its
 // status mark from the one thread-state function. No Active, Settled, Pinned or Snoozed groups.
-// Every row opens its thread. The foot holds Usage and Settings, with no meters.
+// Every row opens its thread. The project thread's row counts its goal's criteria when it holds one
+// ("2/4 met", from the row's tally; plan 6H). The foot holds Usage and Settings, with no meters.
 
+import {
+  goalTallyShort,
+  goalTallyText,
+} from "@cairn/client-logic/GoalProgress";
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type { ProjectShell, ThreadShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
@@ -97,6 +102,22 @@ const projectThreadView = (
         ],
         ["Project thread"]
       ),
+      Option.match(top.thread.goal, {
+        onNone: () => h.empty,
+        onSome: (tally) =>
+          h.span(
+            [
+              h.DataAttribute("testid", "shell-goal-tally"),
+              h.DataAttribute("met", String(tally.met)),
+              h.DataAttribute("total", String(tally.total)),
+              h.Title(`Goal: ${goalTallyText(tally)}`),
+              h.Class(
+                classNames("shrink-0 tabular-nums text-ink-2", TYPE.small)
+              ),
+            ],
+            [goalTallyShort(tally)]
+          ),
+      }),
       h.span(
         [h.Class(classNames("shrink-0 tabular-nums text-ink-3", TYPE.small))],
         [top.age]

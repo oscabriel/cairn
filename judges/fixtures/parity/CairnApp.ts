@@ -70,6 +70,7 @@ import {
   ScriptedTools,
   scriptedAnswer,
 } from "../../../apps/server/src/brain/ScriptedHarness.ts";
+import type { ScriptedGoals } from "../../../apps/server/src/brain/ScriptedHarness.ts";
 import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
@@ -193,6 +194,13 @@ export interface CairnApp {
   readonly restartBrain: () => Promise<void>;
   /** How many threads the scripted store holds: the seeded ones and every child started. */
   readonly threadCount: () => number;
+  /**
+   * Runs `effect` inside the brain, as the server would: the goal judge binds a goal through the
+   * goal service and records a judge run's verdict through the verdict writer (plan 6H).
+   */
+  readonly inBrain: <A, E>(
+    effect: Effect.Effect<A, E, GoalBook | ScriptedGoals>
+  ) => Promise<A>;
   readonly stop: () => Promise<void>;
 }
 
@@ -534,7 +542,8 @@ export const startCairn = async (
     SpendFeed.layerOff,
     BudgetSources.layerNone,
     WorkflowStops.layerOff,
-    GoalBook.layerOff
+    // The scripted harness's goals, so a goal binds, refuses and is marked as on pi-durable.
+    GoalBook.layerScripted
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),
     Layer.provideMerge(Layer.succeed(ScriptedStore, store)),
@@ -622,6 +631,7 @@ export const startCairn = async (
       await runtime.runPromise(Effect.void);
     },
     threadCount: () => store.threads.size,
+    inBrain: async (effect) => await runtime.runPromise(effect),
     stop: async () => {
       await vite.close();
       await runtime.dispose();

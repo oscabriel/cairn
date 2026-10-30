@@ -683,8 +683,13 @@ export const readAttemptState = async (
       Option.getOrUndefined(cursor)
     );
 
+    // A fork sees its parent's entries, but its result is its own (`cairn.result` forks initial),
+    // so only the conversation's own entries count: a resumed workflow node's fork starts with
+    // every attempt free even though the node it forks accepted a result.
     for (const entry of page.items) {
-      marks.push(...Option.toArray(markOf(entry)));
+      if (entry.conversationId === conversationId) {
+        marks.push(...Option.toArray(markOf(entry)));
+      }
     }
 
     return page.next === undefined

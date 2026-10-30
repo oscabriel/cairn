@@ -521,8 +521,10 @@ export const settleNode = async (
       TOOL_SCAN_LIMIT
     );
 
-    const toolCalls = entries.items.filter((entry) =>
-      ToolResultEntry.is(entry)
+    // Only the child's own entries: a resumed node's child is a fork, which sees the calls of the
+    // node it resumes, and those are that node's receipt's.
+    const toolCalls = entries.items.filter(
+      (entry) => entry.conversationId === child && ToolResultEntry.is(entry)
     ).length;
 
     const ledger = await tx.doc(WorkflowsDoc, api.conversationId);

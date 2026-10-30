@@ -1,8 +1,8 @@
 // The workflow gate (ADR 0012 as amended, ADR 0032, workflows note W3 "Launching"): a `beforeTool`
 // hook on every tool call of a conversation that selects the workflows extension.
 //
-// - A model's `codemode` call whose source is a workflow script (`export const meta = ...` first)
-//   runs only when the thread's ledger holds an `approved` row for that exact source (its hash). The
+// - A model's `codemode` call whose source is a workflow script (`export const meta = ...` first),
+//   or a recipe reference that names one (`resolveRecipe`), runs only when the thread's ledger holds an `approved` row for that exact source (its hash). The
 //   hook then rewrites the source behind the prelude (`rewriteScript`), baking in the row's id,
 //   sample, token ceiling and arguments, and marks the call's own task with `GATE_MEMO`. pi-durable
 //   stores the rewritten source in the call's start data, so a replay runs what this hook wrote,
@@ -31,7 +31,11 @@ import { Effect, Exit, Option, Predicate } from "effect";
 import { NODE_TOOLS, rewriteScript } from "./Prelude.ts";
 import { WorkflowsDoc } from "./WorkflowDocs.ts";
 import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
-import { isWorkflowSource, parseWorkflowScript } from "./WorkflowScript.ts";
+import {
+  isWorkflowSource,
+  parseWorkflowScript,
+  resolveRecipe,
+} from "./WorkflowScript.ts";
 import type { WorkflowScript } from "./WorkflowScript.ts";
 
 /**
@@ -108,7 +112,10 @@ const decide = async (
     return undefined;
   }
 
-  const parsed = Effect.runSyncExit(parseWorkflowScript(code));
+  // A recipe reference runs the recipe it names: the approved hash is the recipe's own.
+  const parsed = Effect.runSyncExit(
+    Effect.flatMap(resolveRecipe(code), parseWorkflowScript)
+  );
 
   if (Exit.isFailure(parsed)) {
     const failure = Exit.findErrorOption(parsed);

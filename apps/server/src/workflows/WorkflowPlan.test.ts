@@ -7,6 +7,7 @@ import { MAX_WORKFLOW_NODES } from "@cairn/protocol/Workflows";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Layer, Option, Schema } from "effect";
 
+import { BUILT_IN_RECIPES, recipeReference } from "./recipes/BuiltInRecipes.ts";
 import {
   DryRunLimits,
   estimateRun,
@@ -21,6 +22,8 @@ import type { RefusalReason } from "./WorkflowScript.ts";
 
 const fixture = (name: string) =>
   readFileSync(new URL(`fixtures/${name}.workflow`, import.meta.url), "utf-8");
+
+const recipe = (name: string) => BUILT_IN_RECIPES.get(name) ?? "";
 
 const COUNCIL_ARGS = {
   question: "Should the brain keep one SQLite file per project?",
@@ -68,7 +71,7 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
         const plan = yield* WorkflowPlan;
 
         const run = yield* plan.validate(
-          fixture("council"),
+          recipe("council"),
           input(COUNCIL_ARGS)
         );
 
@@ -137,8 +140,40 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
       })
   );
 
+  test.effect(
+    "a recipe reference dry-runs the recipe it names, under the recipe's own hash",
+    () =>
+      Effect.gen(function* () {
+        const plan = yield* WorkflowPlan;
+
+        const byName = yield* plan.validate(
+          recipeReference("council"),
+          input(COUNCIL_ARGS)
+        );
+
+        const written = yield* plan.validate(
+          recipe("council"),
+          input(COUNCIL_ARGS)
+        );
+
+        assert.strictEqual(byName.script.hash, written.script.hash);
+        assert.strictEqual(byName.script.source, recipe("council"));
+        assert.deepStrictEqual(byName.nodes, { count: 5, unbounded: false });
+      })
+  );
+
+  test.effect(
+    "a reference to no recipe is refused with the recipes' names",
+    () =>
+      expectRefusal(
+        `export const meta = { name: "no-such-recipe" };`,
+        "unknown_recipe",
+        "`council`"
+      )
+  );
+
   test.effect("the council refuses a roster outside two to four advisors", () =>
-    expectRefusal(fixture("council"), "script_failed", "two to four roles", {
+    expectRefusal(recipe("council"), "script_failed", "two to four roles", {
       ...COUNCIL_ARGS,
       advisors: ["@worker"],
     })
@@ -487,7 +522,7 @@ describe(estimateRun, () => {
   const councilRun = Effect.gen(function* () {
     const plan = yield* WorkflowPlan;
 
-    return yield* plan.validate(fixture("council"), input(COUNCIL_ARGS));
+    return yield* plan.validate(recipe("council"), input(COUNCIL_ARGS));
   }).pipe(Effect.provide(WorkflowPlan.layer));
 
   it.effect(

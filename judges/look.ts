@@ -513,9 +513,46 @@ const contextOptions = (
         locale: "en-US",
       };
 
-/** Hides what is not part of a state: toasts and the caret. */
+/** Hides what is not part of a state (toasts, the caret) and stops spinners and transitions. */
 const STILL_STYLE =
-  '[data-slot^="toast"]{display:none!important} *{caret-color:transparent!important}';
+  '[data-slot^="toast"]{display:none!important} *,*::before,*::after{caret-color:transparent!important;animation:none!important;transition:none!important}';
+
+/**
+ * Rewrites the words that differ on every run, so a frozen round compares the look and not the
+ * run: the judge workspace's mkdtemp folder, epoch-millisecond ids (a goal's verdict ids), a
+ * run's measured duration and the clock time on a message sent during the state. All but the
+ * clock time keep their length, so nothing reflows.
+ */
+const steadyText = async (page: Page) => {
+  await page.evaluate(() => {
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_TEXT
+    );
+
+    for (
+      let node = walker.nextNode();
+      node !== null;
+      node = walker.nextNode()
+    ) {
+      const text = node.textContent ?? "";
+
+      const steady = text
+        .replaceAll(/cairn-parity-[A-Za-z0-9]{6}/gu, "cairn-parity-xxxxxx")
+        .replaceAll(/\b1\d{12}\b/gu, "1000000000000")
+        .replaceAll(
+          /\b(?<lead>Working for |for )\d+(?<unit>ms|s)\b/gu,
+          "$<lead>0$<unit>"
+        )
+        .replaceAll(/^\d{1,2}:\d{2} (?:AM|PM)$/gu, "9:41 AM");
+
+      if (steady !== text) {
+        node.textContent = steady;
+      }
+    }
+  });
+  await page.waitForTimeout(200);
+};
 
 /** Opens `state` at `width` in `theme`, with the next frame drawn and the state entered. */
 const openState = async (
@@ -547,6 +584,7 @@ const openState = async (
     });
   await page.addStyleTag({ content: STILL_STYLE });
   await state.enter(page, width);
+  await steadyText(page);
 
   return { context, page, errors };
 };

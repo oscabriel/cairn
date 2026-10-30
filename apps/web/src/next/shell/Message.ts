@@ -1,11 +1,13 @@
 // The `next` shell's Messages, and the OutMessages it hands the root: an item for the outbox (a
 // refresh's launch, a scratch turn or clear), a path to open, and a new draft in a chosen project.
+// The work panel's Messages are the shell's too: it is drawn beside the chat column.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
 import { OutboxItem } from "../../connection/Outbox.ts";
+import { ChildGroup } from "./Model.ts";
 
 /** Everything the shell reacts to. */
 export const Message = defineMessageUnion({
@@ -55,6 +57,17 @@ export const Message = defineMessageUnion({
   ClickedDismissFailure: {},
   /** A field the overlay or the confirm opened with took focus, or was gone. */
   CompletedFocus: {},
+
+  /** The header's work button: show the work panel, or hide it. */
+  ClickedWork: {},
+  ClickedCloseWork: {},
+  ClickedPreviousChildren: {},
+  ClickedMoreChildren: { group: ChildGroup },
+  /** Stop on a child's row: its run stops, its queue and its own children stay. */
+  ClickedStopChild: { threadId: ThreadId },
+  StoppedChild: { threadId: ThreadId },
+  FailedStopChild: { threadId: ThreadId, message: Schema.String },
+  ClickedDismissWorkFailure: {},
 });
 
 export type Message = typeof Message.Type;

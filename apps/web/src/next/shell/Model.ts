@@ -1,7 +1,8 @@
 // The `next` shell's state (ADR 0040, plan look track L6): what the root told it last (the shell,
 // the route, the connection, the clock), which project the rail has selected, the phone's sidebar
-// sheet, which project favicons loaded, the refresh confirm, and the scratch thread's overlay. The
-// rail, the project's sidebar list, the chat header and the scratch overlay all draw from it.
+// sheet, which project favicons loaded, the refresh confirm, the scratch thread's overlay, and the
+// work panel's open state. The rail, the project's sidebar list, the chat header, the scratch
+// overlay and the work panel all draw from it.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelDefaults } from "@cairn/protocol/Models";
@@ -54,6 +55,40 @@ export const ScratchState = Schema.Struct({
 
 export type ScratchState = typeof ScratchState.Type;
 
+/** Which of the work panel's two child groups a "Show more" grows. */
+export const ChildGroup = Schema.Literals(["active", "previous"]);
+
+export type ChildGroup = typeof ChildGroup.Type;
+
+/**
+ * The work panel (lineage and steps): shown or hidden, the "Previous" group open, how many rows
+ * each child group shows, and the children whose Stop was asked and has not yet shown on their row.
+ */
+export const WorkState = Schema.Struct({
+  isOpen: Schema.Boolean,
+  isPreviousOpen: Schema.Boolean,
+  shownActive: Schema.Int,
+  shownPrevious: Schema.Int,
+  stopping: Schema.Array(ThreadId),
+  /** Why the last Stop did not reach Cairn. */
+  failure: Schema.Option(Schema.String),
+});
+
+export type WorkState = typeof WorkState.Type;
+
+/** Rows a child group shows before its first "Show more" (t3code's lineage window). */
+export const FIRST_CHILD_ROWS = 6;
+
+/** The work panel closed, its groups at their first page. */
+export const initialWork: WorkState = {
+  isOpen: false,
+  isPreviousOpen: false,
+  shownActive: FIRST_CHILD_ROWS,
+  shownPrevious: FIRST_CHILD_ROWS,
+  stopping: [],
+  failure: Option.none(),
+};
+
 /** The `next` shell's Model. */
 export const Model = Schema.Struct({
   context: ShellContext,
@@ -67,6 +102,7 @@ export const Model = Schema.Struct({
   favicons: Schema.Record(Schema.String, FaviconState),
   refresh: Schema.Option(RefreshConfirm),
   scratch: ScratchState,
+  work: WorkState,
   /** Why the last refresh or scratch turn could not be prepared. */
   failure: Schema.Option(Schema.String),
 });
@@ -97,5 +133,6 @@ export const initial: Model = {
     draft: "",
     isBusy: false,
   },
+  work: initialWork,
   failure: Option.none(),
 };

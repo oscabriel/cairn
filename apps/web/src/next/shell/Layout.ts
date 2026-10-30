@@ -1,6 +1,7 @@
 // The `next` app's layout (plan look track L6), drawn in the root's boundary: the shell's left
 // column (or the phone's sheet), and beside it the open page under the new chat header, with the
-// hold banner above a thread's transcript; the scratch overlay and the refresh confirm float over
+// hold banner above a thread's transcript, and beside the chat column the work panel (plan 6E) while
+// it is open (a bottom sheet under `lg`); the scratch overlay and the refresh confirm float over
 // it. The shell's parts are Submodel views over `model.nextShell` (`View.ts`); the page's own parts
 // (the transcript, the composer, the hero and settings pages, the diff toggle) are the root's
 // regions, placed beside them rather than inside them, so their Mounts keep the root as their
@@ -21,6 +22,7 @@ import { scratchBody, scratchPanel } from "./Scratch.ts";
 import { registerShell } from "./ShellLoad.ts";
 import { inform, update } from "./Update.ts";
 import * as Shell from "./View.ts";
+import { workInputsOf, workPanelView, workToggleView } from "./Work.ts";
 
 // The root runs the shell's update through `ShellLoad.ts`, from now on.
 registerShell({ update, inform });
@@ -77,20 +79,46 @@ const routeBody = (
   regions: ShellRegions
 ): ReadonlyArray<Html> => {
   if (Predicate.isTagged(model.route, "Thread")) {
+    const work = { inputs: workInputsOf(model) };
+
     return [
       h.div(
         [
-          h.DataAttribute("chat-column", "true"),
-          h.DataAttribute("chat-column-maximized-away", "false"),
-          h.Class(
-            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden"
-          ),
+          h.DataAttribute("slot", "chat-row"),
+          h.Class("flex min-h-0 min-w-0 flex-1"),
         ],
         [
-          header(h, model, [regions.threadControls()]),
-          hold(h, model),
-          regions.thread(),
-          ...regions.composerLane(),
+          h.div(
+            [
+              h.DataAttribute("chat-column", "true"),
+              h.DataAttribute("chat-column-maximized-away", "false"),
+              h.Class(
+                "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden"
+              ),
+            ],
+            [
+              header(h, model, [
+                regions.threadControls(),
+                h.submodel({
+                  slotId: "work-toggle",
+                  model: model.nextShell.work,
+                  view: workToggleView,
+                  viewInputs: work,
+                  toParentMessage: toShell,
+                }),
+              ]),
+              hold(h, model),
+              regions.thread(),
+              ...regions.composerLane(),
+            ]
+          ),
+          h.submodel({
+            slotId: "work-panel",
+            model: model.nextShell.work,
+            view: workPanelView,
+            viewInputs: work,
+            toParentMessage: toShell,
+          }),
         ]
       ),
     ];

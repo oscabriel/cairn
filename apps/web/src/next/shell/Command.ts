@@ -1,6 +1,6 @@
 // The `next` shell's Commands: minting a project's first draft, a refresh's launch, a scratch
 // thread's turns and its clear, focusing the field an overlay opens with, and saving which scratch
-// thread this device holds. Each answers with one Message. A refresh is
+// thread this device holds, and stopping a child from the work panel. Each answers with one Message. A refresh is
 // `thread.launch` with `replaces` (5H): the new project thread, the old one's archive and the moved
 // mark land in one shell commit. The scratch thread's first message launches it in the scratch
 // project (made here first, as the composer's projectless launch does); later ones are sends.
@@ -11,7 +11,7 @@ import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { RuntimeMode } from "@cairn/protocol/Policy";
 import { ThreadClear } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
-import { Effect, Option, Predicate, Schema } from "effect";
+import { Cause, Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
@@ -22,7 +22,10 @@ import {
   mintThreadId,
 } from "../../composer/Ids.ts";
 import { CairnConnection, withBoundary } from "../../connection/Connection.ts";
-import { failureMessageOrTag } from "../../connection/Failure.ts";
+import {
+  failureMessage,
+  failureMessageOrTag,
+} from "../../connection/Failure.ts";
 import { OutboxItem } from "../../connection/Outbox.ts";
 import { Message } from "./Message.ts";
 
@@ -223,4 +226,44 @@ export const SaveScratch = Command.define("SaveScratch", {
 
       return Message.CompletedSaveScratch();
     }).pipe(Effect.orElseSucceed(() => Message.CompletedSaveScratch())),
+});
+
+/**
+ * Stops one child's run from the work panel (`thread.stop` on the child): its queued inputs stay,
+ * and so do its own children. A call cut off by a dropped connection answers as a failure rather
+ * than ending the page (the request card's `whenCutOff`).
+ */
+export const StopChild = Command.define("StopChild", {
+  args: { threadId: ThreadId },
+  messages: [Message.StoppedChild, Message.FailedStopChild],
+  execute: ({ threadId }) =>
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
+        client["thread.stop"]({
+          threadId,
+          clearQueue: false,
+          subagents: Option.none(),
+        })
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: () => Message.StoppedChild({ threadId }),
+        onFailure: (failure) =>
+          Message.FailedStopChild({
+            threadId,
+            message: Predicate.isTagged(failure, "ResourceNotAvailable")
+              ? "Cairn is reconnecting. Stop again once it is back."
+              : failureMessage(failure, "The stop did not reach Cairn."),
+          }),
+      }),
+      Effect.catchCauseIf(Cause.hasInterruptsOnly, () =>
+        Effect.succeed(
+          Message.FailedStopChild({
+            threadId,
+            message:
+              "The connection dropped before Cairn answered. Stop again once it is back.",
+          })
+        )
+      )
+    ),
 });

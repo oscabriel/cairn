@@ -259,8 +259,12 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
               ),
             itemToEstimatedHeightPx: (item) =>
               estimatedHeightOf(item, expandedUsers),
+            // The list draws each row as a grid of one implicit column, which grows to its row's
+            // min-content (a long unbroken path, a wide code block), and its inline `overflow: auto`
+            // beats a class: the column is held to the list's width and sideways scroll is shut, so
+            // a wide row cuts or scrolls inside itself and never moves the transcript (the phone run).
             className:
-              "messages-timeline-scroll min-h-0 [scrollbar-gutter:stable_both-edges] flex-1 overflow-x-hidden overscroll-y-contain",
+              "messages-timeline-scroll min-h-0 [scrollbar-gutter:stable_both-edges] flex-1 overflow-x-hidden! overscroll-y-contain [&>*]:grid-cols-[minmax(0,1fr)]",
             attributes: childAttributes([
               h.DataAttribute("testid", "timeline-scroll"),
             ]),

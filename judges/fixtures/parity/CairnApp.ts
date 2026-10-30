@@ -201,10 +201,15 @@ export interface CairnApp {
   readonly threadCount: () => number;
   /**
    * Runs `effect` inside the brain, as the server would: the goal judge binds a goal through the
-   * goal service and records a judge run's verdict through the verdict writer (plan 6H).
+   * goal service and records a judge run's verdict through the verdict writer (plan 6H); the look
+   * tool writes a changed-files card into the scripted store.
    */
   readonly inBrain: <A, E>(
-    effect: Effect.Effect<A, E, GoalBook | ScriptedGoals>
+    effect: Effect.Effect<
+      A,
+      E,
+      GoalBook | ScriptedGoals | ScriptedStore | HarnessSeam
+    >
   ) => Promise<A>;
   readonly stop: () => Promise<void>;
 }
@@ -396,6 +401,83 @@ const seedShell = (shellSeed: ShellSeed, dataDir: string) =>
       );
     }
   });
+
+/** The kind of the checkpoint entry `putChangedFiles` writes, which `takeChangedFiles` removes. */
+const CHECKPOINT_KIND = "cairn.checkpoint";
+
+/** The harness publishes its view on a change it made; an unchanged setting is such a change. */
+const publish = HarnessSeam.use((seam) =>
+  seam.configure(PARITY_THREAD_ID, {
+    model: Option.none(),
+    thinkingLevel: Option.some("medium"),
+    cwd: Option.none(),
+    runtimeMode: Option.none(),
+  })
+);
+
+/** The seeded thread's record in the scripted store; its absence is a broken harness. */
+const seededThread = ScriptedStore.use((store) =>
+  Effect.orDie(Effect.fromNullishOr(store.threads.get(PARITY_THREAD_ID)))
+);
+
+/**
+ * Gives the seeded thread's last turn a changed-files card: a `cairn.checkpoint` entry, as the
+ * brain's checkpoint capture writes one, listing `files` (the look tool's long-path state).
+ */
+export const putChangedFiles = (
+  files: ReadonlyArray<{
+    readonly path: string;
+    readonly additions: number;
+    readonly deletions: number;
+  }>
+) =>
+  Effect.gen(function* () {
+    const store = yield* ScriptedStore;
+    const thread = yield* seededThread;
+
+    // The seeded thread holds the imported turns; one without a user entry is a broken harness.
+    const lastUser = yield* Effect.orDie(
+      Effect.fromNullishOr(
+        thread.entries.findLast((entry) => entry.kind === "pi.user")
+      )
+    );
+
+    const id = store.ids.next;
+
+    store.ids.next += 1;
+    thread.entries.push({
+      id: piEntryId(EntryId.make(id)),
+      conversationId: piConversationId(
+        ConversationId.make(thread.conversationId)
+      ),
+      kind: CHECKPOINT_KIND,
+      data: {
+        turn: 1,
+        ref: "refs/cairn/checkpoints/look/1",
+        headOid: null,
+        capturedAt: 0,
+        files: files.map((file) => ({ ...file })),
+        moreFiles: 0,
+        userEntryId: Number(lastUser.id),
+      },
+    });
+    yield* publish;
+  });
+
+/** Removes what `putChangedFiles` wrote, so the states after it see the thread as seeded. */
+export const takeChangedFiles = Effect.gen(function* () {
+  const thread = yield* seededThread;
+
+  const index = thread.entries.findIndex(
+    (entry) => entry.kind === CHECKPOINT_KIND
+  );
+
+  if (index !== -1) {
+    thread.entries.splice(index, 1);
+  }
+
+  yield* publish;
+});
 
 const seedLayer = (
   seed: CairnSeed,

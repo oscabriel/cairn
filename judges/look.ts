@@ -68,7 +68,12 @@ import {
   importT3Thread,
   parseT3ThreadExport,
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
-import { SHELL_SEED, startCairn } from "./fixtures/parity/CairnApp.ts";
+import {
+  putChangedFiles,
+  SHELL_SEED,
+  startCairn,
+  takeChangedFiles,
+} from "./fixtures/parity/CairnApp.ts";
 import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
 import { clearGoal, seedGoal } from "./fixtures/surfaces/GoalBrain.ts";
 import { launchBrain } from "./fixtures/workflows/LaunchBrain.ts";
@@ -222,6 +227,26 @@ const openLastFold = async (page: Page) => {
   });
 };
 
+/** The changed files of the thread-files state: paths as long as the phone run's (2026-10-30). */
+const LONG_PATH_FILES = [
+  {
+    path: "docs/decisions/0026-delegated-work-starts-from-an-approved-brief.md",
+    additions: 2,
+    deletions: 0,
+  },
+  {
+    path: "docs/decisions/0032-a-workflow-launch-approval-is-an-envelope.md",
+    additions: 2,
+    deletions: 0,
+  },
+  {
+    path: "apps/web/src/next/settings/SettingsComposerDefaultsBridge.test.ts",
+    additions: 1053,
+    deletions: 76,
+  },
+  { path: "docs/phase-2/waves.md", additions: 17, deletions: 0 },
+];
+
 const STATES: ReadonlyArray<LookState> = [
   {
     name: "hero",
@@ -272,6 +297,31 @@ const STATES: ReadonlyArray<LookState> = [
     enter: async (page) => {
       await waitForThread(page);
       await openLastFold(page);
+      await settle(page);
+    },
+  },
+  {
+    name: "thread-files",
+    title: "A turn's changed files",
+    caption:
+      "The same thread with its last turn's changed-files card, whose paths are longer than a phone is wide: each row keeps its line counts and cuts its name, and the transcript never scrolls sideways.",
+    path: ({ app }) => new URL(app.threadUrl).pathname,
+    widths: [390, 1440],
+    light: false,
+    brain: {
+      put: async ({ app }) => {
+        await app.inBrain(putChangedFiles(LONG_PATH_FILES));
+      },
+      take: async ({ app }) => {
+        await app.inBrain(takeChangedFiles);
+      },
+    },
+    enter: async (page) => {
+      await waitForThread(page);
+      await page
+        .locator(drawn('[data-testid="changed-files-card"]'))
+        .last()
+        .waitFor({ state: "visible", timeout: 10_000 });
       await settle(page);
     },
   },

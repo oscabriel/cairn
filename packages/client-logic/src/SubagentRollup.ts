@@ -2,10 +2,11 @@
 // (`isChildRunLive`, `subagentRequest`, `pendingSubagentRequestsByThread`, `childThreadInputsTitle`
 // and the descendant walk in `childThreadInputsAtomFamily`) and apps/web/src/components/
 // Sidebar.logic.ts (`isSidebarSubagentThread`, `resolveSidebarRowThreadId`,
-// `filterSidebarV2VisibleThreads`) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: a child's
-// request reaches every ancestor with approval over input, a request counts only while the child's
-// run is live, a broken or looping chain stops the walk, and a subagent's row resolves to its
-// nearest ancestor that is not one. Changed: Cairn's shell rows (`lineage` is an Option, the run is
+// `filterSidebarV2VisibleThreads`) and apps/web/src/components/ChatView.tsx (`childInputBannerItem`)
+// at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: a child's request reaches every ancestor with
+// approval over input, a request counts only while the child's run is live, a broken or looping
+// chain stops the walk, a subagent's row resolves to its nearest ancestor that is not one, and the
+// parent's banner names its asking descendants unless the parent asks the user itself. Changed: Cairn's shell rows (`lineage` is an Option, the run is
 // live while `activeRunId` is set or `activity` is busy), a brief or a criteria proposal counts with
 // no live run because no run holds one (ADR 0030), one environment, plain functions instead of atoms.
 // Not ported: provider-native subagents, forks, the atom caches and their reference stability.
@@ -252,4 +253,46 @@ export const sidebarRowThreadId = (
     onNone: () => threadId,
     onSome: (thread) => thread.id,
   });
+};
+
+/** The banner over a parent's composer while its descendants ask the user. */
+export interface ParentBanner<T> {
+  /** "Subagent needs approval", "2 subagents need input". */
+  readonly title: string;
+  /** Every descendant asking, nearest first; each is named, and opens its thread. */
+  readonly children: ReadonlyArray<T>;
+  /** The first of them, which the banner's action opens. */
+  readonly first: T;
+  /** What the first asks for, which names the action ("Open approval" or "Open question"). */
+  readonly request: SubagentRequest;
+}
+
+/**
+ * The parent banner of `threadId` (t3code's `childInputBannerItem`, ChatView.tsx): its asking
+ * descendants, unless the thread asks the user something itself, whose card then has the
+ * composer's lane. None when no descendant asks.
+ */
+export const parentBannerOf = <T extends RollupRow>(
+  threadId: ThreadId,
+  threads: ReadonlyArray<T>
+): Option.Option<ParentBanner<T>> => {
+  const thread = threads.find((each) => each.id === threadId);
+
+  if (thread === undefined || Option.isSome(thread.pendingRuntimeRequest)) {
+    return Option.none();
+  }
+
+  const children = childrenAsking(threadId, threads);
+  const [first] = children;
+
+  if (first === undefined) {
+    return Option.none();
+  }
+
+  return Option.map(subagentRequestOf(first), (request) => ({
+    title: childInputsTitle(children),
+    children,
+    first,
+    request,
+  }));
 };

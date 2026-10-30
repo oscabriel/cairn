@@ -22,6 +22,7 @@ import { view as requestCardView } from "./card/View.ts";
 import { view as rolesView } from "./meters/RolesView.ts";
 import { view as usageView } from "./meters/UsageView.ts";
 import * as Pages from "./page/Regions.ts";
+import { parentBanner } from "./rollup/ParentBanner.ts";
 import { layout } from "./shell/Layout.ts";
 
 /** The request card's update and root hooks, held by `FrameLoad.ts` once this chunk loads. */
@@ -60,11 +61,13 @@ export interface Regions {
 type H = HtmlBuilder<Message>;
 
 /**
- * The composer's lane under an open thread: the request card (plan 6A), then the composer, which
- * gives the card its slot on the phone while a request shows (`next/card/card.css`). Siblings, so
- * the composer keeps its place in the tree and its Mounts.
+ * The composer's lane under an open thread: the parent banner while a subagent asks the user (plan
+ * 6D), the request card (plan 6A), then the composer, which gives the card its slot on the phone
+ * while a request shows (`next/card/card.css`). Siblings, so the composer keeps its place in the
+ * tree and its Mounts.
  */
 const composerLane = (model: Model, h: H): ReadonlyArray<Html> => [
+  parentBanner(model, h),
   h.submodel({
     slotId: "request-card",
     model: model.requestCard,

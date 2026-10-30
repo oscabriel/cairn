@@ -1,0 +1,24 @@
+{"type":"transcript_start","scenario":"subagent_question_routed_before_user","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in one folder."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"cq","name":"ask_parent","arguments":{"question":"Which folder?"}}]}
+{"type":"model","label":"p3","thread":"parent","toolCalls":[{"id":"cr","name":"subagent_reply","arguments":{"subagent":"$child1","escalate":"the user knows the layout"}}]}
+{"type":"model","label":"p4","thread":"parent","text":"I asked the user."}
+{"type":"model","label":"c2","thread":"child1","text":"lib has 7 files."}
+{"type":"model","label":"p5","thread":"parent","text":"lib has 7 files."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$child1","kind":"user-input","status":"pending","route":"parent"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","threadId":"$child1","kind":"user-input","status":"pending"},"count":2}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","threadId":"$child1","kind":"user-input","status":"pending","route":"parent"},"count":1}
+{"type":"expect_event_count","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"user-input","status":"pending","origin":"$child1"},"count":1}
+{"type":"input","step":"respond","answer":"lib"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"user-input","status":"accepted"}}
+{"type":"expect_event","event":{"_tag":"SubagentUpdated","child":"$child1","status":"settled"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"expect_view","path":["pendingApprovals"],"equals":0}
+{"type":"expect_view","path":["escalations"],"equals":[{"status":"resolved","why":"The parent escalated: the user knows the layout"}]}

@@ -287,8 +287,8 @@ export const TYPED_RESULT_SUMMARY = "The child submitted its typed result.";
 export const NO_RESULT_ERROR =
   "The child ended without submitting the typed result its brief asked for.";
 
-/** The entry kind of a brief's answer in the parent's transcript. */
-export const BRIEF_ANSWER_ENTRY = "cairn.brief-answer";
+/** The entry kind of a brief's answer in the parent's transcript (the protocol's). */
+export { BRIEF_ANSWER_ENTRY } from "@cairn/protocol/Subagents";
 
 /** Request ids, in the protocol's `RequestId` alphabet, so each delivery lands once. */
 export const SubagentRequestIds = {

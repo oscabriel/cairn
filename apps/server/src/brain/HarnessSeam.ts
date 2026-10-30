@@ -26,7 +26,11 @@ import type {
   QuestionAnswer,
   RuntimeMode,
 } from "@cairn/protocol/Policy";
-import { RuntimeRequestKind, ApprovalStatus } from "@cairn/protocol/Policy";
+import {
+  ApprovalRoute,
+  ApprovalStatus,
+  RuntimeRequestKind,
+} from "@cairn/protocol/Policy";
 import { RunFailureClass } from "@cairn/protocol/Shell";
 import { SubagentStatus, SubagentTally } from "@cairn/protocol/Subagents";
 import type { SubagentStopPolicy } from "@cairn/protocol/Subagents";
@@ -192,6 +196,10 @@ export interface PendingApproval {
   readonly kind: RuntimeRequestKind;
   /** Epoch milliseconds. */
   readonly askedAt: number;
+  /** Who answers it: `parent` for a subagent's question still with its parent (ADR 0027). */
+  readonly route: ApprovalRoute;
+  /** In a parent: the child whose escalated question this record mirrors. */
+  readonly origin: Option.Option<ThreadId>;
 }
 
 /** A thread whose run, queue, approval or task needs attention at boot. */
@@ -276,7 +284,11 @@ export const QueueChanged = Schema.TaggedStruct("QueueChanged", {
   length: NonNegativeInt,
 });
 
-/** An approval record was asked for or answered. */
+/**
+ * An approval record was asked for, turned to the user, or answered. `route` is `parent` while a
+ * subagent's question waits for its parent's model, which the user is not asked (ADR 0027); absent,
+ * the user answers it. `origin` names the child whose escalated question a parent's record mirrors.
+ */
 export const RuntimeRequestUpdated = Schema.TaggedStruct(
   "RuntimeRequestUpdated",
   {
@@ -284,6 +296,8 @@ export const RuntimeRequestUpdated = Schema.TaggedStruct(
     id: ApprovalId,
     kind: RuntimeRequestKind,
     status: ApprovalStatus,
+    route: Schema.optional(ApprovalRoute),
+    origin: Schema.optional(ThreadId),
   }
 );
 

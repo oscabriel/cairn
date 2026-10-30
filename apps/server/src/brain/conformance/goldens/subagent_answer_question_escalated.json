@@ -138,6 +138,11 @@
     {
       "thread": "child1",
       "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "thread": "child1",
+      "event": "RuntimeRequestUpdated",
       "status": "accepted"
     },
     {

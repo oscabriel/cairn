@@ -1715,10 +1715,17 @@ const layerNoDeps = Layer.effectContext(
       changes.touched.add(child);
       changes.events.push(
         RuntimeRequestUpdated.make({
+          threadId: child.threadId,
+          id: ApprovalId.make(approvalId),
+          kind: turned.kind,
+          status: turned.status,
+        }),
+        RuntimeRequestUpdated.make({
           threadId: parent.threadId,
           id: ApprovalId.make(mirror.id),
           kind: mirror.kind,
           status: mirror.status,
+          origin: child.threadId,
         })
       );
     };
@@ -1991,19 +1998,17 @@ const layerNoDeps = Layer.effectContext(
       const text = renderBriefAnswer(brief.title, answer);
       const requestId = SubagentRequestIds.briefAnswer(record.id);
 
+      // Nothing started, as the client reads it from the entry, a note's or an input's alike.
+      const data = {
+        briefId: record.id,
+        decision: record.status,
+        started: false,
+      };
+
       if (parent.halted) {
         writeNote(
           parent,
-          {
-            requestId,
-            kind: BRIEF_ANSWER_ENTRY,
-            data: {
-              briefId: record.id,
-              decision: record.status,
-              started: false,
-            },
-            text,
-          },
+          { requestId, kind: BRIEF_ANSWER_ENTRY, data, text },
           at,
           changes
         );
@@ -2011,7 +2016,15 @@ const layerNoDeps = Layer.effectContext(
         return;
       }
 
-      admit(parent, textInput(requestId, text), at, changes);
+      admit(
+        parent,
+        {
+          ...textInput(requestId, text),
+          entry: Option.some({ kind: BRIEF_ANSWER_ENTRY, data }),
+        },
+        at,
+        changes
+      );
     };
 
     /** Starts a brief's child once, in the critical section that accepted it (ADR 0030). */
@@ -2435,6 +2448,7 @@ const layerNoDeps = Layer.effectContext(
           id: ApprovalId.make(approvalId),
           kind: "user-input",
           status: "pending",
+          route: "parent",
         })
       );
       recordsChanged(child, changes);
@@ -3584,6 +3598,7 @@ const layerNoDeps = Layer.effectContext(
                 id: ApprovalId.make(approvalId),
                 kind: "user-input",
                 status: "pending",
+                route: "parent",
               })
             );
             recordsChanged(thread, changes);
@@ -4642,6 +4657,11 @@ const layerNoDeps = Layer.effectContext(
                   id: ApprovalId.make(record.id),
                   kind: record.kind,
                   askedAt: record.askedAt,
+                  route: record.route,
+                  origin: Option.map(
+                    Option.fromNullOr(record.mirrorOf),
+                    (mirror) => ThreadId.make(mirror.threadId)
+                  ),
                 },
               ]
             : []

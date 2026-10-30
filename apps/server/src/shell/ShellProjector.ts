@@ -60,6 +60,7 @@ import type {
   LiveThreadState,
   PendingApproval,
   RunFailureInfo,
+  RuntimeRequestUpdated,
 } from "../brain/HarnessSeam.ts";
 import { EventSink } from "./EventSink.ts";
 import { ProjectorSignals } from "./ProjectorSignals.ts";
@@ -209,6 +210,31 @@ const withApprovals = (
     }
   );
 
+/**
+ * `waitingFor` after a question's update (ADR 0027): `parent` while a subagent's question waits for
+ * its parent's model, and nothing once a question of the thread is answered, ends or turns to the
+ * user. A subagent asks one question at a time (its run waits in the asking tool), so the newest
+ * question's update decides. Other kinds leave it alone, and so does a Claude slot.
+ */
+const withQuestion = (
+  projection: ThreadProjection,
+  update: Pick<typeof RuntimeRequestUpdated.Type, "kind" | "status" | "route">
+): ThreadProjection => {
+  if (update.kind !== "user-input") {
+    return projection;
+  }
+
+  if (update.status === "pending" && update.route === "parent") {
+    return projection.fields.waitingFor === "parent"
+      ? projection
+      : withFields(projection, { waitingFor: "parent" });
+  }
+
+  return projection.fields.waitingFor === "parent"
+    ? withFields(projection, { waitingFor: "none" })
+    : projection;
+};
+
 const preview = (text: string) => text.slice(0, PREVIEW_LIMIT);
 
 const isLater = (
@@ -316,21 +342,25 @@ export const applyHarnessEvent = (
         (approval) => approval.id !== update.id
       );
 
-      if (update.status !== "pending") {
-        return withApprovals(projection, others);
+      // A subagent's question with its parent's model is not the user's yet (ADR 0027).
+      if (update.status !== "pending" || update.route === "parent") {
+        return withQuestion(withApprovals(projection, others), update);
       }
 
-      return projection.approvals.some((approval) => approval.id === update.id)
-        ? projection
-        : withApprovals(projection, [
-            ...projection.approvals,
-            {
-              id: update.id,
-              kind: update.kind,
-              createdAt: now,
-              origin: Option.none(),
-            },
-          ]);
+      return withQuestion(
+        projection.approvals.some((approval) => approval.id === update.id)
+          ? projection
+          : withApprovals(projection, [
+              ...projection.approvals,
+              {
+                id: update.id,
+                kind: update.kind,
+                createdAt: now,
+                origin: Option.fromUndefinedOr(update.origin),
+              },
+            ]),
+        update
+      );
     },
     UsageUpdated: () => projection,
     TaskParked: (parked) =>
@@ -349,10 +379,14 @@ export const applySignal = (
   signal: ProjectorSignal
 ): ThreadProjection =>
   withFields(projection, {
-    waitingFor: Option.getOrElse(
-      signal.patch.waitingFor,
-      () => projection.fields.waitingFor
-    ),
+    // A question with the parent outranks a Claude slot: the run waits in the question's tool.
+    waitingFor:
+      projection.fields.waitingFor === "parent"
+        ? "parent"
+        : Option.getOrElse(
+            signal.patch.waitingFor,
+            () => projection.fields.waitingFor
+          ),
     usageLimitResetAt: Option.getOrElse(
       signal.patch.usageLimitResetAt,
       () => projection.fields.usageLimitResetAt
@@ -384,15 +418,19 @@ export const reconcileProjection = (
     projection.approvals.map((approval) => [approval.id, approval])
   );
 
-  const approvals = pending.map(
-    (found): PendingRuntimeRequest =>
-      known.get(found.id) ?? {
-        id: found.id,
-        kind: found.kind,
-        createdAt: DateTime.makeUnsafe(found.askedAt),
-        origin: Option.none(),
-      }
-  );
+  const approvals = pending
+    .filter((found) => found.route === "user")
+    .map(
+      (found): PendingRuntimeRequest =>
+        known.get(found.id) ?? {
+          id: found.id,
+          kind: found.kind,
+          createdAt: DateTime.makeUnsafe(found.askedAt),
+          origin: found.origin,
+        }
+    );
+
+  const asking = pending.some((found) => found.route === "parent");
 
   const endedUnseen =
     Option.isNone(runId) &&
@@ -411,7 +449,7 @@ export const reconcileProjection = (
           onNone: (): ReadonlyArray<TaskId> => [],
           onSome: (state) => state.parkedTaskIds,
         }),
-        waitingFor: "none",
+        waitingFor: asking ? "parent" : "none",
         latestRunCompletedAt: endedUnseen
           ? Option.some(now)
           : fields.latestRunCompletedAt,

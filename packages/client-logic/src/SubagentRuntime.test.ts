@@ -680,6 +680,18 @@ describe("a child's row", () => {
     assert.deepStrictEqual(row.childThreadId, Option.none());
     assert.deepStrictEqual(row.detail, Option.some(why));
     assert.deepStrictEqual(row.completedAt, Option.some(1500));
+
+    // Told as a follow-up input (the parent was not halted), whose message carries one string.
+    const input = answer("call-1", false, why);
+
+    const told = onlyRow(
+      accepted,
+      [],
+      [{ ...input, model: [{ role: "user", content: why, timestamp: 3000 }] }]
+    );
+
+    assert.strictEqual(told.state, "unstarted");
+    assert.deepStrictEqual(told.detail, Option.some(why));
     assert.isTrue(isTerminalSubagentState(row.state));
     assert.strictEqual(summarizeSubagentStates([row.state]), "1 not started");
     assert.isFalse(subagentGroupSummary([row]).active);

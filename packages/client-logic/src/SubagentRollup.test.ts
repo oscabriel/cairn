@@ -37,6 +37,7 @@ import {
   childInputsTitle,
   childrenAsking,
   isSubagentThread,
+  parentBannerOf,
   pendingSubagentRequests,
   sidebarRowThreadId,
   subagentDescendants,
@@ -271,6 +272,77 @@ describe("subagent request rollup", () => {
     assert.strictEqual(requests.get(loopA.id), "approval");
     assert.strictEqual(requests.get(id("missing")), "input");
     assert.strictEqual(requests.size, 2);
+  });
+});
+
+describe("the parent banner", () => {
+  const root = top("root");
+
+  const sibling = {
+    ...subagentOf("sibling", root.id),
+    pendingRuntimeRequest: request("user-input"),
+  };
+
+  const helper = {
+    ...subagentOf("review-helper", id("review"), root.id),
+    pendingRuntimeRequest: request("tool-call"),
+  };
+
+  const review = subagentOf("review", root.id);
+
+  it("names every asking descendant, nearest first, and opens the first", () => {
+    const banner = parentBannerOf(root.id, [root, review, helper, sibling]);
+
+    assert.deepStrictEqual(
+      Option.map(banner, (found) => ({
+        title: found.title,
+        children: found.children.map((child) => child.title),
+        first: found.first.title,
+        request: found.request,
+      })),
+      Option.some({
+        title: "2 subagents need you",
+        children: ["sibling", "review-helper"],
+        first: "sibling",
+        request: "input" as const,
+      })
+    );
+    assert.deepStrictEqual(
+      Option.map(parentBannerOf(review.id, [root, review, helper]), (found) => [
+        found.title,
+        found.request,
+      ]),
+      Option.some(["Subagent needs approval", "approval"])
+    );
+  });
+
+  it("hides while the parent asks the user itself, and when no child asks", () => {
+    const asking = { ...root, pendingRuntimeRequest: request("user-input") };
+
+    assert.deepStrictEqual(
+      parentBannerOf(root.id, [asking, sibling]),
+      Option.none()
+    );
+    assert.deepStrictEqual(
+      parentBannerOf(root.id, [root, review]),
+      Option.none()
+    );
+    assert.deepStrictEqual(
+      parentBannerOf(id("missing"), [sibling]),
+      Option.none()
+    );
+
+    // A child whose run stopped holds its question no longer.
+    const stopped = {
+      ...sibling,
+      activity: "idle" as const,
+      activeRunId: Option.none(),
+    };
+
+    assert.deepStrictEqual(
+      parentBannerOf(root.id, [root, stopped]),
+      Option.none()
+    );
   });
 });
 

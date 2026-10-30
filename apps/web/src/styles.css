@@ -2488,3 +2488,7 @@ code {
 @source not "./next/diff";
 @source not "./next/settings";
 @source not "./next/push";
+
+/* Cairn: the parent banner (next/rollup) builds its own utilities into the `next` chunk the same way,
+ * through next/rollup/rollup.css. */
+@source not "./next/rollup";

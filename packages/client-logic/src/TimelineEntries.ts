@@ -17,7 +17,9 @@
 //   `find` and `ls` a code search, `codemode` a script whose nested Executor calls name their app,
 //   and the Executor proxies are dynamic tools labelled by their app.
 // - `cairn.user` carries the turn's attachments in `data.attachments`; `cairn.checkpoint` is a
-//   display entry; `cairn.hidden` (a `pi.system` entry the wire hides) is skipped.
+//   display entry; `cairn.hidden` (a `pi.system` entry the wire hides) is skipped. A
+//   `cairn.brief-answer` with `started: false` (a brief that started nothing, told to the parent)
+//   is a user message too; Go's (`started: true`) is left to the subagent row.
 // - A user message shows the user's words: the parts the brain added for attachments (text blocks
 //   and path lines) become chips. An attachment shows once: the wire points an image attachment's
 //   content at its attachment id, so an image whose attachment `data.attachments` lists is left to
@@ -37,6 +39,7 @@ import {
   parseAttachmentText,
 } from "@cairn/protocol/Attachments";
 import type { EntryId } from "@cairn/protocol/Ids";
+import { BRIEF_ANSWER_ENTRY } from "@cairn/protocol/Subagents";
 import type { ConversationView, Entry } from "@cairn/protocol/Thread";
 import {
   NOTICE_ENTRY_KIND,
@@ -257,6 +260,11 @@ const ToolResultMessage = Schema.Struct({
 });
 
 const decodeUser = Schema.decodeUnknownOption(UserMessage);
+
+/** The part of a `cairn.brief-answer` entry's data the transcript reads. */
+const BriefAnswerData = Schema.Struct({ started: Schema.Boolean });
+
+const decodeBriefAnswer = Schema.decodeUnknownOption(BriefAnswerData);
 
 const decodeAssistant = Schema.decodeUnknownOption(AssistantMessage);
 
@@ -680,6 +688,27 @@ const readEntryUncached = (entry: Entry): EntryReading => {
             userEntryId: data.userEntryId,
           }),
       });
+    }
+
+    // A brief that started nothing is told to the parent in the user's turn (an input, or a note
+    // while the parent was halted); Go's own answer is the subagent row's, so it is skipped.
+    case BRIEF_ANSWER_ENTRY: {
+      return Option.match(
+        Option.flatMap(
+          Option.filter(decodeBriefAnswer(entry.data), (data) => !data.started),
+          () => Option.flatMap(firstModel(entry), decodeUser)
+        ),
+        {
+          onNone: () => EntryReading.Skip({ kind: entry.kind }),
+          onSome: (message) =>
+            EntryReading.User({
+              entry,
+              message,
+              reading: readUserContent(message),
+              attachments: [],
+            }),
+        }
+      );
     }
 
     case NOTICE_ENTRY_KIND: {

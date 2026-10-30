@@ -421,6 +421,45 @@ describe("entries the recorder cannot provoke", () => {
     assert.strictEqual(error?.id, "error:msg:turn:1:0");
   });
 
+  /** A brief's answer in the parent's transcript, as the brain writes it. */
+  const briefAnswer = (id: number, started: boolean, text: string) => ({
+    id,
+    conversationId,
+    kind: "cairn.brief-answer",
+    model: [{ role: "user", content: text, timestamp: 1000 + id }],
+    data: { briefId: `brief-${id}`, decision: "declined", started },
+  });
+
+  it("reads a brief that started nothing as the user's turn, and leaves Go's answer out", () => {
+    const timeline = entriesFromPi(
+      view([
+        user(1, "delegate it"),
+        briefAnswer(
+          2,
+          true,
+          'The user approved the brief "Count"; it started.'
+        ),
+        briefAnswer(
+          3,
+          false,
+          'The user declined the brief "Rewrite": not now.'
+        ),
+      ])
+    );
+
+    assert.deepStrictEqual(
+      messages(timeline).map((message) => [message.role, message.text]),
+      [
+        ["user", "delegate it"],
+        ["user", 'The user declined the brief "Rewrite": not now.'],
+      ]
+    );
+    assert.deepStrictEqual(
+      timeline.turns.map((turn) => turn.id),
+      ["turn:1", "turn:3"]
+    );
+  });
+
   it("reads skill blocks as chips and keeps the text after them", () => {
     const timeline = entriesFromPi(
       view([

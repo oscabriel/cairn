@@ -9,7 +9,7 @@
 {"type":"crash"}
 {"type":"expect_view","path":["transcript",5],"equals":{"kind":"pi.assistant","role":"assistant","text":"It expired while I was away.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"settle","ms":300}
-{"type":"expect_view","path":["transcript",4],"equals":{"kind":"pi.user","role":"user","text":"The brief \"Rewrite the parser\" expired without an answer; nothing started.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
+{"type":"expect_view","path":["transcript",4],"equals":{"kind":"cairn.brief-answer","role":"user","text":"The brief \"Rewrite the parser\" expired without an answer; nothing started.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"expect_view","path":["transcriptLength"],"equals":6}
 {"type":"expect_view","path":["decisions"],"equals":[{"status":"expired","decidedBy":"expiry","reason":null}]}
 {"type":"expect_view","path":["pendingApprovals"],"equals":0}

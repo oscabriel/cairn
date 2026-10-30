@@ -121,6 +121,11 @@
     },
     {
       "thread": "child1",
+      "event": "RuntimeRequestUpdated",
+      "status": "pending"
+    },
+    {
+      "thread": "child1",
       "event": "RunTerminal",
       "status": "interrupted",
       "failure": null

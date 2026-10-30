@@ -61,6 +61,7 @@ import type { ProjectId } from "@cairn/protocol/Ids";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import type { Brief, RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_ROLE_TABLE, RoleSpec } from "@cairn/protocol/Roles";
+import type { RoleTable } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
@@ -1055,12 +1056,25 @@ const resolvedJson = (
 });
 
 /**
- * What a brief's role runs a child on in the scripted harness, which has no catalog: a literal
- * `provider/modelId[:level]` as named, a role through the default role table's primary binding.
- * Nothing is passed over, and nothing is priced. A role the table does not bind resolves to
- * nothing, in pi-durable's words for it.
+ * The role table the scripted harness resolves a brief's role through, since it reads no server
+ * settings: the default table, unless a judge gives its own (the brief card judge gives a table
+ * the brain's settings no longer hold, as one changed after a brief was asked).
  */
-const scriptedResolve = (spec: RoleSpec): Result.Result<JsonRecord, string> =>
+export const ScriptedRoleTable = Context.Reference<RoleTable>(
+  "cairn/server/brain/ScriptedRoleTable",
+  { defaultValue: () => DEFAULT_ROLE_TABLE }
+);
+
+/**
+ * What a brief's role runs a child on in the scripted harness, which has no catalog: a literal
+ * `provider/modelId[:level]` as named, a role through `table`'s primary binding. Nothing is passed
+ * over, and nothing is priced. A role the table does not bind resolves to nothing, in pi-durable's
+ * words for it.
+ */
+const scriptedResolve = (
+  table: RoleTable,
+  spec: RoleSpec
+): Result.Result<JsonRecord, string> =>
   Option.match(parseRoleSpec(spec), {
     onNone: () =>
       Result.fail(`"${spec}" is neither a role (@name) nor provider/modelId.`),
@@ -1071,7 +1085,7 @@ const scriptedResolve = (spec: RoleSpec): Result.Result<JsonRecord, string> =>
             resolvedJson(spec, null, model, Option.getOrNull(level), "literal")
           ),
         Role: ({ role, level }) =>
-          Option.match(Option.fromUndefinedOr(DEFAULT_ROLE_TABLE[role]), {
+          Option.match(Option.fromUndefinedOr(table[role]), {
             onNone: () => Result.fail(`No role by the name ${role} is bound.`),
             onSome: (binding) =>
               Result.succeed(
@@ -1319,6 +1333,7 @@ const layerNoDeps = Layer.effectContext(
     const tools = yield* ScriptedTools;
     const faults = yield* SubagentFaults;
     const briefTtlMillis = yield* BriefTtl;
+    const roleTable = yield* ScriptedRoleTable;
     const events = yield* PubSub.unbounded<HarnessEvent>();
     /** Each parent's last published tally, as JSON. */
     const tallies = new Map<ThreadId, string>();
@@ -2015,7 +2030,7 @@ const layerNoDeps = Layer.effectContext(
       const dispatch =
         brief.role === null
           ? Result.succeed(Option.none<JsonRecord>())
-          : Result.map(scriptedResolve(brief.role), Option.some);
+          : Result.map(scriptedResolve(roleTable, brief.role), Option.some);
 
       if (Result.isFailure(dispatch)) {
         tellNothingStarted(
@@ -3303,7 +3318,7 @@ const layerNoDeps = Layer.effectContext(
           }
 
           if (brief.success.role !== null) {
-            const resolved = scriptedResolve(brief.success.role);
+            const resolved = scriptedResolve(roleTable, brief.success.role);
 
             if (Result.isFailure(resolved)) {
               return refused(SubagentToolText.roleRefused(resolved.failure));

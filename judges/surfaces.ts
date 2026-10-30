@@ -3,12 +3,14 @@
 // The phase 2 surface judge (plan wave 6; surfaces note "Judges"): behaviour scripts played in the
 // real web client on the `next` views (`?ui=next`) over a real in-process brain on the scripted
 // harness (judges/fixtures/parity/CairnApp.ts with the asking model of
-// judges/fixtures/surfaces/CardBrain.ts), at 390 px as a phone (touch, coarse pointer, an
-// emulated soft keyboard) and at 1,440 px. Each check prints one line; the run ends with one JSON
-// line. No model provider is called.
+// judges/fixtures/surfaces/CardBrain.ts, and for the brief checks a second brain with the
+// proposing parent of judges/fixtures/surfaces/BriefBrain.ts), at 390 px as a phone (touch,
+// coarse pointer, an emulated soft keyboard) and at 1,440 px. Each check prints one line; the run
+// ends with one JSON line. No model provider is called.
 //
-//   node judges/surfaces.ts [--only card-approval,card-question] [--width 390,1440]
-//                           [--broken slot|double|advance|undo] [--out <dir>]
+//   node judges/surfaces.ts [--only card-approval,card-question,brief-go,brief-go-back,brief-go-unbound]
+//                           [--width 390,1440] [--broken slot|double|advance|undo|nocheck]
+//                           [--out <dir>]
 //
 // Checks (6A, the request card):
 //   card-approval  a `gate` call's approval shows on the card with its tool and the call's detail;
@@ -27,12 +29,31 @@
 //                  3 s window, and the model reads both answers, numbered; a second question
 //                  declined with a reason sends one answer and the model reads the reason.
 //
+// Checks (6B, the brief card and Go; ADR 0026, 0030, 0035):
+//   brief-go          a `subagent_spawn` brief naming `@worker` shows its words (Do, Why, Runs on
+//                     with the model `roles.check` resolved) with Send back, Decline and Go, in the
+//                     composer's slot at 390 (44 px targets) and above the composer at 1,440. The
+//                     brain restarts while the card waits: the page reconnects, the card still
+//                     shows and checks the role again. Then a second device opens it, and Go is
+//                     tapped twice on the first while the second taps Go too: each device sends one
+//                     `thread.respond`, both cards close, and exactly one child starts (one new
+//                     thread in the store, one subagent row for the brief).
+//   brief-go-back     Send back opens a notes field; it sends one `revise` with the notes, starts
+//                     no child, and the parent reads the notes once.
+//   brief-go-unbound  a brief naming `@reviewer`, a role the brain's table does not bind: Go is
+//                     blocked with "no role named @reviewer" and a link to the role table (44 px
+//                     targets at 390); a tap on Go sends nothing; the link opens the settings page
+//                     with the role table; back on the thread, Decline with a reason settles it.
+//
 // Broken controls, each planted in the page by this judge (never in the app), each of which must
 // make the check it names fail:
 //   slot     the composer stays drawn under the card on the phone (card-approval at 390);
-//   double   every `thread.respond` frame is sent twice (card-approval and card-question);
+//   double   every `thread.respond` frame is sent twice (card-approval, card-question, brief-go,
+//            brief-go-back);
 //   advance  the 200 ms pause fires at once (card-question);
-//   undo     the 3 s undo window fires at once (card-question).
+//   undo     the 3 s undo window fires at once (card-question);
+//   nocheck  every `roles.check` frame is dropped, so no role is ever checked (brief-go,
+//            brief-go-unbound).
 // Exits 0 when every check passed; a broken control's run exits 1 when it failed rightly, and the
 // JSON line names the failing checks.
 
@@ -46,9 +67,22 @@ import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
 
 import { startCairn } from "./fixtures/parity/CairnApp.ts";
+import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
+import {
+  BOUND_ROLE,
+  BRIEF_ROLES,
+  briefBrain,
+  UNBOUND_ROLE,
+} from "./fixtures/surfaces/BriefBrain.ts";
 import { cardBrain } from "./fixtures/surfaces/CardBrain.ts";
 
-const BROKEN_CONTROLS = ["slot", "double", "advance", "undo"] as const;
+const BROKEN_CONTROLS = [
+  "slot",
+  "double",
+  "advance",
+  "undo",
+  "nocheck",
+] as const;
 
 type Broken = (typeof BROKEN_CONTROLS)[number] | "";
 
@@ -181,6 +215,14 @@ const PLANT_DOUBLE = `
   };
 `;
 
+// Drops every `roles.check` frame, so the card never hears what a role resolves to.
+const PLANT_NOCHECK = `
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    if (!String(data).includes("roles.check")) send.call(this, data);
+  };
+`;
+
 // Makes a sleep of \`delay\` ms fire at once: the app's sleeps go through \`setTimeout\`.
 const plantTimeout = (delay: number) => `
   const original = globalThis.setTimeout;
@@ -222,6 +264,10 @@ const newDevice = async (
     await context.addInitScript({ content: plantTimeout(ADVANCE_MS) });
   }
 
+  if (broken === "nocheck") {
+    await context.addInitScript({ content: PLANT_NOCHECK });
+  }
+
   if (broken === "undo") {
     await context.addInitScript({ content: plantTimeout(UNDO_MS) });
   }
@@ -232,10 +278,11 @@ const newDevice = async (
 const editor = (page: Page) =>
   page.locator('[data-testid="composer-editor"]').first();
 
-/** A page and the `thread.respond` frames it sent, with the time each left. */
+/** A page and the `thread.respond` and `roles.check` frames it sent, with the time each left. */
 interface Device {
   readonly page: Page;
   readonly responds: Array<number>;
+  readonly checks: Array<number>;
 }
 
 const openThread = async (
@@ -244,11 +291,16 @@ const openThread = async (
 ): Promise<Device> => {
   const page = await context.newPage();
   const responds: Array<number> = [];
+  const checks: Array<number> = [];
 
   page.on("websocket", (socket) => {
     socket.on("framesent", ({ payload }) => {
       if (String(payload).includes("thread.respond")) {
         responds.push(Date.now());
+      }
+
+      if (String(payload).includes("roles.check")) {
+        checks.push(Date.now());
       }
     });
   });
@@ -260,7 +312,7 @@ const openThread = async (
   // Attached, not visible: on the phone a pending request hides the composer.
   await editor(page).waitFor({ state: "attached", timeout: 15_000 });
 
-  return { page, responds };
+  return { page, responds, checks };
 };
 
 const card = (page: Page) => page.locator('[data-testid="request-card"]');
@@ -774,30 +826,425 @@ const cardQuestion = async (browser: Browser, url: string, width: number) => {
   }
 };
 
-const app = await startCairn(
-  { projectTitle: "Card judge", threadTitle: "Request card", entries: [] },
-  { brain: cardBrain }
-);
+// The brief checks (6B).
 
-const browser = await chromium.launch();
+/** Whether the card's `name` control takes a click: drawn, and neither disabled nor busy. */
+const isLive = async (page: Page, name: string): Promise<boolean> =>
+  await page.evaluate((selector) => {
+    const control = document.querySelector(selector);
 
-try {
+    return (
+      control !== null &&
+      control.getAttribute("aria-disabled") !== "true" &&
+      control.getAttribute("aria-busy") !== "true" &&
+      !control.hasAttribute("disabled")
+    );
+  }, `[data-testid="request-card"] [data-action="${name}"]`);
+
+/** Waits until the card's `name` control takes a click; false when it never did. */
+const waitLive = async (
+  page: Page,
+  name: string,
+  timeout: number
+): Promise<boolean> => {
+  const until = Date.now() + timeout;
+
+  while (Date.now() < until) {
+    if (await isLive(page, name)) {
+      return true;
+    }
+
+    await settle(100);
+  }
+
+  return false;
+};
+
+/** The card's body text, its label and value lines run together. */
+const cardLines = async (page: Page): Promise<string> =>
+  (await card(page).locator("dl").textContent()) ?? "";
+
+const parentRead = (page: Page, words: string) =>
+  page.locator('[data-message-role="assistant"]', {
+    hasText: `Parent read: ${words}`,
+  });
+
+/** Sends the parent "brief <role> <tag>" and waits for its brief on the card. */
+const proposeBrief = async (page: Page, role: string, tag: string) => {
+  await send(page, `brief ${role} ${tag}`);
+  await card(page)
+    .filter({ hasText: `Count the files ${tag}` })
+    .waitFor({ state: "visible", timeout: 15_000 });
+  expect(
+    (await card(page).getAttribute("data-request-body")) === "Brief",
+    "the card is not a brief"
+  );
+};
+
+const briefGo = async (
+  browser: Browser,
+  app: CairnApp,
+  url: string,
+  width: number
+) => {
+  const contextA = await newDevice(browser, width);
+  const contextB = await newDevice(browser, width);
+  const tag = `go-${width}`;
+
+  try {
+    const a = await openThread(contextA, url);
+
+    await proposeBrief(a.page, BOUND_ROLE, tag);
+
+    // The brief's words and what its role runs on, checked as it showed.
+    expect(
+      await waitLive(a.page, "go", 10_000),
+      `Go never took a click (the card says ${JSON.stringify(await cardLines(a.page))})`
+    );
+
+    const lines = await cardLines(a.page);
+
+    expect(
+      lines.includes("DoCount the TypeScript files under src") &&
+        lines.includes(`Runs on${BOUND_ROLE}: faux/scripted at medium`),
+      `the card says ${JSON.stringify(lines)}`
+    );
+    expect(
+      (await action(a.page, "send-back").count()) === 1 &&
+        (await action(a.page, "decline").count()) === 1,
+      "the card has no Send back or no Decline"
+    );
+    checkSlot(width, await slotGeometry(a.page));
+
+    // The brain restarts while the card waits.
+    const threadsBefore = app.threadCount();
+    const checksBefore = a.checks.length;
+
+    await app.restartBrain();
+
+    const rechecked = await waitForCount(
+      async () =>
+        await Promise.resolve(Math.min(a.checks.length - checksBefore, 1)),
+      1,
+      20_000
+    );
+
+    expect(
+      rechecked === 1,
+      "the card did not check the role again after the brain restarted"
+    );
+    expect(
+      await waitLive(a.page, "go", 15_000),
+      "Go never took a click again after the restart"
+    );
+    const kept = (await card(a.page).textContent()) ?? "";
+
+    expect(
+      kept.includes(`Count the files ${tag}`),
+      "the card lost the brief across the restart"
+    );
+
+    // A second device, then Go twice on the first while the second taps Go too.
+    const b = await openThread(contextB, url);
+
+    expect(
+      await waitLive(b.page, "go", 15_000),
+      "Go never took a click on the second device"
+    );
+
+    const sentA = a.responds.length;
+    const sentB = b.responds.length;
+
+    await Promise.all([
+      clickNow(a.page, "go").then(async () => {
+        await clickNow(a.page, "go");
+      }),
+      clickNow(b.page, "go"),
+    ]);
+    await card(a.page)
+      .filter({ hasText: `Count the files ${tag}` })
+      .waitFor({ state: "hidden", timeout: 10_000 });
+    await card(b.page)
+      .filter({ hasText: `Count the files ${tag}` })
+      .waitFor({ state: "hidden", timeout: 10_000 });
+
+    const threads = await waitForCount(
+      async () => await Promise.resolve(app.threadCount() - threadsBefore),
+      1,
+      10_000
+    );
+
+    // Long enough for a second start, or a second answer, to show if there were one.
+    await settle(2000);
+
+    expect(
+      a.responds.length - sentA === 1 && b.responds.length - sentB === 1,
+      `the devices sent ${a.responds.length - sentA} and ${b.responds.length - sentB} thread.respond frames`
+    );
+    expect(
+      threads === 1 && app.threadCount() - threadsBefore === 1,
+      `Go started ${app.threadCount() - threadsBefore} children`
+    );
+
+    const row = a.page.locator('[data-testid="subagent-row"]', {
+      hasText: `Count the files ${tag}`,
+    });
+
+    await row.first().waitFor({ state: "attached", timeout: 10_000 });
+    expect(
+      (await row.count()) === 1 &&
+        (await row.first().getAttribute("data-child-thread-id")) !== null,
+      `the transcript shows ${await row.count()} rows for the brief`
+    );
+
+    record(
+      "brief-go",
+      width,
+      true,
+      `words and runs-on shown; restart: card kept, role checked again; Go twice and a second device's Go sent 1 and 1 frames; 1 child started`
+    );
+  } catch (error) {
+    await keepScreens("brief-go", width, [contextA, contextB]);
+    record(
+      "brief-go",
+      width,
+      false,
+      error instanceof CheckFailedError
+        ? error.message
+        : (String(error).split("\n")[0] ?? "failed")
+    );
+  } finally {
+    await contextA.close();
+    await contextB.close();
+  }
+};
+
+const briefBack = async (
+  browser: Browser,
+  app: CairnApp,
+  url: string,
+  width: number
+) => {
+  const context = await newDevice(browser, width);
+  const tag = `back-${width}`;
+
+  try {
+    const device = await openThread(context, url);
+    const { page } = device;
+
+    await proposeBrief(page, BOUND_ROLE, tag);
+
+    const threadsBefore = app.threadCount();
+    const before = device.responds.length;
+    const notes = `only src/next, not the tests (${width})`;
+
+    await action(page, "send-back").click();
+
+    const field = card(page).locator("textarea");
+
+    await field.waitFor({ state: "visible", timeout: 5000 });
+    expect(
+      !(await isLive(page, "confirm-send-back")),
+      "Send back took a click with no notes"
+    );
+    await field.fill(notes);
+    await action(page, "confirm-send-back").click();
+    await card(page)
+      .filter({ hasText: `Count the files ${tag}` })
+      .waitFor({ state: "hidden", timeout: 10_000 });
+
+    const read = parentRead(page, "").filter({ hasText: notes });
+
+    const reached = await read
+      .first()
+      .waitFor({ timeout: 10_000 })
+      .then(
+        () => true,
+        () => false
+      );
+
+    await settle(1500);
+
+    expect(
+      device.responds.length - before === 1,
+      `Send back sent ${device.responds.length - before} thread.respond frames`
+    );
+    expect(
+      reached && (await read.count()) === 1,
+      `the parent read the notes ${await read.count()} times`
+    );
+    expect(
+      app.threadCount() === threadsBefore,
+      `Send back started ${app.threadCount() - threadsBefore} children`
+    );
+
+    record(
+      "brief-go-back",
+      width,
+      true,
+      "notes required; Send back sent 1 frame; the parent read the notes once; no child"
+    );
+  } catch (error) {
+    await keepScreens("brief-go-back", width, [context]);
+    record(
+      "brief-go-back",
+      width,
+      false,
+      error instanceof CheckFailedError
+        ? error.message
+        : (String(error).split("\n")[0] ?? "failed")
+    );
+  } finally {
+    await context.close();
+  }
+};
+
+const briefUnbound = async (
+  browser: Browser,
+  app: CairnApp,
+  url: string,
+  width: number
+) => {
+  const context = await newDevice(browser, width);
+  const tag = `unbound-${width}`;
+
+  try {
+    const device = await openThread(context, url);
+    const { page } = device;
+
+    await proposeBrief(page, UNBOUND_ROLE, tag);
+
+    const blocked = card(page).locator(
+      '[data-testid="request-card-go-blocked"]'
+    );
+
+    await blocked.waitFor({ state: "visible", timeout: 10_000 });
+
+    const reason = (await blocked.textContent()) ?? "";
+
+    expect(
+      reason.includes(`no role named ${UNBOUND_ROLE} is in the role table`),
+      `the card says ${JSON.stringify(reason)}`
+    );
+    expect(!(await isLive(page, "go")), "Go takes a click on an unbound role");
+    checkSlot(width, await slotGeometry(page));
+
+    const threadsBefore = app.threadCount();
+    const before = device.responds.length;
+
+    await clickNow(page, "go");
+    await settle(1000);
+    expect(
+      device.responds.length === before && app.threadCount() === threadsBefore,
+      `a tap on the blocked Go sent ${device.responds.length - before} frames`
+    );
+
+    // The way to the role table, and back.
+    await action(page, "role-table").click();
+    await page.waitForURL((found) => found.pathname === "/settings", {
+      timeout: 10_000,
+    });
+    await page
+      .locator('[data-testid="settings-roles"]')
+      .waitFor({ state: "visible", timeout: 10_000 });
+
+    await page.goBack();
+    await card(page)
+      .filter({ hasText: `Count the files ${tag}` })
+      .waitFor({ state: "visible", timeout: 15_000 });
+
+    // Decline with a reason settles it, so the next check starts from an empty card.
+    await action(page, "decline").click();
+    await card(page).locator("textarea").fill("no reviewer role yet");
+    await action(page, "confirm-decline").click();
+    await card(page)
+      .filter({ hasText: `Count the files ${tag}` })
+      .waitFor({ state: "hidden", timeout: 10_000 });
+
+    record(
+      "brief-go-unbound",
+      width,
+      true,
+      `blocked: ${JSON.stringify(reason)}; a tap on Go sent nothing; the role table opened; Decline settled it`
+    );
+  } catch (error) {
+    await keepScreens("brief-go-unbound", width, [context]);
+    record(
+      "brief-go-unbound",
+      width,
+      false,
+      error instanceof CheckFailedError
+        ? error.message
+        : (String(error).split("\n")[0] ?? "failed")
+    );
+  } finally {
+    await context.close();
+  }
+};
+
+const nextUrl = (app: CairnApp): string => {
   const url = new URL(app.threadUrl);
 
   url.searchParams.set("ui", "next");
 
-  for (const width of widths) {
-    if (wanted("card-approval")) {
-      await cardApproval(browser, url.href, width);
-    }
+  return url.href;
+};
 
-    if (wanted("card-question")) {
-      await cardQuestion(browser, url.href, width);
+const CARD_CHECKS = ["card-approval", "card-question"];
+
+const BRIEF_CHECKS = ["brief-go", "brief-go-back", "brief-go-unbound"];
+
+const browser = await chromium.launch();
+
+try {
+  if (CARD_CHECKS.some(wanted)) {
+    const app = await startCairn(
+      { projectTitle: "Card judge", threadTitle: "Request card", entries: [] },
+      { brain: cardBrain }
+    );
+
+    try {
+      for (const width of widths) {
+        if (wanted("card-approval")) {
+          await cardApproval(browser, nextUrl(app), width);
+        }
+
+        if (wanted("card-question")) {
+          await cardQuestion(browser, nextUrl(app), width);
+        }
+      }
+    } finally {
+      await app.stop();
+    }
+  }
+
+  // Its own brain, since `brief-go` restarts it.
+  if (BRIEF_CHECKS.some(wanted)) {
+    const app = await startCairn(
+      { projectTitle: "Brief judge", threadTitle: "Brief card", entries: [] },
+      { brain: briefBrain, roles: BRIEF_ROLES }
+    );
+
+    try {
+      for (const width of widths) {
+        if (wanted("brief-go")) {
+          await briefGo(browser, app, nextUrl(app), width);
+        }
+
+        if (wanted("brief-go-back")) {
+          await briefBack(browser, app, nextUrl(app), width);
+        }
+
+        if (wanted("brief-go-unbound")) {
+          await briefUnbound(browser, app, nextUrl(app), width);
+        }
+      }
+    } finally {
+      await app.stop();
     }
   }
 } finally {
   await browser.close();
-  await app.stop();
 }
 
 const passing = results.filter((result) => result.pass).length;

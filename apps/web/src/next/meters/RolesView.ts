@@ -350,6 +350,8 @@ export const view = Submodel.defineView<Model, Message, RolesViewInputs>(
     h.section(
       [
         h.DataAttribute("testid", "settings-roles"),
+        // The brief card's "Open the role table" links here (`/settings#roles`, plan 6B).
+        h.Id("roles"),
         h.AriaLabel("Roles"),
         h.Class(
           "mx-auto flex w-full min-w-0 max-w-2xl flex-col gap-(--space-3) rounded-(--radius-medium) border border-stroke-1 bg-surface-raised p-(--space-4) text-ink-1"

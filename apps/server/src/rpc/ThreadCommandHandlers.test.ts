@@ -1,12 +1,13 @@
-// The phase 2 inputs this brain cannot act on yet are refused with `InvalidInput` naming the field,
-// and reach no service. Each package that builds one lifts its guard and turns its test here around:
-// 4A `revise`. 1A lifted `reason` and `answers`; 5A lifted `accept_sample` and `launch` (the record
-// refuses them on anything but a workflow's launch); permission modes lifted `runtimeMode` (all but `auto`, which is not offered) and `accept_for_thread`; 4C
-// lifted `thread.stop`'s `subagents: "stop"` (Stop all).
+// The phase 2 inputs this brain could not act on were refused with `InvalidInput` naming the field
+// and reached no service; each package that built one lifted its guard and turned its test here
+// around. 1A lifted `reason` and `answers`; 5A lifted `accept_sample` and `launch` (the record
+// refuses them on anything but a workflow's launch); permission modes lifted `runtimeMode` (all but
+// `auto`, which is not offered) and `accept_for_thread`; 4C lifted `thread.stop`'s
+// `subagents: "stop"` (Stop all); 6B lifted `revise` (Send back: the record refuses it on anything
+// but a subagent's brief, and without notes).
 
 import { InvalidInput } from "@cairn/protocol/Errors";
 import { ApprovalId } from "@cairn/protocol/Ids";
-import type { ApprovalDecision } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import type { RespondInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
@@ -145,19 +146,12 @@ describe("thread commands not handled yet", () => {
   );
 
   it.effect(
-    "refuses each respond field it cannot record, and passes accept, Run on 1 first, launch edits, Allow for this thread or decline with a reason or answers",
+    "passes accept, Run on 1 first, launch edits, Allow for this thread, Send back with notes, or decline with a reason or answers",
     () =>
       Effect.gen(function* () {
         reached.length = 0;
 
         const handlers = yield* threadCommandHandlers;
-
-        const decisions: ReadonlyArray<ApprovalDecision> = ["revise"];
-
-        const refused = yield* Effect.forEach(
-          decisions.map((decision) => respond({ decision })),
-          (input) => outcome(handlers.respond(input, requestId))
-        );
 
         const taken = yield* Effect.forEach(
           [
@@ -177,16 +171,17 @@ describe("thread commands not handled yet", () => {
                 { index: 0, picks: ["Yes"], custom: null },
               ]),
             }),
+            respond({ decision: "revise", reason: Option.some("narrower") }),
           ],
           (input) => outcome(handlers.respond(input, requestId))
         );
 
         assert.deepStrictEqual(
-          [refused, taken, reached],
+          [taken, reached],
           [
-            ["decision"],
-            ["ok", "ok", "ok", "ok", "ok", "ok", "ok"],
+            ["ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok"],
             [
+              "respond",
               "respond",
               "respond",
               "respond",

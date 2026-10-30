@@ -12,6 +12,12 @@
 //   them.
 // - Approve, Allow for this thread and Go answer at once; Decline (on every body, a question's
 //   too) opens a reason field first, and the reason (when there is one) reaches the model.
+// - A brief or a workflow's launch (6B, `BriefGo.ts`): the roles it names are checked with
+//   `roles.check` when it shows, again when the connection comes back (a brain restart) and on
+//   Check again. Go and Run on 1 first are held while the check is out and blocked while a role
+//   does not resolve; a check that could not be made holds nothing, since the brain resolves again
+//   at Go. Send back (a subagent's brief only) opens a notes field and needs notes; Run on 1 first
+//   (a launch of more than one node only) answers `accept_sample`.
 // - One answer in flight at a time. An answer the brain took is hidden at once and stays hidden
 //   until the stream shows it settled, so a slow stream never shows it twice.
 // - A request that leaves the card without this device answering it (another device, the parent,
@@ -20,6 +26,12 @@
 //   `carryDisplacedCustomAnswerIntoPrompt`; that needs a composer capability the composer's owner
 //   adds.)
 
+import {
+  goBlockOf,
+  roleQuestionOf,
+  takesRunOnOne,
+  takesSendBack,
+} from "@cairn/client-logic/BriefGo";
 import {
   answersProblem,
   approvalRecordsOf,
@@ -41,7 +53,17 @@ import type { DraftAnswers } from "@cairn/client-logic/PendingUserInput";
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
 import type { ApprovalRecord, Question } from "@cairn/protocol/Policy";
 import { ApprovalDecision } from "@cairn/protocol/Policy";
-import { Duration, Effect, Equal, Option, Predicate, Schema } from "effect";
+import { RoleOverrides } from "@cairn/protocol/Roles";
+import {
+  Array,
+  Cause,
+  Duration,
+  Effect,
+  Equal,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
 import { Command } from "foldkit";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
@@ -50,7 +72,8 @@ import { CairnConnection } from "../../connection/Connection.ts";
 import type { CairnConnectionService } from "../../connection/Connection.ts";
 import { failureMessage } from "../../connection/Failure.ts";
 import { Message } from "./Message.ts";
-import { CardAnswer, initial } from "./Model.ts";
+import type { Decision } from "./Message.ts";
+import { CardAnswer, initial, RoleCheckState } from "./Model.ts";
 import type { CardContext, Model } from "./Model.ts";
 
 /** The pause after a single pick before the card moves to the next question (t3code's). */
@@ -140,11 +163,33 @@ export const isAnswerable = (model: Model, approvalId: ApprovalId): boolean =>
   Option.isNone(model.sending) &&
   !Option.exists(model.undo, (undo) => undo.approvalId === approvalId);
 
-/** The words the user typed on a request: its own-words answers and its Decline reason. */
+/**
+ * Whether Go (and Run on 1 first) waits on a request's roles: not checked yet, being checked, or
+ * checked with one that does not resolve. A request that names no role never waits; a check that
+ * could not be made does not hold Go, since the brain resolves the role again at Go.
+ */
+export const goHeld = (model: Model, request: PendingRequest): boolean => {
+  if (Option.isNone(roleQuestionOf(request.body))) {
+    return false;
+  }
+
+  const state: RoleCheckState | undefined = model.roleChecks[request.record.id];
+
+  return state === undefined
+    ? true
+    : RoleCheckState.match(state, {
+        Checking: () => true,
+        Checked: ({ checks }) => Option.isSome(goBlockOf(checks)),
+        Unchecked: () => false,
+      });
+};
+
+/** The words the user typed on a request: its own-words answers, its Decline reason and its notes. */
 const typedWords = (model: Model, approvalId: ApprovalId): string =>
   [
     ...Object.values(draftsOf(model, approvalId)).map((draft) => draft.custom),
     model.reasons[approvalId] ?? "",
+    model.notes[approvalId] ?? "",
   ]
     .flatMap((words) => {
       const trimmed = words.trim();
@@ -152,6 +197,19 @@ const typedWords = (model: Model, approvalId: ApprovalId): string =>
       return trimmed.length === 0 ? [] : [trimmed];
     })
     .join("\n\n");
+
+/**
+ * Answers `message` when the call was cut off: a connection dropped while a call was out releases
+ * its client, which interrupts the call, and an interrupted Command would end the page (seen when
+ * the brain restarts while a call is out, 6B's `brief-go`). Only interruption is caught; a defect
+ * still surfaces.
+ */
+const whenCutOff =
+  <B>(message: B) =>
+  <A, R>(call: Effect.Effect<A, never, R>): Effect.Effect<A | B, never, R> =>
+    Effect.catchCauseIf(call, Cause.hasInterruptsOnly, () =>
+      Effect.succeed(message)
+    );
 
 /** Asks the brain to settle one request. */
 export const RespondToRequest = Command.define("RespondToRequest", {
@@ -188,6 +246,65 @@ export const RespondToRequest = Command.define("RespondToRequest", {
             message: "Cairn is reconnecting. Answer again once it is back.",
           })
         )
+      ),
+      whenCutOff(
+        Message.FailedRespond({
+          approvalId: input.approvalId,
+          message:
+            "The connection dropped before Cairn answered. Answer again once it is back.",
+        })
+      )
+    ),
+});
+
+/** Asks the brain what a brief's or a launch's roles resolve to now. */
+export const CheckRoles = Command.define("CheckRoles", {
+  args: {
+    approvalId: ApprovalId,
+    generation: Schema.Int,
+    specs: Schema.Array(Schema.String),
+    overrides: Schema.Option(RoleOverrides),
+  },
+  messages: [Message.ReceivedRoleChecks, Message.FailedRoleChecks],
+  execute: ({ approvalId, generation, specs, overrides }) =>
+    CairnConnection.get.pipe(
+      Effect.flatMap((client) =>
+        client["roles.check"](
+          Option.match(overrides, {
+            onNone: () => ({ specs }),
+            onSome: (given) => ({ specs, overrides: given }),
+          })
+        ).pipe(
+          Effect.match({
+            onSuccess: (checks) =>
+              Message.ReceivedRoleChecks({ approvalId, generation, checks }),
+            onFailure: (failure) =>
+              Message.FailedRoleChecks({
+                approvalId,
+                generation,
+                message: failureMessage(
+                  failure,
+                  "The roles could not be checked."
+                ),
+              }),
+          })
+        )
+      ),
+      Effect.catchTag("ResourceNotAvailable", () =>
+        Effect.succeed(
+          Message.FailedRoleChecks({
+            approvalId,
+            generation,
+            message: "Cairn is reconnecting.",
+          })
+        )
+      ),
+      whenCutOff(
+        Message.FailedRoleChecks({
+          approvalId,
+          generation,
+          message: "The connection dropped before Cairn answered.",
+        })
       )
     ),
 });
@@ -397,6 +514,135 @@ const pick = (
   );
 };
 
+/** Asks `roles.check` about one request's roles, superseding any check still out for it. */
+const askRoles = (model: Model, request: PendingRequest): UpdateReturn =>
+  Option.match(roleQuestionOf(request.body), {
+    onNone: () => ({ model }),
+    onSome: (question) => {
+      const generation = model.checkGeneration + 1;
+      const approvalId = request.record.id;
+
+      return {
+        model: modifyFields(model, {
+          checkGeneration: () => generation,
+          roleChecks: (checks) => ({
+            ...checks,
+            [approvalId]: RoleCheckState.Checking({ generation }),
+          }),
+        }),
+        commands: [
+          CheckRoles({
+            approvalId,
+            generation,
+            specs: question.specs,
+            overrides: question.overrides,
+          }),
+        ],
+      };
+    },
+  });
+
+/**
+ * Asks about the shown request's roles when nothing was asked for it yet, or `again` (the
+ * connection came back): only while there is a client, so a check asked offline is asked on
+ * reconnecting instead.
+ */
+const checkShown = (result: UpdateReturn, again: boolean): UpdateReturn => {
+  const { model } = result;
+
+  return Option.match(
+    Option.filter(
+      shownRequest(model),
+      (request) =>
+        model.hasClient &&
+        (again || model.roleChecks[request.record.id] === undefined)
+    ),
+    {
+      onNone: () => result,
+      onSome: (request) => {
+        const asked = askRoles(model, request);
+
+        return {
+          model: asked.model,
+          commands: Array.appendAll(
+            result.commands ?? [],
+            asked.commands ?? []
+          ),
+        };
+      },
+    }
+  );
+};
+
+/** Takes `roles.check`'s answer (or why there is none) for the check still out, if it is that one. */
+const settleCheck = (
+  model: Model,
+  approvalId: ApprovalId,
+  generation: number,
+  settled: RoleCheckState
+): UpdateReturn => {
+  const state = model.roleChecks[approvalId];
+
+  const isOut =
+    state !== undefined &&
+    RoleCheckState.guards.Checking(state) &&
+    state.generation === generation;
+
+  return isOut
+    ? {
+        model: modifyFields(model, {
+          roleChecks: (checks) => ({ ...checks, [approvalId]: settled }),
+        }),
+      }
+    : { model };
+};
+
+/** Go, Run on 1 first, Approve or Allow for this thread, when the shown request takes it now. */
+const accept = (
+  model: Model,
+  approvalId: ApprovalId,
+  decision: Decision
+): UpdateReturn =>
+  Option.match(requestById(model, approvalId), {
+    onNone: () => ({ model }),
+    onSome: (request) => {
+      if (
+        (request.record.kind === "brief" && goHeld(model, request)) ||
+        (decision === "accept_sample" && !takesRunOnOne(request.body))
+      ) {
+        return { model };
+      }
+
+      return respond(model, {
+        approvalId,
+        decision,
+        reason: Option.none(),
+        answers: Option.none(),
+      });
+    },
+  });
+
+/** Sends a brief back with the notes typed; refuses without notes, as the brain does. */
+const sendBack = (model: Model, approvalId: ApprovalId): UpdateReturn => {
+  const notes = (model.notes[approvalId] ?? "").trim();
+
+  if (notes === "") {
+    return {
+      model: modifyFields(model, {
+        failure: () =>
+          Option.some("Say what should change before sending it back."),
+      }),
+    };
+  }
+
+  return respond(model, {
+    approvalId,
+    decision: "revise",
+    reason: Option.some(notes),
+    answers: Option.none(),
+  });
+};
+
 /** The card's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
@@ -467,20 +713,60 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         }
       ),
     ClickedAccept: ({ approvalId, decision }) =>
-      respond(model, {
-        approvalId,
-        decision,
-        reason: Option.none(),
-        answers: Option.none(),
-      }),
+      accept(model, approvalId, decision),
     ClickedDecline: ({ approvalId }) =>
       isAnswerable(model, approvalId)
         ? {
             model: modifyFields(model, {
               declining: () => Option.some(approvalId),
+              sendingBack: () => Option.none(),
             }),
           }
         : { model },
+    ClickedSendBack: ({ approvalId }) =>
+      isAnswerable(model, approvalId) &&
+      Option.exists(requestById(model, approvalId), (request) =>
+        takesSendBack(request.record, request.body)
+      )
+        ? {
+            model: modifyFields(model, {
+              sendingBack: () => Option.some(approvalId),
+              declining: () => Option.none(),
+            }),
+          }
+        : { model },
+    ChangedNotes: ({ approvalId, value }) => ({
+      model: modifyFields(model, {
+        notes: (notes) => ({ ...notes, [approvalId]: value }),
+        failure: () => Option.none(),
+      }),
+    }),
+    ClickedCancelSendBack: () => ({
+      model: modifyFields(model, {
+        sendingBack: () => Option.none(),
+        failure: () => Option.none(),
+      }),
+    }),
+    ClickedConfirmSendBack: ({ approvalId }) => sendBack(model, approvalId),
+    ClickedCheckRoles: ({ approvalId }) =>
+      Option.match(requestById(model, approvalId), {
+        onNone: () => ({ model }),
+        onSome: (request) => askRoles(model, request),
+      }),
+    ReceivedRoleChecks: ({ approvalId, generation, checks }) =>
+      settleCheck(
+        model,
+        approvalId,
+        generation,
+        RoleCheckState.Checked({ checks })
+      ),
+    FailedRoleChecks: ({ approvalId, generation, message: text }) =>
+      settleCheck(
+        model,
+        approvalId,
+        generation,
+        RoleCheckState.Unchecked({ message: text })
+      ),
     ChangedReason: ({ approvalId, value }) => ({
       model: modifyFields(model, {
         reasons: (reasons) => ({ ...reasons, [approvalId]: value }),
@@ -504,27 +790,33 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         (record) => record.id === approvalId && record.status === "pending"
       );
 
-      return {
-        model: modifyFields(model, {
-          sending: () => Option.none(),
-          declining: (declining) =>
-            Option.filter(declining, (id) => id !== approvalId),
-          answered: (answered) =>
-            stillPending && !answered.includes(approvalId)
-              ? [...answered, approvalId]
-              : answered,
-          shown: () =>
-            Option.map(
-              shownRequest({
-                approvals: model.approvals,
-                answered: stillPending
-                  ? [...model.answered, approvalId]
-                  : model.answered,
-              }),
-              (request) => request.record.id
-            ),
-        }),
-      };
+      // The next request shows now, so its roles are asked about now.
+      return checkShown(
+        {
+          model: modifyFields(model, {
+            sending: () => Option.none(),
+            declining: (declining) =>
+              Option.filter(declining, (id) => id !== approvalId),
+            sendingBack: (sendingBack) =>
+              Option.filter(sendingBack, (id) => id !== approvalId),
+            answered: (answered) =>
+              stillPending && !answered.includes(approvalId)
+                ? [...answered, approvalId]
+                : answered,
+            shown: () =>
+              Option.map(
+                shownRequest({
+                  approvals: model.approvals,
+                  answered: stillPending
+                    ? [...model.answered, approvalId]
+                    : model.answered,
+                }),
+                (request) => request.record.id
+              ),
+          }),
+        },
+        false
+      );
     },
     FailedRespond: ({ message: text }) => ({
       model: modifyFields(model, {
@@ -546,13 +838,21 @@ export const sameContext = (model: Model, context: CardContext): boolean =>
   sameThreadId(model.threadId, context.threadId);
 
 /**
- * Takes the open thread's records. Another thread starts the card over. Drafts, reasons and
- * question places of requests no longer pending are dropped; a request that left the card without
- * this device answering it closes with its settled line and the words typed on it.
+ * Takes the open thread's records. Another thread starts the card over. Drafts, reasons, notes,
+ * role checks and question places of requests no longer pending are dropped; a request that left
+ * the card without this device answering it closes with its settled line and the words typed on
+ * it. The shown request's roles are asked about when it first shows and again when the connection
+ * comes back, since the table or a model's readiness may have changed meanwhile (a brain restart).
  */
 export const inform = (model: Model, context: CardContext): UpdateReturn => {
   const sameThread = sameThreadId(model.threadId, context.threadId);
-  const base = sameThread ? model : initial;
+
+  // The check generation carries over, so an answer to another thread's check is never taken.
+  const base = sameThread
+    ? model
+    : { ...initial, checkGeneration: model.checkGeneration };
+
+  const reconnected = sameThread && !model.hasClient && context.hasClient;
 
   const records = recordsOf(context.approvals);
 
@@ -606,7 +906,10 @@ export const inform = (model: Model, context: CardContext): UpdateReturn => {
         ...pendingIds,
         ...Option.toArray(base.sending),
       ]),
+    notes: (notes) => pruneResolvedDrafts(notes, pendingIds),
+    roleChecks: (checks) => pruneResolvedDrafts(checks, pendingIds),
     declining: (declining) => Option.filter(declining, isPending),
+    sendingBack: (sendingBack) => Option.filter(sendingBack, isPending),
     undo: (undo) => Option.filter(undo, (found) => isPending(found.approvalId)),
     answered: () => answered,
     shown: () =>
@@ -617,7 +920,7 @@ export const inform = (model: Model, context: CardContext): UpdateReturn => {
     closed: () => closed,
   });
 
-  return { model: next };
+  return checkShown({ model: next }, reconnected);
 };
 
 /** The card's update and its root hooks, as the `next` chunk hands them to the root. */

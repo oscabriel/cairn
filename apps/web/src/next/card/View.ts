@@ -10,8 +10,10 @@
 //   digits work while focus is in the options and not in a text field), "Something else" when
 //   the question takes the user's own words, then Back, Decline, and Next or Send. Send opens the
 //   undo bar.
-// - Brief (a subagent's brief or a workflow's launch): its fields in reading order, then Decline
-//   and Go. Send back, the role check and Run on 1 first are 6B's and 6F's.
+// - Brief (a subagent's brief or a workflow's launch; 6B): its fields in reading order and what its
+//   roles run on now, then Send back (a subagent's brief), Run on 1 first (a launch of more than
+//   one node), Decline and Go. While a role does not resolve, Go is blocked with a plain reason, a
+//   link to the role table in settings and Check again; Send back opens a notes field first.
 // - Criteria: the criteria and their judges, then Decline and Approve.
 //
 // Decline opens a reason field first. A request answered elsewhere while it showed leaves a closed
@@ -19,6 +21,13 @@
 // card and its parts, `data-action` on every control.
 
 import "./card.css";
+import {
+  goBlockOf,
+  roleQuestionOf,
+  runsOnLine,
+  takesRunOnOne,
+  takesSendBack,
+} from "@cairn/client-logic/BriefGo";
 import {
   approvalDetail,
   briefLines,
@@ -28,6 +37,7 @@ import {
   requestTitle,
   workflowLines,
 } from "@cairn/client-logic/PendingCard";
+import type { CardLine } from "@cairn/client-logic/PendingCard";
 import type { PendingRequest } from "@cairn/client-logic/PendingRequests";
 import { RequestBody } from "@cairn/client-logic/PendingRequests";
 import { deriveProgress } from "@cairn/client-logic/PendingUserInput";
@@ -38,9 +48,10 @@ import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { settingsRouter } from "../../Route.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import { banner } from "../ui/Banner.ts";
-import { button, buttonDefaults } from "../ui/Button.ts";
+import { button, buttonClass, buttonDefaults } from "../ui/Button.ts";
 import type { ButtonConfig } from "../ui/Button.ts";
 import { card, recordLines } from "../ui/Card.ts";
 import { chip } from "../ui/Chip.ts";
@@ -57,9 +68,11 @@ import { statusGlyph } from "../ui/Glyph.ts";
 import { kbd } from "../ui/Kbd.ts";
 import { statusChip } from "../ui/StatusChip.ts";
 import { Message } from "./Message.ts";
+import { RoleCheckState } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
   draftsOf,
+  goHeld,
   isAnswerable,
   questionIndexOf,
   shownRequest,
@@ -546,6 +559,166 @@ const questionBody = (
   });
 };
 
+/** The "Runs on" line of a brief or a launch: what its roles resolve to now, as far as known. */
+const runsOn = (
+  model: Model,
+  request: PendingRequest
+): ReadonlyArray<CardLine> => {
+  if (Option.isNone(roleQuestionOf(request.body))) {
+    return [];
+  }
+
+  const state: RoleCheckState | undefined = model.roleChecks[request.record.id];
+
+  if (state === undefined) {
+    return [["Runs on", "Checked once Cairn is connected"]];
+  }
+
+  return RoleCheckState.match(state, {
+    Checking: (): ReadonlyArray<CardLine> => [
+      ["Runs on", "Checking the role table…"],
+    ],
+    Checked: ({ checks }): ReadonlyArray<CardLine> => [
+      ["Runs on", runsOnLine(checks)],
+    ],
+    Unchecked: ({ message }): ReadonlyArray<CardLine> => [
+      ["Runs on", `Not checked: ${message} Go checks it again.`],
+    ],
+  });
+};
+
+/** Why Go is blocked, with the way to the role table and Check again; empty when it is not. */
+const goBlockBar = (model: Model, h: H, request: PendingRequest): Html => {
+  const state: RoleCheckState | undefined = model.roleChecks[request.record.id];
+
+  const block =
+    state !== undefined && RoleCheckState.guards.Checked(state)
+      ? goBlockOf(state.checks)
+      : Option.none();
+
+  return Option.match(block, {
+    onNone: () => h.empty,
+    onSome: (found) =>
+      banner(
+        h,
+        {
+          tone: "failed",
+          mark: Option.none(),
+          title: found.title,
+          detail: Option.some(found.detail),
+          actions: [
+            h.a(
+              [
+                h.DataAttribute("action", "role-table"),
+                h.Href(`${settingsRouter()}#roles`),
+                h.Class(buttonClass("secondary", "small")),
+              ],
+              ["Open the role table"]
+            ),
+            actionButton(
+              h,
+              "check-roles",
+              {
+                variant: "ghost",
+                size: "small",
+                onClick: Option.some(
+                  Message.ClickedCheckRoles({ approvalId: request.record.id })
+                ),
+              },
+              "Check again"
+            ),
+          ],
+        },
+        [
+          h.DataAttribute("testid", "request-card-go-blocked"),
+          h.DataAttribute("spec", found.spec),
+        ]
+      ),
+  });
+};
+
+/** A brief's Send back: its notes field (required) and its two buttons. */
+const sendBackControls = (
+  model: Model,
+  h: H,
+  approvalId: ApprovalId
+): CardParts => {
+  const busy = Option.contains(model.sending, approvalId);
+  const notes = model.notes[approvalId] ?? "";
+
+  return {
+    body: [
+      textareaField(
+        h,
+        {
+          ...fieldDefaults<Message>(
+            `request-card-notes-${approvalId}`,
+            "What should change?"
+          ),
+          hint: Option.some(
+            "The parent reads your notes and writes a new brief."
+          ),
+        },
+        {
+          value: notes,
+          placeholder: Option.none(),
+          onInput: Option.some((value: string) =>
+            Message.ChangedNotes({ approvalId, value })
+          ),
+        },
+        3
+      ),
+    ],
+    actions: [
+      actionButton(
+        h,
+        "cancel-send-back",
+        {
+          variant: "ghost",
+          onClick: Option.some(Message.ClickedCancelSendBack()),
+          isDisabled: busy,
+        },
+        "Cancel"
+      ),
+      actionButton(
+        h,
+        "confirm-send-back",
+        {
+          variant: "primary",
+          onClick: Option.some(Message.ClickedConfirmSendBack({ approvalId })),
+          isBusy: busy,
+          isDisabled: notes.trim() === "" || Option.isSome(model.sending),
+        },
+        "Send back"
+      ),
+    ],
+  };
+};
+
+/** Go, or Run on 1 first: held while the roles are checked, blocked while one does not resolve. */
+const goButton = (
+  model: Model,
+  h: H,
+  request: PendingRequest,
+  decision: "accept" | "accept_sample"
+): Html => {
+  const approvalId = request.record.id;
+
+  return actionButton(
+    h,
+    decision === "accept" ? "go" : "run-on-one",
+    {
+      variant: decision === "accept" ? "primary" : "secondary",
+      onClick: Option.some(Message.ClickedAccept({ approvalId, decision })),
+      isBusy:
+        Option.contains(model.sending, approvalId) &&
+        model.sent[approvalId] === decision,
+      isDisabled: Option.isSome(model.sending) || goHeld(model, request),
+    },
+    decision === "accept" ? "Go" : "Run on 1 first"
+  );
+};
+
 const briefBody = (
   model: Model,
   h: H,
@@ -554,24 +727,58 @@ const briefBody = (
 ) => {
   const approvalId = request.record.id;
 
+  const fields =
+    body.payload.type === "workflow"
+      ? workflowLines(body.payload)
+      : briefLines(body.payload);
+
+  const lines = [...fields, ...runsOn(model, request)];
+
+  if (Option.contains(model.sendingBack, approvalId)) {
+    const sendBack = sendBackControls(model, h, approvalId);
+
+    return {
+      body: [recordLines(h, lines), ...sendBack.body],
+      actions: sendBack.actions,
+    };
+  }
+
   const decline = declineControls(
     model,
     h,
     approvalId,
-    acceptButton(model, h, approvalId, "go", "Go")
+    goButton(model, h, request, "accept")
   );
+
+  const isDeclining = Option.contains(model.declining, approvalId);
+
+  const extra = isDeclining
+    ? []
+    : [
+        takesSendBack(request.record, request.body)
+          ? actionButton(
+              h,
+              "send-back",
+              {
+                variant: "ghost",
+                onClick: Option.some(Message.ClickedSendBack({ approvalId })),
+                isDisabled: !isAnswerable(model, approvalId),
+              },
+              "Send back"
+            )
+          : h.empty,
+        takesRunOnOne(request.body)
+          ? goButton(model, h, request, "accept_sample")
+          : h.empty,
+      ];
 
   return {
     body: [
-      recordLines(
-        h,
-        body.payload.type === "workflow"
-          ? workflowLines(body.payload)
-          : briefLines(body.payload)
-      ),
+      recordLines(h, lines),
+      isDeclining ? h.empty : goBlockBar(model, h, request),
       ...decline.body,
     ],
-    actions: decline.actions,
+    actions: [...extra, ...decline.actions],
   };
 };
 

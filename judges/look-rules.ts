@@ -1,6 +1,6 @@
 // The look rules judge (plan look track L3, surfaces note "Structure rules without a baseline",
-// ADR 0040): the look catalogue at `/__look`, every look candidate in dark and light, at 390 px as a
-// phone (touch, coarse pointer) and at 1,440 px, held to the rules a pixel baseline would have
+// ADR 0040): the look catalogue at `/__look`, in the one look (Stone revised, L2b) in dark and
+// light, at 390 px as a phone (touch, coarse pointer) and at 1,440 px, held to the rules a pixel baseline would have
 // implied for new screens. In Chromium, with reduced motion so no transition is caught halfway.
 //
 //   node judges/look-rules.ts [--headed] [--screenshots <dir>]
@@ -29,7 +29,7 @@
 // A rule that checked nothing on a page fails that page, so a selector that stops matching cannot
 // pass by looking at nothing.
 //
-// Then the controls: one page at 390 px in graphite dark with one violation planted in a real
+// Then the controls: one page at 390 px in dark with one violation planted in a real
 // primitive (an icon button shrunk to 24 px, a chip whose label spills out of it, a card title cut
 // without an ellipsis, a button with its outline removed, a block 600 px wide, a destructive menu
 // item drawn in ink-1 as the old wiring drew it, a disclosure header that grows when it opens, the
@@ -60,8 +60,6 @@ const { values } = parseArgs({
 const LOOPBACK = "127.0.0.1";
 
 const root = path.resolve(import.meta.dirname, "..");
-
-const LOOKS = ["graphite", "ink", "stone"] as const;
 
 const THEMES = ["dark", "light"] as const;
 
@@ -906,7 +904,6 @@ const PLANT_IN: Readonly<Record<Plant, () => boolean>> = {
 // Running
 
 interface PageResult {
-  readonly look: string;
   readonly theme: string;
   readonly width: Width;
   readonly coarse: boolean;
@@ -917,7 +914,6 @@ interface PageResult {
 const openPage = async (
   browser: Browser,
   port: number,
-  look: string,
   theme: string,
   width: Width
 ) => {
@@ -940,11 +936,9 @@ const openPage = async (
   const errors: Array<string> = [];
 
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(
-    `http://${LOOPBACK}:${String(port)}/__look?look=${look}&theme=${theme}`
-  );
+  await page.goto(`http://${LOOPBACK}:${String(port)}/__look?theme=${theme}`);
   await page.waitForSelector(
-    `[data-look-catalogue] [data-ui="next"][data-look="${look}"][data-theme="${theme}"]`
+    `[data-look-catalogue] [data-ui="next"][data-theme="${theme}"]`
   );
   // Two frames, so the first layout and paint are done before any rule reads them.
   await page.evaluate(
@@ -956,7 +950,6 @@ const openPage = async (
 
 const judgePage = async (
   page: Page,
-  look: string,
   theme: string,
   width: Width
 ): Promise<PageResult> => {
@@ -985,7 +978,6 @@ const judgePage = async (
     width === 390 ? await sheetRule(page) : { checked: 0, violations: [] };
 
   return {
-    look,
     theme,
     width,
     coarse,
@@ -1047,38 +1039,36 @@ const main = async () => {
   }
 
   try {
-    for (const look of LOOKS) {
-      for (const theme of THEMES) {
-        for (const width of WIDTHS) {
-          const opened = await openPage(browser, port, look, theme, width);
+    for (const theme of THEMES) {
+      for (const width of WIDTHS) {
+        const opened = await openPage(browser, port, theme, width);
 
-          if (values.screenshots !== "") {
-            await opened.page.screenshot({
-              path: path.join(
-                values.screenshots,
-                `${look}-${theme}-${String(width)}.png`
-              ),
-              fullPage: true,
-            });
-          }
-
-          clean.push(await judgePage(opened.page, look, theme, width));
-          errors.push(...opened.errors);
-          await opened.context.close();
+        if (values.screenshots !== "") {
+          await opened.page.screenshot({
+            path: path.join(
+              values.screenshots,
+              `${theme}-${String(width)}.png`
+            ),
+            fullPage: true,
+          });
         }
+
+        clean.push(await judgePage(opened.page, theme, width));
+        errors.push(...opened.errors);
+        await opened.context.close();
       }
     }
 
     const controls = [];
 
     for (const plant of PLANTS) {
-      const opened = await openPage(browser, port, "graphite", "dark", 390);
+      const opened = await openPage(browser, port, "dark", 390);
 
       const planted = decodeBoolean(
         await opened.page.evaluate(PLANT_IN[plant])
       );
 
-      const result = await judgePage(opened.page, "graphite", "dark", 390);
+      const result = await judgePage(opened.page, "dark", 390);
       const rule = RULE_OF_PLANT[plant];
 
       controls.push({
@@ -1093,7 +1083,6 @@ const main = async () => {
 
     const failures = clean.flatMap((result) =>
       failedRules(result).map((rule) => ({
-        look: result.look,
         theme: result.theme,
         width: result.width,
         rule,
@@ -1147,7 +1136,7 @@ const main = async () => {
         ),
         hscrollAt1440: clean.flatMap((result) =>
           result.width === 1440 && result.violations.hscroll.length > 0
-            ? [`${result.look}-${result.theme}`]
+            ? [result.theme]
             : []
         ),
         controls,

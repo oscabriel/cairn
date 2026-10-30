@@ -728,3 +728,19 @@ No block names a judge "at integration". The brain's layers did not change, so n
 ### Left for the user
 
 - The work panel in the user's look round at 390 and 1,440 px (`look.ts capture` holds the work-panel state at both widths). The earlier items under wave 6b's "Left for the user" still stand.
+
+## Wave 6d integration
+
+Integrated on 2026-10-30 on `main` with `--no-ff`: 6F `b33ec64` as `b6a6cad`; 6H `9d74303` as `ce94369`, with conflicts in `ScriptedHarness.ts` (6F's `documents` beside 6H's `goal`), the shell's `Command.ts`, `Model.ts` and `Update.ts` (`StopWorkflow` and `stopKeyOf` beside `MarkCriterion` and the goal panel), `CairnApp.ts` (`brain.stops ?? WorkflowStops.layerOff` with `GoalBook.layerScripted`) and `look.ts` (both new states), each kept whole; 6J `04414a1` as `642c6a4`, no conflicts. Hand-offs accepted as they stand: the protocol additions `Brief.roleOverrides` (6F), `MarkCriterionInput` and `goal.mark` (6H), with their schema goldens. `Workflows.layer` takes the platform FileSystem through `main.ts`'s `NodeServices`, so `ExtensionSet.ts` was not edited. No dependency changed.
+
+Judges on main, under the judge lock, $0, no model: `pnpm check` ok in 431 s, 2,653 tests; `workflow-surfaces.ts` (6F) 4 of 4; `goal-chip.ts` (6H) 8 of 8; `subagent-flows.ts` (6J) 8 of 8; `work-panel.ts` 4 of 4; `look.ts capture --strict` 32 of 32 clean, controls caught; `behaviour.ts --strict --ui next` 30 of 30. No production boot was run, so a project recipe launching by name on pi-durable is proven by unit tests only.
+
+### What differs from the plan
+
+- The goal panel and the work panel share one side-panel slot; opening one closes the other.
+- `look.ts`'s launch-approval shot shows Go blocked, since the look app's `@worker` has no ready model.
+
+### Left for the user
+
+- The launch card, the workflow steps and the goal panel in the look round at 390 and 1,440 px.
+- A bug for a later web package (or 7A): Settings' Follow-up behaviour and Send shortcut never reach the composer, which reads only its own `cairn:composer-settings:v1`, so a phone cannot steer. `subagent-flows.ts` works around it by saving the composer's setting first.

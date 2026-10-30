@@ -666,3 +666,38 @@ No block names a judge "at integration" and the brain's wiring did not change (6
 - Look round 2 (`plans.gneiss.run/cairn/v2/look/round-2/`) was taken before L6's shell merged, so its shots no longer match `main`. Round 3, published from `main` with the shell, is the one to approve; then the integrator runs `node judges/look.ts freeze 3` and commits `judges/look/frozen/round-3.json`, after which a `tokens.css` change fails `pnpm check` until a newer round is frozen.
 - On next, a project cannot be added yet (no add bubble on the rail).
 - When deploying: `@verifier` still binds Codex until rebound in the new Roles section in settings.
+
+## Wave 6b and look track L7 integration
+
+Integrated on 2026-10-30 on `main`, each package with `--no-ff`: L7 `bde8725` as `33017f2`, 6B `d5b895e` as `7f82242`, 6D `612f4e9` as `b478942`. Conflicts: the request card (`next/card/Message.ts`, `Update.ts`, `View.ts`, `RequestCard.test.ts`; `inform` now returns 6B's role check with L7's carried words as its OutMessage), `next/Frame.ts` (the parent banner leads L7's composer lane) and `styles.css` (every `@source not` kept). Both seam commits (L7 `3ffc554`, 6D `612f4e9`) are accepted as merged. No dependency changed.
+
+### Integration judges
+
+No block names a judge "at integration". The brain's layers did not change (6D changed what the harnesses emit and the shell projector, judged by conformance in `pnpm check`), so no judge-main boot or durability run. Under the judge lock, $0, no model:
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 430 s: fmt, lint, typecheck, 2,574 tests. |
+| `behaviour.ts --strict`, `--ui next` and classic | pass | next 30 of 30; classic 22 of 22. |
+| `surfaces.ts` (6A, 6B) | pass | 10 of 10, brief-go with the restart, brief-go-back, brief-go-unbound. |
+| `rollup.ts` (6D) | pass | 8 of 8 at 390 and 1,440, ADR 0027's gate through the page. |
+| `rows-subagent.ts`, `meters.ts` | pass | 14 of 14; 4 of 4. |
+| `typing.ts chromium --ui next` | pass | 1,200 of 1,200 keys, IME (CDP) and menus ok, 0 slow views. |
+
+### Rules later packages follow
+
+- **Page regions.** Next's page, thread page, thread controls and docked composer live in `next/page/Regions.ts`; of the classic regions the next frame draws only the notice bar. A next view folder builds its own CSS and adds an `@source not` line in `styles.css`.
+- **Routed requests.** `RuntimeRequestUpdated` has optional `route` (parent, while a child's question is with its parent) and `origin` (a mirror's child); `PendingApproval` in `inspect()` carries both. Anything that emits `RuntimeRequestUpdated` for a parent-routed record sets `route` parent, or the shell lights the user.
+- **Cut-off commands.** A foldkit Command whose RPC is cut off by an epoch bump ends the page ("All fibers interrupted"). Only the card's commands are guarded (`whenCutOff`); a package adding Commands guards them, and 7A should move the guard into `connection/withBoundary`.
+
+### What differs from the plan
+
+- L7: at 390 px the footer shows traits and mode as icons where t3code hides them, so `behaviour.ts` judges next's fold rule, not t3code's folding. The popovers, attachment tray, markdown body and diff panel are still classic modules greyed through `tokens.css` bridge tokens. WebKit ran on mbp-14 (Playwright's WebKit cannot start on the Beelink), its IME by composition events. `paste.ts`'s real-model half was skipped.
+- 6B: Run on 1 first is judged by scene tests only (6F's launch approval plays it). Go is blocked on every unresolved role. A node brief is not role-checked, since its payload lacks the launch's overrides; adding them is held for 6F. The card's `hasClient` follows Syncing as well as Live, so it may re-check on a socket not yet up (caught); held for 7A.
+- 6D: server work beyond the block (the projector's parent-routed fix, 6C's held brief-answer hand-off, 13 goldens). `thread.respond` on a settled record succeeds and changes nothing, unlike the protocol doc.
+- `View.ts`'s classic `page`, `thread`, `threadControls` and `composer` regions and next lazies are now unused by the next frame; 7A removes them.
+
+### Left for the user
+
+- `tokens.css` gained grey diff-line bridge tokens after round 3, so round 3 must not be frozen. A new look round published from `main` is the one to approve; then the integrator runs `node judges/look.ts freeze <n>`.
+- The WebKit typing tier needs mbp-14: `npx -y playwright@1.64.1 run-server --port 3790 --host 0.0.0.0` on the Mac, `ssh -f -N -R 3791:127.0.0.1:3791 mbp-14` here, then `node judges/typing.ts webkit --ui next --connect ws://100.115.23.81:3790/ --port 3791`.

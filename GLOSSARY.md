@@ -78,6 +78,10 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Way back**: The "Subagent of <parent>" link at the top of a child's transcript, back to the parent thread.
 
+**Parent banner**: The line above a thread's composer while one of its subagents asks the user; it names each asking child and opens the first. It hides while the thread asks the user itself.
+
+**Asked its parent**: A subagent row's state while the child's question is with its parent's model (ADR 0027), so the user is not asked yet and nothing above it lights.
+
 **Subagent anchor**: The background task a parent owns for each child. It owns the child's conversation, so the parent's run is never held open by its children (ADR 0028).
 
 **Brief task**: The parent's background task that holds a pending brief's 7-day expiry; if no answer comes by then, it expires the brief and tells the parent.

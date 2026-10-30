@@ -292,7 +292,28 @@ export interface ScriptedToolApi {
    * the effective mode.
    */
   permissions(): ThreadPermissions;
+  /**
+   * Records a brief for this call (kind `brief`, once; a rerun finds it) whose frozen payload is
+   * `payload`, and waits for its answer: the settled record, with the decision and any launch
+   * edits. A scripted tool plays a workflow's launch approval this way (the launch judges, 6F);
+   * none when the record is gone.
+   */
+  askBrief(
+    summary: string,
+    payload: JsonRecord
+  ): Effect.Effect<Option.Option<ApprovalRecord>>;
+  /**
+   * Replaces one of the thread's documents the stream carries (`cairn.workflows`, as a scripted
+   * tool that plays a workflow's ledger writes it), whole, and publishes the view.
+   */
+  writeDocument(kind: string, value: JsonRecord): Effect.Effect<void>;
 }
+
+/**
+ * The documents a scripted tool may write with `writeDocument`: the ones the thread stream carries
+ * and no harness code of this module writes itself.
+ */
+export const TOOL_DOCUMENTS: ReadonlySet<string> = new Set(["cairn.workflows"]);
 
 /** The result a scripted tool gives the model. */
 export interface ScriptedToolResult {
@@ -477,6 +498,8 @@ interface ScriptedThread {
   readonly subagents: Map<string, SubagentItem>;
   readonly escalations: Map<string, JsonRecord>;
   readonly offered: Map<string, OfferedQuestion>;
+  /** Documents scripted tools wrote (`TOOL_DOCUMENTS`), by kind. */
+  readonly documents: Map<string, JsonRecord>;
 }
 
 /** One input to a child and the delivery of its result. */
@@ -824,6 +847,10 @@ const viewOf = (
       "cairn.escalations",
       { items: Object.fromEntries(thread.escalations) },
     ]);
+  }
+
+  for (const [kind, document] of thread.documents) {
+    cairnDocs.push([kind, document]);
   }
 
   if (Option.isSome(thread.link) && Option.isSome(parentConversation)) {
@@ -1947,6 +1974,7 @@ const layerNoDeps = Layer.effectContext(
       subagents: new Map(),
       escalations: new Map(),
       offered: new Map(),
+      documents: new Map(),
     });
 
     /** Records a reporter for one input to a child; the commit starts its fiber. */
@@ -3224,6 +3252,65 @@ const layerNoDeps = Layer.effectContext(
             onSome: settlementOf,
           });
         }),
+      askBrief: (summary, payload) =>
+        Effect.gen(function* () {
+          const taskId = taskOf(thread, call);
+          const approvalId = approvalIdOf(taskId);
+
+          yield* locked((askedAt, changes) =>
+            Effect.sync(() => {
+              if (thread.approvals.has(approvalId)) {
+                return;
+              }
+
+              const record: ApprovalRecord = {
+                id: approvalId,
+                toolTaskId: taskId,
+                tool: call.name,
+                kind: "brief",
+                summary,
+                status: "pending",
+                askedAt,
+                expiresAt: askedAt + RECORD_TTL_MILLIS,
+                answeredAt: null,
+                run: null,
+                executorRequestId: null,
+                ...UNDECIDED,
+                payload: copyRecordJson(payload),
+                answer: null,
+                decidedBy: null,
+              };
+
+              thread.approvals.set(approvalId, record);
+              changes.touched.add(thread);
+              changes.events.push(
+                RuntimeRequestUpdated.make({
+                  threadId: thread.threadId,
+                  id: ApprovalId.make(approvalId),
+                  kind: "brief",
+                  status: record.status,
+                })
+              );
+              recordsChanged(thread, changes);
+            })
+          );
+
+          return Option.map(
+            yield* settledRecord(thread, approvalId),
+            copyRecord
+          );
+        }),
+      writeDocument: (kind, value) =>
+        locked((_at, changes) =>
+          Effect.sync(() => {
+            if (!TOOL_DOCUMENTS.has(kind)) {
+              return;
+            }
+
+            thread.documents.set(kind, copyRecordJson(value));
+            changes.touched.add(thread);
+          })
+        ),
     });
 
     /**

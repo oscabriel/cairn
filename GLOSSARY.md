@@ -264,6 +264,12 @@ _Avoid_: plugin
 
 **Look catalogue**: The dev-only page at `/__look` (`apps/web/src/next/ui/catalogue`) that draws every next primitive in every state in dark and light. `judges/look-rules.ts` judges it and the look rounds screenshot it; it is never in the production build.
 
+**Look round**: One preview of the look put to the user at `plans.gneiss.run/cairn/v2/look/round-<n>/`, ending with the question: approve, or name what to change. Rounds 0 and 1 were static mock pages; from round 2 `judges/look.ts round <n>` publishes screenshots of named states of the real `next` client, each with its look rules findings. _Avoid_: review (that is code review).
+
+**Named state (look)**: One screen `judges/look.ts` drives the `next` client into (hero, slash menu, thread, unfolded turn, sidebar, settings), taken at 390 and 1,440 px in dark and, where it has one, a light variant. Each width and theme is one shot.
+
+**Frozen round**: An approved look round recorded by `look.ts freeze <n>` in `judges/look/frozen/round-<n>.json`: the hash of `next/tokens.css` and each shot's hash and fingerprint (16 px cell means). `look.ts check` fails when the tokens or a shot drift from the newest frozen round, and `judges/look.test.ts` fails on the tokens in `pnpm check`, so changing an approved look needs a new round. _Avoid_: baseline alone (the parity baseline is t3code's).
+
 **Measured list**: The transcript's own scroll list (`timeline/list`, ADR 0041). A row counts in the scroll range only once it has been measured (history it never drew is measured off-screen first), parked rows keep frozen heights, the first visible row keeps its offset through any change above it, and a glyph bookmark keeps the reader's place through width changes. _Avoid_: virtual list (that was `@foldkit/ui`'s, which estimated heights).
 
 **Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.

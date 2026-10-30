@@ -2,8 +2,12 @@
 // in that project when it has none; a row opens its thread; the foot opens the usage and settings pages; the phone's sheet closes on any navigation.
 // A refresh asks first, then launches the new project thread with `replaces` and opens it. The
 // scratch overlay shows and hides on Cmd+J or Ctrl+J without losing its thread; its first message
-// launches the scratch thread, later ones are sends, and Clear deletes it.
+// launches the scratch thread, later ones are sends, and Clear deletes it. The work panel shows and
+// hides from the header, keeps its state across threads but starts each thread's child groups at
+// their first page, and stops one child at a time; a child shows Stopping until its row is at rest.
 
+import { LINEAGE_PAGE } from "@cairn/client-logic/ThreadLineage";
+import { threadStatus } from "@cairn/client-logic/ThreadState";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Array, Equal, Option, Predicate, Record } from "effect";
@@ -19,6 +23,7 @@ import {
   PrepareScratchClear,
   PrepareScratchTurn,
   SaveScratch,
+  StopChild,
 } from "./Command.ts";
 import type { Services } from "./Command.ts";
 import {
@@ -30,7 +35,8 @@ import {
   threadsOf,
 } from "./Derived.ts";
 import { Message, OutMessage } from "./Message.ts";
-import type { Model, ShellContext } from "./Model.ts";
+import { FIRST_CHILD_ROWS } from "./Model.ts";
+import type { Model, ShellContext, WorkState } from "./Model.ts";
 import { REFRESH_TEXT_ID } from "./Refresh.ts";
 import { SCRATCH_EDITOR_ID } from "./Scratch.ts";
 
@@ -51,6 +57,42 @@ const routedThreadId = (context: ShellContext): Option.Option<string> =>
     ? Option.some(context.route.threadId)
     : Option.none();
 
+/** True while a child's row still has a run or a request: a Stop asked of it has not shown yet. */
+const isStillLive = (context: ShellContext, threadId: string): boolean =>
+  Option.exists(context.shell, (shell) =>
+    shell.threads.some((thread) => {
+      if (thread.id !== threadId) {
+        return false;
+      }
+
+      const status = threadStatus(thread, Option.none());
+
+      return status !== "ready" && status !== "failed";
+    })
+  );
+
+/** The work panel after the context changed: Stopping clears once its child rests. */
+const informWork = (
+  work: WorkState,
+  context: ShellContext,
+  moved: boolean
+): WorkState => {
+  const stopping = work.stopping.filter((threadId) =>
+    isStillLive(context, threadId)
+  );
+
+  if (!moved && stopping.length === work.stopping.length) {
+    return work;
+  }
+
+  return modifyFields(work, {
+    stopping: () => stopping,
+    shownActive: (shown) => (moved ? FIRST_CHILD_ROWS : shown),
+    shownPrevious: (shown) => (moved ? FIRST_CHILD_ROWS : shown),
+    isPreviousOpen: (open) => (moved ? false : open),
+  });
+};
+
 /** The context told, the rail following the route; it asks for no Command. */
 const informContext = (model: Model, context: ShellContext): InformReturn => {
   const moved = !Equal.equals(
@@ -58,7 +100,12 @@ const informContext = (model: Model, context: ShellContext): InformReturn => {
     routedThreadId(context)
   );
 
-  const next = modifyFields(model, { context: () => context });
+  const work = informWork(model.work, context, moved);
+
+  const next = modifyFields(model, {
+    context: () => context,
+    work: () => work,
+  });
 
   if (!moved && model.context.route._tag === context.route._tag) {
     return { model: next };
@@ -219,6 +266,14 @@ const startProjectThread = (
     isSheetOpen: () => false,
   }),
   commands: [PrepareProjectDraft({ projectId })],
+});
+
+/** The work panel with `change` applied. */
+const setWork = (
+  model: Model,
+  change: (work: WorkState) => WorkState
+): UpdateReturn => ({
+  model: modifyFields(model, { work: change }),
 });
 
 /** The shell's update. */
@@ -403,4 +458,48 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       model: modifyFields(model, { failure: () => Option.none() }),
     }),
     CompletedFocus: () => ({ model }),
+
+    ClickedWork: () =>
+      setWork(model, (work) => modifyFields(work, { isOpen: (open) => !open })),
+    ClickedCloseWork: () =>
+      setWork(model, (work) => modifyFields(work, { isOpen: () => false })),
+    ClickedPreviousChildren: () =>
+      setWork(model, (work) =>
+        modifyFields(work, { isPreviousOpen: (open) => !open })
+      ),
+    ClickedMoreChildren: ({ group }) =>
+      group === "active"
+        ? setWork(model, (work) =>
+            modifyFields(work, { shownActive: (shown) => shown + LINEAGE_PAGE })
+          )
+        : setWork(model, (work) =>
+            modifyFields(work, {
+              shownPrevious: (shown) => shown + LINEAGE_PAGE,
+            })
+          ),
+    ClickedStopChild: ({ threadId }) =>
+      model.work.stopping.includes(threadId)
+        ? { model }
+        : {
+            model: modifyFields(model, {
+              work: (work) =>
+                modifyFields(work, {
+                  stopping: (stopping) => [...stopping, threadId],
+                  failure: () => Option.none(),
+                }),
+            }),
+            commands: [StopChild({ threadId })],
+          },
+    StoppedChild: () => ({ model }),
+    FailedStopChild: ({ threadId, message: text }) =>
+      setWork(model, (work) =>
+        modifyFields(work, {
+          stopping: (stopping) => stopping.filter((id) => id !== threadId),
+          failure: () => Option.some(text),
+        })
+      ),
+    ClickedDismissWorkFailure: () =>
+      setWork(model, (work) =>
+        modifyFields(work, { failure: () => Option.none() })
+      ),
   });

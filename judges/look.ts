@@ -322,6 +322,27 @@ const STATES: ReadonlyArray<LookState> = [
     },
   },
   {
+    name: "work-panel",
+    title: "The work panel",
+    caption:
+      "The project thread's work panel, opened from the header's subagents button: its live children with Stop, and the resting ones under Previous, opened. A column beside the chat at 1,440 px, a bottom sheet at 390 px.",
+    path: ({ app }) => new URL(app.threadUrl).pathname,
+    widths: [390, 1440],
+    light: true,
+    enter: async (page) => {
+      await waitForThread(page);
+      await page.getByTestId("work-toggle").click();
+      await page
+        .getByTestId("work-panel")
+        .waitFor({ state: "visible", timeout: 5000 });
+      await page.getByTestId("work-previous-toggle").click();
+      await page
+        .getByTestId("work-previous")
+        .waitFor({ state: "visible", timeout: 5000 });
+      await settle(page, 600);
+    },
+  },
+  {
     name: "settings",
     title: "Settings",
     caption: "The general settings page.",

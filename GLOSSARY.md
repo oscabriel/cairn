@@ -80,6 +80,10 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Parent banner**: The line above a thread's composer while one of its subagents asks the user; it names each asking child and opens the first. It hides while the thread asks the user itself.
 
+**Work panel**: The panel a thread in a tree opens from its chat header (`next` only): its parent chain, its children with their states (live ones with Stop, resting ones under "Previous", folded, six then twelve more at a time), a subagent's own steps, and the thread's workflows from the steps panel's data. A column beside the chat column from 1,024 px, a bottom sheet below.
+
+**Subagent steps**: A child's steps in the work panel, read from its own row and records, never model text: "You said go", "Started" (in a worktree or the project's checkout), "Working on it", "Said what it did", each done, now, to do, failed or stopped. The header's button counts them ("2/4 steps").
+
 **Asked its parent**: A subagent row's state while the child's question is with its parent's model (ADR 0027), so the user is not asked yet and nothing above it lights.
 
 **Subagent anchor**: The background task a parent owns for each child. It owns the child's conversation, so the parent's run is never held open by its children (ADR 0028).

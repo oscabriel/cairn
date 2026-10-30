@@ -3,14 +3,19 @@
 // role through `RoleAliases` right before the commit that creates its child (ADR 0035) and
 // dry-running proposals through `WorkflowPlan`. pi-durable calls both outside Effect, so they run
 // through the layer's context (S43). The dry run needs nothing of the brain, so the layer builds its
-// own `WorkflowPlan` (the memo map shares it with the app's).
+// own `WorkflowPlan` (the memo map shares it with the app's). The soft line's push task hands its
+// pushes to `WorkflowPushes` when the layer is given one (the integrator provides the reference
+// `AppLayer` drains through `WorkflowBudgetPush`); without one it sends nothing.
 
 import { Context, Effect, Layer, Option, Result } from "effect";
 
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
+import { HOLD_RETRY_MILLIS, NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
+import type { BudgetPushSink } from "./WorkflowBudget.ts";
 import { WorkflowPlan } from "./WorkflowPlan.ts";
 import type { PlanAccess } from "./WorkflowPlanTool.ts";
+import { WorkflowPushes } from "./WorkflowPushes.ts";
 import {
   NO_HOLD,
   NO_WORKFLOW_FAULTS,
@@ -46,13 +51,23 @@ export class Workflows extends Context.Service<
   Workflows,
   { readonly extension: CairnExtension }
 >()("cairn/server/workflows/Workflows") {
-  /** Over the root's `RoleAliases`; no faults, no holds. */
+  /** Over the root's `RoleAliases`, and `WorkflowPushes` when given; no faults, no holds. */
   static readonly layer = Layer.effect(
     Workflows,
     Effect.gen(function* () {
       const roles = yield* RoleAliases;
       const context = yield* Effect.context();
       const run = Effect.runPromiseWith(context);
+      const outbox = yield* Effect.serviceOption(WorkflowPushes);
+
+      const push = Option.match(outbox, {
+        onNone: (): BudgetPushSink => NO_BUDGET_PUSH,
+        onSome:
+          (pushes): BudgetPushSink =>
+          async (each) => {
+            await run(pushes.send(each));
+          },
+      });
 
       const resolveRole: RoleResolver = async (spec, overrides) =>
         await run(
@@ -73,6 +88,8 @@ export class Workflows extends Context.Service<
           plan: planAccess(yield* WorkflowPlan, context),
           faults: NO_WORKFLOW_FAULTS,
           hold: NO_HOLD,
+          holdRetryMillis: HOLD_RETRY_MILLIS,
+          push,
         }),
       });
     })

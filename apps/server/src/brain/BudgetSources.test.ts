@@ -232,6 +232,28 @@ describe("budget sources over a Harness", () => {
 
           yield* acceptRaise(harness, child, 0, raised);
 
+          // A workflow's raise in the same records raises that run only, never the thread (5B).
+          yield* Effect.promise(async () => {
+            await harness.commit(async (tx) => {
+              const { items } = await tx.doc(Approvals, child);
+
+              items["budget-raise-wf-7-0"] = {
+                ...record("budget-raise-wf-7-0", {
+                  tool: RAISE_TOOL,
+                  kind: "tool-call",
+                  status: "accepted",
+                  payload: {
+                    type: "budget-raise",
+                    scope: "wf-7",
+                    from: budgetJson(BRIEF_BUDGET),
+                    to: budgetJson({ ...BRIEF_BUDGET, maxTokens: 10 ** 9 }),
+                  },
+                }),
+                askedAt: 20,
+              };
+            }, context);
+          });
+
           const scopes = yield* sources.scopes;
 
           assert.deepStrictEqual(scopes, [

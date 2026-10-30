@@ -10,7 +10,7 @@ import { RoleOverrides as RoleOverridesSchema } from "@cairn/protocol/Roles";
 import type { JsonValue } from "@earendil-works/chord";
 import { copyJson } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import type { Message } from "@earendil-works/pi-ai";
+import type { Message, Models } from "@earendil-works/pi-ai";
 import type {
   ConversationId,
   EntryId,
@@ -25,6 +25,7 @@ import type {
 import { ToolResultEntry, UsageDoc } from "@earendil-works/pi-durable";
 import { Option, Predicate, Result, Schema } from "effect";
 
+import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
 import { messageText } from "../brain/CommitFeed.ts";
 import { emit } from "../brain/Events.ts";
@@ -39,6 +40,14 @@ import { conversationOf } from "../subagents/Delivery.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import { isObjectRootSchema } from "./Prelude.ts";
 import type { NodeOutcome } from "./Prelude.ts";
+import {
+  applyMeter,
+  budgetStopped,
+  cancelPendingRaises,
+  NO_SPEND,
+  readSpends,
+} from "./WorkflowBudget.ts";
+import type { SpendCache } from "./WorkflowBudget.ts";
 import {
   isNodeEnded,
   isWorkflowEnded,
@@ -64,6 +73,39 @@ const SUMMARY_LIMIT = 200;
 
 /** The protocol's `DisplayText` limit: the longest error or label a row may hold and still decode. */
 export const DISPLAY_TEXT_LIMIT = 4096;
+
+/** The words a node stopped at its workflow's budget carries. */
+export const BUDGET_STOP_TEXT =
+  "stopped at the workflow's budget before it answered";
+
+/** The words a node whose child's run was stopped (by the budget's stopper or a person) carries. */
+export const CHILD_STOPPED_TEXT =
+  "its child's run was stopped before it answered";
+
+/**
+ * The words a node that ended without an answer is `stopped` with, or none when it failed: a run
+ * at its line stops every unanswered node, and a child whose run was stopped stops its node (with
+ * the budget's words once the run ever reached its line, since the stopper is what stops them).
+ */
+export const stoppedText = (
+  ending: Result.Result<unknown, string>,
+  atLineNow: boolean,
+  reachedLine: boolean
+): Option.Option<string> => {
+  if (Result.isSuccess(ending)) {
+    return Option.none();
+  }
+
+  if (atLineNow || ending.failure === BUDGET_STOP_TEXT) {
+    return Option.some(BUDGET_STOP_TEXT);
+  }
+
+  if (ending.failure === CHILD_STOPPED_TEXT) {
+    return Option.some(reachedLine ? BUDGET_STOP_TEXT : CHILD_STOPPED_TEXT);
+  }
+
+  return Option.none();
+};
 
 /** Entries of a child a settle reads to count its tool calls. */
 const TOOL_SCAN_LIMIT = 1000;
@@ -272,11 +314,19 @@ export interface Answered {
   readonly submission: SubmissionId;
 }
 
+/** Why an input went unanswered: the words for the row, and the run's own failure text. */
+export interface Unanswered {
+  readonly text: string;
+  /** The settlement's detail or reason, where a provider's usage limit is named. */
+  readonly detail: string;
+}
+
 /**
- * Submits `content` to the child under `requestId` (first submission wins) and waits for it.
- * `submitted` runs between the two (a judge's hold point; production passes nothing).
+ * Submits `content` to the child under `requestId` (first submission wins) and waits for it,
+ * answering why it went unanswered when it did. `submitted` runs between the two (a judge's hold
+ * point; production passes nothing).
  */
-export const askChild = async (
+export const askChildFully = async (
   api: ToolExecutionApi,
   child: ConversationId,
   content: string,
@@ -285,11 +335,14 @@ export const askChild = async (
   submitted: (submission: SubmissionId) => Promise<void> = async () => {
     await Promise.resolve();
   }
-): Promise<Result.Result<Answered, string>> => {
+): Promise<Result.Result<Answered, Unanswered>> => {
   const handle = await api.conversation(child, context);
 
   if (handle === undefined) {
-    return Result.fail(`its child conversation ${String(child)} is gone`);
+    return Result.fail({
+      text: `its child conversation ${String(child)} is gone`,
+      detail: "",
+    });
   }
 
   const submission = await handle.submit(
@@ -308,10 +361,30 @@ export const askChild = async (
     });
   }
 
-  return Result.fail(
-    `its child's run ended unanswered (${settled.reason ?? settled.status})`
-  );
+  return Result.fail({
+    text:
+      settled.reason === "aborted"
+        ? CHILD_STOPPED_TEXT
+        : `its child's run ended unanswered (${settled.reason ?? settled.status})`,
+    detail: Predicate.isString(settled.detail)
+      ? settled.detail
+      : (settled.reason ?? ""),
+  });
 };
+
+/** `askChildFully` with the failure's words only. */
+export const askChild = async (
+  api: ToolExecutionApi,
+  child: ConversationId,
+  content: string,
+  requestId: string,
+  context: ChordContext,
+  submitted?: (submission: SubmissionId) => Promise<void>
+): Promise<Result.Result<Answered, string>> =>
+  Result.mapError(
+    await askChildFully(api, child, content, requestId, context, submitted),
+    (unanswered) => unanswered.text
+  );
 
 /** The final text of a child's answer entry. */
 export const answerText = async (
@@ -341,7 +414,9 @@ export const typedResult = async (
   requestId: string,
   child: ConversationId,
   context: ChordContext,
-  nudgeSubmitted?: (submission: SubmissionId) => Promise<void>
+  nudgeSubmitted?: (submission: SubmissionId) => Promise<void>,
+  /** Whether the child may be sent more work now; false when its workflow is at its budget. */
+  mayContinue: () => Promise<boolean> = async () => await Promise.resolve(true)
 ): Promise<Result.Result<TypedValue, string>> => {
   const first = await readResult(api, child, context);
 
@@ -363,6 +438,11 @@ export const typedResult = async (
     return Result.fail(
       "invalid_result: its child ended without a valid submit_result"
     );
+  }
+
+  // A nudge already sent is asked again below and answers with its first submission: no new work.
+  if (!attempts.nudged && !(await mayContinue())) {
+    return Result.fail(BUDGET_STOP_TEXT);
   }
 
   const nudged = await askChild(
@@ -503,18 +583,28 @@ export interface Settling {
   readonly verify: boolean;
 }
 
+/** What the meter needs to price a response: the model runtime's catalog, and the scan cache. */
+export interface Pricing {
+  readonly models: Pick<Models, "getModel">;
+  readonly cache: SpendCache;
+}
+
 /**
  * Settles the row in one commit: receipt, result, state and the `workflow.node.settled` event,
- * written only by the row's own task and only while it runs. Failing settles `failed` the same way.
+ * written only by the row's own task and only while it runs. Failing settles `failed` the same way,
+ * or `stopped` (with `workflow.node.stopped`) when the run is at its budget's line, since the
+ * stopper ended its child. The same commit recomputes the run's meter. Answers the row's state
+ * after the commit; none when the row was not this task's to settle.
  */
 export const settleNode = async (
   api: ToolExecutionApi,
   settling: Settling,
+  pricing: Pricing,
   context: ChordContext
-): Promise<void> => {
+): Promise<Option.Option<Pick<NodeItemState, "state" | "error">>> => {
   const { caller, nodeId, child, ending, verify } = settling;
 
-  await api.commit(async (tx) => {
+  return await api.commit(async (tx) => {
     // Table reads first: pi-durable refuses a table read after a table write.
     const entries = await tx.scanEntries(
       { conversationId: child, order: "descending" },
@@ -526,6 +616,7 @@ export const settleNode = async (
     ).length;
 
     const ledger = await tx.doc(WorkflowsDoc, api.conversationId);
+    const approvals = await tx.doc(Approvals, api.conversationId);
     const workflow = ledger.items[caller.workflowId];
     const node = workflow?.nodes[nodeId];
 
@@ -535,10 +626,18 @@ export const settleNode = async (
       node.nestedTaskId !== api.taskId ||
       isNodeEnded(node.state)
     ) {
-      return;
+      return Option.none();
     }
 
+    const spends = await readSpends(
+      tx,
+      workflow,
+      pricing.models,
+      pricing.cache
+    );
+
     const totals = usageTotals(await tx.doc(UsageDoc, child));
+    const spend = spends.get(nodeId) ?? NO_SPEND;
     const at = api.now();
 
     const receipt: NodeReceiptState = {
@@ -547,20 +646,33 @@ export const settleNode = async (
       output: totals.output,
       cacheRead: totals.cacheRead,
       cacheWrite: totals.cacheWrite,
-      totalTokens: totals.totalTokens,
-      listMicros:
-        totals.costTotal > 0 ? Math.round(totals.costTotal * 1_000_000) : null,
+      totalTokens: spend.tokens,
+      // Unknown is never zero: a node with no priced response has no dollar figure.
+      listMicros: spend.pricedResponses > 0 ? spend.listMicros : null,
       toolCalls,
       durationMs: Math.max(0, at - (node.startedAt ?? at)),
     };
 
+    const stoppedWith = stoppedText(
+      ending,
+      budgetStopped(workflow, approvals.items),
+      workflow.spentAt !== null
+    );
+
+    const atLine = Option.isSome(stoppedWith);
+
     node.receipt = receipt;
     node.endedAt = at;
-    applyEnding(node, ending, child, verify);
-    workflow.spent.tokens = settledTokens(workflow);
+
+    if (Option.isSome(stoppedWith)) {
+      node.state = "stopped";
+      node.error = stoppedWith.value;
+    } else {
+      applyEnding(node, ending, child, verify);
+    }
 
     await emit(tx, {
-      name: "workflow.node.settled",
+      name: atLine ? "workflow.node.stopped" : "workflow.node.settled",
       data: {
         workflowId: workflow.id,
         nodeId: node.id,
@@ -570,6 +682,16 @@ export const settleNode = async (
       at,
       context: Option.none(),
     });
+
+    await applyMeter(tx, {
+      conversationId: api.conversationId,
+      row: workflow,
+      approvals: approvals.items,
+      spends,
+      at,
+    });
+
+    return Option.some({ state: node.state, error: node.error });
   }, context);
 };
 
@@ -663,7 +785,8 @@ export const isReplayEnding = (text: string): boolean =>
 
 /** The row's state and outcome for how its script call ended. */
 const endingState = (
-  ending: ScriptEnding
+  ending: ScriptEnding,
+  atLine: boolean
 ): Pick<WorkflowItemState, "state" | "outcome"> => {
   if (ending.status === "aborted") {
     return {
@@ -672,35 +795,50 @@ const endingState = (
     };
   }
 
-  if (!ending.isError) {
-    return { state: "finished", outcome: { kind: "complete" } };
+  if (ending.isError && isReplayEnding(ending.text)) {
+    return {
+      state: "failed",
+      outcome: { kind: "partial", reason: "replay_diverged" },
+    };
   }
 
-  return {
-    state: "failed",
-    outcome: {
-      kind: "partial",
-      reason: isReplayEnding(ending.text) ? "replay_diverged" : "script_error",
-    },
-  };
+  // A run stopped at its budget's line is partial whether or not its script coped with the nulls.
+  if (atLine) {
+    return {
+      state: ending.isError ? "failed" : "finished",
+      outcome: { kind: "partial", reason: "budget_spent" },
+    };
+  }
+
+  return ending.isError
+    ? {
+        state: "failed",
+        outcome: { kind: "partial", reason: "script_error" },
+      }
+    : { state: "finished", outcome: { kind: "complete" } };
 };
 
-/** A workflow's row after its script call ended: finished, failed or stopped. */
+/**
+ * A workflow's row after its script call ended: finished, failed or stopped; `partial`,
+ * `budget_spent` when it reached its budget's line. A raise still pending for it is cancelled.
+ */
 export const endWorkflow = async (
   tx: Tx,
   row: WorkflowItemState,
   ending: ScriptEnding,
-  at: number
+  at: number,
+  approvals: Record<string, ApprovalRecord>
 ): Promise<void> => {
   if (isWorkflowEnded(row.state)) {
     return;
   }
 
-  const ended = endingState(ending);
+  const ended = endingState(ending, row.spentAt !== null);
 
   row.state = ended.state;
   row.outcome = ended.outcome;
   row.endedAt = at;
+  cancelPendingRaises(approvals, row.id, at);
 
   row.result =
     row.codemodeTaskId === null ? null : resultRefOf(row.codemodeTaskId);
@@ -724,7 +862,8 @@ export const spentTokens = async (
   context: ChordContext
 ): Promise<number> => {
   const running = Object.values(row.nodes).flatMap((node) =>
-    node.state === "running" && node.conversationId !== null
+    (node.state === "running" || node.state === "held") &&
+    node.conversationId !== null
       ? [node.conversationId]
       : []
   );

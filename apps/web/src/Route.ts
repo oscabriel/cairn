@@ -1,5 +1,5 @@
 // The client's routes: the hero at `/`, a thread at `/t/<threadId>`, a new draft at
-// `/new/<draftId>` and the settings page. Every link and navigation prints its path through these
+// `/new/<draftId>`, the settings page and the usage page (drawn by the `next` views only). Every link and navigation prints its path through these
 // routers, so a path is written once.
 
 import { ThreadId } from "@cairn/protocol/Ids";
@@ -21,6 +21,7 @@ export const AppRoute = defineRouteUnion({
   Thread: { threadId: Schema.String },
   Draft: { draftId: Schema.String },
   Settings: {},
+  Usage: {},
   NotFound: { path: Schema.String },
 });
 
@@ -49,10 +50,14 @@ export const settingsRouter = pipe(
   Route.mapTo(AppRoute.Settings)
 );
 
+/** `/usage`: what threads and workflows spent (the `next` views' foot links to it). */
+export const usageRouter = pipe(literal("usage"), Route.mapTo(AppRoute.Usage));
+
 const routeParser = oneOf(
   threadRouter,
   draftRouter,
   settingsRouter,
+  usageRouter,
   heroRouter
 );
 
@@ -73,6 +78,7 @@ export const urlToAppRoute = (url: Url.Url): AppRoute => {
     Hero: () => route,
     Draft: () => route,
     Settings: () => route,
+    Usage: () => route,
     NotFound: () => route,
   });
 };

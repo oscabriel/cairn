@@ -10,10 +10,23 @@
 // integrator-only after L0.
 
 import "./tokens.css";
+import { Predicate } from "effect";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
-import type { Message } from "../Message.ts";
+import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
+import { usageRouter } from "../Route.ts";
+import { view as rolesView } from "./meters/RolesView.ts";
+import { view as usageView } from "./meters/UsageView.ts";
+
+/** The meters' update and root hooks, held by `FrameLoad.ts` once this chunk loads (plan 6G). */
+export { meters } from "./meters/Update.ts";
+
+/** What the `next` frame draws inside a page the classic views still draw. */
+export interface PageSlots {
+  /** The role table, after the settings page's models section (plan 6G). */
+  readonly roleTable: () => Html;
+}
 
 /**
  * The regions the classic views draw, handed to the frame until `next` draws its own. Each is a
@@ -26,9 +39,34 @@ export interface Regions {
   readonly sidebar: () => Html;
   /** The notice bar above the page; empty when there is no notice. */
   readonly notice: () => Html;
-  /** The routed page: hero, thread, draft, settings or not found. */
-  readonly page: () => Html;
+  /** The routed page: hero, thread, draft, settings or not found, with the frame's slots in it. */
+  readonly page: (slots: PageSlots) => Html;
 }
+
+/** The role table, drawn in the settings page's slot. */
+const roleTable = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.submodel({
+    slotId: "role-table",
+    model: model.meters,
+    view: rolesView,
+    viewInputs: { usageHref: usageRouter() },
+    toParentMessage: (message) => Message.GotMetersMessage({ message }),
+  });
+
+/** The page: the usage page (`next` only, plan 6G), else the classic region with the slots. */
+const routedPage = (
+  model: Model,
+  h: HtmlBuilder<Message>,
+  regions: Regions
+): Html =>
+  Predicate.isTagged(model.route, "Usage")
+    ? h.submodel({
+        slotId: "usage-page",
+        model: model.meters,
+        view: usageView,
+        toParentMessage: (message) => Message.GotMetersMessage({ message }),
+      })
+    : regions.page({ roleTable: () => roleTable(model, h) });
 
 /** The app drawn with the `next` views, over the same Model as the classic ones. */
 export const view = (
@@ -59,7 +97,7 @@ export const view = (
             "relative flex min-w-0 w-full flex-1 flex-col bg-background text-foreground surface-grain h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
           ),
         ],
-        [regions.notice(), regions.page()]
+        [regions.notice(), routedPage(model, h, regions)]
       ),
     ]
   ),

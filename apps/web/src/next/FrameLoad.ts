@@ -9,6 +9,7 @@ import { Effect, Option, Schema } from "effect";
 
 import type { Model } from "../Model.ts";
 import type * as Frame from "./Frame.ts";
+import type { MetersModule } from "./meters/Update.ts";
 
 /** The `next` views' module could not be fetched. */
 export class NextFrameLoadError extends Schema.TaggedError<NextFrameLoadError>()(
@@ -22,6 +23,9 @@ export type FrameView = typeof Frame.view;
 // Held outside the Model on purpose: a module is code, not state. One key, set once.
 const loaded = new Map<"view", FrameView>();
 
+// The meters' update (plan 6G) comes with the same chunk, so the entry carries only their Model.
+const loadedMeters = new Map<"meters", MetersModule>();
+
 /** Fetches the `next` views' chunk and holds its view; the settings `LoadNextFrame` runs it. */
 export const fetchNextFrame: Effect.Effect<void, NextFrameLoadError> =
   Effect.tryPromise({
@@ -31,6 +35,7 @@ export const fetchNextFrame: Effect.Effect<void, NextFrameLoadError> =
     Effect.flatMap((module) =>
       Effect.sync(() => {
         loaded.set("view", module.view);
+        loadedMeters.set("meters", module.meters);
       })
     )
   );
@@ -43,3 +48,12 @@ export const nextFrameOf = (model: Model): Option.Option<FrameView> =>
   model.settings.client.ui === "next" && model.settings.nextFrame === "loaded"
     ? Option.fromNullishOr(loaded.get("view"))
     : Option.none();
+
+/**
+ * The meters' update and root hooks: some when the `next` frame draws (`nextFrameOf`), so the usage
+ * page and the role table are updated exactly when they can be drawn.
+ */
+export const nextMetersOf = (model: Model): Option.Option<MetersModule> =>
+  Option.flatMap(nextFrameOf(model), () =>
+    Option.fromNullishOr(loadedMeters.get("meters"))
+  );

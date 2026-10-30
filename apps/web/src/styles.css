@@ -2466,3 +2466,6 @@ code {
 /* Cairn: the `next` primitives (next/ui) carry their own utilities, built by next/ui/utilities.css into
  * the chunks that import them, so the entry CSS every classic page loads does not grow with them. */
 @source not "./next/ui";
+/* Cairn: the meters (next/meters: the usage page and the role table) build their own utilities into
+ * the `next` chunk the same way, through next/meters/meters.css. */
+@source not "./next/meters";

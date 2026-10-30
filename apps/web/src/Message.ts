@@ -10,6 +10,7 @@ import { UrlRequest } from "foldkit/navigation";
 
 import { Message as ComposerMessage } from "./composer/Message.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
+import { Message as MetersMessage } from "./next/meters/Message.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Message as PushMessage } from "./push/Message.ts";
 import { Message as SettingsMessage } from "./settings/Message.ts";
@@ -66,6 +67,7 @@ export const Message = defineMessageUnion({
   GotPushMessage: { message: PushMessage },
   GotSettingsMessage: { message: SettingsMessage },
   GotParkedMessage: { message: ParkedMessage },
+  GotMetersMessage: { message: MetersMessage },
   /** The settings page's view chunk loaded. */
   LoadedSettingsPage: {},
   /** The settings page's view chunk could not be fetched. */

@@ -46,6 +46,10 @@ import {
 } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
 import type { Flags, Model, SentTurn } from "./Model.ts";
+import { nextMetersOf } from "./next/FrameLoad.ts";
+import type { Message as MetersMessage } from "./next/meters/Message.ts";
+import { initial as initialMeters } from "./next/meters/Model.ts";
+import type { MetersPage, Model as MetersModel } from "./next/meters/Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { pushContextOf, samePushContext } from "./push/Context.ts";
 import { OutMessage as PushOutMessage } from "./push/Message.ts";
@@ -102,6 +106,7 @@ const routedThreadId = (route: AppRoute): Option.Option<ThreadId> =>
     Thread: ({ threadId }) => decodeThreadId(threadId),
     Draft: () => Option.none(),
     Settings: () => Option.none(),
+    Usage: () => Option.none(),
     NotFound: () => Option.none(),
   });
 
@@ -260,6 +265,7 @@ const routedDraftId = (route: AppRoute): Option.Option<string> =>
     Thread: () => Option.none(),
     Draft: ({ draftId }) => Option.some(draftId),
     Settings: () => Option.none(),
+    Usage: () => Option.none(),
     NotFound: () => Option.none(),
   });
 
@@ -510,6 +516,69 @@ const syncParked: Step = (model) => {
     ? { model }
     : informParked(model, { thread, hasClient: connected });
 };
+
+const toGotMetersMessage = (message: MetersMessage): Message =>
+  Message.GotMetersMessage({ message });
+
+const readMeters = (model: Model): Option.Option<MetersModel> =>
+  Option.some(model.meters);
+
+const writeMeters = (model: Model, meters: MetersModel): Model =>
+  modifyFields(model, { meters: () => meters });
+
+/** Folds a meters Message through the meters' update, once the `next` chunk brought it. */
+const foldMetersMessage = (
+  model: Model,
+  message: MetersMessage
+): UpdateReturn =>
+  Option.match(nextMetersOf(model), {
+    onNone: () => ({ model }),
+    onSome: (meters) =>
+      Update.foldChild({
+        update: meters.update,
+        read: readMeters,
+        write: writeMeters,
+        toParentMessage: toGotMetersMessage,
+      })(model, message),
+  });
+
+/** Which of the meters' pages the route opens. */
+const metersPageOf = (route: Model["route"]): MetersPage =>
+  AppRoute.match(route, {
+    Usage: () => "usage" as const,
+    Settings: () => "settings" as const,
+    Hero: () => "closed" as const,
+    Thread: () => "closed" as const,
+    Draft: () => "closed" as const,
+    NotFound: () => "closed" as const,
+  });
+
+/**
+ * Tells the meters the connection, the open page, the plan windows and the rows' spend, when they
+ * changed, while the `next` frame draws them.
+ */
+const syncMeters: Step = (model) =>
+  Option.match(nextMetersOf(model), {
+    onNone: () => ({ model }),
+    onSome: (meters) => {
+      const context = meters.contextOf({
+        epoch: model.connection.epoch,
+        hasClient: hasClient(model.connection),
+        page: metersPageOf(model.route),
+        usage: model.settings.usage,
+        shell: model.shell,
+      });
+
+      return meters.sameContext(model.meters, context)
+        ? { model }
+        : Update.foldChild({
+            update: meters.inform,
+            read: readMeters,
+            write: writeMeters,
+            toParentMessage: toGotMetersMessage,
+          })(model, context);
+    },
+  });
 
 /** Tells the sidebar the shell, the open page, the connection and the drafts, when they changed. */
 const syncSidebar: Step = (model) => {
@@ -903,6 +972,10 @@ const step = (received: Message): Step =>
       ({ message: parkedMessage }) =>
       (model) =>
         foldParkedMessage(model, parkedMessage),
+    GotMetersMessage:
+      ({ message: metersMessage }) =>
+      (model) =>
+        foldMetersMessage(model, metersMessage),
     LoadedSettingsPage: () => (model) => ({
       model: modifyFields(model, { settingsPage: () => "loaded" as const }),
     }),
@@ -923,6 +996,7 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncPush,
     syncSettings,
     syncParked,
+    syncMeters,
     loadSettingsPage,
   ]);
 };
@@ -952,6 +1026,7 @@ export const init: Runtime.RoutingApplicationInit<
       push: initialPush,
       settings: initialSettings,
       parked: Parked.initial,
+      meters: initialMeters,
       settingsPage: "idle",
     }),
     toParentMessage: toGotComposerMessage,
@@ -967,6 +1042,7 @@ export const init: Runtime.RoutingApplicationInit<
     startSettings,
     syncSettings,
     syncParked,
+    syncMeters,
     loadSettingsPage,
   ]);
 

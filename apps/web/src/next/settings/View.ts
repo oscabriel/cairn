@@ -1,13 +1,10 @@
-// The `next` settings page (plan look track L7): classic's page (`settings/View.ts`, over the
-// settings Submodel, its Messages and update) in the Stone look, under L6's chat header, which
-// already says "Settings", so the page draws no header of its own. Sections are titled groups of
+// The settings page (plan look track L7), over the settings Submodel, its Messages and update, in
+// the Stone look, under L6's chat header, which already says "Settings", so the page draws no
+// header of its own. Sections are titled groups of
 // rows on one raised box with hairlines between rows; each row has its title, what it does, and
 // its control (a select or a switch, `Controls.ts`) on the right, or under it when the page is
 // narrow. Statuses are status chips (a provider ready, a credential missing); plan windows are
 // grey bars, with the waiting tone only on a spent one.
-//
-// Classic draws no row for which views draw the app (it would change its page); this page does:
-// "Views", Next or Classic, so the phone can go back without editing the address (ADR 0040).
 
 import { skillsPromptTokens } from "@cairn/client-logic/SkillsPrompt";
 import type { ExecutorStatus } from "@cairn/protocol/Executor";
@@ -30,7 +27,6 @@ import { Message } from "../../settings/Message.ts";
 import type { Model } from "../../settings/Model.ts";
 import { formatDayTime, formatUsed } from "../../settings/Time.ts";
 import { modelValue } from "../../settings/Update.ts";
-import type { SettingsViewInputs } from "../../settings/View.ts";
 import type { Child } from "../../ui/Child.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import type { SelectOption } from "../../ui/Select.ts";
@@ -40,6 +36,12 @@ import type { StatusMark } from "../ui/Glyph.ts";
 import { statusChip } from "../ui/StatusChip.ts";
 import type { Tone } from "../ui/Tone.ts";
 import { select, switchControl } from "./Controls.ts";
+
+/** What the root passes in: the push toggle, and the role table after the models section (plan 6G). */
+export interface SettingsViewInputs {
+  readonly notifications: () => Html;
+  readonly roleTable: () => Html;
+}
 
 const none = Option.none<string>();
 
@@ -406,20 +408,6 @@ const appearanceSection = (model: Model, h: HtmlBuilder<Message>): Html => {
     h,
     { id: "appearance", title: "Appearance", headerAction: Option.none() },
     [
-      row(
-        h,
-        "ui",
-        "Views",
-        Option.some(
-          "Next draws Cairn in the new look; Classic is the look it had before. Each device keeps its own."
-        ),
-        Option.some(
-          clientChoice(h, client, "ui", "Views", [
-            { value: "next", label: "Next" },
-            { value: "classic", label: "Classic" },
-          ])
-        )
-      ),
       row(
         h,
         "theme",

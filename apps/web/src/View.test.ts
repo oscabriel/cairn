@@ -1,6 +1,7 @@
 // The app frame's lazy boundaries: a recorded stream replayed through the root update, rendering the
 // root view after every item the way the runtime does, with Foldkit's lazy resolutions observed.
-// The sidebar and the docked composer must reuse their cached views for every streamed item.
+// The docked composer must reuse its cached view for every streamed item, and the thread page its
+// own for every keystroke.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -152,7 +153,7 @@ const composer = (model: Model, message: ComposerMessage): Model =>
   update(model, Message.GotComposerMessage({ message })).model;
 
 describe("the app frame", () => {
-  it("draws neither the sidebar nor the composer again for a streamed thread item", () => {
+  it("does not draw the composer again for a streamed thread item", () => {
     const [snapshot, ...items] = frames;
 
     if (snapshot === undefined) {
@@ -161,9 +162,8 @@ describe("the app frame", () => {
 
     let model = receive(opened, snapshot);
 
-    // The first render fills the caches. On the thread page the unkeyed lazy views are the sidebar,
-    // the chat header, the thread page and the docked composer, in that order; the transcript's
-    // rows are keyed.
+    // The first render fills the caches. On the thread page the unkeyed lazy views are the thread
+    // page and the docked composer, in that order; the transcript's rows are keyed.
     const unkeyed: Array<object> = [];
 
     render(model, (resolution) => {
@@ -172,9 +172,9 @@ describe("the app frame", () => {
       }
     });
 
-    const [sidebarSlot, headerSlot, , composerSlot] = unkeyed;
+    const [pageSlot, composerSlot] = unkeyed;
 
-    const calls = { sidebar: 0, header: 0, composer: 0 };
+    const calls = { page: 0, composer: 0 };
 
     for (const item of items) {
       const next = receive(model, item);
@@ -188,30 +188,25 @@ describe("the app frame", () => {
           return;
         }
 
-        if (resolution.slot === sidebarSlot) {
-          calls.sidebar += 1;
-        } else if (resolution.slot === headerSlot) {
-          calls.header += 1;
+        if (resolution.slot === pageSlot) {
+          calls.page += 1;
         } else if (resolution.slot === composerSlot) {
           calls.composer += 1;
         }
       });
     }
 
-    // The header redraws for the 5 items that add entries (its diff toggle reads them) and keeps
-    // its view for the streamed tokens and tool output, which proves the renders saw each item.
+    // The thread page redraws for each of the 10 items, which proves the renders saw them.
     expect({
       seq: Option.map(model.thread.view, (state) => state.seq),
       slots: unkeyed.length,
-      sidebar: calls.sidebar,
+      page: calls.page,
       composer: calls.composer,
-      header: calls.header,
     }).toStrictEqual({
       seq: Option.some(10),
-      slots: 4,
-      sidebar: 0,
+      slots: 2,
+      page: 10,
       composer: 0,
-      header: 5,
     });
   });
 
@@ -232,8 +227,8 @@ describe("the app frame", () => {
       }
     });
 
-    const pageSlot = unkeyed.at(2);
-    const composerSlot = unkeyed.at(3);
+    const pageSlot = unkeyed.at(0);
+    const composerSlot = unkeyed.at(1);
     const calls = { page: 0, composer: 0 };
 
     for (const value of ["h", "he", "hel", "hell", "hello"]) {

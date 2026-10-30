@@ -1,6 +1,6 @@
-// The Cairn half of the parity judges (plan 4F): the real web client over a real in-process brain,
-// seeded with what t3code showed, so the judges drive the same `update` and `view` the live app
-// runs. Used by judges/capture.ts (hero and thread states), judges/behaviour.ts and judges/surfaces.ts.
+// The judges' Cairn app (plan 4F): the real web client over a real in-process brain, seeded with
+// what t3code showed, so the judges drive the same `update` and `view` the live app runs. Used by
+// judges/behaviour.ts, judges/look.ts, judges/surfaces.ts and the other behaviour scripts.
 //
 // The brain is AppLayer over the scripted harness on an ephemeral loopback port, with Vite in front
 // of it on another, as judges/typing.ts runs it. `restartBrain` closes the brain and opens it again
@@ -137,10 +137,10 @@ export interface ShellSeed {
   readonly projects: ReadonlyArray<ProjectSeed>;
 }
 
-/** No shell seed: one project, one thread, as the classic judges have it. */
+/** No shell seed: one project, one thread. */
 export const NO_SHELL_SEED: ShellSeed = { managed: [], projects: [] };
 
-/** The managed threads the `next` judges seed (behaviour.ts `--ui next`, look.ts), oldest first; the list shows them newest first. */
+/** The managed threads the judges seed (behaviour.ts, look.ts), oldest first; the list shows them newest first. */
 export const MANAGED_SEED: ShellSeed["managed"] = [
   { title: "Map the favicon resolver", state: "idle", usable: true },
   { title: "Brief: port the fold line tallies", state: "done", usable: false },

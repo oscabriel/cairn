@@ -353,8 +353,5 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
   });
 
-/** The meters' update and root hooks, as the `next` chunk hands them to the root. */
-export const meters = { update, inform, sameContext, contextOf } as const;
-
 /** The meters' update and root hooks. */
-export type MetersModule = typeof meters;
+export const meters = { update, inform, sameContext, contextOf } as const;

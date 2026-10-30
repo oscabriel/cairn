@@ -1,8 +1,7 @@
 // The t3code thread importer (plan 4F): turns a t3code thread's projection into pi-shaped entries,
-// so Cairn's transcript shows the same conversation t3code shows and the parity judges can
-// compare the two row by row.
+// so Cairn's transcript shows the same conversation t3code shows (the judges seed it).
 //
-// The input is the export `judges/capture.ts t3` writes from t3code's
+// The input is the export the deleted `judges/capture.ts t3` (plan 7A) wrote from t3code's
 // `orchestration_v2_projection_turn_items` rows (t3code `fe27e8e3`,
 // apps/server/src/orchestration-v2/projection): one record per run, its turn items in order. The
 // mapping reads t3code's item kinds, not its code, so no source is copied.

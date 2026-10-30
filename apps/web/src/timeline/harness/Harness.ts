@@ -17,10 +17,9 @@
 // (the extend check), and `wheel` stops following on any wheel up, even one a nested scroller
 // takes (the nested-wheel check).
 //
-// `?ui=next` draws the `next` transcript (look track L7: `next/timeline/View.ts` and its rows, in
-// the design tokens) over the same submodel, so the judge holds the redrawn rows to the same checks.
+// It draws the app's transcript (look track L7: `next/timeline/View.ts` and its rows, in the design
+// tokens).
 
-import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";
 import { ManagedResource, Runtime, Subscription, Update } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -44,7 +43,6 @@ import {
   switchThread,
   update as updateTimeline,
 } from "../Update.ts";
-import { view as classicTimelineView } from "../View.ts";
 import {
   commitReply,
   growReply,
@@ -104,15 +102,10 @@ const broken: BrokenControl = Option.getOrElse(
   () => "none" as const
 );
 
-/** Whether the page draws the `next` transcript (`?ui=next`) or classic's. */
-const isNext = new URLSearchParams(location.search).get("ui") === "next";
+// The design tokens scope to `[data-ui="next"]`; the app marks <html> and its root the same way.
+document.documentElement.dataset.ui = "next";
 
-if (isNext) {
-  // The design tokens scope to `[data-ui="next"]`; the frame marks <html> and its root the same way.
-  document.documentElement.dataset.ui = "next";
-}
-
-const timelineView = isNext ? nextTimelineView : classicTimelineView;
+const timelineView = nextTimelineView;
 
 /** Ids for added entries, clear of the synthetic threads' own. */
 const FIRST_ADDED_ID = 1_000_000;
@@ -361,7 +354,7 @@ const button = (
 const view = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
     [
-      ...onlyIf(isNext, h.DataAttribute("ui", "next")),
+      h.DataAttribute("ui", "next"),
       h.Class("flex h-dvh flex-col bg-background text-foreground"),
     ],
     [

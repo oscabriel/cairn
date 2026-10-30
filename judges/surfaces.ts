@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one check after another, on purpose */
 // The phase 2 surface judge (plan wave 6; surfaces note "Judges"): behaviour scripts played in the
-// real web client on the `next` views (`?ui=next`) over a real in-process brain on the scripted
+// real web client on the `next` views over a real in-process brain on the scripted
 // harness (judges/fixtures/parity/CairnApp.ts with the asking model of
 // judges/fixtures/surfaces/CardBrain.ts, and for the brief checks a second brain with the
 // proposing parent of judges/fixtures/surfaces/BriefBrain.ts), at 390 px as a phone (touch,
@@ -1184,8 +1184,6 @@ const briefUnbound = async (
 
 const nextUrl = (app: CairnApp): string => {
   const url = new URL(app.threadUrl);
-
-  url.searchParams.set("ui", "next");
 
   return url.href;
 };

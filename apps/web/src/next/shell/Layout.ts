@@ -20,13 +20,8 @@ import { chatHeaderBand } from "./Header.ts";
 import * as Hold from "./Hold.ts";
 import type { Message as ShellMessage } from "./Message.ts";
 import { scratchBody, scratchPanel } from "./Scratch.ts";
-import { registerShell } from "./ShellLoad.ts";
-import { inform, update } from "./Update.ts";
 import * as Shell from "./View.ts";
 import { workInputsOf, workPanelView, workToggleView } from "./Work.ts";
-
-// The root runs the shell's update through `ShellLoad.ts`, from now on.
-registerShell({ update, inform });
 
 /** The root's regions the layout places. */
 export interface ShellRegions {

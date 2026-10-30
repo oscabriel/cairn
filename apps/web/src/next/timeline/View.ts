@@ -7,6 +7,7 @@
 // off-screen measuring box), held apart from classic's so the two never share a drawing.
 
 import { historyCursor } from "@cairn/client-logic/ThreadView";
+import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { Option } from "effect";
 import { Submodel } from "foldkit";
 import { childAttributes, createKeyedLazy } from "foldkit/html";
@@ -26,10 +27,20 @@ import {
 import type { ListItem, Transcript } from "../../timeline/Rows.ts";
 import type { RowContext } from "../../timeline/RowView.ts";
 import { withSubagentItems } from "../../timeline/Subagents.ts";
-import type { ViewInputs } from "../../timeline/View.ts";
+import type { SubagentShells } from "../../timeline/Subagents.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import { FEEDBACK_MOTION, FOCUS_RING, HIT_TARGET } from "../ui/Classes.ts";
 import { rowView } from "./RowView.ts";
+
+/**
+ * What the thread page passes: its view of the thread, the thread's working directory, and the
+ * shell rows its subagent rows read.
+ */
+export interface ViewInputs {
+  readonly state: Option.Option<ThreadViewState>;
+  readonly workspaceRoot: Option.Option<string>;
+  readonly subagents: Option.Option<SubagentShells>;
+}
 
 /** One keyed lazy per thread for the rows the list draws, for the most recent threads. */
 const rowLazies = new Map<string, ReturnType<typeof createKeyedLazy>>();

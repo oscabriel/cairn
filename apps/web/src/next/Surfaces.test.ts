@@ -213,7 +213,7 @@ describe("the next fold line", () => {
 });
 
 describe("the next settings page", () => {
-  it("draws the Views row, so the phone can go back to classic without the address", () => {
+  it("draws no Views row, since the app has one set of views (plan 7A)", () => {
     const loaded = {
       ...settingsInitial,
       context: {
@@ -243,11 +243,11 @@ describe("the next settings page", () => {
         })(),
       },
       Scene.given(loaded),
-      Scene.expect(Scene.selector("#settings-ui")).toHaveValue("classic"),
+      Scene.expect(Scene.selector("#settings-ui")).toBeAbsent(),
       Scene.expect(
         Scene.role("switch", { name: "Confirm thread deletion" })
       ).toExist(),
-      Scene.expect(Scene.selector("#settings-ui")).toHaveHandler("change"),
+      Scene.expect(Scene.selector("#settings-theme")).toHaveHandler("change"),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

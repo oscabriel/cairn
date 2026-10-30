@@ -2,7 +2,7 @@
 /* oxlint-disable no-await-in-loop -- a judge drives one step after another, on purpose */
 // The subagent flows judge (plan 6J, the behaviour script for steer, stop and escalated-question
 // flows; subagents note S7 and "Judges", "Steerable from the UI"; ADR 0027, ADR 0028): the real
-// web client on the `next` views (`?ui=next`) over a real in-process brain on the scripted harness
+// web client on the `next` views over a real in-process brain on the scripted harness
 // (judges/fixtures/parity/CairnApp.ts with the delegating model of
 // judges/fixtures/subagents/FlowsBrain.ts), at 390 px as a phone (touch, coarse pointer) and at
 // 1,440 px, each width on a fresh brain. No model provider is called.
@@ -724,8 +724,6 @@ const runWidth = async (browser: Browser, width: number) => {
   const brainUrl = process.env.CAIRN_DEV_BRAIN ?? "";
   const protocol = protocolOf(brainUrl, app.origin);
   const parentUrl = new URL(app.threadUrl);
-
-  parentUrl.searchParams.set("ui", "next");
 
   const context = await newDevice(browser, width);
   const page = await context.newPage();

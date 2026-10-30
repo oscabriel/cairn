@@ -13,7 +13,7 @@ import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { RuntimeMode } from "@cairn/protocol/Policy";
 import { ThreadClear } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
-import { Cause, Effect, Option, Predicate, Schema } from "effect";
+import { Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
@@ -25,7 +25,7 @@ import {
 } from "../../composer/Ids.ts";
 import { CairnConnection, withBoundary } from "../../connection/Connection.ts";
 import {
-  failureMessage,
+  callFailureText,
   failureMessageOrTag,
 } from "../../connection/Failure.ts";
 import { OutboxItem } from "../../connection/Outbox.ts";
@@ -233,7 +233,7 @@ export const SaveScratch = Command.define("SaveScratch", {
 /**
  * Stops one child's run from the work panel (`thread.stop` on the child): its queued inputs stay,
  * and so do its own children. A call cut off by a dropped connection answers as a failure rather
- * than ending the page (the request card's `whenCutOff`).
+ * than ending the page (`withBoundary`).
  */
 export const StopChild = Command.define("StopChild", {
   args: { threadId: ThreadId },
@@ -253,20 +253,15 @@ export const StopChild = Command.define("StopChild", {
         onFailure: (failure) =>
           Message.FailedStopChild({
             threadId,
-            message: Predicate.isTagged(failure, "ResourceNotAvailable")
-              ? "Cairn is reconnecting. Stop again once it is back."
-              : failureMessage(failure, "The stop did not reach Cairn."),
+            message: callFailureText(failure, {
+              reconnecting:
+                "Cairn is reconnecting. Stop again once it is back.",
+              cutOff:
+                "The connection dropped before Cairn answered. Stop again once it is back.",
+              fallback: "The stop did not reach Cairn.",
+            }),
           }),
-      }),
-      Effect.catchCauseIf(Cause.hasInterruptsOnly, () =>
-        Effect.succeed(
-          Message.FailedStopChild({
-            threadId,
-            message:
-              "The connection dropped before Cairn answered. Stop again once it is back.",
-          })
-        )
-      )
+      })
     ),
 });
 
@@ -274,7 +269,7 @@ export const StopChild = Command.define("StopChild", {
  * The work panel's Stop on a workflow (6F; ADR 0012 as amended): `workflow.stop` for the whole of
  * it, `workflow.stopNode` for one node, which the script then reads as `null`. Either answers once
  * the stop is marked; settled results stay. A call cut off by a dropped connection answers as a
- * failure rather than ending the page (the request card's `whenCutOff`).
+ * failure rather than ending the page (`withBoundary`).
  */
 export const StopWorkflow = Command.define("StopWorkflow", {
   args: {
@@ -299,20 +294,15 @@ export const StopWorkflow = Command.define("StopWorkflow", {
         onFailure: (failure) =>
           Message.FailedStopWorkflow({
             key,
-            message: Predicate.isTagged(failure, "ResourceNotAvailable")
-              ? "Cairn is reconnecting. Stop again once it is back."
-              : failureMessage(failure, "The stop did not reach Cairn."),
+            message: callFailureText(failure, {
+              reconnecting:
+                "Cairn is reconnecting. Stop again once it is back.",
+              cutOff:
+                "The connection dropped before Cairn answered. Stop again once it is back.",
+              fallback: "The stop did not reach Cairn.",
+            }),
           }),
-      }),
-      Effect.catchCauseIf(Cause.hasInterruptsOnly, () =>
-        Effect.succeed(
-          Message.FailedStopWorkflow({
-            key,
-            message:
-              "The connection dropped before Cairn answered. Stop again once it is back.",
-          })
-        )
-      )
+      })
     ),
 });
 
@@ -340,19 +330,14 @@ export const MarkCriterion = Command.define("MarkCriterion", {
         onFailure: (failure) =>
           Message.FailedMarkCriterion({
             criterionId,
-            message: Predicate.isTagged(failure, "ResourceNotAvailable")
-              ? "Cairn is reconnecting. Mark it again once it is back."
-              : failureMessage(failure, "The mark did not reach Cairn."),
+            message: callFailureText(failure, {
+              reconnecting:
+                "Cairn is reconnecting. Mark it again once it is back.",
+              cutOff:
+                "The connection dropped before Cairn answered. Mark it again once it is back.",
+              fallback: "The mark did not reach Cairn.",
+            }),
           }),
-      }),
-      Effect.catchCauseIf(Cause.hasInterruptsOnly, () =>
-        Effect.succeed(
-          Message.FailedMarkCriterion({
-            criterionId,
-            message:
-              "The connection dropped before Cairn answered. Mark it again once it is back.",
-          })
-        )
-      )
+      })
     ),
 });

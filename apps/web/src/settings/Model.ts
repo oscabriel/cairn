@@ -55,11 +55,6 @@ export const Model = Schema.Struct({
   usage: Schema.Option(UsageSnapshot),
   /** A sentence for the user about a change that did not take. */
   notice: Schema.Option(Schema.String),
-  /**
-   * Where the `next` views' chunk is (`next/FrameLoad.ts`): fetched the first time `client.ui` is
-   * `next`, and the classic views draw the app until it has loaded or when it failed.
-   */
-  nextFrame: Schema.Literals(["idle", "loading", "loaded", "failed"]),
 });
 
 export type Model = typeof Model.Type;
@@ -78,5 +73,4 @@ export const initial: Model = {
   skills: AsyncData.Idle(),
   usage: Option.none(),
   notice: Option.none(),
-  nextFrame: "idle",
 };

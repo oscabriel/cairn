@@ -4,19 +4,17 @@
 // over a real in-process brain (judges/fixtures/parity/CairnApp.ts) seeded with t3code's imported
 // thread. Each check prints one line; the run ends with one JSON line.
 //
-//   node judges/behaviour.ts [--only <check,...>] [--out <dir>] [--strict] [--ui classic|next]
-//                            [--broken footer-measure]
+//   node judges/behaviour.ts [--only <check,...>] [--out <dir>] [--strict] [--broken footer-measure]
 //
-// `--ui next` (look track L0, ADR 0040) runs every check on the `next` views: each page the judge
-// opens carries `?ui=next`, and before a check's body runs the page must show the `next` frame
-// (`#root[data-ui="next"]`); the report is `behaviour-next.json`. With `--ui classic`, the default,
-// a page showing the `next` frame fails its check instead, so classic runs stay classic.
+// Before a check's body runs the page must show the app's frame (`#root[data-ui="next"]`); the
+// report is `behaviour-next.json`. The classic views and their checks were deleted at the cutover
+// (plan 7A).
 //
 // Checks:
 //   footer-<width>   the composer footer's blocks (full, icon-only, hidden) and its overflow button
-//                    at 1440, 1180, 980, 820 and 390 equal what t3code showed at the same widths
-//                    (the hero landmark files in the committed baseline); on `--ui next`, whose
-//                    pills are redrawn (look track L7), the fold rule holds instead: nothing in the
+//                    at 1440, 1180, 980, 820 and 390, against t3code's readings at the same
+//                    widths (the hero landmark files in the committed baseline); the pills are
+//                    redrawn (look track L7), so the fold rule holds: nothing in the
 //                    left cluster is cut off, blocks fold last first, the overflow button shows
 //                    exactly when a block is hidden, nothing folds at 1,180 px and up, and the
 //                    fold is the least that fits: the judge draws the left cluster one step less
@@ -43,23 +41,15 @@
 //                    mutation (a DOM observer watches the whole time; the seed's flash was short).
 //                    The socket holds each `thread.launch` frame for 500 ms, so the page always
 //                    subscribes before the launch reaches the in-process brain, as on a slow link;
-//   settle-undo      Settle moves the row to Settled, Undo within 5 s brings it back;
-//   snooze           a snooze preset from the row menu takes the row out of the active list;
-//   search           search finds the thread by title and shows nothing for a miss;
-//   menu-items       the row menu's top level is the ThreadActionMenuId list (client-logic
-//                    ThreadMenu.ts), with t3code's trimmed items absent (items are read by Cairn's
-//                    `data-menu-id` hook);
 //   mobile-sheet     at 390 the sidebar opens as a sheet and closes on navigation;
 //   soft-keyboard    WebKit at iPhone width (Chromium's iPhone emulation where WebKit cannot run,
 //                    named in the result), with the soft keyboard emulated through a shrunken
 //                    `visualViewport`: Enter inserts a newline and sends nothing.
 //
-// `--ui next` judges the `next` shell (look track L6) instead of the classic sidebar: its seed makes
-// the parity thread its project's project thread, gives it six managed threads (one in each state,
-// one of them a real thread) and adds two rail projects (one with a favicon in its root). The
-// classic sidebar's own checks (settle-undo, search, menu-items, snooze) do not run there, since the
-// shell has no shelves, search or row menu (the user, 2026-10-29); these run instead, at 1,440 and
-// 390 px, each saving its states as screenshots under `<out>/shell-next/`:
+// The shell (look track L6): the seed makes the parity thread its project's project thread, gives
+// it six managed threads (one in each state, one of them a real thread) and adds two rail projects
+// (one with a favicon in its root). The shell has no shelves, search or row menu (the user,
+// 2026-10-29); these run at 1,440 and 390 px, each saving its states as screenshots under `<out>/shell-next/`:
 //   shell-rail-<w>        one squircle bubble per folder project (a low corner radius, not a
 //                         circle), the favicon drawn edge to edge in its bubble, a letter for a
 //                         project with none, the selected one marked; a bubble opens its project
@@ -118,7 +108,6 @@ const { values } = parseArgs({
       ),
     },
     strict: { type: "boolean", default: false },
-    ui: { type: "string", default: "classic" },
     broken: { type: "string" },
   },
 });
@@ -127,58 +116,16 @@ if (values.broken !== undefined && values.broken !== "footer-measure") {
   throw new Error(`--broken is footer-measure, not ${values.broken}`);
 }
 
-if (values.ui !== "classic" && values.ui !== "next") {
-  throw new Error(`--ui is classic or next, not ${values.ui}`);
-}
-
-const { ui } = values;
-
-/** `url` as the judge opens it: with `?ui=next` when judging the `next` views. */
-const withUi = (url: string): string => {
-  if (ui === "classic") {
-    return url;
-  }
-
-  const opened = new URL(url);
-
-  opened.searchParams.set("ui", "next");
-
-  return opened.href;
-};
-
-/** Fails unless the page shows the views this run judges. */
+/** Fails unless the page shows the app's frame. */
 const expectUi = async (page: Page) => {
-  const frames = page.locator('#root[data-ui="next"]');
-
-  if (ui === "next") {
-    await frames.waitFor({ state: "attached", timeout: 15_000 });
-  } else if ((await frames.count()) > 0) {
-    throw new Error("the page shows the next views on a classic run");
-  }
+  await page
+    .locator('#root[data-ui="next"]')
+    .waitFor({ state: "attached", timeout: 15_000 });
 };
 
 const only = new Set(values.only?.split(","));
 
 const wanted = (name: string) => only.size === 0 || only.has(name);
-
-/** The top-level row menu items Cairn keeps (ThreadMenu.ts), and t3code's that it trims. */
-const MENU_KEPT = [
-  "Pin thread",
-  "Settle thread",
-  "Snooze",
-  "Rename thread",
-  "Mark unread",
-  "Auto-settle behavior",
-  "Copy",
-  "Archive thread",
-  "Delete",
-];
-
-const MENU_TRIMMED = [
-  "New thread on main",
-  "Regenerate title",
-  "Project settings",
-];
 
 const decodeLandmarks = Schema.decodeUnknownSync(
   Schema.fromJsonString(LandmarkFile)
@@ -209,10 +156,10 @@ const app = await startCairn(
     threadTitle: exported.title,
     entries: importT3Thread(exported).entries,
   },
-  ui === "next" ? { shell: SHELL_SEED } : {}
+  { shell: SHELL_SEED }
 );
 
-const threadUrl = withUi(app.threadUrl);
+const { threadUrl } = app;
 
 const desktop = (width: number): BrowserContextOptions => ({
   viewport: { width, height: 900 },
@@ -237,9 +184,6 @@ const menu = (page: Page, trigger: string) =>
   page.locator(`[data-testid="composer-menu"][data-trigger="${trigger}"]`);
 
 const chips = (page: Page) => page.locator('[data-testid="attachment-chip"]');
-
-const settledCount = async (page: Page) =>
-  await page.getByTestId("sidebar-settled-shelf-toggle").first().textContent();
 
 /** Runs one check in a fresh context on `url`; a throw is a failure with its message. */
 const check = async (
@@ -277,13 +221,6 @@ const check = async (
     record(name, false, String(error).split("\n")[0] ?? "failed");
   } finally {
     await context.close();
-  }
-};
-
-/** A check of the classic sidebar, which the `next` shell does not have; skipped on `next`. */
-const classicCheck: typeof check = async (...args) => {
-  if (ui === "classic") {
-    await check(...args);
   }
 };
 
@@ -328,7 +265,7 @@ const paste = async (
 
 const value = async (page: Page) => await editor(page).inputValue();
 
-/** Where `--ui next` saves the shell's states, for the look round. */
+/** Where the run saves the shell's states, for the look round. */
 const SHOTS = path.join(values.out, "shell-next");
 
 /** Saves the page as the shell state `name` at `width`. */
@@ -1056,11 +993,9 @@ const nextFooterVerdict = async (
 const chromiumBrowser = await chromium.launch();
 
 try {
-  const hero = withUi(`${app.origin}/`);
+  const hero = `${app.origin}/`;
 
-  if (ui === "next") {
-    await shellChecks(chromiumBrowser, hero);
-  }
+  await shellChecks(chromiumBrowser, hero);
 
   // Footer folding against t3code's readings at the same widths.
   for (const [width, file] of [
@@ -1088,17 +1023,9 @@ try {
 
         const { footer: actual } = await readLandmarks(page);
 
-        if (ui === "next") {
-          return await nextFooterVerdict(page, width, actual, expected);
-        }
-
-        const same =
-          JSON.stringify(actual.blocks) === JSON.stringify(expected.blocks) &&
-          actual.overflow === expected.overflow;
-
-        return `${same ? "same" : "differs"}: t3code ${JSON.stringify(expected)}, Cairn ${JSON.stringify(actual)}`;
+        return await nextFooterVerdict(page, width, actual, expected);
       },
-      (detail) => detail.startsWith("same") || detail.startsWith("folds")
+      (detail) => detail.startsWith("folds")
     );
   }
 
@@ -1344,18 +1271,13 @@ try {
         const words = `hero launch ${index} ${Date.now()}`;
 
         if (index > 0) {
-          // Back to the hero without a reload, so the observer keeps watching. The next shell has
-          // no "New thread" (a project's new top-level thread comes from refresh), so it goes back
+          // Back to the hero without a reload, so the observer keeps watching. The shell has no
+          // "New thread" (a project's new top-level thread comes from refresh), so it goes back
           // through the history the router follows.
-          await (ui === "next"
-            ? page.evaluate(() => {
-                history.pushState(null, "", "/?ui=next");
-                dispatchEvent(new PopStateEvent("popstate"));
-              })
-            : page
-                .getByRole("button", { name: "New thread", exact: true })
-                .first()
-                .click());
+          await page.evaluate(() => {
+            history.pushState(null, "", "/");
+            dispatchEvent(new PopStateEvent("popstate"));
+          });
 
           await editor(page).waitFor({ state: "visible" });
         }
@@ -1409,89 +1331,6 @@ try {
     (detail) => detail === 'hero "", thread "a thread draft"'
   );
 
-  await classicCheck(
-    chromiumBrowser,
-    "settle-undo",
-    desktop(1440),
-    hero,
-    async (page) => {
-      const before = await settledCount(page);
-
-      await page.getByTestId("sidebar-row-card").first().hover();
-      await page.getByRole("button", { name: "Settle thread" }).first().click();
-      await page.waitForTimeout(600);
-
-      const settled = await settledCount(page);
-
-      await page
-        .getByTestId("sidebar-undo-notice")
-        .getByRole("button")
-        .first()
-        .click();
-      await page.waitForTimeout(600);
-
-      return `${before} -> ${settled} -> ${await settledCount(page)}`;
-    },
-    (detail) => {
-      const [before, settled, after] = detail.split(" -> ");
-
-      return before === after && before !== settled;
-    }
-  );
-
-  await classicCheck(
-    chromiumBrowser,
-    "search",
-    desktop(1440),
-    hero,
-    async (page) => {
-      const search = page.getByRole("combobox", { name: "Search threads" });
-
-      await search.fill(exported.title.split(" ")[0] ?? "");
-      await page.waitForTimeout(1000);
-
-      const hit = await page
-        .getByRole("option")
-        .filter({ hasText: exported.title.slice(0, 12) })
-        .count();
-
-      await search.fill("zzzz-nothing");
-      await page.waitForTimeout(1000);
-
-      return `hit ${hit}, miss ${await page.getByRole("option").count()}`;
-    },
-    (detail) => /^hit [1-9]\d*, miss 0$/u.test(detail)
-  );
-
-  await classicCheck(
-    chromiumBrowser,
-    "menu-items",
-    desktop(1440),
-    hero,
-    async (page) => {
-      await page
-        .getByTestId("sidebar-row-card")
-        .first()
-        .click({ button: "right" });
-      await page.waitForTimeout(400);
-
-      const texts = await page
-        .locator('[data-level="0"] [data-menu-id]')
-        .allInnerTexts();
-
-      const labels = texts.map((label) => label.trim());
-
-      const missingKept = MENU_KEPT.filter((label) => !labels.includes(label));
-
-      const trimmedShown = MENU_TRIMMED.filter((label) =>
-        labels.includes(label)
-      );
-
-      return `items ${JSON.stringify(labels)}; missing ${JSON.stringify(missingKept)}; trimmed shown ${JSON.stringify(trimmedShown)}`;
-    },
-    (detail) => detail.endsWith("missing []; trimmed shown []")
-  );
-
   await check(
     chromiumBrowser,
     "mobile-sheet",
@@ -1509,64 +1348,12 @@ try {
       const sheet = page.getByTestId("sidebar-sheet");
       const opened = (await sheet.count()) > 0;
 
-      await sheet
-        .getByTestId(
-          ui === "next" ? "shell-project-thread" : "sidebar-row-card"
-        )
-        .first()
-        .click();
+      await sheet.getByTestId("shell-project-thread").first().click();
       await page.waitForTimeout(900);
 
       return `opened ${opened}, closed ${(await sheet.count()) === 0}, at ${new URL(page.url()).pathname}`;
     },
     (detail) => detail.startsWith("opened true, closed true, at /t/")
-  );
-  // Last: a snoozed thread leaves the active list for every later check.
-  await classicCheck(
-    chromiumBrowser,
-    "snooze",
-    desktop(1440),
-    hero,
-    async (page) => {
-      // Judged by its own effect, not an empty list: earlier checks (hero-launch) leave threads.
-      const cards = page.getByTestId("sidebar-row-card");
-      const before = await cards.count();
-      const first = cards.first();
-
-      const threadId = await first
-        .locator("xpath=ancestor::li[@data-thread-item][1]")
-        .getAttribute("data-thread-item");
-
-      await first.click({ button: "right" });
-      await page.locator('[data-level="0"] [data-menu-id="snooze"]').hover();
-      await page.waitForTimeout(400);
-      await page
-        .locator('[data-level="1"] [data-menu-id^="snooze:"]')
-        .first()
-        .click();
-      await page.waitForTimeout(800);
-
-      const after = await cards.count();
-
-      const stillActive = await page
-        .locator(
-          `[data-thread-item="${threadId ?? ""}"] [data-testid="sidebar-row-card"]`
-        )
-        .count();
-
-      return `active ${before} -> ${after}, snoozed card still active ${stillActive}`;
-    },
-    (detail) => {
-      const match =
-        /^active (?<before>\d+) -> (?<after>\d+), snoozed card still active 0$/u.exec(
-          detail
-        );
-
-      return (
-        match?.groups !== undefined &&
-        Number(match.groups.after) === Number(match.groups.before) - 1
-      );
-    }
   );
 } finally {
   await chromiumBrowser.close();
@@ -1663,15 +1450,17 @@ const passing = results.filter((result) => result.pass).length;
 mkdirSync(values.out, { recursive: true });
 
 writeFileSync(
-  path.join(
-    values.out,
-    ui === "next" ? "behaviour-next.json" : "behaviour.json"
-  ),
-  `${JSON.stringify({ judge: "behaviour", ui, passing, checks: results.length, results }, null, 2)}\n`
+  path.join(values.out, "behaviour-next.json"),
+  `${JSON.stringify({ judge: "behaviour", ui: "next", passing, checks: results.length, results }, null, 2)}\n`
 );
 
 console.log(
-  JSON.stringify({ judge: "behaviour", ui, checks: results.length, passing })
+  JSON.stringify({
+    judge: "behaviour",
+    ui: "next",
+    checks: results.length,
+    passing,
+  })
 );
 
 // Exits outright: a handle the full run leaves open (not one `--only` subsets leave) kept the

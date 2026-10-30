@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one step after another, on purpose */
 // The rollup judge (plan 6D, the behaviour script `rollup`; surfaces note "Judges", S6; ADR 0027's
-// gate played through the page): the real web client on the `next` views (`?ui=next`) over a real
+// gate played through the page): the real web client on the `next` views over a real
 // in-process brain on the scripted harness (judges/fixtures/parity/CairnApp.ts with the delegating
 // model of judges/fixtures/subagents/RollupBrain.ts), its seeded thread the project thread, at
 // 390 px as a phone (touch, coarse pointer) and at 1,440 px, each width on a fresh brain. No model
@@ -553,8 +553,6 @@ const runWidth = async (browser: Browser, width: number) => {
   const brainUrl = process.env.CAIRN_DEV_BRAIN ?? "";
   const protocol = protocolOf(brainUrl, app.origin);
   const parentUrl = new URL(app.threadUrl);
-
-  parentUrl.searchParams.set("ui", "next");
 
   const context = await newDevice(browser, width);
   const page = await context.newPage();

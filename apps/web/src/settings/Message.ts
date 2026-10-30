@@ -27,10 +27,6 @@ export const Message = defineMessageUnion({
   SelectedClientSetting: { key: ChoiceSettingKey, value: Schema.String },
   /** The device switched between light and dark while the theme follows it. */
   ChangedColorScheme: {},
-  /** The `next` views' chunk loaded, so the app can draw with them. */
-  LoadedNextFrame: {},
-  /** The `next` views' chunk could not be fetched; the classic views keep drawing the app. */
-  FailedNextFrame: {},
 
   /** One section's answer for `epoch`. */
   ReceivedServerSettings: { epoch: Schema.Int, settings: ServerSettings },

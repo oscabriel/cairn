@@ -51,3 +51,29 @@ export const causeMessage = (
         ? failure.message
         : failed,
   });
+
+/** What a Command says when its call failed: the words for each way it can fail. */
+export interface FailureTexts {
+  /** No client yet: the connection is coming back. */
+  readonly reconnecting: string;
+  /** The call was out when the connection dropped (`withBoundary`'s `CutOff`). */
+  readonly cutOff: string;
+  /** Anything else without a sentence of the brain's. */
+  readonly fallback: string;
+}
+
+/** The sentence for a Command's failed call: reconnecting, cut off, or the brain's own. */
+export const callFailureText = (
+  failure: CallFailure,
+  texts: FailureTexts
+): string => {
+  if (Predicate.isTagged(failure, "ResourceNotAvailable")) {
+    return texts.reconnecting;
+  }
+
+  if (Predicate.isTagged(failure, "CutOff")) {
+    return texts.cutOff;
+  }
+
+  return failureMessage(failure, texts.fallback);
+};

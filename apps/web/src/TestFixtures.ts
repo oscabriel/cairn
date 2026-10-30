@@ -45,11 +45,11 @@ export const connectingModel: Model = {
   push: Push.initial,
   settings: Settings.initial,
   parked: Parked.initial,
-  nextShell: NextShell.initial,
+  // Started, as after the first update: its scratch thread read (`LoadScratch`) is not under test.
+  nextShell: { ...NextShell.initial, started: true },
   scratchThread: Thread.Model.initial,
   requestCard: RequestCard.initial,
   meters: Meters.initial,
-  settingsPage: "idle",
 };
 
 /** The same page once the shell is current on epoch `epoch`. */

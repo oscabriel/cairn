@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one check after another, on purpose */
 // The meters judge (plan wave 6, 6G; surfaces note S9, models note M10): behaviour scripts played
-// in the real web client on the `next` views (`?ui=next`) over a real in-process brain on the
+// in the real web client on the `next` views over a real in-process brain on the
 // scripted harness (judges/fixtures/meters/MetersApp.ts, seeded with spend, budgets, plan windows
 // and the deployed role table, each with a known truth), at 390 px as a phone (touch, coarse
 // pointer) and at 1,440 px. Each check prints one line; the run ends with one JSON line. No model
@@ -431,7 +431,7 @@ const usageReady = async (page: Page): Promise<boolean> => {
 };
 
 const checkMeters = async (page: Page, width: number, origin: string) => {
-  await openNext(page, `${origin}/usage?ui=next`, '[data-testid="usage-page"]');
+  await openNext(page, `${origin}/usage`, '[data-testid="usage-page"]');
 
   expect(
     await waitUntil(async () => await usageReady(page), 20_000),
@@ -477,11 +477,7 @@ const checkRoles = async (page: Page, width: number, origin: string) => {
     });
   });
 
-  await openNext(
-    page,
-    `${origin}/settings?ui=next`,
-    '[data-testid="settings-roles"]'
-  );
+  await openNext(page, `${origin}/settings`, '[data-testid="settings-roles"]');
 
   const statusOf = async () => {
     const facts = await roleFacts(page);

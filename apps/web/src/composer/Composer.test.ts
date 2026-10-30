@@ -20,6 +20,7 @@ import { AttachmentPaste } from "../attachments/Paste.ts";
 import { readyIds } from "../attachments/Update.ts";
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
+import { view } from "../next/composer/View.ts";
 import { AppRoute } from "../Route.ts";
 import {
   MoveHeroToDraftUrl,
@@ -41,13 +42,11 @@ import { composerContext } from "./Context.ts";
 import { activeDraft, loadDrafts, saveDrafts } from "./Drafts.ts";
 import { ComposerInput } from "./Editor.ts";
 import { MeasureFooter } from "./Footer.ts";
-import { MeasureHeadline } from "./MeasureHeadline.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { pickerRows } from "./Popovers.ts";
 import { contextChanged, inform, pickDraftProject, update } from "./Update.ts";
-import { view } from "./View.ts";
 
 const editor = Scene.testId("composer-editor");
 
@@ -1007,10 +1006,6 @@ describe("the new-thread hero", () => {
       { update, view },
       Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
       ...acknowledgeMounts,
-      Scene.Mount.resolve(
-        MeasureHeadline,
-        Message.MeasuredHeadline({ inline: true })
-      ),
       Scene.expect(Scene.testId("hero-headline")).toContainText(
         "What should we build"
       ),

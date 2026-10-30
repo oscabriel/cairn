@@ -10,7 +10,7 @@ import {
   PROTOCOL_QUERY_PARAM,
   PROTOCOL_VERSION,
 } from "@cairn/protocol/Rpc";
-import { Effect, Layer, Schedule } from "effect";
+import { Cause, Effect, Layer, Schedule, Schema } from "effect";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError } from "effect/rpc";
 import { Socket } from "effect/socket";
@@ -59,16 +59,37 @@ const ProtocolLive = RpcClient.layerProtocolSocket({
 export const BRAIN_INTERNAL_TEXT =
   "The brain answered with an internal error. Reload if it keeps happening.";
 
+/** What a call cut off by a dropped connection says. */
+export const CUT_OFF_TEXT =
+  "The connection dropped before Cairn answered. Try again once it is back.";
+
+/**
+ * A call cut off by a dropped connection: the connection's client was let go while the call was
+ * out, which interrupts it. It carries no `retryable` verdict, so it reads as the transport's
+ * (`connection/Failure.ts`): nothing known ran, and an outbox item stays at the head.
+ */
+export class CutOff extends Schema.TaggedError<CutOff>()("CutOff", {
+  message: Schema.String,
+}) {}
+
 /**
  * The client boundary every Command's call goes through (T19): a server defect or an answer the
  * protocol cannot decode becomes a non-retryable `Internal` failure, which the Command reports,
- * instead of a defect that crashes the page (and, from a saved outbox item, every reload).
+ * instead of a defect that crashes the page (and, from a saved outbox item, every reload); and a
+ * call cut off by an epoch bump becomes a `CutOff` failure, instead of an interruption that ends
+ * the page ("All fibers interrupted", wave 6b). Only interruption alone is caught; a defect still
+ * becomes `Internal`.
  */
 export const withBoundary = <A, E, R>(
   call: Effect.Effect<A, E, R>
-): Effect.Effect<A, E | Internal, R> =>
-  Effect.catchDefect(call, () =>
-    Effect.fail(new Internal({ message: BRAIN_INTERNAL_TEXT }))
+): Effect.Effect<A, E | Internal | CutOff, R> =>
+  call.pipe(
+    Effect.catchDefect(() =>
+      Effect.fail(new Internal({ message: BRAIN_INTERNAL_TEXT }))
+    ),
+    Effect.catchCauseIf(Cause.hasInterruptsOnly, () =>
+      Effect.fail(new CutOff({ message: CUT_OFF_TEXT }))
+    )
   );
 
 /** Opens one client. Its socket closes when the resource's scope does. */

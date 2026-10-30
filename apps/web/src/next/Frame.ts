@@ -1,14 +1,10 @@
-// The `next` views' frame (ADR 0040, plan look track L0): the root view the app draws when the `ui`
-// client setting is `next`. It renders the same Model as the classic views, through the same
-// Messages, and keeps the hooks the judges read (`Hooks.ts`). This module and what it alone imports
-// are their own chunk, fetched by `FrameLoad.ts` the first time `ui` is `next`, so the entry bundle
-// does not grow.
+// The app's frame (ADR 0040, plan look track L0; the only views since the cutover, plan 7A). It
+// keeps the hooks the judges read (`Hooks.ts`).
 //
-// The shell is `next`'s own (L6, `shell/Layout.ts`): the project rail, the project's sidebar list, the
-// chat header, the hold banner and the scratch overlay. The page inside it is `next`'s too (L7,
-// `page/Regions.ts`): the hero and the composer, the thread page and its transcript, the diff
-// toggle and the settings page, over the same Submodels as classic's; of the classic regions only
-// the notice bar is still drawn. This file is integrator-only after L0.
+// The shell (L6, `shell/Layout.ts`): the project rail, the project's sidebar list, the chat header,
+// the hold banner and the scratch overlay. The page inside it (L7, `page/Regions.ts`): the hero and
+// the composer, the thread page and its transcript, the diff toggle and the settings page. The root
+// hands it only the notice bar. This file is integrator-only.
 
 import "./tokens.css";
 // The transcript's subagent rows (plan 6C), registered with the transcript as this chunk loads.
@@ -25,37 +21,10 @@ import * as Pages from "./page/Regions.ts";
 import { parentBanner } from "./rollup/ParentBanner.ts";
 import { layout } from "./shell/Layout.ts";
 
-/** The request card's update and root hooks, held by `FrameLoad.ts` once this chunk loads. */
-export { requestCard } from "./card/Update.ts";
-
-/** The meters' update and root hooks, held by `FrameLoad.ts` once this chunk loads (plan 6G). */
-export { meters } from "./meters/Update.ts";
-
-/** What the `next` frame draws inside a page the classic views still draw. */
-export interface PageSlots {
-  /** The role table, after the settings page's models section (plan 6G). */
-  readonly roleTable: () => Html;
-}
-
-/**
- * The regions the classic views draw, handed to the frame until `next` draws its own. Each is a
- * thunk, so a region `next` has replaced is never built.
- */
+/** The regions the root draws and hands to the frame. */
 export interface Regions {
-  /** The sidebar's open state, for the wrapper's `data-sidebar-state`. */
-  readonly sidebarState: string;
-  /** The sidebar: projects, threads, search and shelves. */
-  readonly sidebar: () => Html;
   /** The notice bar above the page; empty when there is no notice. */
   readonly notice: () => Html;
-  /** The routed page: hero, draft, settings or not found, with the frame's slots in it. */
-  readonly page: (slots: PageSlots) => Html;
-  /** The routed thread's transcript, without the classic header and hold banner. */
-  readonly thread: () => Html;
-  /** The thread page's header controls (the diff toggle). */
-  readonly threadControls: () => Html;
-  /** The composer docked under a thread's transcript. */
-  readonly composer: () => Html;
 }
 
 type H = HtmlBuilder<Message>;
@@ -96,7 +65,7 @@ const usagePage = (model: Model, h: H): Html =>
     toParentMessage: (message) => Message.GotMetersMessage({ message }),
   });
 
-/** The app drawn with the `next` views, over the same Model as the classic ones. */
+/** The app. */
 export const view = (model: Model, h: H, regions: Regions): Document => ({
   title: "Cairn",
   body: layout(model, h, {

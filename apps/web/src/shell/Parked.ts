@@ -20,7 +20,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { defineMessageUnion } from "foldkit/message";
 import { modifyFields } from "foldkit/struct";
 
-import { CairnConnection } from "../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import type {
   CairnClient,
   CairnConnectionService,
@@ -69,7 +69,7 @@ export const retryParkedTask = (
   client: Pick<CairnClient, "thread.retryTask">,
   input: { readonly threadId: ThreadId; readonly taskId: TaskId }
 ) =>
-  client["thread.retryTask"](input).pipe(
+  withBoundary(client["thread.retryTask"](input)).pipe(
     Effect.match({
       onSuccess: () => Message.SucceededRetry(),
       onFailure: (failure) =>

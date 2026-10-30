@@ -1,8 +1,8 @@
 /// <reference lib="dom" />
-// Landmarks for the parity judges (plan 4F): the elements both apps mark with the same hooks, read
-// from a live page with their boxes and computed tokens. judges/capture.ts writes one file per
-// state; judges/parity-structure.ts compares t3code's file with Cairn's; judges/behaviour.ts reads
-// the composer footer part.
+// Landmarks (plan 4F): the elements Cairn and t3code mark with the same hooks, read from a live page
+// with their boxes and computed tokens. judges/behaviour.ts reads the composer footer part and holds
+// it against t3code's committed readings (the pixel-parity judges that wrote and compared whole
+// files were deleted at the cutover, plan 7A).
 
 import { Schema } from "effect";
 import type { Page } from "playwright";

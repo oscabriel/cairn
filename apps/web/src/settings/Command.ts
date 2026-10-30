@@ -1,5 +1,4 @@
-// The settings page's Commands: this device's settings (read with the address's `?ui=` over them,
-// save, apply), one question to the brain per section, `settings.update`, the skills reload and
+// The settings page's Commands: this device's settings (read, save, apply), one question to the brain per section, `settings.update`, the skills reload and
 // Executor's sign-in. Each answers with one Message; a failure carries the brain's sentence when it
 // sent one.
 
@@ -13,46 +12,22 @@ import { load } from "foldkit/navigation";
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import type { CairnConnectionService } from "../connection/Connection.ts";
 import { failureMessage } from "../connection/Failure.ts";
-import { fetchNextFrame } from "../next/FrameLoad.ts";
 import {
   applyClientSettings,
   ClientSettings,
   loadClientSettings,
   saveClientSettings,
-  withSearchUi,
 } from "./ClientSettings.ts";
 import { Message } from "./Message.ts";
 
 /** The services the settings page's Commands and Subscriptions read. */
 export type Services = CairnConnectionService | KeyValueStore.KeyValueStore;
 
-/**
- * Reads this device's settings from storage, with the address's `?ui=` choice over them; a choice
- * that changes them is saved, so it holds on the pages the app navigates to afterwards.
- */
+/** Reads this device's settings from storage. */
 export const LoadClientSettings = Command.define("LoadClientSettings", {
   messages: [Message.LoadedClientSettings],
-  execute: Effect.gen(function* () {
-    const saved = yield* loadClientSettings;
-    const search = yield* Effect.sync(() => globalThis.location.search);
-    const settings = withSearchUi(saved, search);
-
-    if (settings !== saved) {
-      yield* saveClientSettings(settings);
-    }
-
-    return Message.LoadedClientSettings({ settings });
-  }),
-});
-
-/** Fetches the `next` views' chunk (`next/FrameLoad.ts`). */
-export const LoadNextFrame = Command.define("LoadNextFrame", {
-  messages: [Message.LoadedNextFrame, Message.FailedNextFrame],
-  execute: fetchNextFrame.pipe(
-    Effect.match({
-      onSuccess: () => Message.LoadedNextFrame(),
-      onFailure: () => Message.FailedNextFrame(),
-    })
+  execute: Effect.map(loadClientSettings, (settings) =>
+    Message.LoadedClientSettings({ settings })
   ),
 });
 

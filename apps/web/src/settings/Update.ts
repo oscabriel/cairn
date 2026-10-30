@@ -23,7 +23,6 @@ import {
   FetchServerSettings,
   FetchSkills,
   LoadClientSettings,
-  LoadNextFrame,
   SaveClientSettings,
   SignInExecutor,
   UpdateServerSettings,
@@ -122,28 +121,17 @@ export const inform = (
   return { model: next };
 };
 
-/** Asks for the `next` views' chunk the first time the `ui` setting is `next`. */
-const loadNextFrame = (result: UpdateReturn): UpdateReturn =>
-  result.model.client.ui === "next" && result.model.nextFrame === "idle"
-    ? {
-        model: modifyFields(result.model, {
-          nextFrame: () => "loading" as const,
-        }),
-        commands: Array.append(result.commands ?? [], LoadNextFrame()),
-      }
-    : result;
-
 /** Applies and saves `settings` when they differ from what the page holds. */
 const changeClient = (model: Model, settings: ClientSettings): UpdateReturn =>
   Equal.equals(settings, model.client)
     ? { model }
-    : loadNextFrame({
+    : {
         model: modifyFields(model, { client: () => settings }),
         commands: [
           ApplyClientSettings({ settings }),
           SaveClientSettings({ settings }),
         ],
-      });
+      };
 
 const NO_CHANGE: SettingsPatch = {
   autoSettleDays: Option.none(),
@@ -204,14 +192,13 @@ const answer = (
 /** The settings page's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    LoadedClientSettings: ({ settings }) =>
-      loadNextFrame({
-        model: modifyFields(model, {
-          client: () => settings,
-          clientLoaded: () => true,
-        }),
-        commands: [ApplyClientSettings({ settings })],
+    LoadedClientSettings: ({ settings }) => ({
+      model: modifyFields(model, {
+        client: () => settings,
+        clientLoaded: () => true,
       }),
+      commands: [ApplyClientSettings({ settings })],
+    }),
     AppliedClientSettings: () => ({ model }),
     SavedClientSettings: ({ saved }) => ({
       model: saved
@@ -230,18 +217,6 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         onNone: () => ({ model }),
         onSome: (settings) => changeClient(model, settings),
       }),
-    LoadedNextFrame: () => ({
-      model: modifyFields(model, { nextFrame: () => "loaded" as const }),
-    }),
-    FailedNextFrame: () => ({
-      model: modifyFields(model, {
-        nextFrame: () => "failed" as const,
-        notice: () =>
-          Option.some(
-            "The new interface could not load, so the classic one is showing. Reload the page to try again."
-          ),
-      }),
-    }),
     ChangedColorScheme: () => ({
       model,
       commands:

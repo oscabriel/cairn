@@ -2,7 +2,7 @@
 // while a thread with a long history streams under it, then compare what arrived with what was sent.
 //
 //   node judges/typing.ts [chromium|webkit] [--seconds 60] [--cps 20] [--throttle 4] [--busy 10]
-//                         [--mobile] [--history 500] [--url <thread page url>] [--ui classic|next]
+//                         [--mobile] [--history 500] [--url <thread page url>]
 //                         [--connect <ws endpoint>] [--port <vite port>]
 //
 // Without --url the judge starts everything itself, on ephemeral loopback ports: a brain from the
@@ -16,7 +16,7 @@
 // and summed, with the Message tags that triggered them, as `slowViews`.
 // Prints one JSON line and exits 0 when nothing was dropped or reordered, IME and the menu case are
 // intact, the transcript streamed (at least half the judge's own exchanges landed, `stream: ok`),
-// and the page logged no error. `--ui next` types into the `next` frame's composer (look track L7).
+// and the page logged no error.
 // `--connect` drives a browser another machine serves (`npx playwright@<this version> run-server`),
 // so the WebKit tier runs from the Beelink against the MacBook's WebKit, which cannot start on this
 // host (no system libraries, no sudo). `--port` fixes the Vite port, so an SSH reverse tunnel
@@ -86,14 +86,13 @@ const { values, positionals } = parseArgs({
     history: { type: "string", default: "500" },
     mobile: { type: "boolean", default: false },
     url: { type: "string" },
-    ui: { type: "string", default: "classic" },
     connect: { type: "string" },
     port: { type: "string" },
   },
 });
 
-/** Which views type: classic's, or the `next` frame's with `?ui=next` (look track L7). */
-const ui = values.ui === "next" ? "next" : "classic";
+/** The views typed into: the app's frame (look track L7; the only views since plan 7A). */
+const ui = "next";
 
 const [browserName = "chromium"] = positionals;
 
@@ -403,18 +402,12 @@ if (busy > 0) {
   target.searchParams.set("busy", String(busy));
 }
 
-if (ui === "next") {
-  target.searchParams.set("ui", "next");
-}
-
 await page.goto(target.href, { waitUntil: "networkidle" });
 
-if (ui === "next") {
-  // The `next` frame draws once its chunk has loaded; typing into classic would judge the wrong views.
-  await page
-    .locator('#root[data-ui="next"]')
-    .waitFor({ state: "attached", timeout: 20_000 });
-}
+// Typing before the frame draws would judge nothing.
+await page
+  .locator('#root[data-ui="next"]')
+  .waitFor({ state: "attached", timeout: 20_000 });
 
 // The transcript virtualizes its rows, so the judge reads its row count, not the DOM's rows.
 const timeline = page.getByTestId("timeline");

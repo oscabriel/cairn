@@ -16,7 +16,7 @@
  * (Apache-2.0): the named surface set, names only.
  *
  * Scope. Everything sits under `[data-ui="next"]`, which marks two elements: <html>, where
- * ClientSettings sets it, and #root, where `next/Frame.ts` sets it. The classic views never see it.
+ * index.html sets it, and #root, where the frame's layout sets it.
  * The theme is the `dark` class ClientSettings puts on <html>, so each dark rule names both forms:
  * `.dark[data-ui="next"]` for <html> itself and `.dark [data-ui="next"]` for #root, and the two
  * resolve to the same values (the judge checks). There is one look, so no other attribute picks

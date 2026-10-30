@@ -1,12 +1,11 @@
-// The page regions the `next` frame draws itself (plan look track L7), in place of the classic
-// regions the root hands it (`View.ts`'s `Regions`): the composer (the hero on a draft's page, the
-// box docked under a thread), the thread page with its transcript, the chat header's diff toggle,
-// and the settings page. Each is the same Submodel as classic's, over the same slice of the Model
-// and lifted by the same root Message, so the update is classic's; only the views are `next`'s.
+// The page regions the `next` frame draws (plan look track L7): the composer (the hero on a
+// draft's page, the box docked under a thread), the thread page with its transcript, the chat
+// header's diff toggle, and the settings page. Each is a Submodel over its slice of the root Model,
+// lifted by a root Message.
 //
 // The thread page and the composer are lazy views over their own inputs, each with its own cache
 // (a cached view belongs to one position in the tree), so a keystroke rebuilds only the composer
-// and a streamed token only the transcript, as in classic.
+// and a streamed token only the transcript.
 
 import type { Entry } from "@cairn/protocol/Thread";
 import { Equal, Option } from "effect";
@@ -15,12 +14,12 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { Message } from "../../Message.ts";
 import type { Model } from "../../Model.ts";
+import type { ViewInputs as ThreadInputs } from "../../page/thread/Inputs.ts";
+import { launchFailureOf } from "../../page/thread/LaunchFailure.ts";
 import type * as ThreadModel from "../../page/thread/Model.ts";
-import type { ViewInputs as ThreadInputs } from "../../page/thread/View.ts";
 import { AppRoute } from "../../Route.ts";
 import { projectOf, threadRowOf } from "../../ThreadRow.ts";
 import { subagentRowsInput } from "../../timeline/Subagents.ts";
-import { launchFailureOf } from "../../View.ts";
 import { view as composerView } from "../composer/View.ts";
 import { settingsPageView } from "../settings/Page.ts";
 import type { SettingsSlots } from "../settings/Page.ts";
@@ -108,7 +107,7 @@ export const threadBody = (model: Model, h: H): Html =>
               Option.flatMap(failure, ({ retryUrl }) => retryUrl),
               () => ""
             ),
-            subagentRowsInput(true, model.shell, threadId),
+            subagentRowsInput(model.shell, threadId),
           ]),
         ]
       );

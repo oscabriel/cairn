@@ -74,10 +74,6 @@ export const Message = defineMessageUnion({
   GotScratchThreadMessage: { message: Thread.Message },
   GotRequestCardMessage: { message: RequestCardMessage },
   GotMetersMessage: { message: MetersMessage },
-  /** The settings page's view chunk loaded. */
-  LoadedSettingsPage: {},
-  /** The settings page's view chunk could not be fetched. */
-  FailedSettingsPage: {},
 });
 
 export type Message = typeof Message.Type;

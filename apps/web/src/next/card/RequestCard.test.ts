@@ -10,6 +10,11 @@ import { Option } from "effect";
 import type { Schema } from "effect";
 import * as Scene from "foldkit/scene";
 
+import { ConnectionState } from "../../connection/Reconnect.ts";
+import { Message as RootMessage } from "../../Message.ts";
+import type { Model as RootModel } from "../../Model.ts";
+import { liveModel } from "../../TestFixtures.ts";
+import { update as rootUpdate } from "../../Update.ts";
 import { resolvedCheck } from "./CardFixtures.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { initial } from "./Model.ts";
@@ -581,5 +586,27 @@ describe("the request card", () => {
 
     assert.isTrue(Option.isNone(moved.declining));
     assert.isTrue(Option.isNone(moved.closed));
+  });
+});
+
+/** Whether the root tells the card it has a client, after one update from `model`. */
+const toldHasClient = (model: RootModel) =>
+  rootUpdate(model, RootMessage.CompletedNavigateInternal()).model.requestCard
+    .hasClient;
+
+describe("the root's connection, as the card is told it", () => {
+  it("counts a client only once the connection is Live, not while it is Syncing", () => {
+    const live = liveModel(2);
+
+    const syncing: RootModel = {
+      ...live,
+      connection: { epoch: 2, state: ConnectionState.Syncing({ attempt: 0 }) },
+      requestCard: { ...live.requestCard, hasClient: true },
+    };
+
+    assert.deepStrictEqual(
+      [toldHasClient(syncing), toldHasClient(live)],
+      [false, true]
+    );
   });
 });

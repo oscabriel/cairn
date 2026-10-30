@@ -232,24 +232,17 @@ export const subagentKeysOf = (
     onSome: (views) => views.keys(state),
   });
 
-const NO_SUBAGENT_ROWS: Option.Option<SubagentShells> = Option.none();
-
 const someShells = new WeakMap<SubagentShells, Option.Option<SubagentShells>>();
 
 /**
- * What the thread page passes its transcript for the subagent rows: the open thread's shell rows
- * when the `next` frame draws, none on classic. One Option per shells object, so the page's lazy
- * view compares it by reference and keeps its drawing while nothing changed.
+ * What the thread page passes its transcript for the subagent rows: the open thread's shell rows,
+ * one Option per shells object, so the page's lazy view compares it by reference and keeps its
+ * drawing while nothing changed.
  */
 export const subagentRowsInput = (
-  next: boolean,
   shell: Option.Option<ShellSnapshot>,
   threadId: string
 ): Option.Option<SubagentShells> => {
-  if (!next) {
-    return NO_SUBAGENT_ROWS;
-  }
-
   const shells = subagentShellsOf(shell, threadId);
   const known = someShells.get(shells);
 

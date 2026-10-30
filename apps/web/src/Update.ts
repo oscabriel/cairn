@@ -56,10 +56,11 @@ import type {
   CardContext,
   Model as RequestCardModel,
 } from "./next/card/Model.ts";
-import { nextRequestCardOf, nextMetersOf } from "./next/FrameLoad.ts";
+import { requestCard as RequestCard } from "./next/card/Update.ts";
 import type { Message as MetersMessage } from "./next/meters/Message.ts";
 import { initial as initialMeters } from "./next/meters/Model.ts";
 import type { MetersPage, Model as MetersModel } from "./next/meters/Model.ts";
+import { meters as Meters } from "./next/meters/Update.ts";
 import { OutMessage as NextShellOutMessage } from "./next/shell/Message.ts";
 import type { Message as NextShellMessage } from "./next/shell/Message.ts";
 import { initial as initialNextShell } from "./next/shell/Model.ts";
@@ -67,7 +68,7 @@ import type {
   Model as NextShellModel,
   ShellContext as NextShellContext,
 } from "./next/shell/Model.ts";
-import { loadedShell } from "./next/shell/ShellLoad.ts";
+import * as NextShell from "./next/shell/Update.ts";
 import * as Thread from "./page/thread/index.ts";
 import { pushContextOf, samePushContext } from "./push/Context.ts";
 import { OutMessage as PushOutMessage } from "./push/Message.ts";
@@ -92,7 +93,6 @@ import {
   inform as informSettingsModel,
   update as updateSettings,
 } from "./settings/Update.ts";
-import { LoadSettingsPage } from "./SettingsPage.ts";
 import * as Parked from "./shell/Parked.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
 import { OutMessage as SidebarOutMessage } from "./sidebar/Message.ts";
@@ -470,15 +470,6 @@ const startSettings = Update.foldChildStep({
   toParentMessage: toGotSettingsMessage,
 });
 
-/** Asks for the settings page's view chunk the first time the settings route opens. */
-const loadSettingsPage: Step = (model) =>
-  model.settingsPage === "idle" && Predicate.isTagged(model.route, "Settings")
-    ? {
-        model: modifyFields(model, { settingsPage: () => "loading" as const }),
-        commands: [LoadSettingsPage()],
-      }
-    : { model };
-
 /** Tells the settings page the epoch, whether it is open and the shell, when they changed. */
 const syncSettings: Step = (model) => {
   const context: SettingsContext = settingsContextOf({
@@ -544,21 +535,20 @@ const readMeters = (model: Model): Option.Option<MetersModel> =>
 const writeMeters = (model: Model, meters: MetersModel): Model =>
   modifyFields(model, { meters: () => meters });
 
-/** Folds a meters Message through the meters' update, once the `next` chunk brought it. */
-const foldMetersMessage = (
-  model: Model,
-  message: MetersMessage
-): UpdateReturn =>
-  Option.match(nextMetersOf(model), {
-    onNone: () => ({ model }),
-    onSome: (meters) =>
-      Update.foldChild({
-        update: meters.update,
-        read: readMeters,
-        write: writeMeters,
-        toParentMessage: toGotMetersMessage,
-      })(model, message),
-  });
+/** Folds a meters Message through the meters' update. */
+const foldMetersMessage = Update.foldChild({
+  update: Meters.update,
+  read: readMeters,
+  write: writeMeters,
+  toParentMessage: toGotMetersMessage,
+});
+
+const informMeters = Update.foldChild({
+  update: Meters.inform,
+  read: readMeters,
+  write: writeMeters,
+  toParentMessage: toGotMetersMessage,
+});
 
 /** Which of the meters' pages the route opens. */
 const metersPageOf = (route: Model["route"]): MetersPage =>
@@ -571,32 +561,20 @@ const metersPageOf = (route: Model["route"]): MetersPage =>
     NotFound: () => "closed" as const,
   });
 
-/**
- * Tells the meters the connection, the open page, the plan windows and the rows' spend, when they
- * changed, while the `next` frame draws them.
- */
-const syncMeters: Step = (model) =>
-  Option.match(nextMetersOf(model), {
-    onNone: () => ({ model }),
-    onSome: (meters) => {
-      const context = meters.contextOf({
-        epoch: model.connection.epoch,
-        hasClient: hasClient(model.connection),
-        page: metersPageOf(model.route),
-        usage: model.settings.usage,
-        shell: model.shell,
-      });
-
-      return meters.sameContext(model.meters, context)
-        ? { model }
-        : Update.foldChild({
-            update: meters.inform,
-            read: readMeters,
-            write: writeMeters,
-            toParentMessage: toGotMetersMessage,
-          })(model, context);
-    },
+/** Tells the meters the connection, the open page, the plan windows and the rows' spend. */
+const syncMeters: Step = (model) => {
+  const context = Meters.contextOf({
+    epoch: model.connection.epoch,
+    hasClient: hasClient(model.connection),
+    page: metersPageOf(model.route),
+    usage: model.settings.usage,
+    shell: model.shell,
   });
+
+  return Meters.sameContext(model.meters, context)
+    ? { model }
+    : informMeters(model, context);
+};
 
 /** Tells the sidebar the shell, the open page, the connection and the drafts, when they changed. */
 const syncSidebar: Step = (model) => {
@@ -679,21 +657,13 @@ const readRequestCard = (model: Model): Option.Option<RequestCardModel> =>
 const writeRequestCard = (model: Model, requestCard: RequestCardModel): Model =>
   modifyFields(model, { requestCard: () => requestCard });
 
-/** Folds a request card Message through the card's update, once the `next` chunk brought it. */
-const foldRequestCardMessage = (
-  model: Model,
-  message: RequestCardMessage
-): UpdateReturn =>
-  Option.match(nextRequestCardOf(model), {
-    onNone: () => ({ model }),
-    onSome: (card) =>
-      Update.foldChild({
-        update: card.update,
-        read: readRequestCard,
-        write: writeRequestCard,
-        toParentMessage: toGotRequestCardMessage,
-      })(model, message),
-  });
+/** Folds a request card Message through the card's update. */
+const foldRequestCardMessage = Update.foldChild({
+  update: RequestCard.update,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
 
 /**
  * What the request card hands up: the words typed on a request that closed under them go into the
@@ -711,31 +681,30 @@ const foldRequestCardOutMessage = (outMessage: RequestCardOutMessage): Step =>
       }),
   });
 
-/**
- * Tells the request card the open thread's decision records and the connection, when they
- * changed, while the `next` frame draws it.
- */
-const syncRequestCard: Step = (model) =>
-  Option.match(nextRequestCardOf(model), {
-    onNone: () => ({ model }),
-    onSome: (card) => {
-      const context: CardContext = {
-        threadId: model.thread.threadId,
-        approvals: approvalsDocumentOf(model.thread.view),
-        hasClient: hasClient(model.connection),
-      };
+const informRequestCard = Update.foldChild({
+  update: RequestCard.inform,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+  foldOutMessage: foldRequestCardOutMessage,
+});
 
-      return card.sameContext(model.requestCard, context)
-        ? { model }
-        : Update.foldChild({
-            update: card.inform,
-            read: readRequestCard,
-            write: writeRequestCard,
-            toParentMessage: toGotRequestCardMessage,
-            foldOutMessage: foldRequestCardOutMessage,
-          })(model, context);
-    },
-  });
+/**
+ * Tells the request card the open thread's decision records and the connection. The card counts a
+ * client only once the connection is Live, so a reconnect re-checks the shown request's roles on a
+ * socket that is up, not while it is still Syncing.
+ */
+const syncRequestCard: Step = (model) => {
+  const context: CardContext = {
+    threadId: model.thread.threadId,
+    approvals: approvalsDocumentOf(model.thread.view),
+    hasClient: isLive(model.connection),
+  };
+
+  return RequestCard.sameContext(model.requestCard, context)
+    ? { model }
+    : informRequestCard(model, context);
+};
 
 /** Tells the composer the route, the connection, the shell and the thread's view, when they changed. */
 const syncComposer: Step = (model) => {
@@ -908,27 +877,8 @@ const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
       }),
   });
 
-/** The shell's update, once its chunk has loaded; no shell Message can come before. */
-const updateNextShell = (shell: NextShellModel, message: NextShellMessage) =>
-  Option.match(loadedShell(), {
-    onNone: () => ({ model: shell }),
-    onSome: (runtime) => runtime.update(shell, message),
-  });
-
-/** Tells the shell the root's context: through its update once loaded, else only the context. */
-const informNextShellModel = (
-  shell: NextShellModel,
-  context: NextShellContext
-) =>
-  Option.match(loadedShell(), {
-    onNone: () => ({
-      model: modifyFields(shell, { context: () => context }),
-    }),
-    onSome: (runtime) => runtime.inform(shell, context),
-  });
-
 const foldNextShellMessage = Update.foldChild({
-  update: updateNextShell,
+  update: NextShell.update,
   read: readNextShell,
   write: writeNextShell,
   toParentMessage: toGotNextShellMessage,
@@ -936,7 +886,7 @@ const foldNextShellMessage = Update.foldChild({
 });
 
 const informNextShell = Update.foldChild({
-  update: informNextShellModel,
+  update: NextShell.inform,
   read: readNextShell,
   write: writeNextShell,
   toParentMessage: toGotNextShellMessage,
@@ -955,9 +905,9 @@ const syncNextShell: Step = (model) => {
     isMac: model.sidebar.isMac,
   };
 
-  // The first update after the chunk loads starts the shell, even with nothing new to tell.
+  // The first update starts the shell, even with nothing new to tell.
   const unchanged =
-    (model.nextShell.started || Option.isNone(loadedShell())) &&
+    model.nextShell.started &&
     current.shell === context.shell &&
     Equal.equals(current.route, context.route) &&
     current.hasClient === context.hasClient &&
@@ -1244,12 +1194,6 @@ const step = (received: Message): Step =>
       ({ message: metersMessage }) =>
       (model) =>
         foldMetersMessage(model, metersMessage),
-    LoadedSettingsPage: () => (model) => ({
-      model: modifyFields(model, { settingsPage: () => "loaded" as const }),
-    }),
-    FailedSettingsPage: () => (model) => ({
-      model: modifyFields(model, { settingsPage: () => "failed" as const }),
-    }),
   });
 
 /** The root update. */
@@ -1268,7 +1212,6 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncScratchThread,
     syncRequestCard,
     syncMeters,
-    loadSettingsPage,
   ]);
 };
 
@@ -1301,7 +1244,6 @@ export const init: Runtime.RoutingApplicationInit<
       scratchThread: Thread.Model.initial,
       requestCard: initialRequestCard,
       meters: initialMeters,
-      settingsPage: "idle",
     }),
     toParentMessage: toGotComposerMessage,
   });
@@ -1320,7 +1262,6 @@ export const init: Runtime.RoutingApplicationInit<
     syncScratchThread,
     syncRequestCard,
     syncMeters,
-    loadSettingsPage,
   ]);
 
   return {

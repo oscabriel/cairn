@@ -1,6 +1,7 @@
 // Scene tests for the settings page, plus the client settings' decoding: defaults for what is
 // missing, and a corrupt saved value that leaves the page on its defaults instead of failing.
 
+import { skillsPromptTokens } from "@cairn/client-logic/SkillsPrompt";
 import { ProjectId } from "@cairn/protocol/Ids";
 import { DEFAULT_ROLE_TABLE } from "@cairn/protocol/Roles";
 import type { ServerSettings } from "@cairn/protocol/Settings";
@@ -12,6 +13,7 @@ import * as AsyncData from "foldkit/asyncData";
 import * as Scene from "foldkit/scene";
 
 import { leadingWindow, usageMeterView } from "../composer/UsageMeter.ts";
+import { view } from "../next/settings/View.ts";
 import {
   CLIENT_SETTINGS_STORAGE_KEY,
   DEFAULT_CLIENT_SETTINGS,
@@ -32,7 +34,6 @@ import { Message } from "./Message.ts";
 import { initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { inform, update } from "./Update.ts";
-import { skillsPromptTokens, view } from "./View.ts";
 
 const projectId = ProjectId.make("prj_cairn");
 
@@ -160,6 +161,14 @@ describe("client settings", () => {
     assert.strictEqual(DEFAULT_CLIENT_SETTINGS.sendShortcut, "enter");
     assert.strictEqual(DEFAULT_CLIENT_SETTINGS.fontSizeInterface, 16);
     assert.strictEqual(DEFAULT_CLIENT_SETTINGS.confirmThreadDelete, true);
+  });
+
+  it("keep the rest of a value saved before the cutover, with its retired `ui` key", () => {
+    assert.strictEqual(
+      parseClientSettings('{"ui":"classic","theme":"light"}').theme,
+      "light"
+    );
+    assert.notProperty(parseClientSettings('{"ui":"next"}'), "ui");
   });
 
   it("survive a corrupt saved value", () => {

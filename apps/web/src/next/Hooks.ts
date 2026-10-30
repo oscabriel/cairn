@@ -1,8 +1,7 @@
-// The hook contract the `next` views keep (ADR 0040, surfaces note "Fork, judge, switch, delete"):
-// the data attributes `judges/behaviour.ts` and the landmark reader (`judges/fixtures/parity/
-// Landmarks.ts`) find elements by. Whatever a `next` view draws, the element a judge looks for
-// carries the same hook it does in the classic views, so the same judges run on both. Used by tests
-// and judges only, never by a view, so it adds nothing to a bundle.
+// The hook contract the views keep (ADR 0040, surfaces note "Fork, judge, switch, delete"): the data
+// attributes `judges/behaviour.ts` and the landmark reader (`judges/fixtures/parity/Landmarks.ts`)
+// find elements by, the same hooks t3code's elements carry. Used by tests and judges only, never by
+// a view, so it adds nothing to a bundle.
 
 import { Predicate } from "effect";
 import type { Html } from "foldkit/html";

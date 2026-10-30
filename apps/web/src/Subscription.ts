@@ -164,14 +164,13 @@ const liftedSettingsSubscriptions = Subscription.lift(settingsSubscriptions)<
   toParentMessage: (message) => Message.GotSettingsMessage({ message }),
 });
 
-// The `next` shell's keys (the scratch thread's Cmd+J or Ctrl+J), only while `next` draws.
+// The `next` shell's keys (the scratch thread's Cmd+J or Ctrl+J).
 const liftedNextShellSubscriptions = Subscription.lift(nextShellSubscriptions)<
   Model,
   Message
 >({
   read: (model) => Option.some(model.nextShell),
   toParentMessage: (message) => Message.GotNextShellMessage({ message }),
-  when: (model) => model.settings.client.ui === "next",
 });
 
 // The scratch thread's stream; its page holds a thread only while the overlay shows it. Renamed,

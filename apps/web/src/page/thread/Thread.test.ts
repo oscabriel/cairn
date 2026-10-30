@@ -15,17 +15,17 @@ import { Message as ComposerMessage } from "../../composer/Message.ts";
 import { retryDraftId } from "../../composer/Update.ts";
 import { outboxKey } from "../../connection/Outbox.ts";
 import { Message as RootMessage } from "../../Message.ts";
+import { statusLine } from "../../next/page/Thread.ts";
 import { AppRoute } from "../../Route.ts";
 import { emptySnapshot, launchItem, liveModel } from "../../TestFixtures.ts";
 import { update as rootUpdate } from "../../Update.ts";
-import { launchFailureOf } from "../../View.ts";
 import { WaitToResubscribe } from "./Command.ts";
+import type { LaunchFailure } from "./Inputs.ts";
+import { launchFailureOf } from "./LaunchFailure.ts";
 import { Message } from "./Message.ts";
 import { initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { inform, update } from "./Update.ts";
-import type { LaunchFailure } from "./View.ts";
-import { statusLine } from "./View.ts";
 
 const threadId = Schema.decodeSync(ThreadId)(
   "01890a5d-ac96-774b-bcce-b302099a8057"

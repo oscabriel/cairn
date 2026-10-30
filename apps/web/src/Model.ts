@@ -66,8 +66,6 @@ export const Model = Schema.Struct({
   requestCard: RequestCardModel,
   /** The usage page and the role table the `next` views draw (plan 6G). */
   meters: MetersModel,
-  /** Where the settings page's lazily loaded view is (`SettingsPage.ts`). */
-  settingsPage: Schema.Literals(["idle", "loading", "loaded", "failed"]),
 });
 
 export type Model = typeof Model.Type;

@@ -14,10 +14,10 @@ import {
   diffPanelPlaceholder,
   loadedDiffView,
 } from "../../page/thread/DiffPanel.ts";
+import type { LaunchFailure, ViewInputs } from "../../page/thread/Inputs.ts";
 import { Message } from "../../page/thread/Message.ts";
 import type { Model } from "../../page/thread/Model.ts";
 import { ThreadStatus } from "../../page/thread/Model.ts";
-import type { LaunchFailure, ViewInputs } from "../../page/thread/View.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import { toggleView } from "../diff/Toggle.ts";
 import { view as timelineView } from "../timeline/View.ts";
@@ -94,7 +94,7 @@ const statusOf = (model: Model, h: HtmlBuilder<Message>): Html =>
   });
 
 /** The line above the transcript: a failed launch's reason, else the stream's status. */
-const statusLine = (
+export const statusLine = (
   model: Model,
   launchFailure: Option.Option<LaunchFailure>,
   h: HtmlBuilder<Message>

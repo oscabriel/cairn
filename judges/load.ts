@@ -2,7 +2,7 @@
 // with an empty cache, timed from navigation start to the page's own `cairn:interactive` mark.
 //
 //   node judges/load.ts [<url>] [--local] [--browser chromium|webkit] [--profile lan|4g|both]
-//                       [--runs 20] [--headed] [--ui classic|next]
+//                       [--runs 20] [--headed]
 //   node judges/load.ts --collect --device phone [--log <events.log> | --unit cairn] [--runs 3]
 //
 // `<url>` defaults to https://code.gneiss.run (the deployed brain, reached through Caddy, whose
@@ -22,8 +22,8 @@
 // `--collect` reads the brain's log instead of loading anything: the phone's `load.report` lines,
 // judged by `judges/phone-report.ts` (three cold loads under 1,000 ms each, DERP runs excluded).
 //
-// `--ui next` (look track L7) loads `?ui=next`, so each load draws the `next` frame, and a load
-// counts as interactive only once the frame is on the page as well as the mark is set.
+// A load counts as interactive only once the app's frame is on the page as well as the mark is
+// set (look track L7).
 //
 // Prints one JSON line and exits 0 when the judge passes.
 //
@@ -468,12 +468,8 @@ const coldLoad = async (
       { timeout: 30_000, polling: 16 }
     );
 
-    // On `?ui=next` the page is interactive once the `next` frame is drawn too: its chunk loads
-    // after the entry, so the load waits for it and counts its requests (look track L7).
-    const frameAt =
-      new URL(url).searchParams.get("ui") === "next"
-        ? await nextFrameAt(page)
-        : 0;
+    // The page is interactive once the frame is drawn too (look track L7).
+    const frameAt = await nextFrameAt(page);
 
     const measured = await page.evaluate(
       ([mark, frame]) => {
@@ -597,7 +593,6 @@ const main = async () => {
       log: { type: "string" },
       unit: { type: "string", default: "cairn" },
       since: { type: "string", default: "15 min ago" },
-      ui: { type: "string", default: "classic" },
     },
   });
 
@@ -631,7 +626,7 @@ const main = async () => {
       onSome: ({ origin }) => `${origin}/`,
     });
 
-    const url = values.ui === "next" ? `${base}?ui=next` : base;
+    const url = base;
 
     const isWebkit = values.browser === "webkit";
 

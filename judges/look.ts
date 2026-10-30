@@ -11,7 +11,7 @@
 //
 // `capture` and `round` start the client the parity judges drive (judges/fixtures/parity/CairnApp.ts:
 // AppLayer over the scripted harness, with Vite in front, seeded with t3code's imported thread),
-// open every page with `?ui=next`, and take each state at 390 px (a phone: touch, coarse pointer)
+// open every page, and take each state at 390 px (a phone: touch, coarse pointer)
 // and 1,440 px in dark, and in light too where the state lists a light variant. Every page's
 // clock is fixed (`FIXED_TIME`), motion is reduced and the caret hidden, so a state draws the same
 // pixels each time. Each shot is the viewport, at device scale 2.
@@ -535,8 +535,6 @@ const openState = async (
   page.on("pageerror", (error) => errors.push(error.message));
 
   const url = new URL(state.path(reach), reach.app.origin);
-
-  url.searchParams.set("ui", "next");
 
   // Vite may reload the page once while it optimizes a dependency it met late.
   await page.goto(url.href, { waitUntil: "networkidle" });

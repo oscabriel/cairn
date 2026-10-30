@@ -1,7 +1,6 @@
-// Scene tests for the `next` frame: it draws the regions a page needs, once, inside the wrapper the
+// Scene tests for the app's frame: it draws the regions a page needs, once, inside the wrapper the
 // judges read (`#root`, the sidebar wrapper and inset slots, the sidebar state), marked
-// `data-ui="next"`, over the same Model and update as the classic views. Since L6 the sidebar is
-// `next`'s own shell, so the classic sidebar region is never drawn.
+// `data-ui="next"`, with the notice bar the root hands it.
 
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
@@ -37,35 +36,20 @@ const onRoute = (route: AppRoute): Model => ({
   },
 });
 
-/**
- * Stand-ins for the classic regions, each marked by its own test id. Since look track L7 the frame
- * draws only the notice bar from them; the page, the thread, its controls and the composer are its
- * own, so their stand-ins must never show.
- */
+/** The frame with a stand-in for the notice bar the root hands it. */
 const stubbed = (model: Model, h: HtmlBuilder<Message>) =>
   view(model, h, {
-    sidebarState: "expanded",
-    sidebar: () => h.aside([h.DataAttribute("testid", "stub-sidebar")], []),
     notice: () => h.div([h.DataAttribute("testid", "stub-notice")], []),
-    page: () => h.section([h.DataAttribute("testid", "stub-page")], []),
-    thread: () => h.section([h.DataAttribute("testid", "stub-thread")], []),
-    threadControls: () =>
-      h.span([h.DataAttribute("testid", "stub-controls")], []),
-    composer: () => h.form([h.DataAttribute("testid", "stub-composer")], []),
   });
 
 describe("the next frame", () => {
-  it("draws its own page inside the judged wrapper, marked next, with its own shell", () => {
+  it("draws the page inside the judged wrapper, marked next, with the shell", () => {
     Scene.scene(
       { update, view: stubbed },
       Scene.given(onRoute(AppRoute.Settings())),
-      Scene.expect(Scene.testId("stub-sidebar")).toBeAbsent(),
       Scene.expect(Scene.testId("stub-notice")).toExist(),
-      // The page is next's own (look track L7), not the classic region.
-      Scene.expect(Scene.testId("stub-page")).toBeAbsent(),
       Scene.expect(Scene.testId("settings-page")).toExist(),
-      Scene.expect(Scene.role("combobox", { name: "Views" })).toExist(),
-      Scene.expect(Scene.testId("stub-thread")).toBeAbsent(),
+      Scene.expect(Scene.role("combobox", { name: "Views" })).toBeAbsent(),
       Scene.expect(Scene.testId("shell-rail")).toExist(),
       Scene.expect(Scene.selector('[data-ui="next"]')).toHaveAttr(
         "data-route",
@@ -93,7 +77,7 @@ describe("the next frame", () => {
     );
   });
 
-  it("draws a thread's transcript and its diff toggle under the new header, its own and not classic's", () => {
+  it("draws a thread's transcript and its diff toggle under the header", () => {
     Scene.scene(
       { update, view: stubbed },
       Scene.given(
@@ -139,10 +123,6 @@ describe("the next frame", () => {
       Scene.expect(Scene.testId("diff-toggle")).toHaveClass(
         "pointer-coarse:min-h-(--hit-target)"
       ),
-      Scene.expect(Scene.testId("stub-thread")).toBeAbsent(),
-      Scene.expect(Scene.testId("stub-controls")).toBeAbsent(),
-      Scene.expect(Scene.testId("stub-composer")).toBeAbsent(),
-      Scene.expect(Scene.testId("stub-page")).toBeAbsent(),
       Scene.tap(({ html }) => {
         assert.include(hooksOf(html), "data-chat-column");
       })

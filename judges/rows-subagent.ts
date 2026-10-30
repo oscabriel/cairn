@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one step after another, on purpose */
 // The subagent rows judge (plan 6C, the behaviour script `rows-subagent`; surfaces note "Judges",
-// S4): the real web client on the `next` views (`?ui=next`) over a real in-process brain on the
+// S4): the real web client on the `next` views over a real in-process brain on the
 // scripted harness (judges/fixtures/parity/CairnApp.ts with the spawning model of
 // judges/fixtures/subagents/RowsBrain.ts), at 390 px as a phone (touch, coarse pointer) and at
 // 1,440 px, each width on a fresh brain. No model provider is called.
@@ -22,7 +22,6 @@
 //            folded again it dims to the quiet ink with "2 done · 1 failed";
 //   layout   every row, the group line and the way back are one line, at least 44 px tall on the
 //            phone, and nothing scrolls sideways;
-//   classic  the same thread on the classic views shows no subagent row (classic is frozen).
 //
 // Broken controls, each planted in the page by this judge (never in the app), each of which must
 // make the step it names fail:
@@ -335,8 +334,6 @@ const runWidth = async (browser: Browser, width: number) => {
   const brainUrl = process.env.CAIRN_DEV_BRAIN ?? "";
   const parentUrl = new URL(app.threadUrl);
 
-  parentUrl.searchParams.set("ui", "next");
-
   const context = await newDevice(browser, width);
   const page = await context.newPage();
 
@@ -633,35 +630,6 @@ const runWidth = async (browser: Browser, width: number) => {
       );
 
       return `4 lines and the way back each one line, ${Math.round(minimum)} to ${Math.round(tallest)} px tall; no sideways scroll`;
-    });
-
-    await step("classic", async () => {
-      // A fresh device: the `ui` setting this one chose (`?ui=next`) stays with its storage.
-      const plain = await newDevice(browser, width);
-      const classic = await plain.newPage();
-
-      try {
-        await classic.goto(app.threadUrl, { waitUntil: "networkidle" });
-        await classic
-          .locator('[data-testid="timeline"]')
-          .waitFor({ state: "visible", timeout: 15_000 });
-        await sleep(500);
-
-        const next = await classic.locator('#root[data-ui="next"]').count();
-
-        const drawn = await classic
-          .locator(
-            '[data-testid="subagent-group"], [data-testid="subagent-row"]'
-          )
-          .count();
-
-        expect(next === 0, "the classic page drew the next frame");
-        expect(drawn === 0, `the classic page drew ${drawn} subagent rows`);
-
-        return "the classic views draw no subagent row";
-      } finally {
-        await plain.close();
-      }
     });
   } finally {
     await context.close();

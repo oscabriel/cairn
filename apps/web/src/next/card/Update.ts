@@ -56,7 +56,6 @@ import { ApprovalDecision } from "@cairn/protocol/Policy";
 import { RoleOverrides } from "@cairn/protocol/Roles";
 import {
   Array,
-  Cause,
   Duration,
   Effect,
   Equal,
@@ -67,9 +66,9 @@ import {
 import { Command, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
-import { CairnConnection } from "../../connection/Connection.ts";
+import { CairnConnection, withBoundary } from "../../connection/Connection.ts";
 import type { CairnConnectionService } from "../../connection/Connection.ts";
-import { failureMessage } from "../../connection/Failure.ts";
+import { callFailureText } from "../../connection/Failure.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { Decision } from "./Message.ts";
 import { CardAnswer, initial, RoleCheckState } from "./Model.ts";
@@ -205,19 +204,6 @@ const typedWords = (model: Model, approvalId: ApprovalId): string =>
     })
     .join("\n\n");
 
-/**
- * Answers `message` when the call was cut off: a connection dropped while a call was out releases
- * its client, which interrupts the call, and an interrupted Command would end the page (seen when
- * the brain restarts while a call is out, 6B's `brief-go`). Only interruption is caught; a defect
- * still surfaces.
- */
-const whenCutOff =
-  <B>(message: B) =>
-  <A, R>(call: Effect.Effect<A, never, R>): Effect.Effect<A | B, never, R> =>
-    Effect.catchCauseIf(call, Cause.hasInterruptsOnly, () =>
-      Effect.succeed(message)
-    );
-
 /** Asks the brain to settle one request. */
 export const RespondToRequest = Command.define("RespondToRequest", {
   args: {
@@ -229,38 +215,26 @@ export const RespondToRequest = Command.define("RespondToRequest", {
   },
   messages: [Message.SucceededRespond, Message.FailedRespond],
   execute: (input) =>
-    CairnConnection.get.pipe(
-      Effect.flatMap((client) =>
-        client["thread.respond"]({ ...input, launch: Option.none() }).pipe(
-          Effect.match({
-            onSuccess: () =>
-              Message.SucceededRespond({ approvalId: input.approvalId }),
-            onFailure: (failure) =>
-              Message.FailedRespond({
-                approvalId: input.approvalId,
-                message: failureMessage(
-                  failure,
-                  "The answer did not reach Cairn. Try again."
-                ),
-              }),
-          })
-        )
-      ),
-      Effect.catchTag("ResourceNotAvailable", () =>
-        Effect.succeed(
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
+        client["thread.respond"]({ ...input, launch: Option.none() })
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: () =>
+          Message.SucceededRespond({ approvalId: input.approvalId }),
+        onFailure: (failure) =>
           Message.FailedRespond({
             approvalId: input.approvalId,
-            message: "Cairn is reconnecting. Answer again once it is back.",
-          })
-        )
-      ),
-      whenCutOff(
-        Message.FailedRespond({
-          approvalId: input.approvalId,
-          message:
-            "The connection dropped before Cairn answered. Answer again once it is back.",
-        })
-      )
+            message: callFailureText(failure, {
+              reconnecting:
+                "Cairn is reconnecting. Answer again once it is back.",
+              cutOff:
+                "The connection dropped before Cairn answered. Answer again once it is back.",
+              fallback: "The answer did not reach Cairn. Try again.",
+            }),
+          }),
+      })
     ),
 });
 
@@ -274,45 +248,30 @@ export const CheckRoles = Command.define("CheckRoles", {
   },
   messages: [Message.ReceivedRoleChecks, Message.FailedRoleChecks],
   execute: ({ approvalId, generation, specs, overrides }) =>
-    CairnConnection.get.pipe(
-      Effect.flatMap((client) =>
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
         client["roles.check"](
           Option.match(overrides, {
             onNone: () => ({ specs }),
             onSome: (given) => ({ specs, overrides: given }),
           })
-        ).pipe(
-          Effect.match({
-            onSuccess: (checks) =>
-              Message.ReceivedRoleChecks({ approvalId, generation, checks }),
-            onFailure: (failure) =>
-              Message.FailedRoleChecks({
-                approvalId,
-                generation,
-                message: failureMessage(
-                  failure,
-                  "The roles could not be checked."
-                ),
-              }),
-          })
         )
-      ),
-      Effect.catchTag("ResourceNotAvailable", () =>
-        Effect.succeed(
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: (checks) =>
+          Message.ReceivedRoleChecks({ approvalId, generation, checks }),
+        onFailure: (failure) =>
           Message.FailedRoleChecks({
             approvalId,
             generation,
-            message: "Cairn is reconnecting.",
-          })
-        )
-      ),
-      whenCutOff(
-        Message.FailedRoleChecks({
-          approvalId,
-          generation,
-          message: "The connection dropped before Cairn answered.",
-        })
-      )
+            message: callFailureText(failure, {
+              reconnecting: "Cairn is reconnecting.",
+              cutOff: "The connection dropped before Cairn answered.",
+              fallback: "The roles could not be checked.",
+            }),
+          }),
+      })
     ),
 });
 
@@ -949,8 +908,5 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
   );
 };
 
-/** The card's update and its root hooks, as the `next` chunk hands them to the root. */
+/** The card's update and its root hooks. */
 export const requestCard = { update, inform, sameContext } as const;
-
-/** The card's update and root hooks. */
-export type RequestCardModule = typeof requestCard;

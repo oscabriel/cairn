@@ -66,7 +66,6 @@ describe("the hook contract next keeps", () => {
     // The scan finds what the judges are known to read, so an empty scan cannot pass.
     for (const known of [
       "data-testid",
-      "data-menu-id",
       "data-timeline-row-kind",
       "data-chat-*",
     ]) {

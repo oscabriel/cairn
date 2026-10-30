@@ -32,7 +32,7 @@ import {
   ProviderLoginInput,
   ProviderStatus,
 } from "./Models.ts";
-import { SetCriteriaInput } from "./Policy.ts";
+import { MarkCriterionInput, SetCriteriaInput } from "./Policy.ts";
 import {
   BranchesInput,
   BranchesResult,
@@ -298,6 +298,7 @@ export const CairnRpcs = RpcGroup.make(
   Rpc.make("providers.logout", { payload: ProviderLoginInput, error: Change }),
 
   Rpc.make("goal.setCriteria", { payload: SetCriteriaInput, error: Change }),
+  Rpc.make("goal.mark", { payload: MarkCriterionInput, error: Change }),
 
   Rpc.make("workflow.stop", { payload: WorkflowStopInput, error: Change }),
   Rpc.make("workflow.stopNode", {

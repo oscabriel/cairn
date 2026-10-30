@@ -31,7 +31,7 @@ import {
   ApprovalStatus,
   RuntimeRequestKind,
 } from "@cairn/protocol/Policy";
-import { RunFailureClass } from "@cairn/protocol/Shell";
+import { GoalTally, RunFailureClass } from "@cairn/protocol/Shell";
 import { SubagentStatus, SubagentTally } from "@cairn/protocol/Subagents";
 import type { SubagentStopPolicy } from "@cairn/protocol/Subagents";
 import type {
@@ -334,6 +334,16 @@ export const SubagentTallyUpdated = Schema.TaggedStruct(
   }
 );
 
+/**
+ * A thread's `cairn.goal` changed how its criteria count (ADR 0026): bound, rebound, judged or
+ * marked. `tally` is the goal counted after the commit (`goalTallyOf`), none when the thread holds
+ * no criteria, so a consumer sets it, never counts it.
+ */
+export const GoalUpdated = Schema.TaggedStruct("GoalUpdated", {
+  threadId: ThreadId,
+  tally: Schema.Option(GoalTally),
+});
+
 /** The crash-loop guard parked a task; `retry` runs it again. */
 export const TaskParked = Schema.TaggedStruct("TaskParked", {
   threadId: ThreadId,
@@ -364,6 +374,7 @@ export const HarnessEvent = Schema.Union([
   UsageUpdated,
   SubagentUpdated,
   SubagentTallyUpdated,
+  GoalUpdated,
   TaskParked,
   CompactionStarted,
   CompactionEnded,

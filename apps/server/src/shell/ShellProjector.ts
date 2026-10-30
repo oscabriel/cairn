@@ -17,15 +17,19 @@
 // The field mapping follows notes/server.md, "Shell store and the projector". A parent's
 // `subagents` tally is set from each SubagentUpdated and SubagentTallyUpdated, which carry the
 // registry counted after their commit, and the boot reconcile counts the registry again for every
-// row with a child row (ADR 0028).
+// row with a child row (ADR 0028). A goal thread's `goal` tally is set from each GoalUpdated, which
+// carries the goal counted after its commit, and the boot reconcile counts the goal document again
+// for every row with no lineage (a subagent holds no goal; ADR 0026).
 //
 // For the durability judge only: `CAIRN_JUDGE_HOLD_PROJECTOR_MS` makes the projector log
 // `projector_holding` and wait that long before committing a run's end, so a `kill -9` can land
 // after pi-durable committed the run and before the shell did. Unset, nothing waits.
 
+import { goalOf, goalTallyOf } from "@cairn/client-logic/GoalProgress";
 import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import type { TaskId, ThreadId } from "@cairn/protocol/Ids";
+import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import { ThreadShell } from "@cairn/protocol/Shell";
 import type {
   LatestVisibleMessage,
@@ -98,6 +102,7 @@ export type DerivedFields = Pick<
   | "latestUserMessageAt"
   | "parkedTaskIds"
   | "subagents"
+  | "goal"
 >;
 
 /** How the newest run this projection saw ended. */
@@ -154,6 +159,7 @@ export const projectionOf = (
     latestUserMessageAt: shell.latestUserMessageAt,
     parkedTaskIds: shell.parkedTaskIds,
     subagents: shell.subagents,
+    goal: shell.goal,
   },
   changed: {},
   outcome: Option.none(),
@@ -281,6 +287,8 @@ export const applyHarnessEvent = (
       withFields(projection, { subagents: updated.tally }),
     SubagentTallyUpdated: (updated) =>
       withFields(projection, { subagents: updated.tally }),
+    // The goal as its commit left it: set, never counted, like the subagent tallies.
+    GoalUpdated: (updated) => withFields(projection, { goal: updated.tally }),
     RunStarted: (started) =>
       withFields(
         { ...projection, outcome: Option.none() },
@@ -478,6 +486,7 @@ const same = {
   latestVisibleMessage: Schema.toEquivalence(shellFields.latestVisibleMessage),
   parkedTaskIds: Schema.toEquivalence(shellFields.parkedTaskIds),
   subagents: Schema.toEquivalence(shellFields.subagents),
+  goal: Schema.toEquivalence(shellFields.goal),
 };
 
 const diff = <A>(
@@ -577,6 +586,7 @@ export const patchFor = (
       fields.parkedTaskIds
     ),
     subagents: diff(same.subagents, row.subagents, fields.subagents),
+    goal: diff(same.goal, row.goal, fields.goal),
   };
 
   const changes: ReadonlyArray<boolean> = [
@@ -596,6 +606,7 @@ export const patchFor = (
     Option.isSome(patch.latestUserMessageAt),
     Option.isSome(patch.parkedTaskIds),
     Option.isSome(patch.subagents),
+    Option.isSome(patch.goal),
   ];
 
   return changes.includes(true) ? Option.some(patch) : Option.none();
@@ -1114,10 +1125,19 @@ export class ShellProjector extends Context.Service<
             (parents.has(threadId) ||
               !sameTally(row.shell.subagents, NO_SUBAGENTS));
 
+          // A goal a crash cut off from its row: only a thread with no lineage holds one.
+          const readGoal = boot && Option.isNone(row.shell.lineage);
+
           const view =
-            readMessage || readTally
+            readMessage || readTally || readGoal
               ? yield* snapshotOf(threadId)
               : Option.none<ConversationView>();
+
+          if (readGoal && Option.isSome(view)) {
+            projection = withFields(projection, {
+              goal: goalTallyOf(goalOf(view.value.docs[GOAL_DOCUMENT])),
+            });
+          }
 
           if (readTally && Option.isSome(view)) {
             projection = withFields(projection, {

@@ -65,6 +65,7 @@ describe(rpcJsonSchemas, () => {
       "executor.signIn",
       "executor.status",
       "git.branches",
+      "goal.mark",
       "goal.setCriteria",
       "models.list",
       "portal.close",

@@ -19,6 +19,9 @@
 //   change to a parent's registry emits one for every child in it, changed or not: a consumer
 //   treats SubagentUpdated as idempotent (it sets a status, never counts transitions). Seeding the
 //   map from the document would read the state after the commit and hide the change it carries.
+// - `cairn.goal` changes: GoalUpdated when the goal's tally (criteria, met, failed) changed, with
+//   the tally after the commit (ADR 0026). Like the subagent tallies, the last one lives in memory
+//   only, so the first change after a restart emits one; a consumer sets it, never counts it.
 //
 // Conversations that are not threads produce no events; a subagent is a thread, so it does. The
 // listener is attached through `Brain.subscribeCommits` while this layer builds, so before boot
@@ -26,6 +29,7 @@
 // no commit of a resumed task goes unseen. Events never replay across a process restart, so the
 // shell projector reconciles at boot.
 
+import { goalOf, goalTallyOf } from "@cairn/client-logic/GoalProgress";
 import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import {
@@ -36,7 +40,11 @@ import {
   TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
-import { ApprovalStatus, RuntimeRequestKind } from "@cairn/protocol/Policy";
+import {
+  ApprovalStatus,
+  GOAL_DOCUMENT,
+  RuntimeRequestKind,
+} from "@cairn/protocol/Policy";
 import {
   CHILD_DOCUMENT,
   SUBAGENTS_DOCUMENT,
@@ -72,6 +80,7 @@ import { durable } from "./Durable.ts";
 import {
   CompactionEnded,
   CompactionStarted,
+  GoalUpdated,
   MessageCommitted,
   QueueChanged,
   RunStarted,
@@ -156,6 +165,8 @@ interface FeedState {
   readonly subagents: Map<string, string>;
   /** Each parent's last tally, as JSON. */
   readonly tallies: Map<PiConversationId, string>;
+  /** Each goal thread's last goal tally, as JSON. */
+  readonly goals: Map<PiConversationId, string>;
 }
 
 const isRecord = (value: JsonValue | undefined): value is JsonObject =>
@@ -395,6 +406,25 @@ const subagentEvents = (
   return events;
 };
 
+/** GoalUpdated when the goal's tally after the commit differs from the last one emitted. */
+const goalEvents = (
+  state: FeedState,
+  threadId: ThreadId,
+  conversationId: PiConversationId,
+  value: JsonObject | null
+): Array<HarnessEvent> => {
+  const tally = goalTallyOf(goalOf(value ?? undefined));
+  const counted = JSON.stringify(Option.getOrNull(tally));
+
+  if (state.goals.get(conversationId) === counted) {
+    return [];
+  }
+
+  state.goals.set(conversationId, counted);
+
+  return [GoalUpdated.make({ threadId, tally })];
+};
+
 /** The events of one document change. */
 const documentEvents = (
   state: FeedState,
@@ -439,6 +469,10 @@ const documentEvents = (
         outputTokens: totals.output,
       }),
     ];
+  }
+
+  if (kind === GOAL_DOCUMENT) {
+    return goalEvents(state, threadId, conversationId, change.value);
   }
 
   if (kind === SUBAGENTS_DOCUMENT && isRecord(change.value?.items)) {
@@ -664,6 +698,7 @@ export class CommitFeed extends Context.Service<
         approvals: new Map(),
         subagents: new Map(),
         tallies: new Map(),
+        goals: new Map(),
       };
 
       // Conversations this commit names that the feed has not met: read their metadata first.

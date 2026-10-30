@@ -47,6 +47,7 @@
 import { Buffer } from "node:buffer";
 
 import { isWiderThan, narrowerMode } from "@cairn/client-logic/EffectiveMode";
+import { goalOf, goalTallyOf } from "@cairn/client-logic/GoalProgress";
 import { tallyOf } from "@cairn/client-logic/SubagentTally";
 import {
   ApprovalId,
@@ -59,6 +60,7 @@ import {
 } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
+import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import type { Brief, RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_ROLE_TABLE, RoleSpec } from "@cairn/protocol/Roles";
 import type { RoleTable } from "@cairn/protocol/Roles";
@@ -137,6 +139,8 @@ import {
 } from "../models/ResultTool.ts";
 import type { ResultState } from "../models/ResultTool.ts";
 import { ParsedSpec, parseRoleSpec } from "../models/RoleAliases.ts";
+import { NO_GOAL } from "../verdicts/GoalDocs.ts";
+import type { GoalState } from "../verdicts/GoalDocs.ts";
 import { BriefTtl } from "./BriefTtl.ts";
 import type {
   ApprovalRecord,
@@ -162,6 +166,7 @@ import { messageText } from "./CommitFeed.ts";
 import {
   CompactionEnded,
   CompactionStarted,
+  GoalUpdated,
   HarnessError,
   HarnessSeam,
   MessageCommitted,
@@ -477,6 +482,11 @@ interface ScriptedThread {
   readonly subagents: Map<string, SubagentItem>;
   readonly escalations: Map<string, JsonRecord>;
   readonly offered: Map<string, OfferedQuestion>;
+  /**
+   * `cairn.goal`, once anything opened it (ADR 0026). Only the verdict writer's functions change
+   * it, through `ScriptedGoals.change`.
+   */
+  goal: Option.Option<GoalState>;
 }
 
 /** One input to a child and the delivery of its result. */
@@ -785,6 +795,13 @@ const childDocument = (
   permissionMode: thread.permissions.mode,
 });
 
+/** A detached copy of a JSON object a brief or a goal holds. */
+const copyRecordJson = (value: Schema.JsonObject): JsonRecord => {
+  const copied = isJsonValue(value) ? copyJson(value) : null;
+
+  return isJsonRecord(copied) ? copied : {};
+};
+
 /** The thread's view in pi-durable's shape: active entries and the visible documents. */
 const viewOf = (
   thread: ScriptedThread,
@@ -817,6 +834,11 @@ const viewOf = (
         ),
       },
     ]);
+  }
+
+  // pi-durable keeps a goal from the first commit that opened it for writing.
+  if (Option.isSome(thread.goal)) {
+    cairnDocs.push([GOAL_DOCUMENT, copyRecordJson(thread.goal.value)]);
   }
 
   if (thread.escalations.size > 0) {
@@ -995,6 +1017,41 @@ export class ScriptedBoot extends Context.Service<
   { readonly resume: Effect.Effect<void> }
 >()("cairn/server/brain/ScriptedBoot") {}
 
+/** A scripted thread as its goal reads it: whether it is a subagent, and the model it runs on. */
+export interface ScriptedGoalThread {
+  readonly child: boolean;
+  readonly model: ModelRef;
+}
+
+/**
+ * The scripted store's goals (ADR 0026), for the goal service over a scripted brain: the thread a
+ * goal belongs to, what a model judge's spec resolves to through the scripted role table, and one
+ * change to a thread's `cairn.goal` made in the harness's line by the verdict writer's own
+ * functions (`verdicts/Verdicts.ts`), published as pi-durable's commit would be: the view, and
+ * GoalUpdated when the goal's tally moved.
+ */
+export class ScriptedGoals extends Context.Service<
+  ScriptedGoals,
+  {
+    /** The thread a goal belongs to; none when the store does not hold it. */
+    thread(
+      threadId: ThreadId
+    ): Effect.Effect<Option.Option<ScriptedGoalThread>>;
+    /** The model a model judge's spec resolves to, or why it does not resolve. */
+    resolveJudge(spec: RoleSpec): Result.Result<ModelRef, string>;
+    /** A detached copy of the thread's goal; none before anything opened it. */
+    read(threadId: ThreadId): Effect.Effect<Option.Option<GoalState>>;
+    /**
+     * Runs `change` on the thread's goal (opened empty the first time) in the harness's line and
+     * publishes it; none when the thread does not exist.
+     */
+    change<A>(
+      threadId: ThreadId,
+      change: (goal: GoalState) => A
+    ): Effect.Effect<Option.Option<A>>;
+  }
+>()("cairn/server/brain/ScriptedGoals") {}
+
 const queueChanged = (thread: ScriptedThread) =>
   QueueChanged.make({
     threadId: thread.threadId,
@@ -1158,13 +1215,6 @@ const briefOf = (
     wake: wake === "quiet" ? "quiet" : "answer",
     decisions: [],
   });
-};
-
-/** A detached copy of a JSON object a brief holds. */
-const copyRecordJson = (value: Schema.JsonObject): JsonRecord => {
-  const copied = isJsonValue(value) ? copyJson(value) : null;
-
-  return isJsonRecord(copied) ? copied : {};
 };
 
 /** A brief as its record's payload holds it: plain JSON. */
@@ -1337,6 +1387,8 @@ const layerNoDeps = Layer.effectContext(
     const events = yield* PubSub.unbounded<HarnessEvent>();
     /** Each parent's last published tally, as JSON. */
     const tallies = new Map<ThreadId, string>();
+    /** Each goal thread's last published goal tally, as JSON. */
+    const goalTallies = new Map<ThreadId, string>();
     // One mutation at a time, as pi-durable's Session line.
     const line = yield* Semaphore.make(1);
 
@@ -1947,6 +1999,7 @@ const layerNoDeps = Layer.effectContext(
       subagents: new Map(),
       escalations: new Map(),
       offered: new Map(),
+      goal: Option.none(),
     });
 
     /** Records a reporter for one input to a child; the commit starts its fiber. */
@@ -4716,8 +4769,67 @@ const layerNoDeps = Layer.effectContext(
       capabilities: { durable: true, live: false },
     });
 
+    const goals = ScriptedGoals.of({
+      thread: (threadId) =>
+        Effect.sync(() =>
+          Option.map(
+            Option.fromUndefinedOr(store.threads.get(threadId)),
+            (thread) => ({
+              child: Option.isSome(thread.link),
+              model: thread.agent.model,
+            })
+          )
+        ),
+      resolveJudge: (spec) =>
+        Result.flatMap(scriptedResolve(roleTable, spec), (resolved) =>
+          Option.match(decodeModelRef(resolved.model), {
+            onNone: () =>
+              Result.fail(`"${spec}" resolves to no model in this brain.`),
+            onSome: Result.succeed,
+          })
+        ),
+      read: (threadId) =>
+        Effect.sync(() =>
+          Option.flatMap(
+            Option.fromUndefinedOr(store.threads.get(threadId)),
+            (thread) =>
+              Option.map(thread.goal, (goal): GoalState =>
+                structuredClone(goal)
+              )
+          )
+        ),
+      change: (threadId, change) =>
+        locked((_at, changes) =>
+          Effect.sync(() => {
+            const thread = store.threads.get(threadId);
+
+            if (thread === undefined) {
+              return Option.none();
+            }
+
+            const goal = Option.getOrElse(thread.goal, NO_GOAL);
+
+            thread.goal = Option.some(goal);
+
+            const value = change(goal);
+            const tally = goalTallyOf(goalOf(goal));
+            const counted = JSON.stringify(Option.getOrNull(tally));
+
+            changes.touched.add(thread);
+
+            if (goalTallies.get(threadId) !== counted) {
+              goalTallies.set(threadId, counted);
+              changes.events.push(GoalUpdated.make({ threadId, tally }));
+            }
+
+            return Option.some(value);
+          })
+        ),
+    });
+
     return Context.make(HarnessSeam, seam).pipe(
-      Context.add(ScriptedBoot, ScriptedBoot.of({ resume }))
+      Context.add(ScriptedBoot, ScriptedBoot.of({ resume })),
+      Context.add(ScriptedGoals, goals)
     );
   })
 );

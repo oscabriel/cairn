@@ -3,7 +3,9 @@
 // status change in a parent's `cairn.subagents` into one SubagentUpdated, and a note written with
 // `model` content reaches the next model request while a display-only write does not. The
 // documents are committed here by hand, as the subagents extension will commit them. A note left
-// queued by a stopped or failed run is placed when that run ends, ahead of any later note.
+// queued by a stopped or failed run is placed when that run ends, ahead of any later note. A goal
+// bound, marked and rebound through the verdict writer turns into one GoalUpdated per change of its
+// tally (ADR 0026).
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,6 +40,7 @@ import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { Subagents } from "../subagents/Subagents.ts";
+import { bindCriteria, markByUser } from "../verdicts/Verdicts.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { ThreadMeta } from "./CairnDocs.ts";
@@ -747,6 +750,65 @@ describe("CommitFeed subagent events", () => {
             yield* queuedInputCount(brain, parentConversation),
             1
           );
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a goal's tally changes are GoalUpdated, each once, and a change that keeps the tally is none",
+    () =>
+      withBrain(({ brain, events, parentConversation }) =>
+        Effect.gen(function* () {
+          const tallies = Effect.map(Ref.get(events), (all) =>
+            all.flatMap((event) =>
+              Predicate.isTagged(event, "GoalUpdated")
+                ? [[event.threadId, Option.getOrNull(event.tally)]]
+                : []
+            )
+          );
+
+          const bind = (texts: ReadonlyArray<string>) =>
+            commit(brain, async (tx) => {
+              await bindCriteria(
+                tx,
+                parentConversation,
+                {
+                  objective: Option.some("Ship it"),
+                  criteria: texts.map((text) => ({
+                    text,
+                    judge: { kind: "user" as const },
+                  })),
+                  mode: "replace",
+                },
+                10
+              );
+            });
+
+          yield* bind(["Reads well", "Looks right"]);
+          yield* commit(brain, async (tx) => {
+            await markByUser(tx, parentConversation, {
+              criterionId: "c1",
+              ok: true,
+              note: Option.none(),
+              at: 20,
+            });
+          });
+          // The same criteria bound again keep their states: the tally is the same, so no event.
+          yield* bind(["Reads well", "Looks right"]);
+          yield* bind([]);
+          yield* waitFor(
+            Effect.map(tallies, (found) =>
+              found.length >= 3 ? Option.some(true) : Option.none()
+            )
+          );
+          yield* Effect.sleep(Duration.millis(200));
+
+          assert.deepStrictEqual(yield* tallies, [
+            [PARENT, { total: 2, met: 0, failed: 0 }],
+            [PARENT, { total: 2, met: 1, failed: 0 }],
+            [PARENT, null],
+          ]);
         })
       ),
     30_000

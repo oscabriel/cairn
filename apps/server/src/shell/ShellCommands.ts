@@ -127,6 +127,11 @@ export const ThreadActivityPatch = Schema.Struct({
    * it never moves `updatedAt` either: a child's progress does not reorder its parent.
    */
   subagents: patchField(ThreadShell.fields.subagents),
+  /**
+   * The goal's criteria counted (ADR 0026), as the verdict writer left them; derived like
+   * `subagents`, so a verdict does not reorder the thread either.
+   */
+  goal: patchField(ThreadShell.fields.goal),
 });
 
 /** A thread activity patch. */
@@ -155,6 +160,7 @@ export const emptyActivityPatch: ThreadActivityPatch = {
   runtimeMode: Option.none(),
   spend: Option.none(),
   subagents: Option.none(),
+  goal: Option.none(),
 };
 
 /** Updates the fields of a thread row derived from pi-durable (the shell projector's command). */
@@ -756,13 +762,14 @@ const applyPatch = (
   const changed = !sameThreadShell(next, shell);
   const spend = Option.getOrElse(patch.spend, () => shell.spend);
   const subagents = Option.getOrElse(patch.subagents, () => shell.subagents);
+  const goal = Option.getOrElse(patch.goal, () => shell.goal);
 
-  // A spend figure and a tally are derived caches: they change the row but are not activity.
+  // A spend figure and the tallies are derived caches: they change the row but are not activity.
   return {
     ...row,
     shell: changed
-      ? { ...next, spend, subagents, updatedAt: now }
-      : { ...shell, spend, subagents },
+      ? { ...next, spend, subagents, goal, updatedAt: now }
+      : { ...shell, spend, subagents, goal },
   };
 };
 

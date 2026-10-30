@@ -5,13 +5,14 @@
 // refresh is `thread.launch` with `replaces` (5H): the new project thread, the old one's archive
 // and the moved mark land in one shell commit. The scratch thread's first message launches it in
 // the scratch project (made here first, as the composer's projectless launch does); later ones are
-// sends.
+// sends. The add-project picker lists folders on the Beelink (`projects.browse`) and adds one with
+// `shell.dispatch` (`ProjectCreate`), so a refused folder answers in the picker itself.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { RootWorkspace, ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { RuntimeMode } from "@cairn/protocol/Policy";
-import { ThreadClear } from "@cairn/protocol/ShellCommands";
+import { ProjectCreate, ThreadClear } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
 import { Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
@@ -26,6 +27,7 @@ import {
 import { CairnConnection, withBoundary } from "../../connection/Connection.ts";
 import {
   callFailureText,
+  failureMessage,
   failureMessageOrTag,
 } from "../../connection/Failure.ts";
 import { OutboxItem } from "../../connection/Outbox.ts";
@@ -59,6 +61,70 @@ export const PrepareProjectDraft = Command.define("PrepareProjectDraft", {
     Effect.map(mintThreadId, (draftId) =>
       Message.PreparedProjectDraft({ projectId, draftId })
     ),
+});
+
+/** Lists the folders in `path` (the home folder when none) for the add-project picker. */
+export const BrowseFolders = Command.define("BrowseFolders", {
+  args: { request: Schema.Int, path: Schema.Option(Schema.String) },
+  messages: [Message.ReceivedFolders, Message.FailedFolders],
+  execute: ({ path, request }) =>
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
+        client["projects.browse"]({ path })
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: (result) => Message.ReceivedFolders({ request, result }),
+        onFailure: (failure) =>
+          Message.FailedFolders({
+            request,
+            message: failureMessage(
+              failure,
+              "The folder could not be listed. Try again."
+            ),
+          }),
+      })
+    ),
+});
+
+/** Makes `folder` a project; the brain checks the folder and refuses one already a project. */
+export const CreateProject = Command.define("CreateProject", {
+  args: { folder: Schema.String },
+  messages: [Message.AddedProject, Message.FailedAddProject],
+  execute: ({ folder }) =>
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
+        const commandId = yield* mintCommandId;
+
+        return yield* client["shell.dispatch"](
+          ProjectCreate.make({
+            commandId,
+            workspaceRoot: folder,
+            title: Option.none(),
+          })
+        );
+      })
+    ).pipe(
+      Effect.match({
+        onSuccess: () => Message.AddedProject({ folder }),
+        onFailure: (failure) =>
+          Message.FailedAddProject({
+            message: failureMessage(
+              failure,
+              "The project could not be added. Try again."
+            ),
+          }),
+      })
+    ),
+});
+
+/** Hands the added folder's project back as a Message, so the rail selects it as a click would. */
+export const SelectAddedProject = Command.define("SelectAddedProject", {
+  args: { projectId: ProjectId },
+  messages: [Message.FoundAddedProject],
+  execute: ({ projectId }) =>
+    Effect.succeed(Message.FoundAddedProject({ projectId })),
 });
 
 /** Moves focus to the field `selector` names once the render that draws it has landed. */

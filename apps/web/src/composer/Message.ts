@@ -148,8 +148,10 @@ export const OutMessage = defineMessageUnion({
     navigateTo: Schema.Option(Schema.String),
     attachments: Schema.Array(AttachmentRef),
   },
-  /** The hero's "Add project" was chosen; the sidebar owns the folder dialog. */
+  /** The hero's "Add project" was chosen; the shell owns the add-project picker. */
   RequestedAddProject: {},
+  /** The hero's project picker chose this project for the draft; the shell's rail follows it. */
+  ChoseDraftProject: { projectId: ProjectId },
 });
 
 export type OutMessage = typeof OutMessage.Type;

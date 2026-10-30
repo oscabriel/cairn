@@ -1,9 +1,10 @@
 // The `next` shell's Messages, and the OutMessages it hands the root: an item for the outbox (a
 // refresh's launch, a scratch turn or clear), a path to open, and a new draft in a chosen project.
 // The work panel's Messages are the shell's too: it is drawn beside the chat column, as the goal
-// panel's are.
+// panel's are. The add-project picker's are the shell's too.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
+import { BrowseResult } from "@cairn/protocol/Projects";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
@@ -20,6 +21,22 @@ export const Message = defineMessageUnion({
   ClickedStartProjectThread: { projectId: ProjectId },
   /** A new draft is minted for the project's first thread: the root opens it in that project. */
   PreparedProjectDraft: { projectId: ProjectId, draftId: ThreadId },
+  /** The rail's + bubble, or the hero's Add project: open the add-project picker. */
+  ClickedAddProject: {},
+  ChangedAddProjectFolder: { value: Schema.String },
+  /** A folder in the listing, or Up: list that folder, and make it the one to add. */
+  ClickedBrowseFolder: { path: Schema.String },
+  ReceivedFolders: { request: Schema.Int, result: BrowseResult },
+  FailedFolders: { request: Schema.Int, message: Schema.String },
+  /** Add project, or Enter in the folder field. */
+  SubmittedAddProject: {},
+  ClickedCancelAddProject: {},
+  /** The brain made the project for `folder`; the rail selects it once the shell shows it. */
+  AddedProject: { folder: Schema.String },
+  FailedAddProject: { message: Schema.String },
+  /** The added folder's project is in the shell: select it, as its bubble would. */
+  FoundAddedProject: { projectId: ProjectId },
+
   ClickedUsage: {},
   ClickedSettings: {},
   ClickedOpenSheet: {},

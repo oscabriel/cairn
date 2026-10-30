@@ -3,12 +3,15 @@
 // sheet, which project favicons loaded, the refresh confirm, the scratch thread's overlay, and the
 // work panel's open state. The rail, the project's sidebar list, the chat header, the scratch
 // overlay and the work panel all draw from it, and so does the goal panel (plan 6H): the open
-// thread's criteria and the user's marks on its own.
+// thread's criteria and the user's marks on its own. The rail's + bubble opens the add-project
+// picker, whose folder, once added, the rail selects when the shell shows its project.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelDefaults } from "@cairn/protocol/Models";
+import { BrowseResult } from "@cairn/protocol/Projects";
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { Option, Schema } from "effect";
+import { defineTaggedUnion } from "foldkit/schema";
 
 import { AppRoute } from "../../Route.ts";
 
@@ -123,6 +126,31 @@ export const initialGoalPanel: GoalPanelState = {
   failure: Option.none(),
 };
 
+/** The add-project picker's folder listing: on its way, shown, or refused. */
+export const FolderListing = defineTaggedUnion({
+  Loading: { path: Schema.Option(Schema.String) },
+  Loaded: { result: BrowseResult },
+  Failed: { message: Schema.String },
+});
+
+export type FolderListing = typeof FolderListing.Type;
+
+/**
+ * The open add-project picker: the folder typed or browsed to, the listing beside it (bumped per
+ * request, so a slow answer for a folder the user left is dropped), the home folder once the first
+ * listing named it (a typed `~` is read against it), and the create on its way or refused.
+ */
+export const AddProjectState = Schema.Struct({
+  folder: Schema.String,
+  listing: FolderListing,
+  request: Schema.Int,
+  home: Schema.Option(Schema.String),
+  isAdding: Schema.Boolean,
+  failure: Schema.Option(Schema.String),
+});
+
+export type AddProjectState = typeof AddProjectState.Type;
+
 /** The `next` shell's Model. */
 export const Model = Schema.Struct({
   context: ShellContext,
@@ -140,6 +168,9 @@ export const Model = Schema.Struct({
   goal: GoalPanelState,
   /** Why the last refresh or scratch turn could not be prepared. */
   failure: Schema.Option(Schema.String),
+  addProject: Schema.Option(AddProjectState),
+  /** The folder just added: the rail selects its project once the shell shows it. */
+  awaitedFolder: Schema.Option(Schema.String),
 });
 
 export type Model = typeof Model.Type;
@@ -171,4 +202,6 @@ export const initial: Model = {
   work: initialWork,
   goal: initialGoalPanel,
   failure: Option.none(),
+  addProject: Option.none(),
+  awaitedFolder: Option.none(),
 };

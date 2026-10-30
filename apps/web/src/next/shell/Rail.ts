@@ -2,13 +2,15 @@
 // desktop and across the top of the sidebar sheet on a phone. A bubble is a squircle with a low
 // corner radius, filled edge to edge by the project's favicon (found on the server as t3code finds
 // it, `/api/projects/<id>/favicon`), or the project's first letter when it has none. A small mark
-// on a bubble says a thread in that project needs the user or is working. No global inbox.
+// on a bubble says a thread in that project needs the user or is working. No global inbox. Below
+// the last bubble (after it, in the sheet's row), a + bubble of the same shape adds a project.
 
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ProjectShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
+import { Plus } from "lucide";
 
 import { classNames } from "../../ui/ClassNames.ts";
 import {
@@ -17,7 +19,7 @@ import {
   TYPE,
   WEIGHT_STRONG,
 } from "../ui/Classes.ts";
-import { statusGlyph } from "../ui/Glyph.ts";
+import { glyph, statusGlyph } from "../ui/Glyph.ts";
 import { TONE_TEXT } from "../ui/Tone.ts";
 import type { ProjectMark } from "./Derived.ts";
 import { projectLetterOf } from "./Derived.ts";
@@ -136,7 +138,21 @@ const bubbleView = (h: HtmlBuilder<Message>, bubble: RailBubble): Html => {
   );
 };
 
-/** The rail: a bubble per folder project, the selected one ringed. */
+/** The + bubble: a project's squircle with a plus in place of a favicon. */
+const addBubble = (h: HtmlBuilder<Message>): Html =>
+  h.button(
+    [
+      h.Type("button"),
+      h.DataAttribute("testid", "rail-add-project"),
+      h.AriaLabel("Add project"),
+      h.Title("Add project"),
+      h.OnClick(Message.ClickedAddProject()),
+      h.Class(BUBBLE),
+    ],
+    [glyph(h, Plus, "plus", "regular")]
+  );
+
+/** The rail: a bubble per folder project, the selected one ringed, then the + bubble. */
 export const rail = (
   h: HtmlBuilder<Message>,
   direction: RailDirection,
@@ -152,5 +168,5 @@ export const rail = (
           : "flex shrink-0 flex-row items-center gap-(--space-2) overflow-x-auto border-b border-stroke-1 bg-surface-rail px-(--space-4) py-(--space-3)"
       ),
     ],
-    bubbles.map((bubble) => bubbleView(h, bubble))
+    [...bubbles.map((bubble) => bubbleView(h, bubble)), addBubble(h)]
   );

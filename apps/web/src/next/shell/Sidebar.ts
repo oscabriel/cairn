@@ -189,7 +189,10 @@ const head = (h: HtmlBuilder<Message>, project: ProjectShell): Html =>
     ],
     [
       h.h2(
-        [h.Class(classNames("truncate text-ink-1", TYPE.body, WEIGHT_STRONG))],
+        [
+          h.DataAttribute("testid", "shell-project-title"),
+          h.Class(classNames("truncate text-ink-1", TYPE.body, WEIGHT_STRONG)),
+        ],
         [project.title]
       ),
       h.span(

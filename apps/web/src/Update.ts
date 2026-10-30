@@ -4,6 +4,7 @@
 
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import { ThreadId } from "@cairn/protocol/Ids";
+import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ShellCommand } from "@cairn/protocol/ShellCommands";
 import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import { Update, Url } from "foldkit";
@@ -106,7 +107,6 @@ import type {
 import {
   inform as informSidebarModel,
   init as initSidebar,
-  openAddProject,
   update as updateSidebar,
 } from "./sidebar/Update.ts";
 import { threadRowOf } from "./ThreadRow.ts";
@@ -368,14 +368,6 @@ const informSidebar = Update.foldChild({
   foldOutMessage: foldSidebarOutMessage,
 });
 
-const openSidebarAddProject = Update.foldChildStep({
-  update: openAddProject,
-  read: readSidebar,
-  write: writeSidebar,
-  toParentMessage: toGotSidebarMessage,
-  foldOutMessage: foldSidebarOutMessage,
-});
-
 const startSidebar = Update.foldChildStep({
   update: () => initSidebar(),
   read: readSidebar,
@@ -599,7 +591,35 @@ const syncSidebar: Step = (model) => {
   return unchanged ? { model } : informSidebar(model, context);
 };
 
-/** What the composer hands up: a turn for the outbox (and where to go), or a request for the folder dialog. */
+const toGotNextShellMessage = (message: NextShellMessage): Message =>
+  Message.GotNextShellMessage({ message });
+
+const readNextShell = (model: Model): Option.Option<NextShellModel> =>
+  Option.some(model.nextShell);
+
+const writeNextShell = (model: Model, nextShell: NextShellModel): Model =>
+  nextShell === model.nextShell
+    ? model
+    : modifyFields(model, { nextShell: () => nextShell });
+
+/** The hero's Add project: the shell opens its add-project picker. */
+const openShellAddProject = Update.foldChildStep({
+  update: NextShell.openAddProject,
+  read: readNextShell,
+  write: writeNextShell,
+  toParentMessage: toGotNextShellMessage,
+});
+
+/** The hero's project picker chose a project: the shell's rail follows it. */
+const followDraftProject = (projectId: ProjectId): Step =>
+  Update.foldChildStep({
+    update: NextShell.followDraftProject(projectId),
+    read: readNextShell,
+    write: writeNextShell,
+    toParentMessage: toGotNextShellMessage,
+  });
+
+/** What the composer hands up: a turn for the outbox (and where to go), a request for the add-project picker, or the draft's chosen project. */
 const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
   ComposerOutMessage.match<Step>(outMessage, {
     Submitted:
@@ -629,8 +649,9 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
             }),
           ]
         ),
-    // The sidebar owns the folder dialog.
-    RequestedAddProject: () => openSidebarAddProject,
+    // The shell owns the add-project picker, and its rail follows the draft's project.
+    RequestedAddProject: () => openShellAddProject,
+    ChoseDraftProject: ({ projectId }) => followDraftProject(projectId),
   });
 
 const foldComposerMessage = Update.foldChild({
@@ -827,17 +848,6 @@ const followLaunches: Step = (model) =>
       );
     },
   });
-
-const toGotNextShellMessage = (message: NextShellMessage): Message =>
-  Message.GotNextShellMessage({ message });
-
-const readNextShell = (model: Model): Option.Option<NextShellModel> =>
-  Option.some(model.nextShell);
-
-const writeNextShell = (model: Model, nextShell: NextShellModel): Model =>
-  nextShell === model.nextShell
-    ? model
-    : modifyFields(model, { nextShell: () => nextShell });
 
 /**
  * What the `next` shell hands up: an item for the outbox (and where to go), a path to open, or a

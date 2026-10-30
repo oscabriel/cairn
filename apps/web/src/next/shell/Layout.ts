@@ -1,8 +1,8 @@
 // The `next` app's layout (plan look track L6), drawn in the root's boundary: the shell's left
 // column (or the phone's sheet), and beside it the open page under the new chat header, with the
 // hold banner above a thread's transcript, and beside the chat column the work panel (plan 6E) or
-// the goal panel (plan 6H) while one is open (a bottom sheet under `lg`); the scratch overlay and the refresh confirm float over
-// it. The shell's parts are Submodel views over `model.nextShell` (`View.ts`); the page's own parts
+// the goal panel (plan 6H) while one is open (a bottom sheet under `lg`); the scratch overlay, the refresh confirm and the add-project
+// picker float over it. The shell's parts are Submodel views over `model.nextShell` (`View.ts`); the page's own parts
 // (the transcript, the composer, the hero and settings pages, the diff toggle) are the root's
 // regions, placed beside them rather than inside them, so their Mounts keep the root as their
 // render owner.
@@ -240,6 +240,13 @@ export const layout = (model: Model, h: H, regions: ShellRegions): Html =>
         slotId: "next-shell-refresh",
         model: model.nextShell,
         view: Shell.refreshView,
+        viewInputs: { placement: "viewport" },
+        toParentMessage: toShell,
+      }),
+      h.submodel({
+        slotId: "next-shell-add-project",
+        model: model.nextShell,
+        view: Shell.addProjectView,
         viewInputs: { placement: "viewport" },
         toParentMessage: toShell,
       }),

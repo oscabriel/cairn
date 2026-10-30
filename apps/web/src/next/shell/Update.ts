@@ -7,6 +7,9 @@
 // their first page, and stops one child at a time; a child shows Stopping until its row is at rest.
 // The goal panel shows and hides from the header's goal chip (one side panel at a time: opening it
 // closes the work panel, and the other way round), and sends one mark per criterion at a time.
+// The rail's + bubble opens the add-project picker: a folder already a project selects it, any
+// other is made a project and selected once the shell shows it. A project the draft hero's picker
+// chooses is selected on the rail, and a thread a draft launched is followed once its row arrives.
 
 import { LINEAGE_PAGE } from "@cairn/client-logic/ThreadLineage";
 import { threadStatus } from "@cairn/client-logic/ThreadState";
@@ -17,7 +20,10 @@ import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import { settingsRouter, threadRouter } from "../../Route.ts";
+import { ADD_PROJECT_ID } from "./AddProject.ts";
 import {
+  BrowseFolders,
+  CreateProject,
   FocusField,
   LoadScratch,
   PrepareProjectDraft,
@@ -26,12 +32,15 @@ import {
   PrepareScratchTurn,
   MarkCriterion,
   SaveScratch,
+  SelectAddedProject,
   StopChild,
   StopWorkflow,
 } from "./Command.ts";
 import type { Services } from "./Command.ts";
 import {
+  folderOf,
   openThreadOf,
+  projectAtFolder,
   projectThreadFor,
   railProjectsOf,
   scratchRowOf,
@@ -39,8 +48,9 @@ import {
   threadsOf,
 } from "./Derived.ts";
 import { Message, OutMessage } from "./Message.ts";
-import { FIRST_CHILD_ROWS, stopKeyOf } from "./Model.ts";
+import { FIRST_CHILD_ROWS, FolderListing, stopKeyOf } from "./Model.ts";
 import type {
+  AddProjectState,
   GoalPanelState,
   Model,
   ShellContext,
@@ -102,8 +112,23 @@ const informWork = (
   });
 };
 
-/** The context told, the rail following the route; it asks for no Command. */
-const informContext = (model: Model, context: ShellContext): InformReturn => {
+/** The rail's project of the open thread, when the shell holds the thread. */
+const followedOf = (model: Model): Option.Option<ProjectId> =>
+  Option.flatMap(openThreadOf(model), (thread) =>
+    Option.map(
+      Array.findFirst(
+        railProjectsOf(model),
+        (project) => project.id === thread.projectId
+      ),
+      (project) => project.id
+    )
+  );
+
+/**
+ * The context told, the rail following the route. A thread a draft just launched opens before the
+ * shell holds it, so the rail follows it when its row arrives, not only when the route moves.
+ */
+const followRoute = (model: Model, context: ShellContext): Model => {
   const moved = !Equal.equals(
     routedThreadId(model.context),
     routedThreadId(context)
@@ -116,30 +141,39 @@ const informContext = (model: Model, context: ShellContext): InformReturn => {
     work: () => work,
   });
 
-  if (!moved && model.context.route._tag === context.route._tag) {
-    return { model: next };
+  const followed = followedOf(next);
+  const arrived = Option.isNone(followedOf(model)) && Option.isSome(followed);
+  const turned = moved || model.context.route._tag !== context.route._tag;
+
+  if (!turned && !arrived) {
+    return next;
   }
 
-  const followed = Option.flatMap(openThreadOf(next), (thread) =>
-    Array.findFirst(
-      railProjectsOf(next),
-      (project) => project.id === thread.projectId
-    )
+  return modifyFields(next, {
+    isSheetOpen: (open) => (turned ? false : open),
+    selectedProjectId: (selected) =>
+      moved || arrived ? Option.orElse(followed, () => selected) : selected,
+  });
+};
+
+/** Once the shell shows the folder just added, the rail selects its project as a click would. */
+const findAwaitedProject = (model: Model): InformReturn =>
+  Option.match(
+    Option.flatMap(model.awaitedFolder, (folder) =>
+      projectAtFolder(model, folder)
+    ),
+    {
+      onNone: () => ({ model }),
+      onSome: (project) => ({
+        model: modifyFields(model, { awaitedFolder: () => Option.none() }),
+        commands: [SelectAddedProject({ projectId: project.id })],
+      }),
+    }
   );
 
-  return {
-    model: modifyFields(next, {
-      isSheetOpen: () => false,
-      selectedProjectId: (selected) =>
-        moved
-          ? Option.orElse(
-              Option.map(followed, (project) => project.id),
-              () => selected
-            )
-          : selected,
-    }),
-  };
-};
+/** The context told: the rail follows the route, and finds a folder just added. */
+const informContext = (model: Model, context: ShellContext): InformReturn =>
+  findAwaitedProject(followRoute(model, context));
 
 /**
  * Takes what the root knows. When the route opens another thread, the rail follows it to its
@@ -148,12 +182,13 @@ const informContext = (model: Model, context: ShellContext): InformReturn => {
  */
 export const inform = (model: Model, context: ShellContext): InformReturn => {
   const told = informContext(model, context);
+  const found = told.commands ?? [];
 
   return model.started
     ? told
     : {
         model: modifyFields(told.model, { started: () => true }),
-        commands: [LoadScratch()],
+        commands: [LoadScratch(), ...found],
       };
 };
 
@@ -293,29 +328,209 @@ const setGoal = (
   model: modifyFields(model, { goal: change }),
 });
 
+/** Selects the project and opens its project thread, or a draft of its own when it has none. */
+const openProject = (model: Model, projectId: ProjectId): UpdateReturn => {
+  const picked = modifyFields(model, {
+    selectedProjectId: () => Option.some(projectId),
+    awaitedFolder: () => Option.none(),
+  });
+
+  const target = Option.flatMap(
+    Array.findFirst(
+      railProjectsOf(model),
+      (project) => project.id === projectId
+    ),
+    (project) => projectThreadFor(model, project)
+  );
+
+  // A project with no project thread opens a draft of its own, never the hero's fallback.
+  return Option.match(target, {
+    onNone: () => startProjectThread(picked, projectId),
+    onSome: (thread) => navigate(picked, threadRouter({ threadId: thread.id })),
+  });
+};
+
+/** The add-project picker with `change` applied, while it is open. */
+const setAddProject = (
+  model: Model,
+  change: (state: AddProjectState) => AddProjectState
+): UpdateReturn => ({
+  model: modifyFields(model, {
+    addProject: (open) => Option.map(open, change),
+  }),
+});
+
+/** The picker listing `path` (the home folder when none); a listing still out is dropped. */
+const browseFolders = (
+  model: Model,
+  state: AddProjectState,
+  path: Option.Option<string>
+): UpdateReturn => {
+  const request = state.request + 1;
+
+  return {
+    model: modifyFields(model, {
+      addProject: () =>
+        Option.some({
+          ...state,
+          listing: FolderListing.Loading({ path }),
+          request,
+        }),
+    }),
+    commands: [BrowseFolders({ request, path })],
+  };
+};
+
+/** True when `request` is the listing the open picker waits for. */
+const isAwaitedListing = (model: Model, request: number): boolean =>
+  Option.exists(model.addProject, (state) => state.request === request);
+
+/**
+ * Adds the picker's folder: a folder that is already a project selects that project instead, and
+ * any other goes to the brain, which checks it and makes the project.
+ */
+const submitAddProject = (model: Model): UpdateReturn =>
+  Option.match(
+    Option.filter(model.addProject, (state) => !state.isAdding),
+    {
+      onNone: () => ({ model }),
+      onSome: (state) => {
+        const folder = folderOf(state.folder, state.home);
+
+        if (folder === "") {
+          return { model };
+        }
+
+        return Option.match(projectAtFolder(model, folder), {
+          onSome: (project) =>
+            openProject(
+              modifyFields(model, { addProject: () => Option.none() }),
+              project.id
+            ),
+          onNone: () => ({
+            model: modifyFields(model, {
+              addProject: () =>
+                Option.some({
+                  ...state,
+                  isAdding: true,
+                  failure: Option.none(),
+                }),
+            }),
+            commands: [CreateProject({ folder })],
+          }),
+        });
+      },
+    }
+  );
+
+/**
+ * Opens the add-project picker at the home folder: the rail's + bubble, or the hero's Add project
+ * through the root. The picker takes focus, not its field, so a phone's keyboard stays down while
+ * the user browses.
+ */
+export const openAddProject = (model: Model): InformReturn => {
+  const request = Option.match(model.addProject, {
+    onNone: () => 0,
+    onSome: (state) => state.request + 1,
+  });
+
+  return {
+    model: modifyFields(model, {
+      isSheetOpen: () => false,
+      refresh: () => Option.none(),
+      addProject: () =>
+        Option.some({
+          folder: "",
+          listing: FolderListing.Loading({ path: Option.none() }),
+          request,
+          home: Option.flatMap(model.addProject, (state) => state.home),
+          isAdding: false,
+          failure: Option.none(),
+        }),
+    }),
+    commands: [
+      BrowseFolders({ request, path: Option.none() }),
+      FocusField({ selector: `#${ADD_PROJECT_ID}` }),
+    ],
+  };
+};
+
+/** The draft hero's picker chose `projectId`: the rail and the list follow it, with no navigation. */
+export const followDraftProject =
+  (projectId: ProjectId) =>
+  (model: Model): InformReturn => ({
+    model: modifyFields(model, {
+      selectedProjectId: () => Option.some(projectId),
+    }),
+  });
+
+const closeAddProject = (model: Model): UpdateReturn => ({
+  model: modifyFields(model, { addProject: () => Option.none() }),
+});
+
 /** The shell's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    ClickedProject: ({ projectId }) => {
-      const picked = modifyFields(model, {
-        selectedProjectId: () => Option.some(projectId),
-      });
+    ClickedProject: ({ projectId }) => openProject(model, projectId),
 
-      const target = Option.flatMap(
-        Array.findFirst(
-          railProjectsOf(model),
-          (project) => project.id === projectId
-        ),
-        (project) => projectThreadFor(model, project)
-      );
+    ClickedAddProject: () => openAddProject(model),
+    ChangedAddProjectFolder: ({ value }) =>
+      setAddProject(model, (state) => ({
+        ...state,
+        folder: value,
+        failure: Option.none(),
+      })),
+    ClickedBrowseFolder: ({ path }) =>
+      Option.match(model.addProject, {
+        onNone: () => ({ model }),
+        onSome: (state) =>
+          browseFolders(
+            model,
+            { ...state, folder: path, failure: Option.none() },
+            Option.some(path)
+          ),
+      }),
+    ReceivedFolders: ({ request, result }) =>
+      isAwaitedListing(model, request)
+        ? setAddProject(model, (state) => ({
+            ...state,
+            listing: FolderListing.Loaded({ result }),
+            // The first listing, asked with no folder, is the home folder's.
+            home: Option.orElse(state.home, () =>
+              FolderListing.match(state.listing, {
+                Loading: ({ path }) =>
+                  Option.isNone(path)
+                    ? Option.some(result.path)
+                    : Option.none(),
+                Loaded: () => Option.none(),
+                Failed: () => Option.none(),
+              })
+            ),
+          }))
+        : { model },
+    FailedFolders: ({ request, message: reason }) =>
+      isAwaitedListing(model, request)
+        ? setAddProject(model, (state) => ({
+            ...state,
+            listing: FolderListing.Failed({ message: reason }),
+          }))
+        : { model },
+    SubmittedAddProject: () => submitAddProject(model),
+    ClickedCancelAddProject: () => closeAddProject(model),
+    AddedProject: ({ folder }) => ({
+      model: modifyFields(model, {
+        addProject: () => Option.none(),
+        awaitedFolder: () => Option.some(folder),
+      }),
+    }),
+    FailedAddProject: ({ message: reason }) =>
+      setAddProject(model, (state) => ({
+        ...state,
+        isAdding: false,
+        failure: Option.some(reason),
+      })),
+    FoundAddedProject: ({ projectId }) => openProject(model, projectId),
 
-      // A project with no project thread opens a draft of its own, never the hero's fallback.
-      return Option.match(target, {
-        onNone: () => startProjectThread(picked, projectId),
-        onSome: (thread) =>
-          navigate(picked, threadRouter({ threadId: thread.id })),
-      });
-    },
     ClickedThread: ({ threadId }) =>
       navigate(model, threadRouter({ threadId })),
     ClickedStartProjectThread: ({ projectId }) =>
@@ -383,6 +598,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 
     PressedScratchShortcut: () => setScratchOpen(model, !model.scratch.isOpen),
     PressedEscape: () => {
+      if (Option.isSome(model.addProject)) {
+        return closeAddProject(model);
+      }
+
       if (Option.isSome(model.refresh)) {
         return {
           model: modifyFields(model, { refresh: () => Option.none() }),

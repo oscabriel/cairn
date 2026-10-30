@@ -702,10 +702,6 @@ export const inform = (model: Model, context: SidebarContext): UpdateReturn => {
   return settleDerived(informed);
 };
 
-/** Opens the Add project dialog at the home folder (the hero's Add project). */
-export const openAddProject = (model: Model): UpdateReturn =>
-  browse(model, Option.none());
-
 /** The sidebar as the page starts: empty, reading this device's saved shelves and platform. */
 export const init = (): UpdateReturn => ({
   model: initial,

@@ -1190,7 +1190,11 @@ const step = (model: Model, message: Message): UpdateReturn =>
         baseBranch: Option.none(),
       }));
 
-      return { model: retargeted, commands: [FocusEditor()] };
+      return {
+        model: retargeted,
+        commands: [FocusEditor()],
+        outMessage: OutMessage.ChoseDraftProject({ projectId }),
+      };
     },
     ClickedAddProject: () => ({
       model: closePopover(model),

@@ -1,7 +1,7 @@
 // The `next` shell's views (plan look track L6), each a Submodel view over the shell's Model: the
 // project rail with the selected project's list (a column on a desktop, a sheet on a phone), the
-// chat header's lead and actions, the refresh confirm, and the scratch overlay's scrim, head and
-// foot. `Layout.ts` places them around the page's own parts, which keep their own Messages; the
+// chat header's lead and actions, the refresh confirm, the add-project picker, and the scratch
+// overlay's scrim, head and foot. `Layout.ts` places them around the page's own parts, which keep their own Messages; the
 // look catalogue draws them over a fixture.
 
 import { Option, Predicate, Record } from "effect";
@@ -9,6 +9,7 @@ import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import "./shell.css";
+import { addProjectPicker } from "./AddProject.ts";
 import {
   managedMetaOf,
   managedThreadsFor,
@@ -256,6 +257,15 @@ export const refreshView = Submodel.defineView<Model, Message, PlacementInput>(
       ),
       placement
     )
+);
+
+/** The add-project picker, while it is open. */
+export const addProjectView = Submodel.defineView<
+  Model,
+  Message,
+  PlacementInput
+>((model, { placement }, h) =>
+  addProjectPicker(h, model.addProject, placement)
 );
 
 /** The scratch overlay's scrim. */

@@ -69,10 +69,25 @@
 //   shell-refresh-1440    Refresh asks first (Cancel keeps the thread), then starts a new project
 //                         thread with the typed message, opens it and lists it on top;
 //   shell-start-1440      myr's bubble opens a draft of myr's own; its first message launches in
-//                         myr and becomes its project thread, and cairn keeps its own.
+//                         myr and becomes its project thread, and cairn keeps its own;
+//   shell-draft-project-<w>  the hero's project picker chooses oscargabriel-dev: the rail and the
+//                         list follow it, and the first message launches there (the header
+//                         titles the new project thread with it);
+//   shell-add-project-<w> the rail's + bubble, last on the rail and shaped as the project bubbles
+//                         (44 px on the phone), opens the add-project picker; a temporary folder
+//                         under the home folder, browsed to (1,440) or typed (390), becomes a
+//                         project the rail selects, opening its draft with no project thread yet;
+//                         adding the same folder again selects it and adds no second project.
 // Exits 0 when every check ran and the report was written; `--strict` also requires every check
 // to pass, which is wave 5's bar.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -287,6 +302,16 @@ const openSidebar = async (page: Page, width: number) => {
       .click();
     await page.getByTestId("sidebar-sheet").waitFor({ state: "attached" });
   }
+};
+
+/** Closes the phone's sidebar sheet by its scrim, which the sheet covers at its centre. */
+const closeSidebar = async (page: Page) => {
+  await page
+    .getByTestId("sidebar-sheet")
+    .locator('[aria-hidden="true"]')
+    .first()
+    .dispatchEvent("click");
+  await page.getByTestId("sidebar-sheet").waitFor({ state: "detached" });
 };
 
 /** The visible copy of the shell's sidebar: the sheet on a phone, the column on a desktop. */
@@ -790,6 +815,250 @@ const shellChecks = async (browser: Browser, hero: string) => {
       detail ===
       `shown true, myr's project thread true, selected myr, ${exported.projectTitle} kept true`
   );
+
+  // Last of the shell's checks, since it adds a thread the checks above count: the hero's
+  // project picker.
+  for (const width of [1440, 390] as const) {
+    await check(
+      browser,
+      `shell-draft-project-${width}`,
+      shellContext(width),
+      hero,
+      async (page) => {
+        const trigger = page.getByTestId("hero-project-trigger");
+
+        await page.waitForURL((url) => url.pathname.startsWith("/new/"), {
+          timeout: 5000,
+        });
+        await trigger.click();
+        await page
+          .getByRole("option", { name: "oscargabriel-dev", exact: true })
+          .click();
+
+        const chosen = ((await trigger.textContent()) ?? "").trim();
+
+        // The rail and the list follow the draft's project.
+        await openSidebar(page, width);
+
+        const side = sidebarOf(page, width);
+
+        const followed = await side
+          .locator('[data-testid="rail-project"][aria-current="true"]')
+          .getAttribute("aria-label", { timeout: 2000 })
+          .then(
+            (label) => (label ?? "").split(",")[0],
+            () => "none"
+          );
+
+        const listed = (
+          (await side.getByTestId("shell-project-title").textContent()) ?? ""
+        ).trim();
+
+        if (width === 390) {
+          await closeSidebar(page);
+        }
+
+        const words = `a thread for oscargabriel-dev ${Date.now()}`;
+
+        await editor(page).click();
+        await page.keyboard.type(words);
+        await page.keyboard.press("Enter");
+        await page.waitForURL((url) => url.pathname.startsWith("/t/"), {
+          timeout: 10_000,
+        });
+
+        const shown = await page
+          .locator('[data-message-role="user"]', { hasText: words })
+          .first()
+          .waitFor({ state: "visible", timeout: 10_000 })
+          .then(
+            () => true,
+            () => false
+          );
+
+        // A launch in a project is its project thread, which the header titles with the project.
+        const landed = await page
+          .getByTestId("next-header-title")
+          .filter({ hasText: "oscargabriel-dev" })
+          .waitFor({ timeout: 10_000 })
+          .then(
+            () => "oscargabriel-dev",
+            async () =>
+              (
+                (await page.getByTestId("next-header-title").textContent()) ??
+                ""
+              ).trim()
+          );
+
+        await page.waitForTimeout(300);
+        await shot(page, "draft-project", width);
+
+        return `chosen ${chosen}, rail ${followed}, list ${listed}, shown ${shown}, landed in ${landed}`;
+      },
+      (detail) =>
+        detail ===
+        "chosen oscargabriel-dev, rail oscargabriel-dev, list oscargabriel-dev, shown true, landed in oscargabriel-dev"
+    );
+  }
+};
+
+/**
+ * The rail's + bubble, after every other check: the projects it adds are the newest, so the hero's
+ * draft, which launches in the most recently updated project, would start in one of them.
+ */
+const addProjectChecks = async (browser: Browser) => {
+  const projectThreadUrl = threadUrl;
+
+  // The rail's + bubble adds a folder under the home folder (the only place the brain takes one
+  // from), browsed to at 1,440 and typed at 390, and selects it; adding it again selects it again.
+  const folders: Array<string> = [];
+
+  try {
+    for (const width of [1440, 390] as const) {
+      await check(
+        browser,
+        `shell-add-project-${width}`,
+        shellContext(width),
+        projectThreadUrl,
+        async (page) => {
+          const folder = realpathSync(
+            mkdtempSync(path.join(homedir(), "cairn-judge-add-"))
+          );
+
+          folders.push(folder);
+
+          const name = path.basename(folder);
+          const picker = page.getByTestId("add-project");
+
+          const addFolder = async (how: "browse" | "type") => {
+            await openSidebar(page, width);
+            await sidebarOf(page, width)
+              .getByTestId("rail-add-project")
+              .click();
+            await picker.waitFor({ state: "visible", timeout: 5000 });
+
+            if (how === "browse") {
+              await picker
+                .getByTestId("add-project-entry")
+                .filter({ hasText: name })
+                .click();
+              await picker
+                .getByTestId("add-project-path")
+                .filter({ hasText: folder })
+                .waitFor({ timeout: 5000 });
+            } else {
+              await picker.getByTestId("add-project-folder").fill(`${folder}/`);
+            }
+
+            await picker.getByTestId("add-project-submit").click();
+            await picker.waitFor({ state: "detached", timeout: 10_000 });
+          };
+
+          await openSidebar(page, width);
+
+          const plus = sidebarOf(page, width).getByTestId("rail-add-project");
+
+          const look = await plus.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+
+            const bubble = element.parentElement?.querySelector(
+              '[data-testid="rail-project"]'
+            );
+
+            const style = getComputedStyle(element);
+
+            return {
+              size: Math.min(box.width, box.height),
+              matchesBubbles:
+                bubble !== null &&
+                bubble !== undefined &&
+                getComputedStyle(bubble).borderTopLeftRadius ===
+                  style.borderTopLeftRadius &&
+                bubble.getBoundingClientRect().width === box.width,
+              last: element.nextElementSibling === null,
+            };
+          });
+
+          const before = await sidebarOf(page, width)
+            .getByTestId("rail-project")
+            .count();
+
+          await plus.click();
+          await picker.waitFor({ state: "visible", timeout: 5000 });
+          await picker
+            .getByTestId("add-project-entry")
+            .first()
+            .waitFor({ timeout: 5000 });
+          await page.waitForTimeout(300);
+          await shot(page, "add-project", width);
+          await picker.getByTestId("add-project-cancel").click();
+          await picker.waitFor({ state: "detached", timeout: 5000 });
+
+          await addFolder(width === 1440 ? "browse" : "type");
+          await page.waitForURL((url) => url.pathname.startsWith("/new/"), {
+            timeout: 10_000,
+          });
+          await openSidebar(page, width);
+
+          const selectedOf = async () =>
+            (
+              (await sidebarOf(page, width)
+                .locator('[data-testid="rail-project"][aria-current="true"]')
+                .getAttribute("aria-label")) ?? ""
+            ).split(",")[0];
+
+          const selected = await selectedOf();
+
+          const empty = await sidebarOf(page, width)
+            .getByTestId("shell-no-project-thread")
+            .count();
+
+          const added = await sidebarOf(page, width)
+            .getByTestId("rail-project")
+            .count();
+
+          if (width === 390) {
+            await closeSidebar(page);
+          }
+
+          const draftIn = (
+            (await page.getByTestId("hero-project-trigger").textContent()) ?? ""
+          ).trim();
+
+          await shot(page, "added-project", width);
+
+          // Again, from another project: the same folder selects its project, with no second one.
+          await openSidebar(page, width);
+          await sidebarOf(page, width)
+            .getByRole("button", {
+              name: new RegExp(`^${exported.projectTitle}(?:,|$)`, "u"),
+            })
+            .click();
+          await page.waitForURL(/\/t\//u, { timeout: 5000 });
+          await addFolder("type");
+          await page.waitForURL((url) => url.pathname.startsWith("/new/"), {
+            timeout: 10_000,
+          });
+          await openSidebar(page, width);
+
+          const again = await selectedOf();
+
+          const after = await sidebarOf(page, width)
+            .getByTestId("rail-project")
+            .count();
+
+          return `plus ${look.size >= (width === 390 ? 44 : 40)} same shape ${look.matchesBubbles} last ${look.last}, added ${added - before}, selected ${selected === name}, no project thread yet ${empty}, draft in ${draftIn === name}, again selected ${again === name} added ${after - added}`;
+        },
+        (detail) =>
+          detail ===
+          "plus true same shape true last true, added 1, selected true, no project thread yet 1, draft in true, again selected true added 0"
+      );
+    }
+  } finally {
+    for (const folder of folders) {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }
 };
 
 /** The order the footer folds its blocks in: the last block first (client-logic FooterLayout). */
@@ -1355,6 +1624,8 @@ try {
     },
     (detail) => detail.startsWith("opened true, closed true, at /t/")
   );
+
+  await addProjectChecks(chromiumBrowser);
 } finally {
   await chromiumBrowser.close();
 }

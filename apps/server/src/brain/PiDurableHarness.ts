@@ -74,6 +74,8 @@ import {
   SubagentsDoc,
 } from "../subagents/SubagentDocs.ts";
 import { answerBrief, steerReporter } from "../subagents/Subagents.ts";
+import { GoalDoc } from "../verdicts/GoalDocs.ts";
+import { criteriaAnswered } from "../verdicts/Verdicts.ts";
 import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { launchAnswered } from "../workflows/WorkflowLaunch.ts";
 import { Arms } from "./Arms.ts";
@@ -140,6 +142,7 @@ const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
   ChildDoc,
   EscalationsDoc,
   WorkflowsDoc,
+  GoalDoc,
 ];
 
 const encoder = new TextEncoder();
@@ -300,11 +303,13 @@ const layerNoDeps = Layer.effect(
     // Where a judge brain kills itself inside a brief's Go commit; none elsewhere.
     const briefAnswered = answerBrief(yield* BriefFaults);
 
-    // What an answer does in its own commit: a workflow launch's row takes it (ADR 0032), and a
-    // subagent's brief starts its child or tells its parent (ADR 0030).
+    // What an answer does in its own commit: a workflow launch's row takes it (ADR 0032), a
+    // subagent's brief starts its child or tells its parent (ADR 0030), and an accepted criteria
+    // proposal binds its criteria (ADR 0026).
     const answered: AnsweredHook = async (tx, conversationId, record) => {
       await launchAnswered(tx, conversationId, record);
       await briefAnswered(tx, conversationId, record);
+      await criteriaAnswered(tx, conversationId, record);
     };
 
     // A stop finishes here once it started aborting, whatever happens to its caller.

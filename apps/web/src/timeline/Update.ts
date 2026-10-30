@@ -26,6 +26,7 @@ import { Message, OutMessage } from "./Message.ts";
 import type { Model, ThreadUi } from "./Model.ts";
 import { freshUi, SAVED_THREAD_LIMIT } from "./Model.ts";
 import { itemKeys, transcriptForKeys } from "./Rows.ts";
+import { subagentKeysOf } from "./Subagents.ts";
 
 type UpdateReturn = Update.ReturnWithOutMessage<
   Model,
@@ -247,9 +248,12 @@ export const afterView = (
     return { model };
   }
 
-  const keys = new Set(
-    itemKeys(transcriptForKeys(model.threadId.value, after, model.ui))
-  );
+  // The subagent items' keys too, which only the `next` views draw: a key not in the list keeps
+  // nothing, so classic loses nothing by them.
+  const keys = new Set([
+    ...itemKeys(transcriptForKeys(model.threadId.value, after, model.ui)),
+    ...subagentKeysOf(after),
+  ]);
 
   return { model: modifyList(model, (list) => List.keepRows(list, keys)) };
 };

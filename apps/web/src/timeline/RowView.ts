@@ -83,6 +83,8 @@ import { markdownView } from "./markdown/View.ts";
 import { Message } from "./Message.ts";
 import type { HistoryState } from "./Model.ts";
 import type { ChangedFilesRow, ListItem, MessageItem } from "./Rows.ts";
+import { subagentRowViews } from "./Subagents.ts";
+import type { SubagentShells } from "./Subagents.ts";
 import { formatClock, formatFull } from "./Time.ts";
 
 type H = HtmlBuilder<Message>;
@@ -101,6 +103,8 @@ export interface RowContext {
   /** For the history control. */
   readonly history: HistoryState;
   readonly historyCursor: Option.Option<EntryId>;
+  /** For a subagent group and the way back, on the `next` views: the shell rows they read. */
+  readonly subagents: Option.Option<SubagentShells>;
 }
 
 /** Writes "<duration>" into its element once a second, from `startedAt`. */
@@ -1125,5 +1129,26 @@ export const rowView = (h: H, item: ListItem, context: RowContext): Html =>
       error: (row) => errorView(h, row, context),
       "changed-files": (row) =>
         frame(h, "changed-files", "pb-4", [filesCard(h, row)]),
+      // Only the `next` views make these two items, and its chunk draws them (`Subagents.ts`).
+      subagents: (row) =>
+        frame(h, "subagents", "pb-2", [
+          Option.match(Option.all([subagentRowViews(), context.subagents]), {
+            onNone: () => h.empty,
+            onSome: ([views, shells]) =>
+              views.group(
+                h,
+                row,
+                shells,
+                Message.ToggledWorkGroup({ groupId: row.id })
+              ),
+          }),
+        ]),
+      "parent-link": (row) =>
+        frame(h, "parent-link", "pt-1 pb-2", [
+          Option.match(Option.all([subagentRowViews(), context.subagents]), {
+            onNone: () => h.empty,
+            onSome: ([views, shells]) => views.parentLink(h, row, shells),
+          }),
+        ]),
     })
   );

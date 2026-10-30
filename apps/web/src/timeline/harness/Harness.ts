@@ -389,6 +389,7 @@ const view = (model: Model, h: HtmlBuilder<Message>): Html =>
         viewInputs: {
           state: Option.some(stateOf(model)),
           workspaceRoot: Option.none(),
+          subagents: Option.none(),
         },
         toParentMessage: (message) => Message.GotTimelineMessage({ message }),
       }),

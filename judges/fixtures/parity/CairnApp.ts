@@ -1,6 +1,6 @@
 // The Cairn half of the parity judges (plan 4F): the real web client over a real in-process brain,
 // seeded with what t3code showed, so the judges drive the same `update` and `view` the live app
-// runs. Used by judges/capture.ts (hero and thread states) and judges/behaviour.ts.
+// runs. Used by judges/capture.ts (hero and thread states), judges/behaviour.ts and judges/surfaces.ts.
 //
 // The brain is AppLayer over the scripted harness on an ephemeral loopback port, with Vite in front
 // of it on another, as judges/typing.ts runs it. Seeding happens before the page opens:
@@ -90,6 +90,15 @@ export interface CairnSeed {
   readonly entries: ReadonlyArray<ImportedEntry>;
 }
 
+/**
+ * The scripted brain's model and tools, when a judge needs other answers than "Noted." and the
+ * echo tool (judges/surfaces.ts gives a model that asks for approvals and questions).
+ */
+export interface CairnBrain {
+  readonly model: Layer.Layer<ScriptedModel>;
+  readonly tools: Layer.Layer<ScriptedTools>;
+}
+
 /** A running Cairn: the page origin, the seeded thread's URL, and how to stop it. */
 export interface CairnApp {
   readonly origin: string;
@@ -147,6 +156,12 @@ const QuickModel = Layer.succeed(
       ),
   })
 );
+
+/** The parity judges' brain: "Noted." at once, and the echo tool. */
+const QUICK_BRAIN: CairnBrain = {
+  model: QuickModel,
+  tools: ScriptedTools.layerEcho,
+};
 
 const seedLayer = (seed: CairnSeed, workspace: string) =>
   Layer.effectDiscard(
@@ -222,7 +237,10 @@ const seedLayer = (seed: CairnSeed, workspace: string) =>
   );
 
 /** Starts the brain and Vite, seeded; nothing listens outside loopback. */
-export const startCairn = async (seed: CairnSeed): Promise<CairnApp> => {
+export const startCairn = async (
+  seed: CairnSeed,
+  brain: CairnBrain = QUICK_BRAIN
+): Promise<CairnApp> => {
   const vitePort = await freePort();
   const brainPort = await freePort();
   const origin = `http://${LOOPBACK}:${vitePort}`;
@@ -239,8 +257,8 @@ export const startCairn = async (seed: CairnSeed): Promise<CairnApp> => {
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),
     Layer.provideMerge(ScriptedStore.layer),
-    Layer.provide(QuickModel),
-    Layer.provide(ScriptedTools.layerEcho),
+    Layer.provide(brain.model),
+    Layer.provide(brain.tools),
     Layer.provideMerge(
       withCatalog(
         ModelSource.layerFaux({

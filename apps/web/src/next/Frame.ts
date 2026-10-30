@@ -10,6 +10,8 @@
 // integrator-only after L0.
 
 import "./tokens.css";
+// The transcript's subagent rows (plan 6C), registered with the transcript as this chunk loads.
+import "./timeline/SubagentRows.ts";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import type { Message } from "../Message.ts";

@@ -744,3 +744,20 @@ Judges on main, under the judge lock, $0, no model: `pnpm check` ok in 431 s, 2,
 
 - The launch card, the workflow steps and the goal panel in the look round at 390 and 1,440 px.
 - A bug for a later web package (or 7A): Settings' Follow-up behaviour and Send shortcut never reach the composer, which reads only its own `cairn:composer-settings:v1`, so a phone cannot steer. `subagent-flows.ts` works around it by saving the composer's setting first.
+
+## 7A cutover
+
+Done on `main` on 2026-10-30, the user's switch. `next` is the only set of views: `View.ts` draws `next/Frame.ts`, which is now in the entry rather than a chunk (one round trip fewer); the `ui` setting, `?ui=` and the settings Views row are gone, and `index.html` marks `<html data-ui="next">`. Deleted: 34 classic-only web files, `capture.ts`, `parity.ts`, `parity-classify.ts`, `parity-structure.ts`, `parity-review.sh`, the settings capture states and 95 baseline files (kept: `thread/thread.json` and the five footer landmark files `behaviour.ts` reads). `behaviour.ts`, `typing.ts`, `transcript-scroll.ts`, `load.ts` and `paste.ts` lost `--ui`; `behaviour.ts` lost its four classic sidebar checks and `rows-subagent.ts` its classic step. Held items done: the classic regions are out of `Frame.ts`; `withBoundary` turns a cut-off call into a `CutOff` transport failure, so every RPC Command is guarded (an outbox item stays at the head); the request card counts a client only once Live. Found by `load.ts`: the load mark waited for classic sidebar rows, so a `next` page never marked itself interactive or posted its load report; it now waits for the shell list (`LoadMark.ts`, held by `Frame.test.ts`), and `load.ts` waits for the brain's health before seeding. ADR 0040 accepted.
+
+Judges on main, under the judge lock, $0, no model: `pnpm check` ok in 430 s, 2,638 tests; `behaviour.ts --strict` 30 of 30 (`footer-measure` control fails 980 and 820); `surfaces.ts` 10 of 10; `rollup.ts` 8 of 8; `rows-subagent.ts` 12 of 12; `work-panel.ts` 4 of 4; `meters.ts` 4 of 4; `typing.ts chromium` 1,200 of 1,200 keys, 0 slow views; `transcript-scroll.ts` no failing check (`--broken anchor` fails 7); `look.ts capture --strict` 32 of 32, controls caught; `load.ts --local` p50 196 ms (LAN) and 572 ms (4G), 4 requests, control fails.
+
+### Rules later packages follow
+
+- The "classic stays byte for byte" rule and `capture.ts cairn` are retired; a judge opens pages without `?ui=`.
+- Bundle: entry JS 315,455 B gzip under a 315 KiB ceiling, entry CSS 33,550 under 34,000 B.
+
+### Left for the user
+
+- The JS ceiling went up from 300 KiB, not down: the frame's code now loads with the entry, one round trip fewer.
+- The classic sidebar's state (`sidebar/`) still runs for the shell's clock, the key bindings and visits; folding it into the shell is a later package. Diff and composer modules shared with `next` keep a few dead classic exports.
+- Still open from 6d: Settings' Follow-up behaviour and Send shortcut never reach the composer, so a phone cannot steer.

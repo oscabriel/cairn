@@ -268,9 +268,9 @@ _Avoid_: plugin
 
 **Load report**: The page's own account of one load (time to interactive, requests before it, standalone), logged by the brain as one `load.report` line with the peer's direct or DERP path.
 
-**Client settings**: The settings that belong to one device (send shortcut, follow-up behaviour, timestamp format, confirm delete, composer collapse, theme, font sizes, chat width, diff layout, and which views draw the app, Next or Classic, a row on the `next` settings page only), saved in localStorage under `cairn:client-settings:v1`. Server settings are the ones the brain keeps for every device.
+**Client settings**: The settings that belong to one device (send shortcut, follow-up behaviour, timestamp format, confirm delete, composer collapse, theme, font sizes, chat width, diff layout), saved in localStorage under `cairn:client-settings:v1`. Server settings are the ones the brain keeps for every device.
 
-**Next (views)**: The forked set of views the `ui` client setting picks (`?ui=next` sets it, `?ui=classic` returns), drawn in `next/Frame.ts` over the same Model and update as the classic views and loaded as its own chunk (ADR 0040). Classic is the default and stays unchanged.
+**Next (views)**: The app's views, under `apps/web/src/next/` and drawn by `next/Frame.ts` (ADR 0040). They began as a fork beside the classic views, picked by a `ui` client setting; at the cutover (plan 7A, 2026-10-30) the classic views, the setting and `?ui=` were deleted, so `next` is the only set. _Avoid_: classic (the deleted views), except when speaking of history.
 
 **Design token**: A named value in `next/tokens.css` (a surface, ink, stroke, selection ladder step, accent, status tone, radius, space, type step, duration, layer or shadow) that the `next` views use in place of any literal colour or palette utility, in dark and light. `judges/contrast.test.ts` holds every text pair to WCAG AA and fails any other colour in `next/`. _Avoid_: token alone where Spend's model tokens could be meant; say design token or the token's name.
 
@@ -416,9 +416,9 @@ _Avoid_: preview, tunnel
 
 _Avoid_: e2e, test suite (for the recipe)
 
-**Parity baseline**: t3code's captured states (screenshots, page HTML, landmark files, `states.json` with masks, `version.json`) committed under `judges/fixtures/parity/t3@fe27e8e3/<group>/`, written only by `judges/capture.ts t3` when the installed nightly matches ADR 0015 (D56).
+**Parity baseline**: What is left of t3code's captured states under `judges/fixtures/parity/t3@fe27e8e3/`: the imported thread (`thread/thread.json`) the judges seed, and the hero landmark files `behaviour.ts` holds the composer footer against. The screenshots, page HTML and the capture and pixel-parity judges that wrote and compared them were deleted at the cutover (plan 7A).
 
-**Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens; the structure judge compares landmarks by key. _Avoid_: anchor (that word is the subagent anchor's).
+**Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens (`judges/fixtures/parity/Landmarks.ts`). _Avoid_: anchor (that word is the subagent anchor's).
 
 **Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a verifier on another model family, or the user.
 

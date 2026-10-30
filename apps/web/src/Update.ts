@@ -725,6 +725,33 @@ const syncComposer: Step = (model) => {
     : { model };
 };
 
+/**
+ * Hands the composer the Send shortcut and Follow-up behaviour chosen on the settings page, once
+ * this device's settings have loaded. Settings owns them; the composer's own saved copy only
+ * stands in until then.
+ */
+const syncComposerSettings: Step = (model) => {
+  const { client, clientLoaded } = model.settings;
+  const current = model.composer.settings;
+
+  return !clientLoaded ||
+    (current.sendShortcut === client.sendShortcut &&
+      current.followUpBehavior === client.followUpBehavior)
+    ? { model }
+    : {
+        model: modifyFields(model, {
+          composer: (composer) =>
+            modifyFields(composer, {
+              settings: (settings) =>
+                modifyFields(settings, {
+                  sendShortcut: () => client.sendShortcut,
+                  followUpBehavior: () => client.followUpBehavior,
+                }),
+            }),
+        }),
+      };
+};
+
 const isCurrentEpoch = (model: Model, epoch: number): boolean =>
   model.connection.epoch === epoch;
 
@@ -1207,6 +1234,7 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncSidebar,
     syncPush,
     syncSettings,
+    syncComposerSettings,
     syncParked,
     syncNextShell,
     syncScratchThread,
@@ -1257,6 +1285,7 @@ export const init: Runtime.RoutingApplicationInit<
     syncPush,
     startSettings,
     syncSettings,
+    syncComposerSettings,
     syncParked,
     syncNextShell,
     syncScratchThread,

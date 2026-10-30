@@ -585,7 +585,14 @@ const killRun = Effect.gen(function* () {
   return 5;
 });
 
-const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-council-typed-data-"));
+// A life of `--kill-in-pass-2` keeps its data inside the run's folder, which the judge removes
+// whether or not the life was killed; a killed life runs no finalizer of its own.
+const dataDir =
+  values.dir === undefined
+    ? mkdtempSync(path.join(tmpdir(), "cairn-council-typed-data-"))
+    : path.join(values.dir, "data");
+
+mkdirSync(dataDir, { recursive: true });
 
 const root = councilRoot();
 

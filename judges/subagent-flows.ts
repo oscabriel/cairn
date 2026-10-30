@@ -12,8 +12,9 @@
 // One run per width, in order. Each child is spawned by a message typed into the parent's page
 // and started by Go through the protocol, as the brief card sends it. Every step is judged twice:
 // on what the page shows, and on the brain's state read through the protocol as a second client.
-//   steer        the parent's row for a working child opens the child's thread; the steer typed
-//                there goes as a steer ("Steer message", queued as Steer) while the child works;
+//   steer        at 390 px, Follow-up behaviour is first set to Steer on the settings page (the
+//                composer must follow it); the parent's row for a working child opens the child's
+//                thread; the steer typed there goes as a steer ("Steer message", queued as Steer) while the child works;
 //                the brain's registry holds two inputs for the child; let go, the child reads the
 //                steer after its tool round and answers it, the child's page shows both, the
 //                parent's transcript gets one completed note carrying the answer, and the parent's
@@ -112,8 +113,8 @@ const widths = values.width.split(",").map(Number);
 
 const PARENT_TITLE = "Plan the port";
 
-/** Where the composer saves its settings on this device (`composer/Drafts.ts`). */
-const COMPOSER_SETTINGS_KEY = "cairn:composer-settings:v1";
+/** Where the settings page saves this device's settings (`settings/ClientSettings.ts`). */
+const CLIENT_SETTINGS_KEY = "cairn:client-settings:v1";
 
 interface Result {
   readonly check: string;
@@ -186,23 +187,6 @@ const plantSteer = (steer: string) => {
   );
 };
 
-// The phone's saved composer settings: a message sent while a run works steers it. A phone has no
-// mod+Enter, so this setting is how a phone user steers. It is written where the composer reads it
-// (`composer/Drafts.ts`), since the settings page's Follow-up behaviour does not reach the composer
-// yet (6J's hand-off).
-const saveSteerSetting = (key: string) => {
-  if (localStorage.getItem(key) === null) {
-    localStorage.setItem(
-      key,
-      JSON.stringify({
-        sendShortcut: "enter",
-        followUpBehavior: "steer",
-        favoriteModels: [],
-      })
-    );
-  }
-};
-
 // A click on any Stop button never reaches the app.
 const plantStop = () => {
   document.addEventListener(
@@ -248,10 +232,6 @@ const newDevice = async (
         }
       : { viewport: { width, height: 900 }, reducedMotion: "reduce" }
   );
-
-  if (width < 640) {
-    await context.addInitScript(saveSteerSetting, COMPOSER_SETTINGS_KEY);
-  }
 
   if (broken === "steer") {
     await context.addInitScript(plantSteer, STEER);
@@ -737,6 +717,32 @@ const runWidth = async (browser: Browser, width: number) => {
     await editor(page).waitFor({ state: "attached", timeout: 15_000 });
   };
 
+  // A phone has no mod+Enter, so the settings page's Follow-up behaviour is how a phone user
+  // steers: chosen there as Steer, a message sent while a run works steers it.
+  const chooseSteerInSettings = async () => {
+    await page.goto(new URL("/settings", app.origin).href, {
+      waitUntil: "networkidle",
+    });
+    await page
+      .getByRole("combobox", { name: "Follow-up behaviour" })
+      .selectOption("steer");
+
+    const saved = await until(
+      async () =>
+        await page.evaluate(
+          (key) => localStorage.getItem(key) ?? "",
+          CLIENT_SETTINGS_KEY
+        ),
+      (json) => json.includes('"followUpBehavior":"steer"'),
+      10_000
+    );
+
+    expect(
+      saved.includes('"followUpBehavior":"steer"'),
+      "Settings did not save Follow-up behaviour as Steer"
+    );
+  };
+
   /** Runs one step; a failed step is recorded and the rest still run. */
   const step = async (name: string, body: () => Promise<string>) => {
     try {
@@ -754,6 +760,10 @@ const runWidth = async (browser: Browser, width: number) => {
 
   try {
     await step("steer", async () => {
+      if (width < 640) {
+        await chooseSteerInSettings();
+      }
+
       await openParent();
 
       const { description } = CHILDREN.steered;
@@ -767,7 +777,7 @@ const runWidth = async (browser: Browser, width: number) => {
       const sendButton = page.locator('[data-testid="composer-send"]').first();
       const label = (await sendButton.getAttribute("aria-label")) ?? "";
 
-      // The phone steers with Send under its saved Steer setting; the desktop keeps the default
+      // The phone steers with Send under the Steer it chose in Settings; the desktop keeps the default
       // (Send queues) and steers with mod+Enter, the alternate send.
       const shown = width < 640 ? "Steer message" : "Queue message";
 
@@ -875,7 +885,7 @@ const runWidth = async (browser: Browser, width: number) => {
       );
       expect(!(await overflows(page)), "the parent's page scrolls sideways");
 
-      return `opened from the parent's row; ${width < 640 ? "Send under the Steer setting" : "mod+Enter"} queued the steer as Steer (2 inputs in the registry); the child answered "${STEERED}" on its page, once; one completed note in the parent; its row says Done`;
+      return `opened from the parent's row; ${width < 640 ? "Send under Steer chosen in Settings" : "mod+Enter"} queued the steer as Steer (2 inputs in the registry); the child answered "${STEERED}" on its page, once; one completed note in the parent; its row says Done`;
     });
 
     await step("stop-row", async () => {

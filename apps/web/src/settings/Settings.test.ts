@@ -12,8 +12,13 @@ import { KeyValueStore } from "effect/persistence";
 import * as AsyncData from "foldkit/asyncData";
 import * as Scene from "foldkit/scene";
 
+import { Message as ComposerMessage } from "../composer/Message.ts";
+import { defaultSettings as defaultComposerSettings } from "../composer/Model.ts";
 import { leadingWindow, usageMeterView } from "../composer/UsageMeter.ts";
+import { Message as RootMessage } from "../Message.ts";
 import { view } from "../next/settings/View.ts";
+import { liveModel } from "../TestFixtures.ts";
+import { update as rootUpdate } from "../Update.ts";
 import {
   CLIENT_SETTINGS_STORAGE_KEY,
   DEFAULT_CLIENT_SETTINGS,
@@ -197,6 +202,54 @@ describe("client settings", () => {
       assert.deepStrictEqual(settings, DEFAULT_CLIENT_SETTINGS);
     }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
+});
+
+const fromSettings = (message: Message) =>
+  RootMessage.GotSettingsMessage({ message });
+
+describe("the composer's send settings", () => {
+  it("follow the Send shortcut and Follow-up behaviour chosen in Settings", () => {
+    const withChoice = rootUpdate(
+      liveModel(0),
+      fromSettings(
+        Message.LoadedClientSettings({
+          settings: {
+            ...DEFAULT_CLIENT_SETTINGS,
+            sendShortcut: "mod-enter",
+            followUpBehavior: "steer",
+          },
+        })
+      )
+    ).model;
+
+    assert.strictEqual(withChoice.composer.settings.sendShortcut, "mod-enter");
+    assert.strictEqual(withChoice.composer.settings.followUpBehavior, "steer");
+
+    // The composer's own saved copy, answering late, does not undo the choice.
+    const late = rootUpdate(
+      withChoice,
+      RootMessage.GotComposerMessage({
+        message: ComposerMessage.LoadedSettings({
+          settings: defaultComposerSettings,
+        }),
+      })
+    ).model;
+
+    assert.strictEqual(late.composer.settings.followUpBehavior, "steer");
+
+    const chosen = rootUpdate(
+      late,
+      fromSettings(
+        Message.SelectedClientSetting({
+          key: "followUpBehavior",
+          value: "queue",
+        })
+      )
+    ).model;
+
+    assert.strictEqual(chosen.composer.settings.followUpBehavior, "queue");
+    assert.strictEqual(chosen.composer.settings.sendShortcut, "mod-enter");
+  });
 });
 
 describe("the settings page", () => {

@@ -9,7 +9,8 @@
 // are not shown rather than shown as never done.
 
 import type { ThreadShell } from "@cairn/protocol/Shell";
-import { Option } from "effect";
+import type { Entry } from "@cairn/protocol/Thread";
+import { Array, DateTime, Option, Schema } from "effect";
 
 import type { SubagentRequest } from "./SubagentRollup.ts";
 import type { ThreadStateRow, ThreadStatus } from "./ThreadState.ts";
@@ -36,7 +37,7 @@ export interface ChildStep {
 export type ChildStepsRow = ThreadStateRow &
   Pick<
     ThreadShell,
-    "worktreePath" | "latestRunStartedAt" | "latestVisibleMessage"
+    "worktreePath" | "latestRunStartedAt" | "latestRunCompletedAt"
   >;
 
 /** What the child's own records add to its row. */
@@ -45,7 +46,60 @@ export interface ChildStepsContext {
   readonly request: Option.Option<SubagentRequest>;
   /** The child called `report` (its `cairn.child` document holds one). */
   readonly hasReport: boolean;
+  /**
+   * Whether the child's last run ended on an answer, read from its transcript
+   * (`lastRunAnsweredIn`); none while the transcript is not at hand.
+   */
+  readonly answered: Option.Option<boolean>;
 }
+
+/** The fields of a committed model message the answer reads. */
+const ModelMessage = Schema.Struct({
+  role: Schema.String,
+  stopReason: Schema.optionalKey(Schema.String),
+});
+
+const decodeModelMessage = Schema.decodeUnknownOption(ModelMessage);
+
+/** Stop reasons of a model message that ends its run with nothing left to call. */
+const ANSWER_STOP_REASONS: ReadonlySet<string> = new Set(["stop", "length"]);
+
+/**
+ * Whether the transcript's last run ended on an answer: its last user or assistant message is an
+ * assistant one that stopped with nothing left to call. A message that called a tool (`toolUse`),
+ * was cut off (`aborted`) or failed is not one, nor is an input with no reply after it. None when
+ * the entries hold neither.
+ */
+export const lastRunAnsweredIn = (
+  entries: ReadonlyArray<Entry>
+): Option.Option<boolean> =>
+  Array.findLast(entries, (entry) =>
+    Option.flatMap(
+      Option.flatMap(Option.fromUndefinedOr(entry.model), Array.head),
+      decodeModelMessage
+    ).pipe(
+      Option.filter(
+        (message) => message.role === "user" || message.role === "assistant"
+      ),
+      Option.map(
+        (message) =>
+          message.role === "assistant" &&
+          ANSWER_STOP_REASONS.has(message.stopReason ?? "")
+      )
+    )
+  );
+
+/**
+ * True when the row says its latest run completed: a completion no older than its start. A stop
+ * also ends a run, so this is only the fallback while the transcript is not at hand.
+ */
+const completedLatestRun = (row: ChildStepsRow): boolean =>
+  Option.exists(row.latestRunCompletedAt, (completed) =>
+    Option.match(row.latestRunStartedAt, {
+      onNone: () => true,
+      onSome: (started) => !DateTime.isLessThan(completed, started),
+    })
+  );
 
 /** Statuses in which the child still has its work in hand. */
 const LIVE: ReadonlySet<ThreadStatus> = new Set<ThreadStatus>([
@@ -79,10 +133,7 @@ export const childStepsOf = (
 
   const hasAnswered =
     context.hasReport ||
-    Option.exists(
-      row.latestVisibleMessage,
-      (message) => message.role === "assistant"
-    );
+    Option.getOrElse(context.answered, () => completedLatestRun(row));
 
   let working: ChildStepState = "todo";
 

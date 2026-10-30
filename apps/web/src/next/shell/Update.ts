@@ -490,7 +490,15 @@ export const update = (model: Model, message: Message): UpdateReturn =>
             }),
             commands: [StopChild({ threadId })],
           },
-    StoppedChild: () => ({ model }),
+    // The stop's answer comes after the run's abort joined, so the row now says what is true: a
+    // child the stop could not bring to rest (held, or one whose queued input started a run) shows
+    // its own state again rather than Stopping for ever.
+    StoppedChild: ({ threadId }) =>
+      setWork(model, (work) =>
+        modifyFields(work, {
+          stopping: (stopping) => stopping.filter((id) => id !== threadId),
+        })
+      ),
     FailedStopChild: ({ threadId, message: text }) =>
       setWork(model, (work) =>
         modifyFields(work, {

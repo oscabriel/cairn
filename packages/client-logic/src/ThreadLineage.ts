@@ -92,6 +92,22 @@ export const CHILD_LABELS: Readonly<Record<ChildStatus, SubagentLabel>> = {
 export const isRestingChildStatus = (status: ChildStatus): boolean =>
   status === "idle" || isTerminalSubagentState(status);
 
+/**
+ * Statuses a stop can end: a run working or held on a request. A `waiting` or `parked` child is
+ * held by its own children or tasks, which a child's stop keeps, and a `limited` one has no run, so
+ * none of them offers Stop.
+ */
+const STOPPABLE: ReadonlySet<ChildStatus> = new Set<ChildStatus>([
+  "working",
+  "approval",
+  "input",
+  "asking-parent",
+]);
+
+/** True when the panel offers Stop on the child: a stop ends its run. */
+export const isStoppableChildStatus = (status: ChildStatus): boolean =>
+  STOPPABLE.has(status);
+
 const SETTLED: Readonly<Record<SettlementOutcome, ChildStatus>> = {
   completed: "done",
   failed: "failed",

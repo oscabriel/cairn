@@ -1,7 +1,7 @@
 // The work panel (plan 6E): what it reads from the shell and the thread's documents, what it draws
 // for a parent and for a subagent (lineage with Stop, "Previous" folded and paged, steps, workflows),
 // what its controls send, and the shell update's side of it (Stop asked once, Stopping cleared once
-// the child rests, a failed Stop said, a new thread starting at the first page).
+// the child rests or the stop answers, a failed Stop said, a new thread starting at the first page).
 
 import {
   asking,
@@ -12,6 +12,7 @@ import {
 } from "@cairn/client-logic/ShellRowTestKit";
 import { ConversationId, EntryId, RunId, ThreadId } from "@cairn/protocol/Ids";
 import type { ShellSnapshot, ThreadShell } from "@cairn/protocol/Shell";
+import type { Entry } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option, Predicate } from "effect";
 import type { Schema } from "effect";
@@ -88,7 +89,8 @@ const NO_THREAD_PAGE = {
 const inputsOf = (
   open: number,
   threads: ReadonlyArray<ThreadShell>,
-  docs: Readonly<Record<string, Schema.Json>> = {}
+  docs: Readonly<Record<string, Schema.Json>> = {},
+  entries: ReadonlyArray<Entry> = []
 ): Option.Option<WorkInputs> =>
   workInputsOf({
     route: AppRoute.Thread({ threadId: rowId(open) }),
@@ -100,7 +102,7 @@ const inputsOf = (
         seq: 1,
         view: {
           conversation: { id: ConversationId.make(1) },
-          entries: [],
+          entries,
           docs,
         },
         entriesOffset: 0,
@@ -109,6 +111,14 @@ const inputsOf = (
       }),
     },
   });
+
+/** A committed transcript entry carrying one model message. */
+const modelEntry = (id: number, model: Schema.Json): Entry => ({
+  id: EntryId.make(id),
+  conversationId: ConversationId.make(1),
+  kind: "pi.message",
+  model: [model],
+});
 
 const FAMILY = [
   shellRow(PARENT, { title: "Plan the port" }),
@@ -295,6 +305,43 @@ describe("the work panel on a parent", () => {
     );
   });
 
+  it("offers no Stop on a child a stop cannot end", () => {
+    const held = [
+      shellRow(PARENT),
+      childOf(2, "Wait on its own child", {
+        ...working,
+        activity: "waiting",
+        activeRunId: Option.none(),
+      }),
+      childOf(3, "Hit the usage limit", {
+        latestRunStartedAt: Option.some(EARLIER),
+        activity: "failed",
+        lastErrorClass: Option.some("usage_limit"),
+        lastError: Option.some("Usage limit reached."),
+      }),
+      childOf(4, "Count the files", working),
+    ];
+
+    Scene.scene(
+      appFor(inputsOf(PARENT, held)),
+      givenWork(),
+      Scene.expect(child(2)).toHaveAttr("data-state", "waiting"),
+      Scene.expect(child(3)).toHaveAttr("data-state", "limited"),
+      Scene.expect(
+        Scene.role("button", { name: "Stop Wait on its own child" })
+      ).toBeAbsent(),
+      Scene.expect(
+        Scene.role("button", { name: "Stop Hit the usage limit" })
+      ).toBeAbsent(),
+      Scene.expect(
+        Scene.role("button", { name: "Stop Count the files" })
+      ).toExist(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
   it("shows six live children, then twelve more per Show more", () => {
     const many = [
       shellRow(PARENT),
@@ -392,6 +439,44 @@ describe("the work panel on a subagent", () => {
         )
       ).toExist(),
       Scene.expect(child(5)).toHaveAttr("data-state", "working"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("reads a child stopped after a tool step as stopped, not done", () => {
+    const stopped = childOf(6, "Read the README", {
+      latestRunStartedAt: Option.some(EARLIER),
+      latestRunCompletedAt: Option.some(NOW),
+      latestVisibleMessage: Option.some({
+        entryId: EntryId.make(3),
+        role: "assistant",
+        text: "Let me read it.",
+        at: NOW,
+      }),
+    });
+
+    Scene.scene(
+      appFor(
+        inputsOf(6, [shellRow(PARENT), stopped], {}, [
+          modelEntry(2, { role: "user", content: "Read it.", timestamp: 2 }),
+          modelEntry(3, {
+            role: "assistant",
+            content: [],
+            stopReason: "toolUse",
+            timestamp: 3,
+          }),
+        ])
+      ),
+      givenWork(),
+      Scene.expect(Scene.testId("work-toggle")).toContainText("2/4 steps"),
+      Scene.expect(
+        Scene.selector('[data-testid="work-step"][data-step="working"]')
+      ).toHaveAttr("data-step-state", "stopped"),
+      Scene.expect(
+        Scene.selector('[data-testid="work-step"][data-step="reported"]')
+      ).toHaveAttr("data-step-state", "todo"),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
@@ -574,6 +659,60 @@ describe("the shell's update for the work panel", () => {
     );
 
     assert.deepStrictEqual(rested.model.work.stopping, []);
+  });
+
+  it("clears Stopping once the stop answers, though the child still waits", () => {
+    const waiting = childOf(2, "Count the files", {
+      ...working,
+      activity: "waiting",
+      activeRunId: Option.none(),
+    });
+
+    const restarted = childOf(3, "Read the README", working);
+
+    const context = {
+      ...onParent.context,
+      route: AppRoute.Thread({ threadId: rowId(PARENT) }),
+      shell: Option.some(shellOf([shellRow(PARENT), waiting, restarted])),
+    };
+
+    const askedOne = update(
+      inform(onParent, context).model,
+      Message.ClickedStopChild({ threadId: rowId(2) })
+    ).model;
+
+    const asked = update(
+      askedOne,
+      Message.ClickedStopChild({ threadId: rowId(3) })
+    ).model;
+
+    assert.deepStrictEqual(asked.work.stopping, [rowId(2), rowId(3)]);
+
+    const stoppedOne = update(
+      asked,
+      Message.StoppedChild({ threadId: rowId(2) })
+    ).model;
+
+    const stopped = update(
+      stoppedOne,
+      Message.StoppedChild({ threadId: rowId(3) })
+    ).model;
+
+    assert.deepStrictEqual(stopped.work.stopping, []);
+
+    // A child whose queued input started a new run offers Stop again.
+    Scene.scene(
+      appFor(inputsOf(PARENT, [shellRow(PARENT), waiting, restarted])),
+      givenWork(stopped.work),
+      Scene.expect(child(2)).toContainText("Waiting"),
+      Scene.expect(child(3)).toContainText("Working"),
+      Scene.expect(
+        Scene.role("button", { name: "Stop Read the README" })
+      ).toExist(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
   });
 
   it("says why a Stop failed and offers it again", () => {

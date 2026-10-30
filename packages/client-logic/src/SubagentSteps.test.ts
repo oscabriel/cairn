@@ -1,12 +1,23 @@
 // A subagent's steps: each state a child's row passes through, and the steps it reads as.
 
-import { ApprovalId, EntryId, RunId } from "@cairn/protocol/Ids";
+import {
+  ApprovalId,
+  ConversationId,
+  EntryId,
+  RunId,
+} from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
+import type { Entry } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
+import type { Schema } from "effect";
 
 import { asking, EARLIER, NOW, rowId, shellRow } from "./ShellRowTestKit.ts";
-import { childStepsOf, doneStepCount } from "./SubagentSteps.ts";
+import {
+  childStepsOf,
+  doneStepCount,
+  lastRunAnsweredIn,
+} from "./SubagentSteps.ts";
 
 const child = (overrides: Partial<ThreadShell> = {}): ThreadShell =>
   shellRow(2, {
@@ -39,15 +50,36 @@ const answered: Partial<ThreadShell> = {
   }),
 };
 
-const NO_CONTEXT = { request: Option.none(), hasReport: false } as const;
+/** A child at rest after it committed a tool-call step and was stopped before answering. */
+const stoppedAfterAStep: Partial<ThreadShell> = {
+  ...started,
+  latestRunCompletedAt: Option.some(NOW),
+  latestVisibleMessage: Option.some({
+    entryId: EntryId.make(5),
+    role: "assistant",
+    text: "Let me list the files.",
+    at: NOW,
+  }),
+};
+
+const NO_CONTEXT = {
+  request: Option.none(),
+  hasReport: false,
+  answered: Option.none(),
+} as const;
 
 /** Each step as `kind:state`, with its meta when it has one. */
-const read = (row: ThreadShell, hasReport = false) =>
-  childStepsOf(row, { ...NO_CONTEXT, hasReport }).map((step) =>
-    Option.match(step.meta, {
-      onNone: () => `${step.kind}:${step.state}`,
-      onSome: (meta) => `${step.kind}:${step.state}(${meta})`,
-    })
+const read = (
+  row: ThreadShell,
+  hasReport = false,
+  endedOnAnswer: Option.Option<boolean> = Option.none()
+) =>
+  childStepsOf(row, { ...NO_CONTEXT, hasReport, answered: endedOnAnswer }).map(
+    (step) =>
+      Option.match(step.meta, {
+        onNone: () => `${step.kind}:${step.state}`,
+        onSome: (meta) => `${step.kind}:${step.state}(${meta})`,
+      })
   );
 
 describe("a subagent's steps", () => {
@@ -99,10 +131,13 @@ describe("a subagent's steps", () => {
     );
   });
 
-  it("is done once it answered", () => {
-    const steps = childStepsOf(child(answered), NO_CONTEXT);
+  it("is done once its last run ended on an answer", () => {
+    const steps = childStepsOf(child(answered), {
+      ...NO_CONTEXT,
+      answered: Option.some(true),
+    });
 
-    assert.deepStrictEqual(read(child(answered)), [
+    assert.deepStrictEqual(read(child(answered), false, Option.some(true)), [
       "go:done",
       "started:done",
       "working:done",
@@ -134,8 +169,38 @@ describe("a subagent's steps", () => {
   });
 
   it("stops on the work when its run ended without an answer", () => {
+    const steps = childStepsOf(child(stoppedAfterAStep), {
+      ...NO_CONTEXT,
+      answered: Option.some(false),
+    });
+
     assert.deepStrictEqual(
-      read(child({ ...started, latestRunCompletedAt: Option.some(NOW) })),
+      read(child(stoppedAfterAStep), false, Option.some(false)),
+      ["go:done", "started:done", "working:stopped", "reported:todo"]
+    );
+    assert.strictEqual(doneStepCount(steps), 2);
+  });
+
+  it("reads the row's last run while the transcript is not at hand", () => {
+    assert.deepStrictEqual(read(child(answered)), [
+      "go:done",
+      "started:done",
+      "working:done",
+      "reported:done",
+    ]);
+    assert.deepStrictEqual(read(child(started)), [
+      "go:done",
+      "started:done",
+      "working:stopped",
+      "reported:todo",
+    ]);
+    assert.deepStrictEqual(
+      read(
+        child({
+          latestRunStartedAt: Option.some(NOW),
+          latestRunCompletedAt: Option.some(EARLIER),
+        })
+      ),
       ["go:done", "started:done", "working:stopped", "reported:todo"]
     );
   });
@@ -150,5 +215,73 @@ describe("a subagent's steps", () => {
 
     assert.strictEqual(inCheckout?.title, "Started, in the project's checkout");
     assert.strictEqual(inWorktree?.title, "Started, in a worktree");
+  });
+});
+
+const entry = (id: number, message: Schema.Json): Entry => ({
+  id: EntryId.make(id),
+  conversationId: ConversationId.make(3),
+  kind: "pi.message",
+  model: [message],
+});
+
+const user = (id: number) =>
+  entry(id, { role: "user", content: "List the files.", timestamp: id });
+
+const assistant = (id: number, stopReason: string) =>
+  entry(id, { role: "assistant", content: [], stopReason, timestamp: id });
+
+const toolResult = (id: number) =>
+  entry(id, {
+    role: "toolResult",
+    toolCallId: "call_1",
+    toolName: "bash",
+    content: [],
+    isError: false,
+    timestamp: id,
+  });
+
+describe("whether a child's last run ended on an answer", () => {
+  it("is an answer when its last message stopped with nothing left to call", () => {
+    assert.deepStrictEqual(
+      lastRunAnsweredIn([
+        user(1),
+        assistant(2, "toolUse"),
+        toolResult(3),
+        assistant(4, "stop"),
+      ]),
+      Option.some(true)
+    );
+  });
+
+  it("is not one when the run stopped after a tool step or was cut off", () => {
+    assert.deepStrictEqual(
+      lastRunAnsweredIn([user(1), assistant(2, "toolUse"), toolResult(3)]),
+      Option.some(false)
+    );
+    assert.deepStrictEqual(
+      lastRunAnsweredIn([user(1), assistant(2, "aborted")]),
+      Option.some(false)
+    );
+  });
+
+  it("is not one when an input came after the last answer", () => {
+    assert.deepStrictEqual(
+      lastRunAnsweredIn([user(1), assistant(2, "stop"), user(3)]),
+      Option.some(false)
+    );
+  });
+
+  it("is unknown without a message", () => {
+    assert.deepStrictEqual(
+      lastRunAnsweredIn([
+        {
+          id: EntryId.make(1),
+          conversationId: ConversationId.make(3),
+          kind: "cairn.notice",
+        },
+      ]),
+      Option.none()
+    );
   });
 });

@@ -24,7 +24,11 @@ import type {
   ChildStep,
   ChildStepState,
 } from "@cairn/client-logic/SubagentSteps";
-import { childStepsOf, doneStepCount } from "@cairn/client-logic/SubagentSteps";
+import {
+  childStepsOf,
+  doneStepCount,
+  lastRunAnsweredIn,
+} from "@cairn/client-logic/SubagentSteps";
 import type {
   Lineage,
   LineageAncestor,
@@ -32,7 +36,7 @@ import type {
 } from "@cairn/client-logic/ThreadLineage";
 import {
   hasLineage,
-  isRestingChildStatus,
+  isStoppableChildStatus,
   lineageOf,
   lineageWindow,
   settledOutcomesOf,
@@ -52,6 +56,7 @@ import {
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
 import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
+import type { Entry } from "@cairn/protocol/Thread";
 import { WORKFLOWS_DOCUMENT } from "@cairn/protocol/Workflows";
 import { Option, Predicate, Schema } from "effect";
 import { Submodel } from "foldkit";
@@ -110,6 +115,7 @@ interface Memo {
   readonly subagents: Schema.Json | undefined;
   readonly workflows: Schema.Json | undefined;
   readonly child: Schema.Json | undefined;
+  readonly entries: ReadonlyArray<Entry>;
   readonly inputs: Option.Option<WorkInputs>;
 }
 
@@ -120,10 +126,20 @@ const memo = new Map<"last", Memo>();
 
 const NO_DOCS: Readonly<Record<string, Schema.Json>> = {};
 
+const NO_ENTRIES: ReadonlyArray<Entry> = [];
+
+/** The routed thread's documents and transcript, empty until its view is the routed thread's. */
+interface ThreadRecords {
+  readonly docs: Readonly<Record<string, Schema.Json>>;
+  readonly entries: ReadonlyArray<Entry>;
+}
+
+const NO_RECORDS: ThreadRecords = { docs: NO_DOCS, entries: NO_ENTRIES };
+
 const deriveInputs = (
   shell: ShellSnapshot,
   threadId: ThreadId,
-  docs: Readonly<Record<string, Schema.Json>>
+  { docs, entries }: ThreadRecords
 ): Option.Option<WorkInputs> => {
   const lineage = lineageOf(
     threadId,
@@ -142,6 +158,7 @@ const deriveInputs = (
               pendingSubagentRequests(shell.threads).get(threadId)
             ),
             hasReport: hasReportIn(docs[CHILD_DOCUMENT]),
+            answered: lastRunAnsweredIn(entries),
           })
         );
 
@@ -171,12 +188,20 @@ export const workInputsOf = (
   const threadId = ThreadId.make(route.threadId);
   const shell = model.shell.value;
 
-  const docs = Option.match(
+  const records = Option.match(
     Option.filter(model.thread.view, () =>
       Option.contains(model.thread.threadId, threadId)
     ),
-    { onNone: () => NO_DOCS, onSome: (state) => state.view.docs }
+    {
+      onNone: () => NO_RECORDS,
+      onSome: (state): ThreadRecords => ({
+        docs: state.view.docs,
+        entries: state.view.entries,
+      }),
+    }
   );
+
+  const { docs, entries } = records;
 
   const subagents = docs[SUBAGENTS_DOCUMENT];
   const workflows = docs[WORKFLOWS_DOCUMENT];
@@ -188,14 +213,23 @@ export const workInputsOf = (
     last.threadId === threadId &&
     last.subagents === subagents &&
     last.workflows === workflows &&
-    last.child === child
+    last.child === child &&
+    last.entries === entries
   ) {
     return last.inputs;
   }
 
-  const inputs = deriveInputs(shell, threadId, docs);
+  const inputs = deriveInputs(shell, threadId, records);
 
-  memo.set("last", { shell, threadId, subagents, workflows, child, inputs });
+  memo.set("last", {
+    shell,
+    threadId,
+    subagents,
+    workflows,
+    child,
+    entries,
+    inputs,
+  });
 
   return inputs;
 };
@@ -337,7 +371,7 @@ const childRow = (h: H, child: LineageChild, work: WorkState): Html => {
   const { thread, status, label } = child;
   const isStopping = work.stopping.includes(thread.id);
   const tone = toneOfThreadTone(label.tone);
-  const isActive = !isRestingChildStatus(status);
+  const isStoppable = isStoppableChildStatus(status);
 
   return h.li(
     [
@@ -360,7 +394,7 @@ const childRow = (h: H, child: LineageChild, work: WorkState): Html => {
           word(h, isStopping ? "Stopping" : label.word, "work-child-state"),
         ]
       ),
-      isActive && !isStopping
+      isStoppable && !isStopping
         ? iconButton(
             h,
             {

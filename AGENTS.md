@@ -19,7 +19,7 @@ One person's agent harness control plane: a web app whose brain (pi-durable) run
 ## Code
 
 - `docs/coding-standards.md` is the standard. Effect's own conventions win every conflict (ADR 0004).
-- Code drawn from another repo is a port of intent: rewrite it to our standards, and start the file with a header naming the source repo, path and commit, plus the MIT notice when the source is MIT. t3code is pinned at `fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92`, the commit of the `t3code-nightly-bin` build installed on the Beelink, which parity is judged against (ADR 0015). Its sparse clone lives at `~/Developer/clones/github.com/pingdotgg/t3code`; missing paths come from `git show fe27e8e3:<path>`.
+- Code drawn from another repo is a port of intent: rewrite it to our standards, and start the file with a header naming the source repo, path and commit, plus the MIT notice when the source is MIT. t3code is pinned at `fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92`, the commit of the `t3code-nightly-bin` build installed on the Beelink, which ports cite and `behaviour.ts`'s footer readings come from (ADR 0015); pixel parity was retired at the cutover (ADR 0040). Its sparse clone lives at `~/Developer/clones/github.com/pingdotgg/t3code`; missing paths come from `git show fe27e8e3:<path>`.
 - Versions that move together are pinned once, in the `pnpm-workspace.yaml` catalog: `effect` with every `@effect/*` package; oxlint, oxlint-tsgolint, `@oxlint/plugins`, TypeScript and `@effect/tsgo`; the `@earendil-works/*` packages; the Agent SDK with its bundled `claude`.
 - Decisions that are hard to reverse get a short ADR in `docs/decisions/`. Gated decisions stay `status: proposed` until their gate passes.
 

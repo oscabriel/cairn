@@ -7,7 +7,9 @@
 // - a role that resolved at the ask but not at Go (the table changed) starts nothing, and the
 //   parent is told once;
 // - the brain-wide cap (`maxLivePerBrain`, 32 in production, 2 here) counts every thread's
-//   children: a second thread's spawn past it is refused, while its own cap of 8 is far off.
+//   children: a second thread's spawn past it is refused, while its own cap of 8 is far off;
+// - a budget covering the parent at its line when the user says Go starts nothing (ADR 0036, the
+//   check wave 4 left for Go's start task), and the parent is told once.
 //
 // Kept under `brain/`, where pi-durable may be imported in a test (S42).
 
@@ -19,6 +21,7 @@ import { ApprovalId, ProjectId } from "@cairn/protocol/Ids";
 import type { ConversationId, ThreadId } from "@cairn/protocol/Ids";
 import { DEFAULT_ROLE_TABLE, RoleName } from "@cairn/protocol/Roles";
 import type { RoleTable } from "@cairn/protocol/Roles";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
@@ -44,6 +47,7 @@ import { SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { Subagents } from "../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
+import { BudgetBook } from "../usage/BudgetBook.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { Approvals } from "./CairnDocs.ts";
@@ -76,6 +80,8 @@ const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
         Layer.provide(PiModelSource.layerFromModelSource)
       )
     ),
+    // The book the production set's gate and Go's start task read (one, by the memo map).
+    Layer.provideMerge(BudgetBook.layer),
     Layer.provideMerge(ModelHealth.layerTest),
     Layer.provideMerge(SettingsStore.layerTest),
     Layer.provideMerge(
@@ -294,6 +300,7 @@ const go = (threadId: ThreadId, approvalId: string) =>
       decision: "accept",
       reason: Option.none(),
       answers: Option.none(),
+      launch: Option.none(),
     })
   );
 
@@ -517,6 +524,71 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
             assert.include(
               transcript,
               JSON.stringify(SubagentToolText.brainCapReached(2)).slice(1, -1)
+            );
+          })
+      ),
+    30_000
+  );
+  it.live(
+    "a budget at its line when the user says Go starts nothing, and the parent is told once",
+    () =>
+      withBrain(
+        DEFAULT_TOOL_OPTIONS,
+        [
+          fauxAssistantMessage(spawnCall("Count the files", null, "c1"), {
+            stopReason: "toolUse",
+          }),
+          fauxAssistantMessage("Waiting for Go."),
+          fauxAssistantMessage("Understood."),
+          fauxAssistantMessage("Understood again."),
+        ],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
+            yield* ask(PARENT, "r1");
+
+            const [brief] = yield* waitFor(
+              Effect.map(pendingBriefs(events, PARENT), (ids) =>
+                ids.length > 0 ? Option.some(ids) : Option.none()
+              )
+            );
+
+            yield* runsEnded(events, PARENT, 1);
+
+            // The parent's scope reaches its line while the brief waits for Go.
+            const book = yield* BudgetBook;
+
+            yield* book.set({
+              threadId: PARENT,
+              budget: { ...DEFAULT_BUDGET, maxTokens: 1000 },
+              mode: "drain",
+              epoch: 0,
+            });
+            yield* book.stand(PARENT, {
+              state: "exhausted",
+              spent: { listMicros: 0, tokens: 1200, unpricedTokens: 1200 },
+              reached: Option.some("tokens"),
+            });
+
+            yield* go(PARENT, brief ?? "");
+            yield* runsEnded(events, PARENT, 2);
+            yield* Effect.sleep(Duration.millis(300));
+
+            const told = renderBriefAnswer("Count the files", {
+              kind: "noBudget",
+              why: "",
+            });
+
+            const transcript = yield* transcriptOf(parent);
+            const head = JSON.stringify(told).slice(1, -1);
+
+            assert.strictEqual(transcript.split(head).length - 1, 1);
+            assert.include(transcript, "Budget reached for thread");
+            assert.isTrue(
+              (yield* Ref.get(events)).every(
+                (event) =>
+                  !Predicate.isTagged(event, "ThreadEnsured") ||
+                  Option.isNone(event.parent)
+              )
             );
           })
       ),

@@ -15,8 +15,19 @@
 import type { ConversationId, TaskId, Tx } from "@earendil-works/pi-durable";
 
 import { Approvals } from "../brain/CairnDocs.ts";
+import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { conversationOf } from "./Delivery.ts";
 import { SubagentParentsDoc, SubagentsDoc } from "./SubagentDocs.ts";
+
+/** The tool whose brief records start a subagent at Go. */
+export const SPAWN_TOOL = "subagent_spawn";
+
+/**
+ * Whether a record is a subagent's brief, which Go starts as a child: a workflow's launch and a
+ * workflow node's own brief are briefs too, and their workflow acts on them instead.
+ */
+export const isSpawnBrief = (record: ApprovalRecord): boolean =>
+  record.kind === "brief" && record.tool === SPAWN_TOOL;
 
 /** Task states a start can still run from: everything short of completing or terminal. */
 const RUNNABLE = ["pending", "running", "waiting", "sleeping"] as const;
@@ -109,7 +120,7 @@ export const countLive = async (
     ).length;
 
     const proposed = Object.values(ledger.items).filter(
-      (record) => record.kind === "brief" && record.status === "pending"
+      (record) => isSpawnBrief(record) && record.status === "pending"
     ).length;
 
     live += children + proposed;

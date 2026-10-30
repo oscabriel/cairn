@@ -294,22 +294,6 @@ export const launchOf = (
 export const envelopeOf = (record: ApprovalRecord): Option.Option<Envelope> =>
   Option.map(launchOf(record), (launch) => launch.envelope);
 
-/** Why a node does not fit its workflow's envelope, or none when it fits. */
-export const outsideEnvelope = (
-  envelope: Envelope,
-  node: { readonly role: string; readonly readonly: boolean }
-): Option.Option<NodeRefusal> => {
-  // A role granted as a writer covers a reader of the same role; a reader grant covers no writer.
-  const granted = envelope.roles.some(
-    (role) =>
-      role.spec === node.role &&
-      role.arms === "host" &&
-      (!role.readonly || node.readonly)
-  );
-
-  return granted ? Option.none() : Option.some("outside_grant");
-};
-
 /** Nodes of a workflow that count against its node cap: every row but a refused one. */
 export const dispatchedCount = (record: WorkflowItemState): number =>
   Object.values(record.nodes).filter((node) => node.state !== "refused").length;
@@ -372,9 +356,38 @@ export interface LedgerProblem {
   readonly problem: string;
 }
 
+/** Why a brief accepted by an envelope does not stand: the launch it names is not this workflow's accepted one. */
+const envelopeProblem = (
+  workflow: Readonly<WorkflowItemState>,
+  brief: ApprovalRecord,
+  approvals: Readonly<Record<string, ApprovalRecord>>
+): Option.Option<string> => {
+  const by = brief.decidedBy;
+
+  if (by?.kind !== "envelope") {
+    return Option.none();
+  }
+
+  if (by.approvalId !== workflow.approvalId) {
+    return Option.some(
+      `brief ${brief.id} names envelope ${by.approvalId}, not its launch ${workflow.approvalId}`
+    );
+  }
+
+  const launch = approvals[by.approvalId];
+
+  return launch?.status === "accepted"
+    ? Option.none()
+    : Option.some(
+        `brief ${brief.id}'s envelope ${by.approvalId} is ${launch?.status ?? "missing"}, not accepted`
+      );
+};
+
 /**
- * Every dispatched row (every state but `refused`) must name a brief, and that brief must be an
- * `accepted` approval in the launching conversation's records. Refused rows started nothing.
+ * Every dispatched row (every row that made a child; a refused row, or one stopped while it waited
+ * for its brief, started nothing) must name a brief, that brief must be an `accepted` approval in
+ * the launching conversation's records, and a brief its envelope accepted must name this
+ * workflow's accepted launch (ADR 0032).
  */
 export const ledgerProblems = (
   workflows: Readonly<WorkflowsState>,
@@ -382,26 +395,29 @@ export const ledgerProblems = (
 ): ReadonlyArray<LedgerProblem> =>
   Object.values(workflows.items).flatMap((workflow) =>
     Object.values(workflow.nodes).flatMap((node): Array<LedgerProblem> => {
-      if (node.state === "refused") {
+      if (node.state === "refused" || node.conversationId === null) {
         return [];
       }
 
+      const problem = (text: string): Array<LedgerProblem> => [
+        { workflowId: workflow.id, nodeId: node.id, problem: text },
+      ];
+
       if (node.briefId === null) {
-        return [
-          { workflowId: workflow.id, nodeId: node.id, problem: "no briefId" },
-        ];
+        return problem("no briefId");
       }
 
       const brief = approvals[node.briefId];
 
-      return brief?.status === "accepted"
-        ? []
-        : [
-            {
-              workflowId: workflow.id,
-              nodeId: node.id,
-              problem: `briefId ${node.briefId} is ${brief?.status ?? "missing"}, not accepted`,
-            },
-          ];
+      if (brief?.status !== "accepted") {
+        return problem(
+          `briefId ${node.briefId} is ${brief?.status ?? "missing"}, not accepted`
+        );
+      }
+
+      return Option.match(envelopeProblem(workflow, brief, approvals), {
+        onNone: () => [],
+        onSome: problem,
+      });
     })
   );

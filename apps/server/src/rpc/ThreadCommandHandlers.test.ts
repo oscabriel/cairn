@@ -1,7 +1,7 @@
 // The phase 2 inputs this brain cannot act on yet are refused with `InvalidInput` naming the field,
 // and reach no service. Each package that builds one lifts its guard and turns its test here around:
-// 4A `revise`, 5A `accept_sample` and `launch`. 1A lifted `reason` and `answers`; permission
-// modes lifted `runtimeMode` (all but `auto`, which is not offered) and `accept_for_thread`; 4C
+// 4A `revise`. 1A lifted `reason` and `answers`; 5A lifted `accept_sample` and `launch` (the record
+// refuses them on anything but a workflow's launch); permission modes lifted `runtimeMode` (all but `auto`, which is not offered) and `accept_for_thread`; 4C
 // lifted `thread.stop`'s `subagents: "stop"` (Stop all).
 
 import { InvalidInput } from "@cairn/protocol/Errors";
@@ -145,34 +145,30 @@ describe("thread commands not handled yet", () => {
   );
 
   it.effect(
-    "refuses each respond field it cannot record, and passes accept, Allow for this thread or decline with a reason or answers",
+    "refuses each respond field it cannot record, and passes accept, Run on 1 first, launch edits, Allow for this thread or decline with a reason or answers",
     () =>
       Effect.gen(function* () {
         reached.length = 0;
 
         const handlers = yield* threadCommandHandlers;
 
-        const decisions: ReadonlyArray<ApprovalDecision> = [
-          "accept_sample",
-          "revise",
-        ];
+        const decisions: ReadonlyArray<ApprovalDecision> = ["revise"];
 
         const refused = yield* Effect.forEach(
-          [
-            ...decisions.map((decision) => respond({ decision })),
-            respond({
-              launch: Option.some({
-                budget: DEFAULT_BUDGET,
-                roleOverrides: {},
-              }),
-            }),
-          ],
+          decisions.map((decision) => respond({ decision })),
           (input) => outcome(handlers.respond(input, requestId))
         );
 
         const taken = yield* Effect.forEach(
           [
             respond(),
+            respond({ decision: "accept_sample" }),
+            respond({
+              launch: Option.some({
+                budget: DEFAULT_BUDGET,
+                roleOverrides: {},
+              }),
+            }),
             respond({ decision: "accept_for_thread" }),
             respond({ decision: "decline" }),
             respond({ decision: "decline", reason: Option.some("not now") }),
@@ -188,9 +184,17 @@ describe("thread commands not handled yet", () => {
         assert.deepStrictEqual(
           [refused, taken, reached],
           [
-            ["decision", "decision", "launch"],
-            ["ok", "ok", "ok", "ok", "ok"],
-            ["respond", "respond", "respond", "respond", "respond"],
+            ["decision"],
+            ["ok", "ok", "ok", "ok", "ok", "ok", "ok"],
+            [
+              "respond",
+              "respond",
+              "respond",
+              "respond",
+              "respond",
+              "respond",
+              "respond",
+            ],
           ]
         );
       }).pipe(Effect.provide(TestLayer))

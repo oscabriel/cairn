@@ -117,7 +117,9 @@ export type BriefAnswer =
   /** Accepted, but the role table could not be read at Go however long it was retried. */
   | { readonly kind: "rolesUnread"; readonly why: string }
   /** Accepted, but the brain already had its most children live at Go (`live`), so nothing started. */
-  | { readonly kind: "noRoom"; readonly live: number };
+  | { readonly kind: "noRoom"; readonly live: number }
+  /** Accepted, but a budget covering the parent was at its line at Go (`why`), so nothing started. */
+  | { readonly kind: "noBudget"; readonly why: string };
 
 /** `: <reason>` after an answer's verb, or nothing without one. */
 const withReason = (reason: Option.Option<string>) =>
@@ -141,6 +143,8 @@ export const renderBriefAnswer = (title: string, answer: BriefAnswer): string =>
         `The user approved the brief "${title}", but its role resolved to no ready model, so nothing started: ${found.why}`,
       rolesUnread: (found) =>
         `The user approved the brief "${title}", but its role could not be read, so nothing started: ${found.why}`,
+      noBudget: (found) =>
+        `The user approved the brief "${title}", but a budget is reached, so nothing started: ${found.why}`,
       noRoom: (found) =>
         `The user approved the brief "${title}", but the brain already has ${found.live} subagents working or waiting for Go across all threads, the most it may have, so nothing started. Spawn it again once one reports.`,
     })

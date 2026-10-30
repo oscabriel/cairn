@@ -219,6 +219,7 @@ const answerOf = (line: InputLine): ApprovalAnswerInput => ({
           },
         ])
   ),
+  launch: Option.none(),
 });
 
 /** Waits until `check` finds nothing wrong, or fails with its last complaint. */

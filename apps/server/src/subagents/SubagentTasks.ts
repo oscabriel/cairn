@@ -172,7 +172,7 @@ import type {
   PrepareChildWorkspace,
   PreparedChildWorkspace,
 } from "../workspaces/ChildWorkspaces.ts";
-import { countLive, listParent } from "./BrainCap.ts";
+import { countLive, isSpawnBrief, listParent } from "./BrainCap.ts";
 import type { BriefFaultHooks } from "./BriefFaults.ts";
 import { briefOfPayload } from "./Briefs.ts";
 import {
@@ -1081,7 +1081,7 @@ interface StartState {
  */
 export interface StartFailure {
   [key: string]: JsonValue;
-  at: "role" | "roles" | "room" | "workspace";
+  at: "budget" | "role" | "roles" | "room" | "workspace";
   why: string;
   /** For `room`: how many children the brain had live. */
   live?: number;
@@ -1119,6 +1119,7 @@ const answerOf = (
       role: { kind: "noModel", why: failure.why },
       roles: { kind: "rolesUnread", why: failure.why },
       room: { kind: "noRoom", live: failure.live ?? 0 },
+      budget: { kind: "noBudget", why: failure.why },
       workspace: { kind: "noWorkspace", why: failure.why },
     };
 
@@ -1511,6 +1512,16 @@ export interface RoleAccess {
   ) => Promise<Result.Result<ResolvedRole, RoleFailure>>;
 }
 
+/**
+ * Whether a budget lets a parent start new work now (ADR 0036, `Budgets.admit`): nothing, or the
+ * words the parent is told when a scope covering it is at its line.
+ */
+export interface BudgetAccess {
+  readonly admit: (
+    parentThreadId: string
+  ) => Promise<Result.Result<void, string>>;
+}
+
 /** The parts of the extension a task builds with. */
 export interface TaskDependencies {
   readonly faults: SubagentFaultSet;
@@ -1527,6 +1538,8 @@ export interface TaskDependencies {
   readonly briefFaults: BriefFaultHooks;
   /** Resolves a brief's role at Go, right before the commit that creates its child (ADR 0035). */
   readonly roles: RoleAccess;
+  /** Checks the parent's budgets at Go, before the child's workspace is made (ADR 0036). */
+  readonly budgets: BudgetAccess;
   /** How many children the whole brain may hold live (`MAX_LIVE_CHILDREN_PER_BRAIN`). */
   readonly maxLivePerBrain: number;
   /** How long a question a child's answer became waits before it expires. */
@@ -2859,6 +2872,28 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       return;
     }
 
+    // A budget at its line starts no new work (ADR 0036): Go on a brief asked before the line was
+    // reached starts nothing, and the parent is told, before any workspace is made.
+    const admitted = await dependencies.budgets.admit(
+      parentMeta?.threadId ?? ""
+    );
+
+    if (Result.isFailure(admitted)) {
+      await runtime.commit(
+        async (tx): Promise<NextTaskState<StartState, null>> => {
+          await newTell(tx, parent, record.id, {
+            at: "budget",
+            why: admitted.failure,
+          });
+
+          return completed();
+        },
+        context
+      );
+
+      return;
+    }
+
     // A brief with no role runs on its parent's model and level; resolved as a literal spec, the
     // dispatch record says whether it is priced. Any failure here leaves the record unpriced.
     const literal =
@@ -3103,7 +3138,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     record: ApprovalRecord
   ): Promise<void> => {
     if (
-      record.kind !== "brief" ||
+      !isSpawnBrief(record) ||
       Option.isNone(briefOfPayload(record.payload))
     ) {
       return;

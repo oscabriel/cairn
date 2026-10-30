@@ -147,8 +147,9 @@ const requestIdOf = (requestId: RpcMessage.RequestId) =>
   Option.some(String(requestId));
 
 /**
- * A phase 2 input this brain cannot act on yet: `thread.respond`'s `revise` (briefs, 4A),
- * `accept_sample` and `launch` (5A). `reason` and `answers` are recorded (1A); `accept_for_thread`
+ * A phase 2 input this brain cannot act on yet: `thread.respond`'s `revise` (briefs, 4A).
+ * `reason` and `answers` are recorded (1A); `accept_sample` and `launch` answer a workflow's launch
+ * (5A, ADR 0032), and the record refuses them anywhere else; `accept_for_thread`
  * and `thread.configure`'s `runtimeMode` are handled (ADR 0031), and `thread.stop`'s
  * `subagents: "stop"` stops the working children too (Stop all, ADR 0028). Refused, so nothing is
  * silently dropped; the package that builds each lifts its refusal and turns its test in
@@ -165,6 +166,7 @@ const notYet = (field: string, requestId: Option.Option<string>) =>
 const HANDLED_DECISIONS: ReadonlySet<ApprovalDecision> = new Set([
   "accept",
   "accept_for_thread",
+  "accept_sample",
   "decline",
 ]);
 
@@ -181,13 +183,10 @@ const autoNotOffered = (requestId: Option.Option<string>) =>
   });
 
 /** The first field of a `thread.respond` this brain cannot act on yet, if any. */
-const respondNotYet = (input: RespondInput): Option.Option<string> => {
-  if (!HANDLED_DECISIONS.has(input.decision)) {
-    return Option.some("decision");
-  }
-
-  return Option.isSome(input.launch) ? Option.some("launch") : Option.none();
-};
+const respondNotYet = (input: RespondInput): Option.Option<string> =>
+  HANDLED_DECISIONS.has(input.decision)
+    ? Option.none()
+    : Option.some("decision");
 
 /** The handlers, for the handler group and for tests that call them directly. */
 export const threadCommandHandlers = Effect.gen(function* () {

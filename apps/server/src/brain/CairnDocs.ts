@@ -28,9 +28,11 @@ import {
   APPROVALS_VERSION,
   ApprovalStatus,
   DEFAULT_RUNTIME_MODE,
+  LaunchEdits,
   PERMISSIONS_DOCUMENT,
   QuestionsPayload,
   RuntimeRequestKind,
+  WorkflowLaunch,
 } from "@cairn/protocol/Policy";
 import type {
   ApprovalDecision,
@@ -68,12 +70,14 @@ import {
   ChildDoc,
   EscalationsDoc,
   isLinked,
+  jsonRecordOf,
   markQuestion,
 } from "../subagents/SubagentDocs.ts";
 import type { ChildState } from "../subagents/SubagentDocs.ts";
 import { Brain } from "./Brain.ts";
 import { durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
+import { emit } from "./Events.ts";
 import { piConversationId, piTaskId } from "./PiIds.ts";
 
 /** The creation receipt of one thread: the conversation it lives in, 0 until created. */
@@ -784,13 +788,16 @@ export interface RecordAnswer {
   readonly by: Decider;
   readonly reason: Option.Option<string>;
   readonly answers: Option.Option<ReadonlyArray<QuestionAnswer>>;
+  /** A workflow launch card's edits, with Go or Run on 1 first on a launch approval only. */
+  readonly launch: Option.Option<LaunchEdits>;
 }
 
 /**
  * How an answer landed: it changed a pending record, the record was already settled, there is no
  * such record, or the record cannot take it (`answers` on a record that asked no questions,
- * answers that do not fit the questions asked, `revise` on anything but a brief, or `revise` with
- * no notes: Send back says what to change).
+ * answers that do not fit the questions asked, `revise` on anything but a brief, `revise` with
+ * no notes: Send back says what to change, Run on 1 first on anything but a workflow's launch, or
+ * launch edits on anything but Go or Run on 1 first for a workflow's launch).
  */
 export type AnswerOutcome =
   | "answered"
@@ -799,7 +806,9 @@ export type AnswerOutcome =
   | "refused_answers"
   | "refused_answers_invalid"
   | "refused_revise"
-  | "refused_revise_reason";
+  | "refused_revise_reason"
+  | "refused_sample"
+  | "refused_launch";
 
 /** Why a record refused an answer, in the words both harnesses fail with; none when it took it. */
 export const refusalText = (
@@ -824,6 +833,18 @@ export const refusalText = (
     );
   }
 
+  if (outcome === "refused_sample") {
+    return Option.some(
+      `Approval ${approvalId} is not a workflow's launch, so it cannot run on 1 first. Approve or decline it.`
+    );
+  }
+
+  if (outcome === "refused_launch") {
+    return Option.some(
+      `Approval ${approvalId} takes no launch edits: only Go or Run on 1 first on a workflow's launch carries a changed budget or roles. Answer without them.`
+    );
+  }
+
   return outcome === "refused_revise"
     ? Option.some(
         `Approval ${approvalId} is not a brief, so it cannot be sent back. Approve or decline it.`
@@ -841,6 +862,31 @@ const STATUS_OF: Readonly<Record<ApprovalDecision, ApprovalStatus>> = {
 };
 
 const decodeQuestions = Schema.decodeUnknownOption(QuestionsPayload);
+
+const isWorkflowLaunch = Schema.is(WorkflowLaunch);
+
+const encodeLaunchEdits = Schema.encodeSync(LaunchEdits);
+
+/** Whether a record is a workflow's launch approval: a brief whose frozen payload is a launch. */
+export const isLaunchRecord = (record: ApprovalRecord): boolean =>
+  record.kind === "brief" && isWorkflowLaunch(record.payload);
+
+/** Why a record refuses Run on 1 first or launch edits, or none when it takes the answer. */
+const launchFit = (
+  record: ApprovalRecord,
+  answer: RecordAnswer
+): Option.Option<"refused_sample" | "refused_launch"> => {
+  if (answer.decision === "accept_sample" && !isLaunchRecord(record)) {
+    return Option.some("refused_sample");
+  }
+
+  const going =
+    answer.decision === "accept" || answer.decision === "accept_sample";
+
+  return Option.isSome(answer.launch) && (!going || !isLaunchRecord(record))
+    ? Option.some("refused_launch")
+    : Option.none();
+};
 
 /**
  * How a record takes `answers`: none for a record that asked no questions, refused when they do
@@ -881,6 +927,12 @@ export const applyAnswer = (
     }
   }
 
+  const launch = launchFit(record, answer);
+
+  if (Option.isSome(launch)) {
+    return launch.value;
+  }
+
   if (answer.decision === "revise" && record.kind !== "brief") {
     return "refused_revise";
   }
@@ -905,7 +957,10 @@ export const applyAnswer = (
       onSome: copyAnswers,
     }),
     note: null,
-    launch: null,
+    launch: Option.match(answer.launch, {
+      onNone: () => null,
+      onSome: (edits) => jsonRecordOf(encodeLaunchEdits(edits)),
+    }),
   };
 
   return "answered";
@@ -988,6 +1043,62 @@ const settleLinked = async (
   );
 };
 
+/** What an answer's events say: the record, its status and who decided. */
+const decisionData = (
+  conversationId: ConversationId,
+  record: ApprovalRecord
+) => ({
+  conversationId,
+  approvalId: record.id,
+  kind: record.kind,
+  tool: record.tool,
+  status: record.status,
+  decision: record.answer?.decision ?? null,
+  decidedBy: record.decidedBy,
+});
+
+/**
+ * `brief.approved` for an accepted brief, in the commit that accepted it: an answer's, or a
+ * workflow node's dispatch, whose envelope accepted its brief (`decidedBy` envelope, ADR 0032).
+ */
+export const emitBriefApproved = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  record: ApprovalRecord,
+  at: number
+): Promise<void> => {
+  await emit(tx, {
+    name: "brief.approved",
+    data: decisionData(conversationId, record),
+    at,
+    context: Option.none(),
+  });
+};
+
+/**
+ * The events an answer emits in its own commit (ADR 0033): `approval.answered` for every record an
+ * answer settles, and `brief.approved` for a brief it accepted (a subagent's, a workflow's launch or
+ * a workflow node's own). Written last, after the commit's table reads (pi-durable refuses a table
+ * read after a write).
+ */
+export const emitAnswered = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  record: ApprovalRecord,
+  at: number
+): Promise<void> => {
+  await emit(tx, {
+    name: "approval.answered",
+    data: decisionData(conversationId, record),
+    at,
+    context: Option.none(),
+  });
+
+  if (record.kind === "brief" && record.status === "accepted") {
+    await emitBriefApproved(tx, conversationId, record, at);
+  }
+};
+
 /** What else an answer does, inside its transaction, to the record it just settled. */
 export type AnsweredHook = (
   tx: Tx,
@@ -1005,8 +1116,9 @@ const noAnsweredHook: AnsweredHook = async () => {
  * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit,
  * and an escalated question settles with its mirror (`settleLinked`). A parent's pending mirror is
  * answered only through its open `cairn.escalations` entry, which the answer resolves. `answered`
- * runs last inside the same transaction, for a record the answer moved out of `pending`: a brief's
- * Go creates its child's start task there (ADR 0030), so the two land together or not at all.
+ * runs inside the same transaction, for a record the answer moved out of `pending`: a brief's Go
+ * creates its child's start task there (ADR 0030), and a workflow launch's Go approves its ledger
+ * row (ADR 0032), so each lands with its answer or not at all. The answer's events come last.
  */
 export const answerApproval = (
   session: Pick<Session, "commit" | "snapshot">,
@@ -1050,6 +1162,7 @@ export const answerApproval = (
 
       await settleLinked(tx, conversationId, record, link, answer, now);
       await answered(tx, conversationId, record);
+      await emitAnswered(tx, conversationId, record, now);
 
       return outcome;
     }, context);

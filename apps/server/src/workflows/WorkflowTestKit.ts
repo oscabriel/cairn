@@ -60,7 +60,9 @@ import { messageText } from "../brain/CommitFeed.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../models/ResultTool.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import { approveRecord, proposedRecord, WorkflowsDoc } from "./WorkflowDocs.ts";
+import { LAUNCH_TOOL } from "./WorkflowLaunch.ts";
 import { toLaunch, WorkflowPlan } from "./WorkflowPlan.ts";
+import { planAccess } from "./Workflows.ts";
 import { parseWorkflowScript } from "./WorkflowScript.ts";
 import { workflowExtension } from "./WorkflowTools.ts";
 import type {
@@ -80,6 +82,13 @@ export const UNRESOLVABLE_ROLE = "@nobody";
 
 /** What opens a launching thread's input: the script to run follows. */
 export const RUN_PREFIX = "RUN:\n";
+
+/**
+ * What opens a launching thread's input that proposes its script first: the model calls
+ * `workflow_plan`, runs the script with `codemode` on Go, and after a Run on 1 first proposes it
+ * once more to run on all.
+ */
+export const PLAN_PREFIX = "PLAN:\n";
 
 /** The judge tool every node's child calls first. */
 export const WORK_TOOL = "work";
@@ -167,6 +176,58 @@ const call = (name: string, args: { [key: string]: JsonValue }, id: string) =>
     stopReason: "toolUse",
   });
 
+/** The launching model's next step when it proposes its script first (`PLAN_PREFIX`). */
+const planned = (
+  script: string,
+  tools: ReadonlyArray<Message>,
+  last: Message | undefined
+): AssistantMessage => {
+  const named = (name: string) =>
+    tools.filter(
+      (message) => message.role === "toolResult" && message.toolName === name
+    );
+
+  const plans = named(LAUNCH_TOOL);
+  const runs = named(CODEMODE_TOOL_NAME);
+
+  const lastPlan = plans.at(-1);
+
+  const go =
+    lastPlan !== undefined && toolResultText(lastPlan).startsWith("Go:");
+
+  const sampled =
+    go && toolResultText(lastPlan).includes("run on 1 item first");
+
+  if (
+    plans.length === 0 ||
+    (sampled && runs.length === plans.length && plans.length < 2)
+  ) {
+    return call(LAUNCH_TOOL, { script }, `plan-${String(plans.length + 1)}`);
+  }
+
+  if (go && runs.length < plans.length) {
+    return call(
+      CODEMODE_TOOL_NAME,
+      { code: script },
+      `run-${String(runs.length + 1)}`
+    );
+  }
+
+  return fauxAssistantMessage(
+    fauxText(
+      `done: ${last === undefined ? "" : toolResultText(last).slice(0, 2000)}`
+    )
+  );
+};
+
+/** The launching model's next step when it runs its script at once (`RUN_PREFIX`). */
+const ran = (code: string, last: Message | undefined): AssistantMessage =>
+  last?.role === "toolResult"
+    ? fauxAssistantMessage(
+        fauxText(`done: ${toolResultText(last).slice(0, 2000)}`)
+      )
+    : call(CODEMODE_TOOL_NAME, { code }, "run-1");
+
 /** The kit's faux model: what each conversation answers next. */
 export const respond = (context: ModelContext): AssistantMessage => {
   const first = textOfUser(context);
@@ -176,16 +237,12 @@ export const respond = (context: ModelContext): AssistantMessage => {
     (message) => message.role === "toolResult"
   );
 
+  if (first.startsWith(PLAN_PREFIX)) {
+    return planned(first.slice(PLAN_PREFIX.length), tools, last);
+  }
+
   if (first.startsWith(RUN_PREFIX)) {
-    return last?.role === "toolResult"
-      ? fauxAssistantMessage(
-          fauxText(`done: ${toolResultText(last).slice(0, 2000)}`)
-        )
-      : call(
-          CODEMODE_TOOL_NAME,
-          { code: first.slice(RUN_PREFIX.length) },
-          "run-1"
-        );
+    return ran(first.slice(RUN_PREFIX.length), last);
   }
 
   if (first.startsWith("Check one claim")) {
@@ -366,6 +423,7 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
   registry.install(
     workflowExtension({
       resolveRole: kitResolver,
+      plan: planAccess(yield* WorkflowPlan, yield* Effect.context()),
       faults: options.faults,
       hold: options.hold,
     }).extension
@@ -431,7 +489,8 @@ export const plantDefaults = (workflowId: string): PlantInput => ({
   envelope: (granted) => granted,
 });
 
-const MODES: ReadonlyArray<RuntimeMode> = ["approval-required"];
+// The kit thread runs in the default mode, full access, which the plan grants as `workflow_plan` does.
+const MODES: ReadonlyArray<RuntimeMode> = ["full-access"];
 
 /** The launch approval's id for a workflow id. */
 export const launchApprovalIdOf = (workflowId: string) =>

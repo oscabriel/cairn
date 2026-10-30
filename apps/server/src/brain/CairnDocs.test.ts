@@ -9,8 +9,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { TaskId } from "@cairn/protocol/Ids";
-import { ApprovalsDocument } from "@cairn/protocol/Policy";
+import { ApprovalsDocument, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision } from "@cairn/protocol/Policy";
+import { RoleSpec } from "@cairn/protocol/Roles";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { copyJson } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId } from "@earendil-works/pi-durable";
@@ -23,7 +25,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
 
-import { EscalationsDoc } from "../subagents/SubagentDocs.ts";
+import { EscalationsDoc, jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import {
   answerApproval,
   applyAnswer,
@@ -138,6 +140,7 @@ const byUser = (
   by: { kind: "user" },
   reason,
   answers: Option.none(),
+  launch: Option.none(),
 });
 
 const record = (fields: Partial<ApprovalRecord> = {}): ApprovalRecord => ({
@@ -451,6 +454,82 @@ describe("an answer to a record", () => {
       );
       assert.strictEqual(unsaid.status, "pending");
     }
+  });
+
+  it("takes Run on 1 first and the card's edits only on a workflow's launch, with Go", () => {
+    const launch = WorkflowLaunch.make({
+      type: "workflow",
+      workflowId: "wf-7",
+      name: "kit-flow",
+      description: "A kit workflow",
+      phases: [],
+      scriptHash: "sha256-abc",
+      scriptRef: "task-7",
+      args: {},
+      callSites: [],
+      nodes: { count: 1, unbounded: false },
+      estimate: null,
+      envelope: {
+        scriptHash: "sha256-abc",
+        maxNodes: 1,
+        maxConcurrent: 8,
+        roles: [
+          { spec: RoleSpec.make("@worker"), readonly: false, arms: "host" },
+        ],
+        modes: ["full-access"],
+        writes: [],
+        budget: DEFAULT_BUDGET,
+      },
+      roleOverrides: {},
+    });
+
+    const payload = jsonRecordOf(Schema.encodeSync(WorkflowLaunch)(launch));
+
+    const edits = Option.some({
+      budget: { ...DEFAULT_BUDGET, maxTokens: 5000 },
+      roleOverrides: {},
+    });
+
+    // Neither on a subagent's brief, a question or a tool call.
+    for (const other of [
+      record({ kind: "brief" }),
+      record({ payload: questions }),
+      record({ kind: "tool-call" }),
+    ]) {
+      assert.strictEqual(
+        applyAnswer(other, byUser("accept_sample"), 1500),
+        "refused_sample"
+      );
+      assert.strictEqual(
+        applyAnswer(other, { ...byUser("accept"), launch: edits }, 1500),
+        "refused_launch"
+      );
+      assert.strictEqual(other.status, "pending");
+    }
+
+    // Edits come with Go or Run on 1 first, never with Decline.
+    const declined = record({ kind: "brief", tool: "workflow_plan", payload });
+
+    assert.strictEqual(
+      applyAnswer(declined, { ...byUser("decline"), launch: edits }, 1500),
+      "refused_launch"
+    );
+
+    const sampled = record({ kind: "brief", tool: "workflow_plan", payload });
+    const before = copyRecord(sampled);
+
+    assert.strictEqual(
+      applyAnswer(sampled, { ...byUser("accept_sample"), launch: edits }, 1500),
+      "answered"
+    );
+    assert.strictEqual(sampled.status, "accepted");
+    assert.strictEqual(sampled.answer?.decision, "accept_sample");
+    assert.deepStrictEqual(sampled.answer?.launch, {
+      budget: { ...DEFAULT_BUDGET, maxTokens: 5000 },
+      roleOverrides: {},
+    });
+    // The frozen payload stays as the model proposed it.
+    assert.deepStrictEqual(sampled.payload, before.payload);
   });
 });
 

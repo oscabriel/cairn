@@ -1,18 +1,45 @@
 // The workflows extension as the installed set takes it (ExtensionSet.ts, integrator seam): the
-// node tools, the watcher task and the gate (WorkflowTools.ts), resolving each node's role through
-// `RoleAliases` right before the commit that creates its child (ADR 0035). pi-durable calls the
-// resolver outside Effect, so it runs through the layer's context (S43).
+// plan tool, the node tools, the watcher task and the gate (WorkflowTools.ts), resolving each node's
+// role through `RoleAliases` right before the commit that creates its child (ADR 0035) and
+// dry-running proposals through `WorkflowPlan`. pi-durable calls both outside Effect, so they run
+// through the layer's context (S43). The dry run needs nothing of the brain, so the layer builds its
+// own `WorkflowPlan` (the memo map shares it with the app's).
 
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Result } from "effect";
 
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
+import { WorkflowPlan } from "./WorkflowPlan.ts";
+import type { PlanAccess } from "./WorkflowPlanTool.ts";
 import {
   NO_HOLD,
   NO_WORKFLOW_FAULTS,
   workflowExtension,
 } from "./WorkflowTools.ts";
 import type { ResolvedNodeModel, RoleResolver } from "./WorkflowTools.ts";
+
+/**
+ * `WorkflowPlan.validate` for `workflow_plan`, which runs outside Effect: the dry run, or the
+ * refusal's words for the model. Runs with `context`, the layer's (S43).
+ */
+export const planAccess = (
+  plan: WorkflowPlan["Service"],
+  context: Context.Context<never>
+): PlanAccess => {
+  const run = Effect.runPromiseWith(context);
+
+  return {
+    dryRun: async (source, input) =>
+      await run(
+        plan
+          .validate(source, input)
+          .pipe(
+            Effect.result,
+            Effect.map(Result.mapError((error) => error.message))
+          )
+      ),
+  };
+};
 
 /** The workflows extension, for the installed set. */
 export class Workflows extends Context.Service<
@@ -24,7 +51,8 @@ export class Workflows extends Context.Service<
     Workflows,
     Effect.gen(function* () {
       const roles = yield* RoleAliases;
-      const run = Effect.runPromiseWith(yield* Effect.context());
+      const context = yield* Effect.context();
+      const run = Effect.runPromiseWith(context);
 
       const resolveRole: RoleResolver = async (spec, overrides) =>
         await run(
@@ -42,10 +70,11 @@ export class Workflows extends Context.Service<
       return Workflows.of({
         extension: workflowExtension({
           resolveRole,
+          plan: planAccess(yield* WorkflowPlan, context),
           faults: NO_WORKFLOW_FAULTS,
           hold: NO_HOLD,
         }),
       });
     })
-  );
+  ).pipe(Layer.provide(WorkflowPlan.layer));
 }

@@ -76,7 +76,13 @@ import {
   SubagentToolText,
 } from "../brain/SubagentText.ts";
 import { offerResultTool } from "../models/ResultTool.ts";
-import { countLive, dropIdle, listParent } from "./BrainCap.ts";
+import {
+  countLive,
+  dropIdle,
+  isSpawnBrief,
+  listParent,
+  SPAWN_TOOL,
+} from "./BrainCap.ts";
 import { briefOf, briefPayload } from "./Briefs.ts";
 import { conversationOf, setStatus } from "./Delivery.ts";
 import {
@@ -375,7 +381,7 @@ export const subagentToolSet = (
 
         // Briefs still waiting for Go count: Go starts each without asking again.
         const proposed = Object.values(approvals.items).filter(
-          (record) => record.kind === "brief" && record.status === "pending"
+          (record) => isSpawnBrief(record) && record.status === "pending"
         ).length;
 
         const live =
@@ -399,7 +405,7 @@ export const subagentToolSet = (
         approvals.items[approvalId] = {
           id: approvalId,
           toolTaskId: api.taskId,
-          tool: "subagent_spawn",
+          tool: SPAWN_TOOL,
           kind: "brief",
           summary: description.value,
           status: "pending",
@@ -695,6 +701,7 @@ export const subagentToolSet = (
                     },
                   ])
                 : Option.none(),
+            launch: Option.none(),
           },
           api.now()
         );

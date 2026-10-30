@@ -4,6 +4,7 @@
 // dispatched row without a brief naming an accepted approval, one child conversation per dispatched
 // row, and a node's tool result never carrying usage.
 
+import { ApprovalId } from "@cairn/protocol/Ids";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -11,11 +12,18 @@ import { AgentDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
-import { Approvals, ThreadMeta, ThreadReceipt } from "../brain/CairnDocs.ts";
+import {
+  answerApproval,
+  Approvals,
+  ThreadMeta,
+  ThreadReceipt,
+} from "../brain/CairnDocs.ts";
+import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { PRELUDE_VERSION, rewriteScript } from "./Prelude.ts";
 import { ledgerProblems, WorkflowsDoc } from "./WorkflowDocs.ts";
 import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
+import { isNodeBrief, launchAnswered } from "./WorkflowLaunch.ts";
 import { parseWorkflowScript, scriptHash } from "./WorkflowScript.ts";
 import {
   codemodeResultText,
@@ -35,6 +43,9 @@ import type { WorkflowFaultSet } from "./WorkflowTools.ts";
 
 const context = BACKGROUND_CONTEXT;
 
+/** When the user answers, on the record: any fixed time, as the kit plants its records. */
+const ANSWERED_AT = 2;
+
 const isWorkflowsDocument = Schema.is(WorkflowsDocument);
 
 const WF = "wf-1";
@@ -51,6 +62,8 @@ interface Outcome {
   readonly identities: ReadonlyMap<string, Identity>;
   /** The summaries of the thread's `approve` records. */
   readonly approveSummaries: ReadonlyArray<string>;
+  /** Every record of the thread, by id. */
+  readonly records: Readonly<Record<string, ApprovalRecord>>;
   readonly problems: ReadonlyArray<string>;
 }
 
@@ -163,6 +176,46 @@ const identitiesOf = async (brain: KitBrain): Promise<Map<string, Identity>> =>
     return found;
   }, context);
 
+/** Answers every node's own pending brief with `decision`, as the user would from its card. */
+const answerNodeBriefs = async (
+  brain: KitBrain,
+  decision: "accept" | "decline" | undefined
+): Promise<void> => {
+  if (decision === undefined) {
+    return;
+  }
+
+  const approvals = await brain.harness.snapshot(
+    Approvals,
+    brain.root,
+    context
+  );
+
+  const pending = Object.values(approvals?.items ?? {}).filter(
+    (record) => isNodeBrief(record) && record.status === "pending"
+  );
+
+  for (const record of pending) {
+    // oxlint-disable-next-line no-await-in-loop -- one answer at a time, as a user gives them
+    await Effect.runPromise(
+      answerApproval(
+        brain.harness,
+        brain.root,
+        record.id,
+        {
+          decision,
+          by: { kind: "user" },
+          reason: Option.some("not this one"),
+          answers: Option.none(),
+          launch: Option.none(),
+        },
+        ANSWERED_AT,
+        launchAnswered
+      )
+    );
+  }
+};
+
 /** Plants `source` (unless `planted` is none), runs `run` on the root thread, and reads it all back. */
 const scenario = (
   source: string,
@@ -172,6 +225,8 @@ const scenario = (
     readonly faults?: WorkflowFaultSet;
     /** Answers every pending `approve` record so, once it appears. */
     readonly answer?: "accepted" | "declined";
+    /** Answers every node's own pending brief so, through the host's answer path. */
+    readonly briefs?: "accept" | "decline";
   } = {}
 ) =>
   Effect.gen(function* () {
@@ -208,10 +263,14 @@ const scenario = (
     }
 
     return yield* Effect.promise(async () => {
-      const answerer = { running: options.answer !== undefined };
+      const answerer = {
+        running: options.answer !== undefined || options.briefs !== undefined,
+      };
 
       const answering = (async () => {
         while (answerer.running) {
+          // oxlint-disable-next-line no-await-in-loop
+          await answerNodeBriefs(brain, options.briefs);
           // oxlint-disable-next-line no-await-in-loop
           await brain.harness.commit(async (tx) => {
             const approvals = await tx.doc(Approvals, brain.root);
@@ -289,6 +348,7 @@ const scenario = (
         approveSummaries: Object.values(approvals?.items ?? {}).flatMap(
           (record) => (record.tool === "approve" ? [record.summary] : [])
         ),
+        records: approvals?.items ?? {},
         problems,
       } satisfies Outcome;
     });
@@ -447,7 +507,7 @@ return { a, b, c };`)
   );
 
   it.live(
-    "refuses a node outside the envelope; the script sees null and goes on",
+    "a node outside the envelope raises its own brief; declined, it is refused and the script sees null",
     () =>
       Effect.gen(function* () {
         const outcome = yield* scenario(
@@ -461,6 +521,7 @@ return { a, b };`),
                 roles: granted.roles.filter((role) => role.spec !== "@scout"),
               }),
             }),
+            briefs: "decline",
           }
         );
 
@@ -477,11 +538,56 @@ return { a, b };`),
         );
         assert.include(outcome.result, '"a":null');
         assert.deepStrictEqual(starts(outcome.effects), ["b"]);
+
+        const [a, b] = nodes;
+        const card = outcome.records[a?.briefId ?? ""];
+
+        // a's own card, declined by the user; b's brief, accepted by the launch's envelope.
+        assert.strictEqual(card?.status, "declined");
+        assert.deepStrictEqual(card?.decidedBy, { kind: "user" });
+        assert.include(card?.summary ?? "", "Run node");
+        assert.include(a?.error ?? "", "declined: not this one");
+        assert.deepStrictEqual(outcome.records[b?.briefId ?? ""]?.decidedBy, {
+          kind: "envelope",
+          approvalId: ApprovalId.make(
+            Option.getOrThrow(outcome.row).approvalId
+          ),
+        });
       })
   );
 
   it.live(
-    "refuses a writer where the envelope granted a reader of that role",
+    "a node outside the envelope whose brief gets Go runs under that brief",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* scenario(
+          workflow(`const a = await agent("node:a", { label: "a", role: "@scout" });
+return { a };`),
+          {
+            planted: Option.some({
+              envelope: (granted) => ({
+                ...granted,
+                roles: granted.roles.filter((role) => role.spec !== "@scout"),
+              }),
+            }),
+            briefs: "accept",
+          }
+        );
+
+        assert.deepStrictEqual(outcome.problems, []);
+
+        const [a] = Object.values(Option.getOrThrow(outcome.row).nodes);
+        const card = outcome.records[a?.briefId ?? ""];
+
+        assert.strictEqual(a?.state, "settled");
+        assert.strictEqual(card?.status, "accepted");
+        assert.deepStrictEqual(card?.decidedBy, { kind: "user" });
+        assert.deepStrictEqual(starts(outcome.effects), ["a"]);
+      })
+  );
+
+  it.live(
+    "a writer where the envelope granted a reader of that role raises its own brief",
     () =>
       Effect.gen(function* () {
         const outcome = yield* scenario(
@@ -498,42 +604,77 @@ return { a, b };`),
                 })),
               }),
             }),
+            briefs: "decline",
           }
         );
 
         const [node] = Object.values(Option.getOrThrow(outcome.row).nodes);
 
         assert.strictEqual(node?.refusal, "outside_grant");
+        assert.strictEqual(
+          outcome.records[node?.briefId ?? ""]?.status,
+          "declined"
+        );
         assert.deepStrictEqual(outcome.effects, []);
       })
   );
 
-  it.live("refuses a node past the envelope's cap", () =>
-    Effect.gen(function* () {
-      const outcome = yield* scenario(
-        workflow(`const a = await agent("node:a", { label: "a" });
+  it.live(
+    "a node past the envelope's cap raises its own brief; declined, it is refused node_cap",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* scenario(
+          workflow(`const a = await agent("node:a", { label: "a" });
 const b = await agent("node:b", { label: "b" });
 return { a, b };`),
-        { planted: Option.some({ maxNodes: Option.some(1) }) }
-      );
+          {
+            planted: Option.some({ maxNodes: Option.some(1) }),
+            briefs: "decline",
+          }
+        );
 
-      assert.deepStrictEqual(outcome.problems, []);
+        assert.deepStrictEqual(outcome.problems, []);
 
-      assert.deepStrictEqual(
-        Object.values(Option.getOrThrow(outcome.row).nodes).map((node) => [
-          node.label,
-          node.state,
-          node.refusal,
-        ]),
-        [
-          ["a", "settled", null],
-          ["b", "refused", "node_cap"],
-        ]
-      );
-      assert.deepStrictEqual(starts(outcome.effects), ["a"]);
-    })
+        assert.deepStrictEqual(
+          Object.values(Option.getOrThrow(outcome.row).nodes).map((node) => [
+            node.label,
+            node.state,
+            node.refusal,
+          ]),
+          [
+            ["a", "settled", null],
+            ["b", "refused", "node_cap"],
+          ]
+        );
+        assert.deepStrictEqual(starts(outcome.effects), ["a"]);
+      })
   );
 
+  it.live(
+    "a node in a thread now wider than the launch's modes raises its own brief",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* scenario(
+          workflow(`return await agent("node:a", { label: "a" });`),
+          {
+            planted: Option.some({
+              envelope: (granted) => ({
+                ...granted,
+                modes: ["approval-required"],
+              }),
+            }),
+            briefs: "decline",
+          }
+        );
+
+        const [node] = Object.values(Option.getOrThrow(outcome.row).nodes);
+        const card = outcome.records[node?.briefId ?? ""];
+
+        assert.strictEqual(node?.refusal, "outside_grant");
+        assert.include(JSON.stringify(card?.payload ?? {}), "full-access");
+        assert.deepStrictEqual(outcome.effects, []);
+      })
+  );
   it.live("refuses a node whose role resolves to no model", () =>
     Effect.gen(function* () {
       const outcome = yield* scenario(

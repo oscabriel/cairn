@@ -18,6 +18,14 @@
 // kill-stop, mark-kill (a kill between the abort mark and the node seeing it), uncaught-stop-kill
 // and stop-last-node.
 //
+// Envelope matrix (plan 5A, ADR 0032, workflows note judge 3's grant cases): the model proposes
+// `envelope.workflow` with `workflow_plan` and runs it on Go; four of its five nodes fit the
+// envelope and the fifth raises its own brief card. envelope (Go on the card), envelope-declined
+// (Decline: the fifth is refused and null to the script), kill-in-launch-wait (a kill while the
+// launch card waits: one proposal, one dry run's row), kill-in-card-wait (a kill while the fifth's
+// card waits: it starts once after Go), and envelope-control (an envelope that grants every node;
+// it must fail by raising no card).
+//
 // Every case checks, from the brain's report and from `effects.log` (written outside the store by
 // each node child's one `work` call): every dispatched row names an accepted brief; each dispatched
 // row has exactly one child conversation and no child is without a row; no label has two rows or
@@ -25,8 +33,9 @@
 // rewrite. Then the case's own expectation: the workflow's end state, the stopped node `null` to the
 // script with its work never finished, the approval asked once.
 //
-// Prints one JSON line per case and a summary; exits 0 when every case passes and the control
-// fails for the reason it exists (a node dispatched twice). No model, no network, no secrets.
+// Prints one JSON line per case and a summary; exits 0 when every case passes and each control
+// fails for the reason it exists (a node dispatched twice; no card raised). No model, no network,
+// no secrets.
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -62,11 +71,18 @@ interface Life {
 
 interface CaseSpec {
   readonly name: string;
-  readonly matrix: "kill" | "stop";
+  readonly matrix: "kill" | "stop" | "envelope";
   readonly script: string;
   readonly lives: ReadonlyArray<Life>;
-  readonly control: boolean;
+  /** A broken control, and the failure it must show; none for a case that must pass. */
+  readonly control: Option.Option<"duplicate" | "card">;
   readonly expect: {
+    /** Node briefs the envelope did not cover: cards the user saw. */
+    readonly cards: number;
+    /** Launch cards the model's proposals raised (none when the case plants its launch). */
+    readonly launchRecords: number;
+    /** Labels refused before they started, null to the script. */
+    readonly refused: ReadonlyArray<string>;
     readonly state: "finished" | "failed" | "stopped";
     readonly reason: Option.Option<string>;
     /** The node stopped: its row `stopped`, its work never finished. */
@@ -91,6 +107,9 @@ const FINISHED_ALL = {
   nullInResult: false,
   settled: ["a", "b", "c", "d"],
   approveRecords: 0,
+  cards: 0,
+  launchRecords: 0,
+  refused: [],
 } as const;
 
 const killCase = (
@@ -102,7 +121,7 @@ const killCase = (
   matrix: "kill",
   script,
   lives,
-  control: false,
+  control: Option.none(),
   expect: FINISHED_ALL,
 });
 
@@ -117,15 +136,37 @@ const stopCase = (
   matrix: "stop",
   script,
   lives,
-  control: false,
+  control: Option.none(),
   expect: {
-    state: "finished",
-    reason: Option.none(),
+    ...FINISHED_ALL,
     stopped: Option.some(stopped),
     nullInResult: true,
     settled,
-    approveRecords: 0,
   },
+});
+
+/** The envelope's five nodes, all settled; one card raised, from one proposal. */
+const ENVELOPE_ALL = {
+  ...FINISHED_ALL,
+  settled: ["a", "b", "c", "d", "e"],
+  cards: 1,
+  launchRecords: 1,
+} as const;
+
+const PLAN = ["--plan", "--answer-launch"];
+
+const envelopeCase = (
+  name: string,
+  lives: ReadonlyArray<Life>,
+  expect: CaseSpec["expect"] = ENVELOPE_ALL,
+  control: CaseSpec["control"] = Option.none()
+): CaseSpec => ({
+  name,
+  matrix: "envelope",
+  script: "envelope.workflow",
+  lives,
+  control,
+  expect,
 });
 
 const CASES: ReadonlyArray<CaseSpec> = [
@@ -185,7 +226,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life([], { line: "approval-pending", delayMs: 200 }),
       life(["--answer"]),
     ],
-    control: false,
+    control: Option.none(),
     expect: { ...FINISHED_ALL, settled: ["a"], approveRecords: 1 },
   },
   {
@@ -196,7 +237,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life([], { line: "effect b start", delayMs: 300 }),
       life(["--diverge"]),
     ],
-    control: false,
+    control: Option.none(),
     expect: {
       ...FINISHED_ALL,
       state: "failed",
@@ -208,11 +249,16 @@ const CASES: ReadonlyArray<CaseSpec> = [
     name: "control",
     matrix: "kill",
     script: "fan.workflow",
+    // Its fresh rows fill the envelope's node cap, so its later nodes raise their own cards (5A):
+    // they get Go, and the duplicate dispatch shows.
     lives: [
-      life(["--control"], { line: "effect b start", delayMs: 300 }),
-      life(["--control"]),
+      life(["--control", "--briefs", "accept"], {
+        line: "effect b start",
+        delayMs: 300,
+      }),
+      life(["--control", "--briefs", "accept"]),
     ],
-    control: true,
+    control: Option.some("duplicate"),
     expect: FINISHED_ALL,
   },
   stopCase("stop", [life(["--stop", "b:800"])], "b", ["a", "c", "d"]),
@@ -249,17 +295,43 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(["--stop", "b:800"], { line: "workflow failed", delayMs: 0 }),
       life(),
     ],
-    control: false,
+    control: Option.none(),
     expect: {
+      ...FINISHED_ALL,
       state: "failed",
       reason: Option.some("script_error"),
       stopped: Option.some("b"),
-      nullInResult: false,
       settled: ["a"],
-      approveRecords: 0,
     },
   },
   stopCase("stop-last-node", [life(["--stop", "d:300"])], "d", ["a", "b", "c"]),
+  envelopeCase("envelope", [life([...PLAN, "--briefs", "accept"])]),
+  envelopeCase("envelope-declined", [life([...PLAN, "--briefs", "decline"])], {
+    ...ENVELOPE_ALL,
+    settled: ["a", "b", "c", "d"],
+    refused: ["e"],
+    nullInResult: true,
+  }),
+  envelopeCase("kill-in-launch-wait", [
+    life(["--plan", "--briefs", "accept"], {
+      line: "launch-pending",
+      delayMs: 200,
+    }),
+    life([...PLAN, "--briefs", "accept"]),
+  ]),
+  envelopeCase("kill-in-card-wait", [
+    life(PLAN, {
+      line: 'card-pending Run node "e" of workflow envelope',
+      delayMs: 200,
+    }),
+    life([...PLAN, "--briefs", "accept"]),
+  ]),
+  envelopeCase(
+    "envelope-control",
+    [life([...PLAN, "--briefs", "accept", "--grant-all"])],
+    ENVELOPE_ALL,
+    Option.some("card")
+  ),
 ];
 
 /** What `WorkflowBrain.ts` writes to `report.json`. */
@@ -285,6 +357,8 @@ interface Report {
   } | null;
   readonly children: Readonly<Record<string, number>>;
   readonly approveRecords: number;
+  readonly launchRecords: number;
+  readonly cards: number;
   readonly problems: ReadonlyArray<{
     readonly nodeId: string;
     readonly problem: string;
@@ -299,11 +373,12 @@ interface Effect1 {
 }
 
 /**
- * One failed check. `duplicate` is the failure the broken control must show (a node dispatched or
- * started twice); anything else is `other`.
+ * One failed check. `duplicate` (a node dispatched or started twice) and `card` (a node outside
+ * the envelope raised no card of its own) are the failures the broken controls must show;
+ * anything else is `other`.
  */
 interface Failure {
-  readonly kind: "duplicate" | "other";
+  readonly kind: "duplicate" | "card" | "other";
   readonly text: string;
 }
 
@@ -417,6 +492,10 @@ class Failures {
 
   duplicate(text: string) {
     this.list.push({ kind: "duplicate", text });
+  }
+
+  card(text: string) {
+    this.list.push({ kind: "card", text });
   }
 }
 
@@ -555,6 +634,43 @@ const checkWorkflow = (spec: CaseSpec, report: Report, failures: Failures) => {
   }
 };
 
+/** The envelope: the cards the user saw, the proposals made, the nodes refused before they started. */
+const checkEnvelope = (
+  spec: CaseSpec,
+  report: Report,
+  rows: Rows,
+  effects: ReadonlyArray<Effect1>,
+  failures: Failures
+) => {
+  if (report.cards !== spec.expect.cards) {
+    failures.card(
+      `${String(report.cards)} node brief cards, want ${String(spec.expect.cards)}`
+    );
+  }
+
+  if (report.launchRecords !== spec.expect.launchRecords) {
+    failures.other(
+      `${String(report.launchRecords)} launch cards, want ${String(spec.expect.launchRecords)}`
+    );
+  }
+
+  for (const label of spec.expect.refused) {
+    const row = rows.find((each) => each.label === label);
+
+    if (row?.state !== "refused") {
+      failures.other(`${label}: ${row?.state ?? "no row"}, want refused`);
+    }
+
+    if (count(effects, label, "start") !== 0) {
+      failures.other(`${label}: refused, but its work started`);
+    }
+
+    if (!report.result.includes(`"${label}":null`)) {
+      failures.other(`${label}: the script's result does not hold null for it`);
+    }
+  }
+};
+
 /** Every failed check of one case; empty when it passed. */
 const check = (
   spec: CaseSpec,
@@ -568,12 +684,15 @@ const check = (
   checkOnce(spec, rows, effects, failures);
   checkStopped(spec, report, rows, effects, failures);
   checkWorkflow(spec, report, failures);
+  checkEnvelope(spec, report, rows, effects, failures);
 
   return failures.list;
 };
 
-const controlFailedRightly = (failures: ReadonlyArray<Failure>) =>
-  failures.some((failure) => failure.kind === "duplicate");
+const controlFailedRightly = (
+  failures: ReadonlyArray<Failure>,
+  kind: "duplicate" | "card"
+) => failures.some((failure) => failure.kind === kind);
 
 /** One case: its lives, kills between them, the checks. */
 const runCase = Effect.fn("workflow-kill.case")(function* (spec: CaseSpec) {
@@ -691,10 +810,11 @@ const program = Effect.gen(function* () {
 
     yield* Console.log(JSON.stringify(result));
 
-    // The control proves the judge can fail: it must fail, by dispatching a node twice.
-    ok &&= spec.value.control
-      ? controlFailedRightly(result.failures)
-      : result.pass;
+    // A control proves the judge can fail: it must fail for the reason it exists.
+    ok &&= Option.match(spec.value.control, {
+      onNone: () => result.pass,
+      onSome: (kind) => controlFailedRightly(result.failures, kind),
+    });
   }
 
   yield* Console.log(JSON.stringify({ summary: ok ? "pass" : "fail" }));

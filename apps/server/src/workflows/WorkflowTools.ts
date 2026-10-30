@@ -10,14 +10,22 @@
 // launch approval is accepted and the hash and prelude version match, and creates the script
 // call's watcher.
 //
+// `workflow_plan` (the model's tool, 5A) proposes a launch: it parses and dry-runs the script, writes
+// a `proposed` row and the launch approval (a `brief` record whose payload is the plan and its
+// envelope) in one commit, and waits for the answer like any gated call (ADR 0013). The answering
+// commit moves the row (`launchAnswered`, WorkflowLaunch.ts); the tool then tells the model to run
+// the same script with `codemode`, or that nothing will run.
+//
 // `agent` is one dispatch. In one commit it reserves the row (`n-<task id>`, request id
-// `wf-<workflowId>-<nodeId>`), checks the envelope the launch granted (role, reads or writes, node
-// cap) and creates the child conversation owned by its own task, configured with the role's model,
-// with the `cairn.child` link the result tool and the permission gate read, and the row's watcher.
-// A rerun after `kill -9` finds the row and the child, submits under the same request id (which
-// pi-durable answers with the first submission) and waits again: no second dispatch. A node outside
-// the envelope or past the cap is a `refused` row and the script sees `null` (5A turns the outside
-// case into the node's own brief). A typed node's child ends with `submit_result`; one nudge, then
+// `wf-<workflowId>-<nodeId>`) and writes the node's own brief record. When the launch's envelope
+// covers it (role, reads or writes, mode, node cap: `briefWithin`) the record is accepted with
+// `decidedBy` envelope and the same commit creates the child conversation owned by the node's own
+// task, configured with the role's model, with the `cairn.child` link the result tool and the
+// permission gate read, and the row's watcher. When it does not, the record is a pending brief card
+// and the node waits for the user like any approval: Go creates the child in the commit after the
+// answer, anything else ends the row `refused` and the script sees `null`. A rerun after `kill -9`
+// finds the row (and the child, or the pending brief), submits under the same request id (which
+// pi-durable answers with the first submission) and waits again: no second dispatch. A typed node's child ends with `submit_result`; one nudge, then
 // it fails `invalid_result`. The settle is one commit (WorkflowNodes.ts), written only by the row's
 // own task, and the tool's result never carries usage (spec section 12, "double-counted subagent
 // spend"). At most the envelope's `maxConcurrent` nodes of one workflow run at once, held in
@@ -31,10 +39,16 @@
 // probe's node-stop brain.
 
 import { ThinkingLevel } from "@cairn/protocol/Models";
-import type { ApprovalDecision, RuntimeMode } from "@cairn/protocol/Policy";
+import type {
+  ApprovalDecision,
+  Envelope,
+  RuntimeMode,
+} from "@cairn/protocol/Policy";
 import type { RoleOverrides } from "@cairn/protocol/Roles";
 import { RoleSpec } from "@cairn/protocol/Roles";
+import { Budget, DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { MAX_SUBAGENT_DEPTH } from "@cairn/protocol/Subagents";
+import { MAX_WORKFLOW_NODES } from "@cairn/protocol/Workflows";
 import type { NodeRefusal } from "@cairn/protocol/Workflows";
 import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
@@ -57,8 +71,10 @@ import {
 import { Effect, Option, Result, Schema } from "effect";
 
 import {
+  approvalIdOf,
   approvalLedger,
   Approvals,
+  emitBriefApproved,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
@@ -104,11 +120,18 @@ import {
   nextIndex,
   nodeIdOf,
   nodeRequestIdOf,
-  outsideEnvelope,
   WorkflowsDoc,
 } from "./WorkflowDocs.ts";
 import type { NodeItemState, WorkflowItemState } from "./WorkflowDocs.ts";
 import { workflowGate } from "./WorkflowGate.ts";
+import {
+  briefWithin,
+  closeWaiting,
+  isWaitingNode,
+  nodeBriefPayload,
+  nodeBriefRecord,
+} from "./WorkflowLaunch.ts";
+import type { Outside } from "./WorkflowLaunch.ts";
 import {
   answerText,
   askChild,
@@ -130,6 +153,8 @@ import {
   typedResult,
 } from "./WorkflowNodes.ts";
 import type { Caller, NodeEnding } from "./WorkflowNodes.ts";
+import { planTool } from "./WorkflowPlanTool.ts";
+import type { PlanAccess } from "./WorkflowPlanTool.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const WORKFLOWS_EXTENSION = "cairn.workflows";
@@ -208,14 +233,24 @@ export interface WorkflowFaultSet {
    * a fresh request id, so a rerun after a kill dispatches again.
    */
   readonly freshDispatch: boolean;
+  /**
+   * An envelope that covers every node: a node the launch did not show starts without its own
+   * brief card, as if the envelope granted it (the envelope judge's broken control).
+   */
+  readonly grantAll: boolean;
 }
 
 /** No faults. */
-export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = { freshDispatch: false };
+export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = {
+  freshDispatch: false,
+  grantAll: false,
+};
 
 /** What the extension is built with. */
 export interface WorkflowToolOptions {
   readonly resolveRole: RoleResolver;
+  /** Parses and dry-runs a proposed script (`WorkflowPlan`), for `workflow_plan`. */
+  readonly plan: PlanAccess;
   readonly faults: WorkflowFaultSet;
   /** Waits at a hold point (judges only); production resolves at once. */
   readonly hold: (point: HoldPoint, label: string) => Promise<void>;
@@ -273,6 +308,8 @@ type Reserved =
       readonly row: NodeItemState;
       readonly child: ConversationId;
     }
+  /** Outside its envelope: its own brief waits for the user. */
+  | { readonly kind: "waiting"; readonly row: NodeItemState }
   | { readonly kind: "problem"; readonly text: string };
 
 /** What the reserve commit is given, read before it. */
@@ -291,6 +328,12 @@ interface ReserveInput {
     readonly rootThreadId: string;
   }>;
 }
+
+const decodeBudgetState = Schema.decodeUnknownOption(Budget);
+
+/** The budget a workflow runs under, as the protocol reads it: the row's, edits included. */
+const budgetOf = (row: WorkflowItemState): Budget =>
+  Option.getOrElse(decodeBudgetState(row.budget), () => DEFAULT_BUDGET);
 
 /** A row the reserve commit starts from, before its refusal or its child. */
 const reservedRow = (
@@ -334,31 +377,92 @@ const reservedRow = (
   };
 };
 
-/** Why a node may not start: outside its envelope, past the cap, or no model for its role. */
+/**
+ * Why a node may not start at all, before its brief: no launch to read an envelope from, the
+ * workflow's hard cap of nodes reached, or no model for its role. The envelope's own checks raise
+ * a brief card instead (`briefWithin`).
+ */
 const refusalOf = (
-  record: Option.Option<ApprovalRecord>,
+  envelope: Option.Option<Envelope>,
   row: WorkflowItemState,
   input: ReserveInput
 ): Option.Option<NodeRefusal> => {
-  const envelope = Option.flatMap(record, envelopeOf);
-
   if (Option.isNone(envelope)) {
     return Option.some("outside_grant");
   }
 
-  if (dispatchedCount(row) >= envelope.value.maxNodes) {
+  if (dispatchedCount(row) >= MAX_WORKFLOW_NODES) {
     return Option.some("node_cap");
-  }
-
-  const outside = outsideEnvelope(envelope.value, input.dispatch);
-
-  if (Option.isSome(outside)) {
-    return outside;
   }
 
   return Result.isFailure(input.model)
     ? Option.some("no_provider")
     : Option.none();
+};
+
+/** What a node asks of its envelope, from its dispatch and the thread now. */
+const askOf = (row: WorkflowItemState, input: ReserveInput) => ({
+  role: input.dispatch.role,
+  readonly: input.dispatch.readonly,
+  mode: input.mode,
+  dispatched: dispatchedCount(row),
+});
+
+/**
+ * The refusal a node outside its envelope ends with when its own brief is not accepted: past the
+ * node cap when its role and mode fit, outside the grant otherwise.
+ */
+const declinedRefusal = (
+  envelope: Envelope,
+  row: WorkflowItemState,
+  input: ReserveInput
+): NodeRefusal =>
+  Option.isNone(
+    briefWithin(
+      { ...envelope, maxNodes: MAX_WORKFLOW_NODES },
+      { ...askOf(row, input), dispatched: 0 }
+    )
+  )
+    ? "node_cap"
+    : "outside_grant";
+
+/** The prompt a node's child is sent. */
+const promptOf = (dispatch: Dispatch) =>
+  Option.isSome(dispatch.schema)
+    ? `${dispatch.prompt}\n\nWhen you are done, call submit_result with your result; its parameters are the schema it must match.`
+    : dispatch.prompt;
+
+/** The brief record a node is dispatched under: accepted by `envelope`, or a pending card. */
+const nodeRecordOf = (
+  api: ToolExecutionApi,
+  row: WorkflowItemState,
+  input: ReserveInput,
+  outside: Option.Option<Outside>
+) => {
+  const { dispatch } = input;
+
+  return nodeBriefRecord({
+    id: approvalIdOf(api.taskId),
+    toolTaskId: api.taskId,
+    tool: dispatch.verify ? "verify" : "agent",
+    summary: cutSummary(`Run node "${dispatch.label}" of workflow ${row.name}`),
+    at: api.now(),
+    payload: nodeBriefPayload({
+      workflowName: row.name,
+      label: dispatch.label,
+      prompt: promptOf(dispatch),
+      role: dispatch.role,
+      effort: dispatch.effort,
+      readonly: dispatch.readonly,
+      mode: input.mode,
+      budget: budgetOf(row),
+      resultSchema: dispatch.schema,
+      outside,
+    }),
+    envelope: Option.isNone(outside)
+      ? Option.some(row.approvalId)
+      : Option.none(),
+  });
 };
 
 /**
@@ -442,12 +546,6 @@ const linkChild = async (
 const roleProblem = (tool: string, role: string) =>
   `${tool}(): role \`${summaryOf(role)}\` is not a role alias (\`@worker\`, \`@scout:high\`) or a \`provider/model\`.`;
 
-/** The prompt a node's child is sent. */
-const promptOf = (dispatch: Dispatch) =>
-  Option.isSome(dispatch.schema)
-    ? `${dispatch.prompt}\n\nWhen you are done, call submit_result with your result; its parameters are the schema it must match.`
-    : dispatch.prompt;
-
 /** The outcome the script gets for a node's ending. */
 const outcomeOf = (ending: NodeEnding, nodeId: string): NodeOutcome =>
   Result.match(ending, {
@@ -522,13 +620,14 @@ const refuseRow = async (
   row: WorkflowItemState,
   base: NodeItemState,
   refusal: NodeRefusal,
-  error: string | null
+  error: string | null,
+  at: number = base.startedAt ?? 0
 ): Promise<Reserved> => {
   const node: NodeItemState = {
     ...base,
     state: "refused",
     refusal,
-    endedAt: base.startedAt,
+    endedAt: at,
     error: error === null ? null : cutText(error),
   };
 
@@ -537,7 +636,7 @@ const refuseRow = async (
   await emit(tx, {
     name: "workflow.node.refused",
     data: { workflowId: row.id, nodeId: node.id, refusal },
-    at: base.startedAt ?? 0,
+    at,
     context: Option.none(),
   });
 
@@ -567,11 +666,43 @@ const markSubmitted = async (
   }, context);
 };
 
+/** What an earlier attempt left of a node: ended, running, or still waiting for its brief. */
+const foundOf = (existing: NodeItemState): Reserved => {
+  if (isWaitingNode(existing)) {
+    return { kind: "waiting", row: { ...existing } };
+  }
+
+  return isNodeEnded(existing.state) || existing.conversationId === null
+    ? { kind: "ended", row: { ...existing } }
+    : {
+        kind: "running",
+        row: { ...existing },
+        child: conversationOf(existing.conversationId),
+      };
+};
+
+/** The launch approval of a workflow of this thread, read now. */
+const launchRecordOf = async (
+  api: ToolExecutionApi,
+  workflowId: string,
+  context: ChordContext
+): Promise<Option.Option<ApprovalRecord>> => {
+  const approvals = await api.snapshot(Approvals, api.conversationId, context);
+
+  const ledger = await api.snapshot(WorkflowsDoc, api.conversationId, context);
+
+  const approvalId = ledger?.items[workflowId]?.approvalId;
+
+  return Option.fromUndefinedOr(
+    approvalId === undefined ? undefined : approvals?.items[approvalId]
+  );
+};
+
 /** The tools, the watcher task and the gate, as one extension. */
 export const workflowExtension = (
   options: WorkflowToolOptions
 ): CairnExtension => {
-  const { resolveRole, faults, hold } = options;
+  const { resolveRole, faults, hold, plan } = options;
 
   /** Node slots per workflow, in memory: a restart starts with every slot free. */
   const slots = new Map<string, ScriptSlots>();
@@ -616,7 +747,16 @@ export const workflowExtension = (
             const ledger = await tx.doc(WorkflowsDoc, runtime.conversationId);
             const row = ledger.items[workflowId];
 
-            if (row !== undefined && nodeId !== null) {
+            const node = nodeId === null ? undefined : row?.nodes[nodeId];
+
+            // A node still waiting for its own brief: the brief goes with it.
+            if (
+              row !== undefined &&
+              node !== undefined &&
+              isWaitingNode(node)
+            ) {
+              await closeWaiting(tx, runtime.conversationId, row, node, at);
+            } else if (row !== undefined && nodeId !== null) {
               await endNode(tx, row, nodeId, outcome, at);
             }
 
@@ -770,14 +910,19 @@ export const workflowExtension = (
 
   // agent and verify
 
-  /** Creates the node's child, owned by the node's own task, its link and its watcher. */
+  /**
+   * Creates the node's child, owned by the node's own task, and its link, under the node's own
+   * brief (`base.briefId`); with `watch`, also the row's watcher (a node that waited for its brief
+   * has had one since its reserve).
+   */
   const startChild = async (
     tx: Tx,
     api: ToolExecutionApi,
     row: WorkflowItemState,
     base: NodeItemState,
     resolved: ResolvedNodeModel,
-    input: ReserveInput
+    input: ReserveInput,
+    watch: boolean
   ): Promise<Reserved> => {
     const child = await tx.createConversation({
       ownership: { kind: "task", taskId: api.taskId },
@@ -795,9 +940,11 @@ export const workflowExtension = (
       base.requestId
     );
 
+    const briefId = base.briefId ?? row.approvalId;
+
     await linkChild(tx, api.conversationId, child.id, {
       nodeId: input.nodeId,
-      approvalId: row.approvalId,
+      approvalId: briefId,
       childThreadId,
       schema: input.dispatch.schema,
       mode: input.mode,
@@ -807,7 +954,7 @@ export const workflowExtension = (
     const node: NodeItemState = {
       ...base,
       childThreadId,
-      briefId: row.approvalId,
+      briefId,
       provider: resolved.provider,
       modelId: resolved.modelId,
       state: "running",
@@ -817,18 +964,21 @@ export const workflowExtension = (
 
     row.nodes[input.nodeId] = node;
 
-    await tx.createTask(
-      Watch,
-      { workflowId: row.id, nodeId: input.nodeId, target: api.taskId },
-      BACKGROUND
-    );
+    if (watch) {
+      await tx.createTask(
+        Watch,
+        { workflowId: row.id, nodeId: input.nodeId, target: api.taskId },
+        BACKGROUND
+      );
+    }
 
     return { kind: "running", row: { ...node }, child: child.id };
   };
 
   /**
-   * Reserves the node's row and creates its child in one commit, or finds what an earlier attempt
-   * made.
+   * Reserves the node's row with its own brief, in one commit, or finds what an earlier attempt
+   * made. A brief the launch's envelope covers is accepted by it, and the same commit creates the
+   * child; one it does not cover waits for the user (ADR 0032).
    */
   const reserve = async (
     api: ToolExecutionApi,
@@ -851,28 +1001,32 @@ export const workflowExtension = (
       const existing = row.nodes[input.nodeId];
 
       if (existing !== undefined) {
-        return isNodeEnded(existing.state) || existing.conversationId === null
-          ? { kind: "ended", row: { ...existing } }
-          : {
-              kind: "running",
-              row: { ...existing },
-              child: conversationOf(existing.conversationId),
-            };
+        return foundOf(existing);
       }
 
       const base = reservedRow(api, row, input);
-      const record = Option.fromUndefinedOr(approvals.items[row.approvalId]);
-      const refusal = refusalOf(record, row, input);
 
-      if (Option.isSome(refusal)) {
+      const envelope = Option.flatMap(
+        Option.fromUndefinedOr(approvals.items[row.approvalId]),
+        envelopeOf
+      );
+
+      const refusal = refusalOf(envelope, row, input);
+
+      if (Option.isSome(refusal) || Option.isNone(envelope)) {
+        const why = Option.getOrElse(
+          refusal,
+          (): NodeRefusal => "outside_grant"
+        );
+
         // Only a role with no model carries the resolver's words; the other refusals speak for
         // themselves.
         const error =
-          refusal.value === "no_provider" && Result.isFailure(input.model)
+          why === "no_provider" && Result.isFailure(input.model)
             ? input.model.failure
             : null;
 
-        return await refuseRow(tx, row, base, refusal.value, error);
+        return await refuseRow(tx, row, base, why, error);
       }
 
       if (Result.isFailure(input.model)) {
@@ -885,7 +1039,123 @@ export const workflowExtension = (
         );
       }
 
-      return await startChild(tx, api, row, base, input.model.success, input);
+      const outside = faults.grantAll
+        ? Option.none<Outside>()
+        : briefWithin(envelope.value, askOf(row, input));
+
+      const record = nodeRecordOf(api, row, input, outside);
+      const node: NodeItemState = { ...base, briefId: record.id };
+
+      approvals.items[record.id] = record;
+
+      if (Option.isSome(outside)) {
+        row.nodes[input.nodeId] = node;
+
+        await tx.createTask(
+          Watch,
+          { workflowId: row.id, nodeId: input.nodeId, target: api.taskId },
+          BACKGROUND
+        );
+
+        return { kind: "waiting", row: { ...node } };
+      }
+
+      const started = await startChild(
+        tx,
+        api,
+        row,
+        node,
+        input.model.success,
+        input,
+        true
+      );
+
+      await emitBriefApproved(tx, api.conversationId, record, api.now());
+
+      return started;
+    }, context);
+
+  /**
+   * After a waiting node's own brief settled, in one commit: Go creates its child under that brief;
+   * Decline, Send back, an expiry or a stop ends the row `refused`, and the script sees `null`.
+   */
+  const admit = async (
+    api: ToolExecutionApi,
+    input: ReserveInput,
+    context: ChordContext
+  ): Promise<Reserved> =>
+    await api.commit(async (tx): Promise<Reserved> => {
+      const ledger = await tx.doc(WorkflowsDoc, api.conversationId);
+      const approvals = await tx.doc(Approvals, api.conversationId);
+      const row = ledger.items[input.dispatch.workflowId];
+      const problem = runningProblem(row, input.caller);
+
+      if (row === undefined || Option.isSome(problem)) {
+        return {
+          kind: "problem",
+          text: Option.getOrElse(problem, () => "no workflow"),
+        };
+      }
+
+      const node = row.nodes[input.nodeId];
+
+      if (node === undefined) {
+        return { kind: "problem", text: `node ${input.nodeId} has no row` };
+      }
+
+      if (!isWaitingNode(node)) {
+        return foundOf(node);
+      }
+
+      const record = approvals.items[node.briefId ?? ""];
+
+      if (record === undefined || record.status === "pending") {
+        return { kind: "waiting", row: { ...node } };
+      }
+
+      const at = api.now();
+
+      if (record.status === "accepted") {
+        return Result.isFailure(input.model)
+          ? await refuseRow(
+              tx,
+              row,
+              node,
+              "no_provider",
+              input.model.failure,
+              at
+            )
+          : await startChild(
+              tx,
+              api,
+              row,
+              node,
+              input.model.success,
+              input,
+              false
+            );
+      }
+
+      const envelope = Option.flatMap(
+        Option.fromUndefinedOr(approvals.items[row.approvalId]),
+        envelopeOf
+      );
+
+      const refusal = Option.match(envelope, {
+        onNone: (): NodeRefusal => "outside_grant",
+        onSome: (granted) => declinedRefusal(granted, row, input),
+      });
+
+      const reason = record.reason === null ? "" : `: ${record.reason}`;
+
+      return await refuseRow(
+        tx,
+        row,
+        node,
+        refusal,
+        `Its own brief was ${record.status}${reason}.`,
+        at
+      );
     }, context);
 
   /** How the child ended: its value, or why the node failed. */
@@ -968,8 +1238,10 @@ export const workflowExtension = (
     const known = ledger?.items[dispatch.workflowId]?.nodes[nodeId];
 
     // A rerun finds its row and resolves nothing again: the row records what the role resolved to.
+    // A node waiting for its own brief has resolved nothing yet: its role resolves right before the
+    // commit that creates its child (ADR 0035), after Go.
     const model =
-      known === undefined
+      known === undefined || isWaitingNode(known)
         ? await resolveRole(dispatch.role, Option.flatMap(record, overridesOf))
         : Result.succeed<ResolvedNodeModel>({
             provider: known.provider ?? "",
@@ -997,6 +1269,46 @@ export const workflowExtension = (
     };
   };
 
+  /**
+   * Waits for a node's own brief like any approval (ADR 0013: a rerun finds its record and waits
+   * again), then admits or refuses the node, with its role resolved after the answer and the
+   * thread's mode read again.
+   */
+  const awaitBrief = async (
+    api: ToolExecutionApi,
+    waiting: NodeItemState,
+    input: ReserveInput,
+    context: ChordContext
+  ): Promise<Reserved> => {
+    const settled = await Effect.runPromise(
+      approvalLedger(api).awaitSettlement.pipe(Effect.result),
+      { signal: context.abortSignal }
+    );
+
+    if (Result.isFailure(settled)) {
+      return {
+        kind: "problem",
+        text: `node ${waiting.id}'s own brief could not be read: ${settled.failure.message}`,
+      };
+    }
+
+    const launch = await launchRecordOf(
+      api,
+      input.dispatch.workflowId,
+      context
+    );
+
+    const fresh = await reserveInput(
+      api,
+      input.caller,
+      input.dispatch,
+      launch,
+      context
+    );
+
+    return await admit(api, fresh, context);
+  };
+
   /** One node, from its reserve to its settle, holding one of its workflow's node slots. */
   const runHeld = async (
     api: ToolExecutionApi,
@@ -1004,7 +1316,20 @@ export const workflowExtension = (
     context: ChordContext
   ): Promise<ToolExecutionResult> => {
     const { dispatch } = input;
-    const reserved = await reserve(api, input, context);
+    const first = await reserve(api, input, context);
+
+    const reserved =
+      first.kind === "waiting"
+        ? await awaitBrief(api, first.row, input, context)
+        : first;
+
+    if (reserved.kind === "waiting") {
+      const tool = dispatch.verify ? "verify" : "agent";
+
+      return refused(
+        `${tool}: node ${reserved.row.id}'s own brief is still waiting for the user.`
+      );
+    }
 
     if (reserved.kind === "problem") {
       const tool = dispatch.verify ? "verify" : "agent";
@@ -1046,24 +1371,7 @@ export const workflowExtension = (
     dispatch: Dispatch,
     context: ChordContext
   ): Promise<ToolExecutionResult> => {
-    const approvals = await api.snapshot(
-      Approvals,
-      api.conversationId,
-      context
-    );
-
-    const ledger = await api.snapshot(
-      WorkflowsDoc,
-      api.conversationId,
-      context
-    );
-
-    const approvalId = ledger?.items[dispatch.workflowId]?.approvalId;
-
-    const record = Option.fromUndefinedOr(
-      approvalId === undefined ? undefined : approvals?.items[approvalId]
-    );
-
+    const record = await launchRecordOf(api, dispatch.workflowId, context);
     const input = await reserveInput(api, caller, dispatch, record, context);
 
     const limit = Option.match(Option.flatMap(record, envelopeOf), {
@@ -1434,7 +1742,16 @@ export const workflowExtension = (
     order: ExtensionOrder.workflows,
     extension: defineExtension({
       name: WORKFLOWS_EXTENSION,
-      tools: [begin, agent, verify, approve, phase, log, budget],
+      tools: [
+        planTool(plan, resolveRole),
+        begin,
+        agent,
+        verify,
+        approve,
+        phase,
+        log,
+        budget,
+      ],
       hooks: [workflowGate],
       tasks: [Watch],
     }),

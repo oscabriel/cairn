@@ -312,9 +312,13 @@ _Avoid_: permission request, prompt (for the record)
 
 _Avoid_: task, spec, ticket
 
-**Go**: The user's yes to a brief or a workflow's launch. It starts the child (or the workflow) in the same commit that accepts the record. On a launch card, the user may edit the budget and the per-launch role overrides before Go; the edits travel with the answer and the proposal stays as the model wrote it.
+**Go**: The user's yes to a brief or a workflow's launch. It starts the child (or the workflow) in the same commit that accepts the record. On a launch card, the user may edit the budget and the per-launch role overrides before Go; the edits travel with the answer and the proposal stays as the model wrote it. The card offers Go only once every role the brief names resolves by the role table; while one does not, Go is blocked with the reason and a link to the role table.
 
 _Avoid_: approve (for a brief), run
+
+**Send back**: The user's answer to a subagent's brief that asks its parent for a new one: it needs notes on what to change, starts nothing, and the parent reads the notes. A workflow's launch and a node's own brief take Go or Decline only.
+
+_Avoid_: revise (in prose; it is the decision's wire name), reject
 
 **Decider**: Who settled an approval record: the user, a parent thread answering its child's question, the permission mode, a workflow's envelope, a judge, expiry, or the system (a stop or boot). Every record past pending names one.
 

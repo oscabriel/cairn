@@ -10,6 +10,7 @@ import { Option } from "effect";
 import type { Schema } from "effect";
 import * as Scene from "foldkit/scene";
 
+import { resolvedCheck } from "./CardFixtures.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
@@ -303,9 +304,23 @@ describe("the request card", () => {
   });
 
   it("draws a brief's fields in reading order with Go", () => {
+    // Its role resolves (6B holds Go until `roles.check` says so: `BriefCard.test.ts`).
+    const checked = update(
+      showing(doc(brief)),
+      Message.ReceivedRoleChecks({
+        approvalId: ApprovalId.make("b-1"),
+        generation: 1,
+        checks: resolvedCheck(
+          "@scout",
+          { provider: "claude-bridge", modelId: "claude-sonnet-5-5" },
+          "high"
+        ),
+      })
+    ).model;
+
     Scene.scene(
       config,
-      Scene.given(showing(doc(brief))),
+      Scene.given(checked),
       Scene.expect(Scene.testId("request-card")).toHaveAttr(
         "data-request-body",
         "Brief"

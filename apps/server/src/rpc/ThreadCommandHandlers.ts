@@ -12,7 +12,6 @@ import {
   Unavailable,
 } from "@cairn/protocol/Errors";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
-import type { ApprovalDecision } from "@cairn/protocol/Policy";
 import { CairnRpcs, Viewer } from "@cairn/protocol/Rpc";
 import type {
   ConfigureInput,
@@ -147,30 +146,6 @@ const requestIdOf = (requestId: RpcMessage.RequestId) =>
   Option.some(String(requestId));
 
 /**
- * A phase 2 input this brain cannot act on yet: `thread.respond`'s `revise` (briefs, 4A).
- * `reason` and `answers` are recorded (1A); `accept_sample` and `launch` answer a workflow's launch
- * (5A, ADR 0032), and the record refuses them anywhere else; `accept_for_thread`
- * and `thread.configure`'s `runtimeMode` are handled (ADR 0031), and `thread.stop`'s
- * `subagents: "stop"` stops the working children too (Stop all, ADR 0028). Refused, so nothing is
- * silently dropped; the package that builds each lifts its refusal and turns its test in
- * `ThreadCommandHandlers.test.ts` around.
- */
-const notYet = (field: string, requestId: Option.Option<string>) =>
-  new InvalidInput({
-    message: `This brain does not handle ${field} yet. Nothing changed; update the brain and retry.`,
-    field: Option.some(field),
-    requestId,
-  });
-
-/** The decisions this brain records; the others wait for the packages that build them. */
-const HANDLED_DECISIONS: ReadonlySet<ApprovalDecision> = new Set([
-  "accept",
-  "accept_for_thread",
-  "accept_sample",
-  "decline",
-]);
-
-/**
  * `auto` is listed for later (a decider answers routine approvals, after phase 2) and is not
  * offered, so a thread is never set to it (ADR 0031).
  */
@@ -181,12 +156,6 @@ const autoNotOffered = (requestId: Option.Option<string>) =>
     field: Option.some("runtimeMode"),
     requestId,
   });
-
-/** The first field of a `thread.respond` this brain cannot act on yet, if any. */
-const respondNotYet = (input: RespondInput): Option.Option<string> =>
-  HANDLED_DECISIONS.has(input.decision)
-    ? Option.none()
-    : Option.some("decision");
 
 /** The handlers, for the handler group and for tests that call them directly. */
 export const threadCommandHandlers = Effect.gen(function* () {
@@ -271,23 +240,20 @@ export const threadCommandHandlers = Effect.gen(function* () {
                 fromHarnessError(failure, input.threadId, requestId)
               )
             ),
+    // Every decision is recorded (1A, 4A, 5A, 6B); the record refuses one that does not fit it.
     respond: (input: RespondInput, requestId: Option.Option<string>) =>
-      Option.match(respondNotYet(input), {
-        onSome: (field) => Effect.fail(notYet(field, requestId)),
-        onNone: () =>
-          threads
-            .respond(input)
-            .pipe(
-              Effect.mapError((failure) =>
-                fromHarnessError(
-                  failure,
-                  input.approvalId,
-                  requestId,
-                  input.threadId
-                )
-              )
-            ),
-      }),
+      threads
+        .respond(input)
+        .pipe(
+          Effect.mapError((failure) =>
+            fromHarnessError(
+              failure,
+              input.approvalId,
+              requestId,
+              input.threadId
+            )
+          )
+        ),
   };
 });
 

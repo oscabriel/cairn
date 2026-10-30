@@ -3,7 +3,9 @@
 // runs. Used by judges/capture.ts (hero and thread states), judges/behaviour.ts and judges/surfaces.ts.
 //
 // The brain is AppLayer over the scripted harness on an ephemeral loopback port, with Vite in front
-// of it on another, as judges/typing.ts runs it. Seeding happens before the page opens:
+// of it on another, as judges/typing.ts runs it. `restartBrain` closes the brain and opens it again
+// over the same scripted store and data folder (the brief card judge's restart). Seeding happens
+// before the page opens:
 // - one folder project with t3code's draft project title, rooted in a temporary git repository
 //   with a README and a docs folder (so the `@` menu has paths to find, but none for `@src`,
 //   which t3code's read-only pairing cannot search either);
@@ -29,6 +31,7 @@ import {
   TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
+import type { RoleTable } from "@cairn/protocol/Roles";
 import { NodeServices } from "@effect/platform-node";
 import {
   Clock,
@@ -45,6 +48,7 @@ import { createServer as createViteServer } from "vite";
 import {
   AppLayer,
   HarnessBoot,
+  SettingsLive,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
 import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
@@ -58,12 +62,15 @@ import {
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
 import { SpendFeed } from "../../../apps/server/src/brain/SpendFeed.ts";
 import {
+  ScriptedBoot,
   ScriptedHarness,
   ScriptedModel,
+  ScriptedRoleTable,
   ScriptedStore,
   ScriptedTools,
   scriptedAnswer,
 } from "../../../apps/server/src/brain/ScriptedHarness.ts";
+import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
 import { ReachMachine } from "../../../apps/server/src/reach/ReachLayer.ts";
@@ -164,10 +171,28 @@ export interface CairnBrain {
   readonly tools: Layer.Layer<ScriptedTools>;
 }
 
+/**
+ * The role tables a judge gives (the brief card judge, plan 6B): the brain's settings table, which
+ * `roles.check` reads, and the scripted harness's, which its `subagent_spawn` and Go resolve
+ * through. Two tables, so a brief can name a role the settings no longer bind, as when the table
+ * changed after the brief was asked.
+ */
+export interface CairnRoles {
+  readonly settings: RoleTable;
+  readonly scripted: RoleTable;
+}
+
 /** A running Cairn: the page origin, the seeded thread's URL, and how to stop it. */
 export interface CairnApp {
   readonly origin: string;
   readonly threadUrl: string;
+  /**
+   * Closes the brain and opens a new one over the same store and data folder on the same port, as
+   * a restart does (the scripted harness resumes from its store); the page reconnects on its own.
+   */
+  readonly restartBrain: () => Promise<void>;
+  /** How many threads the scripted store holds: the seeded ones and every child started. */
+  readonly threadCount: () => number;
   readonly stop: () => Promise<void>;
 }
 
@@ -459,7 +484,26 @@ export interface CairnOptions {
   readonly brain?: CairnBrain;
   /** The `next` shell's seed; none when absent, so classic judges capture what they did. */
   readonly shell?: ShellSeed;
+  /** The role tables; the default table in both when absent. */
+  readonly roles?: CairnRoles;
 }
+
+/** Writes the settings' role table, when a judge gives one. */
+const seedRoles = (roles: CairnRoles | undefined) =>
+  roles === undefined
+    ? Layer.empty
+    : Layer.effectDiscard(
+        SettingsStore.use((settings) =>
+          settings.update({
+            autoSettleDays: Option.none(),
+            titleModel: Option.none(),
+            bridgeEnabled: Option.none(),
+            bridgeGenerationCap: Option.none(),
+            roleBindings: Option.some(roles.settings),
+            defaultBudget: Option.none(),
+          })
+        ).pipe(Effect.orDie)
+      ).pipe(Layer.provide(SettingsLive));
 
 /**
  * Starts the brain and Vite, seeded; nothing listens outside loopback. A shell seed adds the
@@ -477,6 +521,13 @@ export const startCairn = async (
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "cairn-parity-"));
   const workspace = makeWorkspace(dataDir, seed.projectTitle);
 
+  // One store for every life of the brain, so `restartBrain` is a restart and not a new brain.
+  const store = ScriptedStore.of({
+    threads: new Map(),
+    reporters: new Map(),
+    ids: { next: 1 },
+  });
+
   const Harness = Layer.mergeAll(
     Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
     EventReactors.layerOff,
@@ -486,9 +537,14 @@ export const startCairn = async (
     GoalBook.layerOff
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),
-    Layer.provideMerge(ScriptedStore.layer),
+    Layer.provideMerge(Layer.succeed(ScriptedStore, store)),
     Layer.provide(brain.model),
     Layer.provide(brain.tools),
+    Layer.provide(
+      options.roles === undefined
+        ? Layer.empty
+        : Layer.succeed(ScriptedRoleTable, options.roles.scripted)
+    ),
     Layer.provideMerge(
       withCatalog(
         ModelSource.layerFaux({
@@ -501,7 +557,27 @@ export const startCairn = async (
     )
   );
 
-  const App = seedLayer(seed, workspace, shellSeed, dataDir).pipe(
+  // A later life seeds nothing: it resumes what the store and the data folder hold.
+  const seeded = Layer.merge(
+    seedLayer(seed, workspace, shellSeed, dataDir),
+    seedRoles(options.roles)
+  );
+
+  const resumed = Layer.effectDiscard(
+    ScriptedBoot.use((boot) => boot.resume)
+  );
+
+  type Top = Layer.Layer<
+    never,
+    Layer.Error<typeof seeded>,
+    Layer.Services<typeof seeded> | Layer.Services<typeof resumed>
+  >;
+
+  const seededTop: Top = seeded;
+  const resumedTop: Top = resumed;
+
+  const life = (first: boolean) =>
+    (first ? seededTop : resumedTop).pipe(
     Layer.provideMerge(AppLayer),
     Layer.provideMerge(Harness),
     Layer.provide(ReachMachine.layerTest),
@@ -522,7 +598,7 @@ export const startCairn = async (
     Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error"))
   );
 
-  const runtime = ManagedRuntime.make(App);
+  let runtime = ManagedRuntime.make(life(true));
 
   await runtime.runPromise(Effect.void);
 
@@ -540,6 +616,12 @@ export const startCairn = async (
   return {
     origin,
     threadUrl: `${origin}/t/${PARITY_THREAD_ID}`,
+    restartBrain: async () => {
+      await runtime.dispose();
+      runtime = ManagedRuntime.make(life(false));
+      await runtime.runPromise(Effect.void);
+    },
+    threadCount: () => store.threads.size,
     stop: async () => {
       await vite.close();
       await runtime.dispose();

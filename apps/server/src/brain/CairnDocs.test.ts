@@ -412,7 +412,7 @@ describe("an answer to a record", () => {
     });
   });
 
-  it("takes answers only for questions, and Send back only for a brief", () => {
+  it("takes answers only for questions, and Send back only for a subagent's brief", () => {
     const answers = Option.some([
       { index: 0, picks: ["Postgres"], custom: null },
     ]);
@@ -465,7 +465,7 @@ describe("an answer to a record", () => {
       assert.strictEqual(misanswered.status, "pending");
     }
 
-    const brief = record({ kind: "brief" });
+    const brief = record({ kind: "brief", tool: "subagent_spawn" });
 
     assert.strictEqual(
       applyAnswer(brief, byUser("revise", Option.some("narrower")), 1500),
@@ -473,9 +473,22 @@ describe("an answer to a record", () => {
     );
     assert.strictEqual(brief.status, "revised");
 
+    // Only a subagent's brief has a parent to revise it: a workflow's launch and a node's own
+    // brief refuse Send back and stay pending.
+    for (const tool of ["workflow_plan", "agent", "verify"]) {
+      const other = record({ kind: "brief", tool });
+
+      assert.strictEqual(
+        applyAnswer(other, byUser("revise", Option.some("narrower")), 1500),
+        "refused_revise",
+        tool
+      );
+      assert.strictEqual(other.status, "pending");
+    }
+
     // Send back says what to change: no notes, or blank ones, are refused.
     for (const reason of [Option.none(), Option.some("  ")]) {
-      const unsaid = record({ kind: "brief" });
+      const unsaid = record({ kind: "brief", tool: "subagent_spawn" });
 
       assert.strictEqual(
         applyAnswer(unsaid, byUser("revise", reason), 1500),

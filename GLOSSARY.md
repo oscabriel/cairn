@@ -130,6 +130,10 @@ _Avoid_: launch brief, plan approval
 
 _Avoid_: grant (in prose), allowance
 
+**Steps panel**: What a client shows of a thread's workflows, read from the dispatch ledger on the thread stream (`WorkflowSteps.ts`): each workflow's heading and node tally, its phases with their nodes, its totals and its log. A node reads as queued, running, held, unknown, done, failed, stopped or refused; a phase is pending with no nodes, running while one is live, else done. Phases only grow.
+
+**Phase**: A named stage of a workflow, declared in its `meta` or reached at run time with `phase()`. The ledger lists phases append-only by title, and each node records the phase it ran in.
+
 **Workflow gate**: The `beforeTool` hook that lets a workflow script run only against an approved ledger row of its exact hash, rewrites it behind the prelude, and marks the code mode call (`GATE_MEMO`), so the node tools refuse every other caller.
 
 **Node watcher**: The background task (`cairn.workflow-watch`) that records a workflow node or script call that ended without settling: stopped, failed or finished. A node it records keeps a receipt of what its child used, so a stopped node's spend still counts.

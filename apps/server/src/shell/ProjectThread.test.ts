@@ -2,7 +2,8 @@
 // a folder project's first top-level thread is marked as its project thread; a refresh archives the
 // marked one and moves the mark in the same commit, idempotently by command id, and refuses when
 // the thread it names is no longer the marked one; children are created as before and leave the
-// mark alone; archiving or deleting the marked thread clears the mark; clearing a scratch thread
+// mark alone; archiving or deleting the marked thread clears the mark, and unarchiving a top-level
+// thread marks it again or is refused while another is marked; clearing a scratch thread
 // deletes it and its subagents' rows and is refused anywhere else.
 
 import { ProjectId } from "@cairn/protocol/Ids";
@@ -12,6 +13,7 @@ import {
   ThreadClear,
   ThreadDelete,
   ThreadRename,
+  ThreadUnarchive,
 } from "@cairn/protocol/ShellCommands";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Stream } from "effect";
@@ -51,6 +53,9 @@ const subagent = (
     rootThreadId: root,
   }),
 });
+
+const unarchive = (n: number, threadId: ThreadId) =>
+  ThreadUnarchive.make({ commandId: testCommandId(n), threadId });
 
 const commit = (command: ServerShellCommand) =>
   EventSink.use((sink) => sink.commitCommand(command));
@@ -354,6 +359,66 @@ describe("the project thread", () => {
           );
           assert.deepStrictEqual(yield* liveTopLevel(projectId), [
             testThreadId(3),
+          ]);
+        })
+      )
+  );
+
+  it.effect(
+    "unarchiving a top-level thread marks it again, and is refused while another is marked",
+    () =>
+      withProject((projectId) =>
+        Effect.gen(function* () {
+          yield* commit(projectThread(projectId, 1));
+          yield* commit(
+            ThreadArchive.make({
+              commandId: testCommandId(30),
+              threadId: testThreadId(1),
+            })
+          );
+          assert.deepStrictEqual(yield* markOf(projectId), Option.none());
+
+          // With no project thread, the unarchived one is the project thread again.
+          const before = yield* (yield* EventStore).latestSequence;
+
+          yield* commit(unarchive(31, testThreadId(1)));
+          assert.deepStrictEqual(
+            yield* markOf(projectId),
+            Option.some(testThreadId(1))
+          );
+          assert.deepStrictEqual(
+            (yield* eventsSince(before)).map((event) => [
+              event.type,
+              event.aggregateId,
+            ]),
+            [
+              ["thread.unarchived", testThreadId(1)],
+              ["project.updated", projectId],
+            ]
+          );
+
+          // So the next launch refreshes it instead of making a second one.
+          yield* commit(projectThread(projectId, 2));
+          assert.deepStrictEqual(yield* liveTopLevel(projectId), [
+            testThreadId(2),
+          ]);
+
+          // A thread a refresh replaced stays archived while its successor is the project thread.
+          const refused = yield* refusal(unarchive(32, testThreadId(1)));
+
+          assert.strictEqual(refused._tag, "ShellCommandInvalid");
+          assert.deepStrictEqual(
+            Predicate.isTagged(refused, "ShellCommandInvalid")
+              ? refused.field
+              : Option.none(),
+            Option.some("threadId")
+          );
+          assert.deepStrictEqual(
+            yield* markOf(projectId),
+            Option.some(testThreadId(2))
+          );
+          assert.deepStrictEqual(yield* liveTopLevel(projectId), [
+            testThreadId(2),
           ]);
         })
       )

@@ -34,7 +34,7 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Project thread**: A folder project's one long-lived thread, the one the user talks to (the user, 2026-10-29), marked on the project row (`projectThreadId`). The first launch in a project makes it; it lives on, compacted as it grows. Every top-level thread in a project comes from the first launch or a refresh.
 
-**Refresh**: Replacing a project thread with a new one: the launch that makes the new thread archives the old one and moves the mark in one commit, idempotent by its command id. The old thread's run, queue and subagents carry on; it leaves the sidebar and can still be opened.
+**Refresh**: Replacing a project thread with a new one: the launch that makes the new thread archives the old one and moves the mark in one commit, idempotent by its command id. The launch first stops the old thread's run, queue and working subagents, as an archive does; it leaves the sidebar and can still be opened, but unarchiving it is refused while another thread is the project thread. Unarchiving the project thread when the project has none marks it again.
 
 **Managed thread**: A thread whose lineage roots at a project thread (a subagent, a brief's child, a workflow node), listed under the project thread with its status. It can be opened and used fully (read, message, steer, stop, answer), though the default flow goes through the project thread.
 

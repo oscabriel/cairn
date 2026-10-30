@@ -1,6 +1,6 @@
 // Launches and the project thread (the user's decisions of 2026-10-29): the first launch in a folder
-// project marks its project thread, a later one refreshes it (the old one archived, its run left
-// alone), a refresh naming a thread that is no longer the project thread makes nothing, a scratch
+// project marks its project thread, a later one refreshes it (the old one stopped and archived), a
+// refresh naming a thread that is no longer the project thread makes nothing, a scratch
 // launch never touches a mark, and a thread the project thread manages takes every thread command.
 
 import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
@@ -116,53 +116,51 @@ const eventually = <A, E, R>(
   );
 
 describe("launching the project thread", () => {
-  it.live(
-    "the first launch marks it; a refresh archives it and leaves its run alone",
-    () =>
-      withProject((projectId) =>
-        Effect.gen(function* () {
-          const first = yield* launch(projectId, "first");
+  it.live("the first launch marks it; a refresh stops and archives it", () =>
+    withProject((projectId) =>
+      Effect.gen(function* () {
+        const first = yield* launch(projectId, "first");
 
-          assert.deepStrictEqual(
-            yield* markOf(projectId),
-            Option.some(first.threadId)
-          );
-          yield* eventually(liveState(first.threadId), isRunning);
+        assert.deepStrictEqual(
+          yield* markOf(projectId),
+          Option.some(first.threadId)
+        );
+        yield* eventually(liveState(first.threadId), isRunning);
 
-          const second = yield* launch(
-            projectId,
-            "second",
-            Option.some(first.threadId)
-          );
+        const second = yield* launch(
+          projectId,
+          "second",
+          Option.some(first.threadId)
+        );
 
-          assert.deepStrictEqual(
-            yield* markOf(projectId),
-            Option.some(second.threadId)
-          );
-          assert.isTrue(
-            Option.isSome((yield* shellOf(first.threadId)).archivedAt)
-          );
-          // Archived, not stopped: its run goes on, and it can still be opened and used.
-          assert.isTrue(isRunning(yield* liveState(first.threadId)));
+        assert.deepStrictEqual(
+          yield* markOf(projectId),
+          Option.some(second.threadId)
+        );
+        assert.isTrue(
+          Option.isSome((yield* shellOf(first.threadId)).archivedAt)
+        );
+        // Stopped as an archive stops a thread: nothing runs on out of the sidebar's sight.
+        assert.isFalse(isRunning(yield* liveState(first.threadId)));
 
-          // A launch with nothing named replaces whichever is current.
-          const third = yield* launch(projectId, "third");
+        // A launch with nothing named replaces whichever is current.
+        const third = yield* launch(projectId, "third");
 
-          assert.deepStrictEqual(
-            yield* markOf(projectId),
-            Option.some(third.threadId)
-          );
-          assert.isTrue(
-            Option.isSome((yield* shellOf(second.threadId)).archivedAt)
-          );
+        assert.deepStrictEqual(
+          yield* markOf(projectId),
+          Option.some(third.threadId)
+        );
+        assert.isTrue(
+          Option.isSome((yield* shellOf(second.threadId)).archivedAt)
+        );
 
-          yield* (yield* ModelGate).open;
+        yield* (yield* ModelGate).open;
 
-          for (const input of [first, second, third]) {
-            yield* (yield* ThreadLaunch).settled(input.threadId);
-          }
-        })
-      )
+        for (const input of [first, second, third]) {
+          yield* (yield* ThreadLaunch).settled(input.threadId);
+        }
+      })
+    )
   );
 
   it.live(
@@ -199,6 +197,19 @@ describe("launching the project thread", () => {
           assert.deepStrictEqual(
             yield* markOf(projectId),
             Option.some(second.threadId)
+          );
+
+          // A resend of the refused refresh (its answer lost to a reconnect) is refused the same way.
+          const resent = yield* Effect.flip(
+            (yield* ThreadLaunch).launch(
+              { ...stale, replaces: first.threadId },
+              "owner@test"
+            )
+          );
+
+          assert.deepStrictEqual(resent, refused);
+          assert.isTrue(
+            Option.isNone(yield* (yield* ThreadRows).get(stale.threadId))
           );
 
           for (const input of [first, second]) {

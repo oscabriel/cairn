@@ -464,7 +464,10 @@ export const commandTargets = (
     ThreadMarkUnread: threadTarget,
     ThreadSetAutoSettle: threadTarget,
     ThreadArchive: markedThreadTarget,
-    ThreadUnarchive: threadTarget,
+    ThreadUnarchive: (unarchive) => ({
+      ...markedThreadTarget(unarchive),
+      projectThread: true,
+    }),
     ThreadDelete: markedThreadTarget,
     ThreadClear: (clear) => ({
       ...markedThreadTarget(clear),
@@ -947,10 +950,67 @@ const leavingPlan = (
   );
 
 /**
+ * Brings an archived thread back. A top-level thread in a folder project comes back as its project
+ * thread, so the project keeps exactly one: marked again when the project has none live, refused
+ * when another one is (a refresh replaces the project thread; an unarchive does not).
+ */
+const unarchivePlan = (
+  command: ServerShellCommand,
+  state: ShellCommandState,
+  row: ThreadRow
+): Planned => {
+  const project = Option.filter(
+    state.project,
+    (candidate) =>
+      Option.isNone(candidate.deletedAt) &&
+      candidate.shell.kind !== "scratch" &&
+      candidate.shell.id === row.shell.projectId
+  );
+
+  if (Option.isSome(row.shell.lineage) || Option.isNone(project)) {
+    return threadPlan(row, "thread.unarchived");
+  }
+
+  const current = Option.filter(
+    state.projectThread,
+    (marked) =>
+      isLiveThread(marked) &&
+      marked.shell.id !== row.shell.id &&
+      Option.contains(project.value.shell.projectThreadId, marked.shell.id)
+  );
+
+  if (Option.isSome(current)) {
+    return invalid(
+      command,
+      "threadId",
+      `the project's thread is ${current.value.shell.id}, and a project has one. Open that one, or refresh it to start anew.`
+    );
+  }
+
+  const marked: ProjectRow = {
+    ...project.value,
+    shell: {
+      ...project.value.shell,
+      projectThreadId: Option.some(row.shell.id),
+      updatedAt: state.now,
+    },
+  };
+
+  return Result.succeed({
+    events: [
+      threadEvent(row.shell.id, "thread.unarchived"),
+      projectEvent(marked.shell.id, "project.updated"),
+    ],
+    projects: [marked],
+    threads: [row],
+  });
+};
+
+/**
  * A new top-level thread in a folder project becomes its project thread: it is marked, and the live
  * project thread it replaces (if any) is archived in the same commit, so the project never has two
- * and never none between them. The old one's run, queue and children carry on; it leaves the
- * sidebar.
+ * and never none between them. The launch stops the old one's run, queue and working children
+ * just before this commit, as an archive does; it leaves the sidebar.
  */
 const planProjectThread = (
   command: ServerShellCommand,
@@ -1397,9 +1457,10 @@ export const planShellCommand = (
               "stale_state",
               `thread ${unarchive.threadId} is not archived.`
             )
-          : threadPlan(
-              withShell(row, { archivedAt: Option.none(), updatedAt: now }),
-              "thread.unarchived"
+          : unarchivePlan(
+              command,
+              state,
+              withShell(row, { archivedAt: Option.none(), updatedAt: now })
             )
       ),
 

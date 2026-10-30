@@ -270,6 +270,14 @@ _Avoid_: plugin
 
 **Frozen round**: An approved look round recorded by `look.ts freeze <n>` in `judges/look/frozen/round-<n>.json`: the hash of `next/tokens.css` and each shot's hash and fingerprint (16 px cell means). `look.ts check` fails when the tokens or a shot drift from the newest frozen round, and `judges/look.test.ts` fails on the tokens in `pnpm check`, so changing an approved look needs a new round. _Avoid_: baseline alone (the parity baseline is t3code's).
 
+**Shell (next)**: The `next` views' frame around the page (`next/shell`, look track L6): the project rail and the selected project's list at the left (a sheet on a phone), the chat header and the hold banner. The list shows the project's project thread on top and under it the threads it manages, newest first, each with its status mark from the one thread-state function; there are no Active, Settled, Pinned or Snoozed groups and no inbox. Its foot holds Usage and Settings, with no meters.
+
+**Project rail**: The shell's column of project bubbles: one squircle with a low corner radius per folder project, filled edge to edge by the project's favicon (found in the project's root as t3code finds it, served at `/api/projects/<id>/favicon`) or showing its first letter, with a mark when a thread in the project needs the user or is working. A bubble opens its project's project thread, or, when it has none, a new draft in that project whose first message starts it. _Avoid_: inbox.
+
+**Scratch overlay**: The floating panel over any page that holds the scratch thread: Cmd+J or Ctrl+J shows and hides it without losing it (a header button on a phone), and shown, it takes the keyboard; its first message launches the scratch thread, and Clear deletes the thread and its folder.
+
+**Usage page**: `/usage`, opened from the shell's foot: where spend and the plan windows will show; a placeholder until the meters land.
+
 **Measured list**: The transcript's own scroll list (`timeline/list`, ADR 0041). A row counts in the scroll range only once it has been measured (history it never drew is measured off-screen first), parked rows keep frozen heights, the first visible row keeps its offset through any change above it, and a glyph bookmark keeps the reader's place through width changes. _Avoid_: virtual list (that was `@foldkit/ui`'s, which estimated heights).
 
 **Hold**: What keeps an open thread from moving on without the user: a parked task (with Retry), a turn waiting for a Claude slot, or a plan's spent usage limit (Limited): a Claude plan window, a Codex limit or OpenCode Go's.

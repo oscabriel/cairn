@@ -46,6 +46,14 @@ import {
 } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
 import type { Flags, Model, SentTurn } from "./Model.ts";
+import { OutMessage as NextShellOutMessage } from "./next/shell/Message.ts";
+import type { Message as NextShellMessage } from "./next/shell/Message.ts";
+import { initial as initialNextShell } from "./next/shell/Model.ts";
+import type {
+  Model as NextShellModel,
+  ShellContext as NextShellContext,
+} from "./next/shell/Model.ts";
+import { loadedShell } from "./next/shell/ShellLoad.ts";
 import * as Thread from "./page/thread/index.ts";
 import { pushContextOf, samePushContext } from "./push/Context.ts";
 import { OutMessage as PushOutMessage } from "./push/Message.ts";
@@ -102,6 +110,7 @@ const routedThreadId = (route: AppRoute): Option.Option<ThreadId> =>
     Thread: ({ threadId }) => decodeThreadId(threadId),
     Draft: () => Option.none(),
     Settings: () => Option.none(),
+    Usage: () => Option.none(),
     NotFound: () => Option.none(),
   });
 
@@ -260,6 +269,7 @@ const routedDraftId = (route: AppRoute): Option.Option<string> =>
     Thread: () => Option.none(),
     Draft: ({ draftId }) => Option.some(draftId),
     Settings: () => Option.none(),
+    Usage: () => Option.none(),
     NotFound: () => Option.none(),
   });
 
@@ -705,6 +715,177 @@ const followLaunches: Step = (model) =>
     },
   });
 
+const toGotNextShellMessage = (message: NextShellMessage): Message =>
+  Message.GotNextShellMessage({ message });
+
+const readNextShell = (model: Model): Option.Option<NextShellModel> =>
+  Option.some(model.nextShell);
+
+const writeNextShell = (model: Model, nextShell: NextShellModel): Model =>
+  nextShell === model.nextShell
+    ? model
+    : modifyFields(model, { nextShell: () => nextShell });
+
+/**
+ * What the `next` shell hands up: an item for the outbox (and where to go), a path to open, or a
+ * new draft in the project the rail picked.
+ */
+const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
+  NextShellOutMessage.match<Step>(outMessage, {
+    RequestedOutbox:
+      ({ item, navigateTo }) =>
+      (model) =>
+        Update.combine(
+          modifyFields(model, { outbox: (outbox) => enqueue(outbox, item) }),
+          [
+            persist,
+            sendNext,
+            (next) => ({
+              model: next,
+              commands: Option.match(navigateTo, {
+                onNone: () => [],
+                onSome: (url) => [NavigateInternal({ url })],
+              }),
+            }),
+          ]
+        ),
+    RequestedNavigate:
+      ({ url }) =>
+      (model) => ({ model, commands: [NavigateInternal({ url })] }),
+    // The draft holds its project before its page opens, so the hero launches where the rail says.
+    RequestedProjectDraft:
+      ({ projectId, draftId }) =>
+      (model) => ({
+        model: writeComposer(
+          model,
+          Composer.pickDraftProject(model.composer, draftId, projectId)
+        ),
+        commands: [NavigateInternal({ url: draftRouter({ draftId }) })],
+      }),
+  });
+
+/** The shell's update, once its chunk has loaded; no shell Message can come before. */
+const updateNextShell = (shell: NextShellModel, message: NextShellMessage) =>
+  Option.match(loadedShell(), {
+    onNone: () => ({ model: shell }),
+    onSome: (runtime) => runtime.update(shell, message),
+  });
+
+/** Tells the shell the root's context: through its update once loaded, else only the context. */
+const informNextShellModel = (
+  shell: NextShellModel,
+  context: NextShellContext
+) =>
+  Option.match(loadedShell(), {
+    onNone: () => ({
+      model: modifyFields(shell, { context: () => context }),
+    }),
+    onSome: (runtime) => runtime.inform(shell, context),
+  });
+
+const foldNextShellMessage = Update.foldChild({
+  update: updateNextShell,
+  read: readNextShell,
+  write: writeNextShell,
+  toParentMessage: toGotNextShellMessage,
+  foldOutMessage: foldNextShellOutMessage,
+});
+
+const informNextShell = Update.foldChild({
+  update: informNextShellModel,
+  read: readNextShell,
+  write: writeNextShell,
+  toParentMessage: toGotNextShellMessage,
+});
+
+/** Tells the `next` shell the shell, the route, the connection and the clock, when they changed. */
+const syncNextShell: Step = (model) => {
+  const current = model.nextShell.context;
+
+  const context: NextShellContext = {
+    shell: model.shell,
+    route: model.route,
+    hasClient: hasClient(model.connection),
+    defaults: Option.map(model.hello, (hello) => hello.defaults),
+    nowMs: model.sidebar.nowMs,
+    isMac: model.sidebar.isMac,
+  };
+
+  // The first update after the chunk loads starts the shell, even with nothing new to tell.
+  const unchanged =
+    (model.nextShell.started || Option.isNone(loadedShell())) &&
+    current.shell === context.shell &&
+    Equal.equals(current.route, context.route) &&
+    current.hasClient === context.hasClient &&
+    Equal.equals(current.defaults, context.defaults) &&
+    current.nowMs === context.nowMs &&
+    current.isMac === context.isMac;
+
+  return unchanged ? { model } : informNextShell(model, context);
+};
+
+const toGotScratchThreadMessage = (message: Thread.Message): Message =>
+  Message.GotScratchThreadMessage({ message });
+
+const readScratchThread = (model: Model): Option.Option<Thread.Model.Model> =>
+  Option.some(model.scratchThread);
+
+const writeScratchThread = (
+  model: Model,
+  scratchThread: Thread.Model.Model
+): Model => modifyFields(model, { scratchThread: () => scratchThread });
+
+const informScratchThread = Update.foldChild({
+  update: Thread.inform,
+  read: readScratchThread,
+  write: writeScratchThread,
+  toParentMessage: toGotScratchThreadMessage,
+});
+
+/** The scratch thread page's Messages; a Retry from its transcript joins the outbox. */
+const foldScratchThreadMessage = Update.foldChild({
+  update: Thread.update,
+  read: readScratchThread,
+  write: writeScratchThread,
+  toParentMessage: toGotScratchThreadMessage,
+  foldOutMessage: (out: Thread.OutMessage) =>
+    Thread.OutMessage.match<Step>(out, {
+      RequestedSend:
+        ({ item }) =>
+        (model) =>
+          Update.combine(
+            modifyFields(model, {
+              outbox: (outbox) => enqueue(outbox, item),
+            }),
+            [persist, sendNext]
+          ),
+    }),
+});
+
+/**
+ * Tells the scratch thread's page which thread the `next` shell's overlay shows: its scratch thread
+ * while the overlay is open, none while it is hidden, so a hidden overlay holds no stream.
+ */
+const syncScratchThread: Step = (model) => {
+  const { scratch } = model.nextShell;
+  const threadId = scratch.isOpen ? scratch.threadId : Option.none();
+
+  const context: Thread.PageContext = {
+    threadId,
+    epoch: model.connection.epoch,
+    hasClient: hasClient(model.connection),
+    launching: Option.exists(threadId, (id) => isLaunching(model, id)),
+  };
+
+  const unchanged =
+    Equal.equals(model.scratchThread.threadId, context.threadId) &&
+    model.scratchThread.epoch === context.epoch &&
+    model.scratchThread.hasClient === context.hasClient &&
+    model.scratchThread.launching === context.launching;
+
+  return unchanged ? { model } : informScratchThread(model, context);
+};
+
 const step = (received: Message): Step =>
   Message.match<Step>(received, {
     ClickedLink:
@@ -903,6 +1084,14 @@ const step = (received: Message): Step =>
       ({ message: parkedMessage }) =>
       (model) =>
         foldParkedMessage(model, parkedMessage),
+    GotNextShellMessage:
+      ({ message: nextShellMessage }) =>
+      (model) =>
+        foldNextShellMessage(model, nextShellMessage),
+    GotScratchThreadMessage:
+      ({ message: scratchMessage }) =>
+      (model) =>
+        foldScratchThreadMessage(model, scratchMessage),
     LoadedSettingsPage: () => (model) => ({
       model: modifyFields(model, { settingsPage: () => "loaded" as const }),
     }),
@@ -923,6 +1112,8 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncPush,
     syncSettings,
     syncParked,
+    syncNextShell,
+    syncScratchThread,
     loadSettingsPage,
   ]);
 };
@@ -952,6 +1143,8 @@ export const init: Runtime.RoutingApplicationInit<
       push: initialPush,
       settings: initialSettings,
       parked: Parked.initial,
+      nextShell: initialNextShell,
+      scratchThread: Thread.Model.initial,
       settingsPage: "idle",
     }),
     toParentMessage: toGotComposerMessage,
@@ -967,6 +1160,8 @@ export const init: Runtime.RoutingApplicationInit<
     startSettings,
     syncSettings,
     syncParked,
+    syncNextShell,
+    syncScratchThread,
     loadSettingsPage,
   ]);
 

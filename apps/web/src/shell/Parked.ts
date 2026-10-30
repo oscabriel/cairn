@@ -60,6 +60,10 @@ export const Message = defineMessageUnion({
 
 export type Message = typeof Message.Type;
 
+/** The banner's Retry for the parked task `taskId` of `threadId`, for any view of the banner. */
+export const retryMessage = (threadId: ThreadId, taskId: TaskId): Message =>
+  Message.ClickedRetry({ threadId, taskId });
+
 /** Asks the brain to run a parked task again, through `client`. */
 export const retryParkedTask = (
   client: Pick<CairnClient, "thread.retryTask">,

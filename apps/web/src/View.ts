@@ -66,12 +66,46 @@ const sidebarLazy = createLazy();
 
 const headerLazy = createLazy();
 
-// One slot per place the composer is drawn: a cached view belongs to one position in the tree.
+/**
+ * The cached views the page draws through. A cached view belongs to one position in the tree, so
+ * the composer has one slot per place it is drawn; and the `next` frame has slots of its own, since
+ * it places the same views elsewhere, and a cached view moved to another position would take its
+ * Submodels' registrations with it when the old position is torn down.
+ */
+interface PageLazies {
+  readonly header: ReturnType<typeof createLazy>;
+  readonly pageComposer: ReturnType<typeof createLazy>;
+  readonly dockedComposer: ReturnType<typeof createLazy>;
+  readonly threadPage: ReturnType<typeof createLazy>;
+}
+
 const pageComposerLazy = createLazy();
 
 const dockedComposerLazy = createLazy();
 
 const threadPageLazy = createLazy();
+
+const nextHeaderLazy = createLazy();
+
+const nextPageComposerLazy = createLazy();
+
+const nextDockedComposerLazy = createLazy();
+
+const nextThreadPageLazy = createLazy();
+
+const classicLazies: PageLazies = {
+  header: headerLazy,
+  pageComposer: pageComposerLazy,
+  dockedComposer: dockedComposerLazy,
+  threadPage: threadPageLazy,
+};
+
+const nextLazies: PageLazies = {
+  header: nextHeaderLazy,
+  pageComposer: nextPageComposerLazy,
+  dockedComposer: nextDockedComposerLazy,
+  threadPage: nextThreadPageLazy,
+};
 
 /**
  * The thread page. Its inputs arrive as plain strings ("" for none) so the lazy view compares them
@@ -165,6 +199,18 @@ const headerThreadOf = (thread: Thread.Model.Model): Thread.Model.Model => {
   return thread;
 };
 
+/** The thread page's header controls (the diff toggle), as the root embeds them. */
+const threadHeaderControls = (
+  h: HtmlBuilder<Message>,
+  thread: Thread.Model.Model
+): Html =>
+  h.submodel({
+    slotId: "thread-header-controls",
+    model: thread,
+    view: Thread.headerControls,
+    toParentMessage: (message) => Message.GotThreadMessage({ message }),
+  });
+
 /** The chat header over a thread: its project crumb (none when empty), its title and controls. */
 const threadHeader = (
   h: HtmlBuilder<Message>,
@@ -182,31 +228,62 @@ const threadHeader = (
             onClick: Option.none(),
           }),
     title,
-    controls: [
-      h.submodel({
-        slotId: "thread-header-controls",
-        model: thread,
-        view: Thread.headerControls,
-        toParentMessage: (message) => Message.GotThreadMessage({ message }),
-      }),
-    ],
+    controls: [threadHeaderControls(h, thread)],
   });
 
-const page = (model: Model, h: HtmlBuilder<Message>): Html =>
+/** The routed thread's transcript, in the wrapper that leaves the scrolling to it. */
+const threadBody = (
+  model: Model,
+  h: HtmlBuilder<Message>,
+  threadId: string,
+  lazies: PageLazies
+): Html => {
+  const failure = launchFailureOf(model, threadId);
+  const row = threadRowOf(model.shell, threadId);
+
+  const project = Option.flatMap(row, (thread) =>
+    projectOf(model.shell, thread)
+  );
+
+  // The thread's working directory: its worktree, else its project's workspace root.
+  const workspaceRoot = Option.orElse(
+    Option.flatMap(row, (thread) => thread.worktreePath),
+    () => Option.map(project, ({ workspaceRoot: root }) => root)
+  );
+
+  // The transcript scrolls itself, so this wrapper must not.
+  return h.div(
+    [h.Class("flex min-h-0 flex-1 flex-col")],
+    [
+      lazies.threadPage(threadPage, [
+        h,
+        model.thread,
+        Option.getOrElse(workspaceRoot, () => ""),
+        Option.match(failure, {
+          onNone: () => "",
+          onSome: ({ message }) => message,
+        }),
+        Option.getOrElse(
+          Option.flatMap(failure, ({ retryUrl }) => retryUrl),
+          () => ""
+        ),
+      ]),
+    ]
+  );
+};
+
+const page = (
+  model: Model,
+  h: HtmlBuilder<Message>,
+  lazies: PageLazies
+): Html =>
   AppRoute.match(model.route, {
-    Hero: () => pageComposerLazy(composerView, [h, model.composer]),
+    Hero: () => lazies.pageComposer(composerView, [h, model.composer]),
     Thread: ({ threadId }) => {
-      const failure = launchFailureOf(model, threadId);
       const row = threadRowOf(model.shell, threadId);
 
       const project = Option.flatMap(row, (thread) =>
         projectOf(model.shell, thread)
-      );
-
-      // The thread's working directory: its worktree, else its project's workspace root.
-      const workspaceRoot = Option.orElse(
-        Option.flatMap(row, (thread) => thread.worktreePath),
-        () => Option.map(project, ({ workspaceRoot: root }) => root)
       );
 
       return h.div(
@@ -216,7 +293,7 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
           h.Class(`relative ${CHAT_COLUMN_CLASS}`),
         ],
         [
-          headerLazy(threadHeader, [
+          lazies.header(threadHeader, [
             h,
             Option.getOrElse(
               Option.map(project, ({ title }) => title),
@@ -234,30 +311,12 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
             view: parkedView,
             toParentMessage: (message) => Message.GotParkedMessage({ message }),
           }),
-          // The transcript scrolls itself, so this wrapper must not.
-          h.div(
-            [h.Class("flex min-h-0 flex-1 flex-col")],
-            [
-              threadPageLazy(threadPage, [
-                h,
-                model.thread,
-                Option.getOrElse(workspaceRoot, () => ""),
-                Option.match(failure, {
-                  onNone: () => "",
-                  onSome: ({ message }) => message,
-                }),
-                Option.getOrElse(
-                  Option.flatMap(failure, ({ retryUrl }) => retryUrl),
-                  () => ""
-                ),
-              ]),
-            ]
-          ),
-          dockedComposerLazy(composerView, [h, model.composer]),
+          threadBody(model, h, threadId, lazies),
+          lazies.dockedComposer(composerView, [h, model.composer]),
         ]
       );
     },
-    Draft: () => pageComposerLazy(composerView, [h, model.composer]),
+    Draft: () => lazies.pageComposer(composerView, [h, model.composer]),
     Settings: () =>
       Option.match(loadedSettingsView(), {
         onNone: () => settingsPlaceholder(h, model.settingsPage === "failed"),
@@ -280,6 +339,8 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
               Message.GotSettingsMessage({ message }),
           }),
       }),
+    // Only the `next` views draw the usage page; classic shows what it showed before the route.
+    Usage: () => placeholder(h, "Nothing lives at /usage."),
     NotFound: ({ path }) => placeholder(h, `Nothing lives at ${path}.`),
   });
 
@@ -332,7 +393,7 @@ const classicView = (model: Model, h: HtmlBuilder<Message>): Document => ({
             "relative flex min-w-0 w-full flex-1 flex-col bg-background text-foreground surface-grain h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
           ),
         ],
-        [noticeBar(model, h), page(model, h)]
+        [noticeBar(model, h), page(model, h, classicLazies)]
       ),
     ]
   ),
@@ -351,6 +412,20 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document =>
         sidebarState: sidebarState(model.sidebar),
         sidebar: () => sidebarLazy(sidebar, [h, model.sidebar]),
         notice: () => noticeBar(model, h),
-        page: () => page(model, h),
+        page: () => page(model, h, nextLazies),
+        thread: () =>
+          AppRoute.match(model.route, {
+            Thread: ({ threadId }) =>
+              threadBody(model, h, threadId, nextLazies),
+            Hero: () => h.empty,
+            Draft: () => h.empty,
+            Settings: () => h.empty,
+            Usage: () => h.empty,
+            NotFound: () => h.empty,
+          }),
+        threadControls: () =>
+          threadHeaderControls(h, headerThreadOf(model.thread)),
+        composer: () =>
+          nextLazies.dockedComposer(composerView, [h, model.composer]),
       }),
   });

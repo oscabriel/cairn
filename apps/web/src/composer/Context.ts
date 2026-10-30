@@ -111,6 +111,7 @@ export const composerTarget = (
         onSome: (id) => ComposerTarget.Thread({ threadId: id }),
       }),
     Settings: () => ComposerTarget.None(),
+    Usage: () => ComposerTarget.None(),
     NotFound: () => ComposerTarget.None(),
   });
 

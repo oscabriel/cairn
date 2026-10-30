@@ -16,6 +16,7 @@ import {
 } from "@cairn/client-logic/ComposerTrigger";
 import { resolveRestingComposerControlsLayout } from "@cairn/client-logic/FooterLayout";
 import type { AttachmentRef } from "@cairn/protocol/Attachments";
+import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { Array, Equal, Option, Predicate, Record } from "effect";
 import type { Schema } from "effect";
@@ -101,6 +102,38 @@ export const discardDraft = (
     commands: Command.mapMessages(tray.commands, toTray),
   };
 };
+
+/**
+ * Gives the draft `/new/<draftId>` the project its first message launches in (the `next` shell's
+ * rail, for a project with no project thread yet). An empty draft starts over with that project's
+ * default model, as the hero's project menu does. The debounced saver writes the change.
+ */
+export const pickDraftProject = (
+  model: Model,
+  draftId: string,
+  projectId: ProjectId
+): Model =>
+  modifyFields(model, {
+    drafts: (drafts) => {
+      const key = `draft:${draftId}`;
+
+      const current = Option.getOrElse(
+        Record.get(drafts, key),
+        () => emptyDraft
+      );
+
+      const isEmptyDraft =
+        current.text.length === 0 && current.attachments.length === 0;
+
+      return Record.set(drafts, key, {
+        ...current,
+        projectId: Option.some(projectId),
+        model: isEmptyDraft ? Option.none() : current.model,
+        baseBranch: Option.none(),
+      });
+    },
+    draftsVersion: (version) => version + 1,
+  });
 
 /**
  * Puts a turn that did not reach the brain back into the draft at `key`: its settings when the draft

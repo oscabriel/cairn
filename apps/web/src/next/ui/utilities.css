@@ -14,3 +14,6 @@
 @source not "./catalogue";
 @source not "./**/*.test.ts";
 @source not "./SceneFixture.ts";
+/* Prose in comments ("hidden from assistive technology") would build a bare `hidden`, which this
+ * later stylesheet would let win over the classic regions' `md:block` inside the next frame. */
+@source not inline("hidden");

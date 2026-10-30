@@ -11,6 +11,7 @@ import { UrlRequest } from "foldkit/navigation";
 import { Message as ComposerMessage } from "./composer/Message.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import { Message as RequestCardMessage } from "./next/card/Message.ts";
+import { Message as MetersMessage } from "./next/meters/Message.ts";
 import { Message as NextShellMessage } from "./next/shell/Message.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Message as PushMessage } from "./push/Message.ts";
@@ -72,6 +73,7 @@ export const Message = defineMessageUnion({
   /** A Message of the scratch thread's page, inside the `next` shell's overlay. */
   GotScratchThreadMessage: { message: Thread.Message },
   GotRequestCardMessage: { message: RequestCardMessage },
+  GotMetersMessage: { message: MetersMessage },
   /** The settings page's view chunk loaded. */
   LoadedSettingsPage: {},
   /** The settings page's view chunk could not be fetched. */

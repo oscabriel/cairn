@@ -14,6 +14,7 @@ import { retryDraftId } from "./composer/Update.ts";
 import * as Composer from "./composer/View.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
+import type { PageSlots } from "./next/Frame.ts";
 import { nextFrameOf } from "./next/FrameLoad.ts";
 import * as Thread from "./page/thread/index.ts";
 import { view as pushView } from "./push/View.ts";
@@ -281,10 +282,16 @@ const threadBody = (
   );
 };
 
+/** What the `next` frame draws inside a classic page; nothing in the classic views. */
+const classicSlots = (h: HtmlBuilder<Message>): PageSlots => ({
+  roleTable: () => h.empty,
+});
+
 const page = (
   model: Model,
   h: HtmlBuilder<Message>,
-  lazies: PageLazies
+  lazies: PageLazies,
+  slots: PageSlots
 ): Html =>
   AppRoute.match(model.route, {
     Hero: () => lazies.pageComposer(composerView, [h, model.composer]),
@@ -343,6 +350,7 @@ const page = (
                   toParentMessage: (message) =>
                     Message.GotPushMessage({ message }),
                 }),
+              roleTable: slots.roleTable,
             },
             toParentMessage: (message) =>
               Message.GotSettingsMessage({ message }),
@@ -402,7 +410,7 @@ const classicView = (model: Model, h: HtmlBuilder<Message>): Document => ({
             "relative flex min-w-0 w-full flex-1 flex-col bg-background text-foreground surface-grain h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
           ),
         ],
-        [noticeBar(model, h), page(model, h, classicLazies)]
+        [noticeBar(model, h), page(model, h, classicLazies, classicSlots(h))]
       ),
     ]
   ),
@@ -421,7 +429,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document =>
         sidebarState: sidebarState(model.sidebar),
         sidebar: () => sidebarLazy(sidebar, [h, model.sidebar]),
         notice: () => noticeBar(model, h),
-        page: () => page(model, h, nextLazies),
+        page: (slots) => page(model, h, nextLazies, slots),
         thread: () =>
           AppRoute.match(model.route, {
             Thread: ({ threadId }) =>

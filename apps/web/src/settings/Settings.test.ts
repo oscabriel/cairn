@@ -141,7 +141,10 @@ const loaded: Model = {
   }),
 };
 
-const sceneView = Scene.withViewInputs(view, { notifications: () => null });
+const sceneView = Scene.withViewInputs(view, {
+  notifications: () => null,
+  roleTable: () => null,
+});
 
 const config = { update, view: sceneView() };
 

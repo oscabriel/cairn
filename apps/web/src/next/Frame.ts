@@ -16,11 +16,23 @@ import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
+import { usageRouter } from "../Route.ts";
 import { view as requestCardView } from "./card/View.ts";
+import { view as rolesView } from "./meters/RolesView.ts";
+import { view as usageView } from "./meters/UsageView.ts";
 import { layout } from "./shell/Layout.ts";
 
 /** The request card's update and root hooks, held by `FrameLoad.ts` once this chunk loads. */
 export { requestCard } from "./card/Update.ts";
+
+/** The meters' update and root hooks, held by `FrameLoad.ts` once this chunk loads (plan 6G). */
+export { meters } from "./meters/Update.ts";
+
+/** What the `next` frame draws inside a page the classic views still draw. */
+export interface PageSlots {
+  /** The role table, after the settings page's models section (plan 6G). */
+  readonly roleTable: () => Html;
+}
 
 /**
  * The regions the classic views draw, handed to the frame until `next` draws its own. Each is a
@@ -33,8 +45,8 @@ export interface Regions {
   readonly sidebar: () => Html;
   /** The notice bar above the page; empty when there is no notice. */
   readonly notice: () => Html;
-  /** The routed page: hero, thread, draft, settings or not found. */
-  readonly page: () => Html;
+  /** The routed page: hero, draft, settings or not found, with the frame's slots in it. */
+  readonly page: (slots: PageSlots) => Html;
   /** The routed thread's transcript, without the classic header and hold banner. */
   readonly thread: () => Html;
   /** The thread page's header controls (the diff toggle). */
@@ -43,6 +55,8 @@ export interface Regions {
   readonly composer: () => Html;
 }
 
+type H = HtmlBuilder<Message>;
+
 /**
  * The composer's lane under an open thread: the request card (plan 6A), then the composer, which
  * gives the card its slot on the phone while a request shows (`next/card/card.css`). Siblings, so
@@ -50,7 +64,7 @@ export interface Regions {
  */
 const composerLane = (
   model: Model,
-  h: HtmlBuilder<Message>,
+  h: H,
   regions: Regions
 ): ReadonlyArray<Html> => [
   h.submodel({
@@ -62,18 +76,34 @@ const composerLane = (
   regions.composer(),
 ];
 
+/** The role table, drawn in the settings page's slot (plan 6G). */
+const roleTable = (model: Model, h: H): Html =>
+  h.submodel({
+    slotId: "role-table",
+    model: model.meters,
+    view: rolesView,
+    viewInputs: { usageHref: usageRouter() },
+    toParentMessage: (message) => Message.GotMetersMessage({ message }),
+  });
+
+/** The usage page at `/usage` (plan 6G), opened from the shell's foot. */
+const usagePage = (model: Model, h: H): Html =>
+  h.submodel({
+    slotId: "usage-page",
+    model: model.meters,
+    view: usageView,
+    toParentMessage: (message) => Message.GotMetersMessage({ message }),
+  });
+
 /** The app drawn with the `next` views, over the same Model as the classic ones. */
-export const view = (
-  model: Model,
-  h: HtmlBuilder<Message>,
-  regions: Regions
-): Document => ({
+export const view = (model: Model, h: H, regions: Regions): Document => ({
   title: "Cairn",
   body: layout(model, h, {
     notice: regions.notice,
-    page: regions.page,
+    page: () => regions.page({ roleTable: () => roleTable(model, h) }),
     thread: regions.thread,
     threadControls: regions.threadControls,
     composerLane: () => composerLane(model, h, regions),
+    usage: () => usagePage(model, h),
   }),
 });

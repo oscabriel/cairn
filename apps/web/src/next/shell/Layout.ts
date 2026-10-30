@@ -20,7 +20,6 @@ import type { Message as ShellMessage } from "./Message.ts";
 import { scratchBody, scratchPanel } from "./Scratch.ts";
 import { registerShell } from "./ShellLoad.ts";
 import { inform, update } from "./Update.ts";
-import { usagePage } from "./Usage.ts";
 import * as Shell from "./View.ts";
 
 // The root runs the shell's update through `ShellLoad.ts`, from now on.
@@ -32,6 +31,8 @@ export interface ShellRegions {
   readonly notice: () => Html;
   /** The routed page for the hero, a draft, settings and not found. */
   readonly page: () => Html;
+  /** The usage page (`/usage`, plan 6G). */
+  readonly usage: () => Html;
   /** The open thread's transcript. */
   readonly thread: () => Html;
   /** The thread page's header controls (the diff toggle). */
@@ -96,7 +97,7 @@ const routeBody = (
   }
 
   if (Predicate.isTagged(model.route, "Usage")) {
-    return [header(h, model, []), usagePage(h)];
+    return [header(h, model, []), regions.usage()];
   }
 
   return [header(h, model, []), regions.page()];
@@ -136,6 +137,8 @@ const scratch = (h: H, model: Model): Html => {
               viewInputs: {
                 workspaceRoot: Option.none(),
                 launchFailure: Option.none(),
+                // The scratch thread has no subagent rows: it spawns none worth a row (plan 6C).
+                subagents: Option.none(),
               },
               toParentMessage: (message) =>
                 Message.GotScratchThreadMessage({ message }),

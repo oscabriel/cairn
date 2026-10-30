@@ -37,9 +37,13 @@ import type { Model } from "./Model.ts";
 import { formatDayTime, formatUsed } from "./Time.ts";
 import { modelValue } from "./Update.ts";
 
-/** What the root passes in: the push toggle, built in the root's boundary. */
+/**
+ * What the root passes in, built in the root's boundary: the push toggle, and the role table the
+ * `next` views draw after the models section (plan 6G; empty in the classic views).
+ */
 export interface SettingsViewInputs {
   readonly notifications: () => Html;
+  readonly roleTable: () => Html;
 }
 
 type H = HtmlBuilder<Message>;
@@ -876,6 +880,7 @@ export const view = Submodel.defineView<Model, Message, SettingsViewInputs>(
           appearanceSection(model, h),
           notificationsSection(inputs, h),
           modelsSection(model, h),
+          inputs.roleTable(),
           skillsSection(model, h),
           executorSection(model, h),
         ]),

@@ -12,6 +12,7 @@ import { OutboxItem } from "./connection/Outbox.ts";
 import { ConnectionState } from "./connection/Reconnect.ts";
 import type { Model } from "./Model.ts";
 import * as RequestCard from "./next/card/Model.ts";
+import * as Meters from "./next/meters/Model.ts";
 import * as NextShell from "./next/shell/Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import * as Push from "./push/Model.ts";
@@ -47,6 +48,7 @@ export const connectingModel: Model = {
   nextShell: NextShell.initial,
   scratchThread: Thread.Model.initial,
   requestCard: RequestCard.initial,
+  meters: Meters.initial,
   settingsPage: "idle",
 };
 

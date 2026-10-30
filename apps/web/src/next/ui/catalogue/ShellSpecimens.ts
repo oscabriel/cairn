@@ -44,7 +44,6 @@ import {
   shellModelOn,
 } from "../../shell/ShellFixtures.ts";
 import { sidebarList } from "../../shell/Sidebar.ts";
-import { usagePage } from "../../shell/Usage.ts";
 import {
   headerContentOf,
   railBubblesOf,
@@ -250,13 +249,6 @@ const DRAWS: ReadonlyArray<{
           ),
         ]
       ),
-  },
-  {
-    state: "usage",
-    caption: "The usage page, until its meters land",
-    model: shellModelOn(AppRoute.Usage()),
-    draw: (_model, h) =>
-      h.div([h.Class(classNames(BOX, "h-72 w-full flex-col"))], [usagePage(h)]),
   },
 ];
 

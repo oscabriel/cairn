@@ -2473,3 +2473,7 @@ code {
 /* Cairn: the request card (next/card) builds its own utilities into the `next` chunk the same way,
  * through next/card/card.css. */
 @source not "./next/card";
+
+/* Cairn: the meters (next/meters: the usage page and the role table) build their own utilities into
+ * the `next` chunk the same way, through next/meters/meters.css. */
+@source not "./next/meters";

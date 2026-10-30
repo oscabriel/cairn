@@ -8,8 +8,9 @@
 // default selections"), so the registered tool cannot carry any one child's schema. Instead:
 //
 // - The tool is `deferred`, so a thread is offered it only when its spawn adds it to `modelTools`
-//   (`offerResultTool`); a thread the user opened never sees it. It is callable by the model alone
-//   (`callers`), so neither a code mode script nor another tool can reach it as a nested call.
+//   (`offerResultTool`); a thread the user opened never sees it. Only the model's own call counts:
+//   a nested call (a code mode script, another tool) is refused with words that send it to a
+//   direct call, keeping nothing and using no attempt.
 // - Its registered parameters accept any object, so every call reaches `execute`, which validates
 //   against the child's own schema (`cairn.child`'s `resultSchema`). That is also what lets the cap
 //   hold: pi-durable runs `beforeTool` only after its own validation, so a cap in a hook would never
@@ -116,6 +117,13 @@ export const ResultToolText = {
     "A result was already accepted; this call changes nothing. Your work on this brief is done.",
   /** A call past the cap. */
   capped: `submit_result: ${CAP_TEXT}`,
+  /**
+   * A call from a code mode script or another tool: refused before anything is read or kept, so
+   * it uses no attempt (attempts are counted from the transcript, which a nested call never
+   * enters), and worded so a script's author calls the tool directly instead.
+   */
+  nested:
+    "submit_result cannot run inside a code mode script or another tool. End the script and call submit_result yourself, as a direct tool call, with your result and its divergence from the brief.",
   /** A refused value, with pi-ai's error lines and what to do next. */
   rejected: (attempt: number, errors: string) =>
     `submit_result rejected (attempt ${String(attempt)} of ${String(MAX_RESULT_ATTEMPTS)}):\n${errors}\n${attempt < MAX_RESULT_ATTEMPTS ? "Fix these and call submit_result again." : CAP_TEXT}`,
@@ -742,10 +750,13 @@ export const RESULT_TOOL = defineTool({
   constrainedSampling: { type: "json_schema", strict: "prefer" },
   replay: "safe",
   deferred: true,
-  // Only the model may call it. Code mode's `tools.<name>` covers every tool callable by tools,
-  // and a nested call's result goes to its caller, never the transcript: it would escape the
-  // attempt count, and pi-durable drops a nested call's `control.terminate`.
-  callers: ["model"],
+  // Only the model's own call is kept. A nested call's result goes to its caller, never the
+  // transcript, so it would escape the attempt count, and pi-durable drops its
+  // `control.terminate`; such a call is refused in `execute` with `ResultToolText.nested`. It is
+  // still callable by tools, so a code mode script that looks for it (`searchTools()`, a deferred
+  // tool) finds it and is told to call it directly, instead of concluding it is not there and ending
+  // without a result (J-typed's one miss on gpt-6-luna, twice).
+  callers: ["model", "tools"],
   structuredOutputSchema: Type.Object({
     result: Type.Unknown(),
     divergence: Type.String(),
@@ -765,6 +776,16 @@ export const RESULT_TOOL = defineTool({
     return (Option.getOrUndefined(parsed) ?? args) as JsonObject;
   },
   execute: async (args, api, context) => {
+    // A nested call's id is `<callId>/<key>` (pi-durable's `executeTool`). A script reads a schema
+    // tool's error from its diagnostics, so the refusal is one too.
+    if (api.callId.includes("/")) {
+      return {
+        output: text(ResultToolText.nested),
+        isError: true,
+        diagnostics: [{ severity: "error", message: ResultToolText.nested }],
+      };
+    }
+
     const child = await api.snapshot(ChildDoc, api.conversationId, context);
 
     const schema = resultSchemaOf(child);

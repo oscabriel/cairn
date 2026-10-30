@@ -177,6 +177,17 @@ export interface ApprovalAnswerInput {
   readonly answers: Option.Option<ReadonlyArray<QuestionAnswer>>;
 }
 
+/**
+ * A pending approval as `inspect` reads it from the thread's records: its kind and when it was
+ * asked, so a row reconciled at boot names it rightly even when its event was lost to a crash.
+ */
+export interface PendingApproval {
+  readonly id: ApprovalId;
+  readonly kind: RuntimeRequestKind;
+  /** Epoch milliseconds. */
+  readonly askedAt: number;
+}
+
 /** A thread whose run, queue, approval or task needs attention at boot. */
 export interface LiveThreadState {
   readonly threadId: ThreadId;
@@ -184,7 +195,7 @@ export interface LiveThreadState {
   readonly runId: Option.Option<RunId>;
   readonly queueLength: number;
   readonly parkedTaskIds: ReadonlyArray<TaskId>;
-  readonly pendingApprovals: ReadonlyArray<ApprovalId>;
+  readonly pendingApprovals: ReadonlyArray<PendingApproval>;
 }
 
 /** What an implementation can do, so judges skip what a backend does not model. */
@@ -413,6 +424,16 @@ export class HarnessSeam extends Context.Service<
      * before it looks, so an ensure that lands while it starts is not missed.
      */
     whenEnsured(threadId: ThreadId): Effect.Effect<void, HarnessError>;
+    /**
+     * One `cairn.*` document of the thread (one of `VISIBLE_DOCUMENTS`, such as `cairn.approvals`),
+     * projected as the thread stream carries it, read once without opening the stream; none while
+     * the thread has not written it. A kind the stream does not carry fails `invalid_input`; a
+     * thread that was never ensured fails `thread_not_found`.
+     */
+    document(
+      threadId: ThreadId,
+      kind: string
+    ): Effect.Effect<Option.Option<JsonValue>, HarnessError>;
     /** Older entries, projected as the stream projects them. */
     history(
       threadId: ThreadId,

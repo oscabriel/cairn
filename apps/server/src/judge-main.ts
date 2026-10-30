@@ -97,8 +97,8 @@ const JudgeReach = Layer.mergeAll(
 
 // Subagent crash points for judges/subagent-durability.ts: `CAIRN_JUDGE_FAULT=subagent:<point>` (or
 // `subagent:<point>*<times>`) kills the brain at that point of a delivery, counted in a marker in
-// the data folder; `CAIRN_JUDGE_SUBAGENT_FAULTS=freshIds` (or `deliverTwice`, or `seamOwnIds`)
-// plants the broken delivery its controls run against. Unset, neither plants anything.
+// the data folder; `CAIRN_JUDGE_SUBAGENT_FAULTS=freshIds` (or `deliverTwice`, `seamOwnIds` or
+// `freshQuestionIds`) plants the broken delivery its controls run against. Unset, neither plants anything.
 const JudgeSubagents = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
@@ -117,6 +117,7 @@ const JudgeSubagents = Layer.unwrap(
         freshIds: planted.includes("freshIds"),
         seamOwnIds: planted.includes("seamOwnIds"),
         deliverTwice: planted.includes("deliverTwice"),
+        freshQuestionIds: planted.includes("freshQuestionIds"),
       })
     );
   })

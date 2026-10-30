@@ -189,6 +189,7 @@ const harnessWith = (events: Stream.Stream<HarnessEvent>) =>
     compact: () => unsupported("compact"),
     watch: () => Stream.die("the fake watch is not used here"),
     whenEnsured: () => unsupported("whenEnsured"),
+    document: () => unsupported("document"),
     history: () => unsupported("history"),
     entry: () => unsupported("entry"),
     entryImage: () => unsupported("entryImage"),

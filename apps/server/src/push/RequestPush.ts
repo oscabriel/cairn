@@ -9,7 +9,8 @@
 //   `req:<id>:late` for the push owed after a suppressed or missed first decision once the request
 //   is 60 seconds old, `req:<id>:remind` for the one reminder 15 minutes after the last push.
 // - The body says what is asked: "Go? <brief title>", "Approve <summary>", "<header>: <question>",
-//   prefixed "<child> asks:" for an escalated question, "<n> things need you." when more wait on the
+//   prefixed "<child> asks:" for an escalated question or a subagent's own request (pushed under
+//   its project thread, the root of its lineage, since its row is hidden), "<n> things need you." when more wait on the
 //   thread, and "Still waiting." on the reminder.
 
 import { pendingRequests } from "@cairn/client-logic/PendingRequests";
@@ -88,13 +89,16 @@ export const requestLine = (record: ApprovalRecord): string => {
 
 /** One approval push, before it is cut to the message's limits. */
 export interface RequestPush {
-  /** The row whose card shows the request: its title heads the push and a tap opens it. */
+  /**
+   * The row whose card shows the request: its title heads the push, its tag collapses it and a tap
+   * opens it. A subagent's request names its project thread here, not the subagent's hidden row.
+   */
   readonly thread: ThreadShell;
   /** The request the push is about: the newest of those it was sent for. */
   readonly request: ApprovalRecord;
   /** Requests waiting for the user on the thread, this one included. */
   readonly count: number;
-  /** The asking child's title, for an escalated question's mirror. */
+  /** The asking child's title: an escalated question's child, or the subagent the request is on. */
   readonly asker: Option.Option<string>;
   /** The reminder 15 minutes after the last push. */
   readonly reminder: boolean;

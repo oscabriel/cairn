@@ -63,6 +63,8 @@ export const faultsOf = (
   seamOwnIds: false,
   wakeStoppedParent: mutations.has("wake_stopped_parent"),
   routeApprovalToParent: mutations.has("route_approval_to_parent"),
+  // The kill judge's question control: without a crash it routes once.
+  freshQuestionIds: false,
 });
 
 const isRunTerminal = Predicate.isTagged("RunTerminal");

@@ -168,6 +168,12 @@ const LUNA_ON_GO = ref("opencode-go", "gpt-6-luna");
 
 const LUNA_ON_CODEX = ref("openai-codex", "gpt-6-luna");
 
+/** A table seeded before 2026-10-29: `@verifier` on Codex, OpenCode Go as its fallback. */
+const CODEX_VERIFIER_TABLE: RoleTable = {
+  ...DEFAULT_ROLE_TABLE,
+  [RoleName.make("@verifier")]: binding(LUNA_ON_CODEX, [LUNA_ON_GO]),
+};
+
 describe("parsing a role spec", () => {
   it("reads roles, levels and literal models", () => {
     const cases: ReadonlyArray<readonly [string, string]> = [
@@ -223,6 +229,20 @@ describe("resolving against a world", () => {
     assert.isTrue(resolved.priced);
   });
 
+  it("seeds @verifier on OpenCode Go gpt-6-luna, not Codex (no subscription, 2026-10-29)", () => {
+    const resolved = resolvedOrFail(worldOf(), "@verifier");
+
+    assert.deepStrictEqual(resolved.model, LUNA_ON_GO);
+    assert.strictEqual(resolved.via, "primary");
+    assert.deepStrictEqual(resolved.skipped, []);
+    assert.deepStrictEqual(
+      DEFAULT_ROLE_TABLE[RoleName.make("@verifier")]?.fallbacks,
+      []
+    );
+    // Nothing in the seeded table names Codex, so a brain without a Codex login skips nothing.
+    assert.notInclude(JSON.stringify(DEFAULT_ROLE_TABLE), "openai-codex");
+  });
+
   it("falls back past a primary that is limited, failing, signed out or unknown, naming why", () => {
     const cases: ReadonlyArray<
       readonly [Parameters<typeof worldOf>[0], SkippedModel["reason"]]
@@ -234,7 +254,10 @@ describe("resolving against a world", () => {
     ];
 
     for (const [options, reason] of cases) {
-      const resolved = resolvedOrFail(worldOf(options), "@verifier");
+      const resolved = resolvedOrFail(
+        worldOf({ table: CODEX_VERIFIER_TABLE, ...options }),
+        "@verifier"
+      );
 
       assert.deepStrictEqual(resolved.model, LUNA_ON_GO, reason);
       assert.strictEqual(resolved.via, "fallback");
@@ -259,6 +282,7 @@ describe("resolving against a world", () => {
   it("is unresolved with every candidate skipped when none is ready", () => {
     const failure = failureOf(
       worldOf({
+        table: CODEX_VERIFIER_TABLE,
         health: { "openai-codex": "failing", "opencode-go": "limited" },
       }),
       "@verifier"
@@ -445,7 +469,7 @@ describe("checking specs for the brief card", () => {
 describe("the roles listing", () => {
   it("lists every role, built-ins first, with model, level, readiness and price", () => {
     const table = {
-      ...DEFAULT_ROLE_TABLE,
+      ...CODEX_VERIFIER_TABLE,
       [RoleName.make("@advisor")]: binding(ref("opencode-go", "beam-free")),
     };
 
@@ -527,6 +551,9 @@ describe("the role alias service", () => {
     Effect.gen(function* () {
       const roles = yield* RoleAliases;
       const health = yield* ModelHealth;
+      const settings = yield* SettingsStore;
+
+      yield* settings.update(patchOf(CODEX_VERIFIER_TABLE));
 
       yield* health.record(
         "openai-codex",

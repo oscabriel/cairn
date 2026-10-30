@@ -12,8 +12,9 @@
 // A subagent's run end is never pushed (its result reaches its parent as a note, ADR 0028), and a
 // push is suppressed while a visible page shows its thread or any ancestor of it (`isWatchedTree`).
 // Approval push (briefs note B7, rules in `RequestPush.ts`): the same events push a request the
-// user can answer, once per request and one notification per thread (`ask:<threadId>`), worded
-// from the thread's records (`RequestRecords`); a sweep every 30 seconds pushes a request whose
+// user can answer, once per request and one notification per project thread (`ask:<threadId>`;
+// a subagent's request goes under its root thread, prefixed "<child> asks:"), worded from the
+// thread's records (`RequestRecords`); a sweep every 30 seconds pushes a request whose
 // first push was suppressed or missed once it is 60 seconds old and unwatched, and reminds once 15
 // minutes after its last push. The badge is `@cairn/client-logic/Badge`'s, the count the page shows.
 
@@ -641,14 +642,38 @@ export class Notifier extends Context.Service<
         return false;
       });
 
-      /** The asking child's title, for an escalated question's mirror. */
-      const askerOf = (request: ApprovalRecord) =>
+      /**
+       * The asking child's title: for an escalated question's mirror, the child it came from; for
+       * a request on a subagent's own row (a supervised child's approval), that subagent.
+       */
+      const askerOf = (thread: ThreadShell, request: ApprovalRecord) =>
         Option.match(Option.fromNullOr(request.mirrorOf), {
-          onNone: () => Effect.succeed(Option.none<string>()),
+          onNone: () =>
+            Effect.succeed(Option.map(thread.lineage, () => thread.title)),
           onSome: (mirror) =>
             threads.get(mirror.threadId).pipe(
               Effect.map(Option.map((row) => row.shell.title)),
               Effect.orElseSucceed(() => Option.none<string>())
+            ),
+        });
+
+      /**
+       * The row a request push goes under: a subagent's hidden row is never opened from a push, so
+       * its requests push under its project thread (the root of its lineage), whose card shows them
+       * (ADR 0027). A root that cannot be read leaves the push on the thread itself.
+       */
+      const pushHomeOf = (thread: ThreadShell) =>
+        Option.match(thread.lineage, {
+          onNone: () => Effect.succeed(thread),
+          onSome: (lineage) =>
+            threads.get(lineage.rootThreadId).pipe(
+              Effect.map(
+                Option.match({
+                  onNone: () => thread,
+                  onSome: (row) => row.shell,
+                })
+              ),
+              Effect.orElseSucceed(() => thread)
             ),
         });
 
@@ -665,12 +690,12 @@ export class Notifier extends Context.Service<
           return;
         }
 
-        const asker = yield* askerOf(request.value);
+        const asker = yield* askerOf(thread, request.value);
 
         yield* startSend(
           requestMessage(
             {
-              thread,
+              thread: yield* pushHomeOf(thread),
               request: request.value,
               count: open.length,
               asker,

@@ -21,6 +21,13 @@
 //   its one nudge.
 // - park: five kills at reporter-noted, so pi-durable's crash-loop guard parks the reporter; the
 //   next boot's repair retries it.
+// - question, question-recorded, question-routed, question-answered: question routing (ADR 0027,
+//   4B). The child asks its parent with `ask_parent`; the parent's model answers it with
+//   `subagent_reply` (its script names the child as `$subagent`, `fixtures/JudgeModel.ts`). The
+//   kill lands after the question's record commit, after its offer to the parent is admitted, or
+//   after the parent's answer commit.
+// - escalate, question-escalated: the parent escalates the question instead; the judge answers
+//   the card in the parent thread as the user would. The kill lands after the escalation commit.
 // - control-*: the broken controls. `freshIds`, a reporter that mints a fresh request id for each
 //   submit on every attempt (`CAIRN_JUDGE_SUBAGENT_FAULTS=freshIds`): with no kill it delivers once
 //   and passes; with a kill after the child's input or the wake was submitted it must fail by
@@ -29,7 +36,9 @@
 //   that and by nothing else, or the judge proves nothing. `seamOwnIds` (control-steer-recorded),
 //   a seam that submits the steer under an id of its own rather than its reporter's: killed at
 //   steer-recorded, the reporter's resumed submit and the resent steer both land, so it must fail by
-//   the child receiving the steer twice.
+//   the child receiving the steer twice. `freshQuestionIds` (control-question-routed), a route
+//   that offers the question under a fresh request id on every attempt: killed at question-routed,
+//   the rerun offers it again, so it must fail by the parent being asked twice.
 //
 // `--bridge` runs bridge-reporter-answered instead: parent and child on the Claude bridge
 // (`judge-main.ts --models real`, the model `--model` names), killed after the child's real answer
@@ -38,7 +47,9 @@
 // Claude Code plan bills nothing; at API list price a run is a few cents.
 //
 // Per case it asserts: one child (one registry item, one child row); each input reached the child
-// once (the brief, and the steer or the nudge) and the child answered each once; one note per
+// once (the brief, and the steer or the nudge) and the child answered each once; for a question,
+// one question record settled accepted, the parent asked once and replying once, the child given
+// the answer once, and for an escalation one mirror and one index entry, both settled; one note per
 // settlement, under its `seq`; one wake for a settlement that wakes and none for a steer's quiet
 // one; every settlement delivered; the parent's tally of its child; the kill fired as many times as
 // asked; for park, that a boot repair retried a parked subagent task. Prints one JSON line per case
@@ -51,12 +62,15 @@ import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
+import { approvalRecordsOf } from "@cairn/client-logic/PendingRequests";
 import { CommandId, ProjectId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { RootWorkspace } from "@cairn/protocol/Launch";
 import type { CairnRpcs } from "@cairn/protocol/Rpc";
 import type { ShellSnapshot, ThreadShell } from "@cairn/protocol/Shell";
 import { ProjectCreate } from "@cairn/protocol/ShellCommands";
 import {
+  ESCALATIONS_DOCUMENT,
+  EscalationsDocument,
   SUBAGENT_RESULT_ENTRY,
   SubagentsDocument,
 } from "@cairn/protocol/Subagents";
@@ -101,7 +115,7 @@ const { values } = parseArgs({
 });
 
 /** What the parent asks its child to do. */
-type Errand = "plain" | "steer" | "nudge";
+type Errand = "plain" | "steer" | "nudge" | "question" | "escalate";
 
 interface CaseSpec {
   readonly name: string;
@@ -109,7 +123,9 @@ interface CaseSpec {
   readonly crash: Option.Option<string>;
   readonly errand: Errand;
   /** The broken reporter a control plants (`CAIRN_JUDGE_SUBAGENT_FAULTS`); none for a real case. */
-  readonly fault: Option.Option<"freshIds" | "deliverTwice" | "seamOwnIds">;
+  readonly fault: Option.Option<
+    "freshIds" | "deliverTwice" | "seamOwnIds" | "freshQuestionIds"
+  >;
   /** What the case must end in: a pass, or (a control) a double delivery and nothing else. */
   readonly expect: "pass" | "double";
   readonly bridge: boolean;
@@ -147,6 +163,21 @@ const FAUX_CASES: ReadonlyArray<CaseSpec> = [
   spec("nudge-marked", { crash: "nudge-marked", errand: "nudge" }),
   spec("nudge-submitted", { crash: "nudge-submitted", errand: "nudge" }),
   spec("park", { crash: "reporter-noted*5", park: true }),
+  spec("question", { errand: "question" }),
+  spec("question-recorded", {
+    crash: "question-recorded",
+    errand: "question",
+  }),
+  spec("question-routed", { crash: "question-routed", errand: "question" }),
+  spec("question-answered", {
+    crash: "question-answered",
+    errand: "question",
+  }),
+  spec("escalate", { errand: "escalate" }),
+  spec("question-escalated", {
+    crash: "question-escalated",
+    errand: "escalate",
+  }),
   spec("control-no-crash", { fault: Option.some("freshIds") }),
   spec("control-reporter-submitted", {
     crash: "reporter-submitted",
@@ -166,6 +197,12 @@ const FAUX_CASES: ReadonlyArray<CaseSpec> = [
   }),
   spec("control-deliver-twice", {
     fault: Option.some("deliverTwice"),
+    expect: "double",
+  }),
+  spec("control-question-routed", {
+    crash: "question-routed",
+    errand: "question",
+    fault: Option.some("freshQuestionIds"),
     expect: "double",
   }),
 ];
@@ -195,6 +232,29 @@ const FAUX_TASK = `${SCRIPT_PREFIX} text 30`;
 /** The faux steer: a short reply, its result a quiet note. */
 const FAUX_STEER = `${SCRIPT_PREFIX} text 10`;
 
+/** The child's description, which its question and its wake name. */
+const DESCRIPTION = "Count for the judge";
+
+/** The answer the parent (or the user, for an escalation) gives the child's question. */
+const ANSWER = "blue";
+
+/** What the user is told when the parent escalates. */
+const ESCALATE_REASON = "The judge asks the user.";
+
+/**
+ * The child's question: its words, then on a line of its own the script the parent's model runs
+ * when the question reaches it (`renderQuestion` puts it after "asks: ").
+ */
+const questionOf = (errand: Errand) =>
+  `Which colour?\n${SCRIPT_PREFIX} tool subagent_reply ${JSON.stringify(
+    errand === "escalate"
+      ? { subagent: "$subagent", escalate: ESCALATE_REASON }
+      : { subagent: "$subagent", answer: ANSWER }
+  )}`;
+
+/** The input the parent is asked a question with, as `renderQuestion` begins it. */
+const QUESTION_LEAD = `Subagent "${DESCRIPTION}" asks:`;
+
 const TYPED_SCHEMA = {
   type: "object",
   properties: { count: { type: "number" } },
@@ -207,14 +267,21 @@ const parentMessage = (errand: Errand, bridge: boolean): string => {
     return 'Call the subagent_spawn tool exactly once, with description "Name three colours" and brief "Reply with exactly three colour names, comma separated, and nothing else. Use no tools." After the tool returns, reply with the single word waiting.';
   }
 
+  const brief =
+    errand === "question" || errand === "escalate"
+      ? `${SCRIPT_PREFIX} tool ask_parent ${JSON.stringify({
+          question: questionOf(errand),
+        })}`
+      : FAUX_TASK;
+
   const args =
     errand === "nudge"
       ? {
-          description: "Count for the judge",
+          description: DESCRIPTION,
           brief: `${SCRIPT_PREFIX} text 5`,
           result_schema: TYPED_SCHEMA,
         }
-      : { description: "Count for the judge", brief: FAUX_TASK };
+      : { description: DESCRIPTION, brief };
 
   return `${SCRIPT_PREFIX} tool subagent_spawn ${JSON.stringify(args)}`;
 };
@@ -498,6 +565,33 @@ const noteSeqs = (view: ConversationView) =>
       : []
   );
 
+const ToolResultModel = Schema.Struct({
+  role: Schema.Literal("toolResult"),
+  toolName: Schema.String,
+});
+
+const decodeToolResult = Schema.decodeUnknownOption(ToolResultModel);
+
+/** The text of each result of tool `name` in `view`'s transcript, in order. */
+const toolResults = (view: ConversationView, name: string) =>
+  view.entries.flatMap((entry) =>
+    Option.exists(
+      decodeToolResult(entry.model?.[0]),
+      (result) => result.toolName === name
+    )
+      ? Option.toArray(Option.map(messageOf(entry), (message) => message.text))
+      : []
+  );
+
+const decodeEscalations = Schema.decodeUnknownOption(EscalationsDocument);
+
+/** The entries of a parent's escalation index. */
+const escalationsOf = (view: ConversationView) =>
+  Option.match(decodeEscalations(view.docs[ESCALATIONS_DOCUMENT]), {
+    onNone: () => [],
+    onSome: (index) => Object.values(index.items),
+  });
+
 const isQuietRow = (row: ThreadShell) =>
   Option.isNone(row.activeRunId) &&
   row.queueLength === 0 &&
@@ -522,6 +616,8 @@ interface Plan {
   steered: boolean;
   /** The kills that had fired when the judge first sent the steer; none before it was sent. */
   firedAtSteer: Option.Option<number>;
+  /** Where the case stood at its last full read, for a case that never goes quiet. */
+  lastSeen: string;
 }
 
 /** What one quiet read found. */
@@ -567,6 +663,7 @@ const makePlan = Effect.gen(function* () {
     steerRequest: requestOf(yield* uuid7),
     steered: false,
     firedAtSteer: Option.none(),
+    lastSeen: "nothing read",
   } satisfies Plan;
 });
 
@@ -617,6 +714,37 @@ const goOnBrief = (client: Client, plan: Plan, parentRow: ThreadShell) =>
         decision: "accept",
         reason: Option.none(),
         answers: Option.none(),
+        launch: Option.none(),
+      }).pipe(Effect.ignore),
+    { discard: true }
+  );
+
+/**
+ * The user's answer to an escalated question, from the card in the parent thread; an answered one
+ * is left as it is. Only the escalate errand has one: a question the parent answers never reaches
+ * the user.
+ */
+const answerEscalation = (
+  client: Client,
+  caseSpec: CaseSpec,
+  plan: Plan,
+  parentRow: ThreadShell
+) =>
+  Effect.forEach(
+    Option.toArray(
+      Option.filter(
+        parentRow.pendingRuntimeRequest,
+        (request) =>
+          caseSpec.errand === "escalate" && request.kind === "user-input"
+      )
+    ),
+    (request) =>
+      client["thread.respond"]({
+        threadId: plan.threadId,
+        approvalId: request.id,
+        decision: "accept",
+        reason: Option.none(),
+        answers: Option.some([{ index: 0, picks: [], custom: ANSWER }]),
         launch: Option.none(),
       }).pipe(Effect.ignore),
     { discard: true }
@@ -681,6 +809,7 @@ const readCase = (
     }
 
     yield* goOnBrief(client, plan, parentRow.value);
+    yield* answerEscalation(client, caseSpec, plan, parentRow.value);
 
     const parentView = yield* viewOf(client, plan.threadId);
 
@@ -723,6 +852,24 @@ const readCase = (
       (caseSpec.errand !== "steer" || plan.steered) &&
       isQuietRow(parentRow.value) &&
       childRows.every(isQuietRow);
+
+    plan.lastSeen = JSON.stringify({
+      item: item.status,
+      settlements: item.settlements.length,
+      delivered: item.delivered,
+      parent: {
+        activity: parentRow.value.activity,
+        running: Option.isSome(parentRow.value.activeRunId),
+        queue: parentRow.value.queueLength,
+        request: Option.getOrNull(parentRow.value.pendingRuntimeRequest),
+      },
+      children: childRows.map((row) => ({
+        activity: row.activity,
+        running: Option.isSome(row.activeRunId),
+        queue: row.queueLength,
+        request: Option.getOrNull(row.pendingRuntimeRequest),
+      })),
+    });
 
     const key = JSON.stringify([
       parentView.value.entries.length,
@@ -829,7 +976,7 @@ const drive = (brain: Brain, caseSpec: CaseSpec, plan: Plan) =>
       orElse: () =>
         Effect.fail(
           new CaseFailed({
-            message: `the case did not go quiet in ${Duration.format(caseTimeout(caseSpec.bridge))}`,
+            message: `the case did not go quiet in ${Duration.format(caseTimeout(caseSpec.bridge))}; last seen ${plan.lastSeen}`,
           })
         ),
     })
@@ -868,6 +1015,94 @@ const sameTally = (left: SubagentTally, right: SubagentTally) =>
   left.settled === right.settled &&
   left.failed === right.failed;
 
+/** A failed check unless `holds`, saying what was found. */
+const check = (holds: boolean, text: string): ReadonlyArray<Failure> =>
+  holds ? [] : [{ kind: "other", text }];
+
+/** Every one of `statuses` is `accepted`. */
+const allAccepted = (what: string, statuses: ReadonlyArray<string>) =>
+  check(
+    statuses.every((status) => status === "accepted"),
+    `${what}: ${statuses.join(", ")}`
+  );
+
+/** The errands whose child asks its parent a question. */
+const QUESTION_ERRANDS: ReadonlySet<Errand> = new Set(["question", "escalate"]);
+
+/** The inputs each errand gives the child: the brief, and the steer or the nudge. */
+const INPUTS: Readonly<Record<Errand, number>> = {
+  plain: 1,
+  steer: 2,
+  nudge: 2,
+  question: 1,
+  escalate: 1,
+};
+
+/** The child's answers each errand expects; a question is a tool call of its own, then its answer. */
+const ANSWERS: Readonly<Record<Errand, number>> = {
+  plain: 1,
+  steer: 2,
+  nudge: 2,
+  question: 2,
+  escalate: 2,
+};
+
+/**
+ * The routing checks of a question errand: the child's one question settled accepted; the parent
+ * asked once and replying once; for an escalation, one mirror settled accepted and one index entry
+ * resolved; the child given the answer once.
+ */
+const questionChecks = (
+  caseSpec: CaseSpec,
+  reading: Reading
+): ReadonlyArray<Failure> => {
+  const escalated = caseSpec.errand === "escalate" ? 1 : 0;
+
+  const questions = approvalRecordsOf(
+    reading.childView.docs["cairn.approvals"]
+  ).filter((record) => record.kind === "user-input");
+
+  const mirrors = approvalRecordsOf(
+    reading.parentView.docs["cairn.approvals"]
+  ).filter((record) => record.mirrorOf !== null);
+
+  const asked = userTexts(reading.parentView).filter((text) =>
+    text.startsWith(QUESTION_LEAD)
+  ).length;
+
+  const given = toolResults(reading.childView, "ask_parent");
+  const escalations = escalationsOf(reading.parentView);
+
+  return [
+    ...count("questions the child asked", questions.length, 1),
+    ...allAccepted(
+      "the child's question settled",
+      questions.map((record) => record.status)
+    ),
+    ...count("times the parent was asked", asked, 1),
+    ...count(
+      "replies the parent gave",
+      toolResults(reading.parentView, "subagent_reply").length,
+      1
+    ),
+    ...count("mirrors in the parent", mirrors.length, escalated),
+    ...allAccepted(
+      "the mirror settled",
+      mirrors.map((record) => record.status)
+    ),
+    ...count("escalations indexed", escalations.length, escalated),
+    ...check(
+      escalations.every((entry) => entry.status === "resolved"),
+      `an escalation is still ${escalations.map((entry) => entry.status).join(", ")}`
+    ),
+    ...count("answers the child was given", given.length, 1),
+    ...check(
+      given.every((text) => text.includes(ANSWER)),
+      `the child was given ${JSON.stringify(given)}, not ${ANSWER}`
+    ),
+  ];
+};
+
 /** Every check of one quiet reading. */
 const judge = (
   caseSpec: CaseSpec,
@@ -901,11 +1136,11 @@ const judge = (
   const failures: Array<Failure> = [
     ...count("registry items", reading.items.length, 1),
     ...count("child rows", reading.childRows, 1),
-    ...count("inputs the child received", childInputs, steer || nudge ? 2 : 1),
+    ...count("inputs the child received", childInputs, INPUTS[caseSpec.errand]),
     ...count(
       "answers the child gave",
       answers(reading.childView).length,
-      steer || nudge ? 2 : 1
+      ANSWERS[caseSpec.errand]
     ),
     ...count("settlements", item?.settlements.length ?? 0, settlements),
     ...count("settlements delivered", item?.delivered ?? 0, settlements),
@@ -921,6 +1156,10 @@ const judge = (
     ...count("wakes", wakes, 1),
     ...count("kills that fired", firedCount(brain), timesOf(caseSpec.crash)),
   ];
+
+  if (QUESTION_ERRANDS.has(caseSpec.errand)) {
+    failures.push(...questionChecks(caseSpec, reading));
+  }
 
   if (!sameTally(reading.parentRow.subagents, expectedTally)) {
     failures.push({

@@ -164,7 +164,7 @@ const build = (
     crashAt: crashes.at,
   });
 
-  const tools = subagentToolSet(faults, tasks, roles, tuning);
+  const tools = subagentToolSet(faults, tasks, roles, tuning, crashes.at);
 
   child.agent = childAgentOf(tools);
 

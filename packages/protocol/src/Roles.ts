@@ -168,17 +168,18 @@ const defaultRoleTableJson: typeof RoleTable.Encoded = {
     note: null,
   },
   "@verifier": {
-    model: { provider: "openai-codex", modelId: "gpt-6-luna" },
+    model: lunaOnGo,
     thinkingLevel: null,
-    fallbacks: [lunaOnGo],
+    fallbacks: [],
     note: null,
   },
 };
 
 /**
  * The table a fresh brain seeds (ADR 0035, decided 2026-10-27): `@worker` Opus 5.5 medium, `@scout`
- * Sonnet 5.5 high, `@judge` OpenCode Go `gpt-6-luna`, `@verifier` Codex `gpt-6-luna` with the
- * OpenCode Go model as its fallback until Cairn holds a Codex login.
+ * Sonnet 5.5 high, `@judge` and `@verifier` OpenCode Go `gpt-6-luna`. The verifier was Codex
+ * `gpt-6-luna` until 2026-10-29, when the user said there is no Codex subscription; a table seeded
+ * before then keeps its Codex binding with this model as the fallback, as every seeded table stays.
  */
 export const DEFAULT_ROLE_TABLE: RoleTable =
   Schema.decodeSync(RoleTable)(defaultRoleTableJson);

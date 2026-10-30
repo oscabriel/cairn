@@ -40,7 +40,7 @@ import type {
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import { defineTool } from "@earendil-works/pi-durable";
-import { Duration, Effect, Option, Result } from "effect";
+import { Duration, Effect, Function, Option, Result } from "effect";
 
 import {
   endUnanswered,
@@ -69,7 +69,10 @@ import {
   GATED_APPROVAL_TTL_MILLIS,
   readPermissions,
 } from "../brain/Permissions.ts";
-import type { SubagentFaultSet } from "../brain/SubagentFaults.ts";
+import type {
+  SubagentCrashPoint,
+  SubagentFaultSet,
+} from "../brain/SubagentFaults.ts";
 import {
   renderAnswer,
   SPAWN_WAITING,
@@ -217,10 +220,14 @@ type CapRefusal =
   | { readonly cap: "parent"; readonly live: number }
   | { readonly cap: "brain"; readonly live: number };
 
-/** A route's view of a replay-safe tool call: its commits, its clock and its memo. */
+/**
+ * A route's view of a replay-safe tool call: its commits, its clock and its memo; `offered` runs
+ * once the question's input to the parent is admitted.
+ */
 export const routeIo = (
   api: ToolExecutionApi,
-  context: ChordContext
+  context: ChordContext,
+  offered: () => void = Function.constVoid
 ): RouteIo => ({
   observer: api,
   now: () => api.now(),
@@ -230,6 +237,7 @@ export const routeIo = (
   commitDocs: async (change) => {
     await api.commit(change, context);
   },
+  offered,
 });
 
 /** What a child's `ask_parent` returns once its record settled: the answer, or why there is none. */
@@ -263,7 +271,8 @@ export const subagentToolSet = (
   faults: SubagentFaultSet,
   tasks: SubagentTasks,
   roles: RoleAccess,
-  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS
+  tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
+  crashAt: (point: SubagentCrashPoint) => void = Function.constVoid
 ) => {
   const spawn = defineTool({
     name: "subagent_spawn",
@@ -629,6 +638,9 @@ export const subagentToolSet = (
         return refused(SubagentToolText.escalateTooLong(MAX_ESCALATE_REASON));
       }
 
+      // Which of the reply's commits landed, for the kill judge's crash points after them.
+      let landed: Option.Option<"answered" | "escalated"> = Option.none();
+
       const text = await api.commit(async (tx) => {
         const meta = await tx.doc(ThreadMeta, api.conversationId);
         const { items } = await tx.doc(Approvals, child);
@@ -676,6 +688,8 @@ export const subagentToolSet = (
             why: SubagentToolText.parentEscalated(escalation.value),
           });
 
+          landed = Option.some("escalated");
+
           return Result.succeed(SubagentToolText.replyEscalated);
         }
 
@@ -708,6 +722,8 @@ export const subagentToolSet = (
             "answered",
             Option.none()
           );
+
+          landed = Option.some("answered");
         }
 
         return Result.succeed(
@@ -716,6 +732,12 @@ export const subagentToolSet = (
             : SubagentToolText.replyAlreadySettled
         );
       }, context);
+
+      for (const point of Option.toArray(landed)) {
+        crashAt(
+          point === "answered" ? "question-answered" : "question-escalated"
+        );
+      }
 
       return Result.match(text, { onFailure: refused, onSuccess: said });
     },
@@ -800,6 +822,8 @@ export const subagentToolSet = (
         }
       }, context);
 
+      crashAt("question-recorded");
+
       const settled = runWait(
         approvalLedger(api).awaitSettlement.pipe(
           Effect.catchTag("ApprovalLedgerError", (failure) =>
@@ -814,7 +838,9 @@ export const subagentToolSet = (
       );
 
       await routeQuestion(
-        routeIo(api, context),
+        routeIo(api, context, () => {
+          crashAt("question-routed");
+        }),
         {
           parent,
           child: api.conversationId,
@@ -825,6 +851,7 @@ export const subagentToolSet = (
           windowMillis: tuning.questionWindowMillis,
           settled,
           offerHalted: faults.wakeStoppedParent,
+          freshId: faults.freshQuestionIds,
         },
         context
       );
@@ -899,8 +926,14 @@ export const subagentToolSet = (
           commit: Option.getOrNull(textOf(args.commit)),
         };
 
+        // A typed child is sent to `submit_result`: from code mode (a nested call, whose
+        // `terminate` pi-durable drops) the report would otherwise leave the run going on with no
+        // word of the result, as J-typed saw.
         return {
-          text: SubagentToolText.reported,
+          text:
+            child.resultSchema === null
+              ? SubagentToolText.reported
+              : SubagentToolText.reportedTyped,
           isError: false,
           terminate: true,
         };

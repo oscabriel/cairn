@@ -206,7 +206,13 @@ import {
   TYPED_RESULT_SUMMARY,
 } from "./SubagentText.ts";
 import type { BriefAnswer } from "./SubagentText.ts";
-import { entryImages, projectEntry, wireProjector } from "./ThreadWire.ts";
+import {
+  entryImages,
+  isStreamDocument,
+  projectDocument,
+  projectEntry,
+  wireProjector,
+} from "./ThreadWire.ts";
 
 type RunStatus = (typeof RunTerminal.Type)["status"];
 
@@ -2602,6 +2608,8 @@ const layerNoDeps = Layer.effectContext(
       link.report = Option.none();
       reporter.settlement = Option.some(settlement);
       reporter.phase = "report";
+      // The spent report leaves the child's `cairn.child`, as pi-durable's settle commit writes it.
+      changes.touched.add(child);
       changes.touched.add(parent);
       settledUnlessWorking(child, changes);
     };
@@ -3676,8 +3684,12 @@ const layerNoDeps = Layer.effectContext(
             commit: textArgument(call, "commit"),
           });
 
+          // A typed child is sent to `submit_result` (SubagentTools.ts's `report`).
           return {
-            text: SubagentToolText.reported,
+            text:
+              link.resultSchema === null
+                ? SubagentToolText.reported
+                : SubagentToolText.reportedTyped,
             isError: false,
             terminate: true,
           };
@@ -4493,6 +4505,26 @@ const layerNoDeps = Layer.effectContext(
         })
       );
 
+    const document = Effect.fn("ScriptedHarness.document")(function* (
+      threadId: ThreadId,
+      kind: string
+    ) {
+      if (!isStreamDocument(kind)) {
+        return yield* failure(
+          "invalid_input",
+          threadId,
+          `The thread stream does not carry ${kind}; read one of its cairn.* documents.`
+        );
+      }
+
+      const thread = yield* find(threadId);
+
+      return Option.flatMap(
+        Option.fromUndefinedOr(currentView(thread).docs[kind]),
+        (doc) => projectDocument(kind, doc)
+      );
+    });
+
     const whenEnsured = Effect.fn("ScriptedHarness.whenEnsured")(function* (
       threadId: ThreadId
     ) {
@@ -4588,7 +4620,15 @@ const layerNoDeps = Layer.effectContext(
 
       for (const thread of store.threads.values()) {
         const pending = [...thread.approvals.values()].flatMap((record) =>
-          record.status === "pending" ? [ApprovalId.make(record.id)] : []
+          record.status === "pending"
+            ? [
+                {
+                  id: ApprovalId.make(record.id),
+                  kind: record.kind,
+                  askedAt: record.askedAt,
+                },
+              ]
+            : []
         );
 
         if (
@@ -4620,6 +4660,7 @@ const layerNoDeps = Layer.effectContext(
       write,
       compact,
       watch,
+      document,
       whenEnsured,
       history,
       entry,

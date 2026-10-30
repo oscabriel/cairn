@@ -15,6 +15,7 @@ import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { ApprovalId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { SubmissionId } from "@cairn/protocol/Ids";
 import { DEFAULT_RUNTIME_MODE } from "@cairn/protocol/Policy";
+import { VISIBLE_DOCUMENTS } from "@cairn/protocol/Thread";
 import type { ThreadStreamItem } from "@cairn/protocol/Thread";
 import {
   Clock,
@@ -65,6 +66,11 @@ import type {
 } from "./Transcript.ts";
 
 type Json = Schema.Json;
+
+/** The `cairn.*` documents a client may see: what the seam's one-document read takes. */
+const STREAM_DOCUMENT_KINDS = VISIBLE_DOCUMENTS.filter((kind) =>
+  kind.startsWith("cairn.")
+);
 
 /** The thread every scenario runs on. */
 const THREAD_ID = ThreadId.make("0190f0c0-0000-7000-8000-000000000001");
@@ -1048,12 +1054,59 @@ export const runScenario = (
           })
         );
 
+      /**
+       * The seam's one-document read agrees with what a followed thread's client holds: every
+       * `cairn.*` document the stream carries reads the same through `document`, and one the client
+       * lacks reads as none. Checked once the scenario's lines have all held.
+       */
+      const documentsAgree = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const seam = yield* seamNow;
+          const state = yield* Ref.get(yield* clientOf(threadId));
+
+          if (Option.isNone(state)) {
+            return Result.succeedNone;
+          }
+
+          const { docs } = state.value.view;
+
+          for (const kind of STREAM_DOCUMENT_KINDS) {
+            const read = yield* seam
+              .document(threadId, kind)
+              .pipe(Effect.map(Option.getOrNull), Effect.result);
+
+            if (Result.isFailure(read)) {
+              return Result.fail(
+                `${kind} of ${threadId} failed: ${read.failure.message}`
+              );
+            }
+
+            const held = docs[kind] ?? null;
+
+            if (!jsonEquals(read.success, held)) {
+              return Result.fail(
+                `${kind} of ${threadId} read ${JSON.stringify(read.success)}, the stream holds ${JSON.stringify(held)}`
+              );
+            }
+          }
+
+          return Result.succeedNone;
+        });
+
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* startFeeds;
 
           for (const [index, line] of scenario.lines.entries()) {
             yield* play(describeLine(index, line), line);
+          }
+
+          for (const threadId of aliases.threads()) {
+            yield* eventually(
+              options.timeout,
+              "documents read one at a time",
+              documentsAgree(threadId)
+            );
           }
         })
       );

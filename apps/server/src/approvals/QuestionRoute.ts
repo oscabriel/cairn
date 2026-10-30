@@ -362,6 +362,8 @@ export interface RouteIo {
   ) => Promise<ConversationHandle | undefined>;
   /** Commits `change`, which writes documents only. */
   readonly commitDocs: (change: (tx: Tx) => Promise<void>) => Promise<void>;
+  /** Called once the question's input to the parent is admitted: a judge brain's crash point. */
+  readonly offered: () => void;
 }
 
 /**
@@ -387,6 +389,8 @@ export interface Route {
   readonly settled: Promise<unknown>;
   /** A planted fault: a halted parent is offered the question anyway. */
   readonly offerHalted: boolean;
+  /** A planted fault: the offer's request id is fresh on every attempt (`freshQuestionIds`). */
+  readonly freshId: boolean;
 }
 
 /** How a route's race ended. */
@@ -560,10 +564,10 @@ export const routeQuestion = async (
   const submission = await conversation?.submit(
     {
       type: "input",
-      requestId: SubagentRequestIds.question(
-        route.childThreadId,
-        route.approvalId
-      ),
+      // The kill judge's control mints a fresh id on every attempt, so a rerun offers it again.
+      requestId: route.freshId
+        ? `${SubagentRequestIds.question(route.childThreadId, route.approvalId)}-${String(io.now())}`
+        : SubagentRequestIds.question(route.childThreadId, route.approvalId),
       content: renderQuestion(route.description, route.question),
       whenBusy: "followUp",
     },
@@ -573,6 +577,8 @@ export const routeQuestion = async (
   if (submission === undefined) {
     return;
   }
+
+  io.offered();
 
   const race = new AbortController();
 

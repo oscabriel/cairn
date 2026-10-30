@@ -111,7 +111,15 @@ import {
   InboxDoc,
   LiveDoc,
 } from "@earendil-works/pi-durable";
-import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
+import {
+  DateTime,
+  Effect,
+  Function,
+  Option,
+  Predicate,
+  Result,
+  Schema,
+} from "effect";
 
 import { needsDecision } from "../approvals/NeedsDecision.ts";
 import {
@@ -1627,6 +1635,8 @@ const taskRouteIo = (
       await change(tx);
     }, context);
   },
+  // The kill judge's question windows are `ask_parent`'s; a relayed answer's route has none.
+  offered: Function.constVoid,
 });
 
 /** The task definitions, closed over the extension's faults and the child's agent change. */
@@ -2281,6 +2291,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             windowMillis: questionWindowMillis,
             settled,
             offerHalted: faults.wakeStoppedParent,
+            freshId: faults.freshQuestionIds,
           },
           context
         );

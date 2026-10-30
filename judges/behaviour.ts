@@ -41,6 +41,29 @@
 //   soft-keyboard    WebKit at iPhone width (Chromium's iPhone emulation where WebKit cannot run,
 //                    named in the result), with the soft keyboard emulated through a shrunken
 //                    `visualViewport`: Enter inserts a newline and sends nothing.
+//
+// `--ui next` judges the `next` shell (look track L6) instead of the classic sidebar: its seed makes
+// the parity thread its project's project thread, gives it six managed threads (one in each state,
+// one of them a real thread) and adds two rail projects (one with a favicon in its root). The
+// classic sidebar's own checks (settle-undo, search, menu-items, snooze) do not run there, since the
+// shell has no shelves, search or row menu (the user, 2026-10-29); these run instead, at 1,440 and
+// 390 px, each saving its states as screenshots under `<out>/shell-next/`:
+//   shell-rail-<w>        one squircle bubble per folder project (a low corner radius, not a
+//                         circle), the favicon drawn edge to edge in its bubble, a letter for a
+//                         project with none, the selected one marked; a bubble opens its project
+//                         (its project thread, or the composer when it has none);
+//   shell-list-<w>        the project thread on top opens it under the new header ("project
+//                         thread"), and under it the managed threads, newest first, each with
+//                         its status mark and word; no Active, Settled, Pinned or Snoozed group;
+//   shell-managed-<w>     a managed thread opens, says it is managed, and takes a message that
+//                         shows in its transcript; a parked one shows the hold banner with Retry;
+//   shell-foot-<w>        Usage opens the usage page and Settings the settings page, and the foot
+//                         holds no meter;
+//   shell-scratch-<w>     Ctrl+J (1,440) or the header's button (390) opens the scratch overlay; a
+//                         message sent there shows with its answer; hiding and showing keeps it;
+//                         Clear deletes it and shows the empty overlay;
+//   shell-refresh-1440    Refresh asks first (Cancel keeps the thread), then starts a new project
+//                         thread with the typed message, opens it and lists it on top.
 // Exits 0 when every check ran and the report was written; `--strict` also requires every check
 // to pass, which is wave 5's bar.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -57,6 +80,7 @@ import {
   parseT3ThreadExport,
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { startCairn } from "./fixtures/parity/CairnApp.ts";
+import type { ShellSeed } from "./fixtures/parity/CairnApp.ts";
 import { LandmarkFile, readLandmarks } from "./fixtures/parity/Landmarks.ts";
 
 const root = path.join(import.meta.dirname, "..");
@@ -154,11 +178,37 @@ const exported = await Effect.runPromise(
   )
 );
 
-const app = await startCairn({
-  projectTitle: exported.projectTitle,
-  threadTitle: exported.title,
-  entries: importT3Thread(exported).entries,
-});
+/** The managed threads `--ui next` seeds, oldest first; the list shows them newest first. */
+const MANAGED_SEED: ShellSeed["managed"] = [
+  { title: "Map the favicon resolver", state: "idle", usable: true },
+  { title: "Brief: port the fold line tallies", state: "done", usable: false },
+  { title: "Steps panel projection", state: "parked", usable: false },
+  { title: "Probe the bridge usage endpoint", state: "failed", usable: false },
+  { title: "Review: steps panel", state: "working", usable: false },
+  {
+    title: "Pick the budget meter's thresholds",
+    state: "asking",
+    usable: false,
+  },
+];
+
+/** The `next` shell's seed: managed threads and two more rail projects, one with a favicon. */
+const SHELL_SEED: ShellSeed = {
+  managed: MANAGED_SEED,
+  projects: [
+    { title: "oscargabriel-dev", favicon: true },
+    { title: "myr", favicon: false },
+  ],
+};
+
+const app = await startCairn(
+  {
+    projectTitle: exported.projectTitle,
+    threadTitle: exported.title,
+    entries: importT3Thread(exported).entries,
+  },
+  ui === "next" ? SHELL_SEED : { managed: [], projects: [] }
+);
 
 const threadUrl = withUi(app.threadUrl);
 
@@ -228,6 +278,13 @@ const check = async (
   }
 };
 
+/** A check of the classic sidebar, which the `next` shell does not have; skipped on `next`. */
+const classicCheck: typeof check = async (...args) => {
+  if (ui === "classic") {
+    await check(...args);
+  }
+};
+
 /** Pastes `files` or `text` into the editor through a real `ClipboardEvent`. */
 const paste = async (
   page: Page,
@@ -269,10 +326,454 @@ const paste = async (
 
 const value = async (page: Page) => await editor(page).inputValue();
 
+/** Where `--ui next` saves the shell's states, for the look round. */
+const SHOTS = path.join(values.out, "shell-next");
+
+/** Saves the page as the shell state `name` at `width`. */
+const shot = async (page: Page, name: string, width: number) => {
+  mkdirSync(SHOTS, { recursive: true });
+  await page.screenshot({ path: path.join(SHOTS, `${name}-${width}.png`) });
+};
+
+/** The context a shell check opens at `width`: the phone at 390, a desktop window otherwise. */
+const shellContext = (width: number): BrowserContextOptions =>
+  width === 390 ? PHONE : desktop(width);
+
+/** Opens the phone's sidebar sheet, when the page is a phone; the column shows on a desktop. */
+const openSidebar = async (page: Page, width: number) => {
+  if (width === 390) {
+    await page
+      .getByRole("button", { name: "Toggle main sidebar" })
+      .first()
+      .click();
+    await page.getByTestId("sidebar-sheet").waitFor({ state: "attached" });
+  }
+};
+
+/** The visible copy of the shell's sidebar: the sheet on a phone, the column on a desktop. */
+const sidebarOf = (page: Page, width: number) =>
+  width === 390
+    ? page.getByTestId("sidebar-sheet")
+    : page.getByTestId("shell-column");
+
+/** The `next` shell's checks (look track L6), at 1,440 and 390 px. */
+const shellChecks = async (browser: Browser, hero: string) => {
+  const projectThreadUrl = threadUrl;
+
+  // Each check at both widths before the next one, so a check that changes a thread (a message
+  // to a managed thread) runs after every check that reads it as seeded.
+  const perWidth: ReadonlyArray<(width: 1440 | 390) => Promise<void>> = [
+    async (width) => {
+      await check(
+        browser,
+        `shell-rail-${width}`,
+        shellContext(width),
+        projectThreadUrl,
+        async (page) => {
+          await openSidebar(page, width);
+
+          const side = sidebarOf(page, width);
+          const bubbles = side.getByTestId("rail-project");
+
+          await side
+            .getByTestId("rail-favicon")
+            .first()
+            .waitFor({ state: "visible", timeout: 10_000 });
+          await page.waitForTimeout(400);
+          await shot(page, "rail-and-list", width);
+
+          const read = await bubbles.evaluateAll((elements) =>
+            elements.map((element) => {
+              const box = element.getBoundingClientRect();
+              const image = element.querySelector("img");
+              const imageBox = image?.getBoundingClientRect();
+
+              const radius = Number(
+                getComputedStyle(element).borderTopLeftRadius.replace("px", "")
+              );
+
+              return {
+                name: element.getAttribute("aria-label") ?? "",
+                current: element.getAttribute("aria-current") === "true",
+                width: box.width,
+                radius,
+                favicon:
+                  image !== null &&
+                  image.complete &&
+                  image.naturalWidth > 0 &&
+                  getComputedStyle(image).opacity === "1",
+                fill:
+                  imageBox === undefined
+                    ? 0
+                    : Math.min(imageBox.width, imageBox.height) / box.width,
+                letter:
+                  element.querySelector('[data-testid="rail-letter"]')
+                    ?.textContent ?? "",
+              };
+            })
+          );
+
+          const names = read.map((bubble) => bubble.name.split(",")[0]);
+
+          const dev = read.find((bubble) =>
+            bubble.name.startsWith("oscargabriel-dev")
+          );
+
+          const myr = read.find((bubble) => bubble.name.startsWith("myr"));
+
+          const selected = read
+            .filter((bubble) => bubble.current)
+            .map((bubble) => bubble.name.split(",")[0]);
+
+          // A squircle: rounded, with a radius well under the circle's half width.
+          const squircles = read.every(
+            (bubble) => bubble.radius > 2 && bubble.radius < bubble.width * 0.3
+          );
+
+          await side.getByRole("button", { name: /^myr/u }).click();
+          // The hero, which moves to a draft's address as soon as it holds one.
+          await page.waitForURL(
+            (url) => url.pathname === "/" || url.pathname.startsWith("/new/"),
+            { timeout: 5000 }
+          );
+          await openSidebar(page, width);
+
+          const empty = await sidebarOf(page, width)
+            .getByTestId("shell-no-project-thread")
+            .count();
+
+          await sidebarOf(page, width)
+            .getByTestId("rail-project")
+            .first()
+            .click();
+          await page.waitForURL(/\/t\//u, { timeout: 5000 });
+
+          return `bubbles ${JSON.stringify(names)}, selected ${JSON.stringify(selected)}, squircles ${squircles}, favicon ${dev?.favicon ?? false} fills ${(dev?.fill ?? 0).toFixed(2)}, letter ${myr?.letter ?? ""}, empty project ${empty}, back at ${new URL(page.url()).pathname === new URL(projectThreadUrl).pathname}`;
+        },
+        (detail) =>
+          detail.startsWith(
+            `bubbles ["${exported.projectTitle}","oscargabriel-dev","myr"], selected ["${exported.projectTitle}"], squircles true, favicon true fills `
+          ) &&
+          Number(/fills (?<fill>[\d.]+)/u.exec(detail)?.groups?.fill ?? 0) >=
+            0.9 &&
+          detail.endsWith("letter M, empty project 1, back at true")
+      );
+    },
+    async (width) => {
+      await check(
+        browser,
+        `shell-list-${width}`,
+        shellContext(width),
+        hero,
+        async (page) => {
+          await openSidebar(page, width);
+
+          const side = sidebarOf(page, width);
+
+          const titleTexts = await side
+            .getByTestId("shell-row-title")
+            .allTextContents();
+
+          const titles = titleTexts.map((text) => text.trim());
+
+          const marks = await side
+            .getByTestId("shell-managed-thread")
+            .evaluateAll((rows) =>
+              rows.map(
+                (row) =>
+                  row
+                    .querySelector('[data-testid="shell-status"]')
+                    ?.textContent?.trim() ?? ""
+              )
+            );
+
+          const groups = await side
+            .getByText(/^(?:Active|Settled|Pinned|Snoozed)$/u)
+            .count();
+
+          await side.getByTestId("shell-project-thread").click();
+          await page.waitForURL(/\/t\//u, { timeout: 5000 });
+          await page
+            .getByTestId("next-header-role")
+            .waitFor({ state: "attached", timeout: 5000 });
+          await page.waitForTimeout(400);
+          await shot(page, "project-thread", width);
+
+          // Read as text: the phone's header hides the word to keep room for the title.
+          const role = (
+            (await page.getByTestId("next-header-role").textContent()) ?? ""
+          ).trim();
+
+          return `titles ${JSON.stringify(titles)}, marks ${JSON.stringify(marks)}, groups ${groups}, opened ${new URL(page.url()).pathname === new URL(projectThreadUrl).pathname}, role ${role}`;
+        },
+        (detail) =>
+          detail ===
+          `titles ${JSON.stringify(MANAGED_SEED.map((seed) => seed.title).toReversed())}, marks ${JSON.stringify(["Approval", "Working", "Failed", "Parked", "Done", "Idle"])}, groups 0, opened true, role project thread`
+      );
+    },
+    async (width) => {
+      await check(
+        browser,
+        `shell-managed-${width}`,
+        shellContext(width),
+        projectThreadUrl,
+        async (page) => {
+          await openSidebar(page, width);
+          await sidebarOf(page, width)
+            .getByTestId("shell-managed-thread")
+            .filter({ hasText: "Steps panel projection" })
+            .click();
+          await page.getByTestId("thread-hold").waitFor({ timeout: 5000 });
+          await page.waitForTimeout(300);
+          await shot(page, "hold-parked", width);
+
+          const hold =
+            (await page.getByTestId("thread-hold").textContent()) ?? "";
+
+          const retry = await page
+            .getByTestId("thread-hold")
+            .getByRole("button", { name: "Retry" })
+            .count();
+
+          await openSidebar(page, width);
+          await sidebarOf(page, width)
+            .getByTestId("shell-managed-thread")
+            .filter({ hasText: "Map the favicon resolver" })
+            .click();
+          await page.waitForURL(/\/t\//u, { timeout: 5000 });
+          await editor(page).waitFor({ state: "visible" });
+
+          const words = `a message to a managed thread ${Date.now()}`;
+
+          await editor(page).click();
+          await page.keyboard.type(words);
+          await page.keyboard.press("Enter");
+
+          const shown = await page
+            .locator('[data-message-role="user"]', { hasText: words })
+            .first()
+            .waitFor({ state: "visible", timeout: 10_000 })
+            .then(
+              () => true,
+              () => false
+            );
+
+          await page.waitForTimeout(400);
+          await shot(page, "managed-thread", width);
+
+          const title =
+            (await page.getByTestId("next-header-title").textContent()) ?? "";
+
+          return `hold ${hold.includes("Parked")}, retry ${retry}, title ${title}, sent shown ${shown}`;
+        },
+        (detail) =>
+          detail ===
+          "hold true, retry 1, title Map the favicon resolver, sent shown true"
+      );
+    },
+    async (width) => {
+      await check(
+        browser,
+        `shell-foot-${width}`,
+        shellContext(width),
+        hero,
+        async (page) => {
+          await openSidebar(page, width);
+
+          const foot = sidebarOf(page, width).getByTestId("shell-foot");
+
+          const meters = await foot
+            .locator('[role="meter"], [role="progressbar"], meter, progress')
+            .count();
+
+          await foot.getByTestId("shell-usage").click();
+          await page.getByTestId("usage-page").waitFor({ timeout: 5000 });
+
+          const usageAt = new URL(page.url()).pathname;
+
+          await shot(page, "usage", width);
+          await openSidebar(page, width);
+          await sidebarOf(page, width)
+            .getByTestId("shell-foot")
+            .getByTestId("shell-settings")
+            .click();
+          await page.waitForURL((url) => url.pathname === "/settings", {
+            timeout: 5000,
+          });
+
+          return `meters ${meters}, usage at ${usageAt}, settings at ${new URL(page.url()).pathname}`;
+        },
+        (detail) =>
+          detail === "meters 0, usage at /usage, settings at /settings"
+      );
+    },
+    async (width) => {
+      await check(
+        browser,
+        `shell-scratch-${width}`,
+        shellContext(width),
+        projectThreadUrl,
+        async (page) => {
+          const overlay = page.getByTestId("scratch-overlay");
+
+          // The phone has no keyboard shortcut: its header's button opens the overlay.
+          await (width === 390
+            ? page.getByTestId("open-scratch").click()
+            : page.keyboard.press("Control+j"));
+          await overlay.waitFor({ state: "visible", timeout: 5000 });
+
+          const box = await overlay.boundingBox();
+          const empty = await overlay.getByTestId("scratch-empty").count();
+
+          await shot(page, "scratch-empty", width);
+
+          const words = `a scratch question ${Date.now()}`;
+
+          await overlay.getByTestId("scratch-editor").click();
+          await page.keyboard.type(words);
+          await page.keyboard.press("Enter");
+
+          const sent = await overlay
+            .locator('[data-message-role="user"]', { hasText: words })
+            .first()
+            .waitFor({ state: "visible", timeout: 10_000 })
+            .then(
+              () => true,
+              () => false
+            );
+
+          const answered = await overlay
+            .getByText("Noted.")
+            .first()
+            .waitFor({ state: "visible", timeout: 10_000 })
+            .then(
+              () => true,
+              () => false
+            );
+
+          await page.waitForTimeout(300);
+          await shot(page, "scratch-thread", width);
+
+          // Hidden and shown again, it keeps its thread.
+          if (width === 390) {
+            await overlay.getByTestId("scratch-close").click();
+            await overlay.waitFor({ state: "detached", timeout: 5000 });
+            await page.getByTestId("open-scratch").click();
+          } else {
+            await page.keyboard.press("Control+j");
+            await overlay.waitFor({ state: "detached", timeout: 5000 });
+            await page.keyboard.press("Control+j");
+          }
+
+          const kept = await overlay
+            .locator('[data-message-role="user"]', { hasText: words })
+            .first()
+            .waitFor({ state: "visible", timeout: 10_000 })
+            .then(
+              () => true,
+              () => false
+            );
+
+          await overlay.getByTestId("scratch-clear").click();
+
+          const cleared = await overlay
+            .getByTestId("scratch-empty")
+            .waitFor({ state: "visible", timeout: 5000 })
+            .then(
+              () => true,
+              () => false
+            );
+
+          return `opened ${box !== null}, wide ${(box?.width ?? 0) >= (width === 390 ? 360 : 600)}, empty ${empty}, sent ${sent}, answered ${answered}, kept ${kept}, cleared ${cleared}`;
+        },
+        (detail) =>
+          detail ===
+          "opened true, wide true, empty 1, sent true, answered true, kept true, cleared true"
+      );
+    },
+  ];
+
+  for (const run of perWidth) {
+    for (const width of [1440, 390] as const) {
+      await run(width);
+    }
+  }
+
+  // Last of the shell's checks: a refresh archives the seeded project thread.
+  await check(
+    browser,
+    "shell-refresh-1440",
+    desktop(1440),
+    projectThreadUrl,
+    async (page) => {
+      const confirm = page.getByTestId("refresh-confirm");
+
+      await page.getByTestId("refresh-project-thread").click();
+      await confirm.waitFor({ state: "visible", timeout: 5000 });
+      await page.getByTestId("refresh-confirm-cancel").click();
+      await confirm.waitFor({ state: "detached", timeout: 5000 });
+
+      const kept =
+        new URL(page.url()).pathname === new URL(projectThreadUrl).pathname;
+
+      await page.getByTestId("refresh-project-thread").click();
+      await confirm.waitFor({ state: "visible", timeout: 5000 });
+
+      const words = `a fresh project thread ${Date.now()}`;
+
+      await page.getByTestId("refresh-text").fill(words);
+      await shot(page, "refresh-confirm", 1440);
+      await page.getByTestId("refresh-confirm-go").click();
+      await page.waitForURL(
+        (url) =>
+          url.pathname.startsWith("/t/") &&
+          url.pathname !== new URL(projectThreadUrl).pathname,
+        { timeout: 10_000 }
+      );
+
+      const shown = await page
+        .locator('[data-message-role="user"]', { hasText: words })
+        .first()
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .then(
+          () => true,
+          () => false
+        );
+
+      // The moved mark arrives with the shell stream's next items.
+      const top = await page
+        .getByTestId("shell-column")
+        .locator('[data-testid="shell-project-thread"][aria-current="page"]')
+        .waitFor({ timeout: 10_000 })
+        .then(
+          () => "page",
+          () => "none"
+        );
+
+      const managed = await page
+        .getByTestId("shell-column")
+        .getByTestId("shell-managed-thread")
+        .count();
+
+      await page.waitForTimeout(300);
+      await shot(page, "refreshed", 1440);
+
+      return `cancel kept ${kept}, new thread shown ${shown}, on top ${top === "page"}, managed ${managed}`;
+    },
+    (detail) =>
+      detail ===
+      "cancel kept true, new thread shown true, on top true, managed 0"
+  );
+};
+
 const chromiumBrowser = await chromium.launch();
 
 try {
   const hero = withUi(`${app.origin}/`);
+
+  if (ui === "next") {
+    await shellChecks(chromiumBrowser, hero);
+  }
 
   // Footer folding against t3code's readings at the same widths.
   for (const [width, file] of [
@@ -548,11 +1049,19 @@ try {
         const words = `hero launch ${index} ${Date.now()}`;
 
         if (index > 0) {
-          // Back to the hero without a reload, so the observer keeps watching.
-          await page
-            .getByRole("button", { name: "New thread", exact: true })
-            .first()
-            .click();
+          // Back to the hero without a reload, so the observer keeps watching. The next shell has
+          // no "New thread" (a project's new top-level thread comes from refresh), so it goes back
+          // through the history the router follows.
+          await (ui === "next"
+            ? page.evaluate(() => {
+                history.pushState(null, "", "/?ui=next");
+                dispatchEvent(new PopStateEvent("popstate"));
+              })
+            : page
+                .getByRole("button", { name: "New thread", exact: true })
+                .first()
+                .click());
+
           await editor(page).waitFor({ state: "visible" });
         }
 
@@ -605,7 +1114,7 @@ try {
     (detail) => detail === 'hero "", thread "a thread draft"'
   );
 
-  await check(
+  await classicCheck(
     chromiumBrowser,
     "settle-undo",
     desktop(1440),
@@ -635,7 +1144,7 @@ try {
     }
   );
 
-  await check(
+  await classicCheck(
     chromiumBrowser,
     "search",
     desktop(1440),
@@ -659,7 +1168,7 @@ try {
     (detail) => /^hit [1-9]\d*, miss 0$/u.test(detail)
   );
 
-  await check(
+  await classicCheck(
     chromiumBrowser,
     "menu-items",
     desktop(1440),
@@ -705,7 +1214,12 @@ try {
       const sheet = page.getByTestId("sidebar-sheet");
       const opened = (await sheet.count()) > 0;
 
-      await sheet.getByTestId("sidebar-row-card").first().click();
+      await sheet
+        .getByTestId(
+          ui === "next" ? "shell-project-thread" : "sidebar-row-card"
+        )
+        .first()
+        .click();
       await page.waitForTimeout(900);
 
       return `opened ${opened}, closed ${(await sheet.count()) === 0}, at ${new URL(page.url()).pathname}`;
@@ -713,7 +1227,7 @@ try {
     (detail) => detail.startsWith("opened true, closed true, at /t/")
   );
   // Last: a snoozed thread leaves the active list for every later check.
-  await check(
+  await classicCheck(
     chromiumBrowser,
     "snooze",
     desktop(1440),

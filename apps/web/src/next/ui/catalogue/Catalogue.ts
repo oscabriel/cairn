@@ -49,6 +49,7 @@ import type { TallyPart } from "../Tally.ts";
 import { TONES, TONE_TEXT } from "../Tone.ts";
 import type { Tone } from "../Tone.ts";
 import { tooltipBubble } from "../Tooltip.ts";
+import { shellSpecimens } from "./ShellSpecimens.ts";
 
 /** A theme: the `dark` class or its absence. */
 export const Theme = Schema.Literals(["dark", "light"]);
@@ -76,6 +77,8 @@ export type Model = typeof Model.Type;
 export const Message = defineMessageUnion({
   ChoseTheme: { theme: Theme },
   ToggledFilter: { filter: Schema.String },
+  /** A shell specimen was used; the catalogue shows states and keeps none. */
+  IgnoredSpecimen: {},
   OpenedSheet: {},
   GotSheetDialogMessage: { message: Dialog.Message },
   ToggledDisclosure: { id: Schema.String, isOpen: Schema.Boolean },
@@ -161,6 +164,7 @@ export const update = (model: Model, message: Message): Return =>
       },
     }),
     TypedAnswer: ({ value }) => ({ model: { ...model, answer: value } }),
+    IgnoredSpecimen: () => ({ model }),
   });
 
 // ---------------------------------------------------------------------------------------------
@@ -1214,6 +1218,33 @@ const empties = (h: H): Html =>
 // ---------------------------------------------------------------------------------------------
 // The page
 
+// The shell's specimens are whole regions (a sidebar, a header, an overlay), so each takes the
+// section's full width rather than one cell of its grid.
+const shell = (h: H): Html =>
+  h.section(
+    [
+      h.DataAttribute("testid", "look-shell"),
+      h.AriaLabel("Shell"),
+      h.Class(
+        "flex min-w-0 flex-col gap-(--space-4) rounded-(--radius-large) border border-stroke-1 bg-surface-sidebar p-(--space-4) lg:col-span-2"
+      ),
+    ],
+    [
+      h.h2(
+        [h.Class(classNames("text-ink-1", TYPE.title, WEIGHT_STRONG))],
+        ["Shell"]
+      ),
+      h.div(
+        [h.Class("grid min-w-0 grid-cols-1 gap-(--space-4) xl:grid-cols-2")],
+        shellSpecimens(h, {
+          specimen: (state, caption, content) =>
+            specimen(h, state, caption, content, "flex min-w-0"),
+          ignore: Message.IgnoredSpecimen(),
+        })
+      ),
+    ]
+  );
+
 const THEMES: ReadonlyArray<Theme> = Theme.literals;
 
 const switches = (h: H, model: Model): Html =>
@@ -1296,6 +1327,7 @@ export const view = (model: Model, h: H): Html =>
               kbds(h),
               meters(h),
               empties(h),
+              shell(h),
             ]
           ),
         ]

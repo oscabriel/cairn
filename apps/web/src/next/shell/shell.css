@@ -1,0 +1,12 @@
+/*
+ * The `next` shell's utilities (the rail, the project's sidebar list, the chat header, the hold
+ * banner and the scratch overlay), built from this folder alone into the chunk that imports the
+ * shell, as next/ui/utilities.css does for the primitives. styles.css leaves this folder out of the
+ * entry's scan, so the CSS every classic page loads does not grow with the shell.
+ */
+@reference "tailwindcss";
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "../ui/theme.css";
+@source "./";
+@source not "./**/*.test.ts";
+@source not "./ShellFixtures.ts";

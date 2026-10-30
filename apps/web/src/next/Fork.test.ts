@@ -4,7 +4,7 @@
 // that read them run on both.
 
 import { assert, describe, it } from "@effect/vitest";
-import { Context, Effect, Option } from "effect";
+import { Context, Effect, Option, Predicate } from "effect";
 import type { Html } from "foldkit/html";
 
 // Foldkit's own lazy test harness renders this way; neither is in its public entrypoints.
@@ -40,6 +40,15 @@ const withUi = (
     ...live,
     route,
     shell: Option.some(emptySnapshot),
+    // The root's sync tells the shell the route and the shell on every update.
+    nextShell: {
+      ...live.nextShell,
+      context: {
+        ...live.nextShell.context,
+        route,
+        shell: Option.some(emptySnapshot),
+      },
+    },
     settings: {
       ...live.settings,
       clientLoaded: true,
@@ -64,7 +73,11 @@ const render = (model: Model): Html => {
   }
 };
 
-/** The root view's hooks for `model`, and whether it drew the `next` frame. */
+/**
+ * The root view's hooks for `model`, those outside its sidebar (the wrapper and the page beside
+ * it), and whether it drew the `next` frame. The classic sidebar is the body's first child; `next`
+ * draws its own shell there (L6), whose hooks `behaviour.ts`'s shell checks judge.
+ */
 const drawn = (model: Model) => {
   const body = render(model);
 
@@ -72,15 +85,24 @@ const drawn = (model: Model) => {
     throw new Error("The root view drew nothing.");
   }
 
+  const [, ...rest] = body.children ?? [];
+
+  const outside = rest.flatMap((child) =>
+    Predicate.isString(child) ? [] : hooksOf(child)
+  );
+
   return {
     hooks: hooksOf(body),
+    outsideSidebar: [
+      ...new Set([...outside, ...hooksOf({ ...body, children: [] })]),
+    ],
     next: body.data?.attrs?.["data-ui"] === "next",
   };
 };
 
 describe("the fork behind the root view", () => {
   it.effect(
-    "draws next, with every classic hook, once the chunk has loaded",
+    "draws next, with every classic hook outside the sidebar, once the chunk has loaded",
     () =>
       Effect.gen(function* () {
         yield* fetchNextFrame;
@@ -93,10 +115,10 @@ describe("the fork behind the root view", () => {
           assert.isTrue(next.next, `${route._tag}: next draws the next frame`);
           assert.notInclude(classic.hooks, "data-ui", route._tag);
           assert.isAbove(classic.hooks.length, 3, route._tag);
-          assert.includeMembers(
-            [...next.hooks],
-            [...classic.hooks],
-            `${route._tag}: next keeps the classic hooks`
+          assert.deepStrictEqual(
+            classic.outsideSidebar.filter((hook) => !next.hooks.includes(hook)),
+            [],
+            `${route._tag}: next keeps the classic hooks outside the sidebar`
           );
         }
       })

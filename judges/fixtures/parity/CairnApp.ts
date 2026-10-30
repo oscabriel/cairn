@@ -21,15 +21,18 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  ApprovalId,
   CommandId,
   ConversationId,
   EntryId,
   ProjectId,
+  TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
 import { NodeServices } from "@effect/platform-node";
 import {
   Clock,
+  DateTime,
   Effect,
   Layer,
   ManagedRuntime,
@@ -67,9 +70,12 @@ import { ReachMachine } from "../../../apps/server/src/reach/ReachLayer.ts";
 import { Identity } from "../../../apps/server/src/http/Identity.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import {
+  emptyActivityPatch,
   ProjectRegister,
+  ThreadActivityUpdate,
   ThreadCreate,
 } from "../../../apps/server/src/shell/ShellCommands.ts";
+import type { ThreadActivityPatch } from "../../../apps/server/src/shell/ShellCommands.ts";
 import { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
 
@@ -89,6 +95,42 @@ export interface CairnSeed {
   readonly threadTitle: string;
   readonly entries: ReadonlyArray<ImportedEntry>;
 }
+
+/** What a seeded managed thread is doing, as its shell row says. */
+export type ManagedState =
+  | "asking"
+  | "working"
+  | "failed"
+  | "done"
+  | "idle"
+  | "parked";
+
+/** A thread the seeded project thread manages (a subagent row, ADR 0028). */
+export interface ManagedSeed {
+  readonly title: string;
+  readonly state: ManagedState;
+  /** Made in the harness too, so it opens and takes messages; the others are rows only. */
+  readonly usable: boolean;
+}
+
+/** Another folder project on the rail, with a favicon in its root or none. */
+export interface ProjectSeed {
+  readonly title: string;
+  readonly favicon: boolean;
+}
+
+/**
+ * The `next` shell's seed (look track L6): the seeded thread made its project's project thread,
+ * the threads it manages, and more projects for the rail. Classic judges pass none, so what they
+ * capture is unchanged.
+ */
+export interface ShellSeed {
+  readonly managed: ReadonlyArray<ManagedSeed>;
+  readonly projects: ReadonlyArray<ProjectSeed>;
+}
+
+/** No shell seed: one project, one thread, as the classic judges have it. */
+export const NO_SHELL_SEED: ShellSeed = { managed: [], projects: [] };
 
 /** A running Cairn: the page origin, the seeded thread's URL, and how to stop it. */
 export interface CairnApp {
@@ -148,12 +190,151 @@ const QuickModel = Layer.succeed(
   })
 );
 
-const seedLayer = (seed: CairnSeed, workspace: string) =>
+/** A favicon for a seeded rail project: a filled square, so a screenshot shows it edge to edge. */
+const SEED_FAVICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#2f6f4f"/><path d="M8 22 16 8l8 14z" fill="#f2efe6"/></svg>\n';
+
+/** A seeded id: `019a0000-0000-7000-8000-` and twelve hex digits from `prefix` and `index`. */
+const seededId = (prefix: string, index: number): string =>
+  `019a0000-0000-7000-8000-${prefix}${index.toString(16).padStart(12 - prefix.length, "0")}`;
+
+/** The activity patch that puts a seeded managed row in each state, from when its run started. */
+const PATCHES: Readonly<
+  Record<
+    ManagedState,
+    (started: DateTime.Utc, index: number) => ThreadActivityPatch
+  >
+> = {
+  asking: (started, index) => ({
+    ...emptyActivityPatch,
+    activity: Option.some("waiting"),
+    latestRunStartedAt: Option.some(Option.some(started)),
+    pendingRuntimeRequest: Option.some(
+      Option.some({
+        id: ApprovalId.make(`approval-shell-${index}`),
+        kind: "tool-call",
+        createdAt: started,
+        origin: Option.none(),
+      })
+    ),
+    pendingCount: Option.some(1),
+  }),
+  working: (started) => ({
+    ...emptyActivityPatch,
+    activity: Option.some("running"),
+    latestRunStartedAt: Option.some(Option.some(started)),
+  }),
+  failed: (started) => ({
+    ...emptyActivityPatch,
+    activity: Option.some("failed"),
+    latestRunStartedAt: Option.some(Option.some(started)),
+    lastError: Option.some(Option.some("The provider answered 500.")),
+    lastErrorClass: Option.some(Option.some("provider_error")),
+  }),
+  done: (started) => ({
+    ...emptyActivityPatch,
+    latestRunStartedAt: Option.some(Option.some(started)),
+    latestRunCompletedAt: Option.some(Option.some(started)),
+  }),
+  parked: (started) => ({
+    ...emptyActivityPatch,
+    activity: Option.some("parked"),
+    latestRunStartedAt: Option.some(Option.some(started)),
+    parkedTaskIds: Option.some([TaskId.make(7)]),
+  }),
+  idle: () => emptyActivityPatch,
+};
+
+const seedShell = (shellSeed: ShellSeed, dataDir: string) =>
+  Effect.gen(function* () {
+    const sink = yield* EventSink;
+    const seam = yield* HarnessSeam;
+    const now = DateTime.makeUnsafe(yield* Clock.currentTimeMillis);
+
+    for (const [index, managed] of shellSeed.managed.entries()) {
+      const threadId = ThreadId.make(seededId("b", index + 1));
+
+      yield* sink.commitCommand(
+        ThreadCreate.make({
+          commandId: CommandId.make(seededId("c", index + 1)),
+          threadId,
+          projectId: PROJECT_ID,
+          title: managed.title,
+          provider: "scripted",
+          modelId: "echo",
+          thinkingLevel: "medium",
+          runtimeMode: "full-access",
+          branch: Option.none(),
+          worktreePath: Option.none(),
+          lineage: Option.some({
+            parentThreadId: PARITY_THREAD_ID,
+            relationshipToParent: "subagent",
+            rootThreadId: PARITY_THREAD_ID,
+          }),
+        })
+      );
+
+      // A usable row is a real thread the harness made; the others only say what they are doing.
+      yield* managed.usable
+        ? Effect.asVoid(
+            seam.ensureThread({
+              threadId,
+              projectId: PROJECT_ID,
+              model: { provider: "scripted", modelId: "echo" },
+              thinkingLevel: "medium",
+              cwd: dataDir,
+              instructions: Option.none(),
+              runtimeMode: "full-access",
+            })
+          )
+        : Effect.asVoid(
+            sink.commitCommand(
+              ThreadActivityUpdate.make({
+                commandId: CommandId.make(seededId("d", index + 1)),
+                threadId,
+                patch: PATCHES[managed.state](
+                  DateTime.subtract(now, { minutes: 3 + index * 7 }),
+                  index
+                ),
+              })
+            )
+          );
+    }
+
+    for (const [index, project] of shellSeed.projects.entries()) {
+      const projectRoot = makeWorkspace(dataDir, project.title);
+
+      if (project.favicon) {
+        writeFileSync(path.join(projectRoot, "favicon.svg"), SEED_FAVICON);
+      }
+
+      yield* sink.commitCommand(
+        ProjectRegister.make({
+          commandId: CommandId.make(seededId("e", index + 1)),
+          projectId: ProjectId.make(`prj_shell_${index + 1}`),
+          kind: "folder",
+          title: project.title,
+          workspaceRoot: projectRoot,
+          repository: Option.none(),
+        })
+      );
+    }
+  });
+
+const seedLayer = (
+  seed: CairnSeed,
+  workspace: string,
+  shellSeed: ShellSeed,
+  dataDir: string
+) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sink = yield* EventSink;
       const seam = yield* HarnessSeam;
       const store = yield* ScriptedStore;
+
+      const isShell =
+        shellSeed.managed.length > 0 || shellSeed.projects.length > 0;
 
       yield* sink.commitCommand(
         ProjectRegister.make({
@@ -165,19 +346,28 @@ const seedLayer = (seed: CairnSeed, workspace: string) =>
           repository: Option.none(),
         })
       );
+
+      const create = {
+        commandId: CommandId.make("019a0000-0000-7000-8000-00000000a4f3"),
+        threadId: PARITY_THREAD_ID,
+        projectId: PROJECT_ID,
+        title: seed.threadTitle,
+        provider: "scripted",
+        modelId: "echo",
+        thinkingLevel: "medium",
+        runtimeMode: "full-access",
+        branch: Option.none(),
+        worktreePath: Option.none(),
+      } as const;
+
+      // With a shell seed the thread is its project's project thread (5H), as a first launch makes it.
       yield* sink.commitCommand(
-        ThreadCreate.make({
-          commandId: CommandId.make("019a0000-0000-7000-8000-00000000a4f3"),
-          threadId: PARITY_THREAD_ID,
-          projectId: PROJECT_ID,
-          title: seed.threadTitle,
-          provider: "scripted",
-          modelId: "echo",
-          thinkingLevel: "medium",
-          runtimeMode: "full-access",
-          branch: Option.none(),
-          worktreePath: Option.none(),
-        })
+        isShell
+          ? ThreadCreate.make({
+              ...create,
+              projectThread: { replaces: Option.none() },
+            })
+          : ThreadCreate.make(create)
       );
       yield* seam.ensureThread({
         threadId: PARITY_THREAD_ID,
@@ -218,11 +408,21 @@ const seedLayer = (seed: CairnSeed, workspace: string) =>
         cwd: Option.none(),
         runtimeMode: Option.none(),
       });
+
+      if (isShell) {
+        yield* seedShell(shellSeed, dataDir);
+      }
     })
   );
 
-/** Starts the brain and Vite, seeded; nothing listens outside loopback. */
-export const startCairn = async (seed: CairnSeed): Promise<CairnApp> => {
+/**
+ * Starts the brain and Vite, seeded; nothing listens outside loopback. A shell seed adds the
+ * project thread's managed threads and more rail projects (the `next` shell's judges).
+ */
+export const startCairn = async (
+  seed: CairnSeed,
+  shellSeed: ShellSeed = NO_SHELL_SEED
+): Promise<CairnApp> => {
   const vitePort = await freePort();
   const brainPort = await freePort();
   const origin = `http://${LOOPBACK}:${vitePort}`;
@@ -253,7 +453,7 @@ export const startCairn = async (seed: CairnSeed): Promise<CairnApp> => {
     )
   );
 
-  const App = seedLayer(seed, workspace).pipe(
+  const App = seedLayer(seed, workspace, shellSeed, dataDir).pipe(
     Layer.provideMerge(AppLayer),
     Layer.provideMerge(Harness),
     Layer.provide(ReachMachine.layerTest),

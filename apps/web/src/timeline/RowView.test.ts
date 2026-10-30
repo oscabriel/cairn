@@ -109,6 +109,7 @@ const config = (item: ListItem) => ({
       retryPrompt: Option.none(),
       history: "idle",
       historyCursor: Option.none(),
+      subagents: Option.none(),
     }),
 });
 

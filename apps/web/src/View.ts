@@ -22,6 +22,7 @@ import { loadedSettingsView, settingsPlaceholder } from "./SettingsPage.ts";
 import { view as parkedView } from "./shell/Parked.ts";
 import { sidebarState, view as sidebarView } from "./sidebar/View.ts";
 import { projectOf, threadRowOf } from "./ThreadRow.ts";
+import { subagentRowsInput } from "./timeline/Subagents.ts";
 import { CHAT_COLUMN_CLASS, chatHeader } from "./ui/ChatHeader.ts";
 
 const placeholder = (h: HtmlBuilder<Message>, text: string): Html =>
@@ -117,7 +118,8 @@ const threadPage = (
   thread: Model["thread"],
   workspaceRoot: string,
   failureMessage: string,
-  retryUrl: string
+  retryUrl: string,
+  subagents: Thread.ViewInputs["subagents"]
 ): Html =>
   h.submodel({
     slotId: "thread",
@@ -133,6 +135,7 @@ const threadPage = (
               message: failureMessage,
               retryUrl: retryUrl === "" ? Option.none() : Option.some(retryUrl),
             }),
+      subagents,
     },
     toParentMessage: (message) => Message.GotThreadMessage({ message }),
   });
@@ -266,6 +269,12 @@ const threadBody = (
         Option.getOrElse(
           Option.flatMap(failure, ({ retryUrl }) => retryUrl),
           () => ""
+        ),
+        // The subagent rows (plan 6C), drawn by the `next` views only.
+        subagentRowsInput(
+          Option.isSome(nextFrameOf(model)),
+          model.shell,
+          threadId
         ),
       ]),
     ]

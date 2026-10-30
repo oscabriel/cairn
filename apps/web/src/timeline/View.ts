@@ -21,11 +21,17 @@ import { estimatedHeightOf, setRecent, transcriptOf } from "./Rows.ts";
 import type { ListItem, Transcript } from "./Rows.ts";
 import { rowView } from "./RowView.ts";
 import type { RowContext } from "./RowView.ts";
+import { withSubagentItems } from "./Subagents.ts";
+import type { SubagentShells } from "./Subagents.ts";
 
-/** What the thread page passes: its view of the thread and the thread's working directory. */
+/**
+ * What the thread page passes: its view of the thread, the thread's working directory, and on the
+ * `next` views the shell rows its subagent rows read (none on classic, which draws none).
+ */
 export interface ViewInputs {
   readonly state: Option.Option<ThreadViewState>;
   readonly workspaceRoot: Option.Option<string>;
+  readonly subagents: Option.Option<SubagentShells>;
 }
 
 /**
@@ -68,7 +74,8 @@ const renderRow = (
   expanded: boolean,
   retryPrompt: RowContext["retryPrompt"],
   history: RowContext["history"],
-  cursor: RowContext["historyCursor"]
+  cursor: RowContext["historyCursor"],
+  subagents: RowContext["subagents"]
 ): Html =>
   rowView(h, item, {
     threadId,
@@ -81,6 +88,7 @@ const renderRow = (
     retryPrompt,
     history,
     historyCursor: cursor,
+    subagents,
   });
 
 /** The copy feedback only for the row it belongs to, so other rows keep their lazy views. */
@@ -95,6 +103,8 @@ const NO_COPY: Option.Option<string> = Option.none();
 const NO_PROMPT: RowContext["retryPrompt"] = Option.none();
 
 const NO_CURSOR: RowContext["historyCursor"] = Option.none();
+
+const NO_SHELLS: RowContext["subagents"] = Option.none();
 
 const itemView = (
   h: HtmlBuilder<Message>,
@@ -130,8 +140,43 @@ const itemView = (
       prompt,
       item.kind === "history" ? model.history : "idle",
       cursor,
+      // Only the subagent items read the shell, so a shell change redraws no other row.
+      item.kind === "subagents" || item.kind === "parent-link"
+        ? inputs.subagents
+        : NO_SHELLS,
     ]) ?? h.empty
   );
+};
+
+/** Each derived transcript with its subagent items, so the same transcript keeps one copy. */
+const withItems = new WeakMap<
+  Transcript,
+  { readonly items: ReadonlyArray<ListItem>; readonly transcript: Transcript }
+>();
+
+/** The transcript with the subagent groups and the way back in place (the `next` views only). */
+const withSubagents = (
+  transcript: Transcript,
+  state: ViewInputs["state"],
+  model: Model
+): Transcript => {
+  const items = withSubagentItems(transcript.items, state, model.ui);
+
+  if (items === transcript.items) {
+    return transcript;
+  }
+
+  const known = withItems.get(transcript);
+
+  if (known?.items === items) {
+    return known.transcript;
+  }
+
+  const placed: Transcript = { ...transcript, items };
+
+  withItems.set(transcript, { items, transcript: placed });
+
+  return placed;
 };
 
 const pill = (h: HtmlBuilder<Message>, visible: boolean): Html =>
@@ -164,12 +209,16 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
   (model, inputs, h) => {
     const threadId = Option.getOrElse(model.threadId, () => "");
 
-    const transcript = transcriptOf(
+    const derived = transcriptOf(
       threadId,
       inputs.state,
       model.ui,
       inputs.workspaceRoot
     );
+
+    const transcript: Transcript = Option.isSome(inputs.subagents)
+      ? withSubagents(derived, inputs.state, model)
+      : derived;
 
     const expandedUsers = new Set(model.ui.expandedUserMessageIds);
     const following = isFollowingEnd(model) || transcript.items.length === 0;

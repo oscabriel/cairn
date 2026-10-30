@@ -10,6 +10,8 @@
 // them, then phase 2's surfaces (wave 6). This file is integrator-only after L0.
 
 import "./tokens.css";
+// The transcript's subagent rows (plan 6C), registered with the transcript as this chunk loads.
+import "./timeline/SubagentRows.ts";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import { Message } from "../Message.ts";

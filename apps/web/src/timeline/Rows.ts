@@ -26,6 +26,7 @@ import { Option } from "effect";
 
 import type { ThreadUi } from "./Model.ts";
 import { SAVED_THREAD_LIMIT } from "./Model.ts";
+import type { ParentLinkItem, SubagentsItem } from "./Subagents.ts";
 
 /** The control at the top of a thread with older entries to page in. */
 export interface HistoryItem {
@@ -47,11 +48,13 @@ export type MessageItem = Extract<TimelineRow, { readonly kind: "message" }> & {
   readonly changedFiles: Option.Option<ChangedFilesRow>;
 };
 
-/** One item of the scroll list. */
+/** One item of the scroll list; the subagent items only on the `next` views (`Subagents.ts`). */
 export type ListItem =
   | Exclude<TimelineRow, { readonly kind: "message" }>
   | MessageItem
-  | HistoryItem;
+  | HistoryItem
+  | SubagentsItem
+  | ParentLinkItem;
 
 /** The derived transcript: the list and the timeline it came from. */
 export interface Transcript {
@@ -372,8 +375,14 @@ const messageHeight = (message: TimelineMessage, expanded: boolean): number => {
   return 24 + LINE_PX * lines;
 };
 
+/** One subagent row's height, and a group header's. */
+const SUBAGENT_ROW_PX = 48;
+
 const FIXED_HEIGHTS: Readonly<
-  Record<Exclude<ListItem["kind"], "message" | "changed-files">, number>
+  Record<
+    Exclude<ListItem["kind"], "message" | "changed-files" | "subagents">,
+    number
+  >
 > = {
   history: 44,
   working: 32,
@@ -385,6 +394,7 @@ const FIXED_HEIGHTS: Readonly<
   error: 72,
   "assistant-meta": 28,
   work: 32,
+  "parent-link": 44,
 };
 
 /** A row's height before it is measured. */
@@ -404,6 +414,13 @@ export const estimatedHeightOf = (
 
   if (item.kind === "changed-files") {
     return cardHeight(item);
+  }
+
+  if (item.kind === "subagents") {
+    const rows =
+      item.links.length === 1 ? 1 : 1 + (item.expanded ? item.links.length : 0);
+
+    return 8 + SUBAGENT_ROW_PX * rows;
   }
 
   if (item.kind === "work" && item.isExpandedToolGroup) {

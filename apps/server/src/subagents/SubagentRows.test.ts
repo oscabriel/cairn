@@ -2,10 +2,12 @@
 // lineage, the parent's project and cwd, the brief's title and the dispatched model; a repeat, as
 // the fiber and the boot repair both answer the same child, leaves the one row, also when both
 // commit at once (the command id's receipt); a child whose parent has no row gets none. The fiber
-// ends quietly when its scope closes and with a warning when the event stream ends under it. The
-// fiber and the boot repair over a real brain are in `brain/SubagentsPiDurable.test.ts`.
+// ends quietly when its scope closes and with a warning when the event stream ends under it.
+// Without pi-durable (the scripted harness) the fiber reads the child through the seam's documents
+// and makes the same row. The fiber and the boot repair over a real brain are in
+// `brain/SubagentsPiDurable.test.ts`.
 
-import { ThreadId } from "@cairn/protocol/Ids";
+import { ConversationId, ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Effect,
@@ -19,7 +21,7 @@ import {
 } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
-import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import { HarnessSeam, ThreadEnsured } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
@@ -252,6 +254,103 @@ describe("the subagent row fiber's end", () => {
           ],
           [[], ["subagent_rows_ended"]]
         );
+      }).pipe(Effect.provide(ShellTestLayer))
+  );
+});
+
+/** The documents a scripted child and its parent project, as `HarnessSeam.document` reads them. */
+const scriptedDocuments =
+  (parent: ThreadId) => (threadId: ThreadId, kind: string) => {
+    if (threadId === CHILD && kind === "cairn.child") {
+      return Effect.succeedSome({
+        key: "call-7",
+        parentThreadId: parent,
+        parentConversationId: 1,
+        rootThreadId: parent,
+        depth: 1,
+        briefApprovalId: "call-7",
+        resultSchema: null,
+        attempts: 0,
+        report: null,
+        permissionMode: "auto-accept-edits",
+      });
+    }
+
+    if (threadId === parent && kind === "cairn.subagents") {
+      return Effect.succeedSome({
+        items: {
+          "call-7": {
+            threadId: CHILD,
+            description: "Count the files",
+            dispatch: {
+              spec: null,
+              resolved: { model: { provider: "scripted", modelId: "echo" } },
+              previewed: null,
+              dispatchedAt: 5,
+            },
+            worktree: null,
+          },
+        },
+      });
+    }
+
+    return Effect.succeedNone;
+  };
+
+describe("a scripted subagent's shell row", () => {
+  it.effect(
+    "is made through the seam's documents when there is no pi-durable brain",
+    () =>
+      Effect.gen(function* () {
+        const sink = yield* EventSink;
+        const rows = yield* ThreadRows;
+        const project = createProject(1);
+        const parent = testThreadId(1);
+
+        yield* sink.commitCommand(project.command);
+        yield* sink.commitCommand(createThread(project.projectId, 1));
+
+        const scope = yield* Scope.make();
+
+        yield* Layer.buildWithScope(SubagentRows, scope).pipe(
+          Effect.provideService(HarnessSeam, {
+            ...harnessWith(
+              Stream.make(
+                ThreadEnsured.make({
+                  threadId: CHILD,
+                  conversationId: ConversationId.make(2),
+                  parent: Option.some(parent),
+                })
+              )
+            ),
+            document: scriptedDocuments(parent),
+          })
+        );
+
+        // The fiber runs on its own; wait for its one row.
+        let row = yield* rows.get(CHILD);
+
+        for (let tries = 0; Option.isNone(row) && tries < 50; tries += 1) {
+          yield* Effect.sleep("10 millis");
+          row = yield* rows.get(CHILD);
+        }
+
+        yield* Scope.close(scope, Exit.void);
+
+        const { shell } = Option.getOrThrow(row);
+
+        assert.deepStrictEqual(
+          shell.lineage,
+          Option.some({
+            parentThreadId: parent,
+            relationshipToParent: "subagent" as const,
+            rootThreadId: parent,
+          })
+        );
+        assert.strictEqual(shell.title, "Count the files");
+        assert.strictEqual(shell.provider, "scripted");
+        assert.strictEqual(shell.modelId, "echo");
+        assert.strictEqual(shell.runtimeMode, "auto-accept-edits");
       }).pipe(Effect.provide(ShellTestLayer))
   );
 });

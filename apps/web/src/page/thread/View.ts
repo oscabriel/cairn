@@ -8,6 +8,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { isOpen } from "../../diff/Model.ts";
 import { toggleView as diffToggleView } from "../../diff/Toggle.ts";
+import type { SubagentShells } from "../../timeline/Subagents.ts";
 import * as Timeline from "../../timeline/View.ts";
 import { diffPanelPlaceholder, loadedDiffView } from "./DiffPanel.ts";
 import { Message } from "./Message.ts";
@@ -20,10 +21,14 @@ export interface LaunchFailure {
   readonly retryUrl: Option.Option<string>;
 }
 
-/** What the root passes the page: the thread's working directory and a failed launch, from the shell. */
+/**
+ * What the root passes the page, from the shell: the thread's working directory, a failed launch,
+ * and on the `next` views the rows its subagent rows read.
+ */
 export interface ViewInputs {
   readonly workspaceRoot: Option.Option<string>;
   readonly launchFailure: Option.Option<LaunchFailure>;
+  readonly subagents: Option.Option<SubagentShells>;
 }
 
 /** Why the launch failed, in place of "does not exist", with a link to its first message. */
@@ -118,7 +123,7 @@ const diffPanel = (model: Model, h: HtmlBuilder<Message>): Html =>
 
 /** The thread page. */
 export const view = Submodel.defineView<Model, Message, ViewInputs>(
-  (model, { launchFailure, workspaceRoot }, h) =>
+  (model, { launchFailure, workspaceRoot, subagents }, h) =>
     h.section(
       [
         h.DataAttribute("testid", "thread-page"),
@@ -130,7 +135,7 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
           slotId: "timeline",
           model: model.timeline,
           view: Timeline.view,
-          viewInputs: { state: model.view, workspaceRoot },
+          viewInputs: { state: model.view, workspaceRoot, subagents },
           toParentMessage: (message) => Message.GotTimelineMessage({ message }),
         }),
         diffPanel(model, h),

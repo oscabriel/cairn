@@ -13,7 +13,12 @@
 import { CommandId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelRef } from "@cairn/protocol/Models";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
-import { ChildWorktree } from "@cairn/protocol/Subagents";
+import { RuntimeMode as RuntimeModeSchema } from "@cairn/protocol/Policy";
+import {
+  CHILD_DOCUMENT,
+  ChildWorktree,
+  SUBAGENTS_DOCUMENT,
+} from "@cairn/protocol/Subagents";
 import type { ThreadLineage } from "@cairn/protocol/Subagents";
 import type { ConversationId, Cursor } from "@earendil-works/pi-durable";
 import {
@@ -117,6 +122,81 @@ export const childRowSource = (
       worktree: decodeWorktree(item?.worktree ?? null),
     }));
   });
+
+/** What a seam-read row source reads of a child's `cairn.child`. */
+const decodeLink = Schema.decodeUnknownOption(
+  Schema.Struct({
+    key: Schema.String,
+    parentThreadId: ThreadId,
+    rootThreadId: ThreadId,
+    permissionMode: RuntimeModeSchema,
+  })
+);
+
+/** What a seam-read row source reads of the parent's registry item. */
+const decodeItem = Schema.decodeUnknownOption(
+  Schema.Struct({
+    description: Schema.String,
+    dispatch: Schema.Json,
+    worktree: Schema.Json,
+  })
+);
+
+const decodeItems = Schema.decodeUnknownOption(
+  Schema.Struct({ items: Schema.Record(Schema.String, Schema.Json) })
+);
+
+/**
+ * A child's row source read through the seam (`HarnessSeam.document`), as the stream projects its
+ * `cairn.child` and its parent's `cairn.subagents`: the scripted harness's, which has no pi-durable
+ * session to read. None for a thread that is not a subagent.
+ */
+export const seamRowSource = Effect.fn("SubagentRows.seamRowSource")(function* (
+  threadId: ThreadId
+) {
+  const harness = yield* HarnessSeam;
+
+  const link = Option.flatMap(
+    yield* harness.document(threadId, CHILD_DOCUMENT),
+    decodeLink
+  );
+
+  if (Option.isNone(link)) {
+    return Option.none<ChildRowSource>();
+  }
+
+  const { key, parentThreadId, rootThreadId, permissionMode } = link.value;
+
+  const item = Option.flatMap(
+    Option.flatMap(
+      yield* harness.document(parentThreadId, SUBAGENTS_DOCUMENT),
+      decodeItems
+    ),
+    ({ items }) =>
+      Option.flatMap(Option.fromUndefinedOr(items[key]), decodeItem)
+  );
+
+  return Option.some<ChildRowSource>({
+    threadId,
+    lineage: {
+      parentThreadId,
+      relationshipToParent: "subagent",
+      rootThreadId,
+    },
+    title: Option.getOrElse(
+      Option.flatMap(item, ({ description }) => nonEmpty(description)),
+      () => "Subagent"
+    ),
+    model: Option.flatMap(item, ({ dispatch }) =>
+      decodeDispatched(dispatch).pipe(
+        Option.map((found) => found.resolved.model),
+        Option.filter((model) => model.provider !== "unknown")
+      )
+    ),
+    runtimeMode: permissionMode,
+    worktree: Option.flatMap(item, ({ worktree }) => decodeWorktree(worktree)),
+  });
+});
 
 /**
  * Makes a child's row once. Nothing for a child that has a row, or whose parent has none (a parent
@@ -236,18 +316,31 @@ export const repairSubagentRows = Effect.gen(function* () {
 
 /**
  * The fiber that makes each child's row as its creating commit lands: it answers every
- * `ThreadEnsured` naming a parent, for as long as the scope lives. Off without pi-durable. Leaves
+ * `ThreadEnsured` naming a parent, for as long as the scope lives; without pi-durable (the scripted
+ * harness) it reads each child through the seam (`seamRowSource`). Leaves
  * `HarnessSeam`, `ThreadRows` and `EventSink` to the composition root.
  */
 export const SubagentRows = Layer.effectDiscard(
   Effect.gen(function* () {
     const harness = yield* HarnessSeam;
     const brain = yield* Effect.serviceOption(Brain);
-    const context = yield* Effect.context<ThreadRows | EventSink>();
 
-    if (Option.isNone(brain)) {
-      return;
-    }
+    const context = yield* Effect.context<
+      ThreadRows | EventSink | HarnessSeam
+    >();
+
+    const sourceOf = (event: {
+      readonly threadId: ThreadId;
+      readonly conversationId: number;
+    }) =>
+      Option.match(brain, {
+        // The scripted harness has no pi-durable session: its child reads through the seam.
+        onNone: () => seamRowSource(event.threadId),
+        onSome: (found) =>
+          Effect.flatMap(found.session, (session) =>
+            childRowSource(session, conversationOf(event.conversationId))
+          ),
+      });
 
     const onEnsured = (event: {
       readonly threadId: ThreadId;
@@ -256,12 +349,7 @@ export const SubagentRows = Layer.effectDiscard(
       logged(
         event.threadId,
         Effect.gen(function* () {
-          const session = yield* brain.value.session;
-
-          const source = yield* childRowSource(
-            session,
-            conversationOf(event.conversationId)
-          );
+          const source = yield* sourceOf(event);
 
           for (const child of Option.toArray(source)) {
             yield* ensureChildRow(child);

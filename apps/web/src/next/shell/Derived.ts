@@ -43,6 +43,37 @@ export const railProjectsOf = (model: Model): ReadonlyArray<ProjectShell> =>
       shell.projects.filter((project) => project.kind === "folder"),
   });
 
+/**
+ * A folder as the add-project picker compares it with a project's root: trimmed, a leading `~` read
+ * against the home folder when the picker knows it, and no trailing slash.
+ */
+export const folderOf = (
+  input: string,
+  home: Option.Option<string>
+): string => {
+  const trimmed = input.trim();
+
+  const expanded = Option.match(home, {
+    onNone: () => trimmed,
+    onSome: (root) =>
+      trimmed === "~" || trimmed.startsWith("~/")
+        ? `${root}${trimmed.slice(1)}`
+        : trimmed,
+  });
+
+  return expanded.length > 1 ? expanded.replace(/\/+$/u, "") : expanded;
+};
+
+/** The rail's project rooted at `folder`, when one is. */
+export const projectAtFolder = (
+  model: Model,
+  folder: string
+): Option.Option<ProjectShell> =>
+  Array.findFirst(
+    railProjectsOf(model),
+    (project) => folderOf(project.workspaceRoot, Option.none()) === folder
+  );
+
 /** The thread the route opens, when it opens one the shell holds. */
 export const openThreadOf = (model: Model): Option.Option<ThreadShell> =>
   Predicate.isTagged(model.context.route, "Thread")

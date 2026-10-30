@@ -74,6 +74,10 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Subagent**: A thread that another thread or a stone spawns through a tool, from an approved brief. Its parent owns it; it has no sidebar row of its own but shows under its parent, where it can be steered and stopped. Its result reaches the parent as a note.
 
+**Subagent row**: A spawned child's one line in its parent's transcript (`next` only), placed after the step that spawned it, its state read from the child's own row through the one thread-state function and linking to the child's thread. Two or more children from one step fold into a group with a tally ("3 subagents · 1 working · 2 done").
+
+**Way back**: The "Subagent of <parent>" link at the top of a child's transcript, back to the parent thread.
+
 **Subagent anchor**: The background task a parent owns for each child. It owns the child's conversation, so the parent's run is never held open by its children (ADR 0028).
 
 **Brief task**: The parent's background task that holds a pending brief's 7-day expiry; if no answer comes by then, it expires the brief and tells the parent.
@@ -276,7 +280,7 @@ _Avoid_: plugin
 
 **Scratch overlay**: The floating panel over any page that holds the scratch thread: Cmd+J or Ctrl+J shows and hides it without losing it (a header button on a phone), and shown, it takes the keyboard; its first message launches the scratch thread, and Clear deletes the thread and its folder.
 
-**Usage page**: `/usage`, opened from the shell's foot: where spend and the plan windows will show; a placeholder until the meters land.
+**Usage page**: `/usage`, opened from the shell's foot (`next/meters`): the spend ledger with each figure's basis, the model plans' windows (an unknown share reads Unknown, never zero) and the budgets.
 
 **Measured list**: The transcript's own scroll list (`timeline/list`, ADR 0041). A row counts in the scroll range only once it has been measured (history it never drew is measured off-screen first), parked rows keep frozen heights, the first visible row keeps its offset through any change above it, and a glyph bookmark keeps the reader's place through width changes. _Avoid_: virtual list (that was `@foldkit/ui`'s, which estimated heights).
 

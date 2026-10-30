@@ -13,13 +13,15 @@ import { build } from "vite";
 import type { Rolldown } from "vite";
 
 /**
- * Entry JS ceiling, gzip bytes (288 KiB). See `ENTRY_JS_TARGET` for the plan's number and why it
+ * Entry JS ceiling, gzip bytes (300 KiB). See `ENTRY_JS_TARGET` for the plan's number and why it
  * differs. Wave 4 integration raised it from 256 KiB: the diff panel's and settings page's state,
  * the hold banner and the usage meter add about 22 KB gzip to the entry even with both views
- * split out (ADR 0021). D46's binding bar is round trips and time to interactive, which
- * `judges/load.ts` judges.
+ * split out (ADR 0021). Wave 6a raised it from 288 KiB: until 7A deletes the classic views, the
+ * entry carries both their state and the `next` shell's, request card's, meters' and subagent
+ * rows' Models and Messages (295,528 B at wave 6a); 7A lowers it again. D46's binding bar is
+ * round trips and time to interactive, which `judges/load.ts` judges.
  */
-export const ENTRY_JS_BUDGET = 294_912;
+export const ENTRY_JS_BUDGET = 307_200;
 
 /**
  * The plan's entry target (D46: 200 KB gzip). Not met by wave 3's client: effect, foldkit and

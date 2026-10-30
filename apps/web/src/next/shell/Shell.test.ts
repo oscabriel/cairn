@@ -195,7 +195,7 @@ describe("the rail and the project's list", () => {
 });
 
 describe("the shell's update", () => {
-  it("opens a project's project thread from the rail, and the composer for one without", () => {
+  it("opens a project's project thread from the rail, and a draft in that project for one without", () => {
     const toCairn = update(
       onProjectThread,
       Message.ClickedProject({ projectId: CAIRN })
@@ -211,11 +211,38 @@ describe("the shell's update", () => {
       Message.ClickedProject({ projectId: MYR })
     );
 
-    assert.deepStrictEqual(
-      toMyr.outMessage,
-      OutMessage.RequestedNavigate({ url: "/" })
-    );
+    // Myr has no project thread: a draft of its own opens with myr as its project, so the first
+    // message launches there and never archives the thread of the project the user came from.
+    assert.isUndefined(toMyr.outMessage);
     assert.deepStrictEqual(toMyr.model.selectedProjectId, Option.some(MYR));
+
+    const minted = runOnly(toMyr.commands);
+
+    assert.isTrue(Predicate.isTagged(minted, "PreparedProjectDraft"));
+
+    if (Predicate.isTagged(minted, "PreparedProjectDraft")) {
+      assert.strictEqual(minted.projectId, MYR);
+      assert.deepStrictEqual(
+        update(toMyr.model, minted).outMessage,
+        OutMessage.RequestedProjectDraft({
+          projectId: MYR,
+          draftId: minted.draftId,
+        })
+      );
+    }
+
+    const started = update(
+      onProjectThread,
+      Message.ClickedStartProjectThread({ projectId: MYR })
+    );
+
+    const startedDraft = runOnly(started.commands);
+
+    assert.deepStrictEqual(started.model.selectedProjectId, Option.some(MYR));
+    assert.isTrue(
+      Predicate.isTagged(startedDraft, "PreparedProjectDraft") &&
+        startedDraft.projectId === MYR
+    );
     assert.deepStrictEqual(
       update(onProjectThread, Message.ClickedUsage()).outMessage,
       OutMessage.RequestedNavigate({ url: USAGE_PATH })
@@ -300,6 +327,23 @@ describe("the shell's update", () => {
     ).model;
 
     assert.isTrue(shown.scratch.isOpen);
+    // The overlay takes the keyboard from the composer behind it, and so does the refresh confirm.
+    assert.deepStrictEqual(
+      update(onProjectThread, Message.PressedScratchShortcut()).commands?.map(
+        (command) => [command.name, command.args]
+      ),
+      [["FocusField", { selector: "#scratch-editor" }]]
+    );
+    assert.deepStrictEqual(
+      update(onProjectThread, Message.ClickedRefresh()).commands?.map(
+        (command) => [command.name, command.args]
+      ),
+      [["FocusField", { selector: "#refresh-text" }]]
+    );
+    assert.deepStrictEqual(
+      update(shown, Message.PressedScratchShortcut()).commands ?? [],
+      []
+    );
     assert.isFalse(
       update(shown, Message.PressedScratchShortcut()).model.scratch.isOpen
     );

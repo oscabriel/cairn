@@ -185,7 +185,10 @@ const head = (h: HtmlBuilder<Message>, project: ProjectShell): Html =>
     ]
   );
 
-const noProjectThread = (h: HtmlBuilder<Message>): Html =>
+const noProjectThread = (
+  h: HtmlBuilder<Message>,
+  projectId: ProjectShell["id"]
+): Html =>
   h.div(
     [
       h.DataAttribute("testid", "shell-no-project-thread"),
@@ -201,7 +204,9 @@ const noProjectThread = (h: HtmlBuilder<Message>): Html =>
         {
           ...buttonDefaults<Message>(),
           size: "small",
-          onClick: Option.some(Message.ClickedStartProjectThread()),
+          onClick: Option.some(
+            Message.ClickedStartProjectThread({ projectId })
+          ),
         },
         [glyph(h, Plus, "plus", "small"), "Start the project thread"]
       ),
@@ -337,7 +342,7 @@ export const sidebarList = (
           h.div(
             [h.Class("min-h-0 flex-1 overflow-y-auto pb-(--space-3)")],
             Option.match(content.projectThread, {
-              onNone: () => [noProjectThread(h)],
+              onNone: () => [noProjectThread(h, project.id)],
               onSome: (top) => [
                 h.div(
                   [h.Class("px-(--space-1-5) pt-(--space-2)")],

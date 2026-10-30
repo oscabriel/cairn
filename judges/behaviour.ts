@@ -51,7 +51,7 @@
 //   shell-rail-<w>        one squircle bubble per folder project (a low corner radius, not a
 //                         circle), the favicon drawn edge to edge in its bubble, a letter for a
 //                         project with none, the selected one marked; a bubble opens its project
-//                         (its project thread, or the composer when it has none);
+//                         (its project thread, or a draft in that project when it has none);
 //   shell-list-<w>        the project thread on top opens it under the new header ("project
 //                         thread"), and under it the managed threads, newest first, each with
 //                         its status mark and word; no Active, Settled, Pinned or Snoozed group;
@@ -59,11 +59,15 @@
 //                         shows in its transcript; a parked one shows the hold banner with Retry;
 //   shell-foot-<w>        Usage opens the usage page and Settings the settings page, and the foot
 //                         holds no meter;
-//   shell-scratch-<w>     Ctrl+J (1,440) or the header's button (390) opens the scratch overlay; a
-//                         message sent there shows with its answer; hiding and showing keeps it;
+//   shell-scratch-<w>     Ctrl+J while typing in the composer (1,440) or the header's button (390)
+//                         opens the scratch overlay and moves the keyboard into it; a message
+//                         typed without a click lands there, not in the composer, and shows with
+//                         its answer; hiding and showing keeps it;
 //                         Clear deletes it and shows the empty overlay;
 //   shell-refresh-1440    Refresh asks first (Cancel keeps the thread), then starts a new project
-//                         thread with the typed message, opens it and lists it on top.
+//                         thread with the typed message, opens it and lists it on top;
+//   shell-start-1440      myr's bubble opens a draft of myr's own; its first message launches in
+//                         myr and becomes its project thread, and cairn keeps its own.
 // Exits 0 when every check ran and the report was written; `--strict` also requires every check
 // to pass, which is wave 5's bar.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -431,11 +435,10 @@ const shellChecks = async (browser: Browser, hero: string) => {
           );
 
           await side.getByRole("button", { name: /^myr/u }).click();
-          // The hero, which moves to a draft's address as soon as it holds one.
-          await page.waitForURL(
-            (url) => url.pathname === "/" || url.pathname.startsWith("/new/"),
-            { timeout: 5000 }
-          );
+          // A draft of myr's own, never the bare hero (whose launch falls back to another project).
+          await page.waitForURL((url) => url.pathname.startsWith("/new/"), {
+            timeout: 5000,
+          });
           await openSidebar(page, width);
 
           const empty = await sidebarOf(page, width)
@@ -616,10 +619,16 @@ const shellChecks = async (browser: Browser, hero: string) => {
         async (page) => {
           const overlay = page.getByTestId("scratch-overlay");
 
-          // The phone has no keyboard shortcut: its header's button opens the overlay.
-          await (width === 390
-            ? page.getByTestId("open-scratch").click()
-            : page.keyboard.press("Control+j"));
+          // On a desktop the shortcut comes while typing in the main composer, which keeps its
+          // words; the overlay takes the keyboard. The phone has no shortcut: its header's button
+          // opens the overlay.
+          if (width === 1440) {
+            await editor(page).click();
+            await page.keyboard.press("Control+j");
+          } else {
+            await page.getByTestId("open-scratch").click();
+          }
+
           await overlay.waitFor({ state: "visible", timeout: 5000 });
 
           const box = await overlay.boundingBox();
@@ -629,8 +638,15 @@ const shellChecks = async (browser: Browser, hero: string) => {
 
           const words = `a scratch question ${Date.now()}`;
 
-          await overlay.getByTestId("scratch-editor").click();
+          // Typed with no click: the words land where the focus went.
           await page.keyboard.type(words);
+
+          const scratchField = overlay.getByTestId("scratch-editor");
+          const inOverlay = (await scratchField.inputValue()) === words;
+
+          const composerText = await editor(page).inputValue();
+          const inComposer = composerText.includes(words);
+
           await page.keyboard.press("Enter");
 
           const sent = await overlay
@@ -684,11 +700,11 @@ const shellChecks = async (browser: Browser, hero: string) => {
               () => false
             );
 
-          return `opened ${box !== null}, wide ${(box?.width ?? 0) >= (width === 390 ? 360 : 600)}, empty ${empty}, sent ${sent}, answered ${answered}, kept ${kept}, cleared ${cleared}`;
+          return `opened ${box !== null}, wide ${(box?.width ?? 0) >= (width === 390 ? 360 : 600)}, empty ${empty}, typed in overlay ${inOverlay}, in composer ${inComposer}, sent ${sent}, answered ${answered}, kept ${kept}, cleared ${cleared}`;
         },
         (detail) =>
           detail ===
-          "opened true, wide true, empty 1, sent true, answered true, kept true, cleared true"
+          "opened true, wide true, empty 1, typed in overlay true, in composer false, sent true, answered true, kept true, cleared true"
       );
     },
   ];
@@ -763,6 +779,81 @@ const shellChecks = async (browser: Browser, hero: string) => {
     (detail) =>
       detail ===
       "cancel kept true, new thread shown true, on top true, managed 0"
+  );
+
+  // After the refresh, which left the seeded project the user was in most recently: starting
+  // myr's project thread from the rail launches in myr, and cairn keeps its project thread.
+  await check(
+    browser,
+    "shell-start-1440",
+    desktop(1440),
+    projectThreadUrl,
+    async (page) => {
+      const column = page.getByTestId("shell-column");
+
+      await column.getByRole("button", { name: /^myr/u }).click();
+      await page.waitForURL((url) => url.pathname.startsWith("/new/"), {
+        timeout: 5000,
+      });
+      await column
+        .getByTestId("shell-no-project-thread")
+        .waitFor({ state: "visible", timeout: 5000 });
+
+      const words = `myr's first message ${Date.now()}`;
+
+      await editor(page).click();
+      await page.keyboard.type(words);
+      await page.keyboard.press("Enter");
+      await page.waitForURL((url) => url.pathname.startsWith("/t/"), {
+        timeout: 10_000,
+      });
+
+      const shown = await page
+        .locator('[data-message-role="user"]', { hasText: words })
+        .first()
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .then(
+          () => true,
+          () => false
+        );
+
+      // The new thread is myr's project thread: its mark arrives with the shell stream.
+      const myrThread = await column
+        .locator('[data-testid="shell-project-thread"][aria-current="page"]')
+        .waitFor({ timeout: 10_000 })
+        .then(
+          () => true,
+          () => false
+        );
+
+      const selected = await column
+        .locator('[data-testid="rail-project"][aria-current="true"]')
+        .getAttribute("aria-label");
+
+      await page.waitForTimeout(300);
+      await shot(page, "started", 1440);
+
+      // Cairn's project thread is still there: its bubble opens it, not the empty project.
+      await column
+        .getByRole("button", {
+          name: new RegExp(`^${exported.projectTitle}`, "u"),
+        })
+        .click();
+
+      const cairnKept = await page
+        .waitForURL((url) => url.pathname.startsWith("/t/"), { timeout: 5000 })
+        .then(
+          async () =>
+            (await column.getByTestId("shell-project-thread").count()) === 1 &&
+            (await column.getByTestId("shell-no-project-thread").count()) === 0,
+          () => false
+        );
+
+      return `shown ${shown}, myr's project thread ${myrThread}, selected ${(selected ?? "").split(",")[0]}, ${exported.projectTitle} kept ${cairnKept}`;
+    },
+    (detail) =>
+      detail ===
+      `shown true, myr's project thread true, selected myr, ${exported.projectTitle} kept true`
   );
 };
 

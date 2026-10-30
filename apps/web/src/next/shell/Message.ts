@@ -1,5 +1,5 @@
 // The `next` shell's Messages, and the OutMessages it hands the root: an item for the outbox (a
-// refresh's launch, a scratch turn or clear), a path to open, and a notice.
+// refresh's launch, a scratch turn or clear), a path to open, and a new draft in a chosen project.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { Schema } from "effect";
@@ -13,8 +13,10 @@ export const Message = defineMessageUnion({
   ClickedProject: { projectId: ProjectId },
   /** The project thread's row or a managed thread's row. */
   ClickedThread: { threadId: ThreadId },
-  /** The project has no project thread yet: start one from the composer. */
-  ClickedStartProjectThread: {},
+  /** The project has no project thread yet: start one from the composer, in that project. */
+  ClickedStartProjectThread: { projectId: ProjectId },
+  /** A new draft is minted for the project's first thread: the root opens it in that project. */
+  PreparedProjectDraft: { projectId: ProjectId, draftId: ThreadId },
   ClickedUsage: {},
   ClickedSettings: {},
   ClickedOpenSheet: {},
@@ -51,6 +53,8 @@ export const Message = defineMessageUnion({
   /** A refresh or a scratch turn could not be prepared. */
   FailedPrepare: { message: Schema.String },
   ClickedDismissFailure: {},
+  /** A field the overlay or the confirm opened with took focus, or was gone. */
+  CompletedFocus: {},
 });
 
 export type Message = typeof Message.Type;
@@ -64,6 +68,11 @@ export const OutMessage = defineMessageUnion({
   },
   /** Open this path inside the app. */
   RequestedNavigate: { url: Schema.String },
+  /**
+   * Open the new draft `draftId` with `projectId` as its project, so the first message launches in
+   * the project the rail picked (and becomes its project thread), never in another one.
+   */
+  RequestedProjectDraft: { projectId: ProjectId, draftId: ThreadId },
 });
 
 export type OutMessage = typeof OutMessage.Type;

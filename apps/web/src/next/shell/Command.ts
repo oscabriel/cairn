@@ -1,5 +1,6 @@
-// The `next` shell's Commands: minting a refresh's launch, a scratch thread's turns and its clear,
-// and saving which scratch thread this device holds. Each answers with one Message. A refresh is
+// The `next` shell's Commands: minting a project's first draft, a refresh's launch, a scratch
+// thread's turns and its clear, focusing the field an overlay opens with, and saving which scratch
+// thread this device holds. Each answers with one Message. A refresh is
 // `thread.launch` with `replaces` (5H): the new project thread, the old one's archive and the moved
 // mark land in one shell commit. The scratch thread's first message launches it in the scratch
 // project (made here first, as the composer's projectless launch does); later ones are sends.
@@ -13,6 +14,7 @@ import { SendInput } from "@cairn/protocol/Thread";
 import { Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
+import { focus } from "foldkit/dom";
 
 import {
   mintCommandId,
@@ -38,6 +40,28 @@ const turnOf = (
   text,
   attachments: [],
   skillRefs: [],
+});
+
+/**
+ * Mints the draft a project's first thread is written in. The root gives it the project, so the
+ * launch goes there and not to the draft hero's fallback (the most recently updated project, whose
+ * project thread a top-level launch would archive).
+ */
+export const PrepareProjectDraft = Command.define("PrepareProjectDraft", {
+  args: { projectId: ProjectId },
+  messages: [Message.PreparedProjectDraft],
+  execute: ({ projectId }) =>
+    Effect.map(mintThreadId, (draftId) =>
+      Message.PreparedProjectDraft({ projectId, draftId })
+    ),
+});
+
+/** Moves focus to the field `selector` names once the render that draws it has landed. */
+export const FocusField = Command.define("FocusField", {
+  args: { selector: Schema.String },
+  messages: [Message.CompletedFocus],
+  execute: ({ selector }) =>
+    focus(selector).pipe(Effect.ignore, Effect.as(Message.CompletedFocus())),
 });
 
 /** Mints the refresh's launch: a new project thread replacing `replaces`, on its model. */

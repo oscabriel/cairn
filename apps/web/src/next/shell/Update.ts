@@ -1,9 +1,10 @@
-// The `next` shell's update. The rail picks a project and opens its project thread; a row opens its
-// thread; the foot opens the usage and settings pages; the phone's sheet closes on any navigation.
+// The `next` shell's update. The rail picks a project and opens its project thread, or a new draft
+// in that project when it has none; a row opens its thread; the foot opens the usage and settings pages; the phone's sheet closes on any navigation.
 // A refresh asks first, then launches the new project thread with `replaces` and opens it. The
 // scratch overlay shows and hides on Cmd+J or Ctrl+J without losing its thread; its first message
 // launches the scratch thread, later ones are sends, and Clear deletes it.
 
+import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Array, Equal, Option, Predicate, Record } from "effect";
 import type { Update } from "foldkit";
@@ -11,7 +12,9 @@ import { modifyFields } from "foldkit/struct";
 
 import { settingsRouter, threadRouter } from "../../Route.ts";
 import {
+  FocusField,
   LoadScratch,
+  PrepareProjectDraft,
   PrepareRefresh,
   PrepareScratchClear,
   PrepareScratchTurn,
@@ -28,6 +31,8 @@ import {
 } from "./Derived.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { Model, ShellContext } from "./Model.ts";
+import { REFRESH_TEXT_ID } from "./Refresh.ts";
+import { SCRATCH_EDITOR_ID } from "./Scratch.ts";
 
 /** The usage page's path. */
 export const USAGE_PATH = "/usage";
@@ -195,11 +200,25 @@ const sendScratch = (model: Model): UpdateReturn => {
   });
 };
 
+/** Shows or hides the scratch overlay; shown, its field takes focus from whatever held it. */
 const setScratchOpen = (model: Model, isOpen: boolean): UpdateReturn => ({
   model: modifyFields(model, {
     scratch: (scratch) => modifyFields(scratch, { isOpen: () => isOpen }),
     isSheetOpen: (open) => (isOpen ? false : open),
   }),
+  commands: isOpen ? [FocusField({ selector: `#${SCRATCH_EDITOR_ID}` })] : [],
+});
+
+/** Opens the project's first draft: a new one is minted, then the root gives it the project. */
+const startProjectThread = (
+  model: Model,
+  projectId: ProjectId
+): UpdateReturn => ({
+  model: modifyFields(model, {
+    selectedProjectId: () => Option.some(projectId),
+    isSheetOpen: () => false,
+  }),
+  commands: [PrepareProjectDraft({ projectId })],
 });
 
 /** The shell's update. */
@@ -218,17 +237,21 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         (project) => projectThreadFor(model, project)
       );
 
-      return navigate(
-        picked,
-        Option.match(target, {
-          onNone: () => "/",
-          onSome: (thread) => threadRouter({ threadId: thread.id }),
-        })
-      );
+      // A project with no project thread opens a draft of its own, never the hero's fallback.
+      return Option.match(target, {
+        onNone: () => startProjectThread(picked, projectId),
+        onSome: (thread) =>
+          navigate(picked, threadRouter({ threadId: thread.id })),
+      });
     },
     ClickedThread: ({ threadId }) =>
       navigate(model, threadRouter({ threadId })),
-    ClickedStartProjectThread: () => navigate(model, "/"),
+    ClickedStartProjectThread: ({ projectId }) =>
+      startProjectThread(model, projectId),
+    PreparedProjectDraft: ({ projectId, draftId }) => ({
+      model,
+      outMessage: OutMessage.RequestedProjectDraft({ projectId, draftId }),
+    }),
     ClickedUsage: () => navigate(model, USAGE_PATH),
     ClickedSettings: () => navigate(model, settingsRouter()),
     ClickedOpenSheet: () => ({
@@ -263,6 +286,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
               }),
             failure: () => Option.none(),
           }),
+          commands: [FocusField({ selector: `#${REFRESH_TEXT_ID}` })],
         }),
       }),
     ChangedRefreshText: ({ value }) => ({
@@ -378,4 +402,5 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedDismissFailure: () => ({
       model: modifyFields(model, { failure: () => Option.none() }),
     }),
+    CompletedFocus: () => ({ model }),
   });

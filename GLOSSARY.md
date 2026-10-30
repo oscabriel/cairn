@@ -266,9 +266,9 @@ _Avoid_: plugin
 
 **Shell (next)**: The `next` views' frame around the page (`next/shell`, look track L6): the project rail and the selected project's list at the left (a sheet on a phone), the chat header and the hold banner. The list shows the project's project thread on top and under it the threads it manages, newest first, each with its status mark from the one thread-state function; there are no Active, Settled, Pinned or Snoozed groups and no inbox. Its foot holds Usage and Settings, with no meters.
 
-**Project rail**: The shell's column of project bubbles: one squircle with a low corner radius per folder project, filled edge to edge by the project's favicon (found in the project's root as t3code finds it, served at `/api/projects/<id>/favicon`) or showing its first letter, with a mark when a thread in the project needs the user or is working. A bubble opens its project's project thread. _Avoid_: inbox.
+**Project rail**: The shell's column of project bubbles: one squircle with a low corner radius per folder project, filled edge to edge by the project's favicon (found in the project's root as t3code finds it, served at `/api/projects/<id>/favicon`) or showing its first letter, with a mark when a thread in the project needs the user or is working. A bubble opens its project's project thread, or, when it has none, a new draft in that project whose first message starts it. _Avoid_: inbox.
 
-**Scratch overlay**: The floating panel over any page that holds the scratch thread: Cmd+J or Ctrl+J shows and hides it without losing it (a header button on a phone); its first message launches the scratch thread, and Clear deletes the thread and its folder.
+**Scratch overlay**: The floating panel over any page that holds the scratch thread: Cmd+J or Ctrl+J shows and hides it without losing it (a header button on a phone), and shown, it takes the keyboard; its first message launches the scratch thread, and Clear deletes the thread and its folder.
 
 **Usage page**: `/usage`, opened from the shell's foot: where spend and the plan windows will show; a placeholder until the meters land.
 

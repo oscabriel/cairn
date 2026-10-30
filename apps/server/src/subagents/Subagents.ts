@@ -9,6 +9,7 @@
 // question's mirror in `answerApproval` (CairnDocs.ts), a child's mode is narrowed by its
 // ancestors' in `readPermissions` (Permissions.ts), and Stop all stops each working child.
 
+import { ThreadId } from "@cairn/protocol/Ids";
 import { copyJson } from "@earendil-works/chord";
 import type {
   AgentChange,
@@ -39,14 +40,17 @@ import type {
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
+import { BudgetBook } from "../usage/BudgetBook.ts";
+import { gateDecision } from "../usage/Budgets.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
-import { listParent } from "./BrainCap.ts";
+import { listParent, SPAWN_TOOL } from "./BrainCap.ts";
 import { BriefFaults, NO_BRIEF_FAULTS } from "./BriefFaults.ts";
 import type { BriefFaultHooks } from "./BriefFaults.ts";
 import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
 import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
 import type {
+  BudgetAccess,
   ChildWorkspaceAccess,
   RoleAccess,
   SubagentTasks,
@@ -119,6 +123,37 @@ export const roleAccess = (
   };
 };
 
+/**
+ * The parent's budgets for the start task, which runs outside Effect (ADR 0036): a scope covering
+ * the parent at its line refuses new work, in the words the delegating tools are refused with
+ * (`gateDecision` for `subagent_spawn`). Reads the in-memory `BudgetBook` `Budgets` keeps.
+ */
+export const budgetAccess = (
+  book: BudgetBook["Service"],
+  context: Context.Context<never>
+): BudgetAccess => {
+  const run = Effect.runPromiseWith(context);
+
+  return {
+    admit: async (parentThreadId) =>
+      await run(
+        book.coveringOf(ThreadId.make(parentThreadId)).pipe(
+          Effect.map((covering) =>
+            Option.match(gateDecision(SPAWN_TOOL, covering, []), {
+              onNone: () => Result.void,
+              onSome: (text) => Result.fail(text),
+            })
+          )
+        )
+      ),
+  };
+};
+
+/** No budgets: every start is admitted. For the host's copy and tests that plant no budgets. */
+const ADMIT_ALL: BudgetAccess = {
+  admit: async () => await Promise.resolve(Result.void),
+};
+
 /** No roles: a brief that names one starts nothing. For tests whose briefs name none. */
 const NO_ROLES: RoleAccess = {
   resolve: async () =>
@@ -145,7 +180,8 @@ const build = (
   workspaces: ChildWorkspaceAccess,
   briefFaults: BriefFaultHooks,
   roles: RoleAccess,
-  crashes: SubagentCrashHooks
+  crashes: SubagentCrashHooks,
+  budgets: BudgetAccess
 ) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
@@ -158,6 +194,7 @@ const build = (
     settleDelayMillis: tuning.settleDelayMillis,
     briefFaults,
     roles,
+    budgets,
     maxLivePerBrain: tuning.maxLivePerBrain,
     questionTtlMillis: tuning.questionTtlMillis,
     questionWindowMillis: tuning.questionWindowMillis,
@@ -196,11 +233,19 @@ export const subagentsExtension = (
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
   briefFaults: BriefFaultHooks = NO_BRIEF_FAULTS,
   roles: RoleAccess = NO_ROLES,
-  crashes: SubagentCrashHooks = NO_SUBAGENT_CRASHES
+  crashes: SubagentCrashHooks = NO_SUBAGENT_CRASHES,
+  budgets: BudgetAccess = ADMIT_ALL
 ): CairnExtension => ({
   order: ExtensionOrder.subagents,
-  extension: build(faults, tuning, workspaces, briefFaults, roles, crashes)
-    .extension,
+  extension: build(
+    faults,
+    tuning,
+    workspaces,
+    briefFaults,
+    roles,
+    crashes,
+    budgets
+  ).extension,
 });
 
 /**
@@ -213,7 +258,8 @@ const host = build(
   NO_WORKSPACES,
   NO_BRIEF_FAULTS,
   NO_ROLES,
-  NO_SUBAGENT_CRASHES
+  NO_SUBAGENT_CRASHES,
+  ADMIT_ALL
 );
 
 const hostTasks = host.tasks;
@@ -350,11 +396,16 @@ export class Subagents extends Context.Service<
             workspaces,
             tuning,
             yield* BriefFaults,
-            roleAccess(yield* RoleAliases, yield* Effect.context())
+            roleAccess(yield* RoleAliases, yield* Effect.context()),
+            NO_SUBAGENT_CRASHES,
+            budgetAccess(yield* BudgetBook, yield* Effect.context())
           ),
         });
       })
-    ).pipe(Layer.provide(RoleAliases.layerNoDeps));
+    ).pipe(
+      Layer.provide(RoleAliases.layerNoDeps),
+      Layer.provide(BudgetBook.layer)
+    );
 
   /**
    * The extension with the faults `SubagentFaults` and `BriefFaults` name and the crash points
@@ -381,11 +432,16 @@ export class Subagents extends Context.Service<
           { ...DEFAULT_TOOL_OPTIONS, briefTtlMillis },
           briefFaults,
           roleAccess(yield* RoleAliases, yield* Effect.context()),
-          crashes
+          crashes,
+          budgetAccess(yield* BudgetBook, yield* Effect.context())
         ),
       });
     })
-  ).pipe(Layer.provide(RoleAliases.layerNoDeps));
+  ).pipe(
+    Layer.provide(RoleAliases.layerNoDeps),
+    // The reference AppLayer gives `Budgets`, so the memo map builds one book (ExtensionSet.ts).
+    Layer.provide(BudgetBook.layer)
+  );
 
   /**
    * For tests that build the production extension set: no faults, children's workspaces under a

@@ -299,6 +299,7 @@ describe("the Executor extension", () => {
           decision: "accept",
           reason: Option.none(),
           answers: Option.none(),
+          launch: Option.none(),
         });
         yield* Fiber.join(ended);
 

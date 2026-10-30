@@ -122,6 +122,14 @@ _Avoid_: pipeline, DAG, job
 
 **Node**: One `agent()` call of a workflow script, recorded as a row of the dispatch ledger: a child thread created from the role it resolved, with no subagent tools of its own and no sidebar row.
 
+**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Decline ends it. The card's budget and role edits travel in the answer, never in the frozen plan.
+
+_Avoid_: launch brief, plan approval
+
+**Envelope**: What a workflow's launch approval grants its nodes: the script's hash, the roles (and whether each may write), the permission modes, a node cap and a budget. A node inside it gets its own brief, accepted with the envelope as decider in the commit that dispatches it; a node outside it (another role, a writer where the plan showed a reader, a wider mode, past the cap) raises its own brief card and waits for the user.
+
+_Avoid_: grant (in prose), allowance
+
 **Workflow gate**: The `beforeTool` hook that lets a workflow script run only against an approved ledger row of its exact hash, rewrites it behind the prelude, and marks the code mode call (`GATE_MEMO`), so the node tools refuse every other caller.
 
 **Node watcher**: The background task (`cairn.workflow-watch`) that records a workflow node or script call that ended without settling: stopped, failed or finished.

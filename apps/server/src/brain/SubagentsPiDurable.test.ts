@@ -279,6 +279,7 @@ const withAccepted = <A, E>(
             decision: "accept",
             reason: Option.none(),
             answers: Option.none(),
+            launch: Option.none(),
           });
 
           return yield* body({

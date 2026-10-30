@@ -281,6 +281,7 @@ const withQuestion = <A, E>(
             decision: "accept",
             reason: Option.none(),
             answers: Option.none(),
+            launch: Option.none(),
           });
 
           if (before === "archive-then-ask") {
@@ -384,6 +385,7 @@ const answeredInParent = (parent: ConversationId, why: string) =>
       decision: "accept" as const,
       reason: Option.none(),
       answers: Option.some([{ index: 0, picks: [], custom: "src" }]),
+      launch: Option.none(),
     };
 
     // Answered twice from the parent thread: the second finds it settled and changes nothing.

@@ -3449,6 +3449,7 @@ const layerNoDeps = Layer.effectContext(
                       },
                     ])
                   : Option.none(),
+              launch: Option.none(),
             },
             at,
             changes

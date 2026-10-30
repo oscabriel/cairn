@@ -445,6 +445,7 @@ const respond = (approvalId: string, decision: "accept" | "decline") =>
         decision,
         reason: decision === "decline" ? Option.some("not now") : Option.none(),
         answers: Option.none(),
+        launch: Option.none(),
       })
       .pipe(Effect.result);
   });
@@ -541,6 +542,7 @@ const program = Effect.gen(function* () {
         by: { kind: "user" },
         reason: Option.none(),
         answers: Option.none(),
+        launch: Option.none(),
       },
       brainService.now()
     );

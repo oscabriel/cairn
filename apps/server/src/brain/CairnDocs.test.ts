@@ -9,8 +9,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { TaskId } from "@cairn/protocol/Ids";
-import { ApprovalsDocument } from "@cairn/protocol/Policy";
+import { ApprovalsDocument, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision } from "@cairn/protocol/Policy";
+import { RoleSpec } from "@cairn/protocol/Roles";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { copyJson } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId } from "@earendil-works/pi-durable";
@@ -23,7 +25,8 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
 
-import { EscalationsDoc } from "../subagents/SubagentDocs.ts";
+import { EscalationsDoc, jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { proposedRecord, WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import {
   answerApproval,
   applyAnswer,
@@ -138,6 +141,7 @@ const byUser = (
   by: { kind: "user" },
   reason,
   answers: Option.none(),
+  launch: Option.none(),
 });
 
 const record = (fields: Partial<ApprovalRecord> = {}): ApprovalRecord => ({
@@ -155,6 +159,34 @@ const record = (fields: Partial<ApprovalRecord> = {}): ApprovalRecord => ({
   ...UNDECIDED,
   ...fields,
 });
+
+/** A workflow's launch, as `workflow_plan` freezes it. */
+const LAUNCH = WorkflowLaunch.make({
+  type: "workflow",
+  workflowId: "wf-7",
+  name: "kit-flow",
+  description: "A kit workflow",
+  phases: [],
+  scriptHash: "sha256-abc",
+  scriptRef: "task-7",
+  args: {},
+  callSites: [],
+  nodes: { count: 1, unbounded: false },
+  estimate: null,
+  envelope: {
+    scriptHash: "sha256-abc",
+    maxNodes: 1,
+    maxConcurrent: 8,
+    roles: [{ spec: RoleSpec.make("@worker"), readonly: false, arms: "host" }],
+    modes: ["full-access"],
+    writes: [],
+    budget: DEFAULT_BUDGET,
+  },
+  roleOverrides: {},
+});
+
+/** A workflow launch approval's frozen payload. */
+const LAUNCH_PAYLOAD = jsonRecordOf(Schema.encodeSync(WorkflowLaunch)(LAUNCH));
 
 describe("cairn.approvals version 1 to 2", () => {
   it.live(
@@ -452,6 +484,56 @@ describe("an answer to a record", () => {
       assert.strictEqual(unsaid.status, "pending");
     }
   });
+
+  it("takes Run on 1 first and the card's edits only on a workflow's launch, with Go", () => {
+    const payload = LAUNCH_PAYLOAD;
+
+    const edits = Option.some({
+      budget: { ...DEFAULT_BUDGET, maxTokens: 5000 },
+      roleOverrides: {},
+    });
+
+    // Neither on a subagent's brief, a question or a tool call.
+    for (const other of [
+      record({ kind: "brief" }),
+      record({ payload: questions }),
+      record({ kind: "tool-call" }),
+    ]) {
+      assert.strictEqual(
+        applyAnswer(other, byUser("accept_sample"), 1500),
+        "refused_sample"
+      );
+      assert.strictEqual(
+        applyAnswer(other, { ...byUser("accept"), launch: edits }, 1500),
+        "refused_launch"
+      );
+      assert.strictEqual(other.status, "pending");
+    }
+
+    // Edits come with Go or Run on 1 first, never with Decline.
+    const declined = record({ kind: "brief", tool: "workflow_plan", payload });
+
+    assert.strictEqual(
+      applyAnswer(declined, { ...byUser("decline"), launch: edits }, 1500),
+      "refused_launch"
+    );
+
+    const sampled = record({ kind: "brief", tool: "workflow_plan", payload });
+    const before = copyRecord(sampled);
+
+    assert.strictEqual(
+      applyAnswer(sampled, { ...byUser("accept_sample"), launch: edits }, 1500),
+      "answered"
+    );
+    assert.strictEqual(sampled.status, "accepted");
+    assert.strictEqual(sampled.answer?.decision, "accept_sample");
+    assert.deepStrictEqual(sampled.answer?.launch, {
+      budget: { ...DEFAULT_BUDGET, maxTokens: 5000 },
+      roleOverrides: {},
+    });
+    // The frozen payload stays as the model proposed it.
+    assert.deepStrictEqual(sampled.payload, before.payload);
+  });
 });
 
 describe("what a stop cancels", () => {
@@ -470,6 +552,29 @@ describe("what a stop cancels", () => {
         record({ status: "accepted" }),
       ].map(heldByRun),
       [true, true, false, false, true, false, false]
+    );
+  });
+
+  it("a workflow's launch and a node's own brief are held by the task that waits on them", () => {
+    assert.deepStrictEqual(
+      [
+        record({
+          kind: "brief",
+          tool: "workflow_plan",
+          payload: LAUNCH_PAYLOAD,
+        }),
+        record({ kind: "brief", tool: "agent" }),
+        record({ kind: "brief", tool: "verify" }),
+        record({ kind: "brief", tool: "subagent_spawn" }),
+        record({ kind: "brief", tool: "agent", toolTaskId: 0 }),
+        record({
+          kind: "brief",
+          tool: "workflow_plan",
+          payload: LAUNCH_PAYLOAD,
+          status: "accepted",
+        }),
+      ].map(heldByRun),
+      [true, true, true, false, false, false]
     );
   });
 
@@ -567,6 +672,69 @@ describe("what a stop cancels", () => {
                 ["call-gone", "cancelled", { kind: "system", why: "boot" }],
               ]
             );
+          });
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      })
+  );
+
+  it.live(
+    "the boot repair cancels a launch whose plan task is gone and declines its row",
+    () =>
+      Effect.promise(async () => {
+        const root = mkdtempSync(
+          path.join(tmpdir(), "cairn-approvals-launch-")
+        );
+
+        const file = path.join(root, "brain.sqlite");
+
+        try {
+          await withSession(file, async (session) => {
+            const conversationId = await session.commit(async (tx) => {
+              const conversation = await tx.createConversation({
+                ownership: { kind: "ownerless" },
+              });
+
+              const doc = await tx.doc(Approvals, conversation.id);
+              const ledger = await tx.doc(WorkflowsDoc, conversation.id);
+
+              doc.items["call-9999"] = record({
+                id: "call-9999",
+                toolTaskId: 9999,
+                tool: "workflow_plan",
+                kind: "brief",
+                payload: LAUNCH_PAYLOAD,
+              });
+              ledger.items[LAUNCH.workflowId] = proposedRecord({
+                launch: LAUNCH,
+                approvalId: "call-9999",
+                sample: Option.none(),
+              });
+
+              return conversation.id;
+            }, context);
+
+            const abandoned = await Effect.runPromise(
+              cancelAbandonedApprovals(session, conversationId, 1600, "boot")
+            );
+
+            assert.deepStrictEqual(abandoned, ["call-9999"]);
+
+            const ledger = await session.snapshot(
+              WorkflowsDoc,
+              conversationId,
+              context
+            );
+
+            const row = ledger?.items[LAUNCH.workflowId];
+
+            assert.strictEqual(row?.state, "declined");
+            assert.deepStrictEqual(row?.decidedBy, {
+              kind: "system",
+              why: "boot",
+            });
+            assert.strictEqual(row?.decidedAt, 1600);
           });
         } finally {
           rmSync(root, { recursive: true, force: true });

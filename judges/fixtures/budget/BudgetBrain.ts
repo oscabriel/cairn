@@ -588,6 +588,7 @@ const program = Effect.gen(function* () {
       decision: "accept",
       reason: Option.none(),
       answers: Option.none(),
+      launch: Option.none(),
     })
     .pipe(
       Effect.catchTag("HarnessError", (failure) =>

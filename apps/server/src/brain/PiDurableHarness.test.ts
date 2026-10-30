@@ -279,6 +279,7 @@ describe("PiDurableHarness stop", () => {
                 decision: "accept",
                 reason: Option.none(),
                 answers: Option.none(),
+                launch: Option.none(),
               })
               .pipe(Effect.orDie)
           );

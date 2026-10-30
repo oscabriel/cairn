@@ -22,6 +22,7 @@ import {
 import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import type {
   ApprovalDecision,
+  LaunchEdits,
   QuestionAnswer,
   RuntimeMode,
 } from "@cairn/protocol/Policy";
@@ -175,6 +176,11 @@ export interface ApprovalAnswerInput {
   readonly reason: Option.Option<string>;
   /** A question record's answers; any other kind refuses them. */
   readonly answers: Option.Option<ReadonlyArray<QuestionAnswer>>;
+  /**
+   * A workflow launch card's edits (its budget and role overrides), with Go or Run on 1 first on a
+   * launch approval only; any other record or decision refuses them (ADR 0032).
+   */
+  readonly launch: Option.Option<LaunchEdits>;
 }
 
 /** A thread whose run, queue, approval or task needs attention at boot. */

@@ -276,6 +276,7 @@ const settleDecliningApprovals = (
                 "Not in this task. Report with submit_result."
               ),
               answers: Option.none(),
+              launch: Option.none(),
             })
             .pipe(Effect.ignore);
         }
@@ -376,6 +377,7 @@ const oneChild = (log: EventLog, model: ModelRef, index: number, cwd: string) =>
       decision: "accept",
       reason: Option.none(),
       answers: Option.none(),
+      launch: Option.none(),
     });
 
     const child = yield* eventWhere(log, "the child", (event) =>

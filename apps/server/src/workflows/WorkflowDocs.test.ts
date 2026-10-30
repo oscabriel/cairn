@@ -1,5 +1,6 @@
 // The ledger's pure rules: a proposed row decodes as the protocol's `WorkflowRecord` (S23, plain
-// JSON), the envelope's role check, the node cap's count, and the ledger check every judge runs.
+// JSON), the node cap's count, and the ledger check every judge runs. The envelope's checks are
+// WorkflowLaunch.test.ts's.
 
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { Envelope } from "@cairn/protocol/Policy";
@@ -18,7 +19,6 @@ import {
   envelopeOf,
   ledgerProblems,
   nodeRequestIdOf,
-  outsideEnvelope,
   proposedRecord,
 } from "./WorkflowDocs.ts";
 import type { NodeItemState, WorkflowItemState } from "./WorkflowDocs.ts";
@@ -136,27 +136,6 @@ describe("the dispatch ledger's rules", () => {
     );
     assert.isTrue(
       Option.isNone(envelopeOf({ ...record("accepted"), payload: null }))
-    );
-  });
-
-  it("a reader grant covers no writer; a writer grant covers a reader", () => {
-    assert.isTrue(
-      Option.isNone(
-        outsideEnvelope(envelope, { role: "@scout", readonly: true })
-      )
-    );
-    assert.deepStrictEqual(
-      outsideEnvelope(envelope, { role: "@scout", readonly: false }),
-      Option.some("outside_grant")
-    );
-    assert.isTrue(
-      Option.isNone(
-        outsideEnvelope(envelope, { role: "@worker", readonly: true })
-      )
-    );
-    assert.deepStrictEqual(
-      outsideEnvelope(envelope, { role: "@judge", readonly: true }),
-      Option.some("outside_grant")
     );
   });
 

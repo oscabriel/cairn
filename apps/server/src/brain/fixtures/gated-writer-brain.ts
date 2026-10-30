@@ -215,6 +215,7 @@ if (command === "run") {
           by: { kind: "user" },
           reason: Option.none(),
           answers: Option.none(),
+          launch: Option.none(),
         },
         await Effect.runPromise(Clock.currentTimeMillis)
       )

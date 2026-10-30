@@ -6,7 +6,7 @@
 //
 //   node judges/fixtures/workflows/WorkflowBrain.ts --dir <run> --script <file>
 //     [--hold <point>:<label>:<ms>] [--stop <label>:<ms>] [--answer] [--defer-run]
-//     [--diverge] [--control]
+//     [--diverge] [--control] [--plan] [--answer-launch] [--briefs accept|decline] [--grant-all]
 //
 // - The first life plants an approved launch of the script (as 5A's answer path will) unless the
 //   ledger has it; every life submits the run under one request id, so it is admitted once.
@@ -20,6 +20,11 @@
 // - `--diverge` rewrites the stored code mode start data's version before the Harness resumes,
 //   as a pi bump would: the script call must end with an error and dispatch nothing again.
 // - `--control` plants `freshDispatch`: each attempt of a node dispatches anew.
+// - `--plan` (5A) plants nothing: the model proposes the script with `workflow_plan` and runs it on
+//   Go. `--answer-launch` says Go to its launch card through the host's answer path, as
+//   `thread.respond` does; `--briefs` answers every node's own brief card so. It prints
+//   `launch-pending` and `card-pending <title>` once each. `--grant-all` plants the envelope
+//   judge's broken control: every node fits, so no card is raised.
 //
 // It prints `node <label> <state>`, `workflow <state>`, `approval-pending` and `effect <node>
 // <what>` as they happen, and `done` once the workflow ended and `report.json` is written.
@@ -39,9 +44,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { NodeRuntime } from "@effect/platform-node";
-import { Effect, Predicate } from "effect";
+import { Effect, Option, Predicate } from "effect";
 
-import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
+import {
+  answerApproval,
+  Approvals,
+} from "../../../apps/server/src/brain/CairnDocs.ts";
 import { taskOf } from "../../../apps/server/src/subagents/Delivery.ts";
 import { ChildDoc } from "../../../apps/server/src/subagents/SubagentDocs.ts";
 import { PRELUDE_MARK } from "../../../apps/server/src/workflows/Prelude.ts";
@@ -50,7 +58,15 @@ import {
   ledgerProblems,
   WorkflowsDoc,
 } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
-import type { WorkflowItemState } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../../../apps/server/src/workflows/WorkflowDocs.ts";
+import {
+  isNodeBrief,
+  LAUNCH_TOOL,
+  launchAnswered,
+} from "../../../apps/server/src/workflows/WorkflowLaunch.ts";
 import {
   codemodeResultText,
   kitParts,
@@ -58,6 +74,7 @@ import {
   openKit,
   plant,
   plantDefaults,
+  PLAN_PREFIX,
   runScript,
 } from "../../../apps/server/src/workflows/WorkflowTestKit.ts";
 import type {
@@ -76,6 +93,10 @@ const { values } = parseArgs({
     "defer-run": { type: "boolean", default: false },
     diverge: { type: "boolean", default: false },
     control: { type: "boolean", default: false },
+    plan: { type: "boolean", default: false },
+    "answer-launch": { type: "boolean", default: false },
+    briefs: { type: "string" },
+    "grant-all": { type: "boolean", default: false },
   },
 });
 
@@ -84,6 +105,12 @@ const dir = path.resolve(values.dir ?? ".");
 const source = readFileSync(path.resolve(values.script ?? ""), "utf-8");
 
 const WF = "wf-1";
+
+/** The case's workflow: the planted one, or the one the model proposed (`--plan`). */
+const rowOf = (
+  ledger: Readonly<WorkflowsState> | undefined
+): WorkflowItemState | undefined =>
+  ledger?.items[WF] ?? Object.values(ledger?.items ?? {})[0];
 
 const context = BACKGROUND_CONTEXT;
 
@@ -129,7 +156,7 @@ const diverge = async (brain: KitBrain) => {
     context
   );
 
-  const task = ledger?.items[WF]?.codemodeTaskId ?? null;
+  const task = rowOf(ledger)?.codemodeTaskId ?? null;
 
   if (task === null) {
     return;
@@ -202,6 +229,72 @@ const noteStored = async (
   say(`stored ${rewritten}`);
 };
 
+/** Answers one record as the user, through the host's answer path. */
+const answerAsUser = async (
+  brain: KitBrain,
+  id: string,
+  decision: "accept" | "decline"
+) => {
+  await Effect.runPromise(
+    answerApproval(
+      brain.harness,
+      brain.root,
+      id,
+      {
+        decision,
+        by: { kind: "user" },
+        reason: Option.none(),
+        answers: Option.none(),
+        launch: Option.none(),
+      },
+      Date.now(),
+      launchAnswered
+    ).pipe(Effect.ignore)
+  );
+};
+
+/** How `--answer-launch` answers a launch card: Go, or not at all. */
+const launchDecision = values["answer-launch"] ? "accept" : undefined;
+
+/** How `--briefs` answers a node's own card, or not at all. */
+const briefDecision =
+  values.briefs === "accept" || values.briefs === "decline"
+    ? values.briefs
+    : undefined;
+
+/** Prints a pending launch or node card once; `--answer-launch` and `--briefs` answer them. */
+const followCards = async (brain: KitBrain, seen: Seen) => {
+  const approvals = await brain.harness.snapshot(
+    Approvals,
+    brain.root,
+    context
+  );
+
+  for (const record of Object.values(approvals?.items ?? {})) {
+    if (record.status !== "pending") {
+      continue;
+    }
+
+    const launch = record.tool === LAUNCH_TOOL;
+
+    if (!launch && !isNodeBrief(record)) {
+      continue;
+    }
+
+    if (!seen.has(record.id)) {
+      seen.set(record.id, "pending");
+      say(launch ? "launch-pending" : `card-pending ${record.summary}`);
+    }
+
+    const decision = launch ? launchDecision : briefDecision;
+
+    if (decision !== undefined) {
+      // oxlint-disable-next-line no-await-in-loop -- one answer at a time, as a user gives them
+      await answerAsUser(brain, record.id, decision);
+    }
+  }
+};
+
 /** Prints a pending `approve` record once, and with `--answer` accepts it. */
 const followApprovals = async (brain: KitBrain, seen: Seen) => {
   const approvals = await brain.harness.snapshot(
@@ -258,7 +351,7 @@ const follow = async (brain: KitBrain) => {
       context
     );
 
-    const row = ledger?.items[WF];
+    const row = rowOf(ledger);
     const state = row?.state ?? "none";
 
     if (seen.get("<workflow>") !== state) {
@@ -275,6 +368,8 @@ const follow = async (brain: KitBrain) => {
 
     // oxlint-disable-next-line no-await-in-loop
     await followApprovals(brain, seen);
+    // oxlint-disable-next-line no-await-in-loop
+    await followCards(brain, seen);
 
     if (row !== undefined && isWorkflowEnded(row.state)) {
       return;
@@ -327,9 +422,19 @@ const writeReport = async (brain: KitBrain) => {
         .filter((line) => line !== "")
     : [];
 
+  const records = Object.values(approvals?.items ?? {});
+
   const report = {
     result: await codemodeResultText(brain, context),
-    workflow: ledger?.items[WF] ?? null,
+    workflow: rowOf(ledger) ?? null,
+    /** Launch cards the model's proposals raised (a planted launch has no tool task). */
+    launchRecords: records.filter(
+      (record) => record.tool === LAUNCH_TOOL && record.toolTaskId > 0
+    ).length,
+    /** Node briefs the envelope did not cover: each one a card the user saw. */
+    cards: records.filter(
+      (record) => isNodeBrief(record) && record.decidedBy?.kind !== "envelope"
+    ).length,
     children: await childrenOf(brain),
     approveRecords: Object.values(approvals?.items ?? {}).filter(
       (record) => record.tool === "approve"
@@ -344,7 +449,7 @@ const writeReport = async (brain: KitBrain) => {
 
 const program = Effect.gen(function* () {
   const parts = yield* kitParts({
-    faults: { freshDispatch: values.control },
+    faults: { freshDispatch: values.control, grantAll: values["grant-all"] },
     hold,
     effect,
     tokensPerSecond: 20_000,
@@ -365,7 +470,7 @@ const program = Effect.gen(function* () {
     async () => await brain.harness.snapshot(WorkflowsDoc, brain.root, context)
   );
 
-  if (ledger?.items[WF] === undefined) {
+  if (!values.plan && ledger?.items[WF] === undefined) {
     yield* plant(brain, source, plantDefaults(WF), context);
     say("planted");
   }
@@ -384,7 +489,21 @@ const program = Effect.gen(function* () {
       await sleep(60_000);
     }
 
-    await runScript(brain, source, "run-1", context);
+    if (values.plan) {
+      const root = await brain.harness.conversation(brain.root, context);
+
+      await root?.submit(
+        {
+          type: "input",
+          content: `${PLAN_PREFIX}${source}`,
+          requestId: "plan-1",
+        },
+        context
+      );
+    } else {
+      await runScript(brain, source, "run-1", context);
+    }
+
     say("producing");
     await follow(brain);
     await brain.harness.waitForIdle(context);

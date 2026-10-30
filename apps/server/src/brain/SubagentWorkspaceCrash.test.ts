@@ -285,6 +285,7 @@ describe("a crash between a child's worktree and its creating commit", () => {
                   decision: "accept",
                   reason: Option.none(),
                   answers: Option.none(),
+                  launch: Option.none(),
                 });
 
                 const made = Result.getOrThrow(yield* Deferred.await(prepared));

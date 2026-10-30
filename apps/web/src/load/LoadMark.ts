@@ -1,5 +1,5 @@
 // The page's own account of a load (plan D46, notes/edges.md section 3 "Client report"). Once the
-// sidebar shows thread rows (or says it has none) and one more frame has run, so Foldkit's first
+// shell's list shows its project thread (or says there is none) and one more frame has run, so Foldkit's first
 // update loop turn has painted, the page records `performance.mark("cairn:interactive")` and posts
 // one report to `POST /api/load-report`, which the brain writes as a `load.report` log line. The
 // report is posted with `fetch(..., {keepalive: true})` rather than `navigator.sendBeacon`: the
@@ -16,11 +16,14 @@ export const INTERACTIVE_MARK = "cairn:interactive";
 /** Where the report goes. */
 export const LOAD_REPORT_PATH = "/api/load-report";
 
-/** The sidebar's rows, or its empty state: either means the thread list has rendered. */
+/**
+ * The shell list's project thread, or its word for having none: either means the thread list has
+ * rendered. The desktop column holds them on a phone too, hidden (`next/shell/View.ts`).
+ */
 export const READY_SELECTOR = [
-  '[data-testid="sidebar-row-card"]',
-  '[data-testid="sidebar-row-slim"]',
-  '[data-testid="sidebar-empty"]',
+  '[data-testid="shell-project-thread"]',
+  '[data-testid="shell-no-project-thread"]',
+  '[data-testid="shell-no-projects"]',
 ].join(", ");
 
 /** How long the page may take before it gives up on reporting. */

@@ -109,6 +109,31 @@ export const buildWeb = async (outDir: string) => {
   });
 };
 
+/**
+ * Waits until the brain on `port` says it is ready (`/_cairn/health`): it listens before boot ends
+ * and answers `/ws` with 503 until then, so a client opened at once can be refused.
+ */
+const waitReady = async (port: number, timeoutMs: number) => {
+  const deadline = performance.now() + timeoutMs;
+
+  while (performance.now() < deadline) {
+    // oxlint-disable-next-line no-await-in-loop -- polling one route, on purpose
+    const ready = await fetch(`http://${LOOPBACK}:${port}/_cairn/health`)
+      .then(async (response) => await response.text())
+      .then((body) => body.includes('"ready":true'))
+      .catch(() => false);
+
+    if (ready) {
+      return;
+    }
+
+    // oxlint-disable-next-line no-await-in-loop -- polling one route, on purpose
+    await sleep(100);
+  }
+
+  throw new Error(`the brain on port ${port} was not ready in ${timeoutMs} ms`);
+};
+
 /** The `listening` port in the events log, polled until it appears or `timeoutMs` passes. */
 const waitListening = async (events: string, timeoutMs: number) => {
   const deadline = performance.now() + timeoutMs;
@@ -282,6 +307,9 @@ export const startLocalApp = async (options: {
   );
 
   const brainPort = await waitListening(events, 60_000);
+
+  await waitReady(brainPort, 60_000);
+
   const proxy = await startProxy(proxyPort, brainPort);
 
   return {

@@ -13,6 +13,7 @@ import { AttachmentPaste } from "../attachments/Paste.ts";
 import { ComposerInput } from "../composer/Editor.ts";
 import { MeasureFooter } from "../composer/Footer.ts";
 import { Message as ComposerMessage } from "../composer/Message.ts";
+import { READY_SELECTOR } from "../load/LoadMark.ts";
 import type { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
 import { AppRoute } from "../Route.ts";
@@ -73,6 +74,13 @@ describe("the next frame", () => {
         ]) {
           assert.include(hooks, hook);
         }
+
+        // The load mark waits for one of these, so a frame without them never reports a load.
+        const ready = [
+          ...READY_SELECTOR.matchAll(/data-testid="(?<id>[^"]+)"/gu),
+        ].map((match) => `data-testid=${match.groups?.id ?? ""}`);
+
+        assert.isTrue(ready.some((hook) => hooks.includes(hook)));
       })
     );
   });

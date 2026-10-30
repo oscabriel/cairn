@@ -12,9 +12,13 @@
 import "./tokens.css";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
-import type { Message } from "../Message.ts";
+import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
+import { view as requestCardView } from "./card/View.ts";
 import { layout } from "./shell/Layout.ts";
+
+/** The request card's update and root hooks, held by `FrameLoad.ts` once this chunk loads. */
+export { requestCard } from "./card/Update.ts";
 
 /**
  * The regions the classic views draw, handed to the frame until `next` draws its own. Each is a
@@ -37,6 +41,25 @@ export interface Regions {
   readonly composer: () => Html;
 }
 
+/**
+ * The composer's lane under an open thread: the request card (plan 6A), then the composer, which
+ * gives the card its slot on the phone while a request shows (`next/card/card.css`). Siblings, so
+ * the composer keeps its place in the tree and its Mounts.
+ */
+const composerLane = (
+  model: Model,
+  h: HtmlBuilder<Message>,
+  regions: Regions
+): ReadonlyArray<Html> => [
+  h.submodel({
+    slotId: "request-card",
+    model: model.requestCard,
+    view: requestCardView,
+    toParentMessage: (message) => Message.GotRequestCardMessage({ message }),
+  }),
+  regions.composer(),
+];
+
 /** The app drawn with the `next` views, over the same Model as the classic ones. */
 export const view = (
   model: Model,
@@ -44,5 +67,11 @@ export const view = (
   regions: Regions
 ): Document => ({
   title: "Cairn",
-  body: layout(model, h, regions),
+  body: layout(model, h, {
+    notice: regions.notice,
+    page: regions.page,
+    thread: regions.thread,
+    threadControls: regions.threadControls,
+    composerLane: () => composerLane(model, h, regions),
+  }),
 });

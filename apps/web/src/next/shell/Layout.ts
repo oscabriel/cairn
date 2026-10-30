@@ -36,8 +36,8 @@ export interface ShellRegions {
   readonly thread: () => Html;
   /** The thread page's header controls (the diff toggle). */
   readonly threadControls: () => Html;
-  /** The composer docked under the transcript. */
-  readonly composer: () => Html;
+  /** The composer docked under the transcript, after what its lane holds before it (the request card). */
+  readonly composerLane: () => ReadonlyArray<Html>;
 }
 
 type H = HtmlBuilder<Message>;
@@ -89,7 +89,7 @@ const routeBody = (
           header(h, model, [regions.threadControls()]),
           hold(h, model),
           regions.thread(),
-          regions.composer(),
+          ...regions.composerLane(),
         ]
       ),
     ];

@@ -8,6 +8,7 @@
 import { Effect, Option, Schema } from "effect";
 
 import type { Model } from "../Model.ts";
+import type { RequestCardModule } from "./card/Update.ts";
 import type * as Frame from "./Frame.ts";
 
 /** The `next` views' module could not be fetched. */
@@ -22,6 +23,9 @@ export type FrameView = typeof Frame.view;
 // Held outside the Model on purpose: a module is code, not state. One key, set once.
 const loaded = new Map<"view", FrameView>();
 
+// The request card's update (plan 6A) comes with the same chunk, so the entry carries only its Model.
+const loadedRequestCard = new Map<"card", RequestCardModule>();
+
 /** Fetches the `next` views' chunk and holds its view; the settings `LoadNextFrame` runs it. */
 export const fetchNextFrame: Effect.Effect<void, NextFrameLoadError> =
   Effect.tryPromise({
@@ -31,6 +35,7 @@ export const fetchNextFrame: Effect.Effect<void, NextFrameLoadError> =
     Effect.flatMap((module) =>
       Effect.sync(() => {
         loaded.set("view", module.view);
+        loadedRequestCard.set("card", module.requestCard);
       })
     )
   );
@@ -43,3 +48,14 @@ export const nextFrameOf = (model: Model): Option.Option<FrameView> =>
   model.settings.client.ui === "next" && model.settings.nextFrame === "loaded"
     ? Option.fromNullishOr(loaded.get("view"))
     : Option.none();
+
+/**
+ * The request card's update and root hooks: some when the `next` frame draws (`nextFrameOf`), so
+ * the card is updated exactly when it is drawn.
+ */
+export const nextRequestCardOf = (
+  model: Model
+): Option.Option<RequestCardModule> =>
+  Option.flatMap(nextFrameOf(model), () =>
+    Option.fromNullishOr(loadedRequestCard.get("card"))
+  );

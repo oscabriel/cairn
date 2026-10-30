@@ -2469,3 +2469,7 @@ code {
 
 /* Cairn: the `next` shell (next/shell) carries its own utilities too, built by next/shell/shell.css. */
 @source not "./next/shell";
+
+/* Cairn: the request card (next/card) builds its own utilities into the `next` chunk the same way,
+ * through next/card/card.css. */
+@source not "./next/card";

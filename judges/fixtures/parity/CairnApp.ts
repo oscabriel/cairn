@@ -1,6 +1,6 @@
 // The Cairn half of the parity judges (plan 4F): the real web client over a real in-process brain,
 // seeded with what t3code showed, so the judges drive the same `update` and `view` the live app
-// runs. Used by judges/capture.ts (hero and thread states) and judges/behaviour.ts.
+// runs. Used by judges/capture.ts (hero and thread states), judges/behaviour.ts and judges/surfaces.ts.
 //
 // The brain is AppLayer over the scripted harness on an ephemeral loopback port, with Vite in front
 // of it on another, as judges/typing.ts runs it. Seeding happens before the page opens:
@@ -132,6 +132,15 @@ export interface ShellSeed {
 /** No shell seed: one project, one thread, as the classic judges have it. */
 export const NO_SHELL_SEED: ShellSeed = { managed: [], projects: [] };
 
+/**
+ * The scripted brain's model and tools, when a judge needs other answers than "Noted." and the
+ * echo tool (judges/surfaces.ts gives a model that asks for approvals and questions).
+ */
+export interface CairnBrain {
+  readonly model: Layer.Layer<ScriptedModel>;
+  readonly tools: Layer.Layer<ScriptedTools>;
+}
+
 /** A running Cairn: the page origin, the seeded thread's URL, and how to stop it. */
 export interface CairnApp {
   readonly origin: string;
@@ -189,6 +198,12 @@ const QuickModel = Layer.succeed(
       ),
   })
 );
+
+/** The parity judges' brain: "Noted." at once, and the echo tool. */
+const QUICK_BRAIN: CairnBrain = {
+  model: QuickModel,
+  tools: ScriptedTools.layerEcho,
+};
 
 /** A favicon for a seeded rail project: a filled square, so a screenshot shows it edge to edge. */
 const SEED_FAVICON =
@@ -415,14 +430,24 @@ const seedLayer = (
     })
   );
 
+/** What a judge changes from the parity default: the brain's answers, and the shell's seed. */
+export interface CairnOptions {
+  /** The scripted model and tools; "Noted." and the echo tool when absent. */
+  readonly brain?: CairnBrain;
+  /** The `next` shell's seed; none when absent, so classic judges capture what they did. */
+  readonly shell?: ShellSeed;
+}
+
 /**
  * Starts the brain and Vite, seeded; nothing listens outside loopback. A shell seed adds the
  * project thread's managed threads and more rail projects (the `next` shell's judges).
  */
 export const startCairn = async (
   seed: CairnSeed,
-  shellSeed: ShellSeed = NO_SHELL_SEED
+  options: CairnOptions = {}
 ): Promise<CairnApp> => {
+  const brain = options.brain ?? QUICK_BRAIN;
+  const shellSeed = options.shell ?? NO_SHELL_SEED;
   const vitePort = await freePort();
   const brainPort = await freePort();
   const origin = `http://${LOOPBACK}:${vitePort}`;
@@ -439,8 +464,8 @@ export const startCairn = async (
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),
     Layer.provideMerge(ScriptedStore.layer),
-    Layer.provide(QuickModel),
-    Layer.provide(ScriptedTools.layerEcho),
+    Layer.provide(brain.model),
+    Layer.provide(brain.tools),
     Layer.provideMerge(
       withCatalog(
         ModelSource.layerFaux({

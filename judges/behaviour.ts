@@ -211,7 +211,7 @@ const app = await startCairn(
     threadTitle: exported.title,
     entries: importT3Thread(exported).entries,
   },
-  ui === "next" ? SHELL_SEED : { managed: [], projects: [] }
+  ui === "next" ? { shell: SHELL_SEED } : {}
 );
 
 const threadUrl = withUi(app.threadUrl);

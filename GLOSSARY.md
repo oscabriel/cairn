@@ -158,7 +158,7 @@ _Avoid_: grant (in prose), allowance
 
 _Avoid_: alias (alone), agent type
 
-**Role table**: The global table from each role to its binding, in the server settings, seeded from ADR 0035's defaults. Built-in roles cannot be dropped.
+**Role table**: The global table from each role to its binding, in the server settings, seeded from ADR 0035's defaults. Built-in roles cannot be dropped. The settings page's Roles section (in `next`) shows what each role resolves to now and rebinds one by saving the whole table; children started before keep their model.
 
 **Binding**: One role's entry in the role table: a model, an optional thinking level and up to four fallbacks, tried in order at dispatch only, past a provider that is limited or failing. A binding names a model, never another role. A launch may override bindings for its own children.
 

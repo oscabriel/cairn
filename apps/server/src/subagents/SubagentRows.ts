@@ -6,13 +6,14 @@
 // that exists already is left as it is. The row takes its project from the parent's row, its
 // branch and worktree from the child's own worktree when it has one (else the parent's row's), its
 // title from the brief's description, its model from the dispatch record (a workflow node, which
-// has no registry item, from its node in the parent's `cairn.workflows`), its mode from the
-// child's link, and a `lineage` naming the parent and the root. The sidebar hides a row with a
-// lineage (`isSubagentThread`), the projector sets its parent's tally from the registry, and the
-// shell refuses to settle, snooze, pin or archive it, or to settle its parent while it works.
+// has no registry item, from its node in the parent's `cairn.workflows`, which gives its thinking
+// level too), its mode from the child's link, and a `lineage` naming the parent and the root. The
+// sidebar hides a row with a lineage (`isSubagentThread`), the projector sets its parent's tally
+// from the registry, and the shell refuses to settle, snooze, pin or archive it, or to settle its
+// parent while it works.
 
 import { CommandId, ThreadId } from "@cairn/protocol/Ids";
-import { ModelRef } from "@cairn/protocol/Models";
+import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { RuntimeMode as RuntimeModeSchema } from "@cairn/protocol/Policy";
 import {
@@ -40,13 +41,13 @@ import { ThreadMeta } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import { PI_DEFAULT_THINKING } from "../models/PiModelSource.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
-import type { JsonRecord } from "./SubagentDocs.ts";
 
 /** How many conversations the boot repair reads per page. */
 const SCAN_PAGE = 200;
@@ -58,6 +59,8 @@ export interface ChildRowSource {
   readonly title: string;
   /** The dispatched model; none when the record names none, and the parent's is used. */
   readonly model: Option.Option<ModelRef>;
+  /** A workflow node's own level; none takes the parent's (a dispatched subagent's row). */
+  readonly thinkingLevel: Option.Option<ThinkingLevel>;
   readonly runtimeMode: RuntimeMode;
   /** The child's own worktree (a writing role's); none for a shared child, on its parent's. */
   readonly worktree: Option.Option<ChildWorktree>;
@@ -76,13 +79,13 @@ const decodeDispatched = Schema.decodeUnknownOption(
 const decodeWorktree = Schema.decodeUnknownOption(ChildWorktree);
 
 /** The dispatched model, when the record names a real one. */
-const dispatchedModel = (dispatch: JsonRecord | undefined) =>
+const dispatchedModel = (dispatch: Schema.Json | undefined) =>
   decodeDispatched(dispatch).pipe(
     Option.map((found) => found.resolved.model),
     Option.filter((model) => model.provider !== "unknown")
   );
 
-/** The part of a parent's `cairn.workflows` a row reads: each node's child and model. */
+/** The part of a parent's `cairn.workflows` a row reads: each node's child, model and effort. */
 const NodeLedger = Schema.Struct({
   items: Schema.Record(
     Schema.String,
@@ -93,6 +96,7 @@ const NodeLedger = Schema.Struct({
           childThreadId: Schema.NullOr(Schema.String),
           provider: Schema.NullOr(Schema.String),
           modelId: Schema.NullOr(Schema.String),
+          effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
         })
       ),
     })
@@ -105,14 +109,23 @@ const decodeLedger = Schema.decodeUnknownOption(NodeLedger);
 
 const decodeModel = Schema.decodeUnknownOption(ModelRef);
 
+const isThinkingLevel = Schema.is(ThinkingLevel);
+
+/** What a workflow node's child runs on: its model and thinking level. */
+export interface NodeRun {
+  readonly model: ModelRef;
+  readonly thinkingLevel: ThinkingLevel;
+}
+
 /**
- * The model a workflow node's child runs on: its node's resolved role, from the parent's
- * `cairn.workflows` (`ledger`). None when no node names `threadId` as its child.
+ * What a workflow node's child runs on: its node's resolved role and its effort, from the parent's
+ * `cairn.workflows` (`ledger`); a node with no effort runs at the model's default level, pi's
+ * (`PI_DEFAULT_THINKING`), as a new thread does. None when no node names `threadId` as its child.
  */
-export const workflowNodeModel = (
+export const workflowNodeRun = (
   ledger: Option.Option<NodeLedger>,
   threadId: ThreadId
-): Option.Option<ModelRef> =>
+): Option.Option<NodeRun> =>
   Option.flatMap(ledger, ({ items }) =>
     Option.flatMap(
       Option.fromUndefinedOr(
@@ -122,10 +135,36 @@ export const workflowNodeModel = (
       ),
       (node) =>
         decodeModel({ provider: node.provider, modelId: node.modelId }).pipe(
-          Option.filter((model) => model.provider !== "unknown")
+          Option.filter((model) => model.provider !== "unknown"),
+          Option.map((model): NodeRun => ({
+            model,
+            thinkingLevel: isThinkingLevel(node.effort)
+              ? node.effort
+              : PI_DEFAULT_THINKING,
+          }))
         )
     )
   );
+
+/** The row's model and level: the dispatch record's model, else its workflow node's run. */
+const modelAndLevel = (
+  dispatched: Option.Option<ModelRef>,
+  node: () => Option.Option<NodeRun>
+): Pick<ChildRowSource, "model" | "thinkingLevel"> =>
+  Option.match(dispatched, {
+    onSome: (model) => ({
+      model: Option.some(model),
+      thinkingLevel: Option.none(),
+    }),
+    onNone: () => {
+      const run = node();
+
+      return {
+        model: Option.map(run, ({ model }) => model),
+        thinkingLevel: Option.map(run, ({ thinkingLevel }) => thinkingLevel),
+      };
+    },
+  });
 
 /** A child conversation's row source; none for a conversation that is not a subagent. */
 export const childRowSource = (
@@ -171,8 +210,8 @@ export const childRowSource = (
         rootThreadId: ThreadId.make(link.rootThreadId),
       },
       title: Option.getOrElse(nonEmpty(item?.description), () => "Subagent"),
-      model: Option.orElse(dispatchedModel(item?.dispatch), () =>
-        workflowNodeModel(decodeLedger(ledger), ThreadId.make(threadId))
+      ...modelAndLevel(dispatchedModel(item?.dispatch), () =>
+        workflowNodeRun(decodeLedger(ledger), ThreadId.make(threadId))
       ),
       runtimeMode: link.permissionMode,
       worktree: decodeWorktree(item?.worktree ?? null),
@@ -245,14 +284,9 @@ export const seamRowSource = Effect.fn("SubagentRows.seamRowSource")(function* (
       Option.flatMap(item, ({ description }) => nonEmpty(description)),
       () => "Subagent"
     ),
-    model: Option.orElse(
-      Option.flatMap(item, ({ dispatch }) =>
-        decodeDispatched(dispatch).pipe(
-          Option.map((found) => found.resolved.model),
-          Option.filter((model) => model.provider !== "unknown")
-        )
-      ),
-      () => workflowNodeModel(Option.flatMap(ledger, decodeLedger), threadId)
+    ...modelAndLevel(
+      Option.flatMap(item, ({ dispatch }) => dispatchedModel(dispatch)),
+      () => workflowNodeRun(Option.flatMap(ledger, decodeLedger), threadId)
     ),
     runtimeMode: permissionMode,
     worktree: Option.flatMap(item, ({ worktree }) => decodeWorktree(worktree)),
@@ -295,7 +329,10 @@ export const ensureChildRow = Effect.fn("SubagentRows.ensureChildRow")(
           onNone: () => shell.modelId,
           onSome: (model) => model.modelId,
         }),
-        thinkingLevel: shell.thinkingLevel,
+        thinkingLevel: Option.getOrElse(
+          source.thinkingLevel,
+          () => shell.thinkingLevel
+        ),
         runtimeMode: source.runtimeMode,
         branch: Option.match(source.worktree, {
           onNone: () => shell.branch,

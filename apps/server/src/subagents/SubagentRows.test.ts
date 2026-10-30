@@ -46,6 +46,7 @@ const sourceOf = (parent: ThreadId): ChildRowSource => ({
   },
   title: "Count the files",
   model: Option.some({ provider: "faux", modelId: "small" }),
+  thinkingLevel: Option.none(),
   runtimeMode: "approval-required",
   worktree: Option.none(),
 });
@@ -300,7 +301,8 @@ const scriptedDocuments =
 
 /** A workflow node's child: its link, no registry item, and its node in the parent's ledger. */
 const workflowDocuments =
-  (parent: ThreadId) => (threadId: ThreadId, kind: string) => {
+  (parent: ThreadId, effort: string | null) =>
+  (threadId: ThreadId, kind: string) => {
     if (threadId === CHILD && kind === "cairn.child") {
       return Effect.succeedSome({
         key: "scout-1",
@@ -325,6 +327,7 @@ const workflowDocuments =
                 childThreadId: CHILD,
                 provider: "claude-bridge",
                 modelId: "claude-sonnet-5-5",
+                effort,
               },
             },
           },
@@ -429,7 +432,7 @@ describe("a scripted subagent's shell row", () => {
   );
 
   it.effect(
-    "takes a workflow node's own model from its node, not the parent's",
+    "takes a workflow node's own model and level from its node, not the parent's",
     () =>
       Effect.gen(function* () {
         const sink = yield* EventSink;
@@ -439,10 +442,35 @@ describe("a scripted subagent's shell row", () => {
         yield* sink.commitCommand(project.command);
         yield* sink.commitCommand(createThread(project.projectId, 1));
 
-        const shell = yield* rowThroughSeam(parent, workflowDocuments(parent));
+        const shell = yield* rowThroughSeam(
+          parent,
+          workflowDocuments(parent, "high")
+        );
 
         assert.strictEqual(shell.provider, "claude-bridge");
         assert.strictEqual(shell.modelId, "claude-sonnet-5-5");
+        // The parent's row runs at `off`.
+        assert.strictEqual(shell.thinkingLevel, "high");
+      }).pipe(Effect.provide(ShellTestLayer))
+  );
+
+  it.effect(
+    "gives a workflow node with no effort the model's default level, not the parent's",
+    () =>
+      Effect.gen(function* () {
+        const sink = yield* EventSink;
+        const project = createProject(1);
+        const parent = testThreadId(1);
+
+        yield* sink.commitCommand(project.command);
+        yield* sink.commitCommand(createThread(project.projectId, 1));
+
+        const shell = yield* rowThroughSeam(
+          parent,
+          workflowDocuments(parent, null)
+        );
+
+        assert.strictEqual(shell.thinkingLevel, "medium");
       }).pipe(Effect.provide(ShellTestLayer))
   );
 });

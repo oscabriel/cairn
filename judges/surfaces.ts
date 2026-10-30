@@ -24,7 +24,8 @@
 //                  once and advances after the 200 ms pause (between 150 and 1,500 ms); the
 //                  user's own words typed with the soft keyboard open stay as typed; Send opens the
 //                  undo bar and Undo sends nothing; Send again sends exactly one answer after the
-//                  3 s window, and the model reads both answers, numbered.
+//                  3 s window, and the model reads both answers, numbered; a second question
+//                  declined with a reason sends one answer and the model reads the reason.
 //
 // Broken controls, each planted in the page by this judge (never in the app), each of which must
 // make the check it names fail:
@@ -713,11 +714,50 @@ const cardQuestion = async (browser: Browser, url: string, width: number) => {
       `the model read ${JSON.stringify(answer)}`
     );
 
+    // A second question, declined with a reason: the way out when no option fits, on the phone
+    // too, where the composer (and its Stop) is hidden while the card shows.
+    await send(page, `ask me again (${width})`);
+    await card(page).waitFor({ state: "visible", timeout: 15_000 });
+
+    const beforeDecline = device.responds.length;
+
+    await action(page, "decline").click();
+    // The reason names the width: both widths answer on one thread, whose older lines the
+    // transcript may no longer draw, so the judge looks for this run's own line, not a count.
+    const reason = `none of these (${width})`;
+
+    await card(page).locator("textarea").fill(reason);
+    await action(page, "confirm-decline").click();
+    await card(page).waitFor({ state: "hidden", timeout: 10_000 });
+
+    const declinedLine = toolSaid(page).filter({
+      hasText: `The user declined to answer: ${reason}`,
+    });
+
+    const declinedRead = await declinedLine
+      .first()
+      .waitFor({ timeout: 10_000 })
+      .then(
+        () => true,
+        () => false
+      );
+
+    await settle(800);
+
+    expect(
+      device.responds.length - beforeDecline === 1,
+      `Decline sent ${device.responds.length - beforeDecline} thread.respond frames`
+    );
+    expect(
+      declinedRead && (await declinedLine.count()) === 1,
+      `after Decline the model read ${JSON.stringify((await toolSaid(page).last().textContent()) ?? "")}`
+    );
+
     record(
       "card-question",
       width,
       true,
-      `advanced ${Math.round(advanceMs)} ms after the pick; own words kept; Undo sent nothing; Send left after ${Math.round(windowMs)} ms, 1 frame; model read both answers`
+      `advanced ${Math.round(advanceMs)} ms after the pick; own words kept; Undo sent nothing; Send left after ${Math.round(windowMs)} ms, 1 frame; model read both answers; Decline sent 1 frame with its reason`
     );
   } catch (error) {
     await keepScreens("card-question", width, [context]);

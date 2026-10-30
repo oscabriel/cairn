@@ -443,6 +443,82 @@ describe("the request card", () => {
     assert.isTrue(Option.isNone(own.closed));
   });
 
+  it.each([
+    ["cancelled", "Stopped", { kind: "system", why: "run-stopped" }],
+    ["expired", "Expired", null],
+  ] as const)(
+    "closes a shown request that went %s with no answer, keeping what was typed",
+    (status, line, decidedBy) => {
+      let typed = update(
+        showing(doc(question)),
+        Message.ChangedCustom({ approvalId: qId, index: 0, value: "MariaDB" })
+      ).model;
+
+      for (const message of [
+        Message.ClickedDecline({ approvalId: qId }),
+        Message.ChangedReason({ approvalId: qId, value: "not yet" }),
+      ]) {
+        typed = update(typed, message).model;
+      }
+
+      const settled = inform(typed, {
+        threadId: Option.some(threadId),
+        approvals: doc(
+          record({
+            ...questionFields,
+            status,
+            answeredAt: 2500,
+            decidedBy,
+          })
+        ),
+        hasClient: true,
+      }).model;
+
+      assert.deepStrictEqual(
+        Option.map(settled.closed, (closed) => closed.text),
+        Option.some(line)
+      );
+
+      Scene.scene(
+        config,
+        Scene.given(settled),
+        Scene.expect(Scene.testId("request-card")).toBeAbsent(),
+        Scene.expect(Scene.testId("request-card-closed")).toContainText(line),
+        Scene.expect(Scene.testId("request-card-closed-typed")).toHaveText(
+          "MariaDB\n\nnot yet"
+        )
+      );
+    }
+  );
+
+  it("declines a question with a reason and no answers", () => {
+    Scene.scene(
+      config,
+      Scene.given(showing(doc(question))),
+      Scene.click(Scene.role("button", { name: "Decline" })),
+      Scene.expect(Scene.testId("request-card-options")).toBeAbsent(),
+      Scene.type(Scene.label("Why not? (optional)"), "ask me later"),
+      Scene.click(Scene.role("button", { name: "Decline" })),
+      Scene.Command.expectHas(
+        RespondToRequest({
+          threadId,
+          approvalId: qId,
+          decision: "decline",
+          reason: Option.some("ask me later"),
+          answers: Option.none(),
+        })
+      ),
+      Scene.Command.resolve(
+        RespondToRequest,
+        Message.SucceededRespond({ approvalId: qId })
+      ),
+      Scene.expect(Scene.testId("request-card")).toBeAbsent(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
   it("takes no second answer while one is in flight", () => {
     const sending = update(
       showing(doc(approval)),

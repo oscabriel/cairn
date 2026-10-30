@@ -314,7 +314,7 @@ _Avoid_: forward, bubble up
 
 **Verdict note**: The `cairn.verdict` note a judge run leaves for the thread's model, saying how the criterion was judged. It does not wake the thread.
 
-**Request card**: The card above the composer that holds what waits on the user in a thread: an approval, a question or a brief, one at a time with its place among them ("2/3"). On the phone it takes the composer's slot while a request shows. A question's answers wait out a 3 second undo window before they are sent; a request settled elsewhere while it showed closes with that settled line and keeps what the user had typed. Once answered, it leaves one line in the transcript saying who decided and why.
+**Request card**: The card above the composer that holds what waits on the user in a thread: an approval, a question or a brief, one at a time with its place among them ("2/3"). On the phone it takes the composer's slot while a request shows. Every request can be declined with a reason, a question too. A question's answers wait out a 3 second undo window before they are sent; a request settled elsewhere, stopped or expired while it showed closes with that settled line and keeps what the user had typed. Once answered, it leaves one line in the transcript saying who decided and why.
 
 _Avoid_: prompt, modal, panel
 

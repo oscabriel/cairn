@@ -8,7 +8,8 @@
 //   raise as its two budgets), then Decline and Approve, with Allow for this thread beside them.
 // - Question: one question at a time with "i/N", options as buttons with their digit (1 to 9; the
 //   digits work while focus is in the options and not in a text field), "Something else" when
-//   the question takes the user's own words, then Back, Next or Send. Send opens the undo bar.
+//   the question takes the user's own words, then Back, Decline, and Next or Send. Send opens the
+//   undo bar.
 // - Brief (a subagent's brief or a workflow's launch): its fields in reading order, then Decline
 //   and Go. Send back, the role check and Run on 1 first are 6B's and 6F's.
 // - Criteria: the criteria and their judges, then Decline and Approve.
@@ -175,7 +176,8 @@ const declineControls = (
         {
           variant: "secondary",
           onClick: Option.some(Message.ClickedDecline({ approvalId })),
-          isDisabled: Option.isSome(model.sending),
+          // Not while a question's answers wait out their undo window: Undo first.
+          isDisabled: !isAnswerable(model, approvalId),
         },
         "Decline"
       ),
@@ -381,6 +383,34 @@ const questionBody = (
 
   const index = progress.questionIndex;
   const answerable = isAnswerable(model, approvalId);
+  const isDeclining = Option.contains(model.declining, approvalId);
+
+  const forward = progress.isLastQuestion
+    ? actionButton(
+        h,
+        "send",
+        {
+          variant: "primary",
+          onClick: Option.some(Message.ClickedSend({ approvalId })),
+          isDisabled: !answerable || !progress.isComplete,
+          isBusy: Option.contains(model.sending, approvalId),
+        },
+        "Send"
+      )
+    : actionButton(
+        h,
+        "next",
+        {
+          variant: "primary",
+          onClick: Option.some(Message.ClickedNext({ approvalId })),
+          isDisabled: !answerable || !progress.canAdvance,
+        },
+        "Next"
+      );
+
+  // A question can be declined too (the model reads "The user declined to answer"), so a question
+  // the options do not fit always has a way out, even on the phone where the composer is hidden.
+  const decline = declineControls(model, h, approvalId, forward);
 
   return Option.match(progress.activeQuestion, {
     onNone: () => ({ body: [], actions: [] }),
@@ -421,13 +451,13 @@ const questionBody = (
           ],
           [question.question]
         ),
-        question.multiSelect
+        question.multiSelect && !isDeclining
           ? h.p(
               [h.Class(classNames("text-ink-2", TYPE.small))],
               ["Pick one or more."]
             )
           : h.empty,
-        question.options.length === 0
+        question.options.length === 0 || isDeclining
           ? h.empty
           : h.div(
               [
@@ -472,7 +502,7 @@ const questionBody = (
                 )
               )
             ),
-        question.allowCustomAnswer
+        question.allowCustomAnswer && !isDeclining
           ? inputField(
               h,
               {
@@ -493,43 +523,25 @@ const questionBody = (
               }
             )
           : h.empty,
+        ...decline.body,
       ],
-      actions: [
-        index > 0
-          ? actionButton(
-              h,
-              "back",
-              {
-                variant: "ghost",
-                onClick: Option.some(Message.ClickedBack({ approvalId })),
-                isDisabled: !answerable,
-              },
-              "Back"
-            )
-          : h.empty,
-        progress.isLastQuestion
-          ? actionButton(
-              h,
-              "send",
-              {
-                variant: "primary",
-                onClick: Option.some(Message.ClickedSend({ approvalId })),
-                isDisabled: !answerable || !progress.isComplete,
-                isBusy: Option.contains(model.sending, approvalId),
-              },
-              "Send"
-            )
-          : actionButton(
-              h,
-              "next",
-              {
-                variant: "primary",
-                onClick: Option.some(Message.ClickedNext({ approvalId })),
-                isDisabled: !answerable || !progress.canAdvance,
-              },
-              "Next"
-            ),
-      ],
+      actions: isDeclining
+        ? decline.actions
+        : [
+            index > 0
+              ? actionButton(
+                  h,
+                  "back",
+                  {
+                    variant: "ghost",
+                    onClick: Option.some(Message.ClickedBack({ approvalId })),
+                    isDisabled: !answerable,
+                  },
+                  "Back"
+                )
+              : h.empty,
+            ...decline.actions,
+          ],
     }),
   });
 };

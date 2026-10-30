@@ -10,8 +10,8 @@
 //   `UNDO_MS` (3 s, Ultimate's undo bar) before `thread.respond`, so an answer taken back never
 //   reaches the brain. The answers are checked with `answersProblem` first, as the brain checks
 //   them.
-// - Approve, Allow for this thread and Go answer at once; Decline opens a reason field first, and
-//   the reason (when there is one) reaches the model.
+// - Approve, Allow for this thread and Go answer at once; Decline (on every body, a question's
+//   too) opens a reason field first, and the reason (when there is one) reaches the model.
 // - One answer in flight at a time. An answer the brain took is hidden at once and stays hidden
 //   until the stream shows it settled, so a slow stream never shows it twice.
 // - A request that leaves the card without this device answering it (another device, the parent,
@@ -473,11 +473,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         reason: Option.none(),
         answers: Option.none(),
       }),
-    ClickedDecline: ({ approvalId }) => ({
-      model: modifyFields(model, {
-        declining: () => Option.some(approvalId),
-      }),
-    }),
+    ClickedDecline: ({ approvalId }) =>
+      isAnswerable(model, approvalId)
+        ? {
+            model: modifyFields(model, {
+              declining: () => Option.some(approvalId),
+            }),
+          }
+        : { model },
     ChangedReason: ({ approvalId, value }) => ({
       model: modifyFields(model, {
         reasons: (reasons) => ({ ...reasons, [approvalId]: value }),
@@ -560,7 +563,8 @@ export const inform = (model: Model, context: CardContext): UpdateReturn => {
   const isPending = (id: ApprovalId) => pendingIds.includes(id);
 
   // A request the card showed or this device answered, now settled by someone else: not by this
-  // device, or by this device's answer losing to another device's different one.
+  // device, by this device's answer losing to another device's different one, or with no answer
+  // at all (stopped or expired).
   const candidates = new Set<string>([
     ...Option.toArray(base.shown),
     ...base.answered,
@@ -573,7 +577,8 @@ export const inform = (model: Model, context: CardContext): UpdateReturn => {
         sameThread &&
         candidates.has(record.id) &&
         record.status !== "pending" &&
-        base.sent[record.id] !== record.answer?.decision
+        (record.answer === null ||
+          base.sent[record.id] !== record.answer.decision)
     )
   );
 

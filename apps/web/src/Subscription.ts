@@ -17,6 +17,7 @@ import { causeMessage } from "./connection/Failure.ts";
 import { hasClient, isBackingOff } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
+import { subscriptions as nextShellSubscriptions } from "./next/shell/Subscription.ts";
 import * as Thread from "./page/thread/index.ts";
 import { subscriptions as pushSubscriptions } from "./push/Subscription.ts";
 import { subscriptions as settingsSubscriptions } from "./settings/Subscription.ts";
@@ -163,6 +164,25 @@ const liftedSettingsSubscriptions = Subscription.lift(settingsSubscriptions)<
   toParentMessage: (message) => Message.GotSettingsMessage({ message }),
 });
 
+// The `next` shell's keys (the scratch thread's Cmd+J or Ctrl+J), only while `next` draws.
+const liftedNextShellSubscriptions = Subscription.lift(nextShellSubscriptions)<
+  Model,
+  Message
+>({
+  read: (model) => Option.some(model.nextShell),
+  toParentMessage: (message) => Message.GotNextShellMessage({ message }),
+  when: (model) => model.settings.client.ui === "next",
+});
+
+// The scratch thread's stream; its page holds a thread only while the overlay shows it. Renamed,
+// since the routed page's stream already takes the key `thread`.
+const scratchThreadSubscriptions = {
+  scratchThread: Subscription.lift(Thread.subscriptions)<Model, Message>({
+    read: (model) => Option.some(model.scratchThread),
+    toParentMessage: (message) => Message.GotScratchThreadMessage({ message }),
+  }).thread,
+};
+
 /** Every root subscription. */
 export const subscriptions = Subscription.aggregate(
   rootSubscriptions,
@@ -170,7 +190,9 @@ export const subscriptions = Subscription.aggregate(
   composerSubscriptions,
   liftedSidebarSubscriptions,
   liftedPushSubscriptions,
-  liftedSettingsSubscriptions
+  liftedSettingsSubscriptions,
+  liftedNextShellSubscriptions,
+  scratchThreadSubscriptions
 );
 
 /** The connection resource, one client per epoch. */

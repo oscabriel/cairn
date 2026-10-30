@@ -46,6 +46,7 @@ Decided by the user on 2026-10-27 (stage 1 of the backlog, then the thirty quest
 | Subagent model | A thread with a hidden row; the reserved `conversationId` is removed | ADR 0028 |
 | Stop on a goal thread | Children keep working; the row offers Stop all | ADR 0028 |
 | Child approvals | The user's only; only questions route to the parent | ADR 0027 |
+| Child approval push | Under its project thread (the root of its lineage): the root's tag and link, "<child> asks:" before the request (wave 5, 5I) | ADR 0027 |
 | Completion wakes the parent | Yes, by default | ADR 0028 |
 | Brief in full access | Always waits for Go | ADR 0030 |
 | Isolation | A worktree for writing roles; shared checkout for read-only roles | subagents note |

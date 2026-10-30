@@ -19,3 +19,9 @@ Consequences:
 - The brief, its Go and its record are specified in ADRs 0029 and 0030; a brief waits for Go in every permission mode.
 
 Decided by the user on 2026-10-27.
+
+## Amendment: one project thread per project (2026-10-29)
+
+The user decided that each folder project has one project thread, the long-lived conversation of the top tier, and that new top-level threads in a project come only from a refresh. The project row marks it (`ProjectShell.projectThreadId`). The first launch in a project marks it; a later launch refreshes it: the old thread's run, queue and working subagents are stopped, then one shell commit writes the new row, archives the old one and moves the mark, idempotent by command id. A resent refresh whose `replaces` is stale gets the same refusal as its first attempt. Archiving or deleting the marked thread clears the mark, and unarchiving one is refused while another is marked. Subagents stay managed threads under the project thread. The scratch project has no project thread; each of its threads is a scratch thread, cleared with its folder.
+
+Evidence (5H, wave 5): `ProjectThreadKill.test.ts` kills the brain with `kill -9` at three points of a refresh and finds exactly one project thread after boot and after the resend, while the two-commit control leaves none; `ProjectThread.test.ts` and `ProjectThreadLaunch.test.ts` hold the planner, the unarchive rule and the stale refresh, each failing under its mutation.

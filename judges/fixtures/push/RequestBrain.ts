@@ -44,6 +44,8 @@ import {
   ReachMachine,
 } from "../../../apps/server/src/reach/ReachLayer.ts";
 import { Skills } from "../../../apps/server/src/skills/SkillsLayer.ts";
+import { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";
+import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
 
 /** The text of the newest user message, or "" when there is none. */
 const lastUserText = (request: ScriptedRequest): string => {
@@ -148,7 +150,9 @@ const Harness = Layer.mergeAll(
   Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
   EventReactors.layerOff,
   SpendFeed.layerOff,
-  BudgetSources.layerNone
+  BudgetSources.layerNone,
+  WorkflowStops.layerOff,
+  GoalBook.layerOff
 ).pipe(
   Layer.provideMerge(
     Layer.effectDiscard(ScriptedBoot.use((boot) => boot.resume)).pipe(

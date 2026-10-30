@@ -22,6 +22,8 @@ export const ExtensionOrder = {
   subagents: 650,
   /** cairn.workflows: the workflow node tools, their watcher task and the gate (ADR 0012 as amended). */
   workflows: 660,
+  /** `cairn.goals`: goal_check, goal_criteria and the cairn.judge-run task (ADR 0026). */
+  goals: 670,
   bridgeCwd: 700,
   /** `cairn.reach`: the artifact tools (3E) and the portal tools (3F); 750 is the provider request log's. */
   reach: 760,

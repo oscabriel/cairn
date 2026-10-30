@@ -15,6 +15,8 @@ import { ReachTools } from "../reach/ReachExtension.ts";
 import { skillExtensionSources } from "../skills/SkillsLayer.ts";
 import { Subagents } from "../subagents/Subagents.ts";
 import { BudgetBook } from "../usage/BudgetBook.ts";
+import { Goals } from "../verdicts/Goals.ts";
+import { WorkflowPushes } from "../workflows/WorkflowPushes.ts";
 import { Workflows } from "../workflows/Workflows.ts";
 import { BridgeCwd } from "./BridgeCwdExtension.ts";
 import { BudgetGate } from "./BudgetGateExtension.ts";
@@ -40,6 +42,7 @@ const production: ReadonlyArray<
     | ReachTools
     | Subagents
     | Workflows
+    | Goals
     | BudgetGate
   >
 > = [
@@ -50,6 +53,7 @@ const production: ReadonlyArray<
   BudgetGate.useSync((gate) => gate.extension),
   Subagents.useSync((subagents) => subagents.extension),
   Workflows.useSync((workflows) => workflows.extension),
+  Goals.useSync((goals) => goals.extension),
   BridgeCwd.useSync((bridgeCwd) => bridgeCwd.extension),
   PiHost.useSync((host) => host.extension),
   ModelHealthFeed.useSync((feed) => feed.extension),
@@ -77,7 +81,10 @@ const production: ReadonlyArray<
 // with planted faults in a test brain. The budget gate reads `BudgetBook.layer`, the reference
 // `AppLayer` gives the spend ledger, `Budgets` and the guard, so the memo map builds one book;
 // a test that builds this set alone gets an empty book of its own. The workflow tools resolve
-// roles through `RoleAliases.layerNoDeps`, as the `roles` tool does.
+// roles through `RoleAliases.layerNoDeps`, as the `roles` tool does, and hand the soft line's
+// pushes to `WorkflowPushes.layer`, the reference `AppLayer` drains through `WorkflowBudgetPush`, so
+// the memo map builds one outbox. The goals' model judges resolve through `RoleAliases` too; they
+// are metered only where a `SpendLedger` is in context.
 const dependencies = Layer.mergeAll(
   CodingTools.layer,
   CodeMode.layer,
@@ -91,7 +98,11 @@ const dependencies = Layer.mergeAll(
   ResultTool.layer,
   ReachTools.layerAt(ExtensionOrder.reach),
   BudgetGate.layer.pipe(Layer.provide(BudgetBook.layer)),
-  Workflows.layer.pipe(Layer.provide(RoleAliases.layerNoDeps))
+  Workflows.layer.pipe(
+    Layer.provide(RoleAliases.layerNoDeps),
+    Layer.provide(WorkflowPushes.layer)
+  ),
+  Goals.layer.pipe(Layer.provide(RoleAliases.layerNoDeps))
 );
 
 /** The installed set: production extensions, plus any a composition root adds (judges). */

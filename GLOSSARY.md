@@ -110,7 +110,7 @@ _Avoid_: using it for a thread's settle state, which is **Settle**
 
 **Mirror**: The record that escalating a subagent's question places in its parent. An answer from either thread settles both, once.
 
-**Goal**: A thread with stated criteria that owns the subagents and stones working toward them. Still a thread: same transcript, sidebar row and composer. Its criteria are met only when an outside judge says so.
+**Goal**: A thread with stated criteria that owns the subagents and stones working toward them. Still a thread: same transcript, sidebar row and composer. Its criteria are met only when an outside judge says so. The project thread is the natural goal thread and carries one goal at a time; a subagent's thread has none.
 
 _Avoid_: task, epic, project (for the goal)
 
@@ -258,11 +258,11 @@ _Avoid_: plugin
 
 **Design token**: A named value in `next/tokens.css` (a surface, ink, stroke, selection ladder step, accent, status tone, radius, space, type step, duration, layer or shadow) that the `next` views use in place of any literal colour or palette utility, in dark and light. `judges/contrast.test.ts` holds every text pair to WCAG AA and fails any other colour in `next/`. _Avoid_: token alone where Spend's model tokens could be meant; say design token or the token's name.
 
-**Look**: The set of design token values the `next` views draw with. Until the user chooses, three look candidates (graphite, the default; ink; stone) share one set of names in `next/tokens.css`, picked by `data-look` beside `data-ui`; the user picks one in a look round. _Avoid_: theme (that is dark or light), skin.
+**Look**: The set of design token values the `next` views draw with: one look, Stone revised (the user, 2026-10-29), in dark and light in `next/tokens.css`; there is no look switch. Previewed and approved in look rounds. _Avoid_: theme (that is dark or light), skin.
 
 **Primitive (next)**: A view helper in `apps/web/src/next/ui/` (button, chip, status chip, row, card, menu, sheet, field, banner, meter...) drawn with design tokens only. A next view builds on primitives rather than raw classes.
 
-**Look catalogue**: The dev-only page at `/__look` (`apps/web/src/next/ui/catalogue`) that draws every next primitive in every state under each look and theme. `judges/look-rules.ts` judges it and the look rounds screenshot it; it is never in the production build.
+**Look catalogue**: The dev-only page at `/__look` (`apps/web/src/next/ui/catalogue`) that draws every next primitive in every state in dark and light. `judges/look-rules.ts` judges it and the look rounds screenshot it; it is never in the production build.
 
 **Measured list**: The transcript's own scroll list (`timeline/list`, ADR 0041). A row counts in the scroll range only once it has been measured (history it never drew is measured off-screen first), parked rows keep frozen heights, the first visible row keeps its offset through any change above it, and a glyph bookmark keeps the reader's place through width changes. _Avoid_: virtual list (that was `@foldkit/ui`'s, which estimated heights).
 
@@ -282,7 +282,7 @@ _Avoid_: plugin
 
 **Presence**: A device telling the brain whether Cairn is on screen and which thread it shows, so a push waits while the user is looking at that thread or one above it.
 
-**Approval push**: The push for a request waiting on a thread, in the request's own words, one notification per thread; held back while a page shows it, sent late once it has waited a minute unseen, and reminded once 15 minutes after the last push.
+**Approval push**: The push for a request waiting on a thread, in the request's own words, one notification per thread; held back while a page shows it, sent late once it has waited a minute unseen, and reminded once 15 minutes after the last push. A subagent's request pushes under its project thread (the root of its lineage), with the root's tag and link and a "<child> asks:" prefix.
 
 ## Asking the user
 
@@ -309,6 +309,10 @@ _Avoid_: forward, bubble up
 **Criterion**: One stated, checkable condition of a goal or a brief, naming the outside judge that decides it. It is met only by a verdict recorded after it last changed.
 
 **Verdict**: A judge run's recorded result for a criterion: pass or fail, the judge, and the evidence (exit code, output tail, commit, model). Only the verdict writer records one.
+
+**Judge run**: The durable `cairn.judge-run` task `goal_check` queues for one criterion. It runs the criterion's judge and records the verdict, its index entry and a verdict note in one completing commit; met is set only by that commit, and a rerun or a second check queues nothing.
+
+**Verdict note**: The `cairn.verdict` note a judge run leaves for the thread's model, saying how the criterion was judged. It does not wake the thread.
 
 **Request card**: The card above the composer that holds what waits on the user in a thread: an approval, a question or a brief. Once answered, it leaves one line in the transcript saying who decided and why.
 

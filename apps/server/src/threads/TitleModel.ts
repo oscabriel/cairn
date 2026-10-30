@@ -94,7 +94,9 @@ const completeOn = Effect.fn("TitleModel.complete")(function* (
     .completeSimple(
       model,
       { messages: [{ role: "user", content: prompt, timestamp }] },
-      {}
+      // OpenCode Go refuses a request with no session (`x-opencode-session`, which pi-ai sets from
+      // `sessionId`): one per call, stable across its retries.
+      { sessionId: `cairn-${call.source}-${call.key}` }
     )
     .pipe(
       Effect.timeout(TITLE_MODEL_TIMEOUT),

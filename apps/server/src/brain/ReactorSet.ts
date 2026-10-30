@@ -9,10 +9,13 @@
 
 import { Effect } from "effect";
 
+import { workflowBudgetReactor } from "../workflows/WorkflowBudget.ts";
 import { EventReactors } from "./EventReactors.ts";
 import type { Reactor } from "./Events.ts";
 
-const production: ReadonlyArray<Effect.Effect<Reactor>> = [];
+const production: ReadonlyArray<Effect.Effect<Reactor>> = [
+  Effect.succeed(workflowBudgetReactor),
+];
 
 /** The reactor host over the production reactors, plus any a composition root adds (judges). */
 export const ReactorSet = {

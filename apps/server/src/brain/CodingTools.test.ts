@@ -281,6 +281,7 @@ describe("coding tools", () => {
             "cairn.budgets",
             "cairn.subagents",
             "cairn.workflows",
+            "cairn.goals",
             "cairn.bridge-cwd",
             "cairn-provider-request-log",
             "cairn.reach",

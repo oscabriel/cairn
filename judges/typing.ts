@@ -68,6 +68,8 @@ import {
   ProjectRegister,
   ThreadCreate,
 } from "../apps/server/src/shell/ShellCommands.ts";
+import { GoalBook } from "../apps/server/src/verdicts/GoalBook.ts";
+import { WorkflowStops } from "../apps/server/src/workflows/WorkflowStop.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -151,7 +153,9 @@ const Harness = Layer.mergeAll(
   Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
   EventReactors.layerOff,
   SpendFeed.layerOff,
-  BudgetSources.layerNone
+  BudgetSources.layerNone,
+  WorkflowStops.layerOff,
+  GoalBook.layerOff
 ).pipe(
   Layer.provideMerge(ScriptedHarness.layerNoDeps),
   Layer.provide(ScriptedStore.layer),

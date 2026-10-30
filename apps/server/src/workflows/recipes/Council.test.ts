@@ -38,6 +38,7 @@ import { messageText } from "../../brain/CommitFeed.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../../models/ResultTool.ts";
 import { taskOf } from "../../subagents/Delivery.ts";
 import { DEFAULT_NODE_ROLE } from "../Prelude.ts";
+import { HOLD_RETRY_MILLIS } from "../WorkflowBudget.ts";
 import { ledgerProblems, WorkflowsDoc } from "../WorkflowDocs.ts";
 import type {
   NodeItemState,
@@ -341,8 +342,15 @@ const council = (
     registry.install(
       workflowExtension({
         resolveRole,
+        plan: {
+          dryRun: async () =>
+            await Promise.resolve(
+              Result.fail("the council test plants its launch")
+            ),
+        },
         faults: NO_WORKFLOW_FAULTS,
         hold: NO_HOLD,
+        holdRetryMillis: HOLD_RETRY_MILLIS,
       }).extension
     );
     registry.install(results.extension.extension);

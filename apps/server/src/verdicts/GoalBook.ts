@@ -302,4 +302,27 @@ export class GoalBook extends Context.Service<
   static readonly layer = GoalBook.layerNoDeps.pipe(
     Layer.provide(RoleAliases.layerNoDeps)
   );
+
+  /** For brains with no pi-durable Harness (the scripted dev brain), which hold no goals. */
+  static readonly layerOff = Layer.succeed(
+    GoalBook,
+    GoalBook.of({
+      setCriteria: (input) =>
+        Effect.fail(
+          failure(
+            input.threadId,
+            "unavailable",
+            `Thread ${input.threadId} cannot take a goal: this brain holds no goals.`
+          )
+        ),
+      mark: (input) =>
+        Effect.fail(
+          failure(
+            input.threadId,
+            "unavailable",
+            `Thread ${input.threadId} cannot take a mark: this brain holds no goals.`
+          )
+        ),
+    })
+  );
 }

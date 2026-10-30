@@ -9,10 +9,12 @@ import { Effect, Layer } from "effect";
 import { CodexLogin } from "../models/CodexLogin.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
 import { UsageFeed } from "../usage/UsageFeed.ts";
+import { Recipes } from "../workflows/recipes/Recipes.ts";
 import { AttachmentHandlers } from "./AttachmentHandlers.ts";
 import { DiffHandlers } from "./DiffHandlers.ts";
 import { EventHandlers } from "./EventHandlers.ts";
 import { ExecutorHandlers } from "./ExecutorHandlers.ts";
+import { GoalHandlers } from "./GoalHandlers.ts";
 import { LoginHandlers } from "./LoginHandlers.ts";
 import { ModelHandlers } from "./ModelHandlers.ts";
 import { PortalHandlers } from "./PortalHandlers.ts";
@@ -28,6 +30,7 @@ import { stubHandlers } from "./StubHandlers.ts";
 import { ThreadCommandHandlers } from "./ThreadCommandHandlers.ts";
 import { ThreadStreamHandlers } from "./ThreadStreamHandlers.ts";
 import { UsageHandlers } from "./UsageHandlers.ts";
+import { WorkflowHandlers } from "./WorkflowHandlers.ts";
 
 /** The stubs with the session handlers over them. */
 const BaseHandlers = CairnRpcs.toLayer(
@@ -67,5 +70,7 @@ export const HandlersLayer = Layer.mergeAll(
   PortalHandlers,
   RoleHandlers.pipe(Layer.provide(RoleAliases.layerNoDeps)),
   ReachHandlers,
-  LoginHandlers.pipe(Layer.provide(CodexLogin.layer))
+  LoginHandlers.pipe(Layer.provide(CodexLogin.layer)),
+  WorkflowHandlers.layer.pipe(Layer.provide(Recipes.layer)),
+  GoalHandlers
 );

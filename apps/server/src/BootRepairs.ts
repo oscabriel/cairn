@@ -4,8 +4,9 @@
 // spend, then load the budget book and halt the scopes past their line (4E), both before anything
 // that retries a parked task, since pi-durable's `retryTask` resumes scheduling; cancel approval
 // records a stop left pending (the abort mark committed, the cancel not); `retryTask()` for tasks
-// whose approval is still pending; retry parked subagent tasks; remove child workspaces whose spawn
-// never landed; resume interrupted launches from `thread_launches`; repair checkpoint refs;
+// whose approval is still pending; retry parked subagent tasks, then parked workflow watchers and
+// budget stoppers; remove child workspaces whose spawn never landed; remove scratch folders whose
+// thread is gone (a thread's row is committed before its folder is claimed); resume interrupted launches from `thread_launches`; repair checkpoint refs;
 // reconcile portal rows, units and porches, then start the portal sweep; then start the durable
 // event reactors, last, so they run after every repair and before resume and ready. Orphaned `claude` processes are only logged, by the bridge's boot lines
 // (`BridgeProvider.ts`), not repaired here.
@@ -23,6 +24,8 @@ import type { HarnessSeam } from "./brain/HarnessSeam.ts";
 import { sweepUnfinishedExecutorRequests } from "./executor/ExecutorSweep.ts";
 import type { ExecutorSweep } from "./executor/ExecutorSweep.ts";
 import { CheckpointCapture } from "./git/CheckpointCapture.ts";
+import { repairScratchFoldersAtBoot } from "./projects/ScratchProject.ts";
+import type { ScratchProject } from "./projects/ScratchProject.ts";
 import type { Portals } from "./reach/Portals.ts";
 import { portalReconcile, startPortalSweep } from "./reach/ReachRepair.ts";
 import type { EventSink } from "./shell/EventSink.ts";
@@ -34,6 +37,7 @@ import { budgetBootRepair } from "./usage/BudgetGuard.ts";
 import type { BudgetGuard } from "./usage/BudgetGuard.ts";
 import { reconcileSpendAtBoot } from "./usage/SpendLedger.ts";
 import type { SpendLedger } from "./usage/SpendLedger.ts";
+import { retryParkedWorkflowTasks } from "./workflows/WorkflowRepairs.ts";
 import type { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
 
 /** One repair: a name for the log and the effect. */
@@ -76,6 +80,7 @@ export const bootRepairs: ReadonlyArray<
     | ExecutorSweep
     | HarnessSeam
     | Portals
+    | ScratchProject
     | SpendLedger
     | ThreadLaunch
     | ThreadRows
@@ -89,7 +94,9 @@ export const bootRepairs: ReadonlyArray<
   bootRepair("cancel abandoned approvals", cancelAbandonedApprovalsAtBoot),
   retryParkedApprovalWaits,
   bootRepair("retry parked subagent tasks", retryParkedSubagentTasks),
+  bootRepair("retry parked workflow tasks", retryParkedWorkflowTasks),
   bootRepair("child workspace repair", repairChildWorkspacesAtBoot),
+  bootRepair("scratch folder repair", repairScratchFoldersAtBoot),
   bootRepair(
     "resume interrupted launches",
     ThreadLaunch.use((launcher) => launcher.resumePending)

@@ -397,6 +397,7 @@ describe("the goal tools under a Harness", () => {
               by: { kind: "user" },
               reason: Option.none(),
               answers: Option.none(),
+              launch: Option.none(),
             },
             50,
             criteriaAnswered

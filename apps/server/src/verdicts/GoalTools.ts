@@ -20,6 +20,7 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Result } from "effect";
 
 import { approvalLedger } from "../brain/CairnDocs.ts";
+import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import {
@@ -42,12 +43,6 @@ import { MAX_CRITERIA } from "./Verdicts.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const GOALS_EXTENSION = "cairn.goals";
-
-/**
- * Where `cairn.goals` installs: after the workflows (660), before the bridge's cwd (700). The
- * integrator moves it into `ExtensionOrder` as `goals`.
- */
-export const GOALS_ORDER = 670;
 
 const BACKGROUND = {
   ownership: { kind: "conversation" },
@@ -345,7 +340,7 @@ export const goalsExtension = (
   });
 
   return {
-    order: GOALS_ORDER,
+    order: ExtensionOrder.goals,
     extension: defineExtension({
       name: GOALS_EXTENSION,
       tools: [check, propose],

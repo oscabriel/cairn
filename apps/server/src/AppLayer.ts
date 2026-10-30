@@ -80,7 +80,13 @@ import { BudgetGuard } from "./usage/BudgetGuard.ts";
 import { Budgets } from "./usage/Budgets.ts";
 import { ClaudeSignals } from "./usage/ClaudeSignals.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
+import { GoalBook } from "./verdicts/GoalBook.ts";
 import { WorkflowPlan } from "./workflows/WorkflowPlan.ts";
+import {
+  WorkflowBudgetPush,
+  WorkflowPushes,
+} from "./workflows/WorkflowPushes.ts";
+import { WorkflowStops } from "./workflows/WorkflowStop.ts";
 import { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
 import { ChildWorkspaceStore } from "./workspaces/ChildWorkspaceStore.ts";
 
@@ -247,7 +253,9 @@ export const PiDurableBrain = <Models = never>(options: {
     resume,
     ReactorSet.layer,
     SpendFeed.layer,
-    BudgetSources.layer
+    BudgetSources.layer,
+    WorkflowStops.layer,
+    GoalBook.layer
   ).pipe(
     Layer.provideMerge(PiDurableHarness.layer),
     Layer.provide(
@@ -270,7 +278,9 @@ export const ScriptedBrain = Layer.mergeAll(
   Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
   EventReactors.layerOff,
   SpendFeed.layerOff,
-  BudgetSources.layerNone
+  BudgetSources.layerNone,
+  WorkflowStops.layerOff,
+  GoalBook.layerOff
 ).pipe(
   Layer.provideMerge(ScriptedHarness.layer),
   Layer.provideMerge(Skills.local),
@@ -330,7 +340,8 @@ export const AppLayer = Layer.mergeAll(
   MemoryWatch.pipe(Layer.provide(NodeServices.layer)),
   SubagentRows,
   QuestionRoutes,
-  WorkflowPlan.layer
+  WorkflowPlan.layer,
+  WorkflowBudgetPush
 ).pipe(
   Layer.provide(HandlersLayer),
   Layer.provide(BootData),
@@ -355,6 +366,7 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(SpendLedger.layerNoDeps),
   Layer.provideMerge(PushLayer),
   Layer.provideMerge(BudgetBook.layer),
+  Layer.provideMerge(WorkflowPushes.layer),
   Layer.provideMerge(ReachLive),
   Layer.provide(SettingsLive),
   Layer.provideMerge(Layer.merge(ShellLive, ModelHealthLive))

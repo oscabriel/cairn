@@ -46,6 +46,16 @@ import {
 } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
 import type { Flags, Model, SentTurn } from "./Model.ts";
+import type { Message as RequestCardMessage } from "./next/card/Message.ts";
+import {
+  approvalsDocumentOf,
+  initial as initialRequestCard,
+} from "./next/card/Model.ts";
+import type {
+  CardContext,
+  Model as RequestCardModel,
+} from "./next/card/Model.ts";
+import { nextRequestCardOf } from "./next/FrameLoad.ts";
 import * as Thread from "./page/thread/index.ts";
 import { pushContextOf, samePushContext } from "./push/Context.ts";
 import { OutMessage as PushOutMessage } from "./push/Message.ts";
@@ -583,6 +593,56 @@ const informComposer = Update.foldChild({
   toParentMessage: toGotComposerMessage,
 });
 
+const toGotRequestCardMessage = (message: RequestCardMessage): Message =>
+  Message.GotRequestCardMessage({ message });
+
+const readRequestCard = (model: Model): Option.Option<RequestCardModel> =>
+  Option.some(model.requestCard);
+
+const writeRequestCard = (model: Model, requestCard: RequestCardModel): Model =>
+  modifyFields(model, { requestCard: () => requestCard });
+
+/** Folds a request card Message through the card's update, once the `next` chunk brought it. */
+const foldRequestCardMessage = (
+  model: Model,
+  message: RequestCardMessage
+): UpdateReturn =>
+  Option.match(nextRequestCardOf(model), {
+    onNone: () => ({ model }),
+    onSome: (card) =>
+      Update.foldChild({
+        update: card.update,
+        read: readRequestCard,
+        write: writeRequestCard,
+        toParentMessage: toGotRequestCardMessage,
+      })(model, message),
+  });
+
+/**
+ * Tells the request card the open thread's decision records and the connection, when they
+ * changed, while the `next` frame draws it.
+ */
+const syncRequestCard: Step = (model) =>
+  Option.match(nextRequestCardOf(model), {
+    onNone: () => ({ model }),
+    onSome: (card) => {
+      const context: CardContext = {
+        threadId: model.thread.threadId,
+        approvals: approvalsDocumentOf(model.thread.view),
+        hasClient: hasClient(model.connection),
+      };
+
+      return card.sameContext(model.requestCard, context)
+        ? { model }
+        : Update.foldChild({
+            update: card.inform,
+            read: readRequestCard,
+            write: writeRequestCard,
+            toParentMessage: toGotRequestCardMessage,
+          })(model, context);
+    },
+  });
+
 /** Tells the composer the route, the connection, the shell and the thread's view, when they changed. */
 const syncComposer: Step = (model) => {
   const context = composerContext({
@@ -903,6 +963,10 @@ const step = (received: Message): Step =>
       ({ message: parkedMessage }) =>
       (model) =>
         foldParkedMessage(model, parkedMessage),
+    GotRequestCardMessage:
+      ({ message: requestCardMessage }) =>
+      (model) =>
+        foldRequestCardMessage(model, requestCardMessage),
     LoadedSettingsPage: () => (model) => ({
       model: modifyFields(model, { settingsPage: () => "loaded" as const }),
     }),
@@ -923,6 +987,7 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     syncPush,
     syncSettings,
     syncParked,
+    syncRequestCard,
     loadSettingsPage,
   ]);
 };
@@ -952,6 +1017,7 @@ export const init: Runtime.RoutingApplicationInit<
       push: initialPush,
       settings: initialSettings,
       parked: Parked.initial,
+      requestCard: initialRequestCard,
       settingsPage: "idle",
     }),
     toParentMessage: toGotComposerMessage,
@@ -967,6 +1033,7 @@ export const init: Runtime.RoutingApplicationInit<
     startSettings,
     syncSettings,
     syncParked,
+    syncRequestCard,
     loadSettingsPage,
   ]);
 

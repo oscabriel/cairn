@@ -12,8 +12,12 @@
 import "./tokens.css";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
-import type { Message } from "../Message.ts";
+import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
+import { view as requestCardView } from "./card/View.ts";
+
+/** The request card's update and root hooks, held by `FrameLoad.ts` once this chunk loads. */
+export { requestCard } from "./card/Update.ts";
 
 /**
  * The regions the classic views draw, handed to the frame until `next` draws its own. Each is a
@@ -26,9 +30,33 @@ export interface Regions {
   readonly sidebar: () => Html;
   /** The notice bar above the page; empty when there is no notice. */
   readonly notice: () => Html;
-  /** The routed page: hero, thread, draft, settings or not found. */
-  readonly page: () => Html;
+  /**
+   * The routed page: hero, thread, draft, settings or not found. Under an open thread,
+   * `composerLane` draws around the docked composer what its lane holds besides it.
+   */
+  readonly page: (
+    composerLane: (composer: () => Html) => ReadonlyArray<Html>
+  ) => Html;
 }
+
+/**
+ * The composer's lane under an open thread: the request card (plan 6A), then the composer, which
+ * gives the card its slot on the phone while a request shows (`next/card/card.css`). Siblings, so
+ * the composer keeps its place in the tree and its Mounts.
+ */
+const composerLane = (
+  model: Model,
+  h: HtmlBuilder<Message>,
+  composer: () => Html
+): ReadonlyArray<Html> => [
+  h.submodel({
+    slotId: "request-card",
+    model: model.requestCard,
+    view: requestCardView,
+    toParentMessage: (message) => Message.GotRequestCardMessage({ message }),
+  }),
+  composer(),
+];
 
 /** The app drawn with the `next` views, over the same Model as the classic ones. */
 export const view = (
@@ -59,7 +87,10 @@ export const view = (
             "relative flex min-w-0 w-full flex-1 flex-col bg-background text-foreground surface-grain h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
           ),
         ],
-        [regions.notice(), regions.page()]
+        [
+          regions.notice(),
+          regions.page((composer) => composerLane(model, h, composer)),
+        ]
       ),
     ]
   ),

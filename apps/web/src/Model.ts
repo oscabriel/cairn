@@ -9,6 +9,7 @@ import { Schema } from "effect";
 import * as Composer from "./composer/Model.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import { Connection } from "./connection/Reconnect.ts";
+import { Model as RequestCardModel } from "./next/card/Model.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Model as PushModel } from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
@@ -55,6 +56,8 @@ export const Model = Schema.Struct({
   push: PushModel,
   settings: SettingsModel,
   parked: ParkedModel,
+  /** The request card the `next` views draw in the composer's lane (plan 6A). */
+  requestCard: RequestCardModel,
   /** Where the settings page's lazily loaded view is (`SettingsPage.ts`). */
   settingsPage: Schema.Literals(["idle", "loading", "loaded", "failed"]),
 });

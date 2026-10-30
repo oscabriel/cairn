@@ -192,7 +192,20 @@ const threadHeader = (
     ],
   });
 
-const page = (model: Model, h: HtmlBuilder<Message>): Html =>
+/**
+ * What the composer's lane holds under an open thread, as siblings ending with the docked
+ * composer, so the composer keeps its place in the tree whichever views draw. The classic views
+ * draw the composer alone; the `next` frame puts its request card before it (plan 6A).
+ */
+type ComposerLane = (composer: () => Html) => ReadonlyArray<Html>;
+
+const composerAlone: ComposerLane = (composer) => [composer()];
+
+const page = (
+  model: Model,
+  h: HtmlBuilder<Message>,
+  composerLane: ComposerLane
+): Html =>
   AppRoute.match(model.route, {
     Hero: () => pageComposerLazy(composerView, [h, model.composer]),
     Thread: ({ threadId }) => {
@@ -253,7 +266,9 @@ const page = (model: Model, h: HtmlBuilder<Message>): Html =>
               ]),
             ]
           ),
-          dockedComposerLazy(composerView, [h, model.composer]),
+          ...composerLane(() =>
+            dockedComposerLazy(composerView, [h, model.composer])
+          ),
         ]
       );
     },
@@ -332,7 +347,7 @@ const classicView = (model: Model, h: HtmlBuilder<Message>): Document => ({
             "relative flex min-w-0 w-full flex-1 flex-col bg-background text-foreground surface-grain h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
           ),
         ],
-        [noticeBar(model, h), page(model, h)]
+        [noticeBar(model, h), page(model, h, composerAlone)]
       ),
     ]
   ),
@@ -351,6 +366,6 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document =>
         sidebarState: sidebarState(model.sidebar),
         sidebar: () => sidebarLazy(sidebar, [h, model.sidebar]),
         notice: () => noticeBar(model, h),
-        page: () => page(model, h),
+        page: (composerLane) => page(model, h, composerLane),
       }),
   });

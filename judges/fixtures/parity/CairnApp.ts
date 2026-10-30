@@ -132,6 +132,29 @@ export interface ShellSeed {
 /** No shell seed: one project, one thread, as the classic judges have it. */
 export const NO_SHELL_SEED: ShellSeed = { managed: [], projects: [] };
 
+/** The managed threads the `next` judges seed (behaviour.ts `--ui next`, look.ts), oldest first; the list shows them newest first. */
+export const MANAGED_SEED: ShellSeed["managed"] = [
+  { title: "Map the favicon resolver", state: "idle", usable: true },
+  { title: "Brief: port the fold line tallies", state: "done", usable: false },
+  { title: "Steps panel projection", state: "parked", usable: false },
+  { title: "Probe the bridge usage endpoint", state: "failed", usable: false },
+  { title: "Review: steps panel", state: "working", usable: false },
+  {
+    title: "Pick the budget meter's thresholds",
+    state: "asking",
+    usable: false,
+  },
+];
+
+/** The `next` shell's seed: managed threads and two more rail projects, one with a favicon. */
+export const SHELL_SEED: ShellSeed = {
+  managed: MANAGED_SEED,
+  projects: [
+    { title: "oscargabriel-dev", favicon: true },
+    { title: "myr", favicon: false },
+  ],
+};
+
 /**
  * The scripted brain's model and tools, when a judge needs other answers than "Noted." and the
  * echo tool (judges/surfaces.ts gives a model that asks for approvals and questions).

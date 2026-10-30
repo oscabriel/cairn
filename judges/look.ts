@@ -68,7 +68,7 @@ import {
   importT3Thread,
   parseT3ThreadExport,
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
-import { startCairn } from "./fixtures/parity/CairnApp.ts";
+import { SHELL_SEED, startCairn } from "./fixtures/parity/CairnApp.ts";
 import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
 import {
   ALLOWANCE,
@@ -269,10 +269,10 @@ const STATES: ReadonlyArray<LookState> = [
     name: "sidebar",
     title: "The sidebar",
     caption:
-      "At 1,440 px a thread's row menu, opened from its row; at 390 px the sidebar as a sheet.",
+      "The project rail of favicon squircles, the project thread and the running list of the threads it manages, and the foot's Usage and Settings. At 390 px it opens as a sheet.",
     path: ({ app }) => new URL(app.threadUrl).pathname,
     widths: [390, 1440],
-    light: false,
+    light: true,
     enter: async (page, width) => {
       await waitForThread(page);
 
@@ -286,20 +286,39 @@ const STATES: ReadonlyArray<LookState> = [
         await page
           .getByTestId("sidebar-sheet")
           .waitFor({ state: "attached", timeout: 5000 });
-        await page.waitForTimeout(900);
+      }
 
-        return;
+      // The visible copy of the sidebar: the sheet on a phone, the column on a desktop.
+      await page
+        .getByTestId(width === 390 ? "sidebar-sheet" : "shell-column")
+        .getByTestId("rail-favicon")
+        .first()
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await settle(page, 900);
+    },
+  },
+  {
+    name: "scratch",
+    title: "The scratch thread",
+    caption:
+      "The floating scratch thread with no project, opened with Ctrl+J or Cmd+J (at 390 px, the header's button).",
+    path: ({ app }) => new URL(app.threadUrl).pathname,
+    widths: [390, 1440],
+    light: false,
+    enter: async (page, width) => {
+      await waitForThread(page);
+
+      if (width === 1440) {
+        await editor(page).click();
+        await page.keyboard.press("Control+j");
+      } else {
+        await page.getByTestId("open-scratch").click();
       }
 
       await page
-        .getByTestId("sidebar-row-card")
-        .first()
-        .click({ button: "right" });
-      await page
-        .locator('[data-level="0"] [data-menu-id]')
-        .first()
+        .getByTestId("scratch-overlay")
         .waitFor({ state: "visible", timeout: 5000 });
-      await page.waitForTimeout(400);
+      await settle(page, 600);
     },
   },
   {
@@ -737,11 +756,14 @@ const startApp = async (): Promise<CairnApp> => {
     )
   );
 
-  return await startCairn({
-    projectTitle: exported.projectTitle,
-    threadTitle: exported.title,
-    entries: importT3Thread(exported).entries,
-  });
+  return await startCairn(
+    {
+      projectTitle: exported.projectTitle,
+      threadTitle: exported.title,
+      entries: importT3Thread(exported).entries,
+    },
+    { shell: SHELL_SEED }
+  );
 };
 
 const wantedStates = (): ReadonlyArray<LookState> => {

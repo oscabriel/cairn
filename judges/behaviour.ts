@@ -83,8 +83,11 @@ import {
   importT3Thread,
   parseT3ThreadExport,
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
-import { startCairn } from "./fixtures/parity/CairnApp.ts";
-import type { ShellSeed } from "./fixtures/parity/CairnApp.ts";
+import {
+  MANAGED_SEED,
+  SHELL_SEED,
+  startCairn,
+} from "./fixtures/parity/CairnApp.ts";
 import { LandmarkFile, readLandmarks } from "./fixtures/parity/Landmarks.ts";
 
 const root = path.join(import.meta.dirname, "..");
@@ -181,29 +184,6 @@ const exported = await Effect.runPromise(
     readFileSync(path.join(BASELINE, "thread/thread.json"), "utf-8")
   )
 );
-
-/** The managed threads `--ui next` seeds, oldest first; the list shows them newest first. */
-const MANAGED_SEED: ShellSeed["managed"] = [
-  { title: "Map the favicon resolver", state: "idle", usable: true },
-  { title: "Brief: port the fold line tallies", state: "done", usable: false },
-  { title: "Steps panel projection", state: "parked", usable: false },
-  { title: "Probe the bridge usage endpoint", state: "failed", usable: false },
-  { title: "Review: steps panel", state: "working", usable: false },
-  {
-    title: "Pick the budget meter's thresholds",
-    state: "asking",
-    usable: false,
-  },
-];
-
-/** The `next` shell's seed: managed threads and two more rail projects, one with a favicon. */
-const SHELL_SEED: ShellSeed = {
-  managed: MANAGED_SEED,
-  projects: [
-    { title: "oscargabriel-dev", favicon: true },
-    { title: "myr", favicon: false },
-  ],
-};
 
 const app = await startCairn(
   {

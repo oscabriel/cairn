@@ -69,7 +69,9 @@ export const SPAWN_TOOL = "subagent_spawn";
 
 /**
  * Where one child stands, as its row shows it. Before any child: `go` while its brief waits for
- * Go, `declined`, `expired` or `cancelled` once the brief ended without one. A started child's live
+ * Go, `declined`, `expired` or `cancelled` once the brief ended without one, and `unstarted` once
+ * Go's start told the parent it started nothing (a role, budget, workspace or brain room refused
+ * it). A started child's live
  * states come from its own row (`threadStatus`); at rest, from its latest settlement: `done`,
  * `failed` or `stopped`.
  */
@@ -78,6 +80,7 @@ export type SubagentState =
   | "declined"
   | "expired"
   | "cancelled"
+  | "unstarted"
   | "approval"
   | "input"
   | "asking-parent"
@@ -101,6 +104,7 @@ export const SUBAGENT_LABELS: Readonly<Record<SubagentState, SubagentLabel>> = {
   declined: { word: "Declined", tone: "muted" },
   expired: { word: "Expired", tone: "muted" },
   cancelled: { word: "Cancelled", tone: "muted" },
+  unstarted: { word: "Not started", tone: "error" },
   approval: THREAD_LABELS.approval,
   input: THREAD_LABELS.input,
   "asking-parent": THREAD_LABELS["asking-parent"],
@@ -117,6 +121,7 @@ const TERMINAL: ReadonlySet<SubagentState> = new Set<SubagentState>([
   "declined",
   "expired",
   "cancelled",
+  "unstarted",
   "done",
   "failed",
   "stopped",
@@ -231,6 +236,7 @@ const TALLY_OF: Readonly<Record<SubagentState, TallyKey>> = {
   declined: "not started",
   expired: "not started",
   cancelled: "not started",
+  unstarted: "not started",
 };
 
 /** A group's tally in a fixed order, only the counts above zero: "1 working · 2 done". */
@@ -496,12 +502,78 @@ export const settlementNotesOf = (
   return notes;
 };
 
+/**
+ * The entry kind of a brief's answer in the parent's transcript: the server's `BRIEF_ANSWER_ENTRY`
+ * (`apps/server/src/brain/SubagentText.ts`), which the protocol does not export.
+ */
+export const BRIEF_ANSWER_ENTRY = "cairn.brief-answer";
+
+const UnstartedAnswer = Schema.Struct({
+  briefId: Schema.String,
+  started: Schema.Literal(false),
+});
+
+const decodeUnstartedAnswer = Schema.decodeUnknownOption(UnstartedAnswer);
+
+const TextPart = Schema.Struct({
+  type: Schema.Literal("text"),
+  text: Schema.String,
+});
+
+const AnswerModel = Schema.Struct({
+  content: Schema.Array(Schema.Json),
+});
+
+const decodeAnswerModel = Schema.decodeUnknownOption(AnswerModel);
+
+const decodeTextPart = Schema.decodeUnknownOption(TextPart);
+
+/**
+ * What the parent was told of each brief that started nothing, by brief id: the words of its
+ * `cairn.brief-answer` entry with `started: false`. An accepted brief whose start was refused (a
+ * role, budget, workspace or the brain's room) ends here; Go's own answer says `started: true`.
+ */
+export const unstartedAnswersOf = (
+  entries: ReadonlyArray<Entry>
+): ReadonlyMap<string, string> => {
+  const told = new Map<string, string>();
+
+  for (const entry of entries) {
+    if (entry.kind !== BRIEF_ANSWER_ENTRY) {
+      continue;
+    }
+
+    Option.map(decodeUnstartedAnswer(entry.data), ({ briefId }) => {
+      const words = Option.getOrElse(
+        Option.map(
+          Option.flatMap(
+            Option.fromUndefinedOr(entry.model?.[0]),
+            decodeAnswerModel
+          ),
+          ({ content }) =>
+            content
+              .flatMap((part) => Option.toArray(decodeTextPart(part)))
+              .map(({ text }) => text)
+              .join(" ")
+        ),
+        () => ""
+      );
+
+      told.set(briefId, words);
+    });
+  }
+
+  return told;
+};
+
 /** A spawn call linked to the brief it asked, with the child Go started, if any. */
 export interface SubagentLink {
   readonly call: SpawnCall;
   readonly brief: ApprovalRecord;
   readonly child: Option.Option<RegistryChild>;
   readonly note: Option.Option<SettlementNote>;
+  /** What the parent was told when the brief started nothing, once it was. */
+  readonly unstarted: Option.Option<string>;
 }
 
 const isSpawnBrief = (record: ApprovalRecord): boolean =>
@@ -565,6 +637,7 @@ export const subagentLinksOf = (
 ): ReadonlyArray<SubagentLink> => {
   const registry = registryChildrenOf(view.docs[SUBAGENTS_DOCUMENT]);
   const notes = settlementNotesOf(view.entries);
+  const unstarted = unstartedAnswersOf(view.entries);
 
   return linkSpawnCalls(
     spawnCallsOf(view.entries),
@@ -588,6 +661,7 @@ export const subagentLinksOf = (
       note: Option.flatMap(childThreadId, (id) =>
         Option.fromUndefinedOr(notes.get(id))
       ),
+      unstarted: Option.fromUndefinedOr(unstarted.get(brief.id)),
     };
   });
 };
@@ -629,7 +703,8 @@ export interface SubagentRowContext {
 
 /**
  * A brief's state before its child exists: waiting for Go, or ended without one. An accepted brief
- * whose child is not started yet reads as working: Go's start task is making it.
+ * whose child is not started yet reads as working while Go's start task makes it, and as
+ * `unstarted` once the parent was told it started nothing (`briefState`).
  */
 const BRIEF_STATE: Readonly<Record<ApprovalRecord["status"], SubagentState>> = {
   pending: "go",
@@ -645,6 +720,12 @@ const SETTLED_STATE: Readonly<Record<SettlementOutcome, SubagentState>> = {
   failed: "failed",
   stopped: "stopped",
 };
+
+/** A brief's state with no child: its record's, unless the parent was told its Go started nothing. */
+const briefState = (link: SubagentLink): SubagentState =>
+  link.brief.status === "accepted" && Option.isSome(link.unstarted)
+    ? "unstarted"
+    : BRIEF_STATE[link.brief.status];
 
 /** A started child at rest: how its latest settlement ended, else still working toward one. */
 const restingState = (child: Option.Option<RegistryChild>): SubagentState =>
@@ -716,7 +797,7 @@ export const subagentRowOf = (
   );
 
   const state: SubagentState = Option.match(childThreadId, {
-    onNone: () => BRIEF_STATE[link.brief.status],
+    onNone: () => briefState(link),
     onSome: (id) => startedState(id, link.child, context),
   });
 
@@ -730,8 +811,11 @@ export const subagentRowOf = (
     childThreadId,
     detail: subagentDetailPreview({
       state,
-      result: Option.map(link.note, (note) =>
-        Option.getOrElse(note.error, () => note.summary)
+      result: Option.orElse(
+        Option.map(link.note, (note) =>
+          Option.getOrElse(note.error, () => note.summary)
+        ),
+        () => Option.filter(link.unstarted, () => state === "unstarted")
       ),
       progress: Option.none(),
     }),

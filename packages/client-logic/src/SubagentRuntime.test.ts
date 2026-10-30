@@ -124,6 +124,17 @@ const note = (
     data: { subagent: child, seq, outcome, summary, error },
   });
 
+/** The parent's answer to brief `briefId`, as a note or as the input entry the server wrote. */
+const answer = (briefId: string, started: boolean, text: string): Entry =>
+  entry("cairn.brief-answer", {
+    data: started
+      ? { briefId, decision: "accept", started, childThreadId: CHILD_A }
+      : { briefId, decision: "accepted", started },
+    model: [
+      { role: "user", content: [{ type: "text", text }], timestamp: 3000 },
+    ],
+  });
+
 const brief = (fields: { readonly [key: string]: Json }): Json => ({
   id: "call-1",
   toolTaskId: 1,
@@ -284,6 +295,7 @@ describe("the state sets", () => {
       "declined",
       "expired",
       "cancelled",
+      "unstarted",
       "approval",
       "input",
       "asking-parent",
@@ -307,6 +319,7 @@ describe("the state sets", () => {
       "declined",
       "expired",
       "cancelled",
+      "unstarted",
       "done",
       "failed",
       "stopped",
@@ -647,6 +660,49 @@ describe("a child's row", () => {
 
     assert.strictEqual(row.state, "working");
     assert.deepStrictEqual(row.completedAt, Option.none());
+  });
+
+  it("works while Go's start makes the child, and ends unstarted once the parent is told it started nothing", () => {
+    const accepted = { status: "accepted", answeredAt: 1500 };
+    const making = onlyRow(accepted);
+
+    assert.strictEqual(making.state, "working");
+    assert.isTrue(subagentGroupSummary([making]).active);
+
+    const why =
+      'The user approved the brief "Count the files", but a budget is reached, so nothing started: at its line';
+
+    const row = onlyRow(accepted, [], [answer("call-1", false, why)]);
+
+    assert.strictEqual(row.state, "unstarted");
+    assert.strictEqual(row.label.word, "Not started");
+    assert.strictEqual(row.label.tone, "error");
+    assert.deepStrictEqual(row.childThreadId, Option.none());
+    assert.deepStrictEqual(row.detail, Option.some(why));
+    assert.deepStrictEqual(row.completedAt, Option.some(1500));
+    assert.isTrue(isTerminalSubagentState(row.state));
+    assert.strictEqual(summarizeSubagentStates([row.state]), "1 not started");
+    assert.isFalse(subagentGroupSummary([row]).active);
+    assert.deepStrictEqual(
+      subagentGroupTiming([
+        {
+          state: row.state,
+          startedAt: Option.some(1000),
+          completedAt: row.completedAt,
+        },
+      ]).completedAt,
+      Option.some(1500)
+    );
+
+    // Another brief's tell, and Go's own answer, leave it working.
+    assert.strictEqual(
+      onlyRow(accepted, [], [answer("call-2", false, "other")]).state,
+      "working"
+    );
+    assert.strictEqual(
+      onlyRow(accepted, [], [answer("call-1", true, "started")]).state,
+      "working"
+    );
   });
 
   it("falls back to the registry when the child's row is not in the shell", () => {

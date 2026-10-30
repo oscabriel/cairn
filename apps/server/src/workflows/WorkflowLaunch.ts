@@ -20,6 +20,7 @@ import { ThinkingLevel } from "@cairn/protocol/Models";
 import { Brief, LaunchEdits } from "@cairn/protocol/Policy";
 import type { Envelope, RuntimeMode } from "@cairn/protocol/Policy";
 import { RoleSpec } from "@cairn/protocol/Roles";
+import type { RoleOverrides } from "@cairn/protocol/Roles";
 import type { Budget } from "@cairn/protocol/Spend";
 import type { NodeRefusal } from "@cairn/protocol/Workflows";
 import type { ConversationId, Tx } from "@earendil-works/pi-durable";
@@ -219,6 +220,11 @@ export interface NodeBriefInput {
   readonly mode: RuntimeMode;
   readonly budget: Budget;
   readonly resultSchema: Option.Option<JsonRecord>;
+  /**
+   * The launch's per-launch role bindings (`overridesOf`), which the brain resolves the node's role
+   * with at Go: frozen in the brief, so the card checks the role as the brain will resolve it.
+   */
+  readonly roleOverrides: RoleOverrides;
   /** Why it needs its own card; none when its envelope covers it. */
   readonly outside: Option.Option<Outside>;
 }
@@ -279,6 +285,7 @@ export const nodeBriefPayload = (input: NodeBriefInput): JsonRecord | null => {
         resultSchema: Option.getOrNull(input.resultSchema),
         wake: "quiet",
         decisions: [],
+        roleOverrides: input.roleOverrides,
       })
     )
   );

@@ -549,7 +549,8 @@ const nodeRecordOf = (
   api: ToolExecutionApi,
   row: WorkflowItemState,
   input: ReserveInput,
-  outside: Option.Option<Outside>
+  outside: Option.Option<Outside>,
+  roleOverrides: RoleOverrides
 ) => {
   const { dispatch } = input;
 
@@ -569,6 +570,7 @@ const nodeRecordOf = (
       mode: input.mode,
       budget: budgetOf(row),
       resultSchema: dispatch.schema,
+      roleOverrides,
       outside,
     }),
     envelope: Option.isNone(outside)
@@ -1410,7 +1412,16 @@ export const workflowExtension = (
         ? Option.none<Outside>()
         : briefWithin(envelope.value, askOf(row, input));
 
-      const record = nodeRecordOf(api, row, input, outside);
+      const launch = Option.fromUndefinedOr(approvals.items[row.approvalId]);
+
+      const record = nodeRecordOf(
+        api,
+        row,
+        input,
+        outside,
+        Option.getOrElse(Option.flatMap(launch, overridesOf), () => ({}))
+      );
+
       const node: NodeItemState = { ...base, briefId: record.id };
 
       approvals.items[record.id] = record;

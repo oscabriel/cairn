@@ -1,6 +1,7 @@
 // What the request card says about the request it shows (surfaces note S3 and W1, briefs note
-// section 4): its title and kind word, the detail an approval asks about, the fields of a brief or
-// a workflow's launch in the order the user reads them, and the words for a budget and a judge.
+// section 4): its title and kind word, the detail an approval asks about, the fields of a brief in
+// the order the user reads them, and the words for a budget and a judge (a workflow's launch is
+// `LaunchCard.ts`).
 // Pure, so the card's view only draws what this module decides and its tests judge the words. The
 // card's order and its question drafts are `PendingRequests.ts` and `PendingUserInput.ts`.
 
@@ -11,7 +12,6 @@ import type {
   CriterionProposal,
   JudgeRef,
   ProgramPayload,
-  WorkflowLaunch,
 } from "@cairn/protocol/Policy";
 import type { Budget } from "@cairn/protocol/Spend";
 import { Match, Option } from "effect";
@@ -152,32 +152,6 @@ export const briefLines = (brief: Brief): ReadonlyArray<CardLine> => {
     ["Who", `${whoText(brief)}, ${runtimeModePresentation[brief.mode].label}`],
     ["Budget", budgetText(brief.budget)]
   );
-
-  return lines;
-};
-
-/** A workflow launch's fields in reading order: what it does, its size, its phases, its budget. */
-export const workflowLines = (
-  launch: WorkflowLaunch
-): ReadonlyArray<CardLine> => {
-  const lines: Array<CardLine> = [
-    ["Does", launch.description],
-    [
-      "Nodes",
-      launch.nodes.unbounded
-        ? `At least ${launch.nodes.count}`
-        : String(launch.nodes.count),
-    ],
-  ];
-
-  if (launch.phases.length > 0) {
-    lines.push([
-      "Phases",
-      launch.phases.map((phase) => phase.title).join(", "),
-    ]);
-  }
-
-  lines.push(["Budget", budgetText(launch.envelope.budget)]);
 
   return lines;
 };

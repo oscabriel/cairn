@@ -70,6 +70,7 @@ import {
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { SHELL_SEED, startCairn } from "./fixtures/parity/CairnApp.ts";
 import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
+import { launchBrain } from "./fixtures/workflows/LaunchBrain.ts";
 import {
   ALLOWANCE,
   CELL_CSS_PX,
@@ -340,6 +341,38 @@ const STATES: ReadonlyArray<LookState> = [
         .getByTestId("work-previous")
         .waitFor({ state: "visible", timeout: 5000 });
       await settle(page, 600);
+    },
+  },
+  {
+    name: "launch-approval",
+    title: "A workflow's launch approval",
+    caption:
+      "The request card for a workflow's launch: its numbers first (nodes, an estimate whose cost is unknown, the budget, what Go covers), what each call site runs as, its arguments folded, and Send back, Run on 1 first, Decline and Go. The parity brain's @worker has no ready model, so Go is blocked with the reason and the way to the role table. In the composer's slot at 390 px, above the composer at 1,440 px.",
+    path: ({ app }) => new URL(app.threadUrl).pathname,
+    widths: [390, 1440],
+    light: false,
+    enter: async (page) => {
+      await waitForThread(page);
+
+      const launch = page
+        .getByTestId("request-card")
+        .filter({ hasText: "(look)" });
+
+      // The launch stays pending once asked, so a later width finds it rather than asking again.
+      const asked = await launch
+        .waitFor({ state: "visible", timeout: 2000 })
+        .then(
+          () => true,
+          () => false
+        );
+
+      if (!asked) {
+        await editor(page).fill("launch @worker look");
+        await page.getByTestId("composer-send").first().click();
+        await launch.waitFor({ state: "visible", timeout: 15_000 });
+      }
+
+      await settle(page, 1200);
     },
   },
   {
@@ -783,7 +816,9 @@ const startApp = async (): Promise<CairnApp> => {
       threadTitle: exported.title,
       entries: importT3Thread(exported).entries,
     },
-    { shell: SHELL_SEED }
+    // The launch brain answers "Noted." as the parity brain does, and proposes a workflow on
+    // "launch @worker look" for the launch-approval state.
+    { shell: SHELL_SEED, brain: launchBrain }
   );
 };
 

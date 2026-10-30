@@ -149,6 +149,8 @@ export interface KitOptions {
   readonly tokensPerSecond: number;
   /** Where the soft line's push goes; none sends nothing. */
   readonly push?: BudgetPushSink;
+  /** Project recipes a reference may name, source by name; none when absent. */
+  readonly projectRecipes?: Readonly<Record<string, string>>;
 }
 
 /** The flags of a node prompt: `node:<label> typed ms=200`. */
@@ -485,7 +487,17 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
   registry.install(
     workflowExtension({
       resolveRole: kitResolver,
-      plan: planAccess(yield* WorkflowPlan, yield* Effect.context()),
+      plan: {
+        ...planAccess(
+          yield* WorkflowPlan,
+          Option.none(),
+          yield* Effect.context()
+        ),
+        projectRecipe: async (_root, name) =>
+          await Promise.resolve(
+            Option.fromUndefinedOr(options.projectRecipes?.[name])
+          ),
+      },
       faults: options.faults,
       hold: options.hold,
       holdRetryMillis: KIT_HOLD_RETRY_MILLIS,

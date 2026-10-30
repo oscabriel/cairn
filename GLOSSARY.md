@@ -80,7 +80,7 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Parent banner**: The line above a thread's composer while one of its subagents asks the user; it names each asking child and opens the first. It hides while the thread asks the user itself.
 
-**Work panel**: The panel a thread in a tree opens from its chat header (`next` only): its parent chain, its children with their states (live ones with Stop, resting ones under "Previous", folded, six then twelve more at a time), a subagent's own steps, and the thread's workflows from the steps panel's data. A column beside the chat column from 1,024 px, a bottom sheet below.
+**Work panel**: The panel a thread in a tree opens from its chat header (`next` only): its parent chain, its children with their states (live ones with Stop, resting ones under "Previous", folded, six then twelve more at a time), a subagent's own steps, and the thread's workflows from the steps panel's data, with Stop on the whole workflow while it may run nodes and on each live node of a running one. A column beside the chat column from 1,024 px, a bottom sheet below.
 
 **Subagent steps**: A child's steps in the work panel, read from its own row and records, never model text: "You said go", "Started" (in a worktree or the project's checkout), "Working on it", "Said what it did", each done, now, to do, failed or stopped. The header's button counts them ("2/4 steps").
 
@@ -134,7 +134,7 @@ _Avoid_: pipeline, DAG, job
 
 **Node**: One `agent()` call of a workflow script, recorded as a row of the dispatch ledger: a child thread created from the role it resolved, with no subagent tools of its own and no sidebar row.
 
-**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Decline ends it. The card's budget and role edits travel in the answer, never in the frozen plan.
+**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Send back returns it to its model with notes, and nothing runs; Decline ends it. The card reads numbers first (nodes, the estimate, whose unknown cost is never $0.00, the budget, what Go covers), then what each call site runs as, then its arguments, folded. The card's budget and role edits travel in the answer, never in the frozen plan.
 
 _Avoid_: launch brief, plan approval
 
@@ -156,7 +156,7 @@ _Avoid_: grant (in prose), allowance
 
 **Recipe**: A saved workflow script, named by its `meta.name`: built in (the council) or a project's own under `.cairn/workflows/`.
 
-**Recipe reference**: A workflow script that is only `export const meta = { name: "council" };`. Proposed and run like any script, it stands for the built-in recipe it names, so a thread launches a built-in recipe by name. A project's recipe is launched by proposing its whole script, read from the path its listing gives.
+**Recipe reference**: A workflow script that is only `export const meta = { name: "council" };`. Proposed and run like any script, it stands for the built-in recipe it names, so a thread launches a built-in recipe by name. A project's recipe launches by name too: `workflow_plan` reads it from the thread's folder and keeps the source it proposed beside the ledger, which the gate runs on Go.
 
 **Resume (a node)**: `agent(prompt, { resume: nodeId })`: a new node whose child is a fork of a settled node's child, so it continues with that node's whole context under its own receipt and result. The council's cross-examination resumes each advisor's report.
 
@@ -324,7 +324,7 @@ _Avoid_: task, spec, ticket
 
 _Avoid_: approve (for a brief), run
 
-**Send back**: The user's answer to a subagent's brief that asks its parent for a new one: it needs notes on what to change, starts nothing, and the parent reads the notes. A workflow's launch and a node's own brief take Go or Decline only.
+**Send back**: The user's answer to a subagent's brief that asks its parent for a new one, or to a workflow's launch that asks its model to propose the script again: it needs notes on what to change, starts nothing, and the proposer reads the notes. A node's own brief takes Go or Decline only.
 
 _Avoid_: revise (in prose; it is the decision's wire name), reject
 

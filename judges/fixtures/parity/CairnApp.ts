@@ -169,6 +169,11 @@ export const SHELL_SEED: ShellSeed = {
 export interface CairnBrain {
   readonly model: Layer.Layer<ScriptedModel>;
   readonly tools: Layer.Layer<ScriptedTools>;
+  /**
+   * The workflow stops the page's Stop reaches (the workflow surfaces judge plays its own ledger,
+   * plan 6F); none runs no workflows (`WorkflowStops.layerOff`).
+   */
+  readonly stops?: Layer.Layer<WorkflowStops>;
 }
 
 /**
@@ -533,7 +538,7 @@ export const startCairn = async (
     EventReactors.layerOff,
     SpendFeed.layerOff,
     BudgetSources.layerNone,
-    WorkflowStops.layerOff,
+    brain.stops ?? WorkflowStops.layerOff,
     GoalBook.layerOff
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),

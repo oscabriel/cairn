@@ -163,6 +163,34 @@ export const WorkflowsDoc = defineDoc<WorkflowsState>({
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
 });
 
+/** A project recipe launched by name: its `meta.name` and the source the user approved. */
+export interface WorkflowSourceState {
+  [key: string]: JsonValue;
+  name: string;
+  source: string;
+}
+
+/** `cairn.workflow-sources`: the project recipes a thread proposed by name, by workflow id. */
+export interface WorkflowSourcesState {
+  [key: string]: JsonValue;
+  items: { [workflowId: string]: WorkflowSourceState };
+}
+
+/**
+ * Where `workflow_plan` keeps a project recipe's source when the model proposed it by name, in the
+ * commit that writes its `proposed` row: the gate reads documents, never files, so it runs the
+ * reference from here. Not on the thread stream (the ledger's `scriptHash` says which script ran).
+ */
+export const WorkflowSourcesDoc = defineDoc<WorkflowSourcesState>({
+  kind: "cairn.workflow-sources",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
+});
+
 // Ids. Every id the ledger mints matches the protocol's `RequestId` (`[A-Za-z0-9_-]{1,128}`).
 
 /** A workflow's id: `wf-<workflow_plan tool task id>`. */

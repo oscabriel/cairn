@@ -259,7 +259,12 @@ const runCouncil = Effect.gen(function* () {
   const codemode = yield* CodeMode;
   const results = yield* ResultTool;
   const bridgeCwd = yield* BridgeCwd;
-  const plan = planAccess(yield* WorkflowPlan, yield* Effect.context());
+
+  const plan = planAccess(
+    yield* WorkflowPlan,
+    Option.none(),
+    yield* Effect.context()
+  );
 
   const cwd = mkdtempSync(path.join(tmpdir(), "cairn-council-typed-"));
 

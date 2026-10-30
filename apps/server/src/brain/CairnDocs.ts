@@ -801,9 +801,9 @@ export interface RecordAnswer {
 /**
  * How an answer landed: it changed a pending record, the record was already settled, there is no
  * such record, or the record cannot take it (`answers` on a record that asked no questions,
- * answers that do not fit the questions asked, `revise` on anything but a subagent's brief, `revise` with
- * no notes: Send back says what to change, Run on 1 first on anything but a workflow's launch, or
- * launch edits on anything but Go or Run on 1 first for a workflow's launch).
+ * answers that do not fit the questions asked, `revise` on anything but a subagent's brief or a
+ * workflow's launch, `revise` with no notes: Send back says what to change, Run on 1 first on
+ * anything but a workflow's launch, or launch edits on anything but Go or Run on 1 first for a workflow's launch).
  */
 export type AnswerOutcome =
   | "answered"
@@ -853,7 +853,7 @@ export const refusalText = (
 
   return outcome === "refused_revise"
     ? Option.some(
-        `Approval ${approvalId} is not a subagent's brief, so it cannot be sent back. Approve or decline it.`
+        `Approval ${approvalId} is not a subagent's brief or a workflow's launch, so it cannot be sent back. Approve or decline it.`
       )
     : Option.none();
 };
@@ -945,11 +945,13 @@ export const applyAnswer = (
     return launch.value;
   }
 
-  // Send back asks the parent for a new brief, so only a subagent's brief takes it: a workflow's
-  // launch and a node's own brief have no one to revise them (their workflow reads Go or Decline).
+  // Send back asks the proposer for a new one: a subagent's brief (its parent writes another) or a
+  // workflow's launch (its model proposes the script again). A node's own brief has no one to revise
+  // it (its workflow reads Go or Decline).
   if (
     answer.decision === "revise" &&
-    (record.kind !== "brief" || record.tool !== SEND_BACK_TOOL)
+    (record.kind !== "brief" ||
+      (record.tool !== SEND_BACK_TOOL && !isLaunchRecord(record)))
   ) {
     return "refused_revise";
   }

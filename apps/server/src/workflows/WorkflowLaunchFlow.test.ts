@@ -9,8 +9,9 @@
 // so these scenarios run here, on the real Harness, rather than in the seam's NDJSON suite.
 
 import { ConversationId } from "@cairn/protocol/Ids";
-import { WorkflowLaunch } from "@cairn/protocol/Policy";
+import { Brief, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision, LaunchEdits } from "@cairn/protocol/Policy";
+import { RoleName } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
@@ -44,7 +45,15 @@ const context = BACKGROUND_CONTEXT;
 /** When the user answers, on the record: any fixed time, as the kit plants its records. */
 const ANSWERED_AT = 2;
 
+/** The words a Decline or a Send back carries; the other answers carry none. */
+const REASONS: Partial<Record<ApprovalDecision, string>> = {
+  decline: "not this one",
+  revise: "fewer nodes",
+};
+
 const decodeLaunch = Schema.decodeUnknownSync(WorkflowLaunch);
+
+const decodeBrief = Schema.decodeUnknownSync(Brief);
 
 /** How the user answers one launch card. */
 interface LaunchAnswer {
@@ -81,8 +90,7 @@ const answer = async (
       {
         decision,
         by: { kind: "user" },
-        reason:
-          decision === "decline" ? Option.some("not this one") : Option.none(),
+        reason: Option.fromUndefinedOr(REASONS[decision]),
         answers: Option.none(),
         launch: edits,
       },
@@ -149,12 +157,15 @@ const flow = (
     readonly faults?: WorkflowFaultSet;
     /** Stops the thread instead of answering the first launch or node card that waits. */
     readonly stopAt?: "launch" | "card";
+    /** Project recipes a reference may name, source by name. */
+    readonly projectRecipes?: Readonly<Record<string, string>>;
   }
 ) =>
   Effect.gen(function* () {
     const effects: Array<WorkEffect> = [];
 
     const parts = yield* kitParts({
+      projectRecipes: options.projectRecipes ?? {},
       faults: options.faults ?? NO_WORKFLOW_FAULTS,
       hold: async () => {},
       effect: (line) => {
@@ -448,6 +459,118 @@ describe("launch approval and the envelope on pi-durable", () => {
           outcome.reply,
           "declined workflow kit-flow: not this one"
         );
+      }),
+    30_000
+  );
+
+  it.live(
+    "a project recipe launches by name: the plan proposes its file's script and Go runs it",
+    () =>
+      Effect.gen(function* () {
+        const recipe = workflow(
+          `return await agent("node:a", { label: "a" });`,
+          "kit-recipe"
+        );
+
+        const outcome = yield* flow(
+          `export const meta = { name: "kit-recipe" };`,
+          {
+            launches: [GO],
+            projectRecipes: { "kit-recipe": recipe },
+          }
+        );
+
+        assert.deepStrictEqual(outcome.problems, []);
+
+        const [row] = outcome.rows;
+
+        assert.strictEqual(row?.name, "kit-recipe");
+        assert.strictEqual(row?.state, "finished");
+        assert.deepStrictEqual(starts(outcome.effects), ["a"]);
+      }),
+    30_000
+  );
+
+  it.live(
+    "a reference to no recipe is refused before it reaches the user",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* flow(
+          `export const meta = { name: "nowhere" };`,
+          {
+            launches: [GO],
+          }
+        );
+
+        assert.deepStrictEqual(outcome.rows, []);
+        assert.deepStrictEqual(Object.keys(outcome.records), []);
+        assert.include(outcome.reply, "no project recipe");
+      }),
+    30_000
+  );
+
+  it.live(
+    "Send back on the launch runs nothing, revises the record and gives the model the notes",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* flow(FIVE, {
+          launches: [{ decision: "revise", edits: Option.none() }],
+        });
+
+        const [row] = outcome.rows;
+        const launch = outcome.records[row?.approvalId ?? ""];
+
+        assert.strictEqual(launch?.status, "revised");
+        assert.strictEqual(launch?.reason, "fewer nodes");
+        assert.strictEqual(row?.state, "declined");
+        assert.deepStrictEqual(row?.nodes, {});
+        assert.deepStrictEqual(outcome.effects, []);
+        assert.include(
+          outcome.reply,
+          "sent workflow kit-flow back: fewer nodes"
+        );
+      }),
+    30_000
+  );
+
+  it.live(
+    "a node's own brief carries the launch's role overrides, so the card checks its role as Go resolves it",
+    () =>
+      Effect.gen(function* () {
+        const scout = {
+          model: { provider: "faux", modelId: "kit" },
+          thinkingLevel: null,
+          fallbacks: [],
+          note: null,
+        };
+
+        const edits: LaunchEdits = {
+          budget: DEFAULT_BUDGET,
+          roleOverrides: { [RoleName.make("@scout")]: scout },
+        };
+
+        const outcome = yield* flow(FIVE, {
+          launches: [{ decision: "accept", edits: Option.some(edits) }],
+          briefs: "accept",
+        });
+
+        const nodes = Object.values(outcome.rows[0]?.nodes ?? {});
+
+        const briefOf = (label: string) =>
+          decodeBrief(
+            outcome.records[
+              nodes.find((node) => node.label === label)?.briefId ?? ""
+            ]?.payload
+          );
+
+        // The card's node and the covered ones alike carry what the launch binds.
+        assert.deepStrictEqual(briefOf("e").roleOverrides, {
+          [RoleName.make("@scout")]: scout,
+        });
+        assert.deepStrictEqual(briefOf("a").roleOverrides, {
+          [RoleName.make("@scout")]: scout,
+        });
+        assert.deepStrictEqual(outcome.problems, []);
       }),
     30_000
   );

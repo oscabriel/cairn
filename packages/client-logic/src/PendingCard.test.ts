@@ -1,4 +1,4 @@
-import type { Brief, Question, WorkflowLaunch } from "@cairn/protocol/Policy";
+import type { Brief, Question } from "@cairn/protocol/Policy";
 import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
@@ -12,7 +12,6 @@ import {
   judgeText,
   requestKindWord,
   requestTitle,
-  workflowLines,
 } from "./PendingCard.ts";
 import { RequestBody } from "./PendingRequests.ts";
 
@@ -129,42 +128,6 @@ describe("the request card's words", () => {
       judgeText({ kind: "model", spec: scout, rubric: "Is it right?" }),
       "a model (@scout)"
     );
-  });
-
-  it("reads a workflow launch with its node count, marked when the dry run hit a cap", () => {
-    const launch: WorkflowLaunch = {
-      type: "workflow",
-      workflowId: "wf-1",
-      name: "Council",
-      description: "Five reviewers, one verdict.",
-      phases: [
-        { title: "Review", detail: null },
-        { title: "Verdict", detail: null },
-      ],
-      scriptHash: "abc",
-      scriptRef: "entry-1",
-      args: null,
-      callSites: [],
-      nodes: { count: 5, unbounded: true },
-      estimate: null,
-      envelope: {
-        scriptHash: "abc",
-        maxNodes: 5,
-        maxConcurrent: 2,
-        roles: [],
-        modes: [],
-        writes: [],
-        budget: DEFAULT_BUDGET,
-      },
-      roleOverrides: {},
-    };
-
-    assert.deepStrictEqual(workflowLines(launch), [
-      ["Does", "Five reviewers, one verdict."],
-      ["Nodes", "At least 5"],
-      ["Phases", "Review, Verdict"],
-      ["Budget", "No limit"],
-    ]);
   });
 
   it("shows a program whole, a call's summary, and nothing for a budget raise", () => {

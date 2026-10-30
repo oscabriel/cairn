@@ -4,10 +4,10 @@
 // - Built-in (`BuiltInRecipes.ts`): ship with Cairn, launched by name with a recipe reference.
 // - A project's own, `<project root>/.cairn/workflows/<file>.js`: listed for the project's threads,
 //   with its file's path relative to the root (`RecipeSummary.path`), since a file's name need not
-//   match its `meta.name`. Only a built-in launches by name: the gate cannot read files (a hook must
-//   not wait on anything but documents), so a recipe reference names built-ins only
-//   (`resolveRecipe`), and a project recipe is launched by proposing its whole script, which the
-//   model reads from that path.
+//   match its `meta.name`. It launches by name too (6F): `workflow_plan` finds a reference's
+//   recipe under the thread's folder (`source`) and keeps the source it proposed beside the ledger
+//   (`WorkflowSourcesDoc`), since the gate cannot read files (a hook must not wait on anything but
+//   documents); the gate runs the source the user approved from there.
 //
 // Each listed recipe is parsed (`parseWorkflowScript`, nothing runs) for its `meta`. A project file
 // that does not parse, or that takes a built-in's name, is left out and logged, so one bad file never
@@ -69,134 +69,161 @@ export class Recipes extends Context.Service<
   {
     /** The built-in recipes, then the project's at `root` when one is given, each in name order. */
     list(root: Option.Option<string>): Effect.Effect<RecipeList>;
+    /**
+     * The source of the project recipe `listed` under `root` as `name` (a built-in's name is never
+     * a project's); none when the project lists none by that name or its file cannot be read.
+     */
+    source(root: string, name: string): Effect.Effect<Option.Option<string>>;
   }
 >()("cairn/server/workflows/recipes/Recipes") {
-  /** Over the platform's `FileSystem` and `Path`. */
-  static readonly layer = Layer.effect(
-    Recipes,
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
+  /** The service, over the platform's `FileSystem`. */
+  static readonly make = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
 
-      // A built-in recipe that does not parse is a defect of this build: the recipe tests fail first.
-      const builtIn = yield* Effect.orDie(builtInSummaries);
-      const builtInNames = new Set(builtIn.map((recipe) => recipe.name));
+    // A built-in recipe that does not parse is a defect of this build: the recipe tests fail first.
+    const builtIn = yield* Effect.orDie(builtInSummaries);
+    const builtInNames = new Set(builtIn.map((recipe) => recipe.name));
 
-      /** One project file's summary, or none with a log line saying why it was left out. */
-      const projectRecipe = Effect.fnUntraced(function* (
-        file: string,
-        relative: string
-      ) {
-        const info = yield* fs.stat(file);
+    /** One project file's summary, or none with a log line saying why it was left out. */
+    const projectRecipe = Effect.fnUntraced(function* (
+      file: string,
+      relative: string
+    ) {
+      const info = yield* fs.stat(file);
 
-        if (info.type !== "File" || Number(info.size) > MAX_RECIPE_BYTES) {
-          yield* Effect.logWarning("project recipe left out").pipe(
-            Effect.annotateLogs({
-              event: "recipe_left_out",
-              file,
-              why: "not a file, or larger than 256 KiB",
-            })
-          );
-
-          return Option.none<RecipeSummary>();
-        }
-
-        const parsed = yield* parseWorkflowScript(
-          yield* fs.readFileString(file)
-        ).pipe(Effect.option);
-
-        const summary = Option.map(parsed, (script) =>
-          summaryOf(script.meta, "project", Option.some(relative))
+      if (info.type !== "File" || Number(info.size) > MAX_RECIPE_BYTES) {
+        yield* Effect.logWarning("project recipe left out").pipe(
+          Effect.annotateLogs({
+            event: "recipe_left_out",
+            file,
+            why: "not a file, or larger than 256 KiB",
+          })
         );
 
-        if (Option.isNone(summary)) {
-          yield* Effect.logWarning("project recipe left out").pipe(
-            Effect.annotateLogs({
-              event: "recipe_left_out",
-              file,
-              why: "not a workflow script",
-            })
-          );
-        } else if (builtInNames.has(summary.value.name)) {
-          yield* Effect.logWarning("project recipe left out").pipe(
-            Effect.annotateLogs({
-              event: "recipe_left_out",
-              file,
-              why: `takes the built-in recipe name ${summary.value.name}`,
-            })
-          );
+        return Option.none<RecipeSummary>();
+      }
 
-          return Option.none<RecipeSummary>();
-        }
+      const parsed = yield* parseWorkflowScript(
+        yield* fs.readFileString(file)
+      ).pipe(Effect.option);
 
-        return summary;
-      });
+      const summary = Option.map(parsed, (script) =>
+        summaryOf(script.meta, "project", Option.some(relative))
+      );
 
-      /** The recipes under a project root, in name order; none when it has no recipe folder. */
-      const projectRecipes = Effect.fn("Recipes.projectRecipes")(function* (
-        root: string
-      ) {
-        const dir = path.join(root, PROJECT_RECIPES_DIR);
+      if (Option.isNone(summary)) {
+        yield* Effect.logWarning("project recipe left out").pipe(
+          Effect.annotateLogs({
+            event: "recipe_left_out",
+            file,
+            why: "not a workflow script",
+          })
+        );
+      } else if (builtInNames.has(summary.value.name)) {
+        yield* Effect.logWarning("project recipe left out").pipe(
+          Effect.annotateLogs({
+            event: "recipe_left_out",
+            file,
+            why: `takes the built-in recipe name ${summary.value.name}`,
+          })
+        );
 
-        const names = yield* fs
-          .readDirectory(dir)
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+        return Option.none<RecipeSummary>();
+      }
 
-        const files = names
-          .filter((name) => name.endsWith(PROJECT_RECIPE_EXTENSION))
-          .toSorted()
-          .slice(0, MAX_PROJECT_RECIPES);
+      return summary;
+    });
 
-        const found = yield* Effect.forEach(files, (name) =>
-          projectRecipe(
-            path.join(dir, name),
-            path.posix.join(PROJECT_RECIPES_DIR, name)
-          ).pipe(
-            Effect.catchTag("PlatformError", (failure) =>
-              Effect.as(
-                Effect.logWarning("project recipe left out").pipe(
-                  Effect.annotateLogs({
-                    event: "recipe_left_out",
-                    file: name,
-                    why: failure.message,
-                  })
-                ),
-                Option.none<RecipeSummary>()
-              )
+    /** The recipes under a project root, in name order; none when it has no recipe folder. */
+    const projectRecipes = Effect.fn("Recipes.projectRecipes")(function* (
+      root: string
+    ) {
+      const dir = path.join(root, PROJECT_RECIPES_DIR);
+
+      const names = yield* fs
+        .readDirectory(dir)
+        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+
+      const files = names
+        .filter((name) => name.endsWith(PROJECT_RECIPE_EXTENSION))
+        .toSorted()
+        .slice(0, MAX_PROJECT_RECIPES);
+
+      const found = yield* Effect.forEach(files, (name) =>
+        projectRecipe(
+          path.join(dir, name),
+          path.posix.join(PROJECT_RECIPES_DIR, name)
+        ).pipe(
+          Effect.catchTag("PlatformError", (failure) =>
+            Effect.as(
+              Effect.logWarning("project recipe left out").pipe(
+                Effect.annotateLogs({
+                  event: "recipe_left_out",
+                  file: name,
+                  why: failure.message,
+                })
+              ),
+              Option.none<RecipeSummary>()
             )
           )
-        );
+        )
+      );
 
-        const seen = new Set<string>();
+      const seen = new Set<string>();
 
-        // Two files with one `meta.name`: the first in file order is listed.
-        return found
-          .flatMap((summary) => Option.toArray(summary))
-          .filter((summary) => {
-            const fresh = !seen.has(summary.name);
+      // Two files with one `meta.name`: the first in file order is listed.
+      return found
+        .flatMap((summary) => Option.toArray(summary))
+        .filter((summary) => {
+          const fresh = !seen.has(summary.name);
 
-            seen.add(summary.name);
+          seen.add(summary.name);
 
-            return fresh;
-          })
-          .toSorted((a, b) => a.name.localeCompare(b.name));
-      });
+          return fresh;
+        })
+        .toSorted((a, b) => a.name.localeCompare(b.name));
+    });
 
-      const list = Effect.fn("Recipes.list")(function* (
-        root: Option.Option<string>
-      ) {
-        const project = Option.isSome(root)
-          ? yield* projectRecipes(root.value)
-          : [];
+    const list = Effect.fn("Recipes.list")(function* (
+      root: Option.Option<string>
+    ) {
+      const project = Option.isSome(root)
+        ? yield* projectRecipes(root.value)
+        : [];
 
-        return {
-          recipes: [
-            ...builtIn.toSorted((a, b) => a.name.localeCompare(b.name)),
-            ...project,
-          ],
-        } satisfies RecipeList;
-      });
+      return {
+        recipes: [
+          ...builtIn.toSorted((a, b) => a.name.localeCompare(b.name)),
+          ...project,
+        ],
+      } satisfies RecipeList;
+    });
 
-      return Recipes.of({ list });
-    })
-  );
+    const source = Effect.fn("Recipes.source")(function* (
+      root: string,
+      name: string
+    ) {
+      const listed = (yield* projectRecipes(root)).find(
+        (recipe) => recipe.name === name
+      );
+
+      const file = Option.flatMap(
+        Option.fromUndefinedOr(listed),
+        (recipe) => recipe.path
+      );
+
+      if (Option.isNone(file)) {
+        return Option.none<string>();
+      }
+
+      return yield* fs
+        .readFileString(path.join(root, file.value))
+        .pipe(Effect.option);
+    });
+
+    return Recipes.of({ list, source });
+  });
+
+  /** Over the platform's `FileSystem`. */
+  static readonly layer = Layer.effect(Recipes, Recipes.make);
 }

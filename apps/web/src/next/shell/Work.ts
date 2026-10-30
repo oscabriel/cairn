@@ -9,7 +9,10 @@
 // - Steps: on a subagent's own page, its steps from Go to its answer (`SubagentSteps.ts`), which the
 //   header's button counts ("2/4 steps").
 // - Workflows: each workflow of the thread's dispatch ledger as the steps panel reads it
-//   (`WorkflowSteps.ts`): its heading and tally, its phases with their nodes.
+//   (`WorkflowSteps.ts`): its heading, tally and what it spent, its phases with their nodes, each
+//   node with its role, model and outcome (`WorkflowPanel.ts`, 6F). Stop workflow while it may run
+//   nodes (`workflow.stop`), and Stop on each live node of a running one (`workflow.stopNode`; the
+//   script reads it as `null`); Stopping until the stop answers.
 //
 // The Stone look: colour only on the status marks; every word is ink. The panel is drawn beside the
 // chat column, never over it, from `lg`; under `lg` it is a sheet over a scrim, at most 85% of the
@@ -42,6 +45,12 @@ import {
   settledOutcomesOf,
   showMoreCount,
 } from "@cairn/client-logic/ThreadLineage";
+import {
+  isStoppableNode,
+  isStoppableWorkflow,
+  nodeDetailText,
+  spentText,
+} from "@cairn/client-logic/WorkflowPanel";
 import type {
   NodeStatus,
   PhaseLabel,
@@ -49,6 +58,7 @@ import type {
   WorkflowGroup,
 } from "@cairn/client-logic/WorkflowSteps";
 import {
+  isLiveNodeStatus,
   phaseLabel,
   workflowGroupsOf,
   workflowHeadline,
@@ -58,6 +68,7 @@ import type { ShellSnapshot } from "@cairn/protocol/Shell";
 import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
 import { WORKFLOWS_DOCUMENT } from "@cairn/protocol/Workflows";
+import type { WorkflowRecord } from "@cairn/protocol/Workflows";
 import { Option, Predicate, Schema } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -66,7 +77,7 @@ import { CornerLeftUp, ListTree, Square, X } from "lucide";
 import type { Model } from "../../Model.ts";
 import { threadRouter } from "../../Route.ts";
 import { classNames } from "../../ui/ClassNames.ts";
-import { buttonClass, buttonDefaults } from "../ui/Button.ts";
+import { button, buttonClass, buttonDefaults } from "../ui/Button.ts";
 import {
   FOCUS_RING_INSET,
   HIT_HEIGHT,
@@ -82,6 +93,7 @@ import type { Tone } from "../ui/Tone.ts";
 import { TONE_TEXT, toneOfThreadTone } from "../ui/Tone.ts";
 import type { Message } from "./Message.ts";
 import { Message as ShellMessage } from "./Message.ts";
+import { stopKeyOf } from "./Model.ts";
 import type { WorkState } from "./Model.ts";
 
 type H = HtmlBuilder<Message>;
@@ -583,67 +595,207 @@ const PHASE_LOOK: Readonly<
   "not started": { tone: "neutral", mark: "todo" },
 };
 
-const nodeRow = (h: H, member: StepsNode): Html => {
-  const look = NODE_LOOK[member.status];
+/** Where a workflow is drawn: its thread, and the panel's Stopping keys. */
+interface WorkflowPlace {
+  readonly threadId: ThreadId;
+  readonly work: WorkState;
+}
+
+/** The small Stop beside a node or a workflow's heading. */
+const stopButton = (
+  h: H,
+  label: string,
+  testId: string,
+  message: Message
+): Html =>
+  iconButton(
+    h,
+    {
+      ...buttonDefaults<Message>(),
+      variant: "ghost",
+      size: "small",
+      label,
+      onClick: Option.some(message),
+      attributes: [h.DataAttribute("testid", testId)],
+    },
+    glyph(h, Square, "square", "small")
+  );
+
+const nodeRow = (
+  h: H,
+  member: StepsNode,
+  workflow: WorkflowRecord,
+  place: WorkflowPlace
+): Html => {
+  const { node } = member;
+  const key = stopKeyOf(workflow.id, Option.some(node.id));
+
+  // Stopping the node or its whole workflow: the node's own word waits for the ledger.
+  const isStopping =
+    isLiveNodeStatus(member.status) &&
+    (place.work.stoppingWork.includes(key) ||
+      place.work.stoppingWork.includes(workflow.id));
+
+  const look = isStopping
+    ? ({ tone: "working", mark: "busy" } as const)
+    : NODE_LOOK[member.status];
 
   return h.li(
     [
       h.DataAttribute("testid", "work-node"),
+      h.DataAttribute("node-id", node.id),
       h.DataAttribute("status", member.status),
-      h.Class(classNames(ROW, "min-h-9 ps-(--space-6) pointer-coarse:min-h-9")),
+      ...onlyIf(isStopping, h.DataAttribute("stopping", "true")),
+      h.Class("flex min-w-0 items-center gap-(--space-1) ps-(--space-4)"),
     ],
     [
-      mark(h, look.tone, look.mark),
-      title(h, member.node.label),
-      word(h, member.status, "work-node-status"),
+      h.div(
+        [
+          h.Class(
+            classNames(
+              ROW,
+              "min-h-9 flex-1 items-start py-(--space-1) pointer-coarse:min-h-9"
+            )
+          ),
+        ],
+        [
+          h.span(
+            [h.Class("mt-0.5 inline-flex shrink-0")],
+            [mark(h, look.tone, look.mark)]
+          ),
+          h.span(
+            [h.Class("flex min-w-0 flex-1 flex-col")],
+            [
+              title(h, node.label),
+              h.span(
+                [
+                  h.DataAttribute("slot", "work-node-detail"),
+                  h.Class(
+                    classNames("min-w-0 truncate text-ink-3", TYPE.small)
+                  ),
+                ],
+                [nodeDetailText(member)]
+              ),
+            ]
+          ),
+          word(h, isStopping ? "stopping" : member.status, "work-node-status"),
+        ]
+      ),
+      isStoppableNode(member, workflow) && !isStopping
+        ? stopButton(
+            h,
+            `Stop ${node.label}`,
+            "work-node-stop",
+            ShellMessage.ClickedStopWorkflow({
+              threadId: place.threadId,
+              workflowId: workflow.id,
+              nodeId: Option.some(node.id),
+            })
+          )
+        : h.empty,
     ]
   );
 };
 
-const workflowBlock = (h: H, group: WorkflowGroup): Html => {
+const workflowBlock = (
+  h: H,
+  group: WorkflowGroup,
+  place: WorkflowPlace
+): Html => {
   const headline = workflowHeadline(group);
+  const { workflow } = group;
+  const isStopping = place.work.stoppingWork.includes(workflow.id);
 
   return h.div(
     [
       h.DataAttribute("testid", "work-workflow"),
-      h.DataAttribute("state", group.workflow.state),
+      h.DataAttribute("workflow-id", workflow.id),
+      h.DataAttribute("state", workflow.state),
+      ...onlyIf(isStopping, h.DataAttribute("stopping", "true")),
       h.Class("flex min-w-0 flex-col"),
     ],
     [
       h.div(
-        [h.Class("flex min-w-0 flex-col px-(--space-2) py-(--space-1)")],
         [
-          h.span(
-            [
-              h.Class(
-                classNames(
-                  "min-w-0 truncate text-ink-1",
-                  TYPE.ui,
-                  WEIGHT_STRONG
-                )
-              ),
-            ],
-            [headline.title]
+          h.Class(
+            "flex min-w-0 items-start gap-(--space-2) px-(--space-2) py-(--space-1)"
           ),
-          Option.match(headline.nodes, {
-            onNone: () => h.empty,
-            onSome: (tally) =>
+        ],
+        [
+          h.div(
+            [h.Class("flex min-w-0 flex-1 flex-col")],
+            [
               h.span(
                 [
-                  h.DataAttribute("slot", "work-workflow-tally"),
                   h.Class(
-                    classNames("min-w-0 truncate text-ink-2", TYPE.small)
+                    classNames(
+                      "min-w-0 truncate text-ink-1",
+                      TYPE.ui,
+                      WEIGHT_STRONG
+                    )
                   ),
                 ],
-                [tally]
+                [headline.title]
               ),
-          }),
+              Option.match(headline.nodes, {
+                onNone: () => h.empty,
+                onSome: (tally) =>
+                  h.span(
+                    [
+                      h.DataAttribute("slot", "work-workflow-tally"),
+                      h.Class(
+                        classNames("min-w-0 truncate text-ink-2", TYPE.small)
+                      ),
+                    ],
+                    [tally]
+                  ),
+              }),
+              h.span(
+                [
+                  h.DataAttribute("slot", "work-workflow-spent"),
+                  h.Class(
+                    classNames(
+                      "min-w-0 truncate tabular-nums text-ink-3",
+                      TYPE.small
+                    )
+                  ),
+                ],
+                [spentText(group)]
+              ),
+            ]
+          ),
+          isStoppableWorkflow(workflow)
+            ? button(
+                h,
+                {
+                  ...buttonDefaults<Message>(),
+                  variant: "secondary",
+                  size: "small",
+                  isBusy: isStopping,
+                  isDisabled: isStopping,
+                  onClick: Option.some(
+                    ShellMessage.ClickedStopWorkflow({
+                      threadId: place.threadId,
+                      workflowId: workflow.id,
+                      nodeId: Option.none(),
+                    })
+                  ),
+                  attributes: [
+                    h.DataAttribute("testid", "work-workflow-stop"),
+                    h.AriaLabel(`Stop workflow ${workflow.name}`),
+                  ],
+                },
+                [isStopping ? "Stopping" : "Stop workflow"]
+              )
+            : h.empty,
         ]
       ),
       h.ol(
         [h.Class("flex min-w-0 flex-col")],
         [
-          ...group.unphasedNodes.map((member) => nodeRow(h, member)),
+          ...group.unphasedNodes.map((member) =>
+            nodeRow(h, member, workflow, place)
+          ),
           ...group.phases.flatMap((phase) => {
             const label = phaseLabel(phase);
             const look = PHASE_LOOK[label];
@@ -674,7 +826,9 @@ const workflowBlock = (h: H, group: WorkflowGroup): Html => {
                   word(h, label, "work-phase-label"),
                 ]
               ),
-              ...phase.members.map((member) => nodeRow(h, member)),
+              ...phase.members.map((member) =>
+                nodeRow(h, member, workflow, place)
+              ),
             ];
           }),
         ]
@@ -685,7 +839,8 @@ const workflowBlock = (h: H, group: WorkflowGroup): Html => {
 
 const workflowsSection = (
   h: H,
-  workflows: ReadonlyArray<WorkflowGroup>
+  workflows: ReadonlyArray<WorkflowGroup>,
+  place: WorkflowPlace
 ): Html =>
   h.section(
     [
@@ -695,7 +850,7 @@ const workflowsSection = (
     ],
     [
       sectionHeading(h, "Workflows"),
-      ...workflows.map((group) => workflowBlock(h, group)),
+      ...workflows.map((group) => workflowBlock(h, group, place)),
     ]
   );
 
@@ -901,7 +1056,10 @@ export const workPanelView = Submodel.defineView<
               lineageSection(h, shown.lineage, work),
               shown.workflows.length === 0
                 ? h.empty
-                : workflowsSection(h, shown.workflows),
+                : workflowsSection(h, shown.workflows, {
+                    threadId: shown.threadId,
+                    work,
+                  }),
             ]
           ),
         ]

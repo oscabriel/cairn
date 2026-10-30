@@ -24,6 +24,7 @@ import {
   PrepareScratchTurn,
   SaveScratch,
   StopChild,
+  StopWorkflow,
 } from "./Command.ts";
 import type { Services } from "./Command.ts";
 import {
@@ -35,7 +36,7 @@ import {
   threadsOf,
 } from "./Derived.ts";
 import { Message, OutMessage } from "./Message.ts";
-import { FIRST_CHILD_ROWS } from "./Model.ts";
+import { FIRST_CHILD_ROWS, stopKeyOf } from "./Model.ts";
 import type { Model, ShellContext, WorkState } from "./Model.ts";
 import { REFRESH_TEXT_ID } from "./Refresh.ts";
 import { SCRATCH_EDITOR_ID } from "./Scratch.ts";
@@ -503,6 +504,36 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       setWork(model, (work) =>
         modifyFields(work, {
           stopping: (stopping) => stopping.filter((id) => id !== threadId),
+          failure: () => Option.some(text),
+        })
+      ),
+    ClickedStopWorkflow: ({ threadId, workflowId, nodeId }) => {
+      const key = stopKeyOf(workflowId, nodeId);
+
+      return model.work.stoppingWork.includes(key)
+        ? { model }
+        : {
+            model: modifyFields(model, {
+              work: (work) =>
+                modifyFields(work, {
+                  stoppingWork: (stopping) => [...stopping, key],
+                  failure: () => Option.none(),
+                }),
+            }),
+            commands: [StopWorkflow({ key, threadId, workflowId, nodeId })],
+          };
+    },
+    // The stop answers once it is marked, so the ledger the panel reads already says how it ended.
+    StoppedWorkflow: ({ key }) =>
+      setWork(model, (work) =>
+        modifyFields(work, {
+          stoppingWork: (stopping) => stopping.filter((found) => found !== key),
+        })
+      ),
+    FailedStopWorkflow: ({ key, message: text }) =>
+      setWork(model, (work) =>
+        modifyFields(work, {
+          stoppingWork: (stopping) => stopping.filter((found) => found !== key),
           failure: () => Option.some(text),
         })
       ),

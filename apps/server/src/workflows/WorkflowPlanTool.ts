@@ -1,5 +1,6 @@
 // `workflow_plan` (ADR 0032, workflows note W4 "Launching"): the model proposes a workflow, the user
-// sees its plan and says Go, Run on 1 first or Decline, and only then may the same script run.
+// sees its plan and says Go, Run on 1 first, Send back (with notes) or Decline, and only then may
+// the same script run.
 //
 // The tool is replay-safe and its task is the wait (ADR 0013). It parses and dry-runs the script
 // (`WorkflowPlan`, no model called), estimates it from the thread's own past nodes on each role's
@@ -41,9 +42,15 @@ import { emit } from "../brain/Events.ts";
 import { cutSummary, readPermissions } from "../brain/Permissions.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import {
+  BUILT_IN_RECIPES,
+  recipeReferenceOf,
+} from "./recipes/BuiltInRecipes.ts";
+import { PROJECT_RECIPES_DIR } from "./recipes/Recipes.ts";
+import {
   proposedRecord,
   resultRefOf,
   workflowIdOf,
+  WorkflowSourcesDoc,
   WorkflowsDoc,
 } from "./WorkflowDocs.ts";
 import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
@@ -58,19 +65,41 @@ import { estimateRun, toLaunch } from "./WorkflowPlan.ts";
 import type { DryRun, NodeHistory, PlanInput } from "./WorkflowPlan.ts";
 import type { RoleResolver } from "./WorkflowTools.ts";
 
-/** Parses and dry-runs a proposed script: the run, or the refusal's words for the model. */
+/**
+ * Parses and dry-runs a proposed script: the run, or the refusal's words for the model; and finds a
+ * project recipe a reference names under the thread's folder.
+ */
 export interface PlanAccess {
   readonly dryRun: (
     source: string,
     input: PlanInput
   ) => Promise<Result.Result<DryRun, string>>;
+  /** The source of the project recipe `name` under `root`; none when it has none by that name. */
+  readonly projectRecipe: (
+    root: string,
+    name: string
+  ) => Promise<Option.Option<string>>;
 }
+
+/** For a brain with no project recipes: every reference names a built-in or nothing. */
+export const NO_PROJECT_RECIPES: PlanAccess["projectRecipe"] = async () =>
+  await Promise.resolve(Option.none());
+
+/** What the model is told when a reference names no recipe it can launch. */
+export const UNKNOWN_RECIPE_REFUSAL = (
+  name: string,
+  root: Option.Option<string>
+): string =>
+  `No built-in recipe and no project recipe ${Option.match(root, {
+    onNone: () => "(this thread has no folder)",
+    onSome: (dir) => `under ${dir}/${PROJECT_RECIPES_DIR}`,
+  })} is named \`${name}\`. Built-ins: ${[...BUILT_IN_RECIPES.keys()].map((known) => `\`${known}\``).join(", ")}; workflow.list gives the project's. Otherwise write the whole script.`;
 
 /** What the tool tells the model about writing and launching a workflow. */
 export const PLAN_DESCRIPTION = [
   "Propose a workflow script for the user's Go before running it. A workflow fans work out to subagent nodes from code: the script starts with `export const meta = { name, description, phases: [{ title }] };` and then calls agent(prompt, { role, schema, label, phase, readonly }), verify(result, { claim }), parallel([...thunks]), pipeline(items, ...stages), phase(title), log(text), approve({ summary }) and reads args and budget.",
   "agent() and verify() resolve with the node's value, or null when the node was refused, stopped or failed, so handle null. A node without a schema answers text; in the dry run every node answers at once with a placeholder shaped by its schema.",
-  "A built-in recipe runs by name: propose `export const meta = { name: \"council\" };` with its args and, on Go, run that same line with codemode. The council takes { question, scope, nonGoals, evidence, advisors: [two to four roles], judge?, maxPasses? }. A project recipe (its path from workflow.list) is proposed whole, as its file's script. agent()'s resume option continues a settled node of the same run in a fork of its conversation; a resumed node takes the default role unless it names one.",
+  "A saved recipe runs by name: propose `export const meta = { name: \"council\" };` with its args and, on Go, run that same line with codemode. That works for the built-in council and for a project recipe (workflow.list names them, from the project's .cairn/workflows). The council takes { question, scope, nonGoals, evidence, advisors: [two to four roles], judge?, maxPasses? }. agent()'s resume option continues a settled node of the same run in a fork of its conversation; a resumed node takes the default role unless it names one.",
   "This tool dry-runs the script with stub nodes, shows the user its call sites, node count, estimate and budget, and waits for the answer. On Go, call codemode with exactly the same script, unchanged: any change needs a new proposal. Run on 1 first runs it with pipeline() taking only its first item; propose it again to run on all. A node the plan did not show (another role, a writer where it showed a reader, more nodes than it counted) asks the user before it starts.",
 ].join(" ");
 
@@ -190,6 +219,10 @@ const answerText = (
     return `The launch of workflow ${row.name} expired without an answer. Nothing ran; do not run the script.`;
   }
 
+  if (record.status === "revised") {
+    return `The user sent workflow ${row.name} back${reason}. Nothing ran; do not run this script. Propose a revised one with workflow_plan that does what the notes ask.`;
+  }
+
   if (record.status === "cancelled") {
     return `The launch of workflow ${row.name} was cancelled. Nothing ran; do not run the script.`;
   }
@@ -244,7 +277,31 @@ export const planTool = (plan: PlanAccess, resolveRole: RoleResolver) => {
     const launchArgs: Schema.Json = args.args ?? {};
     const budget = budgetFrom(args.max_tokens, args.max_usd);
 
-    const run = await plan.dryRun(args.script, {
+    // A reference to a project recipe proposes the recipe's own script, kept for the gate; one to a
+    // built-in is resolved by the dry run and the gate alike.
+    const named = Option.filter(
+      recipeReferenceOf(args.script),
+      (name) => !BUILT_IN_RECIPES.has(name)
+    );
+
+    let { script } = args;
+
+    if (Option.isSome(named)) {
+      const { cwd } = await api.agent(context);
+      const root = Option.fromUndefinedOr(cwd);
+
+      const found = Option.isSome(root)
+        ? await plan.projectRecipe(root.value, named.value)
+        : Option.none<string>();
+
+      if (Option.isNone(found)) {
+        return Option.some(UNKNOWN_RECIPE_REFUSAL(named.value, root));
+      }
+
+      script = found.value;
+    }
+
+    const run = await plan.dryRun(script, {
       args: launchArgs,
       budget,
       sample: Option.none(),
@@ -285,6 +342,12 @@ export const planTool = (plan: PlanAccess, resolveRole: RoleResolver) => {
         sample: Option.none(),
       });
       approvals.items[record.id] = record;
+
+      if (Option.isSome(named)) {
+        const sources = await tx.doc(WorkflowSourcesDoc, api.conversationId);
+
+        sources.items[workflowId] = { name: named.value, source: script };
+      }
 
       await emit(tx, {
         name: "workflow.proposed",

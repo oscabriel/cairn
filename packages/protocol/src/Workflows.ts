@@ -20,6 +20,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./Ids.ts";
+import { ThinkingLevel } from "./Models.ts";
 import {
   Decider,
   EpochMillis,
@@ -149,6 +150,11 @@ export const NodeRecord = Schema.Struct({
   provider: Schema.NullOr(TrimmedNonEmptyString),
   modelId: Schema.NullOr(TrimmedNonEmptyString),
   effort: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * The level the child runs at: `effort` when given, else the role's; null for the model's
+   * default. Absent on rows written before it was recorded.
+   */
+  thinkingLevel: Schema.optionalKey(Schema.NullOr(ThinkingLevel)),
   readonly: Schema.Boolean,
   arms: NodeArms,
   state: NodeState,

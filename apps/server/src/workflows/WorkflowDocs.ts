@@ -74,6 +74,8 @@ export interface NodeItemState {
   provider: string | null;
   modelId: string | null;
   effort: string | null;
+  /** The level the child runs at (effort, else the role's); null for the model's default. */
+  thinkingLevel?: string | null;
   readonly: boolean;
   arms: NodeArms;
   state: NodeState;

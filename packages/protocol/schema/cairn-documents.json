@@ -5887,6 +5887,25 @@
                           }
                         ]
                       },
+                      "thinkingLevel": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "off",
+                              "minimal",
+                              "low",
+                              "medium",
+                              "high",
+                              "xhigh",
+                              "max"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "readonly": {
                         "type": "boolean"
                       },

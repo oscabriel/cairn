@@ -4,7 +4,7 @@
 // dispatched row without a brief naming an accepted approval, one child conversation per dispatched
 // row, and a node's tool result never carrying usage.
 
-import { ApprovalId } from "@cairn/protocol/Ids";
+import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -20,6 +20,7 @@ import {
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { ChildDoc } from "../subagents/SubagentDocs.ts";
+import { workflowNodeRun } from "../subagents/SubagentRows.ts";
 import { PRELUDE_VERSION, rewriteScript } from "./Prelude.ts";
 import { ledgerProblems, WorkflowsDoc } from "./WorkflowDocs.ts";
 import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
@@ -35,6 +36,7 @@ import {
   plant,
   plantDefaults,
   runScript,
+  LOW_ROLE,
   UNRESOLVABLE_ROLE,
 } from "./WorkflowTestKit.ts";
 import type { KitBrain, PlantInput, WorkEffect } from "./WorkflowTestKit.ts";
@@ -74,6 +76,8 @@ interface Identity {
   readonly cwd: string | null;
   /** The tools the child's filter removes, by name. */
   readonly removed: ReadonlyArray<string>;
+  /** The thinking level the child was configured at; null for the model's default. */
+  readonly thinkingLevel: string | null;
 }
 
 /** Waits until the workflow row has ended (its watcher wrote it), at most `ms`. */
@@ -170,6 +174,7 @@ const identitiesOf = async (brain: KitBrain): Promise<Map<string, Identity>> =>
         receipted: receipt?.conversationId === conversation.id,
         cwd: agent.cwd ?? null,
         removed: [...removedOf(agent.modelTools)],
+        thinkingLevel: agent.thinkingLevel ?? null,
       });
     }
 
@@ -843,6 +848,41 @@ return a;`)
       });
       assert.isNotNull(row.result);
     })
+  );
+
+  it.live(
+    "runs a node at its effort, else its role's level, and its row shows the level it runs at",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* scenario(
+          workflow(`const a = await agent("node:a", { label: "a", role: "${LOW_ROLE}", effort: "high" });
+const b = await agent("node:b", { label: "b", role: "${LOW_ROLE}" });
+return [a, b];`)
+        );
+
+        assert.deepStrictEqual(outcome.problems, []);
+
+        const nodes = Object.values(Option.getOrThrow(outcome.row).nodes);
+
+        // `LOW_ROLE` resolves at `low`; `a`'s effort wins over it, `b` takes it.
+        assert.deepStrictEqual(
+          nodes.map((node) => [
+            node.label,
+            outcome.identities.get(node.id)?.thinkingLevel,
+            node.thinkingLevel,
+            Option.getOrUndefined(
+              workflowNodeRun(
+                Option.some(outcome.ledger),
+                ThreadId.make(node.childThreadId ?? "")
+              )
+            )?.thinkingLevel,
+          ]),
+          [
+            ["a", "high", "high", "high"],
+            ["b", "low", "low", "low"],
+          ]
+        );
+      })
   );
 
   it.live(

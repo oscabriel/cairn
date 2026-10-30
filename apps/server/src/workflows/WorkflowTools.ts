@@ -1266,10 +1266,21 @@ export const workflowExtension = (
       }
     );
 
+    // One level per node: the script's `effort` when given, else the role's; none runs at the
+    // model's default. The row records it, so the child's shell row shows what runs.
+    const thinkingLevel = Option.orElse(
+      Option.filter(input.dispatch.effort, isThinkingLevel),
+      () => resolved.thinkingLevel
+    );
+
     await configure(
       tx,
       child.id,
-      childAgentOf(resolved, Option.isSome(input.dispatch.schema), input.cwd)
+      childAgentOf(
+        { ...resolved, thinkingLevel },
+        Option.isSome(input.dispatch.schema),
+        input.cwd
+      )
     );
 
     const childThreadId = childThreadIdOf(
@@ -1295,6 +1306,7 @@ export const workflowExtension = (
       briefId,
       provider: resolved.provider,
       modelId: resolved.modelId,
+      thinkingLevel: Option.getOrNull(thinkingLevel),
       state: "running",
       stage: "child_created",
       conversationId: child.id,
@@ -1800,7 +1812,10 @@ export const workflowExtension = (
         : Result.succeed<ResolvedNodeModel>({
             provider: known.provider ?? "",
             modelId: known.modelId ?? "",
-            thinkingLevel: Option.none(),
+            thinkingLevel: Option.filter(
+              Option.fromNullishOr(known.thinkingLevel),
+              isThinkingLevel
+            ),
           });
 
     const { mode } = await readPermissions(api, context);

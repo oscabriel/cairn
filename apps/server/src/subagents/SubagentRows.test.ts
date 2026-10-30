@@ -301,7 +301,11 @@ const scriptedDocuments =
 
 /** A workflow node's child: its link, no registry item, and its node in the parent's ledger. */
 const workflowDocuments =
-  (parent: ThreadId, effort: string | null) =>
+  (
+    parent: ThreadId,
+    effort: string | null,
+    thinkingLevel: string | null = null
+  ) =>
   (threadId: ThreadId, kind: string) => {
     if (threadId === CHILD && kind === "cairn.child") {
       return Effect.succeedSome({
@@ -328,6 +332,7 @@ const workflowDocuments =
                 provider: "claude-bridge",
                 modelId: "claude-sonnet-5-5",
                 effort,
+                thinkingLevel,
               },
             },
           },
@@ -472,5 +477,24 @@ describe("a scripted subagent's shell row", () => {
 
         assert.strictEqual(shell.thinkingLevel, "medium");
       }).pipe(Effect.provide(ShellTestLayer))
+  );
+
+  it.effect("gives a workflow node the level its row recorded it runs at", () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink;
+      const project = createProject(1);
+      const parent = testThreadId(1);
+
+      yield* sink.commitCommand(project.command);
+      yield* sink.commitCommand(createThread(project.projectId, 1));
+
+      // No effort, a role resolved at `low`: the node runs at `low`, not the model's default.
+      const shell = yield* rowThroughSeam(
+        parent,
+        workflowDocuments(parent, null, "low")
+      );
+
+      assert.strictEqual(shell.thinkingLevel, "low");
+    }).pipe(Effect.provide(ShellTestLayer))
   );
 });

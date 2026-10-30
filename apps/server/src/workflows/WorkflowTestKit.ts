@@ -106,6 +106,9 @@ export const KIT_HOLD_RETRY_MILLIS = 400;
 /** A spec the kit's resolver cannot resolve. */
 export const UNRESOLVABLE_ROLE = "@nobody";
 
+/** A spec the kit's resolver binds at thinking level `low`. */
+export const LOW_ROLE = "@low";
+
 /** What opens a launching thread's input: the script to run follows. */
 export const RUN_PREFIX = "RUN:\n";
 
@@ -122,7 +125,10 @@ export const WORK_TOOL = "work";
 /** A tool that only waits, with no effect: a lazy child's pause before it answers its nudge. */
 export const PAUSE_TOOL = "pause";
 
-/** Resolves every spec to the kit's model, except `UNRESOLVABLE_ROLE`. */
+/**
+ * Resolves every spec to the kit's model at no level, except `UNRESOLVABLE_ROLE`, and `LOW_ROLE` at
+ * `low`.
+ */
 export const kitResolver: RoleResolver = async (spec) =>
   await Promise.resolve(
     spec === UNRESOLVABLE_ROLE
@@ -130,7 +136,8 @@ export const kitResolver: RoleResolver = async (spec) =>
       : Result.succeed({
           provider: KIT_MODEL.provider,
           modelId: KIT_MODEL.modelId,
-          thinkingLevel: Option.none(),
+          thinkingLevel:
+            spec === LOW_ROLE ? Option.some("low" as const) : Option.none(),
         })
   );
 

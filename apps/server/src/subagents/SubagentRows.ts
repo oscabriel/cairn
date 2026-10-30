@@ -85,7 +85,7 @@ const dispatchedModel = (dispatch: Schema.Json | undefined) =>
     Option.filter((model) => model.provider !== "unknown")
   );
 
-/** The part of a parent's `cairn.workflows` a row reads: each node's child, model and effort. */
+/** The part of a parent's `cairn.workflows` a row reads: each node's child, model, level and effort. */
 const NodeLedger = Schema.Struct({
   items: Schema.Record(
     Schema.String,
@@ -97,6 +97,7 @@ const NodeLedger = Schema.Struct({
           provider: Schema.NullOr(Schema.String),
           modelId: Schema.NullOr(Schema.String),
           effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
+          thinkingLevel: Schema.optionalKey(Schema.NullOr(Schema.String)),
         })
       ),
     })
@@ -118,8 +119,9 @@ export interface NodeRun {
 }
 
 /**
- * What a workflow node's child runs on: its node's resolved role and its effort, from the parent's
- * `cairn.workflows` (`ledger`); a node with no effort runs at the model's default level, pi's
+ * What a workflow node's child runs on: its node's resolved role and the level its row recorded,
+ * from the parent's `cairn.workflows` (`ledger`); a row written before the level was recorded falls
+ * back to its effort, and one with neither runs at the model's default level, pi's
  * (`PI_DEFAULT_THINKING`), as a new thread does. None when no node names `threadId` as its child.
  */
 export const workflowNodeRun = (
@@ -138,9 +140,9 @@ export const workflowNodeRun = (
           Option.filter((model) => model.provider !== "unknown"),
           Option.map((model): NodeRun => ({
             model,
-            thinkingLevel: isThinkingLevel(node.effort)
-              ? node.effort
-              : PI_DEFAULT_THINKING,
+            thinkingLevel:
+              [node.thinkingLevel, node.effort].find(isThinkingLevel) ??
+              PI_DEFAULT_THINKING,
           }))
         )
     )

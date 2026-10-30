@@ -622,6 +622,8 @@ export const endNode = async (
 
   node.state = stopped ? "stopped" : "failed";
   node.endedAt = at;
+  // Merge hand-off with 5B: its meter owns `row.spent` (`applyMeter`) and its receipts come from
+  // `readSpends`; at that merge this line goes and the receipt above takes the node's spend.
   row.spent.tokens = settledTokens(row);
 
   node.error = stopped

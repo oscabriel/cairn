@@ -42,7 +42,7 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Turn**: One user message and everything the model did in answer to it, up to the next user message: its thoughts, tool calls and replies. The transcript folds a settled turn's work behind one row.
 
-**Fold**: The "Worked for <duration>" (or "You stopped after <duration>") row that stands in for a settled turn's intermediate work, leaving its final answer visible.
+**Fold**: The "Worked for <duration>" (or "You stopped after <duration>") row that stands in for a settled turn's intermediate work, leaving its final answer visible. On `next` the fold line also counts the work it hides by kind, its fold tally: "Worked for 3m 41s · 4 edits · 9 reads · 2 commands · 2 agents" (`client-logic/FoldTally.ts`); only tool calls count.
 
 _Avoid_: session, chat
 
@@ -256,7 +256,7 @@ _Avoid_: plugin
 
 **Load report**: The page's own account of one load (time to interactive, requests before it, standalone), logged by the brain as one `load.report` line with the peer's direct or DERP path.
 
-**Client settings**: The settings that belong to one device (send shortcut, follow-up behaviour, timestamp format, confirm delete, composer collapse, theme, font sizes, chat width, diff layout), saved in localStorage under `cairn:client-settings:v1`. Server settings are the ones the brain keeps for every device.
+**Client settings**: The settings that belong to one device (send shortcut, follow-up behaviour, timestamp format, confirm delete, composer collapse, theme, font sizes, chat width, diff layout, and which views draw the app, Next or Classic, a row on the `next` settings page only), saved in localStorage under `cairn:client-settings:v1`. Server settings are the ones the brain keeps for every device.
 
 **Next (views)**: The forked set of views the `ui` client setting picks (`?ui=next` sets it, `?ui=classic` returns), drawn in `next/Frame.ts` over the same Model and update as the classic views and loaded as its own chunk (ADR 0040). Classic is the default and stays unchanged.
 

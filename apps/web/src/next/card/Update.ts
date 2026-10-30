@@ -15,10 +15,10 @@
 // - One answer in flight at a time. An answer the brain took is hidden at once and stays hidden
 //   until the stream shows it settled, so a slow stream never shows it twice.
 // - A request that leaves the card without this device answering it (another device, the parent,
-//   a stop) closes with its settled line, and keeps any words the user typed on it in the closed
-//   notice, so nothing typed is lost. (t3code carries them into the composer's draft,
-//   `carryDisplacedCustomAnswerIntoPrompt`; that needs a composer capability the composer's owner
-//   adds.)
+//   a stop) closes with its settled line, keeps any words the user typed on it in the closed
+//   notice, and hands them to the root (`CarriedTypedWords`), which puts them in the thread's
+//   composer draft (t3code's `carryDisplacedCustomAnswerIntoPrompt`; look track L7), so nothing
+//   typed is lost.
 
 import {
   answersProblem,
@@ -42,14 +42,13 @@ import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
 import type { ApprovalRecord, Question } from "@cairn/protocol/Policy";
 import { ApprovalDecision } from "@cairn/protocol/Policy";
 import { Duration, Effect, Equal, Option, Predicate, Schema } from "effect";
-import { Command } from "foldkit";
-import type { Update } from "foldkit";
+import { Command, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import { CairnConnection } from "../../connection/Connection.ts";
 import type { CairnConnectionService } from "../../connection/Connection.ts";
 import { failureMessage } from "../../connection/Failure.ts";
-import { Message } from "./Message.ts";
+import { Message, OutMessage } from "./Message.ts";
 import { CardAnswer, initial } from "./Model.ts";
 import type { CardContext, Model } from "./Model.ts";
 
@@ -60,6 +59,14 @@ export const ADVANCE_MS = 200;
 export const UNDO_MS = 3000;
 
 type UpdateReturn = Update.Return<Model, Message, CairnConnectionService>;
+
+/** What `inform` returns: the card, and the words to carry into the composer when a request closed. */
+type InformReturn = Update.ReturnWithOutMessage<
+  Model,
+  Message,
+  OutMessage,
+  CairnConnectionService
+>;
 
 const NO_RECORDS: ReadonlyArray<ApprovalRecord> = [];
 
@@ -550,7 +557,7 @@ export const sameContext = (model: Model, context: CardContext): boolean =>
  * question places of requests no longer pending are dropped; a request that left the card without
  * this device answering it closes with its settled line and the words typed on it.
  */
-export const inform = (model: Model, context: CardContext): UpdateReturn => {
+export const inform = (model: Model, context: CardContext): InformReturn => {
   const sameThread = sameThreadId(model.threadId, context.threadId);
   const base = sameThread ? model : initial;
 
@@ -617,7 +624,23 @@ export const inform = (model: Model, context: CardContext): UpdateReturn => {
     closed: () => closed,
   });
 
-  return { model: next };
+  // The words typed on a request that just closed go back into the thread's composer draft.
+  const carried = Option.flatMap(
+    Option.filter(
+      Option.filter(closed, (found) => found.typed !== ""),
+      (found) =>
+        !Option.exists(
+          base.closed,
+          (before) => before.approvalId === found.approvalId
+        )
+    ),
+    (found) =>
+      Option.map(context.threadId, (threadId) =>
+        OutMessage.CarriedTypedWords({ threadId, text: found.typed })
+      )
+  );
+
+  return Update.withOutMessage({ model: next }, Option.getOrUndefined(carried));
 };
 
 /** The card's update and its root hooks, as the `next` chunk hands them to the root. */

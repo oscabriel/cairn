@@ -6,18 +6,14 @@
 // to the parent's. States come from client-logic's `SubagentRuntime.ts`, which reads a started
 // child's own shell row through the one thread-state function.
 //
-// Drawn by the classic transcript's row frame (`timeline/RowView.ts`) through the views this module
+// Drawn by the `next` transcript's row frame (`next/timeline/RowView.ts`) through the views this module
 // registers when the `next` chunk loads (`timeline/Subagents.ts`), so the entry does not carry
 // them. Every row is one line at 390 px and at least `--hit-target` tall on a coarse pointer; a
 // row's preview line shows from `sm` up.
 //
 // It writes its class strings itself, in the `next/ui` primitives' vocabulary (`Classes.ts`,
-// `Tone.ts`, `Disclosure.ts`), rather than importing `Classes.ts`: that module brings
-// `next/ui/utilities.css`, whose second copy of Tailwind's utilities, loaded after the entry's,
-// overrides the classic regions the frame still draws (the sidebar left the page and
-// `judges/behaviour.ts --ui next` lost 6 checks). Classes written here are built by the entry's
-// `styles.css`, which scans `next/` outside `next/ui`; the entry CSS is at its budget
-// (`Budget.test.ts`), so the rows leave out the primitives' feedback motion.
+// `Tone.ts`, `Disclosure.ts`). They are built by `timeline.css` (look track L7), with the `next`
+// transcript's rows, into the `next` chunk; styles.css leaves this folder out of the entry's scan.
 
 import type {
   SubagentRow,
@@ -63,6 +59,8 @@ import { markOfTone } from "../ui/Glyph.ts";
 import type { Tone } from "../ui/Tone.ts";
 import { toneOfThreadTone } from "../ui/Tone.ts";
 import { placeSubagentItems, subagentItemKeys } from "./SubagentItems.ts";
+
+import "./timeline.css";
 
 type H = HtmlBuilder<Message>;
 

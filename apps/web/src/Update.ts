@@ -47,6 +47,7 @@ import {
 import { Message } from "./Message.ts";
 import type { Flags, Model, SentTurn } from "./Model.ts";
 import type { Message as RequestCardMessage } from "./next/card/Message.ts";
+import { OutMessage as RequestCardOutMessage } from "./next/card/Message.ts";
 import {
   approvalsDocumentOf,
   initial as initialRequestCard,
@@ -695,6 +696,22 @@ const foldRequestCardMessage = (
   });
 
 /**
+ * What the request card hands up: the words typed on a request that closed under them go into the
+ * thread's composer draft (look track L7).
+ */
+const foldRequestCardOutMessage = (outMessage: RequestCardOutMessage): Step =>
+  RequestCardOutMessage.match<Step>(outMessage, {
+    CarriedTypedWords:
+      ({ text, threadId }) =>
+      (model) => ({
+        model: modifyFields(model, {
+          composer: (composer) =>
+            Composer.carryIntoDraft(composer, threadId, text),
+        }),
+      }),
+  });
+
+/**
  * Tells the request card the open thread's decision records and the connection, when they
  * changed, while the `next` frame draws it.
  */
@@ -715,6 +732,7 @@ const syncRequestCard: Step = (model) =>
             read: readRequestCard,
             write: writeRequestCard,
             toParentMessage: toGotRequestCardMessage,
+            foldOutMessage: foldRequestCardOutMessage,
           })(model, context);
     },
   });

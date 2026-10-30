@@ -1,0 +1,16 @@
+/*
+ * The `next` composer's and hero's utilities (plan look track L7), built from next/composer and
+ * next/hero alone and shipped in the `next` chunk that imports their views, as next/ui/utilities.css
+ * does for the primitives: styles.css leaves both folders out of the entry's scan, so the entry CSS
+ * every classic page loads does not grow with them. It takes Tailwind's theme by reference and the
+ * design token colour names from ../ui/theme.css.
+ */
+@reference "tailwindcss";
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "../ui/theme.css";
+@source "./";
+@source "../hero";
+@source not "./**/*.test.ts";
+@source not "../hero/**/*.test.ts";
+/* A bare `hidden` here would win over a classic region's `md:block` inside the next frame. */
+@source not inline("hidden");

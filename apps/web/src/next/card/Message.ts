@@ -1,6 +1,6 @@
 // The request card's Messages.
 
-import { ApprovalId } from "@cairn/protocol/Ids";
+import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
@@ -50,3 +50,16 @@ export const Message = defineMessageUnion({
 
 /** A request card Message. */
 export type Message = typeof Message.Type;
+
+/** What the request card asks the root to do. */
+export const OutMessage = defineMessageUnion({
+  /**
+   * A request closed under the user's words (settled elsewhere, stopped or expired): put `text`, what
+   * they typed on it, into the composer's draft of `threadId`, so nothing typed is lost (t3code's
+   * `carryDisplacedCustomAnswerIntoPrompt`).
+   */
+  CarriedTypedWords: { threadId: ThreadId, text: Schema.String },
+});
+
+/** A request card OutMessage. */
+export type OutMessage = typeof OutMessage.Type;

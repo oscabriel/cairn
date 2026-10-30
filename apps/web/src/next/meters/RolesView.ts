@@ -373,8 +373,9 @@ export const view = Submodel.defineView<Model, Message, RolesViewInputs>(
                 h.Href(inputs.usageHref),
                 h.Class(
                   classNames(
-                    "text-accent-text underline-offset-4 hover:underline",
-                    TYPE.ui
+                    "inline-flex items-center rounded-(--radius-small) text-accent-text underline-offset-4 hover:underline pointer-coarse:min-h-(--hit-target)",
+                    TYPE.ui,
+                    FOCUS_RING
                   )
                 ),
               ],

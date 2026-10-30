@@ -36,6 +36,7 @@
 import { Equal, Option } from "effect";
 
 import type { TurnDiffFile } from "./DiffTree.ts";
+import type { FoldTallyPart } from "./FoldTally.ts";
 import type {
   Timeline,
   TimelineEntry,
@@ -118,6 +119,8 @@ type RowContent =
       readonly createdAt: number;
       readonly turnId: string;
       readonly label: string;
+      /** The hidden work's tally ("4 edits · 9 reads"), drawn by the `next` fold line. */
+      readonly tally: ReadonlyArray<FoldTallyPart>;
       readonly expanded: boolean;
     }
   | {
@@ -563,6 +566,7 @@ const foldRow = (context: RowContext, fold: TurnFold): Row => ({
   createdAt: fold.createdAt,
   turnId: fold.turnId,
   label: fold.label,
+  tally: fold.tally,
   expanded: context.input.expandedTurnIds.has(fold.turnId),
 });
 

@@ -4,10 +4,11 @@
 // generation cap and the title model; Skills shows the count and an estimate of the prompt they
 // add, with Reload; Executor shows the link's state and a way to sign in again.
 
+import { skillsPromptTokens } from "@cairn/client-logic/SkillsPrompt";
 import type { ExecutorStatus } from "@cairn/protocol/Executor";
 import type { ModelCatalog, ProviderStatus } from "@cairn/protocol/Models";
 import type { ServerSettings } from "@cairn/protocol/Settings";
-import type { SkillList, SkillSummary } from "@cairn/protocol/Skills";
+import type { SkillList } from "@cairn/protocol/Skills";
 import type { PlanWindow, ProviderUsage } from "@cairn/protocol/Usage";
 import { Array, Option } from "effect";
 import { Submodel } from "foldkit";
@@ -669,31 +670,8 @@ const modelsSection = (model: Model, h: H): Html =>
     ]
   );
 
-// formatSkillsForPrompt in pi-coding-agent 1.4.0 (core/skills.js): a fixed preamble of about 380
-// characters, then per skill its name, description, file path and about 70 characters of tags.
-// The path is not on the wire, so an average is assumed.
-const PREAMBLE_CHARS = 380;
-
-const PER_SKILL_CHARS = 70 + 60;
-
-/** About how many tokens the skills add to the system prompt (4 characters a token). */
-export const skillsPromptTokens = (
-  skills: ReadonlyArray<SkillSummary>
-): number => {
-  const invocable = skills.filter((skill) => skill.modelInvocable);
-
-  if (invocable.length === 0) {
-    return 0;
-  }
-
-  const chars = invocable.reduce(
-    (total, skill) =>
-      total + PER_SKILL_CHARS + skill.name.length + skill.description.length,
-    PREAMBLE_CHARS
-  );
-
-  return Math.round(chars / 4);
-};
+/** About how many tokens the skills add to the system prompt (`client-logic/SkillsPrompt.ts`). */
+export { skillsPromptTokens } from "@cairn/client-logic/SkillsPrompt";
 
 const skillsSummary = (list: SkillList): string => {
   const total = list.skills.length;

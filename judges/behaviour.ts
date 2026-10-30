@@ -5,6 +5,7 @@
 // thread. Each check prints one line; the run ends with one JSON line.
 //
 //   node judges/behaviour.ts [--only <check,...>] [--out <dir>] [--strict] [--ui classic|next]
+//                            [--broken footer-measure]
 //
 // `--ui next` (look track L0, ADR 0040) runs every check on the `next` views: each page the judge
 // opens carries `?ui=next`, and before a check's body runs the page must show the `next` frame
@@ -14,7 +15,18 @@
 // Checks:
 //   footer-<width>   the composer footer's blocks (full, icon-only, hidden) and its overflow button
 //                    at 1440, 1180, 980, 820 and 390 equal what t3code showed at the same widths
-//                    (the hero landmark files in the committed baseline);
+//                    (the hero landmark files in the committed baseline); on `--ui next`, whose
+//                    pills are redrawn (look track L7), the fold rule holds instead: nothing in the
+//                    left cluster is cut off, blocks fold last first, the overflow button shows
+//                    exactly when a block is hidden, nothing folds at 1,180 px and up, and the
+//                    fold is the least that fits: the judge draws the left cluster one step less
+//                    folded off screen at its natural width (the label of the first icon-only
+//                    block back, or the first hidden block back as an icon) and fails the check
+//                    when that would have fitted. `--broken footer-measure` is its control: it
+//                    makes the page measure every footer label 240 px wider than it is, so the
+//                    footer folds labels with room to spare at 980 and 820 px, whose checks must
+//                    then fail (the rest of the fold rule passes there; 1,440 and 1,180 px keep
+//                    room even so, and 390 px folds to icons either way);
 //   trigger-slash    `/` at line start opens the slash-command menu;
 //   trigger-literal  `/tmp/x` leaves no menu open;
 //   trigger-at       `@READ` lists README (the time from the keystroke is recorded);
@@ -88,6 +100,7 @@ import {
   SHELL_SEED,
   startCairn,
 } from "./fixtures/parity/CairnApp.ts";
+import type { FooterBlockState } from "./fixtures/parity/Landmarks.ts";
 import { LandmarkFile, readLandmarks } from "./fixtures/parity/Landmarks.ts";
 
 const root = path.join(import.meta.dirname, "..");
@@ -106,8 +119,13 @@ const { values } = parseArgs({
     },
     strict: { type: "boolean", default: false },
     ui: { type: "string", default: "classic" },
+    broken: { type: "string" },
   },
 });
+
+if (values.broken !== undefined && values.broken !== "footer-measure") {
+  throw new Error(`--broken is footer-measure, not ${values.broken}`);
+}
 
 if (values.ui !== "classic" && values.ui !== "next") {
   throw new Error(`--ui is classic or next, not ${values.ui}`);
@@ -837,6 +855,204 @@ const shellChecks = async (browser: Browser, hero: string) => {
   );
 };
 
+/** The order the footer folds its blocks in: the last block first (client-logic FooterLayout). */
+const FOLD_RANK = {
+  full: 0,
+  "icon-only": 1,
+  hidden: 2,
+} satisfies Record<typeof FooterBlockState.Type, number>;
+
+/**
+ * `--broken footer-measure`: every footer label reads 240 px wider than it is to the page's own
+ * measurement (MeasureFooter reads a label's `scrollWidth` for its block's natural width), then
+ * the viewport twitches so the measurement runs again. The footer then folds its labels with room
+ * to spare, which the fold rule's least-fold part must catch.
+ */
+const breakFooterMeasure = async (page: Page, width: number) => {
+  await page.evaluate(() => {
+    const original = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollWidth"
+    );
+
+    Object.defineProperty(Element.prototype, "scrollWidth", {
+      configurable: true,
+      get(this: Element) {
+        const real = Number(original?.get?.call(this) ?? 0);
+
+        return this.matches("[data-composer-control-label]")
+          ? real + 240
+          : real;
+      },
+    });
+  });
+
+  const height = page.viewportSize()?.height ?? 900;
+
+  await page.setViewportSize({ width: width - 40, height });
+  await page.waitForTimeout(300);
+  await page.setViewportSize({ width, height });
+  await page.waitForTimeout(800);
+};
+
+/**
+ * Whether the left cluster, one step less folded, would have fitted: an off-screen copy of it at
+ * its natural width (`max-content`, so the model picker's label is whole too) with the label of
+ * the first icon-only block shown again, or, when blocks are hidden, the first hidden block shown
+ * as an icon (and the overflow button gone when it was the last hidden one). The copy sits in the
+ * cluster's own parent, so the same styles and media queries apply, and is measured against the
+ * cluster's width. "unfolded" when nothing is folded. `seen` is the fold the copy started from,
+ * which the caller compares with its own reading: a footer still changing between the two is not
+ * settled.
+ */
+const lessFoldedFits = async (
+  page: Page
+): Promise<{ readonly verdict: string; readonly seen: string }> =>
+  await page.evaluate(() => {
+    const controls = document.querySelector<HTMLElement>(
+      "[data-chat-composer-controls]"
+    );
+
+    if (controls === null || controls.parentElement === null) {
+      return { verdict: "no controls", seen: "" };
+    }
+
+    const copy = controls.cloneNode(true);
+
+    if (!(copy instanceof HTMLElement)) {
+      return { verdict: "no copy", seen: "" };
+    }
+
+    const blocks = [
+      ...copy.querySelectorAll<HTMLElement>("[data-resting-block]"),
+    ];
+
+    // oxlint-disable-next-line unicorn/consistent-function-scoping -- runs in the page
+    const stateOf = (block: HTMLElement) => {
+      if (block.dataset.composerBlockHidden === "true") {
+        return "hidden";
+      }
+
+      return block.dataset.composerBlockIconOnly === "true"
+        ? "icon-only"
+        : "full";
+    };
+
+    const seen = JSON.stringify(
+      Object.fromEntries(
+        blocks.map((block) => [
+          block.dataset.restingBlock ?? "",
+          stateOf(block),
+        ])
+      )
+    );
+
+    const hiddenCount = blocks.filter(
+      (block) => stateOf(block) === "hidden"
+    ).length;
+
+    const firstHidden = blocks.find((block) => stateOf(block) === "hidden");
+
+    const firstIconOnly = blocks.find(
+      (block) => stateOf(block) === "icon-only"
+    );
+
+    if (firstHidden !== undefined) {
+      firstHidden.classList.remove("invisible", "absolute");
+      firstHidden.dataset.composerBlockHidden = "false";
+
+      if (hiddenCount === 1) {
+        for (const overflow of copy.querySelectorAll<HTMLElement>(
+          "[data-resting-controls-overflow]"
+        )) {
+          overflow.style.display = "none";
+        }
+      }
+    } else if (firstIconOnly === undefined) {
+      return { verdict: "unfolded", seen };
+    } else {
+      for (const label of firstIconOnly.querySelectorAll<HTMLElement>(
+        "[data-composer-control-label]"
+      )) {
+        label.classList.remove("sr-only");
+      }
+
+      firstIconOnly.dataset.composerBlockIconOnly = "false";
+    }
+
+    copy.classList.remove("invisible", "flex-1");
+    delete copy.dataset.chatComposerControls;
+    copy.style.position = "absolute";
+    copy.style.visibility = "hidden";
+    copy.style.left = "0";
+    copy.style.top = "0";
+    copy.style.width = "max-content";
+    copy.style.maxWidth = "none";
+
+    controls.parentElement.append(copy);
+
+    const natural = copy.getBoundingClientRect().width;
+
+    copy.remove();
+
+    const room = controls.clientWidth;
+
+    // A pixel of slack either way, as FooterLayout's own promotions take.
+    return {
+      verdict:
+        natural <= room - 1
+          ? `needless (${Math.round(natural)} px fit ${room} px)`
+          : `least (${Math.round(natural)} px over ${room} px)`,
+      seen,
+    };
+  });
+
+/**
+ * The `next` composer's footer at one width (look track L7). Its pills are drawn in the Stone look
+ * and are a finger tall on a phone, so they fold at other widths than t3code's; what must hold is
+ * the fold rule itself: nothing in the left cluster is cut off, a later block is folded at least as
+ * far as an earlier one, the overflow button shows exactly when a block is hidden, at 1,180 px and
+ * up nothing folds, and the fold is the least that fits (`lessFoldedFits`). t3code's reading at
+ * the same width is reported beside it.
+ */
+const nextFooterVerdict = async (
+  page: Page,
+  width: number,
+  actual: typeof LandmarkFile.Type.footer,
+  expected: typeof LandmarkFile.Type.footer
+): Promise<string> => {
+  const fits = await page.evaluate(() => {
+    const controls = document.querySelector("[data-chat-composer-controls]");
+
+    return controls === null
+      ? false
+      : controls.scrollWidth <= controls.clientWidth + 1;
+  });
+
+  const ranks = Object.values(actual.blocks).map((state) => FOLD_RANK[state]);
+
+  const inOrder = ranks.every(
+    (rank, index) => index === 0 || rank >= (ranks[index - 1] ?? 0)
+  );
+
+  const hidden = ranks.some((rank) => rank === 2);
+  const overflowRight = actual.overflow === hidden;
+  const wideFull = width < 1180 || ranks.every((rank) => rank === 0);
+  const reading = await lessFoldedFits(page);
+
+  const lessFolded =
+    reading.seen === JSON.stringify(actual.blocks)
+      ? reading.verdict
+      : `unsettled (read ${JSON.stringify(actual.blocks)}, then ${reading.seen})`;
+
+  const least =
+    !lessFolded.startsWith("needless") && !lessFolded.startsWith("unsettled");
+
+  const holds = fits && inOrder && overflowRight && wideFull && least;
+
+  return `${holds ? "folds" : "breaks"}: fits ${fits}, in order ${inOrder}, overflow ${actual.overflow} with hidden ${hidden}, wide full ${wideFull}, one step less ${lessFolded}; next ${JSON.stringify(actual)}, t3code ${JSON.stringify(expected)}`;
+};
+
 const chromiumBrowser = await chromium.launch();
 
 try {
@@ -866,7 +1082,15 @@ try {
       async (page) => {
         await page.waitForTimeout(800);
 
+        if (values.broken === "footer-measure") {
+          await breakFooterMeasure(page, width);
+        }
+
         const { footer: actual } = await readLandmarks(page);
+
+        if (ui === "next") {
+          return await nextFooterVerdict(page, width, actual, expected);
+        }
 
         const same =
           JSON.stringify(actual.blocks) === JSON.stringify(expected.blocks) &&
@@ -874,7 +1098,7 @@ try {
 
         return `${same ? "same" : "differs"}: t3code ${JSON.stringify(expected)}, Cairn ${JSON.stringify(actual)}`;
       },
-      (detail) => detail.startsWith("same")
+      (detail) => detail.startsWith("same") || detail.startsWith("folds")
     );
   }
 

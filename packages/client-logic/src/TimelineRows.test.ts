@@ -373,6 +373,10 @@ describe(deriveTimelineRows, () => {
       fold?.kind === "turn-fold" ? fold.label : "",
       "Worked for 22s"
     );
+    // The fold counts the work it hides: the one bash call.
+    assert.deepStrictEqual(fold?.kind === "turn-fold" ? fold.tally : [], [
+      { count: 1, word: "command" },
+    ]);
     assert.deepStrictEqual(ids(collapsed), [
       "user-entry",
       "turn-fold:turn-1",

@@ -1,7 +1,7 @@
 // The paste-to-model judge, automated tier (plan 4B, notes/edges.md "Paste to model"): a screenshot
 // pasted into the real web client reaches the model as the same image, fast.
 //
-//   node judges/paste.ts [--runs 20] [--skip-real] [--headed]
+//   node judges/paste.ts [--runs 20] [--skip-real] [--headed] [--ui classic|next]
 //   node judges/paste.ts --page [--wait 600]
 //
 // The judge builds this checkout's web app and runs it on a judge brain behind the compressing
@@ -26,6 +26,9 @@
 // ~/Developer/agent-artifacts/cairn/v2/phase-1-paste/ (served at plans.gneiss.run), then follows the
 // deployed brain's journal until a phone paste reaches the model and prints `phone-report.ts`'s
 // paste verdict.
+//
+// `--ui next` (look track L7) pastes into the `next` frame's composer (`?ui=next`) instead of
+// classic's.
 //
 // Prints one JSON line and exits 0 when every case passed.
 
@@ -517,6 +520,13 @@ const pasteFile = async (
   };
 };
 
+/** Which views the pastes go into: classic's, or the `next` frame's (`--ui next`). */
+const UI =
+  parseArgs({ strict: false, options: { ui: { type: "string" } } }).values
+    .ui === "next"
+    ? "next"
+    : "classic";
+
 const openThread = async (
   browser: Browser,
   app: LocalApp,
@@ -530,7 +540,17 @@ const openThread = async (
   const cdp = await context.newCDPSession(page);
 
   await cdp.send("Network.enable");
-  await page.goto(`${app.origin}/t/${threadId}`, { waitUntil: "load" });
+  await page.goto(
+    `${app.origin}/t/${threadId}${UI === "next" ? "?ui=next" : ""}`,
+    { waitUntil: "load" }
+  );
+
+  if (UI === "next") {
+    await page
+      .locator('#root[data-ui="next"]')
+      .waitFor({ state: "attached", timeout: 30_000 });
+  }
+
   await page.getByTestId("composer-editor").waitFor({ timeout: 30_000 });
 
   return {
@@ -931,6 +951,7 @@ const main = async () => {
       headed: { type: "boolean", default: false },
       page: { type: "boolean", default: false },
       wait: { type: "string", default: "600" },
+      ui: { type: "string", default: "classic" },
     },
   });
 
@@ -1000,7 +1021,9 @@ const main = async () => {
 
   const pass = failures.length === 0;
 
-  process.stdout.write(`${JSON.stringify({ pass, failures, cases })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ pass, ui: UI, failures, cases })}\n`
+  );
   process.exitCode = pass ? 0 : 1;
 };
 

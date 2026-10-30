@@ -24,6 +24,7 @@ export const HOOK_ATTRIBUTES = [
   "data-level",
   "data-soft-keyboard",
   "data-resting-block",
+  "data-resting-controls-overflow",
 ] as const;
 
 /** Hook families matched by prefix: the attribute's name is the hook. */

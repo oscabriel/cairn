@@ -2,7 +2,9 @@
 // hook on every tool call of a conversation that selects the workflows extension.
 //
 // - A model's `codemode` call whose source is a workflow script (`export const meta = ...` first),
-//   or a recipe reference that names one (`resolveRecipe`), runs only when the thread's ledger holds an `approved` row for that exact source (its hash). The
+//   or a recipe reference that names one (a built-in's by `resolveRecipe`, a project recipe's by the
+//   source its launch kept, `WorkflowSourcesDoc`), runs only when the thread's ledger holds an
+//   `approved` row for that exact source (its hash). The
 //   hook then rewrites the source behind the prelude (`rewriteScript`), baking in the row's id,
 //   sample, token ceiling and arguments, and marks the call's own task with `GATE_MEMO`. pi-durable
 //   stores the rewritten source in the call's start data, so a replay runs what this hook wrote,
@@ -29,8 +31,16 @@ import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import { Effect, Exit, Option, Predicate } from "effect";
 
 import { NODE_TOOLS, rewriteScript } from "./Prelude.ts";
-import { WorkflowsDoc } from "./WorkflowDocs.ts";
-import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
+import {
+  BUILT_IN_RECIPES,
+  recipeReferenceOf,
+} from "./recipes/BuiltInRecipes.ts";
+import { WorkflowSourcesDoc, WorkflowsDoc } from "./WorkflowDocs.ts";
+import type {
+  WorkflowItemState,
+  WorkflowSourcesState,
+  WorkflowsState,
+} from "./WorkflowDocs.ts";
 import {
   isWorkflowSource,
   parseWorkflowScript,
@@ -86,6 +96,75 @@ export const bakedSource = (
     args: row.args,
   });
 
+/**
+ * The source an approved launch of the project recipe `name` was proposed with, the first such
+ * row in proposal order; none when no launch of that name is approved.
+ */
+export const projectSourceFor = (
+  ledger: Readonly<WorkflowsState> | undefined,
+  sources: Readonly<WorkflowSourcesState> | undefined,
+  name: string
+): Option.Option<string> =>
+  Option.fromUndefinedOr(
+    Object.values(ledger?.items ?? {})
+      .filter((row) => row.state === "approved")
+      .map((row) => sources?.items[row.id])
+      .find((kept) => kept?.name === name)?.source
+  );
+
+/** Lets `code` run when the ledger holds an approved row for its hash; blocks it otherwise. */
+const run = async (
+  code: string,
+  ledger: Readonly<WorkflowsState> | undefined,
+  call: ToolHookCall,
+  api: HookApi,
+  context: ChordContext
+): Promise<
+  | { readonly block: string }
+  | { readonly arguments: { [key: string]: JsonValue } }
+> => {
+  // A recipe reference runs the recipe it names: the approved hash is the recipe's own.
+  const parsed = Effect.runSyncExit(
+    Effect.flatMap(resolveRecipe(code), parseWorkflowScript)
+  );
+
+  if (Exit.isFailure(parsed)) {
+    const failure = Exit.findErrorOption(parsed);
+
+    return {
+      block: Option.match(failure, {
+        onNone: () => "Workflow script cannot be read.",
+        onSome: (refusal) => refusal.message,
+      }),
+    };
+  }
+
+  const script = parsed.value;
+  const row = approvedRowFor(ledger, script.hash);
+
+  if (Option.isNone(row)) {
+    return { block: UNAPPROVED_REFUSAL(script.meta.name) };
+  }
+
+  const mark = await api.memo<GateMark>(
+    GATE_MEMO,
+    { workflowId: row.value.id, scriptHash: script.hash },
+    context
+  );
+
+  // A retry of this hook before the call's intent was recorded finds its own mark; another
+  // workflow's mark on this task is a wiring fault, and the call is blocked rather than misfiled.
+  if (mark.workflowId !== row.value.id) {
+    return {
+      block: `This codemode call is already bound to workflow ${mark.workflowId}; run workflow ${row.value.id} as its own call.`,
+    };
+  }
+
+  return {
+    arguments: { ...call.arguments, code: bakedSource(script, row.value) },
+  };
+};
+
 /** The gate's decision for one call: pass, block with a text, or run with new arguments. */
 const decide = async (
   call: ToolHookCall,
@@ -112,47 +191,32 @@ const decide = async (
     return undefined;
   }
 
-  // A recipe reference runs the recipe it names: the approved hash is the recipe's own.
-  const parsed = Effect.runSyncExit(
-    Effect.flatMap(resolveRecipe(code), parseWorkflowScript)
-  );
-
-  if (Exit.isFailure(parsed)) {
-    const failure = Exit.findErrorOption(parsed);
-
-    return {
-      block: Option.match(failure, {
-        onNone: () => "Workflow script cannot be read.",
-        onSome: (refusal) => refusal.message,
-      }),
-    };
-  }
-
-  const script = parsed.value;
   const ledger = await api.snapshot(WorkflowsDoc, api.conversationId, context);
-  const row = approvedRowFor(ledger, script.hash);
 
-  if (Option.isNone(row)) {
-    return { block: UNAPPROVED_REFUSAL(script.meta.name) };
-  }
-
-  const mark = await api.memo<GateMark>(
-    GATE_MEMO,
-    { workflowId: row.value.id, scriptHash: script.hash },
-    context
+  // A reference to a project recipe runs the source its launch was approved with, which the plan
+  // kept beside the ledger; with no approved launch of that name it runs nothing.
+  const named = Option.filter(
+    recipeReferenceOf(code),
+    (name) => !BUILT_IN_RECIPES.has(name)
   );
 
-  // A retry of this hook before the call's intent was recorded finds its own mark; another
-  // workflow's mark on this task is a wiring fault, and the call is blocked rather than misfiled.
-  if (mark.workflowId !== row.value.id) {
-    return {
-      block: `This codemode call is already bound to workflow ${mark.workflowId}; run workflow ${row.value.id} as its own call.`,
-    };
+  if (Option.isSome(named)) {
+    const sources = await api.snapshot(
+      WorkflowSourcesDoc,
+      api.conversationId,
+      context
+    );
+
+    const kept = projectSourceFor(ledger, sources, named.value);
+
+    if (Option.isNone(kept)) {
+      return { block: UNAPPROVED_REFUSAL(named.value) };
+    }
+
+    return await run(kept.value, ledger, call, api, context);
   }
 
-  return {
-    arguments: { ...call.arguments, code: bakedSource(script, row.value) },
-  };
+  return await run(code, ledger, call, api, context);
 };
 
 /** The gate hook, installed with the workflows extension. */

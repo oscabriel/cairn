@@ -45,6 +45,7 @@ import type {
   WorkflowItemState,
   WorkflowsState,
 } from "../WorkflowDocs.ts";
+import { NO_PROJECT_RECIPES } from "../WorkflowPlanTool.ts";
 import {
   codemodeResultText,
   KIT_MODEL,
@@ -347,6 +348,7 @@ const council = (
             await Promise.resolve(
               Result.fail("the council test plants its launch")
             ),
+          projectRecipe: NO_PROJECT_RECIPES,
         },
         faults: NO_WORKFLOW_FAULTS,
         hold: NO_HOLD,

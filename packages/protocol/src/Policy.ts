@@ -287,6 +287,13 @@ export const Brief = Schema.Struct({
   wake: WakeMode,
   /** Numbered decisions with the proposer's picks, after Ultimate. */
   decisions: Schema.Array(Question).check(Schema.isMaxLength(9)),
+  /**
+   * A workflow node's own brief only: the launch's per-launch binding of the node's role (the
+   * user's edits on Go, else the model's proposal; empty when the launch binds none), which the
+   * brain resolves the role with at Go (ADR 0035). The card checks the role with it. Absent on a
+   * subagent's brief and on node briefs written before it existed, which the card does not check.
+   */
+  roleOverrides: Schema.optionalKey(RoleOverrides),
 });
 
 export type Brief = typeof Brief.Type;

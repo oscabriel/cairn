@@ -602,6 +602,92 @@
                                 "additionalProperties": true
                               },
                               "maxItems": 9
+                            },
+                            "roleOverrides": {
+                              "type": "object",
+                              "patternProperties": {
+                                "^@[a-z0-9-]{1,24}$": {
+                                  "type": "object",
+                                  "properties": {
+                                    "model": {
+                                      "type": "object",
+                                      "properties": {
+                                        "provider": {
+                                          "type": "string",
+                                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                                          "minLength": 1
+                                        },
+                                        "modelId": {
+                                          "type": "string",
+                                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": ["provider", "modelId"],
+                                      "additionalProperties": true
+                                    },
+                                    "thinkingLevel": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "off",
+                                            "minimal",
+                                            "low",
+                                            "medium",
+                                            "high",
+                                            "xhigh",
+                                            "max"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "fallbacks": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "provider": {
+                                            "type": "string",
+                                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                                            "minLength": 1
+                                          },
+                                          "modelId": {
+                                            "type": "string",
+                                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": ["provider", "modelId"],
+                                        "additionalProperties": true
+                                      },
+                                      "maxItems": 4
+                                    },
+                                    "note": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "maxLength": 4096
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "model",
+                                    "thinkingLevel",
+                                    "fallbacks",
+                                    "note"
+                                  ],
+                                  "additionalProperties": true
+                                }
+                              },
+                              "additionalProperties": true
                             }
                           },
                           "required": [
@@ -3959,6 +4045,92 @@
                                 "additionalProperties": true
                               },
                               "maxItems": 9
+                            },
+                            "roleOverrides": {
+                              "type": "object",
+                              "patternProperties": {
+                                "^@[a-z0-9-]{1,24}$": {
+                                  "type": "object",
+                                  "properties": {
+                                    "model": {
+                                      "type": "object",
+                                      "properties": {
+                                        "provider": {
+                                          "type": "string",
+                                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                                          "minLength": 1
+                                        },
+                                        "modelId": {
+                                          "type": "string",
+                                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": ["provider", "modelId"],
+                                      "additionalProperties": true
+                                    },
+                                    "thinkingLevel": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "off",
+                                            "minimal",
+                                            "low",
+                                            "medium",
+                                            "high",
+                                            "xhigh",
+                                            "max"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "fallbacks": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "provider": {
+                                            "type": "string",
+                                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                                            "minLength": 1
+                                          },
+                                          "modelId": {
+                                            "type": "string",
+                                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": ["provider", "modelId"],
+                                        "additionalProperties": true
+                                      },
+                                      "maxItems": 4
+                                    },
+                                    "note": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "maxLength": 4096
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "model",
+                                    "thinkingLevel",
+                                    "fallbacks",
+                                    "note"
+                                  ],
+                                  "additionalProperties": true
+                                }
+                              },
+                              "additionalProperties": true
                             }
                           },
                           "required": [

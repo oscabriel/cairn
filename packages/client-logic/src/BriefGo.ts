@@ -7,10 +7,12 @@
 // - A role that does not resolve blocks Go (and Run on 1 first): a role the table does not bind, a
 //   spec that is neither a role nor a model, or a role whose models are all passed over. Go would
 //   start nothing then (the brain resolves again at Go and tells the parent so), so the card says
-//   why and where to fix it instead of offering it. A workflow node's own brief is not checked:
-//   the brain resolves it at Go with its launch's overrides, which the node's brief does not carry.
-// - Send back is a subagent's brief's only: its parent writes a new brief from the notes. A
-//   workflow's launch and a node's own brief have no one to revise them (the record refuses it).
+//   why and where to fix it instead of offering it. A workflow node's own brief is checked with
+//   its launch's per-launch bindings, which it carries (`Brief.roleOverrides`, 6F), as the brain
+//   resolves it at Go; one written before it carried them is not checked.
+// - Send back is for a subagent's brief (its parent writes a new brief from the notes) and a
+//   workflow's launch (its model proposes the script again, 6F). A node's own brief has no one to
+//   revise it (the record refuses it).
 // - Run on 1 first is a workflow's launch's only (ADR 0032), and only when there is more than one
 //   node to run: with one node it is Go.
 
@@ -71,13 +73,18 @@ const launchQuestion = (
       });
 };
 
+/** The tools whose briefs are a workflow node's own (raised when it falls outside its envelope). */
+export const NODE_BRIEF_TOOLS: ReadonlySet<string> = new Set([
+  "agent",
+  "verify",
+]);
+
 /**
- * What to ask `roles.check` for a request; none when it names no role or model, and none for a
- * workflow node's own brief (tool `agent` or `verify`, raised when the node falls outside its
- * launch's envelope). The brain resolves a node's role at Go with its launch's overrides, which
- * the node's brief does not carry, so the global table alone could block a role only an override
- * binds or name a model the override replaces: the card neither holds Go on it nor says what it
- * runs on.
+ * What to ask `roles.check` for a request; none when it names no role or model. A workflow node's
+ * own brief (tool `agent` or `verify`) is asked with the launch's bindings it carries, since the
+ * brain resolves its role with them at Go; one that carries none (written before node briefs
+ * carried them) is not asked, since the global table alone could block a role only an override
+ * binds or name a model the override replaces.
  */
 export const roleQuestionOf = (
   record: Pick<ApprovalRecord, "tool">,
@@ -89,10 +96,22 @@ export const roleQuestionOf = (
         return launchQuestion(payload);
       }
 
-      return record.tool === SPAWN_TOOL
+      if (record.tool === SPAWN_TOOL) {
+        return Option.map(briefSpec(payload), (spec) => ({
+          specs: [spec],
+          overrides: Option.none(),
+        }));
+      }
+
+      const carried = payload.roleOverrides;
+
+      return NODE_BRIEF_TOOLS.has(record.tool) && carried !== undefined
         ? Option.map(briefSpec(payload), (spec) => ({
             specs: [spec],
-            overrides: Option.none(),
+            overrides:
+              Object.keys(carried).length === 0
+                ? Option.none()
+                : Option.some(carried),
           }))
         : Option.none();
     },
@@ -101,15 +120,18 @@ export const roleQuestionOf = (
     Criteria: () => Option.none(),
   });
 
-/** Whether a request takes Send back: a subagent's brief only. */
+/** The tool of a workflow's launch approval. */
+export const LAUNCH_TOOL = "workflow_plan";
+
+/** Whether a request takes Send back: a subagent's brief, or a workflow's launch. */
 export const takesSendBack = (
   record: Pick<ApprovalRecord, "kind" | "tool">,
   body: RequestBody
 ): boolean =>
   record.kind === "brief" &&
-  record.tool === SPAWN_TOOL &&
   RequestBody.$is("Brief")(body) &&
-  body.payload.type === "brief";
+  ((record.tool === SPAWN_TOOL && body.payload.type === "brief") ||
+    (record.tool === LAUNCH_TOOL && body.payload.type === "workflow"));
 
 /** Whether a request takes Run on 1 first: a workflow's launch with more than one node. */
 export const takesRunOnOne = (body: RequestBody): boolean =>

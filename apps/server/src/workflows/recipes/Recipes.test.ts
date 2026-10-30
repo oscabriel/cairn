@@ -146,6 +146,24 @@ describe("listing recipes", () => {
   );
 
   it.effect(
+    "finds a project recipe's source by its listed name, never a built-in's or an unlisted file's",
+    () =>
+      Effect.gen(function* () {
+        writeRecipe("again.js", script("zeta", "A second zeta"));
+        writeRecipe("mine.js", script("council", "Shadows the built-in"));
+
+        const recipes = yield* Recipes;
+
+        assert.deepStrictEqual(
+          yield* recipes.source(root, "zeta"),
+          Option.some(script("zeta", "A second zeta"))
+        );
+        assert.isTrue(Option.isNone(yield* recipes.source(root, "council")));
+        assert.isTrue(Option.isNone(yield* recipes.source(root, "missing")));
+      }).pipe(Effect.provide(recipeLayer))
+  );
+
+  it.effect(
     "lists only the built-ins for a project with no recipe folder",
     () =>
       Effect.gen(function* () {

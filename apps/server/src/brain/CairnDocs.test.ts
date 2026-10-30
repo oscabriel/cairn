@@ -412,7 +412,7 @@ describe("an answer to a record", () => {
     });
   });
 
-  it("takes answers only for questions, and Send back only for a subagent's brief", () => {
+  it("takes answers only for questions, and Send back only for a subagent's brief or a launch", () => {
     const answers = Option.some([
       { index: 0, picks: ["Postgres"], custom: null },
     ]);
@@ -473,8 +473,22 @@ describe("an answer to a record", () => {
     );
     assert.strictEqual(brief.status, "revised");
 
-    // Only a subagent's brief has a parent to revise it: a workflow's launch and a node's own
-    // brief refuse Send back and stay pending.
+    // A workflow's launch is sent back to its model, which proposes the script again (6F).
+    const launch = record({
+      kind: "brief",
+      tool: "workflow_plan",
+      payload: LAUNCH_PAYLOAD,
+    });
+
+    assert.strictEqual(
+      applyAnswer(launch, byUser("revise", Option.some("fewer nodes")), 1500),
+      "answered"
+    );
+    assert.strictEqual(launch.status, "revised");
+    assert.strictEqual(launch.reason, "fewer nodes");
+
+    // A node's own brief has no one to revise it, nor has a record that is not a launch: they
+    // refuse Send back and stay pending.
     for (const tool of ["workflow_plan", "agent", "verify"]) {
       const other = record({ kind: "brief", tool });
 

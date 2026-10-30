@@ -162,14 +162,55 @@ describe("what the brief card asks about roles", () => {
     );
   });
 
-  it("asks nothing about a workflow node's own brief, which the brain resolves with its launch's overrides", () => {
+  it("asks about a workflow node's own brief with the launch's bindings it carries", () => {
+    const judge = {
+      [RoleName.make("@judge")]: {
+        model: { provider: "opencode-go", modelId: "gpt-6-luna" },
+        thinkingLevel: null,
+        fallbacks: [],
+        note: null,
+      },
+    };
+
     for (const tool of ["agent", "verify"]) {
+      const node = { ...brief, role: RoleSpec.make("@judge") };
+
+      // Bound only by the launch: asked with the override, as the brain resolves it at Go.
+      assert.deepStrictEqual(
+        roleQuestionOf(
+          { tool },
+          RequestBody.Brief({ payload: { ...node, roleOverrides: judge } })
+        ),
+        Option.some({ specs: ["@judge"], overrides: Option.some(judge) })
+      );
+
+      // A launch that binds nothing: the global table, as Go resolves it.
+      assert.deepStrictEqual(
+        roleQuestionOf(
+          { tool },
+          RequestBody.Brief({ payload: { ...node, roleOverrides: {} } })
+        ),
+        Option.some({ specs: ["@judge"], overrides: Option.none() })
+      );
+
+      // Written before node briefs carried the bindings: not asked, so an override-only role is
+      // never blocked by the global table alone.
       assert.isTrue(
         Option.isNone(
-          roleQuestionOf({ tool }, RequestBody.Brief({ payload: brief }))
+          roleQuestionOf({ tool }, RequestBody.Brief({ payload: node }))
         )
       );
     }
+
+    // Another tool's brief with bindings is still not a node's: not asked.
+    assert.isTrue(
+      Option.isNone(
+        roleQuestionOf(
+          { tool: "other" },
+          RequestBody.Brief({ payload: { ...brief, roleOverrides: judge } })
+        )
+      )
+    );
   });
 
   it("asks about every spec a launch names once, with its overrides", () => {
@@ -202,18 +243,22 @@ describe("what the brief card asks about roles", () => {
     );
   });
 
-  it("offers Send back on a subagent's brief only, and Run on 1 first on a launch of several nodes", () => {
+  it("offers Send back on a subagent's brief and a launch, and Run on 1 first on a launch of several nodes", () => {
     const body = RequestBody.Brief({ payload: brief });
+    const launchBody = RequestBody.Brief({ payload: launch(5, false) });
 
     assert.isTrue(
       takesSendBack({ kind: "brief", tool: "subagent_spawn" }, body)
     );
     assert.isFalse(takesSendBack({ kind: "brief", tool: "agent" }, body));
     assert.isFalse(
-      takesSendBack(
-        { kind: "brief", tool: "subagent_spawn" },
-        RequestBody.Brief({ payload: launch(5, false) })
-      )
+      takesSendBack({ kind: "brief", tool: "subagent_spawn" }, launchBody)
+    );
+    assert.isTrue(
+      takesSendBack({ kind: "brief", tool: "workflow_plan" }, launchBody)
+    );
+    assert.isFalse(
+      takesSendBack({ kind: "brief", tool: "workflow_plan" }, body)
     );
 
     assert.isFalse(takesRunOnOne(body));

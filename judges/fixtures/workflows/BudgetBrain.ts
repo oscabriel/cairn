@@ -69,6 +69,7 @@ import {
   WorkflowsDoc,
 } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
 import type { WorkflowItemState } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
+import { NO_PROJECT_RECIPES } from "../../../apps/server/src/workflows/WorkflowPlanTool.ts";
 import type { PlanAccess } from "../../../apps/server/src/workflows/WorkflowPlanTool.ts";
 import {
   codemodeResultText,
@@ -179,6 +180,7 @@ const resolveRole = async () =>
 const plan: PlanAccess = {
   dryRun: async () =>
     await Promise.resolve(Result.fail("the budget judge plants its launch")),
+  projectRecipe: NO_PROJECT_RECIPES,
 };
 
 const workflows = workflowExtension({

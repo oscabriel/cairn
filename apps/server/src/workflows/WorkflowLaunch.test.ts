@@ -6,7 +6,7 @@
 import { ApprovalId } from "@cairn/protocol/Ids";
 import { Brief, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { Envelope } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
+import { RoleName, RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema } from "effect";
@@ -185,7 +185,12 @@ describe("a launch's answer", () => {
     assert.isFalse(applyLaunchAnswer(pending, launchRecord()));
     assert.strictEqual(pending.state, "proposed");
 
-    for (const status of ["declined", "expired", "cancelled"] as const) {
+    for (const status of [
+      "declined",
+      "revised",
+      "expired",
+      "cancelled",
+    ] as const) {
       const workflow = row();
 
       assert.isTrue(
@@ -209,6 +214,14 @@ describe("a node's brief", () => {
       mode: "full-access",
       budget: DEFAULT_BUDGET,
       resultSchema: Option.none(),
+      roleOverrides: {
+        [RoleName.make("@scout")]: {
+          model: { provider: "faux", modelId: "kit" },
+          thinkingLevel: null,
+          fallbacks: [],
+          note: null,
+        },
+      },
       outside: Option.some({
         refusal: "outside_grant",
         why: "the launch did not show role @scout",
@@ -216,6 +229,9 @@ describe("a node's brief", () => {
     });
 
     const brief = Schema.decodeUnknownSync(Brief)(payload);
+
+    // The launch's bindings travel in the node's brief, so the card checks @scout as Go resolves it.
+    assert.deepStrictEqual(Object.keys(brief.roleOverrides ?? {}), ["@scout"]);
 
     assert.strictEqual(brief.title, "Read a.ts");
     assert.strictEqual(brief.thinking, "high");

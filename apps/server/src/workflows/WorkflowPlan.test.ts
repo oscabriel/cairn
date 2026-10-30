@@ -168,7 +168,7 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
       expectRefusal(
         `export const meta = { name: "no-such-recipe" };`,
         "unknown_recipe",
-        "`council`"
+        "Only built-ins launch by name: `council`"
       )
   );
 

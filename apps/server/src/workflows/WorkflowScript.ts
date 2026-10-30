@@ -1309,7 +1309,8 @@ export const isWorkflowSource = (source: string): boolean => {
 /**
  * The script a source stands for: the built-in recipe a recipe reference names
  * (`export const meta = { name: "council" };`, `recipes/BuiltInRecipes.ts`), else the source as
- * written. Fails with `WorkflowRefusal` when the reference names no recipe.
+ * written. Only built-ins resolve: the gate reads no files, so a project recipe is proposed whole.
+ * Fails with `WorkflowRefusal` when the reference names no built-in recipe.
  */
 export const resolveRecipe = (
   source: string
@@ -1323,7 +1324,7 @@ export const resolveRecipe = (
         Effect.mapError(() =>
           refusal(
             "unknown_recipe",
-            `No recipe is named \`${name}\`. The recipes are ${[...BUILT_IN_RECIPES.keys()].map((known) => `\`${known}\``).join(", ")}; or write the whole script.`
+            `No built-in recipe is named \`${name}\`. Only built-ins launch by name: ${[...BUILT_IN_RECIPES.keys()].map((known) => `\`${known}\``).join(", ")}. A project recipe launches by proposing its whole script, read from the path \`workflow.list\` gives it; otherwise write the whole script.`
           )
         )
       ),

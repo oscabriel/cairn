@@ -14741,6 +14741,18 @@
                   "type": "string",
                   "enum": ["built-in", "project"]
                 },
+                "path": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "phases": {
                   "type": "array",
                   "items": {
@@ -14772,6 +14784,7 @@
                 "description",
                 "whenToUse",
                 "source",
+                "path",
                 "phases"
               ],
               "additionalProperties": true

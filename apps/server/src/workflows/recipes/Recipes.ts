@@ -2,9 +2,12 @@
 // without writing one, listed by `workflow.list` and beside the model's own workflows. Two sources:
 //
 // - Built-in (`BuiltInRecipes.ts`): ship with Cairn, launched by name with a recipe reference.
-// - A project's own, `<project root>/.cairn/workflows/<name>.js`: listed for the project's threads.
-//   The gate cannot read files (a hook must not wait on anything but documents), so a project recipe
-//   is launched by proposing its whole script, which the model reads from the file.
+// - A project's own, `<project root>/.cairn/workflows/<file>.js`: listed for the project's threads,
+//   with its file's path relative to the root (`RecipeSummary.path`), since a file's name need not
+//   match its `meta.name`. Only a built-in launches by name: the gate cannot read files (a hook must
+//   not wait on anything but documents), so a recipe reference names built-ins only
+//   (`resolveRecipe`), and a project recipe is launched by proposing its whole script, which the
+//   model reads from that path.
 //
 // Each listed recipe is parsed (`parseWorkflowScript`, nothing runs) for its `meta`. A project file
 // that does not parse, or that takes a built-in's name, is left out and logged, so one bad file never
@@ -37,12 +40,14 @@ const isDisplayText = Schema.is(DisplayText);
 /** A recipe's summary, from its parsed `meta`. */
 const summaryOf = (
   meta: WorkflowMeta,
-  source: RecipeSummary["source"]
+  source: RecipeSummary["source"],
+  file: Option.Option<string>
 ): RecipeSummary => ({
   name: meta.name,
   description: meta.description,
   whenToUse: Option.filter(meta.whenToUse, isDisplayText),
   source,
+  path: file,
   phases: meta.phases.map((phase) => ({
     title: phase.title,
     detail: Option.fromNullOr(phase.detail),
@@ -54,7 +59,7 @@ const builtInSummaries = Effect.forEach(
   [...BUILT_IN_RECIPES.values()],
   (source) =>
     Effect.map(parseWorkflowScript(source), (script) =>
-      summaryOf(script.meta, "built-in")
+      summaryOf(script.meta, "built-in", Option.none())
     )
 );
 
@@ -77,7 +82,10 @@ export class Recipes extends Context.Service<
       const builtInNames = new Set(builtIn.map((recipe) => recipe.name));
 
       /** One project file's summary, or none with a log line saying why it was left out. */
-      const projectRecipe = Effect.fnUntraced(function* (file: string) {
+      const projectRecipe = Effect.fnUntraced(function* (
+        file: string,
+        relative: string
+      ) {
         const info = yield* fs.stat(file);
 
         if (info.type !== "File" || Number(info.size) > MAX_RECIPE_BYTES) {
@@ -97,7 +105,7 @@ export class Recipes extends Context.Service<
         ).pipe(Effect.option);
 
         const summary = Option.map(parsed, (script) =>
-          summaryOf(script.meta, "project")
+          summaryOf(script.meta, "project", Option.some(relative))
         );
 
         if (Option.isNone(summary)) {
@@ -139,7 +147,10 @@ export class Recipes extends Context.Service<
           .slice(0, MAX_PROJECT_RECIPES);
 
         const found = yield* Effect.forEach(files, (name) =>
-          projectRecipe(path.join(dir, name)).pipe(
+          projectRecipe(
+            path.join(dir, name),
+            path.posix.join(PROJECT_RECIPES_DIR, name)
+          ).pipe(
             Effect.catchTag("PlatformError", (failure) =>
               Effect.as(
                 Effect.logWarning("project recipe left out").pipe(

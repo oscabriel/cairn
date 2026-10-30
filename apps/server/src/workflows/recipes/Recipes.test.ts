@@ -128,11 +128,18 @@ describe("listing recipes", () => {
             recipe.name,
             recipe.source,
             recipe.description,
+            Option.getOrNull(recipe.path),
           ]),
           [
-            ["council", "built-in", list.recipes[0]?.description ?? ""],
-            ["alpha", "project", "A project recipe"],
-            ["zeta", "project", "A second zeta"],
+            ["council", "built-in", list.recipes[0]?.description ?? "", null],
+            [
+              "alpha",
+              "project",
+              "A project recipe",
+              ".cairn/workflows/alpha.js",
+            ],
+            // The file's name need not match `meta.name`: the path is how the model finds it.
+            ["zeta", "project", "A second zeta", ".cairn/workflows/again.js"],
           ]
         );
       }).pipe(Effect.provide(recipeLayer))

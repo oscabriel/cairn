@@ -37,6 +37,7 @@ import { CodeMode } from "../../brain/CodeMode.ts";
 import { messageText } from "../../brain/CommitFeed.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../../models/ResultTool.ts";
 import { taskOf } from "../../subagents/Delivery.ts";
+import { DEFAULT_NODE_ROLE } from "../Prelude.ts";
 import { ledgerProblems, WorkflowsDoc } from "../WorkflowDocs.ts";
 import type {
   NodeItemState,
@@ -730,6 +731,28 @@ const script = (body: string) =>
   `export const meta = {\n  name: "resume-check",\n  description: "Resume checks",\n};\n${body}`;
 
 describe("agent's resume option", () => {
+  it.live(
+    "runs a resume with no role as the default role, as the plan's dry run records the call site",
+    () =>
+      Effect.gen(function* () {
+        const run = yield* council(
+          { advisors: ["@advisor-1"] },
+          {
+            plant: { maxNodes: Option.some(3) },
+            source:
+              script(`const first = await agent.full("You are advisor 1 of 1.", { role: args.advisors[0], label: "first", readonly: true });
+const second = await agent.full("Pass 2. again", { resume: first.nodeId, label: "second" });
+return { first: first.status, second: second.status };`),
+          }
+        );
+
+        assert.strictEqual(run.row.state, "finished", run.resultText);
+        assert.strictEqual(nodeOf(run, "first").role, "@advisor-1");
+        // Not the resumed node's role: the envelope granted DEFAULT_NODE_ROLE at this call site.
+        assert.strictEqual(nodeOf(run, "second").role, DEFAULT_NODE_ROLE);
+      })
+  );
+
   it.live(
     "refuses a node that is not settled, so the script sees a failure",
     () =>

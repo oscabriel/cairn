@@ -120,7 +120,7 @@ _Avoid_: pipeline, DAG, job
 
 **Recipe**: A saved workflow script, named by its `meta.name`: built in (the council) or a project's own under `.cairn/workflows/`.
 
-**Recipe reference**: A workflow script that is only `export const meta = { name: "council" };`. Proposed and run like any script, it stands for the built-in recipe it names, so a thread launches a recipe by name.
+**Recipe reference**: A workflow script that is only `export const meta = { name: "council" };`. Proposed and run like any script, it stands for the built-in recipe it names, so a thread launches a built-in recipe by name. A project's recipe is launched by proposing its whole script, read from the path its listing gives.
 
 **Resume (a node)**: `agent(prompt, { resume: nodeId })`: a new node whose child is a fork of a settled node's child, so it continues with that node's whole context under its own receipt and result. The council's cross-examination resumes each advisor's report.
 

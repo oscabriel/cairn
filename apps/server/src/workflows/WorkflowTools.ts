@@ -27,8 +27,10 @@
 // node: its child is a fork of the old node's child at its latest entry, created in the same reserve
 // commit and owned by the new node's task, so the new child continues with the whole earlier
 // context while the new row keeps its own receipt (a fork's `pi.usage` starts at zero), result and
-// stop. A node that is not settled, or whose conversation is gone, cannot be resumed: the script
-// sees `null` and the council falls back to a fresh node.
+// stop. It runs as the role its own call names, or the default role, never the old node's: the
+// plan's dry run records the call site that way and the envelope grants just that. A node that is
+// not settled, or whose conversation is gone, cannot be resumed: the script sees `null` and the
+// council falls back to a fresh node.
 //
 // A node stopped, or a script call that ends, is recorded by the watcher (`cairn.workflow-watch`), a
 // background task created in the commit that started the work: an aborted tool cannot commit, and
@@ -554,7 +556,7 @@ const latestEntryOf = async (
 
 /**
  * The node `resume` names, read from the ledger: a settled node of the same workflow with a child
- * conversation, and the role it ran as. None when the call resumes nothing; the refusal's words
+ * conversation. None when the call resumes nothing; the refusal's words
  * when it names a node that cannot be resumed (unknown, still running, failed, stopped, refused).
  */
 const resumeTargetOf = async (
@@ -562,15 +564,7 @@ const resumeTargetOf = async (
   workflowId: string,
   resume: Option.Option<string>,
   context: ChordContext
-): Promise<
-  Result.Result<
-    Option.Option<{
-      readonly target: ResumeTarget;
-      readonly role: Option.Option<string>;
-    }>,
-    string
-  >
-> => {
+): Promise<Result.Result<Option.Option<ResumeTarget>, string>> => {
   if (Option.isNone(resume)) {
     return Result.succeed(Option.none());
   }
@@ -596,8 +590,8 @@ const resumeTargetOf = async (
 
   return Result.succeed(
     Option.some({
-      target: { nodeId, conversationId: conversationOf(node.conversationId) },
-      role: Option.fromNullOr(node.role),
+      nodeId,
+      conversationId: conversationOf(node.conversationId),
     })
   );
 };
@@ -1260,13 +1254,9 @@ export const workflowExtension = (
         return refused(schema.failure);
       }
 
-      // A resumed node runs as the node it resumes unless the script names a role.
-      const role = Option.getOrElse(given.role, () =>
-        Option.getOrElse(
-          Option.flatMap(resume.success, (target) => target.role),
-          () => DEFAULT_NODE_ROLE
-        )
-      );
+      // A resumed node takes the default role unless the script names one, as the plan's dry run
+      // records it: the envelope the user approved grants exactly that role at this call site.
+      const role = Option.getOrElse(given.role, () => DEFAULT_NODE_ROLE);
 
       const effort = optionalText(given.effort, PHASE_TITLE_LIMIT);
 
@@ -1294,7 +1284,7 @@ export const workflowExtension = (
           readonly: given.readonly,
           effort,
           verify: false,
-          resume: Option.map(resume.success, (target) => target.target),
+          resume: resume.success,
         },
         context
       );

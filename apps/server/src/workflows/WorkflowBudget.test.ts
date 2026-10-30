@@ -30,6 +30,7 @@ import {
   workflowBudgetReactor,
   workflowRaiseIdOf,
 } from "./WorkflowBudget.ts";
+import type { WorkflowBudgetPush } from "./WorkflowBudget.ts";
 import type { BudgetState, WorkflowItemState } from "./WorkflowDocs.ts";
 import { isWorkflowEnded, WorkflowsDoc } from "./WorkflowDocs.ts";
 import { BUDGET_STOP_TEXT } from "./WorkflowNodes.ts";
@@ -298,6 +299,8 @@ interface Outcome {
   readonly effects: ReadonlyArray<WorkEffect>;
   readonly approvals: Readonly<Record<string, ApprovalRecord>>;
   readonly notices: ReadonlyArray<JsonValue>;
+  /** What the soft line's push task handed to the push sink. */
+  readonly pushes: ReadonlyArray<WorkflowBudgetPush>;
   /** Every node state seen while the run went, by label. */
   readonly seen: ReadonlyMap<string, ReadonlySet<string>>;
   readonly millis: number;
@@ -359,6 +362,7 @@ const run = (
 ) =>
   Effect.gen(function* () {
     const effects: Array<WorkEffect> = [];
+    const pushes: Array<WorkflowBudgetPush> = [];
 
     const parts = yield* kitParts({
       faults: NO_WORKFLOW_FAULTS,
@@ -367,6 +371,10 @@ const run = (
         effects.push(line);
       },
       tokensPerSecond: 50_000,
+      push: async (each) => {
+        pushes.push(each);
+        await Promise.resolve();
+      },
     });
 
     const brain = yield* Effect.acquireRelease(
@@ -449,6 +457,7 @@ const run = (
         effects,
         approvals: approvals?.items ?? {},
         notices: await noticesOf(brain),
+        pushes,
         seen,
         millis,
       };
@@ -518,6 +527,14 @@ return { out, remaining: await budget.remaining() };`,
           "budget_stopped",
           "budget_warning",
         ]);
+
+        // The soft line pushed once, with the warning's words.
+        assert.strictEqual(outcome.pushes.length, 1);
+        assert.strictEqual(outcome.pushes[0]?.workflowId, WF);
+        assert.match(
+          outcome.pushes[0]?.text ?? "",
+          /^Workflow budgeted has used /u
+        );
 
         // The raise was asked once, and cancelled when the run ended.
         const raise = outcome.approvals[workflowRaiseIdOf(WF, 0)];

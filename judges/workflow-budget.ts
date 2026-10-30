@@ -2,7 +2,8 @@
 // (`fixtures/workflows/BudgetBrain.ts`, Cairn's Brain and reactor host over SQLite in a scratch
 // directory, never the deployed unit) runs a fan-out of twenty-four faux nodes, eight at once,
 // against a token line, while this judge `kill -9`s it at named moments: mid fan-out, as the soft
-// line fires, as the hard line fires, while the stopper stops nodes, and three times in one run.
+// line fires, as the hard line fires, while the stopper stops nodes, three times in one run, and
+// between a node's submit and the commit that marks it submitted, its rerun held until the line.
 //
 //   node judges/workflow-budget.ts [--case <name>]... [--keep]
 //
@@ -75,6 +76,8 @@ const lifeFailure = (text: string): Failure => ({ kind: "life", text });
 
 /** One life of the brain: its arguments, and the line after which it is killed (none: the last). */
 interface Life {
+  /** The brain's extra arguments in this life (its holds). */
+  readonly args: ReadonlyArray<string>;
   readonly killOn: Option.Option<{
     readonly line: string;
     readonly delayMs: number;
@@ -87,7 +90,12 @@ interface CaseSpec {
   readonly control: Option.Option<"no-admission" | "no-stopper">;
 }
 
-const life = (line?: string, delayMs = 0): Life => ({
+const life = (
+  line?: string,
+  delayMs = 0,
+  args: ReadonlyArray<string> = []
+): Life => ({
+  args,
   killOn: Option.map(Option.fromUndefinedOr(line), (seen) => ({
     line: seen,
     delayMs,
@@ -123,6 +131,23 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life("soft"),
       life("spent", 15),
       life(),
+    ],
+    control: Option.none(),
+  },
+  // n1 (a 6 s node) is killed after its child took its input, before its row says so. Its rerun
+  // waits until the line, so it finds the row at `child_created` with the run at its line, and the
+  // reactor host starts late, so the stopper comes after it. Settling n1 there without waiting
+  // for its child would leave the child working past the line, with nothing left to stop it.
+  {
+    name: "kill-after-submit",
+    lives: [
+      life("holding after-submit n1", 0, ["--hold-submit", "n1"]),
+      life(undefined, 0, [
+        "--hold-reserve-until-spent",
+        "n1",
+        "--reactors-after",
+        "1500",
+      ]),
     ],
     control: Option.none(),
   },
@@ -191,7 +216,7 @@ interface WorkLine {
   readonly at: number;
 }
 
-const startBrain = (dir: string, spec: CaseSpec) =>
+const startBrain = (dir: string, spec: CaseSpec, each: Life) =>
   Effect.sync(() =>
     spawn(
       process.execPath,
@@ -207,6 +232,7 @@ const startBrain = (dir: string, spec: CaseSpec) =>
           onNone: () => [],
           onSome: (control) => ["--control", control],
         }),
+        ...each.args,
       ],
       { cwd: root, stdio: ["ignore", "pipe", "inherit"] }
     )
@@ -507,7 +533,7 @@ const runCase = Effect.fn("workflow-budget.case")(function* (spec: CaseSpec) {
   let landed = 0;
 
   for (const each of spec.lives) {
-    const child = yield* startBrain(dir, spec);
+    const child = yield* startBrain(dir, spec, each);
 
     if (Option.isNone(each.killOn)) {
       const done = yield* Effect.result(

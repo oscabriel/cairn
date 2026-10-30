@@ -6,7 +6,8 @@
 // list will once the integrator adds it.
 //
 //   node judges/fixtures/workflows/BudgetBrain.ts --dir <run> --script <file> --max-tokens <n>
-//     [--control no-admission|no-stopper]
+//     [--control no-admission|no-stopper] [--hold-submit <label>]
+//     [--hold-reserve-until-spent <label>]
 //
 // - The first life plants an approved launch of the script with a token budget of `--max-tokens`
 //   (as 5A's answer path will); every life submits the run under one request id, so it is admitted
@@ -15,6 +16,12 @@
 //   store): `start` once per child, then `done` or `aborted`.
 // - `--control no-admission` plants the `ignoreBudget` fault: the reserve commit never refuses at
 //   the line. `--control no-stopper` runs no budget reactor: the lines fire, nothing stops.
+//
+// - `--hold-submit <label>` holds that node after its child took its input, before its row is
+//   marked submitted, printing `holding after-submit <label>`, until the judge kills the brain.
+//   `--hold-reserve-until-spent <label>` holds that node after its reserve (or a rerun's) until the
+//   run reaches its line. `--reactors-after <ms>` starts the reactor host that long after the
+//   Harness resumes, as a slow host would, so a node tool's rerun acts before the stopper exists.
 //
 // It prints `node <label> <state>`, `soft`, `spent` and `workflow <state>` as they happen, and
 // `done` once the workflow ended, the stopper is gone and the reactors have caught up, after
@@ -29,7 +36,7 @@ import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import { NodeRuntime } from "@effect/platform-node";
-import { Effect, Layer, Option, Result } from "effect";
+import { Duration, Effect, Layer, Option, Result } from "effect";
 
 import { Arms } from "../../../apps/server/src/brain/Arms.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
@@ -81,6 +88,7 @@ import {
   NO_HOLD,
   workflowExtension,
 } from "../../../apps/server/src/workflows/WorkflowTools.ts";
+import type { HoldPoint } from "../../../apps/server/src/workflows/WorkflowTools.ts";
 
 const { values } = parseArgs({
   options: {
@@ -88,6 +96,9 @@ const { values } = parseArgs({
     script: { type: "string" },
     "max-tokens": { type: "string" },
     control: { type: "string" },
+    "hold-submit": { type: "string" },
+    "hold-reserve-until-spent": { type: "string" },
+    "reactors-after": { type: "string" },
   },
 });
 
@@ -105,6 +116,45 @@ const context = BACKGROUND_CONTEXT;
 
 const say = (line: string) => {
   process.stdout.write(`${line}\n`);
+};
+
+/** The brain this life runs, once it is up: the reserve hold reads the run's line from it. */
+let running: KitBrain | undefined;
+
+/** Whether the run has reached its line. */
+const spent = async (): Promise<boolean> => {
+  if (running === undefined) {
+    return false;
+  }
+
+  const ledger = await running.harness.snapshot(
+    WorkflowsDoc,
+    running.root,
+    context
+  );
+
+  return (ledger?.items[WF]?.spentAt ?? null) !== null;
+};
+
+const hold = async (point: HoldPoint, label: string) => {
+  if (point === "after-submit" && label === values["hold-submit"]) {
+    say(`holding after-submit ${label}`);
+    // Held until the judge's kill.
+    await sleep(3_600_000);
+  }
+
+  if (
+    point === "after-reserve" &&
+    label === values["hold-reserve-until-spent"]
+  ) {
+    // oxlint-disable-next-line no-await-in-loop -- polls the line
+    while (!(await spent())) {
+      // oxlint-disable-next-line no-await-in-loop
+      await sleep(5);
+    }
+
+    say(`released ${label} at the line`);
+  }
 };
 
 const effect = (line: WorkEffect) => {
@@ -127,7 +177,7 @@ const resolveRole = async () =>
 const workflows = workflowExtension({
   resolveRole,
   faults: { freshDispatch: false, ignoreBudget: control === "no-admission" },
-  hold: NO_HOLD,
+  hold,
   holdRetryMillis: 1000,
 });
 
@@ -267,6 +317,8 @@ const program = Effect.gen(function* () {
 
   const kit: KitBrain = { harness: session.harness, root: root.id };
 
+  running = kit;
+
   const ledger = yield* Effect.promise(
     async () => await kit.harness.snapshot(WorkflowsDoc, kit.root, context)
   );
@@ -300,9 +352,20 @@ const program = Effect.gen(function* () {
     );
   });
 
-  // Boot: the reactors start after the repairs, then the Harness resumes.
-  yield* reactors.start;
-  yield* brain.resume;
+  // Boot: the reactors start after the repairs, then the Harness resumes; or late, as asked.
+  const reactorsAfter = Number(values["reactors-after"] ?? "0");
+
+  if (reactorsAfter > 0) {
+    yield* brain.resume;
+    yield* Effect.forkScoped(
+      Effect.sleep(Duration.millis(reactorsAfter)).pipe(
+        Effect.andThen(reactors.start)
+      )
+    );
+  } else {
+    yield* reactors.start;
+    yield* brain.resume;
+  }
 
   yield* Effect.promise(async () => {
     await runScript(kit, source, "run-1", context);

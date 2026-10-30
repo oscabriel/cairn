@@ -29,7 +29,10 @@
 //   creates the stopper task, all in the commit that moves its cursor. The stopper aborts the child
 //   conversation of every running node until none runs; each node's tool then settles its row
 //   `stopped` and the script sees `null`. Settled results stay; the run ends `partial`,
-//   `budget_spent`. At the soft line the reactor writes the `budget_warning` notice.
+//   `budget_spent`. At the soft line the reactor writes the `budget_warning` notice and, in the
+//   same commit, creates the push task (`cairn.workflow-budget-push`), which hands the notice's
+//   words to the extension's push sink (`WorkflowPushes.ts` carries them to the phone). It ends
+//   itself before it sends, so a crash between the two loses the push and never sends it twice.
 // - **Usage holds.** A node whose child's run ends on a provider's usage limit is `held`, not
 //   failed: it waits for the limit's reset (or `HOLD_RETRY_MILLIS` when the provider names none),
 //   then sends its child one input to go on, and other nodes keep running (WorkflowTools.ts).
@@ -57,7 +60,7 @@ import type {
 import { defineTask, InboxDoc, UsageDoc } from "@earendil-works/pi-durable";
 import { Option, Schema } from "effect";
 
-import { Approvals, UNDECIDED } from "../brain/CairnDocs.ts";
+import { Approvals, ThreadMeta, UNDECIDED } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
 import { emit, isEventObject, reactor } from "../brain/Events.ts";
 import type { Reactor } from "../brain/Events.ts";
@@ -90,6 +93,9 @@ export const MAX_HOLDS = 20;
 
 /** The stopper task's name. */
 export const STOPPER_TASK = "cairn.workflow-budget-stop";
+
+/** The soft line's push task's name. */
+export const PUSH_TASK = "cairn.workflow-budget-push";
 
 /** The budget reactor's name: stable, its cursor is stored under it. */
 export const BUDGET_REACTOR = "cairn.workflow-budget";
@@ -793,11 +799,11 @@ const appendNotice = async (
   conversationId: ConversationId,
   requestId: string,
   data: NoticeEntryData
-): Promise<void> => {
+): Promise<boolean> => {
   const reads = await readNote(tx, conversationId, requestId);
 
   if (reads.existing !== undefined) {
-    return;
+    return false;
   }
 
   const draft = { kind: NOTICE_ENTRY_KIND, data: { ...data } };
@@ -806,7 +812,7 @@ const appendNotice = async (
   if (hasQueuedReset(inbox)) {
     await applyNote(tx, conversationId, requestId, reads, draft);
 
-    return;
+    return true;
   }
 
   const appended = await tx.appendEntry(conversationId, draft);
@@ -818,6 +824,8 @@ const appendNotice = async (
     status: "done",
     entry: appended.id,
   });
+
+  return true;
 };
 
 /** A line event's data, as the meter wrote it. */
@@ -899,22 +907,93 @@ const raiseRecord = (
   };
 };
 
-/** At the soft line: the warning notice. */
+// The soft line's push.
+
+/** What the soft line pushes: the thread the run is in (empty when unknown) and the notice. */
+export interface WorkflowBudgetPush {
+  readonly threadId: string;
+  readonly workflowId: string;
+  readonly text: string;
+}
+
+/** Where the push task hands a push: production's `WorkflowPushes`, a test's list. */
+export type BudgetPushSink = (push: WorkflowBudgetPush) => Promise<void>;
+
+/** A sink that sends nothing: a brain with no notifier. */
+export const NO_BUDGET_PUSH: BudgetPushSink = async () => {
+  await Promise.resolve();
+};
+
+/**
+ * The push task (`cairn.workflow-budget-push`) over `send`, created by the budget reactor in the
+ * commit that wrote the soft notice. It reads the thread the run is in, ends itself, then sends:
+ * a crash between the end and the send loses the push, and nothing sends it twice.
+ */
+export const budgetPushTask = (send: BudgetPushSink) =>
+  defineTask<{ workflowId: string; text: string }, { phase: "push" }, null>({
+    name: PUSH_TASK,
+    version: 1,
+    initial: () => ({ phase: "push" }),
+    phases: {
+      push: async (task, runtime, context) => {
+        const meta = await runtime.snapshot(
+          ThreadMeta,
+          runtime.conversationId,
+          context
+        );
+
+        await runtime.commit(
+          () => ({
+            status: "terminal",
+            outcome: { status: "completed", result: null },
+          }),
+          context
+        );
+
+        await send({
+          threadId: meta?.threadId ?? "",
+          workflowId: task.input.workflowId,
+          text: task.input.text,
+        }).catch(() => null);
+      },
+    },
+    abort: async (_task, runtime, context) => {
+      await runtime.commit(
+        () => ({ status: "terminal", outcome: { status: "aborted" } }),
+        context
+      );
+    },
+  });
+
+/** The push task as the reactor creates it: pi-durable runs the extension's, by its name. */
+const SoftPushTask = budgetPushTask(NO_BUDGET_PUSH);
+
+/** At the soft line: the warning notice, and its push when this commit wrote the notice. */
 const onSoft = async (tx: Tx, line: LineEvent, _at: number): Promise<void> => {
   const ledger = await tx.doc(WorkflowsDoc, line.conversationId);
   const row = ledger.items[line.workflowId];
   const name = row?.name ?? line.workflowId;
   const limit = Option.getOrElse(line.limit, (): WorkflowLimit => "tokens");
+  const text = `Workflow ${name} has used ${limitText(limit, line.meter, line.budget)}.`;
 
-  await appendNotice(
+  const wrote = await appendNotice(
     tx,
     line.conversationId,
     noticeIdOf(line.workflowId, "soft", line.epoch),
-    {
-      reason: "budget_warning",
-      text: `Workflow ${name} has used ${limitText(limit, line.meter, line.budget)}.`,
-    }
+    { reason: "budget_warning", text }
   );
+
+  if (wrote) {
+    await tx.createTask(
+      SoftPushTask,
+      { workflowId: line.workflowId, text },
+      {
+        ownership: { kind: "conversation" },
+        conversationId: line.conversationId,
+        background: true,
+      }
+    );
+  }
 };
 
 /** At the line: the stopped notice, the raise, and the stopper task, in this one commit. */

@@ -80,6 +80,8 @@ import type { Reactor } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../models/ResultTool.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
+import type { BudgetPushSink } from "./WorkflowBudget.ts";
 import { approveRecord, proposedRecord, WorkflowsDoc } from "./WorkflowDocs.ts";
 import { toLaunch, WorkflowPlan } from "./WorkflowPlan.ts";
 import { parseWorkflowScript } from "./WorkflowScript.ts";
@@ -136,6 +138,8 @@ export interface KitOptions {
   /** Called for each `work` effect, outside pi-durable's store. */
   readonly effect: (line: WorkEffect) => void;
   readonly tokensPerSecond: number;
+  /** Where the soft line's push goes; none sends nothing. */
+  readonly push?: BudgetPushSink;
 }
 
 /** The flags of a node prompt: `node:<label> typed ms=200`. */
@@ -427,6 +431,7 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
       faults: options.faults,
       hold: options.hold,
       holdRetryMillis: KIT_HOLD_RETRY_MILLIS,
+      push: options.push ?? NO_BUDGET_PUSH,
     }).extension
   );
   registry.install(results.extension.extension);

@@ -8,7 +8,7 @@ import { Effect, Layer } from "effect";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
 import { NODE_TOOLS } from "./Prelude.ts";
-import { STOPPER_TASK } from "./WorkflowBudget.ts";
+import { PUSH_TASK, STOPPER_TASK } from "./WorkflowBudget.ts";
 import { Workflows } from "./Workflows.ts";
 import { WATCH_TASK, WORKFLOWS_EXTENSION } from "./WorkflowTools.ts";
 
@@ -44,7 +44,7 @@ describe("the workflows extension", () => {
       assert.strictEqual(extension.extension.hooks?.length, 1);
       assert.deepStrictEqual(
         extension.extension.tasks?.map((task) => task.definition.name),
-        [WATCH_TASK, STOPPER_TASK]
+        [WATCH_TASK, STOPPER_TASK, PUSH_TASK]
       );
     }).pipe(Effect.provide(Workflows.layer.pipe(Layer.provide(NoRoles))))
   );

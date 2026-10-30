@@ -103,6 +103,7 @@ import {
 import type { NodeOutcome } from "./Prelude.ts";
 import {
   applyMeter,
+  budgetPushTask,
   BudgetStopper,
   budgetStopped,
   effectiveBudget,
@@ -110,9 +111,11 @@ import {
   METER_INTERVAL_MILLIS,
   meterCommit,
   minutesLineOf,
+  NO_BUDGET_PUSH,
   readSpends,
   SpendCache,
 } from "./WorkflowBudget.ts";
+import type { BudgetPushSink } from "./WorkflowBudget.ts";
 import {
   dispatchedCount,
   envelopeOf,
@@ -216,7 +219,11 @@ export type RoleResolver = (
 ) => Promise<Result.Result<ResolvedNodeModel, string>>;
 
 /** Where a judge may hold a node, so its `kill -9` lands there. */
-export type HoldPoint = "after-reserve" | "after-nudge" | "before-settle";
+export type HoldPoint =
+  | "after-reserve"
+  | "after-submit"
+  | "after-nudge"
+  | "before-settle";
 
 /** The broken controls the kill judge runs; production plants none. */
 export interface WorkflowFaultSet {
@@ -246,6 +253,8 @@ export interface WorkflowToolOptions {
    * `HOLD_RETRY_MILLIS` in production, shorter in tests.
    */
   readonly holdRetryMillis: number;
+  /** Where the soft line's push goes (`WorkflowPushes`); none sends nothing. */
+  readonly push?: BudgetPushSink;
 }
 
 /** A hold that never waits. */
@@ -310,6 +319,23 @@ const atLine = async (
 
   return row !== undefined && budgetStopped(row, approvals?.items ?? {});
 };
+
+/**
+ * Whether the child already took the node's input: a `kill -9` between the submit and the commit
+ * that marks the row `submitted` leaves the row at `child_created` with the child working. Such a
+ * node waits for its child (the stopper aborts it) instead of settling while the child goes on.
+ */
+const inputWentIn = async (
+  api: Pick<ToolExecutionApi, "commit">,
+  child: ConversationId,
+  requestId: string,
+  context: ChordContext
+): Promise<boolean> =>
+  await api.commit(
+    async (tx) =>
+      (await tx.submissionByRequest(child, requestId)) !== undefined,
+    context
+  );
 
 /** One node to dispatch, from an `agent` or a `verify` call. */
 interface Dispatch {
@@ -631,7 +657,7 @@ const markSubmitted = async (
 export const workflowExtension = (
   options: WorkflowToolOptions
 ): CairnExtension => {
-  const { resolveRole, faults, hold, holdRetryMillis } = options;
+  const { resolveRole, faults, hold, holdRetryMillis, push } = options;
 
   /** Each child's responses read so far, for the meter (WorkflowBudget.ts). */
   const cache = new SpendCache();
@@ -1159,7 +1185,8 @@ export const workflowExtension = (
 
   /**
    * How the child ended: its value, or why the node failed. A node whose workflow is at its line
-   * before its input went in sends nothing. A child's run that a usage limit ended holds the node
+   * before its input went in sends nothing; one whose input went in (a rerun after a kill between
+   * the submit and `markSubmitted`) waits for its child, which the stopper aborts. A child's run that a usage limit ended holds the node
    * until the limit resets, then the child is asked to go on (`-r<attempt>` request ids, so a rerun
    * finds each), at most `MAX_HOLDS` times.
    */
@@ -1176,7 +1203,8 @@ export const workflowExtension = (
 
     if (
       row.stage === "child_created" &&
-      (await atLine(api, dispatch.workflowId, context))
+      (await atLine(api, dispatch.workflowId, context)) &&
+      !(await inputWentIn(api, child, requestId, context))
     ) {
       return Result.fail(BUDGET_STOP_TEXT);
     }
@@ -1188,6 +1216,7 @@ export const workflowExtension = (
       requestId,
       context,
       async (submission) => {
+        await hold("after-submit", dispatch.label);
         await markSubmitted(
           api,
           dispatch.workflowId,
@@ -1801,7 +1830,7 @@ export const workflowExtension = (
       name: WORKFLOWS_EXTENSION,
       tools: [begin, agent, verify, approve, phase, log, budget],
       hooks: [workflowGate],
-      tasks: [Watch, BudgetStopper],
+      tasks: [Watch, BudgetStopper, budgetPushTask(push ?? NO_BUDGET_PUSH)],
     }),
   };
 };

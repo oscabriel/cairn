@@ -593,6 +593,94 @@ describe("the shell projector", () => {
   );
 
   it.effect(
+    "a question with the parent waits for the parent, not the user, until it is escalated (ADR 0027)",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThreads(2);
+
+          const question = ApprovalId.make("apr_question");
+          const mirror = ApprovalId.make("esc-question");
+          // THREAD is the child; its parent is thread 2.
+          const parent = testThreadId(2);
+
+          yield* emit([
+            RunStarted.make({ threadId: THREAD, runId: run7, at: at(1) }),
+            RuntimeRequestUpdated.make({
+              threadId: THREAD,
+              id: question,
+              kind: "user-input",
+              status: "pending",
+              route: "parent",
+            }),
+          ]);
+
+          const asking = yield* shellOf(THREAD);
+
+          assert.strictEqual(asking.waitingFor, "parent");
+          assert.strictEqual(asking.activity, "running");
+          assert.deepStrictEqual(asking.pendingRuntimeRequest, Option.none());
+          assert.strictEqual(asking.pendingCount, 0);
+
+          // A Claude slot's signal does not hide the question.
+          yield* PubSub.publish(
+            (yield* FakeHarness).signals,
+            ProjectorSignals.waiting(THREAD, "none")
+          );
+          yield* settle;
+          assert.strictEqual((yield* shellOf(THREAD)).waitingFor, "parent");
+
+          // Escalated: the child's record turns to the user, and the parent's mirror names it.
+          yield* emit([
+            RuntimeRequestUpdated.make({
+              threadId: THREAD,
+              id: question,
+              kind: "user-input",
+              status: "pending",
+            }),
+            RuntimeRequestUpdated.make({
+              threadId: parent,
+              id: mirror,
+              kind: "user-input",
+              status: "pending",
+              origin: THREAD,
+            }),
+          ]);
+
+          const escalated = yield* shellOf(THREAD);
+
+          assert.strictEqual(escalated.waitingFor, "none");
+          assert.strictEqual(escalated.activity, "waiting");
+          assert.deepStrictEqual(
+            Option.map(escalated.pendingRuntimeRequest, (found) => found.id),
+            Option.some(question)
+          );
+          assert.deepStrictEqual(
+            Option.flatMap(
+              (yield* shellOf(parent)).pendingRuntimeRequest,
+              (found) => found.origin
+            ),
+            Option.some(THREAD)
+          );
+
+          yield* emit([
+            RuntimeRequestUpdated.make({
+              threadId: THREAD,
+              id: question,
+              kind: "user-input",
+              status: "accepted",
+            }),
+          ]);
+
+          const answered = yield* shellOf(THREAD);
+
+          assert.strictEqual(answered.waitingFor, "none");
+          assert.deepStrictEqual(answered.pendingRuntimeRequest, Option.none());
+        })
+      )
+  );
+
+  it.effect(
     "a parked task parks the thread, and the next event clears it once the brain no longer has it",
     () =>
       run(
@@ -969,7 +1057,16 @@ describe("the shell projector", () => {
               runId: Option.some(RunId.make(9)),
               queueLength: 2,
               parkedTaskIds: [TaskId.make(4)],
-              pendingApprovals: [],
+              // A subagent's question still with its parent: it waits for the parent, not the user.
+              pendingApprovals: [
+                {
+                  id: ApprovalId.make("apr_with_parent"),
+                  kind: "user-input",
+                  askedAt: 500,
+                  route: "parent",
+                  origin: Option.none(),
+                },
+              ],
             },
             {
               threadId: testThreadId(3),
@@ -983,11 +1080,15 @@ describe("the shell projector", () => {
                   id: ApprovalId.make("apr_boot"),
                   kind: "user-input",
                   askedAt: 1000,
+                  route: "user",
+                  origin: Option.none(),
                 },
                 {
                   id: ApprovalId.make("apr_boot_2"),
                   kind: "tool-call",
                   askedAt: 2000,
+                  route: "user",
+                  origin: Option.none(),
                 },
               ],
             },
@@ -1014,6 +1115,8 @@ describe("the shell projector", () => {
           assert.strictEqual(parked.activity, "parked");
           assert.strictEqual(parked.queueLength, 2);
           assert.deepStrictEqual(parked.parkedTaskIds, [TaskId.make(4)]);
+          assert.strictEqual(parked.waitingFor, "parent");
+          assert.deepStrictEqual(parked.pendingRuntimeRequest, Option.none());
 
           const waiting = yield* shellOf(testThreadId(3));
 

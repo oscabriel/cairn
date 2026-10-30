@@ -1453,6 +1453,14 @@ const tellParent = async <I, S, H extends object>(
 
     const requestId = SubagentRequestIds.briefAnswer(approvalId);
 
+    // Nothing started: a declined, revised or expired brief, or an accepted one whose start was
+    // refused. The note and the input carry the same entry, so the client reads either alike.
+    const data = {
+      briefId: approvalId,
+      decision: record.status,
+      started: false,
+    };
+
     if (halted) {
       await runtime.commit(async (tx) => {
         await admitNote(
@@ -1461,13 +1469,7 @@ const tellParent = async <I, S, H extends object>(
           requestId,
           noteEntry({
             kind: BRIEF_ANSWER_ENTRY,
-            // Nothing started: a declined, revised or expired brief, or an accepted one whose
-            // workspace could not be made.
-            data: {
-              briefId: approvalId,
-              decision: record.status,
-              started: false,
-            },
+            data,
             text,
             at: runtime.now(),
           })
@@ -1482,6 +1484,7 @@ const tellParent = async <I, S, H extends object>(
           requestId,
           content: text,
           whenBusy: "followUp",
+          entry: { kind: BRIEF_ANSWER_ENTRY, data },
         },
         context
       );

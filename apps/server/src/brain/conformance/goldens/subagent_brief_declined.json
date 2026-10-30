@@ -39,11 +39,6 @@
     },
     {
       "event": "MessageCommitted",
-      "role": "user",
-      "text": "The user declined the brief \"Rewrite the parser\": not now."
-    },
-    {
-      "event": "MessageCommitted",
       "role": "assistant",
       "text": ""
     },
@@ -67,11 +62,6 @@
     },
     {
       "event": "RunStarted"
-    },
-    {
-      "event": "MessageCommitted",
-      "role": "user",
-      "text": "The user sent back the brief \"Rewrite the parser\": narrow it."
     },
     {
       "event": "MessageCommitted",
@@ -123,7 +113,7 @@
         "isError": null
       },
       {
-        "kind": "pi.user",
+        "kind": "cairn.brief-answer",
         "role": "user",
         "text": "The user declined the brief \"Rewrite the parser\": not now.",
         "images": 0,
@@ -159,7 +149,7 @@
         "isError": null
       },
       {
-        "kind": "pi.user",
+        "kind": "cairn.brief-answer",
         "role": "user",
         "text": "The user sent back the brief \"Rewrite the parser\": narrow it.",
         "images": 0,

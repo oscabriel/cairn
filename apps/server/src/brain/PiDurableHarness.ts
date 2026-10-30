@@ -1493,6 +1493,10 @@ const layerNoDeps = Layer.effect(
               id: ApprovalId.make(item.id),
               kind: item.kind,
               askedAt: item.askedAt,
+              route: item.route,
+              origin: Option.map(Option.fromNullOr(item.mirrorOf), (mirror) =>
+                ThreadId.make(mirror.threadId)
+              ),
             }));
 
           states.push({

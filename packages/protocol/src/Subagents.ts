@@ -136,6 +136,15 @@ export type SubagentSettlement = typeof SubagentSettlement.Type;
 export const SUBAGENT_RESULT_ENTRY = "cairn.subagent-result";
 
 /**
+ * The entry kind of a brief's answer in the parent's transcript, carrying a model user message.
+ * Go writes it as a note with `started: true` and the child; an answer that started nothing
+ * (declined, sent back, expired, or a refused start) has `started: false`, whether it reached the
+ * parent as a note (the parent was halted) or as a follow-up input. The client shows a brief that
+ * started nothing as ended from it, and its words as the user's turn.
+ */
+export const BRIEF_ANSWER_ENTRY = "cairn.brief-answer";
+
+/**
  * Where a child stands in its parent's registry. The registry item is written by the start task at
  * Go, so a brief that is declined, revised or expires never reaches it; those ends live on the
  * brief's own record (`ApprovalStatus`).

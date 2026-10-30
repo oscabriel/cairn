@@ -150,6 +150,7 @@ interface FeedState {
   >;
   readonly startedCompactions: Set<number>;
   readonly queueLengths: Map<PiConversationId, number>;
+  /** Each record's status and whether it is with the parent, as last emitted. */
   readonly approvals: Map<string, string>;
   /** Each child's last status, by `<parent conversation>:<registry key>`. */
   readonly subagents: Map<string, string>;
@@ -453,19 +454,29 @@ const documentEvents = (
         const status = decodeApprovalStatus(record.status);
         const requestKind = decodeRequestKind(record.kind);
 
+        // A child's question with its parent turns to the user when escalated, still pending.
+        const toParent = record.route === "parent";
+
+        const origin = Option.flatMap(
+          Option.liftPredicate(record.mirrorOf, isRecord),
+          (mirror) => decodeThreadId(mirror.threadId)
+        );
+
         if (
           Option.isSome(id) &&
           Option.isSome(status) &&
           Option.isSome(requestKind) &&
-          state.approvals.get(id.value) !== status.value
+          state.approvals.get(id.value) !== `${status.value}:${toParent}`
         ) {
-          state.approvals.set(id.value, status.value);
+          state.approvals.set(id.value, `${status.value}:${toParent}`);
           events.push(
             RuntimeRequestUpdated.make({
               threadId,
               id: id.value,
               kind: requestKind.value,
               status: status.value,
+              route: record.route === "parent" ? "parent" : undefined,
+              origin: Option.getOrUndefined(origin),
             })
           );
         }

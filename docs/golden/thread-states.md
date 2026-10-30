@@ -260,7 +260,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `RunFailureClass` | `transport_error` | "Failed", and `lastError`: "The model provider could not be reached. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `unknown` | "Failed", and `lastError`: "The run failed. Send again to retry.", or a launch's own message. | Sidebar row, thread page |
 | `WaitingFor` | `claude_slot` | Banner "Waiting": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
-| `WaitingFor` | `parent` | The thread-state function says "Asked its parent"; no surface draws it yet, because a child's row is hidden from the sidebar. | None |
+| `WaitingFor` | `parent` | The child's managed row in the `next` sidebar says "Asked its parent"; its ancestors are not lit and show no parent banner, since the user is not asked yet (6D). The classic sidebar hides a child's row. | Sidebar row (`next`) |
 | `WaitingFor` | `none` | Nothing. | None |
 | `SettledOverride` | `settled` | The row sits under the "Settled" shelf header ("Settled (<n>)" when folded); its menu offers "Unsettle". The undo notice after settling says "Settled <n> thread" or "threads", with Undo. | Sidebar |
 | `SettledOverride` | `active` | Nothing of its own: the row sits on the active or pinned shelf and its menu offers "Settle". | Sidebar |
@@ -297,11 +297,11 @@ What the web client shows for each status today. One function gives a thread's s
 | `SubagentStatus` | `working` | Not shown yet; subagent rows (6C). | None |
 | `SubagentStatus` | `waiting` | Not shown yet; subagent rows (6C). | None |
 | `SubagentStatus` | `settled` | Not shown yet; subagent rows (6C). | None |
-| `SubagentQuestionState` | `pending` | Not shown yet; the rollup and parent banner (6D). | None |
+| `SubagentQuestionState` | `pending` | Only through the child's row (see `WaitingFor` `parent`); the rollup and the parent banner leave it out (6D). | Sidebar row (`next`) |
 | `SubagentQuestionState` | `answered` | Not shown yet; the settled-record line (6A). | None |
-| `SubagentQuestionState` | `escalated` | Not shown yet; the request card in the parent thread (6A, 6D). | None |
+| `SubagentQuestionState` | `escalated` | The parent's request card asks it, with a link to the child that asked (6A, 6D); the child's own card asks it too, and either answer settles both. | Request card (`next`) |
 | `SubagentQuestionState` | `cancelled` | Not shown yet; the settled-record line (6A). | None |
-| `EscalationStatus` | `open` | Not shown yet; the request card in the parent thread (6A, 6D). | None |
+| `EscalationStatus` | `open` | The parent's request card for the mirrored question (6A, 6D). | Request card (`next`) |
 | `EscalationStatus` | `resolved` | Not shown yet; the settled-record line (6A). | None |
 | `SettlementOutcome` | `completed` | Not shown yet; the subagent result row in the parent (6C). | None |
 | `SettlementOutcome` | `stopped` | Not shown yet; the subagent result row in the parent (6C). | None |

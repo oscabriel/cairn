@@ -39,11 +39,6 @@
     },
     {
       "event": "MessageCommitted",
-      "role": "user",
-      "text": "The brief \"Rewrite the parser\" expired without an answer; nothing started."
-    },
-    {
-      "event": "MessageCommitted",
       "role": "assistant",
       "text": "It expired, so I will do it here."
     },
@@ -92,7 +87,7 @@
         "isError": null
       },
       {
-        "kind": "pi.user",
+        "kind": "cairn.brief-answer",
         "role": "user",
         "text": "The brief \"Rewrite the parser\" expired without an answer; nothing started.",
         "images": 0,

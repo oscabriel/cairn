@@ -15,8 +15,9 @@
 // - Criteria: the criteria and their judges, then Decline and Approve.
 //
 // Decline opens a reason field first. A request answered elsewhere while it showed leaves a closed
-// notice with its settled line. Hooks for the judges (`judges/surfaces.ts`): `data-testid` on the
-// card and its parts, `data-action` on every control.
+// notice with its settled line. A child's escalated question (a mirror, ADR 0027) links to the child
+// that asked ("Open subagent", plan 6D). Hooks for the judges (`judges/surfaces.ts`):
+// `data-testid` on the card and its parts, `data-action` on every control.
 
 import "./card.css";
 import {
@@ -38,6 +39,7 @@ import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { threadRouter } from "../../Route.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import { banner } from "../ui/Banner.ts";
 import { button, buttonDefaults } from "../ui/Button.ts";
@@ -678,6 +680,26 @@ const requestCard = (model: Model, h: H, request: PendingRequest): Html => {
               [`${request.position}/${request.total}`]
             )
           : h.empty,
+        // A child's question escalated to the user (ADR 0027): the way to the child that asked.
+        request.record.mirrorOf === null
+          ? h.empty
+          : h.a(
+              [
+                h.DataAttribute("testid", "request-card-subagent"),
+                h.DataAttribute("action", "open-subagent"),
+                h.Href(
+                  threadRouter({ threadId: request.record.mirrorOf.threadId })
+                ),
+                h.Class(
+                  classNames(
+                    "rounded-(--radius-small) text-ink-2 underline decoration-stroke-2 underline-offset-2 hover:text-ink-1",
+                    TYPE.small,
+                    FOCUS_RING
+                  )
+                ),
+              ],
+              ["Open subagent"]
+            ),
       ],
       body: [
         h.div(

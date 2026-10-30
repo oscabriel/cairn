@@ -1,0 +1,12 @@
+/*
+ * The parent banner's own utilities, built from this folder alone and shipped in the `next` chunk
+ * that imports the banner, as next/card/card.css does for the request card: styles.css leaves this
+ * folder out of the entry's scan, so the entry CSS every classic page loads does not grow with it.
+ * It takes Tailwind's theme by reference and the design token colour names from ../ui/theme.css.
+ */
+@reference "tailwindcss";
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "../ui/theme.css";
+@source "./";
+@source not "./**/*.test.ts";
+@source not inline("hidden");

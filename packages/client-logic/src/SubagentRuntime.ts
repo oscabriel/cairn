@@ -46,6 +46,7 @@ import type { ApprovalRecord } from "@cairn/protocol/Policy";
 import { APPROVALS_DOCUMENT } from "@cairn/protocol/Policy";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import {
+  BRIEF_ANSWER_ENTRY,
   CHILD_DOCUMENT,
   SettlementOutcome,
   SUBAGENT_RESULT_ENTRY,
@@ -53,7 +54,7 @@ import {
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
-import { Option, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 
 import { approvalRecordsOf } from "./PendingRequests.ts";
 import type { SubagentRequest } from "./SubagentRollup.ts";
@@ -502,12 +503,6 @@ export const settlementNotesOf = (
   return notes;
 };
 
-/**
- * The entry kind of a brief's answer in the parent's transcript: the server's `BRIEF_ANSWER_ENTRY`
- * (`apps/server/src/brain/SubagentText.ts`), which the protocol does not export.
- */
-export const BRIEF_ANSWER_ENTRY = "cairn.brief-answer";
-
 const UnstartedAnswer = Schema.Struct({
   briefId: Schema.String,
   started: Schema.Literal(false),
@@ -520,8 +515,9 @@ const TextPart = Schema.Struct({
   text: Schema.String,
 });
 
+// A note's message carries text parts; a follow-up input's may carry its text as one string.
 const AnswerModel = Schema.Struct({
-  content: Schema.Array(Schema.Json),
+  content: Schema.Union([Schema.String, Schema.Array(Schema.Json)]),
 });
 
 const decodeAnswerModel = Schema.decodeUnknownOption(AnswerModel);
@@ -551,10 +547,12 @@ export const unstartedAnswersOf = (
             decodeAnswerModel
           ),
           ({ content }) =>
-            content
-              .flatMap((part) => Option.toArray(decodeTextPart(part)))
-              .map(({ text }) => text)
-              .join(" ")
+            Predicate.isString(content)
+              ? content
+              : content
+                  .flatMap((part) => Option.toArray(decodeTextPart(part)))
+                  .map(({ text }) => text)
+                  .join(" ")
         ),
         () => ""
       );

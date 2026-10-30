@@ -328,16 +328,22 @@ const answer = async (brain: KitBrain, raise: boolean) => {
     const approvals = await tx.doc(Approvals, brain.root);
     const records = Object.values(approvals.items);
 
-    // With `raise`, the script's question waits for the raise, as a user would answer them.
+    // With `raise`, the raise is answered once the script's question is asked (so every node
+    // before the question has been admitted or refused at the line), and the question once the
+    // raise is accepted, as a user would answer them.
     const raised = records.some(
       (record) => record.tool === RAISE_TOOL && record.status === "accepted"
+    );
+
+    const asked = records.some(
+      (record) => record.tool === "approve" && record.status === "pending"
     );
 
     for (const record of records) {
       const due =
         record.status === "pending" &&
         ((record.tool === "approve" && (!raise || raised)) ||
-          (raise && record.tool === RAISE_TOOL));
+          (raise && asked && record.tool === RAISE_TOOL));
 
       if (due) {
         record.status = "accepted";
@@ -594,7 +600,7 @@ await approve({ summary: "Go on?" });
 const c = await agent("node:c", { label: "c" });
 return { a, b, c };`,
           // Past what a's first response uses, short of both: a's answer reaches the line.
-          { ...DEFAULT_BUDGET, maxTokens: 5000 },
+          { ...DEFAULT_BUDGET, maxTokens: 6000 },
           { raise: true }
         );
 

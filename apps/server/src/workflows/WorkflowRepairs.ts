@@ -7,6 +7,7 @@
 // are idempotent, so each such parked task is retried at boot. The node tools themselves are
 // nested tool tasks of the script call, which the script's own task resumes.
 
+import type { TaskId } from "@earendil-works/pi-durable";
 import { Effect, Option } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
@@ -16,12 +17,15 @@ import { STOPPER_TASK } from "./WorkflowBudget.ts";
 import { WATCH_TASK } from "./WorkflowTools.ts";
 
 /** The workflow tasks a boot retries when parked. */
-const WORKFLOW_TASKS: ReadonlySet<string> = new Set([WATCH_TASK, STOPPER_TASK]);
+export const WORKFLOW_TASKS: ReadonlySet<string> = new Set([
+  WATCH_TASK,
+  STOPPER_TASK,
+]);
 
 /** The workflow tasks among `tasks` the crash-loop guard parked, in their order. */
 export const parkedWorkflowTasks = (
   tasks: ReadonlyArray<InspectedTask>
-): ReadonlyArray<InspectedTask["record"]["id"]> =>
+): ReadonlyArray<TaskId> =>
   tasks.flatMap(({ record, state }) =>
     WORKFLOW_TASKS.has(record.kind) &&
     state.kind === "blocked" &&

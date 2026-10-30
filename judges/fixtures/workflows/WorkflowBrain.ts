@@ -7,6 +7,7 @@
 //   node judges/fixtures/workflows/WorkflowBrain.ts --dir <run> --script <file>
 //     [--hold <point>:<label>:<ms>] [--stop <label>:<ms>] [--answer] [--defer-run]
 //     [--diverge] [--control] [--plan] [--answer-launch] [--briefs accept|decline] [--grant-all]
+//     [--retry-parked] [--repair]
 //
 // - The first life plants an approved launch of the script (as 5A's answer path will) unless the
 //   ledger has it; every life submits the run under one request id, so it is admitted once.
@@ -25,6 +26,12 @@
 //   `thread.respond` does; `--briefs` answers every node's own brief card so. It prints
 //   `launch-pending` and `card-pending <title>` once each. `--grant-all` plants the envelope
 //   judge's broken control: every node fits, so no card is raised.
+// - `--retry-parked` retries, before the Harness resumes, every task the restart limit parked
+//   except the workflow's watchers, as the user's Retry on the thread would; `--repair` then runs
+//   the boot repair's own filter (`parkedWorkflowTasks`, WorkflowRepairs.ts) on the watchers. It
+//   prints `parked <n>` and `repaired <n>`. A life with either flag ends with `workflow stalled`
+//   when the script call has ended and its row still runs 5 s later: a parked watcher that nobody
+//   retried never records the ending.
 //
 // It prints `node <label> <state>`, `workflow <state>`, `approval-pending` and `effect <node>
 // <what>` as they happen, and `done` once the workflow ended and `report.json` is written.
@@ -68,6 +75,10 @@ import {
   launchAnswered,
 } from "../../../apps/server/src/workflows/WorkflowLaunch.ts";
 import {
+  parkedWorkflowTasks,
+  WORKFLOW_TASKS,
+} from "../../../apps/server/src/workflows/WorkflowRepairs.ts";
+import {
   codemodeResultText,
   kitParts,
   KitLayer,
@@ -97,6 +108,8 @@ const { values } = parseArgs({
     "answer-launch": { type: "boolean", default: false },
     briefs: { type: "string" },
     "grant-all": { type: "boolean", default: false },
+    "retry-parked": { type: "boolean", default: false },
+    repair: { type: "boolean", default: false },
   },
 });
 
@@ -171,6 +184,72 @@ const diverge = async (brain: KitBrain) => {
       say("diverged");
     }
   }, context);
+};
+
+/** How long a row may keep running after its script call ended before the life calls it stalled. */
+const STALL_MS = 5000;
+
+/** What the parked-task retries found at this life's boot. */
+const parking = { parked: 0, repaired: 0 };
+
+/**
+ * Retries the tasks the restart limit parked: every one but the workflow's watchers (the user's
+ * Retry), then with `--repair` the watchers by the boot repair's own filter.
+ */
+const retryParked = async (brain: KitBrain) => {
+  const { tasks } = await brain.harness.inspect(context);
+
+  const parked = tasks.filter(
+    ({ state }) => state.kind === "blocked" && state.reason === "restart_limit"
+  );
+
+  parking.parked = parked.length;
+  say(`parked ${String(parked.length)}`);
+
+  for (const { record } of parked) {
+    if (!WORKFLOW_TASKS.has(record.kind)) {
+      // oxlint-disable-next-line no-await-in-loop
+      await brain.harness.retryTask(record.id, context);
+    }
+  }
+
+  if (values.repair) {
+    const watchers = parkedWorkflowTasks(tasks);
+
+    for (const id of watchers) {
+      // oxlint-disable-next-line no-await-in-loop
+      await brain.harness.retryTask(id, context);
+    }
+
+    parking.repaired = watchers.length;
+  }
+
+  say(`repaired ${String(parking.repaired)}`);
+};
+
+/** True once the row has run `STALL_MS` past the end of its script call (`ended` keeps the time). */
+const stalled = async (
+  brain: KitBrain,
+  row: Readonly<WorkflowItemState>,
+  ended: { at: number | null }
+): Promise<boolean> => {
+  if (
+    !(values["retry-parked"] || values.repair) ||
+    row.state !== "running" ||
+    row.codemodeTaskId === null
+  ) {
+    return false;
+  }
+
+  const task = await brain.harness.getTask(taskOf(row.codemodeTaskId), context);
+
+  if (task?.state.status !== "terminal") {
+    return false;
+  }
+
+  ended.at ??= performance.now();
+
+  return performance.now() - ended.at > STALL_MS;
 };
 
 /** Prints each node's new state, and stops the `--stop` node once, `stopMs` after it runs. */
@@ -342,6 +421,7 @@ const followApprovals = async (brain: KitBrain, seen: Seen) => {
 /** Follows the run until the workflow row has ended. */
 const follow = async (brain: KitBrain) => {
   const seen: Seen = new Map();
+  const ended = { at: null };
 
   for (;;) {
     // oxlint-disable-next-line no-await-in-loop
@@ -372,6 +452,13 @@ const follow = async (brain: KitBrain) => {
     await followCards(brain, seen);
 
     if (row !== undefined && isWorkflowEnded(row.state)) {
+      return;
+    }
+
+    // oxlint-disable-next-line no-await-in-loop
+    if (row !== undefined && (await stalled(brain, row, ended))) {
+      say("workflow stalled");
+
       return;
     }
 
@@ -442,6 +529,9 @@ const writeReport = async (brain: KitBrain) => {
     problems: ledgerProblems(ledger ?? { items: {} }, approvals?.items ?? {}),
     /** Each life that saw its script call running: whether it stored the gate's rewrite. */
     storedRewrites: stored.map((line) => line === "true"),
+    /** Tasks this life found parked at boot, and watchers the boot repair's filter retried. */
+    parked: parking.parked,
+    repaired: parking.repaired,
   };
 
   writeFileSync(path.join(dir, "report.json"), JSON.stringify(report, null, 2));
@@ -483,6 +573,12 @@ const program = Effect.gen(function* () {
   if (values.diverge) {
     yield* Effect.promise(async () => {
       await diverge(brain);
+    });
+  }
+
+  if (values["retry-parked"] || values.repair) {
+    yield* Effect.promise(async () => {
+      await retryParked(brain);
     });
   }
 

@@ -31,6 +31,15 @@
 // spend"). At most the envelope's `maxConcurrent` nodes of one workflow run at once, held in
 // memory, so a restart starts with every slot free.
 //
+// `agent(prompt, { resume: nodeId })` sends a settled node a further input (council pass 2) as a new
+// node: its child is a fork of the old node's child at its latest entry, created in the same reserve
+// commit and owned by the new node's task, so the new child continues with the whole earlier
+// context while the new row keeps its own receipt (a fork's `pi.usage` starts at zero), result and
+// stop. It runs as the role its own call names, or the default role, never the old node's: the
+// plan's dry run records the call site that way and the envelope grants just that. A node that is
+// not settled, or whose conversation is gone, cannot be resumed: the script sees `null` and the
+// council falls back to a fresh node.
+//
 // A node stopped, or a script call that ends, is recorded by the watcher (`cairn.workflow-watch`), a
 // background task created in the commit that started the work: an aborted tool cannot commit, and
 // a watcher survives `kill -9` as any task does.
@@ -58,6 +67,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type {
   AgentChange,
   ConversationId,
+  EntryId,
   NextTaskState,
   SubmissionId,
   ToolExecutionApi,
@@ -377,6 +387,15 @@ const inputWentIn = async (
     context
   );
 
+/**
+ * A settled node an `agent` call resumes (council pass 2): its id and its child conversation, which
+ * the new node forks at its latest entry, so the new child carries the old one's whole context.
+ */
+interface ResumeTarget {
+  readonly nodeId: string;
+  readonly conversationId: ConversationId;
+}
+
 /** One node to dispatch, from an `agent` or a `verify` call. */
 interface Dispatch {
   readonly workflowId: string;
@@ -389,6 +408,8 @@ interface Dispatch {
   readonly readonly: boolean;
   readonly effort: Option.Option<string>;
   readonly verify: boolean;
+  /** The node this one resumes; none starts a fresh child. */
+  readonly resume: Option.Option<ResumeTarget>;
 }
 
 /** What the reserve commit found or made. */
@@ -704,6 +725,65 @@ const verifyPrompt = (claim: string, result: Schema.Json): string =>
     "```",
     "Answer verified when the evidence supports the claim, refuted when it contradicts it, unverified when you cannot tell, with your reason.",
   ].join("\n");
+
+/** The words a script's `agent.full` shows for a `resume` it cannot take. */
+const resumeProblem = (nodeId: string, why: string) =>
+  `agent(): cannot resume node \`${summaryOf(nodeId)}\`: ${why}. Start a new node with what it needs instead.`;
+
+/** The latest entry of `conversation`, where a resumed node's fork starts; none when it has none. */
+const latestEntryOf = async (
+  tx: Tx,
+  conversation: ConversationId
+): Promise<Option.Option<EntryId>> => {
+  const page = await tx.scanEntries(
+    { conversationId: conversation, order: "descending" },
+    1
+  );
+
+  return Option.map(Option.fromUndefinedOr(page.items[0]), (entry) => entry.id);
+};
+
+/**
+ * The node `resume` names, read from the ledger: a settled node of the same workflow with a child
+ * conversation. None when the call resumes nothing; the refusal's words
+ * when it names a node that cannot be resumed (unknown, still running, failed, stopped, refused).
+ */
+const resumeTargetOf = async (
+  api: ToolExecutionApi,
+  workflowId: string,
+  resume: Option.Option<string>,
+  context: ChordContext
+): Promise<Result.Result<Option.Option<ResumeTarget>, string>> => {
+  if (Option.isNone(resume)) {
+    return Result.succeed(Option.none());
+  }
+
+  const nodeId = resume.value;
+  const ledger = await api.snapshot(WorkflowsDoc, api.conversationId, context);
+  const node = ledger?.items[workflowId]?.nodes[nodeId];
+
+  if (node === undefined) {
+    return Result.fail(
+      resumeProblem(nodeId, "it is not a node of this workflow")
+    );
+  }
+
+  if (node.state !== "settled" || node.conversationId === null) {
+    return Result.fail(
+      resumeProblem(
+        nodeId,
+        `it is ${node.state}, and only a settled node can be resumed`
+      )
+    );
+  }
+
+  return Result.succeed(
+    Option.some({
+      nodeId,
+      conversationId: conversationOf(node.conversationId),
+    })
+  );
+};
 
 /** Writes a refused row and its event; a rerun reads the decision instead of making it again. */
 const refuseRow = async (
@@ -1166,11 +1246,23 @@ export const workflowExtension = (
     base: NodeItemState,
     resolved: ResolvedNodeModel,
     input: ReserveInput,
-    watch: boolean
+    watch: boolean,
+    forkAt: Option.Option<EntryId>
   ): Promise<Reserved> => {
-    const child = await tx.createConversation({
-      ownership: { kind: "task", taskId: api.taskId },
-    });
+    const ownership = { kind: "task", taskId: api.taskId } as const;
+
+    // A resumed node's child is a fork of the node it resumes, owned by this node's task like any
+    // child, so a stop of this node reaches it and its usage starts at zero (`pi.usage` forks
+    // initial). The fork carries none of the old child's Cairn documents (`cairn.child`,
+    // `cairn.result` fork initial); `linkChild` writes them for this node.
+    const child = await Option.match(
+      Option.all({ target: input.dispatch.resume, at: forkAt }),
+      {
+        onNone: async () => await tx.createConversation({ ownership }),
+        onSome: async ({ target, at }) =>
+          await tx.forkConversation(target.conversationId, at, { ownership }),
+      }
+    );
 
     await configure(
       tx,
@@ -1230,6 +1322,13 @@ export const workflowExtension = (
     context: ChordContext
   ): Promise<Reserved> =>
     await api.commit(async (tx): Promise<Reserved> => {
+      // A table read, so before any write: pi-durable refuses a table read after a table write.
+      const forkAt = await Option.match(input.dispatch.resume, {
+        onNone: async () => await Promise.resolve(Option.none<EntryId>()),
+        onSome: async (target) =>
+          await latestEntryOf(tx, target.conversationId),
+      });
+
       const ledger = await tx.doc(WorkflowsDoc, api.conversationId);
       const approvals = await tx.doc(Approvals, api.conversationId);
       const row = ledger.items[input.dispatch.workflowId];
@@ -1246,6 +1345,16 @@ export const workflowExtension = (
 
       if (existing !== undefined) {
         return foundOf(existing);
+      }
+
+      if (Option.isSome(input.dispatch.resume) && Option.isNone(forkAt)) {
+        return {
+          kind: "problem",
+          text: resumeProblem(
+            input.dispatch.resume.value.nodeId,
+            "its conversation has no entries left to continue from"
+          ),
+        };
       }
 
       // Admission (WorkflowBudget.ts): the meter of this instant, read before any table write.
@@ -1325,7 +1434,8 @@ export const workflowExtension = (
         node,
         input.model.success,
         input,
-        true
+        true,
+        forkAt
       );
 
       await emitBriefApproved(tx, api.conversationId, record, api.now());
@@ -1343,6 +1453,13 @@ export const workflowExtension = (
     context: ChordContext
   ): Promise<Reserved> =>
     await api.commit(async (tx): Promise<Reserved> => {
+      // A table read, so before any write (as in `reserve`).
+      const forkAt = await Option.match(input.dispatch.resume, {
+        onNone: async () => await Promise.resolve(Option.none<EntryId>()),
+        onSome: async (target) =>
+          await latestEntryOf(tx, target.conversationId),
+      });
+
       const ledger = await tx.doc(WorkflowsDoc, api.conversationId);
       const approvals = await tx.doc(Approvals, api.conversationId);
       const row = ledger.items[input.dispatch.workflowId];
@@ -1363,6 +1480,16 @@ export const workflowExtension = (
 
       if (!isWaitingNode(node)) {
         return foundOf(node);
+      }
+
+      if (Option.isSome(input.dispatch.resume) && Option.isNone(forkAt)) {
+        return {
+          kind: "problem",
+          text: resumeProblem(
+            input.dispatch.resume.value.nodeId,
+            "its conversation has no entries left to continue from"
+          ),
+        };
       }
 
       const record = approvals.items[node.briefId ?? ""];
@@ -1404,7 +1531,8 @@ export const workflowExtension = (
               node,
               input.model.success,
               input,
-              false
+              false,
+              forkAt
             );
       }
 
@@ -1877,10 +2005,15 @@ export const workflowExtension = (
         );
       }
 
-      if (Option.isSome(given.resume)) {
-        return refused(
-          "agent(): `resume` comes with the recipes (5D); start a new node instead."
-        );
+      const resume = await resumeTargetOf(
+        api,
+        given.workflowId,
+        given.resume,
+        context
+      );
+
+      if (Result.isFailure(resume)) {
+        return refused(resume.failure);
       }
 
       const schema = nodeSchemaOf(given.schema);
@@ -1889,7 +2022,10 @@ export const workflowExtension = (
         return refused(schema.failure);
       }
 
+      // A resumed node takes the default role unless the script names one, as the plan's dry run
+      // records it: the envelope the user approved grants exactly that role at this call site.
       const role = Option.getOrElse(given.role, () => DEFAULT_NODE_ROLE);
+
       const effort = optionalText(given.effort, PHASE_TITLE_LIMIT);
 
       if (!isRoleSpec(role)) {
@@ -1916,6 +2052,7 @@ export const workflowExtension = (
           readonly: given.readonly,
           effort,
           verify: false,
+          resume: resume.success,
         },
         context
       );
@@ -1977,6 +2114,7 @@ export const workflowExtension = (
           readonly: true,
           effort: Option.none(),
           verify: true,
+          resume: Option.none(),
         },
         context
       );

@@ -54,7 +54,11 @@ import {
   VerifyCall,
 } from "./Prelude.ts";
 import type { ApproveAnswer, NodeOutcome } from "./Prelude.ts";
-import { parseWorkflowScript, WorkflowRefusal } from "./WorkflowScript.ts";
+import {
+  parseWorkflowScript,
+  resolveRecipe,
+  WorkflowRefusal,
+} from "./WorkflowScript.ts";
 import type { WorkflowScript } from "./WorkflowScript.ts";
 
 /** The dry run could not run at all (the sandbox would not start). Nothing was decided; retry. */
@@ -1049,7 +1053,7 @@ export class WorkflowPlan extends Context.Service<
         source: string,
         input: PlanInput
       ) {
-        const script = yield* parseWorkflowScript(source);
+        const script = yield* parseWorkflowScript(yield* resolveRecipe(source));
 
         return yield* dryRun(script, input);
       });

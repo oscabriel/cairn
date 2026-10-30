@@ -282,6 +282,12 @@ export const RecipeSummary = Schema.Struct({
   description: DisplayText,
   whenToUse: Schema.OptionFromNullOr(DisplayText),
   source: Schema.Literals(["built-in", "project"]),
+  /**
+   * A project recipe's file, relative to the project root (`.cairn/workflows/<file>.js`); none for a
+   * built-in. Only a built-in launches by name: a project recipe is launched by proposing this
+   * file's whole script.
+   */
+  path: Schema.OptionFromNullOr(TrimmedNonEmptyString),
   phases: Schema.Array(
     Schema.Struct({
       title: DisplayText,

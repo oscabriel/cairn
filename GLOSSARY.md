@@ -138,7 +138,11 @@ _Avoid_: grant (in prose), allowance
 
 **Abort polling**: Every node tool ends its waits at a stop (`untilStopped`) and checks for one between its steps, so a stop never waits on something deaf to it.
 
-**Recipe**: A saved workflow script, named by its `meta.name`.
+**Recipe**: A saved workflow script, named by its `meta.name`: built in (the council) or a project's own under `.cairn/workflows/`.
+
+**Recipe reference**: A workflow script that is only `export const meta = { name: "council" };`. Proposed and run like any script, it stands for the built-in recipe it names, so a thread launches a built-in recipe by name. A project's recipe is launched by proposing its whole script, read from the path its listing gives.
+
+**Resume (a node)**: `agent(prompt, { resume: nodeId })`: a new node whose child is a fork of a settled node's child, so it continues with that node's whole context under its own receipt and result. The council's cross-examination resumes each advisor's report.
 
 **Prelude**: The fixed JavaScript added to an approved workflow script that gives it `agent`, `parallel`, `pipeline`, `phase`, `log`, `budget`, `args`, `verify` and `approve` over the node tools. Its text is pinned by `PRELUDE_VERSION`.
 

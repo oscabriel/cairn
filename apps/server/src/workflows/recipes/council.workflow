@@ -1,12 +1,16 @@
 // Council: two to four read-only advisors answer one question without seeing each other, a judge
-// sorts their claims into agreements and disputes, and each advisor is resumed once to answer only
-// the claims another advisor disputed. Five nodes with two advisors and two passes.
+// sorts their claims into agreements and disputes, and each advisor is resumed to answer only the
+// claims another advisor disputed. Five nodes with two advisors and two passes.
 //
-// The dry-run judge's council script. Ported in intent from pi-subagents' council mode
-// (github.com/nicobailon/pi-subagents, skills/council-mode/SKILL.md and
-// references/pass-contracts.md at 1a80e24) as docs/phase-2/notes/workflows.md ("The council
-// recipe") records its rules; no text was taken. Changed: the passes are one workflow script over
-// Cairn's prelude, and each advisor's second pass resumes its first node.
+// Cairn's built-in `council` recipe (recipes/index.ts lists it and launches it by name). Ported in
+// intent from pi-subagents' council mode (github.com/nicobailon/pi-subagents,
+// skills/council-mode/SKILL.md and references/pass-contracts.md at 1a80e24) as
+// docs/phase-2/notes/workflows.md ("The council recipe") records its rules; no text was taken.
+// Changed: the passes are one workflow script over Cairn's prelude, the claim matrix is a judge node
+// (a script has no model of its own), and each advisor's later pass resumes its previous node. An
+// advisor that cannot be resumed answers in a fresh node given its own report, labelled
+// "fresh-context fallback, not true cross-exam"; a fallback node is not in the plan's count, so on
+// a launch it asks the user before it starts. A stopped or refused node is never retried.
 //
 // MIT License. Copyright (c) 2026 Nico Bailon
 //
@@ -119,9 +123,13 @@ const advisors = args.advisors;
 if (!Array.isArray(advisors) || advisors.length < 2 || advisors.length > 4) {
   throw new Error("council needs args.advisors: two to four roles, for example [\"@worker\", \"@scout\"]");
 }
+if (typeof args.question !== "string" || args.question.trim() === "") {
+  throw new Error("council needs args.question: the decision the advisors answer");
+}
 const judge = args.judge || "@judge";
 const maxPasses = args.maxPasses === 3 ? 3 : 2;
 const RELAY_PER_ADVISOR = 5;
+const FALLBACK = "fresh-context fallback, not true cross-exam";
 
 const brief =
   "Question: " + args.question +
@@ -149,11 +157,11 @@ const pass1 = await parallel(
   )
 );
 const reports = pass1.map((outcome) => (outcome && outcome.status === "ok" ? outcome.value : null));
-const roster = advisors.map((role, i) => ({ advisor: i + 1, role, report: reports[i] !== null }));
+const roster = advisors.map((role, i) => ({ advisor: i + 1, role, report: reports[i] !== null, crossExam: [] }));
 
 if (reports.filter(Boolean).length < 2) {
   log("Fewer than two advisors reported; the council stops after its first pass.");
-  return { pass1: reports, matrix: null, pass2: [], ownerDecisions: [], roster };
+  return { pass1: reports, matrix: null, pass2: [], pass3: null, ownerDecisions: [], roster };
 }
 
 phase("Matrix");
@@ -168,7 +176,7 @@ const matrix = await agent(
 
 if (matrix === null) {
   log("The claim matrix did not come back; the council returns its first pass only.");
-  return { pass1: reports, matrix: null, pass2: [], ownerDecisions: [], roster };
+  return { pass1: reports, matrix: null, pass2: [], pass3: null, ownerDecisions: [], roster };
 }
 
 const packetFor = (n) =>
@@ -177,30 +185,51 @@ const packetFor = (n) =>
     .slice(0, RELAY_PER_ADVISOR)
     .map((entry) => ({ claimId: entry.claimId, claim: entry.claim, challenge: "Another advisor: " + entry.challenge }));
 
+// The node each advisor's next pass resumes: its report, then its latest cross-examination.
+const latest = pass1.map((outcome) => (outcome && outcome.status === "ok" ? outcome.nodeId : null));
+
 const examine = (pass) =>
   parallel(
     advisors.map((role, i) => async () => {
-      const first = pass1[i];
-      if (!first || first.status !== "ok") return null;
-      const packet = packetFor(i + 1);
+      const from = latest[i];
+      if (from === null) return null;
       const ask =
         "Pass " + pass + ". Answer each challenged claim: accept, reject, refine or owner-decision, with a reason and sources." +
         " Say whether your recommendation changed, and list anything you found outside the scope.\n\n" +
-        JSON.stringify(packet);
-      const resumed = await agent(ask, {
+        JSON.stringify(packetFor(i + 1));
+      const resumed = await agent.full(ask, {
         role,
         label: "Advisor " + (i + 1) + " pass " + pass,
         schema: RESPONSES,
         readonly: true,
-        resume: first.nodeId,
+        resume: from,
         key: "advisor-" + (i + 1) + "-pass-" + pass,
       });
-      if (resumed !== null) return { advisor: i + 1, fallback: false, answer: resumed };
-      const fresh = await agent(
-        brief + "\n\nYour earlier report:\n" + JSON.stringify(first.value) + "\n\n" + ask,
-        { role, label: "Advisor " + (i + 1) + " pass " + pass + " (fresh)", schema: RESPONSES, readonly: true }
+      if (resumed.status === "ok") {
+        latest[i] = resumed.nodeId;
+        roster[i].crossExam.push("resumed");
+        return { advisor: i + 1, fallback: null, answer: resumed.value };
+      }
+      // A stop or a refusal (budget, grant) is the user's or the launch's word: no second node.
+      if (resumed.status !== "failed") {
+        latest[i] = null;
+        roster[i].crossExam.push(resumed.status);
+        return { advisor: i + 1, fallback: null, answer: null };
+      }
+      log("Advisor " + (i + 1) + " could not be resumed for pass " + pass + " (" + resumed.reason + "); asking a fresh node.");
+      const fresh = await agent.full(
+        brief + "\n\nYour earlier report:\n" + JSON.stringify(reports[i]) + "\n\n" + ask,
+        {
+          role,
+          label: "Advisor " + (i + 1) + " pass " + pass + " (fresh)",
+          schema: RESPONSES,
+          readonly: true,
+          key: "advisor-" + (i + 1) + "-pass-" + pass + "-fresh",
+        }
       );
-      return { advisor: i + 1, fallback: "fresh-context fallback, not true cross-exam", answer: fresh };
+      latest[i] = fresh.status === "ok" ? fresh.nodeId : null;
+      roster[i].crossExam.push(fresh.status === "ok" ? "fresh" : fresh.status);
+      return { advisor: i + 1, fallback: FALLBACK, answer: fresh.status === "ok" ? fresh.value : null };
     })
   );
 
@@ -213,8 +242,9 @@ const ownerDecisions = reports
   .flatMap((report) => report.ownerDecisions)
   .concat(
     pass2
-      .filter(Boolean)
-      .flatMap((entry) => (entry.answer ? entry.answer.responses : []))
+      .concat(pass3 || [])
+      .filter((entry) => entry && entry.answer)
+      .flatMap((entry) => entry.answer.responses)
       .filter((response) => response.disposition === "owner-decision")
       .map((response) => response.claimId)
   );

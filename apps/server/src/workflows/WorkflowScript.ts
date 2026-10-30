@@ -47,6 +47,11 @@ import {
 } from "@earendil-works/pi-codemode";
 import { Effect, Option, Schema } from "effect";
 
+import {
+  BUILT_IN_RECIPES,
+  recipeReferenceOf,
+} from "./recipes/BuiltInRecipes.ts";
+
 /** Why a script was refused before it ran; the message tells the model what to change. */
 export const RefusalReason = Schema.Literals([
   "not_a_workflow",
@@ -63,6 +68,7 @@ export const RefusalReason = Schema.Literals([
   "agent_options_invalid",
   "too_many_items",
   "no_nodes",
+  "unknown_recipe",
 ]);
 
 export type RefusalReason = typeof RefusalReason.Type;
@@ -1299,6 +1305,30 @@ export const isWorkflowSource = (source: string): boolean => {
     return false;
   }
 };
+
+/**
+ * The script a source stands for: the built-in recipe a recipe reference names
+ * (`export const meta = { name: "council" };`, `recipes/BuiltInRecipes.ts`), else the source as
+ * written. Only built-ins resolve: the gate reads no files, so a project recipe is proposed whole.
+ * Fails with `WorkflowRefusal` when the reference names no built-in recipe.
+ */
+export const resolveRecipe = (
+  source: string
+): Effect.Effect<string, WorkflowRefusal> =>
+  Option.match(recipeReferenceOf(source), {
+    onNone: () => Effect.succeed(source),
+    onSome: (name) =>
+      Effect.fromOption(
+        Option.fromUndefinedOr(BUILT_IN_RECIPES.get(name))
+      ).pipe(
+        Effect.mapError(() =>
+          refusal(
+            "unknown_recipe",
+            `No built-in recipe is named \`${name}\`. Only built-ins launch by name: ${[...BUILT_IN_RECIPES.keys()].map((known) => `\`${known}\``).join(", ")}. A project recipe launches by proposing its whole script, read from the path \`workflow.list\` gives it; otherwise write the whole script.`
+          )
+        )
+      ),
+  });
 
 /**
  * Parses a workflow script without running it. Fails with `WorkflowRefusal` when the source is not

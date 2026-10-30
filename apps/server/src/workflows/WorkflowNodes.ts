@@ -619,7 +619,11 @@ const toolCallsOf = async (tx: Tx, child: ConversationId): Promise<number> => {
     TOOL_SCAN_LIMIT
   );
 
-  return entries.items.filter((entry) => ToolResultEntry.is(entry)).length;
+  // Only the child's own entries: a resumed node's child is a fork, which sees the calls of the
+  // node it resumes, and those are that node's receipt's.
+  return entries.items.filter(
+    (entry) => entry.conversationId === child && ToolResultEntry.is(entry)
+  ).length;
 };
 
 /**

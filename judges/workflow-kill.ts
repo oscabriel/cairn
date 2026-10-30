@@ -14,6 +14,12 @@
 // while the script's question waits), divergence (the stored start data changed between lives, as
 // a pi bump does), and control (a dispatch that ignores its row; it must fail by dispatching twice).
 //
+// Park: five kills while a node is held park the run's tasks (pi-durable's restart limit); the
+// last life retries every parked task but the watchers, as the user's Retry would, and the boot
+// repair retries the watchers (WorkflowRepairs.ts), so the workflow still ends `finished` with
+// every node once. Its control leaves the watchers parked: the script ends, its row stays
+// `running`, and the case must fail by stalling.
+//
 // Stop matrix (the probe's five cases on the real `agent` tool, plus one): stop, stop-kill,
 // kill-stop, mark-kill (a kill between the abort mark and the node seeing it), uncaught-stop-kill
 // and stop-last-node.
@@ -34,8 +40,8 @@
 // script with its work never finished, the approval asked once.
 //
 // Prints one JSON line per case and a summary; exits 0 when every case passes and each control
-// fails for the reason it exists (a node dispatched twice; no card raised). No model, no network,
-// no secrets.
+// fails for the reason it exists (a node dispatched twice; no card raised; a row left running). No
+// model, no network, no secrets.
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -75,7 +81,9 @@ interface CaseSpec {
   readonly script: string;
   readonly lives: ReadonlyArray<Life>;
   /** A broken control, and the failure it must show; none for a case that must pass. */
-  readonly control: Option.Option<"duplicate" | "card">;
+  readonly control: Option.Option<Failure["kind"]>;
+  /** Whether the last life must find tasks parked and the boot repair retry its watchers. */
+  readonly parks: boolean;
   readonly expect: {
     /** Node briefs the envelope did not cover: cards the user saw. */
     readonly cards: number;
@@ -122,6 +130,7 @@ const killCase = (
   script,
   lives,
   control: Option.none(),
+  parks: false,
   expect: FINISHED_ALL,
 });
 
@@ -137,6 +146,7 @@ const stopCase = (
   script,
   lives,
   control: Option.none(),
+  parks: false,
   expect: {
     ...FINISHED_ALL,
     stopped: Option.some(stopped),
@@ -166,8 +176,20 @@ const envelopeCase = (
   script: "envelope.workflow",
   lives,
   control,
+  parks: false,
   expect,
 });
+
+/**
+ * Five lives killed while node b is held after its reserve, so every task of the run is cut off
+ * five times in a row and the next life finds them parked by the restart limit.
+ */
+const PARKING_LIVES: ReadonlyArray<Life> = Array.from({ length: 5 }, () =>
+  life(["--hold", "after-reserve:b:60000"], {
+    line: "holding after-reserve b",
+    delayMs: 200,
+  })
+);
 
 const CASES: ReadonlyArray<CaseSpec> = [
   killCase("plain", [life()]),
@@ -227,6 +249,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(["--answer"]),
     ],
     control: Option.none(),
+    parks: false,
     expect: { ...FINISHED_ALL, settled: ["a"], approveRecords: 1 },
   },
   {
@@ -238,6 +261,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(["--diverge"]),
     ],
     control: Option.none(),
+    parks: false,
     expect: {
       ...FINISHED_ALL,
       state: "failed",
@@ -259,6 +283,25 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(["--control", "--briefs", "accept"]),
     ],
     control: Option.some("duplicate"),
+    parks: false,
+    expect: FINISHED_ALL,
+  },
+  {
+    name: "park-watcher",
+    matrix: "kill",
+    script: "fan.workflow",
+    lives: [...PARKING_LIVES, life(["--retry-parked", "--repair"])],
+    control: Option.none(),
+    parks: true,
+    expect: FINISHED_ALL,
+  },
+  {
+    name: "park-watcher-control",
+    matrix: "kill",
+    script: "fan.workflow",
+    lives: [...PARKING_LIVES, life(["--retry-parked"])],
+    control: Option.some("stalled"),
+    parks: true,
     expect: FINISHED_ALL,
   },
   stopCase("stop", [life(["--stop", "b:800"])], "b", ["a", "c", "d"]),
@@ -296,6 +339,7 @@ const CASES: ReadonlyArray<CaseSpec> = [
       life(),
     ],
     control: Option.none(),
+    parks: false,
     expect: {
       ...FINISHED_ALL,
       state: "failed",
@@ -364,6 +408,9 @@ interface Report {
     readonly problem: string;
   }>;
   readonly storedRewrites: ReadonlyArray<boolean>;
+  /** Tasks the last life found parked, and watchers its boot repair retried. */
+  readonly parked: number;
+  readonly repaired: number;
 }
 
 /** One `effects.log` line. */
@@ -373,12 +420,12 @@ interface Effect1 {
 }
 
 /**
- * One failed check. `duplicate` (a node dispatched or started twice) and `card` (a node outside
- * the envelope raised no card of its own) are the failures the broken controls must show;
- * anything else is `other`.
+ * One failed check. `duplicate` (a node dispatched or started twice), `card` (a node outside the
+ * envelope raised no card of its own) and `stalled` (the script ended and its row still runs) are
+ * the failures the broken controls must show; anything else is `other`.
  */
 interface Failure {
-  readonly kind: "duplicate" | "card" | "other";
+  readonly kind: "duplicate" | "card" | "stalled" | "other";
   readonly text: string;
 }
 
@@ -497,6 +544,10 @@ class Failures {
   card(text: string) {
     this.list.push({ kind: "card", text });
   }
+
+  stalled(text: string) {
+    this.list.push({ kind: "stalled", text });
+  }
 }
 
 type Rows = ReadonlyArray<NonNullable<Report["workflow"]>["nodes"][string]>;
@@ -612,7 +663,11 @@ const checkWorkflow = (spec: CaseSpec, report: Report, failures: Failures) => {
     failures.other("no life saw the script call's stored source");
   }
 
-  if (workflow?.state !== spec.expect.state) {
+  if (workflow?.state === "running") {
+    failures.stalled(
+      `workflow still running after its script call ended, want ${spec.expect.state}`
+    );
+  } else if (workflow?.state !== spec.expect.state) {
     failures.other(
       `workflow ${workflow?.state ?? "none"}, want ${spec.expect.state}`
     );
@@ -671,6 +726,23 @@ const checkEnvelope = (
   }
 };
 
+/** A park case: its last life found tasks parked, and the boot repair retried its watchers. */
+const checkParked = (spec: CaseSpec, report: Report, failures: Failures) => {
+  if (!spec.parks) {
+    return;
+  }
+
+  if (report.parked === 0) {
+    failures.other(
+      "the last life found no task parked: the kills did not park the run"
+    );
+  }
+
+  if (Option.isNone(spec.control) && report.repaired === 0) {
+    failures.other("the boot repair retried no parked watcher");
+  }
+};
+
 /** Every failed check of one case; empty when it passed. */
 const check = (
   spec: CaseSpec,
@@ -685,13 +757,14 @@ const check = (
   checkStopped(spec, report, rows, effects, failures);
   checkWorkflow(spec, report, failures);
   checkEnvelope(spec, report, rows, effects, failures);
+  checkParked(spec, report, failures);
 
   return failures.list;
 };
 
 const controlFailedRightly = (
   failures: ReadonlyArray<Failure>,
-  kind: "duplicate" | "card"
+  kind: Failure["kind"]
 ) => failures.some((failure) => failure.kind === kind);
 
 /** One case: its lives, kills between them, the checks. */

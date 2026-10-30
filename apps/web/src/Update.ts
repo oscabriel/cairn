@@ -26,7 +26,6 @@ import { burnBusyBudget } from "./composer/Busy.ts";
 import { composerContext } from "./composer/Context.ts";
 import { OutMessage as ComposerOutMessage } from "./composer/Message.ts";
 import type { Message as ComposerMessage } from "./composer/Message.ts";
-import type { Draft as ComposerDraft } from "./composer/Model.ts";
 import * as Composer from "./composer/Update.ts";
 import {
   enqueue,
@@ -99,11 +98,7 @@ import { isCurrent } from "./shell/ShellStore.ts";
 import { OutMessage as SidebarOutMessage } from "./sidebar/Message.ts";
 import type { Message as SidebarMessage } from "./sidebar/Message.ts";
 import { initial as initialSidebar } from "./sidebar/Model.ts";
-import type {
-  DraftSummary,
-  Model as SidebarModel,
-  SidebarContext,
-} from "./sidebar/Model.ts";
+import type { Model as SidebarModel, SidebarContext } from "./sidebar/Model.ts";
 import {
   inform as informSidebarModel,
   init as initSidebar,
@@ -245,14 +240,6 @@ const writeComposer = (model: Model, composer: Model["composer"]): Model =>
     ? model
     : modifyFields(model, { composer: () => composer });
 
-/** Drops one unsent draft from the composer (the sidebar's Discard). */
-const discardComposerDraft = Update.foldChild({
-  update: Composer.discardDraft,
-  read: readComposer,
-  write: writeComposer,
-  toParentMessage: toGotComposerMessage,
-});
-
 /** Queues each shell command in order. */
 const enqueueAll = (
   model: Model,
@@ -287,54 +274,7 @@ const routedDraftId = (route: AppRoute): Option.Option<string> =>
     NotFound: () => Option.none(),
   });
 
-const DRAFT_KEY_PREFIX = "draft:";
-
-/** A draft's sidebar preview: its first line, or how many attachments it holds. */
-const draftPreview = (draft: ComposerDraft): string => {
-  const firstLine = draft.text.trim().split("\n", 1)[0] ?? "";
-
-  if (firstLine !== "") {
-    return firstLine;
-  }
-
-  return draft.attachments.length === 1
-    ? "1 attachment"
-    : `${draft.attachments.length} attachments`;
-};
-
-/** The composer's unsent drafts (not threads' drafts), as the sidebar's draft rows show them. */
-const draftSummaries = (
-  drafts: Model["composer"]["drafts"]
-): ReadonlyArray<DraftSummary> =>
-  Record.toEntries(drafts).flatMap(([key, draft]) =>
-    key.startsWith(DRAFT_KEY_PREFIX)
-      ? [
-          {
-            draftId: key.slice(DRAFT_KEY_PREFIX.length),
-            projectId: draft.projectId,
-            preview: draftPreview(draft),
-          },
-        ]
-      : []
-  );
-
-const sameDrafts = (
-  left: ReadonlyArray<DraftSummary>,
-  right: ReadonlyArray<DraftSummary>
-): boolean =>
-  left.length === right.length &&
-  left.every((draft, index) => {
-    const other = right[index];
-
-    return (
-      other !== undefined &&
-      draft.draftId === other.draftId &&
-      draft.preview === other.preview &&
-      Equal.equals(draft.projectId, other.projectId)
-    );
-  });
-
-/** What the sidebar hands up: shell commands for the outbox, or a draft to discard. */
+/** What the sidebar hands up: shell commands for the outbox. */
 const foldSidebarOutMessage = (outMessage: SidebarOutMessage): Step =>
   SidebarOutMessage.match<Step>(outMessage, {
     RequestedDispatch:
@@ -344,12 +284,6 @@ const foldSidebarOutMessage = (outMessage: SidebarOutMessage): Step =>
           modifyFields(model, { outbox: () => enqueueAll(model, commands) }),
           [persist, sendNext]
         ),
-    RequestedDiscardDraft: ({ draftId }) => discardComposerDraft(draftId),
-    RequestedNotice:
-      ({ message }) =>
-      (model) => ({
-        model: modifyFields(model, { notice: () => Option.some(message) }),
-      }),
   });
 
 const foldSidebarMessage = Update.foldChild({
@@ -568,10 +502,9 @@ const syncMeters: Step = (model) => {
     : informMeters(model, context);
 };
 
-/** Tells the sidebar the shell, the open page, the connection and the drafts, when they changed. */
+/** Tells the sidebar the shell, the open page and the connection, when they changed. */
 const syncSidebar: Step = (model) => {
   const current = model.sidebar.context;
-  const drafts = draftSummaries(model.composer.drafts);
 
   const context: SidebarContext = {
     shell: model.shell,
@@ -579,7 +512,6 @@ const syncSidebar: Step = (model) => {
     openDraftId: routedDraftId(model.route),
     scratchThreadId: model.nextShell.scratch.threadId,
     connection: model.connection.state._tag,
-    drafts: sameDrafts(current.drafts, drafts) ? current.drafts : drafts,
   };
 
   const unchanged =
@@ -587,8 +519,7 @@ const syncSidebar: Step = (model) => {
     Equal.equals(current.openThreadId, context.openThreadId) &&
     Equal.equals(current.openDraftId, context.openDraftId) &&
     Equal.equals(current.scratchThreadId, context.scratchThreadId) &&
-    current.connection === context.connection &&
-    current.drafts === context.drafts;
+    current.connection === context.connection;
 
   return unchanged ? { model } : informSidebar(model, context);
 };

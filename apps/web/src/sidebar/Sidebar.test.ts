@@ -111,7 +111,6 @@ const sidebarWith = (openThread: Option.Option<ThreadShell>): Model => ({
     openDraftId: Option.none(),
     scratchThreadId: Option.none(),
     connection: "Live",
-    drafts: [],
   },
 });
 

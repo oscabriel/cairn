@@ -1,17 +1,12 @@
-// The sidebar's Commands: minting command ids for intents, navigation, timers for the undo notice and
-// pending changes, the saved shelves, the clipboard, the favicon badge, the folder browser and task
-// retry. Each answers with one Message.
+// The sidebar's Commands: minting command ids for intents, the clock, navigation, a new draft's id,
+// the saved shelves, the platform and the favicon badge. Each answers with one Message.
 
-import { ThreadId, TaskId } from "@cairn/protocol/Ids";
 import { Clock, Effect, Option, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
-import { focus } from "foldkit/dom";
 import { pushUrl } from "foldkit/navigation";
 
 import { mintCommandId } from "../composer/Ids.ts";
-import { CairnConnection, withBoundary } from "../connection/Connection.ts";
-import { failureMessage } from "../connection/Failure.ts";
 import { applyFaviconBadge } from "../shell/Notifications.ts";
 import { Intent, mintDraftId, toShellCommand } from "./Intent.ts";
 import { Message } from "./Message.ts";
@@ -93,27 +88,6 @@ export const LoadShelves = Command.define("LoadShelves", {
   }),
 });
 
-/** Saves which shelves are open on this device. */
-export const SaveShelves = Command.define("SaveShelves", {
-  args: { snoozedExpanded: Schema.Boolean, settledExpanded: Schema.Boolean },
-  messages: [Message.CompletedSaveShelves],
-  execute: ({ settledExpanded, snoozedExpanded }) =>
-    Effect.gen(function* () {
-      const store = yield* KeyValueStore.KeyValueStore;
-
-      yield* store.set(
-        SHELF_STORAGE_KEYS.snoozed,
-        JSON.stringify(snoozedExpanded)
-      );
-      yield* store.set(
-        SHELF_STORAGE_KEYS.settled,
-        JSON.stringify(settledExpanded)
-      );
-
-      return Message.CompletedSaveShelves();
-    }).pipe(Effect.orElseSucceed(() => Message.CompletedSaveShelves())),
-});
-
 /** Reads whether this is an Apple platform, where `mod` is Command. */
 export const DetectPlatform = Command.define("DetectPlatform", {
   messages: [Message.DetectedPlatform],
@@ -122,30 +96,6 @@ export const DetectPlatform = Command.define("DetectPlatform", {
       isMac: /mac|iphone|ipad|ipod/iu.test(globalThis.navigator.platform),
     })
   ),
-});
-
-/** The browser refused to write to the clipboard (no permission, or the page lost focus). */
-export class ClipboardRefused extends Schema.TaggedError<ClipboardRefused>()(
-  "ClipboardRefused",
-  { cause: Schema.Defect() }
-) {}
-
-/** Copies `text` to the clipboard. */
-export const CopyText = Command.define("CopyText", {
-  args: { text: Schema.String },
-  messages: [Message.CompletedCopy],
-  execute: ({ text }) =>
-    Effect.tryPromise({
-      try: async () => {
-        await globalThis.navigator.clipboard.writeText(text);
-      },
-      catch: (cause) => new ClipboardRefused({ cause }),
-    }).pipe(
-      Effect.match({
-        onSuccess: () => Message.CompletedCopy({ succeeded: true }),
-        onFailure: () => Message.CompletedCopy({ succeeded: false }),
-      })
-    ),
 });
 
 /** Shows `count` on the favicon. */
@@ -158,63 +108,4 @@ export const SetBadge = Command.define("SetBadge", {
 
       return Message.CompletedSetBadge();
     }),
-});
-
-/** Focuses the element `selector` names, when it exists. */
-export const FocusElement = Command.define("FocusElement", {
-  args: { selector: Schema.String },
-  messages: [Message.CompletedFocus],
-  execute: ({ selector }) =>
-    focus(selector).pipe(Effect.ignore, Effect.as(Message.CompletedFocus())),
-});
-
-/** Lists the folders in `path` (the home folder when none) for the add-project dialog. */
-export const BrowseFolder = Command.define("BrowseFolder", {
-  args: { request: Schema.Int, path: Schema.Option(Schema.String) },
-  messages: [Message.ReceivedListing, Message.FailedListing],
-  execute: ({ path, request }) =>
-    withBoundary(
-      Effect.gen(function* () {
-        const client = yield* CairnConnection.get;
-
-        return yield* client["projects.browse"]({ path });
-      })
-    ).pipe(
-      Effect.match({
-        onSuccess: (result) => Message.ReceivedListing({ request, result }),
-        onFailure: (failure) =>
-          Message.FailedListing({
-            request,
-            message: failureMessage(
-              failure,
-              "The folder could not be listed. Try again."
-            ),
-          }),
-      })
-    ),
-});
-
-/** Asks the brain to retry a parked task. */
-export const RetryTask = Command.define("RetryTask", {
-  args: { threadId: ThreadId, taskId: TaskId },
-  messages: [Message.SucceededRetry, Message.FailedRetry],
-  execute: ({ taskId, threadId }) =>
-    withBoundary(
-      Effect.gen(function* () {
-        const client = yield* CairnConnection.get;
-
-        yield* client["thread.retryTask"]({ threadId, taskId });
-      })
-    ).pipe(
-      Effect.match({
-        onSuccess: () => Message.SucceededRetry(),
-        onFailure: (failure) =>
-          Message.FailedRetry({
-            message: failureMessage(
-              failure,
-              "The task could not be retried. Try again."
-            ),
-          }),
-      })
-    ),
 });

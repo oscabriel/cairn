@@ -25,7 +25,7 @@
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { DateTime, Option, Schema } from "effect";
 
-import { Intent, intentThreadId } from "./Intent.ts";
+import { Intent } from "./Intent.ts";
 
 /** An intent the brain has not shown back yet, and when the user made it. */
 export const PendingChange = Schema.Struct({
@@ -75,29 +75,10 @@ export const applyIntent = (
       snoozedUntil: Option.some(until),
       snoozedAt: Option.some(at),
     }),
-    Unsnooze: () => ({
-      ...thread,
-      snoozedUntil: Option.none(),
-      snoozedAt: Option.none(),
-    }),
-    Rename: ({ title }) => ({ ...thread, title }),
     Visit: ({ at: visitedAt }) => ({
       ...thread,
       lastVisitedAt: Option.some(visitedAt),
     }),
-    MarkUnread: () => ({
-      ...thread,
-      lastVisitedAt: Option.map(thread.latestRunCompletedAt, (completedAt) =>
-        DateTime.subtract(completedAt, { milliseconds: 1 })
-      ),
-    }),
-    SetAutoSettle: ({ enabled }) => ({
-      ...thread,
-      autoSettleDisabledAt: enabled ? Option.none() : Option.some(at),
-    }),
-    Archive: () => ({ ...thread, archivedAt: Option.some(at) }),
-    Delete: () => ({ ...thread, archivedAt: Option.some(at) }),
-    AddProject: () => thread,
   });
 
 /** True once the brain's row shows what `intent` asked for. */
@@ -111,26 +92,10 @@ export const isIntentApplied = (thread: ThreadShell, intent: Intent): boolean =>
       Option.exists(thread.snoozedUntil, (snoozedUntil) =>
         DateTime.Equivalence(snoozedUntil, until)
       ),
-    Unsnooze: () => Option.isNone(thread.snoozedUntil),
-    Rename: ({ title }) => thread.title === title,
     Visit: ({ at }) =>
       Option.exists(thread.lastVisitedAt, (visitedAt) =>
         DateTime.isGreaterThanOrEqualTo(visitedAt, at)
       ),
-    MarkUnread: () =>
-      Option.match(thread.latestRunCompletedAt, {
-        onNone: () => true,
-        onSome: (completedAt) =>
-          Option.match(thread.lastVisitedAt, {
-            onNone: () => true,
-            onSome: (visitedAt) => DateTime.isLessThan(visitedAt, completedAt),
-          }),
-      }),
-    SetAutoSettle: ({ enabled }) =>
-      Option.isNone(thread.autoSettleDisabledAt) === enabled,
-    Archive: () => Option.isSome(thread.archivedAt),
-    Delete: () => Option.isSome(thread.archivedAt),
-    AddProject: () => true,
   });
 
 /** The shell's rows with every pending change laid over its thread, oldest change first. */
@@ -144,7 +109,7 @@ export const withPendingChanges = (
         let row = thread;
 
         for (const change of pending) {
-          if (Option.contains(intentThreadId(change.intent), thread.id)) {
+          if (change.intent.threadId === thread.id) {
             row = applyIntent(row, change.intent, change.at);
           }
         }
@@ -163,25 +128,21 @@ export const outstandingChanges = (
 ): ReadonlyArray<PendingChange> => {
   const blocked = new Set<string>();
 
-  return pending.filter((change) =>
-    Option.match(intentThreadId(change.intent), {
-      onNone: () => false,
-      onSome: (threadId) => {
-        const thread = threads.find((row) => row.id === threadId);
+  return pending.filter((change) => {
+    const { threadId } = change.intent;
+    const thread = threads.find((row) => row.id === threadId);
 
-        if (thread === undefined) {
-          return false;
-        }
+    if (thread === undefined) {
+      return false;
+    }
 
-        const outstanding =
-          blocked.has(threadId) || !isIntentApplied(thread, change.intent);
+    const outstanding =
+      blocked.has(threadId) || !isIntentApplied(thread, change.intent);
 
-        if (outstanding) {
-          blocked.add(threadId);
-        }
+    if (outstanding) {
+      blocked.add(threadId);
+    }
 
-        return outstanding;
-      },
-    })
-  );
+    return outstanding;
+  });
 };

@@ -1,7 +1,6 @@
 // The sidebar's Subscriptions: the clock its labels read (every second while a row shows a running
 // duration, else every 15 seconds), the default key bindings (one `streamFromKeyBindings` table), the
-// `md` breakpoint, and dismissing the context menu or the project filter on Escape or a press
-// outside them.
+// `md` breakpoint, and the undo notice's timer.
 
 import {
   DEFAULT_RESOLVED_KEYBINDINGS,
@@ -12,11 +11,7 @@ import type { KeybindingCommand } from "@cairn/client-logic/Keybindings";
 import { threadStatus } from "@cairn/client-logic/ThreadState";
 import { Clock, Duration, Effect, Option, Schema, Stream } from "effect";
 import { Subscription } from "foldkit";
-import {
-  streamFromEventFilterMap,
-  streamFromKeyBindings,
-  streamFromMediaQuery,
-} from "foldkit/dom";
+import { streamFromKeyBindings, streamFromMediaQuery } from "foldkit/dom";
 import type { KeyBinding } from "foldkit/dom";
 
 import { UNDO_NOTICE_MS } from "./Command.ts";
@@ -64,37 +59,6 @@ const hasRunningRow = (model: Model): boolean =>
     return status === "working" || status === "waiting";
   });
 
-const isInside = (target: EventTarget | null, selector: string): boolean =>
-  target instanceof Element && target.closest(selector) !== null;
-
-const MENU_SELECTOR =
-  '[data-testid="sidebar-context-menu"], [data-testid="sidebar-context-submenu"]';
-
-const FILTER_SELECTOR =
-  '[data-testid="sidebar-project-filter"], [aria-label="Filter threads by project"]';
-
-const dismissals = (
-  selector: string,
-  dismissed: Message
-): Stream.Stream<Message> =>
-  Stream.merge(
-    streamFromEventFilterMap({
-      target: document,
-      type: "pointerdown",
-      filterMapEvent: (event) =>
-        isInside(event.target, selector)
-          ? Option.none()
-          : Option.some(dismissed),
-      options: { capture: true },
-    }),
-    streamFromEventFilterMap({
-      target: document,
-      type: "keydown",
-      filterMapEvent: (event) =>
-        event.key === "Escape" ? Option.some(dismissed) : Option.none(),
-    })
-  );
-
 /** The sidebar's subscriptions. */
 export const subscriptions = Subscription.make<Model, Message, Services>()(
   (entry) => ({
@@ -131,30 +95,6 @@ export const subscriptions = Subscription.make<Model, Message, Services>()(
         query: "(max-width: 767px)",
         mapMatches: (isMobile) => Message.ChangedViewport({ isMobile }),
       })
-    ),
-    menuDismissal: entry(
-      { open: Schema.Boolean },
-      {
-        modelToDependencies: (model) => ({
-          open: Option.isSome(model.contextMenu),
-        }),
-        dependenciesToStream: ({ open }) =>
-          open
-            ? dismissals(MENU_SELECTOR, Message.DismissedMenu())
-            : Stream.empty,
-      }
-    ),
-    filterDismissal: entry(
-      { open: Schema.Boolean },
-      {
-        modelToDependencies: (model) => ({
-          open: Option.isSome(model.filterMenu),
-        }),
-        dependenciesToStream: ({ open }) =>
-          open
-            ? dismissals(FILTER_SELECTOR, Message.DismissedFilterMenu())
-            : Stream.empty,
-      }
     ),
   })
 );

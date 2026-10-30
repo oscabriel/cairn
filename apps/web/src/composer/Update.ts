@@ -83,27 +83,6 @@ const toTray = (message: TrayMessage): Message =>
   Message.GotAttachmentsMessage({ message });
 
 /**
- * Drops the unsent draft `/new/<draftId>` (the sidebar's Discard), and the home hero's id when it
- * was that draft. The debounced saver writes the change.
- */
-export const discardDraft = (
-  model: Model,
-  draftId: string
-): Update.Return<Model, Message, Services> => {
-  const tray = Tray.discardDraft(model.attachments, `draft:${draftId}`);
-
-  return {
-    model: modifyFields(model, {
-      drafts: (drafts) => Record.remove(drafts, `draft:${draftId}`),
-      draftsVersion: (version) => version + 1,
-      homeDraftId: (id) => (Option.contains(id, draftId) ? Option.none() : id),
-      attachments: () => tray.model,
-    }),
-    commands: Command.mapMessages(tray.commands, toTray),
-  };
-};
-
-/**
  * Gives the draft `/new/<draftId>` the project its first message launches in (the `next` shell's
  * rail, for a project with no project thread yet). An empty draft starts over with that project's
  * default model, as the hero's project menu does. The debounced saver writes the change.

@@ -635,34 +635,3 @@ export const clearSent = (
     commands: [...revokeCommands(sent), ...saveCommands(next)],
   };
 };
-
-/** Drops a draft that will never be sent: uploads stop and stored ones are taken back. */
-export const discardDraft = (
-  model: Model,
-  draftKey: string
-): Update.Return<Model, Message, Services> => {
-  const dropped = itemsOf(model, draftKey);
-  const cleared = clearSent(model, draftKey);
-
-  const stop = dropped.flatMap((item): ReadonlyArray<TrayCommand> => {
-    if (AttachmentStatus.guards.Uploading(item.status)) {
-      return [
-        UploadAttachment.Interrupt({ localId: item.localId }, () =>
-          Message.CompletedCancelUpload({ localId: item.localId })
-        ),
-      ];
-    }
-
-    return Option.match(readyRef(item), {
-      onNone: () => [],
-      onSome: ({ id }) => [DiscardAttachment({ attachmentId: id })],
-    });
-  });
-
-  const pumped = pump(cleared.model);
-
-  return {
-    model: pumped.model,
-    commands: Array.flatten([stop, cleared.commands ?? [], pumped.commands]),
-  };
-};

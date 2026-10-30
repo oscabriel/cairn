@@ -1,11 +1,10 @@
-// Ported in behaviour from github.com/pingdotgg/t3code, apps/web/src/components/Sidebar.tsx (row
-// actions, settle and advance, the shelves, search keys, rename), apps/web/src/hooks/useThreadActions.ts
-// (settle and snooze with undo, what undo restores), apps/web/src/hooks/showThreadUndoNotice.ts (one
-// notice per action, grouped, 5 seconds) and apps/web/src/hooks/useThreadActionMenu.ts (what each
-// menu item does) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: every change goes to the
-// brain as a shell command through the root's outbox, and is laid over the row at once until the
-// shell shows it; a settled or snoozed open thread advances to the next row; drafts belong to the
-// composer, so discarding one is handed to the root.
+// Ported in behaviour from github.com/pingdotgg/t3code, apps/web/src/components/Sidebar.tsx (settle
+// and advance, the shelves), apps/web/src/hooks/useThreadActions.ts (settle with undo, what undo
+// restores) and apps/web/src/hooks/showThreadUndoNotice.ts (one notice, grouped, 5 seconds) at
+// fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: every change goes to the brain as a shell
+// command through the root's outbox, and is laid over the row at once until the shell shows it; a
+// settled open thread advances to the next row. Nothing draws the classic sidebar since the 7A
+// cutover: what is left runs the clock, the key bindings, visits and the favicon badge.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -26,7 +25,6 @@
 
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import {
-  isThreadWoke,
   nextThreadAfterLeaving,
   resolveAdjacentThreadId,
 } from "@cairn/client-logic/Sidebar";
@@ -44,33 +42,19 @@ import { draftRouter, threadRouter } from "../Route.ts";
 import { badgeCount } from "../shell/Notifications.ts";
 import { planVisit } from "../shell/Visited.ts";
 import {
-  BrowseFolder,
-  CopyText,
   DetectPlatform,
-  FocusElement,
   IssueCommands,
   LoadShelves,
   ReadClock,
   MintDraftId,
   NavigateTo,
-  RetryTask,
-  SaveShelves,
   SetBadge,
 } from "./Command.ts";
 import type { Services } from "./Command.ts";
-import {
-  findProject,
-  findThread,
-  nowOf,
-  searchResultsOf,
-  snoozePresetsOf,
-  threadMenuOf,
-  visibleOrderOf,
-} from "./Derived.ts";
+import { findThread, nowOf, visibleOrderOf } from "./Derived.ts";
 import { Intent } from "./Intent.ts";
 import { Message, OutMessage } from "./Message.ts";
-import type { Shelf } from "./Message.ts";
-import { initial, Listing, MenuTarget } from "./Model.ts";
+import { initial } from "./Model.ts";
 import type { Model, SidebarContext, UndoEntry } from "./Model.ts";
 import { outstandingChanges, PENDING_CHANGE_TTL_MS } from "./Pending.ts";
 
@@ -83,12 +67,6 @@ export type UpdateReturn = Update.ReturnWithOutMessage<
 >;
 
 type Commands = Update.Commands<Message, Services>;
-
-/** The selector of the rename field, for focusing it. */
-export const RENAME_INPUT_SELECTOR = '[data-testid="sidebar-rename-input"]';
-
-/** The selector of the search field, for focusing it. */
-export const SEARCH_INPUT_SELECTOR = 'input[aria-label="Search threads"]';
 
 /** A Model with the Commands that go with it, before any OutMessage. */
 interface Issued {
@@ -137,12 +115,8 @@ const advanceFrom = (
       })
     : [];
 
-/** Starts or extends the undo notice for `action`; a Subscription ends it after 5 seconds. */
-const showUndo = (
-  model: Model,
-  action: "Settled" | "Snoozed",
-  entry: UndoEntry
-): Model => {
+/** Starts or extends the undo notice; a Subscription ends it after 5 seconds. */
+const showUndo = (model: Model, entry: UndoEntry): Model => {
   const version = Option.match(model.undo, {
     onNone: () => 0,
     onSome: (notice) => notice.version + 1,
@@ -150,19 +124,14 @@ const showUndo = (
 
   const entries = Option.match(model.undo, {
     onNone: () => [entry],
-    onSome: (notice) =>
-      notice.action === action
-        ? [
-            ...notice.entries.filter(
-              (kept) => kept.threadId !== entry.threadId
-            ),
-            entry,
-          ]
-        : [entry],
+    onSome: (notice) => [
+      ...notice.entries.filter((kept) => kept.threadId !== entry.threadId),
+      entry,
+    ],
   });
 
   return modifyFields(model, {
-    undo: () => Option.some({ action, entries, version }),
+    undo: () => Option.some({ entries, version }),
   });
 };
 
@@ -181,7 +150,7 @@ const settle = (model: Model, thread: ThreadShell): UpdateReturn => {
     ...visit,
   ]);
 
-  const withUndo = showUndo(issued.model, "Settled", {
+  const withUndo = showUndo(issued.model, {
     threadId: thread.id,
     wasPinned: Option.isSome(thread.pinnedAt),
     snoozedUntil: effectiveSnoozed(thread, now)
@@ -198,50 +167,20 @@ const settle = (model: Model, thread: ThreadShell): UpdateReturn => {
   };
 };
 
-const snooze = (
-  model: Model,
-  thread: ThreadShell,
-  until: DateTime.Utc
-): UpdateReturn => {
-  const orderBefore = visibleOrderOf(model);
-  const issued = issue(model, [Intent.Snooze({ threadId: thread.id, until })]);
-
-  const withUndo = showUndo(issued.model, "Snoozed", {
-    threadId: thread.id,
-    wasPinned: false,
-    snoozedUntil: Option.none(),
-  });
-
-  return {
-    model: withUndo,
-    commands: [
-      ...issued.commands,
-      ...advanceFrom(model, thread.id, orderBefore),
-    ],
-  };
-};
-
 /** Takes back every entry of the undo notice. */
 const undo = (model: Model): UpdateReturn =>
   Option.match(model.undo, {
     onNone: () => ({ model }),
     onSome: (notice) => {
-      const intents = notice.entries.flatMap((entry): ReadonlyArray<Intent> =>
-        notice.action === "Snoozed"
-          ? [Intent.Unsnooze({ threadId: entry.threadId })]
-          : [
-              Intent.Unsettle({ threadId: entry.threadId }),
-              ...onlyIf(
-                entry.wasPinned,
-                Intent.Pin({ threadId: entry.threadId })
-              ),
-              ...Option.toArray(
-                Option.map(entry.snoozedUntil, (until) =>
-                  Intent.Snooze({ threadId: entry.threadId, until })
-                )
-              ),
-            ]
-      );
+      const intents = notice.entries.flatMap((entry): ReadonlyArray<Intent> => [
+        Intent.Unsettle({ threadId: entry.threadId }),
+        ...onlyIf(entry.wasPinned, Intent.Pin({ threadId: entry.threadId })),
+        ...Option.toArray(
+          Option.map(entry.snoozedUntil, (until) =>
+            Intent.Snooze({ threadId: entry.threadId, until })
+          )
+        ),
+      ]);
 
       const issued = issue(
         modifyFields(model, { undo: () => Option.none() }),
@@ -251,217 +190,6 @@ const undo = (model: Model): UpdateReturn =>
       return issued;
     },
   });
-
-const withThread = (
-  model: Model,
-  threadId: string,
-  act: (thread: ThreadShell) => UpdateReturn
-): UpdateReturn =>
-  Option.match(findThread(model, threadId), {
-    onNone: () => ({ model }),
-    onSome: act,
-  });
-
-const issueFor =
-  (model: Model) =>
-  (intent: Intent): UpdateReturn =>
-    issue(model, [intent]);
-
-const startRename = (model: Model, thread: ThreadShell): UpdateReturn => ({
-  model: modifyFields(model, {
-    renaming: () => Option.some({ threadId: thread.id, title: thread.title }),
-    contextMenu: () => Option.none(),
-  }),
-  commands: [FocusElement({ selector: RENAME_INPUT_SELECTOR })],
-});
-
-const commitRename = (model: Model): UpdateReturn =>
-  Option.match(model.renaming, {
-    onNone: () => ({ model }),
-    onSome: ({ threadId, title }) => {
-      const closed = modifyFields(model, { renaming: () => Option.none() });
-      const trimmed = title.trim();
-
-      const unchanged = Option.exists(
-        findThread(model, threadId),
-        (thread) => thread.title === trimmed
-      );
-
-      return trimmed.length === 0 || unchanged
-        ? { model: closed }
-        : issue(closed, [Intent.Rename({ threadId, title: trimmed })]);
-    },
-  });
-
-const closeMenu = (model: Model): Model =>
-  modifyFields(model, { contextMenu: () => Option.none() });
-
-const pathOf = (model: Model, thread: ThreadShell): Option.Option<string> =>
-  Option.orElse(thread.worktreePath, () =>
-    Option.map(
-      findProject(model, thread.projectId),
-      (project) => project.workspaceRoot
-    )
-  );
-
-/** What a chosen thread menu item does. */
-const chooseThreadAction = (
-  model: Model,
-  thread: ThreadShell,
-  id: string
-): UpdateReturn => {
-  const intent = issueFor(model);
-
-  if (id.startsWith("snooze:")) {
-    return Option.match(
-      Array.findFirst(
-        snoozePresetsOf(model),
-        (preset) => `snooze:${preset.id}` === id
-      ),
-      {
-        onNone: () => ({ model }),
-        onSome: (preset) => snooze(model, thread, preset.snoozedUntil),
-      }
-    );
-  }
-
-  const copy = (text: Option.Option<string>): UpdateReturn =>
-    Option.match(text, {
-      onNone: () => ({ model }),
-      onSome: (value) => ({ model, commands: [CopyText({ text: value })] }),
-    });
-
-  switch (id) {
-    case "pin": {
-      return intent(Intent.Pin({ threadId: thread.id }));
-    }
-
-    case "unpin": {
-      return intent(Intent.Unpin({ threadId: thread.id }));
-    }
-
-    case "settle": {
-      return settle(model, thread);
-    }
-
-    case "unsettle": {
-      return intent(Intent.Unsettle({ threadId: thread.id }));
-    }
-
-    case "unsnooze": {
-      return intent(Intent.Unsnooze({ threadId: thread.id }));
-    }
-
-    case "rename": {
-      return startRename(model, thread);
-    }
-
-    case "mark-unread": {
-      return intent(Intent.MarkUnread({ threadId: thread.id }));
-    }
-
-    case "filter-by-project": {
-      return {
-        model: modifyFields(model, {
-          projectFilter: (current) =>
-            Option.contains(current, thread.projectId)
-              ? Option.none()
-              : Option.some(thread.projectId),
-        }),
-      };
-    }
-
-    case "auto-settle:enabled":
-    case "auto-settle:disabled": {
-      return intent(
-        Intent.SetAutoSettle({
-          threadId: thread.id,
-          enabled: id === "auto-settle:enabled",
-        })
-      );
-    }
-
-    case "copy-path": {
-      return copy(pathOf(model, thread));
-    }
-
-    case "copy-branch": {
-      return copy(thread.branch);
-    }
-
-    case "copy-thread-id": {
-      return copy(Option.some(thread.id));
-    }
-
-    case "archive": {
-      return intent(Intent.Archive({ threadId: thread.id }));
-    }
-
-    case "delete": {
-      return intent(Intent.Delete({ threadId: thread.id }));
-    }
-
-    default: {
-      return { model };
-    }
-  }
-};
-
-const chooseDraftAction = (
-  model: Model,
-  draftId: string,
-  id: string
-): UpdateReturn => {
-  if (id === "discard") {
-    return {
-      model,
-      outMessage: OutMessage.RequestedDiscardDraft({ draftId }),
-    };
-  }
-
-  if (id === "copy-path") {
-    const path = Option.flatMap(
-      Array.findFirst(
-        model.context.drafts,
-        (draft) => draft.draftId === draftId
-      ),
-      (draft) =>
-        Option.flatMap(draft.projectId, (projectId) =>
-          Option.map(
-            findProject(model, projectId),
-            (project) => project.workspaceRoot
-          )
-        )
-    );
-
-    return Option.match(path, {
-      onNone: () => ({ model }),
-      onSome: (text) => ({ model, commands: [CopyText({ text })] }),
-    });
-  }
-
-  return { model };
-};
-
-const toggleShelf = (model: Model, shelf: Shelf): UpdateReturn => {
-  const shelves =
-    shelf === "snoozed"
-      ? modifyFields(model.shelves, { snoozedExpanded: (open) => !open })
-      : modifyFields(model.shelves, {
-          settledExpanded: (open) => !open,
-          settledPages: () => 0,
-        });
-
-  return {
-    model: modifyFields(model, { shelves: () => shelves }),
-    commands: [
-      SaveShelves({
-        snoozedExpanded: shelves.snoozedExpanded,
-        settledExpanded: shelves.settledExpanded,
-      }),
-    ],
-  };
-};
 
 const traverse = (model: Model, direction: "previous" | "next"): UpdateReturn =>
   Option.match(
@@ -538,76 +266,6 @@ const pressShortcut = (model: Model, command: string): UpdateReturn => {
     }
   }
 };
-
-const pressSearchKey = (model: Model, key: string): UpdateReturn => {
-  const results = searchResultsOf(model);
-
-  switch (key) {
-    case "ArrowDown": {
-      return {
-        model: modifyFields(model, {
-          activeSearchIndex: (index) =>
-            results.length === 0 ? 0 : Math.min(index + 1, results.length - 1),
-        }),
-      };
-    }
-
-    case "ArrowUp": {
-      return {
-        model: modifyFields(model, {
-          activeSearchIndex: (index) => Math.max(index - 1, 0),
-        }),
-      };
-    }
-
-    case "Enter": {
-      return Option.match(Array.get(results, model.activeSearchIndex), {
-        onNone: () => ({ model }),
-        onSome: (thread) => ({
-          model: modifyFields(model, {
-            search: () => "",
-            activeSearchIndex: () => 0,
-          }),
-          commands: [navigateToThread(thread.id)],
-        }),
-      });
-    }
-
-    case "Escape": {
-      return {
-        model: modifyFields(model, {
-          search: () => "",
-          activeSearchIndex: () => 0,
-        }),
-      };
-    }
-
-    default: {
-      return { model };
-    }
-  }
-};
-
-const browse = (model: Model, path: Option.Option<string>): UpdateReturn => {
-  const request = Option.match(model.addProject, {
-    onNone: () => 0,
-    onSome: (dialog) => dialog.request + 1,
-  });
-
-  return {
-    model: modifyFields(model, {
-      addProject: () =>
-        Option.some({
-          listing: Listing.Loading({ path }),
-          request,
-        }),
-    }),
-    commands: [BrowseFolder({ request, path })],
-  };
-};
-
-const isCurrentListing = (model: Model, request: number): boolean =>
-  Option.exists(model.addProject, (dialog) => dialog.request === request);
 
 /**
  * Brings the derived state in line after the shell, the open thread or the clock moved: drops
@@ -731,235 +389,18 @@ const step = (model: Model, message: Message): UpdateReturn =>
           }),
       }),
     }),
-    CompletedSaveShelves: () => ({ model }),
     CompletedSetBadge: () => ({ model }),
     CompletedNavigate: () => ({ model }),
-    CompletedMotion: () => ({ model }),
-    CompletedScrollFade: () => ({ model }),
-    CompletedPlaceMenu: () => ({ model }),
-    CompletedFocus: () => ({ model }),
-    IgnoredClick: () => ({ model }),
     ChangedViewport: ({ isMobile }) => ({
       model: modifyFields(model, {
         isMobile: () => isMobile,
         isSheetOpen: (open) => open && isMobile,
       }),
     }),
-
-    ChangedSearch: ({ value }) => ({
-      model: modifyFields(model, {
-        search: () => value,
-        activeSearchIndex: () => 0,
-      }),
-    }),
-    PressedSearchKey: ({ key }) => pressSearchKey(model, key),
-    ClickedClearSearch: () => ({
-      model: modifyFields(model, {
-        search: () => "",
-        activeSearchIndex: () => 0,
-      }),
-      commands: [FocusElement({ selector: SEARCH_INPUT_SELECTOR })],
-    }),
-    HoveredSearchResult: ({ index }) => ({
-      model: modifyFields(model, { activeSearchIndex: () => index }),
-    }),
-    ChoseSearchResult: ({ threadId }) => ({
-      model: modifyFields(model, {
-        search: () => "",
-        activeSearchIndex: () => 0,
-      }),
-      commands: [navigateToThread(threadId)],
-    }),
-
-    ClickedFilterTrigger: () => ({
-      model: modifyFields(model, {
-        filterMenu: (menu) =>
-          Option.isSome(menu) ? Option.none() : Option.some({ query: "" }),
-      }),
-    }),
-    ChangedFilterQuery: ({ value }) => ({
-      model: modifyFields(model, {
-        filterMenu: () => Option.some({ query: value }),
-      }),
-    }),
-    ChoseProjectFilter: ({ projectId }) => ({
-      model: modifyFields(model, {
-        projectFilter: () => projectId,
-        filterMenu: () => Option.none(),
-        shelves: (shelves) => modifyFields(shelves, { settledPages: () => 0 }),
-      }),
-    }),
-    DismissedFilterMenu: () => ({
-      model: modifyFields(model, { filterMenu: () => Option.none() }),
-    }),
-
-    ClickedNewThread: () => ({ model, commands: [MintDraftId()] }),
     MintedDraftId: ({ draftId }) => ({
       model,
       commands: [NavigateTo({ url: draftRouter({ draftId }) })],
     }),
-    ClickedToggleSheet: () => ({
-      model: modifyFields(model, { isSheetOpen: (open) => !open }),
-    }),
-    ClickedSidebarControl: () => pressShortcut(model, "sidebar.toggle"),
-    ClickedRail: () => ({
-      model: modifyFields(model, { isOpen: (open) => !open }),
-    }),
-    ClickedSheetBackdrop: () => ({
-      model: modifyFields(model, { isSheetOpen: () => false }),
-    }),
-
-    ClickedRow: ({ threadId }) => ({
-      model: closeMenu(model),
-      commands: [navigateToThread(threadId)],
-    }),
-    PressedRow: ({ x, y }) => ({
-      model: modifyFields(model, { lastPointer: () => ({ x, y }) }),
-    }),
-    OpenedRowMenu: ({ threadId }) => ({
-      model: modifyFields(model, {
-        contextMenu: () =>
-          Option.some({
-            target: MenuTarget.Thread({ threadId }),
-            x: model.lastPointer.x,
-            y: model.lastPointer.y,
-            highlighted: Option.none(),
-            childHighlighted: Option.none(),
-          }),
-      }),
-    }),
-    DoubleClickedRow: ({ threadId }) =>
-      withThread(model, threadId, (thread) => startRename(model, thread)),
-    ChangedRenameTitle: ({ value }) => ({
-      model: modifyFields(model, {
-        renaming: (renaming) =>
-          Option.map(renaming, (current) => ({ ...current, title: value })),
-      }),
-    }),
-    PressedRenameKey: ({ key }) =>
-      key === "Escape"
-        ? { model: modifyFields(model, { renaming: () => Option.none() }) }
-        : commitRename(model),
-    BlurredRename: () => commitRename(model),
-
-    ClickedSettle: ({ threadId }) =>
-      withThread(model, threadId, (thread) => settle(model, thread)),
-    ClickedUnsettle: ({ threadId }) =>
-      issue(model, [Intent.Unsettle({ threadId })]),
-    ClickedUnsnooze: ({ threadId }) =>
-      issue(model, [Intent.Unsnooze({ threadId })]),
-    ClickedUnpin: ({ threadId }) => issue(model, [Intent.Unpin({ threadId })]),
-    ClickedSnoozeButton: ({ threadId }) =>
-      withThread(model, threadId, (thread) => ({
-        model: modifyFields(model, {
-          contextMenu: () =>
-            Option.some({
-              target: MenuTarget.Thread({ threadId }),
-              x: model.lastPointer.x,
-              y: model.lastPointer.y,
-              // The menu opens with its Snooze item highlighted, so its submenu shows.
-              highlighted: Option.liftPredicate(
-                threadMenuOf(model, thread).findIndex(
-                  (item) => item.id === "snooze"
-                ),
-                (index) => index >= 0
-              ),
-              childHighlighted: Option.none(),
-            }),
-        }),
-      })),
-    ClickedRetry: ({ taskId, threadId }) => ({
-      model,
-      commands: [RetryTask({ threadId, taskId })],
-    }),
-    SucceededRetry: () => ({ model }),
-    // A retry that failed says so, as the hold banner's does (T39).
-    FailedRetry: ({ message: reason }) => ({
-      model,
-      outMessage: OutMessage.RequestedNotice({ message: reason }),
-    }),
-    ClickedDismissWoke: ({ threadId }) =>
-      withThread(model, threadId, (thread) =>
-        isThreadWoke(thread, nowOf(model))
-          ? issue(
-              model,
-              Option.toArray(
-                Option.map(threadWokeAt(thread, nowOf(model)), (at) =>
-                  Intent.Visit({ threadId, at })
-                )
-              )
-            )
-          : { model }
-      ),
-    ToggledShelf: ({ shelf }) => toggleShelf(model, shelf),
-    ClickedShowMoreSettled: () => ({
-      model: modifyFields(model, {
-        shelves: (shelves) =>
-          modifyFields(shelves, { settledPages: (pages) => pages + 1 }),
-      }),
-    }),
-
-    ClickedDraft: ({ draftId }) => ({
-      model: closeMenu(model),
-      commands: [NavigateTo({ url: draftRouter({ draftId }) })],
-    }),
-    ClickedDiscardDraft: ({ draftId }) => ({
-      model,
-      outMessage: OutMessage.RequestedDiscardDraft({ draftId }),
-    }),
-    OpenedDraftMenu: ({ draftId }) => ({
-      model: modifyFields(model, {
-        contextMenu: () =>
-          Option.some({
-            target: MenuTarget.Draft({ draftId }),
-            x: model.lastPointer.x,
-            y: model.lastPointer.y,
-            highlighted: Option.none(),
-            childHighlighted: Option.none(),
-          }),
-      }),
-    }),
-
-    HoveredMenuItem: ({ index }) => ({
-      model: modifyFields(model, {
-        contextMenu: (menu) =>
-          Option.map(menu, (open) =>
-            open.highlighted.pipe(Option.contains(index))
-              ? open
-              : {
-                  ...open,
-                  highlighted: Option.some(index),
-                  childHighlighted: Option.none(),
-                }
-          ),
-      }),
-    }),
-    HoveredSubmenuItem: ({ index }) => ({
-      model: modifyFields(model, {
-        contextMenu: (menu) =>
-          Option.map(menu, (open) => ({
-            ...open,
-            childHighlighted: Option.some(index),
-          })),
-      }),
-    }),
-    ChoseMenuItem: ({ id }) =>
-      Option.match(model.contextMenu, {
-        onNone: () => ({ model }),
-        onSome: (menu) =>
-          MenuTarget.match(menu.target, {
-            Thread: ({ threadId }) =>
-              withThread(closeMenu(model), threadId, (thread) =>
-                chooseThreadAction(closeMenu(model), thread, id)
-              ),
-            Draft: ({ draftId }) =>
-              chooseDraftAction(closeMenu(model), draftId, id),
-          }),
-      }),
-    DismissedMenu: () => ({ model: closeMenu(model) }),
-    CompletedCopy: () => ({ model }),
-
-    ClickedUndo: () => undo(model),
     ExpiredUndo: ({ version }) => ({
       model: modifyFields(model, {
         undo: (notice) =>
@@ -970,40 +411,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
       model,
       outMessage: OutMessage.RequestedDispatch({ commands }),
     }),
-
     PressedShortcut: ({ command }) => pressShortcut(model, command),
-
-    ClickedAddProject: () => browse(model, Option.none()),
-    ReceivedListing: ({ request, result }) => ({
-      model: isCurrentListing(model, request)
-        ? modifyFields(model, {
-            addProject: (dialog) =>
-              Option.map(dialog, (open) => ({
-                ...open,
-                listing: Listing.Loaded({ result }),
-              })),
-          })
-        : model,
-    }),
-    FailedListing: ({ message: reason, request }) => ({
-      model: isCurrentListing(model, request)
-        ? modifyFields(model, {
-            addProject: (dialog) =>
-              Option.map(dialog, (open) => ({
-                ...open,
-                listing: Listing.Failed({ message: reason }),
-              })),
-          })
-        : model,
-    }),
-    ClickedFolder: ({ path }) => browse(model, Option.some(path)),
-    ClickedAddFolder: ({ path }) =>
-      issue(modifyFields(model, { addProject: () => Option.none() }), [
-        Intent.AddProject({ workspaceRoot: path }),
-      ]),
-    DismissedAddProject: () => ({
-      model: modifyFields(model, { addProject: () => Option.none() }),
-    }),
   });
 
 /** The sidebar's update. */

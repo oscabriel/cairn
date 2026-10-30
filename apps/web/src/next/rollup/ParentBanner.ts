@@ -58,7 +58,8 @@ const childLink = <Message>(
           h.Href(threadRouter({ threadId: child.id })),
           h.Class(
             classNames(
-              "rounded-(--radius-small) text-ink-2 underline decoration-stroke-2 underline-offset-2 hover:text-ink-1",
+              // A phone finger needs the hit target the look rules ask of every control (look round 4).
+              "rounded-(--radius-small) text-ink-2 underline decoration-stroke-2 underline-offset-2 hover:text-ink-1 pointer-coarse:inline-flex pointer-coarse:min-h-(--hit-target) pointer-coarse:items-center",
               FOCUS_RING
             )
           ),

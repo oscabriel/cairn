@@ -78,6 +78,9 @@ describe("the parent banner", () => {
         "href",
         threadRouter({ threadId: rowId(2) })
       ),
+      Scene.expect(Scene.testId("parent-banner-child")).toHaveClass(
+        "pointer-coarse:min-h-(--hit-target)"
+      ),
       Scene.expect(Scene.testId("parent-banner-open")).toHaveText(
         "Open approval"
       ),

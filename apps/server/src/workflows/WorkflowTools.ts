@@ -175,6 +175,7 @@ import {
 import type { Caller, NodeEnding } from "./WorkflowNodes.ts";
 import { planTool } from "./WorkflowPlanTool.ts";
 import type { PlanAccess } from "./WorkflowPlanTool.ts";
+import { throwIfStopped, untilStopped } from "./WorkflowStop.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const WORKFLOWS_EXTENSION = "cairn.workflows";
@@ -264,6 +265,11 @@ export interface WorkflowFaultSet {
   readonly grantAll: boolean;
   /** An admission that never refuses at the budget's line: the budget judge's control. */
   readonly ignoreBudget: boolean;
+  /**
+   * Node tools deaf to a stop: their waits ignore the abort signal (no `untilStopped`), so a stop
+   * of a node held in one waits the hold out.
+   */
+  readonly deafToStop: boolean;
 }
 
 /** No faults. */
@@ -271,6 +277,7 @@ export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = {
   freshDispatch: false,
   grantAll: false,
   ignoreBudget: false,
+  deafToStop: false,
 };
 
 /** What the extension is built with. */
@@ -786,10 +793,28 @@ const launchRecordOf = async (
 export const workflowExtension = (
   options: WorkflowToolOptions
 ): CairnExtension => {
-  const { resolveRole, faults, hold, plan, holdRetryMillis, push } = options;
+  const { resolveRole, faults, plan, holdRetryMillis, push } = options;
 
   /** Each child's responses read so far, for the meter (WorkflowBudget.ts). */
   const cache = new SpendCache();
+
+  /** A wait in a node tool, ended by a stop (WorkflowStop.ts) unless the judge's fault deafens it. */
+  const stoppable = async <A>(
+    context: ChordContext,
+    work: Promise<A>
+  ): Promise<A> =>
+    faults.deafToStop
+      ? await work
+      : await untilStopped(context.abortSignal, work);
+
+  /** A judge's hold point, which a stop ends. */
+  const hold = async (
+    point: HoldPoint,
+    label: string,
+    context: ChordContext
+  ): Promise<void> => {
+    await stoppable(context, options.hold(point, label));
+  };
 
   /** Node slots per workflow, in memory: a restart starts with every slot free. */
   const slots = new Map<string, ScriptSlots>();
@@ -837,11 +862,19 @@ export const workflowExtension = (
       () => {
         state.scheduled = false;
 
-        const [node] = state.nodes;
+        // A node whose invocation ended (a stop between its wait and its meter's stop) refuses
+        // even a clock read, so the meter goes through one still running.
+        for (const node of state.nodes) {
+          const read = Result.try(() => node.api.now());
 
-        if (node !== undefined) {
-          state.last = node.api.now();
-          void meterThrough(workflowId, node);
+          if (Result.isSuccess(read)) {
+            state.last = read.success;
+            void meterThrough(workflowId, node);
+
+            return;
+          }
+
+          state.nodes.delete(node);
         }
       },
       Math.max(0, state.last + METER_INTERVAL_MILLIS - now)
@@ -870,17 +903,26 @@ export const workflowExtension = (
     meters.set(workflowId, state);
     state.nodes.add(node);
 
+    // The invocation may end before the meter stops (a stop in a deaf wait); its clock then throws.
+    const soon = () => {
+      const now = Result.try(() => api.now());
+
+      if (Result.isSuccess(now)) {
+        meterSoon(workflowId, now.success);
+      }
+    };
+
     const watch = await api.watchDoc(UsageDoc, child, context);
 
     watch?.start(async () => {
-      meterSoon(workflowId, api.now());
+      soon();
       await Promise.resolve();
     });
 
     const timer = Option.map(deadline, (at) =>
       setTimeout(
         () => {
-          meterSoon(workflowId, api.now());
+          soon();
         },
         Math.max(0, at - api.now())
       )
@@ -944,7 +986,19 @@ export const workflowExtension = (
             ) {
               await closeWaiting(tx, runtime.conversationId, row, node, at);
             } else if (row !== undefined && nodeId !== null) {
-              await endNode(tx, row, nodeId, outcome, at);
+              // Table reads first: the ended node's receipt takes its spend, and the meter owns
+              // `row.spent` (WorkflowBudget.ts).
+              const spends = await readSpends(tx, row, runtime.models, cache);
+
+              await endNode(tx, row, nodeId, outcome, at, spends);
+
+              await applyMeter(tx, {
+                conversationId: runtime.conversationId,
+                row,
+                approvals: approvals.items,
+                spends,
+                at,
+              });
             }
 
             if (row !== undefined && Option.isSome(ending)) {
@@ -1056,6 +1110,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeBegin(args);
 
       if (Option.isNone(call)) {
@@ -1497,7 +1553,7 @@ export const workflowExtension = (
       requestId,
       context,
       async (submission) => {
-        await hold("after-submit", dispatch.label);
+        await hold("after-submit", dispatch.label, context);
         await markSubmitted(
           api,
           dispatch.workflowId,
@@ -1563,7 +1619,7 @@ export const workflowExtension = (
       child,
       context,
       async () => {
-        await hold("after-nudge", dispatch.label);
+        await hold("after-nudge", dispatch.label, context);
       },
       async () => !(await atLine(api, dispatch.workflowId, context))
     );
@@ -1657,12 +1713,9 @@ export const workflowExtension = (
       context
     );
 
-    const fresh = await reserveInput(
-      api,
-      input.caller,
-      input.dispatch,
-      launch,
-      context
+    const fresh = await stoppable(
+      context,
+      reserveInput(api, input.caller, input.dispatch, launch, context)
     );
 
     return await admit(api, fresh, context);
@@ -1702,7 +1755,7 @@ export const workflowExtension = (
 
     const { row, child } = reserved;
 
-    await hold("after-reserve", dispatch.label);
+    await hold("after-reserve", dispatch.label, context);
 
     const workflow = await api.snapshot(
       WorkflowsDoc,
@@ -1726,7 +1779,8 @@ export const workflowExtension = (
       await stopMeter();
     }
 
-    await hold("before-settle", dispatch.label);
+    await hold("before-settle", dispatch.label, context);
+    throwIfStopped(context.abortSignal);
 
     const settled = await settleNode(
       api,
@@ -1761,7 +1815,11 @@ export const workflowExtension = (
     context: ChordContext
   ): Promise<ToolExecutionResult> => {
     const record = await launchRecordOf(api, dispatch.workflowId, context);
-    const input = await reserveInput(api, caller, dispatch, record, context);
+
+    const input = await stoppable(
+      context,
+      reserveInput(api, caller, dispatch, record, context)
+    );
 
     const limit = Option.match(Option.flatMap(record, envelopeOf), {
       onNone: () => 1,
@@ -1792,6 +1850,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeAgent(args);
 
       if (Option.isNone(call)) {
@@ -1871,6 +1931,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeVerify(args);
 
       if (Option.isNone(call)) {
@@ -1932,6 +1994,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeApprove(args);
 
       if (Option.isNone(call)) {
@@ -2015,6 +2079,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodePhase(args);
 
       if (Option.isNone(call)) {
@@ -2055,6 +2121,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeLog(args);
 
       if (Option.isNone(call)) {
@@ -2093,6 +2161,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeBudget(args);
 
       if (Option.isNone(call)) {

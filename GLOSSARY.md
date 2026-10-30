@@ -132,7 +132,11 @@ _Avoid_: grant (in prose), allowance
 
 **Workflow gate**: The `beforeTool` hook that lets a workflow script run only against an approved ledger row of its exact hash, rewrites it behind the prelude, and marks the code mode call (`GATE_MEMO`), so the node tools refuse every other caller.
 
-**Node watcher**: The background task (`cairn.workflow-watch`) that records a workflow node or script call that ended without settling: stopped, failed or finished.
+**Node watcher**: The background task (`cairn.workflow-watch`) that records a workflow node or script call that ended without settling: stopped, failed or finished. A node it records keeps a receipt of what its child used, so a stopped node's spend still counts.
+
+**Node stop**: Stopping one node of a running workflow (`workflow.stopNode`): its task is aborted, the script sees `null` for it and goes on, and nothing reruns. Not offered as a restart; to run a node again, ask the thread. Stopping the whole workflow (`workflow.stop`) aborts its script call, or ends an approved one before it runs.
+
+**Abort polling**: Every node tool ends its waits at a stop (`untilStopped`) and checks for one between its steps, so a stop never waits on something deaf to it.
 
 **Recipe**: A saved workflow script, named by its `meta.name`.
 

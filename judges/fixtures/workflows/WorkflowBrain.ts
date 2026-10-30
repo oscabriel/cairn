@@ -453,6 +453,7 @@ const program = Effect.gen(function* () {
       freshDispatch: values.control,
       grantAll: values["grant-all"],
       ignoreBudget: false,
+      deafToStop: false,
     },
     hold,
     effect,

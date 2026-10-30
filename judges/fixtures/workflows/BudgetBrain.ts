@@ -188,13 +188,19 @@ const workflows = workflowExtension({
     freshDispatch: false,
     grantAll: false,
     ignoreBudget: control === "no-admission",
+    deafToStop: false,
   },
   hold,
   holdRetryMillis: 1000,
 });
 
 const work = workExtension({
-  faults: { freshDispatch: false, grantAll: false, ignoreBudget: false },
+  faults: {
+    freshDispatch: false,
+    grantAll: false,
+    ignoreBudget: false,
+    deafToStop: false,
+  },
   hold: NO_HOLD,
   effect,
   tokensPerSecond: 50_000,

@@ -52,6 +52,7 @@ import {
 import type {
   NodeItemState,
   NodeReceiptState,
+  UsageTotals,
   WorkflowItemState,
 } from "./WorkflowDocs.ts";
 import { GATE_MEMO } from "./WorkflowGate.ts";
@@ -503,6 +504,33 @@ export interface Settling {
   readonly verify: boolean;
 }
 
+/** A receipt from a child's usage totals and what the settle counted. */
+const receiptOf = (
+  totals: UsageTotals,
+  counted: Pick<NodeReceiptState, "answerEntry" | "toolCalls" | "durationMs">
+): NodeReceiptState => ({
+  answerEntry: counted.answerEntry,
+  input: totals.input,
+  output: totals.output,
+  cacheRead: totals.cacheRead,
+  cacheWrite: totals.cacheWrite,
+  totalTokens: totals.totalTokens,
+  listMicros:
+    totals.costTotal > 0 ? Math.round(totals.costTotal * 1_000_000) : null,
+  toolCalls: counted.toolCalls,
+  durationMs: counted.durationMs,
+});
+
+/** Tool calls among a child's latest entries (up to `TOOL_SCAN_LIMIT`); a table read. */
+const toolCallsOf = async (tx: Tx, child: ConversationId): Promise<number> => {
+  const entries = await tx.scanEntries(
+    { conversationId: child, order: "descending" },
+    TOOL_SCAN_LIMIT
+  );
+
+  return entries.items.filter((entry) => ToolResultEntry.is(entry)).length;
+};
+
 /**
  * Settles the row in one commit: receipt, result, state and the `workflow.node.settled` event,
  * written only by the row's own task and only while it runs. Failing settles `failed` the same way.
@@ -516,14 +544,7 @@ export const settleNode = async (
 
   await api.commit(async (tx) => {
     // Table reads first: pi-durable refuses a table read after a table write.
-    const entries = await tx.scanEntries(
-      { conversationId: child, order: "descending" },
-      TOOL_SCAN_LIMIT
-    );
-
-    const toolCalls = entries.items.filter((entry) =>
-      ToolResultEntry.is(entry)
-    ).length;
+    const toolCalls = await toolCallsOf(tx, child);
 
     const ledger = await tx.doc(WorkflowsDoc, api.conversationId);
     const workflow = ledger.items[caller.workflowId];
@@ -541,18 +562,11 @@ export const settleNode = async (
     const totals = usageTotals(await tx.doc(UsageDoc, child));
     const at = api.now();
 
-    const receipt: NodeReceiptState = {
+    const receipt = receiptOf(totals, {
       answerEntry: Result.isSuccess(ending) ? ending.success.answer : null,
-      input: totals.input,
-      output: totals.output,
-      cacheRead: totals.cacheRead,
-      cacheWrite: totals.cacheWrite,
-      totalTokens: totals.totalTokens,
-      listMicros:
-        totals.costTotal > 0 ? Math.round(totals.costTotal * 1_000_000) : null,
       toolCalls,
       durationMs: Math.max(0, at - (node.startedAt ?? at)),
-    };
+    });
 
     node.receipt = receipt;
     node.endedAt = at;
@@ -575,7 +589,11 @@ export const settleNode = async (
 
 // The watcher's records.
 
-/** A node's row after its task ended without settling it: stopped, or failed. */
+/**
+ * A node's row after its task ended without settling it: stopped, or failed. Its receipt records
+ * what its child used up to then, so a stopped node's spend still counts against the workflow's
+ * budget (W6). Call it before any table write in the commit: it scans the child's entries.
+ */
 export const endNode = async (
   tx: Tx,
   row: WorkflowItemState,
@@ -591,8 +609,20 @@ export const endNode = async (
 
   const stopped = outcome.status === "aborted";
 
+  if (node.conversationId !== null && node.receipt === null) {
+    const child = conversationOf(node.conversationId);
+    const toolCalls = await toolCallsOf(tx, child);
+
+    node.receipt = receiptOf(usageTotals(await tx.doc(UsageDoc, child)), {
+      answerEntry: null,
+      toolCalls,
+      durationMs: Math.max(0, at - (node.startedAt ?? at)),
+    });
+  }
+
   node.state = stopped ? "stopped" : "failed";
   node.endedAt = at;
+  row.spent.tokens = settledTokens(row);
 
   node.error = stopped
     ? "stopped before it answered"

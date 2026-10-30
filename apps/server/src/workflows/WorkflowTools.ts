@@ -130,6 +130,7 @@ import {
   typedResult,
 } from "./WorkflowNodes.ts";
 import type { Caller, NodeEnding } from "./WorkflowNodes.ts";
+import { throwIfStopped, untilStopped } from "./WorkflowStop.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const WORKFLOWS_EXTENSION = "cairn.workflows";
@@ -208,10 +209,18 @@ export interface WorkflowFaultSet {
    * a fresh request id, so a rerun after a kill dispatches again.
    */
   readonly freshDispatch: boolean;
+  /**
+   * Node tools deaf to a stop: their waits ignore the abort signal (no `untilStopped`), so a stop
+   * of a node held in one waits the hold out.
+   */
+  readonly deafToStop: boolean;
 }
 
 /** No faults. */
-export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = { freshDispatch: false };
+export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = {
+  freshDispatch: false,
+  deafToStop: false,
+};
 
 /** What the extension is built with. */
 export interface WorkflowToolOptions {
@@ -571,7 +580,25 @@ const markSubmitted = async (
 export const workflowExtension = (
   options: WorkflowToolOptions
 ): CairnExtension => {
-  const { resolveRole, faults, hold } = options;
+  const { resolveRole, faults } = options;
+
+  /** A wait in a node tool, ended by a stop (WorkflowStop.ts) unless the judge's fault deafens it. */
+  const stoppable = async <A>(
+    context: ChordContext,
+    work: Promise<A>
+  ): Promise<A> =>
+    faults.deafToStop
+      ? await work
+      : await untilStopped(context.abortSignal, work);
+
+  /** A judge's hold point, which a stop ends. */
+  const hold = async (
+    point: HoldPoint,
+    label: string,
+    context: ChordContext
+  ): Promise<void> => {
+    await stoppable(context, options.hold(point, label));
+  };
 
   /** Node slots per workflow, in memory: a restart starts with every slot free. */
   const slots = new Map<string, ScriptSlots>();
@@ -728,6 +755,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeBegin(args);
 
       if (Option.isNone(call)) {
@@ -935,7 +964,7 @@ export const workflowExtension = (
       child,
       context,
       async () => {
-        await hold("after-nudge", dispatch.label);
+        await hold("after-nudge", dispatch.label, context);
       }
     );
 
@@ -1018,11 +1047,12 @@ export const workflowExtension = (
 
     const { row, child } = reserved;
 
-    await hold("after-reserve", dispatch.label);
+    await hold("after-reserve", dispatch.label, context);
 
     const ending = await endingOf(api, row, child, dispatch, context);
 
-    await hold("before-settle", dispatch.label);
+    await hold("before-settle", dispatch.label, context);
+    throwIfStopped(context.abortSignal);
 
     await settleNode(
       api,
@@ -1064,7 +1094,10 @@ export const workflowExtension = (
       approvalId === undefined ? undefined : approvals?.items[approvalId]
     );
 
-    const input = await reserveInput(api, caller, dispatch, record, context);
+    const input = await stoppable(
+      context,
+      reserveInput(api, caller, dispatch, record, context)
+    );
 
     const limit = Option.match(Option.flatMap(record, envelopeOf), {
       onNone: () => 1,
@@ -1095,6 +1128,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeAgent(args);
 
       if (Option.isNone(call)) {
@@ -1174,6 +1209,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeVerify(args);
 
       if (Option.isNone(call)) {
@@ -1235,6 +1272,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeApprove(args);
 
       if (Option.isNone(call)) {
@@ -1318,6 +1357,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodePhase(args);
 
       if (Option.isNone(call)) {
@@ -1358,6 +1399,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeLog(args);
 
       if (Option.isNone(call)) {
@@ -1396,6 +1439,8 @@ export const workflowExtension = (
     callers: ["tools"],
     replay: "safe",
     execute: async (args, api, context): Promise<ToolExecutionResult> => {
+      throwIfStopped(context.abortSignal);
+
       const call = decodeBudget(args);
 
       if (Option.isNone(call)) {

@@ -701,3 +701,30 @@ No block names a judge "at integration". The brain's layers did not change (6D c
 
 - `tokens.css` gained grey diff-line bridge tokens after round 3, so round 3 must not be frozen. A new look round published from `main` is the one to approve; then the integrator runs `node judges/look.ts freeze <n>`.
 - The WebKit typing tier needs mbp-14: `npx -y playwright@1.64.1 run-server --port 3790 --host 0.0.0.0` on the Mac, `ssh -f -N -R 3791:127.0.0.1:3791 mbp-14` here, then `node judges/typing.ts webkit --ui next --connect ws://100.115.23.81:3790/ --port 3791`.
+
+## Wave 6c integration
+
+Integrated on 2026-10-30 on `main`: 6E `e24e263` as `726b5cc` with `--no-ff`, no conflicts. 6E edited no integrator-only seam file (the work panel is `next/shell/Work.ts`, placed by `Layout.ts`, its utilities built by `shell.css`), so there were no hand-offs to apply. The shell Model gained `work` and the shell Message union 8 work-panel messages, both in the entry bundle; the budget test passes and entry CSS is unchanged. No dependency changed.
+
+### Integration judges
+
+No block names a judge "at integration". The brain's layers did not change, so no judge-main boot or durability run. Under the judge lock, $0, no model:
+
+| Judge | Result | Numbers |
+| --- | --- | --- |
+| `pnpm check` | pass | ok in 430 s: fmt, lint, typecheck, 2,619 tests. |
+| `work-panel.ts --width 390,1440` (6E) | pass | lineage-stop and steps 4 of 4; no step or transcript box moved over 0.0 px across 32 frames. |
+| `behaviour.ts --strict --ui next` | pass | 30 of 30. |
+| `rows-subagent.ts`, `rollup.ts` | pass | 14 of 14; 8 of 8 on two reruns (the first run exited with a Node error before its summary, not reproduced). |
+
+### What differs from the plan
+
+- One judge file, `judges/work-panel.ts`, runs both `lineage-stop` and `steps`. On the scripted harness `steps` means a subagent's own four steps; "Checked by an outside judge" and "Leave the merge to you" are left out (no record yet). The workflow section is judged by scene tests only; 6F's judge covers nodes and phases.
+- The steps pill is in the chat header, not above the composer (the composer lane is in the seam file `Frame.ts`); one header button opens lineage and steps.
+- The panel is its own layout, a side column from 1,024 px and a bottom sheet below, not `ui/Sheet` (its docked mode would cover the transcript). Escape does not close it.
+- Stop keeps the child's queue and its own children (`clearQueue` false), so a queued input may start a new run; the row then reads Working and offers Stop again. Stop is offered only where a stop ends a run (not waiting, parked or limited).
+- A subagent reads done from its own transcript (its last message an assistant one with nothing left to call), not from `latestRunCompletedAt`, which every run end sets, stopped ones included. That rule is only the fallback until the transcript loads.
+
+### Left for the user
+
+- The work panel in the user's look round at 390 and 1,440 px (`look.ts capture` holds the work-panel state at both widths). The earlier items under wave 6b's "Left for the user" still stand.

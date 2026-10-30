@@ -128,14 +128,19 @@ export const budgetJson = (budget: Budget): JsonRecord => ({
   ...encodeBudget(budget),
 });
 
-/** The accepted raises of one conversation's records, oldest first. */
+/**
+ * The accepted raises of one conversation's records, oldest first. A workflow's raise (5B, its
+ * scope a workflow id `wf-<n>`) sits in the launching thread's records too and raises only that
+ * run, never the thread's scope.
+ */
 const acceptedRaises = (records: ReadonlyArray<ApprovalRecord>) =>
   records
     .filter(
       (record) => record.tool === RAISE_TOOL && record.status === "accepted"
     )
     .toSorted((a, b) => a.askedAt - b.askedAt)
-    .flatMap((record) => Option.toArray(decodeRaise(record.payload)));
+    .flatMap((record) => Option.toArray(decodeRaise(record.payload)))
+    .filter((raise) => !raise.scope.startsWith("wf-"));
 
 /** A brain call for budgets failed, naming the operation. */
 const failed = (operation: string) => (failure: DurableCallError) =>

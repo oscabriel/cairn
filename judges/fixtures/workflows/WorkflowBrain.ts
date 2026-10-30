@@ -344,7 +344,7 @@ const writeReport = async (brain: KitBrain) => {
 
 const program = Effect.gen(function* () {
   const parts = yield* kitParts({
-    faults: { freshDispatch: values.control },
+    faults: { freshDispatch: values.control, ignoreBudget: false },
     hold,
     effect,
     tokensPerSecond: 20_000,

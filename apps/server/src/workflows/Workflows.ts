@@ -7,6 +7,7 @@ import { Context, Effect, Layer, Option } from "effect";
 
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { RoleAliases } from "../models/RoleAliases.ts";
+import { HOLD_RETRY_MILLIS } from "./WorkflowBudget.ts";
 import {
   NO_HOLD,
   NO_WORKFLOW_FAULTS,
@@ -44,6 +45,7 @@ export class Workflows extends Context.Service<
           resolveRole,
           faults: NO_WORKFLOW_FAULTS,
           hold: NO_HOLD,
+          holdRetryMillis: HOLD_RETRY_MILLIS,
         }),
       });
     })

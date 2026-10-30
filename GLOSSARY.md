@@ -316,7 +316,13 @@ _Avoid_: cost (for a plan's figure)
 
 **Budget guard**: What acts once per epoch when a scope crosses its warning line or its limit: a notice, a push, the stop or drain, and the raise.
 
-**Raise**: A `budget_raise` approval proposing the larger of double the line and the spend plus one line. Each accepted raise starts a new epoch.
+**Raise**: A `budget_raise` approval proposing the larger of double the line and the spend plus one line. Each accepted raise starts a new epoch. A workflow's raise names the run (its scope is the workflow id) and raises that run only.
+
+**Workflow meter**: What a workflow run spent, summed over its nodes' children (tokens, list-price dollars priced one response at a time, model turns) and written into its ledger row in the commit that reserves a node, the one that settles a node, and, while a node runs, at most once a second. The first commit that reaches the warning line or the limit marks it and emits `workflow.budget.soft` or `workflow.budget.spent`, once per epoch.
+
+**Budget stopper**: The background task (`cairn.workflow-budget-stop`) the budget reactor creates when a run reaches its limit: it stops the child of every running node until none runs, so those nodes end `stopped` and the script sees `null`. New nodes are refused `budget_spent` at their reserve; the run ends partial, `budget_spent`.
+
+**Usage hold (node)**: A workflow node whose child's run ended on a provider's usage limit is `held` until the limit resets (or fifteen minutes when the provider names no reset), then its child is asked to go on; other nodes keep running.
 
 ## Results
 

@@ -12,6 +12,8 @@
 //   the nudge is due; with `nudgems=` it first calls `pause` that long, so a kill lands while it
 //   answers the nudge), `bad` submits an invalid value every time, `fail` ends its run with a
 //   provider error, `text` (the default) answers `{"label":...}` as text.
+//   `limit` and `limitreset` end the run after the work on a provider's usage limit (OpenCode Go's,
+//   naming no reset, or Codex's, resetting at once) until the node's second input arrives.
 // - A `verify` node's child (its prompt opens "Check one claim") submits `verified`.
 //
 // Launches are planted the way 5A's answer path will write them: the script is parsed and
@@ -21,6 +23,7 @@
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { ConversationId as StoredConversationId } from "@cairn/protocol/Ids";
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { Envelope, RuntimeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
@@ -51,12 +54,30 @@ import {
   Harness as DurableHarness,
 } from "@earendil-works/pi-durable";
 import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
-import { Effect, Function, Layer, Option, Result, Schema } from "effect";
+import {
+  DateTime,
+  Effect,
+  Function,
+  Layer,
+  Option,
+  Result,
+  Schema,
+} from "effect";
 
 import { Approvals, UNDECIDED } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { CodeMode } from "../brain/CodeMode.ts";
 import { messageText } from "../brain/CommitFeed.ts";
+import {
+  EVENT_KIND_PREFIX,
+  EventsDoc,
+  isEventObject,
+  reactOnce,
+  reactorKinds,
+  registerCursors,
+} from "../brain/Events.ts";
+import type { Reactor } from "../brain/Events.ts";
+import { piConversationId } from "../brain/PiIds.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../models/ResultTool.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import { approveRecord, proposedRecord, WorkflowsDoc } from "./WorkflowDocs.ts";
@@ -74,6 +95,9 @@ export const KIT_MODEL = { provider: "faux", modelId: "kit" } as const;
 
 /** The kit root thread's cwd, which every node's child must work in too. */
 export const KIT_CWD = tmpdir();
+
+/** How long a kit node held by a limit that names no reset waits: short, so a test sees it. */
+export const KIT_HOLD_RETRY_MILLIS = 400;
 
 /** A spec the kit's resolver cannot resolve. */
 export const UNRESOLVABLE_ROLE = "@nobody";
@@ -167,6 +191,41 @@ const call = (name: string, args: { [key: string]: JsonValue }, id: string) =>
     stopReason: "toolUse",
   });
 
+/**
+ * A provider error after the work: `fail` always; `limit` and `limitreset` a usage limit until the
+ * node's input to go on arrives.
+ */
+const limitOf = (
+  flags: ReadonlySet<string>,
+  context: ModelContext
+): Option.Option<AssistantMessage> => {
+  if (flags.has("fail")) {
+    return Option.some(
+      fauxAssistantMessage(fauxText(""), {
+        stopReason: "error",
+        errorMessage: "kit: the provider refused the request",
+      })
+    );
+  }
+
+  const inputs = context.messages.filter(
+    (message) => message.role === "user"
+  ).length;
+
+  if ((!flags.has("limit") && !flags.has("limitreset")) || inputs !== 1) {
+    return Option.none();
+  }
+
+  return Option.some(
+    fauxAssistantMessage(fauxText(""), {
+      stopReason: "error",
+      errorMessage: flags.has("limitreset")
+        ? "You have hit your ChatGPT usage limit (plus plan). Try again in ~0 min."
+        : "GoUsageLimitError: Monthly usage limit reached",
+    })
+  );
+};
+
 /** The kit's faux model: what each conversation answers next. */
 export const respond = (context: ModelContext): AssistantMessage => {
   const first = textOfUser(context);
@@ -218,11 +277,10 @@ export const respond = (context: ModelContext): AssistantMessage => {
     return call(WORK_TOOL, { node: label, ms, deaf }, `work-${label}`);
   }
 
-  if (flags.has("fail")) {
-    return fauxAssistantMessage(fauxText(""), {
-      stopReason: "error",
-      errorMessage: "kit: the provider refused the request",
-    });
+  const limited = limitOf(flags, context);
+
+  if (Option.isSome(limited)) {
+    return limited.value;
   }
 
   if (flags.has("bad")) {
@@ -266,7 +324,7 @@ export const respond = (context: ModelContext): AssistantMessage => {
 };
 
 /** The `work` tool: one logged effect per child, then a wait that a stop ends. */
-const workExtension = (options: KitOptions) =>
+export const workExtension = (options: KitOptions) =>
   defineExtension({
     name: "cairn.test.work",
     tools: [
@@ -368,6 +426,7 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
       resolveRole: kitResolver,
       faults: options.faults,
       hold: options.hold,
+      holdRetryMillis: KIT_HOLD_RETRY_MILLIS,
     }).extension
   );
   registry.install(results.extension.extension);
@@ -549,3 +608,92 @@ export const codemodeResultText = async (
 export const pause = async (ms: number): Promise<void> => {
   await sleep(ms);
 };
+
+/**
+ * Runs `reactors` over the kit's event log until the returned function is called, as the reactor
+ * host does (`EventReactors.ts`): cursors registered first, then one event per commit. The kit
+ * brain has no host of its own; the budget judge's brain runs the real one.
+ */
+export const driveReactors = async (
+  brain: KitBrain,
+  reactors: ReadonlyArray<Reactor>,
+  context: ChordContext
+): Promise<() => Promise<void>> => {
+  await brain.harness.commit(async (tx) => {
+    await registerCursors(
+      tx,
+      reactors,
+      DateTime.toEpochMillis(DateTime.nowUnsafe())
+    );
+  }, context);
+
+  const running = { on: true };
+
+  const step = async (target: Reactor) =>
+    await brain.harness
+      .commit(
+        async (tx) =>
+          await reactOnce(tx, target, reactorKinds(target), Function.constVoid),
+        context
+      )
+      .catch(() => Option.none());
+
+  const loop = (async () => {
+    while (running.on) {
+      // oxlint-disable-next-line no-await-in-loop -- one step per reactor, in turn
+      const handled = await Promise.all(reactors.map(step));
+
+      if (!handled.some(Option.isSome)) {
+        // oxlint-disable-next-line no-await-in-loop
+        await sleep(10);
+      }
+    }
+  })();
+
+  return async () => {
+    running.on = false;
+    await loop;
+  };
+};
+
+/** One event as the kit reads it back: its name and data. */
+export interface KitEvent {
+  readonly name: string;
+  readonly data: JsonValue;
+}
+
+/** The events emitted so far, in log order. */
+export const eventsOf = async (
+  brain: KitBrain,
+  context: ChordContext
+): Promise<ReadonlyArray<KitEvent>> =>
+  await brain.harness.commit(async (tx) => {
+    const state = await tx.doc(EventsDoc);
+
+    if (state.logConversationId === null) {
+      return [];
+    }
+
+    const read = await tx.scanEntries(
+      {
+        conversationId: piConversationId(
+          StoredConversationId.make(state.logConversationId)
+        ),
+        order: "ascending",
+      },
+      5000
+    );
+
+    return read.items.flatMap((entry): Array<KitEvent> => {
+      const { data } = entry;
+
+      return entry.kind.startsWith(EVENT_KIND_PREFIX) && isEventObject(data)
+        ? [
+            {
+              name: entry.kind.slice(EVENT_KIND_PREFIX.length),
+              data: data.data ?? null,
+            },
+          ]
+        : [];
+    });
+  }, context);

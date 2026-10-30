@@ -30,6 +30,8 @@
 // Ported in intent from spike 3's `brain.ts` (the `agent` and `approve` nodes) and the workflows
 // probe's node-stop brain.
 
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { ThinkingLevel } from "@cairn/protocol/Models";
 import type { ApprovalDecision, RuntimeMode } from "@cairn/protocol/Policy";
 import type { RoleOverrides } from "@cairn/protocol/Roles";
@@ -53,8 +55,9 @@ import {
   defineExtension,
   defineTask,
   defineTool,
+  UsageDoc,
 } from "@earendil-works/pi-durable";
-import { Effect, Option, Result, Schema } from "effect";
+import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
 
 import {
   approvalLedger,
@@ -77,6 +80,7 @@ import {
   GATED_APPROVAL_TTL_MILLIS,
   readPermissions,
 } from "../brain/Permissions.ts";
+import { usageLimitOf } from "../brain/RunFailure.ts";
 import {
   childThreadIdOf,
   conversationOf,
@@ -98,6 +102,18 @@ import {
 } from "./Prelude.ts";
 import type { NodeOutcome } from "./Prelude.ts";
 import {
+  applyMeter,
+  BudgetStopper,
+  budgetStopped,
+  effectiveBudget,
+  MAX_HOLDS,
+  METER_INTERVAL_MILLIS,
+  meterCommit,
+  minutesLineOf,
+  readSpends,
+  SpendCache,
+} from "./WorkflowBudget.ts";
+import {
   dispatchedCount,
   envelopeOf,
   isNodeEnded,
@@ -111,7 +127,8 @@ import type { NodeItemState, WorkflowItemState } from "./WorkflowDocs.ts";
 import { workflowGate } from "./WorkflowGate.ts";
 import {
   answerText,
-  askChild,
+  askChildFully,
+  BUDGET_STOP_TEXT,
   callerOf,
   cutText,
   endedOutcome,
@@ -208,10 +225,15 @@ export interface WorkflowFaultSet {
    * a fresh request id, so a rerun after a kill dispatches again.
    */
   readonly freshDispatch: boolean;
+  /** An admission that never refuses at the budget's line: the budget judge's control. */
+  readonly ignoreBudget: boolean;
 }
 
 /** No faults. */
-export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = { freshDispatch: false };
+export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = {
+  freshDispatch: false,
+  ignoreBudget: false,
+};
 
 /** What the extension is built with. */
 export interface WorkflowToolOptions {
@@ -219,6 +241,11 @@ export interface WorkflowToolOptions {
   readonly faults: WorkflowFaultSet;
   /** Waits at a hold point (judges only); production resolves at once. */
   readonly hold: (point: HoldPoint, label: string) => Promise<void>;
+  /**
+   * How long a node held by a usage limit that names no reset waits before it tries again:
+   * `HOLD_RETRY_MILLIS` in production, shorter in tests.
+   */
+  readonly holdRetryMillis: number;
 }
 
 /** A hold that never waits. */
@@ -250,6 +277,39 @@ const BACKGROUND = {
   ownership: { kind: "conversation" },
   background: true,
 } as const;
+
+/** A running node the meter may commit through: its invocation and its context. */
+interface MeterNode {
+  readonly api: ToolExecutionApi;
+  readonly context: ChordContext;
+}
+
+/** One workflow's live meter, in memory: when it last wrote and the nodes running now. */
+interface MeterState {
+  last: number;
+  scheduled: boolean;
+  readonly nodes: Set<MeterNode>;
+}
+
+/** What a node's child is sent to go on after a usage limit's reset. */
+export const CONTINUE_TEXT =
+  "The provider's usage limit that stopped you has reset. Go on with your task from where you stopped.";
+
+/** How often a held node looks whether its workflow reached its budget's line. */
+const HOLD_POLL_MILLIS = 1000;
+
+/** Whether workflow `workflowId` is at its budget's line now, from committed documents. */
+const atLine = async (
+  api: Pick<ToolExecutionApi, "snapshot" | "conversationId">,
+  workflowId: string,
+  context: ChordContext
+): Promise<boolean> => {
+  const ledger = await api.snapshot(WorkflowsDoc, api.conversationId, context);
+  const approvals = await api.snapshot(Approvals, api.conversationId, context);
+  const row = ledger?.items[workflowId];
+
+  return row !== undefined && budgetStopped(row, approvals?.items ?? {});
+};
 
 /** One node to dispatch, from an `agent` or a `verify` call. */
 interface Dispatch {
@@ -571,10 +631,112 @@ const markSubmitted = async (
 export const workflowExtension = (
   options: WorkflowToolOptions
 ): CairnExtension => {
-  const { resolveRole, faults, hold } = options;
+  const { resolveRole, faults, hold, holdRetryMillis } = options;
+
+  /** Each child's responses read so far, for the meter (WorkflowBudget.ts). */
+  const cache = new SpendCache();
 
   /** Node slots per workflow, in memory: a restart starts with every slot free. */
   const slots = new Map<string, ScriptSlots>();
+
+  /** Each workflow's live meter: its running nodes, and when it last wrote. */
+  const meters = new Map<string, MeterState>();
+
+  /** One meter commit through a running node's invocation; a node that ended meanwhile skips it. */
+  const meterThrough = async (
+    workflowId: string,
+    node: MeterNode
+  ): Promise<void> => {
+    const { api, context } = node;
+
+    await api
+      .commit(
+        async (tx) =>
+          await meterCommit(
+            tx,
+            api.conversationId,
+            workflowId,
+            api.now(),
+            api.models,
+            cache
+          ),
+        context
+      )
+      .catch(() => Option.none());
+  };
+
+  /**
+   * Asks for a meter commit of `workflowId` soon: at once when the last was a second ago or more,
+   * else once at the end of that second, through whichever of its nodes still runs then.
+   */
+  const meterSoon = (workflowId: string, now: number) => {
+    const state = meters.get(workflowId);
+
+    if (state === undefined || state.scheduled) {
+      return;
+    }
+
+    state.scheduled = true;
+
+    setTimeout(
+      () => {
+        state.scheduled = false;
+
+        const [node] = state.nodes;
+
+        if (node !== undefined) {
+          state.last = node.api.now();
+          void meterThrough(workflowId, node);
+        }
+      },
+      Math.max(0, state.last + METER_INTERVAL_MILLIS - now)
+    );
+  };
+
+  /**
+   * Meters a running node's workflow while its child answers: on each change of the child's
+   * `pi.usage`, and once at the minutes line. Answers the function that stops it.
+   */
+  const startMeter = async (
+    api: ToolExecutionApi,
+    workflowId: string,
+    child: ConversationId,
+    deadline: Option.Option<number>,
+    context: ChordContext
+  ): Promise<() => Promise<void>> => {
+    const node: MeterNode = { api, context };
+
+    const state = meters.get(workflowId) ?? {
+      last: 0,
+      scheduled: false,
+      nodes: new Set<MeterNode>(),
+    };
+
+    meters.set(workflowId, state);
+    state.nodes.add(node);
+
+    const watch = await api.watchDoc(UsageDoc, child, context);
+
+    watch?.start(async () => {
+      meterSoon(workflowId, api.now());
+      await Promise.resolve();
+    });
+
+    const timer = Option.map(deadline, (at) =>
+      setTimeout(
+        () => {
+          meterSoon(workflowId, api.now());
+        },
+        Math.max(0, at - api.now())
+      )
+    );
+
+    return async () => {
+      Option.map(timer, clearTimeout);
+      state.nodes.delete(node);
+      await watch?.stop();
+    };
+  };
 
   const slotsOf = (workflowId: string, limit: number): ScriptSlots => {
     const found = slots.get(workflowId);
@@ -614,6 +776,7 @@ export const workflowExtension = (
         await runtime.commit(
           async (tx): Promise<NextTaskState<{ phase: "wait" }, null>> => {
             const ledger = await tx.doc(WorkflowsDoc, runtime.conversationId);
+            const approvals = await tx.doc(Approvals, runtime.conversationId);
             const row = ledger.items[workflowId];
 
             if (row !== undefined && nodeId !== null) {
@@ -621,7 +784,7 @@ export const workflowExtension = (
             }
 
             if (row !== undefined && Option.isSome(ending)) {
-              await endWorkflow(tx, row, ending.value, at);
+              await endWorkflow(tx, row, ending.value, at, approvals.items);
             }
 
             return {
@@ -632,9 +795,10 @@ export const workflowExtension = (
           context
         );
 
-        // The script call ended, so its workflow takes no more nodes: its slots go.
+        // The script call ended, so its workflow takes no more nodes: its slots and meter go.
         if (nodeId === null) {
           slots.delete(workflowId);
+          meters.delete(workflowId);
         }
       },
     },
@@ -860,7 +1024,22 @@ export const workflowExtension = (
             };
       }
 
+      // Admission (WorkflowBudget.ts): the meter of this instant, read before any table write.
+      const spends = await readSpends(tx, row, api.models, cache);
       const base = reservedRow(api, row, input);
+
+      const metered = await applyMeter(tx, {
+        conversationId: api.conversationId,
+        row,
+        approvals: approvals.items,
+        spends,
+        at: base.startedAt ?? api.now(),
+      });
+
+      if (metered.stopped && !faults.ignoreBudget) {
+        return await refuseRow(tx, row, base, "budget_spent", null);
+      }
+
       const record = Option.fromUndefinedOr(approvals.items[row.approvalId]);
       const refusal = refusalOf(record, row, input);
 
@@ -888,7 +1067,102 @@ export const workflowExtension = (
       return await startChild(tx, api, row, base, input.model.success, input);
     }, context);
 
-  /** How the child ended: its value, or why the node failed. */
+  /**
+   * Holds node `nodeId` for its `attempt`th input until its usage limit resets (WorkflowBudget.ts):
+   * the row `held` with the reset time, then `running` again with the attempt counted. A rerun
+   * finds an attempt already counted and goes on at once, or a hold already written and keeps its
+   * time. False when the workflow reached its budget's line meanwhile, or the row is not this
+   * task's any more.
+   */
+  const holdNode = async (
+    api: ToolExecutionApi,
+    target: { readonly workflowId: string; readonly nodeId: string },
+    attempt: number,
+    resetAt: Option.Option<number>,
+    context: ChordContext
+  ): Promise<boolean> => {
+    const { workflowId, nodeId } = target;
+
+    const held = await api.commit(
+      async (tx): Promise<Option.Option<number>> => {
+        const ledger = await tx.doc(WorkflowsDoc, api.conversationId);
+        const node = ledger.items[workflowId]?.nodes[nodeId];
+
+        if (
+          node === undefined ||
+          node.nestedTaskId !== api.taskId ||
+          isNodeEnded(node.state)
+        ) {
+          return Option.none();
+        }
+
+        if (node.attempt >= attempt) {
+          return Option.some(0);
+        }
+
+        // A hold written before a restart keeps its time.
+        const stored = node.state === "held" ? node.held?.until : undefined;
+
+        const until = Predicate.isNumber(stored)
+          ? stored
+          : Option.getOrElse(resetAt, () => api.now() + holdRetryMillis);
+
+        node.state = "held";
+        node.held = { until };
+
+        return Option.some(until);
+      },
+      context
+    );
+
+    if (Option.isNone(held)) {
+      return false;
+    }
+
+    while (api.now() < held.value) {
+      // oxlint-disable-next-line no-await-in-loop -- one look per wait
+      if (await atLine(api, workflowId, context)) {
+        return false;
+      }
+
+      // oxlint-disable-next-line no-await-in-loop -- the hold's wait; a stop rejects it
+      await sleep(
+        Math.min(HOLD_POLL_MILLIS, held.value - api.now()),
+        undefined,
+        {
+          signal: context.abortSignal,
+        }
+      );
+    }
+
+    if (await atLine(api, workflowId, context)) {
+      return false;
+    }
+
+    return await api.commit(async (tx) => {
+      const ledger = await tx.doc(WorkflowsDoc, api.conversationId);
+      const node = ledger.items[workflowId]?.nodes[nodeId];
+
+      if (node === undefined || isNodeEnded(node.state)) {
+        return false;
+      }
+
+      if (node.attempt < attempt) {
+        node.state = "running";
+        node.held = null;
+        node.attempt = attempt;
+      }
+
+      return true;
+    }, context);
+  };
+
+  /**
+   * How the child ended: its value, or why the node failed. A node whose workflow is at its line
+   * before its input went in sends nothing. A child's run that a usage limit ended holds the node
+   * until the limit resets, then the child is asked to go on (`-r<attempt>` request ids, so a rerun
+   * finds each), at most `MAX_HOLDS` times.
+   */
   const endingOf = async (
     api: ToolExecutionApi,
     row: NodeItemState,
@@ -900,7 +1174,14 @@ export const workflowExtension = (
       ? `${row.requestId}-${String(api.now())}`
       : row.requestId;
 
-    const asked = await askChild(
+    if (
+      row.stage === "child_created" &&
+      (await atLine(api, dispatch.workflowId, context))
+    ) {
+      return Result.fail(BUDGET_STOP_TEXT);
+    }
+
+    let asked = await askChildFully(
       api,
       child,
       promptOf(dispatch),
@@ -917,8 +1198,45 @@ export const workflowExtension = (
       }
     );
 
+    for (
+      let attempt = 2;
+      Result.isFailure(asked) && attempt <= MAX_HOLDS + 1;
+      attempt += 1
+    ) {
+      const limit = usageLimitOf(
+        asked.failure.detail,
+        DateTime.makeUnsafe(api.now())
+      );
+
+      if (Option.isNone(limit)) {
+        break;
+      }
+
+      // oxlint-disable-next-line no-await-in-loop -- one hold per limit, in order
+      const resumed = await holdNode(
+        api,
+        { workflowId: dispatch.workflowId, nodeId: row.id },
+        attempt,
+        Option.map(limit.value.resetAt, DateTime.toEpochMillis),
+        context
+      );
+
+      if (!resumed) {
+        return Result.fail(BUDGET_STOP_TEXT);
+      }
+
+      // oxlint-disable-next-line no-await-in-loop
+      asked = await askChildFully(
+        api,
+        child,
+        CONTINUE_TEXT,
+        `${requestId}-r${String(attempt)}`,
+        context
+      );
+    }
+
     if (Result.isFailure(asked)) {
-      return Result.fail(asked.failure);
+      return Result.fail(asked.failure.text);
     }
 
     const { answer, submission } = asked.success;
@@ -936,7 +1254,8 @@ export const workflowExtension = (
       context,
       async () => {
         await hold("after-nudge", dispatch.label);
-      }
+      },
+      async () => !(await atLine(api, dispatch.workflowId, context))
     );
 
     return Result.map(typed, (found) => ({
@@ -1020,11 +1339,31 @@ export const workflowExtension = (
 
     await hold("after-reserve", dispatch.label);
 
-    const ending = await endingOf(api, row, child, dispatch, context);
+    const workflow = await api.snapshot(
+      WorkflowsDoc,
+      api.conversationId,
+      context
+    );
+
+    const stopMeter = await startMeter(
+      api,
+      dispatch.workflowId,
+      child,
+      minutesLineOf(workflow?.items[dispatch.workflowId]),
+      context
+    );
+
+    let ending: NodeEnding;
+
+    try {
+      ending = await endingOf(api, row, child, dispatch, context);
+    } finally {
+      await stopMeter();
+    }
 
     await hold("before-settle", dispatch.label);
 
-    await settleNode(
+    const settled = await settleNode(
       api,
       {
         caller: input.caller,
@@ -1033,8 +1372,18 @@ export const workflowExtension = (
         ending,
         verify: dispatch.verify,
       },
+      { models: api.models, cache },
       context
     );
+
+    if (Option.isSome(settled) && settled.value.state === "stopped") {
+      return outcomeResult({
+        status: "stopped",
+        value: null,
+        reason: settled.value.error,
+        nodeId: row.id,
+      });
+    }
 
     return outcomeResult(outcomeOf(ending, row.id));
   };
@@ -1415,13 +1764,29 @@ export const workflowExtension = (
         context
       );
 
+      const approvals = await api.snapshot(
+        Approvals,
+        api.conversationId,
+        context
+      );
+
       const row = ledger?.items[workflowId];
 
       const spent =
         row === undefined ? 0 : await spentTokens(api, row, context);
 
-      const ceiling = row?.budget.maxTokens ?? null;
-      const remaining = ceiling === null ? null : Math.max(0, ceiling - spent);
+      const records = approvals?.items ?? {};
+
+      const ceiling =
+        row === undefined
+          ? null
+          : effectiveBudget(row, records).budget.maxTokens;
+
+      // At the line, whichever limit it was, nothing is left.
+      const stopped = row !== undefined && budgetStopped(row, records);
+
+      const left = ceiling === null ? null : Math.max(0, ceiling - spent);
+      const remaining = stopped ? 0 : left;
 
       return {
         output: [{ type: "text", text: `Spent ${String(spent)} tokens.` }],
@@ -1436,7 +1801,7 @@ export const workflowExtension = (
       name: WORKFLOWS_EXTENSION,
       tools: [begin, agent, verify, approve, phase, log, budget],
       hooks: [workflowGate],
-      tasks: [Watch],
+      tasks: [Watch, BudgetStopper],
     }),
   };
 };

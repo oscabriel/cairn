@@ -722,7 +722,7 @@ const closedNotice = (model: Model, h: H): Html =>
             detail: Option.some(
               closed.typed === ""
                 ? "It was settled somewhere else."
-                : "It was settled somewhere else. What you typed is kept below."
+                : "It was settled somewhere else. What you typed is back in the composer, and below."
             ),
             actions: [
               actionButton(

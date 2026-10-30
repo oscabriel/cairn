@@ -14,7 +14,10 @@
 // Checks:
 //   footer-<width>   the composer footer's blocks (full, icon-only, hidden) and its overflow button
 //                    at 1440, 1180, 980, 820 and 390 equal what t3code showed at the same widths
-//                    (the hero landmark files in the committed baseline);
+//                    (the hero landmark files in the committed baseline); on `--ui next`, whose
+//                    pills are redrawn (look track L7), the fold rule holds instead: nothing in the
+//                    left cluster is cut off, blocks fold last first, the overflow button shows
+//                    exactly when a block is hidden, and nothing folds at 1,180 px and up;
 //   trigger-slash    `/` at line start opens the slash-command menu;
 //   trigger-literal  `/tmp/x` leaves no menu open;
 //   trigger-at       `@READ` lists README (the time from the keystroke is recorded);
@@ -88,6 +91,7 @@ import {
   SHELL_SEED,
   startCairn,
 } from "./fixtures/parity/CairnApp.ts";
+import type { FooterBlockState } from "./fixtures/parity/Landmarks.ts";
 import { LandmarkFile, readLandmarks } from "./fixtures/parity/Landmarks.ts";
 
 const root = path.join(import.meta.dirname, "..");
@@ -837,6 +841,48 @@ const shellChecks = async (browser: Browser, hero: string) => {
   );
 };
 
+/** The order the footer folds its blocks in: the last block first (client-logic FooterLayout). */
+const FOLD_RANK = {
+  full: 0,
+  "icon-only": 1,
+  hidden: 2,
+} satisfies Record<typeof FooterBlockState.Type, number>;
+
+/**
+ * The `next` composer's footer at one width (look track L7). Its pills are drawn in the Stone look
+ * and are a finger tall on a phone, so they fold at other widths than t3code's; what must hold is
+ * the fold rule itself: nothing in the left cluster is cut off, a later block is folded at least as
+ * far as an earlier one, the overflow button shows exactly when a block is hidden, and at 1,180 px
+ * and up nothing folds. t3code's reading at the same width is reported beside it.
+ */
+const nextFooterVerdict = async (
+  page: Page,
+  width: number,
+  actual: typeof LandmarkFile.Type.footer,
+  expected: typeof LandmarkFile.Type.footer
+): Promise<string> => {
+  const fits = await page.evaluate(() => {
+    const controls = document.querySelector("[data-chat-composer-controls]");
+
+    return controls === null
+      ? false
+      : controls.scrollWidth <= controls.clientWidth + 1;
+  });
+
+  const ranks = Object.values(actual.blocks).map((state) => FOLD_RANK[state]);
+
+  const inOrder = ranks.every(
+    (rank, index) => index === 0 || rank >= (ranks[index - 1] ?? 0)
+  );
+
+  const hidden = ranks.some((rank) => rank === 2);
+  const overflowRight = actual.overflow === hidden;
+  const wideFull = width < 1180 || ranks.every((rank) => rank === 0);
+  const holds = fits && inOrder && overflowRight && wideFull;
+
+  return `${holds ? "folds" : "breaks"}: fits ${fits}, in order ${inOrder}, overflow ${actual.overflow} with hidden ${hidden}, wide full ${wideFull}; next ${JSON.stringify(actual)}, t3code ${JSON.stringify(expected)}`;
+};
+
 const chromiumBrowser = await chromium.launch();
 
 try {
@@ -868,13 +914,17 @@ try {
 
         const { footer: actual } = await readLandmarks(page);
 
+        if (ui === "next") {
+          return await nextFooterVerdict(page, width, actual, expected);
+        }
+
         const same =
           JSON.stringify(actual.blocks) === JSON.stringify(expected.blocks) &&
           actual.overflow === expected.overflow;
 
         return `${same ? "same" : "differs"}: t3code ${JSON.stringify(expected)}, Cairn ${JSON.stringify(actual)}`;
       },
-      (detail) => detail.startsWith("same")
+      (detail) => detail.startsWith("same") || detail.startsWith("folds")
     );
   }
 

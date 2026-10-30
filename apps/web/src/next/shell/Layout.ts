@@ -11,8 +11,8 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { Message } from "../../Message.ts";
 import type { Model } from "../../Model.ts";
-import * as Thread from "../../page/thread/index.ts";
 import { classNames } from "../../ui/ClassNames.ts";
+import * as Thread from "../page/Thread.ts";
 import { FONT_UI } from "../ui/Classes.ts";
 import { chatHeaderBand } from "./Header.ts";
 import * as Hold from "./Hold.ts";

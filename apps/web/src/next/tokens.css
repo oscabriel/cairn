@@ -270,6 +270,12 @@
   --destructive-foreground: var(--tone-failed);
   --success: var(--tone-done);
   --success-foreground: var(--tone-done);
+  /* The diff panel's line grounds and words are grey in the look (look track L7): its "+" and "-"
+     signs say which is which, and colour is kept for status icons. */
+  --diff-addition: var(--ink-1);
+  --diff-deletion: var(--ink-3);
+  --diff-addition-foreground: var(--ink-1);
+  --diff-deletion-foreground: var(--ink-2);
   --sidebar: var(--surface-sidebar);
   --sidebar-foreground: var(--ink-1);
   --sidebar-muted-foreground: var(--ink-2);

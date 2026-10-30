@@ -2,7 +2,7 @@
 // with an empty cache, timed from navigation start to the page's own `cairn:interactive` mark.
 //
 //   node judges/load.ts [<url>] [--local] [--browser chromium|webkit] [--profile lan|4g|both]
-//                       [--runs 20] [--headed]
+//                       [--runs 20] [--headed] [--ui classic|next]
 //   node judges/load.ts --collect --device phone [--log <events.log> | --unit cairn] [--runs 3]
 //
 // `<url>` defaults to https://code.gneiss.run (the deployed brain, reached through Caddy, whose
@@ -21,6 +21,9 @@
 //
 // `--collect` reads the brain's log instead of loading anything: the phone's `load.report` lines,
 // judged by `judges/phone-report.ts` (three cold loads under 1,000 ms each, DERP runs excluded).
+//
+// `--ui next` (look track L7) loads `?ui=next`, so each load draws the `next` frame, and a load
+// counts as interactive only once the frame is on the page as well as the mark is set.
 //
 // Prints one JSON line and exits 0 when the judge passes.
 //
@@ -43,7 +46,7 @@ import { CommandId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { RootWorkspace } from "@cairn/protocol/Launch";
 import type { ModelRef } from "@cairn/protocol/Models";
 import { NodeServices } from "@effect/platform-node";
-import { Effect, Option, Predicate } from "effect";
+import { Effect, Option, Predicate, Schema } from "effect";
 import { chromium, webkit } from "playwright";
 import type { Browser, Page } from "playwright";
 import { build } from "vite";
@@ -401,6 +404,22 @@ export interface LoadSample {
   readonly bootJsonChars: number;
 }
 
+const decodeFrameAt = Schema.decodeUnknownSync(Schema.Finite);
+
+/** When the `next` frame was on the page, in the page's clock (polled every 16 ms). */
+const nextFrameAt = async (page: Page): Promise<number> => {
+  const handle = await page.waitForFunction(
+    () =>
+      document.querySelector('#root[data-ui="next"]') === null
+        ? false
+        : performance.now(),
+    undefined,
+    { timeout: 30_000, polling: 16 }
+  );
+
+  return decodeFrameAt(await handle.jsonValue());
+};
+
 /** One cold load in a fresh context; `holdDocumentMs` delays the document as the control. */
 const coldLoad = async (
   browser: Browser,
@@ -449,35 +468,51 @@ const coldLoad = async (
       { timeout: 30_000, polling: 16 }
     );
 
-    const measured = await page.evaluate((mark) => {
-      const at = performance.getEntriesByName(mark)[0]?.startTime ?? 0;
-      const [navigation] = performance.getEntriesByType("navigation");
+    // On `?ui=next` the page is interactive once the `next` frame is drawn too: its chunk loads
+    // after the entry, so the load waits for it and counts its requests (look track L7).
+    const frameAt =
+      new URL(url).searchParams.get("ui") === "next"
+        ? await nextFrameAt(page)
+        : 0;
 
-      // The service worker's script and the page's own load report start as the app comes up,
-      // never ahead of it; WebKit stamps them a few ms before the mark where Chromium does not.
-      const resources = performance
-        .getEntriesByType("resource")
-        .filter((entry) => entry.startTime <= at)
-        .filter((entry) => {
-          const { pathname } = new URL(entry.name);
+    const measured = await page.evaluate(
+      ([mark, frame]) => {
+        const at = Math.max(
+          performance.getEntriesByName(mark)[0]?.startTime ?? 0,
+          frame
+        );
 
-          return pathname !== "/sw.js" && pathname !== "/api/load-report";
-        });
+        const [navigation] = performance.getEntriesByType("navigation");
 
-      const bytes = resources.reduce(
-        (sum, entry) =>
-          sum +
-          (entry instanceof PerformanceResourceTiming ? entry.transferSize : 0),
-        navigation instanceof PerformanceNavigationTiming
-          ? navigation.transferSize
-          : 0
-      );
+        // The service worker's script and the page's own load report start as the app comes up,
+        // never ahead of it; WebKit stamps them a few ms before the mark where Chromium does not.
+        const resources = performance
+          .getEntriesByType("resource")
+          .filter((entry) => entry.startTime <= at)
+          .filter((entry) => {
+            const { pathname } = new URL(entry.name);
 
-      const boot =
-        document.querySelector("head #cairn-boot")?.textContent ?? "";
+            return pathname !== "/sw.js" && pathname !== "/api/load-report";
+          });
 
-      return { at, resources: resources.length, bytes, boot: boot.length };
-    }, INTERACTIVE_MARK);
+        const bytes = resources.reduce(
+          (sum, entry) =>
+            sum +
+            (entry instanceof PerformanceResourceTiming
+              ? entry.transferSize
+              : 0),
+          navigation instanceof PerformanceNavigationTiming
+            ? navigation.transferSize
+            : 0
+        );
+
+        const boot =
+          document.querySelector("head #cairn-boot")?.textContent ?? "";
+
+        return { at, resources: resources.length, bytes, boot: boot.length };
+      },
+      [INTERACTIVE_MARK, frameAt] as const
+    );
 
     return {
       interactiveMs: Math.round(measured.at),
@@ -562,6 +597,7 @@ const main = async () => {
       log: { type: "string" },
       unit: { type: "string", default: "cairn" },
       since: { type: "string", default: "15 min ago" },
+      ui: { type: "string", default: "classic" },
     },
   });
 
@@ -590,10 +626,12 @@ const main = async () => {
       await sleep(5000);
     }
 
-    const url = Option.match(app, {
+    const base = Option.match(app, {
       onNone: () => positionals[0] ?? "https://code.gneiss.run",
       onSome: ({ origin }) => `${origin}/`,
     });
+
+    const url = values.ui === "next" ? `${base}?ui=next` : base;
 
     const isWebkit = values.browser === "webkit";
 

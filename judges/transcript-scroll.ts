@@ -1,8 +1,11 @@
 // The transcript's scroll judge (plan 3C, D26): the real transcript submodel over a 2,100-row
 // synthetic thread with a streaming tail, in Chromium, sampled once per animation frame.
 //
-//   node judges/transcript-scroll.ts [--seconds 6] [--headed]
+//   node judges/transcript-scroll.ts [--seconds 6] [--headed] [--ui classic|next]
 //     [--broken estimate|reflow|bookmark|anchor|extend|wheel]
+//
+// `--ui next` has the harness draw the `next` transcript and its rows (look track L7) instead of
+// classic's, over the same list, for the same checks and broken controls.
 //
 // It starts the web client's Vite server on an ephemeral loopback port and opens the transcript
 // harness (apps/web/src/timeline/harness), which has no brain. `--broken` turns on one of the
@@ -102,8 +105,12 @@ const { values } = parseArgs({
     seconds: { type: "string", default: "6" },
     headed: { type: "boolean", default: false },
     broken: { type: "string", default: "" },
+    ui: { type: "string", default: "classic" },
   },
 });
+
+/** Which transcript the harness draws: classic's, or the `next` one (`?ui=next`, look track L7). */
+const UI = values.ui === "next" ? "next" : "classic";
 
 /** The harness's broken controls; any other `--broken` would run the healthy list unnoticed. */
 const BROKEN_CONTROLS: ReadonlyArray<string> = BrokenControl.literals.filter(
@@ -1134,8 +1141,17 @@ const reflowPhase = async (page: Page) => {
 };
 
 const run = async (page: Page, port: number) => {
-  const query =
-    values.broken === "" ? "" : `?broken=${encodeURIComponent(values.broken)}`;
+  const params = new URLSearchParams();
+
+  if (values.broken !== "") {
+    params.set("broken", values.broken);
+  }
+
+  if (UI === "next") {
+    params.set("ui", "next");
+  }
+
+  const query = params.size === 0 ? "" : `?${params.toString()}`;
 
   const url = `http://${LOOPBACK}:${port}/src/timeline/harness/index.html${query}`;
   const loadMs = await load(page, url);
@@ -1310,7 +1326,7 @@ const main = async () => {
   const ok = failed.length === 0 && fixed.length === 0;
 
   process.stdout.write(
-    `${JSON.stringify({ ok, broken: values.broken, failed, knownFailing: [...known], fixed, checks, ...result, errors })}\n`
+    `${JSON.stringify({ ok, ui: UI, broken: values.broken, failed, knownFailing: [...known], fixed, checks, ...result, errors })}\n`
   );
   process.exitCode = ok ? 0 : 1;
 };

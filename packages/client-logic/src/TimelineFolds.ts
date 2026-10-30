@@ -28,6 +28,8 @@
 
 import { Option } from "effect";
 
+import { foldTally } from "./FoldTally.ts";
+import type { FoldTallyPart } from "./FoldTally.ts";
 import { formatDuration } from "./Time.ts";
 import type {
   TimelineEntry,
@@ -103,6 +105,8 @@ export interface TurnFold {
   readonly createdAt: number;
   readonly hiddenEntryIds: ReadonlySet<string>;
   readonly label: string;
+  /** What the hidden work was, counted by kind (`FoldTally.ts`); the `next` fold line shows it. */
+  readonly tally: ReadonlyArray<FoldTallyPart>;
 }
 
 interface TurnGroup {
@@ -286,6 +290,11 @@ export const deriveTurnFolds = (
       createdAt: Option.getOrElse(group.startBoundary, () => first.createdAt),
       hiddenEntryIds: hidden,
       label: foldLabel(Option.some(turn)),
+      tally: foldTally(
+        group.entries.flatMap((entry) =>
+          entry.kind === "work" && hidden.has(entry.id) ? [entry.entry] : []
+        )
+      ),
     });
   }
 

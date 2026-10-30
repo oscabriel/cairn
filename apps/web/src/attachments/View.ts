@@ -395,6 +395,10 @@ export const attachButtonView = <ParentMessage>(
     ]
   );
 
+/** The Message a pick of `files` in a file input sends (the `next` composer's paperclip). */
+export const pickedFiles = (files: ReadonlyArray<File>): Message =>
+  Message.PickedFiles({ files });
+
 /**
  * The attributes the composer's form carries: it accepts dropped files, and its Mount turns pasted
  * files (and long text pastes) into attachments. `toParentMessage` lifts them.

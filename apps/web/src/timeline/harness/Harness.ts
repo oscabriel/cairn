@@ -16,7 +16,11 @@
 // (the insert and arrive checks), `extend` windows the list around the lagging `scrollTop`
 // (the extend check), and `wheel` stops following on any wheel up, even one a nested scroller
 // takes (the nested-wheel check).
+//
+// `?ui=next` draws the `next` transcript (look track L7: `next/timeline/View.ts` and its rows, in
+// the design tokens) over the same submodel, so the judge holds the redrawn rows to the same checks.
 
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";
 import { ManagedResource, Runtime, Subscription, Update } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -24,6 +28,7 @@ import { defineMessageUnion } from "foldkit/message";
 
 import { CairnConnection } from "../../connection/Connection.ts";
 import type { CairnConnectionService } from "../../connection/Connection.ts";
+import { view as nextTimelineView } from "../../next/timeline/View.ts";
 import { ThreadViewModel } from "../../page/thread/Model.ts";
 import type { BrokenControl } from "../list/Model.ts";
 import { Message as TimelineMessage } from "../Message.ts";
@@ -32,12 +37,14 @@ import {
   Model as TimelineModel,
 } from "../Model.ts";
 import { transcriptOf } from "../Rows.ts";
+
+import "../../next/tokens.css";
 import {
   afterView,
   switchThread,
   update as updateTimeline,
 } from "../Update.ts";
-import { view as timelineView } from "../View.ts";
+import { view as classicTimelineView } from "../View.ts";
 import {
   commitReply,
   growReply,
@@ -96,6 +103,16 @@ const broken: BrokenControl = Option.getOrElse(
   ),
   () => "none" as const
 );
+
+/** Whether the page draws the `next` transcript (`?ui=next`) or classic's. */
+const isNext = new URLSearchParams(location.search).get("ui") === "next";
+
+if (isNext) {
+  // The design tokens scope to `[data-ui="next"]`; the frame marks <html> and its root the same way.
+  document.documentElement.dataset.ui = "next";
+}
+
+const timelineView = isNext ? nextTimelineView : classicTimelineView;
 
 /** Ids for added entries, clear of the synthetic threads' own. */
 const FIRST_ADDED_ID = 1_000_000;
@@ -343,7 +360,10 @@ const button = (
 
 const view = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
-    [h.Class("flex h-dvh flex-col bg-background text-foreground")],
+    [
+      ...onlyIf(isNext, h.DataAttribute("ui", "next")),
+      h.Class("flex h-dvh flex-col bg-background text-foreground"),
+    ],
     [
       h.div(
         [h.Class("flex gap-2 border-b border-border p-2")],

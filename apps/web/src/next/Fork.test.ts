@@ -100,6 +100,15 @@ const drawn = (model: Model) => {
   };
 };
 
+/**
+ * Hooks only classic draws, for a reason the `next` page does not have: the settings page's
+ * placeholder while its own chunk loads (`SettingsPage.ts`), since `next` draws its settings page
+ * from the chunk it already loaded (look track L7).
+ */
+const CLASSIC_ONLY: ReadonlySet<string> = new Set([
+  "data-testid=settings-loading",
+]);
+
 describe("the fork behind the root view", () => {
   it.effect(
     "draws next, with every classic hook outside the sidebar, once the chunk has loaded",
@@ -116,7 +125,9 @@ describe("the fork behind the root view", () => {
           assert.notInclude(classic.hooks, "data-ui", route._tag);
           assert.isAbove(classic.hooks.length, 3, route._tag);
           assert.deepStrictEqual(
-            classic.outsideSidebar.filter((hook) => !next.hooks.includes(hook)),
+            classic.outsideSidebar.filter(
+              (hook) => !next.hooks.includes(hook) && !CLASSIC_ONLY.has(hook)
+            ),
             [],
             `${route._tag}: next keeps the classic hooks outside the sidebar`
           );

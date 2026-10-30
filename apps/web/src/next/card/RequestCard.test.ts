@@ -10,7 +10,7 @@ import { Option } from "effect";
 import type { Schema } from "effect";
 import * as Scene from "foldkit/scene";
 
-import { Message } from "./Message.ts";
+import { Message, OutMessage } from "./Message.ts";
 import { initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
@@ -349,7 +349,7 @@ describe("the request card", () => {
       })
     ).model;
 
-    const settled = inform(typed, {
+    const informed = inform(typed, {
       threadId: Option.some(threadId),
       approvals: doc(
         record({
@@ -366,7 +366,22 @@ describe("the request card", () => {
         })
       ),
       hasClient: true,
-    }).model;
+    });
+
+    const settled = informed.model;
+
+    // The typed words go back into the thread's composer draft, once (look track L7).
+    assert.deepStrictEqual(
+      informed.outMessage,
+      OutMessage.CarriedTypedWords({ threadId, text: "MariaDB, please" })
+    );
+    assert.isUndefined(
+      inform(settled, {
+        threadId: Option.some(threadId),
+        approvals: settled.approvals,
+        hasClient: false,
+      }).outMessage
+    );
 
     Scene.scene(
       config,

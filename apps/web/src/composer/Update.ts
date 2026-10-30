@@ -136,6 +136,37 @@ export const pickDraftProject = (
   });
 
 /**
+ * Puts words the user typed elsewhere for `threadId` (on a request card that closed under them)
+ * into that thread's draft, below what is already there and never over it, so nothing typed is
+ * lost (t3code's `carryDisplacedCustomAnswerIntoPrompt`; look track L7). The debounced saver
+ * writes the change, and an open editor shows it on its next draw.
+ */
+export const carryIntoDraft = (
+  model: Model,
+  threadId: string,
+  text: string
+): Model =>
+  text.trim() === ""
+    ? model
+    : modifyFields(model, {
+        drafts: (drafts) => {
+          const key = `thread:${threadId}`;
+
+          const current = Option.getOrElse(
+            Record.get(drafts, key),
+            () => emptyDraft
+          );
+
+          return Record.set(drafts, key, {
+            ...current,
+            text:
+              current.text.trim() === "" ? text : `${current.text}\n\n${text}`,
+          });
+        },
+        draftsVersion: (version) => version + 1,
+      });
+
+/**
  * Puts a turn that did not reach the brain back into the draft at `key`: its settings when the draft
  * is empty, its text (below what the user has typed since, never over it) and its attachments.
  */

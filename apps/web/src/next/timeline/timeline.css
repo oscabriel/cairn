@@ -1,0 +1,30 @@
+/*
+ * The `next` transcript's utilities (plan look track L7: its rows, its list frame and 6C's subagent
+ * rows), the thread page's and the diff's, built from next/timeline, next/page and next/diff alone
+ * and shipped in the `next` chunk that imports their views, as next/ui/utilities.css does for the
+ * primitives: styles.css leaves these folders out of the entry's scan, so the entry CSS every
+ * classic page loads does not grow with them. It takes Tailwind's theme by reference and the
+ * design token colour names from ../ui/theme.css.
+ */
+@reference "tailwindcss";
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "../ui/theme.css";
+@source "./";
+@source "../page";
+@source "../diff";
+@source not "./**/*.test.ts";
+@source not "../page/**/*.test.ts";
+@source not "../diff/**/*.test.ts";
+/* A bare `hidden` here would win over a classic region's `md:block` inside the next frame. */
+@source not inline("hidden");
+
+/* The model's GitHub-style alerts (Note, Tip, Important, Warning, Caution) are drawn by the classic
+   markdown view in a hue each; the look keeps colour for status icons, so in `next` their rule is a
+   hairline and their title the main ink, and their label alone says which kind it is. */
+[data-ui="next"] [data-alert] {
+  border-color: var(--stroke-2);
+}
+
+[data-ui="next"] [data-alert] > [data-slot="alert-title"] {
+  color: var(--ink-1);
+}

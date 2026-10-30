@@ -7,7 +7,8 @@
 // - A role that does not resolve blocks Go (and Run on 1 first): a role the table does not bind, a
 //   spec that is neither a role nor a model, or a role whose models are all passed over. Go would
 //   start nothing then (the brain resolves again at Go and tells the parent so), so the card says
-//   why and where to fix it instead of offering it.
+//   why and where to fix it instead of offering it. A workflow node's own brief is not checked:
+//   the brain resolves it at Go with its launch's overrides, which the node's brief does not carry.
 // - Send back is a subagent's brief's only: its parent writes a new brief from the notes. A
 //   workflow's launch and a node's own brief have no one to revise them (the record refuses it).
 // - Run on 1 first is a workflow's launch's only (ADR 0032), and only when there is more than one
@@ -70,18 +71,31 @@ const launchQuestion = (
       });
 };
 
-/** What to ask `roles.check` for a request; none when it names no role or model. */
+/**
+ * What to ask `roles.check` for a request; none when it names no role or model, and none for a
+ * workflow node's own brief (tool `agent` or `verify`, raised when the node falls outside its
+ * launch's envelope). The brain resolves a node's role at Go with its launch's overrides, which
+ * the node's brief does not carry, so the global table alone could block a role only an override
+ * binds or name a model the override replaces: the card neither holds Go on it nor says what it
+ * runs on.
+ */
 export const roleQuestionOf = (
+  record: Pick<ApprovalRecord, "tool">,
   body: RequestBody
 ): Option.Option<RoleQuestion> =>
   RequestBody.$match(body, {
-    Brief: ({ payload }) =>
-      payload.type === "workflow"
-        ? launchQuestion(payload)
-        : Option.map(briefSpec(payload), (spec) => ({
+    Brief: ({ payload }) => {
+      if (payload.type === "workflow") {
+        return launchQuestion(payload);
+      }
+
+      return record.tool === SPAWN_TOOL
+        ? Option.map(briefSpec(payload), (spec) => ({
             specs: [spec],
             overrides: Option.none(),
-          })),
+          }))
+        : Option.none();
+    },
     Approval: () => Option.none(),
     Question: () => Option.none(),
     Criteria: () => Option.none(),

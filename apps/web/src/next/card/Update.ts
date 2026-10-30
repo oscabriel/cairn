@@ -169,7 +169,7 @@ export const isAnswerable = (model: Model, approvalId: ApprovalId): boolean =>
  * could not be made does not hold Go, since the brain resolves the role again at Go.
  */
 export const goHeld = (model: Model, request: PendingRequest): boolean => {
-  if (Option.isNone(roleQuestionOf(request.body))) {
+  if (Option.isNone(roleQuestionOf(request.record, request.body))) {
     return false;
   }
 
@@ -516,7 +516,7 @@ const pick = (
 
 /** Asks `roles.check` about one request's roles, superseding any check still out for it. */
 const askRoles = (model: Model, request: PendingRequest): UpdateReturn =>
-  Option.match(roleQuestionOf(request.body), {
+  Option.match(roleQuestionOf(request.record, request.body), {
     onNone: () => ({ model }),
     onSome: (question) => {
       const generation = model.checkGeneration + 1;

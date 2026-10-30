@@ -389,6 +389,45 @@ describe("the brief card", () => {
     );
   });
 
+  it("neither checks nor blocks a workflow node's own brief, whose role its launch's overrides may bind", () => {
+    const nodeBrief = record({
+      id: "n-1",
+      tool: "agent",
+      payload: briefPayload("@judge"),
+    });
+
+    const nId = ApprovalId.make("n-1");
+
+    const shown = inform(initial, context(doc(nodeBrief)));
+
+    assert.lengthOf(shown.commands ?? [], 0);
+
+    Scene.scene(
+      config,
+      Scene.given(shown.model),
+      Scene.expect(goButton).not.toBeDisabled(),
+      Scene.expect(Scene.testId("request-card-go-blocked")).not.toExist(),
+      Scene.inside(
+        Scene.testId("request-card"),
+        Scene.expect(Scene.selector("dl")).not.toContainText("Runs on")
+      ),
+      Scene.click(goButton),
+      Scene.Command.expectExact(
+        RespondToRequest({
+          threadId,
+          approvalId: nId,
+          decision: "accept",
+          reason: Option.none(),
+          answers: Option.none(),
+        })
+      ),
+      Scene.Command.resolve(
+        RespondToRequest,
+        Message.SucceededRespond({ approvalId: nId })
+      )
+    );
+  });
+
   it("sends a brief back with the notes typed, and not without them", () => {
     Scene.scene(
       config,

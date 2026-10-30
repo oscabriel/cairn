@@ -564,7 +564,7 @@ const runsOn = (
   model: Model,
   request: PendingRequest
 ): ReadonlyArray<CardLine> => {
-  if (Option.isNone(roleQuestionOf(request.body))) {
+  if (Option.isNone(roleQuestionOf(request.record, request.body))) {
     return [];
   }
 

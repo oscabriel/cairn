@@ -107,6 +107,8 @@ const resolvedCheck = (fields: {
   sameFamilyAsWorker: fields.sameFamilyAsWorker,
 });
 
+const spawn = { tool: "subagent_spawn" };
+
 const unresolvedCheck = (
   spec: string,
   reason: "unbound_role" | "invalid_spec" | "no_ready_model",
@@ -120,11 +122,12 @@ const unresolvedCheck = (
 describe("what the brief card asks about roles", () => {
   it("asks about a brief's role, else its model, else nothing", () => {
     assert.deepStrictEqual(
-      roleQuestionOf(RequestBody.Brief({ payload: brief })),
+      roleQuestionOf(spawn, RequestBody.Brief({ payload: brief })),
       Option.some({ specs: ["@worker"], overrides: Option.none() })
     );
     assert.deepStrictEqual(
       roleQuestionOf(
+        spawn,
         RequestBody.Brief({
           payload: {
             ...brief,
@@ -140,12 +143,16 @@ describe("what the brief card asks about roles", () => {
     );
     assert.isTrue(
       Option.isNone(
-        roleQuestionOf(RequestBody.Brief({ payload: { ...brief, role: null } }))
+        roleQuestionOf(
+          spawn,
+          RequestBody.Brief({ payload: { ...brief, role: null } })
+        )
       )
     );
     assert.isTrue(
       Option.isNone(
         roleQuestionOf(
+          spawn,
           RequestBody.Approval({
             summary: "Open the gate",
             payload: Option.none(),
@@ -155,9 +162,19 @@ describe("what the brief card asks about roles", () => {
     );
   });
 
+  it("asks nothing about a workflow node's own brief, which the brain resolves with its launch's overrides", () => {
+    for (const tool of ["agent", "verify"]) {
+      assert.isTrue(
+        Option.isNone(
+          roleQuestionOf({ tool }, RequestBody.Brief({ payload: brief }))
+        )
+      );
+    }
+  });
+
   it("asks about every spec a launch names once, with its overrides", () => {
     assert.deepStrictEqual(
-      roleQuestionOf(RequestBody.Brief({ payload: launch(5, false) })),
+      roleQuestionOf(spawn, RequestBody.Brief({ payload: launch(5, false) })),
       Option.some({
         specs: ["@scout", "@judge", "@verifier"],
         overrides: Option.none(),
@@ -176,6 +193,7 @@ describe("what the brief card asks about roles", () => {
     assert.deepStrictEqual(
       Option.flatMap(
         roleQuestionOf(
+          spawn,
           RequestBody.Brief({ payload: launch(5, false, overrides) })
         ),
         (question) => question.overrides

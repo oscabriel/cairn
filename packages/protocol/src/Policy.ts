@@ -614,3 +614,17 @@ export const SetCriteriaInput = Schema.Struct({
 });
 
 export type SetCriteriaInput = typeof SetCriteriaInput.Type;
+
+/**
+ * `goal.mark` input: the user's own verdict on a criterion a `user` judge decides (`decidedBy`
+ * user). The verdict writer records it; a criterion any other judge decides refuses it.
+ */
+export const MarkCriterionInput = Schema.Struct({
+  threadId: ThreadId,
+  criterionId: TrimmedNonEmptyString,
+  ok: Schema.Boolean,
+  /** Why, in the user's words; kept as the verdict's note. */
+  note: Schema.OptionFromOptionalKey(DisplayText),
+});
+
+export type MarkCriterionInput = typeof MarkCriterionInput.Type;

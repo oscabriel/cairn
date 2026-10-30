@@ -100,6 +100,7 @@ export const ShellRpcs = CairnRpcs.omit(
   "providers.login.cancel",
   "providers.logout",
   "goal.setCriteria",
+  "goal.mark",
   "workflow.stop",
   "workflow.stopNode",
   "workflow.list",

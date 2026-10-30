@@ -52,6 +52,25 @@ export const goalTallyOf = (
     })
   );
 
+/** Where a goal stands, summed: not met if a criterion failed, met when every one is, else open. */
+export const goalTallyState = (tally: GoalTally): CriterionState => {
+  if (tally.failed > 0) {
+    return "failed";
+  }
+
+  return tally.met === tally.total ? "met" : "open";
+};
+
+/** The goal chip's words: "2 of 4 met", and "1 not met" after them when a criterion failed. */
+export const goalTallyText = (tally: GoalTally): string =>
+  tally.failed > 0
+    ? `${String(tally.met)} of ${String(tally.total)} met, ${String(tally.failed)} not met`
+    : `${String(tally.met)} of ${String(tally.total)} met`;
+
+/** The goal tally in a row's few characters: "2/4 met". */
+export const goalTallyShort = (tally: GoalTally): string =>
+  `${String(tally.met)}/${String(tally.total)} met`;
+
 /** The fields of a subagent's row progress reads. */
 export type ProgressRow = Pick<
   ThreadShell,

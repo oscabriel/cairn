@@ -11,6 +11,7 @@ import {
   TaskId,
 } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
+import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import { NO_SUBAGENTS } from "@cairn/protocol/Subagents";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
@@ -30,6 +31,7 @@ import { TestClock } from "effect/testing";
 
 import { messageText } from "../brain/CommitFeed.ts";
 import {
+  GoalUpdated,
   HarnessError,
   HarnessSeam,
   MessageCommitted,
@@ -1289,6 +1291,109 @@ describe("a parent's tally of its subagents", () => {
           assert.deepStrictEqual(
             (yield* shellOf(testThreadId(2))).subagents,
             NO_SUBAGENTS
+          );
+          assert.strictEqual((yield* projector.reconcile).patched, 0);
+        })
+      )
+  );
+});
+
+/** A user criterion in `cairn.goal`'s JSON, in `state`. */
+const criterion = (id: string, state: "open" | "met" | "failed") => ({
+  id,
+  text: `Criterion ${id}`,
+  judge: { kind: "user" },
+  state,
+  verdict: null,
+  tries: 0,
+  changedAt: 1,
+});
+
+describe("a goal thread's tally of its criteria", () => {
+  const seedThread = Effect.gen(function* () {
+    const sink = yield* EventSink;
+    const project = createProject(1);
+
+    yield* sink.commitCommand(project.command);
+    yield* sink.commitCommand(createThread(project.projectId, 1));
+  });
+
+  it.effect(
+    "sets the tally each GoalUpdated carries, and moves no updatedAt",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThread;
+
+          const before = yield* shellOf(THREAD);
+
+          assert.isTrue(Option.isNone(before.goal));
+
+          yield* emit([
+            GoalUpdated.make({
+              threadId: THREAD,
+              tally: Option.some({ total: 3, met: 1, failed: 0 }),
+            }),
+          ]);
+
+          const counted = yield* shellOf(THREAD);
+
+          assert.deepStrictEqual(
+            counted.goal,
+            Option.some({ total: 3, met: 1, failed: 0 })
+          );
+          // The tally is a cache like the subagents': a verdict does not reorder the thread.
+          assert.deepStrictEqual(counted.updatedAt, before.updatedAt);
+
+          yield* emit([
+            GoalUpdated.make({ threadId: THREAD, tally: Option.none() }),
+          ]);
+
+          assert.isTrue(Option.isNone((yield* shellOf(THREAD)).goal));
+        })
+      )
+  );
+
+  it.effect(
+    "the boot reconcile counts a goal a lost event left behind, then patches nothing",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThread;
+
+          const fake = yield* FakeHarness;
+          const projector = yield* ShellProjector;
+
+          yield* Ref.set(
+            fake.views,
+            new Map([
+              [
+                THREAD,
+                {
+                  ...finishedView,
+                  docs: {
+                    [GOAL_DOCUMENT]: {
+                      objective: "Ship it",
+                      criteria: [
+                        criterion("c1", "met"),
+                        criterion("c2", "failed"),
+                        criterion("c3", "open"),
+                      ],
+                      envelope: null,
+                      closedAt: null,
+                      closedBy: null,
+                    },
+                  },
+                },
+              ],
+            ])
+          );
+
+          yield* projector.reconcile;
+
+          assert.deepStrictEqual(
+            (yield* shellOf(THREAD)).goal,
+            Option.some({ total: 3, met: 1, failed: 1 })
           );
           assert.strictEqual((yield* projector.reconcile).patched, 0);
         })

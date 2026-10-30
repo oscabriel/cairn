@@ -2,7 +2,8 @@
 // the route, the connection, the clock), which project the rail has selected, the phone's sidebar
 // sheet, which project favicons loaded, the refresh confirm, the scratch thread's overlay, and the
 // work panel's open state. The rail, the project's sidebar list, the chat header, the scratch
-// overlay and the work panel all draw from it.
+// overlay and the work panel all draw from it, and so does the goal panel (plan 6H): the open
+// thread's criteria and the user's marks on its own.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelDefaults } from "@cairn/protocol/Models";
@@ -102,6 +103,26 @@ export const stopKeyOf = (
     onSome: (node) => `${workflowId}/${node}`,
   });
 
+/**
+ * The goal panel (plan 6H): shown or hidden, the criteria whose mark is on its way to Cairn, and
+ * why the last mark did not reach it.
+ */
+export const GoalPanelState = Schema.Struct({
+  isOpen: Schema.Boolean,
+  /** Criterion ids of marks sent and not yet answered; their buttons take no second tap. */
+  marking: Schema.Array(Schema.String),
+  failure: Schema.Option(Schema.String),
+});
+
+export type GoalPanelState = typeof GoalPanelState.Type;
+
+/** The goal panel closed, with no mark out. */
+export const initialGoalPanel: GoalPanelState = {
+  isOpen: false,
+  marking: [],
+  failure: Option.none(),
+};
+
 /** The `next` shell's Model. */
 export const Model = Schema.Struct({
   context: ShellContext,
@@ -116,6 +137,7 @@ export const Model = Schema.Struct({
   refresh: Schema.Option(RefreshConfirm),
   scratch: ScratchState,
   work: WorkState,
+  goal: GoalPanelState,
   /** Why the last refresh or scratch turn could not be prepared. */
   failure: Schema.Option(Schema.String),
 });
@@ -147,5 +169,6 @@ export const initial: Model = {
     isBusy: false,
   },
   work: initialWork,
+  goal: initialGoalPanel,
   failure: Option.none(),
 };

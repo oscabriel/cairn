@@ -55,6 +55,7 @@ export const stubHandlers = {
   "providers.login.cancel": unary("providers.login.cancel"),
   "providers.logout": unary("providers.logout"),
   "goal.setCriteria": unary("goal.setCriteria"),
+  "goal.mark": unary("goal.mark"),
   "workflow.stop": unary("workflow.stop"),
   "workflow.stopNode": unary("workflow.stopNode"),
   "workflow.list": unary("workflow.list"),

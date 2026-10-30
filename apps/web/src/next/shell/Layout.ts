@@ -1,7 +1,7 @@
 // The `next` app's layout (plan look track L6), drawn in the root's boundary: the shell's left
 // column (or the phone's sheet), and beside it the open page under the new chat header, with the
-// hold banner above a thread's transcript, and beside the chat column the work panel (plan 6E) while
-// it is open (a bottom sheet under `lg`); the scratch overlay and the refresh confirm float over
+// hold banner above a thread's transcript, and beside the chat column the work panel (plan 6E) or
+// the goal panel (plan 6H) while one is open (a bottom sheet under `lg`); the scratch overlay and the refresh confirm float over
 // it. The shell's parts are Submodel views over `model.nextShell` (`View.ts`); the page's own parts
 // (the transcript, the composer, the hero and settings pages, the diff toggle) are the root's
 // regions, placed beside them rather than inside them, so their Mounts keep the root as their
@@ -15,6 +15,7 @@ import type { Model } from "../../Model.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import * as Thread from "../page/Thread.ts";
 import { FONT_UI } from "../ui/Classes.ts";
+import { goalChipView, goalInputsOf, goalPanelView } from "./Goal.ts";
 import { chatHeaderBand } from "./Header.ts";
 import * as Hold from "./Hold.ts";
 import type { Message as ShellMessage } from "./Message.ts";
@@ -80,6 +81,7 @@ const routeBody = (
 ): ReadonlyArray<Html> => {
   if (Predicate.isTagged(model.route, "Thread")) {
     const work = { inputs: workInputsOf(model) };
+    const goal = { inputs: goalInputsOf(model) };
 
     return [
       h.div(
@@ -106,6 +108,13 @@ const routeBody = (
                   viewInputs: work,
                   toParentMessage: toShell,
                 }),
+                h.submodel({
+                  slotId: "goal-chip",
+                  model: model.nextShell.goal,
+                  view: goalChipView,
+                  viewInputs: goal,
+                  toParentMessage: toShell,
+                }),
               ]),
               hold(h, model),
               regions.thread(),
@@ -117,6 +126,13 @@ const routeBody = (
             model: model.nextShell.work,
             view: workPanelView,
             viewInputs: work,
+            toParentMessage: toShell,
+          }),
+          h.submodel({
+            slotId: "goal-panel",
+            model: model.nextShell.goal,
+            view: goalPanelView,
+            viewInputs: goal,
             toParentMessage: toShell,
           }),
         ]

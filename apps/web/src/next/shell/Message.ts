@@ -1,6 +1,7 @@
 // The `next` shell's Messages, and the OutMessages it hands the root: an item for the outbox (a
 // refresh's launch, a scratch turn or clear), a path to open, and a new draft in a chosen project.
-// The work panel's Messages are the shell's too: it is drawn beside the chat column.
+// The work panel's Messages are the shell's too: it is drawn beside the chat column, as the goal
+// panel's are.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { Schema } from "effect";
@@ -79,6 +80,19 @@ export const Message = defineMessageUnion({
   StoppedWorkflow: { key: Schema.String },
   FailedStopWorkflow: { key: Schema.String, message: Schema.String },
   ClickedDismissWorkFailure: {},
+
+  /** The header's goal chip: show the goal panel, or hide it. */
+  ClickedGoal: {},
+  ClickedCloseGoal: {},
+  /** The user's own verdict on a criterion a user judge decides: met (`ok`) or not met. */
+  ClickedMarkCriterion: {
+    threadId: ThreadId,
+    criterionId: Schema.String,
+    ok: Schema.Boolean,
+  },
+  MarkedCriterion: { criterionId: Schema.String },
+  FailedMarkCriterion: { criterionId: Schema.String, message: Schema.String },
+  ClickedDismissGoalFailure: {},
 });
 
 export type Message = typeof Message.Type;

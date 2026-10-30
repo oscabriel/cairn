@@ -13,11 +13,15 @@ import { WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision, LaunchEdits } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
-import { answerApproval, Approvals } from "../brain/CairnDocs.ts";
+import {
+  answerApproval,
+  Approvals,
+  cancelStoppedApprovals,
+} from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { EventsDoc, eventKind } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
@@ -88,6 +92,28 @@ const answer = async (
   );
 };
 
+/** When the stop lands, on the records it cancels. */
+const STOPPED_AT = 3;
+
+/**
+ * Stops the thread's run as the host's stop does (`abortAndCancel`): aborts the run's task, waits
+ * for it to end, then cancels the records it held in one commit.
+ */
+const stopRun = async (brain: KitBrain): Promise<void> => {
+  const live = await brain.harness.snapshot(LiveDoc, brain.root, context);
+  const run = live?.run;
+
+  if (run === undefined) {
+    return;
+  }
+
+  await brain.harness.abortTask(run.taskId, context);
+  await brain.harness.waitForTask(run.taskId, context);
+  await Effect.runPromise(
+    cancelStoppedApprovals(brain.harness, brain.root, [run.taskId], STOPPED_AT)
+  );
+};
+
 /** The names of the events in the log, oldest first. */
 const eventsOf = async (brain: KitBrain): Promise<ReadonlyArray<string>> => {
   const state = await brain.harness.snapshot(EventsDoc, context);
@@ -121,6 +147,8 @@ const flow = (
     readonly launches: ReadonlyArray<LaunchAnswer>;
     readonly briefs?: "accept" | "decline";
     readonly faults?: WorkflowFaultSet;
+    /** Stops the thread instead of answering the first launch or node card that waits. */
+    readonly stopAt?: "launch" | "card";
   }
 ) =>
   Effect.gen(function* () {
@@ -163,7 +191,25 @@ const flow = (
             (record) => record.status === "pending" && !answered.has(record.id)
           );
 
-          for (const record of pending) {
+          const waiting = pending.find((record) =>
+            options.stopAt === "launch"
+              ? record.tool === LAUNCH_TOOL
+              : options.stopAt === "card" && isNodeBrief(record)
+          );
+
+          if (waiting !== undefined) {
+            answered.add(waiting.id);
+
+            if (isNodeBrief(waiting)) {
+              cards.add(waiting.id);
+            }
+
+            // oxlint-disable-next-line no-await-in-loop -- one stop
+            await stopRun(brain);
+            answering.running = false;
+          }
+
+          for (const record of answering.running ? pending : []) {
             if (record.tool === LAUNCH_TOOL) {
               const next = options.launches[answering.launches];
 
@@ -482,6 +528,68 @@ return { a, total: budget.total };`),
         assert.deepStrictEqual(outcome.rows, []);
         assert.deepStrictEqual(Object.keys(outcome.records), []);
         assert.include(outcome.reply, "dispatched no node");
+      }),
+    30_000
+  );
+
+  it.live(
+    "a stop while the launch card waits cancels it and declines the row, and nothing runs",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* flow(FIVE, { launches: [], stopAt: "launch" });
+
+        const [row] = outcome.rows;
+        const launch = outcome.records[row?.approvalId ?? ""];
+
+        assert.strictEqual(launch?.status, "cancelled");
+        assert.deepStrictEqual(launch?.decidedBy, {
+          kind: "system",
+          why: "run-stopped",
+        });
+        assert.strictEqual(row?.state, "declined");
+        assert.deepStrictEqual(row?.decidedBy, {
+          kind: "system",
+          why: "run-stopped",
+        });
+        assert.strictEqual(row?.decidedAt, STOPPED_AT);
+        assert.deepStrictEqual(row?.nodes, {});
+        assert.deepStrictEqual(outcome.effects, []);
+        assert.isFalse(
+          Object.values(outcome.records).some(
+            (record) => record.status === "pending"
+          )
+        );
+      }),
+    30_000
+  );
+
+  it.live(
+    "a stop while a node waits on its own card cancels the card and stops the node",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* flow(FIVE, { launches: [GO], stopAt: "card" });
+
+        assert.deepStrictEqual(outcome.problems, []);
+        assert.strictEqual(outcome.cards.size, 1, "exactly one card");
+
+        const nodes = Object.values(outcome.rows[0]?.nodes ?? {});
+        const waiting = nodes.find((node) => node.label === "e");
+        const card = outcome.records[waiting?.briefId ?? ""];
+
+        assert.isTrue(outcome.cards.has(card?.id ?? ""));
+        assert.strictEqual(card?.status, "cancelled");
+        assert.deepStrictEqual(card?.decidedBy, {
+          kind: "system",
+          why: "run-stopped",
+        });
+        assert.strictEqual(waiting?.state, "stopped");
+        assert.isNull(waiting?.conversationId ?? null);
+        assert.notInclude(starts(outcome.effects), "e");
+        assert.isFalse(
+          Object.values(outcome.records).some(
+            (record) => record.status === "pending"
+          )
+        );
       }),
     30_000
   );

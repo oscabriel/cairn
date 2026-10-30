@@ -74,6 +74,12 @@ import {
   markQuestion,
 } from "../subagents/SubagentDocs.ts";
 import type { ChildState } from "../subagents/SubagentDocs.ts";
+import {
+  declineRow,
+  launchOf,
+  NODE_BRIEF_TOOLS,
+  WorkflowsDoc,
+} from "../workflows/WorkflowDocs.ts";
 import { Brain } from "./Brain.ts";
 import { durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
@@ -1169,18 +1175,58 @@ export const answerApproval = (
   });
 
 /**
- * Whether a run holds this record: a pending tool call or question its own tool task waits on.
- * Briefs and criteria wait for the user with no run, and a mirror (in a parent, of its child's
- * escalated question) has no tool task of its own, so a stop leaves those pending. A child's
- * question is held by the child's run even once escalated: stopping the child ends the
- * `ask_parent` call that would read its answer, and `cancelLinkedQuestions` cancels its mirrors.
+ * Whether a brief is one a run's own task waits on: a workflow's launch approval (the
+ * `workflow_plan` task is the wait) or a workflow node's own brief (the node's task waits on it).
+ * A subagent's brief waits for the user with no run.
+ */
+const workflowBrief = (record: ApprovalRecord) =>
+  isLaunchRecord(record) || NODE_BRIEF_TOOLS.has(record.tool);
+
+/**
+ * Whether a run holds this record: a pending tool call, question or workflow brief its own tool
+ * task waits on. A subagent's brief and criteria wait for the user with no run, and a mirror (in a
+ * parent, of its child's escalated question) has no tool task of its own, so a stop leaves those
+ * pending. A child's question is held by the child's run even once escalated: stopping the child
+ * ends the `ask_parent` call that would read its answer, and `cancelLinkedQuestions` cancels its
+ * mirrors.
  */
 export const heldByRun = (record: ApprovalRecord) =>
   record.status === "pending" &&
   record.toolTaskId > 0 &&
-  record.kind !== "brief" &&
+  (record.kind !== "brief" || workflowBrief(record)) &&
   record.kind !== "criteria" &&
   record.mirrorOf === null;
+
+/**
+ * For the records just cancelled in `conversationId`, every workflow launch approval among them
+ * declines its row still `proposed`, inside the caller's transaction, so a stopped or abandoned
+ * `workflow_plan` leaves no row waiting for a Go nothing would run (ADR 0032).
+ */
+const declineCancelledLaunches = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  cancelled: ReadonlyArray<ApprovalRecord>
+): Promise<void> => {
+  const launches = cancelled.flatMap((record) =>
+    Option.toArray(
+      Option.map(launchOf(record), (launch) => ({ record, launch }))
+    )
+  );
+
+  if (launches.length === 0) {
+    return;
+  }
+
+  const ledger = await tx.doc(WorkflowsDoc, conversationId);
+
+  for (const { record, launch } of launches) {
+    const row = ledger.items[launch.workflowId];
+
+    if (row !== undefined) {
+      declineRow(row, record);
+    }
+  }
+};
 
 /** The `tool` of a question record a child's final answer became (ADR 0027): no tool asked it. */
 export const RELAYED_QUESTION_TOOL = "subagent_answer";
@@ -1341,6 +1387,7 @@ export const cancelStoppedApprovals = (
           now,
           "run-stopped"
         );
+        await declineCancelledLaunches(tx, conversationId, cancelled);
 
         return cancelled.map((record) => record.id);
       }, context)
@@ -1409,6 +1456,7 @@ export const cancelAbandonedApprovals = (
         }
 
         await cancelLinkedQuestions(tx, conversationId, cancelled, now, why);
+        await declineCancelledLaunches(tx, conversationId, cancelled);
 
         return cancelled.map((record) => record.id);
       }, context)

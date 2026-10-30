@@ -34,7 +34,13 @@ import {
 import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
 import { emit } from "../brain/Events.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
-import { approveRecord, launchOf, WorkflowsDoc } from "./WorkflowDocs.ts";
+import {
+  approveRecord,
+  declineRow,
+  launchOf,
+  NODE_BRIEF_TOOLS,
+  WorkflowsDoc,
+} from "./WorkflowDocs.ts";
 import type {
   BudgetState,
   NodeItemState,
@@ -46,12 +52,6 @@ export const SAMPLE_SIZE = 1;
 
 /** How long a launch approval or a node's own brief stays answerable: a brief's week. */
 export const LAUNCH_TTL_MILLIS = 7 * 24 * 60 * 60 * 1000;
-
-/** The record tool of a node's own brief, one per node kind. */
-export const NODE_BRIEF_TOOLS: ReadonlySet<string> = new Set([
-  "agent",
-  "verify",
-]);
 
 /** The tool of a workflow's launch approval. */
 export const LAUNCH_TOOL = "workflow_plan";
@@ -89,16 +89,11 @@ export const applyLaunchAnswer = (
     return false;
   }
 
-  const at = record.answeredAt ?? record.askedAt;
-
   if (record.status !== "accepted") {
-    row.state = "declined";
-    row.decidedBy = record.decidedBy === null ? null : { ...record.decidedBy };
-    row.decidedAt = at;
-    row.endedAt = at;
-
-    return true;
+    return declineRow(row, record);
   }
+
+  const at = record.answeredAt ?? record.askedAt;
 
   approveRecord(
     row,

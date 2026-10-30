@@ -9,9 +9,11 @@
 // whose approval is pending. A rerun after `kill -9` finds its row and record and waits again
 // without dry-running twice.
 //
-// The answering commit moves the row (`launchAnswered`); an expiry or a stop is applied here, once
-// the wait ends, so a row never stays `proposed` after its record settled. Go tells the model to
-// call `codemode` with exactly the same script: the gate runs only the hash the user approved.
+// The answering commit moves the row (`launchAnswered`); an expiry is applied here, once the wait
+// ends, and a stop (or the boot repair after one a crash cut off) declines it in the commit that
+// cancels the record (`heldByRun` counts a launch as its task's), so a row never stays `proposed`
+// after its record settled. Go tells the model to call `codemode` with exactly the same script: the
+// gate runs only the hash the user approved.
 
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { RoleSpec } from "@cairn/protocol/Roles";

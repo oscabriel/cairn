@@ -280,6 +280,34 @@ export const approveRecord = (
   return true;
 };
 
+/**
+ * Moves a `proposed` row to `declined`, from its launch approval settled any way but Go: Decline,
+ * an expiry, or a stop that cancelled it. False when the row is not `proposed`.
+ */
+export const declineRow = (
+  row: WorkflowItemState,
+  record: ApprovalRecord
+): boolean => {
+  if (row.state !== "proposed") {
+    return false;
+  }
+
+  const at = record.answeredAt ?? record.askedAt;
+
+  row.state = "declined";
+  row.decidedBy = record.decidedBy === null ? null : { ...record.decidedBy };
+  row.decidedAt = at;
+  row.endedAt = at;
+
+  return true;
+};
+
+/** The record tool of a workflow node's own brief, one per node kind. */
+export const NODE_BRIEF_TOOLS: ReadonlySet<string> = new Set([
+  "agent",
+  "verify",
+]);
+
 // The envelope (ADR 0032): what a launch's Go granted, read from the accepted record's payload.
 
 const decodeLaunch = Schema.decodeUnknownOption(WorkflowLaunch);

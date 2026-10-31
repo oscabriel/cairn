@@ -5,24 +5,33 @@
 // ends quietly when its scope closes and with a warning when the event stream ends under it.
 // Without pi-durable (the scripted harness) the fiber reads the child through the seam's documents
 // and makes the same row; a workflow node's child, which has no registry item, takes its node's
-// model from the parent's `cairn.workflows`, not the parent's. The fiber and the boot repair over a
-// real brain are in `brain/SubagentsPiDurable.test.ts`.
+// model from the parent's `cairn.workflows`, not the parent's. A child's first input names it
+// through a scripted title model (a brief child from its brief, a workflow node from its prompt
+// with its label as context, the label showing until then and kept when the model fails), and the
+// title repair renames a row still titled "Subagent" once, not twice. The fiber and the boot
+// repair over a real brain are in `brain/SubagentsPiDurable.test.ts`.
 
-import { ConversationId, ThreadId } from "@cairn/protocol/Ids";
+import { ConversationId, EntryId, ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  DateTime,
   Effect,
   Exit,
   Layer,
   Logger,
   Option,
+  Ref,
   References,
   Scope,
   Stream,
 } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
-import { HarnessSeam, ThreadEnsured } from "../brain/HarnessSeam.ts";
+import {
+  HarnessSeam,
+  MessageCommitted,
+  ThreadEnsured,
+} from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
@@ -32,8 +41,22 @@ import {
   testThreadId,
 } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
-import { ensureChildRow, SubagentRows } from "./SubagentRows.ts";
+import { TitleModelScripted, TitleScript } from "../threads/ThreadsTestKit.ts";
+import { ThreadTitles } from "../threads/ThreadTitles.ts";
+import { TitleModel } from "../threads/TitleModel.ts";
+import {
+  CHILD_TITLE,
+  ensureChildRow,
+  retitleSubagentRows,
+  SubagentRows,
+} from "./SubagentRows.ts";
 import type { ChildRowSource } from "./SubagentRows.ts";
+
+/** The shell store and child titles over no title model. */
+const RowsTestLayer = Layer.mergeAll(
+  ShellTestLayer,
+  ThreadTitles.layerNoDeps.pipe(Layer.provide(TitleModel.layerNone))
+);
 
 const CHILD = ThreadId.make("01a185ff-18ee-7000-8000-000000000018");
 
@@ -45,6 +68,7 @@ const sourceOf = (parent: ThreadId): ChildRowSource => ({
     rootThreadId: parent,
   },
   title: "Count the files",
+  label: Option.none(),
   model: Option.some({ provider: "faux", modelId: "small" }),
   thinkingLevel: Option.none(),
   runtimeMode: "approval-required",
@@ -86,7 +110,7 @@ describe("a subagent's shell row", () => {
         (yield* rows.listLive).filter((found) => found.shell.id === CHILD),
         1
       );
-    }).pipe(Effect.provide(ShellTestLayer))
+    }).pipe(Effect.provide(RowsTestLayer))
   );
 
   it.effect("takes the parent's model when the dispatch names none", () =>
@@ -107,7 +131,7 @@ describe("a subagent's shell row", () => {
 
       assert.strictEqual(shell.provider, "opencode-go");
       assert.strictEqual(shell.modelId, "small");
-    }).pipe(Effect.provide(ShellTestLayer))
+    }).pipe(Effect.provide(RowsTestLayer))
   );
 
   it.effect("takes a writing child's own worktree and branch", () =>
@@ -135,7 +159,7 @@ describe("a subagent's shell row", () => {
         shell.worktreePath,
         Option.some("/data/worktrees/repo/sub-0a1b2c3d")
       );
-    }).pipe(Effect.provide(ShellTestLayer))
+    }).pipe(Effect.provide(RowsTestLayer))
   );
 
   it.effect("is not made for a parent with no row", () =>
@@ -144,7 +168,7 @@ describe("a subagent's shell row", () => {
 
       assert.isFalse(yield* ensureChildRow(sourceOf(testThreadId(9))));
       assert.isTrue(Option.isNone(yield* rows.get(CHILD)));
-    }).pipe(Effect.provide(ShellTestLayer))
+    }).pipe(Effect.provide(RowsTestLayer))
   );
 
   it.effect(
@@ -173,7 +197,7 @@ describe("a subagent's shell row", () => {
           (yield* rows.listLive).filter((found) => found.shell.id === CHILD),
           1
         );
-      }).pipe(Effect.provide(ShellTestLayer))
+      }).pipe(Effect.provide(RowsTestLayer))
   );
 });
 
@@ -256,7 +280,7 @@ describe("the subagent row fiber's end", () => {
           ],
           [[], ["subagent_rows_ended"]]
         );
-      }).pipe(Effect.provide(ShellTestLayer))
+      }).pipe(Effect.provide(RowsTestLayer))
   );
 });
 
@@ -304,7 +328,8 @@ const workflowDocuments =
   (
     parent: ThreadId,
     effort: string | null,
-    thinkingLevel: string | null = null
+    thinkingLevel: string | null = null,
+    label = "scout-1"
   ) =>
   (threadId: ThreadId, kind: string) => {
     if (threadId === CHILD && kind === "cairn.child") {
@@ -333,6 +358,7 @@ const workflowDocuments =
                 modelId: "claude-sonnet-5-5",
                 effort,
                 thinkingLevel,
+                label,
               },
             },
           },
@@ -433,7 +459,7 @@ describe("a scripted subagent's shell row", () => {
         assert.strictEqual(shell.provider, "scripted");
         assert.strictEqual(shell.modelId, "echo");
         assert.strictEqual(shell.runtimeMode, "auto-accept-edits");
-      }).pipe(Effect.provide(ShellTestLayer))
+      }).pipe(Effect.provide(RowsTestLayer))
   );
 
   it.effect(
@@ -456,7 +482,7 @@ describe("a scripted subagent's shell row", () => {
         assert.strictEqual(shell.modelId, "claude-sonnet-5-5");
         // The parent's row runs at `off`.
         assert.strictEqual(shell.thinkingLevel, "high");
-      }).pipe(Effect.provide(ShellTestLayer))
+      }).pipe(Effect.provide(RowsTestLayer))
   );
 
   it.effect(
@@ -476,7 +502,7 @@ describe("a scripted subagent's shell row", () => {
         );
 
         assert.strictEqual(shell.thinkingLevel, "medium");
-      }).pipe(Effect.provide(ShellTestLayer))
+      }).pipe(Effect.provide(RowsTestLayer))
   );
 
   it.effect("gives a workflow node the level its row recorded it runs at", () =>
@@ -495,6 +521,241 @@ describe("a scripted subagent's shell row", () => {
       );
 
       assert.strictEqual(shell.thinkingLevel, "low");
-    }).pipe(Effect.provide(ShellTestLayer))
+    }).pipe(Effect.provide(RowsTestLayer))
+  );
+});
+
+/** The shell store and child titles over a scripted title model a test answers. */
+const titledLayer = (held: boolean) =>
+  Layer.mergeAll(
+    ShellTestLayer,
+    ThreadTitles.layerNoDeps.pipe(
+      Layer.provideMerge(TitleModelScripted({ held }))
+    )
+  );
+
+const BRIEF_TEXT =
+  "Count every TypeScript file under apps/server/src and report the total.";
+
+const NODE_PROMPT =
+  "Read the council question and argue for the cheapest path, with one risk.";
+
+/** `CHILD`'s row title once `check` holds of it, or after a second without. */
+const titleWhen = (check: (title: string) => boolean) =>
+  Effect.gen(function* () {
+    const rows = yield* ThreadRows;
+    let title = "";
+
+    for (let tries = 0; tries < 100; tries += 1) {
+      title = Option.match(yield* rows.get(CHILD), {
+        onNone: () => "",
+        onSome: (row) => row.shell.title,
+      });
+
+      if (check(title)) {
+        return title;
+      }
+
+      yield* Effect.sleep("10 millis");
+    }
+
+    return title;
+  });
+
+/** Runs the fiber over `CHILD`'s creation and first input, then `body`, then closes it. */
+const withChildStarted = <A, E, R>(
+  parent: ThreadId,
+  documents: HarnessSeam["Service"]["document"],
+  firstInput: string,
+  body: Effect.Effect<A, E, R>
+) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+
+    yield* Layer.buildWithScope(SubagentRows, scope).pipe(
+      Effect.provideService(HarnessSeam, {
+        ...harnessWith(
+          Stream.make(
+            ThreadEnsured.make({
+              threadId: CHILD,
+              conversationId: ConversationId.make(2),
+              parent: Option.some(parent),
+            }),
+            MessageCommitted.make({
+              threadId: CHILD,
+              entryId: EntryId.make(1),
+              role: "user",
+              text: firstInput,
+              at: DateTime.makeUnsafe(0),
+            })
+          )
+        ),
+        document: documents,
+      })
+    );
+
+    const result = yield* body;
+
+    yield* Scope.close(scope, Exit.void);
+
+    return result;
+  });
+
+/** Commits the test project and the parent's row; the parent's thread id. */
+const withParent = Effect.gen(function* () {
+  const sink = yield* EventSink;
+  const project = createProject(1);
+
+  yield* sink.commitCommand(project.command);
+  yield* sink.commitCommand(createThread(project.projectId, 1));
+
+  return testThreadId(1);
+});
+
+/** The title model's JSON answer naming `title`. */
+const answer = (title: string) =>
+  Option.some(JSON.stringify({ title, needsRefinement: false }));
+
+describe("a subagent's title", () => {
+  it.live("is generated for a brief child from its first input", () =>
+    Effect.gen(function* () {
+      const script = yield* TitleScript;
+      const parent = yield* withParent;
+
+      yield* Ref.set(script.title, answer("TypeScript file count"));
+
+      const title = yield* withChildStarted(
+        parent,
+        scriptedDocuments(parent),
+        BRIEF_TEXT,
+        titleWhen((found) => found === "TypeScript file count")
+      );
+
+      assert.strictEqual(title, "TypeScript file count");
+
+      const prompts = yield* Ref.get(script.prompts);
+
+      assert.lengthOf(prompts, 1);
+      assert.include(prompts[0], BRIEF_TEXT);
+    }).pipe(Effect.provide(titledLayer(false)))
+  );
+
+  it.live(
+    "is generated for a workflow node from its prompt and label, which shows until then",
+    () =>
+      Effect.gen(function* () {
+        const script = yield* TitleScript;
+        const parent = yield* withParent;
+
+        yield* Ref.set(script.title, answer("Cheapest path argument"));
+
+        const [placeholder, title] = yield* withChildStarted(
+          parent,
+          workflowDocuments(parent, null, null, "Advisor 1 report"),
+          NODE_PROMPT,
+          Effect.gen(function* () {
+            // The model is held: the row shows the node's label until it answers.
+            const shown = yield* titleWhen((found) => found !== "");
+
+            yield* script.gate.open;
+
+            const named = yield* titleWhen(
+              (found) => found === "Cheapest path argument"
+            );
+
+            return [shown, named] as const;
+          })
+        );
+
+        assert.strictEqual(placeholder, "Advisor 1 report");
+        assert.strictEqual(title, "Cheapest path argument");
+
+        const prompts = yield* Ref.get(script.prompts);
+
+        assert.lengthOf(prompts, 1);
+        assert.include(prompts[0], "Workflow node: Advisor 1 report");
+        assert.include(prompts[0], NODE_PROMPT);
+      }).pipe(Effect.provide(titledLayer(true)))
+  );
+
+  it.live("keeps a workflow node's label when the title model fails", () =>
+    Effect.gen(function* () {
+      const script = yield* TitleScript;
+      const parent = yield* withParent;
+
+      // No answer: the request fails, as an unset or unreachable title model does.
+      const title = yield* withChildStarted(
+        parent,
+        workflowDocuments(parent, null, null, "Advisor 1 report"),
+        NODE_PROMPT,
+        Effect.gen(function* () {
+          for (
+            let tries = 0;
+            (yield* Ref.get(script.prompts)).length === 0 && tries < 100;
+            tries += 1
+          ) {
+            yield* Effect.sleep("10 millis");
+          }
+
+          yield* Effect.sleep("20 millis");
+
+          return yield* titleWhen((found) => found !== "");
+        })
+      );
+
+      assert.lengthOf(yield* Ref.get(script.prompts), 1);
+      assert.strictEqual(title, "Advisor 1 report");
+    }).pipe(Effect.provide(titledLayer(false)))
+  );
+});
+
+describe("the subagent title repair", () => {
+  it.live("retitles a child row still titled Subagent once, not twice", () =>
+    Effect.gen(function* () {
+      const script = yield* TitleScript;
+      const rows = yield* ThreadRows;
+      const parent = yield* withParent;
+
+      // A row made before children were titled.
+      yield* ensureChildRow({ ...sourceOf(parent), title: CHILD_TITLE });
+      yield* Ref.set(script.title, answer("Cheapest path argument"));
+
+      const seam = HarnessSeam.of({
+        ...harnessWith(Stream.never),
+        document: workflowDocuments(parent, null, null, "Advisor 1 report"),
+        history: () =>
+          Effect.succeed({
+            entries: [
+              {
+                id: EntryId.make(1),
+                conversationId: ConversationId.make(2),
+                kind: "pi.user",
+                model: [{ role: "user", content: NODE_PROMPT, timestamp: 0 }],
+              },
+            ],
+            hasMore: false,
+          }),
+      });
+
+      const titleOf = Effect.map(
+        rows.get(CHILD),
+        (row) => Option.getOrThrow(row).shell.title
+      );
+
+      yield* retitleSubagentRows.pipe(Effect.provideService(HarnessSeam, seam));
+
+      const first = yield* titleOf;
+
+      yield* Ref.set(script.title, answer("A second title"));
+      yield* retitleSubagentRows.pipe(Effect.provideService(HarnessSeam, seam));
+
+      assert.strictEqual(first, "Cheapest path argument");
+      assert.strictEqual(yield* titleOf, "Cheapest path argument");
+
+      const prompts = yield* Ref.get(script.prompts);
+
+      assert.lengthOf(prompts, 1);
+      assert.include(prompts[0], NODE_PROMPT);
+    }).pipe(Effect.provide(titledLayer(false)))
   );
 });

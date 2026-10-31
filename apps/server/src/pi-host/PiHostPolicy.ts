@@ -70,7 +70,7 @@ const noEnv = () => new Map<string, string>();
 /** `pi-web-access`: web search and fetch. Its results map is keyed by response id, so one instance. */
 const webAccess: PiPackagePolicy = {
   name: "pi-web-access",
-  versions: "0.45.x",
+  versions: "0.46.x",
   scope: "brain",
   flags: noFlags,
   // Its fetch cache lives under ~/.pi otherwise; `PI_CODING_AGENT_DIR` stays unset, or the cache

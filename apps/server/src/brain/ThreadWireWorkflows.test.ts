@@ -290,93 +290,100 @@ const countNodes = (ledger: WorkflowsState) =>
     0
   );
 
+/** Eight seeds of 150 frames: under three seconds idle, many times that on a busy machine. */
+const SLOW_TEST_TIMEOUT = 60_000;
+
 describe("ThreadWire with the dispatch ledger", () => {
-  it("a client applying the frames converges, and the steps panel reads what the brain wrote", () => {
-    let cuts = 0;
+  it(
+    "a client applying the frames converges, and the steps panel reads what the brain wrote",
+    () => {
+      let cuts = 0;
 
-    for (const seed of [11, 12, 13, 14, 15, 16, 17, 18]) {
-      const draw = random(seed);
-      const projector = wireProjector();
+      for (const seed of [11, 12, 13, 14, 15, 16, 17, 18]) {
+        const draw = random(seed);
+        const projector = wireProjector();
 
-      // The thread has no ledger until its first workflow is proposed.
-      let ledger: WorkflowsState | null = null;
+        // The thread has no ledger until its first workflow is proposed.
+        let ledger: WorkflowsState | null = null;
 
-      let client: ThreadViewState = unwrap(
-        applyThreadStreamItem(
-          Option.none(),
-          ThreadSnapshotItem.make({
-            seq: 0,
-            view: unwrap(projector.snapshot(viewOf(ledger))),
-            entriesOffset: 0,
-            hasMoreHistory: false,
-          })
-        )
-      );
-
-      for (let seq = 1; seq <= 150; seq += 1) {
-        ledger = change(ledger ?? { items: {} }, draw, 2000 + seq);
-
-        const ops = unwrap(projector.advance(viewOf(ledger)));
-
-        client = unwrap(
+        let client: ThreadViewState = unwrap(
           applyThreadStreamItem(
-            Option.some(client),
-            ThreadOpsItem.make({ seq, ops })
+            Option.none(),
+            ThreadSnapshotItem.make({
+              seq: 0,
+              view: unwrap(projector.snapshot(viewOf(ledger))),
+              entriesOffset: 0,
+              hasMoreHistory: false,
+            })
           )
         );
 
-        assert.deepStrictEqual(
-          client.view,
-          unwrap(projectView(viewOf(ledger))),
-          `seed ${String(seed)}, frame ${String(seq)}`
-        );
+        for (let seq = 1; seq <= 150; seq += 1) {
+          ledger = change(ledger ?? { items: {} }, draw, 2000 + seq);
 
-        const wire = client.view.docs[WORKFLOWS_DOCUMENT];
+          const ops = unwrap(projector.advance(viewOf(ledger)));
 
-        if (
-          JSON.stringify(wire).includes(
-            JSON.stringify(TRUNCATION_MARKER).slice(1, -1)
-          )
-        ) {
-          cuts += 1;
+          client = unwrap(
+            applyThreadStreamItem(
+              Option.some(client),
+              ThreadOpsItem.make({ seq, ops })
+            )
+          );
+
+          assert.deepStrictEqual(
+            client.view,
+            unwrap(projectView(viewOf(ledger))),
+            `seed ${String(seed)}, frame ${String(seq)}`
+          );
+
+          const wire = client.view.docs[WORKFLOWS_DOCUMENT];
+
+          if (
+            JSON.stringify(wire).includes(
+              JSON.stringify(TRUNCATION_MARKER).slice(1, -1)
+            )
+          ) {
+            cuts += 1;
+          }
+
+          const groups = workflowGroupsOf(wire);
+
+          assert.strictEqual(
+            groups.length,
+            Object.keys(ledger.items).length,
+            `seed ${String(seed)}, frame ${String(seq)}: a workflow did not decode`
+          );
+          assert.strictEqual(
+            groups.reduce(
+              (count, group) =>
+                count +
+                group.unphasedNodes.length +
+                group.phases.reduce(
+                  (sum, phase) => sum + phase.members.length,
+                  0
+                ),
+              0
+            ),
+            countNodes(ledger),
+            `seed ${String(seed)}, frame ${String(seq)}: a node did not decode`
+          );
+          assert.deepStrictEqual(
+            panelOf(groups),
+            panelOf(workflowGroupsOf(ledger)),
+            `seed ${String(seed)}, frame ${String(seq)}`
+          );
         }
 
-        const groups = workflowGroupsOf(wire);
-
-        assert.strictEqual(
-          groups.length,
-          Object.keys(ledger.items).length,
-          `seed ${String(seed)}, frame ${String(seq)}: a workflow did not decode`
-        );
-        assert.strictEqual(
-          groups.reduce(
-            (count, group) =>
-              count +
-              group.unphasedNodes.length +
-              group.phases.reduce(
-                (sum, phase) => sum + phase.members.length,
-                0
-              ),
-            0
-          ),
-          countNodes(ledger),
-          `seed ${String(seed)}, frame ${String(seq)}: a node did not decode`
-        );
+        // A fresh subscription starts from a snapshot that equals what the client converged on.
         assert.deepStrictEqual(
-          panelOf(groups),
-          panelOf(workflowGroupsOf(ledger)),
-          `seed ${String(seed)}, frame ${String(seq)}`
+          unwrap(wireProjector().snapshot(viewOf(ledger))),
+          client.view
         );
       }
 
-      // A fresh subscription starts from a snapshot that equals what the client converged on.
-      assert.deepStrictEqual(
-        unwrap(wireProjector().snapshot(viewOf(ledger))),
-        client.view
-      );
-    }
-
-    // The cut must actually have been exercised.
-    assert.isAbove(cuts, 0, "no frame carried a cut string");
-  });
+      // The cut must actually have been exercised.
+      assert.isAbove(cuts, 0, "no frame carried a cut string");
+    },
+    SLOW_TEST_TIMEOUT
+  );
 });

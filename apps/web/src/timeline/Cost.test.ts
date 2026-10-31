@@ -1,7 +1,8 @@
 // The transcript's cost per streamed frame with a long history (T47): the recorded streaming-tools
 // frames replayed over a thread holding about 3,000 entries, against deriving that transcript from
 // objects never seen before. A share, not a time, so the budget holds on any machine; a frame that
-// re-derives everything costs close to the whole.
+// re-derives everything costs close to the whole. Both sides are medians, so a garbage collection
+// or a descheduling on a busy machine lands in one sample and moves neither.
 
 import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
@@ -20,6 +21,9 @@ const codingView = Schema.decodeSync(ConversationView)(coding);
 
 const items = Schema.decodeUnknownSync(Schema.Array(ThreadStreamItem))(frames);
 
+/** About a second when idle; a full gate on a busy machine can stretch that many times over. */
+const SLOW_TEST_TIMEOUT = 60_000;
+
 /** `count` entries of history, the recorded coding transcript repeated with fresh ids. */
 const history = (count: number): ReadonlyArray<Entry> =>
   Array.from({ length: count }, (_, index): Entry => {
@@ -32,10 +36,17 @@ const history = (count: number): ReadonlyArray<Entry> =>
     return { ...source, id: EntryId.make(1_000_000 + index) };
   });
 
-/** Milliseconds to derive the transcript after every frame, with `older` paged in front. */
+/** The middle of `samples`, which must not be empty. */
+const median = (samples: ReadonlyArray<number>): number => {
+  const sorted = samples.toSorted((left, right) => left - right);
+
+  return sorted[Math.floor(sorted.length / 2)] ?? Number.NaN;
+};
+
+/** The median milliseconds to derive the transcript after one frame, with `older` paged in front. */
 const replayMs = (older: ReadonlyArray<Entry>, rounds: number): number => {
   const ui = freshUi(Option.some("thread-cost"));
-  let total = 0;
+  const samples: Array<number> = [];
 
   for (let round = 0; round < rounds; round += 1) {
     let state = Option.none<ThreadViewState>();
@@ -51,15 +62,15 @@ const replayMs = (older: ReadonlyArray<Entry>, rounds: number): number => {
       const started = performance.now();
 
       transcriptOf("thread-cost", withOlder, ui, Option.none());
-      total += performance.now() - started;
+      samples.push(performance.now() - started);
       state = Option.some(next.success);
     }
   }
 
-  return total;
+  return median(samples);
 };
 
-/** Milliseconds to derive the transcript of the last frame from objects it has never seen. */
+/** The median milliseconds to derive the last frame's transcript from objects it has never seen. */
 const coldMs = (older: ReadonlyArray<Entry>, rounds: number): number => {
   let state = Option.none<ThreadViewState>();
 
@@ -73,7 +84,7 @@ const coldMs = (older: ReadonlyArray<Entry>, rounds: number): number => {
     state = Option.some(next.success);
   }
 
-  let total = 0;
+  const samples: Array<number> = [];
 
   for (let round = 0; round < rounds; round += 1) {
     // Fresh copies: no cache keyed on an entry or a page can answer for them.
@@ -90,28 +101,32 @@ const coldMs = (older: ReadonlyArray<Entry>, rounds: number): number => {
     const started = performance.now();
 
     transcriptOf(`thread-cold-${round}`, fresh, ui, Option.none());
-    total += performance.now() - started;
+    samples.push(performance.now() - started);
   }
 
-  return total / rounds;
+  return median(samples);
 };
 
 describe("the transcript's cost per streamed frame", () => {
-  it("is a small share of deriving the whole transcript, with 3,000 entries of history", () => {
-    const large = history(3000);
+  it(
+    "is a small share of deriving the whole transcript, with 3,000 entries of history",
+    () => {
+      const large = history(3000);
 
-    // Warm the JIT before measuring.
-    replayMs(large, 3);
-    coldMs(large, 3);
+      // Warm the JIT before measuring.
+      replayMs(large, 3);
+      coldMs(large, 3);
 
-    const frameMs = replayMs(large, 10) / (10 * items.length);
-    const fullMs = coldMs(large, 10);
+      const frameMs = replayMs(large, 10);
+      const fullMs = coldMs(large, 10);
 
-    // Measured 2026-10-24: 2.2 ms a frame against 23 ms whole (0.1); 16.3 against 19.1 (0.85) before
-    // the per-turn rows and the kept entries. Both sides run in one process, so a busy machine
-    // slows them alike.
-    expect(frameMs / fullMs).toBeLessThan(0.35);
-  });
+      // Measured 2026-10-24: 2.2 ms a frame against 23 ms whole (0.1); 16.3 against 19.1 (0.85) before
+      // the per-turn rows and the kept entries. As medians, 2026-10-31: 2.5 against 17.6 (0.14). Both sides run in one process, so a busy machine
+      // slows them alike.
+      expect(frameMs / fullMs).toBeLessThan(0.35);
+    },
+    SLOW_TEST_TIMEOUT
+  );
 });
 
 describe("a snapshot's transcript", () => {

@@ -2,8 +2,10 @@
 // D54, and ADR 0002's refusal of pi-ai's Anthropic OAuth login): each case writes a probe file with
 // a unique name into a zone, lints it with the repo's config and checks, line by line, which
 // imports were refused. Zones keyed on one exact file name (AnthropicGuard.ts, PiConfig.ts,
-// ClaudeSdk.ts, ...) are not probed, because a probe there would overwrite real code. A probe is
-// removed in a `finally`, and probes a killed run left behind are swept before the cases run.
+// ClaudeSdk.ts, ...) are not probed, because a probe there would overwrite real code. Every probe
+// is written first and linted in one oxlint run, since type-aware linting builds its program once
+// a run and fourteen runs were slow enough on a busy machine to time out. The probes are removed
+// in a `finally`, and probes a killed run left behind are swept before the cases run.
 
 import { randomBytes } from "node:crypto";
 import {
@@ -15,7 +17,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { assert, describe, it } from "@effect/vitest";
+import { assert, beforeAll, describe, it } from "@effect/vitest";
 
 import { lint } from "./lib/Oxlint.ts";
 
@@ -183,13 +185,8 @@ const cases: ReadonlyArray<ProbeCase> = [
   },
 ];
 
-/** The 1-based lines of `file` that oxlint refused with `no-restricted-imports`. */
-const refusedLines = (file: string): ReadonlySet<number> =>
-  new Set(
-    lint([file])
-      .filter((finding) => finding.code === "eslint(no-restricted-imports)")
-      .flatMap((finding) => finding.lines)
-  );
+/** How long the one oxlint run may take: seconds when idle, far longer under a full gate's load. */
+const LINT_TIMEOUT = 180_000;
 
 /** A probe file name, as `ProbeCase.name` makes them. */
 const PROBE_FILE = /^LintProbe\d+[0-9a-f]{8}\w*\.ts$/u;
@@ -209,43 +206,81 @@ const sweepProbes = () => {
   }
 };
 
+/** Each case's probe file, relative to the root, and the 1-based lines oxlint refused in it. */
+interface Linted {
+  readonly file: string;
+  readonly refused: ReadonlySet<number>;
+}
+
+/** Writes every case's probe, lints them all in one run, removes them, and reads the refusals. */
+const lintProbes = (): ReadonlyArray<Linted> => {
+  const created: Array<string> = [];
+
+  const files = cases.map((probeCase) => {
+    const id = `${process.pid}${randomBytes(4).toString("hex")}`;
+
+    return path.join(probeCase.zone, probeCase.name.replace("<id>", id));
+  });
+
+  try {
+    for (const [index, probeCase] of cases.entries()) {
+      const directory = path.join(root, probeCase.zone);
+
+      if (!existsSync(directory)) {
+        mkdirSync(directory, { recursive: true });
+        created.push(directory);
+      }
+
+      writeFileSync(
+        path.join(root, files[index] ?? ""),
+        `${probeCase.probes.map((probe) => probe.source).join("\n")}\n\nexport {};\n`
+      );
+    }
+
+    const findings = lint(files).filter(
+      (finding) => finding.code === "eslint(no-restricted-imports)"
+    );
+
+    return files.map((file) => ({
+      file,
+      refused: new Set(
+        findings
+          .filter((finding) => finding.filename === file)
+          .flatMap((finding) => finding.lines)
+      ),
+    }));
+  } finally {
+    for (const file of files) {
+      rmSync(path.join(root, file), { force: true });
+    }
+
+    for (const directory of created) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+};
+
 describe("library import boundaries", () => {
   sweepProbes();
 
-  it.each(cases)(
+  let linted: ReadonlyArray<Linted> = [];
+
+  beforeAll(() => {
+    linted = lintProbes();
+  }, LINT_TIMEOUT);
+
+  it.each(cases.map((probeCase, index) => ({ ...probeCase, index })))(
     "refuses exactly the listed imports in $zone/$name",
     (probeCase) => {
-      const id = `${process.pid}${randomBytes(4).toString("hex")}`;
+      const result = linted[probeCase.index];
 
-      const file = path.join(
-        probeCase.zone,
-        probeCase.name.replace("<id>", id)
-      );
-
-      const directory = path.join(root, probeCase.zone);
-      const directoryExisted = existsSync(directory);
-      const source = `${probeCase.probes.map((probe) => probe.source).join("\n")}\n\nexport {};\n`;
-
-      mkdirSync(directory, { recursive: true });
-
-      let refusedByLint: ReadonlySet<number>;
-
-      try {
-        writeFileSync(path.join(root, file), source);
-        refusedByLint = refusedLines(file);
-      } finally {
-        rmSync(path.join(root, file), { force: true });
-
-        if (!directoryExisted) {
-          rmSync(directory, { recursive: true, force: true });
-        }
-      }
+      assert.isDefined(result, "the probes were not linted");
 
       for (const [index, probe] of probeCase.probes.entries()) {
         assert.strictEqual(
-          refusedByLint.has(index + 1),
+          result.refused.has(index + 1),
           probe.refused,
-          `${file}: ${probe.source}`
+          `${result.file}: ${probe.source}`
         );
       }
     }

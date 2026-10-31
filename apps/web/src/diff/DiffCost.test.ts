@@ -39,6 +39,9 @@ const countingHighlighter: Highlighter = {
   },
 };
 
+/** About a second when idle; a full gate on a busy machine can stretch that many times over. */
+const SLOW_TEST_TIMEOUT = 60_000;
+
 const FILES = 60;
 
 const HUNKS_PER_FILE = 5;
@@ -151,35 +154,40 @@ describe("the diff panel's cost", () => {
         Lazy.expectAllReused({ view: testView, model });
 
         assert.strictEqual(tokenized.length, 0);
-      })
+      }),
+    SLOW_TEST_TIMEOUT
   );
 
-  it("draws at most MAX_TOTAL_LINES lines across its files", () => {
-    const patch = patchOf(
-      ["a", "b", "c", "d"].map((name) => fileDiff(`${name}.txt`, 1, 1500))
-    );
+  it(
+    "draws at most MAX_TOTAL_LINES lines across its files",
+    () => {
+      const patch = patchOf(
+        ["a", "b", "c", "d"].map((name) => fileDiff(`${name}.txt`, 1, 1500))
+      );
 
-    Scene.scene(
-      config,
-      Scene.given(loaded(patch)),
-      Scene.expectAll(
-        Scene.all.selector('[data-diff-file="a.txt"] [data-kind]')
-      ).toHaveCount(1500),
-      Scene.expectAll(
-        Scene.all.selector('[data-diff-file="c.txt"] [data-kind]')
-      ).toHaveCount(MAX_TOTAL_LINES - 3000),
-      Scene.expect(Scene.selector('[data-diff-file="c.txt"]')).toContainText(
-        `${String(4500 - MAX_TOTAL_LINES)} more lines not shown`
-      ),
-      Scene.expectAll(
-        Scene.all.selector('[data-diff-file="d.txt"] [data-kind]')
-      ).toHaveCount(0),
-      Scene.expect(Scene.selector('[data-diff-file="d.txt"]')).toContainText(
-        "1500 more lines not shown"
-      ),
-      Scene.tap(({ commands }) => {
-        assert.strictEqual(commands.length, 0);
-      })
-    );
-  });
+      Scene.scene(
+        config,
+        Scene.given(loaded(patch)),
+        Scene.expectAll(
+          Scene.all.selector('[data-diff-file="a.txt"] [data-kind]')
+        ).toHaveCount(1500),
+        Scene.expectAll(
+          Scene.all.selector('[data-diff-file="c.txt"] [data-kind]')
+        ).toHaveCount(MAX_TOTAL_LINES - 3000),
+        Scene.expect(Scene.selector('[data-diff-file="c.txt"]')).toContainText(
+          `${String(4500 - MAX_TOTAL_LINES)} more lines not shown`
+        ),
+        Scene.expectAll(
+          Scene.all.selector('[data-diff-file="d.txt"] [data-kind]')
+        ).toHaveCount(0),
+        Scene.expect(Scene.selector('[data-diff-file="d.txt"]')).toContainText(
+          "1500 more lines not shown"
+        ),
+        Scene.tap(({ commands }) => {
+          assert.strictEqual(commands.length, 0);
+        })
+      );
+    },
+    SLOW_TEST_TIMEOUT
+  );
 });

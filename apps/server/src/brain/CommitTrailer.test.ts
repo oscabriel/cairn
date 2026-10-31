@@ -4,6 +4,10 @@
 // first case runs a real `bash` call through pi-durable with a scripted model; the hook cases run
 // git on a temporary repository with and without the hook's environment (the control: no hook, no
 // trailer, which the same check must reject).
+//
+// The gate may run inside a Cairn thread, whose `bash` hands git its own trailer hook through
+// `GIT_CONFIG_*`. Every git this file starts inherits the brain's environment, so the file sets
+// those variables aside while it runs; otherwise the control commit carries the outer thread's id.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +16,7 @@ import path from "node:path";
 import { ProjectId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { NodeServices } from "@effect/platform-node";
-import { assert, describe, it } from "@effect/vitest";
+import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import {
   Effect,
   Fiber,
@@ -70,6 +74,26 @@ const harness = PiDurableHarness.layer.pipe(
 
 const Platform = Layer.mergeAll(Git.layer, NodeServices.layer);
 
+/** The `GIT_CONFIG_*` variables this process inherited, set aside while a block runs. */
+const setAsideInheritedGitConfig = () => {
+  const inherited = new Map<string, string>();
+
+  beforeAll(() => {
+    for (const [name, value] of Object.entries(process.env)) {
+      if (name.startsWith("GIT_CONFIG_") && value !== undefined) {
+        inherited.set(name, value);
+        Reflect.deleteProperty(process.env, name);
+      }
+    }
+  });
+
+  afterAll(() => {
+    for (const [name, value] of inherited) {
+      process.env[name] = value;
+    }
+  });
+};
+
 const THREAD = ThreadId.make("0190f0c0-0000-7000-8000-000000000301");
 
 const OTHER = ThreadId.make("0190f0c0-0000-7000-8000-000000000302");
@@ -119,6 +143,8 @@ const commitWith = (
   );
 
 describe("the commit trailer hook", () => {
+  setAsideInheritedGitConfig();
+
   it("reads git's version and needs 2.54 or later", () => {
     assert.deepStrictEqual(
       parseGitVersion("git version 2.56.0\n"),
@@ -197,6 +223,8 @@ describe("the commit trailer hook", () => {
 });
 
 describe("a thread's bash", () => {
+  setAsideInheritedGitConfig();
+
   it.live(
     "commits with Cairn-Thread naming the thread",
     () =>

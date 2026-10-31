@@ -106,6 +106,9 @@ const NO_CURSOR: RowContext["historyCursor"] = Option.none();
 
 const NO_SHELLS: RowContext["subagents"] = Option.none();
 
+/** The first row's top space: the user message's bottom gap, which rows keep between them. */
+const FIRST_ROW_CLASS = "min-w-0 pt-(--space-4)";
+
 const itemView = (
   h: HtmlBuilder<Message>,
   model: Model,
@@ -127,7 +130,7 @@ const itemView = (
       ? Option.flatMap(inputs.state, historyCursor)
       : NO_CURSOR;
 
-  return (
+  const row =
     rowLazyFor(threadId, position)(item.id, renderRow, [
       h,
       item,
@@ -136,7 +139,8 @@ const itemView = (
       model.highlightedLanguages,
       model.highlightedCode,
       Option.isSome(copied) ? copied : NO_COPY,
-      model.ui.expandedUserMessageIds.includes(item.id),
+      model.ui.expandedUserMessageIds.includes(item.id) ||
+        model.ui.expandedChangedFilesIds.includes(item.id),
       prompt,
       item.kind === "history" ? model.history : "idle",
       cursor,
@@ -144,8 +148,14 @@ const itemView = (
       item.kind === "subagents" || item.kind === "parent-link"
         ? inputs.subagents
         : NO_SHELLS,
-    ]) ?? h.empty
-  );
+    ]) ?? h.empty;
+
+  // The first row clears the header by the gap the rows keep between them (the user's phone
+  // notes): its own top space, drawn in the list and in the off-screen copy alike, so the row is
+  // measured at the height it shows.
+  return transcript.items[0] === item
+    ? h.div([h.Class(FIRST_ROW_CLASS)], [row])
+    : row;
 };
 
 /** Each derived transcript with its subagent items, so the same transcript keeps one copy. */
@@ -225,7 +235,11 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
       ? withSubagents(derived, inputs.state, model)
       : derived;
 
-    const expandedUsers = new Set(model.ui.expandedUserMessageIds);
+    const expandedRows = new Set([
+      ...model.ui.expandedUserMessageIds,
+      ...model.ui.expandedChangedFilesIds,
+    ]);
+
     const following = isFollowingEnd(model) || transcript.items.length === 0;
 
     return h.div(
@@ -258,7 +272,7 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
                 "offScreen"
               ),
             itemToEstimatedHeightPx: (item) =>
-              estimatedHeightOf(item, expandedUsers),
+              estimatedHeightOf(item, expandedRows),
             // The list draws each row as a grid of one implicit column, which grows to its row's
             // min-content (a long unbroken path, a wide code block), and its inline `overflow: auto`
             // beats a class: the column is held to the list's width and sideways scroll is shut, so

@@ -42,6 +42,18 @@
 //                    The socket holds each `thread.launch` frame for 500 ms, so the page always
 //                    subscribes before the launch reaches the in-process brain, as on a slow link;
 //   mobile-sheet     at 390 the sidebar opens as a sheet and closes on navigation;
+//
+// The user's phone notes (2026-10-30), on the parity thread:
+//   composer-footer-390  the footer is one row: the model pill, the mode, the paperclip and send
+//                        share a line, each at least 44 px each way and inside the composer box;
+//                        no plan meter and no overflow button; the pill names the model shortly
+//                        and its level ("Opus 5.5 · High": no "Claude", no "1M"), uncut;
+//   first-row-gap-<w>    at 390 and 1,440 px, scrolled to the top, the first row starts below the
+//                        header by the gap a user message keeps under itself;
+//   changed-files-<w>    at 390 and 1,440 px, the last turn's changed-files card rests as one
+//                        summary line (its file count and line counts, no file rows) inside the
+//                        transcript's column; its line opens the file list; nothing opens the diff
+//                        panel, which is off (no header toggle, no "Open diff");
 //   soft-keyboard    WebKit at iPhone width (Chromium's iPhone emulation where WebKit cannot run,
 //                    named in the result), with the soft keyboard emulated through a shrunken
 //                    `visualViewport`: Enter inserts a newline and sends nothing.
@@ -102,8 +114,10 @@ import {
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import {
   MANAGED_SEED,
+  putChangedFiles,
   SHELL_SEED,
   startCairn,
+  takeChangedFiles,
 } from "./fixtures/parity/CairnApp.ts";
 import type { FooterBlockState } from "./fixtures/parity/Landmarks.ts";
 import { LandmarkFile, readLandmarks } from "./fixtures/parity/Landmarks.ts";
@@ -1259,10 +1273,277 @@ const nextFooterVerdict = async (
   return `${holds ? "folds" : "breaks"}: fits ${fits}, in order ${inOrder}, overflow ${actual.overflow} with hidden ${hidden}, wide full ${wideFull}, one step less ${lessFolded}; next ${JSON.stringify(actual)}, t3code ${JSON.stringify(expected)}`;
 };
 
+/** A row the list draws, not its off-screen measuring copy. */
+const DRAWN_ROW = '[role="listitem"]';
+
+/** Waits until the thread page shows the seeded transcript. */
+const waitForTranscript = async (page: Page) => {
+  await page
+    .locator(`${DRAWN_ROW} [data-timeline-row-kind]`)
+    .first()
+    .waitFor({ state: "visible", timeout: 15_000 });
+  await page.waitForTimeout(600);
+};
+
+/** The composer footer on a phone: one row, no meter, the short model name and level, uncut. */
+const footerOnPhone = async (page: Page): Promise<string> => {
+  await waitForTranscript(page);
+
+  // The pill names the model once the thread's shell row has reached the composer.
+  await page
+    .waitForFunction(
+      () =>
+        !(
+          document.querySelector("[data-chat-provider-model-picker-label]")
+            ?.textContent ?? "Choose a model"
+        ).startsWith("Choose a model"),
+      undefined,
+      { timeout: 10_000 }
+    )
+    .catch(() => false);
+
+  return await page.evaluate(() => {
+    const footer = document.querySelector("[data-chat-composer-footer]");
+    const box = footer?.closest("[data-slot=composer-shell]") ?? footer;
+
+    if (footer === null || box === null || box === undefined) {
+      return "no footer";
+    }
+
+    const controls = [
+      footer.querySelector("[data-chat-provider-model-picker]"),
+      footer.querySelector('[data-resting-block="mode"] button'),
+      footer.querySelector('input[type="file"]')?.closest("label"),
+      footer.querySelector(
+        '[data-testid="composer-send"], [data-testid="composer-stop"]'
+      ),
+    ].filter((control) => control !== null && control !== undefined);
+
+    if (controls.length < 4) {
+      return `missing controls, ${String(controls.length)} of 4 drawn`;
+    }
+
+    const rects = controls.map((control) => control.getBoundingClientRect());
+
+    const outer = box.getBoundingClientRect();
+    const centres = rects.map((rect) => rect.top + rect.height / 2);
+    const oneRow = Math.max(...centres) - Math.min(...centres) <= 4;
+
+    const targets = rects.every(
+      (rect) => rect.width >= 43.5 && rect.height >= 43.5
+    );
+
+    const inside = rects.every(
+      (rect) =>
+        rect.left >= outer.left - 0.5 &&
+        rect.right <= outer.right + 0.5 &&
+        rect.top >= outer.top - 0.5 &&
+        rect.bottom <= outer.bottom + 0.5
+    );
+
+    const label = footer.querySelector<HTMLElement>(
+      "[data-chat-provider-model-picker-label]"
+    );
+
+    const text = label?.textContent ?? "";
+    const uncut = label !== null && label.scrollWidth <= label.clientWidth + 1;
+    const short = / · \S/u.test(text) && !/claude|\b1M\b/iu.test(text);
+
+    const meter =
+      footer.querySelector(
+        '[data-testid="composer-usage-meter"], [role="meter"], [role="progressbar"]'
+      ) !== null;
+
+    const overflow =
+      footer.querySelector(
+        '[data-resting-controls-overflow], [aria-label="More composer controls"]'
+      ) !== null;
+
+    const holds =
+      oneRow && targets && inside && uncut && short && !meter && !overflow;
+
+    return `${holds ? "fits" : "breaks"}: one row ${oneRow}, 44 px ${targets}, inside ${inside}, label "${text}" uncut ${uncut} short ${short}, meter ${meter}, overflow ${overflow}`;
+  });
+};
+
+/** The gap above the first row, scrolled to the top, against a user message's own bottom gap. */
+const firstRowGap = async (page: Page): Promise<string> => {
+  await waitForTranscript(page);
+
+  await page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>(
+      '[data-testid="timeline-scroll"]'
+    );
+
+    if (scroller !== null) {
+      scroller.scrollTop = 0;
+    }
+  });
+  await page.waitForTimeout(800);
+
+  return await page.evaluate(() => {
+    const scroller = document.querySelector('[data-testid="timeline-scroll"]');
+    const header = document.querySelector("[data-chat-header]");
+
+    const first = scroller?.querySelector(
+      '[role="listitem"][aria-posinset="1"]'
+    );
+
+    const content = first?.querySelector(
+      '[data-timeline-row-kind], [data-testid="load-earlier"]'
+    );
+
+    const user = scroller?.querySelector<HTMLElement>(
+      '[role="listitem"] [data-timeline-row-kind="message"][data-message-role="user"]'
+    );
+
+    if (
+      scroller === null ||
+      scroller === undefined ||
+      content === null ||
+      content === undefined ||
+      user === null ||
+      user === undefined
+    ) {
+      return "no first row";
+    }
+
+    const top = Math.max(
+      scroller.getBoundingClientRect().top,
+      header?.getBoundingClientRect().bottom ?? 0
+    );
+
+    const gap = content.getBoundingClientRect().top - top;
+
+    const rowGap = Number(
+      getComputedStyle(user).paddingBottom.replace("px", "")
+    );
+
+    return `${Math.abs(gap - rowGap) <= 1 ? "clears" : "stuck"}: gap ${Math.round(gap)} px, rows keep ${Math.round(rowGap)} px`;
+  });
+};
+
+/** The changed-files card under the last turn: folded to one line, opening to its files. */
+const changedFilesCard = async (page: Page, count: number): Promise<string> => {
+  await waitForTranscript(page);
+
+  const card = page
+    .locator(`${DRAWN_ROW} [data-testid="changed-files-card"]`)
+    .last();
+
+  await card.waitFor({ state: "visible", timeout: 10_000 });
+  await card.scrollIntoViewIfNeeded();
+
+  const folded = await card.evaluate((element) => {
+    const lane = element.closest("[data-timeline-row-kind]") ?? element;
+    const own = element.getBoundingClientRect();
+    const column = lane.getBoundingClientRect();
+
+    return {
+      state: element.dataset.changedFilesState,
+      files: element.querySelectorAll("[data-changed-files-file]").length,
+      text: element.textContent ?? "",
+      inColumn:
+        own.left >= column.left - 0.5 &&
+        own.right <= column.right + 0.5 &&
+        element.scrollWidth <= element.clientWidth + 1,
+      height: Math.round(own.height),
+    };
+  });
+
+  await card.locator("[data-changed-files-toggle]").click();
+  await page.waitForTimeout(300);
+
+  const opened = await card.evaluate((element) => ({
+    state: element.dataset.changedFilesState,
+    files: element.querySelectorAll("[data-changed-files-file]").length,
+    inColumn: element.scrollWidth <= element.clientWidth + 1,
+  }));
+
+  const panelEntries =
+    (await page.getByRole("button", { name: "Open diff" }).count()) +
+    (await page.getByRole("button", { name: "Toggle diff panel" }).count()) +
+    (await page.locator('[data-testid="diff-toggle"]').count());
+
+  const summary =
+    folded.state === "summary" &&
+    folded.files === 0 &&
+    folded.text.includes(`${String(count)} changed files`) &&
+    /\+\d/u.test(folded.text) &&
+    folded.inColumn;
+
+  const expands =
+    opened.state === "tree" && opened.files === count && opened.inColumn;
+
+  return `${summary && expands && panelEntries === 0 ? "folds" : "breaks"}: folded ${JSON.stringify(folded)}, opened ${JSON.stringify(opened)}, diff panel entries ${panelEntries}`;
+};
+
+const CARD_FILES = [
+  { path: "apps/web/src/next/diff/Card.ts", additions: 120, deletions: 40 },
+  {
+    path: "apps/web/src/next/timeline/RowView.ts",
+    additions: 12,
+    deletions: 3,
+  },
+  {
+    path: "docs/decisions/0026-delegated-work-starts-from-an-approved-brief.md",
+    additions: 2,
+    deletions: 0,
+  },
+];
+
+/** The user's phone notes: the composer footer, the first row's gap, the changed-files card. */
+const phoneNoteChecks = async (browser: Browser) => {
+  await check(
+    browser,
+    "composer-footer-390",
+    PHONE,
+    threadUrl,
+    footerOnPhone,
+    (detail) => detail.startsWith("fits")
+  );
+
+  for (const width of [390, 1440] as const) {
+    await check(
+      browser,
+      `first-row-gap-${width}`,
+      shellContext(width),
+      threadUrl,
+      firstRowGap,
+      (detail) => detail.startsWith("clears")
+    );
+  }
+
+  if (!wanted("changed-files-390") && !wanted("changed-files-1440")) {
+    return;
+  }
+
+  await app.inBrain(putChangedFiles(CARD_FILES));
+
+  try {
+    for (const width of [390, 1440] as const) {
+      await check(
+        browser,
+        `changed-files-${width}`,
+        shellContext(width),
+        threadUrl,
+        async (page) => await changedFilesCard(page, CARD_FILES.length),
+        (detail) => detail.startsWith("folds")
+      );
+    }
+  } finally {
+    await app.inBrain(takeChangedFiles);
+  }
+};
+
 const chromiumBrowser = await chromium.launch();
 
 try {
   const hero = `${app.origin}/`;
+
+  // Before the shell's checks: Refresh makes a new project thread, after which the seeded thread
+  // has no shell row for its composer to read its model from.
+  await phoneNoteChecks(chromiumBrowser);
 
   await shellChecks(chromiumBrowser, hero);
 

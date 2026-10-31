@@ -2,6 +2,7 @@
 // says; a draft runs on what the user picked, else its project's default, else the server's.
 // Thinking is clamped to the levels the chosen model accepts.
 
+import { condensedModelName } from "@cairn/client-logic/ModelName";
 import {
   modelPickerModelKey,
   rankModelSearch,
@@ -108,6 +109,34 @@ export const thinkingLabel = (level: ThinkingLevel): string =>
   level === "xhigh"
     ? "Extra high"
     : `${level.charAt(0).toUpperCase()}${level.slice(1)}`;
+
+/**
+ * The composer pill's label: the model's condensed name and, for a model that thinks, its level
+ * ("Opus 5.5 · High"). The full name stays in the picker.
+ */
+export const pillLabel = (model: Model): string =>
+  Option.match(resolvedModel(model), {
+    onNone: () => "Choose a model",
+    onSome: (ref) => {
+      const name = condensedModelName(ref.modelId);
+
+      return Option.match(
+        // A listed model without levels does not think; an unlisted one shows what it runs at.
+        Option.filter(
+          resolvedThinking(model),
+          () =>
+            !Option.exists(
+              findListing(model, ref),
+              (listing) => listing.thinkingLevels.length === 0
+            )
+        ),
+        {
+          onNone: () => name,
+          onSome: (level) => `${name} · ${thinkingLabel(level)}`,
+        }
+      );
+    },
+  });
 
 /** A provider id as the picker names its group. */
 export const providerLabel = (provider: string): string =>

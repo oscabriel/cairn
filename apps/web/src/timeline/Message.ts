@@ -13,6 +13,7 @@ export const Message = defineMessageUnion({
   ToggledTurnFold: { turnId: Schema.String },
   ToggledWorkGroup: { groupId: Schema.String },
   ToggledUserMessage: { rowId: Schema.String },
+  ToggledChangedFiles: { rowId: Schema.String },
   ClickedScrollToEnd: {},
   ClickedLoadEarlier: { threadId: Schema.String, before: EntryId },
   /** A history page, with the cursor it was asked from. */

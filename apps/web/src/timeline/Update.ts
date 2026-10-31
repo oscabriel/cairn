@@ -118,6 +118,12 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           expandedUserMessageIds: (ids) => toggle(ids, rowId),
         })
       ),
+    ToggledChangedFiles: ({ rowId }) =>
+      modifyUi(model, (ui) =>
+        modifyFields(ui, {
+          expandedChangedFilesIds: (ids) => toggle(ids, rowId),
+        })
+      ),
     ClickedScrollToEnd: () => ({ model: modifyList(model, List.scrollToEnd) }),
     ClickedLoadEarlier: ({ before, threadId }) =>
       loadEarlier(model, threadId, before),

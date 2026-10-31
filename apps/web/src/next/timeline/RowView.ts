@@ -330,12 +330,20 @@ const metaView = (
     ]
   );
 
-const filesCard = (h: HtmlBuilder<Message>, files: ChangedFilesRow): Html =>
+/** A turn's changed-files card; `rowId` is the row it sits in, which keeps it open or folded. */
+const filesCard = (
+  h: HtmlBuilder<Message>,
+  rowId: string,
+  files: ChangedFilesRow,
+  context: RowContext
+): Html =>
   changedFilesCard(h, {
     turn: files.turn,
     files: files.files,
     moreFiles: files.moreFiles,
     onOpen: (path) => Message.ClickedOpenDiff({ turn: files.turn, path }),
+    expanded: context.expanded,
+    onToggle: Message.ToggledChangedFiles({ rowId }),
   });
 
 const assistantMessageView = (
@@ -366,7 +374,7 @@ const assistantMessageView = (
           ),
           Option.match(row.changedFiles, {
             onNone: () => h.empty,
-            onSome: (files) => filesCard(h, files),
+            onSome: (files) => filesCard(h, row.id, files, context),
           }),
           row.showAssistantMeta
             ? metaView(
@@ -1051,7 +1059,9 @@ export const rowView = (
       "context-compaction": (row) => compactionView(h, row),
       error: (row) => errorView(h, row, context),
       "changed-files": (row) =>
-        frame(h, "changed-files", "pb-(--space-4)", [filesCard(h, row)]),
+        frame(h, "changed-files", "pb-(--space-4)", [
+          filesCard(h, row.id, row, context),
+        ]),
       subagents: (row) =>
         frame(h, "subagents", "pb-(--space-2)", [
           Option.match(Option.all([subagentRowViews(), context.subagents]), {

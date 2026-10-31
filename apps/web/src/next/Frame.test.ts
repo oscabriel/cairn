@@ -85,7 +85,7 @@ describe("the next frame", () => {
     );
   });
 
-  it("draws a thread's transcript and its diff toggle under the header", () => {
+  it("draws a thread's transcript under the header, with no diff toggle", () => {
     Scene.scene(
       { update, view: stubbed },
       Scene.given(
@@ -128,9 +128,8 @@ describe("the next frame", () => {
       Scene.expect(Scene.testId("composer-send")).toHaveClass("bg-accent-fill"),
       Scene.expect(Scene.testId("next-chat-header")).toExist(),
       Scene.expect(Scene.testId("thread-page")).toExist(),
-      Scene.expect(Scene.testId("diff-toggle")).toHaveClass(
-        "pointer-coarse:min-h-(--hit-target)"
-      ),
+      // The diff panel is off until it is fixed (next/diff/Panel.ts), so the header has no toggle.
+      Scene.expect(Scene.testId("diff-toggle")).toBeAbsent(),
       Scene.tap(({ html }) => {
         assert.include(hooksOf(html), "data-chat-column");
       })

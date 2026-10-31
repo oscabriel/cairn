@@ -23,6 +23,7 @@ import { OutboxItem } from "../connection/Outbox.ts";
 import { view } from "../next/composer/View.ts";
 import { AppRoute } from "../Route.ts";
 import {
+  FocusPopoverSearch,
   MoveHeroToDraftUrl,
   PrepareLaunch,
   PrepareSend,
@@ -258,116 +259,24 @@ describe("composer triggers", () => {
 });
 
 /**
- * t3code's footer at each composer width, recorded from the installed nightly
- * (t3code-nightly-bin 0.1.1_nightly.20261020.3438, commit fe27e8e3) on 2026-10-22 by forcing
- * `[data-slot=composer-shell]` to the width and reading its attributes. The measurement is t3code's
- * own at that build: the model picker 169.17 px, the traits block 124.39 px and the mode block
- * 139.78 px wide (63 px each icon-only), a 4 px gap, and the controls' host 18 px narrower than the
- * cluster (its padding). Cairn's folding must give the same states for the same widths.
+ * The footer's one measured block, the runtime mode, at host widths around its fold: the model pill
+ * 120 px, the mode 139.78 px wide and 63 px icon-only, a 4 px gap. The pill names the model and its
+ * thinking level, so there is no thinking block and no overflow button to fold into.
  */
-const t3FooterStates: ReadonlyArray<{
-  readonly width: number;
+const footerStates: ReadonlyArray<{
   readonly host: number;
-  readonly compact: boolean;
-  readonly traits: "full" | "icon" | "hidden";
-  readonly mode: "full" | "icon" | "hidden";
-  readonly overflow: boolean;
+  readonly mode: "full" | "icon";
 }> = [
-  {
-    width: 900,
-    host: 634,
-    compact: false,
-    traits: "full",
-    mode: "full",
-    overflow: false,
-  },
-  {
-    width: 780,
-    host: 634,
-    compact: false,
-    traits: "full",
-    mode: "full",
-    overflow: false,
-  },
-  {
-    width: 700,
-    host: 598,
-    compact: false,
-    traits: "full",
-    mode: "full",
-    overflow: false,
-  },
-  {
-    width: 620,
-    host: 518,
-    compact: false,
-    traits: "full",
-    mode: "full",
-    overflow: false,
-  },
-  {
-    width: 560,
-    host: 452,
-    compact: true,
-    traits: "full",
-    mode: "full",
-    overflow: false,
-  },
-  {
-    width: 520,
-    host: 412,
-    compact: true,
-    traits: "full",
-    mode: "icon",
-    overflow: false,
-  },
-  {
-    width: 480,
-    host: 372,
-    compact: true,
-    traits: "full",
-    mode: "icon",
-    overflow: false,
-  },
-  {
-    width: 440,
-    host: 332,
-    compact: true,
-    traits: "icon",
-    mode: "icon",
-    overflow: false,
-  },
-  {
-    width: 400,
-    host: 292,
-    compact: true,
-    traits: "icon",
-    mode: "hidden",
-    overflow: true,
-  },
-  {
-    width: 360,
-    host: 252,
-    compact: true,
-    traits: "hidden",
-    mode: "hidden",
-    overflow: true,
-  },
+  { host: 634, mode: "full" },
+  { host: 264, mode: "full" },
+  { host: 200, mode: "icon" },
+  // Too tight even for the glyph: the layout would hide the mode, but there is nowhere to fold it
+  // into, so it stays drawn as its glyph and the pill truncates instead.
+  { host: 150, mode: "icon" },
 ];
 
 const block = (name: string) =>
   Scene.selector(`[data-resting-block="${name}"]`);
-
-const expectBlock = (name: string, state: "full" | "icon" | "hidden") => [
-  Scene.expect(block(name)).toHaveAttr(
-    "data-composer-block-icon-only",
-    String(state !== "full")
-  ),
-  Scene.expect(block(name)).toHaveAttr(
-    "data-composer-block-hidden",
-    String(state === "hidden")
-  ),
-];
 
 /** A thread's view: the user's prompt, the answer, and `live` streaming. */
 const viewWith = (live: string) =>
@@ -489,46 +398,77 @@ describe("pointer highlights", () => {
 });
 
 describe("composer footer folding", () => {
-  it.each(t3FooterStates)(
-    "matches t3code's footer at $width px",
-    ({ compact, host, mode, overflow, traits, width }) => {
+  it.each(footerStates)(
+    "draws the mode $mode in a $host px host, and no thinking block or overflow",
+    ({ host, mode }) => {
       Scene.scene(
         { update, view },
         Scene.given(onThread),
         ...acknowledgeMounts,
         Scene.Subscription.emit(
           Message.MeasuredFooter({
-            width,
+            width: 390,
             hostWidth: host,
             measurement: {
               gap: 4,
-              naturalFixedWidth: 169.17,
+              naturalFixedWidth: 120,
               minimumFixedWidth: 52,
-              blockWidths: [124.39, 139.78],
-              iconOnlyBlockWidths: Option.some([63, 63]),
-              overflowWidth: 38,
+              blockWidths: [139.78],
+              iconOnlyBlockWidths: Option.some([63]),
+              overflowWidth: 0,
             },
           })
         ),
-        Scene.expect(Scene.selector("[data-chat-composer-footer]")).toHaveAttr(
-          "data-chat-composer-footer-compact",
-          String(compact)
+        Scene.expect(block("mode")).toHaveAttr(
+          "data-composer-block-icon-only",
+          String(mode === "icon")
         ),
-        ...expectBlock("traits", traits),
-        ...expectBlock("mode", mode),
-        overflow
-          ? Scene.expect(
-              Scene.selector("[data-resting-controls-overflow]")
-            ).not.toHaveAttr("aria-hidden")
-          : Scene.expect(
-              Scene.selector("[data-resting-controls-overflow]")
-            ).toHaveAttr("aria-hidden", "true"),
+        Scene.expect(block("mode")).toHaveAttr(
+          "data-composer-block-hidden",
+          "false"
+        ),
+        Scene.expect(block("traits")).toBeAbsent(),
+        Scene.expect(
+          Scene.selector("[data-resting-controls-overflow]")
+        ).toBeAbsent(),
         Scene.tap((simulation) => {
           assert.lengthOf(simulation.commands, 0);
         })
       );
     }
   );
+});
+
+describe("composer model pill", () => {
+  it("names the model shortly with its thinking level, and its picker offers the levels", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(onThread),
+      ...acknowledgeMounts,
+      Scene.expect(
+        Scene.selector("[data-chat-provider-model-picker-label]")
+      ).toHaveText("kimi-k3 · Medium"),
+      Scene.expect(
+        Scene.selector("[data-chat-provider-model-picker]")
+      ).toHaveAttr("title", "Kimi K3"),
+      Scene.click(Scene.selector("[data-chat-provider-model-picker]")),
+      Scene.Command.resolve(
+        FocusPopoverSearch,
+        Message.CompletedEditorCommand()
+      ),
+      Scene.expect(Scene.testId("composer-model-thinking")).toContainText(
+        "High"
+      ),
+      Scene.expect(
+        Scene.selector(
+          '[data-testid="composer-model-thinking"] [aria-pressed="true"]'
+        )
+      ).toHaveText("Medium"),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
 });
 
 describe("composer drafts", () => {

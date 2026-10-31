@@ -51,7 +51,13 @@ import { icon } from "./Icon.ts";
 import { Message } from "./Message.ts";
 import { Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import { modelGroups, resolvedModel } from "./Models.ts";
+import {
+  modelGroups,
+  resolvedModel,
+  resolvedThinking,
+  thinkingLabel,
+  thinkingLevels,
+} from "./Models.ts";
 
 const ROW_CLASS =
   "flex min-h-8 items-center rounded-sm px-2 py-1 text-base outline-none not-data-disabled:hover:bg-accent data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-selected:bg-foreground/[0.08] data-selected:text-foreground data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm group relative w-full !min-w-0 max-w-full cursor-pointer";
@@ -296,6 +302,56 @@ const modelRow = (
   );
 };
 
+const THINKING_CHOICE_CLASS =
+  "inline-flex min-h-8 cursor-pointer items-center rounded-sm px-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:bg-foreground/[0.08] aria-pressed:text-foreground pointer-coarse:min-h-11";
+
+/**
+ * The picker's thinking levels, under the models: the composer's pill names the model and its
+ * level together, so the one popover it opens sets both.
+ */
+const thinkingChoices = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const levels = thinkingLevels(model);
+  const current = resolvedThinking(model);
+
+  return levels.length === 0
+    ? h.empty
+    : h.div(
+        [
+          h.Role("group"),
+          h.AriaLabel("Thinking"),
+          h.DataAttribute("testid", "composer-model-thinking"),
+          h.Class("flex shrink-0 flex-col border-border border-t px-1 py-1.5"),
+        ],
+        [
+          h.div(
+            [
+              h.Class(
+                "px-2 pt-1 pb-1 font-medium text-muted-foreground text-xs"
+              ),
+            ],
+            ["Thinking"]
+          ),
+          h.div(
+            [h.Class("flex flex-wrap gap-0.5")],
+            levels.map((level) =>
+              h.button(
+                [
+                  h.Key(level),
+                  h.Type("button"),
+                  h.AriaPressed(
+                    Option.contains(current, level) ? "true" : "false"
+                  ),
+                  h.Class(THINKING_CHOICE_CLASS),
+                  h.OnClick(Message.PickedThinking({ level })),
+                ],
+                [thinkingLabel(level)]
+              )
+            )
+          ),
+        ]
+      );
+};
+
 const modelPicker = (
   model: Model,
   query: string,
@@ -367,6 +423,7 @@ const modelPicker = (
               )
             )
       ),
+      thinkingChoices(model, h),
     ]
   );
 };

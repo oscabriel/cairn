@@ -31,6 +31,7 @@ import {
   TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
+import type { ModelListing } from "@cairn/protocol/Models";
 import type { RoleTable } from "@cairn/protocol/Roles";
 import { NodeServices } from "@effect/platform-node";
 import {
@@ -71,6 +72,7 @@ import {
   scriptedAnswer,
 } from "../../../apps/server/src/brain/ScriptedHarness.ts";
 import type { ScriptedGoals } from "../../../apps/server/src/brain/ScriptedHarness.ts";
+import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
 import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
@@ -581,7 +583,30 @@ export interface CairnOptions {
   readonly shell?: ShellSeed;
   /** The role tables; the default table in both when absent. */
   readonly roles?: CairnRoles;
+  /**
+   * Listings the model picker shows after the faux model's, as if more providers were signed in
+   * (the look's picker state). Only the picker sees them: the brain still runs on the faux model.
+   */
+  readonly pickerModels?: ReadonlyArray<ModelListing>;
 }
+
+/** The picker's catalog with `extra` listed after its own models. */
+const withPickerModels = (extra: ReadonlyArray<ModelListing>) =>
+  Layer.effect(
+    PiModelSource,
+    Effect.gen(function* () {
+      const source = yield* PiModelSource;
+
+      return PiModelSource.of({
+        ...source,
+        catalog: (options) =>
+          Effect.map(source.catalog(options), (catalog) => ({
+            ...catalog,
+            models: [...catalog.models, ...extra],
+          })),
+      });
+    })
+  );
 
 /** Writes the settings' role table, when a judge gives one. */
 const seedRoles = (roles: CairnRoles | undefined) =>
@@ -623,6 +648,15 @@ export const startCairn = async (
     ids: { next: 1 },
   });
 
+  const models = withCatalog(
+    ModelSource.layerFaux({
+      tokensPerSecond: 200,
+      settings: {},
+      // The model t3code's baseline shows, so the footer folds at the same widths.
+      name: "Claude Fable 5.1",
+    })
+  );
+
   const Harness = Layer.mergeAll(
     Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
     EventReactors.layerOff,
@@ -642,14 +676,12 @@ export const startCairn = async (
         : Layer.succeed(ScriptedRoleTable, options.roles.scripted)
     ),
     Layer.provideMerge(
-      withCatalog(
-        ModelSource.layerFaux({
-          tokensPerSecond: 200,
-          settings: {},
-          // The model t3code's baseline shows, so the footer folds at the same widths.
-          name: "Claude Fable 5.1",
-        })
-      )
+      options.pickerModels === undefined
+        ? models
+        : Layer.merge(
+            models,
+            withPickerModels(options.pickerModels).pipe(Layer.provide(models))
+          )
     )
   );
 

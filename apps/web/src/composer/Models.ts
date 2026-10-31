@@ -138,8 +138,19 @@ export const pillLabel = (model: Model): string =>
     },
   });
 
+/** The providers whose names are not their ids title-cased. */
+const PROVIDER_NAMES = new Map([
+  ["claude-bridge", "Claude"],
+  ["anthropic", "Anthropic API"],
+  ["openai", "OpenAI"],
+  ["openai-codex", "OpenAI Codex"],
+  ["opencode", "OpenCode"],
+  ["opencode-go", "OpenCode Go"],
+]);
+
 /** A provider id as the picker names its group. */
 export const providerLabel = (provider: string): string =>
+  PROVIDER_NAMES.get(provider) ??
   provider
     .split(/[-_]/u)
     .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
@@ -206,4 +217,79 @@ export const modelGroups = (
   return favorites.length === 0
     ? groups
     : [{ id: "favorites", label: "Favorites", models: favorites }, ...groups];
+};
+
+/** The model picker rail's favourites entry. */
+export const FAVORITES_RAIL_ID = "favorites";
+
+/** One entry on the model picker's provider rail. */
+export interface PickerRailItem {
+  readonly id: string;
+  readonly label: string;
+}
+
+/** The rail: the favourites when there are any, then each provider in catalog order. */
+export const pickerRail = (model: Model): ReadonlyArray<PickerRailItem> =>
+  modelGroups(model, "").map((group) => ({
+    id: group.id,
+    label: group.label,
+  }));
+
+/**
+ * The rail entry the picker shows: the one picked on the rail, else the current model's provider,
+ * else the first entry.
+ */
+export const pickerProvider = (
+  model: Model,
+  picked: Option.Option<string>
+): Option.Option<string> => {
+  const ids = pickerRail(model).map((item) => item.id);
+
+  return Option.firstSomeOf([
+    Option.filter(picked, (id) => ids.includes(id)),
+    Option.filter(
+      Option.map(resolvedModel(model), (ref) => ref.provider),
+      (id) => ids.includes(id)
+    ),
+    Array.head(ids),
+  ]);
+};
+
+/** What the picker's list shows: one rail entry's models, or a search across every provider. */
+export interface PickerSection {
+  readonly label: string;
+  readonly models: ReadonlyArray<ModelListing>;
+  /** True for search results, whose rows name their provider. */
+  readonly search: boolean;
+}
+
+/** The picker's list for `query` and the rail's `picked` entry. */
+export const pickerSection = (
+  model: Model,
+  query: string,
+  picked: Option.Option<string>
+): PickerSection => {
+  const groups = modelGroups(model, query);
+
+  if (query.trim().length > 0) {
+    return {
+      label: "Results",
+      models: Array.flatMap(groups, (group) => group.models),
+      search: true,
+    };
+  }
+
+  return Option.match(
+    Option.flatMap(pickerProvider(model, picked), (id) =>
+      Array.findFirst(groups, (group) => group.id === id)
+    ),
+    {
+      onNone: () => ({ label: "Models", models: [], search: false }),
+      onSome: (group) => ({
+        label: group.label,
+        models: group.models,
+        search: false,
+      }),
+    }
+  );
 };

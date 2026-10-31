@@ -971,8 +971,8 @@ const updatePopover = (
 
 const withQuery = (popover: Popover, query: string): Popover =>
   Popover.match(popover, {
-    ModelPicker: () =>
-      Popover.ModelPicker({ query, highlighted: Option.none() }),
+    ModelPicker: ({ provider }) =>
+      Popover.ModelPicker({ query, highlighted: Option.none(), provider }),
     Project: () => Popover.Project({ query, highlighted: Option.none() }),
     Branch: () => Popover.Branch({ query }),
     Thinking: () => popover,
@@ -983,8 +983,8 @@ const withQuery = (popover: Popover, query: string): Popover =>
 
 const withHighlight = (popover: Popover, id: string): Popover =>
   Popover.match(popover, {
-    ModelPicker: ({ query }) =>
-      Popover.ModelPicker({ query, highlighted: Option.some(id) }),
+    ModelPicker: ({ query, provider }) =>
+      Popover.ModelPicker({ query, highlighted: Option.some(id), provider }),
     Project: ({ query }) =>
       Popover.Project({ query, highlighted: Option.some(id) }),
     Branch: () => popover,
@@ -1110,6 +1110,17 @@ const step = (model: Model, message: Message): UpdateReturn =>
     ClosedPopover: () => ({ model: closePopover(model) }),
     ChangedPopoverQuery: ({ query }) =>
       updatePopover(model, (popover) => withQuery(popover, query)),
+    // A provider on the rail shows its models; a search in progress gives way to it.
+    PickedPickerProvider: ({ provider }) =>
+      updatePopover(model, (popover) =>
+        Predicate.isTagged(popover, "ModelPicker")
+          ? Popover.ModelPicker({
+              query: "",
+              highlighted: Option.none(),
+              provider: Option.some(provider),
+            })
+          : popover
+      ),
     // The pointer moves over a row many times a second; the same row keeps the same Model.
     MovedPopoverHighlight: ({ id }) =>
       Option.exists(model.popover, (popover) => isHighlighted(popover, id))

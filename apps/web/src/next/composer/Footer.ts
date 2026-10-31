@@ -1,6 +1,7 @@
 // The `next` composer's footer (plan look track L7), in the Stone look, made to fit one row on a
-// phone (the user's 390 px notes): the left cluster is the model pill, naming the model shortly and
-// its thinking level ("Opus 5.5 · High") and opening the one picker that sets both, then the
+// phone (the user's 390 px notes): the left cluster is the model pill, with its provider's mark,
+// naming the model shortly and its thinking level ("Opus 5.5 · High") and opening the one picker
+// that sets both (providers on a rail, the models, the thinking levels in their own band), then the
 // runtime mode, whose label the measured layout (`composer/Footer.ts`'s `MeasureFooter` and
 // client-logic's `FooterLayout.ts`) drops to its glyph when the row is tight; the right cluster is
 // the paperclip and the round send button (Stop while a run works with nothing typed). The plan
@@ -19,7 +20,6 @@ import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {
-  Bot,
   CornerUpRight,
   ListPlus,
   Lock,
@@ -38,7 +38,13 @@ import type { IconNode } from "../../composer/Icon.ts";
 import { Message } from "../../composer/Message.ts";
 import { Popover } from "../../composer/Model.ts";
 import type { Model } from "../../composer/Model.ts";
-import { modelLabel, pillLabel } from "../../composer/Models.ts";
+import {
+  modelLabel,
+  pillLabel,
+  providerLabel,
+  resolvedModel,
+} from "../../composer/Models.ts";
+import { providerMark } from "../../composer/ProviderMark.ts";
 import { isThreadRunning } from "../../composer/Update.ts";
 import {
   ACTIONS_CLASS,
@@ -128,12 +134,18 @@ const pickerButton = (model: Model, h: HtmlBuilder<Message>): Html =>
           popover: Popover.ModelPicker({
             query: "",
             highlighted: Option.none(),
+            provider: Option.none(),
           }),
         })
       ),
     ],
     [
-      icon(h, Bot, "bot", ""),
+      Option.match(resolvedModel(model), {
+        // No model yet: an empty square holds the pill's shape until the catalog loads.
+        onNone: () => h.span([h.AriaHidden(true), h.Class("size-4 shrink-0")]),
+        onSome: (ref) =>
+          providerMark(h, ref.provider, providerLabel(ref.provider), "size-4"),
+      }),
       h.span(
         [
           h.DataAttribute("chat-provider-model-picker-label", "true"),

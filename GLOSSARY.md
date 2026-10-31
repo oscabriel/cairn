@@ -302,7 +302,11 @@ _Avoid_: plugin
 
 **Draft**: A message not yet sent, kept in the browser per thread (or per new-thread draft) so typing never waits on the network.
 
-**Composer**: Where the user writes a turn: the editor, its `/`, `@` and `$` menus, and the footer's model, thinking and mode controls. Docked under an open thread, or inside the hero for a draft.
+**Composer**: Where the user writes a turn: the editor, its `/`, `@` and `$` menus, and the footer's model pill and mode control. Docked under an open thread, or inside the hero for a draft.
+
+**Model pill**: The composer footer's first control: the provider's mark (Claude, OpenAI, OpenCode, or the provider's initial when it has no mark), the model's short name and its thinking level ("Opus 5.5 · High"). It opens the model picker.
+
+**Model picker**: The popup the model pill opens, above the composer on a desktop and as a sheet along the bottom on a phone. Its provider rail runs down the left edge (Favorites first when there are any, then one mark per provider) and picks which provider's models the list shows; it opens on the current model's provider. A search lists matches from every provider, each row with its provider's mark. The thinking levels are a segmented choice in their own band under the list. _Avoid_: model menu.
 
 **Attachment tray**: The composer's row of a draft's attachments (image thumbnails, file rows, upload progress, retry and remove). A send pressed while uploads are in flight waits and fires when the last one answers.
 

@@ -4,8 +4,8 @@
 // lines, which opens it (the user, 2026-10-30: a turn's whole file breakdown was too much); open,
 // it lists the files as a tree. While the diff panel is on (`Panel.ts`) the header also offers
 // "Open diff" and each file row opens the diff at it; while it is off the rows are plain. The
-// line counts are grey, the faint ink, with "+" and "−" saying which is which: the look keeps
-// colour for status icons only.
+// line counts are green and red (the done and failed tones, the user, 2026-10-31), with "+" and
+// "−" still saying which is which.
 
 import {
   buildTurnDiffTree,
@@ -58,7 +58,7 @@ const formatCompactCount = (value: number): string => {
   return value < 1_000_000 ? scaled(1000, "k") : scaled(1_000_000, "m");
 };
 
-/** `+3 −1` in the faint ink, with one label for screen readers. */
+/** `+3 −1`, added in the done tone and removed in the failed tone, with one label for screen readers. */
 export const diffStatLabel = <Message>(
   h: HtmlBuilder<Message>,
   stat: DiffStat,
@@ -72,15 +72,21 @@ export const diffStatLabel = <Message>(
       ),
       h.Class(
         classNames(
-          "inline-flex shrink-0 items-center gap-(--space-1-5) font-(family-name:--font-code) text-ink-3 tabular-nums",
+          "inline-flex shrink-0 items-center gap-(--space-1-5) font-(family-name:--font-code) tabular-nums",
           TYPE.small,
           className
         )
       ),
     ],
     [
-      h.span([h.AriaHidden(true)], [`+${formatCompactCount(stat.additions)}`]),
-      h.span([h.AriaHidden(true)], [`−${formatCompactCount(stat.deletions)}`]),
+      h.span(
+        [h.AriaHidden(true), h.Class("text-tone-done")],
+        [`+${formatCompactCount(stat.additions)}`]
+      ),
+      h.span(
+        [h.AriaHidden(true), h.Class("text-tone-failed")],
+        [`−${formatCompactCount(stat.deletions)}`]
+      ),
     ]
   );
 

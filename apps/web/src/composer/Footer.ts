@@ -371,6 +371,7 @@ const pickerButton = (model: Model, h: HtmlBuilder<Message>): Html =>
           popover: Popover.ModelPicker({
             query: "",
             highlighted: Option.none(),
+            provider: Option.none(),
           }),
         })
       ),

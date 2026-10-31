@@ -133,6 +133,8 @@ export const Popover = defineTaggedUnion({
   ModelPicker: {
     query: Schema.String,
     highlighted: Schema.Option(Schema.String),
+    /** The provider rail's choice ("favorites" or a provider); none follows the current model. */
+    provider: Schema.Option(Schema.String),
   },
   Thinking: {},
   RuntimeMode: {},

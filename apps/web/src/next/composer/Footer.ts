@@ -1,14 +1,15 @@
-// The `next` composer's footer (plan look track L7): the classic footer's behaviour, drawn in the
-// Stone look. The left cluster holds the model, the thinking level and the runtime mode as quiet
-// pills, folded by the same measured layout as classic (`composer/Footer.ts`'s `MeasureFooter`
-// and client-logic's `FooterLayout.ts`), so a narrow composer shows a block's glyph only, then
-// moves it into the overflow menu; the right cluster holds the plan meter, the paperclip and the
-// round send button (Stop while a run works with nothing typed). Send and Stop are the accent
+// The `next` composer's footer (plan look track L7), in the Stone look, made to fit one row on a
+// phone (the user's 390 px notes): the left cluster is the model pill, naming the model shortly and
+// its thinking level ("Opus 5.5 · High") and opening the one picker that sets both, then the
+// runtime mode, whose label the measured layout (`composer/Footer.ts`'s `MeasureFooter` and
+// client-logic's `FooterLayout.ts`) drops to its glyph when the row is tight; the right cluster is
+// the paperclip and the round send button (Stop while a run works with nothing typed). The plan
+// meter lives on the settings page and the thread's usage, not here. Send and Stop are the accent
 // fill, the main ink: the look has no other action colour.
 //
 // The hooks the judges and the measurement read are classic's: `data-chat-composer-*`,
 // `data-chat-provider-model-picker(-label)`, `data-resting-block`, `data-composer-control-label`,
-// `data-resting-controls-overflow`, `data-composer-shortcut` and the test ids.
+// `data-composer-shortcut` and the test ids.
 
 import { shouldUseCompactComposerFooter } from "@cairn/client-logic/FooterLayout";
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
@@ -19,9 +20,7 @@ import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import {
   Bot,
-  Brain,
   CornerUpRight,
-  Ellipsis,
   ListPlus,
   Lock,
   LockOpen,
@@ -33,20 +32,14 @@ import {
 import { hasAttachments } from "../../attachments/Update.ts";
 import { ATTACH_ACCEPT, pickedFiles } from "../../attachments/View.ts";
 import { activeDraft, draftKey, isDraftTarget } from "../../composer/Drafts.ts";
-import { footerBlocks, MeasureFooter } from "../../composer/Footer.ts";
+import { MeasureFooter } from "../../composer/Footer.ts";
 import { icon } from "../../composer/Icon.ts";
 import type { IconNode } from "../../composer/Icon.ts";
 import { Message } from "../../composer/Message.ts";
 import { Popover } from "../../composer/Model.ts";
 import type { Model } from "../../composer/Model.ts";
-import {
-  modelLabel,
-  resolvedModel,
-  resolvedThinking,
-  thinkingLabel,
-} from "../../composer/Models.ts";
+import { modelLabel, pillLabel } from "../../composer/Models.ts";
 import { isThreadRunning } from "../../composer/Update.ts";
-import { usageMeterView } from "../../composer/UsageMeter.ts";
 import {
   ACTIONS_CLASS,
   ATTACH_CLASS,
@@ -127,6 +120,8 @@ const pickerButton = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.DataAttribute("slot", "popover-trigger"),
       h.AriaHasPopup("dialog"),
       h.AriaExpanded(isOpen(model, "ModelPicker")),
+      h.Title(modelLabel(model)),
+      h.DataAttribute("composer-shortcut", "composer.effort"),
       h.Class(`${PILL_CLASS} min-w-13 shrink`),
       h.OnClick(
         Message.OpenedPopover({
@@ -144,37 +139,10 @@ const pickerButton = (model: Model, h: HtmlBuilder<Message>): Html =>
           h.DataAttribute("chat-provider-model-picker-label", "true"),
           h.Class("min-w-0 flex-1 truncate"),
         ],
-        [modelLabel(model)]
+        [pillLabel(model)]
       ),
     ]
   );
-
-const traitsBlock = (
-  model: Model,
-  hidden: boolean,
-  iconOnly: boolean,
-  h: HtmlBuilder<Message>
-): Html => {
-  const label = Option.match(resolvedThinking(model), {
-    onNone: () => "Thinking",
-    onSome: thinkingLabel,
-  });
-
-  return block(h, "traits", hidden, iconOnly, [
-    h.button(
-      [
-        h.Type("button"),
-        h.AriaLabel(label),
-        h.AriaHasPopup("menu"),
-        h.AriaExpanded(isOpen(model, "Thinking")),
-        h.DataAttribute("composer-shortcut", "composer.effort"),
-        h.Class(PILL_CLASS),
-        h.OnClick(Message.OpenedPopover({ popover: Popover.Thinking() })),
-      ],
-      [controlIcon(h, Brain, "brain"), controlLabel(h, label, iconOnly)]
-    ),
-  ]);
-};
 
 const modeBlock = (
   model: Model,
@@ -202,45 +170,6 @@ const modeBlock = (
       ]
     ),
   ]);
-};
-
-const overflowHolder = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const needed = model.footer.layout.hiddenCount > 0;
-  const blocks = footerBlocks(model);
-
-  // The overflow button carries the shortcut of every block folded into it, as classic's does.
-  const shortcut = blocks
-    .slice(blocks.length - model.footer.layout.hiddenCount)
-    .includes("traits")
-    ? "composer.mode composer.effort"
-    : "composer.mode";
-
-  return h.div(
-    [
-      h.DataAttribute("resting-controls-overflow", "true"),
-      ...onlyIf(!needed, h.AriaHidden(true), h.Inert(true)),
-      h.Class(
-        needed
-          ? "min-w-0 shrink-0"
-          : "pointer-events-none invisible absolute min-w-0 shrink-0"
-      ),
-    ],
-    [
-      h.button(
-        [
-          h.Type("button"),
-          h.AriaLabel("More composer controls"),
-          h.AriaHasPopup("menu"),
-          h.AriaExpanded(isOpen(model, "Overflow")),
-          h.DataAttribute("composer-shortcut", shortcut),
-          h.DataAttribute("slot", "menu-trigger"),
-          h.Class(PILL_CLASS),
-          h.OnClick(Message.OpenedPopover({ popover: Popover.Overflow() })),
-        ],
-        [controlIcon(h, Ellipsis, "ellipsis")]
-      ),
-    ]
-  );
 };
 
 const STOP_ICON_PATH =
@@ -357,10 +286,9 @@ const attachButton = (h: HtmlBuilder<Message>): Html =>
     ]
   );
 
-/** The footer: the left cluster folded by the measured layout, and the actions. */
+/** The footer: the model pill and the mode, then the paperclip and send, on one row. */
 export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const { layout, width } = model.footer;
-  const blocks = footerBlocks(model);
   const draft = activeDraft(model);
 
   const hasContent =
@@ -372,8 +300,10 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
 
   const running = isThreadRunning(model);
   const compact = shouldUseCompactComposerFooter(width, running);
-  const hiddenFrom = blocks.length - layout.hiddenCount;
-  const iconFrom = blocks.length - layout.iconOnlyCount;
+
+  // The mode is the one measured block. It is never folded away: past icon-only there is nothing
+  // left to fold it into, and the pill truncates instead.
+  const modeIconOnly = layout.iconOnlyCount > 0 || layout.hiddenCount > 0;
 
   return h.div(
     [
@@ -392,15 +322,7 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
             layout.visible ? CONTROLS_CLASS : `${CONTROLS_CLASS} invisible`
           ),
         ],
-        [
-          pickerButton(model, h),
-          ...blocks.map((name, index) =>
-            name === "traits"
-              ? traitsBlock(model, index >= hiddenFrom, index >= iconFrom, h)
-              : modeBlock(model, index >= hiddenFrom, index >= iconFrom, h)
-          ),
-          overflowHolder(model, h),
-        ]
+        [pickerButton(model, h), modeBlock(model, false, modeIconOnly, h)]
       ),
       h.div(
         [
@@ -409,13 +331,6 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
           h.Class(ACTIONS_CLASS),
         ],
         [
-          usageMeterView(h, {
-            usage: model.context.usage,
-            provider: Option.match(resolvedModel(model), {
-              onNone: () => "",
-              onSome: (ref) => ref.provider,
-            }),
-          }),
           attachButton(h),
           h.span(
             [

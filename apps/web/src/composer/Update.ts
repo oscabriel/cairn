@@ -951,7 +951,8 @@ const popoverHides = (model: Model, popover: Popover): boolean => {
   return Popover.match(popover, {
     ModelPicker: () => !model.footer.layout.visible,
     Thinking: () => hiddenCount >= 2,
-    RuntimeMode: () => hiddenCount >= 1,
+    // The footer draws the mode control whenever it draws the cluster (icon-only when tight).
+    RuntimeMode: () => !model.footer.layout.visible,
     Overflow: () => hiddenCount === 0,
     Project: () => false,
     EnvMode: () => false,

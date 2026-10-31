@@ -1,17 +1,21 @@
 // The `next` changed-files card under a turn (plan look track L7): classic's card
 // (`diff/Card.ts`, a port of t3code's `ChangedFilesCard`) in the Stone look: a sunken box with a
-// hairline, the count of changed files and their summed lines in the header with "Open diff",
-// and the files as a tree, each a row that opens the diff at it. The line counts are grey, the
-// faint ink, with "+" and "−" saying which is which: the look keeps colour for status icons only.
+// hairline. It rests folded to one summary line, the count of changed files and their summed
+// lines, which opens it (the user, 2026-10-30: a turn's whole file breakdown was too much); open,
+// it lists the files as a tree. While the diff panel is on (`Panel.ts`) the header also offers
+// "Open diff" and each file row opens the diff at it; while it is off the rows are plain. The
+// line counts are grey, the faint ink, with "+" and "−" saying which is which: the look keeps
+// colour for status icons only.
 
 import {
   buildTurnDiffTree,
   summarizeTurnDiffStats,
 } from "@cairn/client-logic/DiffTree";
 import type { DiffStat, DiffTreeNode } from "@cairn/client-logic/DiffTree";
+import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
-import { File, FileDiff, FolderOpen } from "lucide";
+import { ChevronRight, File, FileDiff, FolderOpen } from "lucide";
 
 import { icon } from "../../composer/Icon.ts";
 import type { ChangedFilesCardInput } from "../../diff/Card.ts";
@@ -25,6 +29,15 @@ import {
   TYPE,
   WEIGHT_MEDIUM,
 } from "../ui/Classes.ts";
+import { DIFF_PANEL_ENABLED } from "./Panel.ts";
+
+/** Classic's card input, with whether the card is open and what opening or folding it sends. */
+export interface ChangedFilesCardView<
+  Message,
+> extends ChangedFilesCardInput<Message> {
+  readonly expanded: boolean;
+  readonly onToggle: Message;
+}
 
 /** True when a stat has something to show. */
 const hasNonZeroStat = (stat: DiffStat): boolean =>
@@ -122,6 +135,29 @@ const treeRow = <Message>(
 
   const { path } = row.node;
 
+  const content = [
+    hasDirectories || row.depth > 0
+      ? h.span([h.AriaHidden(true), h.Class("size-3.5 shrink-0")])
+      : h.empty,
+    icon(h, File, "file", "size-3.5 shrink-0 text-ink-3"),
+    h.span(
+      [h.Class("min-w-0 truncate font-(family-name:--font-code)")],
+      [row.node.name]
+    ),
+    statCell(h, row.node.stat),
+  ];
+
+  if (!DIFF_PANEL_ENABLED) {
+    return h.div(
+      [
+        h.DataAttribute("changed-files-file", path),
+        h.Class(`${ROW_CLASS} text-ink-2`),
+        h.Style(padding),
+      ],
+      content
+    );
+  }
+
   return h.button(
     [
       h.Type("button"),
@@ -139,17 +175,7 @@ const treeRow = <Message>(
       h.AriaLabel(`Open the diff of ${path}`),
       h.OnClick(onOpen(Option.some(path))),
     ],
-    [
-      hasDirectories || row.depth > 0
-        ? h.span([h.AriaHidden(true), h.Class("size-3.5 shrink-0")])
-        : h.empty,
-      icon(h, File, "file", "size-3.5 shrink-0 text-ink-3"),
-      h.span(
-        [h.Class("min-w-0 truncate font-(family-name:--font-code)")],
-        [row.node.name]
-      ),
-      statCell(h, row.node.stat),
-    ]
+    content
   );
 };
 
@@ -162,10 +188,67 @@ const OPEN_CLASS = classNames(
   FEEDBACK_MOTION
 );
 
-/** The changed-files card under a turn; nothing when the turn changed no files. */
+/** The open card's files, as a tree. */
+const filesBody = <Message>(
+  h: HtmlBuilder<Message>,
+  input: ChangedFilesCardView<Message>,
+  bodyId: string
+): Html => {
+  const hasDirectories = input.files.some((file) => /[/\\]/u.test(file.path));
+  const rows = flatten(buildTurnDiffTree(input.files), 0);
+
+  return h.div(
+    [h.Id(bodyId), h.Class("flex min-w-0 flex-col p-(--space-1)")],
+    [
+      ...rows.map((row) => treeRow(h, row, hasDirectories, input.onOpen)),
+      input.moreFiles > 0
+        ? h.p(
+            [
+              h.Class(
+                `px-(--space-2) py-(--space-1-5) text-ink-3 ${TYPE.small}`
+              ),
+            ],
+            [
+              `${String(input.moreFiles)} more file${input.moreFiles === 1 ? "" : "s"} in the diff`,
+            ]
+          )
+        : h.empty,
+    ]
+  );
+};
+
+/** The summary line: a button that opens or folds the card, the whole line a finger can hit. */
+const SUMMARY_CLASS = classNames(
+  "flex min-h-9 min-w-0 flex-1 cursor-pointer items-center gap-(--space-2) rounded-(--radius-small) px-(--space-2) text-start text-ink-1 hover:bg-select-1",
+  TYPE.small,
+  WEIGHT_MEDIUM,
+  HIT_HEIGHT,
+  FOCUS_RING_INSET,
+  FEEDBACK_MOTION
+);
+
+const openDiffButton = <Message>(
+  h: HtmlBuilder<Message>,
+  input: ChangedFilesCardView<Message>
+): Html =>
+  h.button(
+    [
+      h.Type("button"),
+      h.AriaLabel("Open diff"),
+      h.Class(OPEN_CLASS),
+      h.OnClick(
+        input.onOpen(
+          Option.map(Option.fromNullishOr(input.files[0]), (file) => file.path)
+        )
+      ),
+    ],
+    [icon(h, FileDiff, "file-diff", ""), "Open diff"]
+  );
+
+/** The changed-files card under a turn, folded or open; nothing when the turn changed no files. */
 export const changedFilesCard = <Message>(
   h: HtmlBuilder<Message>,
-  input: ChangedFilesCardInput<Message>
+  input: ChangedFilesCardView<Message>
 ): Html => {
   if (input.files.length === 0 && input.moreFiles === 0) {
     return h.empty;
@@ -173,16 +256,45 @@ export const changedFilesCard = <Message>(
 
   const count = input.files.length + input.moreFiles;
   const total = summarizeTurnDiffStats(input.files);
-  const hasDirectories = input.files.some((file) => /[/\\]/u.test(file.path));
-  const rows = flatten(buildTurnDiffTree(input.files), 0);
+  const bodyId = `changed-files-${String(input.turn)}`;
+
+  const summary = h.button(
+    [
+      h.Type("button"),
+      h.AriaExpanded(input.expanded),
+      ...onlyIf(input.expanded, h.AriaControls(bodyId)),
+      h.DataAttribute("changed-files-toggle", "true"),
+      h.Class(SUMMARY_CLASS),
+      h.OnClick(input.onToggle),
+    ],
+    [
+      h.span(
+        [
+          h.AriaHidden(true),
+          h.Class(
+            `flex size-4 shrink-0 items-center justify-center text-ink-3 transition-transform duration-(--duration-feedback) ${input.expanded ? "rotate-90" : ""}`
+          ),
+        ],
+        [icon(h, ChevronRight, "chevron-right", "size-3")]
+      ),
+      h.span(
+        [h.Class("min-w-0 truncate")],
+        [`${String(count)} changed file${count === 1 ? "" : "s"}`]
+      ),
+      hasNonZeroStat(total) ? diffStatLabel(h, total) : h.empty,
+    ]
+  );
 
   return h.div(
     [
       h.DataAttribute("testid", "changed-files-card"),
       h.DataAttribute("changed-files-turn", String(input.turn)),
-      h.DataAttribute("changed-files-state", "tree"),
+      h.DataAttribute(
+        "changed-files-state",
+        input.expanded ? "tree" : "summary"
+      ),
       h.Class(
-        "mt-(--space-3) rounded-(--radius-medium) border border-stroke-1 bg-surface-sunken"
+        "mt-(--space-3) w-full min-w-0 max-w-full overflow-hidden rounded-(--radius-medium) border border-stroke-1 bg-surface-sunken"
       ),
     ],
     [
@@ -190,61 +302,12 @@ export const changedFilesCard = <Message>(
         [
           h.DataAttribute("changed-files-header", ""),
           h.Class(
-            "flex items-center justify-between gap-(--space-2) border-b border-stroke-1 py-(--space-1) ps-(--space-3) pe-(--space-1)"
+            `flex min-w-0 items-center justify-between gap-(--space-2) p-(--space-1) ${input.expanded ? "border-b border-stroke-1" : ""}`
           ),
         ],
-        [
-          h.span(
-            [
-              h.Class(
-                classNames(
-                  "flex min-w-0 flex-wrap items-center gap-x-(--space-3) text-ink-1",
-                  TYPE.small,
-                  WEIGHT_MEDIUM
-                )
-              ),
-            ],
-            [
-              `${String(count)} changed file${count === 1 ? "" : "s"}`,
-              hasNonZeroStat(total) ? diffStatLabel(h, total) : h.empty,
-            ]
-          ),
-          h.button(
-            [
-              h.Type("button"),
-              h.AriaLabel("Open diff"),
-              h.Class(OPEN_CLASS),
-              h.OnClick(
-                input.onOpen(
-                  Option.map(
-                    Option.fromNullishOr(input.files[0]),
-                    (file) => file.path
-                  )
-                )
-              ),
-            ],
-            [icon(h, FileDiff, "file-diff", ""), "Open diff"]
-          ),
-        ]
+        [summary, DIFF_PANEL_ENABLED ? openDiffButton(h, input) : h.empty]
       ),
-      h.div(
-        [h.Class("flex flex-col p-(--space-1)")],
-        [
-          ...rows.map((row) => treeRow(h, row, hasDirectories, input.onOpen)),
-          input.moreFiles > 0
-            ? h.p(
-                [
-                  h.Class(
-                    `px-(--space-2) py-(--space-1-5) text-ink-3 ${TYPE.small}`
-                  ),
-                ],
-                [
-                  `${String(input.moreFiles)} more file${input.moreFiles === 1 ? "" : "s"} in the diff`,
-                ]
-              )
-            : h.empty,
-        ]
-      ),
+      input.expanded ? filesBody(h, input, bodyId) : h.empty,
     ]
   );
 };

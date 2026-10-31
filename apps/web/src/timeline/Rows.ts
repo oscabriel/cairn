@@ -362,8 +362,9 @@ const textLines = (message: TimelineMessage): number => {
   return lines;
 };
 
-const cardHeight = (card: ChangedFilesRow): number =>
-  56 + 28 * Math.min(card.files.length, 12);
+/** A changed-files card: one summary line until it is opened, then its file rows. */
+const cardHeight = (card: ChangedFilesRow, expanded: boolean): number =>
+  expanded ? 56 + 28 * Math.min(card.files.length, 12) : 44;
 
 const messageHeight = (message: TimelineMessage, expanded: boolean): number => {
   const lines = bucketLines(textLines(message));
@@ -397,23 +398,28 @@ const FIXED_HEIGHTS: Readonly<
   "parent-link": 44,
 };
 
-/** A row's height before it is measured. */
+/**
+ * A row's height before it is measured. `expandedRows` holds the rows the user opened: a long user
+ * message, or a changed-files card.
+ */
 export const estimatedHeightOf = (
   item: ListItem,
-  expandedUserMessages: ReadonlySet<string>
+  expandedRows: ReadonlySet<string>
 ): number => {
+  const expanded = expandedRows.has(item.id);
+
   if (item.kind === "message") {
     return (
-      messageHeight(item.message, expandedUserMessages.has(item.id)) +
+      messageHeight(item.message, expanded) +
       Option.match(item.changedFiles, {
         onNone: () => 0,
-        onSome: (card) => 16 + cardHeight(card),
+        onSome: (card) => 16 + cardHeight(card, expanded),
       })
     );
   }
 
   if (item.kind === "changed-files") {
-    return cardHeight(item);
+    return cardHeight(item, expanded);
   }
 
   if (item.kind === "subagents") {

@@ -2,7 +2,8 @@
 // transcript, then the diff panel while it is open, over classic's thread page Submodel
 // (`page/thread/`, its Model, Messages and update unchanged). L6's layout draws the chat header
 // and the hold banner above it and the composer lane below; its header controls (the diff toggle)
-// come from `headerControls` here.
+// come from `headerControls` here. The panel and its toggle are off while `DIFF_PANEL_ENABLED`
+// is false (`../diff/Panel.ts`).
 
 import type { Entry } from "@cairn/protocol/Thread";
 import { Option, Predicate } from "effect";
@@ -19,6 +20,7 @@ import { Message } from "../../page/thread/Message.ts";
 import type { Model } from "../../page/thread/Model.ts";
 import { ThreadStatus } from "../../page/thread/Model.ts";
 import { classNames } from "../../ui/ClassNames.ts";
+import { DIFF_PANEL_ENABLED } from "../diff/Panel.ts";
 import { toggleView } from "../diff/Toggle.ts";
 import { view as timelineView } from "../timeline/View.ts";
 import { FOCUS_RING, TYPE } from "../ui/Classes.ts";
@@ -105,7 +107,7 @@ export const statusLine = (
 
 /** The diff panel while it is open: its view once its chunk has loaded, a placeholder before. */
 const diffPanel = (model: Model, h: HtmlBuilder<Message>): Html =>
-  isOpen(model.diff)
+  DIFF_PANEL_ENABLED && isOpen(model.diff)
     ? Option.match(loadedDiffView(), {
         onNone: () => diffPanelPlaceholder(h, model.diffPanel === "failed"),
         onSome: (view) =>
@@ -142,23 +144,25 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
 
 const NO_ENTRIES: ReadonlyArray<Entry> = [];
 
-/** The thread page's controls in the `next` chat header: the diff toggle. */
+/** The thread page's controls in the `next` chat header: the diff toggle, while the panel is on. */
 export const headerControls = Submodel.defineView<Model, Message>((model, h) =>
-  h.submodel({
-    slotId: "diff-toggle",
-    model: model.diff,
-    view: toggleView,
-    viewInputs: {
-      threadId: model.threadId,
-      older: Option.match(model.view, {
-        onNone: () => NO_ENTRIES,
-        onSome: (state) => state.older,
-      }),
-      entries: Option.match(model.view, {
-        onNone: () => NO_ENTRIES,
-        onSome: (state) => state.view.entries,
-      }),
-    },
-    toParentMessage: (message) => Message.GotDiffMessage({ message }),
-  })
+  DIFF_PANEL_ENABLED
+    ? h.submodel({
+        slotId: "diff-toggle",
+        model: model.diff,
+        view: toggleView,
+        viewInputs: {
+          threadId: model.threadId,
+          older: Option.match(model.view, {
+            onNone: () => NO_ENTRIES,
+            onSome: (state) => state.older,
+          }),
+          entries: Option.match(model.view, {
+            onNone: () => NO_ENTRIES,
+            onSome: (state) => state.view.entries,
+          }),
+        },
+        toParentMessage: (message) => Message.GotDiffMessage({ message }),
+      })
+    : h.empty
 );

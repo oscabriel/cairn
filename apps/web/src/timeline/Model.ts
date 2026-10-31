@@ -14,6 +14,8 @@ export const ThreadUi = Schema.Struct({
   expandedTurnIds: Schema.Array(Schema.String),
   expandedWorkGroupIds: Schema.Array(Schema.String),
   expandedUserMessageIds: Schema.Array(Schema.String),
+  /** The rows whose changed-files card the user opened past its one summary line. */
+  expandedChangedFilesIds: Schema.Array(Schema.String),
 });
 
 export type ThreadUi = typeof ThreadUi.Type;
@@ -54,6 +56,7 @@ export const freshUi = (threadId: Option.Option<string>): ThreadUi => ({
   expandedTurnIds: [],
   expandedWorkGroupIds: [],
   expandedUserMessageIds: [],
+  expandedChangedFilesIds: [],
 });
 
 /** No thread yet. */

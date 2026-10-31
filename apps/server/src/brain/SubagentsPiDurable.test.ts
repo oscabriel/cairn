@@ -64,6 +64,8 @@ import { repairSubagentRows, SubagentRows } from "../subagents/SubagentRows.ts";
 import { steerReporter } from "../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
+import { ThreadTitles } from "../threads/ThreadTitles.ts";
+import { TitleModel } from "../threads/TitleModel.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import { Brain } from "./Brain.ts";
 import { Approvals } from "./CairnDocs.ts";
@@ -221,7 +223,11 @@ const withAccepted = <A, E>(
             setup.tuning
           );
 
-          const base = Layer.merge(brainLayer, ShellTestLayer);
+          const base = Layer.mergeAll(
+            brainLayer,
+            ShellTestLayer,
+            ThreadTitles.layerNoDeps.pipe(Layer.provide(TitleModel.layerNone))
+          );
 
           const layer = setup.withRows
             ? Layer.merge(base, SubagentRows.pipe(Layer.provide(base)))

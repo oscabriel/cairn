@@ -4,18 +4,27 @@
 // a boot repair does the same for every child conversation without a row. The command id is the
 // child's thread id, so a repeat (the fiber after a crash, then the boot repair) lands once; a row
 // that exists already is left as it is. The row takes its project from the parent's row, its
-// branch and worktree from the child's own worktree when it has one (else the parent's row's), its
-// title from the brief's description, its model from the dispatch record (a workflow node, which
+// branch and worktree from the child's own worktree when it has one (else the parent's row's), a
+// fallback title (the brief's description, else its workflow node's label), its model from the dispatch record (a workflow node, which
 // has no registry item, from its node in the parent's `cairn.workflows`, which gives its thinking
 // level too), its mode from the child's link, and a `lineage` naming the parent and the root. The
 // sidebar hides a row with a lineage (`isSubagentThread`), the projector sets its parent's tally
 // from the registry, and the shell refuses to settle, snooze, pin or archive it, or to settle its
 // parent while it works.
+//
+// A child is named as a launched thread is (`ThreadTitles`): the same fiber answers a child's first
+// user `MessageCommitted` (its brief, or its node's prompt with the node's label as context) by
+// asking the title model off the event loop and committing one `ThreadRename` under a command id
+// derived from the child's thread id (`titleChild`). A receipt for it, or a title that is no longer
+// the fallback, asks nothing, so a child is named at most once and a user's rename wins; a kill
+// mid-generation commits nothing and the fallback stays. A second boot repair names the rows made
+// before children were titled, still titled `CHILD_TITLE`, from their first user message.
 
-import { CommandId, ThreadId } from "@cairn/protocol/Ids";
+import { CommandId, EntryId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { RuntimeMode as RuntimeModeSchema } from "@cairn/protocol/Policy";
+import { ThreadRename } from "@cairn/protocol/ShellCommands";
 import {
   CHILD_DOCUMENT,
   ChildWorktree,
@@ -28,6 +37,7 @@ import {
   Cause,
   Effect,
   Exit,
+  FiberMap,
   Layer,
   Option,
   Predicate,
@@ -42,9 +52,12 @@ import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import { PI_DEFAULT_THINKING } from "../models/PiModelSource.ts";
+import { CommandReceipts } from "../shell/CommandReceipts.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
+import { derivedCommandId } from "../threads/ThreadLaunch.ts";
+import { placeholderTitle, ThreadTitles } from "../threads/ThreadTitles.ts";
 import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { conversationOf } from "./Delivery.ts";
 import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
@@ -56,7 +69,10 @@ const SCAN_PAGE = 200;
 export interface ChildRowSource {
   readonly threadId: ThreadId;
   readonly lineage: ThreadLineage;
+  /** Shown until the generated title arrives (`fallbackTitle`). */
   readonly title: string;
+  /** A workflow node's label, which its generated title is asked with. */
+  readonly label: Option.Option<string>;
   /** The dispatched model; none when the record names none, and the parent's is used. */
   readonly model: Option.Option<ModelRef>;
   /** A workflow node's own level; none takes the parent's (a dispatched subagent's row). */
@@ -65,6 +81,9 @@ export interface ChildRowSource {
   /** The child's own worktree (a writing role's); none for a shared child, on its parent's. */
   readonly worktree: Option.Option<ChildWorktree>;
 }
+
+/** The title of a child row with nothing better to show, and of the rows made before titles. */
+export const CHILD_TITLE = "Subagent";
 
 const nonEmpty = (value: string | undefined): Option.Option<string> =>
   value !== undefined && value.trim().length > 0
@@ -98,6 +117,7 @@ const NodeLedger = Schema.Struct({
           modelId: Schema.NullOr(Schema.String),
           effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
           thinkingLevel: Schema.optionalKey(Schema.NullOr(Schema.String)),
+          label: Schema.optionalKey(Schema.String),
         })
       ),
     })
@@ -111,6 +131,16 @@ const decodeLedger = Schema.decodeUnknownOption(NodeLedger);
 const decodeModel = Schema.decodeUnknownOption(ModelRef);
 
 const isThinkingLevel = Schema.is(ThinkingLevel);
+
+/** The node in `ledger` whose child is `threadId`. */
+const nodeOf = (ledger: Option.Option<NodeLedger>, threadId: ThreadId) =>
+  Option.flatMap(ledger, ({ items }) =>
+    Option.fromUndefinedOr(
+      Object.values(items)
+        .flatMap((row) => Object.values(row.nodes))
+        .find((node) => node.childThreadId === threadId)
+    )
+  );
 
 /** What a workflow node's child runs on: its model and thinking level. */
 export interface NodeRun {
@@ -128,24 +158,37 @@ export const workflowNodeRun = (
   ledger: Option.Option<NodeLedger>,
   threadId: ThreadId
 ): Option.Option<NodeRun> =>
-  Option.flatMap(ledger, ({ items }) =>
-    Option.flatMap(
-      Option.fromUndefinedOr(
-        Object.values(items)
-          .flatMap((row) => Object.values(row.nodes))
-          .find((node) => node.childThreadId === threadId)
-      ),
-      (node) =>
-        decodeModel({ provider: node.provider, modelId: node.modelId }).pipe(
-          Option.filter((model) => model.provider !== "unknown"),
-          Option.map((model): NodeRun => ({
-            model,
-            thinkingLevel:
-              [node.thinkingLevel, node.effort].find(isThinkingLevel) ??
-              PI_DEFAULT_THINKING,
-          }))
-        )
+  Option.flatMap(nodeOf(ledger, threadId), (node) =>
+    decodeModel({ provider: node.provider, modelId: node.modelId }).pipe(
+      Option.filter((model) => model.provider !== "unknown"),
+      Option.map((model): NodeRun => ({
+        model,
+        thinkingLevel:
+          [node.thinkingLevel, node.effort].find(isThinkingLevel) ??
+          PI_DEFAULT_THINKING,
+      }))
     )
+  );
+
+/** A workflow node's label, the context its child's title is generated with. */
+const nodeLabel = (ledger: Option.Option<NodeLedger>, threadId: ThreadId) =>
+  Option.flatMap(nodeOf(ledger, threadId), (node) => nonEmpty(node.label));
+
+/**
+ * The title a child's row shows until its generated title arrives, and keeps when none does: the
+ * brief's description, else its workflow node's label, cut as a thread's placeholder is; else
+ * `CHILD_TITLE`.
+ */
+const fallbackTitle = (
+  description: Option.Option<string>,
+  label: Option.Option<string>
+) =>
+  Option.match(
+    Option.orElse(description, () => label),
+    {
+      onNone: () => CHILD_TITLE,
+      onSome: placeholderTitle,
+    }
   );
 
 /** The row's model and level: the dispatch record's model, else its workflow node's run. */
@@ -204,20 +247,26 @@ export const childRowSource = (
       context
     );
 
-    return Option.map(nonEmpty(meta?.threadId), (threadId) => ({
-      threadId: ThreadId.make(threadId),
-      lineage: {
-        parentThreadId: ThreadId.make(link.parentThreadId),
-        relationshipToParent: "subagent" as const,
-        rootThreadId: ThreadId.make(link.rootThreadId),
-      },
-      title: Option.getOrElse(nonEmpty(item?.description), () => "Subagent"),
-      ...modelAndLevel(dispatchedModel(item?.dispatch), () =>
-        workflowNodeRun(decodeLedger(ledger), ThreadId.make(threadId))
-      ),
-      runtimeMode: link.permissionMode,
-      worktree: decodeWorktree(item?.worktree ?? null),
-    }));
+    return Option.map(nonEmpty(meta?.threadId), (threadId) => {
+      const nodes = decodeLedger(ledger);
+      const label = nodeLabel(nodes, ThreadId.make(threadId));
+
+      return {
+        threadId: ThreadId.make(threadId),
+        lineage: {
+          parentThreadId: ThreadId.make(link.parentThreadId),
+          relationshipToParent: "subagent" as const,
+          rootThreadId: ThreadId.make(link.rootThreadId),
+        },
+        title: fallbackTitle(nonEmpty(item?.description), label),
+        label,
+        ...modelAndLevel(dispatchedModel(item?.dispatch), () =>
+          workflowNodeRun(nodes, ThreadId.make(threadId))
+        ),
+        runtimeMode: link.permissionMode,
+        worktree: decodeWorktree(item?.worktree ?? null),
+      };
+    });
   });
 
 /** What a seam-read row source reads of a child's `cairn.child`. */
@@ -273,7 +322,12 @@ export const seamRowSource = Effect.fn("SubagentRows.seamRowSource")(function* (
       Option.flatMap(Option.fromUndefinedOr(items[key]), decodeItem)
   );
 
-  const ledger = yield* harness.document(parentThreadId, WORKFLOWS_DOCUMENT);
+  const ledger = Option.flatMap(
+    yield* harness.document(parentThreadId, WORKFLOWS_DOCUMENT),
+    decodeLedger
+  );
+
+  const label = nodeLabel(ledger, threadId);
 
   return Option.some<ChildRowSource>({
     threadId,
@@ -282,13 +336,14 @@ export const seamRowSource = Effect.fn("SubagentRows.seamRowSource")(function* (
       relationshipToParent: "subagent",
       rootThreadId,
     },
-    title: Option.getOrElse(
+    title: fallbackTitle(
       Option.flatMap(item, ({ description }) => nonEmpty(description)),
-      () => "Subagent"
+      label
     ),
+    label,
     ...modelAndLevel(
       Option.flatMap(item, ({ dispatch }) => dispatchedModel(dispatch)),
-      () => workflowNodeRun(Option.flatMap(ledger, decodeLedger), threadId)
+      () => workflowNodeRun(ledger, threadId)
     ),
     runtimeMode: permissionMode,
     worktree: Option.flatMap(item, ({ worktree }) => decodeWorktree(worktree)),
@@ -352,16 +407,20 @@ export const ensureChildRow = Effect.fn("SubagentRows.ensureChildRow")(
   }
 );
 
-/** Logs a row that could not be made (the boot repair tries again at the next boot): none then. */
+/**
+ * Logs a row or a title that could not be made (the boot repair tries a row again at the next
+ * boot): none then.
+ */
 const logged = <A, E extends { readonly message: string }, R>(
   threadId: string,
-  effect: Effect.Effect<A, E, R>
+  effect: Effect.Effect<A, E, R>,
+  what: "row" | "title" = "row"
 ) =>
   effect.pipe(
     Effect.tapError((failure) =>
-      Effect.logWarning("subagent row not made").pipe(
+      Effect.logWarning(`subagent ${what} not made`).pipe(
         Effect.annotateLogs({
-          event: "subagent_row_failed",
+          event: `subagent_${what}_failed`,
           threadId,
           error: failure.message,
         })
@@ -369,6 +428,183 @@ const logged = <A, E extends { readonly message: string }, R>(
     ),
     Effect.option
   );
+
+/** The rename a child's generated title commits under: one per child, so a repeat lands once. */
+const titleCommandId = (threadId: ThreadId) =>
+  derivedCommandId(CommandId.make(threadId), "title");
+
+/**
+ * Names a child from what it was asked to do (`message`, its first input), as a launch names a
+ * thread from its first message (`ThreadTitles`), with its workflow node's label as context. At
+ * most once per child: nothing once its title rename has a receipt, or when the row's title is
+ * neither its fallback nor `CHILD_TITLE` (a user's rename wins). No model title leaves the
+ * fallback; a row still titled `CHILD_TITLE` (one made before titles) takes the fallback then,
+ * under the same rename, so it is not asked again. A kill mid-generation commits nothing, and the
+ * row keeps the title it had. True when it renamed the row.
+ */
+export const titleChild = Effect.fn("SubagentRows.titleChild")(function* (
+  threadId: ThreadId,
+  message: string
+) {
+  const rows = yield* ThreadRows;
+  const receipts = yield* CommandReceipts;
+  const sink = yield* EventSink;
+  const titles = yield* ThreadTitles;
+  const commandId = titleCommandId(threadId);
+
+  const row = yield* rows.get(threadId);
+
+  if (
+    Option.isNone(row) ||
+    Option.isNone(row.value.shell.lineage) ||
+    Option.isSome(yield* receipts.find(commandId))
+  ) {
+    return false;
+  }
+
+  const before = row.value.shell.title;
+
+  const source = yield* seamRowSource(threadId).pipe(
+    Effect.catchTag("HarnessError", () => Effect.succeedNone)
+  );
+
+  const fallback = Option.match(source, {
+    onNone: () => CHILD_TITLE,
+    onSome: ({ title }) => title,
+  });
+
+  if (before !== fallback && before !== CHILD_TITLE) {
+    return false;
+  }
+
+  const label = Option.flatMap(source, (found) => found.label);
+
+  const asked = Option.match(label, {
+    onNone: () => message,
+    onSome: (found) =>
+      message.trim() === "" ? found : `Workflow node: ${found}\n\n${message}`,
+  });
+
+  const title = Option.getOrElse(
+    yield* titles.generate(threadId, asked),
+    () => fallback
+  );
+
+  const current = yield* rows.get(threadId);
+
+  if (
+    title === before ||
+    Option.isNone(current) ||
+    current.value.shell.title !== before
+  ) {
+    return false;
+  }
+
+  yield* sink.commitCommand(ThreadRename.make({ commandId, threadId, title }));
+
+  return true;
+});
+
+/** A projected user entry's text: its text parts. */
+const decodeUserMessage = Schema.decodeUnknownOption(
+  Schema.Struct({
+    role: Schema.Literal("user"),
+    content: Schema.Union([
+      Schema.String,
+      Schema.Array(
+        Schema.Struct({
+          type: Schema.String,
+          text: Schema.optionalKey(Schema.String),
+        })
+      ),
+    ]),
+  })
+);
+
+const USER_KINDS: ReadonlySet<string> = new Set(["pi.user", "cairn.user"]);
+
+/** How many entries the title repair reads per history page. */
+const HISTORY_PAGE = 200;
+
+/** The text of a child's first user message, read back through its history; "" when none. */
+const firstUserMessage = Effect.fn("SubagentRows.firstUserMessage")(function* (
+  threadId: ThreadId
+) {
+  const harness = yield* HarnessSeam;
+  let before = EntryId.make(Number.MAX_SAFE_INTEGER);
+  let first = "";
+
+  for (;;) {
+    const page = yield* harness.history(threadId, {
+      before,
+      limit: HISTORY_PAGE,
+    });
+
+    const text = page.entries
+      .filter((entry) => USER_KINDS.has(entry.kind))
+      .flatMap((entry) => Option.toArray(decodeUserMessage(entry.model?.[0])))
+      .map(({ content }) =>
+        Predicate.isString(content)
+          ? content
+          : content
+              .flatMap((part) =>
+                part.type === "text" && part.text !== undefined
+                  ? [part.text]
+                  : []
+              )
+              .join("\n\n")
+      )
+      .find((found) => found.trim() !== "");
+
+    first = text ?? first;
+
+    const [oldest] = page.entries;
+
+    if (!page.hasMore || oldest === undefined) {
+      return first;
+    }
+
+    before = oldest.id;
+  }
+});
+
+/** How many rows the title repair names at once. */
+const RETITLE_CONCURRENCY = 4;
+
+/**
+ * The boot repair for rows made before children were titled: every child row still titled
+ * `CHILD_TITLE` is named from its first user message (`titleChild`), at most once each.
+ */
+export const retitleSubagentRows = Effect.gen(function* () {
+  const rows = yield* ThreadRows;
+
+  const untitled = (yield* rows.listLive).filter(
+    (row) => Option.isSome(row.shell.lineage) && row.shell.title === CHILD_TITLE
+  );
+
+  const renamed = yield* Effect.forEach(
+    untitled,
+    (row) =>
+      logged(
+        row.shell.id,
+        Effect.gen(function* () {
+          const message = yield* firstUserMessage(row.shell.id).pipe(
+            Effect.catchTag("HarnessError", () => Effect.succeed(""))
+          );
+
+          return yield* titleChild(row.shell.id, message);
+        }),
+        "title"
+      ),
+    { concurrency: RETITLE_CONCURRENCY }
+  );
+
+  const count = renamed.filter((done) => Option.contains(done, true)).length;
+
+  yield* Effect.logInfo(`retitled ${count} subagent rows`).pipe(
+    Effect.annotateLogs({ event: "boot_subagent_titles", renamed: count })
+  );
+});
 
 /**
  * The boot repair: a row for every child conversation that has none. Nothing without pi-durable
@@ -426,8 +662,12 @@ export const SubagentRows = Layer.effectDiscard(
     const brain = yield* Effect.serviceOption(Brain);
 
     const context = yield* Effect.context<
-      ThreadRows | EventSink | HarnessSeam
+      ThreadRows | EventSink | HarnessSeam | CommandReceipts | ThreadTitles
     >();
+
+    const naming = yield* FiberMap.make<ThreadId>();
+    // Children this process has asked a title for, so a later input does not ask again.
+    const asked = new Set<ThreadId>();
 
     const sourceOf = (event: {
       readonly threadId: ThreadId;
@@ -457,11 +697,51 @@ export const SubagentRows = Layer.effectDiscard(
         })
       ).pipe(Effect.provideContext(context));
 
-    yield* Stream.runForEach(harness.events, (event) =>
-      Predicate.isTagged(event, "ThreadEnsured") && Option.isSome(event.parent)
-        ? onEnsured(event)
-        : Effect.void
-    ).pipe(
+    // A child's first input names it, off the event loop: the title model takes seconds.
+    const onUserMessage = (event: {
+      readonly threadId: ThreadId;
+      readonly text: string;
+    }) =>
+      Effect.gen(function* () {
+        if (asked.has(event.threadId)) {
+          return;
+        }
+
+        const row = yield* ThreadRows.use((rows) => rows.get(event.threadId));
+
+        if (Option.isNone(row) || Option.isNone(row.value.shell.lineage)) {
+          return;
+        }
+
+        asked.add(event.threadId);
+
+        yield* FiberMap.run(
+          naming,
+          event.threadId,
+          logged(
+            event.threadId,
+            titleChild(event.threadId, event.text),
+            "title"
+          ).pipe(Effect.provideContext(context))
+        );
+      }).pipe(
+        (effect) => logged(event.threadId, effect, "title"),
+        Effect.provideContext(context)
+      );
+
+    yield* Stream.runForEach(harness.events, (event) => {
+      if (
+        Predicate.isTagged(event, "ThreadEnsured") &&
+        Option.isSome(event.parent)
+      ) {
+        return onEnsured(event);
+      }
+
+      return Predicate.isTagged(event, "MessageCommitted") &&
+        event.role === "user"
+        ? onUserMessage(event)
+        : Effect.void;
+    }).pipe(
       // The brain's shutdown interrupts the fiber with its scope: that end is expected, and only
       // an end the scope did not ask for (the event stream failed or completed) is a warning.
       Effect.onExit((exit) =>

@@ -1,6 +1,7 @@
 // The boot repairs, in the order they run after the Harness opens and before the brain is marked
 // ready. A package hands off a `bootRepair(...)` entry and it is listed here: sweep unfinished
-// attachment uploads; `ExecutorSweep` declines unfinished `apr_` ids; make subagent rows; reconcile
+// attachment uploads; `ExecutorSweep` declines unfinished `apr_` ids; make subagent rows, then title
+// the ones made before children were titled; reconcile
 // spend, then load the budget book and halt the scopes past their line (4E), both before anything
 // that retries a parked task, since pi-durable's `retryTask` resumes scheduling; cancel approval
 // records a stop left pending (the abort mark committed, the cancel not); `retryTask()` for tasks
@@ -28,11 +29,16 @@ import { repairScratchFoldersAtBoot } from "./projects/ScratchProject.ts";
 import type { ScratchProject } from "./projects/ScratchProject.ts";
 import type { Portals } from "./reach/Portals.ts";
 import { portalReconcile, startPortalSweep } from "./reach/ReachRepair.ts";
+import type { CommandReceipts } from "./shell/CommandReceipts.ts";
 import type { EventSink } from "./shell/EventSink.ts";
 import type { ThreadRows } from "./shell/ThreadRows.ts";
 import { retryParkedSubagentTasks } from "./subagents/SubagentRepairs.ts";
-import { repairSubagentRows } from "./subagents/SubagentRows.ts";
+import {
+  repairSubagentRows,
+  retitleSubagentRows,
+} from "./subagents/SubagentRows.ts";
 import { ThreadLaunch } from "./threads/ThreadLaunch.ts";
+import type { ThreadTitles } from "./threads/ThreadTitles.ts";
 import { budgetBootRepair } from "./usage/BudgetGuard.ts";
 import type { BudgetGuard } from "./usage/BudgetGuard.ts";
 import { reconcileSpendAtBoot } from "./usage/SpendLedger.ts";
@@ -75,6 +81,7 @@ export const bootRepairs: ReadonlyArray<
     | BudgetGuard
     | CheckpointCapture
     | ChildWorkspaces
+    | CommandReceipts
     | EventReactors
     | EventSink
     | ExecutorSweep
@@ -84,11 +91,13 @@ export const bootRepairs: ReadonlyArray<
     | SpendLedger
     | ThreadLaunch
     | ThreadRows
+    | ThreadTitles
   >
 > = [
   sweepAttachmentUploads,
   bootRepair("executor-sweep", sweepUnfinishedExecutorRequests),
   bootRepair("subagent rows", repairSubagentRows),
+  bootRepair("subagent titles", retitleSubagentRows),
   bootRepair("spend reconcile", reconcileSpendAtBoot),
   bootRepair("budget boot repair", budgetBootRepair),
   bootRepair("cancel abandoned approvals", cancelAbandonedApprovalsAtBoot),

@@ -32,8 +32,11 @@ export const ENTRY_JS_BUDGET = 322_560;
  */
 export const ENTRY_JS_TARGET = 200_000;
 
-/** Entry CSS ceiling, gzip bytes: 34 KB since the cutover (33,550 B at 7A), under D46's 35 KB. */
-export const ENTRY_CSS_BUDGET = 34_000;
+/**
+ * Entry CSS ceiling, gzip bytes, under D46's 35 KB: 33,550 B at the cutover (7A), 34,143 B with the
+ * model picker's provider rail, phone sheet and touch sizes (2026-10-31).
+ */
+export const ENTRY_CSS_BUDGET = 34_600;
 
 /** Folders D46 says load on demand; a manifest key is the imported module's path. */
 const LAZY_FOLDERS = [

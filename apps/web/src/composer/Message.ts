@@ -62,6 +62,8 @@ export const Message = defineMessageUnion({
   ClosedPopover: {},
   ChangedPopoverQuery: { query: Schema.String },
   MovedPopoverHighlight: { id: Schema.String },
+  /** A provider (or "favorites") picked on the model picker's rail. */
+  PickedPickerProvider: { provider: Schema.String },
   PickedModel: { model: ModelRef },
   ToggledFavoriteModel: { key: Schema.String },
   PickedThinking: { level: ThinkingLevel },

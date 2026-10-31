@@ -237,7 +237,15 @@ export const overflowRule = ({
         text.bottom - rect.bottom
       );
 
+      // A popover is placed outside its parents (over the composer, or as a sheet): only its own
+      // box holds its text, and the boxes around it never contained it.
+      const popup = box.matches("[data-slot='popover-popup']");
+
       if (past <= tolerance) {
+        if (popup) {
+          break;
+        }
+
         continue;
       }
 

@@ -350,7 +350,11 @@ describe("pointer highlights", () => {
     const opened = update(
       onThread,
       Message.OpenedPopover({
-        popover: Popover.ModelPicker({ query: "", highlighted: Option.none() }),
+        popover: Popover.ModelPicker({
+          query: "",
+          highlighted: Option.none(),
+          provider: Option.none(),
+        }),
       })
     ).model;
 
@@ -464,6 +468,107 @@ describe("composer model pill", () => {
           '[data-testid="composer-model-thinking"] [aria-pressed="true"]'
         )
       ).toHaveText("Medium"),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+});
+
+/** `model` with the model picker open, as the pill opens it. */
+const openPicker = (model: Model) =>
+  update(
+    model,
+    Message.OpenedPopover({
+      popover: Popover.ModelPicker({
+        query: "",
+        highlighted: Option.none(),
+        provider: Option.none(),
+      }),
+    })
+  ).model;
+
+describe("the model picker's provider rail", () => {
+  // The fixture catalog with a second provider: the bridge's Claude models.
+  const twoProviders = {
+    ...onThread,
+    catalog: Option.some({
+      ...catalog,
+      models: [
+        ...catalog.models,
+        {
+          provider: "claude-bridge",
+          modelId: "claude-opus-5-5",
+          name: "Claude Opus 5.5",
+          thinkingLevels: ["off", "low", "medium", "high"] as const,
+          acceptsImages: true,
+          contextWindow: Option.none(),
+          available: true,
+        },
+      ],
+    }),
+  };
+
+  it("opens on the current model's provider and lists only its models", () => {
+    assert.deepStrictEqual(
+      pickerRows(openPicker(twoProviders)).map((listing) => listing.modelId),
+      ["kimi-k3", "glm-5"]
+    );
+  });
+
+  it("shows another provider's models when it is picked on the rail", () => {
+    const picked = update(
+      openPicker(twoProviders),
+      Message.PickedPickerProvider({ provider: "claude-bridge" })
+    ).model;
+
+    assert.deepStrictEqual(
+      pickerRows(picked).map((listing) => listing.modelId),
+      ["claude-opus-5-5"]
+    );
+  });
+
+  it("searches every provider, whatever the rail shows", () => {
+    const searched = update(
+      update(
+        openPicker(twoProviders),
+        Message.PickedPickerProvider({ provider: "claude-bridge" })
+      ).model,
+      Message.ChangedPopoverQuery({ query: "k" })
+    ).model;
+
+    assert.include(
+      pickerRows(searched).map((listing) => listing.modelId),
+      "kimi-k3"
+    );
+  });
+
+  it("draws one rail button per provider with its mark, and the pill takes the model's mark", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given(twoProviders),
+      ...acknowledgeMounts,
+      Scene.expect(
+        Scene.selector(
+          '[data-chat-provider-model-picker] [data-provider-mark="opencode"]'
+        )
+      ).toExist(),
+      Scene.click(Scene.selector("[data-chat-provider-model-picker]")),
+      Scene.Command.resolve(
+        FocusPopoverSearch,
+        Message.CompletedEditorCommand()
+      ),
+      Scene.expect(
+        Scene.selector('[data-model-picker-provider="opencode-go"]')
+      ).toHaveAttr("aria-pressed", "true"),
+      Scene.expect(
+        Scene.selector(
+          '[data-model-picker-provider="claude-bridge"] [data-provider-mark="claude"]'
+        )
+      ).toExist(),
+      Scene.expect(
+        Scene.selector('[data-model-picker-provider="claude-bridge"]')
+      ).toHaveAttr("aria-label", "Claude"),
       Scene.tap((simulation) => {
         assert.lengthOf(simulation.commands, 0);
       })
@@ -1002,7 +1107,11 @@ describe("the model picker and the keyboard", () => {
     const opened = update(
       onThread,
       Message.OpenedPopover({
-        popover: Popover.ModelPicker({ query: "", highlighted: Option.none() }),
+        popover: Popover.ModelPicker({
+          query: "",
+          highlighted: Option.none(),
+          provider: Option.none(),
+        }),
       })
     );
 
@@ -1016,7 +1125,11 @@ describe("the model picker and the keyboard", () => {
     const opened = update(
       withUnavailable,
       Message.OpenedPopover({
-        popover: Popover.ModelPicker({ query: "", highlighted: Option.none() }),
+        popover: Popover.ModelPicker({
+          query: "",
+          highlighted: Option.none(),
+          provider: Option.none(),
+        }),
       })
     ).model;
 

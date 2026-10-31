@@ -39,6 +39,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { Folder, FolderPlus, Search, Star } from "lucide";
 
 import { filterBranches, resolveEnvModeLabel } from "../hero/ContextStrip.ts";
+import { FOCUS_RING_INSET } from "../next/ui/Classes.ts";
 import {
   COMBOBOX_ITEM_CLASS,
   COMBOBOX_LIST_CLASS,
@@ -52,21 +53,27 @@ import { Message } from "./Message.ts";
 import { Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
-  modelGroups,
+  FAVORITES_RAIL_ID,
+  pickerProvider,
+  pickerRail,
+  pickerSection,
+  providerLabel,
   resolvedModel,
   resolvedThinking,
   thinkingLabel,
   thinkingLevels,
 } from "./Models.ts";
+import type { PickerRailItem } from "./Models.ts";
+import { providerMark } from "./ProviderMark.ts";
 
 const ROW_CLASS =
   "flex min-h-8 items-center rounded-sm px-2 py-1 text-base outline-none not-data-disabled:hover:bg-accent data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-selected:bg-foreground/[0.08] data-selected:text-foreground data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm group relative w-full !min-w-0 max-w-full cursor-pointer";
 
-const STAR_CLASS =
-  "relative inline-flex cursor-pointer items-center justify-center rounded-[var(--control-radius)] border border-transparent outline-none size-7 sm:size-6 text-muted-foreground hover:bg-accent hover:text-foreground -mr-1 shrink-0";
+// The `!` sizes hold on a phone: the `next` chunks' stylesheets declare the plain sizes again,
+// after the entry's, so an unmarked `pointer-coarse:` size loses to them.
+const STAR_CLASS = `relative inline-flex cursor-pointer items-center justify-center rounded-[var(--control-radius)] border border-transparent size-7 sm:size-6 pointer-coarse:size-11! text-muted-foreground hover:bg-accent hover:text-foreground -mr-1 shrink-0 ${FOCUS_RING_INSET}`;
 
-const SEARCH_INPUT_CLASS =
-  "w-full min-w-0 rounded-[inherit] bg-transparent outline-none placeholder:text-placeholder h-7.5 ps-5 leading-7.5 text-sm sm:h-6.5 sm:leading-6.5";
+const SEARCH_INPUT_CLASS = `w-full min-w-0 rounded-[inherit] bg-transparent placeholder:text-placeholder h-7.5 ps-5 leading-7.5 text-sm sm:h-6.5 sm:leading-6.5 pointer-coarse:h-11! ${FOCUS_RING_INSET}`;
 
 /** The rows of the open model picker, in display order, for keyboard movement. */
 export const pickerRows = (model: Model): ReadonlyArray<ModelListing> =>
@@ -75,13 +82,9 @@ export const pickerRows = (model: Model): ReadonlyArray<ModelListing> =>
     onSome: (popover) =>
       Popover.match(popover, {
         // Only models that can run: the keyboard must not pick one with no key (T30).
-        ModelPicker: ({ query }) =>
-          Array.dedupeWith(
-            Array.flatMap(modelGroups(model, query), (group) =>
-              group.models.filter((listing) => listing.available)
-            ),
-            (left: ModelListing, right: ModelListing) =>
-              left.provider === right.provider && left.modelId === right.modelId
+        ModelPicker: ({ query, provider }) =>
+          pickerSection(model, query, provider).models.filter(
+            (listing) => listing.available
           ),
         Thinking: () => [],
         RuntimeMode: () => [],
@@ -190,7 +193,7 @@ const searchField = (
             h,
             Search,
             "search",
-            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55"
+            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55 pointer-coarse:top-3.5!"
           ),
           h.input([
             h.Type("text"),
@@ -214,6 +217,7 @@ const modelRow = (
   model: Model,
   listing: ModelListing,
   highlighted: boolean,
+  search: boolean,
   h: HtmlBuilder<Message>
 ): Html => {
   const key = listingKey(listing);
@@ -225,6 +229,20 @@ const modelRow = (
   );
 
   const favorite = model.settings.favoriteModels.includes(key);
+
+  // Under a provider's own heading the row needs no provider line; a search result names it.
+  const provider = search
+    ? Option.some(providerLabel(listing.provider))
+    : Option.none<string>();
+
+  const note = listing.available
+    ? provider
+    : Option.some(
+        Option.match(provider, {
+          onNone: () => "No key",
+          onSome: (name) => `${name} (no key)`,
+        })
+      );
 
   return h.div(
     [
@@ -251,29 +269,32 @@ const modelRow = (
           h.DataAttribute("slot", "combobox-item-content"),
         ],
         [
+          search
+            ? providerMark(
+                h,
+                listing.provider,
+                providerLabel(listing.provider),
+                "size-3.5"
+              )
+            : h.empty,
           h.div(
             [h.Class("min-w-0 flex-1 text-left")],
             [
               h.div(
-                [h.Class("min-w-0 truncate text-xs font-medium leading-snug")],
+                [h.Class("min-w-0 truncate text-sm leading-snug")],
                 [listing.name]
               ),
-              h.div(
-                [h.Class("mt-1 flex items-center gap-1.5")],
-                [
-                  h.span(
+              ...Option.toArray(
+                Option.map(note, (text) =>
+                  h.div(
                     [
                       h.Class(
-                        "truncate text-xs font-normal leading-snug text-muted-foreground/70"
+                        "truncate text-xs leading-snug text-muted-foreground/70"
                       ),
                     ],
-                    [
-                      listing.available
-                        ? listing.provider
-                        : `${listing.provider} (no key)`,
-                    ]
-                  ),
-                ]
+                    [text]
+                  )
+                )
               ),
             ]
           ),
@@ -302,12 +323,63 @@ const modelRow = (
   );
 };
 
-const THINKING_CHOICE_CLASS =
-  "inline-flex min-h-8 cursor-pointer items-center rounded-sm px-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:bg-foreground/[0.08] aria-pressed:text-foreground pointer-coarse:min-h-11";
+const RAIL_BUTTON_CLASS = `flex aspect-square w-full shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground aria-pressed:bg-foreground/[0.08] aria-pressed:text-foreground ${FOCUS_RING_INSET}`;
+
+const railButton = (
+  h: HtmlBuilder<Message>,
+  item: PickerRailItem,
+  picked: boolean
+): Html =>
+  h.button(
+    [
+      h.Key(item.id),
+      h.Type("button"),
+      h.Title(item.label),
+      h.AriaLabel(item.label),
+      h.AriaPressed(picked ? "true" : "false"),
+      h.DataAttribute("model-picker-provider", item.id),
+      h.Class(RAIL_BUTTON_CLASS),
+      h.OnClick(Message.PickedPickerProvider({ provider: item.id })),
+    ],
+    [
+      item.id === FAVORITES_RAIL_ID
+        ? icon(h, Star, "star", "size-4.5 fill-current")
+        : providerMark(h, item.id, item.label, "size-4.5"),
+    ]
+  );
+
+/** The provider rail down the picker's left edge: the favourites, then one mark per provider. */
+const providerRail = (
+  model: Model,
+  query: string,
+  provider: Option.Option<string>,
+  h: HtmlBuilder<Message>
+): Html => {
+  // While a search runs every provider is listed, so no rail entry reads as picked.
+  const picked =
+    query.trim().length > 0 ? Option.none() : pickerProvider(model, provider);
+
+  return h.div(
+    [
+      h.Role("group"),
+      h.AriaLabel("Providers"),
+      h.DataAttribute("model-picker-sidebar", "true"),
+      h.Class(
+        "flex w-11 shrink-0 flex-col gap-1 overflow-y-auto border-border/70 border-e bg-muted/30 p-1 pointer-coarse:w-14!"
+      ),
+    ],
+    pickerRail(model).map((item) =>
+      railButton(h, item, Option.contains(picked, item.id))
+    )
+  );
+};
+
+const THINKING_CHOICE_CLASS = `inline-flex min-h-7 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-[calc(var(--radius)-2px)] px-1 text-xs text-muted-foreground hover:text-foreground aria-pressed:bg-background aria-pressed:font-medium aria-pressed:text-foreground pointer-coarse:min-h-11! ${FOCUS_RING_INSET}`;
 
 /**
- * The picker's thinking levels, under the models: the composer's pill names the model and its
- * level together, so the one popover it opens sets both.
+ * The picker's thinking levels: their own band under the models, one segmented choice for the
+ * model the composer runs on. The pill names the model and its level together, so the one popover
+ * sets both.
  */
 const thinkingChoices = (model: Model, h: HtmlBuilder<Message>): Html => {
   const levels = thinkingLevels(model);
@@ -320,19 +392,21 @@ const thinkingChoices = (model: Model, h: HtmlBuilder<Message>): Html => {
           h.Role("group"),
           h.AriaLabel("Thinking"),
           h.DataAttribute("testid", "composer-model-thinking"),
-          h.Class("flex shrink-0 flex-col border-border border-t px-1 py-1.5"),
+          h.Class(
+            "flex shrink-0 items-center gap-3 border-border border-t bg-muted/60 px-3 py-2 max-sm:flex-col! max-sm:items-stretch! max-sm:gap-1.5!"
+          ),
         ],
         [
           h.div(
-            [
-              h.Class(
-                "px-2 pt-1 pb-1 font-medium text-muted-foreground text-xs"
-              ),
-            ],
+            [h.Class("shrink-0 font-medium text-muted-foreground text-xs")],
             ["Thinking"]
           ),
           h.div(
-            [h.Class("flex flex-wrap gap-0.5")],
+            [
+              h.Class(
+                "flex min-w-0 flex-1 gap-0.5 rounded-(--radius) border border-border/70 bg-foreground/[0.04] p-0.5"
+              ),
+            ],
             levels.map((level) =>
               h.button(
                 [
@@ -356,72 +430,80 @@ const modelPicker = (
   model: Model,
   query: string,
   highlighted: Option.Option<string>,
+  provider: Option.Option<string>,
   h: HtmlBuilder<Message>
 ): Html => {
   const active = highlightedKey(model, highlighted);
-  const groups = modelGroups(model, query);
+  const section = pickerSection(model, query, provider);
+
+  const empty = Option.isNone(model.catalog) || section.models.length === 0;
 
   return h.div(
     [
       h.DataAttribute("model-picker-content", "true"),
       h.DataAttribute("testid", "composer-model-list"),
       h.Class(
-        "relative flex max-h-86.5 w-screen max-w-90 flex-col overflow-hidden bg-muted/40"
+        "relative flex max-h-[min(22rem,40dvh)] w-[min(24rem,calc(100vw-1rem))] flex-col overflow-hidden bg-muted/40 max-sm:max-h-[min(30rem,72dvh)]! max-sm:w-full!"
       ),
     ],
     [
-      searchField(h, query, "Search models...", (key) =>
-        pickerKeyMessage(model, key)
-      ),
       h.div(
+        [h.Class("flex min-h-0 flex-1")],
         [
-          h.Role("listbox"),
-          h.AriaLabel("Models"),
-          h.Class("min-h-0 overflow-y-auto px-1 py-1.5"),
-        ],
-        Option.isNone(model.catalog) ||
-          Array.every(groups, (group) => group.models.length === 0)
-          ? [
-              h.p(
-                [h.Class("p-2 text-center text-muted-foreground text-sm")],
-                [
-                  Option.isNone(model.catalog)
-                    ? Option.getOrElse(
-                        model.catalogError,
-                        () => "Loading models..."
-                      )
-                    : "No matching model.",
-                ]
+          providerRail(model, query, provider, h),
+          h.div(
+            [h.Class("flex min-h-0 min-w-0 flex-1 flex-col")],
+            [
+              searchField(h, query, "Search models...", (key) =>
+                pickerKeyMessage(model, key)
               ),
-            ]
-          : groups.map((group) =>
               h.div(
                 [
-                  h.Key(group.id),
-                  h.Role("group"),
-                  h.AriaLabel(group.label),
-                  h.Class("flex flex-col"),
+                  h.Role("listbox"),
+                  h.AriaLabel(section.label),
+                  h.Class("min-h-0 overflow-y-auto px-1 py-1.5"),
                 ],
-                [
-                  h.div(
-                    [
-                      h.Class(
-                        "px-2 pt-2 pb-1 font-medium text-muted-foreground text-xs"
+                empty
+                  ? [
+                      h.p(
+                        [
+                          h.Class(
+                            "p-2 text-center text-muted-foreground text-sm"
+                          ),
+                        ],
+                        [
+                          Option.isNone(model.catalog)
+                            ? Option.getOrElse(
+                                model.catalogError,
+                                () => "Loading models..."
+                              )
+                            : "No matching model.",
+                        ]
                       ),
-                    ],
-                    [group.label]
-                  ),
-                  ...group.models.map((listing) =>
-                    modelRow(
-                      model,
-                      listing,
-                      Option.contains(active, listingKey(listing)),
-                      h
-                    )
-                  ),
-                ]
-              )
-            )
+                    ]
+                  : [
+                      h.div(
+                        [
+                          h.Class(
+                            "px-2 pt-1 pb-1 font-medium text-muted-foreground text-xs"
+                          ),
+                        ],
+                        [section.label]
+                      ),
+                      ...section.models.map((listing) =>
+                        modelRow(
+                          model,
+                          listing,
+                          Option.contains(active, listingKey(listing)),
+                          section.search,
+                          h
+                        )
+                      ),
+                    ]
+              ),
+            ]
+          ),
+        ]
       ),
       thinkingChoices(model, h),
     ]
@@ -764,8 +846,8 @@ export const popoverView = (model: Model, h: HtmlBuilder<Message>): Html =>
     onNone: () => h.empty,
     onSome: (popover) => {
       const content = Popover.match(popover, {
-        ModelPicker: ({ highlighted, query }) =>
-          modelPicker(model, query, highlighted, h),
+        ModelPicker: ({ highlighted, query, provider }) =>
+          modelPicker(model, query, highlighted, provider, h),
         Thinking: () => menuPanel(h, "Thinking", thinkingItems(model, h)),
         RuntimeMode: () => menuPanel(h, "Runtime mode", modeItems(model, h)),
         Overflow: () =>
@@ -775,10 +857,19 @@ export const popoverView = (model: Model, h: HtmlBuilder<Message>): Html =>
         Branch: ({ query }) => branchPicker(model, query, h),
       });
 
-      const side = popoverSide(model);
+      // The model picker opens above the card even in the hero: its list is taller than the
+      // room under the hero's composer.
+      const side = Predicate.isTagged(popover, "ModelPicker")
+        ? "top"
+        : popoverSide(model);
 
       const anchored = Popover.match(popover, {
-        ModelPicker: () => "left-0",
+        // On a phone the picker is a sheet along the bottom of the screen: under the hero's
+        // composer there is room for three rows, and the thinking band would fall off it. The
+        // placement is important because the `next` chunks' stylesheets declare `.absolute` again,
+        // after the entry's.
+        ModelPicker: () =>
+          "left-0 max-sm:fixed! max-sm:inset-x-2 max-sm:top-auto! max-sm:bottom-[max(0.5rem,env(safe-area-inset-bottom))]! max-sm:mt-0! max-sm:mb-0!",
         Thinking: () => "left-0",
         RuntimeMode: () => "left-0",
         Overflow: () => "left-0",

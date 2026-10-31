@@ -68,6 +68,7 @@ import {
   importT3Thread,
   parseT3ThreadExport,
 } from "../apps/server/src/brain/conformance/fixtures/T3Import.ts";
+import { PICKER_MODELS } from "./fixtures/look/PickerModels.ts";
 import {
   putChangedFiles,
   SHELL_SEED,
@@ -272,6 +273,27 @@ const STATES: ReadonlyArray<LookState> = [
       await editor(page).click();
       await page.keyboard.type("/");
       await page.waitForTimeout(800);
+    },
+  },
+  {
+    name: "model-picker",
+    title: "The model picker",
+    caption:
+      "The hero's composer with its model pill tapped and OpenCode Go picked on the provider rail: the providers' marks, that provider's models, and the thinking levels in their own band. The look app runs on the faux model, so the pill shows a provider with no mark of its own.",
+    path: () => "/",
+    widths: [390, 1440],
+    light: true,
+    enter: async (page) => {
+      await editor(page).waitFor({ state: "visible", timeout: 15_000 });
+      await page
+        .locator('[data-chat-provider-model-picker="true"]')
+        .first()
+        .click();
+      await page
+        .getByTestId("composer-model-list")
+        .waitFor({ state: "visible", timeout: 5000 });
+      await page.locator('[data-model-picker-provider="opencode-go"]').click();
+      await settle(page, 400);
     },
   },
   {
@@ -941,7 +963,7 @@ const startApp = async (): Promise<CairnApp> => {
     },
     // The launch brain answers "Noted." as the parity brain does, and proposes a workflow on
     // "launch @worker look" for the launch-approval state.
-    { shell: SHELL_SEED, brain: launchBrain }
+    { shell: SHELL_SEED, brain: launchBrain, pickerModels: PICKER_MODELS }
   );
 };
 

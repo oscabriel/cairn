@@ -255,7 +255,11 @@ describe("the app frame", () => {
     const picker = composer(
       opened,
       ComposerMessage.OpenedPopover({
-        popover: Popover.ModelPicker({ query: "", highlighted: Option.none() }),
+        popover: Popover.ModelPicker({
+          query: "",
+          highlighted: Option.none(),
+          provider: Option.none(),
+        }),
       })
     );
 

@@ -32,6 +32,7 @@
 
 import type { ExecutorStatus } from "@cairn/protocol/Executor";
 import {
+  McpAuthRequiredError,
   McpClient,
   McpError,
   McpSessionExpiredError,
@@ -196,7 +197,17 @@ const errorText = (cause: unknown) =>
     : String(cause);
 
 const SIGN_IN_TEXT =
-  "Executor needs sign-in: Cairn's grant was refused. Open Cairn's settings and connect Executor again.";
+  "Executor needs sign-in: Cairn's grant was refused. Open Cairn's settings and connect Executor again, then sign out of Executor in that browser so the grant outlives its session.";
+
+/**
+ * Whether `cause` says Executor refused Cairn's grant: the OAuth flow wants a new authorization,
+ * or Executor still answered 401 after the one refresh the transport makes. The second is how a
+ * grant whose approving browser session expired looks: Executor ties each token to that session,
+ * so a refresh still issues tokens and `/mcp` refuses every one (ops/executor/NOTES.md).
+ */
+const grantRefused = (cause: unknown) =>
+  cause instanceof McpOAuthAuthorizationRequiredError ||
+  cause instanceof McpAuthRequiredError;
 
 /** A call refused before anything was sent: there is no usable grant. */
 const disabledCall = (detail: string) =>
@@ -516,7 +527,7 @@ export class ExecutorLink extends Context.Service<
               Effect.gen(function* () {
                 yield* closeClient(client);
 
-                if (cause instanceof McpOAuthAuthorizationRequiredError) {
+                if (grantRefused(cause)) {
                   yield* setStatus("needs-sign-in", Option.some(SIGN_IN_TEXT));
 
                   return yield* new ExecutorCallError({
@@ -613,7 +624,7 @@ export class ExecutorLink extends Context.Service<
           });
         }
 
-        if (cause instanceof McpOAuthAuthorizationRequiredError) {
+        if (grantRefused(cause)) {
           // The session's grant is refused: drop it, so the next call or a sign-in starts clean.
           yield* retire(session);
           yield* setStatus("needs-sign-in", Option.some(SIGN_IN_TEXT));

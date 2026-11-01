@@ -87,6 +87,12 @@ export interface FakeExecutorHandle {
   expireAccess(): void;
   /** Revokes every refresh token too: the grant is gone and needs a sign-in. */
   revoke(): void;
+  /**
+   * The browser session that approved every grant so far expires. Executor ties each token to its
+   * approving session and refuses it at `/mcp` once that session expires, though a refresh still
+   * hands out new tokens, which carry the same session; only a new consent works again.
+   */
+  endSessions(): void;
   /** Answers every `spike.hang` call waiting. */
   release(): void;
   /** Calls to one tool. */
@@ -158,6 +164,10 @@ const build = (now: () => number, mintToken: () => string) => {
   const codes = new Map<string, { challenge: string; redirect: string }>();
   const accessTokens = new Set<string>();
   const refreshTokens = new Set<string>();
+  /** Each token's approving browser session, and the sessions that have expired. */
+  const tokenSessions = new Map<string, number>();
+  const endedSessions = new Set<number>();
+  let approvals = 0;
   const hanging: Array<() => void> = [];
   let registrations = 0;
   let next = 0;
@@ -173,12 +183,20 @@ const build = (now: () => number, mintToken: () => string) => {
     log: [],
   };
 
-  const issueTokens = () => {
+  /** Tokens for `inherited`, the approval a refresh descends from, or for a new approval. */
+  const issueTokens = (inherited?: number) => {
+    if (inherited === undefined) {
+      approvals += 1;
+    }
+
+    const session = inherited ?? approvals;
     const access = `at_${mintToken()}`;
     const refresh = `rt_${mintToken()}`;
 
     accessTokens.add(access);
     refreshTokens.add(refresh);
+    tokenSessions.set(access, session);
+    tokenSessions.set(refresh, session);
 
     return {
       access_token: access,
@@ -466,7 +484,11 @@ const build = (now: () => number, mintToken: () => string) => {
   const mcp = async (request: IncomingMessage, response: ServerResponse) => {
     const auth = (request.headers.authorization ?? "").replace(/^Bearer /u, "");
 
-    if (auth === "" || !accessTokens.has(auth)) {
+    if (
+      auth === "" ||
+      !accessTokens.has(auth) ||
+      endedSessions.has(tokenSessions.get(auth) ?? -1)
+    ) {
       await readBody(request);
       response.writeHead(401, {
         "www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp?connection=${CONNECTION}", scope="mcp offline_access"`,
@@ -635,7 +657,7 @@ const build = (now: () => number, mintToken: () => string) => {
 
       refreshTokens.delete(refresh);
       state.refreshes += 1;
-      json(response, 200, issueTokens());
+      json(response, 200, issueTokens(tokenSessions.get(refresh)));
 
       return;
     }
@@ -757,6 +779,11 @@ const build = (now: () => number, mintToken: () => string) => {
     revoke: () => {
       accessTokens.clear();
       refreshTokens.clear();
+    },
+    endSessions: () => {
+      for (let session = 1; session <= approvals; session += 1) {
+        endedSessions.add(session);
+      }
     },
     release: () => {
       for (const resolve of hanging.splice(0)) {

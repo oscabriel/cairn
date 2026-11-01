@@ -292,6 +292,49 @@ describe("the link", () => {
     )
   );
 
+  it.live(
+    "asks for sign-in when the approving session expired, though a refresh still issues tokens",
+    () =>
+      withFake((fake) =>
+        Effect.gen(function* () {
+          const link = yield* ExecutorLink;
+
+          yield* link.call("skills", {});
+          fake.endSessions();
+          fake.restart();
+
+          const refused = yield* link.call("skills", {}).pipe(Effect.result);
+
+          assert.strictEqual(
+            Result.isFailure(refused) ? refused.failure.reason : "",
+            "sign_in_required"
+          );
+          assert.isFalse(
+            Result.isFailure(refused) && refused.failure.sent,
+            "a refused grant sent nothing"
+          );
+          // The transport refreshed once and was refused again: not "unreachable".
+          assert.strictEqual(fake.state.refreshes, 1);
+          assert.strictEqual((yield* link.status).state, "needs-sign-in");
+
+          const consent = fake.consent(yield* link.signIn);
+
+          yield* link.callback({
+            state: Option.some(consent.state),
+            code: Option.some(consent.code),
+            iss: Option.none(),
+            error: Option.none(),
+            errorDescription: Option.none(),
+          });
+
+          const reply = yield* link.call("skills", {});
+
+          assert.isTrue(Option.isSome(reply.structured));
+          assert.strictEqual((yield* link.status).state, "connected");
+        })
+      )
+  );
+
   it.live("asks for sign-in when the grant is revoked, then signs in", () =>
     withFake((fake) =>
       Effect.gen(function* () {

@@ -2,6 +2,8 @@
 
 Executor 2.0.0-beta.25 (`ghcr.io/usefulsoftwareco/executor-selfhost@sha256:5cb26b28…`, revision 92f85f4), installed 2026-10-21 by `install.sh` and the phase 0 wizard. Organization "Cairn", slug `executor`.
 
+Checked 2026-10-31: 2.0 is still in beta (beta.34 that day; the stable line is v1.6.11). The unit matches the self-host docs of beta.34. Upgrading is not needed for anything Cairn uses. The betas since 25 change the app authoring API (`mcpRouter` takes an `account` in place of `accountId`, which the bridges app in `spikes/5-stdio-bridges/executor-app` already passes; accounts are saved only through an app's connection request), so an upgrade is its own step: back up the volume, then re-check the bridges app, its account and the hand fixes below.
+
 ## Fixes applied by hand
 
 Installed apps are copies: reinstalling one from the catalog or regenerating it loses these.
@@ -23,6 +25,8 @@ The container reaches the host through ufw's rule `allow in on docker0 to 172.17
 Cairn reaches Executor through one scoped connection named Cairn (GitHub and Cairn bridges, Executor's own app off), with one OAuth grant on it. Stage 9 of `ops/wizards/phase-0.sh` has the user create the connection in the UI (`mcp-connections` refuses the setup token) and runs `ops/executor/grant.ts`, which registers a public client by DCR, waits for consent on `127.0.0.1:3777/callback` (not 3774, the brain's port) and keeps the grant in `~/.config/cairn/executor-grant.json` (mode 600) until Cairn has a database.
 
 - Access tokens last an hour. A 401 makes the client refresh by itself, and every refresh rotates the refresh token, so only one process may hold the grant. Checked 2026-10-21 by spoiling the stored access token.
+- **Tokens die with the browser session that approved them.** Executor ties every token of a grant to the dashboard session that gave consent, carries it through each refresh, and refuses the token at `/mcp` once that session expires (Better Auth's default: 7 days after its last use). A refresh still succeeds and hands out new tokens, which are refused too, so the grant looks alive and is not. Signing out ends the session differently: Better Auth revokes its access tokens and detaches its `offline_access` refresh tokens, which then keep working. Source: `usableGrants` in `packages/mcp-auth/src/implementation/oauth.ts` and the session check in `apps/hosted/server/src/implementation/bearer-access.ts`, unchanged from beta.25 to beta.34. Found 2026-10-31: the grant consented on 2026-10-22 was refused from about 2026-10-29, while refreshes kept working; Cairn showed it as unreachable until `ExecutorLink` learned that a 401 after the refresh means sign-in.
+- **So after every consent, sign out of Executor in the browser that gave it.** The refresh token detaches from the session and the grant lasts until it is revoked or idle for 30 days (`expireIdleMcpGrants`). The brain's next call gets a 401 on the revoked access token and refreshes into a detached one.
 - A refreshed-away access token still works until it expires: refreshing does not revoke it.
 - The revocation endpoint needs client authentication, which a public client lacks, so Cairn cannot revoke its own grant. Ending it from the UI is untested.
 - Search through the connection lists only the apps the connection allows (checked: Cairn bridges and GitHub, no Executor).

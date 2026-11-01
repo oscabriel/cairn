@@ -346,7 +346,7 @@ _Avoid_: revise (in prose; it is the decision's wire name), reject
 
 **Decider**: Who settled an approval record: the user, a parent thread answering its child's question, the permission mode, a workflow's envelope, a project's standing approval, a judge, expiry, or the system (a stop or boot). Every record past pending names one.
 
-**Standing approval**: A project's lasting yes to its coordinator's briefs: a budget, the roles it may brief and whether each may write. A brief inside it starts with no Go card and names the standing approval as its decider; one outside it waits for the user.
+**Standing approval**: A project's lasting yes to its coordinator's briefs: a budget, the roles it may brief and whether each may write, set only by the user. A brief inside it starts with no Go card and names the standing approval as its decider; one outside it waits for the user.
 
 _Avoid_: auto-approve, blanket Go
 

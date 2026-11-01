@@ -11,7 +11,6 @@
 // draws no state of its own: the shell rows decide it, so a reload or a second device shows the
 // same banner.
 
-import "./rollup.css";
 import { parentBannerOf } from "@cairn/client-logic/SubagentRollup";
 import type { ParentBanner } from "@cairn/client-logic/SubagentRollup";
 import { ThreadId } from "@cairn/protocol/Ids";

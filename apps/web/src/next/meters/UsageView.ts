@@ -35,8 +35,6 @@ import { TYPE, WEIGHT_MEDIUM, WEIGHT_STRONG } from "../ui/Classes.ts";
 import { markOfTone } from "../ui/Glyph.ts";
 import { meter } from "../ui/Meter.ts";
 import { statusChip } from "../ui/StatusChip.ts";
-
-import "./meters.css";
 import { Message } from "./Message.ts";
 import type { MeteredThread, Model } from "./Model.ts";
 

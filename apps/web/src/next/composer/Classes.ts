@@ -7,10 +7,9 @@
 // Every control is at least `--hit-target` each way on a coarse pointer, its ring is the
 // `--stroke-focus` outline on keyboard focus only, and nothing that takes focus casts a shadow at
 // rest (the look rules read a resting shadow as a ring that never goes away). The box's elevation
-// sits on its wrapper for the same reason. The utilities are built by `composer.css`, imported
-// here, from this folder and next/hero only.
+// sits on its wrapper for the same reason. Its utilities are built by styles.css with the rest
+// of the client.
 
-import "./composer.css";
 import { classNames } from "../../ui/ClassNames.ts";
 import {
   DISABLED,

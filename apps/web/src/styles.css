@@ -2463,32 +2463,13 @@ code {
  * apps/web/src/projectIconColors.ts at fe27e8e3. */
 @source inline("text-{amber,blue,cyan,emerald,fuchsia,gray,green,indigo,lime,orange,pink,purple,red,rose,sky,teal,violet,yellow}-600 dark:text-{amber,blue,cyan,emerald,fuchsia,gray,green,indigo,lime,orange,pink,purple,red,rose,sky,teal,violet,yellow}-400");
 
-/* Cairn: the `next` primitives (next/ui) carry their own utilities, built by next/ui/utilities.css into
- * the chunks that import them, so the entry CSS every classic page loads does not grow with them. */
-@source not "./next/ui";
-
-/* Cairn: the `next` shell (next/shell) carries its own utilities too, built by next/shell/shell.css. */
-@source not "./next/shell";
-
-/* Cairn: the request card (next/card) builds its own utilities into the `next` chunk the same way,
- * through next/card/card.css. */
-@source not "./next/card";
-
-/* Cairn: the meters (next/meters: the usage page and the role table) build their own utilities into
- * the `next` chunk the same way, through next/meters/meters.css. */
-@source not "./next/meters";
-
-/* Cairn: the `next` page (look track L7: next/composer and next/hero, next/timeline with next/page and
- * next/diff, next/settings and next/push) builds its own utilities into the `next` chunk the same
- * way, through composer.css, timeline.css and settings.css. */
-@source not "./next/composer";
-@source not "./next/hero";
-@source not "./next/timeline";
-@source not "./next/page";
-@source not "./next/diff";
-@source not "./next/settings";
-@source not "./next/push";
-
-/* Cairn: the parent banner (next/rollup) builds its own utilities into the `next` chunk the same way,
- * through next/rollup/rollup.css. */
-@source not "./next/rollup";
+/* Cairn: one Tailwind build for the whole client, the `next` views included. Each `next` folder once
+ * built its own utilities into its own stylesheet; Vite merges every stylesheet into one file and keeps
+ * the last copy of a repeated rule, so a later folder's plain `.flex` or `.w-full` landed after an
+ * earlier folder's width and container variants and beat them (the settings rows never went two
+ * columns). One build puts every plain utility before every variant. Left out: the dev-only look
+ * catalogue, which builds its own page (next/ui/catalogue/catalogue.css), tests and fixtures. */
+@source not "./next/ui/catalogue";
+@source not "./**/*.test.ts";
+@source not "./next/ui/SceneFixture.ts";
+@source not "./next/shell/ShellFixtures.ts";

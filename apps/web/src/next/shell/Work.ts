@@ -18,8 +18,6 @@
 // chat column, never over it, from `lg`; under `lg` it is a sheet over a scrim, at most 85% of the
 // viewport tall, its body scrolling on its own. Nothing in it moves the transcript: on a wide
 // screen it is its own column, on a phone it floats.
-//
-// Its utilities are built by `shell.css` with the rest of the shell, into the `next` chunk.
 
 import { onlyIf } from "@cairn/client-logic/OnlyIf";
 import { pendingSubagentRequests } from "@cairn/client-logic/SubagentRollup";

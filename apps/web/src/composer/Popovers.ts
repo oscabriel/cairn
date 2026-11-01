@@ -69,11 +69,9 @@ import { providerMark } from "./ProviderMark.ts";
 const ROW_CLASS =
   "flex min-h-8 items-center rounded-sm px-2 py-1 text-base outline-none not-data-disabled:hover:bg-accent data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-selected:bg-foreground/[0.08] data-selected:text-foreground data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm group relative w-full !min-w-0 max-w-full cursor-pointer";
 
-// The `!` sizes hold on a phone: the `next` chunks' stylesheets declare the plain sizes again,
-// after the entry's, so an unmarked `pointer-coarse:` size loses to them.
-const STAR_CLASS = `relative inline-flex cursor-pointer items-center justify-center rounded-[var(--control-radius)] border border-transparent size-7 sm:size-6 pointer-coarse:size-11! text-muted-foreground hover:bg-accent hover:text-foreground -mr-1 shrink-0 ${FOCUS_RING_INSET}`;
+const STAR_CLASS = `relative inline-flex cursor-pointer items-center justify-center rounded-[var(--control-radius)] border border-transparent size-7 sm:size-6 pointer-coarse:size-11 text-muted-foreground hover:bg-accent hover:text-foreground -mr-1 shrink-0 ${FOCUS_RING_INSET}`;
 
-const SEARCH_INPUT_CLASS = `w-full min-w-0 rounded-[inherit] bg-transparent placeholder:text-placeholder h-7.5 ps-5 leading-7.5 text-sm sm:h-6.5 sm:leading-6.5 pointer-coarse:h-11! ${FOCUS_RING_INSET}`;
+const SEARCH_INPUT_CLASS = `w-full min-w-0 rounded-[inherit] bg-transparent placeholder:text-placeholder h-7.5 ps-5 leading-7.5 text-sm sm:h-6.5 sm:leading-6.5 pointer-coarse:h-11 ${FOCUS_RING_INSET}`;
 
 /** The rows of the open model picker, in display order, for keyboard movement. */
 export const pickerRows = (model: Model): ReadonlyArray<ModelListing> =>
@@ -193,7 +191,7 @@ const searchField = (
             h,
             Search,
             "search",
-            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55 pointer-coarse:top-3.5!"
+            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55 pointer-coarse:top-3.5"
           ),
           h.input([
             h.Type("text"),
@@ -365,7 +363,7 @@ const providerRail = (
       h.AriaLabel("Providers"),
       h.DataAttribute("model-picker-sidebar", "true"),
       h.Class(
-        "flex w-11 shrink-0 flex-col gap-1 overflow-y-auto border-border/70 border-e bg-muted/30 p-1 pointer-coarse:w-14!"
+        "flex w-11 shrink-0 flex-col gap-1 overflow-y-auto border-border/70 border-e bg-muted/30 p-1 pointer-coarse:w-14"
       ),
     ],
     pickerRail(model).map((item) =>
@@ -374,7 +372,7 @@ const providerRail = (
   );
 };
 
-const THINKING_CHOICE_CLASS = `inline-flex min-h-7 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-[calc(var(--radius)-2px)] px-1 text-xs text-muted-foreground hover:text-foreground aria-pressed:bg-background aria-pressed:font-medium aria-pressed:text-foreground pointer-coarse:min-h-11! ${FOCUS_RING_INSET}`;
+const THINKING_CHOICE_CLASS = `inline-flex min-h-7 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-[calc(var(--radius)-2px)] px-1 text-xs text-muted-foreground hover:text-foreground aria-pressed:bg-background aria-pressed:font-medium aria-pressed:text-foreground pointer-coarse:min-h-11 ${FOCUS_RING_INSET}`;
 
 /**
  * The picker's thinking levels: their own band under the models, one segmented choice for the
@@ -393,7 +391,7 @@ const thinkingChoices = (model: Model, h: HtmlBuilder<Message>): Html => {
           h.AriaLabel("Thinking"),
           h.DataAttribute("testid", "composer-model-thinking"),
           h.Class(
-            "flex shrink-0 items-center gap-3 border-border border-t bg-muted/60 px-3 py-2 max-sm:flex-col! max-sm:items-stretch! max-sm:gap-1.5!"
+            "flex shrink-0 items-center gap-3 border-border border-t bg-muted/60 px-3 py-2 max-sm:flex-col max-sm:items-stretch max-sm:gap-1.5"
           ),
         ],
         [
@@ -443,7 +441,7 @@ const modelPicker = (
       h.DataAttribute("model-picker-content", "true"),
       h.DataAttribute("testid", "composer-model-list"),
       h.Class(
-        "relative flex max-h-[min(22rem,40dvh)] w-[min(24rem,calc(100vw-1rem))] flex-col overflow-hidden bg-muted/40 max-sm:max-h-[min(30rem,72dvh)]! max-sm:w-full!"
+        "relative flex max-h-[min(22rem,40dvh)] w-[min(24rem,calc(100vw-1rem))] flex-col overflow-hidden bg-muted/40 max-sm:max-h-[min(30rem,72dvh)] max-sm:w-full"
       ),
     ],
     [
@@ -865,11 +863,9 @@ export const popoverView = (model: Model, h: HtmlBuilder<Message>): Html =>
 
       const anchored = Popover.match(popover, {
         // On a phone the picker is a sheet along the bottom of the screen: under the hero's
-        // composer there is room for three rows, and the thinking band would fall off it. The
-        // placement is important because the `next` chunks' stylesheets declare `.absolute` again,
-        // after the entry's.
+        // composer there is room for three rows, and the thinking band would fall off it.
         ModelPicker: () =>
-          "left-0 max-sm:fixed! max-sm:inset-x-2 max-sm:top-auto! max-sm:bottom-[max(0.5rem,env(safe-area-inset-bottom))]! max-sm:mt-0! max-sm:mb-0!",
+          "left-0 max-sm:fixed max-sm:inset-x-2 max-sm:top-auto max-sm:bottom-[max(0.5rem,env(safe-area-inset-bottom))] max-sm:mt-0 max-sm:mb-0",
         Thinking: () => "left-0",
         RuntimeMode: () => "left-0",
         Overflow: () => "left-0",

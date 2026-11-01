@@ -1,6 +1,6 @@
 // The push toggle (plan look track L7), over the push Submodel and its update, drawn with the
-// switch on the settings page: "Notify me on this device", what it is for, and the note that says
-// why it cannot be turned on when it cannot.
+// switch on the settings page as one of its rows: "Notify me on this device", what it is for, and
+// the note that says why it cannot be turned on when it cannot, with the switch on the right.
 
 import { Option } from "effect";
 import { Submodel } from "foldkit";
@@ -9,8 +9,9 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { Message } from "../../push/Message.ts";
 import { PushStatus } from "../../push/Model.ts";
 import type { Model } from "../../push/Model.ts";
+import { classNames } from "../../ui/ClassNames.ts";
 import { switchControl } from "../settings/Controls.ts";
-import { TYPE } from "../ui/Classes.ts";
+import { TYPE, WEIGHT_MEDIUM } from "../ui/Classes.ts";
 
 /** The switch's element id; the settings page and judges find it by this. */
 export const PUSH_SWITCH_ID = "push-notifications";
@@ -72,34 +73,45 @@ const content = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
     [
       h.DataAttribute("testid", "push-toggle"),
-      h.Class("flex flex-col gap-(--space-1)"),
+      h.Class(
+        "flex flex-wrap items-center justify-between gap-x-(--space-4) gap-y-(--space-2)"
+      ),
     ],
     [
+      h.div(
+        [h.Class("flex min-w-0 flex-[1_1_12rem] flex-col gap-(--space-0-5)")],
+        [
+          h.h3(
+            [h.Class(classNames("text-ink-1", TYPE.ui, WEIGHT_MEDIUM))],
+            ["Notify me on this device"]
+          ),
+          h.p(
+            [h.Class(classNames("text-ink-2", TYPE.small))],
+            [
+              "A notification when a long run finishes or fails while Cairn is not on screen.",
+            ]
+          ),
+          Option.match(pushNote(model), {
+            onNone: () => h.empty,
+            onSome: (note) =>
+              h.p(
+                [
+                  h.DataAttribute("testid", "push-note"),
+                  h.Role("status"),
+                  h.Class(classNames("text-ink-3", TYPE.small)),
+                ],
+                [note]
+              ),
+          }),
+        ]
+      ),
       switchControl(h, {
         id: PUSH_SWITCH_ID,
         label: "Notify me on this device",
-        showLabel: true,
+        showLabel: false,
         isChecked: isOn(model),
         isDisabled: isDisabled(model),
         onToggle: (isChecked) => Message.ToggledNotifications({ isChecked }),
-      }),
-      h.p(
-        [h.Class(`text-ink-2 ${TYPE.small}`)],
-        [
-          "A notification when a long run finishes or fails while Cairn is not on screen.",
-        ]
-      ),
-      Option.match(pushNote(model), {
-        onNone: () => h.empty,
-        onSome: (note) =>
-          h.p(
-            [
-              h.DataAttribute("testid", "push-note"),
-              h.Role("status"),
-              h.Class(`text-ink-2 ${TYPE.small}`),
-            ],
-            [note]
-          ),
       }),
     ]
   );

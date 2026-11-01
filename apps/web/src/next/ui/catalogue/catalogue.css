@@ -1,11 +1,11 @@
 /*
- * The look catalogue's own classes (its page layout, its sections and specimens), built from this
- * folder alone. The primitives' classes come from ../utilities.css, which leaves this folder out, so
- * the production chunks that import a primitive never carry a class only the catalogue uses. Loaded
- * by Main.ts, the dev-only entry.
+ * The look catalogue's classes: its own page layout, sections and specimens, and the primitives it
+ * shows. The client's utilities are built by styles.css, which leaves this folder out so production
+ * never carries a class only the catalogue uses; this dev-only page (Main.ts) does not load
+ * styles.css, so it builds the primitives' classes here, from all of next/ui, in one build.
  */
 @reference "tailwindcss";
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
 @import "../theme.css";
-@source "./";
-@source not "./**/*.test.ts";
+@source "../";
+@source not "../**/*.test.ts";

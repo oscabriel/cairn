@@ -12,8 +12,7 @@
 // row's preview line shows from `sm` up.
 //
 // It writes its class strings itself, in the `next/ui` primitives' vocabulary (`Classes.ts`,
-// `Tone.ts`, `Disclosure.ts`). They are built by `timeline.css` (look track L7), with the `next`
-// transcript's rows, into the `next` chunk; styles.css leaves this folder out of the entry's scan.
+// `Tone.ts`, `Disclosure.ts`).
 
 import type {
   SubagentRow,

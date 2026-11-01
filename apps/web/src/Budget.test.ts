@@ -138,6 +138,111 @@ const staticClosure = (manifest: Manifest) => {
   return seen;
 };
 
+/** The index of the brace that closes the block opened at `open`. */
+const closingBrace = (text: string, open: number): number => {
+  let depth = 0;
+
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === "{") {
+      depth += 1;
+    } else if (text[index] === "}") {
+      depth -= 1;
+
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return text.length;
+};
+
+/** The top-level blocks of a CSS body: each one's prelude and its contents. */
+const cssBlocks = (
+  body: string
+): ReadonlyArray<{ head: string; inner: string }> => {
+  const blocks: Array<{ head: string; inner: string }> = [];
+
+  for (let start = 0; start < body.length;) {
+    const open = body.indexOf("{", start);
+
+    if (open === -1) {
+      break;
+    }
+
+    const close = closingBrace(body, open);
+
+    blocks.push({
+      head: body.slice(start, open).trim(),
+      inner: body.slice(open + 1, close),
+    });
+    start = close + 1;
+  }
+
+  return blocks;
+};
+
+const propertiesOf = (declarations: string): ReadonlyArray<string> =>
+  declarations
+    .split(";")
+    .map((declaration) => declaration.split(":")[0]?.trim() ?? "")
+    .filter((property) => property !== "");
+
+/** A selector that is one bare utility class (`.flex`, `.w-full`), no variant and no pseudo. */
+const PLAIN_UTILITY = /^\.(?:[\w-]|\\.)+$/u;
+
+/**
+ * Plain utilities the built CSS places after a width, container or other conditional variant that
+ * sets the same property, where they would win over it on an element that has both. One Tailwind
+ * build sorts every plain utility before every variant, so the list is empty; several builds merged
+ * into one file are not (the settings rows' `@min-[32rem]` grid lost to a later `.flex`, 2026-11-01).
+ * A conditional rule counts only when its selector names a variant (`\:`): `.container`'s own
+ * widths and the `@supports` colour fallbacks belong to plain utilities.
+ */
+const shadowedVariants = (css: string): ReadonlyArray<string> => {
+  const layer = css.indexOf("@layer utilities{");
+
+  if (layer === -1) {
+    return [];
+  }
+
+  const open = css.indexOf("{", layer);
+  const variants = new Map<string, string>();
+  const shadowed: Array<string> = [];
+
+  const collect = (inner: string, condition: string) => {
+    for (const block of cssBlocks(inner)) {
+      if (block.head.startsWith("@")) {
+        collect(block.inner, `${condition} ${block.head}`);
+      } else if (block.head.includes("\\:")) {
+        for (const property of propertiesOf(block.inner)) {
+          if (!variants.has(property)) {
+            variants.set(property, `${condition} ${block.head}`);
+          }
+        }
+      }
+    }
+  };
+
+  for (const block of cssBlocks(css.slice(open + 1, closingBrace(css, open)))) {
+    if (block.head.startsWith("@")) {
+      collect(block.inner, block.head);
+    } else if (PLAIN_UTILITY.test(block.head)) {
+      const property = propertiesOf(block.inner).find((name) =>
+        variants.has(name)
+      );
+
+      if (property !== undefined) {
+        shadowed.push(
+          `${block.head} (${property}) after ${variants.get(property) ?? ""}`
+        );
+      }
+    }
+  }
+
+  return shadowed;
+};
+
 describe("the bundle budget", () => {
   it.live(
     "keeps the entry's JS and CSS under budget and named lazy chunks lazy",
@@ -182,6 +287,19 @@ describe("the bundle budget", () => {
         assert.isAtMost(entryJs, ENTRY_JS_BUDGET, "entry JS gzip bytes");
         assert.isAtMost(entryCss, ENTRY_CSS_BUDGET, "entry CSS gzip bytes");
 
+        // Every plain utility sorts before every variant (`shadowedVariants`).
+        for (const file of new Set(
+          chunks.flatMap((chunk) => chunk.css ?? [])
+        )) {
+          assert.deepStrictEqual(
+            shadowedVariants(
+              Option.getOrThrow(Option.fromNullishOr(files.get(file)))
+            ),
+            [],
+            `${file}: plain utilities after a variant of the same property`
+          );
+        }
+
         // The look catalogue (`next/ui/catalogue`, `/__look`) is for the dev server only: no
         // chunk comes from its folder and no emitted file carries its marker.
         assert.deepStrictEqual(
@@ -209,4 +327,19 @@ describe("the bundle budget", () => {
       }),
     60_000
   );
+
+  it("catches a plain utility placed after a variant of the same property", () => {
+    const merged =
+      "@layer utilities{.grid{display:grid}@container row (width>=32rem){.\\@min-\\[32rem\\]\\/row\\:grid{display:grid}}.flex{display:flex}}";
+
+    assert.deepStrictEqual(shadowedVariants(merged), [
+      ".flex (display) after @container row (width>=32rem) .\\@min-\\[32rem\\]\\/row\\:grid",
+    ]);
+    assert.deepStrictEqual(
+      shadowedVariants(
+        "@layer utilities{.flex{display:flex}.container{width:100%}@media (width>=40rem){.container{max-width:40rem}}.max-w-3xl{max-width:48rem}}"
+      ),
+      []
+    );
+  });
 });

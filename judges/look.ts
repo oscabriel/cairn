@@ -493,6 +493,33 @@ const STATES: ReadonlyArray<LookState> = [
       await settle(page, 300);
     },
   },
+  {
+    name: "settings-models",
+    title: "Settings: models and roles",
+    caption:
+      "The settings page scrolled to its Models section, the model list folded, and the role table under it.",
+    path: () => "/settings",
+    widths: [390, 1440],
+    light: false,
+    enter: async (page) => {
+      await page
+        .locator('[data-testid="settings-roles"] [data-testid="role-row"]')
+        .first()
+        .waitFor({ state: "visible", timeout: 10_000 });
+      // The page's own scroller, never an ancestor: `scrollIntoView` would scroll a clipped one.
+      await page.locator("[data-settings-page-scroll]").evaluate((scroller) => {
+        const models = scroller.querySelector("#models");
+
+        if (models !== null) {
+          scroller.scrollTop +=
+            models.getBoundingClientRect().top -
+            scroller.getBoundingClientRect().top -
+            16;
+        }
+      });
+      await settle(page, 300);
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------------------------

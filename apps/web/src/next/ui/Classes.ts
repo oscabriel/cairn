@@ -5,11 +5,6 @@
 // Forced states. The look catalogue (`catalogue/`) shows hover and focus without a pointer or a
 // keyboard, so every primitive that has those states also keys them on `data-hover` and
 // `data-focus`; nothing else sets those attributes.
-//
-// The utilities these classes name are built by `utilities.css`, which this module imports, so a
-// chunk that uses a primitive carries them and the entry CSS does not.
-
-import "./utilities.css";
 
 /** A type step from the token scale: font size with its line height. */
 export type TypeStep = "micro" | "small" | "ui" | "body" | "title" | "display";

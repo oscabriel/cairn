@@ -8,7 +8,6 @@ import { Option, Predicate, Record } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import "./shell.css";
 import { addProjectPicker } from "./AddProject.ts";
 import {
   managedMetaOf,

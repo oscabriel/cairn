@@ -2,9 +2,11 @@
 // the Stone look, under L6's chat header, which already says "Settings", so the page draws no
 // header of its own. Sections are titled groups of
 // rows on one raised box with hairlines between rows; each row has its title, what it does, and
-// its control (a select or a switch, `Controls.ts`) on the right, or under it when the page is
-// narrow. Statuses are status chips (a provider ready, a credential missing); plan windows are
-// grey bars, with the waiting tone only on a spent one.
+// its control (a select or a switch, `Controls.ts`) at its own width on the right, wrapping under
+// the text only when the row has no room for both. Statuses are status chips (a provider ready, a
+// credential missing); plan windows are grey bars, with the waiting tone only on a spent one. The
+// model list is folded until opened, so the page reads as settings, not as a catalog
+// (the user, 2026-11-01: too dense, and every select ran the row's full width).
 
 import { skillsPromptTokens } from "@cairn/client-logic/SkillsPrompt";
 import type { ExecutorStatus } from "@cairn/protocol/Executor";
@@ -16,6 +18,7 @@ import { Array, Option } from "effect";
 import { Submodel } from "foldkit";
 import * as AsyncData from "foldkit/asyncData";
 import type { Html, HtmlBuilder } from "foldkit/html";
+import { ChevronRight } from "lucide";
 
 import { BRIDGE_PROVIDER } from "../../composer/UsageMeter.ts";
 import type {
@@ -31,7 +34,15 @@ import type { Child } from "../../ui/Child.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import type { SelectOption } from "../../ui/Select.ts";
 import { button, buttonDefaults } from "../ui/Button.ts";
-import { TYPE, WEIGHT_MEDIUM, WEIGHT_STRONG } from "../ui/Classes.ts";
+import {
+  FEEDBACK_MOTION,
+  FOCUS_RING_INSET,
+  HIT_HEIGHT,
+  TYPE,
+  WEIGHT_MEDIUM,
+  WEIGHT_STRONG,
+} from "../ui/Classes.ts";
+import { glyph } from "../ui/Glyph.ts";
 import type { StatusMark } from "../ui/Glyph.ts";
 import { statusChip } from "../ui/StatusChip.ts";
 import type { Tone } from "../ui/Tone.ts";
@@ -64,7 +75,7 @@ const page = (h: HtmlBuilder<Message>, children: ReadonlyArray<Child>): Html =>
           h.div(
             [
               h.Class(
-                "mx-auto flex w-full max-w-3xl flex-col gap-(--space-8) px-(--space-3) pt-(--space-6) pb-(--space-12) sm:px-(--space-6)"
+                "mx-auto flex w-full max-w-3xl flex-col gap-(--space-6) px-(--space-3) pt-(--space-6) pb-(--space-12) sm:px-(--space-6)"
               ),
             ],
             children
@@ -117,6 +128,19 @@ const section = (
     ]
   );
 
+/**
+ * A row's line: the text and the control side by side, the control wrapping under the text when
+ * the row is too narrow for both. The text gives up width first, down to 12rem.
+ */
+const ROW_LINE =
+  "flex flex-wrap items-center justify-between gap-x-(--space-4) gap-y-(--space-2)";
+
+const ROW_TEXT = "flex min-w-0 flex-[1_1_12rem] flex-col gap-(--space-0-5)";
+
+/** The control at its own width, never wider than the row. */
+const ROW_CONTROL =
+  "flex min-w-0 max-w-full shrink-0 items-center justify-end gap-(--space-2)";
+
 /** A row: its title, what it does and its status on the left, its control on the right. */
 const settingsRow = (
   h: HtmlBuilder<Message>,
@@ -133,18 +157,14 @@ const settingsRow = (
     [
       h.DataAttribute("slot", "settings-row"),
       h.DataAttribute("settings-row", config.id),
-      h.Class("@container/settings-row px-(--space-4) py-(--space-3)"),
+      h.Class("px-(--space-4) py-(--space-3)"),
     ],
     [
       h.div(
-        [
-          h.Class(
-            "flex flex-col gap-(--space-2) @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-(--space-4)"
-          ),
-        ],
+        [h.Class(ROW_LINE)],
         [
           h.div(
-            [h.Class("flex min-w-0 flex-col gap-(--space-0-5)")],
+            [h.Class(ROW_TEXT)],
             [
               h.h3(
                 [h.Class(classNames("text-ink-1", TYPE.ui, WEIGHT_MEDIUM))],
@@ -154,7 +174,7 @@ const settingsRow = (
                 onNone: () => h.empty,
                 onSome: (description) =>
                   h.p(
-                    [h.Class(classNames("max-w-xl text-ink-2", TYPE.small))],
+                    [h.Class(classNames("text-ink-2", TYPE.small))],
                     [description]
                   ),
               }),
@@ -173,15 +193,7 @@ const settingsRow = (
           ),
           Option.match(config.control, {
             onNone: () => h.empty,
-            onSome: (control) =>
-              h.div(
-                [
-                  h.Class(
-                    "flex w-full min-w-0 items-center gap-(--space-2) @min-[32rem]/settings-row:w-auto @min-[32rem]/settings-row:justify-end"
-                  ),
-                ],
-                [control]
-              ),
+            onSome: (control) => h.div([h.Class(ROW_CONTROL)], [control]),
           }),
         ]
       ),
@@ -747,23 +759,75 @@ const titleModelRow = (
     )
   );
 
+/**
+ * Every model pi's configuration lists, folded under one row until opened: the model picker is
+ * where a model is chosen, so this list is for looking something up.
+ */
 const modelList = (h: HtmlBuilder<Message>, catalog: ModelCatalog): Html =>
-  settingsRow(
-    h,
-    {
-      id: "models",
-      title: "Models",
-      description: Option.some(
-        `${catalog.models.length} ${catalog.models.length === 1 ? "model" : "models"} from pi's configuration. New threads start on ${catalog.defaults.model.provider}/${catalog.defaults.model.modelId}.`
-      ),
-      status: Option.none(),
-      control: Option.none(),
-    },
+  h.details(
     [
+      h.DataAttribute("slot", "settings-row"),
+      h.DataAttribute("settings-row", "models"),
+      h.Class("group/models"),
+    ],
+    [
+      h.summary(
+        [
+          h.Class(
+            classNames(
+              "flex cursor-pointer list-none flex-wrap items-center justify-between gap-x-(--space-4) gap-y-(--space-2) px-(--space-4) py-(--space-3) hover:bg-select-1 [&::-webkit-details-marker]:hidden",
+              HIT_HEIGHT,
+              FOCUS_RING_INSET,
+              FEEDBACK_MOTION
+            )
+          ),
+        ],
+        [
+          h.div(
+            [h.Class(ROW_TEXT)],
+            [
+              h.h3(
+                [h.Class(classNames("text-ink-1", TYPE.ui, WEIGHT_MEDIUM))],
+                ["All models"]
+              ),
+              h.p(
+                [h.Class(classNames("text-ink-2", TYPE.small))],
+                [
+                  `${catalog.models.length} ${catalog.models.length === 1 ? "model" : "models"} from pi's configuration. New threads start on ${catalog.defaults.model.provider}/${catalog.defaults.model.modelId}.`,
+                ]
+              ),
+            ]
+          ),
+          h.span(
+            [
+              h.Class(
+                classNames(
+                  "flex shrink-0 items-center gap-(--space-1) text-ink-2",
+                  TYPE.small
+                )
+              ),
+            ],
+            [
+              h.span([h.Class("group-open/models:hidden")], ["Show"]),
+              h.span([h.Class("hidden group-open/models:inline")], ["Hide"]),
+              h.span(
+                [
+                  h.Class(
+                    "flex transition-transform duration-(--duration-feedback) group-open/models:rotate-90"
+                  ),
+                ],
+                [glyph(h, ChevronRight, "chevron-right", "regular")]
+              ),
+            ]
+          ),
+        ]
+      ),
       h.ul(
         [
           h.DataAttribute("testid", "settings-model-list"),
-          h.Class("flex flex-col pt-(--space-1)"),
+          h.Class(
+            "flex flex-col border-t border-stroke-1 px-(--space-4) py-(--space-2)"
+          ),
         ],
         catalog.models.map((listing) =>
           h.li(
@@ -798,14 +862,11 @@ const modelList = (h: HtmlBuilder<Message>, catalog: ModelCatalog): Html =>
     ]
   );
 
-const modelsSection = (model: Model, h: HtmlBuilder<Message>): Html =>
+/** The providers, with Claude's plan windows and the subscription bridge's switches. */
+const providersSection = (model: Model, h: HtmlBuilder<Message>): Html =>
   section(
     h,
-    {
-      id: "models",
-      title: "Models and providers",
-      headerAction: Option.none(),
-    },
+    { id: "providers", title: "Providers", headerAction: Option.none() },
     [
       ...pending(h, "providers", model.providers, (providers) =>
         providers.map((provider) => providerRow(h, provider))
@@ -814,15 +875,20 @@ const modelsSection = (model: Model, h: HtmlBuilder<Message>): Html =>
       ...pending(h, "bridge", model.server, (settings) =>
         bridgeRows(h, settings)
       ),
-      ...pending(h, "catalog", model.catalog, (catalog) => [
-        ...Option.match(AsyncData.getData(model.server), {
-          onNone: () => [],
-          onSome: (settings) => [titleModelRow(h, settings, catalog)],
-        }),
-        modelList(h, catalog),
-      ]),
     ]
   );
+
+/** The model that names threads, and every model pi lists. The role table follows. */
+const modelsSection = (model: Model, h: HtmlBuilder<Message>): Html =>
+  section(h, { id: "models", title: "Models", headerAction: Option.none() }, [
+    ...pending(h, "catalog", model.catalog, (catalog) => [
+      ...Option.match(AsyncData.getData(model.server), {
+        onNone: () => [],
+        onSome: (settings) => [titleModelRow(h, settings, catalog)],
+      }),
+      modelList(h, catalog),
+    ]),
+  ]);
 
 const skillsSummary = (list: SkillList): string => {
   const total = list.skills.length;
@@ -909,13 +975,23 @@ const skillsSection = (model: Model, h: HtmlBuilder<Message>): Html => {
   );
 };
 
-const EXECUTOR_LABEL: Readonly<Record<ExecutorStatus["state"], string>> = {
-  connected: "Connected",
-  "needs-sign-in": "Needs sign-in",
-  unreachable: "Unreachable",
-  disabled: "Off",
+const EXECUTOR_STATUS: Readonly<
+  Record<
+    ExecutorStatus["state"],
+    { tone: Tone; mark: StatusMark; word: string }
+  >
+> = {
+  connected: { tone: "done", mark: "done", word: "Connected" },
+  "needs-sign-in": { tone: "waiting", mark: "needs", word: "Needs sign-in" },
+  unreachable: { tone: "failed", mark: "failed", word: "Unreachable" },
+  disabled: { tone: "neutral", mark: "idle", word: "Off" },
 };
 
+/**
+ * Executor's state as a chip, and Sign in only while the grant is refused: a sign-in while
+ * connected would make a new grant that lapses with the browser session that approved it
+ * (ops/executor/NOTES.md), so the page does not offer one then.
+ */
 const executorSection = (model: Model, h: HtmlBuilder<Message>): Html =>
   section(
     h,
@@ -930,33 +1006,31 @@ const executorSection = (model: Model, h: HtmlBuilder<Message>): Html =>
             Option.some("Tools from Executor are offered to every thread.")
           ),
           Option.some(
-            button(
-              h,
-              {
-                ...buttonDefaults<Message>(),
-                variant:
-                  status.state === "needs-sign-in" ? "primary" : "secondary",
-                size: "small",
-                onClick: Option.some(Message.ClickedSignIn()),
-                isDisabled:
-                  !model.context.hasClient || status.state === "disabled",
-              },
-              ["Sign in again"]
-            )
-          ),
-          Option.some(
-            h.span(
-              [h.DataAttribute("testid", "executor-state")],
+            h.div(
+              [h.Class("flex items-center gap-(--space-2)")],
               [
-                EXECUTOR_LABEL[status.state],
-                ...Option.match(status.checkedAt, {
-                  onNone: () => [],
-                  onSome: (at) => [
-                    `, checked ${formatDayTime(at, model.client.timestampFormat)}`,
-                  ],
-                }),
+                statusChip(h, EXECUTOR_STATUS[status.state], [
+                  h.DataAttribute("testid", "executor-state"),
+                ]),
+                status.state === "needs-sign-in"
+                  ? button(
+                      h,
+                      {
+                        ...buttonDefaults<Message>(),
+                        variant: "primary",
+                        size: "small",
+                        onClick: Option.some(Message.ClickedSignIn()),
+                        isDisabled: !model.context.hasClient,
+                      },
+                      ["Sign in"]
+                    )
+                  : h.empty,
               ]
             )
+          ),
+          Option.map(
+            status.checkedAt,
+            (at) => `Checked ${formatDayTime(at, model.client.timestampFormat)}`
           )
         ),
       ]),
@@ -1009,6 +1083,7 @@ export const view = Submodel.defineView<Model, Message, SettingsViewInputs>(
           generalSection(model, h),
           appearanceSection(model, h),
           notificationsSection(inputs, h),
+          providersSection(model, h),
           modelsSection(model, h),
           inputs.roleTable(),
           skillsSection(model, h),

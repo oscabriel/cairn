@@ -1,8 +1,7 @@
 /*
- * The design token colour names and the animations the `next` utilities name, for the two style
- * sheets that build them: utilities.css (the primitives, shipped in the chunk that imports them) and
- * catalogue/catalogue.css (the dev-only look catalogue's own classes). The colour list is the same
- * list as styles.css's `@theme inline`, and a name added to one is added to the other.
+ * The design token colour names and the animations the `next` utilities name, for the dev-only look
+ * catalogue's build (catalogue/catalogue.css), which does not load styles.css. The colour list is the
+ * same list as styles.css's `@theme inline`, and a name added to one is added to the other.
  */
 @theme inline {
   --color-ink-1: var(--ink-1);
@@ -36,8 +35,7 @@
   --color-tone-done-wash: var(--tone-done-wash);
   --color-scrim: var(--scrim);
 
-  /* Tailwind's own animations, inlined: the entry CSS declares a theme variable only when a classic
-     view uses it, so these chunk utilities must not lean on one. */
+  /* Tailwind's own animations, inlined: the catalogue takes Tailwind's theme by reference only. */
   --animate-spin: spin 1s linear infinite;
   --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 

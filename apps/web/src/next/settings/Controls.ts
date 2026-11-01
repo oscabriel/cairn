@@ -1,5 +1,5 @@
-// The `next` settings page's controls (plan look track L7): a native select and a switch in the
-// Stone look, each `--hit-target` tall on a coarse pointer with the focus ring on keyboard focus
+// The `next` settings page's controls (plan look track L7): a native select as wide as its longest
+// choice (never the row's full width) and a switch in the Stone look, each `--hit-target` tall on a coarse pointer with the focus ring on keyboard focus
 // only and no resting shadow. Both keep @foldkit/ui's wiring (the label's `for`, the switch's
 // `role="switch"` and `aria-checked`) and the ids the judges find them by.
 
@@ -17,10 +17,8 @@ import {
   TYPE,
 } from "../ui/Classes.ts";
 
-import "./settings.css";
-
 const SELECT_CLASS = classNames(
-  "h-8 w-full min-w-36 max-w-full cursor-pointer rounded-(--radius-small) border border-stroke-2 bg-surface-sunken px-(--space-2) text-ink-1",
+  "h-8 w-auto min-w-28 max-w-full cursor-pointer rounded-(--radius-small) border border-stroke-2 bg-surface-sunken px-(--space-2) text-ink-1",
   TYPE.ui,
   HIT_TARGET,
   FOCUS_RING,
@@ -51,7 +49,7 @@ export const select = <Message>(
       onChange: config.onChange,
       toView: (attributes) =>
         h.div(
-          [h.Class("flex w-full min-w-0 flex-col")],
+          [h.Class("flex min-w-0 max-w-full")],
           [
             h.label([...attributes.label, h.Class("sr-only")], [config.label]),
             h.select(

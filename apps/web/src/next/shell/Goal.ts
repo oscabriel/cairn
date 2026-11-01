@@ -11,8 +11,7 @@
 // asks for.
 //
 // The Stone look, as the work panel draws it: colour only on the status marks; beside the chat
-// column from `lg`, a bottom sheet over a scrim below, rows at least 44 px on a coarse pointer. Its
-// utilities are built by `shell.css`, into the `next` chunk.
+// column from `lg`, a bottom sheet over a scrim below, rows at least 44 px on a coarse pointer.
 
 import type { GoalProgress } from "@cairn/client-logic/GoalProgress";
 import {

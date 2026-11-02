@@ -34,14 +34,6 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Project thread**: A folder project's one long-lived thread, the one the user talks to (the user, 2026-10-29), marked on the project row (`projectThreadId`). The first launch in a project makes it; it lives on, compacted as it grows. Every top-level thread in a project comes from the first launch or a refresh.
 
-**Coordinator**: The project thread's role (ADR 0042, proposed): it holds the project's goals and hands all implementation and review to children it briefs, keeping only tools that read, delegate or ask. Scratch and managed threads are not coordinators.
-
-_Avoid_: orchestrator, manager, lead (for the project thread)
-
-**Hands-on turn**: One turn in which the user lets the coordinator make changes itself; only the user can grant one, and it ends with the turn.
-
-_Avoid_: override, escape hatch
-
 **Refresh**: Replacing a project thread with a new one: the launch that makes the new thread archives the old one and moves the mark in one commit, idempotent by its command id. The launch first stops the old thread's run, queue and working subagents, as an archive does; it leaves the sidebar and can still be opened, but unarchiving it is refused while another thread is the project thread. Unarchiving the project thread when the project has none marks it again.
 
 **Managed thread**: A thread whose lineage roots at a project thread (a subagent, a brief's child, a workflow node), listed under the project thread with its status. It can be opened and used fully (read, message, steer, stop, answer), though the default flow goes through the project thread.
@@ -344,11 +336,7 @@ _Avoid_: approve (for a brief), run
 
 _Avoid_: revise (in prose; it is the decision's wire name), reject
 
-**Decider**: Who settled an approval record: the user, a parent thread answering its child's question, the permission mode, a workflow's envelope, a project's standing approval, a judge, expiry, or the system (a stop or boot). Every record past pending names one.
-
-**Standing approval**: A project's lasting yes to its coordinator's briefs: a budget, the roles it may brief and whether each may write, set only by the user. A brief inside it starts with no Go card and names the standing approval as its decider; one outside it waits for the user.
-
-_Avoid_: auto-approve, blanket Go
+**Decider**: Who settled an approval record: the user, a parent thread answering its child's question, the permission mode, a workflow's envelope, a judge, expiry, or the system (a stop or boot). Every record past pending names one.
 
 **Escalate**: To pass a child's question up from its parent to the user, because the parent chose to, the parent was stopped, failed or parked, the run that saw the question ended, the parent thread was archived or deleted, or 15 minutes passed after the parent's model saw it. The parent's `cairn.escalations` records each one and why. The user answers it in the parent thread, and either answer settles both records once.
 

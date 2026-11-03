@@ -1,24 +1,22 @@
 // The scripted brain the brief card judge (judges/surfaces.ts, `brief-go`, plan 6B) drives: a parent
-// that proposes one brief naming the role the user's message names, children that answer at once,
-// and two role tables (`BRIEF_ROLES`) that disagree about one role. The subagent tools are the
-// scripted harness's own (briefs, Go, Send back, the child's thread, settlement notes and the wake);
-// no provider is called and nothing is billed.
+// that proposes one brief naming the model the user's message names, and children that answer at
+// once. The subagent tools are the scripted harness's own (briefs, Go, Send back, the child's
+// thread, settlement notes and the wake); no provider is called and nothing is billed.
 //
-// - The parent (the seeded thread): a message "brief @<role> <tag>" is answered with one
-//   `subagent_spawn` of "Count the files <tag>" with that role; once the tool answered it says
-//   "Waiting for Go.". Anything else it is given (a Send back's notes, a child's wake) is answered
-//   "Parent read: <what it was given>", so the judge reads what reached the parent, and how often.
+// - The parent (the seeded thread): a message "brief <provider/modelId[:level]> <tag>" is answered
+//   with one `subagent_spawn` of "Count the files <tag>" naming that model; once the tool answered
+//   it says "Waiting for Go.". Anything else it is given (a Send back's notes, a child's wake) is
+//   answered "Parent read: <what it was given>", so the judge reads what reached the parent, and
+//   how often.
 // - A child answers "Counted 3 files." at once.
-// - Roles: the brain's settings table binds `@worker` to the faux model the scripted brain lists,
-//   so `roles.check` resolves it; the scripted harness's own table also binds `@reviewer`, which
-//   the settings do not. A brief naming `@reviewer` is asked (as when the table changed after the
-//   ask), and `roles.check` then finds no `@reviewer`: Go is blocked on an unbound role.
+// - Models (ADR 0043): the scripted harness takes a named model as named, while `models.check`
+//   reads the brain's catalog, which lists the faux model only. A brief naming `READY_MODEL` checks
+//   ready; one naming `UNREADY_MODEL` is asked (as when a provider lost its credential after the
+//   ask), and `models.check` then finds it is not in the catalog: Go is blocked on it.
 
-import { DEFAULT_ROLE_TABLE, RoleName } from "@cairn/protocol/Roles";
-import type { RoleTable } from "@cairn/protocol/Roles";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { Message } from "@earendil-works/pi-ai";
-import { Clock, Effect, Layer, Option } from "effect";
+import { Clock, Effect, Layer } from "effect";
 
 import { messageText } from "../../../apps/server/src/brain/CommitFeed.ts";
 import { FAUX_MODEL } from "../../../apps/server/src/brain/ModelSource.ts";
@@ -27,37 +25,19 @@ import {
   ScriptedTools,
   scriptedAnswer,
 } from "../../../apps/server/src/brain/ScriptedHarness.ts";
-import type { CairnBrain, CairnRoles } from "../parity/CairnApp.ts";
+import type { CairnBrain } from "../parity/CairnApp.ts";
 import { PARITY_THREAD_ID } from "../parity/CairnApp.ts";
 
 /** What a child answers. */
 export const CHILD_ANSWER = "Counted 3 files.";
 
-/** The role the brain's table binds and `roles.check` resolves. */
-export const BOUND_ROLE = "@worker";
+/** The model a brief names that `models.check` finds ready: the brain's faux model at medium. */
+export const READY_MODEL = `${FAUX_MODEL.provider}/${FAUX_MODEL.modelId}:medium`;
 
-/** The role only the scripted harness binds: unbound for `roles.check`. */
-export const UNBOUND_ROLE = "@reviewer";
+/** A model the brain's catalog does not list: `models.check` blocks Go on it. */
+export const UNREADY_MODEL = "opencode-go/gpt-6-luna";
 
-const binding = {
-  model: FAUX_MODEL,
-  thinkingLevel: Option.some("medium" as const),
-  fallbacks: [],
-  note: Option.none(),
-};
-
-const settingsTable: RoleTable = {
-  ...DEFAULT_ROLE_TABLE,
-  [RoleName.make(BOUND_ROLE)]: binding,
-};
-
-/** The two tables: the brain's settings, and the scripted harness's with `@reviewer` too. */
-export const BRIEF_ROLES: CairnRoles = {
-  settings: settingsTable,
-  scripted: { ...settingsTable, [RoleName.make(UNBOUND_ROLE)]: binding },
-};
-
-const ASK = /^brief (?<role>@[a-z-]+) (?<tag>.+)$/u;
+const ASK = /^brief (?<model>\S+) (?<tag>.+)$/u;
 
 const parentAnswer = (messages: ReadonlyArray<Message>, now: number) => {
   const last = messages.at(-1);
@@ -74,7 +54,7 @@ const parentAnswer = (messages: ReadonlyArray<Message>, now: number) => {
   const asked = ASK.exec(given);
 
   if (asked !== null) {
-    const role = asked.groups?.role ?? "";
+    const model = asked.groups?.model ?? "";
     const tag = asked.groups?.tag ?? "";
 
     return fauxAssistantMessage(
@@ -84,7 +64,7 @@ const parentAnswer = (messages: ReadonlyArray<Message>, now: number) => {
           {
             description: `Count the files ${tag}`.trim(),
             brief: "Count the TypeScript files under src and say how many.",
-            role,
+            model,
           },
           { id: `spawn-${String(now)}` }
         ),

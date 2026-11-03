@@ -1,43 +1,23 @@
 // Scene tests for the meters (plan 6G): the usage page never draws an unknown as zero (an unpriced
 // model, an unread window, Codex with no login, OpenCode Go's unreadable plan, a thread with no
-// spend); the page asks the brain once per epoch, and again when the rows show new spend; the role
-// table rebinds one role by saving the whole table, one change at a time, shows the brain's answer
-// and checks the roles again.
+// spend); and the page asks the brain once per epoch, and again when the rows show new spend.
 
 import { ThreadId } from "@cairn/protocol/Ids";
-import type { ModelCatalog, ModelListing } from "@cairn/protocol/Models";
-import {
-  DEFAULT_ROLE_TABLE,
-  RoleCheck,
-  RoleName,
-  RoleSpec,
-} from "@cairn/protocol/Roles";
-import type { RoleTable } from "@cairn/protocol/Roles";
 import type { ServerSettings } from "@cairn/protocol/Settings";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { ModelSpend, Spend, SpendSummary } from "@cairn/protocol/Spend";
 import type { UsageSnapshot } from "@cairn/protocol/Usage";
 import { assert, describe, it } from "@effect/vitest";
-import { Option, Predicate, Schema } from "effect";
+import { Option, Predicate } from "effect";
 import * as AsyncData from "foldkit/asyncData";
-import type { Html, HtmlBuilder } from "foldkit/html";
+import type { Html } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 
-import {
-  CheckRoles,
-  FetchMetersCatalog,
-  FetchMetersSettings,
-  FetchSpend,
-  SaveRoleTable,
-} from "./Command.ts";
 import { Message } from "./Message.ts";
 import { initial } from "./Model.ts";
 import type { MetersContext, Model } from "./Model.ts";
-import { view as rolesView } from "./RolesView.ts";
 import { inform, update } from "./Update.ts";
 import { view as usageView } from "./UsageView.ts";
-
-const verifier = RoleName.make("@verifier");
 
 const tokens = (input: number) => ({
   input,
@@ -146,101 +126,21 @@ const context = (fields: Partial<MetersContext>): MetersContext => ({
   ...fields,
 });
 
-const codexTable: RoleTable = {
-  ...DEFAULT_ROLE_TABLE,
-  [verifier]: {
-    model: { provider: "openai-codex", modelId: "gpt-6-luna" },
-    thinkingLevel: Option.none(),
-    fallbacks: [],
-    note: Option.none(),
-  },
-};
-
-const settingsWith = (table: RoleTable): ServerSettings => ({
+const SETTINGS: ServerSettings = {
   autoSettleDays: 3,
   titleModel: Option.none(),
   bridgeEnabled: true,
   bridgeGenerationCap: 4,
-  roleBindings: table,
   defaultBudget: { ...DEFAULT_BUDGET, maxTokens: 200_000 },
-});
-
-const listing = (
-  provider: string,
-  modelId: string,
-  available: boolean
-): ModelListing => ({
-  provider,
-  modelId,
-  name: modelId,
-  thinkingLevels: ["low", "medium", "high"],
-  acceptsImages: false,
-  contextWindow: Option.none(),
-  available,
-});
-
-const CATALOG: ModelCatalog = {
-  models: [
-    listing("claude-bridge", "claude-opus-5-5", true),
-    listing("claude-bridge", "claude-sonnet-5-5", true),
-    listing("opencode-go", "gpt-6-luna", true),
-  ],
-  defaults: {
-    model: { provider: "claude-bridge", modelId: "claude-opus-5-5" },
-    thinkingLevel: "medium",
-  },
-};
-
-const Resolution = RoleCheck.fields.resolution.pipe(
-  Schema.toTaggedUnion("_tag")
-);
-
-const unresolvedVerifier: RoleCheck = {
-  spec: "@verifier",
-  resolution: Resolution.cases.Unresolved.make({
-    reason: "no_ready_model",
-    skipped: [
-      {
-        model: { provider: "openai-codex", modelId: "gpt-6-luna" },
-        reason: "missing_credential",
-      },
-    ],
-  }),
-  sameFamilyAsWorker: false,
-};
-
-const readyVerifier: RoleCheck = {
-  spec: "@verifier",
-  resolution: Resolution.cases.Resolved.make({
-    resolved: {
-      spec: RoleSpec.make("@verifier"),
-      role: verifier,
-      model: { provider: "opencode-go", modelId: "gpt-6-luna" },
-      thinkingLevel: null,
-      via: "primary",
-      skipped: [],
-      family: "openai",
-      priced: true,
-    },
-  }),
-  sameFamilyAsWorker: false,
 };
 
 const loaded = (fields: Partial<MetersContext>): Model => ({
   ...inform(initial, context(fields)).model,
   spend: AsyncData.succeed(SPEND),
-  server: AsyncData.succeed(settingsWith(codexTable)),
-  catalog: AsyncData.succeed(CATALOG),
-  checks: AsyncData.succeed([unresolvedVerifier]),
+  server: AsyncData.succeed(SETTINGS),
 });
 
 const usageConfig = { update, view: usageView };
-
-const rolesConfig = {
-  update,
-  view: (model: Model, h: HtmlBuilder<Message>) =>
-    rolesView(model, { usageHref: "/usage" }, h),
-};
 
 /** Zero as a reading prints it. */
 const ZERO = /(?:^|\D)0%|\$0\.00/u;
@@ -285,7 +185,7 @@ describe("the usage page", () => {
 
     assert.deepStrictEqual(
       (opened.commands ?? []).map((command) => command.name),
-      ["FetchSpend", "FetchMetersSettings", "FetchMetersCatalog"]
+      ["FetchSpend", "FetchMetersSettings"]
     );
 
     // The same context again asks nothing; new spend on a row asks for the roll-up again.
@@ -406,118 +306,6 @@ describe("the usage page", () => {
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
-    );
-  });
-});
-
-describe("the role table", () => {
-  const rebound: RoleTable = {
-    ...codexTable,
-    [verifier]: {
-      model: { provider: "opencode-go", modelId: "gpt-6-luna" },
-      thinkingLevel: Option.none(),
-      fallbacks: [],
-      note: Option.none(),
-    },
-  };
-
-  it("shows why a role has no ready model, and rebinds it by saving the whole table", () => {
-    Scene.scene(
-      rolesConfig,
-      Scene.given(loaded({ page: "settings" })),
-      Scene.expect(
-        Scene.selector('[data-role="@verifier"] [data-role-status]')
-      ).toHaveText("No ready model"),
-      Scene.expect(
-        Scene.selector('[data-role="@verifier"] [data-role-detail]')
-      ).toContainText("openai-codex/gpt-6-luna has no credential here"),
-      Scene.change(
-        Scene.label("Model for @verifier"),
-        "opencode-go/gpt-6-luna"
-      ),
-      Scene.Command.expectExact(SaveRoleTable({ table: rebound })),
-      Scene.expect(
-        Scene.selector('[data-role="@verifier"] [data-slot="status-chip"]')
-      ).toHaveText("Saving"),
-      // One change at a time: every select waits while the first change is saving.
-      Scene.expect(Scene.label("Model for @worker")).toBeDisabled(),
-      Scene.expect(Scene.label("Thinking for @verifier")).toBeDisabled(),
-      Scene.Command.resolve(
-        SaveRoleTable({ table: rebound }),
-        Message.SavedRoleTable({ settings: settingsWith(rebound) })
-      ),
-      Scene.Command.expectExact(CheckRoles({ epoch: 1, table: rebound })),
-      Scene.expect(Scene.selector('[data-role="@verifier"]')).toHaveAttr(
-        "data-binding",
-        "opencode-go/gpt-6-luna"
-      ),
-      Scene.expect(Scene.label("Model for @verifier")).toHaveValue(
-        "opencode-go/gpt-6-luna"
-      ),
-      Scene.Command.resolve(
-        CheckRoles({ epoch: 1, table: rebound }),
-        Message.ReceivedRoleChecks({ epoch: 1, checks: [readyVerifier] })
-      ),
-      Scene.expect(
-        Scene.selector('[data-role="@verifier"] [data-role-status]')
-      ).toHaveText("Ready"),
-      Scene.expect(
-        Scene.selector('[data-role="@verifier"] [data-role-detail]')
-      ).toContainText("Resolves to opencode-go/gpt-6-luna"),
-      Scene.tap(({ commands }) => {
-        assert.lengthOf(commands, 0);
-      })
-    );
-  });
-
-  it("keeps the old binding and says so when the brain refuses the table", () => {
-    Scene.scene(
-      rolesConfig,
-      Scene.given(loaded({ page: "settings" })),
-      Scene.change(Scene.label("Thinking for @worker"), "high"),
-      Scene.Command.resolve(
-        SaveRoleTable({
-          table: {
-            ...codexTable,
-            [RoleName.make("@worker")]: {
-              ...DEFAULT_ROLE_TABLE[RoleName.make("@worker")],
-              thinkingLevel: Option.some("high"),
-            },
-          },
-        }),
-        Message.FailedRoleSave({ message: "roleBindings: refused." })
-      ),
-      Scene.expect(Scene.testId("roles-notice")).toContainText(
-        "roleBindings: refused."
-      ),
-      Scene.expect(Scene.selector('[data-role="@verifier"]')).toHaveAttr(
-        "data-binding",
-        "openai-codex/gpt-6-luna"
-      ),
-      Scene.tap(({ commands }) => {
-        assert.lengthOf(commands, 0);
-      })
-    );
-  });
-
-  it("checks every role when the table arrives", () => {
-    const opened = inform(initial, context({ page: "settings" })).model;
-
-    const answered = update(
-      opened,
-      Message.ReceivedServerSettings({
-        epoch: 1,
-        settings: settingsWith(codexTable),
-      })
-    );
-
-    assert.deepStrictEqual(
-      (answered.commands ?? []).map((command) => command.name),
-      [CheckRoles.name]
-    );
-    assert.deepStrictEqual(
-      [FetchSpend.name, FetchMetersSettings.name, FetchMetersCatalog.name],
-      ["FetchSpend", "FetchMetersSettings", "FetchMetersCatalog"]
     );
   });
 });

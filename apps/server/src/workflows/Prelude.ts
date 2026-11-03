@@ -32,7 +32,14 @@ import type { WorkflowScript } from "./WorkflowScript.ts";
  * `BAKE_CLOSING`); bump it with any change to any of them. A test pins their hash to this number,
  * so an edit without a bump fails the gate.
  */
-export const PRELUDE_VERSION = 2;
+export const PRELUDE_VERSION = 3;
+
+/**
+ * Every prelude version this brain still runs: version 2 (before ADR 0043) sent the script's
+ * `opts.role` in the node calls' `role` field and named no `model`. A workflow that started before
+ * an upgrade replays the prelude its call stored, so `workflow_begin` takes either.
+ */
+export const RUNNABLE_PRELUDE_VERSIONS: ReadonlySet<number> = new Set([2, 3]);
 
 /** The comment that opens `PRELUDE_SOURCE`: what marks a rewritten script. */
 export const PRELUDE_MARK = "/* Cairn workflow prelude v";
@@ -51,20 +58,19 @@ export const NODE_TOOLS = [
 /** The start of the error `parallel` and `pipeline` throw past `MAX_ITEMS_PER_CALL` items. */
 export const TOO_MANY_ITEMS = "Too many items";
 
-/** The role a node runs as when the script names none. */
-export const DEFAULT_NODE_ROLE = "@worker";
-
 /**
- * The role a `verify` node runs as when the script names none. The dry run grants it, so the live
- * `verify` tool must default to the same role or its nodes fall outside the envelope.
+ * The option roles were named by before ADR 0043. The prelude still passes it on, in the call's
+ * `role` field, and `agent` reports it in `unknownOptions`: the dry run refuses a new script that
+ * passes it, so only a script approved before the change reaches a node with it, and that node
+ * reads it as no model named when it holds a role name, or as the model spec it holds.
  */
-export const DEFAULT_VERIFY_ROLE = "@verifier";
+export const ROLE_OPTION = "role";
 
 /** `agent` options the prelude passes on; any other key is reported in `unknownOptions`. */
 export const AGENT_OPTIONS: ReadonlyArray<string> = [
   "label",
   "phase",
-  "role",
+  "model",
   "schema",
   "key",
   "readonly",
@@ -82,7 +88,7 @@ export const BeginCall = Schema.Struct({
 export type BeginCall = typeof BeginCall.Type;
 
 /**
- * `tools.agent`'s argument, built by the prelude from `agent(prompt, opts)`. `role` and `schema`
+ * `tools.agent`'s argument, built by the prelude from `agent(prompt, opts)`. `model` and `schema`
  * are passed as written; the node tool and the dry run check them.
  */
 export const AgentCall = Schema.Struct({
@@ -93,6 +99,13 @@ export const AgentCall = Schema.Struct({
   label: Schema.OptionFromNullOr(Schema.String),
   /** `opts.phase`, else the title of the last `phase()` call. */
   phase: Schema.OptionFromNullOr(Schema.String),
+  /** `opts.model`, the model spec the node runs on; absent from prelude version 2's calls. */
+  model: Schema.OptionFromOptionalNullOr(Schema.String),
+  /**
+   * `opts.role`, from a script written before ADR 0043: a role name (`@worker`) or a model spec.
+   * Prelude version 2 sent every script's option here; version 3 passes it on only so a script
+   * approved before the change still runs (see `ROLE_OPTION`).
+   */
   role: Schema.OptionFromNullOr(Schema.String),
   schema: Schema.OptionFromNullOr(Schema.Json),
   key: Schema.OptionFromNullOr(Schema.String),
@@ -114,6 +127,9 @@ export const VerifyCall = Schema.Struct({
   site: Schema.OptionFromNullOr(Schema.String),
   label: Schema.OptionFromNullOr(Schema.String),
   phase: Schema.OptionFromNullOr(Schema.String),
+  /** `opts.model`; absent from prelude version 2's calls. */
+  model: Schema.OptionFromOptionalNullOr(Schema.String),
+  /** `opts.role`, as `AgentCall.role` keeps it. */
   role: Schema.OptionFromNullOr(Schema.String),
 });
 
@@ -241,6 +257,7 @@ async function __cairnAgentFull(prompt, opts) {
     site: __cairnSite(),
     label: __cairnText(o.label),
     phase: o.phase === undefined || o.phase === null ? __cairnPhase : String(o.phase),
+    model: __cairnText(o.model),
     role: __cairnText(o.role),
     schema: o.schema === undefined ? null : o.schema,
     key: __cairnText(o.key),
@@ -270,6 +287,7 @@ async function verify(result, opts) {
       site: __cairnSite(),
       label: __cairnText(o.label),
       phase: o.phase === undefined || o.phase === null ? __cairnPhase : String(o.phase),
+      model: __cairnText(o.model),
       role: __cairnText(o.role)
     });
     if (outcome && outcome.status === "ok") return outcome.value;

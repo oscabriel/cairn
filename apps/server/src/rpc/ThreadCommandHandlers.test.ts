@@ -158,10 +158,7 @@ describe("thread commands not handled yet", () => {
             respond(),
             respond({ decision: "accept_sample" }),
             respond({
-              launch: Option.some({
-                budget: DEFAULT_BUDGET,
-                roleOverrides: {},
-              }),
+              launch: Option.some({ budget: DEFAULT_BUDGET }),
             }),
             respond({ decision: "accept_for_thread" }),
             respond({ decision: "decline" }),

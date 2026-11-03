@@ -16,6 +16,7 @@ import type {
 import type { Budget } from "@cairn/protocol/Spend";
 import { Match, Option } from "effect";
 
+import { briefSpec, judgeModelText, namedSpecText } from "./BriefGo.ts";
 import { RequestBody } from "./PendingRequests.ts";
 import { runtimeModePresentation } from "./RuntimeMode.ts";
 
@@ -98,7 +99,7 @@ export const judgeText = (judge: JudgeRef): string =>
       command: (found) =>
         `the command \`${found.argv.join(" ")}\` exits ${found.expectExit}`,
       user: () => "you",
-      model: (found) => `a model (${found.spec})`,
+      model: (found) => `a model (${judgeModelText(found.spec)})`,
       verification: (found) => `the ${found.recipe} recipe`,
     })
   );
@@ -107,18 +108,15 @@ export const judgeText = (judge: JudgeRef): string =>
 export const criterionText = (criterion: CriterionProposal): string =>
   `${criterion.text} (judged by ${judgeText(criterion.judge)})`;
 
-/** Who runs a brief: its role, else its model, else its parent's model. */
-const whoText = (brief: Brief): string => {
-  if (brief.role !== null) {
-    return brief.role;
-  }
-
-  if (brief.model !== null) {
-    return `${brief.model.provider}/${brief.model.modelId}`;
-  }
-
-  return "The parent's model";
-};
+/**
+ * Who runs a brief: the model it names, else its parent's model, which a role recorded before
+ * ADR 0043 runs on too.
+ */
+const whoText = (brief: Brief): string =>
+  Option.match(briefSpec(brief), {
+    onNone: () => "The parent's model",
+    onSome: namedSpecText,
+  });
 
 /** Where a brief's child works. */
 const whereText = (brief: Brief): string => {

@@ -70,11 +70,15 @@ export interface NodeItemState {
   index: number;
   requestId: string;
   briefId: string | null;
+  /**
+   * The model spec the node asked for (the script's, else the launching thread's model and level);
+   * a row written before ADR 0043 holds a role name. The wire name `role` is kept for those rows.
+   */
   role: string | null;
   provider: string | null;
   modelId: string | null;
   effort: string | null;
-  /** The level the child runs at (effort, else the role's); null for the model's default. */
+  /** The level the child runs at (effort, else the spec's); null for the model's default. */
   thinkingLevel?: string | null;
   readonly: boolean;
   arms: NodeArms;

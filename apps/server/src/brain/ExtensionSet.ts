@@ -7,9 +7,9 @@ import { Effect, Layer } from "effect";
 import { askUserExtension } from "../approvals/AskUserTool.ts";
 import { ProviderRequestLog } from "../attachments/ProviderRequestExtension.ts";
 import { ExecutorExtension } from "../executor/ExecutorExtension.ts";
+import { ModelsTool } from "../models/ModelsExtension.ts";
+import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { ResultTool } from "../models/ResultTool.ts";
-import { RoleAliases } from "../models/RoleAliases.ts";
-import { RolesTool } from "../models/RolesExtension.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachTools } from "../reach/ReachExtension.ts";
 import { skillExtensionSources } from "../skills/SkillsLayer.ts";
@@ -37,7 +37,7 @@ const production: ReadonlyArray<
     | BridgeCwd
     | PiHost
     | ModelHealthFeed
-    | RolesTool
+    | ModelsTool
     | ResultTool
     | ReachTools
     | Subagents
@@ -57,7 +57,7 @@ const production: ReadonlyArray<
   BridgeCwd.useSync((bridgeCwd) => bridgeCwd.extension),
   PiHost.useSync((host) => host.extension),
   ModelHealthFeed.useSync((feed) => feed.extension),
-  RolesTool.useSync((roles) => roles.extension),
+  ModelsTool.useSync((models) => models.extension),
   ResultTool.useSync((results) => results.extension),
   ReachTools.useSync((reach) => reach.extension),
   Effect.succeed(askUserExtension(ExtensionOrder.askUser)),
@@ -70,8 +70,8 @@ const production: ReadonlyArray<
 // is left to the composition root too: `PiHost.layer` (the user's pi packages) in `main.ts`,
 // `PiHost.layerEmpty` (the same empty `cairn.pi-tools` extension) everywhere else. So is
 // `ModelHealth`, which the health feed records into: `PiDurableBrain` gives it the app's one
-// `ModelHealthLive`, and tests a fresh in-memory one (`ModelHealth.layerTest`). The `roles` tool's
-// `RoleAliases` leaves `SettingsStore` (and `ModelHealth`) to the root as well: `SettingsLive` in
+// `ModelHealthLive`, and tests a fresh in-memory one (`ModelHealth.layerTest`). The `models` tool's
+// `ModelSpecs` leaves `SettingsStore` (and `ModelHealth`) to the root as well: `SettingsLive` in
 // the entry points, `SettingsStore.layerTest` in tests. It reads the Claude plan's windows from
 // `BridgeProvider`, a reference the deployed root provides. The `cairn.reach` tools read
 // `Artifacts` and `PortalTools`, which the root gives too (`ReachLive` in `AppLayer.ts`, the same
@@ -80,10 +80,10 @@ const production: ReadonlyArray<
 // `Subagents.layer` over the root's `ChildWorkspaces` in the entry points, `Subagents.layerWith`
 // with planted faults in a test brain. The budget gate reads `BudgetBook.layer`, the reference
 // `AppLayer` gives the spend ledger, `Budgets` and the guard, so the memo map builds one book;
-// a test that builds this set alone gets an empty book of its own. The workflow tools resolve
-// roles through `RoleAliases.layerNoDeps`, as the `roles` tool does, and hand the soft line's
+// a test that builds this set alone gets an empty book of its own. The workflow tools check
+// the models scripts name through `ModelSpecs.layerNoDeps`, as the `models` tool does, and hand the soft line's
 // pushes to `WorkflowPushes.layer`, the reference `AppLayer` drains through `WorkflowBudgetPush`, so
-// the memo map builds one outbox. The goals' model judges resolve through `RoleAliases` too; they
+// the memo map builds one outbox. The goals' model judges check theirs through `ModelSpecs` too; they
 // are metered only where a `SpendLedger` is in context.
 const dependencies = Layer.mergeAll(
   CodingTools.layer,
@@ -92,17 +92,17 @@ const dependencies = Layer.mergeAll(
   ExecutorExtension.layer,
   BridgeCwd.layer,
   ModelHealthFeed.layer,
-  RolesTool.layerAt(ExtensionOrder.roles).pipe(
-    Layer.provide(RoleAliases.layerNoDeps)
+  ModelsTool.layerAt(ExtensionOrder.models).pipe(
+    Layer.provide(ModelSpecs.layerNoDeps)
   ),
   ResultTool.layer,
   ReachTools.layerAt(ExtensionOrder.reach),
   BudgetGate.layer.pipe(Layer.provide(BudgetBook.layer)),
   Workflows.layer.pipe(
-    Layer.provide(RoleAliases.layerNoDeps),
+    Layer.provide(ModelSpecs.layerNoDeps),
     Layer.provide(WorkflowPushes.layer)
   ),
-  Goals.layer.pipe(Layer.provide(RoleAliases.layerNoDeps))
+  Goals.layer.pipe(Layer.provide(ModelSpecs.layerNoDeps))
 );
 
 /** The installed set: production extensions, plus any a composition root adds (judges). */

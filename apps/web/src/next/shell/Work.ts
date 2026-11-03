@@ -10,7 +10,7 @@
 //   header's button counts ("2/4 steps").
 // - Workflows: each workflow of the thread's dispatch ledger as the steps panel reads it
 //   (`WorkflowSteps.ts`): its heading, tally and what it spent, its phases with their nodes, each
-//   node with its role, model and outcome (`WorkflowPanel.ts`, 6F). Stop workflow while it may run
+//   node with its model and outcome (`WorkflowPanel.ts`, 6F). Stop workflow while it may run
 //   nodes (`workflow.stop`), and Stop on each live node of a running one (`workflow.stopNode`; the
 //   script reads it as `null`); Stopping until the stop answers.
 //

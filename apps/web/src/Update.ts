@@ -645,7 +645,7 @@ const informRequestCard = Update.foldChild({
 
 /**
  * Tells the request card the open thread's decision records and the connection. The card counts a
- * client only once the connection is Live, so a reconnect re-checks the shown request's roles on a
+ * client only once the connection is Live, so a reconnect re-checks the shown request's models on a
  * socket that is up, not while it is still Syncing.
  */
 const syncRequestCard: Step = (model) => {

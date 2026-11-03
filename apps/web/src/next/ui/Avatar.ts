@@ -1,4 +1,4 @@
-// The `next` avatar: a small square mark for a project, a role (`@worker`, `@scout`) or an agent,
+// The `next` avatar: a small square mark for a project, a model, a person (`@name`) or an agent,
 // as one or two initials on a tone's wash, or as a glyph. It names nothing on its own: the words
 // beside it do, so the avatar is hidden from assistive technology.
 

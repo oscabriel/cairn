@@ -7,7 +7,7 @@ import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { Effect, Layer } from "effect";
 
 import { CodexLogin } from "../models/CodexLogin.ts";
-import { RoleAliases } from "../models/RoleAliases.ts";
+import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { UsageFeed } from "../usage/UsageFeed.ts";
 import { Recipes } from "../workflows/recipes/Recipes.ts";
 import { AttachmentHandlers } from "./AttachmentHandlers.ts";
@@ -16,12 +16,12 @@ import { EventHandlers } from "./EventHandlers.ts";
 import { ExecutorHandlers } from "./ExecutorHandlers.ts";
 import { GoalHandlers } from "./GoalHandlers.ts";
 import { LoginHandlers } from "./LoginHandlers.ts";
+import { ModelCheckHandlers } from "./ModelCheckHandlers.ts";
 import { ModelHandlers } from "./ModelHandlers.ts";
 import { PortalHandlers } from "./PortalHandlers.ts";
 import { ProjectHandlers } from "./ProjectHandlers.ts";
 import { PushHandlers } from "./PushHandlers.ts";
 import { ReachHandlers } from "./ReachHandlers.ts";
-import { RoleHandlers } from "./RoleHandlers.ts";
 import { sessionHandlers } from "./SessionHandlers.ts";
 import { ShellHandlers } from "./ShellHandlers.ts";
 import { SkillHandlers } from "./SkillHandlers.ts";
@@ -48,7 +48,7 @@ const BaseHandlers = CairnRpcs.toLayer(
  * The handlers of `CairnRpcs`, as the layer each socket's RPC server reads. Needs `SessionHello`,
  * the shell store (`ShellStream`, `EventSink`), the `HarnessSeam`, the model catalog
  * (`PiModelSource`), `SettingsStore`, `ModelHealth`, and the project and thread services. The
- * `roles.check` handler's `RoleAliases` reads the Claude plan's windows from `BridgeProvider`, a
+ * `models.check` handler's `ModelSpecs` reads the Claude plan's windows from `BridgeProvider`, a
  * reference the deployed root provides. The reach handlers read `Artifacts`, `ReachLister` and
  * `Portals` (`ReachLive`), over porch.
  */
@@ -68,7 +68,7 @@ export const HandlersLayer = Layer.mergeAll(
   EventHandlers,
   SpendHandlers,
   PortalHandlers,
-  RoleHandlers.pipe(Layer.provide(RoleAliases.layerNoDeps)),
+  ModelCheckHandlers.pipe(Layer.provide(ModelSpecs.layerNoDeps)),
   ReachHandlers,
   LoginHandlers.pipe(Layer.provide(CodexLogin.layer)),
   WorkflowHandlers.layer.pipe(Layer.provide(Recipes.layer)),

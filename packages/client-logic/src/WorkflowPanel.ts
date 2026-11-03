@@ -6,13 +6,15 @@
 // - Stop on the whole workflow is offered while it may still run nodes: approved (Go given, the
 //   script not yet started) or running. Stop on a node is offered while its workflow runs and the
 //   node is live (queued, running, held or unknown); the script reads a stopped node as `null`.
-// - A node's detail is its role, the model it resolved to, and what it used or why it ended.
+// - A node's detail is the model it runs on (the one it resolved to, else the spec it asked for)
+//   and what it used or why it ended.
 // - Spent is the meter's tokens against the token budget, and dollars at API list price only where
 //   every spent token is priced: an unknown is never a zero (ADR 0036).
 
 import type { WorkflowRecord } from "@cairn/protocol/Workflows";
 import { Option } from "effect";
 
+import { specText } from "./LaunchCard.ts";
 import { dollarsText, tokensShort, tokensText } from "./Meters.ts";
 import type { StepsNode, WorkflowGroup } from "./WorkflowSteps.ts";
 import { isLiveNodeStatus, workflowTotals } from "./WorkflowSteps.ts";
@@ -33,7 +35,7 @@ const REFUSAL_WORDS: Readonly<
   budget_spent: "refused: the budget is spent",
   outside_grant: "refused: outside what Go covered",
   node_cap: "refused: past the node cap",
-  no_provider: "refused: no model for its role",
+  no_provider: "refused: its model is not ready",
 };
 
 /** Why a node ended or what it gave, when there is something to say. */
@@ -52,26 +54,26 @@ const outcomeOf = (member: StepsNode): Option.Option<string> => {
 };
 
 /**
- * One line of detail under a node: "@scout · faux/scripted · 2.1k tokens · Counted 3 files.", each
- * part only when known.
+ * One line of detail under a node: "faux/scripted at high · 2.1k tokens · Counted 3 files.", each
+ * part only when known. The model is the one the node resolved to, else the spec it asked for.
  */
 export const nodeDetailText = (member: StepsNode): string => {
   const { node } = member;
 
+  const level =
+    node.thinkingLevel === undefined || node.thinkingLevel === null
+      ? ""
+      : ` at ${node.thinkingLevel}`;
+
   const model =
     node.provider === null || node.modelId === null
-      ? []
-      : [`${node.provider}/${node.modelId}`];
+      ? Option.toArray(Option.map(Option.fromNullOr(node.role), specText))
+      : [`${node.provider}/${node.modelId}${level}`];
 
   const used =
     node.receipt === null ? [] : [tokensText(node.receipt.totalTokens)];
 
-  return [
-    node.role ?? "default role",
-    ...model,
-    ...used,
-    ...Option.toArray(outcomeOf(member)),
-  ].join(" · ");
+  return [...model, ...used, ...Option.toArray(outcomeOf(member))].join(" · ");
 };
 
 /**

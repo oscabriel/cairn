@@ -94,7 +94,7 @@ export const ShellRpcs = CairnRpcs.omit(
   "presence.report",
   "settings.get",
   "settings.update",
-  "roles.check",
+  "models.check",
   "spend.get",
   "providers.login.start",
   "providers.login.cancel",

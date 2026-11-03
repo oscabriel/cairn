@@ -3,17 +3,18 @@
 // child, so the child's first input is the approved brief and never the call's own arguments.
 //
 // A result schema is checked when the brief is asked (`checkResultSchema`), so a schema the result
-// tool cannot hold a child to comes back to the parent at once, naming what to change. A role must
-// be a role or a model by its form here; whether it resolves is the tool's check at the ask, and
-// the start task resolves it again at Go (ADR 0035).
+// tool cannot hold a child to comes back to the parent at once, naming what to change. A model must
+// be `provider/modelId[:level]` by its form here, never a role name (ADR 0043); whether it is ready
+// is the tool's check at the ask, and the start task checks it again at Go.
 
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { Brief } from "@cairn/protocol/Policy";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { Option, Result, Schema } from "effect";
 
 import { SubagentToolText } from "../brain/SubagentText.ts";
+import { isRoleName } from "../models/ModelSpecs.ts";
 import { checkResultSchema } from "../models/ResultTool.ts";
 import { jsonRecordOf } from "./SubagentDocs.ts";
 import type { JsonRecord } from "./SubagentDocs.ts";
@@ -26,15 +27,15 @@ export interface SpawnArguments {
   readonly isolation: Option.Option<string>;
   readonly resultSchema: Option.Option<JsonRecord>;
   readonly wake: Option.Option<string>;
-  /** A role (`@worker`) or `provider/modelId[:level]` the child runs on; none for the parent's. */
-  readonly role: Option.Option<string>;
+  /** The `provider/modelId[:level]` the child runs on; none for the parent's model and level. */
+  readonly model: Option.Option<string>;
 }
 
 const encodeBrief = Schema.encodeSync(Brief);
 
 const decodeBrief = Schema.decodeUnknownOption(Brief);
 
-const decodeRoleSpec = Schema.decodeOption(RoleSpec);
+const decodeModelSpec = Schema.decodeOption(ModelSpec);
 
 /**
  * The brief a spawn proposes, in `mode` (the parent's effective mode, which a child never widens);
@@ -46,11 +47,16 @@ export const briefOf = (
 ): Result.Result<Brief, string> => {
   const schema = Option.map(args.resultSchema, jsonRecordOf);
 
-  const role = Option.map(args.role, (text) => text.trim());
-  const spec = Option.flatMap(role, decodeRoleSpec);
+  const model = Option.map(args.model, (text) => text.trim());
 
-  if (Option.isSome(role) && Option.isNone(spec)) {
-    return Result.fail(SubagentToolText.roleInvalid(role.value));
+  if (Option.isSome(model) && isRoleName(model.value)) {
+    return Result.fail(SubagentToolText.roleRemoved(model.value));
+  }
+
+  const spec = Option.flatMap(model, decodeModelSpec);
+
+  if (Option.isSome(model) && Option.isNone(spec)) {
+    return Result.fail(SubagentToolText.modelInvalid(model.value));
   }
 
   if (Option.isSome(schema) && schema.value === null) {
@@ -104,3 +110,10 @@ export const briefOfPayload = (
   payload: JsonRecord | null
 ): Option.Option<Brief> =>
   payload === null ? Option.none() : decodeBrief(payload);
+
+/**
+ * The model a brief names, as a spec; none when it names none, or names a role (a brief recorded
+ * before ADR 0043), which reads as no model named: the parent's.
+ */
+export const namedSpecOf = (brief: Brief): Option.Option<string> =>
+  Option.filter(Option.fromNullOr(brief.role), (spec) => !isRoleName(spec));

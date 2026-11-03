@@ -9,9 +9,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { TaskId } from "@cairn/protocol/Ids";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { ApprovalsDocument, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { copyJson } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -177,12 +177,17 @@ const LAUNCH = WorkflowLaunch.make({
     scriptHash: "sha256-abc",
     maxNodes: 1,
     maxConcurrent: 8,
-    roles: [{ spec: RoleSpec.make("@worker"), readonly: false, arms: "host" }],
+    roles: [
+      {
+        spec: ModelSpec.make("faux/scripted"),
+        readonly: false,
+        arms: "host",
+      },
+    ],
     modes: ["full-access"],
     writes: [],
     budget: DEFAULT_BUDGET,
   },
-  roleOverrides: {},
 });
 
 /** A workflow launch approval's frozen payload. */
@@ -517,7 +522,6 @@ describe("an answer to a record", () => {
 
     const edits = Option.some({
       budget: { ...DEFAULT_BUDGET, maxTokens: 5000 },
-      roleOverrides: {},
     });
 
     // Neither on a subagent's brief, a question or a tool call.
@@ -556,7 +560,6 @@ describe("an answer to a record", () => {
     assert.strictEqual(sampled.answer?.decision, "accept_sample");
     assert.deepStrictEqual(sampled.answer?.launch, {
       budget: { ...DEFAULT_BUDGET, maxTokens: 5000 },
-      roleOverrides: {},
     });
     // The frozen payload stays as the model proposed it.
     assert.deepStrictEqual(sampled.payload, before.payload);

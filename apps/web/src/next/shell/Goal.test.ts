@@ -45,7 +45,7 @@ const COMMAND: Json = {
 
 const MODEL: Json = {
   kind: "model",
-  spec: "@judge",
+  spec: "opencode-go/gpt-6-luna",
   rubric: "The README says how to run it",
 };
 
@@ -274,7 +274,9 @@ describe("the goal chip and panel", () => {
       Scene.expect(row("c1")).toContainText("12 passed"),
       Scene.expect(row("c2")).toHaveAttr("data-state", "failed"),
       Scene.expect(row("c2")).toContainText("Not met"),
-      Scene.expect(row("c2")).toContainText("Judged by Model: @judge"),
+      Scene.expect(row("c2")).toContainText(
+        "Judged by Model: opencode-go/gpt-6-luna"
+      ),
       Scene.expect(row("c2")).toContainText("Judged by opencode-go/gpt-6-luna"),
       Scene.expect(row("c3")).toHaveAttr("data-state", "open"),
       Scene.expect(row("c3")).toContainText("Judged by You"),

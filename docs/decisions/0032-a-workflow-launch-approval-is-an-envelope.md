@@ -16,3 +16,5 @@ Evidence for the first half of the gate, on `phase2/5A` (2026-10-29): the model 
 Evidence (7B, 2026-10-30): `judges/workflow-kill.sh` 22 of 22 including the envelope cases, its envelope control failing with 0 cards. Stays proposed until ADR 0026's phone run.
 
 Evidence (phone run): on 2026-10-30 at about 19:50 UTC the user, from the phone and on the deployed brain at `29cf38d`, had the project thread launch the council recipe and answered its launch card (`decidedBy` user); six nodes ran (Advisor 1 pass 2 rerun fresh) on two providers, the bridge and OpenCode Go; with the 7B `workflow-kill.sh` envelope cases, both halves of the gate pass.
+
+Amended by ADR 0043 (2026-11-02): the envelope is keyed by the model each call site's nodes run on (the launching thread's when the script names none), not by role.

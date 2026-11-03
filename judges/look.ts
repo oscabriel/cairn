@@ -428,7 +428,7 @@ const STATES: ReadonlyArray<LookState> = [
     name: "launch-approval",
     title: "A workflow's launch approval",
     caption:
-      "The request card for a workflow's launch: its numbers first (nodes, an estimate whose cost is unknown, the budget, what Go covers), what each call site runs as, its arguments folded, and Send back, Run on 1 first, Decline and Go. The parity brain's @worker has no ready model, so Go is blocked with the reason and the way to the role table. In the composer's slot at 390 px, above the composer at 1,440 px.",
+      "The request card for a workflow's launch: its numbers first (nodes, an estimate whose cost is unknown, the budget, what Go covers), what each call site runs as, its arguments folded, and Send back, Run on 1 first, Decline and Go. Its model is one the parity brain's catalog does not list, so Go is blocked with the reason. In the composer's slot at 390 px, above the composer at 1,440 px.",
     path: ({ app }) => new URL(app.threadUrl).pathname,
     widths: [390, 1440],
     light: false,
@@ -448,7 +448,7 @@ const STATES: ReadonlyArray<LookState> = [
         );
 
       if (!asked) {
-        await editor(page).fill("launch @worker look");
+        await editor(page).fill("launch opencode-go/gpt-6-luna look");
         await page.getByTestId("composer-send").first().click();
         await launch.waitFor({ state: "visible", timeout: 15_000 });
       }
@@ -495,15 +495,15 @@ const STATES: ReadonlyArray<LookState> = [
   },
   {
     name: "settings-models",
-    title: "Settings: models and roles",
+    title: "Settings: models",
     caption:
-      "The settings page scrolled to its Models section, the model list folded, and the role table under it.",
+      "The settings page scrolled to its Models section, the model list folded.",
     path: () => "/settings",
     widths: [390, 1440],
     light: false,
     enter: async (page) => {
       await page
-        .locator('[data-testid="settings-roles"] [data-testid="role-row"]')
+        .locator('[data-settings-row="models"]')
         .first()
         .waitFor({ state: "visible", timeout: 10_000 });
       // The page's own scroller, never an ancestor: `scrollIntoView` would scroll a clipped one.
@@ -989,7 +989,7 @@ const startApp = async (): Promise<CairnApp> => {
       entries: importT3Thread(exported).entries,
     },
     // The launch brain answers "Noted." as the parity brain does, and proposes a workflow on
-    // "launch @worker look" for the launch-approval state.
+    // "launch opencode-go/gpt-6-luna look" for the launch-approval state.
     { shell: SHELL_SEED, brain: launchBrain, pickerModels: PICKER_MODELS }
   );
 };

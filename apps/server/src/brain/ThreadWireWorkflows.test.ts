@@ -77,7 +77,7 @@ const nodeRow = (
   index,
   requestId: `wf-${workflowId}-n-${String(200 + index)}`,
   briefId: `launch-${workflowId}`,
-  role: "@worker",
+  role: "faux/scripted",
   provider: "faux",
   modelId: "scripted",
   effort: null,

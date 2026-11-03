@@ -1,11 +1,12 @@
-// The goal tools' pure rules: `goal_criteria`'s refusals name the field, the model judge's family
-// rule, its prompt and how its reply reads.
+// The goal tools' pure rules: `goal_criteria`'s refusals name the field, a model judge that names
+// no model judges on the thread's own (ADR 0043), the bridge refused as a judge, the judge's prompt
+// and how its reply reads.
 
-import { RoleSpec } from "@cairn/protocol/Roles";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Result } from "effect";
 
-import { goalListing, proposalsOf } from "./GoalCriteria.ts";
+import { goalListing, judgeLine, proposalsOf } from "./GoalCriteria.ts";
 import type { CriterionArgs } from "./GoalCriteria.ts";
 import { NO_GOAL } from "./GoalDocs.ts";
 import {
@@ -30,8 +31,13 @@ describe("goal_criteria's arguments", () => {
       {
         text: "The README explains setup",
         judge: "model",
-        model: "@judge",
+        model: "opencode-go/gpt-6-luna:high",
         rubric: "A setup section with commands",
+      },
+      {
+        text: "The tone is calm",
+        judge: "model",
+        rubric: "No exclamation marks",
       },
     ]);
 
@@ -48,9 +54,19 @@ describe("goal_criteria's arguments", () => {
         { kind: "user" },
         {
           kind: "model",
-          spec: RoleSpec.make("@judge"),
+          spec: ModelSpec.make("opencode-go/gpt-6-luna:high"),
           rubric: "A setup section with commands",
         },
+        { kind: "model", spec: null, rubric: "No exclamation marks" },
+      ]
+    );
+    assert.deepStrictEqual(
+      Result.getOrThrow(parsed).map((proposal) => judgeLine(proposal.judge)),
+      [
+        "command `npm test`",
+        "the user",
+        "model opencode-go/gpt-6-luna:high",
+        "model (this thread's)",
       ]
     );
     assert.strictEqual(Result.getOrThrow(parsed)[0]?.text, "Tests pass");
@@ -64,12 +80,17 @@ describe("goal_criteria's arguments", () => {
     assert.include(
       refusalOf([
         { text: "ok", judge: "user" },
-        { text: "Reads well", judge: "model", rubric: "clear" },
+        {
+          text: "Reads well",
+          judge: "model",
+          model: "@judge",
+          rubric: "clear",
+        },
       ]),
-      "criteria[1].model"
+      'criteria[1].model: "@judge" is a role, and roles'
     );
     assert.include(
-      refusalOf([{ text: "Reads well", judge: "model", model: "@judge" }]),
+      refusalOf([{ text: "Reads well", judge: "model" }]),
       "criteria[0].rubric"
     );
     assert.include(
@@ -126,50 +147,34 @@ describe("goal_criteria's arguments", () => {
 
 const CLAUDE = { provider: "anthropic", modelId: "claude-opus-5-5" };
 
-describe("the model judge's family rule", () => {
-  it("refuses the thread's family, the same model and the bridge", () => {
-    assert.isTrue(
-      Option.isSome(
-        judgeModelRefusal(Option.some(CLAUDE), {
-          provider: "opencode-go",
-          modelId: "claude-haiku-5-5",
-        })
-      )
+describe("which models may judge", () => {
+  it("refuses the Claude bridge, named or as the thread's own model", () => {
+    const bridge = { provider: "claude-bridge", modelId: "claude-haiku-5-5" };
+
+    assert.include(
+      Option.getOrThrow(judgeModelRefusal(bridge, true)),
+      "Name a model served by another provider"
     );
-    assert.isTrue(
-      Option.isSome(
-        judgeModelRefusal(
-          Option.some({ provider: "opencode-go", modelId: "qwen3.8-flash" }),
-          { provider: "opencode-go", modelId: "qwen3.8-flash" }
-        )
-      )
-    );
-    assert.isTrue(
-      Option.isSome(
-        judgeModelRefusal(
-          Option.some({ provider: "opencode-go", modelId: "gpt-6-luna" }),
-          { provider: "claude-bridge", modelId: "claude-haiku-5-5" }
-        )
-      )
+    assert.include(
+      Option.getOrThrow(judgeModelRefusal(bridge, false)),
+      "This thread runs on claude-bridge/claude-haiku-5-5"
     );
   });
 
-  it("lets another family judge", () => {
-    assert.isTrue(
-      Option.isNone(
-        judgeModelRefusal(Option.some(CLAUDE), {
-          provider: "opencode-go",
-          modelId: "gpt-6-luna",
-        })
-      )
-    );
-    assert.isTrue(
-      Option.isNone(
-        judgeModelRefusal(Option.some(CLAUDE), {
-          provider: "opencode-go",
-          modelId: "qwen3.8-flash",
-        })
-      )
+  it("lets any other model judge, the thread's own and its family included", () => {
+    assert.deepStrictEqual(
+      [
+        judgeModelRefusal(CLAUDE, false),
+        judgeModelRefusal(
+          { provider: "opencode-go", modelId: "claude-haiku-5-5" },
+          true
+        ),
+        judgeModelRefusal(
+          { provider: "opencode-go", modelId: "gpt-6-luna" },
+          true
+        ),
+      ].map(Option.isNone),
+      [true, true, true]
     );
   });
 });

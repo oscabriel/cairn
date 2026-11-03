@@ -4773,90 +4773,9 @@
                   "warnAt"
                 ],
                 "additionalProperties": true
-              },
-              "roleOverrides": {
-                "type": "object",
-                "patternProperties": {
-                  "^@[a-z0-9-]{1,24}$": {
-                    "type": "object",
-                    "properties": {
-                      "model": {
-                        "type": "object",
-                        "properties": {
-                          "provider": {
-                            "type": "string",
-                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                            "minLength": 1
-                          },
-                          "modelId": {
-                            "type": "string",
-                            "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                            "minLength": 1
-                          }
-                        },
-                        "required": ["provider", "modelId"],
-                        "additionalProperties": true
-                      },
-                      "thinkingLevel": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "enum": [
-                              "off",
-                              "minimal",
-                              "low",
-                              "medium",
-                              "high",
-                              "xhigh",
-                              "max"
-                            ]
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "fallbacks": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "provider": {
-                              "type": "string",
-                              "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                              "minLength": 1
-                            },
-                            "modelId": {
-                              "type": "string",
-                              "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                              "minLength": 1
-                            }
-                          },
-                          "required": ["provider", "modelId"],
-                          "additionalProperties": true
-                        },
-                        "maxItems": 4
-                      },
-                      "note": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "maxLength": 4096
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      }
-                    },
-                    "required": ["model", "thinkingLevel", "fallbacks", "note"],
-                    "additionalProperties": true
-                  }
-                },
-                "additionalProperties": true
               }
             },
-            "required": ["budget", "roleOverrides"],
+            "required": ["budget"],
             "additionalProperties": true
           }
         },
@@ -10838,87 +10757,6 @@
             "minimum": 1,
             "maximum": 16
           },
-          "roleBindings": {
-            "type": "object",
-            "patternProperties": {
-              "^@[a-z0-9-]{1,24}$": {
-                "type": "object",
-                "properties": {
-                  "model": {
-                    "type": "object",
-                    "properties": {
-                      "provider": {
-                        "type": "string",
-                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                        "minLength": 1
-                      },
-                      "modelId": {
-                        "type": "string",
-                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                        "minLength": 1
-                      }
-                    },
-                    "required": ["provider", "modelId"],
-                    "additionalProperties": true
-                  },
-                  "thinkingLevel": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "enum": [
-                          "off",
-                          "minimal",
-                          "low",
-                          "medium",
-                          "high",
-                          "xhigh",
-                          "max"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "fallbacks": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "provider": {
-                          "type": "string",
-                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                          "minLength": 1
-                        },
-                        "modelId": {
-                          "type": "string",
-                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                          "minLength": 1
-                        }
-                      },
-                      "required": ["provider", "modelId"],
-                      "additionalProperties": true
-                    },
-                    "maxItems": 4
-                  },
-                  "note": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4096
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": ["model", "thinkingLevel", "fallbacks", "note"],
-                "additionalProperties": true
-              }
-            },
-            "additionalProperties": true
-          },
           "defaultBudget": {
             "type": "object",
             "properties": {
@@ -11021,7 +10859,6 @@
           "titleModel",
           "bridgeEnabled",
           "bridgeGenerationCap",
-          "roleBindings",
           "defaultBudget"
         ],
         "additionalProperties": true
@@ -11198,87 +11035,6 @@
             "minimum": 1,
             "maximum": 16
           },
-          "roleBindings": {
-            "type": "object",
-            "patternProperties": {
-              "^@[a-z0-9-]{1,24}$": {
-                "type": "object",
-                "properties": {
-                  "model": {
-                    "type": "object",
-                    "properties": {
-                      "provider": {
-                        "type": "string",
-                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                        "minLength": 1
-                      },
-                      "modelId": {
-                        "type": "string",
-                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                        "minLength": 1
-                      }
-                    },
-                    "required": ["provider", "modelId"],
-                    "additionalProperties": true
-                  },
-                  "thinkingLevel": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "enum": [
-                          "off",
-                          "minimal",
-                          "low",
-                          "medium",
-                          "high",
-                          "xhigh",
-                          "max"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "fallbacks": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "provider": {
-                          "type": "string",
-                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                          "minLength": 1
-                        },
-                        "modelId": {
-                          "type": "string",
-                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                          "minLength": 1
-                        }
-                      },
-                      "required": ["provider", "modelId"],
-                      "additionalProperties": true
-                    },
-                    "maxItems": 4
-                  },
-                  "note": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4096
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": ["model", "thinkingLevel", "fallbacks", "note"],
-                "additionalProperties": true
-              }
-            },
-            "additionalProperties": true
-          },
           "defaultBudget": {
             "type": "object",
             "properties": {
@@ -11422,87 +11178,6 @@
             "minimum": 1,
             "maximum": 16
           },
-          "roleBindings": {
-            "type": "object",
-            "patternProperties": {
-              "^@[a-z0-9-]{1,24}$": {
-                "type": "object",
-                "properties": {
-                  "model": {
-                    "type": "object",
-                    "properties": {
-                      "provider": {
-                        "type": "string",
-                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                        "minLength": 1
-                      },
-                      "modelId": {
-                        "type": "string",
-                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                        "minLength": 1
-                      }
-                    },
-                    "required": ["provider", "modelId"],
-                    "additionalProperties": true
-                  },
-                  "thinkingLevel": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "enum": [
-                          "off",
-                          "minimal",
-                          "low",
-                          "medium",
-                          "high",
-                          "xhigh",
-                          "max"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "fallbacks": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "provider": {
-                          "type": "string",
-                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                          "minLength": 1
-                        },
-                        "modelId": {
-                          "type": "string",
-                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                          "minLength": 1
-                        }
-                      },
-                      "required": ["provider", "modelId"],
-                      "additionalProperties": true
-                    },
-                    "maxItems": 4
-                  },
-                  "note": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4096
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": ["model", "thinkingLevel", "fallbacks", "note"],
-                "additionalProperties": true
-              }
-            },
-            "additionalProperties": true
-          },
           "defaultBudget": {
             "type": "object",
             "properties": {
@@ -11605,7 +11280,6 @@
           "titleModel",
           "bridgeEnabled",
           "bridgeGenerationCap",
-          "roleBindings",
           "defaultBudget"
         ],
         "additionalProperties": true
@@ -11916,7 +11590,7 @@
     }
   },
   {
-    "tag": "roles.check",
+    "tag": "models.check",
     "stream": false,
     "payload": {
       "dialect": "draft-2020-12",
@@ -11931,87 +11605,6 @@
               "minLength": 1
             },
             "maxItems": 64
-          },
-          "overrides": {
-            "type": "object",
-            "patternProperties": {
-              "^@[a-z0-9-]{1,24}$": {
-                "type": "object",
-                "properties": {
-                  "model": {
-                    "type": "object",
-                    "properties": {
-                      "provider": {
-                        "type": "string",
-                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                        "minLength": 1
-                      },
-                      "modelId": {
-                        "type": "string",
-                        "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                        "minLength": 1
-                      }
-                    },
-                    "required": ["provider", "modelId"],
-                    "additionalProperties": true
-                  },
-                  "thinkingLevel": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "enum": [
-                          "off",
-                          "minimal",
-                          "low",
-                          "medium",
-                          "high",
-                          "xhigh",
-                          "max"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "fallbacks": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "provider": {
-                          "type": "string",
-                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                          "minLength": 1
-                        },
-                        "modelId": {
-                          "type": "string",
-                          "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                          "minLength": 1
-                        }
-                      },
-                      "required": ["provider", "modelId"],
-                      "additionalProperties": true
-                    },
-                    "maxItems": 4
-                  },
-                  "note": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "maxLength": 4096
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": ["model", "thinkingLevel", "fallbacks", "note"],
-                "additionalProperties": true
-              }
-            },
-            "additionalProperties": true
           }
         },
         "required": ["specs"],
@@ -12046,17 +11639,6 @@
                         "spec": {
                           "type": "string",
                           "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
-                        },
-                        "role": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^@[a-z0-9-]{1,24}$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
                         },
                         "model": {
                           "type": "object",
@@ -12094,64 +11676,11 @@
                             }
                           ]
                         },
-                        "via": {
-                          "type": "string",
-                          "enum": ["primary", "fallback", "literal"]
-                        },
-                        "skipped": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "model": {
-                                "type": "object",
-                                "properties": {
-                                  "provider": {
-                                    "type": "string",
-                                    "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                                    "minLength": 1
-                                  },
-                                  "modelId": {
-                                    "type": "string",
-                                    "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                                    "minLength": 1
-                                  }
-                                },
-                                "required": ["provider", "modelId"],
-                                "additionalProperties": true
-                              },
-                              "reason": {
-                                "type": "string",
-                                "enum": [
-                                  "missing_credential",
-                                  "unknown_model",
-                                  "limited",
-                                  "failing"
-                                ]
-                              }
-                            },
-                            "required": ["model", "reason"],
-                            "additionalProperties": true
-                          }
-                        },
-                        "family": {
-                          "type": "string",
-                          "enum": ["anthropic", "openai", "google", "other"]
-                        },
                         "priced": {
                           "type": "boolean"
                         }
                       },
-                      "required": [
-                        "spec",
-                        "role",
-                        "model",
-                        "thinkingLevel",
-                        "via",
-                        "skipped",
-                        "family",
-                        "priced"
-                      ],
+                      "required": ["spec", "model", "thinkingLevel", "priced"],
                       "additionalProperties": true
                     }
                   },
@@ -12167,55 +11696,23 @@
                     },
                     "reason": {
                       "type": "string",
-                      "enum": ["unbound_role", "invalid_spec", "no_ready_model"]
-                    },
-                    "skipped": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "model": {
-                            "type": "object",
-                            "properties": {
-                              "provider": {
-                                "type": "string",
-                                "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                                "minLength": 1
-                              },
-                              "modelId": {
-                                "type": "string",
-                                "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                                "minLength": 1
-                              }
-                            },
-                            "required": ["provider", "modelId"],
-                            "additionalProperties": true
-                          },
-                          "reason": {
-                            "type": "string",
-                            "enum": [
-                              "missing_credential",
-                              "unknown_model",
-                              "limited",
-                              "failing"
-                            ]
-                          }
-                        },
-                        "required": ["model", "reason"],
-                        "additionalProperties": true
-                      }
+                      "enum": [
+                        "invalid_spec",
+                        "role_removed",
+                        "unknown_model",
+                        "missing_credential",
+                        "limited",
+                        "failing"
+                      ]
                     }
                   },
-                  "required": ["_tag", "reason", "skipped"],
+                  "required": ["_tag", "reason"],
                   "additionalProperties": true
                 }
               ]
-            },
-            "sameFamilyAsWorker": {
-              "type": "boolean"
             }
           },
-          "required": ["spec", "resolution", "sameFamilyAsWorker"],
+          "required": ["spec", "resolution"],
           "additionalProperties": true
         }
       },
@@ -13720,8 +13217,15 @@
                           "enum": ["model"]
                         },
                         "spec": {
-                          "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "rubric": {
                           "type": "string",

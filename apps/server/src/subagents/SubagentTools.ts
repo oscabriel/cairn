@@ -100,7 +100,7 @@ import type {
   SubagentItemState,
 } from "./SubagentDocs.ts";
 import { START_TASK } from "./SubagentTasks.ts";
-import type { RoleAccess, SubagentTasks } from "./SubagentTasks.ts";
+import type { ModelAccess, SubagentTasks } from "./SubagentTasks.ts";
 import { awaitDoc, runWait } from "./Waits.ts";
 
 /** The longest bounded wait `subagent_status` takes. */
@@ -276,7 +276,7 @@ const answerOf = async (
 export const subagentToolSet = (
   faults: SubagentFaultSet,
   tasks: SubagentTasks,
-  roles: RoleAccess,
+  models: ModelAccess,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
   crashAt: (point: SubagentCrashPoint) => void = Function.constVoid
 ) => {
@@ -313,10 +313,10 @@ export const subagentToolSet = (
             "answer (the default) wakes you when the child reports; quiet only leaves the note.",
         })
       ),
-      role: Type.Optional(
+      model: Type.Optional(
         Type.String({
           description:
-            "The role the child runs as (@worker, @scout; the roles tool lists them) or provider/modelId[:level]. Leave it out to run the child on your own model.",
+            "The model the child runs on, provider/modelId[:level]; call models to see what is available. Leave it out to run the child on your own model and level; name another only when the user asks.",
         })
       ),
     }),
@@ -345,7 +345,7 @@ export const subagentToolSet = (
           isolation: textOf(args.isolation),
           resultSchema: Option.fromUndefinedOr(args.result_schema),
           wake: textOf(args.wake),
-          role: textOf(args.role),
+          model: textOf(args.model),
         },
         permissions.mode
       );
@@ -358,20 +358,20 @@ export const subagentToolSet = (
 
       const asked = await api.snapshot(Approvals, api.conversationId, context);
 
-      // A role is checked at the ask, so the card never offers Go on one nothing ready answers to;
-      // it resolves again at Go, which decides (ADR 0035). A replayed call that already asked is
-      // not checked again: its brief is pending whatever the role's readiness is now.
+      // A named model is checked at the ask, so the card never offers Go on one that is not
+      // ready; it is checked again at Go, which decides (ADR 0043). A replayed call that already
+      // asked is not checked again: its brief is pending whatever the model's readiness is now.
       if (
         brief.success.role !== null &&
         asked?.items[approvalId] === undefined
       ) {
-        const resolved = await roles.resolve(brief.success.role);
+        const resolved = await models.resolve(brief.success.role);
 
         if (Result.isFailure(resolved)) {
           return refused(
             resolved.failure.retry
-              ? SubagentToolText.roleUnchecked(resolved.failure.why)
-              : SubagentToolText.roleRefused(resolved.failure.why)
+              ? SubagentToolText.modelUnchecked(resolved.failure.why)
+              : SubagentToolText.modelRefused(resolved.failure.why)
           );
         }
       }

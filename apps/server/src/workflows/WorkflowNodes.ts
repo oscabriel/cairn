@@ -5,8 +5,6 @@
 // invocation's own `commit`.
 
 import { EntryId as ProtocolEntryId } from "@cairn/protocol/Ids";
-import type { RoleOverrides } from "@cairn/protocol/Roles";
-import { RoleOverrides as RoleOverridesSchema } from "@cairn/protocol/Roles";
 import type { JsonValue } from "@earendil-works/chord";
 import { copyJson } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
@@ -51,7 +49,6 @@ import type { NodeSpend, SpendCache } from "./WorkflowBudget.ts";
 import {
   isNodeEnded,
   isWorkflowEnded,
-  launchOf,
   nudgeRequestIdOf,
   resultRefOf,
   settledTokens,
@@ -114,8 +111,6 @@ const TOOL_SCAN_LIMIT = 1000;
 const decodeMark = Schema.decodeUnknownOption(
   Schema.Struct({ workflowId: Schema.String, scriptHash: Schema.String })
 );
-
-const decodeOverrides = Schema.decodeUnknownOption(RoleOverridesSchema);
 
 const decodeToolTaskResult = Schema.decodeUnknownOption(
   Schema.Struct({ kind: Schema.String, entryId: Schema.Int })
@@ -285,19 +280,6 @@ export const runningCaller = async (
     onSome: (text) => Result.fail(`${tool} refused: ${text}`),
     onNone: () => Result.succeed(caller.success),
   });
-};
-
-/** The role overrides a launch runs with: the user's edits on Go, else the model's proposal. */
-export const overridesOf = (
-  record: ApprovalRecord
-): Option.Option<RoleOverrides> => {
-  const edited = record.answer?.launch?.roleOverrides;
-
-  if (edited !== undefined) {
-    return decodeOverrides(edited);
-  }
-
-  return Option.map(launchOf(record), (launch) => launch.roleOverrides);
 };
 
 // Asking a child and reading its answer.

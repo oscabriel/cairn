@@ -21,7 +21,7 @@ const app = appOf((h) => [
       aside: [h.span([h.DataAttribute("testid", "aside")], ["Go"])],
       body: [
         recordLines(h, [
-          ["Role", "@worker"],
+          ["Model", "Opus 5.5"],
           ["Budget", "$2.00"],
         ]),
       ],
@@ -102,7 +102,9 @@ describe("the next card", () => {
       given,
       Scene.inside(
         Scene.testId("brief"),
-        Scene.expect(Scene.selector("dl")).toHaveText("Role@workerBudget$2.00")
+        Scene.expect(Scene.selector("dl")).toHaveText(
+          "ModelOpus 5.5Budget$2.00"
+        )
       ),
       Scene.inside(
         Scene.testId("note"),

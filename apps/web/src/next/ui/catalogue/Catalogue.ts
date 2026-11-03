@@ -455,9 +455,8 @@ const avatars = (h: H): Html =>
         TONES.map((tone, index) =>
           avatar(
             h,
-            ["cairn", "@worker", "@scout", "pi durable", "porch", "web"][
-              index
-            ] ?? "cairn",
+            ["cairn", "opus", "luna", "pi durable", "porch", "web"][index] ??
+              "cairn",
             size,
             tone
           )
@@ -550,8 +549,8 @@ const rows = (h: H): Html =>
           h,
           {},
           {
-            leading: Option.some(avatar(h, "@scout", "small", "accent")),
-            title: "@scout reads the reach note",
+            leading: Option.some(avatar(h, "luna", "small", "accent")),
+            title: "A subagent reads the reach note",
             meta: Option.some("$0.04"),
           }
         ),
@@ -586,7 +585,7 @@ const cards = (h: H): Html =>
           aside: [statusChip(h, statusOfLabel(THREAD_LABELS.go))],
           body: [
             recordLines(h, [
-              ["Role", "@worker"],
+              ["Model", "Opus 5.5"],
               ["Writes", "packages/client-logic/src/PendingCard.ts"],
               ["Result", "a summary and the test count"],
               ["Budget", "$2.00"],
@@ -1097,8 +1096,8 @@ const disclosures = (h: H, model: Model): Html => {
                 h,
                 {},
                 {
-                  leading: Option.some(avatar(h, "@scout", "small", "accent")),
-                  title: "@scout read the reach note",
+                  leading: Option.some(avatar(h, "luna", "small", "accent")),
+                  title: "A subagent read the reach note",
                 }
               ),
             ]

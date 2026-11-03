@@ -30,12 +30,12 @@
 // - StartChild (`cairn.subagent-start`), created by the Go commit itself (`briefAnswered`, inside
 //   the answering transaction), so a brief is accepted and its start exists together or not at
 //   all. Idempotent by brief id: it mints the child's thread id from the brief (the same on a
-//   rerun), resolves the brief's role (`RoleAliases.resolve`, ADR 0035), makes the child's
-//   workspace (`ChildWorkspaces.prepare`: a worktree of its own for a writing role, its parent's
+//   rerun), checks the model the brief names (`ModelSpecs.resolve`, ADR 0043), makes the child's
+//   workspace (`ChildWorkspaces.prepare`: a worktree of its own for a writer, its parent's
 //   cwd for a shared child), then starts the child in one commit (`startChild`): anchor, child
 //   conversation in that cwd with Cairn's thread identity and its `cairn.child` link, the registry
 //   item with its worktree and dispatch record, the first reporter and the parent's note that it
-//   started. A record already started changes nothing. A role that does not resolve or a
+//   started. A record already started changes nothing. A named model that is not ready or a
 //   workspace that cannot be made starts nothing, and the parent is told why. When the crash-loop
 //   guard parks it, it waits for a human Retry on the parent: the boot repair does not retry it.
 // - BriefTell (`cairn.subagent-brief-tell`), created by the commit that settles a brief without a
@@ -79,8 +79,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { narrowerMode } from "@cairn/client-logic/EffectiveMode";
 import { ThreadId } from "@cairn/protocol/Ids";
+import type { ResolvedModel } from "@cairn/protocol/ModelSpecs";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
-import type { ResolvedRole } from "@cairn/protocol/Roles";
 import {
   MAX_SUBAGENT_DEPTH,
   SUBAGENT_RESULT_ENTRY,
@@ -157,7 +157,7 @@ import {
   TYPED_RESULT_SUMMARY,
 } from "../brain/SubagentText.ts";
 import type { BriefAnswer } from "../brain/SubagentText.ts";
-import { familyOf } from "../models/ModelFamily.ts";
+import { isRoleName } from "../models/ModelSpecs.ts";
 import {
   CAP_TEXT,
   markOf,
@@ -174,7 +174,7 @@ import type {
 } from "../workspaces/ChildWorkspaces.ts";
 import { countLive, isSpawnBrief, listParent } from "./BrainCap.ts";
 import type { BriefFaultHooks } from "./BriefFaults.ts";
-import { briefOfPayload } from "./Briefs.ts";
+import { briefOfPayload, namedSpecOf } from "./Briefs.ts";
 import {
   childThreadIdOf,
   conversationOf,
@@ -1070,14 +1070,15 @@ type BriefState =
 interface StartState {
   [key: string]: JsonValue;
   phase: "start";
-  /** How many times the role table could not be read at Go; absent before the first. */
+  /** How many times the model catalog could not be read at Go; absent before the first. */
   unread?: number;
 }
 
 /**
- * Why an accepted brief started nothing: its role resolved to no ready model (`role`), its role
- * table could not be read however long it was retried (`roles`), the brain already had its most
- * children live (`room`), or no workspace could be made (`workspace`).
+ * Why an accepted brief started nothing: the model it names is not ready (`role`), the model
+ * catalog could not be read however long it was retried (`roles`), the brain already had its most
+ * children live (`room`), or no workspace could be made (`workspace`). The literals are kept from
+ * before ADR 0043 because start and tell tasks persist them.
  */
 export interface StartFailure {
   [key: string]: JsonValue;
@@ -1087,11 +1088,11 @@ export interface StartFailure {
   live?: number;
 }
 
-/** How long a start waits before it reads a role table it could not read again. */
-export const ROLE_REREAD_MILLIS = 30_000;
+/** How long a start waits before it reads a model catalog it could not read again. */
+export const MODEL_REREAD_MILLIS = 30_000;
 
-/** How many times a start reads an unreadable role table before it tells the parent (ten minutes). */
-export const ROLE_REREADS = 20;
+/** How many times a start reads an unreadable catalog before it tells the parent (ten minutes). */
+export const MODEL_REREADS = 20;
 
 /** What a tell task says, fixed by the commit that settled the brief. */
 export interface BriefTellInput {
@@ -1117,7 +1118,7 @@ const answerOf = (
   if (failure !== null) {
     const unstarted: Record<StartFailure["at"], BriefAnswer> = {
       role: { kind: "noModel", why: failure.why },
-      roles: { kind: "rolesUnread", why: failure.why },
+      roles: { kind: "modelsUnread", why: failure.why },
       room: { kind: "noRoom", live: failure.live ?? 0 },
       budget: { kind: "noBudget", why: failure.why },
       workspace: { kind: "noWorkspace", why: failure.why },
@@ -1396,7 +1397,7 @@ export interface StartReads {
     readonly rootThreadId: string;
   }>;
   /**
-   * The model and thinking level the parent runs on: a child whose brief names no role runs on
+   * The model and thinking level the parent runs on: a child whose brief names no model runs on
    * them too, and its dispatch record names them.
    */
   readonly model: Option.Option<{
@@ -1406,13 +1407,13 @@ export interface StartReads {
   readonly thinkingLevel: Option.Option<Agent["thinkingLevel"]>;
   /** The child's thread id, minted from the brief before its workspace (`childThreadIdOf`). */
   readonly childThreadId: ThreadId;
-  /** What the brief's role resolved to at Go; none for a brief that names no role. */
-  readonly dispatch: Option.Option<ResolvedRole>;
+  /** What the brief's model resolved to at Go; none for a brief that names no model. */
+  readonly dispatch: Option.Option<ResolvedModel>;
   /**
-   * For a brief with no role, the parent's model resolved as a literal spec at Go, which prices
-   * the dispatch record and names its family; none when it did not resolve (its provider down).
+   * For a brief with no model, the parent's model resolved as a spec at Go, which prices the
+   * dispatch record; none when it did not resolve (its provider down).
    */
-  readonly literal: Option.Option<ResolvedRole>;
+  readonly literal: Option.Option<ResolvedModel>;
   /** Where the child works: its cwd (empty: the default) and its worktree, when it has one. */
   readonly workspace: PreparedChildWorkspace;
 }
@@ -1495,24 +1496,29 @@ const tellParent = async <I, S, H extends object>(
 };
 
 /**
- * Why a spec did not resolve: nothing ready answers to it (`retry` false: a `RoleError`, final),
- * or the role table, catalog or providers could not be read (`retry` true:
- * `RoleAliasesUnavailable`, which says nothing about the role and passes). `why` is the error's
+ * Why a spec did not resolve: the model is not ready or the spec is none (`retry` false: a
+ * `ModelSpecError`, final), or the catalog or providers could not be read (`retry` true:
+ * `ModelSpecsUnavailable`, which says nothing about the model and passes). `why` is the error's
  * words for the parent.
  */
-export interface RoleFailure {
+export interface ModelFailure {
   readonly retry: boolean;
   readonly why: string;
 }
 
 /**
- * A role resolved for the commit that creates a child (`RoleAliases.resolve`, ADR 0035): the
+ * A named model checked for the commit that creates a child (`ModelSpecs.resolve`, ADR 0043): the
  * resolution, or why it did not resolve.
  */
-export interface RoleAccess {
+export interface ModelAccess {
   readonly resolve: (
     spec: string
-  ) => Promise<Result.Result<ResolvedRole, RoleFailure>>;
+  ) => Promise<Result.Result<ResolvedModel, ModelFailure>>;
+  /**
+   * Logs that a brief recorded before ADR 0043 named a role (`spec`), which reads as no model
+   * named: its child runs on the parent's model.
+   */
+  readonly roleNameRead: (spec: string, approvalId: string) => Promise<void>;
 }
 
 /**
@@ -1539,8 +1545,8 @@ export interface TaskDependencies {
   readonly settleDelayMillis: (quiet: boolean) => number;
   /** Where a judge brain kills itself in a brief's Go (`judges/brief-go.sh`); none elsewhere. */
   readonly briefFaults: BriefFaultHooks;
-  /** Resolves a brief's role at Go, right before the commit that creates its child (ADR 0035). */
-  readonly roles: RoleAccess;
+  /** Checks a brief's model at Go, right before the commit that creates its child (ADR 0043). */
+  readonly models: ModelAccess;
   /** Checks the parent's budgets at Go, before the child's workspace is made (ADR 0036). */
   readonly budgets: BudgetAccess;
   /** How many children the whole brain may hold live (`MAX_LIVE_CHILDREN_PER_BRAIN`). */
@@ -2611,35 +2617,21 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       modelId: "unknown",
     }));
 
-    // The child runs on what its dispatch record names (2D's rule): what the brief's role
-    // resolved to at Go, or for a brief with no role the parent's model and thinking level.
+    // The child runs on what its dispatch record names (2D's rule): the model the brief named,
+    // checked at Go, or for a brief that names none the parent's model and thinking level.
     const resolved: JsonRecord = Option.match(reads.dispatch, {
       onNone: () => ({
         spec: `${parentModel.provider}/${parentModel.modelId}`,
-        role: null,
         model: { provider: parentModel.provider, modelId: parentModel.modelId },
         thinkingLevel: Option.getOrNull(reads.thinkingLevel),
-        via: "literal",
-        skipped: [],
-        // The parent's model as a literal spec, resolved at Go, prices it; unresolved, it runs
-        // anyway (the parent's model) and the record says unpriced.
-        family: Option.match(reads.literal, {
-          onNone: () => familyOf(parentModel),
-          onSome: (found) => found.family,
-        }),
+        // The parent's model as a spec, resolved at Go, prices it; unresolved, it runs anyway (the
+        // parent's model) and the record says unpriced.
         priced: Option.exists(reads.literal, (found) => found.priced),
       }),
       onSome: (found) => ({
         spec: found.spec,
-        role: found.role,
         model: { ...found.model },
         thinkingLevel: found.thinkingLevel,
-        via: found.via,
-        skipped: found.skipped.map((skip) => ({
-          model: { ...skip.model },
-          reason: skip.reason,
-        })),
-        family: found.family,
         priced: found.priced,
       }),
     });
@@ -2721,7 +2713,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       briefApprovalId: approvalId,
       description: brief.value.title,
       dispatch: {
-        spec: brief.value.role,
+        spec: Option.getOrNull(namedSpecOf(brief.value)),
         resolved,
         previewed: null,
         dispatchedAt: now,
@@ -2845,26 +2837,35 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       record.id
     );
 
-    const role = Option.flatMap(brief, (found) =>
-      Option.fromNullOr(found.role)
+    // A brief recorded before ADR 0043 may name a role: it reads as no model named, so its child
+    // runs on the parent's model, and the read is logged.
+    const roleName = Option.filter(
+      Option.flatMap(brief, (found) => Option.fromNullOr(found.role)),
+      isRoleName
     );
 
-    // The role resolves now, at Go, never at the ask (ADR 0035); a role nothing ready answers to
-    // starts nothing, and the parent is told why.
-    const dispatch = Option.isNone(role)
-      ? Result.succeed(Option.none<ResolvedRole>())
-      : Result.map(await dependencies.roles.resolve(role.value), Option.some);
+    if (Option.isSome(roleName)) {
+      await dependencies.models.roleNameRead(roleName.value, record.id);
+    }
+
+    const named = Option.flatMap(brief, namedSpecOf);
+
+    // The named model is checked now, at Go, as well as at the ask (ADR 0043); one that is not
+    // ready starts nothing, and the parent is told why.
+    const dispatch = Option.isNone(named)
+      ? Result.succeed(Option.none<ResolvedModel>())
+      : Result.map(await dependencies.models.resolve(named.value), Option.some);
 
     if (Result.isFailure(dispatch)) {
       const { retry, why } = dispatch.failure;
       const unread = (checkpoint.unread ?? 0) + 1;
 
-      // A role table that could not be read says nothing about the role: the start reads it again
+      // A catalog that could not be read says nothing about the model: the start reads it again
       // in a while, on pi-durable's clock, and tells the parent only once that failed for ten
-      // minutes. A role nothing ready answers to is final.
-      if (retry && unread < ROLE_REREADS) {
+      // minutes. A model that is not ready is final.
+      if (retry && unread < MODEL_REREADS) {
         await runtime.sleepUntil(
-          runtime.now() + ROLE_REREAD_MILLIS,
+          runtime.now() + MODEL_REREAD_MILLIS,
           { phase: "start", unread },
           context
         );
@@ -2909,13 +2910,13 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       return;
     }
 
-    // A brief with no role runs on its parent's model and level; resolved as a literal spec, the
+    // A brief with no model runs on its parent's model and level; resolved as a spec, the
     // dispatch record says whether it is priced. Any failure here leaves the record unpriced.
     const literal =
-      Option.isSome(role) || agent.model === undefined
-        ? Option.none<ResolvedRole>()
+      Option.isSome(named) || agent.model === undefined
+        ? Option.none<ResolvedModel>()
         : Result.getSuccess(
-            await dependencies.roles.resolve(
+            await dependencies.models.resolve(
               `${agent.model.provider}/${agent.model.modelId}:${agent.thinkingLevel}`
             )
           );

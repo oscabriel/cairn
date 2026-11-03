@@ -7,6 +7,8 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Schema } from "effect";
 
 import {
+  AgentCall,
+  RUNNABLE_PRELUDE_VERSIONS,
   BAKE_CLOSING,
   BAKE_OPENING,
   isRewrittenWorkflow,
@@ -219,8 +221,8 @@ describe(rewriteScript, () => {
     assert.deepStrictEqual(
       { version: PRELUDE_VERSION, hash },
       {
-        version: 2,
-        hash: "c1eecb76450d137b",
+        version: 3,
+        hash: "d5514d910ba7437b",
       }
     );
   });
@@ -382,21 +384,54 @@ return "returned without awaiting";`);
     () =>
       Effect.gen(function* () {
         const { calls } = yield* runScript(`
-await agent("x", { role: "@scout", schema: { type: "object" }, readonly: true, key: "k", effort: "low", model: "opus", isolation: "worktree" });`);
+await agent("x", { model: "opencode-go/gpt-6-luna:low", schema: { type: "object" }, readonly: true, key: "k", effort: "low", isolation: "worktree" });
+await agent("y", { role: "@scout" });`);
 
-        const [call] = named(calls, "agent");
+        const [call, legacy] = named(calls, "agent");
 
         assert.deepInclude(call, {
-          role: "@scout",
+          model: "opencode-go/gpt-6-luna:low",
+          role: null,
           schema: { type: "object" },
           readonly: true,
           key: "k",
           effort: "low",
           resume: null,
-          unknownOptions: ["model", "isolation"],
+          unknownOptions: ["isolation"],
+        });
+        // `role` (ADR 0043 removed roles) is passed on for a script approved before, and reported.
+        assert.deepInclude(legacy, {
+          model: null,
+          role: "@scout",
+          unknownOptions: ["role"],
         });
       })
   );
+
+  it("reads a node call from prelude version 2, which named no model", () => {
+    // What a workflow started before ADR 0043 replays: its stored prelude sends `role`, no `model`.
+    const call = Schema.decodeSync(AgentCall)({
+      workflowId: "wf-7",
+      prompt: "x",
+      site: "3:7",
+      label: null,
+      phase: null,
+      role: "@scout",
+      schema: null,
+      key: null,
+      readonly: true,
+      resume: null,
+      effort: null,
+      unknownOptions: [],
+    });
+
+    assert.deepStrictEqual(
+      [call.model, call.role],
+      [Option.none(), Option.some("@scout")]
+    );
+    assert.isTrue(RUNNABLE_PRELUDE_VERSIONS.has(2));
+    assert.isTrue(RUNNABLE_PRELUDE_VERSIONS.has(PRELUDE_VERSION));
+  });
 
   it.effect(
     "budget reads through the node tool and has no ceiling without a token limit",

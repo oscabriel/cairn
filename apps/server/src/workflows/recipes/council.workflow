@@ -12,6 +12,11 @@
 // "fresh-context fallback, not true cross-exam"; a fallback node is not in the plan's count, so on
 // a launch it asks the user before it starts. A stopped or refused node is never retried.
 //
+// Every node runs on the launching thread's model unless the args name one (ADR 0043):
+// `args.advisors` is two to four advisors, each a model spec (`provider/modelId[:level]`) or null
+// for the thread's model, and two advisors on the thread's model when it is left out; `args.judge`
+// is the claim matrix's model, the thread's when left out.
+//
 // MIT License. Copyright (c) 2026 Nico Bailon
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
@@ -119,14 +124,19 @@ const RESPONSES = {
   },
 };
 
-const advisors = args.advisors;
-if (!Array.isArray(advisors) || advisors.length < 2 || advisors.length > 4) {
-  throw new Error("council needs args.advisors: two to four roles, for example [\"@worker\", \"@scout\"]");
+const advisors = args.advisors === undefined || args.advisors === null ? [null, null] : args.advisors;
+if (
+  !Array.isArray(advisors) ||
+  advisors.length < 2 ||
+  advisors.length > 4 ||
+  !advisors.every((model) => model === null || typeof model === "string")
+) {
+  throw new Error("council's args.advisors is two to four models, each provider/modelId[:level] or null for this thread's model, for example [null, \"opencode-go/gpt-6-luna\"]; leave it out for two advisors on this thread's model");
 }
 if (typeof args.question !== "string" || args.question.trim() === "") {
   throw new Error("council needs args.question: the decision the advisors answer");
 }
-const judge = args.judge || "@judge";
+const judge = args.judge || null;
 const maxPasses = args.maxPasses === 3 ? 3 : 2;
 const RELAY_PER_ADVISOR = 5;
 const FALLBACK = "fresh-context fallback, not true cross-exam";
@@ -146,9 +156,9 @@ const reportPrompt = (n) =>
 
 phase("Reports");
 const pass1 = await parallel(
-  advisors.map((role, i) => () =>
+  advisors.map((model, i) => () =>
     agent.full(reportPrompt(i + 1), {
-      role,
+      model,
       label: "Advisor " + (i + 1) + " report",
       schema: REPORT,
       readonly: true,
@@ -157,7 +167,7 @@ const pass1 = await parallel(
   )
 );
 const reports = pass1.map((outcome) => (outcome && outcome.status === "ok" ? outcome.value : null));
-const roster = advisors.map((role, i) => ({ advisor: i + 1, role, report: reports[i] !== null, crossExam: [] }));
+const roster = advisors.map((model, i) => ({ advisor: i + 1, model, report: reports[i] !== null, crossExam: [] }));
 
 if (reports.filter(Boolean).length < 2) {
   log("Fewer than two advisors reported; the council stops after its first pass.");
@@ -171,7 +181,7 @@ const matrix = await agent(
     " that another's evidence disputes, at most " + RELAY_PER_ADVISOR + " per advisor, each with the advisor who made it" +
     " and the strongest challenge to it. Say whether more evidence could still settle a dispute.\n\n" +
     JSON.stringify(reports.map((report, i) => ({ advisor: i + 1, report }))),
-  { role: judge, label: "Claim matrix", schema: MATRIX, readonly: true, key: "matrix" }
+  { model: judge, label: "Claim matrix", schema: MATRIX, readonly: true, key: "matrix" }
 );
 
 if (matrix === null) {
@@ -190,7 +200,7 @@ const latest = pass1.map((outcome) => (outcome && outcome.status === "ok" ? outc
 
 const examine = (pass) =>
   parallel(
-    advisors.map((role, i) => async () => {
+    advisors.map((model, i) => async () => {
       const from = latest[i];
       if (from === null) return null;
       const ask =
@@ -198,7 +208,7 @@ const examine = (pass) =>
         " Say whether your recommendation changed, and list anything you found outside the scope.\n\n" +
         JSON.stringify(packetFor(i + 1));
       const resumed = await agent.full(ask, {
-        role,
+        model,
         label: "Advisor " + (i + 1) + " pass " + pass,
         schema: RESPONSES,
         readonly: true,
@@ -220,7 +230,7 @@ const examine = (pass) =>
       const fresh = await agent.full(
         brief + "\n\nYour earlier report:\n" + JSON.stringify(reports[i]) + "\n\n" + ask,
         {
-          role,
+          model,
           label: "Advisor " + (i + 1) + " pass " + pass + " (fresh)",
           schema: RESPONSES,
           readonly: true,

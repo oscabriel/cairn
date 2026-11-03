@@ -514,7 +514,7 @@ describe("a scripted subagent's shell row", () => {
       yield* sink.commitCommand(project.command);
       yield* sink.commitCommand(createThread(project.projectId, 1));
 
-      // No effort, a role resolved at `low`: the node runs at `low`, not the model's default.
+      // No effort, a spec at `low`: the node runs at `low`, not the model's default.
       const shell = yield* rowThroughSeam(
         parent,
         workflowDocuments(parent, null, "low")

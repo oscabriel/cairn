@@ -26,7 +26,7 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Agent dir**: pi's own configuration folder (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`): settings, skills, packages and `auth.json`. The brain reads it through pi's own classes and never writes it, which `judges/pi-readonly.sh` judges.
 
-**Server settings**: The settings the brain owns and every device shares (auto-settle days, the title model, whether Claude is offered through the bridge, the bridge's generation cap, the role table and the default budget), kept in `cairn.sqlite`.
+**Server settings**: The settings the brain owns and every device shares (auto-settle days, the title model, whether Claude is offered through the bridge, the bridge's generation cap and the default budget), kept in `cairn.sqlite`.
 
 ## Conversations
 
@@ -94,7 +94,7 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Brief task**: The parent's background task that holds a pending brief's 7-day expiry; if no answer comes by then, it expires the brief and tells the parent.
 
-**Start task**: The parent's background task (`cairn.subagent-start`) that Go's commit creates: it resolves the brief's role at Go, makes the child's workspace, then creates and starts the child in one commit. When parked, it waits for a human Retry on the parent and is never retried at boot.
+**Start task**: The parent's background task (`cairn.subagent-start`) that Go's commit creates: it checks the model the brief names at Go (none: the parent's), makes the child's workspace, then creates and starts the child in one commit. When parked, it waits for a human Retry on the parent and is never retried at boot.
 
 **Tell task**: The parent's background task (`cairn.subagent-brief-tell`) that tells it of a Decline, a Send back, an expiry, or a Go whose child could not start.
 
@@ -110,7 +110,7 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Child workspace**: A subagent's own git worktree and branch, planned in `cairn.sqlite` before git makes it, so a crash between the two is repaired at boot. Releasing it never deletes a worktree with uncommitted or unmerged work. Every commit a thread's `bash` makes carries a `Cairn-Thread: <thread id>` trailer.
 
-_Avoid_: child agent, worker (except as a role alias)
+_Avoid_: child agent, worker
 
 **Lineage**: A subagent's place in the tree, on its row: its parent, its root, and how it relates to its parent. A row with a lineage is hidden from the sidebar, which shows it under its nearest ancestor that has a row.
 
@@ -136,13 +136,13 @@ _Avoid_: pipeline, DAG, job
 
 **Dispatch ledger**: A workflow's record of every node it dispatched: the brief that approved it, its model and its cost. A replay reads it, and the steps panel shows it.
 
-**Node**: One `agent()` call of a workflow script, recorded as a row of the dispatch ledger: a child thread created from the role it resolved, with no subagent tools of its own and no sidebar row.
+**Node**: One `agent()` call of a workflow script, recorded as a row of the dispatch ledger: a child thread on the model its call names (none: the launching thread's), with no subagent tools of its own and no sidebar row.
 
-**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Send back returns it to its model with notes, and nothing runs; Decline ends it. The card reads numbers first (nodes, the estimate, whose unknown cost is never $0.00, the budget, what Go covers), then what each call site runs as, then its arguments, folded. The card's budget and role edits travel in the answer, never in the frozen plan.
+**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Send back returns it to its model with notes, and nothing runs; Decline ends it. The card reads numbers first (nodes, the estimate, whose unknown cost is never $0.00, the budget, what Go covers), then the model each call site runs on, then its arguments, folded. The card's budget edits travel in the answer, never in the frozen plan.
 
 _Avoid_: launch brief, plan approval
 
-**Envelope**: What a workflow's launch approval grants its nodes: the script's hash, the roles (and whether each may write), the permission modes, a node cap and a budget. A node inside it gets its own brief, accepted with the envelope as decider in the commit that dispatches it; a node outside it (another role, a writer where the plan showed a reader, a wider mode, past the cap) raises its own brief card and waits for the user.
+**Envelope**: What a workflow's launch approval grants its nodes: the script's hash, the models its nodes run on (and whether each may write), the permission modes, a node cap and a budget. A node inside it gets its own brief, accepted with the envelope as decider in the commit that dispatches it; a node outside it (another model, a writer where the plan showed a reader, a wider mode, past the cap) raises its own brief card and waits for the user.
 
 _Avoid_: grant (in prose), allowance
 
@@ -168,15 +168,11 @@ _Avoid_: grant (in prose), allowance
 
 **Dry run**: Running a workflow script in its own sandbox with stub nodes, to build its launch card: the call sites, the node count and the estimate.
 
-**Call site**: One row of a launch card's table: a script `line:column` with its role, label, phase, schema name, whether it may write, and how many times it may run at most.
+**Call site**: One row of a launch card's table: a script `line:column` with its model, label, phase, schema name, whether it may write, and how many times it may run at most.
 
-**Role**: A name such as `@worker`, `@scout`, `@judge` or `@verifier` that briefs and workflows use instead of a model. It resolves to a concrete model when the child is created, and the child keeps that model.
+**Model spec**: What a brief, a workflow node, a recipe argument or a goal's model judge names to pick the model a child runs on: `provider/modelId`, with `:level` for a thinking level (`opencode-go/gpt-6-luna:high`). Naming none runs the child on its parent's model and level (ADR 0043). A named model is checked when the child is created (in the catalog, a usable credential, its provider neither failing nor past a spent plan window) and refused with the reason, never replaced. The `models` tool lists what a child can run on now. A role name (`@worker`) in a record written before ADR 0043 reads as no model named.
 
-_Avoid_: alias (alone), agent type
-
-**Role table**: The global table from each role to its binding, in the server settings, seeded from ADR 0035's defaults. Built-in roles cannot be dropped. The settings page's Roles section (in `next`) shows what each role resolves to now and rebinds one by saving the whole table; children started before keep their model.
-
-**Binding**: One role's entry in the role table: a model, an optional thinking level and up to four fallbacks, tried in order at dispatch only, past a provider that is limited or failing. A binding names a model, never another role. A launch may override bindings for its own children.
+_Avoid_: role, alias, binding
 
 ## Seams and services
 
@@ -328,7 +324,7 @@ _Avoid_: permission request, prompt (for the record)
 
 _Avoid_: task, spec, ticket
 
-**Go**: The user's yes to a brief or a workflow's launch. It starts the child (or the workflow) in the same commit that accepts the record. On a launch card, the user may edit the budget and the per-launch role overrides before Go; the edits travel with the answer and the proposal stays as the model wrote it. The card offers Go only once every role the brief names resolves by the role table; while one does not, Go is blocked with the reason and a link to the role table.
+**Go**: The user's yes to a brief or a workflow's launch. It starts the child (or the workflow) in the same commit that accepts the record. On a launch card, the user may edit the budget before Go; the edit travels with the answer and the proposal stays as the model wrote it. The card offers Go only once every model the brief or launch names is ready; while one is not, Go is blocked with the reason.
 
 _Avoid_: approve (for a brief), run
 
@@ -374,9 +370,7 @@ _Avoid_: cost (for a plan's figure)
 
 **Spend ledger**: The derived cache of each conversation's `pi.usage` in `cairn.sqlite`, priced one response at a time and rebuilt from `pi.usage` at boot when it drifts. A kill never counts a response twice.
 
-**Model family**: The vendor a model comes from (Anthropic, OpenAI, Google, or other), whichever provider serves it. A judge or verifier on another family than the worker is the outside judge the kickoff asks for.
-
-**Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between; such a streak lapses fifteen minutes after its newest failure, so one request can find out). Each request counts once, by its last attempt, and a login or logout starts the provider over. Role resolution passes over a limited or failing provider.
+**Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between; such a streak lapses fifteen minutes after its newest failure, so one request can find out). Each request counts once, by its last attempt, and a login or logout starts the provider over. A child named onto a limited or failing provider's model is refused.
 
 **Budget**: The limits a brief or a workflow's launch carries (list-price dollars, tokens, turns, minutes, a plan window guard), with a warning line at 80% by default. Reaching it stops new work and asks for a raise.
 
@@ -424,7 +418,7 @@ _Avoid_: e2e, test suite (for the recipe)
 
 **Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens (`judges/fixtures/parity/Landmarks.ts`). _Avoid_: anchor (that word is the subagent anchor's).
 
-**Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a verifier on another model family, or the user.
+**Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a model judge or verifier on another model, or the user.
 
 _Avoid_: reviewer (alone), checker
 

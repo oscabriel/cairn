@@ -29,7 +29,13 @@ export type JudgeRefState =
       timeoutSec: number;
     }
   | { [key: string]: JsonValue; kind: "user" }
-  | { [key: string]: JsonValue; kind: "model"; spec: string; rubric: string }
+  | {
+      [key: string]: JsonValue;
+      kind: "model";
+      /** Null for the goal thread's model (ADR 0043). */
+      spec: string | null;
+      rubric: string;
+    }
   | { [key: string]: JsonValue; kind: "verification"; recipe: string };
 
 /** A verdict's evidence; null where the judge has none of that kind. */

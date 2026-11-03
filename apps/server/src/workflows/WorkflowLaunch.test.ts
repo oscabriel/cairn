@@ -1,12 +1,15 @@
-// The launch approval's pure rules (ADR 0032): what the envelope covers (`briefWithin`), how a
+// The launch approval's pure rules (ADR 0032): what the envelope covers (`briefWithin`, keyed by
+// model per ADR 0043, a role name an envelope recorded before it reading as the launching thread's
+// model), how a
 // launch's answer moves its row (`applyLaunchAnswer`), the brief a node is dispatched under, and
 // the ledger check's envelope rule (a brief its envelope accepted names this workflow's accepted
 // launch).
 
 import { ApprovalId } from "@cairn/protocol/Ids";
+import type { ModelRef } from "@cairn/protocol/Models";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { Brief, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { Envelope } from "@cairn/protocol/Policy";
-import { RoleName, RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema } from "effect";
@@ -33,8 +36,12 @@ const envelope: Envelope = {
   maxNodes: 3,
   maxConcurrent: 2,
   roles: [
-    { spec: RoleSpec.make("@scout"), readonly: true, arms: "host" },
-    { spec: RoleSpec.make("@worker"), readonly: false, arms: "host" },
+    {
+      spec: ModelSpec.make("opencode-go/gpt-6-luna"),
+      readonly: true,
+      arms: "host",
+    },
+    { spec: ModelSpec.make("faux/kit:high"), readonly: false, arms: "host" },
   ],
   modes: ["auto-accept-edits"],
   writes: [],
@@ -54,7 +61,6 @@ const launch = WorkflowLaunch.make({
   nodes: { count: 3, unbounded: false },
   estimate: null,
   envelope,
-  roleOverrides: {},
 });
 
 const launchRecord = (
@@ -79,11 +85,17 @@ const launchRecord = (
 const row = (): WorkflowItemState =>
   proposedRecord({ launch, approvalId: "call-7", sample: Option.none() });
 
+/** The launching thread's model. */
+const THREAD: ModelRef = { provider: "faux", modelId: "kit" };
+
+const LUNA: ModelRef = { provider: "opencode-go", modelId: "gpt-6-luna" };
+
 const ask = (fields: Partial<Parameters<typeof briefWithin>[1]> = {}) => ({
-  role: "@worker",
+  model: THREAD,
   readonly: false,
   mode: "auto-accept-edits" as const,
   dispatched: 0,
+  threadModel: Option.some(THREAD),
   ...fields,
 });
 
@@ -91,12 +103,10 @@ const refusal = (fields: Partial<Parameters<typeof briefWithin>[1]>) =>
   Option.map(briefWithin(envelope, ask(fields)), (outside) => outside.refusal);
 
 describe("the envelope", () => {
-  it("covers a granted role, a reader under a writer grant, and narrower modes", () => {
+  it("covers a granted model at any level, a reader under a writer grant, and narrower modes", () => {
     assert.isTrue(Option.isNone(briefWithin(envelope, ask())));
     assert.isTrue(
-      Option.isNone(
-        briefWithin(envelope, ask({ role: "@scout", readonly: true }))
-      )
+      Option.isNone(briefWithin(envelope, ask({ model: LUNA, readonly: true })))
     );
     assert.isTrue(
       Option.isNone(briefWithin(envelope, ask({ readonly: true })))
@@ -111,13 +121,15 @@ describe("the envelope", () => {
     );
   });
 
-  it("does not cover another role, a writer under a reader grant, a wider mode, or a node past the cap", () => {
+  it("does not cover another model, a writer under a reader grant, a wider mode, or a node past the cap", () => {
+    const other: ModelRef = { provider: "anthropic", modelId: "claude-x" };
+
     assert.deepStrictEqual(
-      refusal({ role: "@judge" }),
+      refusal({ model: other }),
       Option.some("outside_grant")
     );
     assert.deepStrictEqual(
-      refusal({ role: "@scout", readonly: false }),
+      refusal({ model: LUNA, readonly: false }),
       Option.some("outside_grant")
     );
     assert.deepStrictEqual(
@@ -127,13 +139,40 @@ describe("the envelope", () => {
     assert.deepStrictEqual(refusal({ dispatched: 3 }), Option.some("node_cap"));
 
     const words = Option.map(
-      briefWithin(envelope, ask({ role: "@judge" })),
+      briefWithin(envelope, ask({ model: other })),
       (outside) => outside.why
     );
 
     assert.deepStrictEqual(
       words,
-      Option.some("the launch did not show role @judge")
+      Option.some("the launch did not show model anthropic/claude-x")
+    );
+  });
+
+  it("reads a role name an envelope recorded before ADR 0043 as the launching thread's model", () => {
+    const recorded: Envelope = {
+      ...envelope,
+      roles: [
+        { spec: ModelSpec.make("@scout"), readonly: true, arms: "host" },
+        { spec: ModelSpec.make("@worker:high"), readonly: false, arms: "host" },
+      ],
+    };
+
+    assert.isTrue(Option.isNone(briefWithin(recorded, ask())));
+    assert.isTrue(
+      Option.isNone(briefWithin(recorded, ask({ readonly: true })))
+    );
+    assert.deepStrictEqual(
+      Option.map(briefWithin(recorded, ask({ model: LUNA })), (o) => o.refusal),
+      Option.some("outside_grant")
+    );
+    // With no thread model to read them as, the role names grant nothing.
+    assert.deepStrictEqual(
+      Option.map(
+        briefWithin(recorded, ask({ threadModel: Option.none() })),
+        (o) => o.refusal
+      ),
+      Option.some("outside_grant")
     );
   });
 });
@@ -167,9 +206,10 @@ describe("a launch's answer", () => {
         decision: "accept_sample",
         answers: null,
         note: null,
+        // An answer recorded before ADR 0043 also carried role overrides; they are ignored.
         launch: {
           budget: { ...DEFAULT_BUDGET, maxTokens: 4000 },
-          roleOverrides: {},
+          roleOverrides: { "@scout": { model: LUNA } },
         },
       },
     });
@@ -208,35 +248,27 @@ describe("a node's brief", () => {
       workflowName: "kit-flow",
       label: "Read a.ts",
       prompt: "node:a",
-      role: "@scout",
+      spec: Option.some("opencode-go/gpt-6-luna"),
       effort: Option.some("high"),
       readonly: true,
       mode: "full-access",
       budget: DEFAULT_BUDGET,
       resultSchema: Option.none(),
-      roleOverrides: {
-        [RoleName.make("@scout")]: {
-          model: { provider: "faux", modelId: "kit" },
-          thinkingLevel: null,
-          fallbacks: [],
-          note: null,
-        },
-      },
       outside: Option.some({
         refusal: "outside_grant",
-        why: "the launch did not show role @scout",
+        why: "the launch did not show model opencode-go/gpt-6-luna",
       }),
     });
 
     const brief = Schema.decodeUnknownSync(Brief)(payload);
 
-    // The launch's bindings travel in the node's brief, so the card checks @scout as Go resolves it.
-    assert.deepStrictEqual(Object.keys(brief.roleOverrides ?? {}), ["@scout"]);
+    // The named model travels in the node's brief, so the card checks it.
+    assert.strictEqual(brief.role, "opencode-go/gpt-6-luna");
 
     assert.strictEqual(brief.title, "Read a.ts");
     assert.strictEqual(brief.thinking, "high");
     assert.strictEqual(brief.mayCommit, false);
-    assert.include(brief.why, "did not show role @scout");
+    assert.include(brief.why, "did not show model opencode-go/gpt-6-luna");
 
     const covered = nodeBriefRecord({
       id: "call-12",

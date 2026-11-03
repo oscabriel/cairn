@@ -1,6 +1,6 @@
 // The goals extension as the installed set takes it (ExtensionSet.ts, integrator seam): the goal
-// tools and the judge-run task (`GoalTools.ts`), with the model judge resolving its spec through
-// `RoleAliases` (ADR 0035) and asking its one question through the brain's `ModelSource`, never
+// tools and the judge-run task (`GoalTools.ts`), with the model judge checking the model it names
+// through `ModelSpecs` (ADR 0043) and asking its one question through the brain's `ModelSource`, never
 // the Claude bridge. A model judge's answered call is recorded in the spend ledger under its run id
 // when the brain has one (ADR 0036), so a rerun after a crash counts once. pi-durable calls these
 // outside Effect, so they run through the layer's context (S43).
@@ -19,7 +19,7 @@ import {
 
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { ModelSource } from "../brain/ModelSource.ts";
-import { RoleAliases } from "../models/RoleAliases.ts";
+import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { SpendLedger } from "../usage/SpendLedger.ts";
 import { goalsExtension } from "./GoalTools.ts";
 import { NO_JUDGE_FAULTS } from "./JudgeRun.ts";
@@ -53,14 +53,14 @@ const replyText = (message: AssistantMessage): string =>
 
 /** The model judge's resolver and caller over the brain's services. */
 const judgeModels = Effect.gen(function* () {
-  const roles = yield* RoleAliases;
+  const specs = yield* ModelSpecs;
   const source = yield* ModelSource;
   const ledger = yield* Effect.serviceOption(SpendLedger);
   const run = Effect.runPromiseWith(yield* Effect.context());
 
   const resolve: JudgeModels["resolve"] = async (spec) =>
     await run(
-      roles.resolve(spec, Option.none()).pipe(
+      specs.resolve(spec).pipe(
         Effect.map((resolved): ModelRef => resolved.model),
         Effect.mapError((error) => error.message),
         Effect.result
@@ -146,7 +146,15 @@ const judgeModels = Effect.gen(function* () {
       )
     );
 
-  return { resolve, ask } satisfies JudgeModels;
+  const roleNameRead: JudgeModels["roleNameRead"] = async (spec, runId) => {
+    await run(
+      Effect.logInfo(
+        "a model judge recorded before roles were removed names a role; it runs on the goal thread's model"
+      ).pipe(Effect.annotateLogs({ event: "legacy_role_read", spec, runId }))
+    );
+  };
+
+  return { resolve, ask, roleNameRead } satisfies JudgeModels;
 });
 
 /** The goals extension, for the installed set. */
@@ -154,7 +162,7 @@ export class Goals extends Context.Service<
   Goals,
   { readonly extension: CairnExtension }
 >()("cairn/server/verdicts/Goals") {
-  /** Over the root's `RoleAliases` and `ModelSource`, and its `SpendLedger` when it has one. */
+  /** Over the root's `ModelSpecs` and `ModelSource`, and its `SpendLedger` when it has one. */
   static readonly layer = Layer.effect(
     Goals,
     Effect.map(judgeModels, (models) =>

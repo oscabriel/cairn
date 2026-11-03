@@ -9,7 +9,7 @@
 //   node judges/goal-chip.ts [--width 390,1440] [--broken mark|count|state] [--out <dir>]
 //
 // The goal is bound as the user binds one (`goal.setCriteria`'s service) and every verdict is the
-// verdict writer's: the tests command ran (met), the model judge of another family said not met,
+// verdict writer's: the tests command ran (met), the model judge on another model said not met,
 // the user's and lint's criteria are open. Each step is judged on what the page shows and on what
 // the brain holds.
 //   goal-chip  the chat header's chip reads "1 of 4 met, 1 not met" ("1/4" on a phone) and the
@@ -23,7 +23,8 @@
 //              a user verdict, then the page says so and the chip reads "2 of 4 met, 1 not met".
 //              Through the protocol, a mark on lint (a command judges it) and on a criterion the
 //              goal does not hold are refused InvalidInput, and so is binding a model judge on the
-//              thread's own model; the goal is unchanged by all three.
+//              Claude bridge, which cannot answer a judge's one request; the goal is unchanged by
+//              all three.
 //   verdict    the lint command runs in the brain and its verdict reaches the open page with no
 //              reload: lint reads met with its output, the chip "3 of 4 met, 1 not met". After a
 //              reload the chip and the sidebar row still say so.
@@ -46,12 +47,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
 import { ThreadId } from "@cairn/protocol/Ids";
-import { RoleSpec } from "@cairn/protocol/Roles";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { Effect, Option, Predicate } from "effect";
 import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
 
-import { ScriptedGoals } from "../apps/server/src/brain/ScriptedHarness.ts";
 import {
   PARITY_THREAD_ID,
   SHELL_SEED,
@@ -450,16 +450,14 @@ const outcomeOf = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<string> =>
     })
   );
 
+/** A model judge the bridge would run: refused, since the bridge cannot answer one request. */
+const BRIDGE_JUDGE = "claude-bridge/claude-opus-5-5";
+
 /**
  * The refusals, through the protocol as a client sends them: a mark on a command's criterion, a
- * mark on a criterion the goal does not hold, and a model judge on the thread's own model.
+ * mark on a criterion the goal does not hold, and a model judge on the Claude bridge.
  */
-const refusals = async (
-  brainUrl: string,
-  origin: string,
-  lintId: string,
-  ownModel: string
-) =>
+const refusals = async (brainUrl: string, origin: string, lintId: string) =>
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -492,16 +490,16 @@ const refusals = async (
           })
         );
 
-        const sameModel = yield* outcomeOf(
+        const bridge = yield* outcomeOf(
           client["goal.setCriteria"]({
             threadId,
             objective: Option.none(),
             criteria: [
               {
-                text: "Graded by the thread's own model",
+                text: "Graded through the Claude bridge",
                 judge: {
                   kind: "model",
-                  spec: RoleSpec.make(ownModel),
+                  spec: ModelSpec.make(BRIDGE_JUDGE),
                   rubric: "Anything",
                 },
               },
@@ -509,21 +507,8 @@ const refusals = async (
           })
         );
 
-        return { command, unknown, sameModel };
+        return { command, unknown, bridge };
       })
-    )
-  );
-
-/** The thread's own model as a literal spec, `provider/modelId`. */
-const ownModelOf = async (app: CairnApp) =>
-  await app.inBrain(
-    ScriptedGoals.use((goals) =>
-      Effect.map(goals.thread(PARITY_THREAD_ID), (found) =>
-        Option.match(found, {
-          onNone: () => "",
-          onSome: ({ model }) => `${model.provider}/${model.modelId}`,
-        })
-      )
     )
   );
 
@@ -747,9 +732,8 @@ const runWidth = async (browser: Browser, width: number) => {
       const lintId =
         before.find((criterion) => criterion.text === LINT)?.id ?? "";
 
-      const ownModel = await ownModelOf(app);
       const settled = await app.inBrain(goalRecords);
-      const refused = await refusals(brainUrl, app.origin, lintId, ownModel);
+      const refused = await refusals(brainUrl, app.origin, lintId);
 
       expect(
         refused.command === "InvalidInput(criterionId)",
@@ -760,8 +744,8 @@ const runWidth = async (browser: Browser, width: number) => {
         `a mark on a criterion the goal does not hold answered ${refused.unknown}`
       );
       expect(
-        refused.sameModel === "InvalidInput(criteria[0].judge)",
-        `a model judge on the thread's own model (${ownModel}) answered ${refused.sameModel}`
+        refused.bridge === "InvalidInput(criteria[0].judge)",
+        `a model judge on ${BRIDGE_JUDGE} answered ${refused.bridge}`
       );
 
       const after = await app.inBrain(goalRecords);
@@ -771,7 +755,7 @@ const runWidth = async (browser: Browser, width: number) => {
         `the refusals changed the goal: ${JSON.stringify(after)}`
       );
 
-      return `Met reached the verdict writer (a user verdict), then the page and the chip ${JSON.stringify(words)}; refused: lint's mark ${refused.command}, an unknown criterion ${refused.unknown}, a model judge on ${ownModel} ${refused.sameModel}; the goal unchanged`;
+      return `Met reached the verdict writer (a user verdict), then the page and the chip ${JSON.stringify(words)}; refused: lint's mark ${refused.command}, an unknown criterion ${refused.unknown}, a model judge on ${BRIDGE_JUDGE} ${refused.bridge}; the goal unchanged`;
     });
 
     await step("verdict", async () => {

@@ -24,7 +24,7 @@ const node = (id: string, overrides: Json = {}): Json => ({
   index: 0,
   requestId: `wf-wf-1-${id}`,
   briefId: "launch-1",
-  role: "@scout",
+  role: "opencode-go/gpt-6-luna:high",
   provider: "faux",
   modelId: "scripted",
   effort: null,
@@ -165,43 +165,44 @@ describe("what the work panel offers to stop", () => {
 });
 
 describe("what the work panel says of a node and a run", () => {
-  it("gives a node's role, model, use and outcome", () => {
+  it("gives a node's model, use and outcome", () => {
     const group = groupOf([
       node("n-done", {
         state: "settled",
         endedAt: 2,
         receipt: receipt(2100),
         resultSummary: "Counted 3 files.",
+        thinkingLevel: "high",
       }),
       node("n-refused", {
         state: "refused",
         provider: null,
         modelId: null,
-        refusal: "budget_spent",
+        refusal: "no_provider",
         endedAt: 2,
       }),
       node("n-failed", {
         state: "failed",
         error: "The bridge did not answer.",
       }),
-      node("n-default", { role: null }),
+      node("n-old", { role: "@scout", provider: null, modelId: null }),
     ]);
 
     assert.strictEqual(
       nodeDetailText(memberOf(group, "n-done")),
-      "@scout · faux/scripted · 2.1k tokens · Counted 3 files."
+      "faux/scripted at high · 2.1k tokens · Counted 3 files."
     );
     assert.strictEqual(
       nodeDetailText(memberOf(group, "n-refused")),
-      "@scout · refused: the budget is spent"
+      "opencode-go/gpt-6-luna at high · refused: its model is not ready"
     );
     assert.strictEqual(
       nodeDetailText(memberOf(group, "n-failed")),
-      "@scout · faux/scripted · The bridge did not answer."
+      "faux/scripted · The bridge did not answer."
     );
     assert.strictEqual(
-      nodeDetailText(memberOf(group, "n-default")),
-      "default role · faux/scripted"
+      nodeDetailText(memberOf(group, "n-old")),
+      "this thread's model"
     );
   });
 

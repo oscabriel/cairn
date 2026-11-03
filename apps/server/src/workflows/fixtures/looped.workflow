@@ -31,11 +31,11 @@ for (;;) {
   phase("Hunt");
   const batch = await agent(
     "Find bugs in " + args.scope + " that are not already in this list: " + JSON.stringify(found.map((bug) => bug.title)),
-    { role: "@scout", label: "Hunt round " + round, schema: FINDINGS, readonly: true }
+    { label: "Hunt round " + round, schema: FINDINGS, readonly: true }
   );
   if (batch === null || batch.bugs.length === 0) break;
   phase("Verify");
-  const verified = await pipeline(batch.bugs, (bug) => verify(bug, { role: "@verifier", claim: bug.title }));
+  const verified = await pipeline(batch.bugs, (bug) => verify(bug, { claim: bug.title }));
   found.push(...batch.bugs.filter((bug, i) => verified[i] && verified[i].verdict === "verified"));
   log("Round " + round + ": " + batch.bugs.length + " found, " + found.length + " verified so far");
 }

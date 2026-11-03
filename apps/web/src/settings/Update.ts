@@ -138,7 +138,6 @@ const NO_CHANGE: SettingsPatch = {
   titleModel: Option.none(),
   bridgeEnabled: Option.none(),
   bridgeGenerationCap: Option.none(),
-  roleBindings: Option.none(),
   defaultBudget: Option.none(),
 };
 

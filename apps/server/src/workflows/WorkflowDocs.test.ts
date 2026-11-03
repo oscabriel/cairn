@@ -2,9 +2,9 @@
 // JSON), the node cap's count, and the ledger check every judge runs. The envelope's checks are
 // WorkflowLaunch.test.ts's.
 
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { Envelope } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { assert, describe, it } from "@effect/vitest";
@@ -28,8 +28,12 @@ const envelope: Envelope = {
   maxNodes: 3,
   maxConcurrent: 2,
   roles: [
-    { spec: RoleSpec.make("@scout"), readonly: true, arms: "host" },
-    { spec: RoleSpec.make("@worker"), readonly: false, arms: "host" },
+    {
+      spec: ModelSpec.make("opencode-go/gpt-6-luna"),
+      readonly: true,
+      arms: "host",
+    },
+    { spec: ModelSpec.make("faux/kit"), readonly: false, arms: "host" },
   ],
   modes: ["approval-required"],
   writes: [],
@@ -49,7 +53,6 @@ const launch = WorkflowLaunch.make({
   nodes: { count: 2, unbounded: false },
   estimate: null,
   envelope,
-  roleOverrides: {},
 });
 
 const record = (status: ApprovalRecord["status"]): ApprovalRecord => ({

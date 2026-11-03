@@ -32,6 +32,7 @@ import {
   ProviderLoginInput,
   ProviderStatus,
 } from "./Models.ts";
+import { ModelCheck, ModelsCheckInput } from "./ModelSpecs.ts";
 import { MarkCriterionInput, SetCriteriaInput } from "./Policy.ts";
 import {
   BranchesInput,
@@ -53,7 +54,6 @@ import {
   ReachList,
   ReachListInput,
 } from "./Reach.ts";
-import { RoleCheck, RolesCheckInput } from "./Roles.ts";
 import { ServerSettings, SettingsPatch } from "./Settings.ts";
 import { ProjectShell, ShellStreamItem, SubscribeShellInput } from "./Shell.ts";
 import { DispatchResult, ShellCommand } from "./ShellCommands.ts";
@@ -275,9 +275,9 @@ export const CairnRpcs = RpcGroup.make(
 
   // Phase 2. Steering, stopping and answering a subagent are thread.send, thread.stop and
   // thread.respond on the child's own thread id (ADR 0028); no RPC is added for them.
-  Rpc.make("roles.check", {
-    payload: RolesCheckInput,
-    success: Schema.Array(RoleCheck),
+  Rpc.make("models.check", {
+    payload: ModelsCheckInput,
+    success: Schema.Array(ModelCheck),
     error: Common,
   }),
   Rpc.make("spend.get", {

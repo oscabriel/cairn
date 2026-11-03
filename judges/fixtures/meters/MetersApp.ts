@@ -1,6 +1,6 @@
 // The brain the meters judge plays against (plan 6G, judges/meters.ts): the real web client over a
 // real in-process brain on the scripted harness, as judges/fixtures/parity/CairnApp.ts runs one,
-// seeded with the readings the usage page and the role table must show, each with a known truth:
+// seeded with the readings the usage page and the settings page must show, each with a known truth:
 //
 // - a catalog of the user's plans: the Claude bridge (Opus, Sonnet), OpenCode Go (gpt-6-luna, and
 //   `beam-free`, which has no list price) and a metered `openrouter` model; no Codex model;
@@ -12,8 +12,7 @@
 // - the Claude plan's windows from a stand-in usage service: the session window read at 42%, the
 //   weekly window unknown, the Opus window spent; no Codex login, so no Codex row; OpenCode Go
 //   ready, so its row says `unsupported`;
-// - the role table the deployed brain still holds: `@verifier` on Codex `gpt-6-luna` with no
-//   fallback, so it resolves to no ready model until the user rebinds it.
+// - a default budget of 200,000 tokens in the server settings.
 //
 // Production's port 3774 and the deployed brain's data are never touched.
 
@@ -25,7 +24,6 @@ import path from "node:path";
 
 import { ClaudeUsage, INITIAL_READING } from "@cairn/bridge/ClaudeUsage";
 import { CommandId, ProjectId, ThreadId } from "@cairn/protocol/Ids";
-import { DEFAULT_ROLE_TABLE, RoleName } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { ProviderUsage } from "@cairn/protocol/Usage";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -332,23 +330,11 @@ const seedLayer = (workspace: string) =>
       yield* ledger.touch([BRIDGE_THREAD, LUNA_THREAD]);
       yield* ledger.flush;
 
-      // The deployed brain's table: `@verifier` still on Codex, seeded before 2026-10-29.
-      const verifier = RoleName.make("@verifier");
-
       yield* settings.update({
         autoSettleDays: Option.none(),
         titleModel: Option.none(),
         bridgeEnabled: Option.none(),
         bridgeGenerationCap: Option.none(),
-        roleBindings: Option.some({
-          ...DEFAULT_ROLE_TABLE,
-          [verifier]: {
-            model: { provider: "openai-codex", modelId: "gpt-6-luna" },
-            thinkingLevel: Option.none(),
-            fallbacks: [],
-            note: Option.none(),
-          },
-        }),
         defaultBudget: Option.some({
           ...DEFAULT_BUDGET,
           maxTokens: 200_000,

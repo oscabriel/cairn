@@ -7,8 +7,9 @@
 // - a second check of a criterion whose run is going queues nothing;
 // - `goal_criteria` asks the user and binds nothing; accepting binds the criteria, declining binds
 //   none, and a proposal judged by `true` reads as deciding nothing on the card;
-// - a model judge of the thread model's family is refused and runs nothing; one of another family
-//   records its model and reply, having read the rubric and the transcript;
+// - a model judge that names no model (or a role, recorded before ADR 0043) runs on the thread's own
+//   model, one of the thread's family runs when named, and one on the Claude bridge is refused and
+//   runs nothing; each verdict records its model and reply, having read the rubric and transcript;
 // - a subagent's thread has no goal tools;
 // - a kill during a judge run (the Harness closed while its command runs, then reopened on the same
 //   store) reruns the command and records one verdict and one note.
@@ -25,9 +26,9 @@ import {
   requestBodyOf,
 } from "@cairn/client-logic/PendingRequests";
 import type { ModelRef } from "@cairn/protocol/Models";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { ApprovalRecord as ApprovalRecordSchema } from "@cairn/protocol/Policy";
 import type { JudgeRef } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -81,6 +82,9 @@ const judgesAnswering = (
 
       return await Promise.resolve(Result.succeed(reply));
     },
+    roleNameRead: async () => {
+      await Promise.resolve();
+    },
   };
 };
 
@@ -89,6 +93,13 @@ const command = (argv: ReadonlyArray<string>): JudgeRef => ({
   argv: [argv[0] ?? "true", ...argv.slice(1)],
   expectExit: 0,
   timeoutSec: 60,
+});
+
+/** A model judge naming `spec`, or none for the thread's own model. */
+const modelJudge = (spec: string | null): JudgeRef => ({
+  kind: "model",
+  spec: spec === null ? null : ModelSpec.make(spec),
+  rubric: "A test run with no failures",
 });
 
 const scratch = Effect.acquireRelease(
@@ -432,7 +443,7 @@ describe("the goal tools under a Harness", () => {
   );
 
   it.live(
-    "a model judge of the thread's family is refused; another family's verdict records its model and reply",
+    "a model judge runs on the thread's own model when it names none, of any family when named, never on the bridge",
     () =>
       Effect.gen(function* () {
         const cwd = yield* scratch;
@@ -447,27 +458,26 @@ describe("the goal tools under a Harness", () => {
           responses: [
             callTool("goal_check", { criterion: "c1" }, "t1"),
             callTool("goal_check", { criterion: "c2" }, "t2"),
+            callTool("goal_check", { criterion: "c3" }, "t3"),
+            callTool("goal_check", { criterion: "c4" }, "t4"),
           ],
           judges,
           faults: NO_JUDGE_FAULTS,
         });
 
         const conversation = yield* thread(kit, cwd, [
+          // Names no model: the thread's own judges (ADR 0043).
+          { text: "Tests pass", judge: modelJudge(null) },
+          // The thread's family, named: no longer refused.
           {
-            text: "Tests pass",
-            judge: {
-              kind: "model",
-              spec: RoleSpec.make("opencode-go/claude-haiku-5-5"),
-              rubric: "A test run with no failures",
-            },
+            text: "Tests pass, judged by a cousin",
+            judge: modelJudge("opencode-go/claude-haiku-5-5"),
           },
+          // A judge recorded before ADR 0043 names a role: it reads as none.
+          { text: "Tests pass, judged by a role", judge: modelJudge("@judge") },
           {
-            text: "Tests pass, judged elsewhere",
-            judge: {
-              kind: "model",
-              spec: RoleSpec.make("opencode-go/gpt-6-luna"),
-              rubric: "A test run with no failures",
-            },
+            text: "Tests pass, judged on the bridge",
+            judge: modelJudge("claude-bridge/claude-haiku-5-5"),
           },
         ]);
 
@@ -487,8 +497,8 @@ describe("the goal tools under a Harness", () => {
           async () => await toolResults(conversation, context)
         );
 
-        assert.include(results.get("t1") ?? "", "same family");
-        assert.strictEqual(judges.prompts.length, 1);
+        assert.include(results.get("t4") ?? "", "Claude bridge");
+        assert.strictEqual(judges.prompts.length, 3);
         assert.include(
           judges.prompts[0] ?? "",
           "Rubric: A test run with no failures"
@@ -499,14 +509,20 @@ describe("the goal tools under a Harness", () => {
           async () => await readGoal(kit, conversation, context)
         );
 
-        assert.strictEqual(goal?.criteria[0]?.state, "open");
-        assert.strictEqual(goal?.criteria[1]?.state, "met");
-        assert.strictEqual(
-          goal?.criteria[1]?.verdict?.evidence.model,
-          "opencode-go/gpt-6-luna"
+        assert.deepStrictEqual(
+          goal?.criteria.map((criterion) => [
+            criterion.state,
+            criterion.verdict?.evidence.model ?? null,
+          ]),
+          [
+            ["met", "anthropic/claude-test"],
+            ["met", "opencode-go/claude-haiku-5-5"],
+            ["met", "anthropic/claude-test"],
+            ["open", null],
+          ]
         );
         assert.include(
-          goal?.criteria[1]?.verdict?.evidence.note ?? "",
+          goal?.criteria[0]?.verdict?.evidence.note ?? "",
           "12 passed"
         );
       }).pipe(Effect.scoped)

@@ -144,7 +144,10 @@ export interface ApprovalAnswerState {
   decision: ApprovalDecision;
   answers: Array<QuestionAnswerState> | null;
   note: string | null;
-  /** A workflow launch's edited budget and roles (package 5A); null runs the payload as proposed. */
+  /**
+   * A workflow launch's edited budget (package 5A); null runs the payload as proposed. An answer
+   * recorded before ADR 0043 may also hold role overrides, which nothing reads.
+   */
   launch: JsonRecord | null;
 }
 
@@ -847,7 +850,7 @@ export const refusalText = (
 
   if (outcome === "refused_launch") {
     return Option.some(
-      `Approval ${approvalId} takes no launch edits: only Go or Run on 1 first on a workflow's launch carries a changed budget or roles. Answer without them.`
+      `Approval ${approvalId} takes no launch edits: only Go or Run on 1 first on a workflow's launch carries a changed budget. Answer without them.`
     );
   }
 

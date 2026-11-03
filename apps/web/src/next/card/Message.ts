@@ -1,7 +1,7 @@
 // The request card's Messages.
 
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
-import { RoleCheck } from "@cairn/protocol/Roles";
+import { ModelCheck } from "@cairn/protocol/ModelSpecs";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
@@ -54,14 +54,14 @@ export const Message = defineMessageUnion({
   ClickedCancelSendBack: {},
   /** Send back, with the notes typed (required: the parent writes a new brief from them). */
   ClickedConfirmSendBack: { approvalId: ApprovalId },
-  /** Asks `roles.check` again about a brief's or a launch's roles. */
-  ClickedCheckRoles: { approvalId: ApprovalId },
-  ReceivedRoleChecks: {
+  /** Asks `models.check` again about the models a brief or a launch names. */
+  ClickedCheckModels: { approvalId: ApprovalId },
+  ReceivedModelChecks: {
     approvalId: ApprovalId,
     generation: Schema.Int,
-    checks: Schema.Array(RoleCheck),
+    checks: Schema.Array(ModelCheck),
   },
-  FailedRoleChecks: {
+  FailedModelChecks: {
     approvalId: ApprovalId,
     generation: Schema.Int,
     message: Schema.String,

@@ -287,7 +287,7 @@ describe("coding tools", () => {
             "cairn.reach",
             "cairn.pi-tools",
             "cairn.model-health",
-            "cairn.roles",
+            "cairn.models",
             "cairn.ask-user",
             "cairn.results",
           ]

@@ -16,7 +16,7 @@ const FINDINGS = {
 phase("Read");
 const reads = await pipeline(
   args.files,
-  (file) => agent("Read " + file + " and list its issues", { role: "@scout", label: "Read " + file, schema: FINDINGS, readonly: true }),
+  (file) => agent("Read " + file + " and list its issues", { label: "Read " + file, schema: FINDINGS, readonly: true }),
   (found, file) => verify(found, { claim: "the issues in " + file + " are real" })
 );
 

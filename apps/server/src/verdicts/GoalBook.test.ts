@@ -1,14 +1,15 @@
 // The user's side of a goal (`goal.setCriteria` and the user's mark) over a real Harness: the user
 // binds criteria in one host commit, the rules `goal_criteria` keeps hold (a subagent's thread, a
-// model judge of the thread's family, a verification judge), a mark lands only on a criterion the
-// user judges, and each refusal reaches the client as the public error it can act on.
+// model judge on the Claude bridge, a verification judge), a model judge may be of the thread's
+// own family or name no model at all (ADR 0043), a mark lands only on a criterion the user judges,
+// and each refusal reaches the client as the public error it can act on.
 
 import {
   ConversationId as ProtocolConversationId,
   ThreadId,
 } from "@cairn/protocol/Ids";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import type { JudgeRef } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
@@ -16,7 +17,7 @@ import { Context, Effect, Layer, Option, Result } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
-import { RoleAliases, RoleError } from "../models/RoleAliases.ts";
+import { ModelSpecError, ModelSpecs } from "../models/ModelSpecs.ts";
 import { goalErrorOf } from "../rpc/GoalHandlers.ts";
 import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { GoalBook } from "./GoalBook.ts";
@@ -42,9 +43,9 @@ const tests: JudgeRef = {
   timeoutSec: 60,
 };
 
-const modelJudge = (spec: string): JudgeRef => ({
+const modelJudge = (spec: string | null): JudgeRef => ({
   kind: "model",
-  spec: RoleSpec.make(spec),
+  spec: spec === null ? null : ModelSpec.make(spec),
   rubric: "Shows the output",
 });
 
@@ -91,27 +92,22 @@ const bookOver = (kit: GoalKit) =>
       })
     ),
     Layer.provide(
-      Layer.mock(RoleAliases)({
-        resolve: (spec) => {
+      Layer.mock(ModelSpecs)({
+        resolve: (spec: string) => {
           const [provider, modelId] = spec.split("/");
 
           return provider === undefined || modelId === undefined
             ? Effect.fail(
-                new RoleError({
+                new ModelSpecError({
                   message: `${spec} does not resolve.`,
                   spec,
-                  reason: "unbound_role",
-                  skipped: [],
+                  reason: "invalid_spec",
                 })
               )
             : Effect.succeed({
-                spec: RoleSpec.make(spec),
-                role: null,
+                spec: ModelSpec.make(spec),
                 model: { provider, modelId },
                 thinkingLevel: null,
-                via: "literal" as const,
-                skipped: [],
-                family: "other" as const,
                 priced: true,
               });
         },
@@ -132,6 +128,9 @@ const kitScope = Effect.acquireRelease(
               await Promise.resolve(Result.fail("No model judges here.")),
             ask: async () =>
               await Promise.resolve(Result.fail("No model judges here.")),
+            roleNameRead: async () => {
+              await Promise.resolve();
+            },
           },
           faults: NO_JUDGE_FAULTS,
         },
@@ -167,6 +166,14 @@ describe("the user's side of a goal", () => {
               text: "Docs read well",
               judge: modelJudge("opencode-go/gpt-6-luna"),
             },
+            {
+              text: "The tone is calm",
+              judge: modelJudge(null),
+            },
+            {
+              text: "Names match",
+              judge: modelJudge("opencode-go/claude-haiku-5-5"),
+            },
           ],
         });
 
@@ -186,29 +193,28 @@ describe("the user's side of a goal", () => {
             ["c1", "open", 40],
             ["c2", "open", 40],
             ["c3", "open", 40],
+            ["c4", "open", 40],
+            ["c5", "open", 40],
           ]
         );
 
         const refused = (input: Parameters<typeof book.setCriteria>[0]) =>
           book.setCriteria(input).pipe(Effect.flip);
 
-        const sameFamily = yield* refused({
+        const bridge = yield* refused({
           threadId: GOAL,
           objective: Option.none(),
           criteria: [
             {
               text: "Reads well",
-              judge: modelJudge("opencode-go/claude-haiku-5-5"),
+              judge: modelJudge("claude-bridge/claude-haiku-5-5"),
             },
           ],
         });
 
-        assert.strictEqual(sameFamily.reason, "invalid_input");
-        assert.include(sameFamily.message, "same family");
-        assert.deepStrictEqual(
-          sameFamily.field,
-          Option.some("criteria[0].judge")
-        );
+        assert.strictEqual(bridge.reason, "invalid_input");
+        assert.include(bridge.message, "Claude bridge");
+        assert.deepStrictEqual(bridge.field, Option.some("criteria[0].judge"));
 
         const verification = yield* refused({
           threadId: GOAL,
@@ -239,10 +245,7 @@ describe("the user's side of a goal", () => {
 
         assert.strictEqual(missing.reason, "thread_not_found");
         assert.strictEqual(goalErrorOf(missing, "req-1")._tag, "NotFound");
-        assert.strictEqual(
-          goalErrorOf(sameFamily, "req-1")._tag,
-          "InvalidInput"
-        );
+        assert.strictEqual(goalErrorOf(bridge, "req-1")._tag, "InvalidInput");
 
         // A refused binding changed nothing.
         const after = yield* Effect.promise(
@@ -250,7 +253,7 @@ describe("the user's side of a goal", () => {
             await kit.harness.snapshot(GoalDoc, conversation.id, context)
         );
 
-        assert.strictEqual(after?.criteria.length, 3);
+        assert.strictEqual(after?.criteria.length, 5);
 
         const byHand = yield* book
           .mark({
@@ -280,7 +283,7 @@ describe("the user's side of a goal", () => {
 
         assert.deepStrictEqual(
           marked?.criteria.map((criterion) => criterion.state),
-          ["open", "met", "open"]
+          ["open", "met", "open", "open", "open"]
         );
         assert.strictEqual(marked?.criteria[1]?.verdict?.judge.kind, "user");
       }).pipe(Effect.scoped)

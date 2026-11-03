@@ -68,7 +68,7 @@
     {
       "event": "MessageCommitted",
       "role": "user",
-      "text": "again, with another role"
+      "text": "again, naming a role"
     },
     {
       "event": "MessageCommitted",
@@ -78,7 +78,7 @@
     {
       "event": "MessageCommitted",
       "role": "assistant",
-      "text": "That role was refused."
+      "text": "That model was refused."
     },
     {
       "event": "RunTerminal",
@@ -202,7 +202,7 @@
       {
         "kind": "pi.user",
         "role": "user",
-        "text": "again, with another role",
+        "text": "again, naming a role",
         "images": 0,
         "toolCalls": [],
         "toolName": null,
@@ -220,7 +220,7 @@
       {
         "kind": "pi.tool-result",
         "role": "toolResult",
-        "text": "subagent_spawn's role \"the fast one\" is neither a role (@worker, @scout) nor provider/modelId[:level]. Call it again with one, or leave role out.",
+        "text": "subagent_spawn's model \"@worker\" is a role, and roles were removed. Pass model as provider/modelId[:level] (call models to see what a child can run on), or leave it out to run the child on your own model and level.",
         "images": 0,
         "toolCalls": [],
         "toolName": "subagent_spawn",
@@ -229,7 +229,7 @@
       {
         "kind": "pi.assistant",
         "role": "assistant",
-        "text": "That role was refused.",
+        "text": "That model was refused.",
         "images": 0,
         "toolCalls": [],
         "toolName": null,

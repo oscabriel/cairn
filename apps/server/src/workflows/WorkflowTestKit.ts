@@ -78,6 +78,12 @@ import {
 } from "../brain/Events.ts";
 import type { Reactor } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
+import {
+  FAILURE_WORDS,
+  isRoleName,
+  ParsedSpec,
+  parseModelSpec,
+} from "../models/ModelSpecs.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../models/ResultTool.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import { NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
@@ -90,12 +96,21 @@ import { parseWorkflowScript } from "./WorkflowScript.ts";
 import { workflowExtension } from "./WorkflowTools.ts";
 import type {
   HoldPoint,
-  RoleResolver,
+  ModelResolver,
   WorkflowFaultSet,
 } from "./WorkflowTools.ts";
 
 /** The faux provider and model every conversation of the kit runs on. */
 export const KIT_MODEL = { provider: "faux", modelId: "kit" } as const;
+
+/** The kit root thread's thinking level, which a node that names no model runs at. */
+export const KIT_LEVEL = "medium" as const;
+
+/** The spec a kit node that names no model runs on: the root thread's model and level. */
+export const KIT_SPEC = `${KIT_MODEL.provider}/${KIT_MODEL.modelId}:${KIT_LEVEL}`;
+
+/** A second model the kit's faux provider serves: what a node that names another model runs on. */
+export const ALT_MODEL = `${KIT_MODEL.provider}/kit-alt`;
 
 /** The kit root thread's cwd, which every node's child must work in too. */
 export const KIT_CWD = tmpdir();
@@ -103,11 +118,11 @@ export const KIT_CWD = tmpdir();
 /** How long a kit node held by a limit that names no reset waits: short, so a test sees it. */
 export const KIT_HOLD_RETRY_MILLIS = 400;
 
-/** A spec the kit's resolver cannot resolve. */
-export const UNRESOLVABLE_ROLE = "@nobody";
+/** A model the kit's resolver refuses, as `ModelSpecs` refuses one with no usable credential. */
+export const UNREADY_MODEL = "faux/unready";
 
-/** A spec the kit's resolver binds at thinking level `low`. */
-export const LOW_ROLE = "@low";
+/** The kit's model named at thinking level `low`. */
+export const LOW_MODEL = `${KIT_MODEL.provider}/${KIT_MODEL.modelId}:low`;
 
 /** What opens a launching thread's input: the script to run follows. */
 export const RUN_PREFIX = "RUN:\n";
@@ -126,20 +141,38 @@ export const WORK_TOOL = "work";
 export const PAUSE_TOOL = "pause";
 
 /**
- * Resolves every spec to the kit's model at no level, except `UNRESOLVABLE_ROLE`, and `LOW_ROLE` at
- * `low`.
+ * Resolves a spec as `Workflows.ts` does over `ModelSpecs`, with no catalog: a role name to none
+ * (the launching thread's model), `UNREADY_MODEL` to its refusal, any other spec to the model and
+ * level it names.
  */
-export const kitResolver: RoleResolver = async (spec) =>
-  await Promise.resolve(
-    spec === UNRESOLVABLE_ROLE
-      ? Result.fail(`no model is bound to ${spec}`)
-      : Result.succeed({
-          provider: KIT_MODEL.provider,
-          modelId: KIT_MODEL.modelId,
-          thinkingLevel:
-            spec === LOW_ROLE ? Option.some("low" as const) : Option.none(),
-        })
+export const kitResolver: ModelResolver = async (spec) => {
+  if (isRoleName(spec)) {
+    return await Promise.resolve(Result.succeed(Option.none()));
+  }
+
+  const named = Option.flatMap(parseModelSpec(spec), (parsed) =>
+    ParsedSpec.$is("Named")(parsed) ? Option.some(parsed) : Option.none()
   );
+
+  if (spec === UNREADY_MODEL || Option.isNone(named)) {
+    return await Promise.resolve(
+      Result.fail(
+        `ModelSpecs.resolve refused "${spec}": ${FAILURE_WORDS.missing_credential}.`
+      )
+    );
+  }
+
+  return await Promise.resolve(
+    Result.succeed(
+      Option.some({
+        spec,
+        provider: named.value.model.provider,
+        modelId: named.value.model.modelId,
+        thinkingLevel: named.value.level,
+      })
+    )
+  );
+};
 
 /** One line of a node's outside effect: the `work` tool's start and end. */
 export interface WorkEffect {
@@ -478,7 +511,7 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
 
   const faux = fauxProvider({
     provider: KIT_MODEL.provider,
-    models: [{ id: KIT_MODEL.modelId }],
+    models: [{ id: KIT_MODEL.modelId }, { id: "kit-alt" }],
     tokensPerSecond: options.tokensPerSecond,
   });
 
@@ -493,7 +526,7 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
   registry.install(codemode.extension.extension);
   registry.install(
     workflowExtension({
-      resolveRole: kitResolver,
+      resolveModel: kitResolver,
       plan: {
         ...planAccess(
           yield* WorkflowPlan,
@@ -541,7 +574,7 @@ export const openKit = async (
   );
 
   const root = await harness.root(context, {
-    agent: { model: { ...KIT_MODEL }, cwd: KIT_CWD },
+    agent: { model: { ...KIT_MODEL }, cwd: KIT_CWD, thinkingLevel: KIT_LEVEL },
   });
 
   return { harness, root: root.id };
@@ -598,6 +631,10 @@ export const plant = Effect.fn("WorkflowTestKit.plant")(function* (
     args: input.args,
     budget: input.budget,
     sample: input.sample,
+    threadModel: Option.some({
+      model: KIT_MODEL,
+      thinkingLevel: Option.some(KIT_LEVEL),
+    }),
   });
 
   const launch = toLaunch(run, {
@@ -606,7 +643,6 @@ export const plant = Effect.fn("WorkflowTestKit.plant")(function* (
     args: input.args,
     budget: input.budget,
     estimate: Option.none(),
-    roleOverrides: {},
     maxNodes: input.maxNodes,
     modes: MODES,
     writes: [],

@@ -3,7 +3,6 @@
 
 import { skillsPromptTokens } from "@cairn/client-logic/SkillsPrompt";
 import { ProjectId } from "@cairn/protocol/Ids";
-import { DEFAULT_ROLE_TABLE } from "@cairn/protocol/Roles";
 import type { ServerSettings } from "@cairn/protocol/Settings";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
@@ -47,7 +46,6 @@ const server: ServerSettings = {
   titleModel: Option.none(),
   bridgeEnabled: true,
   bridgeGenerationCap: 4,
-  roleBindings: DEFAULT_ROLE_TABLE,
   defaultBudget: DEFAULT_BUDGET,
 };
 
@@ -149,7 +147,6 @@ const loaded: Model = {
 
 const sceneView = Scene.withViewInputs(view, {
   notifications: () => null,
-  roleTable: () => null,
 });
 
 const config = { update, view: sceneView() };
@@ -354,7 +351,6 @@ describe("the settings page", () => {
             titleModel: Option.none(),
             bridgeEnabled: Option.some(false),
             bridgeGenerationCap: Option.none(),
-            roleBindings: Option.none(),
             defaultBudget: Option.none(),
           },
         }),

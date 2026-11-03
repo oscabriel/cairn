@@ -12,11 +12,11 @@
 //   them.
 // - Approve, Allow for this thread and Go answer at once; Decline (on every body, a question's
 //   too) opens a reason field first, and the reason (when there is one) reaches the model.
-// - A brief or a workflow's launch (6B, `BriefGo.ts`): the roles it names are checked with
-//   `roles.check` when it shows, again when the connection comes back (a brain restart) and on
-//   Check again. Go and Run on 1 first are held while the check is out and blocked while a role
-//   does not resolve; a check that could not be made holds nothing, since the brain resolves again
-//   at Go. Send back (a subagent's brief only) opens a notes field and needs notes; Run on 1 first
+// - A brief or a workflow's launch (6B, `BriefGo.ts`): the models it names are checked with
+//   `models.check` when it shows, again when the connection comes back (a brain restart) and on
+//   Check again. Go and Run on 1 first are held while the check is out and blocked while a named
+//   model does not resolve; a check that could not be made holds nothing, since the brain checks
+//   again at Go. A request that names no model runs on its parent's and is not checked. Send back (a subagent's brief only) opens a notes field and needs notes; Run on 1 first
 //   (a launch of more than one node only) answers `accept_sample`.
 // - One answer in flight at a time. An answer the brain took is hidden at once and stays hidden
 //   until the stream shows it settled, so a slow stream never shows it twice.
@@ -28,7 +28,7 @@
 
 import {
   goBlockOf,
-  roleQuestionOf,
+  modelQuestionOf,
   takesRunOnOne,
   takesSendBack,
 } from "@cairn/client-logic/BriefGo";
@@ -53,7 +53,6 @@ import type { DraftAnswers } from "@cairn/client-logic/PendingUserInput";
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
 import type { ApprovalRecord, Question } from "@cairn/protocol/Policy";
 import { ApprovalDecision } from "@cairn/protocol/Policy";
-import { RoleOverrides } from "@cairn/protocol/Roles";
 import {
   Array,
   Duration,
@@ -71,7 +70,7 @@ import type { CairnConnectionService } from "../../connection/Connection.ts";
 import { callFailureText } from "../../connection/Failure.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { Decision } from "./Message.ts";
-import { CardAnswer, initial, RoleCheckState } from "./Model.ts";
+import { CardAnswer, initial, ModelCheckState } from "./Model.ts";
 import type { CardContext, Model } from "./Model.ts";
 
 /** The pause after a single pick before the card moves to the next question (t3code's). */
@@ -170,20 +169,21 @@ export const isAnswerable = (model: Model, approvalId: ApprovalId): boolean =>
   !Option.exists(model.undo, (undo) => undo.approvalId === approvalId);
 
 /**
- * Whether Go (and Run on 1 first) waits on a request's roles: not checked yet, being checked, or
- * checked with one that does not resolve. A request that names no role never waits; a check that
- * could not be made does not hold Go, since the brain resolves the role again at Go.
+ * Whether Go (and Run on 1 first) waits on the models a request names: not checked yet, being
+ * checked, or checked with one that does not resolve. A request that names no model never waits; a
+ * check that could not be made does not hold Go, since the brain checks the model again at Go.
  */
 export const goHeld = (model: Model, request: PendingRequest): boolean => {
-  if (Option.isNone(roleQuestionOf(request.record, request.body))) {
+  if (Option.isNone(modelQuestionOf(request.record, request.body))) {
     return false;
   }
 
-  const state: RoleCheckState | undefined = model.roleChecks[request.record.id];
+  const state: ModelCheckState | undefined =
+    model.modelChecks[request.record.id];
 
   return state === undefined
     ? true
-    : RoleCheckState.match(state, {
+    : ModelCheckState.match(state, {
         Checking: () => true,
         Checked: ({ checks }) => Option.isSome(goBlockOf(checks)),
         Unchecked: () => false,
@@ -238,37 +238,31 @@ export const RespondToRequest = Command.define("RespondToRequest", {
     ),
 });
 
-/** Asks the brain what a brief's or a launch's roles resolve to now. */
-export const CheckRoles = Command.define("CheckRoles", {
+/** Asks the brain what the models a brief or a launch names resolve to now. */
+export const CheckModels = Command.define("CheckModels", {
   args: {
     approvalId: ApprovalId,
     generation: Schema.Int,
     specs: Schema.Array(Schema.String),
-    overrides: Schema.Option(RoleOverrides),
   },
-  messages: [Message.ReceivedRoleChecks, Message.FailedRoleChecks],
-  execute: ({ approvalId, generation, specs, overrides }) =>
+  messages: [Message.ReceivedModelChecks, Message.FailedModelChecks],
+  execute: ({ approvalId, generation, specs }) =>
     withBoundary(
       Effect.flatMap(CairnConnection.get, (client) =>
-        client["roles.check"](
-          Option.match(overrides, {
-            onNone: () => ({ specs }),
-            onSome: (given) => ({ specs, overrides: given }),
-          })
-        )
+        client["models.check"]({ specs })
       )
     ).pipe(
       Effect.match({
         onSuccess: (checks) =>
-          Message.ReceivedRoleChecks({ approvalId, generation, checks }),
+          Message.ReceivedModelChecks({ approvalId, generation, checks }),
         onFailure: (failure) =>
-          Message.FailedRoleChecks({
+          Message.FailedModelChecks({
             approvalId,
             generation,
             message: callFailureText(failure, {
               reconnecting: "Cairn is reconnecting.",
               cutOff: "The connection dropped before Cairn answered.",
-              fallback: "The roles could not be checked.",
+              fallback: "The models could not be checked.",
             }),
           }),
       })
@@ -480,9 +474,9 @@ const pick = (
   );
 };
 
-/** Asks `roles.check` about one request's roles, superseding any check still out for it. */
-const askRoles = (model: Model, request: PendingRequest): UpdateReturn =>
-  Option.match(roleQuestionOf(request.record, request.body), {
+/** Asks `models.check` about the models one request names, superseding any check still out for it. */
+const askModels = (model: Model, request: PendingRequest): UpdateReturn =>
+  Option.match(modelQuestionOf(request.record, request.body), {
     onNone: () => ({ model }),
     onSome: (question) => {
       const generation = model.checkGeneration + 1;
@@ -491,17 +485,16 @@ const askRoles = (model: Model, request: PendingRequest): UpdateReturn =>
       return {
         model: modifyFields(model, {
           checkGeneration: () => generation,
-          roleChecks: (checks) => ({
+          modelChecks: (checks) => ({
             ...checks,
-            [approvalId]: RoleCheckState.Checking({ generation }),
+            [approvalId]: ModelCheckState.Checking({ generation }),
           }),
         }),
         commands: [
-          CheckRoles({
+          CheckModels({
             approvalId,
             generation,
             specs: question.specs,
-            overrides: question.overrides,
           }),
         ],
       };
@@ -509,7 +502,7 @@ const askRoles = (model: Model, request: PendingRequest): UpdateReturn =>
   });
 
 /**
- * Asks about the shown request's roles when nothing was asked for it yet, or `again` (the
+ * Asks about the shown request's models when nothing was asked for it yet, or `again` (the
  * connection came back): only while there is a client, so a check asked offline is asked on
  * reconnecting instead.
  */
@@ -521,12 +514,12 @@ const checkShown = (result: UpdateReturn, again: boolean): UpdateReturn => {
       shownRequest(model),
       (request) =>
         model.hasClient &&
-        (again || model.roleChecks[request.record.id] === undefined)
+        (again || model.modelChecks[request.record.id] === undefined)
     ),
     {
       onNone: () => result,
       onSome: (request) => {
-        const asked = askRoles(model, request);
+        const asked = askModels(model, request);
 
         return {
           model: asked.model,
@@ -540,24 +533,24 @@ const checkShown = (result: UpdateReturn, again: boolean): UpdateReturn => {
   );
 };
 
-/** Takes `roles.check`'s answer (or why there is none) for the check still out, if it is that one. */
+/** Takes `models.check`'s answer (or why there is none) for the check still out, if it is that one. */
 const settleCheck = (
   model: Model,
   approvalId: ApprovalId,
   generation: number,
-  settled: RoleCheckState
+  settled: ModelCheckState
 ): UpdateReturn => {
-  const state = model.roleChecks[approvalId];
+  const state = model.modelChecks[approvalId];
 
   const isOut =
     state !== undefined &&
-    RoleCheckState.guards.Checking(state) &&
+    ModelCheckState.guards.Checking(state) &&
     state.generation === generation;
 
   return isOut
     ? {
         model: modifyFields(model, {
-          roleChecks: (checks) => ({ ...checks, [approvalId]: settled }),
+          modelChecks: (checks) => ({ ...checks, [approvalId]: settled }),
         }),
       }
     : { model };
@@ -714,24 +707,24 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
     ClickedConfirmSendBack: ({ approvalId }) => sendBack(model, approvalId),
-    ClickedCheckRoles: ({ approvalId }) =>
+    ClickedCheckModels: ({ approvalId }) =>
       Option.match(requestById(model, approvalId), {
         onNone: () => ({ model }),
-        onSome: (request) => askRoles(model, request),
+        onSome: (request) => askModels(model, request),
       }),
-    ReceivedRoleChecks: ({ approvalId, generation, checks }) =>
+    ReceivedModelChecks: ({ approvalId, generation, checks }) =>
       settleCheck(
         model,
         approvalId,
         generation,
-        RoleCheckState.Checked({ checks })
+        ModelCheckState.Checked({ checks })
       ),
-    FailedRoleChecks: ({ approvalId, generation, message: text }) =>
+    FailedModelChecks: ({ approvalId, generation, message: text }) =>
       settleCheck(
         model,
         approvalId,
         generation,
-        RoleCheckState.Unchecked({ message: text })
+        ModelCheckState.Unchecked({ message: text })
       ),
     ChangedReason: ({ approvalId, value }) => ({
       model: modifyFields(model, {
@@ -756,7 +749,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         (record) => record.id === approvalId && record.status === "pending"
       );
 
-      // The next request shows now, so its roles are asked about now.
+      // The next request shows now, so its models are asked about now.
       return checkShown(
         {
           model: modifyFields(model, {
@@ -805,9 +798,9 @@ export const sameContext = (model: Model, context: CardContext): boolean =>
 
 /**
  * Takes the open thread's records. Another thread starts the card over. Drafts, reasons, notes,
- * role checks and question places of requests no longer pending are dropped; a request that left
+ * model checks and question places of requests no longer pending are dropped; a request that left
  * the card without this device answering it closes with its settled line and the words typed on
- * it. The shown request's roles are asked about when it first shows and again when the connection
+ * it. The shown request's models are asked about when it first shows and again when the connection
  * comes back, since the table or a model's readiness may have changed meanwhile (a brain restart).
  */
 export const inform = (model: Model, context: CardContext): InformReturn => {
@@ -873,7 +866,7 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
         ...Option.toArray(base.sending),
       ]),
     notes: (notes) => pruneResolvedDrafts(notes, pendingIds),
-    roleChecks: (checks) => pruneResolvedDrafts(checks, pendingIds),
+    modelChecks: (checks) => pruneResolvedDrafts(checks, pendingIds),
     declining: (declining) => Option.filter(declining, isPending),
     sendingBack: (sendingBack) => Option.filter(sendingBack, isPending),
     undo: (undo) => Option.filter(undo, (found) => isPending(found.approvalId)),

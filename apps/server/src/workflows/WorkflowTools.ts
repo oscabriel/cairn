@@ -18,9 +18,9 @@
 //
 // `agent` is one dispatch. In one commit it reserves the row (`n-<task id>`, request id
 // `wf-<workflowId>-<nodeId>`) and writes the node's own brief record. When the launch's envelope
-// covers it (role, reads or writes, mode, node cap: `briefWithin`) the record is accepted with
+// covers it (model, reads or writes, mode, node cap: `briefWithin`) the record is accepted with
 // `decidedBy` envelope and the same commit creates the child conversation owned by the node's own
-// task, configured with the role's model, with the `cairn.child` link the result tool and the
+// task, configured with its model, with the `cairn.child` link the result tool and the
 // permission gate read, and the row's watcher. When it does not, the record is a pending brief card
 // and the node waits for the user like any approval: Go creates the child in the commit after the
 // answer, anything else ends the row `refused` and the script sees `null`. A rerun after `kill -9`
@@ -35,8 +35,13 @@
 // node: its child is a fork of the old node's child at its latest entry, created in the same reserve
 // commit and owned by the new node's task, so the new child continues with the whole earlier
 // context while the new row keeps its own receipt (a fork's `pi.usage` starts at zero), result and
-// stop. It runs as the role its own call names, or the default role, never the old node's: the
-// plan's dry run records the call site that way and the envelope grants just that. A node that is
+// stop. It runs on the model its own call names, or the launching thread's, never the old node's:
+// the plan's dry run records the call site that way and the envelope grants just that.
+//
+// A node runs on the model its call names (`model`, ADR 0043), checked by `ModelSpecs` right before
+// the commit that creates its child, or on the launching thread's model and level when it names
+// none. A script approved before ADR 0043 may still pass `role`: a role name there reads as no
+// model named (logged by the resolver), a model spec as named. A node that is
 // not settled, or whose conversation is gone, cannot be resumed: the script sees `null` and the
 // council falls back to a fresh node.
 //
@@ -50,13 +55,13 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { ThinkingLevel } from "@cairn/protocol/Models";
+import type { ModelRef } from "@cairn/protocol/Models";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import type {
   ApprovalDecision,
   Envelope,
   RuntimeMode,
 } from "@cairn/protocol/Policy";
-import type { RoleOverrides } from "@cairn/protocol/Roles";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { Budget, DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { MAX_SUBAGENT_DEPTH } from "@cairn/protocol/Subagents";
 import { MAX_WORKFLOW_NODES } from "@cairn/protocol/Workflows";
@@ -107,6 +112,7 @@ import {
   readPermissions,
 } from "../brain/Permissions.ts";
 import { usageLimitOf } from "../brain/RunFailure.ts";
+import { isRoleName, parseModelSpec, specOf } from "../models/ModelSpecs.ts";
 import {
   childThreadIdOf,
   conversationOf,
@@ -119,11 +125,11 @@ import {
   ApproveCall,
   BeginCall,
   BudgetCall,
-  DEFAULT_NODE_ROLE,
-  DEFAULT_VERIFY_ROLE,
   LogCall,
   PhaseCall,
   PRELUDE_VERSION,
+  ROLE_OPTION,
+  RUNNABLE_PRELUDE_VERSIONS,
   VerifyCall,
 } from "./Prelude.ts";
 import type { NodeOutcome } from "./Prelude.ts";
@@ -172,7 +178,6 @@ import {
   endWorkflow,
   nodeSchemaOf,
   outcomeResult,
-  overridesOf,
   refused,
   runningCaller,
   runningProblem,
@@ -205,7 +210,7 @@ const KEY_LIMIT = 200;
 /** The most options a question may offer (the protocol's `Question`). */
 const MAX_APPROVE_OPTIONS = 9;
 
-const isRoleSpec = Schema.is(RoleSpec);
+const decodeModelSpec = Schema.decodeOption(ModelSpec);
 
 const isThinkingLevel = Schema.is(ThinkingLevel);
 
@@ -238,21 +243,24 @@ export const VERDICT_SCHEMA: JsonRecord = {
   additionalProperties: false,
 };
 
-/** What a role spec resolved to at dispatch (ADR 0035), as the node's row records it. */
+/** The model a node runs on, as its row records it. */
 export interface ResolvedNodeModel {
+  /** The spec the node asked for: the named one, or the launching thread's model and level. */
+  readonly spec: string;
   readonly provider: string;
   readonly modelId: string;
   readonly thinkingLevel: Option.Option<ThinkingLevel>;
 }
 
 /**
- * Resolves a role spec with the launch's overrides right before the commit that creates the child
- * (2D's dispatch rule). Fails with the words the script's `agent.full` shows.
+ * Resolves the model spec a node names right before the commit that creates its child (2D's
+ * dispatch rule, ADR 0043): a named model, checked for readiness; or none for a role name a script
+ * approved before ADR 0043 still passes, which runs on the launching thread's model (the resolver
+ * logs it). Fails with the words the script's `agent.full` shows.
  */
-export type RoleResolver = (
-  spec: string,
-  overrides: Option.Option<RoleOverrides>
-) => Promise<Result.Result<ResolvedNodeModel, string>>;
+export type ModelResolver = (
+  spec: string
+) => Promise<Result.Result<Option.Option<ResolvedNodeModel>, string>>;
 
 /** Where a judge may hold a node, so its `kill -9` lands there. */
 export type HoldPoint =
@@ -292,7 +300,7 @@ export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = {
 
 /** What the extension is built with. */
 export interface WorkflowToolOptions {
-  readonly resolveRole: RoleResolver;
+  readonly resolveModel: ModelResolver;
   /** Parses and dry-runs a proposed script (`WorkflowPlan`), for `workflow_plan`. */
   readonly plan: PlanAccess;
   readonly faults: WorkflowFaultSet;
@@ -402,7 +410,11 @@ interface Dispatch {
   readonly prompt: string;
   readonly label: string;
   readonly phase: Option.Option<string>;
-  readonly role: string;
+  /**
+   * The model spec the call names: `model`, or the `role` of a script approved before ADR 0043.
+   * None runs on the launching thread's model and level.
+   */
+  readonly spec: Option.Option<string>;
   readonly schema: Option.Option<JsonRecord>;
   readonly key: Option.Option<string>;
   readonly readonly: boolean;
@@ -430,6 +442,8 @@ interface ReserveInput {
   readonly caller: Caller;
   readonly dispatch: Dispatch;
   readonly model: Result.Result<ResolvedNodeModel, string>;
+  /** The launching thread's model: what a role name in a stored envelope grants. */
+  readonly threadModel: Option.Option<ModelRef>;
   /** The launching thread's effective mode: the child's. */
   readonly mode: RuntimeMode;
   /** The launching conversation's cwd, where the child works (shared checkout); none without one. */
@@ -464,7 +478,10 @@ const reservedRow = (
     index: nextIndex(row),
     requestId: nodeRequestIdOf(row.id, nodeId),
     briefId: null,
-    role: dispatch.role,
+    role: Result.match(input.model, {
+      onFailure: () => Option.getOrNull(dispatch.spec),
+      onSuccess: (model) => model.spec,
+    }),
     provider: null,
     modelId: null,
     effort: Option.getOrNull(dispatch.effort),
@@ -491,7 +508,7 @@ const reservedRow = (
 
 /**
  * Why a node may not start at all, before its brief: no launch to read an envelope from, the
- * workflow's hard cap of nodes reached, or no model for its role. The envelope's own checks raise
+ * workflow's hard cap of nodes reached, or no model to run on. The envelope's own checks raise
  * a brief card instead (`briefWithin`).
  */
 const refusalOf = (
@@ -512,17 +529,24 @@ const refusalOf = (
     : Option.none();
 };
 
+/** No model: what a node whose model did not resolve asks for, which no envelope grants. */
+const NO_MODEL: ModelRef = { provider: "", modelId: "" };
+
 /** What a node asks of its envelope, from its dispatch and the thread now. */
 const askOf = (row: WorkflowItemState, input: ReserveInput) => ({
-  role: input.dispatch.role,
+  model: Result.match(input.model, {
+    onFailure: () => NO_MODEL,
+    onSuccess: ({ provider, modelId }): ModelRef => ({ provider, modelId }),
+  }),
   readonly: input.dispatch.readonly,
   mode: input.mode,
   dispatched: dispatchedCount(row),
+  threadModel: input.threadModel,
 });
 
 /**
  * The refusal a node outside its envelope ends with when its own brief is not accepted: past the
- * node cap when its role and mode fit, outside the grant otherwise.
+ * node cap when its model and mode fit, outside the grant otherwise.
  */
 const declinedRefusal = (
   envelope: Envelope,
@@ -549,8 +573,7 @@ const nodeRecordOf = (
   api: ToolExecutionApi,
   row: WorkflowItemState,
   input: ReserveInput,
-  outside: Option.Option<Outside>,
-  roleOverrides: RoleOverrides
+  outside: Option.Option<Outside>
 ) => {
   const { dispatch } = input;
 
@@ -564,13 +587,12 @@ const nodeRecordOf = (
       workflowName: row.name,
       label: dispatch.label,
       prompt: promptOf(dispatch),
-      role: dispatch.role,
+      spec: Option.filter(dispatch.spec, (spec) => !isRoleName(spec)),
       effort: dispatch.effort,
       readonly: dispatch.readonly,
       mode: input.mode,
       budget: budgetOf(row),
       resultSchema: dispatch.schema,
-      roleOverrides,
       outside,
     }),
     envelope: Option.isNone(outside)
@@ -580,7 +602,7 @@ const nodeRecordOf = (
 };
 
 /**
- * The agent change a node's child is created with: the role's model, the launching conversation's
+ * The agent change a node's child is created with: its model, the launching conversation's
  * cwd (so its file and shell tools have an environment, and the bridge a cwd), no subagent tools
  * (a node cannot spawn), and the result tool when typed (`nodeChildTools`).
  */
@@ -656,9 +678,52 @@ const linkChild = async (
   await writeMode(tx, child, link.mode);
 };
 
-/** The refusal of a role that is no role spec: no row is written for it. */
-const roleProblem = (tool: string, role: string) =>
-  `${tool}(): role \`${summaryOf(role)}\` is not a role alias (\`@worker\`, \`@scout:high\`) or a \`provider/model\`.`;
+/**
+ * The model spec a node call names, or the refusal the script sees (no row is written for it):
+ * `model` as written, refused when it is a role name or no spec; else the `role` of a script
+ * approved before ADR 0043 (prelude version 2 sends every script's there, and version 3 passes
+ * one on), which the resolver reads.
+ */
+const namedSpecOf = (
+  tool: string,
+  given: {
+    readonly model: Option.Option<string>;
+    readonly role: Option.Option<string>;
+  }
+): Result.Result<Option.Option<string>, string> => {
+  const model = Option.filter(
+    Option.map(given.model, (text) => text.trim()),
+    (text) => text !== ""
+  );
+
+  if (Option.isNone(model)) {
+    return Result.succeed(
+      Option.filter(
+        Option.map(given.role, (text) => text.trim()),
+        (text) => text !== ""
+      )
+    );
+  }
+
+  if (isRoleName(model.value)) {
+    return Result.fail(
+      `${tool}(): model \`${summaryOf(model.value)}\` is a role, and roles were removed. Name a model as provider/modelId[:level] (the models tool lists them), or leave model out to run on the launching thread's model.`
+    );
+  }
+
+  return Option.match(
+    Option.filter(decodeModelSpec(model.value), (spec) =>
+      Option.isSome(parseModelSpec(spec))
+    ),
+    {
+      onNone: () =>
+        Result.fail(
+          `${tool}(): model \`${summaryOf(model.value)}\` is not provider/modelId[:level].`
+        ),
+      onSome: (spec) => Result.succeed(Option.some<string>(spec)),
+    }
+  );
+};
 
 /** The outcome the script gets for a node's ending. */
 const outcomeOf = (ending: NodeEnding, nodeId: string): NodeOutcome =>
@@ -875,7 +940,7 @@ const launchRecordOf = async (
 export const workflowExtension = (
   options: WorkflowToolOptions
 ): CairnExtension => {
-  const { resolveRole, faults, plan, holdRetryMillis, push } = options;
+  const { resolveModel, faults, plan, holdRetryMillis, push } = options;
 
   /** Each child's responses read so far, for the meter (WorkflowBudget.ts). */
   const cache = new SpendCache();
@@ -1217,7 +1282,7 @@ export const workflowExtension = (
         );
       }
 
-      if (preludeVersion !== PRELUDE_VERSION) {
+      if (!RUNNABLE_PRELUDE_VERSIONS.has(preludeVersion)) {
         return refused(
           `workflow_begin refused: the script carries prelude version ${String(preludeVersion)}, and this brain runs ${String(PRELUDE_VERSION)}.`
         );
@@ -1266,7 +1331,7 @@ export const workflowExtension = (
       }
     );
 
-    // One level per node: the script's `effort` when given, else the role's; none runs at the
+    // One level per node: the script's `effort` when given, else the model's; none runs at the
     // model's default. The row records it, so the child's shell row shows what runs.
     const thinkingLevel = Option.orElse(
       Option.filter(input.dispatch.effort, isThinkingLevel),
@@ -1400,8 +1465,8 @@ export const workflowExtension = (
           (): NodeRefusal => "outside_grant"
         );
 
-        // Only a role with no model carries the resolver's words; the other refusals speak for
-        // themselves.
+        // Only a model that did not resolve carries the resolver's words; the other refusals speak
+        // for themselves.
         const error =
           why === "no_provider" && Result.isFailure(input.model)
             ? input.model.failure
@@ -1424,15 +1489,7 @@ export const workflowExtension = (
         ? Option.none<Outside>()
         : briefWithin(envelope.value, askOf(row, input));
 
-      const launch = Option.fromUndefinedOr(approvals.items[row.approvalId]);
-
-      const record = nodeRecordOf(
-        api,
-        row,
-        input,
-        outside,
-        Option.getOrElse(Option.flatMap(launch, overridesOf), () => ({}))
-      );
+      const record = nodeRecordOf(api, row, input, outside);
 
       const node: NodeItemState = { ...base, briefId: record.id };
 
@@ -1783,12 +1840,51 @@ export const workflowExtension = (
     }));
   };
 
-  /** What the reserve commit needs from outside it: the role's model and the thread's mode. */
+  /**
+   * The model a node runs on: the one its call names, resolved now; else the launching thread's
+   * model at its level (ADR 0043), unchecked, as a subagent that names no model runs on its parent's.
+   */
+  const nodeModelOf = async (
+    dispatch: Dispatch,
+    threadModel: Option.Option<ModelRef>,
+    threadLevel: string | undefined
+  ): Promise<Result.Result<ResolvedNodeModel, string>> => {
+    const named = Option.isSome(dispatch.spec)
+      ? await resolveModel(dispatch.spec.value)
+      : Result.succeed(Option.none<ResolvedNodeModel>());
+
+    return Result.flatMap(named, (found) =>
+      Option.match(found, {
+        onSome: (resolved) => Result.succeed(resolved),
+        onNone: () =>
+          Option.match(threadModel, {
+            onNone: () =>
+              Result.fail(
+                'the launching thread runs on no model; name one with model: "provider/modelId[:level]"'
+              ),
+            onSome: (model) => {
+              const thinkingLevel = Option.filter(
+                Option.fromUndefinedOr(threadLevel),
+                isThinkingLevel
+              );
+
+              return Result.succeed<ResolvedNodeModel>({
+                spec: specOf(model, thinkingLevel),
+                provider: model.provider,
+                modelId: model.modelId,
+                thinkingLevel,
+              });
+            },
+          }),
+      })
+    );
+  };
+
+  /** What the reserve commit needs from outside it: the node's model and the thread's mode. */
   const reserveInput = async (
     api: ToolExecutionApi,
     caller: Caller,
     dispatch: Dispatch,
-    record: Option.Option<ApprovalRecord>,
     context: ChordContext
   ): Promise<ReserveInput> => {
     const nodeId = faults.freshDispatch
@@ -1803,13 +1899,24 @@ export const workflowExtension = (
 
     const known = ledger?.items[dispatch.workflowId]?.nodes[nodeId];
 
-    // A rerun finds its row and resolves nothing again: the row records what the role resolved to.
-    // A node waiting for its own brief has resolved nothing yet: its role resolves right before the
-    // commit that creates its child (ADR 0035), after Go.
+    const agent = await api.agent(context);
+
+    const threadModel = Option.map(
+      Option.fromUndefinedOr(agent.model),
+      (found): ModelRef => ({
+        provider: found.provider,
+        modelId: found.modelId,
+      })
+    );
+
+    // A rerun finds its row and resolves nothing again: the row records what it runs on. A node
+    // waiting for its own brief has resolved nothing yet: its model resolves right before the
+    // commit that creates its child, after Go.
     const model =
       known === undefined || isWaitingNode(known)
-        ? await resolveRole(dispatch.role, Option.flatMap(record, overridesOf))
+        ? await nodeModelOf(dispatch, threadModel, agent.thinkingLevel)
         : Result.succeed<ResolvedNodeModel>({
+            spec: known.role ?? "",
             provider: known.provider ?? "",
             modelId: known.modelId ?? "",
             thinkingLevel: Option.filter(
@@ -1819,7 +1926,6 @@ export const workflowExtension = (
           });
 
     const { mode } = await readPermissions(api, context);
-    const agent = await api.agent(context);
     const link = await api.snapshot(ChildDoc, api.conversationId, context);
 
     return {
@@ -1827,6 +1933,7 @@ export const workflowExtension = (
       caller,
       dispatch,
       model,
+      threadModel,
       mode,
       cwd: Option.filter(
         Option.fromUndefinedOr(agent.cwd),
@@ -1840,7 +1947,7 @@ export const workflowExtension = (
 
   /**
    * Waits for a node's own brief like any approval (ADR 0013: a rerun finds its record and waits
-   * again), then admits or refuses the node, with its role resolved after the answer and the
+   * again), then admits or refuses the node, with its model resolved after the answer and the
    * thread's mode read again.
    */
   const awaitBrief = async (
@@ -1861,15 +1968,9 @@ export const workflowExtension = (
       };
     }
 
-    const launch = await launchRecordOf(
-      api,
-      input.dispatch.workflowId,
-      context
-    );
-
     const fresh = await stoppable(
       context,
-      reserveInput(api, input.caller, input.dispatch, launch, context)
+      reserveInput(api, input.caller, input.dispatch, context)
     );
 
     return await admit(api, fresh, context);
@@ -1972,7 +2073,7 @@ export const workflowExtension = (
 
     const input = await stoppable(
       context,
-      reserveInput(api, caller, dispatch, record, context)
+      reserveInput(api, caller, dispatch, context)
     );
 
     const limit = Option.match(Option.flatMap(record, envelopeOf), {
@@ -2025,10 +2126,12 @@ export const workflowExtension = (
         return refused(caller.failure);
       }
 
-      if (given.unknownOptions.length > 0) {
-        return refused(
-          `agent(): unknown options ${given.unknownOptions.join(", ")}.`
-        );
+      // `role` reaches a node only from a script approved before ADR 0043 (the dry run refuses a
+      // new one), and `namedSpecOf` reads it.
+      const unknown = given.unknownOptions.filter((key) => key !== ROLE_OPTION);
+
+      if (unknown.length > 0) {
+        return refused(`agent(): unknown options ${unknown.join(", ")}.`);
       }
 
       const resume = await resumeTargetOf(
@@ -2048,14 +2151,14 @@ export const workflowExtension = (
         return refused(schema.failure);
       }
 
-      // A resumed node takes the default role unless the script names one, as the plan's dry run
-      // records it: the envelope the user approved grants exactly that role at this call site.
-      const role = Option.getOrElse(given.role, () => DEFAULT_NODE_ROLE);
+      // A resumed node runs on the launching thread's model unless the script names one, as the
+      // plan's dry run records it: the envelope the user approved grants exactly that model here.
+      const spec = namedSpecOf("agent", given);
 
       const effort = optionalText(given.effort, PHASE_TITLE_LIMIT);
 
-      if (!isRoleSpec(role)) {
-        return refused(roleProblem("agent", role));
+      if (Result.isFailure(spec)) {
+        return refused(spec.failure);
       }
 
       if (Option.isSome(effort) && !isThinkingLevel(effort.value)) {
@@ -2072,7 +2175,7 @@ export const workflowExtension = (
           prompt: given.prompt,
           label: labelOf(given.label, given.prompt),
           phase: optionalText(given.phase, PHASE_TITLE_LIMIT),
-          role,
+          spec: spec.success,
           schema: schema.success,
           key: optionalText(given.key, KEY_LIMIT),
           readonly: given.readonly,
@@ -2120,10 +2223,10 @@ export const workflowExtension = (
         () => "The result is correct and complete."
       );
 
-      const role = Option.getOrElse(given.role, () => DEFAULT_VERIFY_ROLE);
+      const spec = namedSpecOf("verify", given);
 
-      if (!isRoleSpec(role)) {
-        return refused(roleProblem("verify", role));
+      if (Result.isFailure(spec)) {
+        return refused(spec.failure);
       }
 
       return await runNode(
@@ -2134,7 +2237,7 @@ export const workflowExtension = (
           prompt: verifyPrompt(claim, given.result),
           label: labelOf(given.label, `Verify: ${claim}`),
           phase: optionalText(given.phase, PHASE_TITLE_LIMIT),
-          role,
+          spec: spec.success,
           schema: Option.some(VERDICT_SCHEMA),
           key: Option.none(),
           readonly: true,
@@ -2382,7 +2485,7 @@ export const workflowExtension = (
     extension: defineExtension({
       name: WORKFLOWS_EXTENSION,
       tools: [
-        planTool(plan, resolveRole),
+        planTool(plan),
         begin,
         agent,
         verify,

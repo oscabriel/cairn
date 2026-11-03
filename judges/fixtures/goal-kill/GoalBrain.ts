@@ -117,6 +117,9 @@ const program = Effect.gen(function* () {
                 await Promise.resolve(Result.fail("No model judges here.")),
               ask: async () =>
                 await Promise.resolve(Result.fail("No model judges here.")),
+              roleNameRead: async () => {
+                await Promise.resolve();
+              },
             },
             faults: {
               at,

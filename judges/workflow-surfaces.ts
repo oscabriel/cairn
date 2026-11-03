@@ -12,14 +12,14 @@
 //
 //   launch-approval  a launch of `review-fan` shows its numbers first (Nodes 4; the estimate's cost
 //                    unknown, never "$0.00"; the $2.00 budget; Go covers "Up to 4 nodes, 3 at
-//                    once"), then what each call site runs as (Read · @worker · reads only · up to
-//                    3; Judge · @worker · reads only · once) and its arguments folded until
+//                    once"), then the model each call site runs on (Read · faux/scripted at medium
+//                    · reads only · up to 3; Judge · the same · once) and its arguments folded until
 //                    opened, with Send back, Run on 1 first, Decline and Go, every control at
 //                    least 44 px at 390 and nothing scrolling sideways. Send back takes notes,
 //                    sends one answer and runs nothing, and the model reads the notes once. Run on
 //                    1 first sends one answer and runs two nodes of four (the first reader and the
-//                    judge). A launch naming `@reviewer`, which the role table does not bind,
-//                    blocks Go and Run on 1 first with "no role named @reviewer"; a tap on Go sends
+//                    judge). A launch naming a model the catalog does not list blocks Go and Run on
+//                    1 first with "is not ready, as it is not in the model catalog"; a tap on Go sends
 //                    nothing, and Decline with a reason settles it, running nothing.
 //   steps            Go on a launch whose readers keep working: the header's button says "1
 //                    workflow" and opens the panel (a column beside the chat at 1,440, a bottom
@@ -27,7 +27,7 @@
 //                    readers, each with Stop, and Judge not started. Stop on the second reader
 //                    sends one `workflow.stopNode` and stops it alone: it reads stopped, with no
 //                    Stop, while the other two still run. The first reader, released, reads done
-//                    with its role, model and tokens. Stop workflow sends one `workflow.stop`: the
+//                    with its model and tokens. Stop workflow sends one `workflow.stop`: the
 //                    third reader reads stopped, the workflow stopped with no Stop left, the tally
 //                    "3 nodes · 1 done · 2 stopped", Judge not started, and the model reads that
 //                    3 of 4 nodes ran. Nothing scrolls sideways; at 390 every control is 44 px.
@@ -52,7 +52,7 @@ import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
 
 import { startCairn } from "./fixtures/parity/CairnApp.ts";
-import { BRIEF_ROLES } from "./fixtures/surfaces/BriefBrain.ts";
+import { READY_MODEL, UNREADY_MODEL } from "./fixtures/surfaces/BriefBrain.ts";
 import {
   holdAll,
   JUDGE,
@@ -94,9 +94,9 @@ const broken: Broken = values.broken;
 
 const widths = values.width.split(",").map(Number);
 
-const BOUND = "@worker";
+const BOUND = READY_MODEL;
 
-const UNBOUND = "@reviewer";
+const UNBOUND = UNREADY_MODEL;
 
 interface Result {
   readonly check: string;
@@ -297,12 +297,12 @@ const send = async (page: Page, words: string) => {
 };
 
 /** Asks the parent for a launch and waits for its card. */
-const propose = async (page: Page, role: string, tag: string) => {
-  await send(page, `launch ${role} ${tag}`);
+const propose = async (page: Page, model: string, tag: string) => {
+  await send(page, `launch ${model} ${tag}`);
   await card(page)
     .filter({ hasText: `(${tag})` })
     .waitFor({ state: "visible", timeout: 15_000 });
-  // `roles.check` answers after the card draws.
+  // `models.check` answers after the card draws.
   await sleep(800);
 };
 
@@ -374,7 +374,12 @@ const launchApproval = async (
   await propose(page, BOUND, back);
 
   const text = await cardText(page);
-  const site = (pattern: string) => pattern.replace("<role>", BOUND);
+
+  const site = (pattern: string) =>
+    pattern.replace(
+      "<model>",
+      BOUND.replace(/:(?<level>[a-z]+)$/u, " at $<level>")
+    );
 
   for (const [what, words] of [
     ["the node count", `Nodes${LAUNCH_CARD_WORDS.nodes}`],
@@ -476,7 +481,7 @@ const launchApproval = async (
     `Run on 1 first ran ${JSON.stringify(outcomes.get(one))}`
   );
 
-  // An unbound role blocks Go and Run on 1 first; Decline settles it.
+  // A model that is not ready blocks Go and Run on 1 first; Decline settles it.
   const unbound = `unbound-${width}`;
 
   await propose(page, UNBOUND, unbound);
@@ -488,12 +493,14 @@ const launchApproval = async (
   const reason = ((await blocked.textContent()) ?? "").trim();
 
   expect(
-    reason.includes(`no role named ${UNBOUND}`),
+    reason.includes(
+      `${UNBOUND} is not ready, as it is not in the model catalog`
+    ),
     `the card says ${JSON.stringify(reason)}`
   );
   expect(
     !(await isLive(page, "go")) && !(await isLive(page, "run-on-one")),
-    "Go or Run on 1 first takes a click on an unbound role"
+    "Go or Run on 1 first takes a click on a model that is not ready"
   );
 
   const beforeBlocked = sentCount(frames, "thread.respond");
@@ -506,7 +513,7 @@ const launchApproval = async (
   );
 
   await action(page, "decline").click();
-  await card(page).locator("textarea").fill("no reviewer role yet");
+  await card(page).locator("textarea").fill("that model is not signed in");
   await action(page, "confirm-decline").click();
   await cardClosed(page, unbound);
   await sleep(500);
@@ -702,7 +709,7 @@ const steps = async (
     "the stopped reader still offers Stop"
   );
 
-  // The first reader, released, reads done with its role, model and tokens.
+  // The first reader, released, reads done with its model and tokens.
   release(first ?? "");
 
   await until(
@@ -718,9 +725,7 @@ const steps = async (
   ).trim();
 
   expect(
-    detail.includes(BOUND) &&
-      detail.includes("faux/scripted") &&
-      detail.includes("2.1k tokens"),
+    detail.includes("faux/scripted") && detail.includes("2.1k tokens"),
     `the done reader's detail reads ${JSON.stringify(detail)}`
   );
 
@@ -783,7 +788,7 @@ const runWidth = async (browser: Browser, width: number) => {
 
   const app = await startCairn(
     { projectTitle: "Cairn", threadTitle: "Review the fan", entries: [] },
-    { brain: launchBrain, roles: BRIEF_ROLES }
+    { brain: launchBrain }
   );
 
   const url = new URL(app.threadUrl);

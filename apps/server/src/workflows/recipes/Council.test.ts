@@ -1,7 +1,8 @@
 // The council recipe on a faux model (plan 5D; workflows note W7): the built-in `council.workflow`
 // launched by name (its recipe reference through the gate) on a real pi-durable Harness with the
-// code mode, workflows and results extensions, every node on pi-ai's faux provider. Each role
-// resolves to a faux model whose id says how it behaves, so one script exercises:
+// code mode, workflows and results extensions, every node on pi-ai's faux provider. Each advisor and
+// the judge name a faux model (`faux/advisor-1`) whose id, less a trailing number, says how it
+// behaves, so one script exercises:
 //
 // - structure: two advisors, a claim matrix and two cross-examinations are five nodes in three
 //   phases; each cross-examination resumes its advisor's report node as a fork of its child, which
@@ -37,7 +38,6 @@ import { CodeMode } from "../../brain/CodeMode.ts";
 import { messageText } from "../../brain/CommitFeed.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../../models/ResultTool.ts";
 import { taskOf } from "../../subagents/Delivery.ts";
-import { DEFAULT_NODE_ROLE } from "../Prelude.ts";
 import { HOLD_RETRY_MILLIS } from "../WorkflowBudget.ts";
 import { ledgerProblems, WorkflowsDoc } from "../WorkflowDocs.ts";
 import type {
@@ -49,6 +49,7 @@ import { NO_PROJECT_RECIPES } from "../WorkflowPlanTool.ts";
 import {
   codemodeResultText,
   KIT_MODEL,
+  KIT_SPEC,
   KitLayer,
   openKit,
   pause,
@@ -63,7 +64,7 @@ import {
   NO_WORKFLOW_FAULTS,
   workflowExtension,
 } from "../WorkflowTools.ts";
-import type { RoleResolver } from "../WorkflowTools.ts";
+import type { ModelResolver } from "../WorkflowTools.ts";
 import { BUILT_IN_RECIPES, recipeReference } from "./BuiltInRecipes.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -73,7 +74,7 @@ const WF = "wf-council";
 const COUNCIL = BUILT_IN_RECIPES.get("council") ?? "";
 
 /**
- * The faux models, by id: `advisor` answers every pass; `advisor-forkfail` reports, but fails any
+ * The faux models, by id: `advisor` (and `advisor-1`, `advisor-2`) answers every pass; `advisor-forkfail` reports, but fails any
  * run that continues an earlier one (so its resumed node fails); `advisor-fail` fails its report;
  * `judge` disputes one claim of each of advisors 1 and 2; `judge-fail` fails; `judge-settle` also
  * says evidence can settle the disputes (a third pass runs); `advisor-slow` takes 3 s over any
@@ -81,6 +82,8 @@ const COUNCIL = BUILT_IN_RECIPES.get("council") ?? "";
  */
 const NODE_MODELS = [
   "advisor",
+  "advisor-1",
+  "advisor-2",
   "advisor-forkfail",
   "advisor-fail",
   "judge",
@@ -89,18 +92,31 @@ const NODE_MODELS = [
   "advisor-slow",
 ] as const;
 
-/** A role resolves to the faux model of the same name: `@advisor` runs on `advisor`. */
-const resolveRole: RoleResolver = async (spec) => {
-  const name = spec.replace(/^@/u, "").replace(/-\d+$/u, "");
+/**
+ * A named model resolves to the faux model it names, as `ModelSpecs` does: `faux/advisor-1` runs on
+ * `advisor-1`, which behaves as `advisor`. A role name, which only a script written before ADR 0043
+ * holds, names none.
+ */
+const resolveModel: ModelResolver = async (spec) => {
+  if (spec.startsWith("@")) {
+    return await Promise.resolve(Result.succeed(Option.none()));
+  }
+
+  const name = spec.replace(/^faux\//u, "");
 
   return await Promise.resolve(
     NODE_MODELS.some((model) => model === name)
-      ? Result.succeed({
-          provider: KIT_MODEL.provider,
-          modelId: name,
-          thinkingLevel: Option.none(),
-        })
-      : Result.fail(`no model is bound to ${spec}`)
+      ? Result.succeed(
+          Option.some({
+            spec,
+            provider: KIT_MODEL.provider,
+            modelId: name,
+            thinkingLevel: Option.none(),
+          })
+        )
+      : Result.fail(
+          `ModelSpecs.resolve refused "${spec}": it is not in the model catalog.`
+        )
   );
 };
 
@@ -241,7 +257,7 @@ const CouncilResult = Schema.Struct({
   roster: Schema.Array(
     Schema.Struct({
       advisor: Schema.Finite,
-      role: Schema.String,
+      model: Schema.NullOr(Schema.String),
       report: Schema.Boolean,
       crossExam: Schema.Array(Schema.String),
     })
@@ -342,7 +358,7 @@ const council = (
     registry.install(codemode.extension.extension);
     registry.install(
       workflowExtension({
-        resolveRole,
+        resolveModel,
         plan: {
           dryRun: async () =>
             await Promise.resolve(
@@ -451,8 +467,8 @@ const council = (
 const ARGS = {
   question: "Should the brain keep one SQLite file per project?",
   scope: "apps/server/src/brain",
-  advisors: ["@advisor-1", "@advisor-2"],
-  judge: "@judge",
+  advisors: ["faux/advisor-1", "faux/advisor-2"],
+  judge: "faux/judge",
 };
 
 const labelsOf = (run: Run) =>
@@ -498,13 +514,13 @@ describe("the council recipe on a faux model", () => {
         assert.deepStrictEqual(result.roster, [
           {
             advisor: 1,
-            role: "@advisor-1",
+            model: "faux/advisor-1",
             report: true,
             crossExam: ["resumed"],
           },
           {
             advisor: 2,
-            role: "@advisor-2",
+            model: "faux/advisor-2",
             report: true,
             crossExam: ["resumed"],
           },
@@ -537,7 +553,7 @@ describe("the council recipe on a faux model", () => {
           const report = nodeOf(run, `Advisor ${String(advisor)} report`);
           const resumed = nodeOf(run, `Advisor ${String(advisor)} pass 2`);
 
-          // A child of its own, on the role the report ran as.
+          // A child of its own, on the model the report ran on.
           assert.notStrictEqual(resumed.conversationId, report.conversationId);
           assert.strictEqual(resumed.role, report.role);
 
@@ -577,7 +593,7 @@ describe("the council recipe on a faux model", () => {
       // The dry run's stub matrix settles nothing, so the plan counts five nodes; the launch
       // grants seven.
       const run = yield* council(
-        { ...ARGS, judge: "@judge-settle", maxPasses: 3 },
+        { ...ARGS, judge: "faux/judge-settle", maxPasses: 3 },
         { plant: { maxNodes: Option.some(7) } }
       );
 
@@ -617,7 +633,7 @@ describe("the council recipe on a faux model", () => {
       Effect.gen(function* () {
         const run = yield* council({
           ...ARGS,
-          advisors: ["@advisor-1", "@advisor-fail"],
+          advisors: ["faux/advisor-1", "faux/advisor-fail"],
         });
 
         assert.deepStrictEqual(run.problems, []);
@@ -638,7 +654,7 @@ describe("the council recipe on a faux model", () => {
 
   it.live("with the claim matrix failed, returns the first pass only", () =>
     Effect.gen(function* () {
-      const run = yield* council({ ...ARGS, judge: "@judge-fail" });
+      const run = yield* council({ ...ARGS, judge: "faux/judge-fail" });
 
       assert.strictEqual(run.row.state, "finished", run.resultText);
       assert.deepStrictEqual(labelsOf(run), [
@@ -657,7 +673,10 @@ describe("the council recipe on a faux model", () => {
     () =>
       Effect.gen(function* () {
         const run = yield* council(
-          { ...ARGS, advisors: ["@advisor-1", "@advisor-2", "@advisor-fail"] },
+          {
+            ...ARGS,
+            advisors: ["faux/advisor-1", "faux/advisor-2", "faux/advisor-fail"],
+          },
           { plant: { maxNodes: Option.some(7) } }
         );
 
@@ -683,7 +702,7 @@ describe("the council recipe on a faux model", () => {
     () =>
       Effect.gen(function* () {
         const run = yield* council(
-          { ...ARGS, advisors: ["@advisor-1", "@advisor-forkfail"] },
+          { ...ARGS, advisors: ["faux/advisor-1", "faux/advisor-forkfail"] },
           { plant: { maxNodes: Option.some(7) } }
         );
 
@@ -717,7 +736,7 @@ describe("the council recipe on a faux model", () => {
   it.live("a stopped cross-examination is null, with no fallback node", () =>
     Effect.gen(function* () {
       const run = yield* council(
-        { ...ARGS, advisors: ["@advisor-slow", "@advisor-2"] },
+        { ...ARGS, advisors: ["faux/advisor-slow", "faux/advisor-2"] },
         { plant: { maxNodes: Option.some(7) }, stop: "Advisor 1 pass 2" }
       );
 
@@ -742,24 +761,24 @@ const script = (body: string) =>
 
 describe("agent's resume option", () => {
   it.live(
-    "runs a resume with no role as the default role, as the plan's dry run records the call site",
+    "runs a resume that names no model on the launching thread's, as the plan's dry run records the call site",
     () =>
       Effect.gen(function* () {
         const run = yield* council(
-          { advisors: ["@advisor-1"] },
+          { advisors: ["faux/advisor-1"] },
           {
             plant: { maxNodes: Option.some(3) },
             source:
-              script(`const first = await agent.full("You are advisor 1 of 1.", { role: args.advisors[0], label: "first", readonly: true });
+              script(`const first = await agent.full("You are advisor 1 of 1.", { model: args.advisors[0], label: "first", readonly: true });
 const second = await agent.full("Pass 2. again", { resume: first.nodeId, label: "second" });
 return { first: first.status, second: second.status };`),
           }
         );
 
         assert.strictEqual(run.row.state, "finished", run.resultText);
-        assert.strictEqual(nodeOf(run, "first").role, "@advisor-1");
-        // Not the resumed node's role: the envelope granted DEFAULT_NODE_ROLE at this call site.
-        assert.strictEqual(nodeOf(run, "second").role, DEFAULT_NODE_ROLE);
+        assert.strictEqual(nodeOf(run, "first").role, "faux/advisor-1");
+        // Not the resumed node's model: the envelope granted the thread's model at this call site.
+        assert.strictEqual(nodeOf(run, "second").role, KIT_SPEC);
       })
   );
 
@@ -768,11 +787,11 @@ return { first: first.status, second: second.status };`),
     () =>
       Effect.gen(function* () {
         const run = yield* council(
-          { advisors: ["@advisor-fail"] },
+          { advisors: ["faux/advisor-fail"] },
           {
             plant: { maxNodes: Option.some(3) },
             source:
-              script(`const first = await agent.full("You are advisor 1 of 1.", { role: args.advisors[0], label: "first" });
+              script(`const first = await agent.full("You are advisor 1 of 1.", { model: args.advisors[0], label: "first" });
 const second = await agent.full("Pass 2. again", { resume: first.nodeId, label: "second" });
 return { first: first.status, second };`),
           }

@@ -8,15 +8,14 @@
 //
 // - a `command` judge's run executes its argv for real, here in the brain's process, and records
 //   its exit code and the tail of its output, as `JudgeRun.ts` does;
-// - the `model` judge names `opencode-go/gpt-6-luna`, another family than the thread's scripted
-//   model (the binding refuses one of the same family); its run is played, with the reply a model
-//   judge would give, since no model is asked;
+// - the `model` judge names `opencode-go/gpt-6-luna`, another model than the thread's scripted one;
+//   its run is played, with the reply a model judge would give, since no model is asked;
 // - the `user` judge's criterion stays open for the user to mark through the page (`goal.mark`).
 
 import { execFileSync } from "node:child_process";
 
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import type { CriterionProposal } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { Clock, Effect, Option } from "effect";
 
 import { ScriptedGoals } from "../../../apps/server/src/brain/ScriptedHarness.ts";
@@ -33,7 +32,7 @@ import { PARITY_THREAD_ID } from "../parity/CairnApp.ts";
 /** The goal's objective. */
 export const OBJECTIVE = "Ship the parser with its docs";
 
-/** The model judge's model: of another family than the thread's scripted model. */
+/** The model judge's model: another than the thread's scripted model. */
 export const JUDGE_MODEL = "opencode-go/gpt-6-luna";
 
 /** The criteria, in the order they are bound: ids `c1` to `c4` on a fresh goal. */
@@ -51,7 +50,7 @@ export const CRITERIA = {
     text: "The README says how to run it",
     judge: {
       kind: "model",
-      spec: RoleSpec.make(JUDGE_MODEL),
+      spec: ModelSpec.make(JUDGE_MODEL),
       rubric: "The README names the command that runs the parser",
     },
   },

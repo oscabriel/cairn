@@ -12,7 +12,7 @@
 // examinations); every node took one or two schema attempts (the ledger's `schemaAttempts`, which
 // the result tool derives from the transcript); each cross-examination resumed its advisor's report
 // node (the roster says `resumed`, no fresh-context fallback); and each node ran on the model its
-// role names. Prints one JSON line per node and a summary with the tokens and list-price cost (the
+// spec names. Prints one JSON line per node and a summary with the tokens and list-price cost (the
 // bridge's tokens are plan usage, unpriced). Exit 0 on a pass.
 //
 // `--kill-in-pass-2` is workflows note judge 6's kill on the same council (plan 7B): the brain runs
@@ -82,7 +82,7 @@ import {
   NO_WORKFLOW_FAULTS,
   workflowExtension,
 } from "../apps/server/src/workflows/WorkflowTools.ts";
-import type { RoleResolver } from "../apps/server/src/workflows/WorkflowTools.ts";
+import type { ModelResolver } from "../apps/server/src/workflows/WorkflowTools.ts";
 import {
   councilRoot,
   openCouncilBrain,
@@ -119,15 +119,17 @@ const refOf = (spec: string): ModelRef => {
   return { provider, modelId: rest.join("/") };
 };
 
-/** The roles the council names, and the models they run on. */
-const ROLES: ReadonlyMap<string, ModelRef> = new Map([
-  [
-    "@advisor-bridge",
-    { provider: "claude-bridge", modelId: values["bridge-model"] },
-  ],
-  ["@advisor-go", refOf(values["advisor-model"])],
-  ["@judge-go", refOf(values["judge-model"])],
-]);
+/** The models the council names (ADR 0043): advisor 1 on the bridge, the rest on OpenCode Go. */
+const BRIDGE_ADVISOR = `claude-bridge/${values["bridge-model"]}`;
+
+const GO_ADVISOR = values["advisor-model"];
+
+const GO_JUDGE = values["judge-model"];
+
+/** The specs this judge resolves, each to the model it names. */
+const MODELS: ReadonlyMap<string, ModelRef> = new Map(
+  [BRIDGE_ADVISOR, GO_ADVISOR, GO_JUDGE].map((spec) => [spec, refOf(spec)])
+);
 
 const ARGS = {
   question:
@@ -135,20 +137,24 @@ const ARGS = {
   scope: "A single-user CLI written in TypeScript; the file is edited by hand",
   nonGoals: "Remote or synced settings",
   evidence: "None given; answer from what you know and say what you assumed",
-  advisors: ["@advisor-bridge", "@advisor-go"],
-  judge: "@judge-go",
+  advisors: [BRIDGE_ADVISOR, GO_ADVISOR],
+  judge: GO_JUDGE,
 };
 
-const resolveRole: RoleResolver = async (spec) =>
+/** Each spec the council names resolves to its model; any other spec is refused. */
+const resolveModel: ModelResolver = async (spec) =>
   await Promise.resolve(
-    Option.match(Option.fromUndefinedOr(ROLES.get(spec)), {
-      onNone: () => Result.fail(`the judge binds no model to ${spec}`),
+    Option.match(Option.fromUndefinedOr(MODELS.get(spec)), {
+      onNone: () => Result.fail(`the judge names no model ${spec}`),
       onSome: (model) =>
-        Result.succeed({
-          provider: model.provider,
-          modelId: model.modelId,
-          thinkingLevel: Option.none(),
-        }),
+        Result.succeed(
+          Option.some({
+            spec,
+            provider: model.provider,
+            modelId: model.modelId,
+            thinkingLevel: Option.none(),
+          })
+        ),
     })
   );
 
@@ -258,7 +264,7 @@ const waitForEnd = (brain: KitBrain) =>
 
 /** What is wrong with one node, if anything. */
 const nodeFailures = (node: NodeItemState): ReadonlyArray<string> => {
-  const want = ROLES.get(node.role ?? "");
+  const want = MODELS.get(node.role ?? "");
   const ran = `${node.provider ?? ""}/${node.modelId ?? ""}`;
   const found: Array<string> = [];
 
@@ -337,7 +343,7 @@ const runCouncil = Effect.gen(function* () {
           [
             codemode.extension.extension,
             workflowExtension({
-              resolveRole,
+              resolveModel,
               plan,
               faults: NO_WORKFLOW_FAULTS,
               hold: NO_HOLD,
@@ -456,7 +462,7 @@ const program = Effect.gen(function* () {
   return nodes.length;
 });
 
-/** One life's arguments: this script over the store in `dir`, with the same role bindings. */
+/** One life's arguments: this script over the store in `dir`, with the same models. */
 const lifeArgs = (dir: string, mark: boolean) => {
   const args = [
     import.meta.filename,

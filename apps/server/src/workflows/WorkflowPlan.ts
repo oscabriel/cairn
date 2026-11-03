@@ -1,7 +1,8 @@
 // The dry run behind a workflow's launch card (ADR 0012 as amended, ADR 0032): the rewritten script
 // runs in a QuickJS sandbox of its own whose node tools are stubs. Each `agent` or `verify` call
 // resolves at once with a value built from its schema, and is recorded with its call site (the
-// script's `line:column`), role, label, phase, schema name and whether it may write. The calls
+// script's `line:column`), the model it runs on (the script's `model`, else the launching thread's
+// model and level, ADR 0043), label, phase, schema name and whether it may write. The calls
 // become the call-site table and the node count; a script that reaches the node cap is `unbounded`
 // ("at least N, depends on the data"), and it keeps running past the cap with every further node
 // refused, so sites it reaches only after its loop still reach the table. Nothing outside the
@@ -10,20 +11,20 @@
 // Only the node tools exist in the dry run's sandbox: a workflow script that calls any other tool
 // (`tools.read`, say) fails here, so the run's gate must refuse the same call.
 //
-// `validate` is parse plus dry run, never a launch. The estimate multiplies each role's call count by
-// the spread of that role's settled nodes in past ledgers, with a labelled fallback for a role with
-// no history; it is a range and says what it rests on.
+// `validate` is parse plus dry run, never a launch. The estimate multiplies each model's call count
+// by the spread of the thread's past settled nodes on that model, with a labelled fallback for a
+// model with no history; it is a range and says what it rests on.
 
 import { DisplayText } from "@cairn/protocol/Ids";
 import { ThinkingLevel } from "@cairn/protocol/Models";
+import type { ModelRef } from "@cairn/protocol/Models";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { CallSite, Envelope, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type {
   NodeArms,
   RuntimeMode,
   WorkflowEstimate,
 } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
-import type { RoleOverrides } from "@cairn/protocol/Roles";
 import type { Budget } from "@cairn/protocol/Spend";
 import { WIRE_STRING_LIMIT_BYTES } from "@cairn/protocol/Thread";
 import {
@@ -43,13 +44,19 @@ import {
 } from "effect";
 
 import {
+  isRoleName,
+  modelOfSpec,
+  modelText,
+  parseModelSpec,
+  specOf,
+} from "../models/ModelSpecs.ts";
+import {
   AgentCall,
   ApproveCall,
-  DEFAULT_NODE_ROLE,
-  DEFAULT_VERIFY_ROLE,
   isObjectRootSchema,
   preludeLineOf,
   rewriteScript,
+  ROLE_OPTION,
   TOO_MANY_ITEMS,
   VerifyCall,
 } from "./Prelude.ts";
@@ -102,7 +109,22 @@ export interface PlanInput {
   readonly budget: Budget;
   /** Run on N first; none runs on all. */
   readonly sample: Option.Option<number>;
+  /**
+   * The launching thread's model and level: what a call that names no model runs on (ADR 0043).
+   * None when the thread has no model, which refuses every such call.
+   */
+  readonly threadModel: Option.Option<ThreadModel>;
 }
+
+/** The model and level a thread runs on. */
+export interface ThreadModel {
+  readonly model: ModelRef;
+  readonly thinkingLevel: Option.Option<ThinkingLevel>;
+}
+
+/** The spec a node that names no model runs on: the thread's model at its level. */
+export const threadSpecOf = (thread: ThreadModel): string =>
+  specOf(thread.model, thread.thinkingLevel);
 
 /** The dry run's answer: the script, its call sites and how many nodes it dispatched. */
 export interface DryRun {
@@ -117,9 +139,9 @@ export interface DryRun {
    * table may be incomplete. Always true for a bounded run.
    */
   readonly sitesComplete: boolean;
-  /** Nodes per role spec, in order of each spec's first node: what the estimate multiplies. */
-  readonly byRole: ReadonlyArray<{
-    readonly spec: RoleSpec;
+  /** Nodes per model, in order of each model's first node: what the estimate multiplies. */
+  readonly byModel: ReadonlyArray<{
+    readonly model: ModelRef;
     readonly count: number;
   }>;
   /** Phases the run reached that `meta` does not declare, in order. */
@@ -128,13 +150,9 @@ export interface DryRun {
   readonly output: ReadonlyArray<string>;
 }
 
-/**
- * One settled node of a past ledger: what its role spent. The caller passes only nodes that ran on
- * the binding each role spec has now (its provider and model), so after the user rebinds an alias
- * the old model's nodes do not feed the new estimate.
- */
+/** One settled node of a past ledger: the model it ran on and what it spent. */
 export interface NodeHistory {
-  readonly spec: RoleSpec;
+  readonly model: ModelRef;
   /** Every token it used, cache reads and writes included (`historyTokens`). */
   readonly totalTokens: number;
   /** None when its model has no list price (ADR 0036). */
@@ -157,11 +175,11 @@ export const historyTokens = (receipt: {
     receipt.input + receipt.output + receipt.cacheRead + receipt.cacheWrite
   );
 
-/** Settled nodes per role an estimate reads, newest last. */
+/** Settled nodes per model an estimate reads, newest last. */
 export const HISTORY_WINDOW = 20;
 
 /**
- * Tokens a node of a role with no history is assumed to use, low and high, cache reads included: a
+ * Tokens a node on a model with no history is assumed to use, low and high, cache reads included: a
  * node re-reads its context every turn, so most of its tokens are cache reads. The 2026-10-30
  * council's nodes used 110k to 1.29M each (median about 300k).
  */
@@ -181,7 +199,6 @@ export interface LaunchInput {
   readonly args: Schema.Json;
   readonly budget: Budget;
   readonly estimate: Option.Option<WorkflowEstimate>;
-  readonly roleOverrides: RoleOverrides;
   /** The envelope's node cap; none takes the dry run's count, or the workflow cap when unbounded. */
   readonly maxNodes: Option.Option<number>;
   readonly modes: ReadonlyArray<RuntimeMode>;
@@ -197,7 +214,7 @@ const decodeVerifyCall = Schema.decodeUnknownOption(VerifyCall);
 
 const decodeApproveCall = Schema.decodeUnknownOption(ApproveCall);
 
-const decodeRoleSpec = Schema.decodeUnknownOption(RoleSpec);
+const decodeModelSpec = Schema.decodeUnknownOption(ModelSpec);
 
 const decodeCallSites = Schema.decodeUnknownEffect(Schema.Array(CallSite));
 
@@ -349,7 +366,7 @@ const schemaTitle = (schema: Schema.Json) =>
 /** One recorded node call before the table groups it. */
 interface RecordedNode {
   readonly site: string;
-  readonly spec: RoleSpec;
+  readonly spec: ModelSpec;
   readonly label: string;
   readonly phase: Option.Option<string>;
   readonly schemaName: Option.Option<string>;
@@ -380,7 +397,7 @@ const refusedPastCap: NodeOutcome = {
 /** The stub tools of one dry run and what they recorded. */
 class Recorder {
   readonly nodes: Array<RecordedNode> = [];
-  /** Nodes asked for past the cap and refused: the first of each site, role and mutability. */
+  /** Nodes asked for past the cap and refused: the first of each site, model and mutability. */
   readonly late = new Map<string, RecordedNode>();
   readonly problems: Array<string> = [];
   readonly phases: Array<string> = [];
@@ -393,9 +410,11 @@ class Recorder {
   callCapReached = false;
 
   readonly limits: DryRunLimits;
+  readonly threadModel: Option.Option<ThreadModel>;
 
-  constructor(limits: DryRunLimits) {
+  constructor(limits: DryRunLimits, threadModel: Option.Option<ThreadModel>) {
     this.limits = limits;
+    this.threadModel = threadModel;
   }
 
   /** Counts a call; stops the run past the call cap. */
@@ -461,30 +480,70 @@ class Recorder {
     });
   }
 
-  /** The role spec a call names, or the problem with it. */
+  /**
+   * The model spec a call runs on, or the problem with it: the script's `model`, else the launching
+   * thread's model and level (ADR 0043). A `role` option (prelude version 3 still passes one on)
+   * and a role name in `model` are refused, since roles were removed.
+   */
   spec(
     site: string,
-    role: Option.Option<string>,
-    fallback: string
-  ): Option.Option<RoleSpec> {
-    const written = Option.getOrElse(role, () => fallback);
-    const spec = decodeRoleSpec(written);
-
-    if (Option.isNone(spec)) {
+    tool: string,
+    call: Pick<AgentCall, "model" | "role">
+  ): Option.Option<ModelSpec> {
+    if (Option.isSome(call.role)) {
       this.problem(
-        `line ${site}: role \`${written}\` is not a role alias (\`@worker\`, \`@scout:high\`) or a \`provider/model\``
+        `line ${site}: ${tool}() takes no \`role\` any more: roles were removed; name a model with \`model: "provider/modelId[:level]"\` (the models tool lists them), or leave it out to run on this thread's model`
+      );
+
+      return Option.none();
+    }
+
+    if (Option.isSome(call.model)) {
+      const written = call.model.value.trim();
+
+      if (isRoleName(written)) {
+        this.problem(
+          `line ${site}: model \`${written}\` is a role, and roles were removed; name a model as \`provider/modelId[:level]\` (the models tool lists them), or leave model out to run on this thread's model`
+        );
+
+        return Option.none();
+      }
+
+      const spec = Option.filter(decodeModelSpec(written), (found) =>
+        Option.isSome(parseModelSpec(found))
+      );
+
+      if (Option.isNone(spec)) {
+        this.problem(
+          `line ${site}: model \`${written}\` is not \`provider/modelId[:level]\``
+        );
+      }
+
+      return spec;
+    }
+
+    const thread = Option.flatMap(this.threadModel, (found) =>
+      decodeModelSpec(threadSpecOf(found))
+    );
+
+    if (Option.isNone(thread)) {
+      this.problem(
+        `line ${site}: ${tool}() names no model and this thread runs on none; name one with \`model: "provider/modelId[:level]"\``
       );
     }
 
-    return spec;
+    return thread;
   }
 
   agent(call: AgentCall): NodeOutcome {
     const site = Option.getOrElse(call.site, () => "?");
 
-    if (call.unknownOptions.length > 0) {
+    // `role` is reported by `spec`, with what to pass instead.
+    const unknown = call.unknownOptions.filter((key) => key !== ROLE_OPTION);
+
+    if (unknown.length > 0) {
       this.problem(
-        `line ${site}: agent() does not take ${call.unknownOptions.map((key) => `\`${key}\``).join(", ")}; its options are label, phase, role, schema, key, readonly, resume and effort (a model goes in \`role\`)`
+        `line ${site}: agent() does not take ${unknown.map((key) => `\`${key}\``).join(", ")}; its options are label, phase, model, schema, key, readonly, resume and effort`
       );
     }
 
@@ -508,13 +567,13 @@ class Recorder {
       );
     }
 
-    const spec = this.spec(site, call.role, DEFAULT_NODE_ROLE);
+    const spec = this.spec(site, "agent", call);
 
     if (Option.isNone(spec)) {
       return {
         status: "refused",
         value: null,
-        reason: "invalid role",
+        reason: "invalid model",
         nodeId: null,
       };
     }
@@ -544,13 +603,13 @@ class Recorder {
 
   verify(call: VerifyCall): NodeOutcome {
     const site = Option.getOrElse(call.site, () => "?");
-    const spec = this.spec(site, call.role, DEFAULT_VERIFY_ROLE);
+    const spec = this.spec(site, "verify", call);
 
     if (Option.isNone(spec)) {
       return {
         status: "refused",
         value: null,
-        reason: "invalid role",
+        reason: "invalid model",
         nodeId: null,
       };
     }
@@ -734,15 +793,21 @@ const callSitesOf = (
   );
 };
 
-/** Nodes per role spec, in order of first use. */
-const byRoleOf = (nodes: ReadonlyArray<RecordedNode>) => {
-  const counts = new Map<RoleSpec, number>();
+/** Nodes per model (its level aside), in order of first use. */
+const byModelOf = (nodes: ReadonlyArray<RecordedNode>) => {
+  const counts = new Map<string, { model: ModelRef; count: number }>();
 
   for (const node of nodes) {
-    counts.set(node.spec, (counts.get(node.spec) ?? 0) + 1);
+    for (const model of Option.toArray(modelOfSpec(node.spec))) {
+      const key = modelText(model);
+      const entry = counts.get(key) ?? { model, count: 0 };
+
+      entry.count += 1;
+      counts.set(key, entry);
+    }
   }
 
-  return [...counts].map(([spec, count]) => ({ spec, count }));
+  return [...counts.values()];
 };
 
 /**
@@ -783,16 +848,16 @@ const tokenText = (tokens: number) =>
     : `${Math.round(tokens / 1000)}k`;
 
 /**
- * The pre-launch estimate: each role's node count times the spread (first to third quartile) of
- * its last `HISTORY_WINDOW` settled nodes (`NodeHistory.totalTokens`, cache reads included), or
- * `FALLBACK_NODE_TOKENS` for a role with none. Dollars
- * only when every role's history is priced. For an unbounded run it is the floor of the estimate.
+ * The pre-launch estimate: each model's node count times the spread (first to third quartile) of
+ * the last `HISTORY_WINDOW` settled nodes on that model (`NodeHistory.totalTokens`, cache reads
+ * included), or `FALLBACK_NODE_TOKENS` for a model with none. Dollars only when every model's
+ * history is priced. For an unbounded run it is the floor of the estimate.
  */
 export const estimateRun = (
   run: DryRun,
   history: ReadonlyArray<NodeHistory>
 ): WorkflowEstimate => {
-  const nodes = run.byRole.reduce((sum, entry) => sum + entry.count, 0);
+  const nodes = run.byModel.reduce((sum, entry) => sum + entry.count, 0);
   let tokensLow = 0;
   let tokensHigh = 0;
   let microsLow = 0;
@@ -800,9 +865,11 @@ export const estimateRun = (
   let priced = true;
   const notes: Array<string> = [];
 
-  for (const { spec, count: share } of run.byRole) {
+  for (const { model, count: share } of run.byModel) {
+    const spec = modelText(model);
+
     const samples = history
-      .filter((entry) => entry.spec === spec)
+      .filter((entry) => modelText(entry.model) === spec)
       .slice(-HISTORY_WINDOW);
 
     if (samples.length === 0) {
@@ -867,13 +934,14 @@ export const isLargeWorkflow = (
 
 /** The launch approval's payload for a dry run: the plan the user says Go to. */
 export const toLaunch = (run: DryRun, input: LaunchInput): WorkflowLaunch => {
-  const roles = new Map<string, { spec: RoleSpec; readonly: boolean }>();
+  // The envelope grants each model a call site runs on (ADR 0043), as a reader or a writer.
+  const models = new Map<string, { spec: ModelSpec; readonly: boolean }>();
 
   for (const site of run.callSites) {
     const key = `${site.spec}|${site.readonly}`;
 
-    if (!roles.has(key)) {
-      roles.set(key, { spec: site.spec, readonly: site.readonly });
+    if (!models.has(key)) {
+      models.set(key, { spec: site.spec, readonly: site.readonly });
     }
   }
 
@@ -900,12 +968,11 @@ export const toLaunch = (run: DryRun, input: LaunchInput): WorkflowLaunch => {
         Option.getOrElse(input.maxNodes, () => counted)
       ),
       maxConcurrent: MAX_CONCURRENT_NODES,
-      roles: [...roles.values()].map((role) => ({ ...role, arms: ARMS })),
+      roles: [...models.values()].map((model) => ({ ...model, arms: ARMS })),
       modes: input.modes,
       writes: input.writes,
       budget: input.budget,
     }),
-    roleOverrides: input.roleOverrides,
   });
 };
 
@@ -951,7 +1018,7 @@ export class WorkflowPlan extends Context.Service<
           );
         }
 
-        const recorder = new Recorder(limits);
+        const recorder = new Recorder(limits, input.threadModel);
 
         const code = rewriteScript(script, {
           workflowId: "dry-run",
@@ -1072,7 +1139,7 @@ export class WorkflowPlan extends Context.Service<
           undeclaredPhases: [
             ...new Set(reached.filter((title) => !declared.has(title))),
           ],
-          byRole: byRoleOf(recorder.nodes),
+          byModel: byModelOf(recorder.nodes),
           output: outputOf(result, recorder.logs)
             .filter(isDisplayText)
             .slice(0, 50),

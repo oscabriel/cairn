@@ -1,21 +1,9 @@
 // The server-owned settings (`settings.get`, `settings.update`), kept in `cairn.sqlite`'s
 // `settings` table so every device sees the same values: one row per setting, its value as the
 // setting's encoded JSON. A row that no longer decodes (a setting whose shape changed) reads as the
-// default and is logged; the next update writes it again.
-//
-// The role table (ADR 0035) is seeded once: the first store over a database writes the default
-// table, so the user's table is what the database holds from then on and a later change to the
-// defaults never moves it. Its built-in roles always exist (a stored table missing one reads with
-// the default binding for it), and an update that drops a built-in or binds a role to another role
-// is refused with `SettingsInvalid`, changing nothing.
+// default and is logged; the next update writes it again. A row whose key is no setting any more
+// (`roleBindings`, the role table ADR 0043 removed) is never read, and stays where it is.
 
-import type { ModelRef } from "@cairn/protocol/Models";
-import type { RoleBinding, RoleTable } from "@cairn/protocol/Roles";
-import {
-  BUILT_IN_ROLES,
-  DEFAULT_ROLE_TABLE,
-  RoleName,
-} from "@cairn/protocol/Roles";
 import type { SettingsPatch } from "@cairn/protocol/Settings";
 import { ServerSettings } from "@cairn/protocol/Settings";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
@@ -36,62 +24,6 @@ export class SettingsStoreError extends Schema.TaggedError<SettingsStoreError>()
   }
 ) {}
 
-/** A patch would break a setting's rules. Nothing changed; fix the named setting and send again. */
-export class SettingsInvalid extends Schema.TaggedError<SettingsInvalid>()(
-  "SettingsInvalid",
-  {
-    message: Schema.String,
-    field: Schema.Literals(["roleBindings"]),
-  }
-) {}
-
-/**
- * Whether a model reference names a role instead of a model: a binding may never point at one. Only
- * the provider slot is read, because real model ids start with `@` too (every
- * `cloudflare-workers-ai` model is `@cf/...`).
- */
-export const isAliasRef = (model: ModelRef): boolean =>
-  model.provider.startsWith("@");
-
-/** What a role table breaks, if anything: a missing built-in role, or a binding naming a role. */
-export interface RoleTableProblem {
-  readonly role: string;
-  readonly problem: "missing_built_in" | "alias_binding";
-}
-
-/** Every rule the stored table must keep: the built-ins exist, and no binding names a role. */
-export const roleTableProblems = (
-  table: RoleTable
-): ReadonlyArray<RoleTableProblem> => {
-  const missing = BUILT_IN_ROLES.filter(
-    (role) => !Object.hasOwn(table, role)
-  ).map((role): RoleTableProblem => ({ role, problem: "missing_built_in" }));
-
-  const aliased = Object.entries(table)
-    .filter(([, binding]) =>
-      [binding.model, ...binding.fallbacks].some(isAliasRef)
-    )
-    .map(([role]): RoleTableProblem => ({ role, problem: "alias_binding" }));
-
-  return [...missing, ...aliased];
-};
-
-/** `table` with every built-in role it lacks taken from `defaults`. */
-export const withBuiltIns = (
-  table: RoleTable,
-  defaults: RoleTable
-): RoleTable => {
-  const filled: Record<RoleName, RoleBinding> = { ...table };
-
-  for (const [role, binding] of Object.entries(defaults)) {
-    if (BUILT_IN_ROLES.includes(role) && !Object.hasOwn(filled, role)) {
-      filled[RoleName.make(role)] = binding;
-    }
-  }
-
-  return filled;
-};
-
 /** An update's storage failure, as the store reports it. */
 const updateFailed = (cause: SqlError.SqlError | Schema.SchemaError) =>
   Effect.fail(
@@ -109,7 +41,6 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = {
   titleModel: Option.none(),
   bridgeEnabled: true,
   bridgeGenerationCap: 4,
-  roleBindings: DEFAULT_ROLE_TABLE,
   defaultBudget: DEFAULT_BUDGET,
 };
 
@@ -121,7 +52,6 @@ export const ServerSettingsCodecs = {
   titleModel: Schema.fromJsonString(fields.titleModel),
   bridgeEnabled: Schema.fromJsonString(fields.bridgeEnabled),
   bridgeGenerationCap: Schema.fromJsonString(fields.bridgeGenerationCap),
-  roleBindings: Schema.fromJsonString(fields.roleBindings),
   defaultBudget: Schema.fromJsonString(fields.defaultBudget),
 };
 
@@ -177,12 +107,6 @@ const encodeRows = Effect.fnUntraced(function* (settings: ServerSettings) {
       ),
     ],
     [
-      "roleBindings",
-      yield* Schema.encodeEffect(ServerSettingsCodecs.roleBindings)(
-        settings.roleBindings
-      ),
-    ],
-    [
       "defaultBudget",
       yield* Schema.encodeEffect(ServerSettingsCodecs.defaultBudget)(
         settings.defaultBudget
@@ -211,10 +135,6 @@ export const applySettingsPatch = (
     patch.bridgeGenerationCap,
     () => current.bridgeGenerationCap
   ),
-  roleBindings: Option.getOrElse(
-    patch.roleBindings,
-    () => current.roleBindings
-  ),
   defaultBudget: Option.getOrElse(
     patch.defaultBudget,
     () => current.defaultBudget
@@ -227,13 +147,10 @@ export class SettingsStore extends Context.Service<
   {
     /** The current settings, defaults filling any that were never set. */
     readonly get: Effect.Effect<ServerSettings, SettingsStoreError>;
-    /**
-     * Applies the patch's present keys in one transaction and returns the result. Fails with
-     * `SettingsInvalid` when the role table drops a built-in role or binds a role to a role.
-     */
+    /** Applies the patch's present keys in one transaction and returns the result. */
     update(
       patch: SettingsPatch
-    ): Effect.Effect<ServerSettings, SettingsStoreError | SettingsInvalid>;
+    ): Effect.Effect<ServerSettings, SettingsStoreError>;
   }
 >()("cairn/server/models/SettingsStore") {
   /** Reads and writes `settings` through the ambient `SqlClient`. */
@@ -284,14 +201,6 @@ export class SettingsStore extends Context.Service<
             ServerSettingsCodecs.bridgeGenerationCap,
             defaults.bridgeGenerationCap
           ),
-          roleBindings: withBuiltIns(
-            yield* value(
-              "roleBindings",
-              ServerSettingsCodecs.roleBindings,
-              defaults.roleBindings
-            ),
-            DEFAULT_ROLE_TABLE
-          ),
           defaultBudget: yield* value(
             "defaultBudget",
             ServerSettingsCodecs.defaultBudget,
@@ -315,54 +224,8 @@ export class SettingsStore extends Context.Service<
         Effect.withSpan("SettingsStore.get")
       );
 
-      // Seed the role table once, so the defaults in code never move a table the user has.
-      yield* Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-
-        const json = yield* Schema.encodeEffect(
-          ServerSettingsCodecs.roleBindings
-        )(DEFAULT_ROLE_TABLE);
-
-        yield* sql`
-          INSERT INTO settings (key, value_json, updated_at)
-          VALUES ('roleBindings', ${json}, ${now})
-          ON CONFLICT (key) DO NOTHING
-        `;
-      }).pipe(
-        Effect.catchTags({
-          SqlError: (cause) =>
-            Effect.logWarning("role table not seeded").pipe(
-              Effect.annotateLogs({
-                event: "role_table_seed_failed",
-                cause: cause.message,
-              })
-            ),
-          SchemaError: (cause) =>
-            Effect.die(
-              `The default role table does not encode: ${cause.message}. Fix DEFAULT_ROLE_TABLE.`
-            ),
-        })
-      );
-
       const update = Effect.fn("SettingsStore.update")(
         function* (patch: SettingsPatch) {
-          for (const table of Option.toArray(patch.roleBindings)) {
-            const problems = roleTableProblems(table);
-
-            if (problems.length > 0) {
-              return yield* new SettingsInvalid({
-                message: `SettingsStore.update refused the role table: ${problems
-                  .map(({ role, problem }) =>
-                    problem === "missing_built_in"
-                      ? `${role} is a built-in role and cannot be removed`
-                      : `${role} is bound to another role; bind it to a model (provider/modelId)`
-                  )
-                  .join("; ")}. Nothing changed; fix the table and save again.`,
-                field: "roleBindings",
-              });
-            }
-          }
-
           return yield* sql.withTransaction(
             Effect.gen(function* () {
               const next = applySettingsPatch(yield* read, patch);

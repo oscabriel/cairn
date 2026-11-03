@@ -1,6 +1,6 @@
 // The workflows extension as the installed set takes it (ExtensionSet.ts, integrator seam): the
-// plan tool, the node tools, the watcher task and the gate (WorkflowTools.ts), resolving each node's
-// role through `RoleAliases` right before the commit that creates its child (ADR 0035) and
+// plan tool, the node tools, the watcher task and the gate (WorkflowTools.ts), checking the model a
+// node names through `ModelSpecs` right before the commit that creates its child (ADR 0043) and
 // dry-running proposals through `WorkflowPlan` and finding a project recipe named by reference
 // through `Recipes`. pi-durable calls both outside Effect, so they run
 // through the layer's context (S43). The dry run needs nothing of the brain, so the layer builds its
@@ -11,7 +11,7 @@
 import { Context, Effect, FileSystem, Layer, Option, Result } from "effect";
 
 import type { CairnExtension } from "../brain/Extensions.ts";
-import { RoleAliases } from "../models/RoleAliases.ts";
+import { isRoleName, ModelSpecs } from "../models/ModelSpecs.ts";
 import { Recipes } from "./recipes/Recipes.ts";
 import { HOLD_RETRY_MILLIS, NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
 import type { BudgetPushSink } from "./WorkflowBudget.ts";
@@ -24,7 +24,7 @@ import {
   NO_WORKFLOW_FAULTS,
   workflowExtension,
 } from "./WorkflowTools.ts";
-import type { ResolvedNodeModel, RoleResolver } from "./WorkflowTools.ts";
+import type { ModelResolver, ResolvedNodeModel } from "./WorkflowTools.ts";
 
 /**
  * `WorkflowPlan.validate` for `workflow_plan`, which runs outside Effect: the dry run, or the
@@ -62,13 +62,13 @@ export class Workflows extends Context.Service<
   { readonly extension: CairnExtension }
 >()("cairn/server/workflows/Workflows") {
   /**
-   * Over the root's `RoleAliases`, `WorkflowPushes` and the platform's `FileSystem` when given; no
+   * Over the root's `ModelSpecs`, `WorkflowPushes` and the platform's `FileSystem` when given; no
    * faults, no holds.
    */
   static readonly layer = Layer.effect(
     Workflows,
     Effect.gen(function* () {
-      const roles = yield* RoleAliases;
+      const specs = yield* ModelSpecs;
       // Project recipes are read through the platform's file system when the brain has one (the
       // installed set does); without it a reference names only a built-in.
       const files = yield* Effect.serviceOption(FileSystem.FileSystem);
@@ -95,22 +95,34 @@ export class Workflows extends Context.Service<
           },
       });
 
-      const resolveRole: RoleResolver = async (spec, overrides) =>
+      // A role name reaches a node only from a script approved before ADR 0043; it reads as no
+      // model named, so the node runs on the launching thread's model.
+      const resolveModel: ModelResolver = async (spec) =>
         await run(
-          roles.resolve(spec, overrides).pipe(
-            Effect.map((resolved): ResolvedNodeModel => ({
-              provider: resolved.model.provider,
-              modelId: resolved.model.modelId,
-              thinkingLevel: Option.fromNullOr(resolved.thinkingLevel),
-            })),
-            Effect.mapError((error) => error.message),
-            Effect.result
-          )
+          isRoleName(spec)
+            ? Effect.logInfo(
+                "workflow node read a role as the launching thread's model"
+              ).pipe(
+                Effect.annotateLogs({ event: "workflow_legacy_role", spec }),
+                Effect.as(Result.succeed(Option.none<ResolvedNodeModel>()))
+              )
+            : specs.resolve(spec).pipe(
+                Effect.map((resolved) =>
+                  Option.some<ResolvedNodeModel>({
+                    spec: resolved.spec,
+                    provider: resolved.model.provider,
+                    modelId: resolved.model.modelId,
+                    thinkingLevel: Option.fromNullOr(resolved.thinkingLevel),
+                  })
+                ),
+                Effect.mapError((error) => error.message),
+                Effect.result
+              )
         );
 
       return Workflows.of({
         extension: workflowExtension({
-          resolveRole,
+          resolveModel,
           plan: planAccess(yield* WorkflowPlan, recipes, context),
           faults: NO_WORKFLOW_FAULTS,
           hold: NO_HOLD,

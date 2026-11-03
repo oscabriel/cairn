@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 gate: `pnpm check` green with no role table, `roles` tool or Roles section left; a subagent brief and a workflow node that name no model run on the parent's model and level, and one that names `provider/modelId` runs on it; a brief that names a model with no usable credential is refused at the ask with the reason; the workflow judges (`workflow-kill.sh`, `brief-go.sh`, `council-typed.ts`) pass with envelopes keyed by model; a workflow from the phone whose nodes run on the launching thread's model
 ---
 
@@ -21,3 +21,5 @@ t3code's orchestrator (upstream `main` at `3c59595`, `apps/server/src/mcp/Orches
 6. **Old records still read.** Children already record their concrete model (ADR 0035 did that), so history is unchanged. A record written before this change that still holds a role name (a pending brief, a paused workflow's script) resolves as if it named no model.
 
 Decided by the user on 2026-11-02.
+
+Evidence: on `main` at `4c60024`, deployed 2026-11-03, `pnpm check` is green (2,670 tests) with no role table, `roles` tool or Roles section left; `SubagentModelsPiDurable.test.ts` covers a brief with no model, a named model, an unready model refused at the ask and a legacy role name; `subagent_spawn_with_model` passes on both harnesses; `workflow-kill.sh` passes and `brief-go.sh` holds 10 of 10 windows with envelopes keyed by model; look round 10 is frozen. `council-typed.ts` and the phone workflow run were not run: the user accepted this ADR on their word on 2026-11-03 without them.

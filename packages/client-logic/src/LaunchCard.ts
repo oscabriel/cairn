@@ -1,14 +1,17 @@
 // What a workflow's launch card says (plan wave 6, 6F; surfaces note S8; workflows note "What the
 // user sees"; ADR 0032): the numbers first (how many nodes, the estimate labelled as one, the
-// budget and what Go covers), then the roles each call site runs as, then what it does. Pure, so
+// budget and what Go covers), then the model each call site runs on, then what it does. Pure, so
 // the card's view only draws what this module decides and its tests judge the words.
 //
 // - The estimate is a range with its basis. A cost that is not known reads "unknown", never
 //   "$0.00": no estimate yet, no tokens in it, or a model with no list price (ADR 0036).
-// - A call site reads "@scout · reads only · up to 4" or "depends on the data" when the dry run
-//   could not count it; its phase leads when it has one.
-// - What Go covers is the envelope: the node cap, how many run at once, and the roles granted with
-//   whether they may write. A node outside it asks again with its own card.
+// - A call site reads "opencode-go/gpt-6-luna at high · reads only · up to 4", or "depends on the
+//   data" when the dry run could not count it; its phase leads when it has one. A call site the
+//   script names no model for runs on the launching thread's model, which the dry run wrote in. A
+//   role name (`@scout`) in a launch recorded before ADR 0043 removed roles reads "this thread's
+//   model", as the brain runs it.
+// - What Go covers is the envelope: the node cap, how many run at once, and the models granted with
+//   whether they may write (ADR 0043). A node outside it asks again with its own card.
 
 import type {
   CallSite,
@@ -18,6 +21,7 @@ import type {
 } from "@cairn/protocol/Policy";
 import { Option, Predicate } from "effect";
 
+import { isRoleName, namedSpecText } from "./BriefGo.ts";
 import { dollarsText, tokensShort } from "./Meters.ts";
 import { budgetText } from "./PendingCard.ts";
 import type { CardLine } from "./PendingCard.ts";
@@ -85,19 +89,29 @@ export const estimateText = (
 export const coversText = (envelope: Envelope): string =>
   `Up to ${String(envelope.maxNodes)} node${envelope.maxNodes === 1 ? "" : "s"}, ${String(envelope.maxConcurrent)} at once`;
 
-/** A role's grant in words: "@scout, reads only". */
-const grantText = (role: Envelope["roles"][number]): string =>
-  `${role.spec}, ${role.readonly ? "reads only" : "may write"}`;
+/** What a role name from before ADR 0043 runs on: the thread that launched the workflow's model. */
+export const LAUNCHING_MODEL_TEXT = "this thread's model";
 
-/** The roles the envelope grants, in words; "No roles" for an envelope that grants none. */
+/**
+ * A spec as the card names its model: "opencode-go/gpt-6-luna at high" for
+ * `opencode-go/gpt-6-luna:high`, and a role name from before ADR 0043 as this thread's model.
+ */
+export const specText = (spec: string): string =>
+  isRoleName(spec) ? LAUNCHING_MODEL_TEXT : namedSpecText(spec);
+
+/** A model's grant in words: "opencode-go/gpt-6-luna, reads only". */
+const grantText = (entry: Envelope["roles"][number]): string =>
+  `${specText(entry.spec)}, ${entry.readonly ? "reads only" : "may write"}`;
+
+/** The models the envelope grants, in words; "No models" for an envelope that grants none. */
 export const grantsText = (envelope: Envelope): string =>
   envelope.roles.length === 0
-    ? "No roles"
+    ? "No models"
     : envelope.roles.map(grantText).join("; ");
 
 /**
  * The launch's numbers in reading order, as the card's first lines: nodes, the estimate, the
- * budget, what Go covers and the roles it grants, and the phases when it has them.
+ * budget, what Go covers and the models it grants, and the phases when it has them.
  */
 export const launchNumbers = (
   launch: WorkflowLaunch
@@ -107,7 +121,7 @@ export const launchNumbers = (
     ["Estimate", estimateText(Option.fromNullOr(launch.estimate))],
     ["Budget", budgetText(launch.envelope.budget)],
     ["Go covers", coversText(launch.envelope)],
-    ["Roles", grantsText(launch.envelope)],
+    ["Models", grantsText(launch.envelope)],
   ];
 
   if (launch.phases.length > 0) {
@@ -120,11 +134,12 @@ export const launchNumbers = (
   return lines;
 };
 
-/** One call site of the plan as the card's roles list draws it. */
+/** One call site of the plan as the card's call site list draws it. */
 export interface CallSiteRow {
   readonly label: string;
-  readonly spec: string;
-  /** "Review · @scout · reads only · up to 4". */
+  /** The model it runs on, in words (`specText`). */
+  readonly model: string;
+  /** "Review · opencode-go/gpt-6-luna at high · reads only · up to 4". */
   readonly detail: string;
 }
 
@@ -143,7 +158,7 @@ export const callSiteRows = (
 ): ReadonlyArray<CallSiteRow> =>
   launch.callSites.map((site) => {
     const parts = [
-      site.spec,
+      specText(site.spec),
       site.readonly ? "reads only" : "writes",
       countText(site.maxCount),
     ];
@@ -154,7 +169,7 @@ export const callSiteRows = (
 
     return {
       label: site.label.trim() === "" ? "Node" : site.label,
-      spec: site.spec,
+      model: specText(site.spec),
       detail: parts.join(" · "),
     };
   });

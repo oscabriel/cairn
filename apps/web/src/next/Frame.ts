@@ -13,9 +13,7 @@ import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
-import { usageRouter } from "../Route.ts";
 import { view as requestCardView } from "./card/View.ts";
-import { view as rolesView } from "./meters/RolesView.ts";
 import { view as usageView } from "./meters/UsageView.ts";
 import * as Pages from "./page/Regions.ts";
 import { parentBanner } from "./rollup/ParentBanner.ts";
@@ -46,16 +44,6 @@ const composerLane = (model: Model, h: H): ReadonlyArray<Html> => [
   Pages.dockedComposer(model, h),
 ];
 
-/** The role table, drawn in the settings page's slot (plan 6G). */
-const roleTable = (model: Model, h: H): Html =>
-  h.submodel({
-    slotId: "role-table",
-    model: model.meters,
-    view: rolesView,
-    viewInputs: { usageHref: usageRouter() },
-    toParentMessage: (message) => Message.GotMetersMessage({ message }),
-  });
-
 /** The usage page at `/usage` (plan 6G), opened from the shell's foot. */
 const usagePage = (model: Model, h: H): Html =>
   h.submodel({
@@ -70,7 +58,7 @@ export const view = (model: Model, h: H, regions: Regions): Document => ({
   title: "Cairn",
   body: layout(model, h, {
     notice: regions.notice,
-    page: () => Pages.page(model, h, { roleTable: () => roleTable(model, h) }),
+    page: () => Pages.page(model, h),
     thread: () => Pages.threadBody(model, h),
     threadControls: () => Pages.threadControls(model, h),
     composerLane: () => composerLane(model, h),

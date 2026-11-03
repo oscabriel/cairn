@@ -7,7 +7,9 @@ import { CriterionProposal } from "@cairn/protocol/Policy";
 import type { JudgeRef } from "@cairn/protocol/Policy";
 import { Match, Option, Result, Schema } from "effect";
 
+import { FAILURE_WORDS, isRoleName } from "../models/ModelSpecs.ts";
 import type { GoalState, JudgeRefState } from "./GoalDocs.ts";
+import { judgeSpecOf } from "./ModelJudge.ts";
 
 /** The `goal_criteria` tool's name. */
 export const GOAL_CRITERIA_TOOL = "goal_criteria";
@@ -68,9 +70,9 @@ const judgeOf = (
   }
 
   if (args.judge === "model") {
-    if (args.model === undefined || args.model.trim() === "") {
+    if (args.model !== undefined && isRoleName(args.model)) {
       return Result.fail(
-        `${at}.model: a model judge names a role (such as @judge) or provider/modelId of another family than this thread's model.`
+        `${at}.model: "${args.model.trim()}" is a role, and ${FAILURE_WORDS.role_removed}.`
       );
     }
 
@@ -90,7 +92,8 @@ const judgeOf = (
 
 /**
  * The proposals `goal_criteria` asks the user to bind, or the refusal naming the field. The model
- * judge's spec is decoded here and resolved by the tool (it needs the role table).
+ * judge's spec is decoded here, null when it names none (the thread's own model, ADR 0043), and
+ * checked by the tool (it needs the catalog).
  */
 export const proposalsOf = (
   criteria: ReadonlyArray<CriterionArgs>
@@ -125,7 +128,10 @@ export const proposalsOf = (
             text,
             judge: {
               kind: "model",
-              spec: (args.model ?? "").trim(),
+              spec:
+                args.model === undefined || args.model.trim() === ""
+                  ? null
+                  : args.model.trim(),
               rubric: (args.rubric ?? "").trim().slice(0, MAX_RUBRIC),
             },
           }
@@ -135,7 +141,7 @@ export const proposalsOf = (
 
     if (Result.isFailure(decoded)) {
       return Result.fail(
-        `${at}: ${decoded.failure.message}. A model is a role such as @judge or provider/modelId; a timeout is 1 to 3600 seconds.`
+        `${at}: ${decoded.failure.message}. A model is provider/modelId[:level]; a timeout is 1 to 3600 seconds.`
       );
     }
 
@@ -152,7 +158,11 @@ export const judgeLine = (judge: JudgeRef | JudgeRefState): string =>
       command: (found) =>
         `command \`${found.argv.join(" ")}\`${found.expectExit === 0 ? "" : `, exit ${String(found.expectExit)}`}`,
       user: () => "the user",
-      model: (found) => `model ${found.spec}`,
+      model: (found) =>
+        Option.match(judgeSpecOf(found.spec), {
+          onNone: () => "model (this thread's)",
+          onSome: (spec) => `model ${spec}`,
+        }),
       verification: (found) => `verification ${found.recipe}`,
     })
   );

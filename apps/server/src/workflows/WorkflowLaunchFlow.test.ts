@@ -11,7 +11,6 @@
 import { ConversationId } from "@cairn/protocol/Ids";
 import { Brief, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision, LaunchEdits } from "@cairn/protocol/Policy";
-import { RoleName } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
@@ -30,6 +29,8 @@ import { ledgerProblems, WorkflowsDoc } from "./WorkflowDocs.ts";
 import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
 import { isNodeBrief, LAUNCH_TOOL, launchAnswered } from "./WorkflowLaunch.ts";
 import {
+  ALT_MODEL,
+  KIT_SPEC,
   kitParts,
   KitLayer,
   openKit,
@@ -308,14 +309,14 @@ const starts = (effects: ReadonlyArray<WorkEffect>) =>
     .toSorted();
 
 /**
- * Five nodes: four `@worker` nodes in a fan-out, then a fifth whose role the data decides. The dry
- * run's placeholder answers send it to `@worker`, so the plan shows one role and five nodes; the
- * live answers send it to `@scout`, which the envelope never granted.
+ * Five nodes: four on the launching thread's model in a fan-out, then a fifth whose model the data
+ * decides. The dry run's placeholder answers leave it on the thread's model, so the plan shows one
+ * model and five nodes; the live answers send it to `ALT_MODEL`, which the envelope never granted.
  */
 const FIVE = workflow(`phase("Fan");
 const found = await parallel(["a", "b", "c", "d"].map((item) => () => agent("node:" + item, { label: item })));
 const live = !String(found[0]).startsWith("(dry run");
-const e = await agent("node:e", { label: "e", role: live ? "@scout" : "@worker" });
+const e = await agent("node:e", { label: "e", model: live ? "${ALT_MODEL}" : undefined });
 return { found, e };`);
 
 describe("launch approval and the envelope on pi-durable", () => {
@@ -337,13 +338,13 @@ describe("launch approval and the envelope on pi-durable", () => {
         assert.strictEqual(launch?.status, "accepted");
         assert.deepStrictEqual(launch?.decidedBy, { kind: "user" });
 
-        // The plan the user said Go to: five nodes, one role, and Go covers five.
+        // The plan the user said Go to: five nodes, one model, and Go covers five.
         const plan = decodeLaunch(launch?.payload);
 
         assert.deepStrictEqual(plan.nodes, { count: 5, unbounded: false });
         assert.deepStrictEqual(
-          plan.envelope.roles.map((role) => role.spec),
-          ["@worker"]
+          plan.envelope.roles.map((entry) => entry.spec),
+          [KIT_SPEC]
         );
         assert.strictEqual(plan.envelope.maxNodes, 5);
 
@@ -376,7 +377,7 @@ describe("launch approval and the envelope on pi-durable", () => {
         assert.strictEqual(card?.kind, "brief");
         assert.include(
           JSON.stringify(card?.payload),
-          "did not show role @scout"
+          `did not show model ${ALT_MODEL}`
         );
 
         // Events: the launch's answer, each accepted brief, the card's answer.
@@ -534,23 +535,11 @@ describe("launch approval and the envelope on pi-durable", () => {
   );
 
   it.live(
-    "a node's own brief carries the launch's role overrides, so the card checks its role as Go resolves it",
+    "a node's own brief names the model its script named, for the card to check; one that names none runs on the thread's",
     () =>
       Effect.gen(function* () {
-        const scout = {
-          model: { provider: "faux", modelId: "kit" },
-          thinkingLevel: null,
-          fallbacks: [],
-          note: null,
-        };
-
-        const edits: LaunchEdits = {
-          budget: DEFAULT_BUDGET,
-          roleOverrides: { [RoleName.make("@scout")]: scout },
-        };
-
         const outcome = yield* flow(FIVE, {
-          launches: [{ decision: "accept", edits: Option.some(edits) }],
+          launches: [GO],
           briefs: "accept",
         });
 
@@ -563,13 +552,12 @@ describe("launch approval and the envelope on pi-durable", () => {
             ]?.payload
           );
 
-        // The card's node and the covered ones alike carry what the launch binds.
-        assert.deepStrictEqual(briefOf("e").roleOverrides, {
-          [RoleName.make("@scout")]: scout,
-        });
-        assert.deepStrictEqual(briefOf("a").roleOverrides, {
-          [RoleName.make("@scout")]: scout,
-        });
+        assert.strictEqual(briefOf("e").role, ALT_MODEL);
+        assert.isNull(briefOf("a").role);
+
+        const e = nodes.find((node) => node.label === "e");
+
+        assert.deepStrictEqual([e?.provider, e?.modelId], ["faux", "kit-alt"]);
         assert.deepStrictEqual(outcome.problems, []);
       }),
     30_000
@@ -581,7 +569,6 @@ describe("launch approval and the envelope on pi-durable", () => {
       Effect.gen(function* () {
         const edits: LaunchEdits = {
           budget: { ...DEFAULT_BUDGET, maxTokens: 900_000 },
-          roleOverrides: {},
         };
 
         const outcome = yield* flow(
@@ -597,7 +584,6 @@ return { a, total: budget.total };`),
         assert.isNull(decodeLaunch(launch?.payload).envelope.budget.maxTokens);
         assert.deepStrictEqual(launch?.answer?.launch, {
           budget: { ...DEFAULT_BUDGET, maxTokens: 900_000 },
-          roleOverrides: {},
         });
         assert.include(outcome.reply, '"total":900000');
       }),

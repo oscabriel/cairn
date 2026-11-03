@@ -1,8 +1,8 @@
-// The `model` judge on a real model (plan 5F: "a model judge must be from another family"). The
-// goals extension is built by production's `Goals.layer`, over the brain's real model runtime
-// (`PiModelSource.layer`, reading `~/.pi/agent` read-only) and `RoleAliases`; the goal thread's own
-// model is pi-ai's faux provider under the `anthropic` name, so its family is Anthropic and it only
-// calls `goal_check`. The judge is the cheapest OpenCode Go model of another family.
+// The `model` judge on a real model (plan 5F; ADR 0043). The goals extension is built by
+// production's `Goals.layer`, over the brain's real model runtime (`PiModelSource.layer`, reading
+// `~/.pi/agent` read-only) and `ModelSpecs`; the goal thread's own model is pi-ai's faux provider
+// under the `anthropic` name, and it only calls `goal_check`. The judge is a cheap OpenCode Go
+// model, named by the criterion.
 //
 //   node judges/goal-judge.ts [--judge opencode-go/<model>] [--keep]
 //
@@ -10,8 +10,8 @@
 // - met: the user's message carries a test run with no failures; the judge must say MET.
 // - not-met: the model claims success while the user's message shows three failures; the judge
 //   must say NOT MET, so a false claim does not meet the criterion.
-// - same-family: a criterion judged by `opencode-go/claude-haiku-5-5` (Anthropic, as the thread
-//   is) is refused by `goal_check` and asks no model ($0).
+// - bridge: a criterion judged by `claude-bridge/claude-opus-5-5` is refused by `goal_check` (the
+//   bridge answers no single request, and this runtime lists no bridge) and asks no model ($0).
 //
 // Each answered call's cost is read from the spend ledger's `recordCall` (a stand-in ledger that
 // sums `usage.cost`), the path production meters judge calls on. Prints one JSON line per case and
@@ -22,15 +22,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { RoleSpec } from "@cairn/protocol/Roles";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer, Logger } from "effect";
 
 import { ServerConfig } from "../apps/server/src/Config.ts";
 import { ModelHealth } from "../apps/server/src/models/ModelHealth.ts";
+import { ModelSpecs } from "../apps/server/src/models/ModelSpecs.ts";
 import { PiModelSource } from "../apps/server/src/models/PiModelSource.ts";
-import { RoleAliases } from "../apps/server/src/models/RoleAliases.ts";
 import { SettingsStore } from "../apps/server/src/models/SettingsStore.ts";
 import { SpendLedger } from "../apps/server/src/usage/SpendLedger.ts";
 import { Goals } from "../apps/server/src/verdicts/Goals.ts";
@@ -100,8 +100,8 @@ const CASES: ReadonlyArray<Case> = [
     expect: "failed",
   },
   {
-    name: "same-family",
-    spec: "opencode-go/claude-haiku-5-5",
+    name: "bridge",
+    spec: "claude-bridge/claude-opus-5-5",
     evidence: "Check the criterion.",
     claim: "Done.",
     expect: "refused",
@@ -145,7 +145,7 @@ const runCase = (goals: Goals["Service"], spec: Case) =>
                 text: "The parser's unit tests pass",
                 judge: {
                   kind: "model",
-                  spec: RoleSpec.make(spec.spec),
+                  spec: ModelSpec.make(spec.spec),
                   rubric: RUBRIC,
                 },
               },
@@ -188,7 +188,7 @@ const runCase = (goals: Goals["Service"], spec: Case) =>
     const checkText = results.get("check") ?? "";
 
     const refused =
-      checkText.includes("same family") && criterion?.verdict === null;
+      checkText.includes(spec.spec) && criterion?.verdict === null;
 
     let got = String(criterion?.state);
 
@@ -245,7 +245,7 @@ const models = PiModelSource.layer.pipe(
 );
 
 const live = Goals.layer.pipe(
-  Layer.provide(RoleAliases.layerNoDeps),
+  Layer.provide(ModelSpecs.layerNoDeps),
   Layer.provide(CostLedger),
   Layer.provide(SettingsStore.layerTest),
   Layer.provide(ModelHealth.layerTest),

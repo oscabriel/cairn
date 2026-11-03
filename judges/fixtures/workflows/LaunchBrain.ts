@@ -5,11 +5,11 @@
 // ledger reads; and a `WorkflowStops` over that play, so the work panel's Stop on a node or on the
 // whole workflow reaches it. No script runs, no provider is called, and nothing is billed.
 //
-// - The parent (the seeded thread): a message "launch <role> <tag>" is answered with one
+// - The parent (the seeded thread): a message "launch <provider/modelId[:level]> <tag>" is answered with one
 //   `workflow_plan` call; once the tool answered it says "Tool said: <the tool's text>". Anything
 //   else is answered "Noted.".
-// - The launch (`LAUNCH_CARD_WORDS`): `review-fan <tag>`, two phases, Read (three readers as <role>) then
-//   Judge (one judge as <role>), an estimate with tokens and no list price, a $2.00 budget.
+// - The launch (`LAUNCH_CARD_WORDS`): `review-fan <tag>`, two phases, Read (three readers on the
+//   model) then Judge (one judge on it), an estimate with tokens and no list price, a $2.00 budget.
 //   Decline and Send back run nothing and say so; Go runs four nodes, Run on 1 first two (the first
 //   reader and the judge).
 // - A reader settles 300 ms after it starts, except under a tag starting "steps", where it keeps
@@ -20,9 +20,9 @@
 import { NotFound } from "@cairn/protocol/Errors";
 import { ApprovalId } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import type { WorkflowLaunch } from "@cairn/protocol/Policy";
 import { WorkflowLaunch as WorkflowLaunchSchema } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { NodeRecord, WorkflowRecord } from "@cairn/protocol/Workflows";
 import {
@@ -68,8 +68,8 @@ export const LAUNCH_CARD_WORDS = {
   budget: "$2.00 at API list price",
   covers: "Up to 4 nodes, 3 at once",
   phases: "Read, Judge",
-  readSite: "Read · <role> · reads only · up to 3",
-  judgeSite: "Judge · <role> · reads only · once",
+  readSite: "Read · <model> · reads only · up to 3",
+  judgeSite: "Judge · <model> · reads only · once",
 } as const;
 
 /** What a settled node used: tokens, no list price (the faux model has none). */
@@ -117,7 +117,7 @@ const toolText = (message: Message): string =>
         .join("")
     : "";
 
-const ASK = /^launch (?<role>@[a-z-]+) (?<tag>\S+)$/u;
+const ASK = /^launch (?<model>\S+) (?<tag>\S+)$/u;
 
 const parentAnswer = (messages: ReadonlyArray<Message>, now: number) => {
   const last = messages.at(-1);
@@ -140,7 +140,7 @@ const parentAnswer = (messages: ReadonlyArray<Message>, now: number) => {
     [
       fauxToolCall(
         "workflow_plan",
-        { role: asked.groups?.role ?? "", tag: asked.groups?.tag ?? "" },
+        { model: asked.groups?.model ?? "", tag: asked.groups?.tag ?? "" },
         { id: `plan-${String(now)}` }
       ),
     ],
@@ -163,10 +163,10 @@ const LaunchModel = Layer.succeed(
 /** The launch a `workflow_plan` call proposes. */
 export const launchOf = (
   workflowId: string,
-  role: string,
+  model: string,
   tag: string
 ): WorkflowLaunch => {
-  const spec = RoleSpec.make(role);
+  const spec = ModelSpec.make(model);
 
   return {
     type: "workflow",
@@ -218,7 +218,6 @@ export const launchOf = (
       writes: [],
       budget: { ...DEFAULT_BUDGET, maxListMicros: Micros.make(2_000_000) },
     },
-    roleOverrides: {},
   };
 };
 
@@ -231,7 +230,7 @@ const nodeOf = (
   index: number,
   label: string,
   phase: string,
-  role: string,
+  spec: string,
   at: number
 ): NodeRecord => {
   const id = `n-${workflowId}-${String(index)}`;
@@ -245,7 +244,7 @@ const nodeOf = (
     index,
     requestId: `wf-${workflowId}-${id}`,
     briefId: null,
-    role: RoleSpec.make(role),
+    role: ModelSpec.make(spec),
     provider: "faux",
     modelId: "scripted",
     effort: null,
@@ -304,7 +303,7 @@ const play = Effect.fnUntraced(function* (
   hold: boolean
 ) {
   const now = yield* Clock.currentTimeMillis;
-  const role = launch.envelope.roles[0]?.spec ?? "@worker";
+  const spec = launch.envelope.roles[0]?.spec ?? "faux/scripted";
   const asks: Array<StopAsk> = [];
 
   let record: WorkflowRecord = {
@@ -426,7 +425,7 @@ const play = Effect.fnUntraced(function* (
     const ids: Array<string> = [];
 
     for (const [offset, label] of labels.entries()) {
-      const node = nodeOf(record.id, first + offset, label, title, role, at);
+      const node = nodeOf(record.id, first + offset, label, title, spec, at);
 
       ids.push(node.id);
       setNode(node);
@@ -490,14 +489,14 @@ const planTool = Effect.fnUntraced(function* (
   call: ToolCall,
   api: ScriptedToolApi
 ) {
-  const { role, tag } = call.arguments;
+  const { model, tag } = call.arguments;
 
-  if (!Predicate.isString(role) || !Predicate.isString(tag)) {
-    return { text: "workflow_plan takes a role and a tag", isError: true };
+  if (!Predicate.isString(model) || !Predicate.isString(tag)) {
+    return { text: "workflow_plan takes a model and a tag", isError: true };
   }
 
   const workflowId = `wf-${call.id}`;
-  const launch = launchOf(workflowId, role, tag);
+  const launch = launchOf(workflowId, model, tag);
   const payload = jsonRecordOf(encodeLaunch(launch));
 
   if (payload === null) {

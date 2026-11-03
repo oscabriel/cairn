@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import { MAX_WORKFLOW_NODES } from "@cairn/protocol/Workflows";
 import { assert, describe, it, layer } from "@effect/vitest";
@@ -31,14 +30,26 @@ const COUNCIL_ARGS = {
   scope: "apps/server/src/brain",
   nonGoals: "the web client",
   evidence: "docs/decisions/0016",
-  advisors: ["@worker", "opencode-go/gpt-6-luna"],
+  advisors: [null, "opencode-go/gpt-6-luna"],
   maxPasses: 2,
 };
+
+/** The launching thread's model, which every call that names none runs on. */
+const THREAD = { provider: "faux", modelId: "kit" };
+
+/** The thread's model at its level, as a call site that names no model shows it. */
+const THREAD_SPEC = "faux/kit:medium";
+
+const LUNA = "opencode-go/gpt-6-luna";
 
 const input = (args: Schema.Json): PlanInput => ({
   args,
   budget: DEFAULT_BUDGET,
   sample: Option.none(),
+  threadModel: Option.some({
+    model: THREAD,
+    thinkingLevel: Option.some("medium"),
+  }),
 });
 
 const META = `export const meta = { name: "probe", description: "A probe" };\n`;
@@ -66,7 +77,7 @@ const expectRefusal = (
 
 layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
   test.effect(
-    "the council recipe is five nodes on two providers, one call-site row per role and pass",
+    "the council recipe is five nodes on two providers, one call-site row per model and pass",
     () =>
       Effect.gen(function* () {
         const plan = yield* WorkflowPlan;
@@ -88,7 +99,7 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
           })),
           [
             {
-              spec: "@worker",
+              spec: THREAD_SPEC,
               label: "Advisor 1 report",
               phase: "Reports",
               schemaName: "advisor-report",
@@ -104,7 +115,7 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
               maxCount: 1,
             },
             {
-              spec: "@judge",
+              spec: THREAD_SPEC,
               label: "Claim matrix",
               phase: "Matrix",
               schemaName: "claim-matrix",
@@ -112,7 +123,7 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
               maxCount: 1,
             },
             {
-              spec: "@worker",
+              spec: THREAD_SPEC,
               label: "Advisor 1 pass 2",
               phase: "Cross-examination",
               schemaName: "cross-examination",
@@ -131,11 +142,13 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
         );
         assert.deepStrictEqual(run.undeclaredPhases, []);
         assert.deepStrictEqual(
-          run.byRole.map((entry) => [String(entry.spec), entry.count]),
+          run.byModel.map((entry) => [
+            `${entry.model.provider}/${entry.model.modelId}`,
+            entry.count,
+          ]),
           [
-            ["@worker", 2],
-            ["opencode-go/gpt-6-luna", 2],
-            ["@judge", 1],
+            ["faux/kit", 3],
+            [LUNA, 2],
           ]
         );
       })
@@ -173,10 +186,29 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
       )
   );
 
+  test.effect(
+    "the council with no advisors or judge named runs two advisors and the judge on the thread's model",
+    () =>
+      Effect.gen(function* () {
+        const plan = yield* WorkflowPlan;
+
+        const run = yield* plan.validate(
+          recipe("council"),
+          input({ question: COUNCIL_ARGS.question })
+        );
+
+        assert.deepStrictEqual(run.nodes, { count: 5, unbounded: false });
+        assert.deepStrictEqual(
+          [...new Set(run.callSites.map((site) => String(site.spec)))],
+          [THREAD_SPEC]
+        );
+      })
+  );
+
   test.effect("the council refuses a roster outside two to four advisors", () =>
-    expectRefusal(recipe("council"), "script_failed", "two to four roles", {
+    expectRefusal(recipe("council"), "script_failed", "two to four models", {
       ...COUNCIL_ARGS,
-      advisors: ["@worker"],
+      advisors: [LUNA],
     })
   );
 
@@ -200,9 +232,9 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
             site.maxCount,
           ]),
           [
-            ["@scout", true, 4],
-            ["@verifier", true, 4],
-            ["@worker", false, 1],
+            [THREAD_SPEC, true, 4],
+            [THREAD_SPEC, true, 4],
+            [THREAD_SPEC, false, 1],
           ]
         );
 
@@ -232,8 +264,8 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
       assert.deepStrictEqual(
         run.callSites.map((site) => [String(site.spec), site.maxCount]),
         [
-          ["@scout", null],
-          ["@verifier", null],
+          [THREAD_SPEC, null],
+          [THREAD_SPEC, null],
         ]
       );
 
@@ -289,14 +321,14 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
   test.effect("refuses agent options a launch would refuse", () =>
     Effect.gen(function* () {
       yield* expectRefusal(
-        `${META}await agent("x", { role: "opus" });`,
+        `${META}await agent("x", { model: "opus" });`,
         "agent_options_invalid",
-        "`opus`"
+        "model `opus` is not `provider/modelId[:level]`"
       );
       yield* expectRefusal(
-        `${META}await agent("x", { model: "opus", isolation: "worktree" });`,
+        `${META}await agent("x", { isolation: "worktree" });`,
         "agent_options_invalid",
-        "`model`, `isolation`"
+        "does not take `isolation`"
       );
       yield* expectRefusal(
         `${META}await agent("x", { schema: { type: "array" } });`,
@@ -315,10 +347,67 @@ layer(WorkflowPlan.layer)("WorkflowPlan dry run", (test) => {
       );
       // Inside parallel the bad call would have been a silent null; the dry run still sees it.
       yield* expectRefusal(
-        `${META}await parallel([() => agent("x", { role: "not a role" })]);`,
+        `${META}await parallel([() => agent("x", { model: "not a model" })]);`,
         "agent_options_invalid"
       );
     })
+  );
+
+  test.effect(
+    "a call runs on the model it names, else on the launching thread's model and level",
+    () =>
+      Effect.gen(function* () {
+        const plan = yield* WorkflowPlan;
+
+        const run = yield* plan.validate(
+          `${META}await agent("a");\nawait agent("b", { model: "${LUNA}:high" });\nawait verify("c", { claim: "c" });\nawait verify("d", { model: "${LUNA}" });`,
+          input({})
+        );
+
+        assert.deepStrictEqual(
+          run.callSites.map((site) => String(site.spec)),
+          [THREAD_SPEC, `${LUNA}:high`, THREAD_SPEC, LUNA]
+        );
+      })
+  );
+
+  test.effect(
+    "refuses a role, as an option or as a model, since roles were removed",
+    () =>
+      Effect.gen(function* () {
+        yield* expectRefusal(
+          `${META}await agent("x", { role: "@scout" });`,
+          "agent_options_invalid",
+          "agent() takes no `role` any more: roles were removed"
+        );
+        yield* expectRefusal(
+          `${META}await verify("x", { role: "${LUNA}" });`,
+          "agent_options_invalid",
+          "verify() takes no `role` any more"
+        );
+        yield* expectRefusal(
+          `${META}await agent("x", { model: "@worker" });`,
+          "agent_options_invalid",
+          "model `@worker` is a role, and roles were removed"
+        );
+      })
+  );
+
+  test.effect(
+    "refuses a call that names no model on a thread that runs on none",
+    () =>
+      Effect.gen(function* () {
+        const plan = yield* WorkflowPlan;
+
+        const refusal = yield* plan
+          .validate(`${META}await agent("x");`, {
+            ...input({}),
+            threadModel: Option.none(),
+          })
+          .pipe(Effect.flip);
+
+        assert.include(refusal.message, "this thread runs on none");
+      })
   );
 
   test.effect(
@@ -449,7 +538,7 @@ layer(tight)("WorkflowPlan under tight limits", (test) => {
         const plan = yield* WorkflowPlan;
 
         const run = yield* plan.validate(
-          `${META}await agent("first");\nfor (let i = 0; i < 30; i += 1) {\n  await agent("item " + i, { role: "@scout" });\n}\nawait agent("summary", { role: "@writer" });`,
+          `${META}await agent("first");\nfor (let i = 0; i < 30; i += 1) {\n  await agent("item " + i, { model: "${LUNA}" });\n}\nawait agent("summary", { model: "opencode-go/beam" });`,
           input({})
         );
 
@@ -458,16 +547,19 @@ layer(tight)("WorkflowPlan under tight limits", (test) => {
         assert.deepStrictEqual(
           run.callSites.map((site) => [String(site.spec), site.maxCount]),
           [
-            ["@worker", 1],
-            ["@scout", null],
-            ["@writer", null],
+            [THREAD_SPEC, 1],
+            [LUNA, null],
+            ["opencode-go/beam", null],
           ]
         );
         assert.deepStrictEqual(
-          run.byRole.map((entry) => [String(entry.spec), entry.count]),
+          run.byModel.map((entry) => [
+            `${entry.model.provider}/${entry.model.modelId}`,
+            entry.count,
+          ]),
           [
-            ["@worker", 1],
-            ["@scout", 9],
+            ["faux/kit", 1],
+            [LUNA, 9],
           ]
         );
       })
@@ -494,7 +586,7 @@ layer(tight)("WorkflowPlan under tight limits", (test) => {
         const plan = yield* WorkflowPlan;
 
         const run = yield* plan.validate(
-          `${META}for (;;) {\n  await agent("again");\n}\nawait agent("never", { role: "@writer" });`,
+          `${META}for (;;) {\n  await agent("again");\n}\nawait agent("never", { model: "opencode-go/beam" });`,
           input({})
         );
 
@@ -502,19 +594,22 @@ layer(tight)("WorkflowPlan under tight limits", (test) => {
         assert.isFalse(run.sitesComplete);
         assert.deepStrictEqual(
           run.callSites.map((site) => [String(site.spec), site.maxCount]),
-          [["@worker", null]]
+          [[THREAD_SPEC, null]]
         );
       })
   );
 });
 
-/** Priced history for `spec`, three micros a token. */
+/** Priced history on `provider/modelId`, three micros a token. */
 const priced = (
-  spec: string,
+  model: string,
   tokens: ReadonlyArray<number>
 ): Array<NodeHistory> =>
   tokens.map((totalTokens) => ({
-    spec: RoleSpec.make(spec),
+    model: {
+      provider: model.slice(0, model.indexOf("/")),
+      modelId: model.slice(model.indexOf("/") + 1),
+    },
     totalTokens,
     listMicros: Option.some(totalTokens * 3),
   }));
@@ -527,7 +622,7 @@ describe(estimateRun, () => {
   }).pipe(Effect.provide(WorkflowPlan.layer));
 
   it.effect(
-    "falls back to the labelled constant for roles with no history",
+    "falls back to the labelled constant for models with no history",
     () =>
       Effect.gen(function* () {
         const run = yield* councilRun;
@@ -539,7 +634,7 @@ describe(estimateRun, () => {
         assert.isNull(estimate.listMicrosLow);
         assert.include(
           estimate.basis,
-          "@judge: no history, 100k to 1M tokens a node assumed, cache reads included"
+          "faux/kit: no history, 100k to 1M tokens a node assumed, cache reads included"
         );
       })
   );
@@ -582,30 +677,31 @@ describe(estimateRun, () => {
   });
 
   it.effect(
-    "uses each role's quartiles from its last nodes, and dollars only when all are priced",
+    "uses each model's quartiles from its last nodes on it, and dollars only when all are priced",
     () =>
       Effect.gen(function* () {
         const run = yield* councilRun;
 
         const history = [
-          ...priced("@worker", [10_000, 20_000, 30_000, 40_000]),
-          ...priced("opencode-go/gpt-6-luna", [8000]),
-          ...priced("@judge", [5000, 6000]),
+          ...priced("faux/kit", [10_000, 20_000, 30_000, 40_000]),
+          ...priced(LUNA, [8000]),
+          // Another model's nodes feed no call site's estimate.
+          ...priced("opencode-go/beam", [900_000]),
         ];
 
         const estimate = estimateRun(run, history);
 
-        // @worker: q1 10k, q3 30k, two nodes; luna: 8k both, two nodes; judge: q1 5k, q3 6k.
-        assert.strictEqual(estimate.tokensLow, 2 * 10_000 + 2 * 8000 + 5000);
-        assert.strictEqual(estimate.tokensHigh, 2 * 30_000 + 2 * 8000 + 6000);
+        // faux/kit: q1 10k, q3 30k, three nodes; luna: 8k both, two nodes.
+        assert.strictEqual(estimate.tokensLow, 3 * 10_000 + 2 * 8000);
+        assert.strictEqual(estimate.tokensHigh, 3 * 30_000 + 2 * 8000);
         assert.strictEqual(estimate.listMicrosLow, 3 * estimate.tokensLow);
         assert.strictEqual(estimate.listMicrosHigh, 3 * estimate.tokensHigh);
-        assert.include(estimate.basis, "@worker: from its last 4 nodes");
+        assert.include(estimate.basis, "faux/kit: from its last 4 nodes");
 
         const unpriced = estimateRun(run, [
           ...history,
           {
-            spec: RoleSpec.make("@judge"),
+            model: THREAD,
             totalTokens: 5500,
             listMicros: Option.none(),
           },
@@ -628,7 +724,6 @@ describe(estimateRun, () => {
           args: COUNCIL_ARGS,
           budget: DEFAULT_BUDGET,
           estimate: Option.some(estimate),
-          roleOverrides: {},
           maxNodes: Option.none(),
           modes: ["approval-required"],
           writes: [],
@@ -646,9 +741,8 @@ describe(estimateRun, () => {
             role.readonly,
           ]),
           [
-            ["@worker", true],
-            ["opencode-go/gpt-6-luna", true],
-            ["@judge", true],
+            [THREAD_SPEC, true],
+            [LUNA, true],
           ]
         );
         assert.isFalse(isLargeWorkflow(run, estimate, DEFAULT_BUDGET));
@@ -668,9 +762,8 @@ describe(estimateRun, () => {
         const run = yield* councilRun;
 
         const estimate = estimateRun(run, [
-          ...priced("@worker", [10_000, 20_000]),
-          ...priced("opencode-go/gpt-6-luna", [8000]),
-          ...priced("@judge", [5000]),
+          ...priced("faux/kit", [10_000, 20_000]),
+          ...priced(LUNA, [8000]),
         ]);
 
         const high = estimate.listMicrosHigh ?? 0;

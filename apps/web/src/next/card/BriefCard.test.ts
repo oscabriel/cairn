@@ -1,22 +1,23 @@
-// Scene tests for the brief card's Go (plan wave 6, 6B): a brief's roles are checked with
-// `roles.check` as it shows, Go waits for the answer and is blocked with a plain reason and a way to
-// the role table while a role does not resolve; Check again asks again and an earlier answer does
-// nothing; the connection coming back (a brain restart) asks again; a check that could not be made
+// Scene tests for the brief card's Go (plan wave 6, 6B; ADR 0043): the model a brief names is
+// checked with `models.check` as it shows, Go waits for the answer and is blocked with a plain
+// reason while the model is not ready; a brief that names no model, or a role recorded before roles
+// were removed, runs on its parent's model and is neither checked nor held; Check again asks again
+// and an earlier answer does nothing; the connection coming back (a brain restart) asks again; a check that could not be made
 // holds nothing; Send back needs notes and answers `revise` with them; Run on 1 first is a launch's
 // only and answers `accept_sample`; and the notes typed on a brief settled elsewhere are kept.
 
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
-import type { RoleCheck } from "@cairn/protocol/Roles";
+import type { ModelCheck } from "@cairn/protocol/ModelSpecs";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 import type { Schema } from "effect";
 import * as Scene from "foldkit/scene";
 
-import { resolvedCheck, unboundCheck } from "./CardFixtures.ts";
+import { resolvedCheck, unreadyCheck } from "./CardFixtures.ts";
 import { Message } from "./Message.ts";
 import { initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import { CheckRoles, inform, RespondToRequest, update } from "./Update.ts";
+import { CheckModels, inform, RespondToRequest, update } from "./Update.ts";
 import { view } from "./View.ts";
 
 type Json = Schema.Json;
@@ -99,7 +100,7 @@ const launch = (count: number): Json =>
       args: null,
       callSites: [
         {
-          spec: "@scout",
+          spec: "faux/scripted:medium",
           label: "review",
           phase: null,
           schemaName: null,
@@ -114,12 +115,11 @@ const launch = (count: number): Json =>
         scriptHash: "hash-1",
         maxNodes: Math.max(count, 1),
         maxConcurrent: 2,
-        roles: [{ spec: "@scout", readonly: true, arms: "host" }],
+        roles: [{ spec: "faux/scripted:medium", readonly: true, arms: "host" }],
         modes: ["full-access"],
         writes: [],
         budget,
       },
-      roleOverrides: {},
     },
   });
 
@@ -131,9 +131,15 @@ const doc = (...records: ReadonlyArray<Json>): Json => ({
 
 const faux = { provider: "faux", modelId: "scripted" };
 
+/** A model a brief names. */
+const LUNA = "opencode-go/gpt-6-luna:high";
+
+/** A model the catalog does not list. */
+const NOPE = "opencode-go/nope";
+
 const resolved = (spec: string) => resolvedCheck(spec, faux, "medium");
 
-const unbound = unboundCheck;
+const unready = (spec: string) => unreadyCheck(spec, "unknown_model");
 
 const context = (approvals: Json, hasClient = true) => ({
   threadId: Option.some(threadId),
@@ -145,23 +151,19 @@ const bId = ApprovalId.make("b-1");
 
 const wId = ApprovalId.make("w-1");
 
-/** A workflow node's own brief for `@judge`, carrying its launch's bindings. */
-const nodeBrief = (roleOverrides: Json): Json =>
-  record({
-    id: "n-1",
-    tool: "agent",
-    payload: { ...briefPayload("@judge"), roleOverrides },
-  });
+/** A workflow node's own brief, naming `spec`. */
+const nodeBrief = (spec: string): Json =>
+  record({ id: "n-1", tool: "agent", payload: briefPayload(spec) });
 
-/** The card showing `approvals`, its first role check answered with `checks`. */
+/** The card showing `approvals`, its first model check answered with `checks`. */
 const checked = (
   approvals: Json,
   approvalId: ApprovalId,
-  checks: ReadonlyArray<RoleCheck>
+  checks: ReadonlyArray<ModelCheck>
 ): Model =>
   update(
     inform(initial, context(approvals)).model,
-    Message.ReceivedRoleChecks({ approvalId, generation: 1, checks })
+    Message.ReceivedModelChecks({ approvalId, generation: 1, checks })
   ).model;
 
 /** Commands as their names and arguments, which compare by value (their effects do not). */
@@ -176,17 +178,16 @@ const config = { update, view };
 const goButton = Scene.role("button", { name: "Go" });
 
 describe("the brief card", () => {
-  it("checks the brief's role as it shows, holds Go until it resolves, then goes once", () => {
-    const shown = inform(initial, context(doc(brief("@worker"))));
+  it("checks the brief's model as it shows, holds Go until it resolves, then goes once", () => {
+    const shown = inform(initial, context(doc(brief(LUNA))));
 
     assert.deepStrictEqual(
       asked(shown.commands),
       asked([
-        CheckRoles({
+        CheckModels({
           approvalId: bId,
           generation: 1,
-          specs: ["@worker"],
-          overrides: Option.none(),
+          specs: [LUNA],
         }),
       ])
     );
@@ -198,7 +199,7 @@ describe("the brief card", () => {
       Scene.inside(
         Scene.testId("request-card"),
         Scene.expect(Scene.selector("dl")).toContainText(
-          "Runs onChecking the role table…"
+          "Runs onChecking the models…"
         )
       )
     );
@@ -208,10 +209,10 @@ describe("the brief card", () => {
       Scene.given(
         update(
           shown.model,
-          Message.ReceivedRoleChecks({
+          Message.ReceivedModelChecks({
             approvalId: bId,
             generation: 1,
-            checks: resolved("@worker"),
+            checks: resolved(LUNA),
           })
         ).model
       ),
@@ -219,7 +220,7 @@ describe("the brief card", () => {
       Scene.inside(
         Scene.testId("request-card"),
         Scene.expect(Scene.selector("dl")).toContainText(
-          "Runs on@worker: faux/scripted at medium"
+          "Runs onfaux/scripted at medium"
         )
       ),
       Scene.expect(Scene.testId("request-card-go-blocked")).not.toExist(),
@@ -243,19 +244,15 @@ describe("the brief card", () => {
     );
   });
 
-  it("blocks Go on an unbound role with a plain reason, the role table and Check again", () => {
-    const blocked = checked(doc(brief("@reviewer")), bId, unbound("@reviewer"));
+  it("blocks Go on a model that is not ready with a plain reason and Check again", () => {
+    const blocked = checked(doc(brief(NOPE)), bId, unready(NOPE));
 
     Scene.scene(
       config,
       Scene.given(blocked),
       Scene.expect(goButton).toBeDisabled(),
       Scene.expect(Scene.testId("request-card-go-blocked")).toContainText(
-        "Go is blocked: no role named @reviewer is in the role table."
-      ),
-      Scene.expect(Scene.selector('[data-action="role-table"]')).toHaveAttr(
-        "href",
-        "/settings#roles"
+        "Go is blocked: opencode-go/nope is not ready, as it is not in the model catalog."
       ),
       Scene.expect(
         Scene.role("button", { name: "Send back" })
@@ -265,21 +262,20 @@ describe("the brief card", () => {
       ).not.toBeDisabled(),
       Scene.click(Scene.role("button", { name: "Check again" })),
       Scene.Command.expectExact(
-        CheckRoles({
+        CheckModels({
           approvalId: bId,
           generation: 2,
-          specs: ["@reviewer"],
-          overrides: Option.none(),
+          specs: [NOPE],
         })
       ),
       // Still held while the second check is out.
       Scene.expect(goButton).toBeDisabled(),
       Scene.Command.resolve(
-        CheckRoles,
-        Message.ReceivedRoleChecks({
+        CheckModels,
+        Message.ReceivedModelChecks({
           approvalId: bId,
           generation: 2,
-          checks: resolved("@reviewer"),
+          checks: resolved(NOPE),
         })
       ),
       Scene.expect(goButton).not.toBeDisabled(),
@@ -297,40 +293,40 @@ describe("the brief card", () => {
   });
 
   it("takes only the answer to the check still out", () => {
-    const shown = inform(initial, context(doc(brief("@reviewer")))).model;
+    const shown = inform(initial, context(doc(brief(NOPE)))).model;
 
     const again = update(
       shown,
-      Message.ClickedCheckRoles({ approvalId: bId })
+      Message.ClickedCheckModels({ approvalId: bId })
     ).model;
 
     // The first check's answer arrives after the second was asked: it does nothing.
     const stale = update(
       again,
-      Message.ReceivedRoleChecks({
+      Message.ReceivedModelChecks({
         approvalId: bId,
         generation: 1,
-        checks: resolved("@reviewer"),
+        checks: resolved(NOPE),
       })
     ).model;
 
-    assert.strictEqual(stale.roleChecks[bId]?._tag, "Checking");
+    assert.strictEqual(stale.modelChecks[bId]?._tag, "Checking");
 
     const fresh = update(
       stale,
-      Message.ReceivedRoleChecks({
+      Message.ReceivedModelChecks({
         approvalId: bId,
         generation: 2,
-        checks: unbound("@reviewer"),
+        checks: unready(NOPE),
       })
     ).model;
 
-    assert.strictEqual(fresh.roleChecks[bId]?._tag, "Checked");
+    assert.strictEqual(fresh.modelChecks[bId]?._tag, "Checked");
   });
 
   it("asks again when the connection comes back, and not before", () => {
-    const approvals = doc(brief("@worker"));
-    const first = checked(approvals, bId, resolved("@worker"));
+    const approvals = doc(brief(LUNA));
+    const first = checked(approvals, bId, resolved(LUNA));
 
     const dropped = inform(first, context(approvals, false));
 
@@ -341,11 +337,10 @@ describe("the brief card", () => {
     assert.deepStrictEqual(
       asked(back.commands),
       asked([
-        CheckRoles({
+        CheckModels({
           approvalId: bId,
           generation: 2,
-          specs: ["@worker"],
-          overrides: Option.none(),
+          specs: [LUNA],
         }),
       ])
     );
@@ -360,10 +355,10 @@ describe("the brief card", () => {
     );
   });
 
-  it("holds nothing when the check could not be made, and never waits on a brief with no role", () => {
+  it("holds nothing when the check could not be made, and never waits on a brief with no model", () => {
     const failed = update(
-      inform(initial, context(doc(brief("@worker")))).model,
-      Message.FailedRoleChecks({
+      inform(initial, context(doc(brief(LUNA)))).model,
+      Message.FailedModelChecks({
         approvalId: bId,
         generation: 1,
         message: "Cairn is reconnecting.",
@@ -382,23 +377,33 @@ describe("the brief card", () => {
       )
     );
 
-    const parentModel = inform(initial, context(doc(brief(null))));
+    // No model named, or a role a brief recorded before roles were removed: the parent's model.
+    for (const role of [null, "@worker"]) {
+      const parentModel = inform(initial, context(doc(brief(role))));
 
-    assert.lengthOf(parentModel.commands ?? [], 0);
+      assert.lengthOf(parentModel.commands ?? [], 0);
 
-    Scene.scene(
-      config,
-      Scene.given(parentModel.model),
-      Scene.expect(goButton).not.toBeDisabled(),
-      Scene.inside(
-        Scene.testId("request-card"),
-        Scene.expect(Scene.selector("dl")).not.toContainText("Runs on")
-      )
-    );
+      Scene.scene(
+        config,
+        Scene.given(parentModel.model),
+        Scene.expect(goButton).not.toBeDisabled(),
+        Scene.inside(
+          Scene.testId("request-card"),
+          Scene.expect(Scene.selector("dl")).not.toContainText("Runs on"),
+          Scene.expect(Scene.selector("dl")).toContainText(
+            "WhoThe parent's model"
+          )
+        )
+      );
+    }
   });
 
   it("sends a launch back with notes for its model, which runs nothing", () => {
-    const shown = checked(doc(launch(5)), wId, resolved("@scout"));
+    const shown = checked(
+      doc(launch(5)),
+      wId,
+      resolved("faux/scripted:medium")
+    );
 
     // Send back opens the notes field on the launch, as on a subagent's brief.
     assert.isTrue(
@@ -434,44 +439,25 @@ describe("the brief card", () => {
     );
   });
 
-  it("checks a node's own brief with the launch's bindings it carries, and blocks Go on an unbound role", () => {
-    const binding = {
-      model: faux,
-      thinkingLevel: null,
-      fallbacks: [],
-      note: null,
-    };
-
+  it("checks a node's own brief, and blocks Go on a model that is not ready", () => {
     const nId = ApprovalId.make("n-1");
 
-    // Bound by the launch: asked with the override, as the brain resolves it at Go.
-    const bound = inform(
-      initial,
-      context(doc(nodeBrief({ "@judge": binding })))
-    );
+    const shown = inform(initial, context(doc(nodeBrief(NOPE))));
 
     assert.deepStrictEqual(
-      asked(bound.commands),
-      asked([
-        CheckRoles({
-          approvalId: nId,
-          generation: 1,
-          specs: ["@judge"],
-          overrides: Option.some({ "@judge": binding }),
-        }),
-      ])
+      asked(shown.commands),
+      asked([CheckModels({ approvalId: nId, generation: 1, specs: [NOPE] })])
     );
 
-    // A launch that binds nothing: the table alone, which binds no @judge here, so Go is blocked.
     Scene.scene(
       config,
-      Scene.given(checked(doc(nodeBrief({})), nId, unbound("@judge"))),
+      Scene.given(checked(doc(nodeBrief(NOPE)), nId, unready(NOPE))),
       Scene.expect(Scene.testId("request-card-go-blocked")).toExist(),
       Scene.expect(goButton).toBeDisabled()
     );
   });
 
-  it("neither checks nor blocks a workflow node's own brief written before it carried its launch's bindings", () => {
+  it("neither checks nor blocks a workflow node's own brief that names a role from before roles were removed", () => {
     const olderNodeBrief = record({
       id: "n-1",
       tool: "agent",
@@ -513,7 +499,7 @@ describe("the brief card", () => {
   it("sends a brief back with the notes typed, and not without them", () => {
     Scene.scene(
       config,
-      Scene.given(checked(doc(brief("@worker")), bId, resolved("@worker"))),
+      Scene.given(checked(doc(brief(LUNA)), bId, resolved(LUNA))),
       Scene.click(Scene.role("button", { name: "Send back" })),
       Scene.expect(goButton).not.toExist(),
       Scene.expect(Scene.role("button", { name: "Send back" })).toBeDisabled(),
@@ -537,7 +523,7 @@ describe("the brief card", () => {
 
     // Blank notes are refused by the update too, as the brain refuses them.
     const opened = update(
-      checked(doc(brief("@worker")), bId, resolved("@worker")),
+      checked(doc(brief(LUNA)), bId, resolved(LUNA)),
       Message.ClickedSendBack({ approvalId: bId })
     ).model;
 
@@ -557,11 +543,10 @@ describe("the brief card", () => {
     assert.deepStrictEqual(
       asked(launched.commands),
       asked([
-        CheckRoles({
+        CheckModels({
           approvalId: wId,
           generation: 1,
-          specs: ["@scout"],
-          overrides: Option.none(),
+          specs: ["faux/scripted:medium"],
         }),
       ])
     );
@@ -571,10 +556,10 @@ describe("the brief card", () => {
       Scene.given(
         update(
           launched.model,
-          Message.ReceivedRoleChecks({
+          Message.ReceivedModelChecks({
             approvalId: wId,
             generation: 1,
-            checks: resolved("@scout"),
+            checks: resolved("faux/scripted:medium"),
           })
         ).model
       ),
@@ -587,7 +572,7 @@ describe("the brief card", () => {
         ),
         Scene.expect(Scene.selector("dl")).not.toContainText("$0.00"),
         Scene.expect(Scene.testId("request-card-call-site")).toContainText(
-          "@scout · reads only · depends on the data"
+          "faux/scripted at medium · reads only · depends on the data"
         )
       ),
       Scene.click(Scene.role("button", { name: "Run on 1 first" })),
@@ -609,7 +594,11 @@ describe("the brief card", () => {
     );
 
     // One node: Run on 1 first is Go, so it is not offered, and the update refuses it.
-    const single = checked(doc(launch(1)), wId, resolved("@scout"));
+    const single = checked(
+      doc(launch(1)),
+      wId,
+      resolved("faux/scripted:medium")
+    );
 
     Scene.scene(
       config,
@@ -630,7 +619,7 @@ describe("the brief card", () => {
     // A subagent's brief takes no Run on 1 first either.
     assert.lengthOf(
       update(
-        checked(doc(brief("@worker")), bId, resolved("@worker")),
+        checked(doc(brief(LUNA)), bId, resolved(LUNA)),
         Message.ClickedAccept({ approvalId: bId, decision: "accept_sample" })
       ).commands ?? [],
       0
@@ -638,11 +627,11 @@ describe("the brief card", () => {
   });
 
   it("keeps the notes typed on a brief settled elsewhere", () => {
-    const approvals = doc(brief("@worker"));
+    const approvals = doc(brief(LUNA));
 
     const typed = update(
       update(
-        checked(approvals, bId, resolved("@worker")),
+        checked(approvals, bId, resolved(LUNA)),
         Message.ClickedSendBack({ approvalId: bId })
       ).model,
       Message.ChangedNotes({ approvalId: bId, value: "narrower please" })
@@ -653,7 +642,7 @@ describe("the brief card", () => {
       context(
         doc(
           record({
-            payload: briefPayload("@worker"),
+            payload: briefPayload(LUNA),
             status: "accepted",
             answeredAt: 2000,
             decidedBy: { kind: "user" },

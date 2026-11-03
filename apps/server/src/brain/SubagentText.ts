@@ -112,10 +112,10 @@ export type BriefAnswer =
   | { readonly kind: "expired" }
   /** Accepted, but the child's workspace could not be made (`why`), so nothing started. */
   | { readonly kind: "noWorkspace"; readonly why: string }
-  /** Accepted, but the brief's role resolved to no ready model at Go (`why`), so nothing started. */
+  /** Accepted, but the model the brief names was not ready at Go (`why`), so nothing started. */
   | { readonly kind: "noModel"; readonly why: string }
-  /** Accepted, but the role table could not be read at Go however long it was retried. */
-  | { readonly kind: "rolesUnread"; readonly why: string }
+  /** Accepted, but the model catalog could not be read at Go however long it was retried. */
+  | { readonly kind: "modelsUnread"; readonly why: string }
   /** Accepted, but the brain already had its most children live at Go (`live`), so nothing started. */
   | { readonly kind: "noRoom"; readonly live: number }
   /** Accepted, but a budget covering the parent was at its line at Go (`why`), so nothing started. */
@@ -140,9 +140,9 @@ export const renderBriefAnswer = (title: string, answer: BriefAnswer): string =>
       noWorkspace: (found) =>
         `The user approved the brief "${title}", but its workspace could not be made, so nothing started: ${found.why}`,
       noModel: (found) =>
-        `The user approved the brief "${title}", but its role resolved to no ready model, so nothing started: ${found.why}`,
-      rolesUnread: (found) =>
-        `The user approved the brief "${title}", but its role could not be read, so nothing started: ${found.why}`,
+        `The user approved the brief "${title}", but the model it names is not ready, so nothing started: ${found.why}`,
+      modelsUnread: (found) =>
+        `The user approved the brief "${title}", but the model it names could not be checked, so nothing started: ${found.why}`,
       noBudget: (found) =>
         `The user approved the brief "${title}", but a budget is reached, so nothing started: ${found.why}`,
       noRoom: (found) =>
@@ -228,15 +228,18 @@ export const SubagentToolText = {
   /** `subagent_spawn` missing its description or its brief. */
   spawnNeedsBrief:
     "subagent_spawn needs a description (5 to 10 words) and a brief. Call it again with both.",
-  /** `subagent_spawn` whose `role` does not resolve now (`why`: what resolves instead). */
-  roleRefused: (why: string) =>
-    `subagent_spawn's role does not resolve now. ${why} Call it again with one of those, or leave role out to run the child on your own model.`,
-  /** `subagent_spawn` whose role could not be checked: the role table or catalog was unreadable. */
-  roleUnchecked: (why: string) =>
-    `subagent_spawn could not check its role just now: ${why} Call it again in a moment, or leave role out.`,
-  /** `subagent_spawn` whose `role` is neither a role nor a model. */
-  roleInvalid: (role: string) =>
-    `subagent_spawn's role "${role}" is neither a role (@worker, @scout) nor provider/modelId[:level]. Call it again with one, or leave role out.`,
+  /** `subagent_spawn` whose `model` is not ready now (`why`: the reason). */
+  modelRefused: (why: string) =>
+    `subagent_spawn's model cannot take a child now. ${why} Tell the user if they asked for that model; otherwise leave model out to run the child on your own model.`,
+  /** `subagent_spawn` whose model could not be checked: the catalog was unreadable. */
+  modelUnchecked: (why: string) =>
+    `subagent_spawn could not check its model just now: ${why} Call it again in a moment, or leave model out.`,
+  /** `subagent_spawn` whose `model` is not `provider/modelId[:level]`. */
+  modelInvalid: (model: string) =>
+    `subagent_spawn's model "${model}" is not provider/modelId[:level]. Call models to see what a child can run on, then call it again with one, or leave model out to run the child on your own model.`,
+  /** `subagent_spawn` whose `model` is a role name: roles were removed (ADR 0043). */
+  roleRemoved: (role: string) =>
+    `subagent_spawn's model "${role}" is a role, and roles were removed. Pass model as provider/modelId[:level] (call models to see what a child can run on), or leave it out to run the child on your own model and level.`,
   /** `subagent_spawn` whose `result_schema` is not a JSON object. */
   resultSchemaNotObject:
     "subagent_spawn's result_schema must be a JSON Schema object. Pass an object, or leave it out for a text result.",

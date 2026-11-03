@@ -3,8 +3,9 @@
 // the same script run.
 //
 // The tool is replay-safe and its task is the wait (ADR 0013). It parses and dry-runs the script
-// (`WorkflowPlan`, no model called), estimates it from the thread's own past nodes on each role's
-// current binding, and in one commit writes the `proposed` ledger row, the launch approval (a
+// (`WorkflowPlan`, no model called) with the thread's own model and level as what a call that names
+// no model runs on (ADR 0043), estimates it from the thread's own past nodes on each model, and in
+// one commit writes the `proposed` ledger row, the launch approval (a
 // `brief` record whose frozen payload is the plan and its envelope, id `call-<task id>`) and the
 // `workflow.proposed` event. Then it waits for the answer like any gated call; boot retries a task
 // whose approval is pending. A rerun after `kill -9` finds its row and record and waits again
@@ -16,8 +17,8 @@
 // after its record settled. Go tells the model to call `codemode` with exactly the same script: the
 // gate runs only the hash the user approved.
 
+import type { ThinkingLevel } from "@cairn/protocol/Models";
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
-import type { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
 import type { JsonValue } from "@earendil-works/chord";
@@ -62,8 +63,12 @@ import {
 } from "./WorkflowLaunch.ts";
 import { refused } from "./WorkflowNodes.ts";
 import { estimateRun, historyTokens, toLaunch } from "./WorkflowPlan.ts";
-import type { DryRun, NodeHistory, PlanInput } from "./WorkflowPlan.ts";
-import type { RoleResolver } from "./WorkflowTools.ts";
+import type {
+  DryRun,
+  NodeHistory,
+  PlanInput,
+  ThreadModel,
+} from "./WorkflowPlan.ts";
 
 /**
  * Parses and dry-runs a proposed script: the run, or the refusal's words for the model; and finds a
@@ -97,10 +102,11 @@ export const UNKNOWN_RECIPE_REFUSAL = (
 
 /** What the tool tells the model about writing and launching a workflow. */
 export const PLAN_DESCRIPTION = [
-  "Propose a workflow script for the user's Go before running it. A workflow fans work out to subagent nodes from code: the script starts with `export const meta = { name, description, phases: [{ title }] };` and then calls agent(prompt, { role, schema, label, phase, readonly }), verify(result, { claim }), parallel([...thunks]), pipeline(items, ...stages), phase(title), log(text), approve({ summary }) and reads args and budget.",
+  "Propose a workflow script for the user's Go before running it. A workflow fans work out to subagent nodes from code: the script starts with `export const meta = { name, description, phases: [{ title }] };` and then calls agent(prompt, { model, schema, label, phase, readonly }), verify(result, { claim, model }), parallel([...thunks]), pipeline(items, ...stages), phase(title), log(text), approve({ summary }) and reads args and budget.",
+  'A node runs on this thread\'s model and thinking level unless it names another as model: "provider/modelId[:level]" (the models tool lists what is ready); name one only when the user asks for it. There are no roles.',
   "agent() and verify() resolve with the node's value, or null when the node was refused, stopped or failed, so handle null. A node without a schema answers text; in the dry run every node answers at once with a placeholder shaped by its schema.",
-  "A saved recipe runs by name: propose `export const meta = { name: \"council\" };` with its args and, on Go, run that same line with codemode. That works for the built-in council and for a project recipe (workflow.list names them, from the project's .cairn/workflows). The council takes { question, scope, nonGoals, evidence, advisors: [two to four roles], judge?, maxPasses? }. agent()'s resume option continues a settled node of the same run in a fork of its conversation; a resumed node takes the default role unless it names one.",
-  "This tool dry-runs the script with stub nodes, shows the user its call sites, node count, estimate and budget, and waits for the answer. On Go, call codemode with exactly the same script, unchanged: any change needs a new proposal. Run on 1 first runs it with pipeline() taking only its first item; propose it again to run on all. A node the plan did not show (another role, a writer where it showed a reader, more nodes than it counted) asks the user before it starts.",
+  "A saved recipe runs by name: propose `export const meta = { name: \"council\" };` with its args and, on Go, run that same line with codemode. That works for the built-in council and for a project recipe (workflow.list names them, from the project's .cairn/workflows). The council takes { question, scope, nonGoals, evidence, advisors?: [two to four models, each provider/modelId[:level] or null for this thread's; leave it out for two advisors on this thread's model], judge?: a model, maxPasses? }. agent()'s resume option continues a settled node of the same run in a fork of its conversation; a resumed node runs on this thread's model unless it names one.",
+  "This tool dry-runs the script with stub nodes, shows the user its call sites, node count, estimate and budget, and waits for the answer. On Go, call codemode with exactly the same script, unchanged: any change needs a new proposal. Run on 1 first runs it with pipeline() taking only its first item; propose it again to run on all. A node the plan did not show (another model, a writer where it showed a reader, more nodes than it counted) asks the user before it starts.",
 ].join(" ");
 
 const decodeLaunch = Schema.decodeUnknownOption(WorkflowLaunch);
@@ -119,48 +125,39 @@ const budgetFrom = (
 });
 
 /**
- * The settled nodes of the thread's past workflows each role's estimate rests on: only those that
- * ran on the provider and model the role resolves to now, oldest first.
+ * The settled nodes of the thread's past workflows the estimate rests on, each with the model it
+ * ran on, oldest first; `estimateRun` reads those on each call site's model.
  */
-const historyOf = async (
-  ledger: Readonly<WorkflowsState> | undefined,
-  run: DryRun,
-  resolveRole: RoleResolver
-): Promise<ReadonlyArray<NodeHistory>> => {
-  const bound = new Map<string, { spec: RoleSpec; binding: string }>();
-
-  for (const { spec } of run.byRole) {
-    // oxlint-disable-next-line no-await-in-loop -- a handful of roles, resolved in order
-    const resolved = await resolveRole(spec, Option.none());
-
-    if (Result.isSuccess(resolved)) {
-      bound.set(spec, {
-        spec,
-        binding: `${resolved.success.provider}/${resolved.success.modelId}`,
-      });
-    }
-  }
-
-  return Object.values(ledger?.items ?? {})
+const historyOf = (
+  ledger: Readonly<WorkflowsState> | undefined
+): ReadonlyArray<NodeHistory> =>
+  Object.values(ledger?.items ?? {})
     .flatMap((row) => Object.values(row.nodes))
-    .filter((node) => node.state === "settled" && node.receipt !== null)
     .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
-    .flatMap((node): Array<NodeHistory> => {
-      const role = bound.get(node.role ?? "");
-
-      return role === undefined ||
-        role.binding !== `${node.provider ?? ""}/${node.modelId ?? ""}` ||
-        node.receipt === null
+    .flatMap((node): Array<NodeHistory> =>
+      node.state !== "settled" ||
+      node.receipt === null ||
+      node.provider === null ||
+      node.modelId === null
         ? []
         : [
             {
-              spec: role.spec,
+              model: { provider: node.provider, modelId: node.modelId },
               totalTokens: historyTokens(node.receipt),
               listMicros: Option.fromNullOr(node.receipt.listMicros),
             },
-          ];
-    });
-};
+          ]
+    );
+
+/** The model and level the thread runs on; none when it names no model. */
+export const threadModelOf = (agent: {
+  readonly model?: { readonly provider: string; readonly modelId: string };
+  readonly thinkingLevel?: ThinkingLevel;
+}): Option.Option<ThreadModel> =>
+  Option.map(Option.fromUndefinedOr(agent.model), (model) => ({
+    model: { provider: model.provider, modelId: model.modelId },
+    thinkingLevel: Option.fromUndefinedOr(agent.thinkingLevel),
+  }));
 
 /** The launch approval record for `launch`, pending, as the plan's commit writes it. */
 const launchRecord = (
@@ -247,8 +244,8 @@ const settle = async (api: ToolExecutionApi, context: ChordContext) =>
       : Option.some({ row: copyRow(row), record: copyRecord(record) });
   }, context);
 
-/** `workflow_plan`, over the dry run and the role resolver. */
-export const planTool = (plan: PlanAccess, resolveRole: RoleResolver) => {
+/** `workflow_plan`, over the dry run. */
+export const planTool = (plan: PlanAccess) => {
   /** Dry-runs, then writes the row, the record and the event once; the refusal's words otherwise. */
   const propose = async (
     api: ToolExecutionApi,
@@ -285,10 +282,10 @@ export const planTool = (plan: PlanAccess, resolveRole: RoleResolver) => {
     );
 
     let { script } = args;
+    const agent = await api.agent(context);
 
     if (Option.isSome(named)) {
-      const { cwd } = await api.agent(context);
-      const root = Option.fromUndefinedOr(cwd);
+      const root = Option.fromUndefinedOr(agent.cwd);
 
       const found = Option.isSome(root)
         ? await plan.projectRecipe(root.value, named.value)
@@ -305,13 +302,14 @@ export const planTool = (plan: PlanAccess, resolveRole: RoleResolver) => {
       args: launchArgs,
       budget,
       sample: Option.none(),
+      threadModel: threadModelOf(agent),
     });
 
     if (Result.isFailure(run)) {
       return Option.some(run.failure);
     }
 
-    const history = await historyOf(ledger, run.success, resolveRole);
+    const history = historyOf(ledger);
     const { mode } = await readPermissions(api, context);
 
     const launch = toLaunch(run.success, {
@@ -321,7 +319,6 @@ export const planTool = (plan: PlanAccess, resolveRole: RoleResolver) => {
       args: launchArgs,
       budget,
       estimate: Option.some(estimateRun(run.success, history)),
-      roleOverrides: {},
       maxNodes: Option.fromUndefinedOr(args.max_nodes),
       modes: [mode],
       writes: [],

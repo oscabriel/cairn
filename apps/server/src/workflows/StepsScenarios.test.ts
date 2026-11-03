@@ -41,7 +41,7 @@ import {
   plant,
   plantDefaults,
   runScript,
-  UNRESOLVABLE_ROLE,
+  UNREADY_MODEL,
 } from "./WorkflowTestKit.ts";
 import { NO_WORKFLOW_FAULTS } from "./WorkflowTools.ts";
 
@@ -459,7 +459,7 @@ phase("Try");
 const tried = await parallel([
   () => agent("node:t1 ms=50", { label: "t1" }),
   () => agent("node:t2 fail", { label: "t2" }),
-  () => agent.full("node:t3", { label: "t3", role: "${UNRESOLVABLE_ROLE}" }),
+  () => agent.full("node:t3", { label: "t3", model: "${UNREADY_MODEL}" }),
 ]);
 return { first, tried };`
           )

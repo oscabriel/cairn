@@ -1,24 +1,11 @@
-// What the usage page and the role table say, as pure functions (plan wave 6, 6G; models note M10,
-// surfaces note S9). One rule runs through all of it: an unknown value is said to be unknown, never
+// What the usage page says, as pure functions (plan wave 6, 6G; models note M10, surfaces note
+// S9). One rule runs through all of it: an unknown value is said to be unknown, never
 // drawn as zero. A model with no list price reads "no price" with its tokens, a plan window the
 // probe could not read reads "unknown", a provider Cairn cannot read (Codex with no login) says so,
 // and a thread with no spend recorded is left out rather than listed at $0.00. Dollars are list
 // prices (ADR 0036): a plan model's figure is labelled "at API list price", since the plan bills
 // nothing per token.
 
-import type {
-  ModelListing,
-  ModelRef,
-  ThinkingLevel,
-} from "@cairn/protocol/Models";
-import type {
-  RoleBinding,
-  RoleCheck,
-  RoleName,
-  RoleTable,
-  SkippedModel,
-} from "@cairn/protocol/Roles";
-import { BUILT_IN_ROLES } from "@cairn/protocol/Roles";
 import type {
   Budget,
   BudgetState,
@@ -27,7 +14,8 @@ import type {
   SpendSummary,
 } from "@cairn/protocol/Spend";
 import type { PlanWindow, UsageSnapshot } from "@cairn/protocol/Usage";
-import { Array, Match, Option, Order, Record } from "effect";
+import { Array, Match, Option, Order } from "effect";
+import type { Record } from "effect";
 
 /** The tone a line takes: a status tone, or neutral for a plain reading. */
 export type MeterTone = "neutral" | "working" | "waiting" | "failed" | "done";
@@ -324,191 +312,3 @@ export const otherPlanProviders = (
         .map((row) => row.provider)
         .filter((id) => !PLAN_PROVIDERS.some(([fixed]) => fixed === id)),
   });
-
-// The role table.
-
-/** A role's binding as text: `claude-bridge/claude-opus-5-5 at medium`. */
-export const modelText = (model: ModelRef): string =>
-  `${model.provider}/${model.modelId}`;
-
-/** The roles of a table in the order the editor lists them: built-ins first, then by name. */
-export const rolesOf = (table: RoleTable): ReadonlyArray<RoleName> => {
-  const names = Record.keys(table);
-
-  const builtIn = BUILT_IN_ROLES.flatMap((role) =>
-    names.filter((name) => name === role)
-  );
-
-  return [
-    ...builtIn,
-    ...names.filter((name) => !BUILT_IN_ROLES.includes(name)).toSorted(),
-  ];
-};
-
-const SKIP_WORDS: Readonly<Record<SkippedModel["reason"], string>> = {
-  missing_credential: "has no credential here",
-  unknown_model: "is not in the catalog",
-  limited: "is at a usage limit",
-  failing: "is failing",
-};
-
-/** One passed-over model in words: `openai-codex/gpt-6-luna has no credential here`. */
-export const skippedText = (skipped: SkippedModel): string =>
-  `${modelText(skipped.model)} ${SKIP_WORDS[skipped.reason]}`;
-
-type UnresolvedReason = Extract<
-  RoleCheck["resolution"],
-  { readonly _tag: "Unresolved" }
->["reason"];
-
-const UNRESOLVED_WORDS: Readonly<Record<UnresolvedReason, string>> = {
-  unbound_role: "Not bound",
-  invalid_spec: "Not a role or model",
-  no_ready_model: "No ready model",
-};
-
-/** What a role resolves to now, in words with a tone. */
-export interface RoleStatus {
-  readonly word: string;
-  readonly detail: Option.Option<string>;
-  readonly tone: MeterTone;
-}
-
-/** A role's status from its `roles.check` answer. */
-export const roleStatusOf = (check: RoleCheck): RoleStatus => {
-  const family = check.sameFamilyAsWorker
-    ? Option.some("Same model family as @worker.")
-    : Option.none<string>();
-
-  return Match.value(check.resolution).pipe(
-    Match.tagsExhaustive({
-      Resolved: ({ resolved }): RoleStatus => {
-        const fallback = resolved.via === "fallback";
-
-        const detail = [
-          `Resolves to ${modelText(resolved.model)}${fallback ? ", its fallback" : ""}.`,
-          ...resolved.skipped.map(
-            (skipped) => `Skipped: ${skippedText(skipped)}.`
-          ),
-          ...Option.toArray(family),
-        ];
-
-        return {
-          word: fallback ? "On its fallback" : "Ready",
-          detail: Option.some(detail.join(" ")),
-          tone: fallback || check.sameFamilyAsWorker ? "waiting" : "done",
-        };
-      },
-      Unresolved: ({ reason, skipped }): RoleStatus => {
-        const lines = skipped.map(skippedText);
-
-        return {
-          word: UNRESOLVED_WORDS[reason],
-          detail:
-            lines.length === 0
-              ? Option.none()
-              : Option.some(
-                  `${lines.join("; ")}. Rebind it to a model that is ready.`
-                ),
-          tone: "failed",
-        };
-      },
-    })
-  );
-};
-
-/** A model choice in the role editor: its value is `provider/modelId`. */
-export interface ModelChoice {
-  readonly value: string;
-  readonly label: string;
-  readonly available: boolean;
-}
-
-/**
- * The models a role can be bound to: every listed model, available ones first, and the role's
- * current model even when the catalog does not list it (a Codex binding with no Codex login), so the
- * select shows what the role is bound to rather than another model.
- */
-export const modelChoicesOf = (
-  catalog: ReadonlyArray<ModelListing>,
-  current: ModelRef
-): ReadonlyArray<ModelChoice> => {
-  const listed = catalog.map((listing): ModelChoice => ({
-    value: modelText(listing),
-    label: listing.available
-      ? `${listing.name} (${modelText(listing)})`
-      : `${listing.name} (${modelText(listing)}, not available)`,
-    available: listing.available,
-  }));
-
-  const currentValue = modelText(current);
-
-  const missing: ReadonlyArray<ModelChoice> = listed.some(
-    (choice) => choice.value === currentValue
-  )
-    ? []
-    : [
-        {
-          value: currentValue,
-          label: `${currentValue} (not in the catalog)`,
-          available: false,
-        },
-      ];
-
-  return [
-    ...missing,
-    ...listed.filter((choice) => choice.available),
-    ...listed.filter((choice) => !choice.available),
-  ];
-};
-
-/** The thinking levels a binding can take on `model`: the catalog's, or every level when unknown. */
-export const thinkingChoicesOf = (
-  catalog: ReadonlyArray<ModelListing>,
-  model: ModelRef,
-  every: ReadonlyArray<ThinkingLevel>
-): ReadonlyArray<ThinkingLevel> =>
-  Option.match(
-    Array.findFirst(
-      catalog,
-      (listing) =>
-        listing.provider === model.provider && listing.modelId === model.modelId
-    ),
-    { onNone: () => every, onSome: (listing) => listing.thinkingLevels }
-  );
-
-/**
- * The table with `role` bound to `model`: its thinking level kept while the new model takes it
- * (else the model's default), its fallbacks kept less the new model, its note kept.
- */
-export const rebindModel = (
-  table: RoleTable,
-  role: RoleName,
-  model: ModelRef,
-  levels: ReadonlyArray<ThinkingLevel>
-): Option.Option<RoleTable> =>
-  Option.map(Option.fromUndefinedOr(table[role]), (binding): RoleTable => {
-    const next: RoleBinding = {
-      model,
-      thinkingLevel: Option.filter(binding.thinkingLevel, (level) =>
-        levels.includes(level)
-      ),
-      fallbacks: binding.fallbacks.filter(
-        (fallback) => modelText(fallback) !== modelText(model)
-      ),
-      note: binding.note,
-    };
-
-    return { ...table, [role]: next };
-  });
-
-/** The table with `role`'s thinking level set (none: the model's default). */
-export const rebindThinking = (
-  table: RoleTable,
-  role: RoleName,
-  level: Option.Option<ThinkingLevel>
-): Option.Option<RoleTable> =>
-  Option.map(Option.fromUndefinedOr(table[role]), (binding): RoleTable => ({
-    ...table,
-    [role]: { ...binding, thinkingLevel: level },
-  }));

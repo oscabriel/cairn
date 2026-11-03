@@ -1,8 +1,8 @@
 // The request card's state (plan wave 6, 6A and 6B; surfaces note S3 and W1; briefs note section
 // 4): the open thread's `cairn.approvals` document as its stream holds it, and what the user has
 // started on the card: a question's drafts and the question they are on, a Decline's reason, a
-// Send back's notes, an answer waiting out its undo window, an answer in flight, what a brief's
-// roles resolve to now, and a request that closed under them because it was answered somewhere
+// Send back's notes, an answer waiting out its undo window, an answer in flight, what the models a
+// brief names resolve to now, and a request that closed under them because it was answered somewhere
 // else. The document comes from the thread page's view, never from the card.
 //
 // This module and `Message.ts` sit in the entry, since the root Model holds the card; the card's
@@ -10,7 +10,7 @@
 // the document stays plain JSON here and is decoded there.
 
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
-import { RoleCheck } from "@cairn/protocol/Roles";
+import { ModelCheck } from "@cairn/protocol/ModelSpecs";
 import { Option, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
@@ -53,16 +53,16 @@ export const ClosedRequest = Schema.Struct({
 export type ClosedRequest = typeof ClosedRequest.Type;
 
 /**
- * What `roles.check` said about the roles a brief or a launch names (6B): asked and not answered
- * yet (`generation` tells a stale answer from a fresh one), answered, or not checkable now.
+ * What `models.check` said about the models a brief or a launch names (6B, ADR 0043): asked and not
+ * answered yet (`generation` tells a stale answer from a fresh one), answered, or not checkable now.
  */
-export const RoleCheckState = defineTaggedUnion({
+export const ModelCheckState = defineTaggedUnion({
   Checking: { generation: Schema.Int },
-  Checked: { checks: Schema.Array(RoleCheck) },
+  Checked: { checks: Schema.Array(ModelCheck) },
   Unchecked: { message: Schema.String },
 });
 
-export type RoleCheckState = typeof RoleCheckState.Type;
+export type ModelCheckState = typeof ModelCheckState.Type;
 
 /** The card's Model. */
 export const Model = Schema.Struct({
@@ -82,9 +82,9 @@ export const Model = Schema.Struct({
   notes: Schema.Record(Schema.String, Schema.String),
   /** The brief whose Send back notes field is open (6B). */
   sendingBack: Schema.Option(ApprovalId),
-  /** What each shown brief's or launch's roles resolve to now, by approval id (6B). */
-  roleChecks: Schema.Record(Schema.String, RoleCheckState),
-  /** Bumped by every role check asked, so an answer to an earlier one does nothing. */
+  /** What the models each shown brief or launch names resolve to now, by approval id (6B). */
+  modelChecks: Schema.Record(Schema.String, ModelCheckState),
+  /** Bumped by every model check asked, so an answer to an earlier one does nothing. */
   checkGeneration: Schema.Int,
   /** The request whose answer is in flight; the card takes no second answer meanwhile. */
   sending: Schema.Option(ApprovalId),
@@ -118,7 +118,7 @@ export const initial: Model = {
   declining: Option.none(),
   notes: {},
   sendingBack: Option.none(),
-  roleChecks: {},
+  modelChecks: {},
   checkGeneration: 0,
   sending: Option.none(),
   answered: [],

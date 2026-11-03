@@ -19,6 +19,7 @@ import type {
 import type { GoalTally, ThreadShell } from "@cairn/protocol/Shell";
 import { Match, Option, Schema } from "effect";
 
+import { judgeModelText } from "./BriefGo.ts";
 import { subagentDescendants } from "./SubagentRollup.ts";
 
 const decodeGoal = Schema.decodeUnknownOption(GoalDocument);
@@ -251,7 +252,7 @@ export const judgeChip = (judge: JudgeRef): string =>
       command: (found) =>
         `Command: ${found.argv.join(" ")}${found.expectExit === 0 ? "" : ` (exit ${String(found.expectExit)})`}`,
       user: () => "You",
-      model: (found) => `Model: ${found.spec}`,
+      model: (found) => `Model: ${judgeModelText(found.spec)}`,
       verification: (found) => `Verification: ${found.recipe}`,
     })
   );

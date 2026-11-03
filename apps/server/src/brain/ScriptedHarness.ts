@@ -60,10 +60,9 @@ import {
 } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import type { Brief, RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
-import { DEFAULT_ROLE_TABLE, RoleSpec } from "@cairn/protocol/Roles";
-import type { RoleTable } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
@@ -123,7 +122,12 @@ import {
   questionRecord,
   relayedAsk,
 } from "../approvals/QuestionRoute.ts";
-import { familyOf } from "../models/ModelFamily.ts";
+import {
+  FAILURE_WORDS,
+  isRoleName,
+  ParsedSpec,
+  parseModelSpec,
+} from "../models/ModelSpecs.ts";
 import {
   attemptStateOf,
   CAP_TEXT,
@@ -138,7 +142,6 @@ import {
   validateResult,
 } from "../models/ResultTool.ts";
 import type { ResultState } from "../models/ResultTool.ts";
-import { ParsedSpec, parseRoleSpec } from "../models/RoleAliases.ts";
 import { NO_GOAL } from "../verdicts/GoalDocs.ts";
 import type { GoalState } from "../verdicts/GoalDocs.ts";
 import { BriefTtl } from "./BriefTtl.ts";
@@ -1052,7 +1055,7 @@ export interface ScriptedGoalThread {
 
 /**
  * The scripted store's goals (ADR 0026), for the goal service over a scripted brain: the thread a
- * goal belongs to, what a model judge's spec resolves to through the scripted role table, and one
+ * goal belongs to, what a model judge's named spec resolves to, and one
  * change to a thread's `cairn.goal` made in the harness's line by the verdict writer's own
  * functions (`verdicts/Verdicts.ts`), published as pi-durable's commit would be: the view, and
  * GoalUpdated when the goal's tally moved.
@@ -1064,8 +1067,8 @@ export class ScriptedGoals extends Context.Service<
     thread(
       threadId: ThreadId
     ): Effect.Effect<Option.Option<ScriptedGoalThread>>;
-    /** The model a model judge's spec resolves to, or why it does not resolve. */
-    resolveJudge(spec: RoleSpec): Result.Result<ModelRef, string>;
+    /** The model a model judge's named spec resolves to, or why it does not resolve. */
+    resolveJudge(spec: string): Result.Result<ModelRef, string>;
     /** A detached copy of the thread's goal; none before anything opened it. */
     read(threadId: ThreadId): Effect.Effect<Option.Option<GoalState>>;
     /**
@@ -1115,7 +1118,7 @@ const textInput = (requestId: string, text: string): AdmitInput => ({
   whenBusy: "followUp",
 });
 
-const decodeRoleSpec = Schema.decodeOption(RoleSpec);
+const decodeModelSpec = Schema.decodeOption(ModelSpec);
 
 const decodeModelRef = Schema.decodeUnknownOption(ModelRef);
 
@@ -1124,66 +1127,28 @@ const decodeThinkingLevel = Schema.decodeUnknownOption(ThinkingLevel);
 /** A resolution as the dispatch record keeps it: plain JSON. */
 const resolvedJson = (
   spec: string,
-  role: string | null,
   model: ModelRef,
-  thinkingLevel: ThinkingLevel | null,
-  via: "literal" | "primary"
+  thinkingLevel: ThinkingLevel | null
 ): JsonRecord => ({
   spec,
-  role,
   model: { provider: model.provider, modelId: model.modelId },
   thinkingLevel,
-  via,
-  skipped: [],
-  family: familyOf(model),
   priced: false,
 });
 
 /**
- * The role table the scripted harness resolves a brief's role through, since it reads no server
- * settings: the default table, unless a judge gives its own (the brief card judge gives a table
- * the brain's settings no longer hold, as one changed after a brief was asked).
+ * What a named model runs a child on in the scripted harness, which has no catalog: the model as
+ * named, at its level. Nothing is checked for readiness, and nothing is priced. A role name, from a
+ * new call, is refused as the real harness refuses it (ADR 0043).
  */
-export const ScriptedRoleTable = Context.Reference<RoleTable>(
-  "cairn/server/brain/ScriptedRoleTable",
-  { defaultValue: () => DEFAULT_ROLE_TABLE }
-);
-
-/**
- * What a brief's role runs a child on in the scripted harness, which has no catalog: a literal
- * `provider/modelId[:level]` as named, a role through `table`'s primary binding. Nothing is passed
- * over, and nothing is priced. A role the table does not bind resolves to nothing, in pi-durable's
- * words for it.
- */
-const scriptedResolve = (
-  table: RoleTable,
-  spec: RoleSpec
-): Result.Result<JsonRecord, string> =>
-  Option.match(parseRoleSpec(spec), {
-    onNone: () =>
-      Result.fail(`"${spec}" is neither a role (@name) nor provider/modelId.`),
+const scriptedResolve = (spec: string): Result.Result<JsonRecord, string> =>
+  Option.match(parseModelSpec(spec), {
+    onNone: () => Result.fail(`"${spec}": ${FAILURE_WORDS.invalid_spec}.`),
     onSome: (parsed) =>
       ParsedSpec.$match(parsed, {
-        Literal: ({ model, level }) =>
-          Result.succeed(
-            resolvedJson(spec, null, model, Option.getOrNull(level), "literal")
-          ),
-        Role: ({ role, level }) =>
-          Option.match(Option.fromUndefinedOr(table[role]), {
-            onNone: () => Result.fail(`No role by the name ${role} is bound.`),
-            onSome: (binding) =>
-              Result.succeed(
-                resolvedJson(
-                  spec,
-                  role,
-                  binding.model,
-                  Option.getOrNull(
-                    Option.orElse(level, () => binding.thinkingLevel)
-                  ),
-                  "primary"
-                )
-              ),
-          }),
+        Named: ({ model, level }) =>
+          Result.succeed(resolvedJson(spec, model, Option.getOrNull(level))),
+        Role: () => Result.fail(`"${spec}": ${FAILURE_WORDS.role_removed}.`),
       }),
   });
 
@@ -1204,11 +1169,16 @@ const briefOf = (
     return Result.fail(SubagentToolText.resultSchemaNotObject);
   }
 
-  const role = Option.map(textArgument(call, "role"), (text) => text.trim());
-  const spec = Option.flatMap(role, decodeRoleSpec);
+  const model = Option.map(textArgument(call, "model"), (text) => text.trim());
 
-  if (Option.isSome(role) && Option.isNone(spec)) {
-    return Result.fail(SubagentToolText.roleInvalid(role.value));
+  if (Option.isSome(model) && isRoleName(model.value)) {
+    return Result.fail(SubagentToolText.roleRemoved(model.value));
+  }
+
+  const spec = Option.flatMap(model, decodeModelSpec);
+
+  if (Option.isSome(model) && Option.isNone(spec)) {
+    return Result.fail(SubagentToolText.modelInvalid(model.value));
   }
 
   // A schema the result tool cannot hold the child to is refused at the ask, as pi-durable does.
@@ -1410,7 +1380,6 @@ const layerNoDeps = Layer.effectContext(
     const tools = yield* ScriptedTools;
     const faults = yield* SubagentFaults;
     const briefTtlMillis = yield* BriefTtl;
-    const roleTable = yield* ScriptedRoleTable;
     const events = yield* PubSub.unbounded<HarnessEvent>();
     /** Each parent's last published tally, as JSON. */
     const tallies = new Map<ThreadId, string>();
@@ -2120,11 +2089,17 @@ const layerNoDeps = Layer.effectContext(
         return;
       }
 
-      // The role resolves again at Go (ADR 0035); one that no longer does starts nothing.
-      const dispatch =
-        brief.role === null
-          ? Result.succeed(Option.none<JsonRecord>())
-          : Result.map(scriptedResolve(roleTable, brief.role), Option.some);
+      // The named model is checked again at Go (ADR 0043); one that no longer resolves starts
+      // nothing. A role a brief recorded before then names reads as none: the parent's model.
+      const named =
+        brief.role === null || isRoleName(brief.role)
+          ? Option.none<string>()
+          : Option.some(brief.role);
+
+      const dispatch = Option.match(named, {
+        onNone: () => Result.succeed(Option.none<JsonRecord>()),
+        onSome: (spec) => Result.map(scriptedResolve(spec), Option.some),
+      });
 
       if (Result.isFailure(dispatch)) {
         tellNothingStarted(
@@ -2187,13 +2162,7 @@ const layerNoDeps = Layer.effectContext(
       const spec = `${parent.agent.model.provider}/${parent.agent.model.modelId}`;
 
       const resolved = Option.getOrElse(dispatch.success, () =>
-        resolvedJson(
-          spec,
-          null,
-          parent.agent.model,
-          parent.agent.thinkingLevel,
-          "literal"
-        )
+        resolvedJson(spec, parent.agent.model, parent.agent.thinkingLevel)
       );
 
       const item: SubagentItem = {
@@ -2203,7 +2172,7 @@ const layerNoDeps = Layer.effectContext(
         briefApprovalId: record.id,
         description: brief.title,
         dispatch: {
-          spec: brief.role,
+          spec: Option.getOrNull(named),
           resolved,
           previewed: null,
           dispatchedAt: at,
@@ -3472,10 +3441,10 @@ const layerNoDeps = Layer.effectContext(
           }
 
           if (brief.success.role !== null) {
-            const resolved = scriptedResolve(roleTable, brief.success.role);
+            const resolved = scriptedResolve(brief.success.role);
 
             if (Result.isFailure(resolved)) {
-              return refused(SubagentToolText.roleRefused(resolved.failure));
+              return refused(SubagentToolText.modelRefused(resolved.failure));
             }
           }
 
@@ -4868,7 +4837,7 @@ const layerNoDeps = Layer.effectContext(
           )
         ),
       resolveJudge: (spec) =>
-        Result.flatMap(scriptedResolve(roleTable, spec), (resolved) =>
+        Result.flatMap(scriptedResolve(spec), (resolved) =>
           Option.match(decodeModelRef(resolved.model), {
             onNone: () =>
               Result.fail(`"${spec}" resolves to no model in this brain.`),

@@ -1,14 +1,11 @@
-// The meters' state (plan wave 6, 6G): the usage page (the spend ledger, plan windows and budgets)
-// and the role table editor on the settings page, over one Model. What the root tells it (the
-// connection, which of its pages is open, the plan windows the settings page already streams, the
-// thread rows' spend) arrives as its context; what it asks the brain for (the whole roll-up, the
-// server settings with the role table and the default budget, the model catalog, and what each
-// role resolves to now) is held per epoch, as the settings page holds its sections. Only this
-// module and the Messages load with the entry; the update and views come with the `next` chunk.
+// The meters' state (plan wave 6, 6G): the usage page (the spend ledger, plan windows and budgets).
+// What the root tells it (the connection, which of its pages is open, the plan windows the settings
+// page already streams, the thread rows' spend) arrives as its context; what it asks the brain for
+// (the whole roll-up and the server settings with the default budget) is held per epoch, as the
+// settings page holds its sections. Only this module and the Messages load with the entry; the
+// update and views come with the `next` chunk.
 
 import { ThreadId } from "@cairn/protocol/Ids";
-import { ModelCatalog } from "@cairn/protocol/Models";
-import { RoleCheck, RoleName } from "@cairn/protocol/Roles";
 import { ServerSettings } from "@cairn/protocol/Settings";
 import { Spend, SpendSummary } from "@cairn/protocol/Spend";
 import { UsageSnapshot } from "@cairn/protocol/Usage";
@@ -55,13 +52,6 @@ export const Model = Schema.Struct({
   /** The rows' token total when `spend` was asked, so new spend asks again. */
   spendAt: Schema.Int,
   server: remote(ServerSettings),
-  catalog: remote(ModelCatalog),
-  /** `roles.check` of every role in the table. */
-  checks: remote(Schema.Array(RoleCheck)),
-  /** The role whose new binding `settings.update` is carrying; one change at a time. */
-  saving: Schema.Option(RoleName),
-  /** A sentence for the user about a change that did not take. */
-  notice: Schema.Option(Schema.String),
 });
 
 export type Model = typeof Model.Type;
@@ -79,8 +69,4 @@ export const initial: Model = {
   spend: AsyncData.Idle(),
   spendAt: 0,
   server: AsyncData.Idle(),
-  catalog: AsyncData.Idle(),
-  checks: AsyncData.Idle(),
-  saving: Option.none(),
-  notice: Option.none(),
 };

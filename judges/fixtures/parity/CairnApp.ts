@@ -32,7 +32,6 @@ import {
   ThreadId,
 } from "@cairn/protocol/Ids";
 import type { ModelListing } from "@cairn/protocol/Models";
-import type { RoleTable } from "@cairn/protocol/Roles";
 import { NodeServices } from "@effect/platform-node";
 import {
   Clock,
@@ -49,7 +48,6 @@ import { createServer as createViteServer } from "vite";
 import {
   AppLayer,
   HarnessBoot,
-  SettingsLive,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
 import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
@@ -66,14 +64,12 @@ import {
   ScriptedBoot,
   ScriptedHarness,
   ScriptedModel,
-  ScriptedRoleTable,
   ScriptedStore,
   ScriptedTools,
   scriptedAnswer,
 } from "../../../apps/server/src/brain/ScriptedHarness.ts";
 import type { ScriptedGoals } from "../../../apps/server/src/brain/ScriptedHarness.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
-import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
 import { ReachMachine } from "../../../apps/server/src/reach/ReachLayer.ts";
@@ -177,17 +173,6 @@ export interface CairnBrain {
    * plan 6F); none runs no workflows (`WorkflowStops.layerOff`).
    */
   readonly stops?: Layer.Layer<WorkflowStops>;
-}
-
-/**
- * The role tables a judge gives (the brief card judge, plan 6B): the brain's settings table, which
- * `roles.check` reads, and the scripted harness's, which its `subagent_spawn` and Go resolve
- * through. Two tables, so a brief can name a role the settings no longer bind, as when the table
- * changed after the brief was asked.
- */
-export interface CairnRoles {
-  readonly settings: RoleTable;
-  readonly scripted: RoleTable;
 }
 
 /** A running Cairn: the page origin, the seeded thread's URL, and how to stop it. */
@@ -581,8 +566,6 @@ export interface CairnOptions {
   readonly brain?: CairnBrain;
   /** The `next` shell's seed; none when absent, so classic judges capture what they did. */
   readonly shell?: ShellSeed;
-  /** The role tables; the default table in both when absent. */
-  readonly roles?: CairnRoles;
   /**
    * Listings the model picker shows after the faux model's, as if more providers were signed in
    * (the look's picker state). Only the picker sees them: the brain still runs on the faux model.
@@ -607,23 +590,6 @@ const withPickerModels = (extra: ReadonlyArray<ModelListing>) =>
       });
     })
   );
-
-/** Writes the settings' role table, when a judge gives one. */
-const seedRoles = (roles: CairnRoles | undefined) =>
-  roles === undefined
-    ? Layer.empty
-    : Layer.effectDiscard(
-        SettingsStore.use((settings) =>
-          settings.update({
-            autoSettleDays: Option.none(),
-            titleModel: Option.none(),
-            bridgeEnabled: Option.none(),
-            bridgeGenerationCap: Option.none(),
-            roleBindings: Option.some(roles.settings),
-            defaultBudget: Option.none(),
-          })
-        ).pipe(Effect.orDie)
-      ).pipe(Layer.provide(SettingsLive));
 
 /**
  * Starts the brain and Vite, seeded; nothing listens outside loopback. A shell seed adds the
@@ -670,11 +636,6 @@ export const startCairn = async (
     Layer.provideMerge(Layer.succeed(ScriptedStore, store)),
     Layer.provide(brain.model),
     Layer.provide(brain.tools),
-    Layer.provide(
-      options.roles === undefined
-        ? Layer.empty
-        : Layer.succeed(ScriptedRoleTable, options.roles.scripted)
-    ),
     Layer.provideMerge(
       options.pickerModels === undefined
         ? models
@@ -686,10 +647,7 @@ export const startCairn = async (
   );
 
   // A later life seeds nothing: it resumes what the store and the data folder hold.
-  const seeded = Layer.merge(
-    seedLayer(seed, workspace, shellSeed, dataDir),
-    seedRoles(options.roles)
-  );
+  const seeded = seedLayer(seed, workspace, shellSeed, dataDir);
 
   const resumed = Layer.effectDiscard(
     ScriptedBoot.use((boot) => boot.resume)

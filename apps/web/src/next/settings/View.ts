@@ -48,10 +48,9 @@ import { statusChip } from "../ui/StatusChip.ts";
 import type { Tone } from "../ui/Tone.ts";
 import { select, switchControl } from "./Controls.ts";
 
-/** What the root passes in: the push toggle, and the role table after the models section (plan 6G). */
+/** What the root passes in: the push toggle. */
 export interface SettingsViewInputs {
   readonly notifications: () => Html;
-  readonly roleTable: () => Html;
 }
 
 const none = Option.none<string>();
@@ -878,7 +877,7 @@ const providersSection = (model: Model, h: HtmlBuilder<Message>): Html =>
     ]
   );
 
-/** The model that names threads, and every model pi lists. The role table follows. */
+/** The model that names threads, and every model pi lists. */
 const modelsSection = (model: Model, h: HtmlBuilder<Message>): Html =>
   section(h, { id: "models", title: "Models", headerAction: Option.none() }, [
     ...pending(h, "catalog", model.catalog, (catalog) => [
@@ -1085,7 +1084,6 @@ export const view = Submodel.defineView<Model, Message, SettingsViewInputs>(
           notificationsSection(inputs, h),
           providersSection(model, h),
           modelsSection(model, h),
-          inputs.roleTable(),
           skillsSection(model, h),
           executorSection(model, h),
         ]),

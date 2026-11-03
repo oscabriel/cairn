@@ -1,5 +1,5 @@
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import type { WorkflowEstimate, WorkflowLaunch } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
@@ -10,6 +10,7 @@ import {
   coversText,
   estimateCostText,
   estimateText,
+  grantsText,
   launchNumbers,
   nodesText,
 } from "./LaunchCard.ts";
@@ -20,7 +21,7 @@ const estimate = (fields: Partial<WorkflowEstimate>): WorkflowEstimate => ({
   tokensHigh: 1_200_000,
   listMicrosLow: 400_000,
   listMicrosHigh: 900_000,
-  basis: "5 nodes; @scout: from its last 9 nodes.",
+  basis: "5 nodes; opencode-go/gpt-6-luna: from its last 9 nodes.",
   ...fields,
 });
 
@@ -38,7 +39,7 @@ const launch: WorkflowLaunch = {
   args: { paths: ["src"] },
   callSites: [
     {
-      spec: RoleSpec.make("@scout"),
+      spec: ModelSpec.make("opencode-go/gpt-6-luna:high"),
       label: "Read a file",
       phase: "Read",
       schemaName: null,
@@ -47,7 +48,7 @@ const launch: WorkflowLaunch = {
       maxCount: 4,
     },
     {
-      spec: RoleSpec.make("@judge"),
+      spec: ModelSpec.make("faux/scripted"),
       label: "",
       phase: null,
       schemaName: "Verdict",
@@ -63,14 +64,17 @@ const launch: WorkflowLaunch = {
     maxNodes: 5,
     maxConcurrent: 2,
     roles: [
-      { spec: RoleSpec.make("@scout"), readonly: true, arms: "host" },
-      { spec: RoleSpec.make("@judge"), readonly: false, arms: "host" },
+      {
+        spec: ModelSpec.make("opencode-go/gpt-6-luna:high"),
+        readonly: true,
+        arms: "host",
+      },
+      { spec: ModelSpec.make("faux/scripted"), readonly: false, arms: "host" },
     ],
     modes: [],
     writes: [],
     budget: { ...DEFAULT_BUDGET, maxListMicros: Micros.make(2_000_000) },
   },
-  roleOverrides: {},
 };
 
 describe("the launch card's numbers", () => {
@@ -140,13 +144,16 @@ describe("the launch card's numbers", () => {
     );
   });
 
-  it("puts the numbers first: nodes, estimate, budget, what Go covers, roles, phases", () => {
+  it("puts the numbers first: nodes, estimate, budget, what Go covers, models, phases", () => {
     assert.deepStrictEqual(launchNumbers(launch), [
       ["Nodes", "5"],
       ["Estimate", "No estimate yet: cost unknown"],
       ["Budget", "$2.00 at API list price"],
       ["Go covers", "Up to 5 nodes, 2 at once"],
-      ["Roles", "@scout, reads only; @judge, may write"],
+      [
+        "Models",
+        "opencode-go/gpt-6-luna at high, reads only; faux/scripted, may write",
+      ],
       ["Phases", "Read, Judge"],
     ]);
     assert.strictEqual(
@@ -156,20 +163,45 @@ describe("the launch card's numbers", () => {
   });
 });
 
-describe("the launch card's roles and arguments", () => {
-  it("draws each call site with its phase, role, access and count", () => {
+describe("the launch card's call sites and arguments", () => {
+  it("draws each call site with its phase, model, access and count", () => {
     assert.deepStrictEqual(callSiteRows(launch), [
       {
         label: "Read a file",
-        spec: "@scout",
-        detail: "Read · @scout · reads only · up to 4",
+        model: "opencode-go/gpt-6-luna at high",
+        detail: "Read · opencode-go/gpt-6-luna at high · reads only · up to 4",
       },
       {
         label: "Node",
-        spec: "@judge",
-        detail: "@judge · writes · depends on the data",
+        model: "faux/scripted",
+        detail: "faux/scripted · writes · depends on the data",
       },
     ]);
+  });
+
+  it("reads a role a launch recorded before roles were removed as this thread's model", () => {
+    const old: WorkflowLaunch = {
+      ...launch,
+      callSites: launch.callSites.map((site) => ({
+        ...site,
+        spec: ModelSpec.make("@scout"),
+      })),
+      envelope: {
+        ...launch.envelope,
+        roles: [
+          { spec: ModelSpec.make("@scout"), readonly: true, arms: "host" },
+        ],
+      },
+    };
+
+    assert.deepStrictEqual(
+      callSiteRows(old).map((row) => row.model),
+      ["this thread's model", "this thread's model"]
+    );
+    assert.strictEqual(
+      grantsText(old.envelope),
+      "this thread's model, reads only"
+    );
   });
 
   it("folds the arguments as JSON, and none when there are none", () => {

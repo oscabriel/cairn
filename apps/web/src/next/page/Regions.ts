@@ -22,7 +22,6 @@ import { projectOf, threadRowOf } from "../../ThreadRow.ts";
 import { subagentRowsInput } from "../../timeline/Subagents.ts";
 import { view as composerView } from "../composer/View.ts";
 import { settingsPageView } from "../settings/Page.ts";
-import type { SettingsSlots } from "../settings/Page.ts";
 import * as Thread from "./Thread.ts";
 
 type H = HtmlBuilder<Message>;
@@ -167,9 +166,6 @@ export const threadControls = (model: Model, h: H): Html =>
     toParentMessage: (message) => Message.GotThreadMessage({ message }),
   });
 
-/** What the frame draws inside the settings page: the role table (plan 6G). */
-export type PageSlots = SettingsSlots;
-
 const placeholder = (h: H, text: string): Html =>
   h.div(
     [
@@ -181,12 +177,12 @@ const placeholder = (h: H, text: string): Html =>
   );
 
 /** The routed page that is not a thread: the hero, a draft, settings, or not found. */
-export const page = (model: Model, h: H, slots: PageSlots): Html =>
+export const page = (model: Model, h: H): Html =>
   AppRoute.match(model.route, {
     Hero: () => heroComposerLazy(composer, [h, model.composer]),
     Draft: () => heroComposerLazy(composer, [h, model.composer]),
     Thread: () => h.empty,
-    Settings: () => settingsPageView(model, h, slots),
+    Settings: () => settingsPageView(model, h),
     Usage: () => h.empty,
     NotFound: ({ path }) => placeholder(h, `Nothing lives at ${path}.`),
   });

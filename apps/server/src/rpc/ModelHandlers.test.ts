@@ -1,11 +1,8 @@
 // Judges the hello defaults that come from the model catalog: a new socket learns the model a new
 // thread starts on from the brain's models (here the faux one), not the fixed fallback, and the
-// settings that hide the bridge reach the catalog. Then `settings.update` over `RpcTest`: a role
-// table the store refuses answers `InvalidInput` naming `roleBindings` and changes nothing.
+// settings that hide the bridge reach the catalog. Then `settings.update` over `RpcTest`: the
+// patch's present keys change and the absent ones stay.
 
-import { InvalidInput } from "@cairn/protocol/Errors";
-import type { RoleBinding } from "@cairn/protocol/Roles";
-import { DEFAULT_ROLE_TABLE, RoleName } from "@cairn/protocol/Roles";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
@@ -76,36 +73,25 @@ const SettingsHandlers = Layer.mergeAll(
 ).pipe(Layer.provideMerge(ViewerTest));
 
 describe("settings.update", () => {
-  it.effect(
-    "answers InvalidInput naming roleBindings for a table without @judge, and changes nothing",
-    () =>
-      Effect.gen(function* () {
-        const client = yield* RpcTest.makeClient(CairnRpcs);
+  it.effect("changes the present keys and keeps the absent ones", () =>
+    Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(CairnRpcs);
 
-        const withoutJudge: Record<RoleName, RoleBinding> = {};
+      const before = yield* client["settings.get"]();
 
-        for (const [role, binding] of Object.entries(DEFAULT_ROLE_TABLE)) {
-          if (role !== "@judge") {
-            withoutJudge[RoleName.make(role)] = binding;
-          }
-        }
+      const after = yield* client["settings.update"]({
+        autoSettleDays: Option.none(),
+        titleModel: Option.none(),
+        bridgeEnabled: Option.some(!before.bridgeEnabled),
+        bridgeGenerationCap: Option.none(),
+        defaultBudget: Option.none(),
+      });
 
-        const before = yield* client["settings.get"]();
-
-        const failure = yield* client["settings.update"]({
-          autoSettleDays: Option.none(),
-          titleModel: Option.none(),
-          bridgeEnabled: Option.some(!before.bridgeEnabled),
-          bridgeGenerationCap: Option.none(),
-          roleBindings: Option.some(withoutJudge),
-          defaultBudget: Option.none(),
-        }).pipe(Effect.flip);
-
-        assert.instanceOf(failure, InvalidInput);
-        assert.deepStrictEqual(failure.field, Option.some("roleBindings"));
-        assert.include(failure.message, "@judge");
-
-        assert.deepStrictEqual(yield* client["settings.get"](), before);
-      }).pipe(Effect.scoped, Effect.provide(SettingsHandlers))
+      assert.deepStrictEqual(after, {
+        ...before,
+        bridgeEnabled: !before.bridgeEnabled,
+      });
+      assert.deepStrictEqual(yield* client["settings.get"](), after);
+    }).pipe(Effect.scoped, Effect.provide(SettingsHandlers))
   );
 });

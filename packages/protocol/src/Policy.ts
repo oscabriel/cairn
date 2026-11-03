@@ -34,7 +34,7 @@ import {
   TrimmedNonEmptyString,
 } from "./Ids.ts";
 import { ModelRef, ThinkingLevel } from "./Models.ts";
-import { RoleOverrides, RoleSpec } from "./Roles.ts";
+import { ModelSpec } from "./ModelSpecs.ts";
 import { Budget } from "./Spend.ts";
 
 /**
@@ -176,8 +176,9 @@ export const QuestionAnswer = Schema.Struct({
 export type QuestionAnswer = typeof QuestionAnswer.Type;
 
 /**
- * An outside judge that decides a criterion or a brief's `doneWhen` item. A `model` judge must be
- * of another family than the thread's; `verification` waits for phase 4.
+ * An outside judge that decides a criterion or a brief's `doneWhen` item. A `model` judge runs on
+ * the model its spec names, or on the goal thread's model when it names none (ADR 0043);
+ * `verification` waits for phase 4.
  */
 export const JudgeRef = Schema.Union([
   Schema.Struct({
@@ -189,7 +190,8 @@ export const JudgeRef = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("user") }),
   Schema.Struct({
     kind: Schema.Literal("model"),
-    spec: RoleSpec,
+    /** Null for the goal thread's model; a judge recorded before ADR 0043 may hold `@judge`. */
+    spec: Schema.NullOr(ModelSpec),
     rubric: DisplayText,
   }),
   Schema.Struct({
@@ -245,7 +247,7 @@ export const CriterionProposal = Schema.Struct({
 
 export type CriterionProposal = typeof CriterionProposal.Type;
 
-/** Where a child works: its own worktree (writing roles) or the parent's checkout (read-only). */
+/** Where a child works: its own worktree (a writer) or the parent's checkout (read-only). */
 export const BriefWorkspace = Schema.Literals(["worktree", "shared"]);
 
 export type BriefWorkspace = typeof BriefWorkspace.Type;
@@ -273,8 +275,12 @@ export const Brief = Schema.Struct({
   base: Schema.NullOr(TrimmedNonEmptyString),
   /** Project-relative write scope, never with `..`. */
   writes: Schema.Array(TrimmedNonEmptyString),
-  /** A role alias or literal spec, resolved at dispatch (ADR 0035). */
-  role: Schema.NullOr(RoleSpec),
+  /**
+   * The model the child runs on, `provider/modelId[:level]`, checked at dispatch; null for its
+   * parent's model and level (ADR 0043). The wire name `role` is kept for briefs recorded before
+   * ADR 0043, whose role name (`@worker`) reads as null.
+   */
+  role: Schema.NullOr(ModelSpec),
   model: Schema.NullOr(ModelRef),
   thinking: Schema.NullOr(ThinkingLevel),
   /** Never wider than the parent's. */
@@ -287,13 +293,6 @@ export const Brief = Schema.Struct({
   wake: WakeMode,
   /** Numbered decisions with the proposer's picks, after Ultimate. */
   decisions: Schema.Array(Question).check(Schema.isMaxLength(9)),
-  /**
-   * A workflow node's own brief only: the launch's per-launch binding of the node's role (the
-   * user's edits on Go, else the model's proposal; empty when the launch binds none), which the
-   * brain resolves the role with at Go (ADR 0035). The card checks the role with it. Absent on a
-   * subagent's brief and on node briefs written before it existed, which the card does not check.
-   */
-  roleOverrides: Schema.optionalKey(RoleOverrides),
 });
 
 export type Brief = typeof Brief.Type;
@@ -303,14 +302,18 @@ export const NodeArms = Schema.Literals(["host", "stone"]);
 
 export type NodeArms = typeof NodeArms.Type;
 
-/** One role an envelope lets nodes run as, and whether it may write. */
-export const EnvelopeRole = Schema.Struct({
-  spec: RoleSpec,
+/**
+ * One model an envelope lets nodes run on (ADR 0043), and whether they may write. An envelope
+ * recorded before ADR 0043 holds a role name here (`@worker`), which reads as the launching
+ * thread's model.
+ */
+export const EnvelopeModel = Schema.Struct({
+  spec: ModelSpec,
   readonly: Schema.Boolean,
   arms: NodeArms,
 });
 
-export type EnvelopeRole = typeof EnvelopeRole.Type;
+export type EnvelopeModel = typeof EnvelopeModel.Type;
 
 /**
  * What a workflow's launch approval grants (ADR 0032): a node brief that fits it is accepted with
@@ -322,7 +325,8 @@ export const Envelope = Schema.Struct({
   scriptHash: Schema.NullOr(TrimmedNonEmptyString),
   maxNodes: PositiveInt.check(Schema.isLessThanOrEqualTo(1000)),
   maxConcurrent: PositiveInt.check(Schema.isLessThanOrEqualTo(32)),
-  roles: Schema.Array(EnvelopeRole),
+  /** The models nodes may run on; the wire name `roles` is kept for envelopes recorded before ADR 0043. */
+  roles: Schema.Array(EnvelopeModel),
   modes: Schema.Array(RuntimeMode),
   writes: Schema.Array(TrimmedNonEmptyString),
   budget: Budget,
@@ -332,7 +336,8 @@ export type Envelope = typeof Envelope.Type;
 
 /** One call site of a workflow script, from the dry run, for the launch card. */
 export const CallSite = Schema.Struct({
-  spec: RoleSpec,
+  /** The model its nodes run on: the script's, else the launching thread's (ADR 0043). */
+  spec: ModelSpec,
   label: DisplayText,
   phase: Schema.NullOr(DisplayText),
   schemaName: Schema.NullOr(TrimmedNonEmptyString),
@@ -351,7 +356,7 @@ export const WorkflowEstimate = Schema.Struct({
   tokensHigh: NonNegativeInt,
   listMicrosLow: Schema.NullOr(NonNegativeInt),
   listMicrosHigh: Schema.NullOr(NonNegativeInt),
-  /** For example "from the last 9 `@reader` nodes". */
+  /** For example "from the last 9 nodes on opencode-go/gpt-6-luna". */
   basis: DisplayText,
 });
 
@@ -365,7 +370,10 @@ export const WorkflowPhase = Schema.Struct({
 
 export type WorkflowPhase = typeof WorkflowPhase.Type;
 
-/** A workflow's launch approval payload (kind `brief`): the plan the user says Go to. */
+/**
+ * A workflow's launch approval payload (kind `brief`): the plan the user says Go to. A payload
+ * frozen before ADR 0043 also holds `roleOverrides`, which decoding ignores.
+ */
 export const WorkflowLaunch = Schema.Struct({
   type: Schema.Literal("workflow"),
   workflowId: TrimmedNonEmptyString,
@@ -381,24 +389,18 @@ export const WorkflowLaunch = Schema.Struct({
   nodes: Schema.Struct({ count: NonNegativeInt, unbounded: Schema.Boolean }),
   estimate: Schema.NullOr(WorkflowEstimate),
   envelope: Envelope,
-  /**
-   * Role bindings the model proposes for this launch only (ADR 0035, "a per-launch override on a
-   * workflow's approval"); empty uses the global table. The user's edits on the card travel in the
-   * answer's `launch`, never in this frozen payload.
-   */
-  roleOverrides: RoleOverrides,
 });
 
 export type WorkflowLaunch = typeof WorkflowLaunch.Type;
 
 /**
- * What the user changed on a workflow's launch card before Go: the budget and the per-launch role
- * overrides, each replacing the payload's whole. Carried in the answer, so the frozen payload stays
- * what the model proposed and the record still shows both. Only a launch approval takes one.
+ * What the user changed on a workflow's launch card before Go: the budget, replacing the
+ * payload's. Carried in the answer, so the frozen payload stays what the model proposed and the
+ * record still shows both. Only a launch approval takes one. Answers recorded before ADR 0043 also
+ * hold `roleOverrides`, which decoding ignores.
  */
 export const LaunchEdits = Schema.Struct({
   budget: Budget,
-  roleOverrides: RoleOverrides,
 });
 
 export type LaunchEdits = typeof LaunchEdits.Type;

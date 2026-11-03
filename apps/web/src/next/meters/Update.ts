@@ -1,31 +1,14 @@
 // The meters' update (plan wave 6, 6G). The brain is asked for each section when the usage page or
 // the settings page opens on a client, and again on a new epoch; answers from another epoch are
-// dropped. On the usage page, new spend on the thread rows asks for the roll-up again. A role is
-// rebound by saving the whole table through `settings.update`, one change at a time, and the editor
-// shows what the brain answered rather than what was asked, then checks every role again.
+// dropped. On the usage page, new spend on the thread rows asks for the roll-up again.
 
-import {
-  modelText,
-  rebindModel,
-  rebindThinking,
-  thinkingChoicesOf,
-} from "@cairn/client-logic/Meters";
-import { ThinkingLevel } from "@cairn/protocol/Models";
-import type { ModelRef } from "@cairn/protocol/Models";
-import type { RoleName, RoleTable } from "@cairn/protocol/Roles";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
-import { Array, Equal, Match, Option, Order, Schema } from "effect";
+import { Array, Equal, Match, Option, Order } from "effect";
 import type { Update } from "foldkit";
 import * as AsyncData from "foldkit/asyncData";
 import { modifyFields } from "foldkit/struct";
 
-import {
-  CheckRoles,
-  FetchMetersCatalog,
-  FetchMetersSettings,
-  FetchSpend,
-  SaveRoleTable,
-} from "./Command.ts";
+import { FetchMetersSettings, FetchSpend } from "./Command.ts";
 import type { Services } from "./Command.ts";
 import { Message } from "./Message.ts";
 import type {
@@ -116,14 +99,8 @@ const loadSections = (model: Model): UpdateReturn => {
       spend: reloading,
       spendAt: () => rowTokens(model.context),
       server: reloading,
-      catalog: reloading,
-      checks: reloading,
     }),
-    commands: [
-      FetchSpend({ epoch }),
-      FetchMetersSettings({ epoch }),
-      FetchMetersCatalog({ epoch }),
-    ],
+    commands: [FetchSpend({ epoch }), FetchMetersSettings({ epoch })],
   };
 };
 
@@ -170,75 +147,6 @@ const answer = (
   write: (model: Model) => UpdateReturn
 ): UpdateReturn => (epoch === model.context.epoch ? write(model) : { model });
 
-/** Checks every role of the table the brain answered. */
-const checkTable = (model: Model, table: RoleTable): UpdateReturn => ({
-  model: modifyFields(model, { checks: reloading }),
-  commands: canAsk(model)
-    ? [CheckRoles({ epoch: model.context.epoch, table })]
-    : [],
-});
-
-const decodeThinking = Schema.decodeUnknownOption(ThinkingLevel);
-
-/** The table the brain answered, when nothing else is saving. */
-const editableTable = (model: Model): Option.Option<RoleTable> =>
-  Option.isSome(model.saving)
-    ? Option.none()
-    : Option.map(
-        AsyncData.getData(model.server),
-        (settings) => settings.roleBindings
-      );
-
-/** The model a select value names: a listed model, or the role's current one. */
-const modelOfValue = (
-  model: Model,
-  table: RoleTable,
-  role: RoleName,
-  value: string
-): Option.Option<ModelRef> => {
-  const listed = Option.flatMap(AsyncData.getData(model.catalog), (catalog) =>
-    Array.findFirst(catalog.models, (listing) => modelText(listing) === value)
-  );
-
-  return Option.orElse(
-    Option.map(listed, (listing): ModelRef => ({
-      provider: listing.provider,
-      modelId: listing.modelId,
-    })),
-    () =>
-      Option.filter(
-        Option.map(
-          Option.fromUndefinedOr(table[role]),
-          (binding) => binding.model
-        ),
-        (current) => modelText(current) === value
-      )
-  );
-};
-
-/** Saves `next` for `role` when it changes the table. */
-const save = (
-  model: Model,
-  role: RoleName,
-  table: RoleTable,
-  next: Option.Option<RoleTable>
-): UpdateReturn =>
-  Option.match(
-    Option.filter(next, (changed) => !Equal.equals(changed, table)),
-    {
-      onNone: () => ({ model }),
-      onSome: (changed) => ({
-        model: modifyFields(model, {
-          saving: () => Option.some(role),
-          notice: () => Option.none(),
-        }),
-        commands: [SaveRoleTable({ table: changed })],
-      }),
-    }
-  );
-
-const ALL_LEVELS = ThinkingLevel.literals;
-
 /** The meters' update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
@@ -247,22 +155,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         model: modifyFields(current, { spend: () => AsyncData.succeed(spend) }),
       })),
     ReceivedServerSettings: ({ epoch, settings }) =>
-      answer(model, epoch, (current) =>
-        checkTable(
-          modifyFields(current, { server: () => AsyncData.succeed(settings) }),
-          settings.roleBindings
-        )
-      ),
-    ReceivedCatalog: ({ catalog, epoch }) =>
       answer(model, epoch, (current) => ({
         model: modifyFields(current, {
-          catalog: () => AsyncData.succeed(catalog),
-        }),
-      })),
-    ReceivedRoleChecks: ({ checks, epoch }) =>
-      answer(model, epoch, (current) => ({
-        model: modifyFields(current, {
-          checks: () => AsyncData.succeed(checks),
+          server: () => AsyncData.succeed(settings),
         }),
       })),
     FailedLoad: ({ epoch, message: text, section }) =>
@@ -277,80 +172,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
             Match.when("server", () =>
               modifyFields(current, { server: () => failed })
             ),
-            Match.when("catalog", () =>
-              modifyFields(current, { catalog: () => failed })
-            ),
-            Match.when("checks", () =>
-              modifyFields(current, { checks: () => failed })
-            ),
             Match.exhaustive
           ),
         };
       }),
     ClickedRetry: () => (canAsk(model) ? loadSections(model) : { model }),
-
-    SelectedRoleModel: ({ role, value }) =>
-      Option.match(editableTable(model), {
-        onNone: () => ({ model }),
-        onSome: (table) =>
-          Option.match(modelOfValue(model, table, role, value), {
-            onNone: () => ({ model }),
-            onSome: (ref) => {
-              const levels = Option.match(AsyncData.getData(model.catalog), {
-                onNone: () => ALL_LEVELS,
-                onSome: (catalog) =>
-                  thinkingChoicesOf(catalog.models, ref, ALL_LEVELS),
-              });
-
-              return save(
-                model,
-                role,
-                table,
-                rebindModel(table, role, ref, levels)
-              );
-            },
-          }),
-      }),
-    SelectedRoleThinking: ({ role, value }) =>
-      Option.match(editableTable(model), {
-        onNone: () => ({ model }),
-        onSome: (table) =>
-          value === ""
-            ? save(
-                model,
-                role,
-                table,
-                rebindThinking(table, role, Option.none())
-              )
-            : Option.match(decodeThinking(value), {
-                onNone: () => ({ model }),
-                onSome: (level) =>
-                  save(
-                    model,
-                    role,
-                    table,
-                    rebindThinking(table, role, Option.some(level))
-                  ),
-              }),
-      }),
-    SavedRoleTable: ({ settings }) =>
-      checkTable(
-        modifyFields(model, {
-          server: () => AsyncData.succeed(settings),
-          saving: () => Option.none(),
-        }),
-        settings.roleBindings
-      ),
-    FailedRoleSave: ({ message: text }) => ({
-      model: modifyFields(model, {
-        saving: () => Option.none(),
-        notice: () => Option.some(text),
-      }),
-    }),
-
-    DismissedNotice: () => ({
-      model: modifyFields(model, { notice: () => Option.none() }),
-    }),
   });
 
 /** The meters' update and root hooks. */

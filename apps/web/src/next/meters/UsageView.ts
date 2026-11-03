@@ -26,7 +26,7 @@ import { Submodel } from "foldkit";
 import * as AsyncData from "foldkit/asyncData";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import { settingsRouter, threadRouter } from "../../Route.ts";
+import { threadRouter } from "../../Route.ts";
 import { formatDayTime } from "../../settings/Time.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import { button, buttonDefaults } from "../ui/Button.ts";
@@ -438,19 +438,6 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
               h.h1(
                 [h.Class(classNames("text-ink-1", TYPE.title, WEIGHT_STRONG))],
                 ["Usage"]
-              ),
-              h.a(
-                [
-                  h.DataAttribute("testid", "usage-roles-link"),
-                  h.Href(settingsRouter()),
-                  h.Class(
-                    classNames(
-                      "text-accent-text underline-offset-4 hover:underline",
-                      TYPE.ui
-                    )
-                  ),
-                ],
-                ["Rebind roles in Settings"]
               ),
             ]
           ),

@@ -1,24 +1,23 @@
 import type { ThinkingLevel } from "@cairn/protocol/Models";
-import type { Brief, WorkflowLaunch } from "@cairn/protocol/Policy";
-import { RoleName, RoleSpec } from "@cairn/protocol/Roles";
-import type {
-  ResolvedRole,
-  RoleCheck,
-  SkippedModel,
-} from "@cairn/protocol/Roles";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
+import type { ModelCheck, ModelCheckFailure } from "@cairn/protocol/ModelSpecs";
+import type { Brief, JudgeRef, WorkflowLaunch } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 
 import {
   goBlockOf,
+  judgeModelText,
+  modelQuestionOf,
   Resolution,
-  roleQuestionOf,
   runsOnLine,
   runsOnText,
   takesRunOnOne,
   takesSendBack,
 } from "./BriefGo.ts";
+import { judgeChip } from "./GoalProgress.ts";
+import { judgeText } from "./PendingCard.ts";
 import { RequestBody } from "./PendingRequests.ts";
 
 const brief: Brief = {
@@ -33,7 +32,7 @@ const brief: Brief = {
   workspace: "shared",
   base: null,
   writes: [],
-  role: RoleSpec.make("@worker"),
+  role: ModelSpec.make("opencode-go/gpt-6-luna:high"),
   model: null,
   thinking: null,
   mode: "full-access",
@@ -45,7 +44,7 @@ const brief: Brief = {
 };
 
 const site = (spec: string) => ({
-  spec: RoleSpec.make(spec),
+  spec: ModelSpec.make(spec),
   label: "review",
   phase: null,
   schemaName: null,
@@ -57,7 +56,11 @@ const site = (spec: string) => ({
 const launch = (
   count: number,
   unbounded: boolean,
-  roleOverrides: WorkflowLaunch["roleOverrides"] = {}
+  specs: ReadonlyArray<string> = [
+    "faux/scripted:medium",
+    "opencode-go/gpt-6-luna",
+    "faux/scripted:medium",
+  ]
 ): WorkflowLaunch => ({
   type: "workflow",
   workflowId: "wf-1",
@@ -67,7 +70,7 @@ const launch = (
   scriptHash: "abc",
   scriptRef: "entry-1",
   args: null,
-  callSites: [site("@scout"), site("@judge"), site("@scout")],
+  callSites: specs.map(site),
   nodes: { count, unbounded },
   estimate: null,
   envelope: {
@@ -75,58 +78,56 @@ const launch = (
     maxNodes: 5,
     maxConcurrent: 2,
     roles: [
-      { spec: RoleSpec.make("@judge"), readonly: true, arms: "host" },
-      { spec: RoleSpec.make("@verifier"), readonly: true, arms: "host" },
+      {
+        spec: ModelSpec.make("opencode-go/gpt-6-luna"),
+        readonly: true,
+        arms: "host",
+      },
+      {
+        spec: ModelSpec.make("opencode-go/kimi-k2"),
+        readonly: true,
+        arms: "host",
+      },
     ],
     modes: [],
     writes: [],
     budget: DEFAULT_BUDGET,
   },
-  roleOverrides,
 });
 
-const resolvedCheck = (fields: {
-  readonly spec: string;
-  readonly via: ResolvedRole["via"];
-  readonly thinkingLevel: ThinkingLevel | null;
-  readonly sameFamilyAsWorker: boolean;
-}): RoleCheck => ({
-  spec: fields.spec,
+const resolvedCheck = (
+  spec: string,
+  thinkingLevel: ThinkingLevel | null
+): ModelCheck => ({
+  spec,
   resolution: Resolution.cases.Resolved.make({
     resolved: {
-      spec: RoleSpec.make(fields.spec),
-      role: fields.spec.startsWith("@") ? RoleName.make(fields.spec) : null,
+      spec: ModelSpec.make(spec),
       model: { provider: "opencode-go", modelId: "gpt-6-luna" },
-      thinkingLevel: fields.thinkingLevel,
-      via: fields.via,
-      skipped: [],
-      family: "openai",
+      thinkingLevel,
       priced: true,
     },
   }),
-  sameFamilyAsWorker: fields.sameFamilyAsWorker,
 });
 
 const spawn = { tool: "subagent_spawn" };
 
 const unresolvedCheck = (
   spec: string,
-  reason: "unbound_role" | "invalid_spec" | "no_ready_model",
-  skipped: ReadonlyArray<SkippedModel> = []
-): RoleCheck => ({
+  reason: ModelCheckFailure
+): ModelCheck => ({
   spec,
-  resolution: Resolution.cases.Unresolved.make({ reason, skipped }),
-  sameFamilyAsWorker: false,
+  resolution: Resolution.cases.Unresolved.make({ reason }),
 });
 
-describe("what the brief card asks about roles", () => {
-  it("asks about a brief's role, else its model, else nothing", () => {
+describe("what the brief card asks about models", () => {
+  it("asks about the model a brief names, else nothing: it runs on its parent's", () => {
     assert.deepStrictEqual(
-      roleQuestionOf(spawn, RequestBody.Brief({ payload: brief })),
-      Option.some({ specs: ["@worker"], overrides: Option.none() })
+      modelQuestionOf(spawn, RequestBody.Brief({ payload: brief })),
+      Option.some({ specs: ["opencode-go/gpt-6-luna:high"] })
     );
     assert.deepStrictEqual(
-      roleQuestionOf(
+      modelQuestionOf(
         spawn,
         RequestBody.Brief({
           payload: {
@@ -136,14 +137,11 @@ describe("what the brief card asks about roles", () => {
           },
         })
       ),
-      Option.some({
-        specs: ["opencode-go/gpt-6-luna"],
-        overrides: Option.none(),
-      })
+      Option.some({ specs: ["opencode-go/gpt-6-luna"] })
     );
     assert.isTrue(
       Option.isNone(
-        roleQuestionOf(
+        modelQuestionOf(
           spawn,
           RequestBody.Brief({ payload: { ...brief, role: null } })
         )
@@ -151,7 +149,7 @@ describe("what the brief card asks about roles", () => {
     );
     assert.isTrue(
       Option.isNone(
-        roleQuestionOf(
+        modelQuestionOf(
           spawn,
           RequestBody.Approval({
             summary: "Open the gate",
@@ -162,84 +160,76 @@ describe("what the brief card asks about roles", () => {
     );
   });
 
-  it("asks about a workflow node's own brief with the launch's bindings it carries", () => {
-    const judge = {
-      [RoleName.make("@judge")]: {
-        model: { provider: "opencode-go", modelId: "gpt-6-luna" },
-        thinkingLevel: null,
-        fallbacks: [],
-        note: null,
-      },
-    };
+  it("asks nothing about a role a brief recorded before roles were removed", () => {
+    for (const role of ["@worker", "@scout:high"]) {
+      for (const tool of ["subagent_spawn", "agent", "verify"]) {
+        assert.isTrue(
+          Option.isNone(
+            modelQuestionOf(
+              { tool },
+              RequestBody.Brief({
+                payload: { ...brief, role: ModelSpec.make(role) },
+              })
+            )
+          ),
+          `${tool} ${role}`
+        );
+      }
+    }
+  });
 
+  it("asks about a workflow node's own brief, and not another tool's", () => {
     for (const tool of ["agent", "verify"]) {
-      const node = { ...brief, role: RoleSpec.make("@judge") };
-
-      // Bound only by the launch: asked with the override, as the brain resolves it at Go.
       assert.deepStrictEqual(
-        roleQuestionOf(
-          { tool },
-          RequestBody.Brief({ payload: { ...node, roleOverrides: judge } })
-        ),
-        Option.some({ specs: ["@judge"], overrides: Option.some(judge) })
-      );
-
-      // A launch that binds nothing: the global table, as Go resolves it.
-      assert.deepStrictEqual(
-        roleQuestionOf(
-          { tool },
-          RequestBody.Brief({ payload: { ...node, roleOverrides: {} } })
-        ),
-        Option.some({ specs: ["@judge"], overrides: Option.none() })
-      );
-
-      // Written before node briefs carried the bindings: not asked, so an override-only role is
-      // never blocked by the global table alone.
-      assert.isTrue(
-        Option.isNone(
-          roleQuestionOf({ tool }, RequestBody.Brief({ payload: node }))
-        )
+        modelQuestionOf({ tool }, RequestBody.Brief({ payload: brief })),
+        Option.some({ specs: ["opencode-go/gpt-6-luna:high"] })
       );
     }
 
-    // Another tool's brief with bindings is still not a node's: not asked.
     assert.isTrue(
       Option.isNone(
-        roleQuestionOf(
+        modelQuestionOf(
           { tool: "other" },
-          RequestBody.Brief({ payload: { ...brief, roleOverrides: judge } })
+          RequestBody.Brief({ payload: brief })
         )
       )
     );
   });
 
-  it("asks about every spec a launch names once, with its overrides", () => {
+  it("asks about every model a launch names once, leaving out recorded roles", () => {
     assert.deepStrictEqual(
-      roleQuestionOf(spawn, RequestBody.Brief({ payload: launch(5, false) })),
+      modelQuestionOf(spawn, RequestBody.Brief({ payload: launch(5, false) })),
       Option.some({
-        specs: ["@scout", "@judge", "@verifier"],
-        overrides: Option.none(),
+        specs: [
+          "faux/scripted:medium",
+          "opencode-go/gpt-6-luna",
+          "opencode-go/kimi-k2",
+        ],
       })
     );
 
-    const overrides = {
-      [RoleName.make("@scout")]: {
-        model: { provider: "opencode-go", modelId: "gpt-6-luna" },
-        thinkingLevel: null,
-        fallbacks: [],
-        note: null,
-      },
-    };
+    const old = launch(5, false, ["@scout", "@judge"]);
 
     assert.deepStrictEqual(
-      Option.flatMap(
-        roleQuestionOf(
-          spawn,
-          RequestBody.Brief({ payload: launch(5, false, overrides) })
-        ),
-        (question) => question.overrides
+      modelQuestionOf(
+        spawn,
+        RequestBody.Brief({
+          payload: {
+            ...old,
+            envelope: {
+              ...old.envelope,
+              roles: [
+                {
+                  spec: ModelSpec.make("@scout"),
+                  readonly: true,
+                  arms: "host",
+                },
+              ],
+            },
+          },
+        })
       ),
-      Option.some(overrides)
+      Option.none()
     );
   });
 
@@ -275,87 +265,93 @@ describe("what the brief card asks about roles", () => {
 });
 
 describe("why Go is blocked", () => {
-  it("is not blocked while every spec resolves", () => {
+  it("is not blocked while every named model resolves", () => {
     assert.isTrue(
       Option.isNone(
-        goBlockOf([
-          resolvedCheck({
-            spec: "@worker",
-            via: "primary",
-            thinkingLevel: "medium",
-            sameFamilyAsWorker: false,
-          }),
-        ])
+        goBlockOf([resolvedCheck("opencode-go/gpt-6-luna", "medium")])
       )
     );
   });
 
-  it("says plainly which spec blocks it and why", () => {
+  it("says plainly which model blocks it and why", () => {
     assert.deepStrictEqual(
       goBlockOf([
-        resolvedCheck({
-          spec: "@worker",
-          via: "primary",
-          thinkingLevel: null,
-          sameFamilyAsWorker: false,
-        }),
-        unresolvedCheck("@reviewer", "unbound_role"),
+        resolvedCheck("faux/scripted", null),
+        unresolvedCheck("openai-codex/gpt-6-luna", "missing_credential"),
       ]),
       Option.some({
-        spec: "@reviewer",
-        title: "Go is blocked: no role named @reviewer is in the role table.",
-        detail:
-          "Bind it in the role table, then check again, or send the brief back.",
-      })
-    );
-    assert.deepStrictEqual(
-      Option.map(
-        goBlockOf([unresolvedCheck("@x:bogus", "invalid_spec")]),
-        (block) => block.title
-      ),
-      Option.some("Go is blocked: @x:bogus is neither a role nor a model.")
-    );
-    assert.deepStrictEqual(
-      goBlockOf([
-        unresolvedCheck("@verifier", "no_ready_model", [
-          {
-            model: { provider: "openai-codex", modelId: "gpt-6-luna" },
-            reason: "missing_credential",
-          },
-        ]),
-      ]),
-      Option.some({
-        spec: "@verifier",
+        spec: "openai-codex/gpt-6-luna",
         title:
-          "Go is blocked: no model is ready for @verifier (openai-codex/gpt-6-luna has no credential here).",
-        detail: "Bind it to a ready model in the role table, then check again.",
+          "Go is blocked: openai-codex/gpt-6-luna is not ready, as its provider has no usable credential.",
+        detail: "Check again once it is ready, or send it back.",
       })
+    );
+
+    const cases: ReadonlyArray<readonly [string, ModelCheckFailure]> = [
+      ["gpt-6-luna", "invalid_spec"],
+      ["@judge", "role_removed"],
+      ["opencode-go/nope", "unknown_model"],
+      ["claude-bridge/claude-opus-5-5", "limited"],
+      ["opencode-go/gpt-6-luna", "failing"],
+    ];
+
+    assert.deepStrictEqual(
+      cases.map(([spec, reason]) =>
+        Option.map(
+          goBlockOf([unresolvedCheck(spec, reason)]),
+          (block) => block.title
+        )
+      ),
+      [
+        Option.some(
+          "Go is blocked: gpt-6-luna is not a model (provider/modelId)."
+        ),
+        Option.some("Go is blocked: @judge is a role, and roles were removed."),
+        Option.some(
+          "Go is blocked: opencode-go/nope is not ready, as it is not in the model catalog."
+        ),
+        Option.some(
+          "Go is blocked: claude-bridge/claude-opus-5-5 is not ready, as its plan limit is reached."
+        ),
+        Option.some(
+          "Go is blocked: opencode-go/gpt-6-luna is not ready, as its provider is failing."
+        ),
+      ]
     );
   });
 
-  it("says what each spec runs on, with a fallback and a judge on the worker's family", () => {
+  it("says what each named model runs on, with its level", () => {
     assert.strictEqual(
-      runsOnText(
-        resolvedCheck({
-          spec: "@judge",
-          via: "fallback",
-          thinkingLevel: "high",
-          sameFamilyAsWorker: true,
-        })
-      ),
-      "@judge: opencode-go/gpt-6-luna at high (its fallback, same model family as @worker)"
+      runsOnText(resolvedCheck("opencode-go/gpt-6-luna:high", "high")),
+      "opencode-go/gpt-6-luna at high"
     );
     assert.strictEqual(
       runsOnLine([
-        resolvedCheck({
-          spec: "opencode-go/gpt-6-luna",
-          via: "literal",
-          thinkingLevel: null,
-          sameFamilyAsWorker: false,
-        }),
-        unresolvedCheck("@reviewer", "unbound_role"),
+        resolvedCheck("opencode-go/gpt-6-luna", null),
+        unresolvedCheck("opencode-go/nope", "unknown_model"),
       ]),
-      "opencode-go/gpt-6-luna: opencode-go/gpt-6-luna; @reviewer: not bound"
+      "opencode-go/gpt-6-luna; opencode-go/nope: not in the catalog"
+    );
+  });
+});
+
+const judge = (spec: string | null): JudgeRef => ({
+  kind: "model",
+  spec: spec === null ? null : ModelSpec.make(spec),
+  rubric: "A count.",
+});
+
+describe("a goal's model judge", () => {
+  it("names its model, or the goal thread's when it names none or a recorded role", () => {
+    assert.deepStrictEqual(
+      [null, "@judge", "opencode-go/gpt-6-luna"].map(judgeModelText),
+      ["this thread's", "this thread's", "opencode-go/gpt-6-luna"]
+    );
+    assert.strictEqual(judgeChip(judge(null)), "Model: this thread's");
+    assert.strictEqual(judgeText(judge(null)), "a model (this thread's)");
+    assert.strictEqual(
+      judgeText(judge("opencode-go/gpt-6-luna")),
+      "a model (opencode-go/gpt-6-luna)"
     );
   });
 });

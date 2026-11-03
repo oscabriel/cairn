@@ -69,7 +69,7 @@ describe("the avatar", () => {
   it("takes two words' first letters, or one word's first two, past a leading @", () => {
     assert.strictEqual(initialsOf("pi durable"), "pd");
     assert.strictEqual(initialsOf("cairn"), "ca");
-    assert.strictEqual(initialsOf("@worker"), "wo");
+    assert.strictEqual(initialsOf("@oscabriel"), "os");
     assert.strictEqual(initialsOf("agent-artifacts"), "aa");
     assert.strictEqual(initialsOf(""), "");
   });

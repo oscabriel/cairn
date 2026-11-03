@@ -221,7 +221,7 @@ const dollars = (perMtok: number) =>
     : `$${perMtok.toFixed(4).replace(/\.?0+$/u, "")}`;
 
 /**
- * How a price reads on a card or in the `roles` tool: input and output per million tokens, with
+ * How a price reads on a card or in the `models` tool: input and output per million tokens, with
  * "at API list price" on a plan, or "no price listed". Never "$0": a priced model's rate below
  * $0.0001 reads "<$0.0001".
  */

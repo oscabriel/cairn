@@ -521,7 +521,7 @@ const node = (index: number, overrides: { readonly state?: string } = {}) => ({
   index,
   requestId: `wf-wf-1-n-${String(index)}`,
   briefId: null,
-  role: "@worker",
+  role: "faux/kit:medium",
   provider: "faux",
   modelId: "kit",
   effort: null,
@@ -620,7 +620,7 @@ describe("the work panel's workflows", () => {
       ).toHaveCount(2),
       Scene.expect(
         Scene.selector('[data-testid="work-node"][data-node-id="n-1"]')
-      ).toContainText("@worker · faux/kit"),
+      ).toContainText("faux/kit"),
       Scene.expect(Scene.testId("work-workflow")).toContainText(
         "Nothing spent yet"
       ),

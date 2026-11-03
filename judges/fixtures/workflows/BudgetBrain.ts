@@ -166,14 +166,17 @@ const effect = (line: WorkEffect) => {
   );
 };
 
-/** Every node's child resolves to the faux model this brain runs. */
-const resolveRole = async () =>
+/** A model a node names resolves to the faux model this brain runs; none runs on the thread's. */
+const resolveModel = async (spec: string) =>
   await Promise.resolve(
-    Result.succeed({
-      provider: FAUX_MODEL.provider,
-      modelId: FAUX_MODEL.modelId,
-      thinkingLevel: Option.none(),
-    })
+    Result.succeed(
+      Option.some({
+        spec,
+        provider: FAUX_MODEL.provider,
+        modelId: FAUX_MODEL.modelId,
+        thinkingLevel: Option.none(),
+      })
+    )
   );
 
 /** This brain plants its launch, so its model never proposes one. */
@@ -184,7 +187,7 @@ const plan: PlanAccess = {
 };
 
 const workflows = workflowExtension({
-  resolveRole,
+  resolveModel,
   plan,
   faults: {
     freshDispatch: false,

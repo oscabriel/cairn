@@ -8,8 +8,9 @@
 // - `command` runs `argv` (no shell) in the goal thread's folder, through the thread's own arms,
 //   with the judge's timeout, and records the exit code, the output's tail and `HEAD`'s sha; met
 //   when the exit code is the one expected.
-// - `model` resolves its spec now (ADR 0035), refuses a model of the thread model's family
-//   (`ModelJudge.ts`), and asks it once over the transcript's end; it records the model and reply.
+// - `model` runs on the model it names, checked now, or on the goal thread's own model when it names
+//   none (ADR 0043); it refuses the Claude bridge (`ModelJudge.ts`), and asks the model once over
+//   the transcript's end; it records the model and reply.
 // - `user` and `verification` never run here: a user's mark is the user's (`Goals.ts`), and a
 //   verification recipe waits for phase 4.
 //
@@ -35,6 +36,7 @@ import { Data, Match, Option, Result, Schema } from "effect";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
 import { applyNote, noteEntry, readNote } from "../brain/NoteAdmission.ts";
+import { isRoleName } from "../models/ModelSpecs.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
 import type {
   CriterionStateDoc,
@@ -44,6 +46,7 @@ import type {
 } from "./GoalDocs.ts";
 import {
   judgeModelRefusal,
+  judgeSpecOf,
   MODEL_JUDGE_SYSTEM,
   modelJudgePrompt,
   modelText,
@@ -95,7 +98,7 @@ export interface JudgeRunState {
   phase: "judge";
 }
 
-/** The model a judge resolves to, or why it does not. */
+/** The model a judge's named spec resolves to, or why it is not ready. */
 export type JudgeModelResolver = (
   spec: string
 ) => Promise<Result.Result<ModelRef, string>>;
@@ -112,6 +115,11 @@ export type JudgeModelCall = (
 export interface JudgeModels {
   readonly resolve: JudgeModelResolver;
   readonly ask: JudgeModelCall;
+  /**
+   * Logs that a judge recorded before ADR 0043 names a role (`spec`), which reads as no model
+   * named: it runs on the goal thread's model.
+   */
+  readonly roleNameRead: (spec: string, runId: string) => Promise<void>;
 }
 
 /**
@@ -383,18 +391,34 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
     runId: string,
     context: ChordContext
   ): Promise<Judged> => {
-    const resolved = await models.resolve(judge.spec);
+    if (judge.spec !== null && isRoleName(judge.spec)) {
+      await models.roleNameRead(judge.spec, runId);
+    }
+
+    const named = judgeSpecOf(judge.spec);
+    const agent = await runtime.agent(context);
+
+    // A judge that names no model runs on the goal thread's own, as it is now (ADR 0043).
+    const resolved = await Option.match(named, {
+      onNone: async () =>
+        await Promise.resolve(
+          agent.model === undefined
+            ? Result.fail(
+                "The goal thread runs on no model a judge can use. Name the judge's model as provider/modelId."
+              )
+            : Result.succeed<ModelRef>({
+                provider: agent.model.provider,
+                modelId: agent.model.modelId,
+              })
+        ),
+      onSome: async (spec) => await models.resolve(spec),
+    });
 
     if (Result.isFailure(resolved)) {
       return Judged.None({ why: resolved.failure });
     }
 
-    const agent = await runtime.agent(context);
-
-    const refusal = judgeModelRefusal(
-      Option.fromUndefinedOr(agent.model),
-      resolved.success
-    );
+    const refusal = judgeModelRefusal(resolved.success, Option.isSome(named));
 
     if (Option.isSome(refusal)) {
       return Judged.None({ why: refusal.value });

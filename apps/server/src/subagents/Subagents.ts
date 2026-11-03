@@ -38,7 +38,7 @@ import type {
   SubagentFaultSet,
 } from "../brain/SubagentFaults.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
-import { RoleAliases } from "../models/RoleAliases.ts";
+import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { BudgetBook } from "../usage/BudgetBook.ts";
 import { gateDecision } from "../usage/Budgets.ts";
@@ -52,7 +52,7 @@ import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
 import type {
   BudgetAccess,
   ChildWorkspaceAccess,
-  RoleAccess,
+  ModelAccess,
   SubagentTasks,
 } from "./SubagentTasks.ts";
 import {
@@ -96,30 +96,44 @@ export const workspaceAccess = (
 };
 
 /**
- * `RoleAliases.resolve` for the spawn and the start task, which run outside Effect: the resolution,
- * or why not, in the error's words for the parent. A `RoleError` is final (nothing ready answers to
- * the spec); `RoleAliasesUnavailable` is a read that failed and says nothing about the role, so it
- * is marked `retry`. It runs with `context`, the layer's (S43).
+ * `ModelSpecs.resolve` for the spawn and the start task, which run outside Effect: the resolution,
+ * or why not, in the error's words for the parent. A `ModelSpecError` is final (the model is not
+ * ready, or the spec is none); `ModelSpecsUnavailable` is a read that failed and says nothing about
+ * the model, so it is marked `retry`. A brief recorded before ADR 0043 that names a role is logged
+ * through `roleNameRead`. It runs with `context`, the layer's (S43).
  */
-export const roleAccess = (
-  roles: RoleAliases["Service"],
+export const modelAccess = (
+  specs: ModelSpecs["Service"],
   context: Context.Context<never>
-): RoleAccess => {
+): ModelAccess => {
   const run = Effect.runPromiseWith(context);
 
   return {
     resolve: async (spec) =>
       await run(
-        roles.resolve(spec, Option.none()).pipe(
+        specs.resolve(spec).pipe(
           Effect.result,
           Effect.map(
             Result.mapError((error) => ({
-              retry: Predicate.isTagged(error, "RoleAliasesUnavailable"),
+              retry: Predicate.isTagged(error, "ModelSpecsUnavailable"),
               why: error.message,
             }))
           )
         )
       ),
+    roleNameRead: async (spec, approvalId) => {
+      await run(
+        Effect.logInfo(
+          "a brief recorded before roles were removed names a role; its child runs on the parent's model"
+        ).pipe(
+          Effect.annotateLogs({
+            event: "legacy_role_read",
+            spec,
+            approvalId,
+          })
+        )
+      );
+    },
   };
 };
 
@@ -154,15 +168,18 @@ const ADMIT_ALL: BudgetAccess = {
   admit: async () => await Promise.resolve(Result.void),
 };
 
-/** No roles: a brief that names one starts nothing. For tests whose briefs name none. */
-const NO_ROLES: RoleAccess = {
+/** No models: a brief that names one starts nothing. For tests whose briefs name none. */
+const NO_MODELS: ModelAccess = {
   resolve: async () =>
     await Promise.resolve(
       Result.fail({
         retry: false,
-        why: "This brain resolves no roles; leave role out.",
+        why: "This brain checks no models; leave model out.",
       })
     ),
+  roleNameRead: async () => {
+    await Promise.resolve();
+  },
 };
 
 /** No workspaces: for the host's copy of the task definitions, whose start task never runs. */
@@ -179,7 +196,7 @@ const build = (
   tuning: SubagentToolOptions,
   workspaces: ChildWorkspaceAccess,
   briefFaults: BriefFaultHooks,
-  roles: RoleAccess,
+  models: ModelAccess,
   crashes: SubagentCrashHooks,
   budgets: BudgetAccess
 ) => {
@@ -193,7 +210,7 @@ const build = (
     workspaces,
     settleDelayMillis: tuning.settleDelayMillis,
     briefFaults,
-    roles,
+    models,
     budgets,
     maxLivePerBrain: tuning.maxLivePerBrain,
     questionTtlMillis: tuning.questionTtlMillis,
@@ -201,7 +218,7 @@ const build = (
     crashAt: crashes.at,
   });
 
-  const tools = subagentToolSet(faults, tasks, roles, tuning, crashes.at);
+  const tools = subagentToolSet(faults, tasks, models, tuning, crashes.at);
 
   child.agent = childAgentOf(tools);
 
@@ -232,7 +249,7 @@ export const subagentsExtension = (
   workspaces: ChildWorkspaceAccess,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
   briefFaults: BriefFaultHooks = NO_BRIEF_FAULTS,
-  roles: RoleAccess = NO_ROLES,
+  models: ModelAccess = NO_MODELS,
   crashes: SubagentCrashHooks = NO_SUBAGENT_CRASHES,
   budgets: BudgetAccess = ADMIT_ALL
 ): CairnExtension => ({
@@ -242,7 +259,7 @@ export const subagentsExtension = (
     tuning,
     workspaces,
     briefFaults,
-    roles,
+    models,
     crashes,
     budgets
   ).extension,
@@ -257,7 +274,7 @@ const host = build(
   DEFAULT_TOOL_OPTIONS,
   NO_WORKSPACES,
   NO_BRIEF_FAULTS,
-  NO_ROLES,
+  NO_MODELS,
   NO_SUBAGENT_CRASHES,
   ADMIT_ALL
 );
@@ -396,14 +413,14 @@ export class Subagents extends Context.Service<
             workspaces,
             tuning,
             yield* BriefFaults,
-            roleAccess(yield* RoleAliases, yield* Effect.context()),
+            modelAccess(yield* ModelSpecs, yield* Effect.context()),
             NO_SUBAGENT_CRASHES,
             budgetAccess(yield* BudgetBook, yield* Effect.context())
           ),
         });
       })
     ).pipe(
-      Layer.provide(RoleAliases.layerNoDeps),
+      Layer.provide(ModelSpecs.layerNoDeps),
       Layer.provide(BudgetBook.layer)
     );
 
@@ -431,21 +448,21 @@ export class Subagents extends Context.Service<
           workspaces,
           { ...DEFAULT_TOOL_OPTIONS, briefTtlMillis },
           briefFaults,
-          roleAccess(yield* RoleAliases, yield* Effect.context()),
+          modelAccess(yield* ModelSpecs, yield* Effect.context()),
           crashes,
           budgetAccess(yield* BudgetBook, yield* Effect.context())
         ),
       });
     })
   ).pipe(
-    Layer.provide(RoleAliases.layerNoDeps),
+    Layer.provide(ModelSpecs.layerNoDeps),
     // The reference AppLayer gives `Budgets`, so the memo map builds one book (ExtensionSet.ts).
     Layer.provide(BudgetBook.layer)
   );
 
   /**
    * For tests that build the production extension set: no faults, children's workspaces under a
-   * fresh temporary data folder (`ChildWorkspaces.layerTest`), and roles resolved over the test
+   * fresh temporary data folder (`ChildWorkspaces.layerTest`), and models checked over the test
    * settings and health (`SettingsStore.layerTest`, `ModelHealth.layerTest`, the references such
    * a test gives the extension set too, so it builds one of each) and the test's models.
    */

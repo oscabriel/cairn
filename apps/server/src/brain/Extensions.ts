@@ -29,8 +29,8 @@ export const ExtensionOrder = {
   reach: 760,
   piTools: 800,
   modelHealth: 850,
-  /** `cairn.roles`: the `roles` tool over the role table (ADR 0035). */
-  roles: 860,
+  /** `cairn.models`: the `models` tool, what a child can run on (ADR 0043). */
+  models: 860,
   /** `cairn.ask-user`: the `ask_user` tool, questions for the user as user-input records. */
   askUser: 870,
   judge: 900,

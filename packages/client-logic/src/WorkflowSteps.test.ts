@@ -66,7 +66,7 @@ const node = (index: number, overrides: Json = {}): Row => ({
   index,
   requestId: `wf-wf-1-n-${String(100 + index)}`,
   briefId: "launch-wf-1",
-  role: "@worker",
+  role: "faux/scripted",
   provider: "faux",
   modelId: "kit",
   effort: null,
@@ -624,7 +624,7 @@ describe(workflowTotals, () => {
                 tokensHigh: 9000,
                 listMicrosLow: null,
                 listMicrosHigh: null,
-                basis: "from the last 3 @worker nodes",
+                basis: "from the last 3 nodes on faux/scripted",
               },
             }
           )

@@ -2,12 +2,12 @@
 /* oxlint-disable no-await-in-loop -- a judge drives one check after another, on purpose */
 // The meters judge (plan wave 6, 6G; surfaces note S9, models note M10): behaviour scripts played
 // in the real web client on the `next` views over a real in-process brain on the
-// scripted harness (judges/fixtures/meters/MetersApp.ts, seeded with spend, budgets, plan windows
-// and the deployed role table, each with a known truth), at 390 px as a phone (touch, coarse
+// scripted harness (judges/fixtures/meters/MetersApp.ts, seeded with spend, budgets and plan
+// windows, each with a known truth), at 390 px as a phone (touch, coarse
 // pointer) and at 1,440 px. Each check prints one line; the run ends with one JSON line. No model
 // provider is called.
 //
-//   node judges/meters.ts [--only meters,roles] [--width 390,1440] [--broken zero|no-save]
+//   node judges/meters.ts [--only meters] [--width 390,1440] [--broken zero]
 //                         [--out <dir>]
 //
 // Checks:
@@ -22,18 +22,12 @@
 //           without one is not listed; the default budget reads "No limit" where it sets none.
 //           Every reading marked unknown is free of "0%" and "$0.00", and every meter without a
 //           value reads Unknown. No sideways scroll at either width.
-//   roles   the role table shows `@verifier` bound to Codex with no ready model and says why; a
-//           pick of `opencode-go/gpt-6-luna` sends exactly one `settings.update`, the row reads
-//           Ready on the new binding, and after a reload of the page the binding, the select and
-//           the status are the same (it persisted in the brain). At 390 every select is at least
-//           44 px tall and the page does not scroll sideways.
 //
 // Broken controls, each planted in the page by this judge (never in the app), each of which must
 // make the check it names fail:
 //   zero     every frame from the brain loses its unknowns on the way in: a null plan-window
 //            share and a null list price become 0, and an unpriced model is called metered
-//            (meters);
-//   no-save  every `settings.update` frame is dropped before it leaves the page (roles).
+//            (meters).
 // Exits 0 when every check passed; a broken control's run exits 1 when it failed rightly, and the
 // JSON line names the failing checks.
 
@@ -54,7 +48,7 @@ import {
   UNPRICED_THREAD,
 } from "./fixtures/meters/MetersApp.ts";
 
-const BROKEN_CONTROLS = ["zero", "no-save"] as const;
+const BROKEN_CONTROLS = ["zero"] as const;
 
 type Broken = (typeof BROKEN_CONTROLS)[number] | "";
 
@@ -140,15 +134,6 @@ const PLANT_ZERO = `
   });
 `;
 
-// Drops every \`settings.update\` frame before it leaves the page.
-const PLANT_NO_SAVE = `
-  const send = WebSocket.prototype.send;
-  WebSocket.prototype.send = function (data) {
-    if (String(data).includes("settings.update")) return;
-    send.call(this, data);
-  };
-`;
-
 const newDevice = async (
   browser: Browser,
   width: number
@@ -167,10 +152,6 @@ const newDevice = async (
 
   if (broken === "zero") {
     await context.addInitScript({ content: PLANT_ZERO });
-  }
-
-  if (broken === "no-save") {
-    await context.addInitScript({ content: PLANT_NO_SAVE });
   }
 
   return context;
@@ -451,138 +432,12 @@ const checkMeters = async (page: Page, width: number, origin: string) => {
   return `${facts.unknown.length} unknown readings, none zero; ${facts.models.length} models, ${facts.budgets.length} budgets`;
 };
 
-const verifierRow = (page: Page) =>
-  page.locator('[data-testid="role-row"][data-role="@verifier"]');
-
-const roleFacts = async (page: Page) => ({
-  binding: (await verifierRow(page).getAttribute("data-binding")) ?? "",
-  status:
-    (await verifierRow(page)
-      .locator("[data-role-status]")
-      .textContent()
-      .catch(() => "")) ?? "",
-  select: await page.locator("#role-model-verifier").inputValue(),
-});
-
-const LUNA = "opencode-go/gpt-6-luna";
-
-const checkRoles = async (page: Page, width: number, origin: string) => {
-  const updates: Array<number> = [];
-
-  page.on("websocket", (socket) => {
-    socket.on("framesent", ({ payload }) => {
-      if (String(payload).includes("settings.update")) {
-        updates.push(Date.now());
-      }
-    });
-  });
-
-  await openNext(page, `${origin}/settings`, '[data-testid="settings-roles"]');
-
-  const statusOf = async () => {
-    const facts = await roleFacts(page);
-
-    return facts.status;
-  };
-
-  expect(
-    await waitUntil(
-      async () => (await statusOf()) === "No ready model",
-      20_000
-    ),
-    `@verifier first reads "${await statusOf()}", not "No ready model"`
-  );
-
-  const before = await roleFacts(page);
-
-  expect(
-    before.binding === "openai-codex/gpt-6-luna",
-    `@verifier starts bound to ${before.binding}`
-  );
-
-  const detail =
-    (await verifierRow(page).locator("[data-role-detail]").textContent()) ?? "";
-
-  expect(
-    detail.includes("openai-codex/gpt-6-luna") &&
-      /is not in the catalog|has no credential here/u.test(detail),
-    `the row does not say why: "${detail}"`
-  );
-
-  if (width < 640) {
-    const short = await page.evaluate(() =>
-      [
-        ...document.querySelectorAll('[data-testid="settings-roles"] select'),
-      ].flatMap((select) => {
-        const { height } = select.getBoundingClientRect();
-
-        return height < 44 ? [height] : [];
-      })
-    );
-
-    expect(short.length === 0, `selects under 44 px: ${short.join(", ")}`);
-  }
-
-  await verifierRow(page).scrollIntoViewIfNeeded();
-  await page.locator("#role-model-verifier").selectOption(LUNA);
-
-  const saved = await waitUntil(async () => {
-    const now = await roleFacts(page);
-
-    return now.binding === LUNA && now.status === "Ready";
-  }, 10_000);
-
-  const after = await roleFacts(page);
-
-  expect(
-    saved,
-    `after the pick @verifier reads ${after.binding} "${after.status}"`
-  );
-  expect(
-    updates.length === 1,
-    `${updates.length} settings.update frames for one pick`
-  );
-
-  await page.reload({ waitUntil: "networkidle" });
-  await page
-    .locator('[data-testid="settings-roles"]')
-    .waitFor({ state: "visible", timeout: 20_000 });
-
-  const persisted = await waitUntil(async () => {
-    const now = await roleFacts(page);
-
-    return now.status === "Ready";
-  }, 20_000);
-
-  const reloaded = await roleFacts(page);
-
-  await page
-    .locator('[data-testid="settings-roles"]')
-    .screenshot({ path: path.join(values.out, `roles-${width}.png`) });
-
-  expect(
-    persisted && reloaded.binding === LUNA && reloaded.select === LUNA,
-    `after a reload @verifier reads ${reloaded.binding} (select ${reloaded.select}) "${reloaded.status}"`
-  );
-
-  const sideways = await page.evaluate(
-    () => document.documentElement.scrollWidth > window.innerWidth
-  );
-
-  expect(!sideways, "the settings page scrolls sideways");
-
-  return `rebound to ${LUNA} with one settings.update; kept across a reload`;
-};
-
 const CHECKS: ReadonlyArray<
   readonly [
     string,
     (page: Page, width: number, origin: string) => Promise<string>,
   ]
-> = [
-  ["meters", checkMeters],
-  ["roles", checkRoles],
-];
+> = [["meters", checkMeters]];
 
 mkdirSync(values.out, { recursive: true });
 
@@ -590,8 +445,7 @@ const browser = await chromium.launch();
 
 try {
   for (const width of widths) {
-    // A fresh brain per width: the roles check rebinds a role, and each width starts from the
-    // deployed table.
+    // A fresh brain per width, so each width starts from the seeded truth.
     const app = await startMeters();
 
     try {

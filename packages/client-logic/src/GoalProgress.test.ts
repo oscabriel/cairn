@@ -3,7 +3,7 @@
 
 import { RunId } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
-import { RoleSpec } from "@cairn/protocol/Roles";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 import type { Schema } from "effect";
@@ -241,7 +241,7 @@ describe("the strip's chips and evidence", () => {
         judgeChip({ kind: "user" }),
         judgeChip({
           kind: "model",
-          spec: RoleSpec.make("@judge"),
+          spec: ModelSpec.make("opencode-go/gpt-6-luna"),
           rubric: "clear",
         }),
       ],
@@ -249,7 +249,7 @@ describe("the strip's chips and evidence", () => {
         "Command: pnpm vitest run src/parser.test.ts",
         "Command: grep -q TODO x (exit 1)",
         "You",
-        "Model: @judge",
+        "Model: opencode-go/gpt-6-luna",
       ]
     );
   });

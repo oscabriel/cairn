@@ -64,7 +64,7 @@ export const Model = Schema.Struct({
   scratchThread: Thread.Model.Model,
   /** The request card the `next` views draw in the composer's lane (plan 6A). */
   requestCard: RequestCardModel,
-  /** The usage page and the role table the `next` views draw (plan 6G). */
+  /** The usage page the `next` views draw (plan 6G). */
   meters: MetersModel,
 });
 

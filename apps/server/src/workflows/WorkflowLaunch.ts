@@ -5,22 +5,22 @@
 // (`launchAnswered`, run by `answerApproval` inside the answering transaction): Go moves the row to
 // `approved` with who decided and when; Run on 1 first (`accept_sample`) does the same with
 // `sample` 1, so the gate bakes `SAMPLE = 1` and `pipeline` takes one item (a separate, full run
-// with nothing carried over); the card's edits (`launch`) replace the row's budget, and the role
-// overrides are read from the answer by `overridesOf`; Decline, an expiry or a stop marks the row
-// `declined`. The frozen payload stays as the model proposed it.
+// with nothing carried over); the card's edits (`launch`) replace the row's budget; Decline, an
+// expiry or a stop marks the row `declined`. The frozen payload stays as the model proposed it.
 //
 // Every node of a running workflow is a brief. `briefWithin` decides whether the launch's envelope
-// covers it (the role and whether it writes, the thread's mode, the node cap): a node inside is
+// covers it (the model it runs on and whether it writes, the thread's mode, the node cap; ADR 0043
+// keys the envelope by model): a node inside is
 // recorded as an accepted brief with `decidedBy` envelope in the commit that dispatches it; a node
 // outside raises its own brief card and waits for the user like any approval. So every dispatched
 // row of the ledger names an accepted brief, and `ledgerProblems` checks it.
 
 import { ApprovalId } from "@cairn/protocol/Ids";
 import { ThinkingLevel } from "@cairn/protocol/Models";
+import type { ModelRef } from "@cairn/protocol/Models";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { Brief, LaunchEdits } from "@cairn/protocol/Policy";
 import type { Envelope, RuntimeMode } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
-import type { RoleOverrides } from "@cairn/protocol/Roles";
 import type { Budget } from "@cairn/protocol/Spend";
 import type { NodeRefusal } from "@cairn/protocol/Workflows";
 import type { ConversationId, Tx } from "@earendil-works/pi-durable";
@@ -34,6 +34,7 @@ import {
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
 import { emit } from "../brain/Events.ts";
+import { isRoleName, modelOfSpec, modelText } from "../models/ModelSpecs.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import {
   approveRecord,
@@ -146,13 +147,27 @@ const MODE_WIDTH: Readonly<Record<RuntimeMode, number>> = {
 
 /** What a node asks of its envelope. */
 export interface NodeAsk {
-  readonly role: string;
+  /** The model its child runs on (its level aside). */
+  readonly model: ModelRef;
   readonly readonly: boolean;
   /** The mode its child would run in: the launching thread's, now. */
   readonly mode: RuntimeMode;
   /** Nodes of the workflow dispatched or waiting before this one. */
   readonly dispatched: number;
+  /**
+   * The launching thread's model: what an envelope entry recorded before ADR 0043 under a role
+   * name (`@worker`) grants, since such a role now reads as no model named. None grants nothing
+   * through those entries.
+   */
+  readonly threadModel: Option.Option<ModelRef>;
 }
+
+/** The model an envelope entry grants: its spec's, or the launching thread's for a role name. */
+const grantedModel = (
+  spec: string,
+  threadModel: Option.Option<ModelRef>
+): Option.Option<ModelRef> =>
+  isRoleName(spec) ? threadModel : modelOfSpec(spec);
 
 /** Why a node is outside its envelope: the refusal it ends with if declined, and the card's words. */
 export interface Outside {
@@ -161,9 +176,10 @@ export interface Outside {
 }
 
 /**
- * Whether the launch's envelope covers a node (ADR 0032): a role granted with the same arms, as a
- * writer for a writer (a writer grant covers a reader of that role); a mode no wider than the
- * widest granted (no modes granted covers any); and room under the node cap. None when it fits.
+ * Whether the launch's envelope covers a node (ADR 0032, keyed by model per ADR 0043): its model
+ * granted with the same arms, the level aside, as a writer for a writer (a writer grant covers a
+ * reader on that model); a mode no wider than the widest granted (no modes granted covers any); and
+ * room under the node cap. None when it fits.
  */
 export const briefWithin = (
   envelope: Envelope,
@@ -176,21 +192,29 @@ export const briefWithin = (
     });
   }
 
-  const roles = envelope.roles.filter(
-    (role) => role.spec === node.role && role.arms === "host"
+  // The envelope's wire field keeps its name `roles` for launches recorded before ADR 0043.
+  const wanted = modelText(node.model);
+
+  const grants = envelope.roles.filter(
+    (entry) =>
+      entry.arms === "host" &&
+      Option.exists(
+        grantedModel(entry.spec, node.threadModel),
+        (model) => modelText(model) === wanted
+      )
   );
 
-  if (roles.length === 0) {
+  if (grants.length === 0) {
     return Option.some({
       refusal: "outside_grant",
-      why: `the launch did not show role ${node.role}`,
+      why: `the launch did not show model ${wanted}`,
     });
   }
 
-  if (!node.readonly && roles.every((role) => role.readonly)) {
+  if (!node.readonly && grants.every((entry) => entry.readonly)) {
     return Option.some({
       refusal: "outside_grant",
-      why: `the launch showed ${node.role} reading only, and this node may write`,
+      why: `the launch showed ${wanted} reading only, and this node may write`,
     });
   }
 
@@ -214,22 +238,20 @@ export interface NodeBriefInput {
   readonly workflowName: string;
   readonly label: string;
   readonly prompt: string;
-  readonly role: string;
+  /** The model spec the script named; none runs on the launching thread's model. */
+  readonly spec: Option.Option<string>;
   readonly effort: Option.Option<string>;
   readonly readonly: boolean;
   readonly mode: RuntimeMode;
   readonly budget: Budget;
   readonly resultSchema: Option.Option<JsonRecord>;
-  /**
-   * The launch's per-launch role bindings (`overridesOf`), which the brain resolves the node's role
-   * with at Go: frozen in the brief, so the card checks the role as the brain will resolve it.
-   */
-  readonly roleOverrides: RoleOverrides;
   /** Why it needs its own card; none when its envelope covers it. */
   readonly outside: Option.Option<Outside>;
 }
 
 const isThinkingLevel = Schema.is(ThinkingLevel);
+
+const decodeSpec = Schema.decodeOption(ModelSpec);
 
 /** A text cut to `limit` characters, with an ellipsis when cut. */
 const cut = (text: string, limit: number) =>
@@ -276,7 +298,8 @@ export const nodeBriefPayload = (input: NodeBriefInput): JsonRecord | null => {
         workspace: "shared",
         base: null,
         writes: [],
-        role: RoleSpec.make(input.role),
+        // Only a named model is frozen, for the card to check; none runs on the launching thread's.
+        role: Option.getOrNull(Option.flatMap(input.spec, decodeSpec)),
         model: null,
         thinking: Option.getOrNull(thinking),
         mode: input.mode,
@@ -285,7 +308,6 @@ export const nodeBriefPayload = (input: NodeBriefInput): JsonRecord | null => {
         resultSchema: Option.getOrNull(input.resultSchema),
         wake: "quiet",
         decisions: [],
-        roleOverrides: input.roleOverrides,
       })
     )
   );

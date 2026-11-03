@@ -1,32 +1,19 @@
-// The usage page's and role table's words: unknown is never zero (an unpriced model, an unread
-// window, Codex with no login, a missing limit), dollars carry their basis, and a rebinding keeps
-// what the user did not change.
+// The usage page's words: unknown is never zero (an unpriced model, an unread window, Codex with
+// no login, a missing limit), and dollars carry their basis.
 
-import type { ModelListing } from "@cairn/protocol/Models";
-import type { RoleCheck, RoleTable } from "@cairn/protocol/Roles";
-import {
-  DEFAULT_ROLE_TABLE,
-  RoleCheck as RoleCheckSchema,
-  RoleName as RoleNames,
-} from "@cairn/protocol/Roles";
 import type { ModelSpend, Spend } from "@cairn/protocol/Spend";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { PlanWindow, UsageSnapshot } from "@cairn/protocol/Usage";
 import { assert, describe, it } from "@effect/vitest";
-import { Option, Schema } from "effect";
+import { Option } from "effect";
 
 import {
   budgetLinesOf,
   budgetWordOf,
   CODEX_PROVIDER,
   dollarsText,
-  modelChoicesOf,
   modelLinesOf,
   planStateOf,
-  rebindModel,
-  rebindThinking,
-  roleStatusOf,
-  rolesOf,
   spendFigure,
   spendFigureOf,
   tokensShort,
@@ -59,25 +46,6 @@ const window = (fields: Partial<PlanWindow>): PlanWindow => ({
   exhausted: false,
   ...fields,
 });
-
-const listing = (
-  provider: string,
-  modelId: string,
-  available: boolean,
-  thinkingLevels: ModelListing["thinkingLevels"]
-): ModelListing => ({
-  provider,
-  modelId,
-  name: modelId,
-  thinkingLevels,
-  acceptsImages: false,
-  contextWindow: Option.none(),
-  available,
-});
-
-const Resolution = RoleCheckSchema.fields.resolution.pipe(
-  Schema.toTaggedUnion("_tag")
-);
 
 describe("spend figures", () => {
   it("never prints a dollar figure for tokens that have no price", () => {
@@ -218,110 +186,6 @@ describe("budgets", () => {
     assert.deepStrictEqual(
       Option.map(budgetWordOf("exhausted"), (word) => word.tone),
       Option.some("failed")
-    );
-  });
-});
-
-describe("the role table", () => {
-  const verifier = RoleNames.make("@verifier");
-  const worker = RoleNames.make("@worker");
-
-  const codexTable: RoleTable = {
-    ...DEFAULT_ROLE_TABLE,
-    [verifier]: {
-      model: { provider: "openai-codex", modelId: "gpt-6-luna" },
-      thinkingLevel: Option.some("high"),
-      fallbacks: [{ provider: "opencode-go", modelId: "gpt-6-luna" }],
-      note: Option.none(),
-    },
-  };
-
-  const catalog = [
-    listing("opencode-go", "gpt-6-luna", true, ["low", "medium"]),
-    listing("claude-bridge", "claude-opus-5-5", false, ["medium", "high"]),
-  ];
-
-  it("lists the built-in roles first", () => {
-    assert.deepStrictEqual(
-      rolesOf(codexTable),
-      ["@worker", "@scout", "@judge", "@verifier"].map((name) =>
-        RoleNames.make(name)
-      )
-    );
-  });
-
-  it("keeps a binding the catalog does not list as the selected choice", () => {
-    const choices = modelChoicesOf(catalog, {
-      provider: "openai-codex",
-      modelId: "gpt-6-luna",
-    });
-
-    assert.deepStrictEqual(
-      choices.map((choice) => [choice.value, choice.available]),
-      [
-        ["openai-codex/gpt-6-luna", false],
-        ["opencode-go/gpt-6-luna", true],
-        ["claude-bridge/claude-opus-5-5", false],
-      ]
-    );
-  });
-
-  it("rebinds one role, dropping a fallback equal to the new model and a level it cannot take", () => {
-    const next = Option.getOrThrow(
-      rebindModel(
-        codexTable,
-        verifier,
-        { provider: "opencode-go", modelId: "gpt-6-luna" },
-        ["low", "medium"]
-      )
-    );
-
-    assert.deepStrictEqual(next[verifier]?.fallbacks, []);
-    assert.deepStrictEqual(next[verifier]?.thinkingLevel, Option.none());
-    assert.strictEqual(next[worker], codexTable[worker]);
-
-    const thought = Option.getOrThrow(
-      rebindThinking(next, verifier, Option.some("low"))
-    );
-
-    assert.deepStrictEqual(
-      thought[verifier]?.thinkingLevel,
-      Option.some("low")
-    );
-    assert.isTrue(
-      Option.isNone(
-        rebindModel(
-          codexTable,
-          RoleNames.make("@nobody"),
-          { provider: "opencode-go", modelId: "gpt-6-luna" },
-          []
-        )
-      )
-    );
-  });
-
-  it("says why a role has no ready model", () => {
-    const check: RoleCheck = {
-      spec: "@verifier",
-      resolution: Resolution.cases.Unresolved.make({
-        reason: "no_ready_model",
-        skipped: [
-          {
-            model: { provider: "openai-codex", modelId: "gpt-6-luna" },
-            reason: "missing_credential",
-          },
-        ],
-      }),
-      sameFamilyAsWorker: false,
-    };
-
-    const status = roleStatusOf(check);
-
-    assert.strictEqual(status.word, "No ready model");
-    assert.strictEqual(status.tone, "failed");
-    assert.include(
-      Option.getOrElse(status.detail, () => ""),
-      "openai-codex/gpt-6-luna has no credential here"
     );
   });
 });

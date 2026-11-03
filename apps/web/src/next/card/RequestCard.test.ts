@@ -118,7 +118,7 @@ const brief = record({
     workspace: "shared",
     base: null,
     writes: [],
-    role: "@scout",
+    role: "claude-bridge/claude-sonnet-5-5:high",
     model: null,
     thinking: null,
     mode: "approval-required",
@@ -309,14 +309,14 @@ describe("the request card", () => {
   });
 
   it("draws a brief's fields in reading order with Go", () => {
-    // Its role resolves (6B holds Go until `roles.check` says so: `BriefCard.test.ts`).
+    // Its model resolves (6B holds Go until `models.check` says so: `BriefCard.test.ts`).
     const checked = update(
       showing(doc(brief)),
-      Message.ReceivedRoleChecks({
+      Message.ReceivedModelChecks({
         approvalId: ApprovalId.make("b-1"),
         generation: 1,
         checks: resolvedCheck(
-          "@scout",
+          "claude-bridge/claude-sonnet-5-5:high",
           { provider: "claude-bridge", modelId: "claude-sonnet-5-5" },
           "high"
         ),

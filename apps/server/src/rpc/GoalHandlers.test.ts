@@ -3,13 +3,13 @@
 // the criterion a user judge decides, and the thread's `cairn.goal` and its GoalUpdated tally follow
 // from the verdict writer; a mark on a criterion a command decides, on one the goal does not hold,
 // or on a thread the brain does not hold, is refused with the public error a client acts on, and
-// changes nothing. A model judge of the thread's own family is refused at binding.
+// changes nothing. A model judge on the Claude bridge is refused at binding.
 
 import { goalOf, goalTallyOf } from "@cairn/client-logic/GoalProgress";
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import type { CriterionProposal } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Option, Predicate, Stream } from "effect";
@@ -61,7 +61,7 @@ const CRITERIA: ReadonlyArray<CriterionProposal> = [
     text: "Docs read well",
     judge: {
       kind: "model",
-      spec: RoleSpec.make("opencode-go/gpt-6-luna"),
+      spec: ModelSpec.make("opencode-go/gpt-6-luna"),
       rubric: "Reads the docs",
     },
   },
@@ -223,7 +223,7 @@ describe("goal RPCs", () => {
       )
   );
 
-  it.live("goal.setCriteria refuses a model judge of the thread's family", () =>
+  it.live("goal.setCriteria refuses a model judge on the Claude bridge", () =>
     run(
       Effect.gen(function* () {
         yield* ensureGoalThread;
@@ -238,7 +238,7 @@ describe("goal RPCs", () => {
               text: "Reads well",
               judge: {
                 kind: "model",
-                spec: RoleSpec.make("anthropic/claude-other"),
+                spec: ModelSpec.make("claude-bridge/claude-opus-5-5"),
                 rubric: "Reads the docs",
               },
             },
@@ -246,7 +246,7 @@ describe("goal RPCs", () => {
         }).pipe(Effect.flip);
 
         assert.strictEqual(refused._tag, "InvalidInput");
-        assert.include(refused.message, "same family");
+        assert.include(refused.message, "Claude bridge");
         assert.isTrue(Option.isNone(yield* goalNow));
       })
     )

@@ -10,13 +10,13 @@
 //   digits work while focus is in the options and not in a text field), "Something else" when
 //   the question takes the user's own words, then Back, Decline, and Next or Send. Send opens the
 //   undo bar.
-// - Brief (a subagent's brief or a workflow's launch; 6B): its fields in reading order and what its
-//   roles run on now, then Send back (a subagent's brief or a launch), Run on 1 first (a launch of
-//   more than one node), Decline and Go. While a role does not resolve, Go is blocked with a plain
-//   reason, a link to the role table in settings and Check again; Send back opens a notes field
-//   first. A launch (6F) leads with its numbers (`LaunchCard.ts`: nodes, the estimate, which is
-//   never a zero for an unknown, the budget, what Go covers), then what each call site runs as and
-//   its arguments, folded.
+// - Brief (a subagent's brief or a workflow's launch; 6B): its fields in reading order and what the
+//   models it names run on now, then Send back (a subagent's brief or a launch), Run on 1 first (a
+//   launch of more than one node), Decline and Go. While a named model does not resolve, Go is
+//   blocked with a plain reason and Check again; Send back opens a notes field first. A launch (6F)
+//   leads with its numbers (`LaunchCard.ts`: nodes, the estimate, which is never a zero for an
+//   unknown, the budget, what Go covers), then the model each call site runs on and its arguments,
+//   folded.
 // - Criteria: the criteria and their judges, then Decline and Approve.
 //
 // Decline opens a reason field first. A request answered elsewhere while it showed leaves a closed
@@ -27,7 +27,7 @@
 import "./card.css";
 import {
   goBlockOf,
-  roleQuestionOf,
+  modelQuestionOf,
   runsOnLine,
   takesRunOnOne,
   takesSendBack,
@@ -56,10 +56,10 @@ import { Option } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import { settingsRouter, threadRouter } from "../../Route.ts";
+import { threadRouter } from "../../Route.ts";
 import { classNames } from "../../ui/ClassNames.ts";
 import { banner } from "../ui/Banner.ts";
-import { button, buttonClass, buttonDefaults } from "../ui/Button.ts";
+import { button, buttonDefaults } from "../ui/Button.ts";
 import type { ButtonConfig } from "../ui/Button.ts";
 import { card, recordLines } from "../ui/Card.ts";
 import { chip } from "../ui/Chip.ts";
@@ -76,7 +76,7 @@ import { statusGlyph } from "../ui/Glyph.ts";
 import { kbd } from "../ui/Kbd.ts";
 import { statusChip } from "../ui/StatusChip.ts";
 import { Message } from "./Message.ts";
-import { RoleCheckState } from "./Model.ts";
+import { ModelCheckState } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
   draftsOf,
@@ -567,24 +567,25 @@ const questionBody = (
   });
 };
 
-/** The "Runs on" line of a brief or a launch: what its roles resolve to now, as far as known. */
+/** The "Runs on" line of a brief or a launch: what the models it names resolve to now, as far as known. */
 const runsOn = (
   model: Model,
   request: PendingRequest
 ): ReadonlyArray<CardLine> => {
-  if (Option.isNone(roleQuestionOf(request.record, request.body))) {
+  if (Option.isNone(modelQuestionOf(request.record, request.body))) {
     return [];
   }
 
-  const state: RoleCheckState | undefined = model.roleChecks[request.record.id];
+  const state: ModelCheckState | undefined =
+    model.modelChecks[request.record.id];
 
   if (state === undefined) {
     return [["Runs on", "Checked once Cairn is connected"]];
   }
 
-  return RoleCheckState.match(state, {
+  return ModelCheckState.match(state, {
     Checking: (): ReadonlyArray<CardLine> => [
-      ["Runs on", "Checking the role table…"],
+      ["Runs on", "Checking the models…"],
     ],
     Checked: ({ checks }): ReadonlyArray<CardLine> => [
       ["Runs on", runsOnLine(checks)],
@@ -595,12 +596,13 @@ const runsOn = (
   });
 };
 
-/** Why Go is blocked, with the way to the role table and Check again; empty when it is not. */
+/** Why Go is blocked, with Check again; empty when it is not. */
 const goBlockBar = (model: Model, h: H, request: PendingRequest): Html => {
-  const state: RoleCheckState | undefined = model.roleChecks[request.record.id];
+  const state: ModelCheckState | undefined =
+    model.modelChecks[request.record.id];
 
   const block =
-    state !== undefined && RoleCheckState.guards.Checked(state)
+    state !== undefined && ModelCheckState.guards.Checked(state)
       ? goBlockOf(state.checks)
       : Option.none();
 
@@ -615,22 +617,14 @@ const goBlockBar = (model: Model, h: H, request: PendingRequest): Html => {
           title: found.title,
           detail: Option.some(found.detail),
           actions: [
-            h.a(
-              [
-                h.DataAttribute("action", "role-table"),
-                h.Href(`${settingsRouter()}#roles`),
-                h.Class(buttonClass("secondary", "small")),
-              ],
-              ["Open the role table"]
-            ),
             actionButton(
               h,
-              "check-roles",
+              "check-models",
               {
                 variant: "ghost",
                 size: "small",
                 onClick: Option.some(
-                  Message.ClickedCheckRoles({ approvalId: request.record.id })
+                  Message.ClickedCheckModels({ approvalId: request.record.id })
                 ),
               },
               "Check again"
@@ -702,7 +696,7 @@ const sendBackControls = (
   };
 };
 
-/** Go, or Run on 1 first: held while the roles are checked, blocked while one does not resolve. */
+/** Go, or Run on 1 first: held while the models are checked, blocked while one does not resolve. */
 const goButton = (
   model: Model,
   h: H,
@@ -726,7 +720,7 @@ const goButton = (
   );
 };
 
-/** A launch's call sites: each one's label, then its phase, role, access and count. */
+/** A launch's call sites: each one's label, then its phase, model, access and count. */
 const callSitesList = (h: H, launch: WorkflowLaunch): Html => {
   const rows = callSiteRows(launch);
 
@@ -735,7 +729,7 @@ const callSitesList = (h: H, launch: WorkflowLaunch): Html => {
     : h.ul(
         [
           h.DataAttribute("testid", "request-card-call-sites"),
-          h.AriaLabel("What each node runs as"),
+          h.AriaLabel("What each node runs on"),
           h.Class(
             "flex min-w-0 flex-col gap-(--space-1) border-t border-stroke-1 pt-(--space-2)"
           ),
@@ -744,7 +738,7 @@ const callSitesList = (h: H, launch: WorkflowLaunch): Html => {
           h.li(
             [
               h.DataAttribute("testid", "request-card-call-site"),
-              h.DataAttribute("spec", row.spec),
+              h.DataAttribute("model", row.model),
               h.Class("flex min-w-0 flex-col"),
             ],
             [

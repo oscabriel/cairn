@@ -1,11 +1,14 @@
-// A brief's role and the brain's cap over a real pi-durable brain (the conformance suite's
-// composition, with the settings store in reach so a test can change the role table):
+// A brief's model and the brain's cap over a real pi-durable brain (the conformance suite's
+// composition, with model health in reach so a test can mark a provider limited), ADR 0043:
 //
-// - an `@role` alias resolves at Go to its binding's model and level, which the child runs on
-//   (`pi.agent`) and its dispatch record names;
-// - a role nothing ready answers to at the ask is refused there, naming the roles that resolve now;
-// - a role that resolved at the ask but not at Go (the table changed) starts nothing, and the
-//   parent is told once;
+// - a brief that names no model runs its child on the parent's model and level, and its dispatch
+//   record names them;
+// - a named `provider/modelId:level` is the child's model and level (`pi.agent`), as its dispatch
+//   record names;
+// - a named model that is not ready is refused at the ask with its reason, and a role name
+//   (`@worker`) from a new call is refused as removed;
+// - a model that was ready at the ask but not at Go starts nothing, and the parent is told once;
+// - a brief recorded before ADR 0043 that names `@worker` runs on the parent's model at Go;
 // - the brain-wide cap (`maxLivePerBrain`, 32 in production, 2 here) counts every thread's
 //   children: a second thread's spawn past it is refused, while its own cap of 8 is far off;
 // - a budget covering the parent at its line when the user says Go starts nothing (ADR 0036, the
@@ -19,14 +22,13 @@ import path from "node:path";
 
 import { ApprovalId, ProjectId } from "@cairn/protocol/Ids";
 import type { ConversationId, ThreadId } from "@cairn/protocol/Ids";
-import { DEFAULT_ROLE_TABLE, RoleName } from "@cairn/protocol/Roles";
-import type { RoleTable } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Context,
+  DateTime,
   Duration,
   Effect,
   Layer,
@@ -37,7 +39,7 @@ import {
 } from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
+import { HealthOutcome, ModelHealth } from "../models/ModelHealth.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
@@ -68,7 +70,7 @@ const PARENT = testThreadId(1);
 
 const OTHER_PARENT = testThreadId(2);
 
-/** The brain the conformance suite runs, with `SettingsStore` and `ModelHealth` left in reach. */
+/** The brain the conformance suite runs, with `ModelHealth` left in reach. */
 const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
@@ -118,15 +120,15 @@ interface Running {
   readonly parent: ConversationId;
 }
 
-/** A spawn of `description` with `role`, as the faux model calls it. */
-const spawnCall = (description: string, role: string | null, id: string) => {
+/** A spawn of `description` naming `model`, as the faux model calls it. */
+const spawnCall = (description: string, model: string | null, id: string) => {
   const brief = `${description}, please.`;
 
-  if (role === null) {
+  if (model === null) {
     return fauxToolCall("subagent_spawn", { description, brief }, { id });
   }
 
-  return fauxToolCall("subagent_spawn", { description, brief, role }, { id });
+  return fauxToolCall("subagent_spawn", { description, brief, model }, { id });
 };
 
 /** Ensures `threadId` on the faux model at level `off`. */
@@ -134,7 +136,7 @@ const ensure = (threadId: ThreadId) =>
   Effect.flatMap(HarnessSeam, (seam) =>
     seam.ensureThread({
       threadId,
-      projectId: ProjectId.make("roles"),
+      projectId: ProjectId.make("models"),
       model: FAUX_MODEL,
       thinkingLevel: "off",
       cwd: process.cwd(),
@@ -150,7 +152,7 @@ const withBrain = <A, E>(
   body: (running: Running) => Effect.Effect<A, E, Services>
 ) =>
   Effect.acquireUseRelease(
-    Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-roles-"))),
+    Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-models-"))),
     (dataDir) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -266,33 +268,70 @@ const transcriptOf = (conversation: ConversationId) =>
     return JSON.stringify(page.items);
   });
 
-/** Binds `@worker` to `model` at `thinkingLevel`, the rest of the table as it ships. */
-const bindWorker = (
-  model: { readonly provider: string; readonly modelId: string },
-  thinkingLevel: "high" | "low"
+/** Marks the faux provider limited, as a plan's usage limit would. */
+const limitFaux = Effect.gen(function* () {
+  const health = yield* ModelHealth;
+
+  yield* health.record(
+    FAUX_MODEL.provider,
+    HealthOutcome.Failed({
+      at: yield* DateTime.now,
+      message:
+        "You have hit your ChatGPT usage limit (plus plan). Try again in ~30 min.",
+    })
+  );
+}).pipe(Effect.orDie);
+
+/** The first pending brief of `threadId`, once there is one. */
+const firstBrief = (
+  events: Ref.Ref<ReadonlyArray<HarnessEvent>>,
+  threadId: ThreadId
 ) =>
-  Effect.gen(function* () {
-    const settings = yield* SettingsStore;
+  waitFor(
+    Effect.map(pendingBriefs(events, threadId), (ids) =>
+      Option.fromUndefinedOr(ids[0])
+    )
+  );
 
-    const table: RoleTable = {
-      ...DEFAULT_ROLE_TABLE,
-      [RoleName.make("@worker")]: {
-        model,
-        thinkingLevel: Option.some(thinkingLevel),
-        fallbacks: [],
-        note: Option.none(),
+/** The first child the brain ensured, once there is one. */
+const firstChild = (events: Ref.Ref<ReadonlyArray<HarnessEvent>>) =>
+  waitFor(
+    Effect.map(Ref.get(events), (all) =>
+      Option.firstSomeOf(
+        all.map((event) =>
+          Predicate.isTagged(event, "ThreadEnsured") &&
+          Option.isSome(event.parent)
+            ? Option.some(event.conversationId)
+            : Option.none()
+        )
+      )
+    )
+  );
+
+/** The child's `pi.agent` and the parent's registry item for it. */
+const dispatchOf = (parent: ConversationId, child: ConversationId) =>
+  read("test.child", async (harness, context) => {
+    const agent = await harness.snapshot(
+      AgentDoc,
+      piConversationId(child),
+      context
+    );
+
+    const registry = await harness.snapshot(
+      SubagentsDoc,
+      piConversationId(parent),
+      context
+    );
+
+    return {
+      model: {
+        provider: agent?.model?.provider,
+        modelId: agent?.model?.modelId,
       },
+      thinkingLevel: agent?.thinkingLevel,
+      dispatch: Object.values(registry?.items ?? {})[0]?.dispatch,
     };
-
-    yield* settings.update({
-      autoSettleDays: Option.none(),
-      titleModel: Option.none(),
-      bridgeEnabled: Option.none(),
-      bridgeGenerationCap: Option.none(),
-      roleBindings: Option.some(table),
-      defaultBudget: Option.none(),
-    });
-  }).pipe(Effect.orDie);
+  });
 
 const go = (threadId: ThreadId, approvalId: string) =>
   Effect.flatMap(HarnessSeam, (seam) =>
@@ -304,14 +343,14 @@ const go = (threadId: ThreadId, approvalId: string) =>
     })
   );
 
-describe("brief roles and the brain's cap over a pi-durable brain", () => {
+describe("brief models and the brain's cap over a pi-durable brain", () => {
   it.live(
-    "an @role alias resolves at Go to its binding's model and level",
+    "a brief that names no model runs on the parent's model and level",
     () =>
       withBrain(
         DEFAULT_TOOL_OPTIONS,
         [
-          fauxAssistantMessage(spawnCall("Count the files", "@worker", "c1"), {
+          fauxAssistantMessage(spawnCall("Count the files", null, "c1"), {
             stopReason: "toolUse",
           }),
           fauxAssistantMessage("Waiting for Go."),
@@ -320,66 +359,25 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
         ],
         ({ events, parent }) =>
           Effect.gen(function* () {
-            yield* bindWorker(FAUX_MODEL, "high");
             yield* ask(PARENT, "r1");
+            yield* go(PARENT, yield* firstBrief(events, PARENT));
 
-            const [brief] = yield* waitFor(
-              Effect.map(pendingBriefs(events, PARENT), (ids) =>
-                ids.length > 0 ? Option.some(ids) : Option.none()
-              )
-            );
+            const child = yield* firstChild(events);
+            const found = yield* dispatchOf(parent, child);
 
-            yield* go(PARENT, brief ?? "");
-
-            const child = yield* waitFor(
-              Effect.map(Ref.get(events), (all) =>
-                Option.firstSomeOf(
-                  all.map((event) =>
-                    Predicate.isTagged(event, "ThreadEnsured") &&
-                    Option.isSome(event.parent)
-                      ? Option.some(event.conversationId)
-                      : Option.none()
-                  )
-                )
-              )
-            );
-
-            const { agent, registry } = yield* read(
-              "test.child",
-              async (harness, context) => ({
-                agent: await harness.snapshot(
-                  AgentDoc,
-                  piConversationId(child),
-                  context
-                ),
-                registry: await harness.snapshot(
-                  SubagentsDoc,
-                  piConversationId(parent),
-                  context
-                ),
-              })
-            );
-
+            assert.deepStrictEqual(found.model, FAUX_MODEL);
+            // The parent runs at `off`, and so does its child.
+            assert.strictEqual(found.thinkingLevel, "off");
+            assert.strictEqual(found.dispatch?.spec, null);
+            // The fields roles had are gone from new records.
             assert.deepStrictEqual(
-              {
-                provider: agent?.model?.provider,
-                modelId: agent?.model?.modelId,
-              },
-              FAUX_MODEL
+              Object.keys(found.dispatch?.resolved ?? {}),
+              ["spec", "model", "thinkingLevel", "priced"]
             );
-            // The parent runs at `off`; the binding's `high` is the child's.
-            assert.strictEqual(agent?.thinkingLevel, "high");
-
-            const dispatched = Object.values(registry?.items ?? {})[0]
-              ?.dispatch;
-
-            assert.strictEqual(dispatched?.spec, "@worker");
-            assert.deepInclude(dispatched?.resolved ?? {}, {
-              spec: "@worker",
-              role: "@worker",
-              thinkingLevel: "high",
-              via: "primary",
+            assert.deepInclude(found.dispatch?.resolved ?? {}, {
+              spec: "faux/scripted",
               model: FAUX_MODEL,
+              thinkingLevel: "off",
             });
           })
       ),
@@ -387,19 +385,58 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
   );
 
   it.live(
-    "a role nothing ready answers to is refused at the ask, naming the roles that resolve now",
+    "a named provider/modelId:level is the child's model and level",
     () =>
       withBrain(
         DEFAULT_TOOL_OPTIONS,
         [
-          fauxAssistantMessage(spawnCall("Count the files", "@nobody", "c1"), {
-            stopReason: "toolUse",
-          }),
-          fauxAssistantMessage("That role was refused."),
+          fauxAssistantMessage(
+            spawnCall("Count the files", "faux/scripted:high", "c1"),
+            { stopReason: "toolUse" }
+          ),
+          fauxAssistantMessage("Waiting for Go."),
+          fauxAssistantMessage("There are 3 files."),
+          fauxAssistantMessage("Noted."),
         ],
         ({ events, parent }) =>
           Effect.gen(function* () {
-            yield* bindWorker(FAUX_MODEL, "high");
+            yield* ask(PARENT, "r1");
+            yield* go(PARENT, yield* firstBrief(events, PARENT));
+
+            const child = yield* firstChild(events);
+            const found = yield* dispatchOf(parent, child);
+
+            assert.deepStrictEqual(found.model, FAUX_MODEL);
+            // The parent runs at `off`; the spec's `high` is the child's.
+            assert.strictEqual(found.thinkingLevel, "high");
+            assert.strictEqual(found.dispatch?.spec, "faux/scripted:high");
+            assert.deepInclude(found.dispatch?.resolved ?? {}, {
+              spec: "faux/scripted:high",
+              model: FAUX_MODEL,
+              thinkingLevel: "high",
+            });
+          })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a named model that is not ready, or a role name, is refused at the ask with its reason",
+    () =>
+      withBrain(
+        DEFAULT_TOOL_OPTIONS,
+        [
+          fauxAssistantMessage(
+            [
+              spawnCall("Count the files", "faux/gone", "c1"),
+              spawnCall("Read the readme", "@worker", "c2"),
+            ],
+            { stopReason: "toolUse" }
+          ),
+          fauxAssistantMessage("Both were refused."),
+        ],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
             yield* ask(PARENT, "r1");
             yield* runsEnded(events, PARENT, 1);
 
@@ -408,10 +445,17 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
             assert.include(
               transcript,
               JSON.stringify(
-                "subagent_spawn's role does not resolve now."
+                "subagent_spawn's model cannot take a child now."
               ).slice(1, -1)
             );
-            assert.include(transcript, "@worker");
+            assert.include(transcript, "it is not in the model catalog");
+            assert.include(
+              transcript,
+              JSON.stringify(SubagentToolText.roleRemoved("@worker")).slice(
+                1,
+                -1
+              )
+            );
             assert.deepStrictEqual(yield* pendingBriefs(events, PARENT), []);
           })
       ),
@@ -419,34 +463,30 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
   );
 
   it.live(
-    "a role that resolved at the ask but not at Go starts nothing, and the parent is told once",
+    "a model ready at the ask but not at Go starts nothing, and the parent is told once",
     () =>
       withBrain(
         DEFAULT_TOOL_OPTIONS,
         [
-          fauxAssistantMessage(spawnCall("Count the files", "@worker", "c1"), {
-            stopReason: "toolUse",
-          }),
+          fauxAssistantMessage(
+            spawnCall("Count the files", "faux/scripted", "c1"),
+            { stopReason: "toolUse" }
+          ),
           fauxAssistantMessage("Waiting for Go."),
           fauxAssistantMessage("Understood."),
           fauxAssistantMessage("Understood again."),
         ],
         ({ events, parent }) =>
           Effect.gen(function* () {
-            yield* bindWorker(FAUX_MODEL, "high");
             yield* ask(PARENT, "r1");
 
-            const [brief] = yield* waitFor(
-              Effect.map(pendingBriefs(events, PARENT), (ids) =>
-                ids.length > 0 ? Option.some(ids) : Option.none()
-              )
-            );
+            const brief = yield* firstBrief(events, PARENT);
 
             yield* runsEnded(events, PARENT, 1);
 
-            // The table changes while the brief waits: `@worker` now names no model the brain has.
-            yield* bindWorker({ provider: "faux", modelId: "gone" }, "low");
-            yield* go(PARENT, brief ?? "");
+            // The provider reaches its plan's limit while the brief waits.
+            yield* limitFaux;
+            yield* go(PARENT, brief);
             yield* runsEnded(events, PARENT, 2);
             yield* Effect.sleep(Duration.millis(300));
 
@@ -459,6 +499,7 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
             const head = JSON.stringify(told).slice(1, -1);
 
             assert.strictEqual(transcript.split(head).length - 1, 1);
+            assert.include(transcript, "its plan limit is reached");
 
             const record = yield* read(
               "test.record",
@@ -469,7 +510,7 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
                   context
                 );
 
-                return ledger?.items[brief ?? ""];
+                return ledger?.items[brief];
               }
             );
 
@@ -482,6 +523,61 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
                   Option.isNone(event.parent)
               )
             );
+          })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a brief recorded before roles were removed that names @worker runs on the parent's model",
+    () =>
+      withBrain(
+        DEFAULT_TOOL_OPTIONS,
+        [
+          fauxAssistantMessage(spawnCall("Count the files", null, "c1"), {
+            stopReason: "toolUse",
+          }),
+          fauxAssistantMessage("Waiting for Go."),
+          fauxAssistantMessage("There are 3 files."),
+          fauxAssistantMessage("Noted."),
+        ],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
+            yield* ask(PARENT, "r1");
+
+            const brief = yield* firstBrief(events, PARENT);
+
+            yield* runsEnded(events, PARENT, 1);
+
+            // The pending record as a brain before ADR 0043 froze it: its brief names `@worker`.
+            yield* read("test.legacy", async (harness, context) => {
+              await harness.commit(async (tx) => {
+                const ledger = await tx.doc(
+                  Approvals,
+                  piConversationId(parent)
+                );
+
+                const payload = ledger.items[brief]?.payload;
+
+                if (payload !== undefined && payload !== null) {
+                  payload.role = "@worker";
+                }
+              }, context);
+            });
+
+            yield* go(PARENT, brief);
+
+            const child = yield* firstChild(events);
+            const found = yield* dispatchOf(parent, child);
+
+            assert.deepStrictEqual(found.model, FAUX_MODEL);
+            assert.strictEqual(found.thinkingLevel, "off");
+            assert.strictEqual(found.dispatch?.spec, null);
+            assert.deepInclude(found.dispatch?.resolved ?? {}, {
+              spec: "faux/scripted",
+              model: FAUX_MODEL,
+              thinkingLevel: "off",
+            });
           })
       ),
     30_000
@@ -546,11 +642,7 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
           Effect.gen(function* () {
             yield* ask(PARENT, "r1");
 
-            const [brief] = yield* waitFor(
-              Effect.map(pendingBriefs(events, PARENT), (ids) =>
-                ids.length > 0 ? Option.some(ids) : Option.none()
-              )
-            );
+            const brief = yield* firstBrief(events, PARENT);
 
             yield* runsEnded(events, PARENT, 1);
 
@@ -569,7 +661,7 @@ describe("brief roles and the brain's cap over a pi-durable brain", () => {
               reached: Option.some("tokens"),
             });
 
-            yield* go(PARENT, brief ?? "");
+            yield* go(PARENT, brief);
             yield* runsEnded(events, PARENT, 2);
             yield* Effect.sleep(Duration.millis(300));
 

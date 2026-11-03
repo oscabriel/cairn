@@ -5,7 +5,6 @@
 // hold the hooks, the words and the wiring.
 
 import { ProjectId } from "@cairn/protocol/Ids";
-import { DEFAULT_ROLE_TABLE } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
@@ -229,7 +228,6 @@ describe("the next settings page", () => {
         titleModel: Option.none(),
         bridgeEnabled: true,
         bridgeGenerationCap: 4,
-        roleBindings: DEFAULT_ROLE_TABLE,
         defaultBudget: DEFAULT_BUDGET,
       }),
     };
@@ -239,7 +237,6 @@ describe("the next settings page", () => {
         update: settingsUpdate,
         view: Scene.withViewInputs(settingsView, {
           notifications: () => null,
-          roleTable: () => null,
         })(),
       },
       Scene.given(loaded),

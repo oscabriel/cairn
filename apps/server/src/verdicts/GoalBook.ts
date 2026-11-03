@@ -4,9 +4,10 @@
 // verdict writer (`Verdicts.ts`) in one host commit on the thread's conversation.
 //
 // The rules the model's `goal_criteria` keeps hold here too: a subagent's thread has no goal (its
-// brief's done-when judges it), `verification` judges wait for phase 4, and a `model` judge must
-// resolve now to a model of another family than the thread's (`ModelJudge.ts`), which the user
-// would otherwise only learn when the judge refused to run.
+// brief's done-when judges it), `verification` judges wait for phase 4, and a `model` judge must be
+// able to run now: a model it names must be ready, and neither it nor the thread's own model, which
+// a judge naming none runs on (ADR 0043), may be the Claude bridge (`ModelJudge.ts`). The user
+// would otherwise only learn it when the judge refused to run.
 //
 // The rules live once, over a goal host: pi-durable's store (the deployed brain), or the scripted
 // harness's goals (`ScriptedGoals`), so a judge over the scripted brain binds, refuses and marks as
@@ -19,7 +20,6 @@ import type {
   CriterionProposal,
   SetCriteriaInput,
 } from "@cairn/protocol/Policy";
-import type { RoleSpec } from "@cairn/protocol/Roles";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { Clock, Context, Effect, Layer, Option, Result, Schema } from "effect";
@@ -30,9 +30,9 @@ import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { piConversationId } from "../brain/PiIds.ts";
 import { ScriptedGoals } from "../brain/ScriptedHarness.ts";
-import { RoleAliases } from "../models/RoleAliases.ts";
+import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
-import { judgeModelRefusal } from "./ModelJudge.ts";
+import { judgeModelRefusal, judgeSpecOf } from "./ModelJudge.ts";
 import {
   applyBind,
   applyMark,
@@ -103,10 +103,10 @@ interface GoalHost<Key> {
   readonly threadOf: (
     threadId: ThreadId
   ) => Effect.Effect<Option.Option<GoalThread<Key>>, GoalError>;
-  /** The model a model judge's spec resolves to now, or why not, in the role table's words. */
+  /** The model a model judge's named spec resolves to now, or why it is not ready. */
   readonly resolveJudge: (
     threadId: ThreadId,
-    spec: RoleSpec
+    spec: string
   ) => Effect.Effect<Result.Result<ModelRef, string>, GoalError>;
   /** Binds criteria in one commit, through the verdict writer. */
   readonly bind: (
@@ -144,7 +144,7 @@ const bookOver = <Key>(host: GoalHost<Key>): GoalBook["Service"] => {
     return found.value;
   });
 
-  /** Refuses a judge that cannot run: verification, or a model judge that does not resolve or shares the thread's family. */
+  /** Refuses a judge that cannot run: verification, or a model judge whose model cannot answer now. */
   const checkJudge = Effect.fn("GoalBook.checkJudge")(function* (
     threadId: ThreadId,
     model: Option.Option<ModelRef>,
@@ -157,7 +157,7 @@ const bookOver = <Key>(host: GoalHost<Key>): GoalBook["Service"] => {
       return yield* failure(
         threadId,
         "invalid_input",
-        "Verification recipes arrive in phase 4. Judge this criterion by a command, by you or by a model of another family.",
+        "Verification recipes arrive in phase 4. Judge this criterion by a command, by you or by a model.",
         field
       );
     }
@@ -166,13 +166,28 @@ const bookOver = <Key>(host: GoalHost<Key>): GoalBook["Service"] => {
       return yield* Effect.void;
     }
 
-    const resolved = yield* host.resolveJudge(threadId, proposal.judge.spec);
+    const named = judgeSpecOf(proposal.judge.spec);
+
+    // A judge that names no model runs on the thread's own (ADR 0043).
+    const resolved = yield* Option.match(named, {
+      onNone: () =>
+        Effect.succeed(
+          Option.match(model, {
+            onNone: () =>
+              Result.fail(
+                `Thread ${threadId} runs on no model a judge can use. Name the judge's model as provider/modelId.`
+              ),
+            onSome: (found) => Result.succeed(found),
+          })
+        ),
+      onSome: (spec) => host.resolveJudge(threadId, spec),
+    });
 
     if (Result.isFailure(resolved)) {
       return yield* failure(threadId, "invalid_input", resolved.failure, field);
     }
 
-    const refusal = judgeModelRefusal(model, resolved.success);
+    const refusal = judgeModelRefusal(resolved.success, Option.isSome(named));
 
     if (Option.isSome(refusal)) {
       return yield* failure(threadId, "invalid_input", refusal.value, field);
@@ -245,12 +260,12 @@ export class GoalBook extends Context.Service<
     mark(input: MarkInput): Effect.Effect<MarkOutcome, GoalError>;
   }
 >()("cairn/server/verdicts/GoalBook") {
-  /** Over the root's `Brain` and `RoleAliases`. */
+  /** Over the root's `Brain` and `ModelSpecs`. */
   static readonly layerNoDeps = Layer.effect(
     GoalBook,
     Effect.gen(function* () {
       const brain = yield* Brain;
-      const roles = yield* RoleAliases;
+      const specs = yield* ModelSpecs;
 
       const sessionFor = (threadId: ThreadId) =>
         brain.session.pipe(
@@ -306,13 +321,14 @@ export class GoalBook extends Context.Service<
 
       const resolveJudge = (
         threadId: ThreadId,
-        spec: RoleSpec
+        spec: string
       ): Effect.Effect<Result.Result<ModelRef, string>, GoalError> =>
-        roles.resolve(spec, Option.none()).pipe(
+        specs.resolve(spec).pipe(
           Effect.map((resolved) => Result.succeed(resolved.model)),
           Effect.catchTags({
-            RoleError: (error) => Effect.succeed(Result.fail(error.message)),
-            RoleAliasesUnavailable: (error) =>
+            ModelSpecError: (error) =>
+              Effect.succeed(Result.fail(error.message)),
+            ModelSpecsUnavailable: (error) =>
               Effect.fail(
                 failure(
                   threadId,
@@ -367,14 +383,14 @@ export class GoalBook extends Context.Service<
     })
   );
 
-  /** Over `RoleAliases.layerNoDeps`; the root gives `Brain` and the role table's sources. */
+  /** Over `ModelSpecs.layerNoDeps`; the root gives `Brain` and the catalog's sources. */
   static readonly layer = GoalBook.layerNoDeps.pipe(
-    Layer.provide(RoleAliases.layerNoDeps)
+    Layer.provide(ModelSpecs.layerNoDeps)
   );
 
   /**
    * Over the scripted harness's goals (`ScriptedGoals`): the same rules and the same verdict
-   * writer, a model judge resolved through the scripted role table. For the judges' scripted brains.
+   * writer, a model judge on the model it names, or the goal thread's. For the judges' scripted brains.
    */
   static readonly layerScripted = Layer.effect(
     GoalBook,

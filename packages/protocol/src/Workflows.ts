@@ -21,6 +21,7 @@ import {
   TrimmedNonEmptyString,
 } from "./Ids.ts";
 import { ThinkingLevel } from "./Models.ts";
+import { ModelSpec } from "./ModelSpecs.ts";
 import {
   Decider,
   EpochMillis,
@@ -28,7 +29,6 @@ import {
   WorkflowEstimate,
   WorkflowPhase,
 } from "./Policy.ts";
-import { RoleSpec } from "./Roles.ts";
 import { Budget, Micros } from "./Spend.ts";
 
 /** Nodes one workflow runs at once (a semaphore in the `agent` tool); the hard cap is 32. */
@@ -145,13 +145,17 @@ export const NodeRecord = Schema.Struct({
   index: NonNegativeInt,
   requestId: TrimmedNonEmptyString,
   briefId: Schema.NullOr(ApprovalId),
-  /** The spec the script passed and what it resolved to at dispatch (ADR 0035). */
-  role: Schema.NullOr(RoleSpec),
+  /**
+   * The model spec the node asked for: the script's, else the launching thread's model and level
+   * (ADR 0043); below, the model it ran on. The wire name `role` is kept for rows written before
+   * ADR 0043, when it held a role name (`@worker`).
+   */
+  role: Schema.NullOr(ModelSpec),
   provider: Schema.NullOr(TrimmedNonEmptyString),
   modelId: Schema.NullOr(TrimmedNonEmptyString),
   effort: Schema.NullOr(TrimmedNonEmptyString),
   /**
-   * The level the child runs at: `effort` when given, else the role's; null for the model's
+   * The level the child runs at: `effort` when given, else the spec's; null for the model's
    * default. Absent on rows written before it was recorded.
    */
   thinkingLevel: Schema.optionalKey(Schema.NullOr(ThinkingLevel)),

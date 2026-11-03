@@ -1,5 +1,5 @@
+import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import type { Brief, Question } from "@cairn/protocol/Policy";
-import { RoleSpec } from "@cairn/protocol/Roles";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
@@ -15,7 +15,7 @@ import {
 } from "./PendingCard.ts";
 import { RequestBody } from "./PendingRequests.ts";
 
-const scout = RoleSpec.make("@scout");
+const luna = ModelSpec.make("opencode-go/gpt-6-luna:high");
 
 const brief: Brief = {
   type: "brief",
@@ -38,7 +38,7 @@ const brief: Brief = {
   workspace: "worktree",
   base: null,
   writes: ["src/count"],
-  role: scout,
+  role: luna,
   model: null,
   thinking: null,
   mode: "auto-accept-edits",
@@ -92,7 +92,7 @@ describe("the request card's words", () => {
         "The parent accepts the result. (judged by you); Tests pass (judged by the command `pnpm test` exits 0)",
       ],
       ["Where", "A worktree from the parent's HEAD; writes src/count"],
-      ["Who", "@scout, Auto-accept edits"],
+      ["Who", "opencode-go/gpt-6-luna at high, Auto-accept edits"],
       ["Budget", "40 turns"],
     ]);
 
@@ -125,8 +125,8 @@ describe("the request card's words", () => {
 
   it("names a model judge by its spec", () => {
     assert.strictEqual(
-      judgeText({ kind: "model", spec: scout, rubric: "Is it right?" }),
-      "a model (@scout)"
+      judgeText({ kind: "model", spec: luna, rubric: "Is it right?" }),
+      "a model (opencode-go/gpt-6-luna:high)"
     );
   });
 

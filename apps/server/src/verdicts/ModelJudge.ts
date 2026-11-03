@@ -1,16 +1,14 @@
-// The `model` judge's rules (briefs note section 3): one plain request to a model of another family
-// than the goal thread's, which reads the objective, the criterion, its rubric and the end of the
-// thread's transcript, and answers MET or NOT MET on its first line. It is not a subagent, so it
-// needs no brief; its model id and reply are the verdict's evidence. A reply that says neither is
-// not met: a criterion is met only when its judge says so.
-//
-// The family rule is `sameFamily`'s (ADR 0035), plus the same model never judging itself, whatever
-// its family: two `other` models are not known to differ, and one model surely does not.
+// The `model` judge's rules (briefs note section 3): one plain request to the model the criterion
+// names, or to the goal thread's own model when it names none (ADR 0043), which reads the objective,
+// the criterion, its rubric and the end of the thread's transcript, and answers MET or NOT MET on
+// its first line. It is not a subagent, so it needs no brief; its model id and reply are the
+// verdict's evidence. A reply that says neither is not met: a criterion is met only when its judge
+// says so. A judge from another model family is the user's or the model's choice, never a rule.
 
 import type { ModelRef } from "@cairn/protocol/Models";
 import { Option } from "effect";
 
-import { sameFamily } from "../models/ModelFamily.ts";
+import { isRoleName } from "../models/ModelSpecs.ts";
 
 /** The provider the Claude bridge registers: it answers conversations, not one plain request. */
 export const BRIDGE_PROVIDER = "claude-bridge";
@@ -33,36 +31,30 @@ export const modelText = (model: ModelRef): string =>
   `${model.provider}/${model.modelId}`;
 
 /**
- * Why `judge` may not judge a thread on `thread`; none when it may. The same family (Anthropic,
- * OpenAI, Google) or the very same model is refused, and so is the bridge, which cannot answer a
- * plain request.
+ * The spec a model judge names; none when it names none, or names a role (a judge recorded before
+ * ADR 0043), which reads as none: the judge runs on the goal thread's model.
+ */
+export const judgeSpecOf = (spec: string | null): Option.Option<string> =>
+  Option.filter(Option.fromNullOr(spec), (named) => !isRoleName(named));
+
+/**
+ * Why `judge` may not judge a thread; none when it may. The Claude bridge is refused, since it
+ * answers conversations, not one plain request; `named` says whether the criterion named the model
+ * or it is the thread's own.
  */
 export const judgeModelRefusal = (
-  thread: Option.Option<ModelRef>,
-  judge: ModelRef
+  judge: ModelRef,
+  named: boolean
 ): Option.Option<string> => {
-  if (judge.provider === BRIDGE_PROVIDER) {
-    return Option.some(
-      `${modelText(judge)} runs through the Claude bridge, which cannot answer a judge's one request. Name a model served by another provider, such as an opencode-go model.`
-    );
+  if (judge.provider !== BRIDGE_PROVIDER) {
+    return Option.none();
   }
 
-  return Option.flatMap(thread, (worker) => {
-    if (
-      worker.provider === judge.provider &&
-      worker.modelId === judge.modelId
-    ) {
-      return Option.some(
-        `${modelText(judge)} is the thread's own model, and a model does not judge its own work. Name a model of another family.`
-      );
-    }
-
-    return sameFamily(worker, judge)
-      ? Option.some(
-          `${modelText(judge)} is of the same family as the thread's model ${modelText(worker)}. A model judge must be of another family; name one (for example an opencode-go model of another vendor).`
-        )
-      : Option.none();
-  });
+  return Option.some(
+    named
+      ? `${modelText(judge)} runs through the Claude bridge, which cannot answer a judge's one request. Name a model served by another provider (call models to see them), such as an opencode-go model.`
+      : `This thread runs on ${modelText(judge)}, through the Claude bridge, which cannot answer a judge's one request, so a model judge cannot run on the thread's own model. Name a model served by another provider (call models to see them), such as an opencode-go model.`
+  );
 };
 
 /** What the judge is asked to decide. */

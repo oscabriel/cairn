@@ -71,7 +71,7 @@ export const SPAWN_TOOL = "subagent_spawn";
 /**
  * Where one child stands, as its row shows it. Before any child: `go` while its brief waits for
  * Go, `declined`, `expired` or `cancelled` once the brief ended without one, and `unstarted` once
- * Go's start told the parent it started nothing (a role, budget, workspace or brain room refused
+ * Go's start told the parent it started nothing (a model, budget, workspace or brain room refused
  * it). A started child's live
  * states come from its own row (`threadStatus`); at rest, from its latest settlement: `done`,
  * `failed` or `stopped`.

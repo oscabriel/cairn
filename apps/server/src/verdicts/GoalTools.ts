@@ -4,8 +4,9 @@
 //
 // - `goal_criteria` writes a `criteria` approval (`call-<task id>`, so a rerun finds it) and returns
 //   at once: the user binds the criteria by accepting it, in the answering commit
-//   (`Verdicts.criteriaAnswered`), never the model. It refuses a model judge that does not resolve
-//   or shares the thread model's family. It always asks, whatever the thread's mode.
+//   (`Verdicts.criteriaAnswered`), never the model. It refuses a model judge that cannot run: a
+//   named model that is not ready, or the Claude bridge, named or as the thread's own model, which
+//   a judge naming none runs on (ADR 0043). It always asks, whatever the thread's mode.
 // - `goal_check {criterion}` creates the judge run in one commit that also indexes it under the
 //   tool's task in `cairn.judge-runs`, so a rerun of the tool finds its run, and a criterion whose
 //   run is still going is not queued again. It returns "queued", never a verdict. Without a
@@ -14,6 +15,7 @@
 // A subagent's work is judged by its brief's `doneWhen`, so both tools refuse in a child: goals
 // live on the threads the user talks to, the project thread first among them (2026-10-29).
 
+import type { ModelRef } from "@cairn/protocol/Models";
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
@@ -38,7 +40,7 @@ import {
 import { GoalDoc, judgeState, JudgeRunsDoc, NO_GOAL } from "./GoalDocs.ts";
 import { judgeRunId, judgeRunTask } from "./JudgeRun.ts";
 import type { JudgeFaults, JudgeModels } from "./JudgeRun.ts";
-import { judgeModelRefusal } from "./ModelJudge.ts";
+import { judgeModelRefusal, judgeSpecOf } from "./ModelJudge.ts";
 import { MAX_CRITERIA } from "./Verdicts.ts";
 
 /** The extension's name in pi-durable's registry. */
@@ -80,7 +82,7 @@ const criteriaParameters = Type.Object({
         [Type.Literal("command"), Type.Literal("user"), Type.Literal("model")],
         {
           description:
-            "command: a command whose exit code decides; user: the user marks it; model: a model of another family reads the transcript.",
+            "command: a command whose exit code decides; user: the user marks it; model: a model reads the transcript (this thread's own unless model names another).",
         }
       ),
       argv: Type.Optional(
@@ -110,7 +112,7 @@ const criteriaParameters = Type.Object({
       model: Type.Optional(
         Type.String({
           description:
-            "model judges: a role such as @judge, or provider/modelId, of another family than this thread's model.",
+            "model judges: the model that judges, provider/modelId[:level]; call models to see what is available. Leave it out to judge on this thread's own model; name another only when the user asks for one.",
         })
       ),
       rubric: Type.Optional(
@@ -136,6 +138,37 @@ export const goalsExtension = (
   faults: JudgeFaults
 ): CairnExtension => {
   const JudgeRun = judgeRunTask(models, faults);
+
+  /**
+   * Why a model judge cannot run on a thread on `threadModel`; none when it can. A named model must
+   * be ready; one naming none (or a role, recorded before ADR 0043) runs on the thread's own model.
+   * Neither may be the Claude bridge.
+   */
+  const judgeCannotRun = async (
+    spec: string | null,
+    threadModel: Option.Option<ModelRef>
+  ): Promise<Option.Option<string>> => {
+    const named = judgeSpecOf(spec);
+
+    const resolved = await Option.match(named, {
+      onNone: async () =>
+        await Promise.resolve(
+          Option.match(threadModel, {
+            onNone: () =>
+              Result.fail(
+                "this thread runs on no model a judge can use. Name the judge's model as provider/modelId."
+              ),
+            onSome: (model) => Result.succeed(model),
+          })
+        ),
+      onSome: async (found) => await models.resolve(found),
+    });
+
+    return Result.match(resolved, {
+      onFailure: (why) => Option.some(why),
+      onSuccess: (model) => judgeModelRefusal(model, Option.isSome(named)),
+    });
+  };
 
   const check = defineTool({
     name: GOAL_CHECK_TOOL,
@@ -184,17 +217,11 @@ export const goalsExtension = (
       }
 
       if (criterion.judge.kind === "model") {
-        const resolved = await models.resolve(criterion.judge.spec);
-
-        if (Result.isFailure(resolved)) {
-          return text(`${criterion.id}: ${resolved.failure}`, true);
-        }
-
         const agent = await api.agent(context);
 
-        const refusal = judgeModelRefusal(
-          Option.fromUndefinedOr(agent.model),
-          resolved.success
+        const refusal = await judgeCannotRun(
+          criterion.judge.spec,
+          Option.fromUndefinedOr(agent.model)
         );
 
         if (Option.isSome(refusal)) {
@@ -285,21 +312,17 @@ export const goalsExtension = (
           continue;
         }
 
-        // oxlint-disable-next-line no-await-in-loop -- one role at a time, refusing at the first
-        const resolved = await models.resolve(proposal.judge.spec);
-        const at = `criteria[${String(index)}].model`;
-
-        if (Result.isFailure(resolved)) {
-          return text(`${at}: ${resolved.failure}`, true);
-        }
-
-        const refusal = judgeModelRefusal(
-          Option.fromUndefinedOr(agent.model),
-          resolved.success
+        // oxlint-disable-next-line no-await-in-loop -- one judge at a time, refusing at the first
+        const refusal = await judgeCannotRun(
+          proposal.judge.spec,
+          Option.fromUndefinedOr(agent.model)
         );
 
         if (Option.isSome(refusal)) {
-          return text(`${at}: ${refusal.value}`, true);
+          return text(
+            `criteria[${String(index)}].model: ${refusal.value}`,
+            true
+          );
         }
       }
 

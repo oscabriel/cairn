@@ -8,7 +8,7 @@
 // coarse pointer, an emulated soft keyboard) and at 1,440 px. Each check prints one line; the run
 // ends with one JSON line. No model provider is called.
 //
-//   node judges/surfaces.ts [--only card-approval,card-question,brief-go,brief-go-back,brief-go-unbound]
+//   node judges/surfaces.ts [--only card-approval,card-question,brief-go,brief-go-back,brief-go-unready]
 //                           [--width 390,1440] [--broken slot|double|advance|undo|nocheck]
 //                           [--out <dir>]
 //
@@ -29,21 +29,21 @@
 //                  3 s window, and the model reads both answers, numbered; a second question
 //                  declined with a reason sends one answer and the model reads the reason.
 //
-// Checks (6B, the brief card and Go; ADR 0026, 0030, 0035):
-//   brief-go          a `subagent_spawn` brief naming `@worker` shows its words (Do, Why, Runs on
-//                     with the model `roles.check` resolved) with Send back, Decline and Go, in the
-//                     composer's slot at 390 (44 px targets) and above the composer at 1,440. The
-//                     brain restarts while the card waits: the page reconnects, the card still
-//                     shows and checks the role again. Then a second device opens it, and Go is
+// Checks (6B, the brief card and Go; ADR 0026, 0030, 0043):
+//   brief-go          a `subagent_spawn` brief naming `faux/scripted:medium` shows its words (Do,
+//                     Why, Runs on with the model `models.check` resolved) with Send back, Decline
+//                     and Go, in the composer's slot at 390 (44 px targets) and above the composer
+//                     at 1,440. The brain restarts while the card waits: the page reconnects, the
+//                     card still shows and checks the model again. Then a second device opens it, and Go is
 //                     tapped twice on the first while the second taps Go too: each device sends one
 //                     `thread.respond`, both cards close, and exactly one child starts (one new
 //                     thread in the store, one subagent row for the brief).
 //   brief-go-back     Send back opens a notes field; it sends one `revise` with the notes, starts
 //                     no child, and the parent reads the notes once.
-//   brief-go-unbound  a brief naming `@reviewer`, a role the brain's table does not bind: Go is
-//                     blocked with "no role named @reviewer" and a link to the role table (44 px
-//                     targets at 390); a tap on Go sends nothing; the link opens the settings page
-//                     with the role table; back on the thread, Decline with a reason settles it.
+//   brief-go-unready  a brief naming `opencode-go/gpt-6-luna`, a model the brain's catalog does not
+//                     list: Go is blocked with "not in the model catalog" and Check again (44 px
+//                     targets at 390); a tap on Go sends nothing; Check again asks `models.check`
+//                     once more and Go stays blocked; Decline with a reason settles it.
 //
 // Broken controls, each planted in the page by this judge (never in the app), each of which must
 // make the check it names fail:
@@ -52,8 +52,8 @@
 //            brief-go-back);
 //   advance  the 200 ms pause fires at once (card-question);
 //   undo     the 3 s undo window fires at once (card-question);
-//   nocheck  every `roles.check` frame is dropped, so no role is ever checked (brief-go,
-//            brief-go-unbound).
+//   nocheck  every `models.check` frame is dropped, so no model is ever checked (brief-go,
+//            brief-go-unready).
 // Exits 0 when every check passed; a broken control's run exits 1 when it failed rightly, and the
 // JSON line names the failing checks.
 
@@ -69,10 +69,9 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import { startCairn } from "./fixtures/parity/CairnApp.ts";
 import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
 import {
-  BOUND_ROLE,
-  BRIEF_ROLES,
   briefBrain,
-  UNBOUND_ROLE,
+  READY_MODEL,
+  UNREADY_MODEL,
 } from "./fixtures/surfaces/BriefBrain.ts";
 import { cardBrain } from "./fixtures/surfaces/CardBrain.ts";
 
@@ -215,11 +214,11 @@ const PLANT_DOUBLE = `
   };
 `;
 
-// Drops every `roles.check` frame, so the card never hears what a role resolves to.
+// Drops every `models.check` frame, so the card never hears whether a model is ready.
 const PLANT_NOCHECK = `
   const send = WebSocket.prototype.send;
   WebSocket.prototype.send = function (data) {
-    if (!String(data).includes("roles.check")) send.call(this, data);
+    if (!String(data).includes("models.check")) send.call(this, data);
   };
 `;
 
@@ -278,7 +277,7 @@ const newDevice = async (
 const editor = (page: Page) =>
   page.locator('[data-testid="composer-editor"]').first();
 
-/** A page and the `thread.respond` and `roles.check` frames it sent, with the time each left. */
+/** A page and the `thread.respond` and `models.check` frames it sent, with the time each left. */
 interface Device {
   readonly page: Page;
   readonly responds: Array<number>;
@@ -299,7 +298,7 @@ const openThread = async (
         responds.push(Date.now());
       }
 
-      if (String(payload).includes("roles.check")) {
+      if (String(payload).includes("models.check")) {
         checks.push(Date.now());
       }
     });
@@ -869,9 +868,9 @@ const parentRead = (page: Page, words: string) =>
     hasText: `Parent read: ${words}`,
   });
 
-/** Sends the parent "brief <role> <tag>" and waits for its brief on the card. */
-const proposeBrief = async (page: Page, role: string, tag: string) => {
-  await send(page, `brief ${role} ${tag}`);
+/** Sends the parent "brief <model> <tag>" and waits for its brief on the card. */
+const proposeBrief = async (page: Page, model: string, tag: string) => {
+  await send(page, `brief ${model} ${tag}`);
   await card(page)
     .filter({ hasText: `Count the files ${tag}` })
     .waitFor({ state: "visible", timeout: 15_000 });
@@ -894,9 +893,9 @@ const briefGo = async (
   try {
     const a = await openThread(contextA, url);
 
-    await proposeBrief(a.page, BOUND_ROLE, tag);
+    await proposeBrief(a.page, READY_MODEL, tag);
 
-    // The brief's words and what its role runs on, checked as it showed.
+    // The brief's words and the model it runs on, checked as it showed.
     expect(
       await waitLive(a.page, "go", 10_000),
       `Go never took a click (the card says ${JSON.stringify(await cardLines(a.page))})`
@@ -906,7 +905,7 @@ const briefGo = async (
 
     expect(
       lines.includes("DoCount the TypeScript files under src") &&
-        lines.includes(`Runs on${BOUND_ROLE}: faux/scripted at medium`),
+        lines.includes("Runs onfaux/scripted at medium"),
       `the card says ${JSON.stringify(lines)}`
     );
     expect(
@@ -931,7 +930,7 @@ const briefGo = async (
 
     expect(
       rechecked === 1,
-      "the card did not check the role again after the brain restarted"
+      "the card did not check the model again after the brain restarted"
     );
     expect(
       await waitLive(a.page, "go", 15_000),
@@ -1001,7 +1000,7 @@ const briefGo = async (
       "brief-go",
       width,
       true,
-      `words and runs-on shown; restart: card kept, role checked again; Go twice and a second device's Go sent 1 and 1 frames; 1 child started`
+      `words and runs-on shown; restart: card kept, model checked again; Go twice and a second device's Go sent 1 and 1 frames; 1 child started`
     );
   } catch (error) {
     await keepScreens("brief-go", width, [contextA, contextB]);
@@ -1032,7 +1031,7 @@ const briefBack = async (
     const device = await openThread(context, url);
     const { page } = device;
 
-    await proposeBrief(page, BOUND_ROLE, tag);
+    await proposeBrief(page, READY_MODEL, tag);
 
     const threadsBefore = app.threadCount();
     const before = device.responds.length;
@@ -1099,20 +1098,20 @@ const briefBack = async (
   }
 };
 
-const briefUnbound = async (
+const briefUnready = async (
   browser: Browser,
   app: CairnApp,
   url: string,
   width: number
 ) => {
   const context = await newDevice(browser, width);
-  const tag = `unbound-${width}`;
+  const tag = `unready-${width}`;
 
   try {
     const device = await openThread(context, url);
     const { page } = device;
 
-    await proposeBrief(page, UNBOUND_ROLE, tag);
+    await proposeBrief(page, UNREADY_MODEL, tag);
 
     const blocked = card(page).locator(
       '[data-testid="request-card-go-blocked"]'
@@ -1123,10 +1122,12 @@ const briefUnbound = async (
     const reason = (await blocked.textContent()) ?? "";
 
     expect(
-      reason.includes(`no role named ${UNBOUND_ROLE} is in the role table`),
+      reason.includes(
+        `${UNREADY_MODEL} is not ready, as it is not in the model catalog`
+      ),
       `the card says ${JSON.stringify(reason)}`
     );
-    expect(!(await isLive(page, "go")), "Go takes a click on an unbound role");
+    expect(!(await isLive(page, "go")), "Go takes a click on an unready model");
     checkSlot(width, await slotGeometry(page));
 
     const threadsBefore = app.threadCount();
@@ -1139,38 +1140,40 @@ const briefUnbound = async (
       `a tap on the blocked Go sent ${device.responds.length - before} frames`
     );
 
-    // The way to the role table, and back.
-    await action(page, "role-table").click();
-    await page.waitForURL((found) => found.pathname === "/settings", {
-      timeout: 10_000,
-    });
-    await page
-      .locator('[data-testid="settings-roles"]')
-      .waitFor({ state: "visible", timeout: 10_000 });
+    // Check again asks once more, and the model is still not ready.
+    const checksBefore = device.checks.length;
 
-    await page.goBack();
-    await card(page)
-      .filter({ hasText: `Count the files ${tag}` })
-      .waitFor({ state: "visible", timeout: 15_000 });
+    await action(page, "check-models").click();
+
+    const rechecked = await waitForCount(
+      async () =>
+        await Promise.resolve(Math.min(device.checks.length - checksBefore, 1)),
+      1,
+      10_000
+    );
+
+    expect(rechecked === 1, "Check again sent no models.check");
+    await blocked.waitFor({ state: "visible", timeout: 10_000 });
+    expect(!(await isLive(page, "go")), "Go took a click after Check again");
 
     // Decline with a reason settles it, so the next check starts from an empty card.
     await action(page, "decline").click();
-    await card(page).locator("textarea").fill("no reviewer role yet");
+    await card(page).locator("textarea").fill("that model is not set up yet");
     await action(page, "confirm-decline").click();
     await card(page)
       .filter({ hasText: `Count the files ${tag}` })
       .waitFor({ state: "hidden", timeout: 10_000 });
 
     record(
-      "brief-go-unbound",
+      "brief-go-unready",
       width,
       true,
-      `blocked: ${JSON.stringify(reason)}; a tap on Go sent nothing; the role table opened; Decline settled it`
+      `blocked: ${JSON.stringify(reason)}; a tap on Go sent nothing; Check again checked once more and stayed blocked; Decline settled it`
     );
   } catch (error) {
-    await keepScreens("brief-go-unbound", width, [context]);
+    await keepScreens("brief-go-unready", width, [context]);
     record(
-      "brief-go-unbound",
+      "brief-go-unready",
       width,
       false,
       error instanceof CheckFailedError
@@ -1190,7 +1193,7 @@ const nextUrl = (app: CairnApp): string => {
 
 const CARD_CHECKS = ["card-approval", "card-question"];
 
-const BRIEF_CHECKS = ["brief-go", "brief-go-back", "brief-go-unbound"];
+const BRIEF_CHECKS = ["brief-go", "brief-go-back", "brief-go-unready"];
 
 const browser = await chromium.launch();
 
@@ -1220,7 +1223,7 @@ try {
   if (BRIEF_CHECKS.some(wanted)) {
     const app = await startCairn(
       { projectTitle: "Brief judge", threadTitle: "Brief card", entries: [] },
-      { brain: briefBrain, roles: BRIEF_ROLES }
+      { brain: briefBrain }
     );
 
     try {
@@ -1233,8 +1236,8 @@ try {
           await briefBack(browser, app, nextUrl(app), width);
         }
 
-        if (wanted("brief-go-unbound")) {
-          await briefUnbound(browser, app, nextUrl(app), width);
+        if (wanted("brief-go-unready")) {
+          await briefUnready(browser, app, nextUrl(app), width);
         }
       }
     } finally {

@@ -16,11 +16,11 @@ import * as Ids from "@cairn/protocol/Ids";
 import * as JsonSchema from "@cairn/protocol/JsonSchema";
 import * as Launch from "@cairn/protocol/Launch";
 import * as Models from "@cairn/protocol/Models";
+import * as ModelSpecs from "@cairn/protocol/ModelSpecs";
 import * as Policy from "@cairn/protocol/Policy";
 import * as Projects from "@cairn/protocol/Projects";
 import * as Push from "@cairn/protocol/Push";
 import * as Reach from "@cairn/protocol/Reach";
-import * as Roles from "@cairn/protocol/Roles";
 import * as Rpc from "@cairn/protocol/Rpc";
 import * as Settings from "@cairn/protocol/Settings";
 import * as Shell from "@cairn/protocol/Shell";
@@ -50,11 +50,11 @@ const MODULES = {
   JsonSchema,
   Launch,
   Models,
+  ModelSpecs,
   Policy,
   Projects,
   Push,
   Reach,
-  Roles,
   Rpc,
   Settings,
   Shell,
@@ -91,8 +91,8 @@ const NOT_STATUSES = {
   ArtifactKind: "file or folder, fixed at publish",
   PortalArms: "where a portal's process runs, a placement",
   PortalStopReason: "why a portal stopped, a reason beside `PortalState`",
-  ModelFamily: "a model's maker, for the different-family rule",
-  RoleSkipReason: "why a candidate model was passed over, a reason",
+  ModelUnready: "why a named model cannot take a child now, a reason",
+  ModelCheckFailure: "why a model spec did not resolve, a reason",
   PriceBasis: "how a dollar figure relates to a bill, a label",
   RelationshipToParent: "how a row relates to its parent, a kind",
   SubagentStopPolicy: "a stop option",
@@ -103,9 +103,7 @@ const NOT_STATUSES = {
   "LoginProgress.reason": "why a login failed, a reason",
   "Decider.why": "why the system decided a record, a reason",
   "ApprovalRecord.run": "the effect sandwich's mark, read by the boot repair",
-  "ResolvedRole.via": "which binding a role resolved through",
   "RecipeSummary.source": "where a recipe was found",
-  "RoleCheck.resolution.reason": "why a role spec did not resolve, a reason",
 } as const;
 
 const isLiteralUnion = (

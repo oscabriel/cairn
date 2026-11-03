@@ -17,7 +17,7 @@
 //   the abort mark before it waits, so a `kill -9` after the mark still stops the task on the next
 //   life, and nothing reruns (the probe's `mark-kill`).
 // - Abort polling. `abortTask` waits for the aborted tool's invocation to end, so a node tool that
-//   waits on something deaf to its signal (a role resolve, a judge's hold) keeps the stop pending.
+//   waits on something deaf to its signal (a model check, a judge's hold) keeps the stop pending.
 //   Every such wait in a node tool goes through `untilStopped`, and each tool checks
 //   `throwIfStopped` between its steps.
 //

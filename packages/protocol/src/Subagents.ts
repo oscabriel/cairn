@@ -20,6 +20,7 @@ import {
   TrimmedNonEmptyString,
 } from "./Ids.ts";
 import { ModelRef } from "./Models.ts";
+import { ModelSpec, ResolvedModel } from "./ModelSpecs.ts";
 import {
   ApprovalPayload,
   BriefWorkspace,
@@ -29,7 +30,6 @@ import {
   RuntimeRequestKind,
   WakeMode,
 } from "./Policy.ts";
-import { ResolvedRole, RoleSpec } from "./Roles.ts";
 
 /** How deep subagents may nest under a thread the user opened (ADR 0028), fixed until measured. */
 export const MAX_SUBAGENT_DEPTH = 2;
@@ -180,12 +180,13 @@ export const ChildWorktree = Schema.Struct({
 export type ChildWorktree = typeof ChildWorktree.Type;
 
 /**
- * What the dispatch resolved (ADR 0035): the role the brief named, the model it ran on, and the
- * card's preview when the table moved while the brief waited.
+ * What the dispatch resolved: the model the brief named (null for its parent's, ADR 0043), the
+ * model the child runs on for life, and the card's preview when it differs.
  */
 export const DispatchRecord = Schema.Struct({
-  spec: Schema.NullOr(RoleSpec),
-  resolved: ResolvedRole,
+  /** A record written before ADR 0043 may hold a role name here (`@worker`). */
+  spec: Schema.NullOr(ModelSpec),
+  resolved: ResolvedModel,
   /** The model the brief card showed, when it differs from `resolved`. */
   previewed: Schema.NullOr(ModelRef),
   dispatchedAt: EpochMillis,

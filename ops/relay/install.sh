@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh [--check]: switch the stdio relay unit cairn-bridges from spikes/5-stdio-bridges to ops/relay
-# (ADR 0014). Ports stay 3775 (Chrome's CDP, loopback) and 3776 (the gateway, docker bridge), and the
-# unit keeps KillMode=control-group.
+# (ADR 0014). The port stays 3776 (the gateway, docker bridge), and the unit keeps
+# KillMode=control-group.
 #
 #   --check  changes nothing: verifies the unit, then diffs it and the rendered gateway config against
 #            the unit and config that are running now, and says what the switch-over would do.

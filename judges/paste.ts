@@ -44,9 +44,9 @@ import type { ModelListing, ModelRef } from "@cairn/protocol/Models";
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { NodeServices } from "@effect/platform-node";
 import { DateTime, Effect, Option, Schema } from "effect";
-import { chromium } from "playwright";
-import type { Browser, CDPSession, Page } from "playwright";
 
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, CDPSession, Page } from "./lib/Browser.ts";
 import * as Events from "./lib/Events.ts";
 import type { BrainEvent } from "./lib/Events.ts";
 import type { LocalApp } from "./load.ts";

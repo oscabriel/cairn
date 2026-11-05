@@ -1,12 +1,12 @@
 // The Executor tools judge (plan 3D, at integration): against the deployed brain, through the
 // browser's wire, on a cheap real model (the deployed brain has no faux provider), the model reaches
-// Executor's apps from a code mode script. Four threads in the project of this repo:
+// Executor's apps from a code mode script. Three threads in the project of this repo:
 //
 //   node judges/tools.ts [--base https://code.gneiss.run] [--model <provider>/<modelId>]
 //                        [--repo oscabriel/cairn] [--project ~/Developer/projects/cairn] [--keep]
 //
-// - Three directed turns, one per server: `convex` (a status read), `playwright` (a navigate) and
-//   `github` (a read of this repo). Each passes when a committed code mode script called
+// - Two directed turns, one per server: `convex` (a status read) and `github` (a read of this
+//   repo). Each passes when a committed code mode script called
 //   `tools.executor_call` with a path on that server, the call ended well inside a script that did
 //   not fail, and the final answer quotes a value from the script's result that the prompt does not
 //   already hold.
@@ -78,19 +78,13 @@ const TURNS: ReadonlyArray<Turn> = [
     app: Option.some("convex"),
   },
   {
-    name: "playwright",
-    prompt: `Through Executor's playwright app, navigate a browser to https://example.com and tell me the page title. ${RULES}`,
-    app: Option.some("playwright"),
-  },
-  {
     name: "github",
     prompt: `Through Executor's github app, read this project's repository (${values.repo}) and tell me its default branch. ${RULES}`,
     app: Option.some("github"),
   },
   {
     name: "open",
-    prompt:
-      "What MCP tools can you reach? Find one that can open a web page, and use it to tell me the title of https://example.com. Quote the exact value you got.",
+    prompt: `What MCP tools can you reach? Find one that can read a GitHub repository, and use it to tell me when ${values.repo} was last pushed to. Quote the exact value you got.`,
     app: Option.none(),
   },
 ];

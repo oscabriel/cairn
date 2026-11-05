@@ -57,8 +57,6 @@ import {
   Stream,
 } from "effect";
 import { HttpServer } from "effect/http";
-import { chromium } from "playwright";
-import type { Page } from "playwright";
 
 import { ServerConfig } from "../apps/server/src/Config.ts";
 import { PushMessage } from "../apps/server/src/push/Notifier.ts";
@@ -74,6 +72,8 @@ import {
   testThreadId,
 } from "../apps/server/src/shell/ShellTestKit.ts";
 import { requestBrain } from "./fixtures/push/RequestBrain.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Page } from "./lib/Browser.ts";
 import { startFakePushService } from "./lib/FakePushService.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
 
@@ -143,8 +143,8 @@ const decodeManifest = Schema.decodeUnknownOption(
 );
 
 /** The manifest's install fields, and the status of every icon it names. */
-const checkManifest = async (page: Page, origin: string) => {
-  const response = await page.request.get(`${origin}/manifest.webmanifest`);
+const checkManifest = async (origin: string) => {
+  const response = await fetch(`${origin}/manifest.webmanifest`);
   const manifest = decodeManifest(await response.text());
 
   if (Option.isNone(manifest)) {
@@ -155,9 +155,9 @@ const checkManifest = async (page: Page, origin: string) => {
   const iconStatuses: Array<number> = [];
 
   for (const icon of icons) {
-    const iconResponse = await page.request.get(`${origin}${icon.src}`);
+    const iconResponse = await fetch(`${origin}${icon.src}`);
 
-    iconStatuses.push(iconResponse.status());
+    iconStatuses.push(iconResponse.status);
   }
 
   const manifestOk =
@@ -174,8 +174,8 @@ const checkManifest = async (page: Page, origin: string) => {
 };
 
 /** True when the served worker has no `fetch` listener (ADR 0021). */
-const checkNoFetchListener = async (page: Page, origin: string) => {
-  const response = await page.request.get(`${origin}/sw.js`);
+const checkNoFetchListener = async (origin: string) => {
+  const response = await fetch(`${origin}/sw.js`);
   const text = await response.text();
 
   return (
@@ -306,12 +306,9 @@ const pwaCheck = async () => {
         .locator('link[rel="manifest"]')
         .getAttribute("href");
 
-      const { iconStatuses, manifestOk } = await checkManifest(
-        page,
-        dev.origin
-      );
+      const { iconStatuses, manifestOk } = await checkManifest(dev.origin);
 
-      const noFetchListener = await checkNoFetchListener(page, dev.origin);
+      const noFetchListener = await checkNoFetchListener(dev.origin);
       const { registeredBy, registration } = await awaitRegistration(page);
 
       const scopeOk =

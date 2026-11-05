@@ -16,9 +16,8 @@ import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
-import { chromium } from "playwright";
-
 import { DEV_DEMO_THREAD_ID } from "../apps/server/src/DevDemo.ts";
+import { chromium } from "./lib/Browser.ts";
 
 const { values } = parseArgs({
   options: {

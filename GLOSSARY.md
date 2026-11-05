@@ -420,6 +420,8 @@ _Avoid_: e2e, test suite (for the recipe)
 
 **Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a model judge or verifier on another model, or the user.
 
+**Browser driver**: `judges/lib/Browser.ts`, what every browser judge drives system Chromium with over the DevTools protocol (ADR 0044). Chained locators with auto-waiting and strict single-match behaviour, real key events, touch, routes, screenshots, and nothing no judge calls.
+
 _Avoid_: reviewer (alone), checker
 
 **Attachment**: A file the user adds to a message: an image, a document or text. The brain prepares it when it is uploaded, and the model gets it as content.

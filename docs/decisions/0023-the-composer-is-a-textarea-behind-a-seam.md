@@ -15,3 +15,5 @@ Gate: `judges/typing.ts` on the real client: no dropped keystroke at 20 characte
 - WebKit at phone width (Playwright WebKit on the MacBook, macOS 27.2, against commit 2c91fc1): 1,200 of 1,200 keys in 60 s at 20 a second while 484 rows streamed, match, 1 late key (0 ms), menus path, skill and slash-command ok, no errors.
 - IME composition was judged in Chromium only: Playwright's WebKit has no way to drive a composition, so `typing.ts` reports `ime: skipped` there. Accepted on that basis; typing on the iPhone itself (wizard stages 4 and 8) is the real-device check.
 - `judges/load.ts --browser webkit` against the deployed brain on the same run: lan p50 358 ms, p95 390 ms, 6 requests before interactive.
+
+Amended on 2026-11-04 by ADR 0044: the WebKit tier leaves automated judging, and the user tests on a real iPhone by hand. `judges/typing.ts` and `judges/load.ts` no longer have WebKit branches. The results above state what was true then.

@@ -1,26 +1,21 @@
 // The composer typing judge (ADR 0023's gate): type into the real client's composer at a fixed rate
 // while a thread with a long history streams under it, then compare what arrived with what was sent.
 //
-//   node judges/typing.ts [chromium|webkit] [--seconds 60] [--cps 20] [--throttle 4] [--busy 10]
+//   node judges/typing.ts [chromium] [--seconds 60] [--cps 20] [--throttle 4] [--busy 10]
 //                         [--mobile] [--history 500] [--url <thread page url>]
-//                         [--connect <ws endpoint>] [--port <vite port>]
 //
 // Without --url the judge starts everything itself, on ephemeral loopback ports: a brain from the
 // app's own layers with the scripted harness (a thread seeded with --history entries, then a new
 // exchange every 250 ms for the length of the run), and the web client's Vite server proxying to it.
 // Each key goes out on its own schedule, so a slow frame cannot make the typist wait for the app.
-// Then three more checks on the same page: IME composition of 日本 (through CDP on Chromium, through
-// composition events on WebKit), and the menu case (typing `@`, `/` and `$` opens each of the
-// composer's menus, which the judge waits for, and typing on through them loses no character).
+// Then three more checks on the same page: IME composition of 日本 (through CDP), and the menu case
+// (typing `@`, `/` and `$` opens each of the composer's menus, which the judge waits for, and typing
+// on through them loses no character).
 // While the typist types, Foldkit's slow-view warnings (dev builds, views over 16 ms) are counted
 // and summed, with the Message tags that triggered them, as `slowViews`.
 // Prints one JSON line and exits 0 when nothing was dropped or reordered, IME and the menu case are
 // intact, the transcript streamed (at least half the judge's own exchanges landed, `stream: ok`),
 // and the page logged no error.
-// `--connect` drives a browser another machine serves (`npx playwright@<this version> run-server`),
-// so the WebKit tier runs from the Beelink against the MacBook's WebKit, which cannot start on this
-// host (no system libraries, no sudo). `--port` fixes the Vite port, so an SSH reverse tunnel
-// (`ssh -R <port>:127.0.0.1:<port> <mac>`) gives that browser the same loopback origin.
 /* oxlint-disable no-await-in-loop -- the typist sends one key after another, on purpose */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -44,7 +39,6 @@ import {
   References,
   Schedule,
 } from "effect";
-import { chromium, devices, webkit } from "playwright";
 import { createServer as createViteServer } from "vite";
 
 import {
@@ -75,6 +69,7 @@ import {
 } from "../apps/server/src/shell/ShellCommands.ts";
 import { GoalBook } from "../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../apps/server/src/workflows/WorkflowStop.ts";
+import { chromium, IPHONE_15 } from "./lib/Browser.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -86,17 +81,20 @@ const { values, positionals } = parseArgs({
     history: { type: "string", default: "500" },
     mobile: { type: "boolean", default: false },
     url: { type: "string" },
-    connect: { type: "string" },
-    port: { type: "string" },
   },
 });
 
 /** The views typed into: the app's frame (look track L7; the only views since plan 7A). */
 const ui = "next";
 
+// WebKit is judged by hand on the user's iPhone (ADR 0044); Chromium is the one engine here.
 const [browserName = "chromium"] = positionals;
 
-const isWebkit = browserName === "webkit";
+if (browserName !== "chromium") {
+  throw new Error(
+    `judges/typing.ts drives Chromium only (ADR 0044), not ${browserName}`
+  );
+}
 
 const seconds = Number(values.seconds);
 
@@ -108,7 +106,7 @@ const busy = Number(values.busy);
 
 const historyEntries = Number(values.history);
 
-const mobile = values.mobile || isWebkit;
+const { mobile } = values;
 
 const root = path.join(import.meta.dirname, "..");
 
@@ -260,9 +258,7 @@ const startApp = async (): Promise<{
   readonly url: string;
   readonly stop: () => Promise<void>;
 }> => {
-  const vitePort =
-    values.port === undefined ? await freePort() : Number(values.port);
-
+  const vitePort = await freePort();
   const brainPort = await freePort();
   const origin = `http://${LOOPBACK}:${vitePort}`;
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "cairn-typing-"));
@@ -353,16 +349,10 @@ const app =
     ? await startApp()
     : { url: values.url, stop: stopNothing };
 
-const browserType = isWebkit ? webkit : chromium;
-
-const browser = await (values.connect === undefined
-  ? browserType.launch()
-  : browserType.connect(values.connect));
-
-const { defaultBrowserType: _ignored, ...phone } = devices["iPhone 15"] ?? {};
+const browser = await chromium.launch();
 
 const context = await browser.newContext(
-  mobile ? phone : { viewport: { width: 1440, height: 900 } }
+  mobile ? IPHONE_15 : { viewport: { width: 1440, height: 900 } }
 );
 
 const page = await context.newPage();
@@ -428,7 +418,7 @@ await page.waitForFunction(
 
 const historyRows = await entries.count();
 
-if (throttle > 1 && !isWebkit) {
+if (throttle > 1) {
   const cdp = await context.newCDPSession(page);
 
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle });
@@ -502,11 +492,8 @@ for (let index = 0; index < Math.max(text.length, typed.length); index += 1) {
   }
 }
 
-// IME: compose a word through the browser's composition events, between plain keys. Chromium
-// composes through CDP's IME; WebKit has no such protocol, so there the page gets the events a
-// Japanese IME sends (compositionstart, then each step's compositionupdate and composing input
-// over the composed range, compositionend, the committing input) and the judge reads what stays.
-const imeVia = isWebkit ? "composition events" : "cdp";
+// IME: compose a word through CDP's IME, between plain keys.
+const imeVia = "cdp";
 
 const IME_STEPS = ["n", "に", "にほ", "にほん", "日本"] as const;
 
@@ -516,73 +503,18 @@ await page.waitForTimeout(200);
 
 await page.keyboard.type("ab");
 
-if (isWebkit) {
-  await composer.evaluate((element) => {
-    element.dispatchEvent(
-      new CompositionEvent("compositionstart", { bubbles: true, data: "" })
-    );
+const cdp = await context.newCDPSession(page);
+
+for (const step of IME_STEPS) {
+  await cdp.send("Input.imeSetComposition", {
+    text: step,
+    selectionStart: step.length,
+    selectionEnd: step.length,
   });
-
-  let composed = "";
-
-  for (const step of IME_STEPS) {
-    await composer.evaluate(
-      (element, { next, previous }) => {
-        if (!(element instanceof HTMLTextAreaElement)) {
-          return;
-        }
-
-        const end = element.selectionStart;
-
-        element.dispatchEvent(
-          new CompositionEvent("compositionupdate", {
-            bubbles: true,
-            data: next,
-          })
-        );
-        element.setRangeText(next, end - previous.length, end, "end");
-        element.dispatchEvent(
-          new InputEvent("input", {
-            bubbles: true,
-            data: next,
-            inputType: "insertCompositionText",
-            isComposing: true,
-          })
-        );
-      },
-      { next: step, previous: composed }
-    );
-    composed = step;
-    await page.waitForTimeout(60);
-  }
-
-  await composer.evaluate((element, data) => {
-    element.dispatchEvent(
-      new CompositionEvent("compositionend", { bubbles: true, data })
-    );
-    element.dispatchEvent(
-      new InputEvent("input", {
-        bubbles: true,
-        data,
-        inputType: "insertFromComposition",
-        isComposing: false,
-      })
-    );
-  }, composed);
-} else {
-  const cdp = await context.newCDPSession(page);
-
-  for (const step of IME_STEPS) {
-    await cdp.send("Input.imeSetComposition", {
-      text: step,
-      selectionStart: step.length,
-      selectionEnd: step.length,
-    });
-    await page.waitForTimeout(60);
-  }
-
-  await cdp.send("Input.insertText", { text: "日本" });
+  await page.waitForTimeout(60);
 }
+
+await cdp.send("Input.insertText", { text: "日本" });
 
 await page.keyboard.type("cd");
 

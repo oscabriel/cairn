@@ -1,7 +1,7 @@
 // The load judge (plan 4B, notes/edges.md "Load"): cold loads in Chromium, each in a fresh context
 // with an empty cache, timed from navigation start to the page's own `cairn:interactive` mark.
 //
-//   node judges/load.ts [<url>] [--local] [--browser chromium|webkit] [--profile lan|4g|both]
+//   node judges/load.ts [<url>] [--local] [--profile lan|4g|both]
 //                       [--runs 20] [--headed]
 //   node judges/load.ts --collect --device phone [--log <events.log> | --unit cairn] [--runs 3]
 //
@@ -14,10 +14,6 @@
 // (`index.html`, entry JS, CSS, service worker registration, `/ws`), and the control fails: five
 // loads whose `index.html` is held 1,500 ms (the plan's `?slow=1500`, done here by the judge's own
 // route) must miss the p50.
-//
-// `--browser webkit` (ADR 0023's WebKit tier, run on the MacBook) loads in Playwright's WebKit,
-// which has no CDP: each fresh context still starts with an empty cache, and only the `lan` profile
-// runs (a `4g` request is dropped and the line says so in `profilesSkipped`).
 //
 // `--collect` reads the brain's log instead of loading anything: the phone's `load.report` lines,
 // judged by `judges/phone-report.ts` (three cold loads under 1,000 ms each, DERP runs excluded).
@@ -47,10 +43,10 @@ import { RootWorkspace } from "@cairn/protocol/Launch";
 import type { ModelRef } from "@cairn/protocol/Models";
 import { NodeServices } from "@effect/platform-node";
 import { Effect, Option, Predicate, Schema } from "effect";
-import { chromium, webkit } from "playwright";
-import type { Browser, Page } from "playwright";
 import { build } from "vite";
 
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, Page } from "./lib/Browser.ts";
 import * as Events from "./lib/Events.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
 import { loadVerdict, PHONE_AGENT, readLog } from "./phone-report.ts";
@@ -453,27 +449,22 @@ const coldLoad = async (
   browser: Browser,
   url: string,
   profile: "lan" | "4g",
-  holdDocumentMs: number,
-  cdp = true
+  holdDocumentMs: number
 ): Promise<LoadSample> => {
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
-    serviceWorkers: "allow",
   });
 
   try {
     const page: Page = await context.newPage();
 
-    // WebKit has no CDP; its fresh context's cache is empty anyway.
-    if (cdp) {
-      const session = await context.newCDPSession(page);
+    const session = await context.newCDPSession(page);
 
-      await session.send("Network.enable");
-      await session.send("Network.setCacheDisabled", { cacheDisabled: true });
+    await session.send("Network.enable");
+    await session.send("Network.setCacheDisabled", { cacheDisabled: true });
 
-      if (profile === "4g") {
-        await session.send("Network.emulateNetworkConditions", FOUR_G);
-      }
+    if (profile === "4g") {
+      await session.send("Network.emulateNetworkConditions", FOUR_G);
     }
 
     let sockets = 0;
@@ -509,7 +500,7 @@ const coldLoad = async (
         const [navigation] = performance.getEntriesByType("navigation");
 
         // The service worker's script and the page's own load report start as the app comes up,
-        // never ahead of it; WebKit stamps them a few ms before the mark where Chromium does not.
+        // never ahead of it.
         const resources = performance
           .getEntriesByType("resource")
           .filter((entry) => entry.startTime <= at)
@@ -613,7 +604,6 @@ const main = async () => {
     options: {
       local: { type: "boolean", default: false },
       profile: { type: "string", default: "both" },
-      browser: { type: "string", default: "chromium" },
       runs: { type: "string" },
       headed: { type: "boolean", default: false },
       collect: { type: "boolean", default: false },
@@ -656,23 +646,14 @@ const main = async () => {
 
     const url = base;
 
-    const isWebkit = values.browser === "webkit";
-
-    const browser = await (isWebkit ? webkit : chromium).launch({
-      headless: !values.headed,
-    });
+    const browser = await chromium.launch({ headless: !values.headed });
 
     try {
-      const asked = (
+      const profiles = (
         values.profile === "both" ? ["lan", "4g"] : [values.profile]
       ).filter((profile): profile is "lan" | "4g" =>
         ["lan", "4g"].includes(profile)
       );
-
-      // Shaping needs CDP, so WebKit runs the unshaped profile only.
-      const profiles = isWebkit
-        ? asked.filter((profile) => profile === "lan")
-        : asked;
 
       const results: Record<string, ReturnType<typeof summarize>> = {};
 
@@ -681,7 +662,7 @@ const main = async () => {
 
         for (let run = 0; run < runs; run += 1) {
           // oxlint-disable-next-line no-await-in-loop -- cold loads one after another, on purpose
-          samples.push(await coldLoad(browser, url, profile, 0, !isWebkit));
+          samples.push(await coldLoad(browser, url, profile, 0));
         }
 
         results[profile] = summarize(samples);
@@ -692,7 +673,7 @@ const main = async () => {
       for (let run = 0; run < CONTROL_RUNS; run += 1) {
         controlSamples.push(
           // oxlint-disable-next-line no-await-in-loop -- cold loads one after another, on purpose
-          await coldLoad(browser, url, "lan", CONTROL_DELAY_MS, !isWebkit)
+          await coldLoad(browser, url, "lan", CONTROL_DELAY_MS)
         );
       }
 
@@ -715,10 +696,7 @@ const main = async () => {
       process.stdout.write(
         `${JSON.stringify({
           url,
-          browser: isWebkit ? "webkit" : "chromium",
-          profilesSkipped: asked.filter(
-            (profile) => !profiles.includes(profile)
-          ),
+          browser: "chromium",
           local: values.local,
           pass,
           profiles: results,

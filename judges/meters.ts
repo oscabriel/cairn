@@ -37,9 +37,6 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page } from "playwright";
-
 import {
   BRIDGE_THREAD,
   LUNA_THREAD,
@@ -47,6 +44,8 @@ import {
   UNPRICED_MODEL,
   UNPRICED_THREAD,
 } from "./fixtures/meters/MetersApp.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
 
 const BROKEN_CONTROLS = ["zero"] as const;
 

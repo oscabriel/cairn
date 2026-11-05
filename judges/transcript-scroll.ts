@@ -91,11 +91,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
 import { Option, Predicate, Schema } from "effect";
-import { chromium } from "playwright";
-import type { Page } from "playwright";
 import { createServer as createViteServer } from "vite";
 
 import { BrokenControl } from "../apps/web/src/timeline/list/Model.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Page } from "./lib/Browser.ts";
 
 const { values } = parseArgs({
   options: {
@@ -1256,7 +1256,9 @@ const main = async () => {
 
   const errors: Array<string> = [];
 
-  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+  });
   await page.addInitScript(PAGE_SCRIPT);
 
   const result = await run(page, port);

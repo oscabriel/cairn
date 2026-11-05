@@ -17,11 +17,11 @@
 // The allowance, and why. A cell is 16 by 16 CSS px (32 by 32 device px at scale 2) and the
 // allowance is 0 levels: a change passes only when it moves no cell's rounded mean at all, such
 // as a few antialiased glyph-edge pixels shifting by a few levels. Measured on 2026-10-29: the
-// rendering noise is nil (three full captures, 18 of 18 shots byte-identical; Playwright, and so
-// its Chromium, is pinned at 1.64.1), while the smallest real changes moved some cell by 1 or 2
+// rendering noise is nil (three full captures, 18 of 18 shots byte-identical on one pinned Chromium
+// build), while the smallest real changes moved some cell by 1 or 2
 // levels and no more: the whole main column 1 px lower (thread at 390 px: 15 cells, at most 1
 // level; at 1,440 px: 19 cells, at most 2) and the faint ink 7 levels lighter (thread at 390 px:
-// 30 cells, at most 2). Any allowance of 1 level or more would let those through. A Playwright
+// 30 cells, at most 2). Any allowance of 1 level or more would let those through. A system Chromium
 // upgrade that rasterizes text differently is reported as drift: republish the round and ask.
 // Pure: no browser and no files, so judges/look.test.ts can judge it with fixtures.
 

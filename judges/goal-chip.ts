@@ -49,8 +49,6 @@ import { parseArgs } from "node:util";
 import { ThreadId } from "@cairn/protocol/Ids";
 import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { Effect, Option, Predicate } from "effect";
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page } from "playwright";
 
 import {
   PARITY_THREAD_ID,
@@ -66,6 +64,8 @@ import {
   runCommandJudge,
   seedGoal,
 } from "./fixtures/surfaces/GoalBrain.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
 
 const BROKEN_CONTROLS = ["mark", "count", "state"] as const;

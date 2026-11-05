@@ -54,8 +54,7 @@
 //                        summary line (its file count and line counts, no file rows) inside the
 //                        transcript's column; its line opens the file list; nothing opens the diff
 //                        panel, which is off (no header toggle, no "Open diff");
-//   soft-keyboard    WebKit at iPhone width (Chromium's iPhone emulation where WebKit cannot run,
-//                    named in the result), with the soft keyboard emulated through a shrunken
+//   soft-keyboard    Chromium's iPhone emulation, with the soft keyboard emulated through a shrunken
 //                    `visualViewport`: Enter inserts a newline and sends nothing.
 //
 // The shell (look track L6): the seed makes the parity thread its project's project thread, gives
@@ -105,8 +104,6 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { Effect, Predicate, Schema } from "effect";
-import { chromium, devices, webkit } from "playwright";
-import type { Browser, BrowserContextOptions, Page } from "playwright";
 
 import {
   importT3Thread,
@@ -121,6 +118,8 @@ import {
 } from "./fixtures/parity/CairnApp.ts";
 import type { FooterBlockState } from "./fixtures/parity/Landmarks.ts";
 import { LandmarkFile, readLandmarks } from "./fixtures/parity/Landmarks.ts";
+import { chromium, IPHONE_15 } from "./lib/Browser.ts";
+import type { Browser, BrowserContextOptions, Page } from "./lib/Browser.ts";
 
 const root = path.join(import.meta.dirname, "..");
 
@@ -1911,26 +1910,11 @@ try {
   await chromiumBrowser.close();
 }
 
-/** WebKit when this host can run it (the MacBook can, the Beelink lacks its libraries), else Chromium. */
-const phoneBrowser = async (): Promise<{
-  readonly browser: Browser;
-  readonly engine: string;
-}> => {
-  try {
-    return { browser: await webkit.launch(), engine: "webkit" };
-  } catch {
-    return { browser: await chromium.launch(), engine: "chromium" };
-  }
-};
-
 if (wanted("soft-keyboard")) {
-  const { browser: phone, engine } = await phoneBrowser();
-
-  const { defaultBrowserType: _ignored, ...iphone } =
-    devices["iPhone 15"] ?? {};
+  const phone = await chromium.launch();
 
   try {
-    const context = await phone.newContext(iphone);
+    const context = await phone.newContext(IPHONE_15);
 
     // The soft keyboard, emulated: a visual viewport the judge can shrink, as iOS does.
     await context.addInitScript(() => {
@@ -1983,7 +1967,7 @@ if (wanted("soft-keyboard")) {
       record(
         "soft-keyboard",
         text === "one\ntwo",
-        `${engine}: keyboard flagged on ${flagged} element(s), editor ${JSON.stringify(text)}`
+        `chromium: keyboard flagged on ${flagged} element(s), editor ${JSON.stringify(text)}`
       );
     } finally {
       await context.close();

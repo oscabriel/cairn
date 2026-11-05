@@ -61,8 +61,6 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { Effect, Schema } from "effect";
-import { chromium } from "playwright";
-import type { Browser, BrowserContextOptions, Page } from "playwright";
 
 import {
   importT3Thread,
@@ -78,6 +76,8 @@ import {
 import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
 import { clearGoal, seedGoal } from "./fixtures/surfaces/GoalBrain.ts";
 import { launchBrain } from "./fixtures/workflows/LaunchBrain.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, BrowserContextOptions, Page } from "./lib/Browser.ts";
 import {
   ALLOWANCE,
   CELL_CSS_PX,
@@ -668,7 +668,9 @@ const openState = async (
   const page = await context.newPage();
   const errors: Array<string> = [];
 
-  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+  });
 
   const url = new URL(state.path(reach), reach.app.origin);
 

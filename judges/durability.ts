@@ -122,14 +122,14 @@ import {
 } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { RpcClient, RpcClientError, RpcGroup } from "effect/rpc";
-import { chromium } from "playwright";
-import type { Browser } from "playwright";
 
 import { projectIdFor } from "../apps/server/src/shell/ShellCommands.ts";
 import * as Page from "./fixtures/durability/Page.ts";
 import * as Proxy from "./fixtures/durability/Proxy.ts";
 import * as Upload from "./fixtures/durability/Upload.ts";
 import { SCRIPT_PREFIX } from "./fixtures/JudgeModel.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser } from "./lib/Browser.ts";
 import * as DeployedUnit from "./lib/DeployedUnit.ts";
 import * as Events from "./lib/Events.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";

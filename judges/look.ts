@@ -127,6 +127,9 @@ const FIRST_ROUND = 2;
 /** Every page's clock: a fixed instant a few days after the seeded thread's last run. */
 const FIXED_TIME = Date.parse("2026-10-20T09:00:00Z");
 
+/** What a shot shows for the brain's real probe time: the label round 10 froze. */
+const CHECKED_LABEL = "Checked Tue 5:17 PM";
+
 /** The device scale every shot is taken at. */
 const SCALE = 2;
 
@@ -506,6 +509,20 @@ const STATES: ReadonlyArray<LookState> = [
         .locator('[data-settings-row="models"]')
         .first()
         .waitFor({ state: "visible", timeout: 10_000 });
+      // "Checked <day and time>" is the brain's real probe time, which the page's fixed clock cannot
+      // reach, so it would differ on every capture. The one label a shot may not take from the run.
+      await page.evaluate((label) => {
+        const walker = document.createTreeWalker(
+          document.body,
+          NodeFilter.SHOW_TEXT
+        );
+
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (node.textContent?.startsWith("Checked ") === true) {
+            node.textContent = label;
+          }
+        }
+      }, CHECKED_LABEL);
       // The page's own scroller, never an ancestor: `scrollIntoView` would scroll a clipped one.
       await page.locator("[data-settings-page-scroll]").evaluate((scroller) => {
         const models = scroller.querySelector("#models");

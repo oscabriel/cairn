@@ -45,8 +45,6 @@ import { approvalRecordsOf } from "@cairn/client-logic/PendingRequests";
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
 import { APPROVALS_DOCUMENT } from "@cairn/protocol/Policy";
 import { Effect, Option, Predicate, Stream } from "effect";
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page } from "playwright";
 
 import { PARITY_THREAD_ID, startCairn } from "./fixtures/parity/CairnApp.ts";
 import {
@@ -56,6 +54,8 @@ import {
   SPAWNED,
   workBrain,
 } from "./fixtures/subagents/WorkBrain.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
 
 const BROKEN_CONTROLS = ["stop", "state", "move", "count"] as const;

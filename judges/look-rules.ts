@@ -42,10 +42,10 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { chromium } from "playwright";
-import type { Browser, Page } from "playwright";
 import { createServer as createViteServer } from "vite";
 
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, Page } from "./lib/Browser.ts";
 import {
   HIT_TARGET_PX,
   LOOPBACK,
@@ -320,7 +320,9 @@ const openPage = async (
   const page = await context.newPage();
   const errors: Array<string> = [];
 
-  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+  });
   await page.goto(`http://${LOOPBACK}:${String(port)}/__look?theme=${theme}`);
   await page.waitForSelector(
     `[data-look-catalogue] [data-ui="next"][data-theme="${theme}"]`

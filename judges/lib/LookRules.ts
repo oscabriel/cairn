@@ -2,7 +2,7 @@
 // ADR 0040), run in a Chromium page: the rules a pixel baseline would have implied for new screens.
 // judges/look-rules.ts holds the look catalogue at `/__look` to them, and judges/look.ts holds
 // each named state of the real `next` client to them. Each rule that reads the page is a
-// self-contained function, because Playwright sends its source into the page:
+// self-contained function, because the browser driver sends its source into the page:
 //   touch     every control (a button, link, field, menu item, `[role=button]` or `[data-action]`)
 //             is at least 44 by 44 px, the box a finger hits (WCAG 2.5.5; the tokens'
 //             `--hit-target`); judged at 390 px;
@@ -25,7 +25,8 @@ import { once } from "node:events";
 import { createServer as createNetServer } from "node:net";
 
 import { Predicate, Schema } from "effect";
-import type { Page } from "playwright";
+
+import type { Page } from "./Browser.ts";
 
 /* oxlint-disable no-await-in-loop -- a rule drives the page one step after another, on purpose */
 
@@ -89,7 +90,7 @@ export const freePort = async (): Promise<number> => {
 };
 
 // ---------------------------------------------------------------------------------------------
-// The rules, run in the page. Each is a self-contained function: Playwright sends its source.
+// The rules, run in the page. Each is a self-contained function: the driver sends its source.
 
 /** Controls a finger hits, and every element smaller than the target. */
 export const touchRule = (target: number): RuleRun => {

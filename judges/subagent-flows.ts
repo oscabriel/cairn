@@ -64,8 +64,6 @@ import {
 import type { SubagentRecord } from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
 import { Effect, Exit, Option, Predicate, Schema, Stream } from "effect";
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Locator, Page } from "playwright";
 
 import { PARITY_THREAD_ID, startCairn } from "./fixtures/parity/CairnApp.ts";
 import {
@@ -78,6 +76,8 @@ import {
   STEER,
   STEERED,
 } from "./fixtures/subagents/FlowsBrain.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, BrowserContext, Locator, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
 
 const BROKEN_CONTROLS = ["steer", "stop", "card"] as const;

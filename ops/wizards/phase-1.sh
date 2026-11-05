@@ -202,7 +202,6 @@ RUNS=$GATE/runs
 mkdir -p "$RUNS"
 VERDICTS=$RUNS/wizard.txt
 PHONE=iphone-serpentine
-MAC=mbp-14
 # Re-run from a later stage with `ops/wizards/phase-1.sh <stage>`.
 FROM_STAGE=${1:-1}
 want() { (( $1 >= FROM_STAGE )) || { _STAGE_INDEX=$((_STAGE_INDEX + 1)); return 1; }; }
@@ -220,7 +219,7 @@ judge() {
   return "$status"
 }
 
-banner "Cairn phase 1: the phone, the MacBook and your look"
+banner "Cairn phase 1: the phone and your look"
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
 if want 1; then
@@ -328,31 +327,14 @@ fi
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
 if want 5; then
-  stage "MacBook: WebKit typing and load (ADR 0023)"
-  if [[ -s $RUNS/webkit-typing.jsonl && -s $RUNS/webkit-load.jsonl ]]; then
-    say "Claude already ran both WebKit judges on the MacBook over SSH:"
-    note "$RUNS/webkit-typing.jsonl and $RUNS/webkit-load.jsonl"
-    say "Nothing to do here."
+  stage "iPhone: the composer in WebKit, by hand (ADR 0044)"
+  say "No automated WebKit run any more: you are the judge on a real iPhone. Open the deployed"
+  say "app there, type a few sentences into a thread's composer while it streams, then load"
+  say "the app cold once."
+  if confirm "Did the typing land whole and the app load quickly"; then
+    record 5 "iphone=ok"
   else
-    say "Playwright's WebKit cannot start on the Beelink, and the MacBook was asleep"
-    say "when Claude tried it over SSH. On the MacBook, in a checkout of this repo at the"
-    say "deployed commit ($(git -C ~/Developer/projects/cairn-live rev-parse --short HEAD)), run:"
-    say ""
-    say "    ${BOLD}pnpm install --frozen-lockfile && pnpm exec playwright install webkit${RESET}"
-    say "    ${BOLD}node judges/typing.ts webkit --mobile --seconds 60 | tee webkit-typing.jsonl${RESET}"
-    say "    ${BOLD}node judges/load.ts --browser webkit | tee webkit-load.jsonl${RESET}"
-    say ""
-    note "Or just wake the MacBook and tell Claude; it runs them itself over SSH."
-    if confirm "Copy the two result files from $MAC now (scp)"; then
-      ask MAC_REPO "The repo's path on the MacBook (Enter for Developer/projects/cairn):"
-      MAC_REPO=${MAC_REPO:-Developer/projects/cairn}
-      write_env MAC_REPO "$MAC_REPO"
-      scp "$MAC:$MAC_REPO/webkit-typing.jsonl" "$MAC:$MAC_REPO/webkit-load.jsonl" "$RUNS/" &&
-        record 5 "webkit=copied" ||
-        SKIPPED+=("stage 5: copy webkit-typing.jsonl and webkit-load.jsonl into $RUNS")
-    else
-      SKIPPED+=("stage 5: the WebKit runs on the MacBook")
-    fi
+    SKIPPED+=("stage 5: the iPhone check did not pass; note what went wrong")
   fi
   pause
 fi

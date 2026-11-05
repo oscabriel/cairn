@@ -8,16 +8,6 @@
   "sessionTimeout": 600000,
   "apiKeyFile": "@HOME@/.config/cairn/bridges.key",
   "mcpServers": {
-    "playwright": {
-      "path": "/playwright",
-      "command": "@RELAY@/node_modules/.bin/playwright-mcp",
-      "args": [
-        "--cdp-endpoint",
-        "http://127.0.0.1:3775",
-        "--output-dir",
-        "@HOME@/.local/state/cairn/playwright"
-      ]
-    },
     "convex": {
       "path": "/convex",
       "command": "@RELAY@/node_modules/.bin/convex",

@@ -63,9 +63,6 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page } from "playwright";
-
 import { startCairn } from "./fixtures/parity/CairnApp.ts";
 import type { CairnApp } from "./fixtures/parity/CairnApp.ts";
 import {
@@ -74,6 +71,8 @@ import {
   UNREADY_MODEL,
 } from "./fixtures/surfaces/BriefBrain.ts";
 import { cardBrain } from "./fixtures/surfaces/CardBrain.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
 
 const BROKEN_CONTROLS = [
   "slot",
@@ -509,7 +508,7 @@ const cardApproval = async (browser: Browser, url: string, width: number) => {
     const sentA = a.responds.length;
     const sentB = b.responds.length;
 
-    // Both clicks land before either answer comes back: a click through Playwright would wait
+    // Both clicks land before either answer comes back: a click through the browser driver would wait
     // for a button the other device's answer already took away.
     await action(a.page, "approve").waitFor({ state: "visible" });
     await action(b.page, "confirm-decline").waitFor({ state: "visible" });

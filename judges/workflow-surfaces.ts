@@ -48,9 +48,6 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Page } from "playwright";
-
 import { startCairn } from "./fixtures/parity/CairnApp.ts";
 import { READY_MODEL, UNREADY_MODEL } from "./fixtures/surfaces/BriefBrain.ts";
 import {
@@ -62,6 +59,8 @@ import {
   READERS,
   release,
 } from "./fixtures/workflows/LaunchBrain.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
 
 const BROKEN_CONTROLS = ["double", "sample", "stop"] as const;
 

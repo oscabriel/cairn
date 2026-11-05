@@ -40,8 +40,6 @@ import {
   References,
   Schema,
 } from "effect";
-import { chromium } from "playwright";
-import type { Page, Route, WebSocketRoute } from "playwright";
 import { createServer as createViteServer } from "vite";
 
 import {
@@ -72,6 +70,8 @@ import {
 } from "../apps/server/src/shell/ShellCommands.ts";
 import { GoalBook } from "../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../apps/server/src/workflows/WorkflowStop.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Page, Route, WebSocketRoute } from "./lib/Browser.ts";
 
 const { values } = parseArgs({
   options: {

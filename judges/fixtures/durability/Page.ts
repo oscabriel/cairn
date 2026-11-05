@@ -1,11 +1,11 @@
 // The durability judge's second client (notes/edges.md, "Durability"): the real web client in a
-// Playwright Chromium page at the judge brain's origin, behind `Proxy.ts`. The page exposes
+// Chromium page at the judge brain's origin, behind `Proxy.ts`. The page exposes
 // nothing for testing; the judge reads what a person would see. Its text is the thread's timeline
 // (`[data-testid=timeline]`) and the sidebar's thread rows (`[data-testid=shell-thread-row]`), and
 // its oracle is the same text from a fresh page opened once the brain is quiet, so both sides are
 // rendered by the same renderer from the same build.
 
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "../../lib/Browser.ts";
 
 const TIMELINE = '[data-testid="timeline"]';
 
@@ -35,14 +35,18 @@ export const openThread = async (
   const page = await context.newPage();
   const errors: Array<string> = [];
 
-  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+  });
 
   await page.goto(`${origin}/t/${threadId}`, { waitUntil: "load" });
   await page.waitForSelector(TIMELINE, { timeout: 30_000 });
 
   const reloads: Array<string> = [];
 
-  page.on("load", () => reloads.push(page.url()));
+  page.on("load", () => {
+    reloads.push(page.url());
+  });
 
   return { context, page, errors, reloads };
 };

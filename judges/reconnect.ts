@@ -41,8 +41,9 @@ import {
 } from "effect";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError } from "effect/rpc";
-import { chromium } from "playwright";
 import { createServer as createViteServer } from "vite";
+
+import { chromium } from "./lib/Browser.ts";
 
 const { values } = parseArgs({
   options: {

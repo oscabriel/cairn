@@ -5,7 +5,7 @@
 // files were deleted at the cutover, plan 7A).
 
 import { Schema } from "effect";
-import type { Page } from "playwright";
+import type { Page } from "../../lib/Browser.ts";
 
 /** A rectangle in CSS pixels of the viewport. */
 export const Rect = Schema.Struct({

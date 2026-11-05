@@ -323,9 +323,9 @@ fi
 # ── 8 ─────────────────────────────────────────────────────────────────────
 if want 8; then
   stage "Firewall: let Executor reach the stdio relay"
-  say "The stdio MCP servers (convex, playwright) run behind the stdio relay on the docker bridge,"
+  say "The stdio MCP server (convex) runs behind the stdio relay on the docker bridge,"
   say "172.17.0.1:3776. ufw drops incoming traffic by default, so the Executor container"
-  say "can't reach them until one rule allows that port from docker0 only. It needs sudo."
+  say "can't reach it until one rule allows that port from docker0 only. It needs sudo."
   step "Run this, or let the wizard run it:"
   say "    ${BOLD}sudo ufw allow in on docker0 to 172.17.0.1 port 3776 proto tcp comment 'Cairn stdio relay for Executor'${RESET}"
   if confirm "Run it now?"; then
@@ -362,7 +362,7 @@ if want 9; then
 fi
 
 if want 10; then
-  stage "S2: the composer in WebKit, and your parity verdict"
+  stage "S2: the composer on your iPhone, and your parity verdict"
   S2=spikes/2-foldkit
   if ! curl -fsS -o /dev/null http://127.0.0.1:3774/; then
     say "The spike isn't running. Start it in another terminal on the Beelink and leave it:"
@@ -371,18 +371,7 @@ if want 10; then
   fi
   S2_KEY=$(cat "$S2/runs/page.key")
   S2_URL="https://cairn-s2.gneiss.run/?key=$S2_KEY"
-  say "First the typing test in WebKit at iPhone size. On the ${BOLD}MacBook${RESET}, run:"
-  say ""
-  printf '    %s\n' "mkdir -p /tmp/cairn-typing && cd /tmp/cairn-typing && npm init -y >/dev/null \\"
-  printf '    %s\n' "  && npm i playwright@1.64.1 >/dev/null && npx playwright install webkit \\"
-  printf '    %s\n' "  && curl -fsSo typing.mts 'https://cairn-s2.gneiss.run/typing.ts?key=$S2_KEY' \\"
-  printf '    %s\n' "  && npx -y tsx typing.mts '$S2_URL' webkit"
-  say ""
-  say "It types for a minute, then prints one line of JSON."
-  ask S2_WEBKIT_RESULT "Paste that line:"
-  printf '%s\n' "$S2_WEBKIT_RESULT" >>"$S2/runs/typing-macbook.jsonl"
-  say ""
-  say "Next, IME on the iPhone: open this link there, switch to a Japanese (kana) or"
+  say "First, IME on the iPhone (WebKit is judged by hand, ADR 0044): open this link there, switch to a Japanese (kana) or"
   say "Chinese keyboard, and type a few composed words into the composer while the text"
   say "above it streams. They should land whole, with nothing doubled or lost:"
   say "    ${BOLD}https://cairn-s2.gneiss.run/?stream=1&key=$S2_KEY${RESET}"

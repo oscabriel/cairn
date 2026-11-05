@@ -54,8 +54,6 @@ import type { ApprovalRecord } from "@cairn/protocol/Policy";
 import { APPROVALS_DOCUMENT } from "@cairn/protocol/Policy";
 import type { Entry } from "@cairn/protocol/Thread";
 import { Effect, Exit, Option, Predicate, Schema, Stream } from "effect";
-import { chromium } from "playwright";
-import type { Browser, BrowserContext, Locator, Page } from "playwright";
 
 import { PARITY_THREAD_ID, startCairn } from "./fixtures/parity/CairnApp.ts";
 import {
@@ -65,6 +63,8 @@ import {
   releaseParent,
   rollupBrain,
 } from "./fixtures/subagents/RollupBrain.ts";
+import { chromium } from "./lib/Browser.ts";
+import type { Browser, BrowserContext, Locator, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
 
 const BROKEN_CONTROLS = ["banner", "lit"] as const;

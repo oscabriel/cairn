@@ -98,6 +98,8 @@ export class UsageFeed extends Context.Service<
    * out). Needs `BridgeProvider`, `PiModelSource` and the `HarnessSeam`.
    */
   static readonly layer = Layer.merge(UsageFeed.layerNoDeps, CodexSignals).pipe(
-    Layer.provide(CodexUsage.layer.pipe(Layer.provide(CodexAccess.layerIfHeld)))
+    Layer.provide(
+      CodexUsage.layer.pipe(Layer.provideMerge(CodexAccess.layerIfHeld))
+    )
   );
 }

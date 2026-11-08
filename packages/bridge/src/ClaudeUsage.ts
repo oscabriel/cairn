@@ -204,7 +204,11 @@ const scopedWindow = (
   exhausted: false,
 });
 
-/** Merges windows by id: an update replaces the window it names and leaves the others, in first-seen order. */
+/**
+ * Merges windows by id: an update replaces the window it names unless the known one was observed
+ * later (a probe that started before a rejection never undoes it), and leaves the others, in
+ * first-seen order.
+ */
 export const mergeWindows = (
   current: ReadonlyArray<UsageWindow>,
   update: ReadonlyArray<UsageWindow>
@@ -212,7 +216,11 @@ export const mergeWindows = (
   const byId = new Map(current.map((window) => [window.id, window] as const));
 
   for (const window of update) {
-    byId.set(window.id, window);
+    const known = byId.get(window.id);
+
+    if (known === undefined || known.observedAt <= window.observedAt) {
+      byId.set(window.id, window);
+    }
   }
 
   return [...byId.values()];
@@ -847,6 +855,8 @@ export class ClaudeUsage extends Context.Service<
       const inFlight = yield* Ref.make(Option.none<Deferred.Deferred<true>>());
       const lastStartedAt = yield* Ref.make(Option.none<number>());
       const lastTurnAt = yield* Ref.make(Option.none<number>());
+      // When a turn was last rejected: a probe that started before it cannot lift the limit.
+      const lastRejectedAt = yield* Ref.make(Option.none<number>());
       const watchers = yield* Ref.make(0);
 
       const probeOptions = {
@@ -875,7 +885,8 @@ export class ClaudeUsage extends Context.Service<
                 failedProbe(
                   `timed out after ${Duration.toMillis(PROBE_TIMEOUT)} ms`
                 ),
-              onSome: (raw) => readProbe(raw, ended),
+              // Stamped when the CLI was asked, so a window an event reported since stays newer.
+              onSome: (raw) => readProbe(raw, started),
             }),
         });
 
@@ -883,8 +894,24 @@ export class ClaudeUsage extends Context.Service<
           yield* Ref.set(names, reading.names);
         }
 
-        const next = yield* SubscriptionRef.updateAndGet(ref, (current) =>
-          applyReading(current, reading, ended)
+        const rejectedSince = Option.exists(
+          yield* Ref.get(lastRejectedAt),
+          (at) => at > started
+        );
+
+        // A rejection marks the state limited until a later reading says otherwise, and this one
+        // was read before it.
+        const next = yield* SubscriptionRef.updateAndGet(
+          ref,
+          (current): ClaudeUsageReading => {
+            const applied = applyReading(current, reading, ended);
+
+            return rejectedSince &&
+              current.state === "limited" &&
+              applied.state === "ok"
+              ? { ...applied, state: "limited" }
+              : applied;
+          }
         );
 
         yield* Effect.logInfo("claude usage probe").pipe(
@@ -932,6 +959,23 @@ export class ClaudeUsage extends Context.Service<
       });
 
       const probeInBackground = Effect.asVoid(Effect.forkIn(probe, scope));
+
+      // A probe that starts after the one in flight, if any, ends: joining a probe that started
+      // earlier would read the windows from before whatever made the caller ask.
+      const probeAfterInFlight = Effect.asVoid(
+        Effect.forkIn(
+          Effect.gen(function* () {
+            const flight = yield* Ref.get(inFlight);
+
+            if (Option.isSome(flight)) {
+              yield* Deferred.await(flight.value);
+            }
+
+            yield* probe;
+          }),
+          scope
+        )
+      );
 
       const sinceLastProbe = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
@@ -1024,9 +1068,13 @@ export class ClaudeUsage extends Context.Service<
           applyEvent(current, info, known, now)
         );
 
+        if (info.status === "rejected") {
+          yield* Ref.set(lastRejectedAt, Option.some(now));
+        }
+
         // Once per rejection: the probe reads the windows around the spent one and when it resets.
         if (info.status === "rejected" && before.state !== "limited") {
-          yield* probeInBackground;
+          yield* probeAfterInFlight;
         }
       });
 

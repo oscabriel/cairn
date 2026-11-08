@@ -9,7 +9,8 @@
 //   multi-select pick toggles. The last question's advance, or Send, opens an undo window of
 //   `UNDO_MS` (3 s, Ultimate's undo bar) before `thread.respond`, so an answer taken back never
 //   reaches the brain. The answers are checked with `answersProblem` first, as the brain checks
-//   them.
+//   them. A window that ends while Cairn is reconnecting, or while another answer is in flight,
+//   leaves its answers due, and they go as soon as neither holds.
 // - Approve, Allow for this thread and Go answer at once; Decline (on every body, a question's
 //   too) opens a reason field first, and the reason (when there is one) reaches the model.
 // - A brief or a workflow's launch (6B, `BriefGo.ts`): the models it names are checked with
@@ -302,7 +303,10 @@ interface Answer {
   readonly answers: Option.Option<ReadonlyArray<CardAnswer>>;
 }
 
-/** Sends one answer, unless one is in flight or there is no thread. */
+/**
+ * Sends one answer, unless one is in flight or there is no thread. It closes the undo window only
+ * when the window holds this request's answers: another request's waiting answers stay due.
+ */
 const respond = (model: Model, answer: Answer): UpdateReturn => {
   if (Option.isSome(model.sending)) {
     return { model };
@@ -319,7 +323,11 @@ const respond = (model: Model, answer: Answer): UpdateReturn => {
                 ...sent,
                 [answer.approvalId]: answer.decision,
               }),
-              undo: () => Option.none(),
+              undo: (undo) =>
+                Option.filter(
+                  undo,
+                  (pending) => pending.approvalId !== answer.approvalId
+                ),
               failure: () => Option.none(),
             }),
             commands: [
@@ -342,6 +350,43 @@ const respond = (model: Model, answer: Answer): UpdateReturn => {
           },
   });
 };
+
+/** Runs `step` on `result`'s model, keeping both commands. */
+const andThen = (
+  result: UpdateReturn,
+  step: (model: Model) => UpdateReturn
+): UpdateReturn => {
+  const after = step(result.model);
+
+  return {
+    model: after.model,
+    commands: Array.appendAll(result.commands ?? [], after.commands ?? []),
+  };
+};
+
+/**
+ * Sends the answers whose undo window ended, once nothing holds them: a client to send with and no
+ * other answer in flight. Every transition that can lift a hold (an answer settling, the
+ * connection coming back) ends here, so a due window never waits on a timer that already fired.
+ */
+const sendDue = (model: Model): UpdateReturn =>
+  Option.match(
+    Option.filter(
+      model.undo,
+      (undo) =>
+        undo.state === "due" && model.hasClient && Option.isNone(model.sending)
+    ),
+    {
+      onNone: () => ({ model }),
+      onSome: (undo) =>
+        respond(model, {
+          approvalId: undo.approvalId,
+          decision: "accept",
+          reason: Option.none(),
+          answers: Option.some(undo.answers),
+        }),
+    }
+  );
 
 /** Opens the undo window over a question card's answers, when they are complete and fit. */
 const startSend = (model: Model, approvalId: ApprovalId): UpdateReturn =>
@@ -367,7 +412,13 @@ const startSend = (model: Model, approvalId: ApprovalId): UpdateReturn =>
                 return {
                   model: modifyFields(model, {
                     timer: () => timer,
-                    undo: () => Option.some({ approvalId, answers, timer }),
+                    undo: () =>
+                      Option.some({
+                        approvalId,
+                        answers,
+                        timer,
+                        state: "waiting" as const,
+                      }),
                     failure: () => Option.none(),
                   }),
                   commands: [WaitToSend({ approvalId, timer })],
@@ -655,22 +706,20 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
     ElapsedUndo: ({ approvalId, timer }) =>
-      Option.match(
-        Option.filter(
-          model.undo,
-          (undo) => undo.approvalId === approvalId && undo.timer === timer
-        ),
-        {
-          onNone: () => ({ model }),
-          onSome: (undo) =>
-            respond(model, {
-              approvalId,
-              decision: "accept",
-              reason: Option.none(),
-              answers: Option.some(undo.answers),
-            }),
-        }
-      ),
+      Option.exists(
+        model.undo,
+        (undo) => undo.approvalId === approvalId && undo.timer === timer
+      )
+        ? sendDue(
+            modifyFields(model, {
+              undo: (undo) =>
+                Option.map(undo, (pending) => ({
+                  ...pending,
+                  state: "due" as const,
+                })),
+            })
+          )
+        : { model },
     ClickedAccept: ({ approvalId, decision }) =>
       accept(model, approvalId, decision),
     ClickedDecline: ({ approvalId }) =>
@@ -744,45 +793,57 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         answers: Option.none(),
       });
     },
+    // An answer settles only the request in flight: one for a request the card let go of (another
+    // thread opened meanwhile) is the stream's to show.
     SucceededRespond: ({ approvalId }) => {
+      if (!Option.contains(model.sending, approvalId)) {
+        return { model };
+      }
+
       const stillPending = recordsOf(model.approvals).some(
         (record) => record.id === approvalId && record.status === "pending"
       );
 
-      // The next request shows now, so its models are asked about now.
-      return checkShown(
-        {
-          model: modifyFields(model, {
-            sending: () => Option.none(),
-            declining: (declining) =>
-              Option.filter(declining, (id) => id !== approvalId),
-            sendingBack: (sendingBack) =>
-              Option.filter(sendingBack, (id) => id !== approvalId),
-            answered: (answered) =>
-              stillPending && !answered.includes(approvalId)
-                ? [...answered, approvalId]
-                : answered,
-            shown: () =>
-              Option.map(
-                shownRequest({
-                  approvals: model.approvals,
-                  answered: stillPending
-                    ? [...model.answered, approvalId]
-                    : model.answered,
-                }),
-                (request) => request.record.id
-              ),
-          }),
-        },
-        false
+      // The next request shows now, so its models are asked about now; answers due go now.
+      return andThen(
+        checkShown(
+          {
+            model: modifyFields(model, {
+              sending: () => Option.none(),
+              declining: (declining) =>
+                Option.filter(declining, (id) => id !== approvalId),
+              sendingBack: (sendingBack) =>
+                Option.filter(sendingBack, (id) => id !== approvalId),
+              answered: (answered) =>
+                stillPending && !answered.includes(approvalId)
+                  ? [...answered, approvalId]
+                  : answered,
+              shown: () =>
+                Option.map(
+                  shownRequest({
+                    approvals: model.approvals,
+                    answered: stillPending
+                      ? [...model.answered, approvalId]
+                      : model.answered,
+                  }),
+                  (request) => request.record.id
+                ),
+            }),
+          },
+          false
+        ),
+        sendDue
       );
     },
-    FailedRespond: ({ message: text }) => ({
-      model: modifyFields(model, {
-        sending: () => Option.none(),
-        failure: () => Option.some(text),
-      }),
-    }),
+    FailedRespond: ({ approvalId, message: text }) =>
+      Option.contains(model.sending, approvalId)
+        ? andThen(
+            sendDue(modifyFields(model, { sending: () => Option.none() })),
+            (sent) => ({
+              model: modifyFields(sent, { failure: () => Option.some(text) }),
+            })
+          )
+        : { model },
     DismissedClosed: () => ({
       model: modifyFields(model, { closed: () => Option.none() }),
     }),
@@ -806,10 +867,16 @@ export const sameContext = (model: Model, context: CardContext): boolean =>
 export const inform = (model: Model, context: CardContext): InformReturn => {
   const sameThread = sameThreadId(model.threadId, context.threadId);
 
-  // The check generation carries over, so an answer to another thread's check is never taken.
+  // The check generation and the timer carry over, so an answer to another thread's check is never
+  // taken, and a pause or an undo window's wait from before the switch, which keeps running, never
+  // ends a later one.
   const base = sameThread
     ? model
-    : { ...initial, checkGeneration: model.checkGeneration };
+    : {
+        ...initial,
+        checkGeneration: model.checkGeneration,
+        timer: model.timer,
+      };
 
   const reconnected = sameThread && !model.hasClient && context.hasClient;
 
@@ -895,8 +962,9 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
       )
   );
 
+  // Answers whose window ended while Cairn was reconnecting go once it is back.
   return Update.withOutMessage(
-    checkShown({ model: next }, reconnected),
+    andThen(checkShown({ model: next }, reconnected), sendDue),
     Option.getOrUndefined(carried)
   );
 };

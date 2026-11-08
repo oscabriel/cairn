@@ -29,6 +29,7 @@ import { addProject, COMMIT_OPTIONS } from "../threads/ThreadsTestKit.ts";
 import {
   CheckpointCapture,
   CheckpointEntries,
+  CheckpointEntryError,
   checkpointRequestId,
   missedRunEnd,
   planEndTurn,
@@ -367,25 +368,39 @@ describe("Checkpoints with real git", () => {
   );
 });
 
-/** Records every entry write, as the harness would keep the first per request id. */
+/**
+ * Records every entry write, as the harness would keep the first per request id. While `lost` is
+ * true a write fails, as one cut off by a kill would.
+ */
 const recordedEntries = Effect.gen(function* () {
   const written = yield* Ref.make<
     ReadonlyArray<{ requestId: string; data: CheckpointEntryData }>
   >([]);
 
+  const lost = yield* Ref.make(false);
+
   const layer = Layer.succeed(
     CheckpointEntries,
     CheckpointEntries.of({
-      write: (_threadId, requestId, data) =>
-        Ref.update(written, (all) =>
-          all.some((found) => found.requestId === requestId)
-            ? all
-            : [...all, { requestId, data }]
-        ),
+      write: (threadId, requestId, data) =>
+        Effect.gen(function* () {
+          if (yield* Ref.get(lost)) {
+            return yield* new CheckpointEntryError({
+              message: "the brain went down before the entry landed",
+              threadId,
+            });
+          }
+
+          return yield* Ref.update(written, (all) =>
+            all.some((found) => found.requestId === requestId)
+              ? all
+              : [...all, { requestId, data }]
+          );
+        }),
     })
   );
 
-  return { written, layer };
+  return { written, lost, layer };
 });
 
 const threadIn = Effect.fn("test.threadIn")(function* (
@@ -418,13 +433,14 @@ const withCapture = <A, E, R>(
   body: (
     written: Ref.Ref<
       ReadonlyArray<{ requestId: string; data: CheckpointEntryData }>
-    >
+    >,
+    lost: Ref.Ref<boolean>
   ) => Effect.Effect<A, E, R>
 ) =>
   Effect.gen(function* () {
-    const { written, layer } = yield* recordedEntries;
+    const { written, lost, layer } = yield* recordedEntries;
 
-    return yield* body(written).pipe(
+    return yield* body(written, lost).pipe(
       Effect.provide(
         CheckpointCapture.layerNoDeps.pipe(
           Layer.provideMerge(Diffs.layerNoDeps),
@@ -729,6 +745,122 @@ describe("turn diffs and the capture service", () => {
         );
       })
     )
+  );
+  it.live(
+    "the boot repair writes the entry of an end checkpoint whose entry a kill lost",
+    () =>
+      withCapture(2_000_000, (written, lost) =>
+        Effect.gen(function* () {
+          const capture = yield* CheckpointCapture;
+          const checkpoints = yield* Checkpoints;
+          const fs = yield* FileSystem.FileSystem;
+          const rows = yield* ThreadRows;
+          const { repo } = yield* makeRepo();
+          const projectId = yield* addProject(repo);
+          const threadId = yield* threadIn(projectId, 6);
+
+          yield* capture.runStarted(threadId, "1");
+          yield* fs.writeFileString(path.join(repo, "a.txt"), "one\ntwo\n");
+
+          // The run ends and the projector commits it; the end ref lands, its entry does not.
+          const completedAt = yield* DateTime.now;
+          const row = yield* rows.get(threadId);
+
+          assert.isTrue(Option.isSome(row));
+
+          if (Option.isSome(row)) {
+            yield* rows.write({
+              ...row.value,
+              shell: {
+                ...row.value.shell,
+                latestRunCompletedAt: Option.some(completedAt),
+              },
+            });
+          }
+
+          yield* Ref.set(lost, true);
+          yield* capture.runEnded(threadId, "1", Option.some(9));
+          assert.deepStrictEqual(yield* Ref.get(written), []);
+
+          // The next boot.
+          yield* Ref.set(lost, false);
+          yield* capture.repair;
+
+          assert.deepStrictEqual(
+            (yield* checkpoints.list(repo, checkpointRefsOf(threadId))).map(
+              (found) => [found.turn, found.point]
+            ),
+            [
+              [0, Option.some("start")],
+              [1, Option.some("end")],
+            ]
+          );
+          assert.deepStrictEqual(
+            (yield* Ref.get(written)).map((found) => [
+              found.requestId,
+              found.data.files,
+            ]),
+            [
+              [
+                checkpointRequestId(threadId, 1),
+                [{ path: "a.txt", additions: 1, deletions: 0 }],
+              ],
+            ]
+          );
+        })
+      )
+  );
+});
+
+describe("the boot repair after a kill before the run end was projected", () => {
+  it.live(
+    "writes the entry of the end checkpoint a kill lost, though the run end was stamped after it",
+    () =>
+      withCapture(2_000_000, (written, lost) =>
+        Effect.gen(function* () {
+          const capture = yield* CheckpointCapture;
+          const fs = yield* FileSystem.FileSystem;
+          const rows = yield* ThreadRows;
+          const { repo } = yield* makeRepo();
+          const projectId = yield* addProject(repo);
+          const threadId = yield* threadIn(projectId, 7);
+
+          yield* capture.runStarted(threadId, "1");
+          yield* fs.writeFileString(path.join(repo, "a.txt"), "one\ntwo\n");
+
+          // The end ref lands, its entry does not, and the brain dies before the projector
+          // commits the run's end.
+          yield* Ref.set(lost, true);
+          yield* capture.runEnded(threadId, "1", Option.some(9));
+          assert.deepStrictEqual(yield* Ref.get(written), []);
+
+          // Boot 1 skips the thread (its run is still active); its reconcile stamps the run end
+          // with the boot's time, later than the end ref.
+          const stampedAt = DateTime.add(yield* DateTime.now, { seconds: 5 });
+          const row = yield* rows.get(threadId);
+
+          assert.isTrue(Option.isSome(row));
+
+          if (Option.isSome(row)) {
+            yield* rows.write({
+              ...row.value,
+              shell: {
+                ...row.value.shell,
+                latestRunCompletedAt: Option.some(stampedAt),
+              },
+            });
+          }
+
+          // Boot 2.
+          yield* Ref.set(lost, false);
+          yield* capture.repair;
+
+          assert.include(
+            (yield* Ref.get(written)).map((found) => found.requestId),
+            checkpointRequestId(threadId, 1)
+          );
+        })
+      )
   );
 });
 

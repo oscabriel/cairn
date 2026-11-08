@@ -4,6 +4,7 @@
 // reactor driven as the reactor host drives it: admission refuses past the line, each line fires
 // once, the stopper ends running nodes, a raise opens a new epoch, and a usage limit holds a node.
 
+import type { Envelope } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
@@ -32,10 +33,12 @@ import {
 } from "./WorkflowBudget.ts";
 import type { WorkflowBudgetPush } from "./WorkflowBudget.ts";
 import type { BudgetState, WorkflowItemState } from "./WorkflowDocs.ts";
-import { isWorkflowEnded, WorkflowsDoc } from "./WorkflowDocs.ts";
-import { BUDGET_STOP_TEXT } from "./WorkflowNodes.ts";
+import { isNodeEnded, isWorkflowEnded, WorkflowsDoc } from "./WorkflowDocs.ts";
+import { isNodeBrief } from "./WorkflowLaunch.ts";
+import { BUDGET_STOP_TEXT, CHILD_STOPPED_TEXT } from "./WorkflowNodes.ts";
 import { parkedWorkflowTasks } from "./WorkflowRepairs.ts";
 import {
+  ALT_MODEL,
   codemodeResultText,
   driveReactors,
   eventsOf,
@@ -322,8 +325,17 @@ const noticesOf = async (brain: KitBrain) =>
     );
   }, context);
 
+/** How a run's records are answered. */
+interface Answering {
+  /** Accept each raise: once the script's question is asked, or as soon as it is asked. */
+  readonly raise?: boolean | "at-once";
+  /** Accept each node's own brief once a raise was accepted. */
+  readonly briefsAfterRaise?: boolean;
+}
+
 /** Accepts each pending `approve` record, and each raise when `raise` is set. */
-const answer = async (brain: KitBrain, raise: boolean) => {
+const answer = async (brain: KitBrain, answering: Answering) => {
+  const raise = answering.raise !== undefined && answering.raise !== false;
   await brain.harness.commit(async (tx) => {
     const approvals = await tx.doc(Approvals, brain.root);
     const records = Object.values(approvals.items);
@@ -343,7 +355,12 @@ const answer = async (brain: KitBrain, raise: boolean) => {
       const due =
         record.status === "pending" &&
         ((record.tool === "approve" && (!raise || raised)) ||
-          (raise && asked && record.tool === RAISE_TOOL));
+          (raise &&
+            (asked || answering.raise === "at-once") &&
+            record.tool === RAISE_TOOL) ||
+          (answering.briefsAfterRaise === true &&
+            raised &&
+            isNodeBrief(record)));
 
       if (due) {
         record.status = "accepted";
@@ -364,15 +381,50 @@ const answer = async (brain: KitBrain, raise: boolean) => {
 const run = (
   body: string,
   budget: Budget,
-  options: { readonly raise?: boolean } = {}
+  options: Answering & {
+    /** Edits the granted envelope before it is frozen (a node outside it raises its own brief). */
+    readonly envelope?: (granted: Envelope) => Envelope;
+    /** Holds node `node` after its reserve until node `until` is seen held on a limit. */
+    readonly order?: { readonly node: string; readonly until: string };
+  } = {}
 ) =>
   Effect.gen(function* () {
     const effects: Array<WorkEffect> = [];
     const pushes: Array<WorkflowBudgetPush> = [];
+    const opened = { brain: Option.none<KitBrain>() };
+
+    const heldYet = async (label: string) => {
+      const ledger = Option.isSome(opened.brain)
+        ? await opened.brain.value.harness.snapshot(
+            WorkflowsDoc,
+            opened.brain.value.root,
+            context
+          )
+        : undefined;
+
+      // A node that ended without a hold releases the wait too, so a case fails rather than hangs.
+      return Object.values(ledger?.items[WF]?.nodes ?? {}).some(
+        (node) =>
+          node.label === label &&
+          (node.state === "held" || isNodeEnded(node.state))
+      );
+    };
 
     const parts = yield* kitParts({
       faults: NO_WORKFLOW_FAULTS,
-      hold: async () => {},
+      hold: async (point, label) => {
+        const { order } = options;
+
+        if (order === undefined || point !== "after-reserve") {
+          return;
+        }
+
+        // oxlint-disable-next-line no-await-in-loop -- waits for the other node's hold
+        while (label === order.node && !(await heldYet(order.until))) {
+          // oxlint-disable-next-line no-await-in-loop
+          await pause(10);
+        }
+      },
       effect: (line) => {
         effects.push(line);
       },
@@ -393,9 +445,20 @@ const run = (
         })
     );
 
+    opened.brain = Option.some(brain);
+
     const source = workflow(body);
 
-    yield* plant(brain, source, { ...plantDefaults(WF), budget }, context);
+    yield* plant(
+      brain,
+      source,
+      {
+        ...plantDefaults(WF),
+        budget,
+        envelope: options.envelope ?? ((granted) => granted),
+      },
+      context
+    );
 
     return yield* Effect.promise(async () => {
       const stop = await driveReactors(brain, [workflowBudgetReactor], context);
@@ -426,7 +489,7 @@ const run = (
         }
 
         // oxlint-disable-next-line no-await-in-loop
-        await answer(brain, options.raise ?? false);
+        await answer(brain, options);
         // oxlint-disable-next-line no-await-in-loop
         await pause(10);
       }
@@ -616,6 +679,44 @@ return { a, b, c };`,
         );
       })
   );
+
+  it.live(
+    "a node admitted after a raise runs to its end: the stopper of the line before the raise leaves it",
+    () =>
+      Effect.gen(function* () {
+        // a runs on a model the envelope never granted, so it waits on its own brief (a live node)
+        // while b reaches the line; the raise is accepted, then a's brief, and a starts.
+        const outcome = yield* run(
+          `const [a, b] = await parallel([
+  () => agent("node:a ms=900", { label: "a", model: "${ALT_MODEL}" }),
+  () => agent("node:b ms=20${PAD.repeat(3).replaceAll("\n", "\\n")}", { label: "b" }),
+]);
+return { a, b };`,
+          // b's answer crosses the line; the raise adds at least the line again, more than a uses.
+          { ...DEFAULT_BUDGET, maxTokens: 6000 },
+          {
+            raise: "at-once",
+            briefsAfterRaise: true,
+            envelope: (granted) => ({
+              ...granted,
+              roles: granted.roles.filter((entry) => entry.spec !== ALT_MODEL),
+            }),
+          }
+        );
+
+        const byLabel = (label: string) =>
+          Object.values(outcome.row.nodes).find((node) => node.label === label);
+
+        assert.strictEqual(
+          outcome.approvals[workflowRaiseIdOf(WF, 0)]?.status,
+          "accepted"
+        );
+        assert.notStrictEqual(byLabel("a")?.error, CHILD_STOPPED_TEXT);
+        assert.strictEqual(byLabel("a")?.state, "settled");
+        assert.include(outcome.result, String.raw`"a":"{\"label\":\"a\"}"`);
+      }),
+    30_000
+  );
 });
 
 /** A task as the boot repair inspects it: blocked for `reason`. */
@@ -663,6 +764,32 @@ describe("usage holds on pi-durable", () => {
         assert.include(outcome.result, '"label":"a"');
         assert.deepStrictEqual(outcome.row.outcome, { kind: "complete" });
         assert.isAtLeast(outcome.millis, 400);
+      })
+  );
+
+  it.live(
+    "a held node the run's line stops ends with no hold left on its row",
+    () =>
+      Effect.gen(function* () {
+        // a is held on a limit with no reset (a 400 ms wait), short of the line; b starts once a
+        // is held and crosses the line meanwhile.
+        const outcome = yield* run(
+          `const [a, b] = await parallel([
+  () => agent("node:a limit", { label: "a" }),
+  () => agent("node:b ms=20${PAD.replaceAll("\n", "\\n")}", { label: "b" }),
+]);
+return { a, b };`,
+          { ...DEFAULT_BUDGET, maxTokens: 8000 },
+          { order: { node: "b", until: "a" } }
+        );
+
+        const a = Object.values(outcome.row.nodes).find(
+          (node) => node.label === "a"
+        );
+
+        assert.isTrue(outcome.seen.get("a")?.has("held"), "a was held");
+        assert.strictEqual(a?.state, "stopped");
+        assert.isNull(a?.held ?? null);
       })
   );
 

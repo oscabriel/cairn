@@ -29,16 +29,31 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import { escalateIn, mirrorIdOf } from "../approvals/QuestionRoute.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachServicesTest } from "../reach/ReachLayer.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  SubagentsDoc,
+} from "../subagents/SubagentDocs.ts";
 import { Subagents } from "../subagents/Subagents.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
-import { Approvals, cancelAbandonedApprovalsAtBoot } from "./CairnDocs.ts";
+import {
+  Approvals,
+  cancelAbandonedApprovalsAtBoot,
+  expireLapsedApprovalsAtBoot,
+  expirePending,
+  ThreadMeta,
+  ThreadReceipt,
+  UNDECIDED,
+} from "./CairnDocs.ts";
+import type { ApprovalRecord } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
 import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
@@ -589,6 +604,294 @@ describe("PiDurableHarness stop, cut off between its abort and its cancellation"
             assert.deepStrictEqual(settled, [
               ["cancelled", { kind: "system", why: "run-stopped" }],
             ]);
+          })
+        )
+      ),
+    30_000
+  );
+});
+
+describe("PiDurableHarness answer during a stop", () => {
+  it.live(
+    "an answer between the stop's abort mark and its cancellation does not accept the held record",
+    () =>
+      withDataDir((dataDir) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { seam, brain, faux, run, events } =
+              yield* openBrain(dataDir);
+
+            gateThenAnswer(faux, run);
+            yield* brain.resume;
+
+            const conversationId = yield* ensure(seam);
+            const [asked] = yield* askGate(seam, events);
+
+            // The stop's abort mark lands, then holds while the phone answers the card.
+            const { harness } = yield* Effect.orDie(brain.session);
+            const abortTask = harness.abortTask.bind(harness);
+            const marked = yield* Latch.make(false);
+            const answered = yield* Latch.make(false);
+
+            harness.abortTask = async (taskId, abortContext) => {
+              const mark = await abortTask(taskId, abortContext);
+
+              await run(Effect.andThen(marked.open, answered.await));
+
+              return mark;
+            };
+
+            const stopping = yield* seam
+              .stop(THREAD_ID, { clearQueue: false, subagents: "keep" })
+              .pipe(Effect.forkChild);
+
+            yield* marked.await;
+            yield* seam.respond(THREAD_ID, asked.id, {
+              decision: "accept",
+              reason: Option.none(),
+              answers: Option.none(),
+              launch: Option.none(),
+            });
+            yield* answered.open;
+            yield* Fiber.join(stopping);
+
+            assert.deepStrictEqual(yield* decisions(brain, conversationId), [
+              ["cancelled", { kind: "system", why: "run-stopped" }],
+            ]);
+          })
+        )
+      ),
+    30_000
+  );
+});
+
+/** Proposed criteria as goal_propose_criteria leaves them: pending, and nothing waits on them. */
+const proposedCriteria = (id: string, expiresAt: number): ApprovalRecord => ({
+  id,
+  toolTaskId: 0,
+  tool: "goal_propose_criteria",
+  kind: "criteria",
+  summary: "Proposed criteria",
+  status: "pending",
+  askedAt: 5,
+  expiresAt,
+  answeredAt: null,
+  run: null,
+  executorRequestId: null,
+  ...UNDECIDED,
+});
+
+// The boot reconcile reads `inspect` to put each thread's pending requests on its row, so a thread
+// waiting on the user with no live task (a criteria proposal, a halted scope's raise) must be named.
+describe("PiDurableHarness inspect", () => {
+  it.live(
+    "names an idle thread's pending record that no task waits on",
+    () =>
+      withDataDir((dataDir) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { seam, brain } = yield* openBrain(dataDir);
+            const conversationId = yield* ensure(seam);
+            const { harness } = yield* Effect.orDie(brain.session);
+
+            // As goal_propose_criteria leaves it: asked, and nothing waits on it.
+            yield* Effect.promise(async () => {
+              await harness.commit(async (tx) => {
+                const { items } = await tx.doc(Approvals, conversationId);
+
+                items["criteria-1"] = proposedCriteria(
+                  "criteria-1",
+                  Number.MAX_SAFE_INTEGER
+                );
+              }, BACKGROUND_CONTEXT);
+            });
+
+            yield* brain.resume;
+
+            const states = yield* seam.inspect;
+
+            assert.deepStrictEqual(
+              states.map((state) => [
+                state.threadId,
+                state.pendingApprovals.map((pending) => pending.id),
+              ]),
+              [[THREAD_ID, ["criteria-1"]]]
+            );
+          })
+        )
+      ),
+    30_000
+  );
+
+  it.live(
+    "the boot sweep expires a lapsed record nothing waits on, and only that one",
+    () =>
+      withDataDir((dataDir) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { seam, brain } = yield* openBrain(dataDir);
+            const conversationId = yield* ensure(seam);
+            const { harness } = yield* Effect.orDie(brain.session);
+            const now = brain.now();
+
+            yield* Effect.promise(async () => {
+              await harness.commit(async (tx) => {
+                const { items } = await tx.doc(Approvals, conversationId);
+
+                items["criteria-lapsed"] = proposedCriteria(
+                  "criteria-lapsed",
+                  10
+                );
+                items["criteria-open"] = proposedCriteria(
+                  "criteria-open",
+                  now + 60_000
+                );
+                // A budget raise never lapses: it is the way out of a halted scope.
+                items["budget-raise-0"] = {
+                  ...proposedCriteria("budget-raise-0", 10),
+                  tool: "budget_raise",
+                  kind: "tool-call",
+                  summary: "Raise the budget",
+                };
+              }, BACKGROUND_CONTEXT);
+            });
+
+            const expired = yield* expireLapsedApprovalsAtBoot.pipe(
+              Effect.provideService(Brain, brain)
+            );
+
+            assert.strictEqual(expired, 1);
+            assert.deepStrictEqual(yield* decisions(brain, conversationId), [
+              ["expired", { kind: "expiry" }],
+              ["pending", null],
+              ["pending", null],
+            ]);
+          })
+        )
+      ),
+    30_000
+  );
+
+  it.live(
+    "the boot sweep ends a mirror whose child's question ended without ending it",
+    () =>
+      withDataDir((dataDir) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { seam, brain } = yield* openBrain(dataDir);
+            const parentId = yield* ensure(seam);
+            const { harness } = yield* Effect.orDie(brain.session);
+
+            // A child's escalated question that expired, then a stop of the child's run before
+            // `ask_parent` ended the parent's side: the stop skips the expired record.
+            const childId = yield* Effect.promise(
+              async () =>
+                await harness.commit(async (tx) => {
+                  const child = await tx.createConversation({
+                    ownership: { kind: "ownerless" },
+                  });
+
+                  const meta = await tx.doc(ThreadMeta, child.id);
+
+                  meta.threadId = "child-thread";
+                  await tx.doc(ThreadReceipt, "child-thread", {
+                    conversationId: child.id,
+                  });
+
+                  const link = await tx.doc(ChildDoc, child.id);
+
+                  link.key = "brief-1";
+                  link.parentConversationId = parentId;
+
+                  const registry = await tx.doc(SubagentsDoc, parentId);
+
+                  registry.items["brief-1"] = {
+                    threadId: "child-thread",
+                    conversationId: child.id,
+                    anchorTaskId: 1,
+                    briefApprovalId: "brief-1",
+                    description: "a child",
+                    dispatch: {},
+                    isolation: "shared",
+                    worktree: null,
+                    status: "working",
+                    wake: "answer",
+                    settlements: [],
+                    runs: [],
+                    delivered: 0,
+                    questions: {},
+                    inputs: {},
+                  };
+
+                  const { items } = await tx.doc(Approvals, child.id);
+
+                  items["call-9"] = {
+                    ...proposedCriteria("call-9", 2000),
+                    toolTaskId: 9,
+                    tool: "ask_parent",
+                    kind: "user-input",
+                    route: "parent",
+                  };
+
+                  return child.id;
+                }, BACKGROUND_CONTEXT)
+            );
+
+            yield* Effect.promise(async () => {
+              await harness.commit(async (tx) => {
+                await escalateIn(tx, {
+                  parentConversationId: parentId,
+                  childConversationId: childId,
+                  approvalId: "call-9",
+                  now: 1100,
+                  why: "The parent's run ended without settling it.",
+                });
+              }, BACKGROUND_CONTEXT);
+              await harness.commit(async (tx) => {
+                const { items } = await tx.doc(Approvals, childId);
+                const question = items["call-9"];
+
+                if (question !== undefined) {
+                  expirePending(question, 2000);
+                }
+              }, BACKGROUND_CONTEXT);
+            });
+
+            yield* expireLapsedApprovalsAtBoot.pipe(
+              Effect.provideService(Brain, brain)
+            );
+
+            const mirrorId = mirrorIdOf(childId, "call-9");
+
+            const { approvals, registry, index } = yield* Effect.promise(
+              async () => ({
+                approvals: await harness.snapshot(
+                  Approvals,
+                  parentId,
+                  BACKGROUND_CONTEXT
+                ),
+                registry: await harness.snapshot(
+                  SubagentsDoc,
+                  parentId,
+                  BACKGROUND_CONTEXT
+                ),
+                index: await harness.snapshot(
+                  EscalationsDoc,
+                  parentId,
+                  BACKGROUND_CONTEXT
+                ),
+              })
+            );
+
+            const mirror = approvals?.items[mirrorId];
+
+            assert.strictEqual(mirror?.status, "expired");
+            assert.deepStrictEqual(mirror?.decidedBy, { kind: "expiry" });
+            assert.strictEqual(
+              registry?.items["brief-1"]?.questions["call-9"]?.state,
+              "cancelled"
+            );
+            assert.strictEqual(index?.items["call-9"]?.status, "resolved");
           })
         )
       ),

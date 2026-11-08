@@ -36,8 +36,13 @@ import {
 import { Message } from "./Message.ts";
 import { ComposerSettings, defaultSettings, Draft } from "./Model.ts";
 
-const failed = (failure: { readonly _tag: string }) =>
-  Message.FailedRequest({ message: failureMessageOrTag(failure) });
+const failed =
+  (draftKey: Option.Option<string>) => (failure: { readonly _tag: string }) =>
+    Message.FailedRequest({ draftKey, message: failureMessageOrTag(failure) });
+
+/** A thread's request fails into that thread's composer. */
+const failedIn = (threadId: ThreadId) =>
+  failed(Option.some(`thread:${threadId}`));
 
 /**
  * Puts the keyboard in an opened picker's search field (T30), so typing filters, Enter picks and
@@ -70,13 +75,17 @@ export const LoadDrafts = Command.define("LoadDrafts", {
   execute: Effect.map(loadDrafts, (drafts) => Message.LoadedDrafts({ drafts })),
 });
 
-/** Writes every draft. */
+/** Writes the drafts this tab changed since `base`, the drafts as it last read or wrote them. */
 export const SaveDrafts = Command.define("SaveDrafts", {
-  args: { version: Schema.Int, drafts: Schema.Record(Schema.String, Draft) },
+  args: {
+    version: Schema.Int,
+    base: Schema.Record(Schema.String, Draft),
+    drafts: Schema.Record(Schema.String, Draft),
+  },
   messages: [Message.CompletedSaveDrafts],
-  execute: ({ drafts, version }) =>
-    Effect.map(saveDrafts(drafts), (saved) =>
-      Message.CompletedSaveDrafts({ version, saved })
+  execute: ({ base, drafts, version }) =>
+    Effect.map(saveDrafts(base, drafts), (stored) =>
+      Message.CompletedSaveDrafts({ version, written: drafts, stored })
     ),
 });
 
@@ -200,13 +209,15 @@ export const fetchBranches = (projectId: ProjectId) =>
 
 /** Makes (or finds) the scratch project behind "start without a project". */
 export const EnsureScratch = Command.define("EnsureScratch", {
+  args: { draftKey: Schema.Option(Schema.String) },
   messages: [Message.SucceededScratch, Message.FailedRequest],
-  execute: onClient((client) => client["projects.ensureScratch"]()).pipe(
-    Effect.match({
-      onSuccess: (project) => Message.SucceededScratch({ project }),
-      onFailure: failed,
-    })
-  ),
+  execute: ({ draftKey }) =>
+    onClient((client) => client["projects.ensureScratch"]()).pipe(
+      Effect.match({
+        onSuccess: (project) => Message.SucceededScratch({ project }),
+        onFailure: failed(draftKey),
+      })
+    ),
 });
 
 /** Stops the thread's run; with `clearQueue`, its queued inputs go too. */
@@ -219,7 +230,7 @@ export const StopThread = Command.define("StopThread", {
     ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failed,
+        onFailure: failedIn(input.threadId),
       })
     ),
 });
@@ -232,7 +243,7 @@ export const WithdrawQueued = Command.define("WithdrawQueued", {
     onClient((client) => client["thread.withdraw"](input)).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failed,
+        onFailure: failedIn(input.threadId),
       })
     ),
 });
@@ -251,7 +262,7 @@ export const ConfigureThread = Command.define("ConfigureThread", {
     ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failed,
+        onFailure: failedIn(input.threadId),
       })
     ),
 });
@@ -269,11 +280,14 @@ export const PrepareSend = Command.define("PrepareSend", {
     whenBusy: WhenBusy,
     content: TurnContent,
     attachments: Schema.Array(AttachmentRef),
+    /** The draft it was sent from. */
+    draftKey: Schema.String,
   },
   messages: [Message.PreparedTurn],
-  execute: ({ attachments, content, threadId, whenBusy }) =>
+  execute: ({ attachments, content, draftKey, threadId, whenBusy }) =>
     Effect.map(mintRequestId, (requestId) =>
       Message.PreparedTurn({
+        draftKey,
         item: OutboxItem.Send({
           input: SendInput.make({
             threadId,
@@ -348,6 +362,7 @@ export const PrepareLaunch = Command.define("PrepareLaunch", {
       });
 
       return Message.PreparedTurn({
+        draftKey: plan.draftKey,
         item: OutboxItem.Launch({ input }),
         navigateTo: plan.stay
           ? Option.none()

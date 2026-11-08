@@ -18,7 +18,7 @@ import { icon } from "../../composer/Icon.ts";
 import * as List from "../../timeline/list/View.ts";
 import { Message } from "../../timeline/Message.ts";
 import type { Model } from "../../timeline/Model.ts";
-import { isFollowingEnd } from "../../timeline/Model.ts";
+import { isFollowingEnd, promptKey } from "../../timeline/Model.ts";
 import {
   estimatedHeightOf,
   setRecent,
@@ -120,9 +120,21 @@ const itemView = (
 ): Html => {
   const copied = copiedFor(model.copiedRowId, item.id);
 
+  // A turn whose Retry already went out, here or waiting in the shared outbox, shows no second Retry.
   const prompt =
-    item.kind === "error"
-      ? Option.fromUndefinedOr(transcript.prompts.get(item.entry.turnId))
+    item.kind === "error" &&
+    !Option.contains(model.ui.retriedTurnId, item.entry.turnId)
+      ? Option.filter(
+          Option.fromUndefinedOr(transcript.prompts.get(item.entry.turnId)),
+          (message) =>
+            !model.queuedPrompts.includes(
+              promptKey(
+                message.text,
+                message.attachments.map(({ id }) => id),
+                message.skills
+              )
+            )
+        )
       : NO_PROMPT;
 
   const cursor =

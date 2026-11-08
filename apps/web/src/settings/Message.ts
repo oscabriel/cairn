@@ -2,6 +2,7 @@
 // stream, and the `next` views' chunk.
 
 import { ExecutorStatus } from "@cairn/protocol/Executor";
+import { ProjectId } from "@cairn/protocol/Ids";
 import { ModelCatalog, ProviderStatus } from "@cairn/protocol/Models";
 import { ServerSettings } from "@cairn/protocol/Settings";
 import { SkillList } from "@cairn/protocol/Skills";
@@ -29,24 +30,33 @@ export const Message = defineMessageUnion({
   ChangedColorScheme: {},
 
   /** One section's answer for `epoch`. */
-  ReceivedServerSettings: { epoch: Schema.Int, settings: ServerSettings },
+  ReceivedServerSettings: {
+    epoch: Schema.Int,
+    request: Schema.Int,
+    settings: ServerSettings,
+  },
   ReceivedCatalog: { epoch: Schema.Int, catalog: ModelCatalog },
   ReceivedProviders: {
     epoch: Schema.Int,
     providers: Schema.Array(ProviderStatus),
   },
   ReceivedExecutorStatus: { epoch: Schema.Int, status: ExecutorStatus },
-  ReceivedSkills: { epoch: Schema.Int, skills: SkillList },
+  /** `projectId`'s skills, taken only while the Skills section still shows that project. */
+  ReceivedSkills: {
+    epoch: Schema.Int,
+    projectId: ProjectId,
+    skills: SkillList,
+  },
   /** A section's question failed; `section` names which. */
   FailedLoad: {
     epoch: Schema.Int,
-    section: Schema.Literals([
-      "server",
-      "catalog",
-      "providers",
-      "executor",
-      "skills",
-    ]),
+    section: Schema.Literals(["server", "catalog", "providers", "executor"]),
+    message: Schema.String,
+  },
+  /** `projectId`'s skills could not be read. */
+  FailedSkills: {
+    epoch: Schema.Int,
+    projectId: ProjectId,
     message: Schema.String,
   },
 
@@ -54,8 +64,8 @@ export const Message = defineMessageUnion({
   SelectedTitleModel: { value: Schema.String },
   ToggledBridge: { isChecked: Schema.Boolean },
   SelectedGenerationCap: { value: Schema.String },
-  /** `settings.update` answered with the settings as they now are. */
-  SucceededServerUpdate: { settings: ServerSettings },
+  /** `settings.update` number `request` answered with the settings as they now are. */
+  SucceededServerUpdate: { request: Schema.Int, settings: ServerSettings },
   FailedServerUpdate: { message: Schema.String },
 
   SelectedSkillsProject: { value: Schema.String },

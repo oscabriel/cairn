@@ -54,7 +54,7 @@ _Avoid_: events log (for this conversation)
 
 **Settle**: To move a thread off the active shelf: by hand, or automatically after `autoSettleDays` of quiet (3 by default; 0 turns it off). A manual settle state (settled, or unsettled by hand) wins over the automatic one until the user sends the thread a message, which clears it.
 
-**Snooze**: To hide a thread until a wake time. The server ends the snooze on time. A failed run or a pending request wakes the thread early, and a message the user sends ends the snooze.
+**Snooze**: To hide a thread until a wake time. The server ends the snooze on time. A failure, a pending request, or a subagent below asking the user wakes the thread early, and the server records that wake on the row; a message the user sends also ends the snooze.
 
 **Launch**: Creating a thread: its sidebar row appears at once (preparing), then the brain prepares its workspace, opens its conversation and sends its first message, each step recorded so a restart resumes it.
 
@@ -242,7 +242,7 @@ _Avoid_: plugin
 
 **Close hook**: A step SIGTERM runs after every socket has closed and before the stores close, in the fixed order listed in `apps/server/src/ShutdownHooks.ts`, each with its own timeout.
 
-**Command receipt**: The shell store's record of a command id's first answer (the sequence it committed at, or its rejection), so a resent command lands once.
+**Command receipt**: The shell store's record of a command id's first answer (the sequence it committed at, or its rejection), so a resent command lands once. Receipts are kept for four times the outbox's resend window, however many events follow.
 
 **Durable event**: A fact with several consumers (a node settled, a child's result, an approval answered), appended to the event conversation in the commit of the change it describes, so it exists exactly when the change does (ADR 0033). Not the events log.
 
@@ -308,7 +308,7 @@ _Avoid_: plugin
 
 **Hero**: The new-thread page: "What should we build in <project>?" above the composer, with the project picker and the workspace strip.
 
-**Outbox**: The browser's list of sends not yet acknowledged. It resends them after a reconnect, and the brain admits each one once.
+**Outbox**: The browser's list of sends not yet acknowledged. It resends them after a reconnect, and the brain admits each one once. A shell command older than the resend window (seven days) is dropped unsent.
 
 **Presence**: A device telling the brain whether Cairn is on screen and which thread it shows, so a push waits while the user is looking at that thread or one above it.
 
@@ -370,7 +370,7 @@ _Avoid_: cost (for a plan's figure)
 
 **Spend ledger**: The derived cache of each conversation's `pi.usage` in `cairn.sqlite`, priced one response at a time and rebuilt from `pi.usage` at boot when it drifts. A kill never counts a response twice.
 
-**Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between; such a streak lapses fifteen minutes after its newest failure, so one request can find out). Each request counts once, by its last attempt, and a login or logout starts the provider over. A child named onto a limited or failing provider's model is refused.
+**Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between; such a streak lapses fifteen minutes after its newest failure, so one request can find out). Each request counts once, by its last attempt, and a login or logout starts the provider over: the outcome of a request made before it is ignored. A child named onto a limited or failing provider's model is refused.
 
 **Budget**: The limits a brief or a workflow's launch carries (list-price dollars, tokens, turns, minutes, a plan window guard), with a warning line at 80% by default. Reaching it stops new work and asks for a raise.
 

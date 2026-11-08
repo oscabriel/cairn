@@ -11,6 +11,7 @@ import {
   ThreadClear,
   ThreadDelete,
   ThreadRename,
+  ThreadUnarchive,
 } from "@cairn/protocol/ShellCommands";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
@@ -166,6 +167,39 @@ describe("shell.dispatch stops the runs it removes", () => {
             ]
           );
           assert.isAbove(result.sequence, 0);
+        })
+      )
+  );
+
+  it.effect(
+    "stops nothing for a resent archive whose first send committed",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const { client } = yield* seed;
+          const sink = yield* EventSink;
+
+          const archive = ThreadArchive.make({
+            commandId: testCommandId(5),
+            threadId: testThreadId(2),
+          });
+
+          const first = yield* client["shell.dispatch"](archive);
+
+          // Another device unarchives the thread and starts a new run on it.
+          yield* sink.commitCommand(
+            ThreadUnarchive.make({
+              commandId: testCommandId(6),
+              threadId: testThreadId(2),
+            })
+          );
+          stops.length = 0;
+
+          // The first device never saw its answer and resends the same command.
+          const resent = yield* client["shell.dispatch"](archive);
+
+          assert.deepStrictEqual(stops, []);
+          assert.strictEqual(resent.sequence, first.sequence);
         })
       )
   );

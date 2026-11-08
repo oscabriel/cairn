@@ -1,7 +1,9 @@
 // Signed upload URLs: a token is refused when tampered with, signed by another key, malformed or
 // past its ten minutes (on the test clock); the upload route refuses a wrong `Content-Length`, a
 // body shorter or longer than the signed size, and a second upload to a URL already used, before
-// and after the attachment is claimed. Nothing of a refused upload stays on disk.
+// and after the attachment is claimed. Nothing of a refused upload stays on disk. A second upload to
+// a URL whose first upload is still being prepared is refused too, and leaves the first one's files.
+// An upload interrupted after its row was written keeps the files the row names.
 
 import os from "node:os";
 import path from "node:path";
@@ -9,19 +11,42 @@ import path from "node:path";
 import { RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import { DateTime, Duration, Effect, FileSystem, Layer, Schema } from "effect";
+import {
+  DateTime,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import type { Scope } from "effect";
 import { TestClock } from "effect/testing";
 
 import { ServerConfig } from "../Config.ts";
+import { Database } from "../db/Database.ts";
+import { AttachmentIntake } from "./AttachmentIntake.ts";
+import { makePdf } from "./AttachmentsTestKit.ts";
 import {
+  attachmentMigrations,
   attachmentsTestLayer,
   postUpload,
   uploadHandler,
 } from "./AttachmentsTestLayer.ts";
 import type { AttachmentServices } from "./AttachmentsTestLayer.ts";
 import { AttachmentStore } from "./AttachmentStore.ts";
-import { SIGNING_KEY_FILE, UploadTokens } from "./UploadTokens.ts";
+import { Extracted } from "./ExtractJob.ts";
+import { ImagePrepare, PhotonInWorker } from "./ImagePrepare.ts";
+import { TextExtract } from "./TextExtract.ts";
+import {
+  SIGNING_KEY_FILE,
+  UploadKeyFromFile,
+  UploadTokens,
+} from "./UploadTokens.ts";
 
 const decodeProblem = Schema.decodeUnknownEffect(
   Schema.Struct({ message: Schema.String })
@@ -358,5 +383,216 @@ describe("the upload route", () => {
         assert.deepInclude(replay.json, { code: "conflict" });
       })
     )
+  );
+});
+
+describe("two uploads to one URL", () => {
+  it.live(
+    "refuses the second while the first is being prepared, and keeps the first one's files",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+
+        const dir = yield* fs.makeTempDirectoryScoped({
+          directory: os.tmpdir(),
+          prefix: "cairn-upload-race-",
+        });
+
+        // Each extraction says it started, then waits for its own gate.
+        const entered = {
+          first: yield* Deferred.make<number>(),
+          second: yield* Deferred.make<number>(),
+        };
+
+        const gates = {
+          first: yield* Deferred.make<number>(),
+          second: yield* Deferred.make<number>(),
+        };
+
+        let calls = 0;
+
+        const heldExtract = Layer.succeed(
+          TextExtract,
+          TextExtract.of({
+            extract: () =>
+              Effect.gen(function* () {
+                const call = calls;
+
+                const which = call === 0 ? "first" : "second";
+
+                calls += 1;
+                yield* Deferred.succeed(entered[which], call);
+                yield* Deferred.await(gates[which]);
+
+                return Extracted.make({
+                  text: "page one",
+                  pages: Option.some(1),
+                  truncated: false,
+                });
+              }),
+          })
+        );
+
+        const stack = AttachmentIntake.layerNoDeps.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              AttachmentStore.layerNoDeps,
+              UploadTokens.layerNoDeps,
+              ImagePrepare.layer,
+              heldExtract
+            )
+          ),
+          Layer.provide(Layer.succeed(PhotonInWorker, false)),
+          Layer.provide(UploadKeyFromFile),
+          Layer.provideMerge(Database.layerTest(attachmentMigrations)),
+          Layer.provideMerge(
+            ServerConfig.layerWith({
+              dataDir: path.join(dir, "data"),
+              configDir: path.join(dir, "config"),
+            })
+          ),
+          Layer.orDie
+        );
+
+        yield* Effect.gen(function* () {
+          const intake = yield* AttachmentIntake;
+          const store = yield* AttachmentStore;
+          const pdf = makePdf([[{ x: 72, y: 700, text: "page one" }]]);
+
+          const issued = yield* UploadTokens.use((tokens) =>
+            tokens.issue({
+              name: "notes.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: pdf.length,
+            })
+          );
+
+          const claims = yield* UploadTokens.use((tokens) =>
+            tokens.verify(tokenOf(issued.uploadPath))
+          );
+
+          const first = yield* Effect.forkChild(
+            intake.ingest(claims, Stream.make(pdf))
+          );
+
+          yield* Deferred.await(entered.first);
+
+          // The same URL again, as a replaying proxy would send it, while the first is prepared.
+          const second = yield* Effect.forkChild(
+            intake.ingest(claims, Stream.make(pdf))
+          );
+
+          yield* Effect.raceFirst(
+            Effect.asVoid(Fiber.await(second)),
+            Effect.asVoid(Deferred.await(entered.second))
+          );
+
+          yield* Deferred.succeed(gates.first, 0);
+          assert.isTrue(Exit.isSuccess(yield* Fiber.await(first)));
+
+          yield* Deferred.succeed(gates.second, 1);
+          const refused = yield* Fiber.await(second);
+
+          assert.deepStrictEqual(
+            Exit.isFailure(refused)
+              ? Option.map(Exit.findErrorOption(refused), (error) => error._tag)
+              : Option.none(),
+            Option.some("UploadAlreadyReceived")
+          );
+          assert.isTrue(Option.isSome(yield* store.get(claims.attachmentId)));
+          assert.isTrue(
+            Option.isSome(yield* store.read(claims.attachmentId, "original"))
+          );
+          assert.isTrue(
+            Option.isSome(yield* store.read(claims.attachmentId, "text"))
+          );
+        }).pipe(Effect.provide(stack));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  );
+});
+
+describe("an upload interrupted while it is recorded", () => {
+  it.live("keeps the files its row names", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+
+      const dir = yield* fs.makeTempDirectoryScoped({
+        directory: os.tmpdir(),
+        prefix: "cairn-upload-record-",
+      });
+
+      // The row is written; the record step then waits, as a slow release would.
+      const inserted = yield* Deferred.make<boolean>();
+      const gate = yield* Deferred.make<boolean>();
+
+      const slowRecord = Layer.effect(
+        AttachmentStore,
+        Effect.gen(function* () {
+          const real = yield* AttachmentStore;
+
+          return AttachmentStore.of({
+            ...real,
+            record: (stored) =>
+              real
+                .record(stored)
+                .pipe(
+                  Effect.andThen(Deferred.succeed(inserted, true)),
+                  Effect.andThen(Deferred.await(gate))
+                ),
+          });
+        })
+      ).pipe(Layer.provide(AttachmentStore.layerNoDeps));
+
+      const stack = AttachmentIntake.layerNoDeps.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            slowRecord,
+            UploadTokens.layerNoDeps,
+            ImagePrepare.layer,
+            TextExtract.layer
+          )
+        ),
+        Layer.provide(Layer.succeed(PhotonInWorker, false)),
+        Layer.provide(UploadKeyFromFile),
+        Layer.provideMerge(Database.layerTest(attachmentMigrations)),
+        Layer.provideMerge(
+          ServerConfig.layerWith({
+            dataDir: path.join(dir, "data"),
+            configDir: path.join(dir, "config"),
+          })
+        ),
+        Layer.orDie
+      );
+
+      yield* Effect.gen(function* () {
+        const intake = yield* AttachmentIntake;
+        const store = yield* AttachmentStore;
+        const issued = yield* issueText();
+
+        const claims = yield* UploadTokens.use((tokens) =>
+          tokens.verify(tokenOf(issued.uploadPath))
+        );
+
+        const ingesting = yield* Effect.forkChild(
+          intake.ingest(claims, Stream.make(TEXT))
+        );
+
+        yield* Deferred.await(inserted);
+
+        // The request goes away after the row landed and before the record step ended.
+        const interrupting = yield* Effect.forkChild(
+          Fiber.interrupt(ingesting)
+        );
+
+        yield* Effect.sleep(Duration.millis(50));
+        yield* Deferred.succeed(gate, true);
+        yield* Fiber.join(interrupting);
+
+        assert.isTrue(Option.isSome(yield* store.get(claims.attachmentId)));
+        assert.isTrue(
+          Option.isSome(yield* store.read(claims.attachmentId, "original"))
+        );
+      }).pipe(Effect.provide(stack));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   );
 });

@@ -5,6 +5,7 @@ import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { NewWorktreeWorkspace, RootWorkspace } from "@cairn/protocol/Launch";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { ThreadSettle } from "@cairn/protocol/ShellCommands";
+import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
 import type { SendInput } from "@cairn/protocol/Thread";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -26,6 +27,7 @@ import type { Layer } from "effect";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
+import { ScratchProject } from "../projects/ScratchProject.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
@@ -44,6 +46,7 @@ import {
   threadsTestLayer,
 } from "./ThreadsTestKit.ts";
 import { TitleModel } from "./TitleModel.ts";
+import { TurnContent, textStage } from "./TurnContent.ts";
 
 const stopped = Ref.makeUnsafe<ReadonlyArray<ThreadId>>([]);
 
@@ -132,6 +135,49 @@ const withHeldWorkspace = <A, E>(
       yield* (yield* ModelGate).open;
 
       return yield* body(yield* addProject(repo), gate);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+/**
+ * Runs `body` with turn content whose second build (a launch's first message, after the thread is
+ * ensured) waits for `gate`; the first (the launch's check) passes at once.
+ */
+const withHeldFirstMessage = <A, E>(
+  body: (
+    gate: Latch.Latch
+  ) => Effect.Effect<A, E, Layer.Success<ReturnType<typeof layerFor>>>
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+    const gate = yield* Latch.make(false);
+    const builds = yield* Ref.make(0);
+
+    const layer = threadsTestLayer({
+      dataDir: path.join(root, "data"),
+      titleModel: TitleModel.layerNone,
+      model: HeldModel,
+      stopHooks: RecordingStopHooks,
+      turnContent: TurnContent.layerFrom([
+        textStage,
+        {
+          name: "held",
+          run: (draft) =>
+            Effect.gen(function* () {
+              if ((yield* Ref.updateAndGet(builds, (n) => n + 1)) > 1) {
+                yield* gate.await;
+              }
+
+              return draft;
+            }),
+        },
+      ]),
+    });
+
+    return yield* Effect.gen(function* () {
+      yield* (yield* ModelGate).open;
+
+      return yield* body(gate);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
@@ -668,6 +714,65 @@ describe("thread commands", () => {
 
           assert.isFalse(
             yield* (yield* FileSystem.FileSystem).exists(worktreePath)
+          );
+        })
+      )
+  );
+
+  it.live(
+    "a stop after a scratch launch ensured its thread keeps the folder the thread runs in",
+    () =>
+      withHeldFirstMessage((gate) =>
+        Effect.gen(function* () {
+          const scratchProject = yield* ScratchProject;
+          const scratch = yield* scratchProject.ensure;
+          const launcher = yield* ThreadLaunch;
+          const launches = yield* LaunchStore;
+
+          const input = yield* launchInput(
+            scratch.id,
+            RootWorkspace.make({ branch: Option.none() }),
+            "Ensured then stopped"
+          );
+
+          yield* launcher.launch(input, "owner@test");
+
+          // The thread is ensured on its scratch folder; the first message's build is held.
+          const ensured = yield* eventually(
+            launches.get(input.commandId),
+            (found) => Option.exists(found, (row) => row.phase === "ensured")
+          );
+
+          const folder = Option.getOrThrow(
+            Option.flatMap(ensured, (row) => row.cwd)
+          );
+
+          yield* (yield* Threads).stop({
+            threadId: input.threadId,
+            clearQueue: false,
+            subagents: Option.none(),
+          });
+
+          yield* gate.open;
+          yield* launcher.settled(input.threadId);
+
+          const { shell } = Option.getOrThrow(
+            yield* (yield* ThreadRows).get(input.threadId)
+          );
+
+          assert.strictEqual(shell.activity, "failed");
+
+          const thread = (yield* ScriptedStore).threads.get(input.threadId);
+
+          assert.deepStrictEqual(
+            thread?.entries
+              .filter((entry) => entry.kind === NOTICE_ENTRY_KIND)
+              .map((entry) => entry.data),
+            [{ reason: "launch_failed", text: STOPPED_BEFORE_START }]
+          );
+          assert.isTrue(
+            yield* (yield* FileSystem.FileSystem).exists(folder),
+            "the ensured thread's folder is kept"
           );
         })
       )

@@ -81,6 +81,7 @@ import {
   WorkflowsDoc,
 } from "../workflows/WorkflowDocs.ts";
 import { Brain } from "./Brain.ts";
+import type { BrainSession } from "./Brain.ts";
 import { durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
 import { emit } from "./Events.ts";
@@ -591,14 +592,117 @@ const ACCEPTED_AT_ASK: ApprovalAnswerState = {
 /** The approval id of a tool task. Stable across reruns of that task. */
 export const approvalIdOf = (taskId: number) => `call-${taskId}`;
 
+/** The status a decision moves a pending record to. */
+const STATUS_OF: Readonly<Record<ApprovalDecision, ApprovalStatus>> = {
+  accept: "accepted",
+  accept_for_thread: "accepted",
+  accept_sample: "accepted",
+  decline: "declined",
+  revise: "revised",
+};
+
+const encodeLaunchEdits = Schema.encodeSync(LaunchEdits);
+
+/**
+ * One way a pending record settles (ADR 0029): an answer that took, its expiry, the system's
+ * cancel (with the words the card shows, if any), or a parent's mirror taking the ending of the
+ * child's question it mirrors.
+ */
+export type SettleMove =
+  | { readonly kind: "answer"; readonly answer: RecordAnswer }
+  | { readonly kind: "expire" }
+  | {
+      readonly kind: "cancel";
+      readonly why: CancelWhy;
+      readonly reason: Option.Option<string>;
+    }
+  | { readonly kind: "follow"; readonly settled: Readonly<ApprovalRecord> };
+
+/**
+ * Settles a pending record in place: the one move out of `pending`, which writes the status,
+ * `answeredAt` and `decidedBy` together (and an answer's `answer` and `reason`), and nothing else,
+ * so the payload stays as asked. Every settle goes through it, so a record leaves `pending` once:
+ * one no longer pending, or a mirror whose child is still pending, stays as it is. Returns whether
+ * it moved.
+ */
+export const settleRecord = (
+  record: ApprovalRecord,
+  move: SettleMove,
+  now: number
+): boolean => {
+  if (record.status !== "pending") {
+    return false;
+  }
+
+  if (move.kind === "follow") {
+    if (move.settled.status === "pending") {
+      return false;
+    }
+
+    record.status = move.settled.status;
+    record.decidedBy =
+      move.settled.decidedBy === null ? null : { ...move.settled.decidedBy };
+  } else if (move.kind === "expire") {
+    record.status = "expired";
+    record.decidedBy = { kind: "expiry" };
+  } else if (move.kind === "cancel") {
+    record.status = "cancelled";
+    record.decidedBy = { kind: "system", why: move.why };
+    record.reason = Option.getOrElse(move.reason, () => record.reason);
+  } else {
+    const { answer } = move;
+
+    record.status = STATUS_OF[answer.decision];
+    record.decidedBy = { ...answer.by };
+    record.reason = Option.getOrNull(answer.reason);
+    record.answer = {
+      decision: answer.decision,
+      answers: Option.match(answer.answers, {
+        onNone: () => null,
+        onSome: copyAnswers,
+      }),
+      note: null,
+      launch: Option.match(answer.launch, {
+        onNone: () => null,
+        onSome: (edits) => jsonRecordOf(encodeLaunchEdits(edits)),
+      }),
+    };
+  }
+
+  record.answeredAt = now;
+
+  return true;
+};
+
 /** Expires a record still pending at its expiry, in place; any other record is left as it is. */
 export const expirePending = (record: ApprovalRecord, now: number) => {
-  if (record.status === "pending") {
-    record.status = "expired";
-    record.answeredAt = now;
-    record.decidedBy = { kind: "expiry" };
-  }
+  settleRecord(record, { kind: "expire" }, now);
 };
+
+/**
+ * Whether no task waits on a pending record, so nothing commits its expiry: proposed criteria
+ * (`goal_propose_criteria` returns at once) and a record no tool task asked (a budget raise). A
+ * mirror has none either, but its child's question ends it.
+ */
+export const waiterless = (record: ApprovalRecord): boolean =>
+  record.status === "pending" &&
+  record.mirrorOf === null &&
+  (record.kind === "criteria" || record.toolTaskId === 0);
+
+/** The tool of a budget raise record, a thread scope's or a workflow's (`BudgetSources.ts`, `WorkflowBudget.ts`). */
+const BUDGET_RAISE_TOOL = "budget_raise";
+
+/**
+ * Whether a pending record outlives its `expiresAt`: a budget raise does. It is asked once per
+ * epoch and is the way out of a halted scope or workflow, so a late answer is the user's current
+ * choice, not a stale one (ADR 0029).
+ */
+const neverLapses = (record: ApprovalRecord): boolean =>
+  record.toolTaskId === 0 && record.tool === BUDGET_RAISE_TOOL;
+
+/** Whether a record is a parent's mirror of its child's escalated question, still pending. */
+const pendingMirror = (record: ApprovalRecord): boolean =>
+  record.status === "pending" && record.mirrorOf !== null;
 
 /** The ledger of one tool invocation, committing through that invocation's own `commit`. */
 export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
@@ -867,20 +971,9 @@ export const refusalText = (
  */
 const SEND_BACK_TOOL = "subagent_spawn";
 
-/** The status a decision moves a pending record to. */
-const STATUS_OF: Readonly<Record<ApprovalDecision, ApprovalStatus>> = {
-  accept: "accepted",
-  accept_for_thread: "accepted",
-  accept_sample: "accepted",
-  decline: "declined",
-  revise: "revised",
-};
-
 const decodeQuestions = Schema.decodeUnknownOption(QuestionsPayload);
 
 const isWorkflowLaunch = Schema.is(WorkflowLaunch);
-
-const encodeLaunchEdits = Schema.encodeSync(LaunchEdits);
 
 /** Whether a record is a workflow's launch approval: a brief whose frozen payload is a launch. */
 export const isLaunchRecord = (record: ApprovalRecord): boolean =>
@@ -920,10 +1013,12 @@ const answersFit = (
   });
 
 /**
- * Applies an answer to one record in place: the status, `answer`, `decidedBy`, `reason` and
- * `answeredAt` together, and nothing else (the payload stays as asked). A record that is no longer
- * pending stays as it was, so a late or repeated answer cannot run a declined call. Both harnesses
- * answer through this, pi-durable's inside one transaction.
+ * Applies an answer to one record in place (`settleRecord`): the status, `answer`, `decidedBy`,
+ * `reason` and `answeredAt` together, and nothing else (the payload stays as asked). A record that
+ * is no longer pending stays as it was, so a late or repeated answer cannot run a declined call,
+ * and one past its `expiresAt` takes no answer (`already_settled`): it expires here when nothing
+ * waits on it (`waiterless`). Both harnesses answer through this, pi-durable's inside one
+ * transaction.
  */
 export const applyAnswer = (
   record: ApprovalRecord,
@@ -931,6 +1026,16 @@ export const applyAnswer = (
   now: number
 ): AnswerOutcome => {
   if (record.status !== "pending") {
+    return "already_settled";
+  }
+
+  // Past its expiry a record takes no answer. One nothing waits on expires here; a waiting task
+  // commits its own expiry, with what goes with it (a brief's tell to its parent).
+  if (now >= record.expiresAt && !neverLapses(record)) {
+    if (waiterless(record)) {
+      expirePending(record, now);
+    }
+
     return "already_settled";
   }
 
@@ -968,22 +1073,7 @@ export const applyAnswer = (
     return "refused_revise_reason";
   }
 
-  record.status = STATUS_OF[answer.decision];
-  record.answeredAt = now;
-  record.decidedBy = { ...answer.by };
-  record.reason = Option.getOrNull(answer.reason);
-  record.answer = {
-    decision: answer.decision,
-    answers: Option.match(answer.answers, {
-      onNone: () => null,
-      onSome: copyAnswers,
-    }),
-    note: null,
-    launch: Option.match(answer.launch, {
-      onNone: () => null,
-      onSome: (edits) => jsonRecordOf(encodeLaunchEdits(edits)),
-    }),
-  };
+  settleRecord(record, { kind: "answer", answer }, now);
 
   return "answered";
 };
@@ -991,6 +1081,79 @@ export const applyAnswer = (
 /** A stored conversation id as pi-durable types it. */
 const piConversationOf = (id: number) =>
   piConversationId(ProtocolConversationId.make(id));
+
+/**
+ * The child's record a mirror stands for, as a draft of the caller's transaction, with the child's
+ * conversation; none when no thread receipt or record names it.
+ */
+const mirroredRecord = async (
+  tx: Tx,
+  mirror: ApprovalRecord
+): Promise<
+  Option.Option<{
+    readonly childId: ConversationId;
+    readonly approvalId: string;
+    readonly child: ApprovalRecord;
+  }>
+> => {
+  if (mirror.mirrorOf === null) {
+    return Option.none();
+  }
+
+  const { approvalId, threadId } = mirror.mirrorOf;
+
+  const receipt = await tx.doc(ThreadReceipt, threadId, {
+    conversationId: 0,
+  });
+
+  if (receipt.conversationId < 1) {
+    return Option.none();
+  }
+
+  const childId = piConversationOf(receipt.conversationId);
+  const childApprovals = await tx.doc(Approvals, childId);
+  const child = childApprovals.items[approvalId];
+
+  return child === undefined
+    ? Option.none()
+    : Option.some({ childId, approvalId, child });
+};
+
+/**
+ * When the child question a pending mirror stands for is no longer pending, ends the mirror with
+ * the child's status and decider inside the caller's transaction, and marks the question
+ * `cancelled` in the parent's registry (which resolves its escalation entry) unless it was
+ * answered, as `ask_parent`'s `endUnanswered` would. Returns whether it ended the mirror. A child
+ * no thread receipt or record names leaves the mirror as it is.
+ */
+const endedWithChild = async (
+  tx: Tx,
+  conversationId: ConversationId,
+  mirror: ApprovalRecord,
+  now: number
+): Promise<boolean> => {
+  const found = await mirroredRecord(tx, mirror);
+
+  if (
+    Option.isNone(found) ||
+    !settleRecord(mirror, { kind: "follow", settled: found.value.child }, now)
+  ) {
+    return false;
+  }
+
+  const { childId, approvalId, child } = found.value;
+
+  await markQuestion(
+    tx,
+    conversationId,
+    childId,
+    approvalId,
+    child.status === "accepted" ? "answered" : "cancelled",
+    Option.none()
+  );
+
+  return true;
+};
 
 /**
  * Settles, inside the answering transaction, what an answered record is linked to (ADR 0027): a
@@ -1022,8 +1185,9 @@ const settleLinked = async (
     const childApprovals = await tx.doc(Approvals, childId);
     const child = childApprovals.items[approvalId];
 
-    if (child !== undefined) {
-      applyAnswer(child, answer, now);
+    // `answerApproval` found the child still pending, so it takes the answer too.
+    if (child !== undefined && applyAnswer(child, answer, now) !== "answered") {
+      return;
     }
 
     await markQuestion(
@@ -1134,63 +1298,6 @@ const noAnsweredHook: AnsweredHook = async () => {
 };
 
 /**
- * Answers one record from the host side, in one transaction (`applyAnswer`). "Allow for this
- * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit,
- * and an escalated question settles with its mirror (`settleLinked`). A parent's pending mirror is
- * answered only through its open `cairn.escalations` entry, which the answer resolves. `answered`
- * runs inside the same transaction, for a record the answer moved out of `pending`: a brief's Go
- * creates its child's start task there (ADR 0030), and a workflow launch's Go approves its ledger
- * row (ADR 0032), so each lands with its answer or not at all. The answer's events come last.
- */
-export const answerApproval = (
-  session: Pick<Session, "commit" | "snapshot">,
-  conversationId: ConversationId,
-  approvalId: string,
-  answer: RecordAnswer,
-  now: number,
-  answered: AnsweredHook = noAnsweredHook
-): Effect.Effect<AnswerOutcome, DurableCallError> =>
-  durable("approvals.answer", async (context) => {
-    const link = await session.snapshot(ChildDoc, conversationId, context);
-
-    return await session.commit(async (tx): Promise<AnswerOutcome> => {
-      const { items } = await tx.doc(Approvals, conversationId);
-      const record = items[approvalId];
-
-      if (record === undefined) {
-        return "not_found";
-      }
-
-      // A mirror is answered through its open escalation entry, which is also its authorization
-      // (ADR 0027): a pending mirror with none was never escalated here.
-      if (record.mirrorOf !== null && record.status === "pending") {
-        const index = await tx.doc(EscalationsDoc, conversationId);
-
-        if (index.items[record.mirrorOf.approvalId]?.status !== "open") {
-          return "not_found";
-        }
-      }
-
-      const outcome = applyAnswer(record, answer, now);
-
-      if (outcome !== "answered") {
-        return outcome;
-      }
-
-      // "Allow for this thread" lands with the answer, so the next call of the tool runs at once.
-      if (answer.decision === "accept_for_thread") {
-        await allowTool(tx, conversationId, record.tool);
-      }
-
-      await settleLinked(tx, conversationId, record, link, answer, now);
-      await answered(tx, conversationId, record);
-      await emitAnswered(tx, conversationId, record, now);
-
-      return outcome;
-    }, context);
-  });
-
-/**
  * Whether a brief is one a run's own task waits on: a workflow's launch approval (the
  * `workflow_plan` task is the wait) or a workflow node's own brief (the node's task waits on it).
  * A subagent's brief waits for the user with no run.
@@ -1263,15 +1370,14 @@ const piTaskOf = (id: number) => piTaskId(TaskId.make(id));
 /** Why the system cancelled a record: a stop, or boot finding its tool task abandoned. */
 export type CancelWhy = "run-stopped" | "boot";
 
-/** Marks a held record cancelled by the system, in place. */
+/** Marks a pending record cancelled by the system, in place (`settleRecord`). */
 export const cancelRecord = (
   record: ApprovalRecord,
   now: number,
-  why: CancelWhy
+  why: CancelWhy,
+  reason: Option.Option<string> = Option.none()
 ) => {
-  record.status = "cancelled";
-  record.answeredAt = now;
-  record.decidedBy = { kind: "system", why };
+  settleRecord(record, { kind: "cancel", why, reason }, now);
 };
 
 /**
@@ -1411,10 +1517,15 @@ export const cancelStoppedApprovals = (
 
 /**
  * Whether a held record's tool task will never wait on it again: the task (or an owner up its
- * chain) is gone, ending, or under an abort mark. A stop commits its abort marks before it cancels
- * the records its run held, so a crash between the two leaves exactly this.
+ * chain) is ending or under an abort mark, or is gone unless `gone` says otherwise. A stop commits
+ * its abort marks before it cancels the records its run held, so a crash between the two leaves
+ * exactly this.
  */
-const abandonedTask = async (tx: Tx, taskId: number): Promise<boolean> => {
+const abandonedTask = async (
+  tx: Tx,
+  taskId: number,
+  gone = true
+): Promise<boolean> => {
   let current: Option.Option<number> = Option.some(taskId);
 
   for (let hop = 0; hop <= OWNER_HOPS && Option.isSome(current); hop += 1) {
@@ -1422,8 +1533,11 @@ const abandonedTask = async (tx: Tx, taskId: number): Promise<boolean> => {
     // oxlint-disable-next-line no-await-in-loop
     const task = await tx.task(piTaskOf(current.value));
 
+    if (task === undefined) {
+      return gone;
+    }
+
     if (
-      task === undefined ||
       task.abortRequested ||
       task.state.status === "completing" ||
       task.state.status === "terminal"
@@ -1436,6 +1550,93 @@ const abandonedTask = async (tx: Tx, taskId: number): Promise<boolean> => {
 
   return false;
 };
+
+/**
+ * Answers one record from the host side, in one transaction (`applyAnswer`). "Allow for this
+ * thread" (`accept_for_thread`) also adds the record's tool to `cairn.permissions` in that commit,
+ * and an escalated question settles with its mirror (`settleLinked`). A parent's pending mirror is
+ * answered only through its open `cairn.escalations` entry, which the answer resolves. `answered`
+ * runs inside the same transaction, for a record the answer moved out of `pending`: a brief's Go
+ * creates its child's start task there (ADR 0030), and a workflow launch's Go approves its ledger
+ * row (ADR 0032), so each lands with its answer or not at all. The answer's events come last.
+ */
+export const answerApproval = (
+  session: Pick<Session, "commit" | "snapshot">,
+  conversationId: ConversationId,
+  approvalId: string,
+  answer: RecordAnswer,
+  now: number,
+  answered: AnsweredHook = noAnsweredHook
+): Effect.Effect<AnswerOutcome, DurableCallError> =>
+  durable("approvals.answer", async (context) => {
+    const link = await session.snapshot(ChildDoc, conversationId, context);
+
+    return await session.commit(async (tx): Promise<AnswerOutcome> => {
+      const { items } = await tx.doc(Approvals, conversationId);
+      const record = items[approvalId];
+
+      if (record === undefined) {
+        return "not_found";
+      }
+
+      // A mirror is answered through its open escalation entry, which is also its authorization
+      // (ADR 0027): a pending mirror with none was never escalated here.
+      if (record.mirrorOf !== null && record.status === "pending") {
+        const index = await tx.doc(EscalationsDoc, conversationId);
+
+        if (index.items[record.mirrorOf.approvalId]?.status !== "open") {
+          return "not_found";
+        }
+
+        // The child's question ended first (it expired, or its run stopped, in the commits before
+        // `ask_parent` ends the parent's side): the mirror ends with it and takes no answer.
+        if (await endedWithChild(tx, conversationId, record, now)) {
+          return "already_settled";
+        }
+
+        // The child's run is being stopped (its `ask_parent` task abort marked, the cancel not yet
+        // committed): the answer would land on a question nothing reads, and the stop's cancel
+        // ends both records. Read before any write, as below.
+        const mirrored = await mirroredRecord(tx, record);
+
+        if (
+          Option.isSome(mirrored) &&
+          heldByRun(mirrored.value.child) &&
+          (await abandonedTask(tx, mirrored.value.child.toolTaskId, false))
+        ) {
+          return "already_settled";
+        }
+      }
+
+      // A record whose run a stop is ending (abort marked, the cancel not yet committed) takes no
+      // answer: nothing would run on it, and the stop's cancel finds it still pending. A tool task
+      // gone from the store is the boot repair's to cancel. Read before any write, as pi-durable
+      // reads tables.
+      if (
+        heldByRun(record) &&
+        (await abandonedTask(tx, record.toolTaskId, false))
+      ) {
+        return "already_settled";
+      }
+
+      const outcome = applyAnswer(record, answer, now);
+
+      if (outcome !== "answered") {
+        return outcome;
+      }
+
+      // "Allow for this thread" lands with the answer, so the next call of the tool runs at once.
+      if (answer.decision === "accept_for_thread") {
+        await allowTool(tx, conversationId, record.tool);
+      }
+
+      await settleLinked(tx, conversationId, record, link, answer, now);
+      await answered(tx, conversationId, record);
+      await emitAnswered(tx, conversationId, record, now);
+
+      return outcome;
+    }, context);
+  });
 
 /**
  * Cancels, in one transaction, every record of one conversation that a run held and whose tool
@@ -1482,6 +1683,48 @@ export const cancelAbandonedApprovals = (
 const SCAN_PAGE = 200;
 
 /**
+ * Visits every conversation's `cairn.approvals` (every one, not only those with live tasks) with
+ * `visit`, which returns how many records it changed. Returns the total. The boot repairs read
+ * records this way before the Harness resumes.
+ */
+const sweepApprovals = (
+  session: BrainSession,
+  visit: (
+    conversationId: ConversationId,
+    items: ApprovalsState["items"]
+  ) => Effect.Effect<number, DurableCallError>
+) =>
+  Effect.gen(function* () {
+    const { harness, storage } = session;
+    let cursor: Option.Option<Cursor> = Option.none();
+    let changed = 0;
+
+    do {
+      const after = Option.getOrUndefined(cursor);
+
+      const page = yield* durable(
+        "conversations.scan",
+        async (context) =>
+          await storage.scanConversations({}, SCAN_PAGE, after, context)
+      );
+
+      for (const conversation of page.items) {
+        const approvals = yield* durable(
+          "approvals.read",
+          async (context) =>
+            await harness.snapshot(Approvals, conversation.id, context)
+        );
+
+        changed += yield* visit(conversation.id, approvals?.items ?? {});
+      }
+
+      cursor = Option.fromUndefinedOr(page.next);
+    } while (Option.isSome(cursor));
+
+    return changed;
+  });
+
+/**
  * The boot repair for a stop cut off between its abort and its cancellations (a crash, or a
  * failed cancel): before the Harness resumes, every conversation's held records whose tool task is
  * abandoned are cancelled (`cancelAbandonedApprovals`), so no request nobody can answer stays
@@ -1497,44 +1740,87 @@ export const cancelAbandonedApprovalsAtBoot = Effect.gen(function* () {
   }
 
   const brain = found.value;
-  const { harness, storage } = yield* brain.session;
-  let cursor: Option.Option<Cursor> = Option.none();
-  let cancelled = 0;
+  const session = yield* brain.session;
 
-  do {
-    const after = Option.getOrUndefined(cursor);
-
-    const page = yield* durable(
-      "conversations.scan",
-      async (context) =>
-        await storage.scanConversations({}, SCAN_PAGE, after, context)
-    );
-
-    for (const conversation of page.items) {
-      const approvals = yield* durable(
-        "approvals.read",
-        async (context) =>
-          await harness.snapshot(Approvals, conversation.id, context)
-      );
-
-      if (Object.values(approvals?.items ?? {}).some(heldByRun)) {
-        const ids = yield* cancelAbandonedApprovals(
-          harness,
-          conversation.id,
-          brain.now(),
-          "boot"
-        );
-
-        cancelled += ids.length;
-      }
-    }
-
-    cursor = Option.fromUndefinedOr(page.next);
-  } while (Option.isSome(cursor));
+  const cancelled = yield* sweepApprovals(session, (conversationId, items) =>
+    Object.values(items).some(heldByRun)
+      ? Effect.map(
+          cancelAbandonedApprovals(
+            session.harness,
+            conversationId,
+            brain.now(),
+            "boot"
+          ),
+          (ids) => ids.length
+        )
+      : Effect.succeed(0)
+  );
 
   yield* Effect.logInfo(`cancelled ${cancelled} abandoned approvals`).pipe(
     Effect.annotateLogs({ event: "boot_cancelled_approvals", cancelled })
   );
 
   return cancelled;
+});
+
+/**
+ * The boot repair for records nothing waits on (`waiterless`: proposed criteria; a budget raise
+ * never lapses, `neverLapses`):
+ * no task's timer expires them, so one still pending past its `expiresAt` is expired here, in one
+ * commit per conversation, and stops asking for the user. `applyAnswer` refuses an answer to one
+ * meanwhile. A pending mirror whose child's question already ended (it expired, then a stop of the
+ * child's run skipped it before `ask_parent` ended the mirror) ends with it here too
+ * (`endedWithChild`). None without a pi-durable `Brain`. Returns how many records it ended.
+ */
+export const expireLapsedApprovalsAtBoot = Effect.gen(function* () {
+  const found = yield* Effect.serviceOption(Brain);
+
+  if (Option.isNone(found)) {
+    return 0;
+  }
+
+  const brain = found.value;
+  const session = yield* brain.session;
+  const now = brain.now();
+
+  const lapsed = (record: ApprovalRecord) =>
+    waiterless(record) && !neverLapses(record) && now >= record.expiresAt;
+
+  const expired = yield* sweepApprovals(session, (conversationId, items) =>
+    Object.values(items).some(
+      (record) => lapsed(record) || pendingMirror(record)
+    )
+      ? durable(
+          "approvals.expire-lapsed",
+          async (context) =>
+            await session.harness.commit(async (tx) => {
+              const doc = await tx.doc(Approvals, conversationId);
+              const ending = Object.values(doc.items).filter(lapsed);
+
+              for (const record of ending) {
+                expirePending(record, now);
+              }
+
+              let ended = ending.length;
+
+              for (const mirror of Object.values(doc.items).filter(
+                pendingMirror
+              )) {
+                // oxlint-disable-next-line no-await-in-loop -- document reads, one mirror at a time
+                if (await endedWithChild(tx, conversationId, mirror, now)) {
+                  ended += 1;
+                }
+              }
+
+              return ended;
+            }, context)
+        )
+      : Effect.succeed(0)
+  );
+
+  yield* Effect.logInfo(`expired ${expired} lapsed approvals`).pipe(
+    Effect.annotateLogs({ event: "boot_expired_approvals", expired })
+  );
+
+  return expired;
 });

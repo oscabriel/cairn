@@ -25,7 +25,13 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
 
-import { EscalationsDoc, jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { escalateIn, mirrorIdOf } from "../approvals/QuestionRoute.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  jsonRecordOf,
+  SubagentsDoc,
+} from "../subagents/SubagentDocs.ts";
 import { proposedRecord, WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import {
   answerApproval,
@@ -34,9 +40,12 @@ import {
   cancelAbandonedApprovals,
   cancelStoppedApprovals,
   copyRecord,
+  expirePending,
   heldByRun,
   migrateApprovals,
   RELAYED_QUESTION_TOOL,
+  ThreadMeta,
+  ThreadReceipt,
   UNDECIDED,
 } from "./CairnDocs.ts";
 import type {
@@ -566,6 +575,64 @@ describe("an answer to a record", () => {
   });
 });
 
+describe("an answer after a record's expiry", () => {
+  it("expires a record nothing waits on, and takes no answer", () => {
+    // Proposed criteria: goal_propose_criteria returns at once, so no task waits on them.
+    const lapsed = record({
+      kind: "criteria",
+      tool: "goal_propose_criteria",
+    });
+
+    assert.strictEqual(
+      applyAnswer(lapsed, byUser("accept"), lapsed.expiresAt + 1),
+      "already_settled"
+    );
+    assert.strictEqual(lapsed.status, "expired");
+    assert.deepStrictEqual(lapsed.decidedBy, { kind: "expiry" });
+    assert.strictEqual(lapsed.answeredAt, lapsed.expiresAt + 1);
+    assert.strictEqual(lapsed.answer, null);
+  });
+
+  it("takes an answer to a budget raise past its expiresAt, since a raise never lapses", () => {
+    // The raise is the way out of a halted scope, and it is asked once per epoch (ADR 0029).
+    const raise = record({
+      toolTaskId: 0,
+      kind: "tool-call",
+      tool: "budget_raise",
+    });
+
+    assert.strictEqual(
+      applyAnswer(raise, byUser("accept"), raise.expiresAt + 1),
+      "answered"
+    );
+    assert.strictEqual(raise.status, "accepted");
+  });
+
+  it("takes no answer for a record a task waits on, and leaves its expiry to that task", () => {
+    // The waiting task commits the expiry and what goes with it (a brief's tell to its parent).
+    const brief = record({ kind: "brief", tool: "subagent_spawn" });
+
+    assert.strictEqual(
+      applyAnswer(brief, byUser("accept"), brief.expiresAt),
+      "already_settled"
+    );
+    assert.strictEqual(brief.status, "pending");
+  });
+
+  it("takes an answer until its expiry", () => {
+    const criteria = record({
+      kind: "criteria",
+      tool: "goal_propose_criteria",
+    });
+
+    assert.strictEqual(
+      applyAnswer(criteria, byUser("accept"), criteria.expiresAt - 1),
+      "answered"
+    );
+    assert.strictEqual(criteria.status, "accepted");
+  });
+});
+
 describe("what a stop cancels", () => {
   it("only records a run holds: an escalated question too, but no brief, criteria or mirror", () => {
     assert.deepStrictEqual(
@@ -845,6 +912,88 @@ describe("a question a child's final answer became", () => {
   );
 });
 
+/**
+ * A parent and its child, linked as the subagents extension links them, with the child's
+ * `ask_parent` question `call-9` held by a live tool task and escalated to the user: the parent
+ * holds its mirror and an open escalation entry. Returns the ids.
+ */
+const escalatedChildQuestion = async (
+  session: ReturnType<typeof createSession>
+) => {
+  const ids = await session.commit(async (tx) => {
+    const parent = await tx.createConversation({
+      ownership: { kind: "ownerless" },
+    });
+
+    const child = await tx.createConversation({
+      ownership: { kind: "ownerless" },
+    });
+
+    const meta = await tx.doc(ThreadMeta, child.id);
+
+    meta.threadId = "child-thread";
+    await tx.doc(ThreadReceipt, "child-thread", {
+      conversationId: child.id,
+    });
+
+    const link = await tx.doc(ChildDoc, child.id);
+
+    link.key = "brief-1";
+    link.parentConversationId = parent.id;
+
+    const registry = await tx.doc(SubagentsDoc, parent.id);
+
+    registry.items["brief-1"] = {
+      threadId: "child-thread",
+      conversationId: child.id,
+      anchorTaskId: 1,
+      briefApprovalId: "brief-1",
+      description: "a child",
+      dispatch: {},
+      isolation: "shared",
+      worktree: null,
+      status: "working",
+      wake: "answer",
+      settlements: [],
+      runs: [],
+      delivered: 0,
+      questions: {},
+      inputs: {},
+    };
+
+    const toolTaskId = Number(
+      await tx.createTask(
+        IdleTask,
+        {},
+        { conversationId: child.id, ownership: { kind: "conversation" } }
+      )
+    );
+
+    const asked = await tx.doc(Approvals, child.id);
+
+    asked.items["call-9"] = record({
+      id: "call-9",
+      toolTaskId,
+      tool: "ask_parent",
+      route: "parent",
+    });
+
+    return { parentId: parent.id, childId: child.id, toolTaskId };
+  }, context);
+
+  await session.commit(async (tx) => {
+    await escalateIn(tx, {
+      parentConversationId: ids.parentId,
+      childConversationId: ids.childId,
+      approvalId: "call-9",
+      now: 1100,
+      why: "The parent's run ended without settling it.",
+    });
+  }, context);
+
+  return ids;
+};
+
 describe("an escalated question's mirror", () => {
   it.live("is answered only through an open escalation entry", () =>
     Effect.promise(async () => {
@@ -923,5 +1072,215 @@ describe("an escalated question's mirror", () => {
         rmSync(root, { recursive: true, force: true });
       }
     })
+  );
+
+  it.live(
+    "refuses an answer once the child's question expired, and ends with it",
+    () =>
+      Effect.promise(async () => {
+        const root = mkdtempSync(
+          path.join(tmpdir(), "cairn-approvals-mirror-")
+        );
+
+        const file = path.join(root, "brain.sqlite");
+
+        try {
+          await withSession(file, async (session) => {
+            // A parent and its child, linked as the subagents extension links them.
+            const { parentId, childId } = await session.commit(async (tx) => {
+              const parent = await tx.createConversation({
+                ownership: { kind: "ownerless" },
+              });
+
+              const child = await tx.createConversation({
+                ownership: { kind: "ownerless" },
+              });
+
+              const meta = await tx.doc(ThreadMeta, child.id);
+
+              meta.threadId = "child-thread";
+              await tx.doc(ThreadReceipt, "child-thread", {
+                conversationId: child.id,
+              });
+
+              const link = await tx.doc(ChildDoc, child.id);
+
+              link.key = "brief-1";
+              link.parentConversationId = parent.id;
+
+              const registry = await tx.doc(SubagentsDoc, parent.id);
+
+              registry.items["brief-1"] = {
+                threadId: "child-thread",
+                conversationId: child.id,
+                anchorTaskId: 1,
+                briefApprovalId: "brief-1",
+                description: "a child",
+                dispatch: {},
+                isolation: "shared",
+                worktree: null,
+                status: "working",
+                wake: "answer",
+                settlements: [],
+                runs: [],
+                delivered: 0,
+                questions: {},
+                inputs: {},
+              };
+
+              // The child's ask_parent question, still with its parent.
+              const asked = await tx.doc(Approvals, child.id);
+
+              asked.items["call-9"] = record({
+                id: "call-9",
+                toolTaskId: 9,
+                tool: "ask_parent",
+                route: "parent",
+              });
+
+              return { parentId: parent.id, childId: child.id };
+            }, context);
+
+            // Escalated to the user, then the child's wait expires: only the child's record moves.
+            await session.commit(async (tx) => {
+              await escalateIn(tx, {
+                parentConversationId: parentId,
+                childConversationId: childId,
+                approvalId: "call-9",
+                now: 1100,
+                why: "The parent's run ended without settling it.",
+              });
+            }, context);
+            await session.commit(async (tx) => {
+              const { items } = await tx.doc(Approvals, childId);
+              const question = items["call-9"];
+
+              assert.isDefined(question);
+              expirePending(question, 2000);
+            }, context);
+
+            const mirrorId = mirrorIdOf(childId, "call-9");
+
+            const outcome = await Effect.runPromise(
+              answerApproval(
+                session,
+                parentId,
+                mirrorId,
+                byUser("accept"),
+                2100
+              )
+            );
+
+            const parentApprovals = await session.snapshot(
+              Approvals,
+              parentId,
+              context
+            );
+
+            const mirror = parentApprovals?.items[mirrorId];
+
+            const registry = await session.snapshot(
+              SubagentsDoc,
+              parentId,
+              context
+            );
+
+            const index = await session.snapshot(
+              EscalationsDoc,
+              parentId,
+              context
+            );
+
+            assert.strictEqual(outcome, "already_settled");
+            assert.strictEqual(mirror?.status, "expired");
+            assert.deepStrictEqual(mirror?.decidedBy, { kind: "expiry" });
+            assert.strictEqual(
+              registry?.items["brief-1"]?.questions["call-9"]?.state,
+              "cancelled"
+            );
+            assert.strictEqual(index?.items["call-9"]?.status, "resolved");
+          });
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      })
+  );
+
+  it.live(
+    "refuses an answer while a stop is ending the child's run, and leaves both records pending",
+    () =>
+      Effect.promise(async () => {
+        const root = mkdtempSync(
+          path.join(tmpdir(), "cairn-approvals-mirror-")
+        );
+
+        const file = path.join(root, "brain.sqlite");
+
+        try {
+          const { parentId, childId, toolTaskId } = await withSession(
+            file,
+            escalatedChildQuestion
+          );
+
+          // The stop's abort mark lands on the child's `ask_parent` task; its cancel has not yet.
+          const storage = await openNodeSqliteStorage(file);
+
+          const task = await storage.task(
+            piTaskId(TaskId.make(toolTaskId)),
+            context
+          );
+
+          assert.isDefined(task);
+
+          if (task !== undefined) {
+            await storage.commit(
+              [{ type: "task", value: { ...task, abortRequested: true } }],
+              context
+            );
+          }
+
+          const session = createSession(storage);
+
+          try {
+            const mirrorId = mirrorIdOf(childId, "call-9");
+
+            const outcome = await Effect.runPromise(
+              answerApproval(
+                session,
+                parentId,
+                mirrorId,
+                byUser("accept"),
+                1500
+              )
+            );
+
+            const parentApprovals = await session.snapshot(
+              Approvals,
+              parentId,
+              context
+            );
+
+            const childApprovals = await session.snapshot(
+              Approvals,
+              childId,
+              context
+            );
+
+            assert.strictEqual(outcome, "already_settled");
+            assert.strictEqual(
+              parentApprovals?.items[mirrorId]?.status,
+              "pending"
+            );
+            assert.strictEqual(
+              childApprovals?.items["call-9"]?.status,
+              "pending"
+            );
+          } finally {
+            await session.close(context);
+          }
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      })
   );
 });

@@ -1,6 +1,7 @@
 // The meters' update (plan wave 6, 6G). The brain is asked for each section when the usage page or
 // the settings page opens on a client, and again on a new epoch; answers from another epoch are
-// dropped. On the usage page, new spend on the thread rows asks for the roll-up again.
+// dropped. On the usage page, new spend on the thread rows asks for the roll-up again, one question
+// at a time.
 
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
 import { Array, Equal, Match, Option, Order } from "effect";
@@ -104,6 +105,32 @@ const loadSections = (model: Model): UpdateReturn => {
   };
 };
 
+/**
+ * Asks for the roll-up again when the usage page's rows show spend it was not asked with. One
+ * `spend.get` is out at a time (`Loading` or `Refreshing`), so an older roll-up never lands after a
+ * newer one; spend that arrives meanwhile is asked for once that answer is in.
+ */
+const askNewSpend = (model: Model): UpdateReturn => {
+  const tokens = rowTokens(model.context);
+
+  if (
+    !canAsk(model) ||
+    model.context.page !== "usage" ||
+    tokens === model.spendAt ||
+    AsyncData.isPending(model.spend)
+  ) {
+    return { model };
+  }
+
+  return {
+    model: modifyFields(model, {
+      spend: reloading,
+      spendAt: () => tokens,
+    }),
+    commands: [FetchSpend({ epoch: model.context.epoch })],
+  };
+};
+
 /** Takes the root's context; an opened page, a new epoch or new spend asks the brain. */
 export const inform = (model: Model, context: MetersContext): UpdateReturn => {
   const next = modifyFields(model, {
@@ -121,23 +148,7 @@ export const inform = (model: Model, context: MetersContext): UpdateReturn => {
     return loadSections(next);
   }
 
-  const tokens = rowTokens(context);
-
-  if (
-    context.page === "usage" &&
-    tokens !== next.spendAt &&
-    !AsyncData.isLoading(next.spend)
-  ) {
-    return {
-      model: modifyFields(next, {
-        spend: reloading,
-        spendAt: () => tokens,
-      }),
-      commands: [FetchSpend({ epoch: context.epoch })],
-    };
-  }
-
-  return { model: next };
+  return askNewSpend(next);
 };
 
 /** The answer for `epoch`, written when it is still the meters' epoch. */
@@ -151,9 +162,11 @@ const answer = (
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     ReceivedSpend: ({ epoch, spend }) =>
-      answer(model, epoch, (current) => ({
-        model: modifyFields(current, { spend: () => AsyncData.succeed(spend) }),
-      })),
+      answer(model, epoch, (current) =>
+        askNewSpend(
+          modifyFields(current, { spend: () => AsyncData.succeed(spend) })
+        )
+      ),
     ReceivedServerSettings: ({ epoch, settings }) =>
       answer(model, epoch, (current) => ({
         model: modifyFields(current, {

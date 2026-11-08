@@ -61,6 +61,7 @@ import type { BrainSession } from "../brain/Brain.ts";
 import {
   Approvals,
   copyRecord,
+  settleRecord,
   ThreadMeta,
   ThreadReceipt,
   UNDECIDED,
@@ -208,10 +209,7 @@ export const endUnanswered = async (
       mirror.mirrorOf?.threadId === meta.threadId &&
       mirror.mirrorOf.approvalId === target.approvalId
     ) {
-      mirror.status = record.status;
-      mirror.answeredAt = target.now;
-      mirror.decidedBy =
-        record.decidedBy === null ? null : { ...record.decidedBy };
+      settleRecord(mirror, { kind: "follow", settled: record }, target.now);
     }
   }
 

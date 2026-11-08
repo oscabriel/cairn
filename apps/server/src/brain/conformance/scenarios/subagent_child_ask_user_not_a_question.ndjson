@@ -1,0 +1,16 @@
+{"type":"transcript_start","scenario":"subagent_child_ask_user_not_a_question","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Name the service","brief":"Ask the user for a name."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","toolCalls":[{"id":"call_c1","name":"ask_user","arguments":{"questions":[{"header":"Name","question":"What should the service be called?"}]}}]}
+{"type":"model","label":"c2","thread":"child1","text":"Calling it heron."}
+{"type":"model","label":"p3","thread":"parent","text":"Named heron."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$child1","kind":"user-input","status":"pending"}}
+{"type":"input","step":"respond","thread":"child1","answer":"heron"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$child1","status":"completed"}}
+{"type":"settle","ms":500}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":1,"delivered":1,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}

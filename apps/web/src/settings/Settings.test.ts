@@ -6,7 +6,7 @@ import { ProjectId } from "@cairn/protocol/Ids";
 import type { ServerSettings } from "@cairn/protocol/Settings";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
-import { DateTime, Effect, Option } from "effect";
+import { DateTime, Effect, Option, Predicate } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import * as AsyncData from "foldkit/asyncData";
 import * as Scene from "foldkit/scene";
@@ -278,7 +278,7 @@ describe("the settings page", () => {
   it("drops an answer from another epoch", () => {
     const result = update(
       { ...loaded, server: AsyncData.Loading() },
-      Message.ReceivedServerSettings({ epoch: 2, settings: server })
+      Message.ReceivedServerSettings({ epoch: 2, request: 1, settings: server })
     );
 
     assert.isTrue(AsyncData.isLoading(result.model.server));
@@ -346,6 +346,7 @@ describe("the settings page", () => {
       ),
       Scene.Command.resolve(
         UpdateServerSettings({
+          request: 1,
           patch: {
             autoSettleDays: Option.none(),
             titleModel: Option.none(),
@@ -354,7 +355,7 @@ describe("the settings page", () => {
             defaultBudget: Option.none(),
           },
         }),
-        Message.SucceededServerUpdate({ settings: off })
+        Message.SucceededServerUpdate({ request: 1, settings: off })
       ),
       Scene.expect(
         Scene.role("switch", { name: "Claude through the subscription" })
@@ -423,6 +424,238 @@ describe("the composer usage meter", () => {
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
+    );
+  });
+});
+
+const skillsOf = (name: string) => ({
+  skills: [
+    {
+      name,
+      description: `${name}'s skill.`,
+      source: "project" as const,
+      modelInvocable: true,
+    },
+  ],
+});
+
+type SettingsCommand = NonNullable<
+  ReturnType<typeof update>["commands"]
+>[number];
+
+/** Runs messages through `update`, keeping every step's commands. */
+const run = (model: Model, ...messages: ReadonlyArray<Message>) => {
+  let current = model;
+
+  const commands: Array<SettingsCommand> = [];
+
+  for (const message of messages) {
+    const next = update(current, message);
+
+    current = next.model;
+
+    for (const command of next.commands ?? []) {
+      commands.push(command);
+    }
+  }
+
+  return { model: current, commands };
+};
+
+describe("the settings page's stale answers", () => {
+  const otherId = ProjectId.make("prj_myr");
+
+  const twoProjects: Model = {
+    ...loaded,
+    context: {
+      ...loaded.context,
+      projects: [...loaded.context.projects, { id: otherId, title: "myr" }],
+    },
+  };
+
+  it("keeps the selected project's skills when a slower answer for the previous one lands last", () => {
+    const asked = run(
+      twoProjects,
+      Message.ClickedReloadSkills(),
+      Message.SelectedSkillsProject({ value: otherId })
+    );
+
+    const [reloadA, listB] = asked.commands.filter(
+      (command) => command.name === FetchSkills.name
+    );
+
+    assert.deepStrictEqual(
+      [reloadA?.args?.projectId, listB?.args?.projectId],
+      [projectId, otherId]
+    );
+
+    const answered = run(
+      asked.model,
+      Message.ReceivedSkills({
+        epoch: 3,
+        projectId: otherId,
+        skills: skillsOf("myr-only"),
+      }),
+      Message.ReceivedSkills({
+        epoch: 3,
+        projectId,
+        skills: skillsOf("cairn-only"),
+      }),
+      Message.FailedSkills({
+        epoch: 3,
+        projectId,
+        message: "The skills could not be read.",
+      })
+    ).model;
+
+    assert.deepStrictEqual(
+      Option.map(AsyncData.getData(answered.skills), (list) =>
+        list.skills.map((skill) => skill.name)
+      ),
+      Option.some(["myr-only"]),
+      "the previous project's skills replaced the selected one's"
+    );
+  });
+
+  it("shows the settings of the newest change when an older change's answer lands last", () => {
+    const changed = run(
+      loaded,
+      Message.SelectedAutoSettleDays({ value: "14" }),
+      Message.ToggledBridge({ isChecked: false })
+    );
+
+    const requests = changed.commands
+      .filter((command) => command.name === UpdateServerSettings.name)
+      .flatMap((command) => {
+        const request = command.args?.request;
+
+        return Predicate.isNumber(request) ? [request] : [];
+      });
+
+    assert.lengthOf(requests, 2);
+
+    const [first = 0, second = 0] = requests;
+    const both = { ...server, autoSettleDays: 14, bridgeEnabled: false };
+    const firstOnly = { ...server, autoSettleDays: 14 };
+
+    const answered = run(
+      changed.model,
+      Message.SucceededServerUpdate({ request: second, settings: both }),
+      Message.SucceededServerUpdate({ request: first, settings: firstOnly })
+    ).model;
+
+    assert.deepStrictEqual(
+      AsyncData.getData(answered.server),
+      Option.some(both),
+      "the older change's answer replaced the newer one's"
+    );
+  });
+
+  it("keeps a change's answer when the page's first read of the settings lands after it", () => {
+    const opened = inform(
+      { ...initial, clientLoaded: true },
+      {
+        epoch: 3,
+        hasClient: true,
+        isOpen: true,
+        projects: [{ id: projectId, title: "cairn" }],
+      }
+    );
+
+    const [read = 0] = (opened.commands ?? [])
+      .filter((command) => command.name === FetchServerSettings.name)
+      .flatMap((command) => {
+        const request = command.args?.request;
+
+        return Predicate.isNumber(request) ? [request] : [];
+      });
+
+    const off = { ...server, bridgeEnabled: false };
+
+    const changed = run(
+      opened.model,
+      Message.ToggledBridge({ isChecked: false })
+    );
+
+    const [request = 0] = changed.commands
+      .filter((command) => command.name === UpdateServerSettings.name)
+      .flatMap((command) => {
+        const asked = command.args?.request;
+
+        return Predicate.isNumber(asked) ? [asked] : [];
+      });
+
+    const answered = run(
+      changed.model,
+      Message.SucceededServerUpdate({ request, settings: off }),
+      Message.ReceivedServerSettings({
+        epoch: 3,
+        request: read,
+        settings: server,
+      })
+    ).model;
+
+    assert.deepStrictEqual(
+      AsyncData.getData(answered.server),
+      Option.some(off)
+    );
+  });
+
+  it("keeps a change's answer when a read asked after it, on coming back to the page, lands first", () => {
+    const context = {
+      epoch: 3,
+      hasClient: true,
+      isOpen: true,
+      projects: [{ id: projectId, title: "cairn" }],
+    };
+
+    const opened = inform({ ...initial, clientLoaded: true }, context);
+
+    const shown = run(
+      opened.model,
+      Message.ReceivedServerSettings({ epoch: 3, request: 1, settings: server })
+    ).model;
+
+    const off = { ...server, bridgeEnabled: false };
+
+    const changed = run(shown, Message.ToggledBridge({ isChecked: false }));
+
+    const [request = 0] = changed.commands
+      .filter((command) => command.name === UpdateServerSettings.name)
+      .flatMap((command) => {
+        const asked = command.args?.request;
+
+        return Predicate.isNumber(asked) ? [asked] : [];
+      });
+
+    // The user leaves and comes back while the change is in flight, which asks a new read.
+    const left = inform(changed.model, { ...context, isOpen: false }).model;
+    const back = inform(left, context);
+
+    const [read = 0] = (back.commands ?? [])
+      .filter((command) => command.name === FetchServerSettings.name)
+      .flatMap((command) => {
+        const asked = command.args?.request;
+
+        return Predicate.isNumber(asked) ? [asked] : [];
+      });
+
+    assert.isAbove(read, request);
+
+    // The read was answered before the brain applied the change, and lands first.
+    const answered = run(
+      back.model,
+      Message.ReceivedServerSettings({
+        epoch: 3,
+        request: read,
+        settings: server,
+      }),
+      Message.SucceededServerUpdate({ request, settings: off })
+    ).model;
+
+    assert.deepStrictEqual(
+      AsyncData.getData(answered.server),
+      Option.some(off)
     );
   });
 });

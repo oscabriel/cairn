@@ -1942,7 +1942,7 @@
                             },
                             "why": {
                               "type": "string",
-                              "enum": ["run-stopped", "boot"]
+                              "enum": ["run-stopped", "boot", "superseded"]
                             }
                           },
                           "required": ["kind", "why"],
@@ -2744,7 +2744,7 @@
                       },
                       "why": {
                         "type": "string",
-                        "enum": ["run-stopped", "boot"]
+                        "enum": ["run-stopped", "boot", "superseded"]
                       }
                     },
                     "required": ["kind", "why"],
@@ -5102,7 +5102,7 @@
                             },
                             "why": {
                               "type": "string",
-                              "enum": ["run-stopped", "boot"]
+                              "enum": ["run-stopped", "boot", "superseded"]
                             }
                           },
                           "required": ["kind", "why"],

@@ -198,7 +198,8 @@ export class AttachmentStore extends Context.Service<
      * Streams an upload's body to a private `.part` file while hashing it, then renames it to the
      * attachment's original. Fails with `UploadAlreadyReceived` when the attachment already has a
      * row or another upload of it is running, and with `UploadBodyMismatch` when the body is
-     * shorter or longer than `sizeBytes` or breaks off; nothing is kept then.
+     * shorter or longer than `sizeBytes` or breaks off; nothing is kept then. On success the id
+     * stays reserved until `record` or `forget` ends the upload, so the caller must call one.
      */
     receive<E>(
       id: AttachmentId,
@@ -214,9 +215,9 @@ export class AttachmentStore extends Context.Service<
       variant: "prepared" | "text",
       data: Uint8Array
     ): Effect.Effect<void, AttachmentStoreError>;
-    /** Records a fully prepared upload. Its files must already be in place. */
+    /** Records a fully prepared upload and ends its reservation. Its files must already be in place. */
     record(stored: StoredAttachment): Effect.Effect<void, AttachmentStoreError>;
-    /** Removes an upload that was refused after `receive`: its files, never a row. */
+    /** Removes an upload that was refused after `receive`: its files, never a row; ends its reservation. */
     forget(id: AttachmentId): Effect.Effect<void, AttachmentStoreError>;
     /** The attachment recorded under `id`, if any. */
     get(
@@ -348,6 +349,11 @@ export class AttachmentStore extends Context.Service<
         }).pipe(Effect.ensuring(removeQuietly(part)));
       });
 
+      const release = (id: AttachmentId) =>
+        Effect.sync(() => {
+          inFlight.delete(id);
+        });
+
       const receive = Effect.fn("AttachmentStore.receive")(function* <E>(
         id: AttachmentId,
         sizeBytes: number,
@@ -366,20 +372,25 @@ export class AttachmentStore extends Context.Service<
 
         inFlight.add(id);
 
-        const received = yield* writeBody(id, sizeBytes, body).pipe(
-          Effect.ensuring(Effect.sync(() => inFlight.delete(id)))
-        );
+        // The id stays reserved after the body lands, until `record` or `forget` ends the upload:
+        // another upload to the same URL while this one is prepared would otherwise rename its own
+        // body over these files, fail to record and then forget the files this one's row names.
+        // Until `receive` returns, the caller cannot end it, so a failure or an interrupt here
+        // releases it.
+        return yield* Effect.gen(function* () {
+          const received = yield* writeBody(id, sizeBytes, body);
 
-        yield* Effect.logInfo("attachment stored").pipe(
-          Effect.annotateLogs({
-            event: "attachment.stored",
-            attachmentId: id,
-            sizeBytes: received.sizeBytes,
-            sha256: received.sha256,
-          })
-        );
+          yield* Effect.logInfo("attachment stored").pipe(
+            Effect.annotateLogs({
+              event: "attachment.stored",
+              attachmentId: id,
+              sizeBytes: received.sizeBytes,
+              sha256: received.sha256,
+            })
+          );
 
-        return received;
+          return received;
+        }).pipe(Effect.onError(() => release(id)));
       });
 
       const writeVariant = Effect.fn("AttachmentStore.writeVariant")(function* (
@@ -417,6 +428,7 @@ export class AttachmentStore extends Context.Service<
             ${Option.getOrNull(stored.textChars)}, ${stored.textTruncated ? 1 : 0}, ${now}
           )
         `;
+        yield* release(ref.id);
       }, failure("AttachmentStore.record"));
 
       const removeFiles = (id: string) =>
@@ -429,7 +441,7 @@ export class AttachmentStore extends Context.Service<
       const forget = Effect.fn("AttachmentStore.forget")(function* (
         id: AttachmentId
       ) {
-        yield* removeFiles(id);
+        yield* removeFiles(id).pipe(Effect.ensuring(release(id)));
       });
 
       const get = Effect.fn("AttachmentStore.get")(function* (

@@ -90,7 +90,17 @@ export const Message = defineMessageUnion({
   MovedHeroToDraftUrl: {},
   ElapsedDraftDebounce: { version: Schema.Int },
   HidPage: {},
-  CompletedSaveDrafts: { version: Schema.Int, saved: Schema.Boolean },
+  /**
+   * Drafts up to `version` were written as `written`; `stored` is what storage held afterwards, with
+   * other tabs' drafts, or none when storage refused.
+   */
+  CompletedSaveDrafts: {
+    version: Schema.Int,
+    written: Schema.Record(Schema.String, Draft),
+    stored: Schema.Option(Schema.Record(Schema.String, Draft)),
+  },
+  /** Another tab wrote the drafts. */
+  ChangedStoredDrafts: {},
   CompletedSaveSettings: { saved: Schema.Boolean },
 
   SucceededModels: { epoch: Schema.Int, catalog: ModelCatalog },
@@ -110,10 +120,12 @@ export const Message = defineMessageUnion({
   SucceededBranches: { projectId: ProjectId, result: BranchesResult },
   SucceededScratch: { project: ProjectShell },
   /**
-   * A turn is ready to go: ids minted (and the scratch project made, for a projectless launch);
-   * `attachments` are the refs it carries, kept to restore it if refused.
+   * The turn sent from the draft at `draftKey` is ready to go: ids minted (and the scratch project
+   * made, for a projectless launch); `attachments` are the refs it carries, kept to restore it if
+   * refused.
    */
   PreparedTurn: {
+    draftKey: Schema.String,
     item: OutboxItem,
     navigateTo: Schema.Option(Schema.String),
     attachments: Schema.Array(AttachmentRef),
@@ -125,7 +137,11 @@ export const Message = defineMessageUnion({
     attachments: Schema.Array(AttachmentRef),
     message: Schema.String,
   },
-  FailedRequest: { message: Schema.String },
+  /** A request failed; `draftKey` is the draft that made it, whose composer shows why. */
+  FailedRequest: {
+    draftKey: Schema.Option(Schema.String),
+    message: Schema.String,
+  },
   /** A list the composer loads in the background could not be read; the surface that needs it says so. */
   FailedLoad: {
     what: Schema.Literals(["models", "skills", "branches"]),

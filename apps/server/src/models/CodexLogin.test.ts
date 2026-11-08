@@ -2,8 +2,10 @@
 // (`FakeCodexAuth.ts`) that rotates the refresh token and revokes the grant on reuse. The device-code
 // sign-in reaches the store and shows the account; a refresh under the store's permit persists the
 // rotated token before anyone else reads it, so concurrent requests and a restarted brain never
-// present a spent token; a second brain refuses to refresh; cancel stores nothing. The database is
-// a temporary file and the lock a temporary path, never the deployed ones.
+// present a spent token; a second brain refuses to refresh; cancel stores nothing, and a cancel that
+// lands while the credential is written still answers signed in; signing in and out forgets the
+// old login's health. The database is a temporary file and the lock a temporary path, never the
+// deployed ones.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +18,8 @@ import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Context,
+  DateTime,
+  Deferred,
   Effect,
   Fiber,
   Layer,
@@ -31,6 +35,7 @@ import { CodexLogin } from "./CodexLogin.ts";
 import { CairnCredentialStore, CODEX_PROVIDER } from "./CredentialStore.ts";
 import type { FakeCodexAuth, FakeCodexAuthOptions } from "./FakeCodexAuth.ts";
 import { FAKE_ACCOUNT, startFakeCodexAuth } from "./FakeCodexAuth.ts";
+import { HealthOutcome, ModelHealth } from "./ModelHealth.ts";
 import { OAuthStore } from "./OAuthStore.ts";
 
 const Migrations = {
@@ -55,12 +60,50 @@ const place = (): Place => {
   };
 };
 
-/** One brain's store and sign-in over `where`, alive as long as the caller's scope. */
-const brainAt = (where: Place) =>
+/** Holds a sign-in's write inside its uninterruptible region until `release` is done. */
+interface WriteGate {
+  readonly entered: Deferred.Deferred<true>;
+  readonly release: Deferred.Deferred<true>;
+}
+
+/** The store, with every sign-in write held at `gate` first. */
+const gatedStore = (lock: string, gate: WriteGate) =>
+  Layer.effect(
+    OAuthStore,
+    Effect.gen(function* () {
+      const store = yield* OAuthStore;
+
+      return OAuthStore.of({
+        ...store,
+        signIn: (provider, credential) =>
+          Effect.uninterruptible(
+            Deferred.succeed(gate.entered, true).pipe(
+              Effect.andThen(Deferred.await(gate.release)),
+              Effect.andThen(store.signIn(provider, credential))
+            )
+          ),
+      });
+    })
+  ).pipe(Layer.provide(OAuthStore.layerWith(lock)));
+
+/**
+ * One brain's store, health and sign-in over `where`, alive as long as the caller's scope. `gate`
+ * holds each sign-in write.
+ */
+const brainAt = (
+  where: Place,
+  gate: Option.Option<WriteGate> = Option.none()
+) =>
   Effect.map(
     Layer.build(
       CodexLogin.layer.pipe(
-        Layer.provideMerge(OAuthStore.layerWith(where.lock)),
+        Layer.provideMerge(
+          Option.match(gate, {
+            onNone: () => OAuthStore.layerWith(where.lock),
+            onSome: (held) => gatedStore(where.lock, held),
+          })
+        ),
+        Layer.provideMerge(ModelHealth.layerNoDeps),
         Layer.provideMerge(
           Database.layer({ filename: where.database, migrations: Migrations })
         ),
@@ -79,7 +122,12 @@ const brainAt = (where: Place) =>
 
       models.setProvider(openaiCodexProvider());
 
-      return { store, login: Context.get(context, CodexLogin), models };
+      return {
+        store,
+        login: Context.get(context, CodexLogin),
+        health: Context.get(context, ModelHealth),
+        models,
+      };
     }
   );
 
@@ -120,6 +168,23 @@ const labelOf = (step: LoginProgress) =>
 
 const tagsOf = (steps: ReadonlyArray<LoginProgress>) =>
   steps.map((step) => step._tag);
+
+/** Marks Codex failing with a revoked login, as a run's 401 would. */
+const markRevoked = (health: ModelHealth["Service"]) =>
+  Effect.gen(function* () {
+    yield* health.record(
+      CODEX_PROVIDER,
+      HealthOutcome.Failed({
+        at: yield* DateTime.now,
+        message: "401 invalid_grant",
+      })
+    );
+
+    assert.strictEqual(
+      (yield* health.stateOf(CODEX_PROVIDER)).state,
+      "failing"
+    );
+  });
 
 const storedRefresh = (store: OAuthStore["Service"]) =>
   Effect.map(store.read(CODEX_PROVIDER), (found) =>
@@ -301,6 +366,47 @@ describe("the Codex sign-in against a fake OpenAI", () => {
     }).pipe(Effect.scoped)
   );
 
+  it.live(
+    "answers signed in, and forgets the old login's health, when a cancel lands during the write",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* fakeAuth();
+
+        const gate: WriteGate = {
+          entered: yield* Deferred.make<true>(),
+          release: yield* Deferred.make<true>(),
+        };
+
+        const brain = yield* brainAt(place(), Option.some(gate));
+
+        yield* markRevoked(brain.health);
+
+        const running = yield* signInWith(brain.login, fake).pipe(
+          Effect.forkChild
+        );
+
+        yield* Deferred.await(gate.entered);
+
+        const cancelling = yield* Effect.forkChild(brain.login.cancel);
+
+        yield* Effect.sleep("50 millis");
+        yield* Deferred.succeed(gate.release, true);
+        yield* Fiber.join(cancelling);
+
+        const steps = yield* Fiber.join(running);
+
+        assert.notStrictEqual(yield* storedRefresh(brain.store), "none");
+        assert.strictEqual(
+          steps.map((step) => labelOf(step)).at(-1),
+          "SignedIn"
+        );
+        assert.strictEqual(
+          (yield* brain.health.stateOf(CODEX_PROVIDER)).state,
+          "unknown"
+        );
+      }).pipe(Effect.scoped)
+  );
+
   it.live("runs one sign-in at a time", () =>
     Effect.gen(function* () {
       const fake = yield* fakeAuth();
@@ -330,15 +436,20 @@ describe("the Codex sign-in against a fake OpenAI", () => {
     }).pipe(Effect.scoped)
   );
 
-  it.live("signs out", () =>
+  it.live("signs out, and forgets the login's health", () =>
     Effect.gen(function* () {
       const fake = yield* fakeAuth();
       const brain = yield* brainAt(place());
 
       yield* signInWith(brain.login, fake);
+      yield* markRevoked(brain.health);
 
       assert.isTrue(yield* brain.login.logout);
       assert.strictEqual(yield* storedRefresh(brain.store), "none");
+      assert.strictEqual(
+        (yield* brain.health.stateOf(CODEX_PROVIDER)).state,
+        "unknown"
+      );
 
       const available = yield* Effect.promise(
         async () => await brain.models.getAvailable(CODEX_PROVIDER)
@@ -350,10 +461,14 @@ describe("the Codex sign-in against a fake OpenAI", () => {
 
   it.live("answers unavailable on a brain without the OAuth store", () =>
     Effect.gen(function* () {
-      const login = Context.get(
-        yield* Layer.build(CodexLogin.layer),
-        CodexLogin
+      const context = yield* Layer.build(
+        CodexLogin.layer.pipe(Layer.provideMerge(ModelHealth.layerTest))
       );
+
+      const login = Context.get(context, CodexLogin);
+      const health = Context.get(context, ModelHealth);
+
+      yield* markRevoked(health);
 
       const steps = yield* Stream.runCollect(login.start);
 
@@ -365,6 +480,11 @@ describe("the Codex sign-in against a fake OpenAI", () => {
       const refused = yield* login.logout.pipe(Effect.flip);
 
       assert.strictEqual(refused.reason, "unavailable");
+      // A refused logout changed no credential, so the health stays.
+      assert.strictEqual(
+        (yield* health.stateOf(CODEX_PROVIDER)).state,
+        "failing"
+      );
     }).pipe(Effect.scoped)
   );
 });

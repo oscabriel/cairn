@@ -49,11 +49,11 @@ export const ApplyClientSettings = Command.define("ApplyClientSettings", {
     Effect.as(applyClientSettings(settings), Message.AppliedClientSettings()),
 });
 
-/** Asks for the server settings. */
+/** Asks for the server settings; `request` numbers the read among the page's changes. */
 export const FetchServerSettings = Command.define("FetchServerSettings", {
-  args: { epoch: Schema.Int },
+  args: { epoch: Schema.Int, request: Schema.Int },
   messages: [Message.ReceivedServerSettings, Message.FailedLoad],
-  execute: ({ epoch }) =>
+  execute: ({ epoch, request }) =>
     withBoundary(
       Effect.gen(function* () {
         const client = yield* CairnConnection.get;
@@ -63,7 +63,7 @@ export const FetchServerSettings = Command.define("FetchServerSettings", {
     ).pipe(
       Effect.match({
         onSuccess: (settings) =>
-          Message.ReceivedServerSettings({ epoch, settings }),
+          Message.ReceivedServerSettings({ epoch, request, settings }),
         onFailure: (failure) =>
           Message.FailedLoad({
             epoch,
@@ -157,7 +157,7 @@ export const FetchExecutorStatus = Command.define("FetchExecutorStatus", {
 /** Asks for a project's skills; `reload` makes the brain read them from disk again. */
 export const FetchSkills = Command.define("FetchSkills", {
   args: { epoch: Schema.Int, projectId: ProjectId, reload: Schema.Boolean },
-  messages: [Message.ReceivedSkills, Message.FailedLoad],
+  messages: [Message.ReceivedSkills, Message.FailedSkills],
   execute: ({ epoch, projectId, reload }) =>
     withBoundary(
       Effect.gen(function* () {
@@ -169,22 +169,23 @@ export const FetchSkills = Command.define("FetchSkills", {
       })
     ).pipe(
       Effect.match({
-        onSuccess: (skills) => Message.ReceivedSkills({ epoch, skills }),
+        onSuccess: (skills) =>
+          Message.ReceivedSkills({ epoch, projectId, skills }),
         onFailure: (failure) =>
-          Message.FailedLoad({
+          Message.FailedSkills({
             epoch,
-            section: "skills",
+            projectId,
             message: failureMessage(failure, "The skills could not be read."),
           }),
       })
     ),
 });
 
-/** Changes server settings; an absent key is left alone. */
+/** Changes server settings; an absent key is left alone. `request` numbers the change. */
 export const UpdateServerSettings = Command.define("UpdateServerSettings", {
-  args: { patch: SettingsPatch },
+  args: { request: Schema.Int, patch: SettingsPatch },
   messages: [Message.SucceededServerUpdate, Message.FailedServerUpdate],
-  execute: ({ patch }) =>
+  execute: ({ patch, request }) =>
     withBoundary(
       Effect.gen(function* () {
         const client = yield* CairnConnection.get;
@@ -193,7 +194,8 @@ export const UpdateServerSettings = Command.define("UpdateServerSettings", {
       })
     ).pipe(
       Effect.match({
-        onSuccess: (settings) => Message.SucceededServerUpdate({ settings }),
+        onSuccess: (settings) =>
+          Message.SucceededServerUpdate({ request, settings }),
         onFailure: (failure) =>
           Message.FailedServerUpdate({
             message: failureMessage(

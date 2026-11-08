@@ -1,11 +1,13 @@
 // The refresh confirm: a refresh replaces the project thread with a new one and archives this one
 // (5H), stopping its run, its queue and its working subagents, so it asks first. The new thread
-// starts with the message typed here; Refresh waits until there is one.
+// starts with the message typed here; Refresh waits until there is one. A Refresh that could not go
+// (the project thread left the shell meanwhile) says why here and keeps the message.
 
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { classNames } from "../../ui/ClassNames.ts";
+import { banner } from "../ui/Banner.ts";
 import { buttonDefaults, button } from "../ui/Button.ts";
 import {
   FEEDBACK_MOTION,
@@ -106,6 +108,21 @@ export const refreshConfirm = (
                   ]),
                 ]
               ),
+              Option.match(confirm.failure, {
+                onNone: () => h.empty,
+                onSome: (text) =>
+                  banner(
+                    h,
+                    {
+                      tone: "failed",
+                      mark: Option.none(),
+                      title: "Not refreshed.",
+                      detail: Option.some(text),
+                      actions: [],
+                    },
+                    [h.DataAttribute("testid", "refresh-failure")]
+                  ),
+              }),
               h.div(
                 [
                   h.Class(

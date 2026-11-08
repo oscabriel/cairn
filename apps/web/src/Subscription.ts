@@ -1,7 +1,8 @@
 // The root's streams and resources. The connection resource is keyed on the epoch, so a new epoch
 // releases the old client and builds a new one. The shell stream runs while the epoch's client
 // exists and reports the socket lost when it fails or ends; it is the connection's health check.
-// The page also wakes the connection when the browser says it is back (online, shown, visible).
+// The page also wakes the connection when the browser says it is back (online, shown, visible), and
+// folds in the outbox another tab saved.
 
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import type { Cause } from "effect";
@@ -14,6 +15,7 @@ import * as Composer from "./composer/Subscription.ts";
 import { acquireClient, CairnConnection } from "./connection/Connection.ts";
 import type { CairnConnectionService } from "./connection/Connection.ts";
 import { causeMessage } from "./connection/Failure.ts";
+import { OUTBOX_STORAGE_KEY } from "./connection/Outbox.ts";
 import { hasClient, isBackingOff } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
@@ -23,6 +25,7 @@ import { subscriptions as pushSubscriptions } from "./push/Subscription.ts";
 import { subscriptions as settingsSubscriptions } from "./settings/Subscription.ts";
 import { subscribeShell } from "./shell/ShellStore.ts";
 import { subscriptions as sidebarSubscriptions } from "./sidebar/Subscription.ts";
+import { storageChanges } from "./storage/TabChanges.ts";
 
 const describe = (cause: Cause.Cause<unknown>): string =>
   causeMessage(
@@ -120,6 +123,9 @@ const rootSubscriptions = Subscription.make<Model, Message, Services>()(
       }
     ),
     wake: Subscription.persistentEntry(wakeEvents),
+    storedOutbox: Subscription.persistentEntry(
+      storageChanges(OUTBOX_STORAGE_KEY, Message.ChangedStoredOutbox())
+    ),
   })
 );
 

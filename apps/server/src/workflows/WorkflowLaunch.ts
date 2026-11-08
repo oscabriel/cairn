@@ -41,6 +41,7 @@ import {
   declineRow,
   launchOf,
   NODE_BRIEF_TOOLS,
+  supersedeRow,
   WorkflowsDoc,
 } from "./WorkflowDocs.ts";
 import type {
@@ -113,8 +114,10 @@ export const applyLaunchAnswer = (
 
 /**
  * The answering commit's part for a workflow's launch (`answerApproval`'s `answered` hook): the row
- * its payload names takes the answer, so Go and the approved row land together. Nothing for any
- * other record.
+ * its payload names takes the answer, so Go and the approved row land together. A Go supersedes
+ * every other approved row of the same script that never ran (a launch whose run stopped before
+ * it called codemode), so the ledger holds at most one approved row per script hash and the gate
+ * runs the launch the user approved last. Nothing for any other record.
  */
 export const launchAnswered = async (
   tx: Tx,
@@ -130,8 +133,20 @@ export const launchAnswered = async (
   const ledger = await tx.doc(WorkflowsDoc, conversationId);
   const row = ledger.items[launch.value.workflowId];
 
-  if (row !== undefined) {
-    applyLaunchAnswer(row, record);
+  if (row === undefined || !applyLaunchAnswer(row, record)) {
+    return;
+  }
+
+  if (row.state !== "approved") {
+    return;
+  }
+
+  const at = record.answeredAt ?? record.askedAt;
+
+  for (const other of Object.values(ledger.items)) {
+    if (other.id !== row.id && other.scriptHash === row.scriptHash) {
+      supersedeRow(other, at);
+    }
   }
 };
 

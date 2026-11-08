@@ -1,5 +1,5 @@
 // The composer's streams: the soft keyboard, the draft saver's 300 ms pause, the `@` search's 120 ms
-// debounce, the `pagehide` flush, and type-to-focus (a printable key pressed with focus on no field
+// debounce, the `pagehide` flush, another tab's draft writes, and type-to-focus (a printable key pressed with focus on no field
 // starts typing into the composer, from t3code's composerFocusRedirect.ts).
 
 import { isTypeToFocusKey } from "@cairn/client-logic/ComposerLogic";
@@ -12,6 +12,7 @@ import {
 } from "foldkit/dom";
 
 import type { CairnConnectionService } from "../connection/Connection.ts";
+import { storageChanges } from "../storage/TabChanges.ts";
 import { attachmentSubscriptions } from "./AttachmentTray.ts";
 import {
   fetchBranches,
@@ -21,6 +22,7 @@ import {
 } from "./Command.ts";
 import {
   DRAFT_SAVE_DEBOUNCE_MS,
+  DRAFTS_STORAGE_KEY,
   draftProject,
   isDraftTarget,
   targetProject,
@@ -193,9 +195,13 @@ export const subscriptions = Subscription.make<
     )
   ),
   pageHide: Subscription.persistentEntry(pageHides),
+  storedDrafts: Subscription.persistentEntry(
+    storageChanges(DRAFTS_STORAGE_KEY, Message.ChangedStoredDrafts())
+  ),
   typeToFocus: Subscription.persistentEntry(typeToFocus),
   attachmentProgress: trayLifted.uploadProgress,
   attachmentPaste: trayLifted.documentPaste,
+  attachmentStorage: trayLifted.storedAttachments,
   draftSave: entry(
     { version: Schema.Int, saved: Schema.Int },
     {

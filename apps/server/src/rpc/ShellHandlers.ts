@@ -3,7 +3,8 @@
 // passes `FolderRules` (the deny list, dot folders, links escaping the home) and is committed with
 // the folder's real path. Deleting or archiving a thread, or deleting a project, first stops the
 // runs it removes (queue cleared, stop hooks run), so a hung thread that is deleted frees its
-// Claude Code child instead of holding it for hours. Clearing a scratch thread stops its run and its
+// Claude Code child instead of holding it for hours. A resent command whose id already has a
+// receipt stops nothing: its first send did, and the thread may have a newer run since. Clearing a scratch thread stops its run and its
 // subagents' first, then removes its folder once the clear is committed; a crash between the two
 // leaves the folder to the scratch boot repair.
 
@@ -22,6 +23,7 @@ import { Effect, Layer, Option, Predicate, Stream } from "effect";
 import { FolderRules } from "../projects/FolderRules.ts";
 import { Projects } from "../projects/Projects.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
+import { CommandReceipts } from "../shell/CommandReceipts.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import type { ShellStoreError } from "../shell/ShellStoreError.ts";
 import { ShellStream } from "../shell/ShellStream.ts";
@@ -62,6 +64,7 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
   "shell.dispatch",
   Effect.gen(function* () {
     const sink = yield* EventSink;
+    const receipts = yield* CommandReceipts;
     const folders = yield* FolderRules;
     const threads = yield* Threads;
     const rows = yield* ThreadRows;
@@ -82,7 +85,7 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
     });
 
     /** The threads whose runs `command` removes from the shell. */
-    const runsEndedBy = (
+    const removedRuns = (
       command: ShellCommand
     ): Effect.Effect<ReadonlyArray<ThreadId>, ShellStoreError> => {
       if (Predicate.isTagged(command, "ThreadClear")) {
@@ -106,6 +109,20 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
 
       return Effect.succeed([]);
     };
+
+    /**
+     * The threads whose runs `command` removes from the shell; none for a resent command, whose
+     * receipt holds the first answer.
+     */
+    const runsEndedBy = Effect.fnUntraced(function* (
+      command: ShellCommand
+    ): Effect.fn.Return<ReadonlyArray<ThreadId>, ShellStoreError> {
+      if (Option.isSome(yield* receipts.find(command.commandId))) {
+        return [];
+      }
+
+      return yield* removedRuns(command);
+    });
 
     /**
      * Stops each run, and with `subagents: "stop"` its working subagents' runs too; a thread the
@@ -254,7 +271,7 @@ export const ShellDispatchHandler = CairnRpcs.toLayerHandler(
 );
 
 /**
- * Both shell handlers. Needs `ShellStream`, `EventSink`, `FolderRules`, `ThreadRows`, `Projects`,
+ * Both shell handlers. Needs `ShellStream`, `EventSink`, `CommandReceipts`, `FolderRules`, `ThreadRows`, `Projects`,
  * `ScratchProject` and `Threads`.
  */
 export const ShellHandlers = Layer.mergeAll(

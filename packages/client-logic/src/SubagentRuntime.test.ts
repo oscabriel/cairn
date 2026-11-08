@@ -293,6 +293,7 @@ describe("the state sets", () => {
     const all: ReadonlyArray<SubagentState> = [
       "go",
       "declined",
+      "sent-back",
       "expired",
       "cancelled",
       "unstarted",
@@ -317,6 +318,7 @@ describe("the state sets", () => {
 
     assert.deepStrictEqual(all.filter(isTerminalSubagentState), [
       "declined",
+      "sent-back",
       "expired",
       "cancelled",
       "unstarted",
@@ -509,6 +511,25 @@ describe("spawn calls and their briefs", () => {
     );
   });
 
+  it("leaves a newer call unpaired while its brief is not written, never taking an older call's", () => {
+    const links = subagentLinksOf({
+      entries: [
+        spawning(1000, [["c1", "Count the files"]]),
+        result("c1"),
+        // The same description again: its tool task has not written its brief yet.
+        spawning(2000, [["c2", "Count the files"]]),
+      ],
+      docs: {
+        "cairn.approvals": items(brief({ id: "call-1", askedAt: 1001 })),
+      },
+    });
+
+    assert.deepStrictEqual(
+      links.map(({ call, brief: record }) => [call.callId, record.id]),
+      [["c1", "call-1"]]
+    );
+  });
+
   it("reads the way back from a child's cairn.child document only", () => {
     assert.deepStrictEqual(
       parentThreadIdOf({
@@ -540,6 +561,7 @@ describe("a child's row", () => {
     ["declined", "Declined"],
     ["expired", "Expired"],
     ["cancelled", "Cancelled"],
+    ["revised", "Sent back"],
   ] as const)("ends %s without a child when its brief does", (status, word) => {
     const row = onlyRow({ status, answeredAt: 1500 });
 

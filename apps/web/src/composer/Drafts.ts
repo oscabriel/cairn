@@ -1,7 +1,8 @@
 // Ported in shape from github.com/pingdotgg/t3code, apps/web/src/composerDraftStore.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (shape only, no code): drafts live in localStorage per
 // thread or draft id, written after a 300 ms pause and on `pagehide`, with attachments kept as ids
-// rather than data. Changed: Cairn's record is small (plan D28) and keyed `cairn:composer-drafts:v1`.
+// rather than data. Changed: Cairn's record is small (plan D28) and keyed `cairn:composer-drafts:v1`,
+// and a save writes only the drafts this tab changed, so tabs keep each other's (`TabChanges.ts`).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -24,6 +25,12 @@ import type { ProjectShell } from "@cairn/protocol/Shell";
 import { Array, DateTime, Effect, Option, Order, Record, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 
+import {
+  applyRecordChanges,
+  mergeRecord,
+  mergeStored,
+  recordChanges,
+} from "../storage/TabChanges.ts";
 import {
   ComposerSettings,
   ComposerTarget,
@@ -49,6 +56,18 @@ export const draftKey = (model: Model): Option.Option<string> =>
     Draft: ({ draftId }) => Option.some(`draft:${draftId}`),
     Thread: ({ threadId }) => Option.some(`thread:${threadId}`),
   });
+
+/** The notice to show now: one about the open draft, or one about no one draft. */
+export const shownNotice = (model: Model): Option.Option<string> =>
+  Option.map(
+    Option.filter(model.notice, (notice) =>
+      Option.match(notice.draftKey, {
+        onNone: () => true,
+        onSome: (key) => Option.contains(draftKey(model), key),
+      })
+    ),
+    (notice) => notice.text
+  );
 
 /** The draft id a new thread launches with: the URL's draft, or the home hero's. */
 export const draftThreadId = (model: Model): Option.Option<string> =>
@@ -174,18 +193,46 @@ export const loadDrafts: Effect.Effect<
   });
 }).pipe(Effect.orElseSucceed(() => ({})));
 
-/** Writes every draft, replacing what was saved; false when storage refused. */
+const draftEquivalence = Schema.toEquivalence(Draft);
+
+const draftChanges = recordChanges(draftEquivalence);
+
+/**
+ * Writes the drafts this tab changed or removed since `base` (the drafts as it last read or wrote
+ * them) into what storage holds now, so another tab's drafts are kept, and writes back a draft of
+ * this tab's that another tab's write dropped without removing it. Answers what storage holds
+ * afterwards, or none when storage refused.
+ */
 export const saveDrafts = (
+  base: Record<string, Draft>,
   drafts: Record<string, Draft>
-): Effect.Effect<boolean, never, KeyValueStore.KeyValueStore> =>
-  Effect.gen(function* () {
-    const store = yield* KeyValueStore.KeyValueStore;
-    const json = yield* encodeDrafts(drafts);
+): Effect.Effect<
+  Option.Option<Record<string, Draft>>,
+  never,
+  KeyValueStore.KeyValueStore
+> =>
+  mergeStored(
+    DRAFTS_STORAGE_KEY,
+    loadDrafts,
+    mergeRecord(draftEquivalence)(base, drafts),
+    (next) =>
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
 
-    yield* store.set(DRAFTS_STORAGE_KEY, json);
+        yield* store.set(DRAFTS_STORAGE_KEY, yield* encodeDrafts(next));
+      })
+  );
 
-    return true;
-  }).pipe(Effect.orElseSucceed(() => false));
+/**
+ * This tab's drafts once storage holds `stored`: what it changed since `written` (the drafts it
+ * last wrote or read) stays, and every other draft is as stored, so other tabs' writes show here.
+ */
+export const rebaseDrafts = (
+  written: Record<string, Draft>,
+  mine: Record<string, Draft>,
+  stored: Record<string, Draft>
+): Record<string, Draft> =>
+  applyRecordChanges(stored, draftChanges(written, mine));
 
 /** Reads the composer's settings, falling back to the defaults. */
 export const loadSettings = (

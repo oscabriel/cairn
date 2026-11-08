@@ -48,7 +48,18 @@ export const Message = defineMessageUnion({
   LoadedSaved: {
     drafts: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
   },
-  CompletedSave: { saved: Schema.Boolean },
+  /**
+   * The ready attachments were written as `written`; `stored` is what storage held afterwards, with
+   * other tabs' attachments, or none when storage refused.
+   */
+  CompletedSave: {
+    written: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
+    stored: Schema.Option(
+      Schema.Record(Schema.String, Schema.Array(AttachmentRef))
+    ),
+  },
+  /** Another tab wrote the saved attachments. */
+  ChangedStoredAttachments: {},
 });
 
 export type Message = typeof Message.Type;

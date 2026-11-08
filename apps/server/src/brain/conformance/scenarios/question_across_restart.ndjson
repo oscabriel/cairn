@@ -13,3 +13,4 @@
 {"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"name the service","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["ask_user"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"The user answered:\n1. Name: heron","images":0,"toolCalls":[],"toolName":"ask_user","isError":false},{"kind":"pi.assistant","role":"assistant","text":"Calling it heron.","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
 {"type":"expect_view","path":["approvals"],"equals":[{"status":"accepted","tool":"ask_user"}]}
 {"type":"expect_view","path":["decisions"],"equals":[{"status":"accepted","decidedBy":"user","reason":null}]}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":2}

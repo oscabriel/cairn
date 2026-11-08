@@ -32,9 +32,10 @@ import type {
   Tx,
 } from "@earendil-works/pi-durable";
 import { defineTask } from "@earendil-works/pi-durable";
-import { Data, Match, Option, Result, Schema } from "effect";
+import { Data, Effect, Match, Option, Predicate, Result, Schema } from "effect";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
+import { errorText } from "../brain/Durable.ts";
 import { applyNote, noteEntry, readNote } from "../brain/NoteAdmission.ts";
 import { isRoleName } from "../models/ModelSpecs.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
@@ -145,6 +146,21 @@ export const NO_JUDGE_FAULTS: JudgeFaults = {
   },
   control: "none",
 };
+
+/**
+ * A judge run's judging threw rather than returning (a judge model's defect, a broken env, a
+ * planted fault). `aborted` when it is the rejection of an aborted `exec`: the run is being
+ * aborted or the brain is closing, and the abort path settles the run instead.
+ */
+class JudgeRunThrew extends Schema.TaggedError<JudgeRunThrew>()(
+  "JudgeRunThrew",
+  {
+    message: Schema.String,
+    runId: Schema.String,
+    aborted: Schema.Boolean,
+    cause: Schema.Defect(),
+  }
+) {}
 
 /** What judging found: a verdict to record, or a reason there is none. */
 type Judged = Data.TaggedEnum<{
@@ -581,33 +597,72 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
         const goal = await runtime.snapshot(GoalDoc, conversationId, context);
         const criterion = criterionOf(goal, task.input);
 
-        const judged: Judged =
-          goal === undefined || Option.isNone(criterion)
-            ? Judged.None({
-                why: "the criterion changed or was removed after the check was queued. Call goal_check again for the criterion as it stands.",
-              })
-            : await judgeOnce(runtime, goal, criterion.value, runId, context);
+        const judging = async () => {
+          const judged: Judged =
+            goal === undefined || Option.isNone(criterion)
+              ? Judged.None({
+                  why: "the criterion changed or was removed after the check was queued. Call goal_check again for the criterion as it stands.",
+                })
+              : await judgeOnce(runtime, goal, criterion.value, runId, context);
 
-        const early = Option.filter(
-          verdictOf(judged),
-          () => faults.control === "split"
+          const early = Option.filter(
+            verdictOf(judged),
+            () => faults.control === "split"
+          );
+
+          // The broken control only: the verdict in a commit of its own, under a fresh run id.
+          if (Option.isSome(early)) {
+            await runtime.commit(async (tx) => {
+              await recordVerdict(tx, conversationId, {
+                criterionId: task.input.criterionId,
+                changedAt: task.input.changedAt,
+                verdict: {
+                  ...early.value,
+                  runId: `${runId}-${String(runtime.now())}`,
+                },
+              });
+            }, context);
+          }
+
+          faults.at("judged");
+
+          return { judged, recordedEarly: Option.isSome(early) };
+        };
+
+        // A throw that is not the run's abort (a judge model's defect, a broken env) would fault
+        // the task with its index item unsettled, and goal_check would wait on it for good: the
+        // run completes instead, with no verdict and a note that says why. An abort rethrows, so
+        // the abort handler settles the item and a rerun judges again.
+        const attempt = await Effect.runPromise(
+          Effect.result(
+            Effect.tryPromise({
+              try: judging,
+              catch: (cause) =>
+                new JudgeRunThrew({
+                  message: `Judge run ${runId} threw before its verdict: ${errorText(cause)}`,
+                  runId,
+                  aborted:
+                    Predicate.hasProperty(cause, "code") &&
+                    cause.code === "aborted",
+                  cause,
+                }),
+            })
+          )
         );
 
-        // The broken control only: the verdict in a commit of its own, under a fresh run id.
-        if (Option.isSome(early)) {
-          await runtime.commit(async (tx) => {
-            await recordVerdict(tx, conversationId, {
-              criterionId: task.input.criterionId,
-              changedAt: task.input.changedAt,
-              verdict: {
-                ...early.value,
-                runId: `${runId}-${String(runtime.now())}`,
-              },
-            });
-          }, context);
+        if (
+          Result.isFailure(attempt) &&
+          (runtime.signal.aborted || attempt.failure.aborted)
+        ) {
+          throw attempt.failure.cause;
         }
 
-        faults.at("judged");
+        const done = Result.getOrElse(attempt, (threw) => ({
+          judged: Judged.None({
+            why: `the judge failed before it reached a verdict (${errorText(threw.cause)}). Call goal_check again to judge it anew.`,
+          }),
+          recordedEarly: false,
+        }));
 
         await runtime.commit(
           async (tx) =>
@@ -617,9 +672,9 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
               task.id,
               task.input,
               criterion,
-              judged,
+              done.judged,
               runtime.now(),
-              Option.isSome(early)
+              done.recordedEarly
             ),
           context
         );

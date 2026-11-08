@@ -213,6 +213,7 @@ const DRAWS: ReadonlyArray<{
         threadId: Option.some(SCRATCH_THREAD),
         draft: "And on a rename?",
         isBusy: false,
+        sentDraft: Option.none(),
       },
     },
     draw: (model, h) =>
@@ -243,6 +244,7 @@ const DRAWS: ReadonlyArray<{
               replaces: PROJECT_THREAD,
               text: "Pick up the look track from L7.",
               isSending: false,
+              failure: Option.none(),
             }),
             "cairn",
             "contained"

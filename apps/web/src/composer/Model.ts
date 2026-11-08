@@ -184,12 +184,31 @@ export const FooterState = Schema.Struct({
 
 export type FooterState = typeof FooterState.Type;
 
+/**
+ * A note for the user and the draft it is about (`thread:<id>` or `draft:<id>`); it shows only on
+ * that draft. None for a note about no one draft, shown wherever it was set.
+ */
+export const ComposerNotice = Schema.Struct({
+  draftKey: Schema.Option(Schema.String),
+  text: Schema.String,
+});
+
+export type ComposerNotice = typeof ComposerNotice.Type;
+
 /** The composer's Model. */
 export const Model = Schema.Struct({
   context: ComposerContext,
   /** Every draft on this device, by `draftKey`. */
   drafts: Schema.Record(Schema.String, Draft),
   draftsLoaded: Schema.Boolean,
+  /** The drafts as this tab last read or wrote them in storage; a save writes what changed since. */
+  storedDrafts: Schema.Record(Schema.String, Draft),
+  /**
+   * Drafts sent and emptied whose turn the outbox does not hold yet (its ids are being minted, or a
+   * launch's scratch project made), by draft key. They are saved in place of the emptied draft until
+   * then, so a page that dies in between keeps the words.
+   */
+  sending: Schema.Record(Schema.String, Draft),
   /** Bumped on every draft change; the saver writes when it is ahead of `savedVersion`. */
   draftsVersion: Schema.Int,
   savedVersion: Schema.Int,
@@ -217,8 +236,8 @@ export const Model = Schema.Struct({
   history: Schema.Option(ComposerPromptHistoryPosition),
   footer: FooterState,
   headlineInline: Schema.Boolean,
-  /** Why the last send did not go, or another note for the user. */
-  notice: Schema.Option(Schema.String),
+  /** Why the last send did not go, or another note for the user, with the draft it is about. */
+  notice: Schema.Option(ComposerNotice),
   /** Every draft's attachment tray (pasted, dropped and picked files, and their uploads). */
   attachments: Attachments.Model,
 });
@@ -230,6 +249,8 @@ export const initial: Model = {
   context: emptyContext,
   drafts: {},
   draftsLoaded: false,
+  storedDrafts: {},
+  sending: {},
   draftsVersion: 0,
   savedVersion: 0,
   homeDraftId: Option.none(),

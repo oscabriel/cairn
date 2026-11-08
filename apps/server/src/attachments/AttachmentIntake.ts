@@ -227,15 +227,28 @@ export class AttachmentIntake extends Context.Service<
         body: Stream.Stream<Uint8Array, E>
       ) {
         const id = claims.attachmentId;
-        const received = yield* store.receive(id, claims.sizeBytes, body);
 
-        const stored = yield* Effect.gen(function* () {
-          const result = yield* prepare(claims, received, received.bytes);
+        // A received upload holds its id until `record` or `forget`; the mask keeps an interrupt
+        // from landing between the steps, where neither would run. Only receiving and preparing
+        // can be interrupted: an interrupt inside `record` could land after its row commits, and
+        // then `forget` would delete the files that row names.
+        const stored = yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const received = yield* restore(
+              store.receive(id, claims.sizeBytes, body)
+            );
 
-          yield* store.record(result);
+            const result = yield* restore(
+              prepare(claims, received, received.bytes)
+            ).pipe(Effect.onError(() => store.forget(id).pipe(Effect.ignore)));
 
-          return result;
-        }).pipe(Effect.onError(() => store.forget(id).pipe(Effect.ignore)));
+            yield* store
+              .record(result)
+              .pipe(Effect.onError(() => store.forget(id).pipe(Effect.ignore)));
+
+            return result;
+          })
+        );
 
         return stored.ref;
       });

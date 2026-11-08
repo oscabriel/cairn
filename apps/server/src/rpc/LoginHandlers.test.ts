@@ -1,35 +1,24 @@
 // The login RPCs over the stubs, as `Handlers.ts` layers them: a provider other than Codex is
 // `InvalidInput` on `provider`, a second sign-in is `Conflict`, and a brain without Cairn's OAuth
-// store answers the stream with one `Failed` step and `providers.logout` with `Unavailable`. A
-// stored sign-in and a logout each forget the provider's health; a refused logout does not.
+// store answers the stream with one `Failed` step and `providers.logout` with `Unavailable`. The
+// health reset that follows a sign-in or a logout is `CodexLogin`'s, tested in CodexLogin.test.ts.
 
-import { LoginProgress } from "@cairn/protocol/Models";
+import type { LoginProgress } from "@cairn/protocol/Models";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
 import { assert, describe, it } from "@effect/vitest";
-import {
-  DateTime,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  Schema,
-  Stream,
-} from "effect";
+import { Effect, Layer, Option, Predicate, Stream } from "effect";
 import type { Scope } from "effect";
 import { RpcTest } from "effect/rpc";
 
 import { CodexLogin, CodexLoginBusy } from "../models/CodexLogin.ts";
-import { CODEX_PROVIDER } from "../models/CredentialStore.ts";
-import { HealthOutcome, ModelHealth } from "../models/ModelHealth.ts";
+import { ModelHealth } from "../models/ModelHealth.ts";
 import { ViewerTest } from "../shell/ShellTestKit.ts";
 import { LoginHandlers } from "./LoginHandlers.ts";
 import { stubHandlers } from "./StubHandlers.ts";
 
-const LoginSteps = LoginProgress.pipe(Schema.toTaggedUnion("_tag"));
-
 const Stubs = CairnRpcs.toLayer(Effect.succeed(CairnRpcs.of(stubHandlers)));
 
-const handlersWith = (login: Layer.Layer<CodexLogin>) =>
+const handlersWith = (login: Layer.Layer<CodexLogin, never, ModelHealth>) =>
   Layer.mergeAll(Stubs, LoginHandlers.pipe(Layer.provide(login))).pipe(
     Layer.provideMerge(ModelHealth.layerTest),
     Layer.provideMerge(ViewerTest)
@@ -41,27 +30,6 @@ const BusyLogin = Layer.mock(CodexLogin)({
   cancel: Effect.succeed(false),
 });
 
-/** A sign-in that stores at once, and a logout that removes it. */
-const SignedInLogin = Layer.mock(CodexLogin)({
-  start: Stream.make(
-    LoginSteps.cases.SignedIn.make({ account: Option.none() })
-  ),
-  logout: Effect.succeed(true),
-});
-
-/** Marks Codex failing with a revoked login, as a run's 401 would. */
-const markRevoked = Effect.gen(function* () {
-  const health = yield* ModelHealth;
-  const at = yield* DateTime.now;
-
-  yield* health.record(
-    CODEX_PROVIDER,
-    HealthOutcome.Failed({ at, message: "401 invalid_grant" })
-  );
-
-  assert.strictEqual((yield* health.stateOf(CODEX_PROVIDER)).state, "failing");
-});
-
 /** A step's tag, or a failure's reason. */
 const labelOf = (step: LoginProgress) =>
   Predicate.isTagged(step, "Failed") ? step.reason : step._tag;
@@ -69,7 +37,7 @@ const labelOf = (step: LoginProgress) =>
 const makeClient = RpcTest.makeClient(CairnRpcs);
 
 const run = <A, E>(
-  login: Layer.Layer<CodexLogin>,
+  login: Layer.Layer<CodexLogin, never, ModelHealth>,
   body: Effect.Effect<
     A,
     E,
@@ -146,72 +114,5 @@ describe("the login RPCs", () => {
         }
       })
     )
-  );
-
-  it.effect("forget the provider's health after a stored sign-in", () =>
-    run(
-      SignedInLogin,
-      Effect.gen(function* () {
-        const client = yield* makeClient;
-        const health = yield* ModelHealth;
-
-        yield* markRevoked;
-
-        const steps = yield* client["providers.login.start"]({
-          provider: CODEX_PROVIDER,
-        }).pipe(Stream.runCollect);
-
-        assert.deepStrictEqual(
-          steps.map((step) => labelOf(step)),
-          ["SignedIn"]
-        );
-        assert.strictEqual(
-          (yield* health.stateOf(CODEX_PROVIDER)).state,
-          "unknown"
-        );
-      })
-    )
-  );
-
-  it.effect(
-    "forget the provider's health after a logout, not after a refused one",
-    () =>
-      Effect.gen(function* () {
-        yield* run(
-          CodexLogin.layer,
-          Effect.gen(function* () {
-            const client = yield* makeClient;
-            const health = yield* ModelHealth;
-
-            yield* markRevoked;
-
-            yield* client["providers.logout"]({
-              provider: CODEX_PROVIDER,
-            }).pipe(Effect.flip);
-
-            assert.strictEqual(
-              (yield* health.stateOf(CODEX_PROVIDER)).state,
-              "failing"
-            );
-          })
-        );
-
-        yield* run(
-          SignedInLogin,
-          Effect.gen(function* () {
-            const client = yield* makeClient;
-            const health = yield* ModelHealth;
-
-            yield* markRevoked;
-
-            yield* client["providers.logout"]({ provider: CODEX_PROVIDER });
-
-            assert.strictEqual(
-              (yield* health.stateOf(CODEX_PROVIDER)).state,
-              "unknown"
-            );
-          })
-        );
-      })
   );
 });

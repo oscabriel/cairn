@@ -110,17 +110,33 @@ const KIND_RANK: Readonly<Record<RuntimeRequestKind, number>> = {
   criteria: 3,
 };
 
+/** What the card orders a request by: its kind, when it was asked (epoch ms), then its id. */
+export interface RequestOrderKey {
+  readonly id: string;
+  readonly kind: RuntimeRequestKind;
+  readonly askedAt: number;
+}
+
 /**
- * The requests the user can answer on this thread, in card order: pending and routed to the user
- * (a child's question still with its parent is not the user's yet), approvals first, then
- * questions, briefs and criteria, each group oldest first.
+ * The card's order of two pending requests: approvals first, then questions, briefs and criteria,
+ * each group oldest first. The shell projector picks a row's head request with it, so the row's
+ * status names the request the card shows first.
+ */
+export const byCardOrder = (a: RequestOrderKey, b: RequestOrderKey): number =>
+  KIND_RANK[a.kind] - KIND_RANK[b.kind] ||
+  a.askedAt - b.askedAt ||
+  a.id.localeCompare(b.id);
+
+/**
+ * The requests the user can answer on this thread, in card order (`byCardOrder`): pending and
+ * routed to the user (a child's question still with its parent is not the user's yet).
  */
 export const pendingRequests = (
   records: ReadonlyArray<ApprovalRecord>
 ): ReadonlyArray<PendingRequest> => {
   const open = records
     .filter((record) => record.status === "pending" && record.route === "user")
-    .toSorted((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || byAge(a, b));
+    .toSorted(byCardOrder);
 
   return open.map((record, index) => ({
     record,

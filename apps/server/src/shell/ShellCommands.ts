@@ -35,6 +35,10 @@
 
 import { hasLiveChildren } from "@cairn/client-logic/SubagentTally";
 import {
+  effectiveSnoozed,
+  hasQueuedTurnStart,
+} from "@cairn/client-logic/ThreadSettled";
+import {
   CommandId,
   DisplayText,
   ProjectId,
@@ -627,6 +631,21 @@ const unsnooze = (row: ThreadRow, now: DateTime.Utc): ThreadRow => {
     lastSnoozeWakeAt: Option.some(now),
   };
 };
+
+/**
+ * Whether an activity change ends the row's snooze early: a request for the user (its own or a
+ * subagent's below it) or a failure arrived while it was snoozed. The wake is recorded on the row
+ * then, as a sent message records one, so answering the request does not put the thread back to
+ * sleep. A launch failure counts though it has no run to date it.
+ */
+const endsSnoozeEarly = (
+  before: ThreadShell,
+  after: ThreadShell,
+  now: DateTime.Utc
+): boolean =>
+  effectiveSnoozed(before, now) &&
+  (!effectiveSnoozed(after, now) ||
+    (after.activity === "failed" && before.activity !== "failed"));
 
 /**
  * What a sent message does to a row: the manual settle state goes back to none (keeping the time of
@@ -1318,6 +1337,22 @@ export const planShellCommand = (
           );
         }
 
+        if (row.shell.subagents.asking > 0) {
+          return conflict(
+            command,
+            "thread_busy",
+            "a subagent of the thread is waiting on an approval or a question. Answer it before snoozing."
+          );
+        }
+
+        if (hasQueuedTurnStart(row.shell, now)) {
+          return conflict(
+            command,
+            "thread_busy",
+            "the thread is still starting a run. Wait for it to start before snoozing."
+          );
+        }
+
         // Always restamp, even for the same wake time: a snooze after a failure woke the thread
         // means "I saw it, not now".
         return threadPlan(
@@ -1532,11 +1567,24 @@ export const planShellCommand = (
       ),
 
     ThreadActivityUpdate: (update) =>
-      Result.flatMap(liveThread(command, state, update.threadId), (row) =>
-        threadPlan(
-          applyPatch(row, update.patch, now),
-          "thread.activity-updated"
-        )
+      Result.flatMap(
+        liveThread(command, state, update.threadId),
+        (row): Planned => {
+          const patched = applyPatch(row, update.patch, now);
+
+          if (!endsSnoozeEarly(row.shell, patched.shell, now)) {
+            return threadPlan(patched, "thread.activity-updated");
+          }
+
+          return Result.succeed({
+            events: [
+              threadEvent(row.shell.id, "thread.activity-updated"),
+              threadEvent(row.shell.id, "thread.unsnoozed"),
+            ],
+            projects: [],
+            threads: [unsnooze(patched, now)],
+          });
+        }
       ),
 
     ThreadWorkspaceUpdate: (update) =>

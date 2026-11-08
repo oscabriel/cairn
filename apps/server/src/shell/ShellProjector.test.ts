@@ -3,6 +3,7 @@
 // commits at most one activity event per thread per 50 ms window and nothing when nothing changed;
 // a parked task shows and clears; and the boot reconcile repairs rows a lost event left wrong.
 
+import { threadStatus } from "@cairn/client-logic/ThreadState";
 import {
   ApprovalId,
   ConversationId,
@@ -595,6 +596,48 @@ describe("the shell projector", () => {
   );
 
   it.effect(
+    "the row names the request the card shows first: an approval asked after a question leads",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThreads();
+
+          const question = ApprovalId.make("esc-child-1");
+          const approval = ApprovalId.make("call-9");
+
+          yield* emit([
+            RunStarted.make({ threadId: THREAD, runId: run7, at: at(1) }),
+            RuntimeRequestUpdated.make({
+              threadId: THREAD,
+              id: question,
+              kind: "user-input",
+              status: "pending",
+            }),
+          ]);
+          yield* TestClock.adjust("1 second");
+          yield* emit([
+            RuntimeRequestUpdated.make({
+              threadId: THREAD,
+              id: approval,
+              kind: "tool-call",
+              status: "pending",
+            }),
+          ]);
+
+          const shell = yield* shellOf(THREAD);
+
+          // The card (client-logic's pendingRequests) opens on the approval, so the row says so.
+          assert.deepStrictEqual(
+            Option.map(shell.pendingRuntimeRequest, (request) => request.id),
+            Option.some(approval)
+          );
+          assert.strictEqual(threadStatus(shell, Option.none()), "approval");
+          assert.strictEqual(shell.pendingCount, 2);
+        })
+      )
+  );
+
+  it.effect(
     "a question with the parent waits for the parent, not the user, until it is escalated (ADR 0027)",
     () =>
       run(
@@ -1129,7 +1172,8 @@ describe("the shell projector", () => {
               request.kind,
               DateTime.toEpochMillis(request.createdAt),
             ]),
-            Option.some([ApprovalId.make("apr_boot"), "user-input", 1000])
+            // The card shows the approval before the older question, so the row names it.
+            Option.some([ApprovalId.make("apr_boot_2"), "tool-call", 2000])
           );
           assert.strictEqual(waiting.pendingCount, 2);
           assert.strictEqual(ended.pendingCount, 0);

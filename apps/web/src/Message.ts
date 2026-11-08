@@ -59,7 +59,16 @@ export const Message = defineMessageUnion({
   },
   /** The wait before sending the outbox item with `key` again, after a retryable failure, is over. */
   ElapsedResend: { epoch: Schema.Int, key: Schema.String },
-  CompletedSaveOutbox: { saved: Schema.Boolean },
+  /**
+   * The outbox was written as `written`; `stored` is what storage held afterwards, with other tabs'
+   * items, or none when storage was full or refused.
+   */
+  CompletedSaveOutbox: {
+    written: Schema.Array(OutboxItem),
+    stored: Schema.Option(Schema.Array(OutboxItem)),
+  },
+  /** Another tab wrote the saved outbox. */
+  ChangedStoredOutbox: {},
   /** The user closed the notice bar. */
   DismissedNotice: {},
 

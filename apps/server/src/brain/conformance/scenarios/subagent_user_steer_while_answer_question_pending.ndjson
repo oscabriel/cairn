@@ -1,0 +1,26 @@
+{"type":"transcript_start","scenario":"subagent_user_steer_while_answer_question_pending","version":1}
+{"type":"model","label":"p1","thread":"parent","toolCalls":[{"id":"call_1","name":"subagent_spawn","arguments":{"description":"Count the files","brief":"Count the files in one folder."}}]}
+{"type":"model","label":"p2","thread":"parent","text":"Waiting for Go."}
+{"type":"model","label":"c1","thread":"child1","text":"Which folder should I count?\n1. src\n2. lib"}
+{"type":"model","label":"p3","thread":"parent","hold":true,"toolCalls":[{"id":"call_p3","name":"subagent_reply","arguments":{"subagent":"$child1","answer":"src"}}]}
+{"type":"model","label":"c2","thread":"child1","text":"There are 2 test files."}
+{"type":"model","label":"p4","thread":"parent","text":"Answered: src."}
+{"type":"model","label":"c3","thread":"child1","hold":true,"text":"src has 12 files."}
+{"type":"model","label":"p5","thread":"parent","text":"src has 12 files."}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"delegate it"}
+{"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","threadId":"$parent","kind":"brief","status":"pending"}}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$parent","status":"completed"}}
+{"type":"input","step":"respond","decision":"accept"}
+{"type":"expect_view","path":["subagents",0,"questions"],"equals":["pending"]}
+{"type":"settle","ms":300}
+{"type":"input","step":"message","thread":"child1","requestId":"u1","text":"how many test files?"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","threadId":"$child1","status":"completed"}}
+{"type":"settle","ms":300}
+{"type":"expect_view","path":["subagents",0],"equals":{"status":"waiting","settlements":1,"delivered":1,"questions":["pending"],"model":{"provider":"faux","modelId":"scripted"}}}
+{"type":"release","label":"p3"}
+{"type":"expect_view","path":["subagents",0,"questions"],"equals":["answered"]}
+{"type":"expect_view","path":["running"],"thread":"child1","equals":true}
+{"type":"expect_view","path":["subagents",0,"status"],"equals":"working"}
+{"type":"release","label":"c3"}
+{"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":2,"delivered":2,"questions":["answered"],"model":{"provider":"faux","modelId":"scripted"}}]}

@@ -8,16 +8,23 @@ import {
 import { ProjectShell } from "@cairn/protocol/Shell";
 import { ConversationView } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
-import { DateTime, Effect, Option, Ref, Schema } from "effect";
+import { DateTime, Duration, Effect, Option, Ref, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
+import { TestClock } from "effect/testing";
 import { Mount } from "foldkit";
 import * as Scene from "foldkit/scene";
 import * as Story from "foldkit/story";
 
+import { SaveReady } from "../attachments/Command.ts";
 import { Message as AttachmentsMessage } from "../attachments/Message.ts";
 import { AttachmentStatus } from "../attachments/Model.ts";
 import { AttachmentPaste } from "../attachments/Paste.ts";
-import { readyIds } from "../attachments/Update.ts";
+import {
+  loadSaved,
+  RESTORE_WINDOW_MS,
+  saveSaved,
+} from "../attachments/Saved.ts";
+import { noticeFor, readyIds } from "../attachments/Update.ts";
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { view } from "../next/composer/View.ts";
@@ -40,14 +47,22 @@ import {
   threadId,
 } from "./ComposerFixtures.ts";
 import { composerContext } from "./Context.ts";
-import { activeDraft, loadDrafts, saveDrafts } from "./Drafts.ts";
+import {
+  activeDraft,
+  DRAFTS_STORAGE_KEY,
+  loadDrafts,
+  saveDrafts,
+  shownNotice,
+} from "./Drafts.ts";
 import { ComposerInput } from "./Editor.ts";
 import { MeasureFooter } from "./Footer.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { pickerRows } from "./Popovers.ts";
+import { menuContents } from "./TriggerMenu.ts";
 import { contextChanged, inform, pickDraftProject, update } from "./Update.ts";
+import type { UpdateReturn } from "./Update.ts";
 
 const editor = Scene.testId("composer-editor");
 
@@ -96,6 +111,25 @@ const typeWithCaret = (value: string) => [
     Message.ChangedSelection({ start: value.length, end: value.length })
   ),
 ];
+
+/** An @ search answer for `src` in `projectId`, listing one file. */
+const srcAnswer = (projectId: ProjectId, path: string) =>
+  Message.SucceededPathSearch({
+    projectId,
+    query: "src",
+    result: { entries: [{ path, kind: "file" }], truncated: false },
+  });
+
+/** `model` after each of `messages` in turn. */
+const afterAll = (model: Model, messages: ReadonlyArray<Message>): Model => {
+  let current = model;
+
+  for (const message of messages) {
+    current = update(current, message).model;
+  }
+
+  return current;
+};
 
 describe("composer triggers", () => {
   it("opens the command menu for a slash at the start of a line", () => {
@@ -193,6 +227,70 @@ describe("composer triggers", () => {
       Scene.tap((simulation) => {
         assert.lengthOf(simulation.commands, 0);
       })
+    );
+  });
+
+  it("applies an @ search answer only for the target project, and does not spin without one", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b08";
+    const target = ComposerTarget.Draft({ draftId });
+
+    const other = ProjectShell.make({
+      ...project,
+      id: ProjectId.make("prj_other"),
+      title: "other",
+      workspaceRoot: "/home/user/other",
+    });
+
+    const base = inform(composerOn(target), {
+      ...contextFor(target),
+      projects: [project, other],
+    }).model;
+
+    const typed = [
+      Message.ChangedDraft({ value: "see @src" }),
+      Message.ChangedSelection({ start: 8, end: 8 }),
+    ];
+
+    const steps = [
+      ...typed,
+      Message.ElapsedPathSearchDebounce({
+        projectId: project.id,
+        query: "src",
+      }),
+      Message.PickedProject({ projectId: other.id }),
+      Message.ElapsedPathSearchDebounce({ projectId: other.id, query: "src" }),
+      srcAnswer(project.id, "src/first.ts"),
+      srcAnswer(other.id, "src/second.ts"),
+    ];
+
+    const answered = afterAll(
+      pickDraftProject(base, draftId, project.id),
+      steps
+    );
+
+    assert.deepStrictEqual(
+      Option.map(menuContents(answered), (contents) =>
+        contents.items.map((item) => item.description)
+      ),
+      Option.some(["src/second.ts"]),
+      "the menu lists the picked project's files"
+    );
+
+    const orphaned = afterAll(
+      pickDraftProject(base, draftId, ProjectId.make("prj_gone")),
+      typed
+    );
+
+    assert.deepStrictEqual(
+      Option.map(menuContents(orphaned), ({ error, loading }) => ({
+        loading,
+        error,
+      })),
+      Option.some({
+        loading: false,
+        error: Option.some("Choose a project to search its files."),
+      }),
+      "a draft with no project shows no endless search"
     );
   });
 
@@ -604,7 +702,7 @@ describe("composer drafts", () => {
     // The saver writes after the pause; a new page reads it back.
     const saved = await Effect.runPromise(
       Effect.gen(function* () {
-        yield* saveDrafts(back.drafts);
+        yield* saveDrafts({}, back.drafts);
 
         return yield* loadDrafts;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
@@ -639,7 +737,13 @@ describe("composer drafts", () => {
       Story.Command.expectHas(SaveDrafts),
       Story.Command.resolve(
         SaveDrafts,
-        Message.CompletedSaveDrafts({ version: 2, saved: true })
+        Message.CompletedSaveDrafts({
+          version: 2,
+          written: { [`thread:${threadId}`]: { ...emptyDraft, text: "ab" } },
+          stored: Option.some({
+            [`thread:${threadId}`]: { ...emptyDraft, text: "ab" },
+          }),
+        })
       ),
       Story.model((model: Model) => {
         assert.strictEqual(model.savedVersion, 2);
@@ -665,6 +769,344 @@ describe("composer drafts", () => {
   });
 });
 
+/** Runs the Commands named `names` an update issued, as the runtime would, with no connection. */
+const runCommands = (result: UpdateReturn, names: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const disconnected = yield* Ref.make(Option.none());
+
+    return yield* Effect.forEach(
+      (result.commands ?? []).filter(({ name }) => names.includes(name)),
+      (command) => command.effect
+    ).pipe(Effect.provideService(CairnConnection._tag, disconnected));
+  });
+
+/** Runs the draft saves an update issued, and returns their answers. */
+const runSaves = (result: UpdateReturn) =>
+  runCommands(result, [SaveDrafts.name]);
+
+/** A tab on `target` whose drafts were read from an empty store. */
+const freshTab = (target: ComposerTarget): Model =>
+  update(composerOn(target), Message.LoadedDrafts({ drafts: {} })).model;
+
+/** Types `value` into `tab`'s open draft, lets the saver's pause run out, and takes its answer. */
+const typeAndSave = (tab: Model, value: string) =>
+  Effect.gen(function* () {
+    const typed = update(tab, Message.ChangedDraft({ value })).model;
+
+    const [answer] = yield* runSaves(
+      update(
+        typed,
+        Message.ElapsedDraftDebounce({ version: typed.draftsVersion })
+      )
+    );
+
+    return answer === undefined ? typed : update(typed, answer).model;
+  });
+
+/** `tab` told another tab wrote, after its save (which reads storage) answered. */
+const hear = (tab: Model) =>
+  Effect.gen(function* () {
+    const told = update(tab, Message.ChangedStoredDrafts());
+    const [answer] = yield* runSaves(told);
+
+    return answer === undefined ? told.model : update(told.model, answer).model;
+  });
+
+describe("drafts in two tabs", () => {
+  it.effect("keep each other's saved drafts", () =>
+    Effect.gen(function* () {
+      const tabB = freshTab(ComposerTarget.Thread({ threadId: otherThreadId }));
+      const tabA = freshTab(ComposerTarget.Thread({ threadId }));
+
+      yield* typeAndSave(tabA, "half a thought");
+      yield* typeAndSave(tabB, "another");
+
+      const stored = yield* loadDrafts;
+
+      assert.deepStrictEqual(
+        {
+          a: stored[`thread:${threadId}`]?.text,
+          b: stored[`thread:${otherThreadId}`]?.text,
+        },
+        { a: "half a thought", b: "another" }
+      );
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect("show each other's writes, and keep their own unsaved typing", () =>
+    Effect.gen(function* () {
+      const xKey = `thread:${threadId}`;
+      const yKey = `thread:${otherThreadId}`;
+
+      const tabA = freshTab(ComposerTarget.Thread({ threadId }));
+      const tabB = freshTab(ComposerTarget.Thread({ threadId: otherThreadId }));
+      const wrote = yield* typeAndSave(tabA, "half a thought");
+
+      // Tab B types without pausing, so its draft is not saved yet.
+      const typing = update(
+        tabB,
+        Message.ChangedDraft({ value: "mine" })
+      ).model;
+
+      const heard = yield* hear(typing);
+
+      // Tab A empties its draft, and the saver writes it.
+      yield* typeAndSave(wrote, "");
+
+      const heardAgain = yield* hear(heard);
+
+      assert.deepStrictEqual(
+        {
+          heard: [heard.drafts[xKey]?.text, heard.drafts[yKey]?.text],
+          heardAgain: [
+            heardAgain.drafts[xKey]?.text,
+            heardAgain.drafts[yKey]?.text,
+          ],
+          stored: Object.keys(yield* loadDrafts),
+        },
+        {
+          heard: ["half a thought", "mine"],
+          heardAgain: [undefined, "mine"],
+          stored: [yKey],
+        }
+      );
+    }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "keep a draft another tab's write dropped because it read storage before the draft was saved",
+    () =>
+      Effect.gen(function* () {
+        const xKey = `thread:${threadId}`;
+        const yKey = `thread:${otherThreadId}`;
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        const tabA = yield* typeAndSave(
+          freshTab(ComposerTarget.Thread({ threadId })),
+          "hello"
+        );
+
+        // Tab B read storage before tab A's write landed, so its own write leaves A's draft out.
+        yield* store.remove(DRAFTS_STORAGE_KEY);
+        yield* typeAndSave(
+          freshTab(ComposerTarget.Thread({ threadId: otherThreadId })),
+          "another"
+        );
+
+        const heard = yield* hear(tabA);
+
+        assert.deepStrictEqual(
+          {
+            open: activeDraft(heard).text,
+            stored: Object.keys(yield* loadDrafts).toSorted(),
+          },
+          { open: "hello", stored: [xKey, yKey].toSorted() }
+        );
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+});
+
+/** `model` after both stores answered with what they hold now, drafts first or tray first. */
+const reload = (model: Model, traysFirst: boolean) =>
+  Effect.gen(function* () {
+    const drafts = Message.LoadedDrafts({ drafts: yield* loadDrafts });
+
+    const tray = Message.GotAttachmentsMessage({
+      message: AttachmentsMessage.LoadedSaved({ drafts: yield* loadSaved }),
+    });
+
+    const [first, second] = traysFirst ? [tray, drafts] : [drafts, tray];
+
+    return update(update(model, first).model, second).model;
+  });
+
+describe("drafts after a reload", () => {
+  const key = `thread:${threadId}`;
+
+  const pdfRef = {
+    id: AttachmentId.make("att_1"),
+    name: "notes.pdf",
+    mimeType: "application/pdf",
+    sizeBytes: 12,
+    kind: "pdf" as const,
+    sha256: "0".repeat(64),
+  };
+
+  /** A page opened on the thread, before either store answered. */
+  const opened: Model = { ...onThread, draftsLoaded: false };
+
+  it.effect(
+    "drop an attachment the brain has swept, so an empty composer cannot send",
+    () =>
+      Effect.gen(function* () {
+        yield* saveSaved({}, { [key]: [pdfRef] });
+        yield* saveDrafts(
+          {},
+          { [key]: { ...emptyDraft, attachments: [pdfRef.id] } }
+        );
+        yield* TestClock.adjust(Duration.millis(RESTORE_WINDOW_MS));
+
+        for (const traysFirst of [false, true]) {
+          const reloaded = yield* reload(opened, traysFirst);
+
+          const sent = update(
+            reloaded,
+            Message.ClickedSend({ alternate: false })
+          );
+
+          assert.deepStrictEqual(
+            {
+              attachments: activeDraft(reloaded).attachments,
+              tray: readyIds(reloaded.attachments, key),
+              sends: (sent.commands ?? []).map(({ name }) => name),
+            },
+            { attachments: [], tray: [], sends: [] }
+          );
+        }
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "drop a swept attachment without overwriting another tab's newer words for the draft",
+    () =>
+      Effect.gen(function* () {
+        const old = { ...emptyDraft, text: "old", attachments: [pdfRef.id] };
+
+        yield* saveSaved({}, { [key]: [pdfRef] });
+        yield* saveDrafts({}, { [key]: old });
+        yield* TestClock.adjust(Duration.millis(RESTORE_WINDOW_MS));
+
+        const reloaded = yield* reload(opened, false);
+
+        // Another tab rewrites the draft after this page read it.
+        yield* saveDrafts({ [key]: old }, { [key]: { ...old, text: "newer" } });
+        yield* runSaves(update(reloaded, Message.HidPage()));
+
+        assert.strictEqual((yield* loadDrafts)[key]?.text, "newer");
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "keep a sent turn's words out of the drafts when the page dies before the saver's pause",
+    () =>
+      Effect.gen(function* () {
+        const drafts = {
+          [key]: { ...emptyDraft, text: "ship it", attachments: [pdfRef.id] },
+        };
+
+        const saved = { [key]: [pdfRef] };
+
+        yield* saveDrafts({}, drafts);
+        yield* saveSaved({}, saved);
+
+        const typed: Model = {
+          ...onThread,
+          drafts,
+          storedDrafts: drafts,
+          attachments: {
+            ...onThread.attachments,
+            loaded: true,
+            stored: saved,
+            nextLocalId: 2,
+            items: [
+              {
+                localId: "attachment-1",
+                draftKey: key,
+                name: pdfRef.name,
+                mimeType: pdfRef.mimeType,
+                sizeBytes: pdfRef.sizeBytes,
+                isImage: false,
+                file: Option.none(),
+                previewUrl: Option.none(),
+                pastedAt: Option.none(),
+                pasteToRequestMs: Option.none(),
+                attempts: 1,
+                status: AttachmentStatus.Ready({ ref: pdfRef }),
+              },
+            ],
+          },
+        };
+
+        // Send: the tray is saved at once and the turn's id is minted; every save the composer
+        // issues runs, but the saver's pause never runs out, because the page dies here.
+        const sent = update(typed, Message.ClickedSend({ alternate: false }));
+        const answers = yield* runCommands(sent, [PrepareSend.name]);
+
+        yield* runCommands(sent, [SaveReady.name, SaveDrafts.name]);
+
+        const [answer] = answers;
+
+        const prepared = update(
+          sent.model,
+          answer ?? Message.CompletedRequest()
+        );
+
+        yield* runCommands(prepared, [SaveReady.name, SaveDrafts.name]);
+
+        const reloaded = yield* reload(opened, false);
+
+        assert.deepStrictEqual(
+          {
+            text: activeDraft(reloaded).text,
+            attachments: activeDraft(reloaded).attachments,
+            tray: readyIds(reloaded.attachments, key),
+          },
+          { text: "", attachments: [], tray: [] }
+        );
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "keep a launch's words saved while its scratch project is being made",
+    () =>
+      Effect.gen(function* () {
+        const draftId = "019a0000-0000-7000-8000-000000000b09";
+        const base = composerOn(ComposerTarget.Draft({ draftId }));
+
+        // No project: the launch first asks the brain for the scratch project.
+        const projectless: Model = {
+          ...base,
+          context: { ...base.context, projects: [] },
+        };
+
+        const typed = update(
+          projectless,
+          Message.ChangedDraft({ value: "start the migration" })
+        ).model;
+
+        const sent = update(typed, Message.ClickedSend({ alternate: false }));
+
+        // The tab closes before the brain answers.
+        yield* runSaves(update(sent.model, Message.HidPage()));
+
+        assert.deepStrictEqual(
+          {
+            launching: (sent.commands ?? []).some(
+              ({ name }) => name === PrepareLaunch.name
+            ),
+            saved: (yield* loadDrafts)[`draft:${draftId}`]?.text,
+          },
+          { launching: true, saved: "start the migration" }
+        );
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it("keeps Send off while only the draft, not the tray, names an attachment", () => {
+    Scene.scene(
+      { update, view },
+      Scene.given({
+        ...onThread,
+        drafts: { [key]: { ...emptyDraft, attachments: [pdfRef.id] } },
+      }),
+      ...acknowledgeMounts,
+      Scene.expect(Scene.testId("composer-send")).toBeDisabled(),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+});
+
 describe("composer sends", () => {
   it("sends a thread turn through the outbox and empties the composer", () => {
     Story.story(
@@ -681,6 +1123,7 @@ describe("composer sends", () => {
       Story.Command.resolve(
         PrepareSend,
         Message.PreparedTurn({
+          draftKey: `thread:${threadId}`,
           item: OutboxItem.Send({
             input: {
               threadId,
@@ -713,6 +1156,14 @@ describe("composer sends", () => {
           }),
           navigateTo: Option.none(),
           attachments: [],
+        })
+      ),
+      Story.Command.resolve(
+        SaveDrafts,
+        Message.CompletedSaveDrafts({
+          version: 3,
+          written: {},
+          stored: Option.some({}),
         })
       )
     );
@@ -779,6 +1230,105 @@ describe("composer sends", () => {
           attachments: [],
           message: "no",
         })
+      )
+    );
+  });
+
+  it("shows an answer's notice only on the draft it is about", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b07";
+    const onDraft = composerOn(ComposerTarget.Draft({ draftId }));
+
+    const sent = update(
+      update(onDraft, Message.ChangedDraft({ value: "start here" })).model,
+      Message.ClickedSend({ alternate: false })
+    );
+
+    assert.isTrue(
+      (sent.commands ?? []).some(
+        (command) => command.name === PrepareLaunch.name
+      )
+    );
+
+    const elsewhere = inform(
+      sent.model,
+      contextFor(ComposerTarget.Thread({ threadId }))
+    ).model;
+
+    const failed = update(
+      elsewhere,
+      Message.FailedPrepareTurn({
+        draftKey: `draft:${draftId}`,
+        draft: { ...emptyDraft, text: "start here" },
+        attachments: [],
+        message:
+          "The thread did not start. Your message is back in the composer.",
+      })
+    ).model;
+
+    assert.isTrue(
+      Option.isNone(shownNotice(failed)),
+      "the thread opened meanwhile shows no notice about the draft"
+    );
+
+    const backOnDraft = inform(
+      failed,
+      contextFor(ComposerTarget.Draft({ draftId }))
+    ).model;
+
+    assert.strictEqual(activeDraft(backOnDraft).text, "start here");
+    assert.deepStrictEqual(
+      shownNotice(backOnDraft),
+      Option.some(
+        "The thread did not start. Your message is back in the composer."
+      ),
+      "the draft the message went back to says so when the user returns"
+    );
+
+    const stopFailed = update(
+      inform(
+        failed,
+        contextFor(ComposerTarget.Thread({ threadId: otherThreadId }))
+      ).model,
+      Message.FailedRequest({
+        draftKey: Option.some(`thread:${threadId}`),
+        message: "The run could not be stopped.",
+      })
+    ).model;
+
+    assert.isTrue(
+      Option.isNone(shownNotice(stopFailed)),
+      "a failed Stop of the thread the user left shows nothing on the thread now open"
+    );
+  });
+
+  it("keeps a draft's notice while the user types in another draft", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b08";
+
+    const failed = update(
+      composerOn(ComposerTarget.Thread({ threadId })),
+      Message.FailedPrepareTurn({
+        draftKey: `draft:${draftId}`,
+        draft: { ...emptyDraft, text: "start here" },
+        attachments: [],
+        message:
+          "The thread did not start. Your message is back in the composer.",
+      })
+    ).model;
+
+    const typed = update(
+      failed,
+      Message.ChangedDraft({ value: "meanwhile" })
+    ).model;
+
+    const backOnDraft = inform(
+      typed,
+      contextFor(ComposerTarget.Draft({ draftId }))
+    ).model;
+
+    assert.deepStrictEqual(
+      shownNotice(backOnDraft),
+      Option.some(
+        "The thread did not start. Your message is back in the composer."
       )
     );
   });
@@ -1018,12 +1568,11 @@ describe("composer sends", () => {
         prepared: (answered.commands ?? []).some(
           (command) => command.name === PrepareSend.name
         ),
-        notice: Option.map(answered.model.attachments.notice, (notice) => [
-          notice.draftKey,
-          notice.text.startsWith("Not sent"),
-        ]),
+        notice: Option.map(noticeFor(answered.model.attachments, key), (text) =>
+          text.startsWith("Not sent")
+        ),
       },
-      { prepared: false, notice: Option.some([key, true]) }
+      { prepared: false, notice: Option.some(true) }
     );
   });
 

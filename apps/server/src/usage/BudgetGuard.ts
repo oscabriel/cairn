@@ -16,7 +16,11 @@
 //
 // The guard acts on a scope at its line once per epoch (its count of accepted raises), and records
 // the epoch in the book when it has; an evaluation that finds a scope at its line at an epoch not
-// acted on reports it again, so a declared scope or a failed step is acted on by the next one.
+// acted on reports it again, so a declared scope or a failed step is acted on by the next one. A
+// warning is recorded the same way. Each scope's step runs on its own, so one that fails never
+// drops another's, and a scope whose step failed is evaluated again by every pass until it is
+// acted on, with a pass started for it after `RETRY_AFTER` when no spend moves. A pass whose reads
+// fail keeps the scopes it was retrying.
 // Each notice is written once under a request id keyed by the epoch, and the push goes out only
 // when this guard wrote the notice: a crash between the two loses the push, never doubles it. Stops
 // are idempotent.
@@ -37,11 +41,13 @@ import type { ThreadId } from "@cairn/protocol/Ids";
 import type { Budget } from "@cairn/protocol/Spend";
 import {
   Context,
+  Duration,
   Effect,
   Layer,
   Option,
   Predicate,
   Queue,
+  Ref,
   Stream,
 } from "effect";
 
@@ -72,6 +78,9 @@ import type { SpendLedgerError } from "./SpendLedger.ts";
 
 /** The prefix of the request id a raise's approval carries. */
 const RAISE_PREFIX = "budget-raise-";
+
+/** How long a scope whose guard step failed waits for a pass before one is started for it. */
+const RETRY_AFTER = Duration.seconds(30);
 
 /** How long a push's title and body may be. */
 const TITLE_LIMIT = 80;
@@ -190,6 +199,28 @@ export class BudgetGuard extends Context.Service<
       const seam = yield* HarnessSeam;
       const notifier = yield* Notifier;
       const threadRows = yield* ThreadRows;
+      const layerScope = yield* Effect.scope;
+
+      // The feed only gathers; the worker takes everything gathered at each pass (module header).
+      const work = yield* Queue.unbounded<Work>();
+
+      // Scopes whose last guard step failed: every pass evaluates them again, and a pass is
+      // started for them after `RETRY_AFTER` if nothing else starts one.
+      const unfinished = yield* Ref.make<ReadonlySet<ThreadId>>(new Set());
+
+      const retryLater = Effect.fnUntraced(function* (threadId: ThreadId) {
+        const waiting = yield* Ref.modify(unfinished, (current) => [
+          current.size > 0,
+          new Set(current).add(threadId),
+        ]);
+
+        if (!waiting) {
+          yield* Queue.offer(work, { kind: "evaluate", threads: [] }).pipe(
+            Effect.delay(RETRY_AFTER),
+            Effect.forkIn(layerScope)
+          );
+        }
+      });
 
       const badge = threadRows.listLive.pipe(
         Effect.map((rows) => badgeOf(rows.map((row) => row.shell))),
@@ -312,41 +343,84 @@ export class BudgetGuard extends Context.Service<
         yield* book.markActed(limit.threadId, limit.epoch);
       });
 
-      const act = Effect.fn("BudgetGuard.act")(
-        function* (transitions: ReadonlyArray<Transition>, live: boolean) {
-          for (const { limit, before, after } of transitions) {
-            if (after.state === "exhausted") {
-              yield* reached(limit, after, live);
-            } else if (
-              after.state === "warned" &&
-              before.state !== "exhausted"
-            ) {
+      /** Acts on one transition; a failed step is logged, and its scope is retried later. */
+      const step = Effect.fnUntraced(
+        function* ({ limit, before, after }: Transition, live: boolean) {
+          if (after.state === "exhausted") {
+            yield* reached(limit, after, live);
+          } else if (after.state === "warned") {
+            // A raise that brings a scope back below its line but past its warning says nothing.
+            if (before.state !== "exhausted") {
               yield* notify(limit, "warning", warningText(limit, after));
             }
+
+            yield* book.markWarned(limit.threadId, limit.epoch);
           }
         },
-        Effect.catchTag("BudgetSourceError", (failure) =>
-          Effect.logWarning("budget guard step failed").pipe(
-            Effect.annotateLogs({
-              event: "budget_guard_failed",
-              operation: failure.operation,
-              error: failure.message,
-            })
+        (effect, { limit }) =>
+          effect.pipe(
+            Effect.catchTag("BudgetSourceError", (failure) =>
+              Effect.logWarning("budget guard step failed").pipe(
+                Effect.annotateLogs({
+                  event: "budget_guard_failed",
+                  threadId: limit.threadId,
+                  operation: failure.operation,
+                  error: failure.message,
+                }),
+                Effect.andThen(retryLater(limit.threadId))
+              )
+            )
           )
-        )
       );
+
+      // Each transition on its own, so a failed step never drops another scope's.
+      const act = Effect.fn("BudgetGuard.act")(function* (
+        transitions: ReadonlyArray<Transition>,
+        live: boolean
+      ) {
+        for (const transition of transitions) {
+          yield* step(transition, live);
+        }
+      });
 
       const pass = (batch: ReadonlyArray<Work>) =>
         Effect.gen(function* () {
           const { refresh, evaluate } = coalesce(batch);
+          const retried = yield* Ref.getAndSet(unfinished, new Set());
 
-          for (const threadId of refresh) {
-            yield* act(yield* budgets.refresh(threadId), true);
-          }
+          yield* Effect.gen(function* () {
+            for (const threadId of refresh) {
+              yield* act(yield* budgets.refresh(threadId), true);
+            }
 
-          if (evaluate.length > 0) {
-            yield* act(yield* budgets.evaluate(evaluate), true);
-          }
+            const threads = [...new Set([...evaluate, ...retried])];
+
+            if (threads.length > 0) {
+              yield* act(yield* budgets.evaluate(threads), true);
+            }
+          }).pipe(
+            // A read that fails drops nothing this pass came for: the scopes it took to retry and
+            // the ones it was asked to evaluate wait for the next pass, and each scope it was asked
+            // to read again is read again after `RETRY_AFTER`.
+            Effect.onError(() =>
+              Effect.gen(function* () {
+                yield* Effect.forEach(
+                  new Set([...retried, ...evaluate]),
+                  retryLater,
+                  { discard: true }
+                );
+                yield* Effect.forEach(
+                  refresh,
+                  (threadId) =>
+                    Queue.offer(work, { kind: "refresh", threadId }).pipe(
+                      Effect.delay(RETRY_AFTER),
+                      Effect.forkIn(layerScope)
+                    ),
+                  { discard: true }
+                );
+              })
+            )
+          );
         }).pipe(
           Effect.catchTags({
             SpendLedgerError: (failure) =>
@@ -365,9 +439,6 @@ export class BudgetGuard extends Context.Service<
               ),
           })
         );
-
-      // The feed only gathers; the worker takes everything gathered at each pass (module header).
-      const work = yield* Queue.unbounded<Work>();
 
       yield* Stream.merge(
         ledger.changes.pipe(

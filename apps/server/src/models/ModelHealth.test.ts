@@ -2,9 +2,9 @@
 // success; three transient failures within five minutes do, until fifteen minutes after the newest
 // of them, two do not, and three spread wider do not; pi-ai's credential errors are auth failures;
 // capacity and request failures never count; a Codex limit holds until the reset it names and
-// an OpenCode Go limit or a spent quota or bill until the next success or for an hour; the stored error holds only the fixed
-// vocabulary; `reset` forgets a provider; and the record survives a restart, on a migrated in-memory
-// cairn.sqlite.
+// an OpenCode Go limit or a spent quota or bill until the next success or for an hour; the stored
+// error holds only the fixed vocabulary; `reset` forgets a provider and ignores outcomes of requests
+// made before it; and the record survives a restart, on a migrated in-memory cairn.sqlite.
 
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Effect, Layer, Option, Schema } from "effect";
@@ -482,6 +482,47 @@ describe("provider health", () => {
         ["opencode-go"]
       );
     }).pipe(Effect.provide(DbLayer))
+  );
+
+  it.effect(
+    "ignores an outcome of a request made before the reset, in memory and after a restart",
+    () =>
+      Effect.gen(function* () {
+        const fresh = ModelHealth.pipe(Effect.provide(ModelHealth.layerNoDeps));
+        const before = yield* fresh;
+
+        const limit =
+          "You have hit your ChatGPT usage limit (plus plan). Try again in ~3 days.";
+
+        yield* before.record("openai-codex", failed(1, "401 unauthorized"));
+        yield* TestClock.setTime(BASE + 2 * MINUTE);
+        yield* before.reset("openai-codex");
+
+        // Requests that started on the old login end after the new login's reset.
+        yield* before.record("openai-codex", failed(1, "401 unauthorized"));
+        yield* before.record("openai-codex", failed(1, limit));
+        yield* TestClock.setTime(BASE + 3 * MINUTE);
+
+        assert.strictEqual(
+          (yield* before.stateOf("openai-codex")).state,
+          "unknown"
+        );
+
+        const after = yield* fresh;
+
+        yield* after.record("openai-codex", failed(1, limit));
+        assert.strictEqual(
+          (yield* after.stateOf("openai-codex")).state,
+          "unknown"
+        );
+
+        // A request on the new login still counts.
+        yield* after.record("openai-codex", failed(2, "401 unauthorized"));
+        assert.strictEqual(
+          (yield* after.stateOf("openai-codex")).state,
+          "failing"
+        );
+      }).pipe(Effect.provide(DbLayer))
   );
 
   it.effect("stores only words from the fixed vocabulary", () =>

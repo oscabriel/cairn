@@ -122,8 +122,10 @@ export type JsonObject = typeof JsonObject.Type;
  * Who decided a record (ADR 0029). Null on a record only while it is `pending`. `thread` is a
  * parent's model answering its child's question; `mode` is the permission mode accepting at ask
  * time; `envelope` is a workflow's launch approval covering a node's brief (ADR 0032); `judge` is
- * a judge run. `proxy` (a decider inside a goal's grant) arrives with hands-off goals after phase
- * 2, as an added member.
+ * a judge run. `system` is Cairn itself: a stop or a boot that cancelled the record, or (on a
+ * workflow row only) a newer Go of the same script that superseded an approved launch that never
+ * ran. `proxy` (a decider inside a goal's grant) arrives with hands-off goals after phase 2, as an
+ * added member.
  */
 export const Decider = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("user") }),
@@ -137,7 +139,7 @@ export const Decider = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("expiry") }),
   Schema.Struct({
     kind: Schema.Literal("system"),
-    why: Schema.Literals(["run-stopped", "boot"]),
+    why: Schema.Literals(["run-stopped", "boot", "superseded"]),
   }),
 ]);
 

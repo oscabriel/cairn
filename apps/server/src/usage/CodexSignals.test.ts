@@ -22,6 +22,7 @@ import {
   Option,
   PubSub,
   Queue,
+  Ref,
   Stream,
 } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
@@ -167,8 +168,8 @@ const SignedIn = Layer.unwrap(
   ).pipe(Effect.orDie)
 );
 
-// One `CodexUsage`, shared by the signal and the test, as the root shares it with `UsageFeed`.
-const Usage = CodexUsage.layerNoDeps.pipe(
+/** A `CodexUsage` over an endpoint that always answers `BODY`; the login is the caller's. */
+const UsageOver = CodexUsage.layerNoDeps.pipe(
   Layer.provide(
     Layer.succeed(
       HttpClient.HttpClient,
@@ -181,9 +182,11 @@ const Usage = CodexUsage.layerNoDeps.pipe(
         )
       )
     )
-  ),
-  Layer.provide(SignedIn)
+  )
 );
+
+// One `CodexUsage`, shared by the signal and the test, as the root shares it with `UsageFeed`.
+const Usage = UsageOver.pipe(Layer.provideMerge(SignedIn));
 
 const TestLayer = CodexSignals.pipe(
   Layer.provideMerge(Usage),
@@ -263,6 +266,62 @@ describe("Codex signals", () => {
         Effect.provide(TestLayer),
         // Near the windows' times, set before the reader starts.
         (test) => Effect.andThen(TestClock.setTime(1_793_177_000_000), test)
+      )
+  );
+
+  it.effect(
+    "keeps a refused turn's limit for the account signed in when it was refused",
+    () =>
+      Effect.gen(function* () {
+        const first = yield* parseCodexCredential({
+          access: "test-access-token",
+          accountId: "acct_1",
+        });
+
+        const second = yield* parseCodexCredential({
+          access: "other-access-token",
+          accountId: "acct_2",
+        });
+
+        const held = yield* Ref.make(first);
+
+        const access = Layer.succeed(
+          CodexAccess,
+          CodexAccess.of({ credential: Effect.asSome(Ref.get(held)) })
+        );
+
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
+          const { pubsub } = yield* Events;
+
+          // The last read was for account 1; then the user signs in with account 2.
+          yield* usage.read;
+          yield* Ref.set(held, second);
+
+          // Account 2's turn is refused, before any read for account 2.
+          yield* PubSub.publish(
+            pubsub,
+            terminal(
+              Option.some("codex"),
+              "usage_limit",
+              Option.some(1_793_178_060_000)
+            )
+          );
+          yield* settle;
+          yield* usage.read;
+
+          assert.deepStrictEqual(yield* spentIds, ["five_hour"]);
+        }).pipe(
+          Effect.provide(
+            CodexSignals.pipe(
+              Layer.provideMerge(UsageOver),
+              Layer.provideMerge(access),
+              Layer.provideMerge(FakeHarness)
+            )
+          )
+        );
+      }).pipe(Effect.orDie, (test) =>
+        Effect.andThen(TestClock.setTime(1_793_177_000_000), test)
       )
   );
 });

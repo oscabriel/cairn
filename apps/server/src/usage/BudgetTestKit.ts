@@ -21,7 +21,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { BudgetSources } from "../brain/BudgetSources.ts";
+import { BudgetSources, BudgetSourceError } from "../brain/BudgetSources.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent, StopOptions } from "../brain/HarnessSeam.ts";
 import { ModelSource } from "../brain/ModelSource.ts";
@@ -60,6 +60,10 @@ export interface SourcesRecord {
   readonly raises: Ref.Ref<ReadonlyMap<string, Budget>>;
   /** Every `halt` call's threads. */
   readonly halted: Ref.Ref<ReadonlyArray<ReadonlyArray<ThreadId>>>;
+  /** Notices, by `<thread> <request id>`, whose next write fails, as a store failure would. */
+  readonly failNotices: Ref.Ref<ReadonlySet<string>>;
+  /** How many of the next `scopeOf` reads fail, as a store failure would. */
+  readonly failScopeReads: Ref.Ref<number>;
 }
 
 /** The in-memory sources' record. */
@@ -84,14 +88,44 @@ export const SourcesMemory = Layer.effectContext(
       notices: yield* Ref.make<ReadonlyMap<string, NoticeEntryData>>(new Map()),
       raises: yield* Ref.make<ReadonlyMap<string, Budget>>(new Map()),
       halted: yield* Ref.make<ReadonlyArray<ReadonlyArray<ThreadId>>>([]),
+      failNotices: yield* Ref.make<ReadonlySet<string>>(new Set()),
+      failScopeReads: yield* Ref.make(0),
     };
+
+    /** True once for a notice set to fail, which no longer fails after. */
+    const failsNow = (key: string) =>
+      Ref.modify(record.failNotices, (failing) => {
+        if (!failing.has(key)) {
+          return [false, failing];
+        }
+
+        const rest = new Set(failing);
+
+        rest.delete(key);
+
+        return [true, rest];
+      });
 
     const sources = BudgetSources.of({
       scopes: Effect.map(Ref.get(record.scopes), (map) => [...map.values()]),
       scopeOf: (threadId) =>
-        Effect.map(Ref.get(record.scopes), (map) =>
-          Option.fromUndefinedOr(map.get(threadId))
-        ),
+        Effect.gen(function* () {
+          const fails = yield* Ref.modify(record.failScopeReads, (left) =>
+            left > 0 ? [true, left - 1] : [false, left]
+          );
+
+          if (fails) {
+            return yield* new BudgetSourceError({
+              message: `the scope of ${threadId} could not be read`,
+              operation: "scopeOf",
+              cause: new Error("store closed"),
+            });
+          }
+
+          return Option.fromUndefinedOr(
+            (yield* Ref.get(record.scopes)).get(threadId)
+          );
+        }),
       declare: (threadId: ThreadId, budget: Budget, mode: BudgetMode) =>
         Ref.update(record.scopes, (map) =>
           new Map(map).set(threadId, { threadId, budget, mode, epoch: 0 })
@@ -99,7 +133,19 @@ export const SourcesMemory = Layer.effectContext(
       askRaise: (limit, to) =>
         once(record.raises, `${limit.threadId} ${limit.epoch}`, to),
       notice: (threadId, requestId, data) =>
-        once(record.notices, `${threadId} ${requestId}`, data),
+        Effect.gen(function* () {
+          const key = `${threadId} ${requestId}`;
+
+          if (yield* failsNow(key)) {
+            return yield* new BudgetSourceError({
+              message: `the notice ${key} could not be written`,
+              operation: "notice",
+              cause: new Error("store closed"),
+            });
+          }
+
+          return yield* once(record.notices, key, data);
+        }),
       samples: Effect.succeed([]),
       halt: (threads) =>
         Ref.update(record.halted, (calls) => [...calls, threads]).pipe(

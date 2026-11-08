@@ -28,7 +28,11 @@ import { ScriptedStore } from "../brain/ScriptedHarness.ts";
 import { Git } from "../git/Git.ts";
 import { Projects } from "../projects/Projects.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
-import { worktreeRepoKey, Worktrees } from "../projects/Worktrees.ts";
+import {
+  worktreePathFor,
+  worktreeRepoKey,
+  Worktrees,
+} from "../projects/Worktrees.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ThreadCreate } from "../shell/ShellCommands.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
@@ -37,6 +41,7 @@ import { ThreadLaunch } from "./ThreadLaunch.ts";
 import {
   addProject,
   HeldModel,
+  heldEnsuredUpdates,
   heldLaunchInserts,
   launchInput,
   makeRepository,
@@ -150,6 +155,23 @@ const userEntries = Effect.fn("test.userEntries")(function* (
 type Annotations = ReturnType<
   typeof References.CurrentLogAnnotations.defaultValue
 >;
+
+/** Turn content that refuses every build: a resumed launch fails at its first message. */
+const refuseEveryBuild = TurnContent.layerFrom([
+  textStage,
+  {
+    name: "refusing",
+    run: () =>
+      Effect.fail(
+        new TurnContentError({
+          message: "The refusing stage refused the turn.",
+          stage: "refusing",
+          reason: "unavailable",
+          field: Option.none(),
+        })
+      ),
+  },
+]);
 
 describe("launching threads", () => {
   it.live(
@@ -808,6 +830,87 @@ describe("launching threads", () => {
   );
 
   it.live(
+    "a launch resumed after a crash inside git worktree add still owns the worktree it planned",
+    () =>
+      // The resumed launch fails at its first message, so it must clean up what it made.
+      withRepo(
+        { held: false, turnContent: refuseEveryBuild },
+        ({ dataDir, repo }) =>
+          Effect.gen(function* () {
+            const projectId = yield* addProject(repo);
+            const launcher = yield* ThreadLaunch;
+            const launches = yield* LaunchStore;
+            const worktrees = yield* Worktrees;
+
+            const input = yield* launchInput(projectId, newWorktree, "Crash");
+
+            assert.isTrue(yield* launches.insert(input, "owner@test"));
+            yield* (yield* EventSink).commitCommand(
+              ThreadCreate.make({
+                commandId: input.commandId,
+                threadId: input.threadId,
+                projectId,
+                title: "Crash",
+                provider: input.model.provider,
+                modelId: input.model.modelId,
+                thinkingLevel: input.thinkingLevel,
+                runtimeMode: input.runtimeMode,
+                branch: Option.none(),
+                worktreePath: Option.none(),
+              })
+            );
+
+            // The killed attempt planned its temporary branch and path, and git made both before
+            // the brain died, so the plan's made flags were never written.
+            const branch = yield* worktrees.temporaryBranchName(repo);
+
+            const worktreePath = worktreePathFor(
+              path.join(dataDir, "worktrees"),
+              worktreeRepoKey(repo),
+              branch
+            );
+
+            const recorded = Option.getOrThrow(
+              yield* launches.get(input.commandId)
+            );
+
+            yield* launches.update({
+              ...recorded,
+              branch: Option.some(branch),
+              worktreePath: Option.some(worktreePath),
+              worktreeCreated: false,
+              branchCreated: false,
+            });
+
+            yield* (yield* FileSystem.FileSystem).makeDirectory(
+              path.dirname(worktreePath),
+              { recursive: true }
+            );
+            yield* (yield* Git).stdout("test", repo, [
+              "worktree",
+              "add",
+              "-b",
+              branch,
+              "--",
+              worktreePath,
+              "main",
+            ]);
+
+            yield* launcher.resumePending;
+            yield* launcher.settled(input.threadId);
+
+            assert.strictEqual((yield* row(input.threadId)).activity, "failed");
+            assert.strictEqual(
+              (yield* worktrees.list(repo)).length,
+              1,
+              "only the main checkout is left"
+            );
+            assert.deepStrictEqual(yield* branchesOf(repo), ["main"]);
+          })
+      )
+  );
+
+  it.live(
     "a launch row with no thread row is dropped at boot, without ensuring a thread",
     () =>
       withRepo({ held: false }, ({ repo }) =>
@@ -872,6 +975,52 @@ describe("launching threads", () => {
         assert.isUndefined((yield* ScriptedStore).threads.get(input.threadId));
       })
     )
+  );
+
+  it.live(
+    "a scratch launch stopped once its thread is ensured keeps the folder the thread runs in",
+    () => {
+      const reached = Latch.makeUnsafe(false);
+      const release = Latch.makeUnsafe(false);
+
+      return withRepo(
+        { held: false, launchStore: heldEnsuredUpdates(reached, release) },
+        () =>
+          Effect.gen(function* () {
+            const scratch = yield* (yield* ScratchProject).ensure;
+            const launcher = yield* ThreadLaunch;
+            const fs = yield* FileSystem.FileSystem;
+
+            const input = yield* launchInput(
+              scratch.id,
+              rootWorkspace,
+              "Stop me"
+            );
+
+            yield* launcher.launch(input, "owner@test");
+
+            // The thread is ensured on its folder; the stop lands before the launch records it.
+            yield* reached.await;
+
+            const stopping = yield* Effect.forkChild(
+              launcher.cancel(input.threadId)
+            );
+
+            yield* Effect.sleep(Duration.millis(100));
+            yield* release.open;
+            yield* Fiber.join(stopping);
+
+            const thread = yield* scriptedThread(input.threadId);
+            const cwd = thread?.agent.cwd ?? "";
+
+            assert.notStrictEqual(cwd, "");
+            assert.isTrue(
+              yield* fs.exists(cwd),
+              "the ensured thread's folder is still there"
+            );
+          })
+      );
+    }
   );
 
   it.live(

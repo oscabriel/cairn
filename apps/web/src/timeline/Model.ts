@@ -16,6 +16,11 @@ export const ThreadUi = Schema.Struct({
   expandedUserMessageIds: Schema.Array(Schema.String),
   /** The rows whose changed-files card the user opened past its one summary line. */
   expandedChangedFilesIds: Schema.Array(Schema.String),
+  /**
+   * The failed turn whose Retry already went to the outbox: its button hides and a second press
+   * sends nothing. A later failed turn has another id, so it can be retried in its turn.
+   */
+  retriedTurnId: Schema.Option(Schema.String),
 });
 
 export type ThreadUi = typeof ThreadUi.Type;
@@ -33,12 +38,23 @@ export const Model = Schema.Struct({
   saved: Schema.Record(Schema.String, ThreadUi),
   savedOrder: Schema.Array(Schema.String),
   history: HistoryState,
+  /**
+   * The latest page request's number, bumped by each request and by a switch of thread: only the
+   * answer that carries it changes `history`, so a stale one cannot.
+   */
+  historyRequest: Schema.Int,
   /** The row whose copy button just copied. */
   copiedRowId: Schema.Option(Schema.String),
   copyVersion: Schema.Int,
   highlightedLanguages: Schema.Array(Schema.String),
   /** Counts long code blocks tokenized off the render; rows compare it, so they redraw with the tokens. */
   highlightedCode: Schema.Int,
+  /**
+   * The prompts (`promptKey`) of the sends to the shown thread waiting in the outbox, which every
+   * tab shares and a reload keeps: a failed turn whose prompt is among them is being retried, so it
+   * shows no Retry and a press sends nothing.
+   */
+  queuedPrompts: Schema.Array(Schema.String),
 });
 
 export type Model = typeof Model.Type;
@@ -57,6 +73,7 @@ export const freshUi = (threadId: Option.Option<string>): ThreadUi => ({
   expandedWorkGroupIds: [],
   expandedUserMessageIds: [],
   expandedChangedFilesIds: [],
+  retriedTurnId: Option.none(),
 });
 
 /** No thread yet. */
@@ -66,11 +83,25 @@ export const initial: Model = {
   saved: {},
   savedOrder: [],
   history: "idle",
+  historyRequest: 0,
   copiedRowId: Option.none(),
   copyVersion: 0,
   highlightedLanguages: [],
   highlightedCode: 0,
+  queuedPrompts: [],
 };
+
+/** What a prompt sends: its words, attachment ids and skills, as one comparable key. */
+export const promptKey = (
+  text: string,
+  attachments: ReadonlyArray<string>,
+  skillRefs: ReadonlyArray<string>
+): string =>
+  JSON.stringify([
+    text,
+    attachments,
+    skillRefs.filter((skill) => skill.trim() !== ""),
+  ]);
 
 /** True while the list follows its end (new rows scroll into view). */
 export const isFollowingEnd = (model: Model): boolean =>

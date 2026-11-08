@@ -1014,6 +1014,7 @@ const errorView = (
                             h.OnClick(
                               Message.ClickedRetry({
                                 threadId: context.threadId,
+                                turnId: row.entry.turnId,
                                 text: prompt.text,
                                 attachments: prompt.attachments.map(
                                   (attachment) => attachment.id

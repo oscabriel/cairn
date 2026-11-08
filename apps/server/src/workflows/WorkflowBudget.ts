@@ -60,7 +60,12 @@ import type {
 import { defineTask, InboxDoc, UsageDoc } from "@earendil-works/pi-durable";
 import { Option, Schema } from "effect";
 
-import { Approvals, ThreadMeta, UNDECIDED } from "../brain/CairnDocs.ts";
+import {
+  Approvals,
+  cancelRecord,
+  ThreadMeta,
+  UNDECIDED,
+} from "../brain/CairnDocs.ts";
 import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
 import { emit, isEventObject, reactor } from "../brain/Events.ts";
 import type { Reactor } from "../brain/Events.ts";
@@ -103,7 +108,7 @@ export const BUDGET_REACTOR = "cairn.workflow-budget";
 /** The tool name a raise record carries (ADR 0036; the same as a thread scope's raise). */
 export const RAISE_TOOL = "budget_raise";
 
-/** How long a raise stays answerable: nothing waits on it, so a week, as a thread's. */
+/** The `expiresAt` a raise carries, as a thread's; a raise never lapses (`neverLapses` in `CairnDocs.ts`, ADR 0029). */
 const RAISE_TTL_MILLIS = 7 * 24 * 3_600_000;
 
 /** The entry kind pi-durable writes each provider response under. */
@@ -686,6 +691,21 @@ const liveNodes = (row: Readonly<WorkflowItemState>) =>
       node.state === "reserved"
   );
 
+/**
+ * Whether `row` still stands at the line a stopper of `epoch` was created for: not ended, at its
+ * line and not raised since. A raise accepted since moves the run to a later epoch, and a stopper
+ * written before stoppers kept their epoch (none) goes by the raise alone.
+ */
+const atStoppersLine = (
+  row: Readonly<WorkflowItemState> | undefined,
+  approvals: Readonly<Record<string, ApprovalRecord>>,
+  epoch: Option.Option<number>
+): row is Readonly<WorkflowItemState> =>
+  row !== undefined &&
+  !isWorkflowEnded(row.state) &&
+  budgetStopped(row, approvals) &&
+  !Option.exists(epoch, (own) => effectiveBudget(row, approvals).epoch > own);
+
 /** Resolves after `millis`, or at once when `signal` aborts. */
 const pause = async (millis: number, signal: AbortSignal): Promise<void> => {
   await sleep(millis, null, { signal }).catch(() => null);
@@ -697,11 +717,13 @@ const pause = async (millis: number, signal: AbortSignal): Promise<void> => {
  * child conversation of every node still running, and looks again until none runs, since a node
  * that sent its input just after an abort would start its child again; every node tool then sees
  * the run at its line and settles `stopped`. A rerun after `kill -9` aborts again, which changes
- * nothing for a child already idle. Last, it marks the run `partial`, `budget_spent`, unless the
- * run ended already (its watcher writes the same outcome).
+ * nothing for a child already idle. It stops at once when the run leaves the line of its `epoch`
+ * (a raise was accepted, so the nodes the raised budget admits are not its to stop). Last, it
+ * marks the run `partial`, `budget_spent`, only while the run still stands at that line (its
+ * watcher writes the same outcome when it ends).
  */
 export const BudgetStopper = defineTask<
-  { workflowId: string },
+  { workflowId: string; epoch?: number },
   { phase: "stop" },
   null
 >({
@@ -711,6 +733,7 @@ export const BudgetStopper = defineTask<
   phases: {
     stop: async (task, runtime, context) => {
       const { workflowId } = task.input;
+      const epoch = Option.fromUndefinedOr(task.input.epoch);
 
       for (;;) {
         // oxlint-disable-next-line no-await-in-loop -- one look per round
@@ -720,9 +743,19 @@ export const BudgetStopper = defineTask<
           context
         );
 
+        // oxlint-disable-next-line no-await-in-loop
+        const approvals = await runtime.snapshot(
+          Approvals,
+          runtime.conversationId,
+          context
+        );
+
         const row = ledger?.items[workflowId];
 
-        if (row === undefined || liveNodes(row).length === 0) {
+        if (
+          !atStoppersLine(row, approvals?.items ?? {}, epoch) ||
+          liveNodes(row).length === 0
+        ) {
           break;
         }
 
@@ -744,9 +777,10 @@ export const BudgetStopper = defineTask<
 
       await runtime.commit(async (tx) => {
         const ledger = await tx.doc(WorkflowsDoc, runtime.conversationId);
+        const approvals = await tx.doc(Approvals, runtime.conversationId);
         const row = ledger.items[workflowId];
 
-        if (row !== undefined && !isWorkflowEnded(row.state)) {
+        if (atStoppersLine(row, approvals.items, epoch)) {
           row.outcome = { kind: "partial", reason: "budget_spent" };
         }
 
@@ -1026,7 +1060,7 @@ const onSpent = async (tx: Tx, line: LineEvent, at: number): Promise<void> => {
 
   await tx.createTask(
     BudgetStopper,
-    { workflowId: line.workflowId },
+    { workflowId: line.workflowId, epoch: line.epoch },
     {
       ownership: { kind: "conversation" },
       conversationId: line.conversationId,
@@ -1062,11 +1096,13 @@ export const cancelPendingRaises = (
   for (const raise of raisesOf(approvals, workflowId)) {
     const record = approvals[raise.record.id];
 
-    if (record?.status === "pending") {
-      record.status = "cancelled";
-      record.answeredAt = at;
-      record.decidedBy = { kind: "system", why: "run-stopped" };
-      record.reason = "The workflow ended before the raise was answered.";
+    if (record !== undefined) {
+      cancelRecord(
+        record,
+        at,
+        "run-stopped",
+        Option.some("The workflow ended before the raise was answered.")
+      );
     }
   }
 };

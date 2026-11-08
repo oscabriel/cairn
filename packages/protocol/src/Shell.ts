@@ -108,7 +108,8 @@ export const WaitingFor = Schema.Literals(["claude_slot", "parent", "none"]);
 export type WaitingFor = typeof WaitingFor.Type;
 
 /**
- * The oldest request on a thread that needs the user. `origin` names the descendant whose request
+ * The request on a thread that needs the user and that its card shows first (approvals, then
+ * questions, briefs and criteria, each oldest first). `origin` names the descendant whose request
  * it is, for a child's escalated question mirrored in its parent (ADR 0027); none for the thread's
  * own.
  */

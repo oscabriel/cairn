@@ -94,6 +94,8 @@ export interface PageContext {
   readonly hasClient: boolean;
   /** The routed thread's launch is on its way (queued in the outbox, or its row is `preparing`). */
   readonly launching: boolean;
+  /** The prompts (`promptKey`) of the sends to the routed thread waiting in the outbox. */
+  readonly queuedPrompts: ReadonlyArray<string>;
 }
 
 /**
@@ -101,7 +103,14 @@ export interface PageContext {
  * nothing; a new connection keeps the view on screen until its fresh snapshot replaces it. A thread
  * shown as Missing is subscribed again once its launch is known to be on its way.
  */
-export const inform = (model: Model, context: PageContext): InformReturn => {
+export const inform = (page: Model, context: PageContext): InformReturn => {
+  const told = Timeline.informQueued(page.timeline, context.queuedPrompts);
+
+  const model =
+    told === page.timeline
+      ? page
+      : modifyFields(page, { timeline: () => told });
+
   if (!Equal.equals(model.threadId, context.threadId)) {
     const switched = timelineStep((timeline) =>
       Timeline.switchThread(timeline, Option.map(context.threadId, String))

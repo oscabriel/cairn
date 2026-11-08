@@ -581,7 +581,10 @@ describe("the Codex usage reader", () => {
           yield* usage.read;
 
           // The session window resets at 1_793_178_000 s; the refusal names a time near it.
-          yield* usage.observeLimit(Option.some(1_793_178_060_000));
+          yield* usage.observeLimit(
+            Option.some(1_793_178_060_000),
+            Option.some("acct_test")
+          );
           yield* usage.read;
 
           const spent = yield* usage.current;
@@ -605,6 +608,52 @@ describe("the Codex usage reader", () => {
             [false, false]
           );
         }).pipe(Effect.provide(usageOver(endpoint, signedIn)));
+      })
+  );
+
+  it.effect(
+    "drops a refused turn's limit when the next read is for another account",
+    () =>
+      Effect.gen(function* () {
+        const endpoint = yield* makeEndpoint;
+        const first = yield* testCredential;
+
+        const second = yield* parseCodexCredential({
+          access: "other-access-token",
+          accountId: "acct_other",
+        }).pipe(Effect.orDie);
+
+        const held = yield* Ref.make(first);
+
+        yield* TestClock.setTime(1_793_177_000_000);
+
+        yield* Effect.gen(function* () {
+          const usage = yield* CodexUsage;
+
+          yield* usage.read;
+
+          // Account A's turn is refused with a reset three days away.
+          yield* usage.observeLimit(
+            Option.some(1_793_177_000_000 + 3 * 24 * 60 * 60_000),
+            Option.some("acct_test")
+          );
+
+          // The user signs in with account B, whose plan has room.
+          yield* Ref.set(held, second);
+          yield* usage.read;
+
+          const after = yield* usage.current;
+
+          assert.deepStrictEqual(
+            after.windows.map((window) => window.exhausted),
+            [false, false]
+          );
+          assert.isTrue(Option.isNone(after.limit));
+        }).pipe(
+          Effect.provide(
+            usageOver(endpoint, accessOf(Effect.asSome(Ref.get(held))))
+          )
+        );
       })
   );
 
@@ -845,7 +894,7 @@ describe("the Codex usage reader", () => {
 
           yield* usage.read;
           // Naming no reset, the mark would hold for an hour on the fullest window.
-          yield* usage.observeLimit(Option.none());
+          yield* usage.observeLimit(Option.none(), Option.some("acct_test"));
           yield* usage.read;
           assert.deepStrictEqual(yield* spentIds, ["seven_day"]);
 
@@ -1011,7 +1060,7 @@ describe("the Codex usage reader", () => {
           );
 
           yield* usage.read;
-          yield* usage.observeLimit(Option.none());
+          yield* usage.observeLimit(Option.none(), Option.some("acct_test"));
           // The read the refusal starts, and one more: the endpoint does not show it spent yet.
           yield* usage.read;
           assert.deepStrictEqual(yield* spentIds, ["seven_day"]);

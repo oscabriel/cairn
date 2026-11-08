@@ -268,8 +268,10 @@ export const isLinked = (
  * Records where a child's question stands in its parent's registry, inside the caller's
  * transaction (`at` is when it escalated, kept once set). A question answered or cancelled also
  * resolves its open entry in the parent's `cairn.escalations`, so the index never shows a question
- * that is no longer the user's. `childConversationId` must be a subagent's: `tx.doc` would create
- * an empty link on any other conversation. Writes documents only.
+ * that is no longer the user's. An answer or a cancellation only ends a question already marked:
+ * a record that never went to the parent (the child's own `ask_user`) gets no mark.
+ * `childConversationId` must be a subagent's: `tx.doc` would create an empty link on any other
+ * conversation. Writes documents only.
  */
 export const markQuestion = async (
   tx: Tx,
@@ -293,7 +295,14 @@ export const markQuestion = async (
     (item?.questions[approvalId]?.escalatedAt ?? null) !== null ||
     Option.isSome(at);
 
-  if (item !== undefined) {
+  // An answer or a cancellation ends a question the parent was asked; a record of the child that
+  // never reached the parent (an `ask_user` question) has no entry and gets none.
+  const ends = state === "answered" || state === "cancelled";
+
+  if (
+    item !== undefined &&
+    (!ends || item.questions[approvalId] !== undefined)
+  ) {
     item.questions[approvalId] = {
       state,
       escalatedAt: Option.getOrElse(

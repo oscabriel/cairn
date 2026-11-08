@@ -295,13 +295,18 @@ export interface CodexUsageReading {
   /**
    * A turn reported a spent Codex limit: the window it names stays exhausted until `until` (the
    * reset the turn named or, naming none, `UNSTATED_LIMIT_MS` after it, as `ModelHealth` holds it),
-   * unless a read in between already shows a spent window.
+   * unless a read in between already shows a spent window, or reads another account's plan.
    */
   readonly limit: Option.Option<{
     /** The reset the refused turn named, which picks the window; none picks the fullest. */
     readonly resetsAt: Option.Option<number>;
     /** When the mark lapses. */
     readonly until: number;
+    /**
+     * The ChatGPT account of the refused turn (the login held when it was refused); none when it
+     * could not be read, when the next read's account takes it.
+     */
+    readonly account: Option.Option<string>;
   }>;
 }
 
@@ -364,11 +369,12 @@ const markLimited = (
     },
   });
 
-/** The reading after a read finished at `now`. */
+/** The reading after a read for `account` (none when no login was read) finished at `now`. */
 const applyOutcome = (
   current: CodexUsageReading,
   outcome: ReadOutcome,
-  now: number
+  now: number,
+  account: Option.Option<string>
 ): CodexUsageReading => {
   if (outcome.kind === "signed_out") {
     return INITIAL_READING;
@@ -415,12 +421,24 @@ const applyOutcome = (
       }
 
       // The endpoint agrees once it shows a spent window; until then a refused turn's limit holds
-      // until its time passes.
+      // until its time passes. A limit belongs to its account: another account's plan (a sign-in
+      // over the old one) drops it.
       const agrees = windows.some((window) => window.exhausted);
 
-      const limit = Option.filter(
-        current.limit,
-        ({ until }) => !agrees && now < until
+      const limit = Option.map(
+        Option.filter(
+          current.limit,
+          (held) =>
+            !agrees &&
+            now < held.until &&
+            !Option.exists(held.account, (owner) =>
+              Option.exists(account, (reader) => reader !== owner)
+            )
+        ),
+        (held) => ({
+          ...held,
+          account: Option.orElse(held.account, () => account),
+        })
       );
 
       return {
@@ -436,16 +454,18 @@ const applyOutcome = (
 
 /**
  * The reading after a turn, at `now`, reported a spent Codex limit resetting at `resetsAt`; a limit
- * naming no reset holds for `UNSTATED_LIMIT_MS`.
+ * naming no reset holds for `UNSTATED_LIMIT_MS`. `account` is the refused turn's.
  */
 const applyLimit = (
   current: CodexUsageReading,
   resetsAt: Option.Option<number>,
-  now: number
+  now: number,
+  account: Option.Option<string>
 ): CodexUsageReading => {
   const limit = Option.some({
     resetsAt,
     until: Option.getOrElse(resetsAt, () => now + UNSTATED_LIMIT_MS),
+    account,
   });
 
   return { ...current, windows: markLimited(current.windows, limit), limit };
@@ -532,9 +552,13 @@ export class CodexUsage extends Context.Service<
     /**
      * Marks the window a refused turn names as exhausted (the one resetting nearest `resetsAt`,
      * epoch milliseconds, else the fullest) until that reset, or for `UNSTATED_LIMIT_MS` when the
-     * turn named none, and starts one read.
+     * turn named none, and starts one read. `account` is the refused turn's ChatGPT account; none
+     * when it is not known, and the next read's account takes the limit.
      */
-    observeLimit(resetsAt: Option.Option<number>): Effect.Effect<void>;
+    observeLimit(
+      resetsAt: Option.Option<number>,
+      account: Option.Option<string>
+    ): Effect.Effect<void>;
   }
 >()("cairn/server/usage/CodexUsage") {
   /**
@@ -552,6 +576,9 @@ export class CodexUsage extends Context.Service<
       const ref = yield* SubscriptionRef.make(INITIAL_READING);
       const inFlight = yield* Ref.make(Option.none<Deferred.Deferred<true>>());
       const lastStartedAt = yield* Ref.make(Option.none<number>());
+      // The ChatGPT account of the last login a read used: a read for another one drops a refused
+      // turn's limit.
+      const lastAccount = yield* Ref.make(Option.none<string>());
       const watchers = yield* Ref.make(0);
 
       const fetchBody = (credential: CodexCredential) =>
@@ -639,18 +666,21 @@ export class CodexUsage extends Context.Service<
               // Only a read that went for the endpoint counts as fresh: after a sign-in, the
               // next watcher reads at once.
               onSome: (credential: CodexCredential) =>
-                Effect.andThen(
-                  Ref.set(lastStartedAt, Option.some(started)),
-                  fetchBody(credential)
+                Ref.set(lastStartedAt, Option.some(started)).pipe(
+                  Effect.andThen(
+                    Ref.set(lastAccount, Option.some(credential.accountId))
+                  ),
+                  Effect.andThen(fetchBody(credential))
                 ),
             }),
           })
         );
 
         const ended = yield* Clock.currentTimeMillis;
+        const account = yield* Ref.get(lastAccount);
 
         const next = yield* SubscriptionRef.updateAndGet(ref, (current) =>
-          applyOutcome(current, outcome, ended)
+          applyOutcome(current, outcome, ended, account)
         );
 
         yield* Effect.logInfo("codex usage read").pipe(
@@ -730,12 +760,13 @@ export class CodexUsage extends Context.Service<
       );
 
       const observeLimit = Effect.fn("CodexUsage.observeLimit")(function* (
-        resetsAt: Option.Option<number>
+        resetsAt: Option.Option<number>,
+        account: Option.Option<string>
       ) {
         const now = yield* Clock.currentTimeMillis;
 
         yield* SubscriptionRef.update(ref, (current) =>
-          applyLimit(current, resetsAt, now)
+          applyLimit(current, resetsAt, now, account)
         );
         yield* readInBackground;
       });

@@ -17,7 +17,12 @@ import {
   attachmentFormAttributes,
   attachmentTray,
 } from "../../composer/AttachmentTray.ts";
-import { activeDraft, draftKey, isDraftTarget } from "../../composer/Drafts.ts";
+import {
+  activeDraft,
+  draftKey,
+  isDraftTarget,
+  shownNotice,
+} from "../../composer/Drafts.ts";
 import { editorView } from "../../composer/Editor.ts";
 import { icon } from "../../composer/Icon.ts";
 import { Message } from "../../composer/Message.ts";
@@ -43,9 +48,8 @@ import {
 import { footerView } from "./Footer.ts";
 import { triggerMenuView } from "./TriggerMenu.ts";
 
-/** True when the open draft holds attachments, saved or still in the tray. */
+/** True when the open draft's tray holds attachments, ready or still uploading. */
 const draftHasAttachments = (model: Model): boolean =>
-  activeDraft(model).attachments.length > 0 ||
   Option.exists(draftKey(model), (key) =>
     hasAttachments(model.attachments, key)
   );
@@ -126,7 +130,7 @@ const queueView = (model: Model, h: HtmlBuilder<Message>): Html => {
 };
 
 const noticeView = (model: Model, h: HtmlBuilder<Message>): Html =>
-  Option.match(model.notice, {
+  Option.match(shownNotice(model), {
     onNone: () => h.empty,
     onSome: (text) =>
       h.p(

@@ -4,7 +4,8 @@
 // the ones made before children were titled; reconcile
 // spend, then load the budget book and halt the scopes past their line (4E), both before anything
 // that retries a parked task, since pi-durable's `retryTask` resumes scheduling; cancel approval
-// records a stop left pending (the abort mark committed, the cancel not); `retryTask()` for tasks
+// records a stop left pending (the abort mark committed, the cancel not); expire records nothing
+// waits on that lapsed (criteria, a budget raise); `retryTask()` for tasks
 // whose approval is still pending; retry parked subagent tasks, then parked workflow watchers and
 // budget stoppers; remove child workspaces whose spawn never landed; remove scratch folders whose
 // thread is gone (a thread's row is committed before its folder is claimed); resume interrupted launches from `thread_launches`; repair checkpoint refs;
@@ -17,7 +18,10 @@ import { Effect } from "effect";
 import { sweepAttachmentUploads } from "./attachments/AttachmentStore.ts";
 import type { AttachmentStore } from "./attachments/AttachmentStore.ts";
 import { retryParkedApprovalWaits } from "./Boot.ts";
-import { cancelAbandonedApprovalsAtBoot } from "./brain/CairnDocs.ts";
+import {
+  cancelAbandonedApprovalsAtBoot,
+  expireLapsedApprovalsAtBoot,
+} from "./brain/CairnDocs.ts";
 import { repairChildWorkspacesAtBoot } from "./brain/ChildWorkspaceRepair.ts";
 import { startEventReactors } from "./brain/EventReactors.ts";
 import type { EventReactors } from "./brain/EventReactors.ts";
@@ -101,6 +105,7 @@ export const bootRepairs: ReadonlyArray<
   bootRepair("spend reconcile", reconcileSpendAtBoot),
   bootRepair("budget boot repair", budgetBootRepair),
   bootRepair("cancel abandoned approvals", cancelAbandonedApprovalsAtBoot),
+  bootRepair("expire lapsed approvals", expireLapsedApprovalsAtBoot),
   retryParkedApprovalWaits,
   bootRepair("retry parked subagent tasks", retryParkedSubagentTasks),
   bootRepair("retry parked workflow tasks", retryParkedWorkflowTasks),

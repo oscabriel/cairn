@@ -26,3 +26,4 @@
 {"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":4}
 {"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"The child failed.","images":0,"toolCalls":[],"toolName":null,"isError":null}}
 {"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":2,"delivered":2,"questions":[],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"expect_view","path":["transcript"],"match":"includes","equals":{"kind":"cairn.subagent-result","role":"user","text":"Subagent \"Count the files\" (thread $child1) failed.\n<subagent_result>\n\n</subagent_result>\nDivergence: not reported\nError: The child's run failed before it answered: 500 upstream exploded","images":0,"toolCalls":[],"toolName":null,"isError":null}}

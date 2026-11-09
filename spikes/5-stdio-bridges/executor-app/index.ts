@@ -3,7 +3,7 @@ import { mcpRouter } from "apps/mcp";
 import { always } from "apps/operations/approval";
 import { headers, provider, serverUrl } from "./provider.ts";
 
-const servers = ["convex", "playwright"] as const;
+const servers = ["convex"] as const;
 
 export default defineApp({ app: { accounts: { bridges: provider } } }, async (ctx) => {
   const account = ctx.app.accounts.bridges;
@@ -18,5 +18,5 @@ export default defineApp({ app: { accounts: { bridges: provider } } }, async (ct
       }),
       (tool) => (toolAnnotations(tool)?.destructiveHint === true ? always() : undefined),
     );
-  return { tools: router({ convex: await mount("convex"), playwright: await mount("playwright") }) };
+  return { tools: router({ convex: await mount("convex") }) };
 });

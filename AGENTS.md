@@ -38,4 +38,4 @@ Throwaway code goes under `spikes/<n>-<name>/`, each with a `NOTES.md` of measur
 
 ## Writing for the user
 
-Plans and pages for the user go under `~/Developer/agent-artifacts/cairn/`, served at `https://plans.gneiss.run/cairn/`. Docs and pages use sentence-case headings and no em dashes.
+Plans and pages for the user go under `~/Developer/agent-artifacts/cairn/`, served at `https://plans.gneiss.run/cairn/`. Reports are HTML pages, not Markdown. Docs and pages use sentence-case headings and no em dashes.

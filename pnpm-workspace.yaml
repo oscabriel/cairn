@@ -42,6 +42,8 @@ catalog:
   "@alchemy.run/cloudflare": 2.0.0-beta.85
   "@alchemy.run/github": 2.0.0-beta.85
   "@effect/tsgo": 0.67.5
+  # oxlint moves only as far as @effect/tsgo's `patch --oxlint` (the prepare script) supports:
+  # 0.67.5 stops at 1.92.0.
   "@oxlint/plugins": 1.92.0
   oxlint: 1.92.0
   oxlint-tsgolint: 7.0.2006

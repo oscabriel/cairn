@@ -2,6 +2,8 @@
 
 Status: in progress, part A only. Started 2026-11-04 on the user's word, with one snapshot, on the throwaway stack `CairnS11` (`./deploy.sh destroy` removes it). The gate is in `docs/phase-3/notes/bases.md`, "Measured spikes": launch to first tool call p95 under 5 s on Cairn's tree, warm, 24 h unused and ten at once.
 
+Measured so far on Alchemy beta.83 and Effect 4.0.5. On 2026-11-09 the stack moved to the catalog's Alchemy beta.85, `@alchemy.run/cloudflare` and Effect 4.1.2, typechecked only, never planned or deployed on them. `CairnS11` may still be deployed, last written by beta.83: the next `./deploy.sh` (deploy, plan or destroy) is its first beta.85 run, and it upgrades the account's state store to v8 unless another beta.85 run already has.
+
 ## Shape
 
 Spike 1's Worker, `Workspace` object and relay, plus options on start and one guarded snapshot. The object records a snapshot's id before answering and refuses a second capture, because a snapshot can be neither deleted nor listed.

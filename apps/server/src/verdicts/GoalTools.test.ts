@@ -12,7 +12,9 @@
 //   runs nothing; each verdict records its model and reply, having read the rubric and transcript;
 // - a subagent's thread has no goal tools;
 // - a kill during a judge run (the Harness closed while its command runs, then reopened on the same
-//   store) reruns the command and records one verdict and one note.
+//   store) reruns the command and records one verdict and one note;
+// - a judge run the crash-loop guard parked does not hold its criterion: a second check settles
+//   its item and queues a fresh run.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -30,13 +32,18 @@ import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { ApprovalRecord as ApprovalRecordSchema } from "@cairn/protocol/Policy";
 import type { JudgeRef } from "@cairn/protocol/Policy";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import {
+  DEFAULT_RESTART_LIMIT,
+  MemoryStorage,
+} from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result, Schema } from "effect";
 
 import { answerApproval, Approvals } from "../brain/CairnDocs.ts";
+import { taskOf } from "../subagents/Delivery.ts";
 import { ChildDoc } from "../subagents/SubagentDocs.ts";
+import { JudgeRunsDoc } from "./GoalDocs.ts";
 import {
   callTool,
   createGoalThread,
@@ -52,7 +59,7 @@ import {
 import type { GoalKit, KitModel } from "./GoalTestKit.ts";
 import { NO_JUDGE_FAULTS } from "./JudgeRun.ts";
 import type { JudgeModels } from "./JudgeRun.ts";
-import { criteriaAnswered } from "./Verdicts.ts";
+import { bindCriteria, criteriaAnswered } from "./Verdicts.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -569,6 +576,236 @@ describe("the goal tools under a Harness", () => {
   );
 
   it.live(
+    "a judge run whose judging throws still settles: a later check queues a fresh run and its verdict arrives",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* scratch;
+        const thrown = { once: false };
+
+        const kit = yield* kitOver({
+          storage: new MemoryStorage(),
+          model: CLAUDE,
+          responses: [
+            callTool("goal_check", { criterion: "c1" }, "t1"),
+            say("Queued."),
+            callTool("goal_check", { criterion: "c1" }, "t2"),
+            say("Queued again."),
+          ],
+          judges: judgesAnswering("MET"),
+          // A fault inside the judge phase that is not an abort: the first run's phase throws.
+          faults: {
+            at: (point) => {
+              if (point === "judged" && !thrown.once) {
+                thrown.once = true;
+                throw new Error("the judge broke");
+              }
+            },
+            control: "none",
+          },
+        });
+
+        const conversation = yield* thread(kit, cwd, [
+          { text: "Tests pass", judge: command(["true"]) },
+        ]);
+
+        yield* Effect.promise(async () => {
+          await send(conversation, "Check.", "r-1", context);
+        });
+
+        const first = yield* Effect.promise(
+          async () => await readRuns(kit, conversation, context)
+        );
+
+        const [queued] = Object.values(first?.items ?? {});
+
+        assert.isDefined(queued);
+
+        // The first run ends however its phase's throw ends it.
+        yield* Effect.promise(async () => {
+          await kit.harness.waitForTask(taskOf(queued?.taskId ?? 0), context);
+        });
+
+        yield* Effect.promise(async () => {
+          await send(conversation, "Check again.", "r-2", context);
+        });
+
+        const results = yield* Effect.promise(
+          async () => await toolResults(conversation, context)
+        );
+
+        assert.include(results.get("t2") ?? "", "Queued judge run judge-");
+
+        assert.isTrue(
+          yield* Effect.promise(
+            async () => await waitForJudges(kit, conversation, 10_000, context)
+          )
+        );
+
+        const goal = yield* Effect.promise(
+          async () => await readGoal(kit, conversation, context)
+        );
+
+        const notes = yield* Effect.promise(
+          async () => await verdictNotes(conversation, context)
+        );
+
+        assert.strictEqual(goal?.criteria[0]?.state, "met");
+        assert.isAtLeast(notes.length, 1);
+      }).pipe(Effect.scoped),
+    30_000
+  );
+
+  it.live(
+    "an index item whose run ended without settling it does not hold its criterion",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* scratch;
+
+        const kit = yield* kitOver({
+          storage: new MemoryStorage(),
+          model: CLAUDE,
+          responses: [
+            callTool("goal_check", { criterion: "c1" }, "t1"),
+            say("Queued."),
+            callTool("goal_check", { criterion: "c1" }, "t2"),
+            say("Queued again."),
+          ],
+          judges: judgesAnswering("MET"),
+          faults: NO_JUDGE_FAULTS,
+        });
+
+        const conversation = yield* thread(kit, cwd, [
+          { text: "Tests pass", judge: command(["true"]) },
+        ]);
+
+        yield* Effect.promise(async () => {
+          await send(conversation, "Check.", "r-1", context);
+          await waitForJudges(kit, conversation, 10_000, context);
+        });
+
+        // As a task that faulted in its completing commit leaves it: ended, its item unsettled.
+        const dead = yield* Effect.promise(
+          async () =>
+            await kit.harness.commit(async (tx) => {
+              const runs = await tx.doc(JudgeRunsDoc, conversation.id);
+
+              for (const item of Object.values(runs.items)) {
+                item.settledAt = null;
+              }
+
+              return Object.keys(runs.items);
+            }, context)
+        );
+
+        assert.strictEqual(dead.length, 1);
+
+        yield* Effect.promise(async () => {
+          await send(conversation, "Check again.", "r-2", context);
+        });
+
+        const results = yield* Effect.promise(
+          async () => await toolResults(conversation, context)
+        );
+
+        assert.include(results.get("t2") ?? "", "Queued judge run judge-");
+
+        const runs = yield* Effect.promise(
+          async () => await readRuns(kit, conversation, context)
+        );
+
+        const items = Object.values(runs?.items ?? {});
+
+        assert.strictEqual(items.length, 2);
+        assert.isNotNull(
+          runs?.items[dead[0] ?? ""]?.settledAt ?? null,
+          "the dead item is settled"
+        );
+      }).pipe(Effect.scoped),
+    30_000
+  );
+
+  it.live(
+    "a criterion minted with a dropped criterion's id gets its own run, not the dropped one's",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* scratch;
+
+        const kit = yield* kitOver({
+          storage: new MemoryStorage(),
+          model: CLAUDE,
+          responses: [
+            callTool("goal_check", { criterion: "c3" }, "t1"),
+            say("Queued."),
+            callTool("goal_check", { criterion: "c3" }, "t2"),
+            say("Queued the new one."),
+          ],
+          judges: judgesAnswering("MET"),
+          faults: NO_JUDGE_FAULTS,
+        });
+
+        const kept = [
+          { text: "Tests pass", judge: command(["true"]) },
+          { text: "Lint passes", judge: command(["true"]) },
+        ];
+
+        const conversation = yield* thread(kit, cwd, [
+          ...kept,
+          { text: "Slow", judge: command(["sh", "-c", "sleep 2"]) },
+        ]);
+
+        yield* Effect.promise(async () => {
+          await send(conversation, "Check c3.", "r-1", context);
+        });
+
+        // The user drops c3 while its run goes, then binds a new criterion, which is minted c3.
+        yield* Effect.promise(async () => {
+          await kit.harness.commit(async (tx) => {
+            await bindCriteria(
+              tx,
+              conversation.id,
+              { objective: Option.none(), criteria: kept, mode: "replace" },
+              2
+            );
+            await bindCriteria(
+              tx,
+              conversation.id,
+              {
+                objective: Option.none(),
+                criteria: [{ text: "Docs build", judge: command(["true"]) }],
+                mode: "append",
+              },
+              3
+            );
+          }, context);
+        });
+
+        const goal = yield* Effect.promise(
+          async () => await readGoal(kit, conversation, context)
+        );
+
+        assert.deepStrictEqual(
+          goal?.criteria.map((criterion) => [criterion.id, criterion.text]),
+          [
+            ["c1", "Tests pass"],
+            ["c2", "Lint passes"],
+            ["c3", "Docs build"],
+          ]
+        );
+
+        yield* Effect.promise(async () => {
+          await send(conversation, "Check the new c3.", "r-2", context);
+        });
+
+        const results = yield* Effect.promise(
+          async () => await toolResults(conversation, context)
+        );
+
+        assert.include(results.get("t2") ?? "", "Queued judge run judge-");
+      }).pipe(Effect.scoped),
+    30_000
+  );
+
+  it.live(
     "a kill during a judge run reruns its command and records one verdict and one note",
     () =>
       Effect.gen(function* () {
@@ -660,6 +897,118 @@ describe("the goal tools under a Harness", () => {
         assert.strictEqual(goal?.criteria[0]?.state, "met");
         assert.strictEqual(goal?.criteria[0]?.tries, 1);
         assert.strictEqual(notes.length, 1);
+      }).pipe(Effect.scoped),
+    30_000
+  );
+
+  it.live(
+    "a judge run the crash-loop guard parked does not hold its criterion",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* scratch;
+        const store = path.join(cwd, "brain.sqlite");
+
+        const options = {
+          storage: yield* Effect.promise(
+            async () => await openNodeSqliteStorage(store)
+          ),
+          model: CLAUDE,
+          responses: [callTool("goal_check", { criterion: "c1" }, "t1")],
+          judges: judgesAnswering("MET"),
+          faults: NO_JUDGE_FAULTS,
+        };
+
+        const first = yield* Effect.promise(
+          async () => await openGoalKit(options, context)
+        );
+
+        const conversation = yield* thread(first, cwd, [
+          { text: "Slow tests pass", judge: command(["sleep", "30"]) },
+        ]);
+
+        yield* Effect.promise(async () => {
+          await send(conversation, "Check.", "r-1", context);
+        });
+
+        const queued = yield* Effect.promise(
+          async () => await readRuns(first, conversation, context)
+        );
+
+        const [parkedKey, parkedItem] = Object.entries(
+          queued?.items ?? {}
+        )[0] ?? ["", undefined];
+
+        assert.isDefined(parkedItem);
+
+        yield* Effect.promise(async () => {
+          await first.close();
+        });
+
+        // As the crash-loop guard leaves a run cut off at the limit: live, and parked until a retry.
+        const storage = yield* Effect.promise(
+          async () => await openNodeSqliteStorage(store)
+        );
+
+        yield* Effect.promise(async () => {
+          const record = await storage.task(
+            taskOf(parkedItem?.taskId ?? 0),
+            context
+          );
+
+          assert.isDefined(record);
+
+          if (record !== undefined) {
+            await storage.commit(
+              [
+                {
+                  type: "task",
+                  value: { ...record, restarts: DEFAULT_RESTART_LIMIT },
+                },
+              ],
+              context
+            );
+          }
+        });
+
+        const second = yield* kitOver({
+          ...options,
+          storage,
+          responses: [
+            callTool("goal_check", { criterion: "c1" }, "t2"),
+            say("Queued again."),
+          ],
+        });
+
+        const again = yield* Effect.promise(
+          async () =>
+            await second.harness.conversation(conversation.id, context)
+        );
+
+        assert.isDefined(again);
+
+        if (again === undefined) {
+          return;
+        }
+
+        yield* Effect.promise(async () => {
+          await send(again, "Check again.", "r-2", context);
+        });
+
+        const results = yield* Effect.promise(
+          async () => await toolResults(again, context)
+        );
+
+        assert.include(results.get("t2") ?? "", "Queued judge run judge-");
+
+        const runs = yield* Effect.promise(
+          async () => await readRuns(second, again, context)
+        );
+
+        assert.strictEqual(Object.keys(runs?.items ?? {}).length, 2);
+        assert.isNotNull(
+          runs?.items[parkedKey]?.settledAt ?? null,
+          "the parked run's item is settled"
+        );
       }).pipe(Effect.scoped),
     30_000
   );

@@ -4,7 +4,7 @@
 // ready item holds the brain's `AttachmentRef`, which is all a draft keeps across a reload.
 
 import { AttachmentRef } from "@cairn/protocol/Attachments";
-import { Option, Schema } from "effect";
+import { Schema } from "effect";
 import { File } from "foldkit/file";
 import { defineTaggedUnion } from "foldkit/schema";
 
@@ -58,22 +58,6 @@ export const SendIntent = Schema.Literals([
 
 export type SendIntent = typeof SendIntent.Type;
 
-/** A send pressed while the draft still had uploads in flight. */
-export const WaitingSend = Schema.Struct({
-  draftKey: Schema.String,
-  intent: SendIntent,
-});
-
-export type WaitingSend = typeof WaitingSend.Type;
-
-/** A note for one draft's tray, such as why a file was refused. */
-export const TrayNotice = Schema.Struct({
-  draftKey: Schema.String,
-  text: Schema.String,
-});
-
-export type TrayNotice = typeof TrayNotice.Type;
-
 /** The attachment tray's Model. */
 export const Model = Schema.Struct({
   /** Every draft's attachments, oldest first. */
@@ -82,8 +66,12 @@ export const Model = Schema.Struct({
   nextLocalId: Schema.Int,
   /** True once the ready attachments saved on this device have been read. */
   loaded: Schema.Boolean,
-  waitingSend: Schema.Option(WaitingSend),
-  notice: Schema.Option(TrayNotice),
+  /** Each draft whose send was pressed while it still had uploads in flight, with how it was asked. */
+  waitingSends: Schema.Record(Schema.String, SendIntent),
+  /** Each draft's tray note, such as why a file was refused or why a send did not go. */
+  notices: Schema.Record(Schema.String, Schema.String),
+  /** The saved attachments as this tab last read or wrote them; a save writes what changed since. */
+  stored: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
 });
 
 export type Model = typeof Model.Type;
@@ -93,6 +81,7 @@ export const initial: Model = {
   items: [],
   nextLocalId: 1,
   loaded: false,
-  waitingSend: Option.none(),
-  notice: Option.none(),
+  waitingSends: {},
+  notices: {},
+  stored: {},
 };

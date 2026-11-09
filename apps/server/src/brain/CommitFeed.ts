@@ -159,7 +159,10 @@ interface FeedState {
   >;
   readonly startedCompactions: Set<number>;
   readonly queueLengths: Map<PiConversationId, number>;
-  /** Each record's status and whether it is with the parent, as last emitted. */
+  /**
+   * Each record's status and whether it is with the parent, as last emitted, by
+   * `<conversation>:<record id>`: a record id is unique only within its conversation's document.
+   */
   readonly approvals: Map<string, string>;
   /** Each child's last status, by `<parent conversation>:<registry key>`. */
   readonly subagents: Map<string, string>;
@@ -500,9 +503,13 @@ const documentEvents = (
           Option.isSome(id) &&
           Option.isSome(status) &&
           Option.isSome(requestKind) &&
-          state.approvals.get(id.value) !== `${status.value}:${toParent}`
+          state.approvals.get(`${conversationId}:${id.value}`) !==
+            `${status.value}:${toParent}`
         ) {
-          state.approvals.set(id.value, `${status.value}:${toParent}`);
+          state.approvals.set(
+            `${conversationId}:${id.value}`,
+            `${status.value}:${toParent}`
+          );
           events.push(
             RuntimeRequestUpdated.make({
               threadId,

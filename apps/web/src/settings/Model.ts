@@ -45,6 +45,20 @@ export const Model = Schema.Struct({
   clientLoaded: Schema.Boolean,
   client: ClientSettings,
   server: remote(ServerSettings),
+  /** `settings.get` and `settings.update` calls asked so far, numbered in one sequence. */
+  serverAsked: Schema.Int,
+  /**
+   * The newest numbered read or change whose answer `server` holds (0 for none). A read's answer
+   * shows only when it is newer than every answer shown, so it never hides a change made after
+   * the read was asked.
+   */
+  serverShown: Schema.Int,
+  /**
+   * The newest numbered change whose answer `server` holds (0 for none). A change's answer shows
+   * unless a newer change's already did: a read asked after a change can be answered before the
+   * brain applies it, so a read never hides a change's answer.
+   */
+  serverChangeShown: Schema.Int,
   catalog: remote(ModelCatalog),
   providers: remote(Schema.Array(ProviderStatus)),
   executor: remote(ExecutorStatus),
@@ -66,6 +80,9 @@ export const initial: Model = {
   clientLoaded: false,
   client: DEFAULT_CLIENT_SETTINGS,
   server: AsyncData.Idle(),
+  serverAsked: 0,
+  serverShown: 0,
+  serverChangeShown: 0,
   catalog: AsyncData.Idle(),
   providers: AsyncData.Idle(),
   executor: AsyncData.Idle(),

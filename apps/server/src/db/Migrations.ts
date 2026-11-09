@@ -9,6 +9,7 @@
 // - 0010_Artifacts: `artifacts` (2F, the reach index)
 // - 0011_Portals: `portals` (2F, ADR 0038)
 // - 0012_ChildWorkspaces: `child_workspaces` (3B)
+// - 0013_ModelHealthReset: `model_health.reset_at`, a login's floor on provider health
 // A phase 2 package that needs a table not listed here asks the integrator for the next number.
 
 import type { MigrationRecord } from "./Database.ts";
@@ -24,6 +25,8 @@ import { Spend0009 } from "./migrations/0009Spend.ts";
 import { Artifacts0010 } from "./migrations/0010Artifacts.ts";
 import { Portals0011 } from "./migrations/0011Portals.ts";
 import { ChildWorkspaces0012 } from "./migrations/0012ChildWorkspaces.ts";
+import { ModelHealthReset0013 } from "./migrations/0013ModelHealthReset.ts";
+import { CommandReceiptAge0014 } from "./migrations/0014CommandReceiptAge.ts";
 
 /** Every cairn.sqlite migration, keyed <NNNN>_<Name>; one id space. */
 export const migrations: MigrationRecord = {
@@ -39,4 +42,6 @@ export const migrations: MigrationRecord = {
   "0010_Artifacts": Artifacts0010,
   "0011_Portals": Portals0011,
   "0012_ChildWorkspaces": ChildWorkspaces0012,
+  "0013_ModelHealthReset": ModelHealthReset0013,
+  "0014_CommandReceiptAge": CommandReceiptAge0014,
 };

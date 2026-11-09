@@ -668,6 +668,8 @@ export const settleNode = async (
 
     node.receipt = receipt;
     node.endedAt = at;
+    // An ended node holds for nothing, whichever state it waited in.
+    node.held = null;
 
     if (Option.isSome(stoppedWith)) {
       node.state = "stopped";
@@ -740,6 +742,7 @@ export const endNode = async (
 
   node.state = stopped ? "stopped" : "failed";
   node.endedAt = at;
+  node.held = null;
 
   node.error = stopped
     ? "stopped before it answered"

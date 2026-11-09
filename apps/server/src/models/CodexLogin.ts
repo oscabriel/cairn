@@ -7,8 +7,12 @@
 // response) are classified, never forwarded.
 //
 // One sign-in at a time. It lives as long as its stream: `cancel`, or the stream's subscriber going
-// away, aborts the flow, and nothing is stored before the provider's last answer. A brain without
-// the OAuth store, or one that does not hold its lock, answers `Failed` with `unavailable`.
+// away, aborts the flow, and nothing is stored before the provider's last answer. Once that answer
+// arrives, storing it, resetting the provider's `ModelHealth` and offering `SignedIn` are one
+// uninterruptible step, so the last step says `SignedIn` exactly when the credential was stored. A
+// sign-out resets the health too: a new login mends a broken one and may lift a limit, so the old
+// record says nothing about it. A brain without the OAuth store, or one that does not hold its lock,
+// answers `Failed` with `unavailable`.
 
 import { LoginProgress } from "@cairn/protocol/Models";
 import type {
@@ -33,6 +37,7 @@ import {
 } from "effect";
 
 import { CODEX_PROVIDER } from "./CredentialStore.ts";
+import { ModelHealth } from "./ModelHealth.ts";
 import { OAuthStore } from "./OAuthStore.ts";
 
 /** pi-ai's id of the device-code method in the Codex flow's method prompt. */
@@ -191,30 +196,49 @@ const answerPrompt = async (prompt: AuthPrompt): Promise<string> =>
         new Error("Cairn signs in to Codex with a device code only")
       );
 
+/**
+ * Forgets Codex's health after its credential changed. A failed write is only logged: the credential
+ * change it follows did happen.
+ */
+const resetHealth = (health: ModelHealth["Service"]) =>
+  health.reset(CODEX_PROVIDER).pipe(
+    Effect.catchTag("ModelHealthError", (failure) =>
+      Effect.logWarning("model health not reset after a login change").pipe(
+        Effect.annotateLogs({
+          event: "model_health_reset_failed",
+          provider: CODEX_PROVIDER,
+          cause: failure.message,
+        })
+      )
+    )
+  );
+
 /** Signs Cairn in to Codex and out again. */
 export class CodexLogin extends Context.Service<
   CodexLogin,
   {
     /**
-     * Runs one sign-in: the device code, progress, then `SignedIn` (stored) or `Failed`, then the
-     * stream ends. Fails with `CodexLoginBusy` while another sign-in runs. Ending the stream early
-     * cancels the sign-in.
+     * Runs one sign-in: the device code, progress, then `SignedIn` (stored, and Codex's health
+     * reset) or `Failed`, then the stream ends. Fails with `CodexLoginBusy` while another sign-in
+     * runs. Ending the stream early cancels the sign-in, unless the credential is already being
+     * stored.
      */
     readonly start: Stream.Stream<LoginProgress, CodexLoginBusy>;
     /** Cancels the running sign-in, if any. True when one was running. */
     readonly cancel: Effect.Effect<boolean>;
-    /** Removes the stored sign-in. True when there was one. */
+    /** Removes the stored sign-in and resets Codex's health. True when there was one. */
     readonly logout: Effect.Effect<boolean, CodexLogoutError>;
   }
 >()("cairn/server/models/CodexLogin") {
   /**
    * The sign-in over `OAuthStore` when the brain provides one (the deployed brain), with pi-ai's
-   * Codex flow. Without the store, every sign-in fails with `unavailable`.
+   * Codex flow. Without the store, every sign-in fails with `unavailable`. Needs `ModelHealth`.
    */
   static readonly layer = Layer.effect(
     CodexLogin,
     Effect.gen(function* () {
       const store = yield* Effect.serviceOption(OAuthStore);
+      const health = yield* ModelHealth;
       // Whether a sign-in holds the one slot, and its fiber once it runs (`cancel` interrupts it).
       const busy = yield* Ref.make(false);
       const running = yield* Ref.make(Option.none<Fiber.Fiber<void>>());
@@ -267,30 +291,36 @@ export class CodexLogin extends Context.Service<
               catch: (cause) =>
                 new CodexFlowFailed({ reason: reasonOf(cause) }),
             }).pipe(
+              // Store, reset and answer as one step: a cancel that lands during the write waits
+              // for it, and then finds the stream already ended with `SignedIn`.
               Effect.flatMap((credential) =>
-                holder.signIn(CODEX_PROVIDER, credential).pipe(
-                  Effect.as(
-                    Steps.cases.SignedIn.makeOption({
-                      account: accountOf(credential.access),
-                    })
-                  ),
-                  Effect.catchTag("OAuthStoreError", (failure) =>
-                    Effect.succeed(
-                      failed(
-                        "unavailable",
-                        `The sign-in succeeded but could not be stored (${failure.reason}). Start it again.`
+                Effect.uninterruptible(
+                  holder.signIn(CODEX_PROVIDER, credential).pipe(
+                    Effect.andThen(resetHealth(health)),
+                    Effect.as(
+                      Steps.cases.SignedIn.makeOption({
+                        account: accountOf(credential.access),
+                      })
+                    ),
+                    Effect.catchTag("OAuthStoreError", (failure) =>
+                      Effect.succeed(
+                        failed(
+                          "unavailable",
+                          `The sign-in succeeded but could not be stored (${failure.reason}). Start it again.`
+                        )
                       )
-                    )
+                    ),
+                    Effect.flatMap((last) => endWith(queue, last))
                   )
                 )
               ),
               Effect.catchTag("CodexFlowFailed", ({ reason }) =>
                 Effect.logWarning("codex sign-in failed").pipe(
                   Effect.annotateLogs({ event: "codex_login_failed", reason }),
-                  Effect.as(failed(reason))
+                  Effect.andThen(endWith(queue, failed(reason)))
                 )
               ),
-              Effect.flatMap((last) => endWith(queue, last)),
+              // A no-op when the stream already ended: `endWith` offers to an ended queue.
               Effect.onInterrupt(() => endWith(queue, failed("cancelled")))
             );
 
@@ -338,6 +368,8 @@ export class CodexLogin extends Context.Service<
         }
 
         return yield* store.value.remove(CODEX_PROVIDER).pipe(
+          Effect.tap(() => resetHealth(health)),
+          Effect.uninterruptible,
           Effect.mapError(
             (failure) =>
               new CodexLogoutError({

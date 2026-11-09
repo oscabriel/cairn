@@ -107,6 +107,7 @@ import type {
 import {
   configure,
   ConversationBusy,
+  DEFAULT_RESTART_LIMIT,
   defineTask,
   InboxDoc,
   LiveDoc,
@@ -1240,18 +1241,52 @@ const endOf = (
   };
 };
 
-/** Whether any other input of the child's registry item is not admitted yet (table reads). */
-const anyUnadmitted = async (
+/** A reporter's phases that still hand the child an input: a nudge, or a question's answer. */
+const HANDING_PHASES: ReadonlySet<JsonValue> = new Set([
+  "nudge",
+  "ask",
+  "answer",
+]);
+
+/**
+ * Whether the child still has work ahead of it besides `mine` (table reads): another input of its
+ * registry item not admitted yet, or another live reporter that will hand it an input (a nudge, or
+ * the answer to a relayed question). A reporter the crash-loop guard parked hands nothing until a
+ * retry, so it is no work ahead, as `parentHalt` reads a parked run; one marked for abort still
+ * ends on its own.
+ */
+export const workAhead = async (
   tx: Tx,
   child: ConversationId,
   item: SubagentItemState,
   mine: string
 ): Promise<boolean> => {
-  for (const requestId of Object.keys(item.inputs)) {
+  for (const [requestId, taskId] of Object.entries(item.inputs)) {
+    if (requestId === mine) {
+      continue;
+    }
+
+    // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+    if ((await tx.submissionByRequest(child, requestId)) === undefined) {
+      return true;
+    }
+
+    // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
+    const task = await tx.task(taskOf(taskId));
+    const state = task?.state;
+
+    const parked =
+      task !== undefined &&
+      !task.abortRequested &&
+      (task.restarts ?? 0) >= DEFAULT_RESTART_LIMIT;
+
     if (
-      requestId !== mine &&
-      // oxlint-disable-next-line no-await-in-loop -- reads, before any table write
-      (await tx.submissionByRequest(child, requestId)) === undefined
+      state !== undefined &&
+      !parked &&
+      state.status !== "completing" &&
+      state.status !== "terminal" &&
+      isJsonRecord(state.checkpoint) &&
+      HANDING_PHASES.has(state.checkpoint.phase ?? null)
     ) {
       return true;
     }
@@ -1260,16 +1295,30 @@ const anyUnadmitted = async (
   return false;
 };
 
+/** Whether a question the child put to its parent is still open: pending or escalated. */
+const questionOpen = (item: SubagentItemState): boolean =>
+  Object.values(item.questions).some(
+    (question) => question.state === "pending" || question.state === "escalated"
+  );
+
 /**
- * Marks a child settled unless it still works (registry, in the caller's commit): a run of its own,
- * or an input a reporter has not admitted yet (read before the commit's first table write).
+ * Sets a child's status once a run of it settled (registry, in the caller's commit), unless a run
+ * of its own goes on (whose reporter follows it): `waiting` while a question it asked is open,
+ * else `settled` unless it has work ahead (`workAhead`, read before the commit's first table
+ * write).
  */
 const settleUnlessWorking = (
   item: SubagentItemState,
   running: boolean,
-  unadmitted: boolean
+  ahead: boolean
 ) => {
-  if (!running && !unadmitted) {
+  if (running) {
+    return;
+  }
+
+  if (questionOpen(item)) {
+    setStatus(item, "waiting");
+  } else if (!ahead) {
     setStatus(item, "settled");
   }
 };
@@ -1311,6 +1360,63 @@ const wakeQueued = async (
         break;
       }
     }
+  }
+
+  return false;
+};
+
+/** How many live reporters of a parent `wakeFrozen` reads; a parent holds at most a few. */
+const REPORTER_SCAN = 256;
+
+/**
+ * Whether another reporter of the parent decided on a wake it has not submitted yet: its task
+ * waits in the `wake` phase with wakes to send, and the parent holds no submission of its first
+ * (table reads). Report commits run one at a time, so a reporter that reads one here leaves the
+ * wake to it, and two children settling together queue one wake. A wake already submitted counts
+ * here no longer: a queued one is `wakeQueued`'s, and one that started a run may have started it
+ * past the point that reads a note landing now.
+ */
+const wakeFrozen = async (
+  tx: Tx,
+  parent: ConversationId,
+  mine: number
+): Promise<boolean> => {
+  // A live reporter is running, or pending again after a restart.
+  for (const status of ["running", "pending"] as const) {
+    let cursor: Parameters<Tx["scanTasks"]>[2];
+
+    do {
+      // Each page continues from the last one's cursor.
+      // oxlint-disable-next-line no-await-in-loop
+      const page = await tx.scanTasks(
+        { conversationId: parent, kind: REPORTER_TASK, status },
+        REPORTER_SCAN,
+        cursor
+      );
+
+      for (const { id, state } of page.items) {
+        const { checkpoint } = state;
+
+        const first =
+          Number(id) !== mine &&
+          isJsonRecord(checkpoint) &&
+          checkpoint.phase === "wake" &&
+          Array.isArray(checkpoint.wakes)
+            ? checkpoint.wakes[0]
+            : undefined;
+
+        if (
+          isJsonRecord(first) &&
+          Predicate.isString(first.requestId) &&
+          // oxlint-disable-next-line no-await-in-loop -- a few reads, before any table write
+          (await tx.submissionByRequest(parent, first.requestId)) === undefined
+        ) {
+          return true;
+        }
+      }
+
+      cursor = page.next;
+    } while (cursor !== undefined);
   }
 
   return false;
@@ -1431,17 +1537,23 @@ export interface ChildWorkspaceAccess {
 /**
  * Tells the parent how a brief ended without a child: declined, sent back, expired, or accepted
  * with no workspace (`failure`). As a follow-up input under the answer's request id, or as a note
- * under it when the parent was halted as the brief settled, so a rerun lands it once. Then ends
- * the task.
+ * under it when the parent was halted as the brief settled or is halted now, so a rerun lands it
+ * once. Then ends the task. `delayMillis` holds the tell before it reads the parent (tests only).
  */
 const tellParent = async <I, S, H extends object>(
   runtime: TaskRuntime<I, S, null, H>,
   approvalId: string,
   halted: boolean,
   failure: StartFailure | null,
-  context: Parameters<typeof runWait>[1]
+  context: Parameters<typeof runWait>[1],
+  delayMillis: number
 ) => {
   const parent = runtime.conversationId;
+
+  if (delayMillis > 0) {
+    await sleep(delayMillis);
+  }
+
   const approvals = await runtime.snapshot(Approvals, parent, context);
   const record = approvals?.items[approvalId];
   const brief = briefOfPayload(record?.payload ?? null);
@@ -1462,8 +1574,15 @@ const tellParent = async <I, S, H extends object>(
       started: false,
     };
 
-    if (halted) {
-      await runtime.commit(async (tx) => {
+    // `halted` was read when the tell was decided; a parent the user stopped since is not started
+    // either (ADR 0028), so it is read again right before the submit. A rerun after the submit
+    // lands nothing more: the note and the input share one request id.
+    let noted = false;
+
+    await runtime.commit(async (tx) => {
+      if (halted || (await parentHalted(tx, parent))) {
+        noted = true;
+
         await admitNote(
           tx,
           parent,
@@ -1475,8 +1594,10 @@ const tellParent = async <I, S, H extends object>(
             at: runtime.now(),
           })
         );
-      }, context);
-    } else {
+      }
+    }, context);
+
+    if (!noted) {
       const conversation = await runtime.conversation(parent, context);
 
       await conversation?.submit(
@@ -1543,6 +1664,10 @@ export interface TaskDependencies {
   readonly workspaces: ChildWorkspaceAccess;
   /** How long a reporter waits before it settles, by whether its input is quiet (tests only). */
   readonly settleDelayMillis: (quiet: boolean) => number;
+  /** How long a reporter waits before it submits a wake it decided on, and a tell (tests only). */
+  readonly wakeDelayMillis: number;
+  /** How long a reporter waits after it submitted a wake, before the commit that ends it (tests only). */
+  readonly wokenDelayMillis: number;
   /** Where a judge brain kills itself in a brief's Go (`judges/brief-go.sh`); none elsewhere. */
   readonly briefFaults: BriefFaultHooks;
   /** Checks a brief's model at Go, right before the commit that creates its child (ADR 0043). */
@@ -1662,6 +1787,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     crashAt,
     faults,
     settleDelayMillis,
+    wakeDelayMillis,
+    wokenDelayMillis,
     briefFaults,
     questionTtlMillis,
     questionWindowMillis,
@@ -1951,7 +2078,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       return completed();
     }
 
-    const unadmitted = await anyUnadmitted(tx, child, item, input.requestId);
+    const ahead = await workAhead(tx, child, item, input.requestId);
     const live = await tx.doc(LiveDoc, child);
     const running = live.run !== undefined;
     const context = await runContext(tx, child, item);
@@ -1981,7 +2108,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     if (marked.length > 0) {
       if (marked.some((mark) => mark.phase === "settled")) {
-        settleUnlessWorking(item, running, unadmitted);
+        settleUnlessWorking(item, running, ahead);
       }
 
       return completed();
@@ -2116,7 +2243,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     // The run's report is spent; the next run starts with none.
     link.report = null;
-    settleUnlessWorking(item, running, unadmitted);
+    settleUnlessWorking(item, running, ahead);
 
     return {
       status: "running",
@@ -2345,9 +2472,9 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             const current = await tx.doc(SubagentsDoc, parent);
             const item = current.items[input.key];
 
-            const unadmitted =
+            const ahead =
               item !== undefined &&
-              (await anyUnadmitted(tx, child, item, input.requestId));
+              (await workAhead(tx, child, item, input.requestId));
 
             await endUnanswered(tx, {
               parentConversationId: parent,
@@ -2375,7 +2502,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
               inputs: [...markInputs(item, mark)],
             });
             item.runs.push({ run: mark.run, phase: "settled", seq: next });
-            settleUnlessWorking(item, live.run !== undefined, unadmitted);
+            settleUnlessWorking(item, live.run !== undefined, ahead);
 
             return {
               status: "running",
@@ -2458,7 +2585,11 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             // Table reads first.
             const halted = await parentHalted(tx, parent);
             const registry = await tx.doc(SubagentsDoc, parent);
-            const queued = await wakeQueued(tx, parent, registry);
+
+            const queued =
+              (await wakeQueued(tx, parent, registry)) ||
+              (await wakeFrozen(tx, parent, Number(runtime.taskId)));
+
             const notes = [];
 
             for (const ids of faults.dropNote ? [] : deliveries) {
@@ -2524,9 +2655,33 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
         crashAt("reporter-noted");
 
-        if (wakes.length > 0) {
-          const conversation = await runtime.conversation(parent, context);
+        if (wakes.length > 0 && wakeDelayMillis > 0) {
+          await sleep(wakeDelayMillis);
+        }
 
+        const conversation =
+          wakes.length > 0
+            ? await runtime.conversation(parent, context)
+            : undefined;
+
+        // The wake was decided in the report's commit; a parent the user stopped since is not woken
+        // (ADR 0028). Read again right before the submit, and kept: a rerun submits nothing either.
+        let halted = false;
+
+        if (wakes.length > 0 && !faults.wakeStoppedParent) {
+          await runtime.commit(async (tx) => {
+            halted = await parentHalted(tx, parent);
+
+            return halted
+              ? {
+                  status: "running",
+                  checkpoint: { phase: "wake", settlement, wakes: [] },
+                }
+              : undefined;
+          }, context);
+        }
+
+        if (!halted) {
           for (const wake of wakes) {
             // oxlint-disable-next-line no-await-in-loop -- in order
             await conversation?.submit(
@@ -2538,6 +2693,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
               },
               context
             );
+          }
+
+          if (wakes.length > 0 && wokenDelayMillis > 0) {
+            await sleep(wokenDelayMillis);
           }
         }
 
@@ -2783,7 +2942,14 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       tell: async (task, runtime, context) => {
         const { approvalId, halted, failure } = task.input;
 
-        await tellParent(runtime, approvalId, halted, failure, context);
+        await tellParent(
+          runtime,
+          approvalId,
+          halted,
+          failure,
+          context,
+          wakeDelayMillis
+        );
       },
     },
     abort: async (_task, runtime, context) => {
@@ -3113,9 +3279,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
             await newTell(tx, parent, approvalId, null);
 
-            expiring.status = "expired";
-            expiring.answeredAt = runtime.now();
-            expiring.decidedBy = { kind: "expiry" };
+            expirePending(expiring, runtime.now());
 
             return completed();
           },
@@ -3130,7 +3294,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           task.input.approvalId,
           halted,
           failure === null ? null : { at: "workspace", why: failure },
-          context
+          context,
+          wakeDelayMillis
         );
       },
     },

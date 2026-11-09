@@ -52,6 +52,8 @@ import {
   draftThreadId,
   isDraftTarget,
   modifyActiveDraft,
+  rebaseDrafts,
+  shownNotice,
   targetProject,
 } from "./Drafts.ts";
 import { FocusEditor, SetEditorValue } from "./Editor.ts";
@@ -165,7 +167,8 @@ const restoreDraft = (
           drafts,
           key,
           Option.match(Record.get(drafts, key), {
-            onNone: () => sent,
+            // The draft names only attachments the tray holds again.
+            onNone: () => ({ ...sent, attachments: ids }),
             onSome: (current) => ({
               ...current,
               text:
@@ -314,14 +317,22 @@ export const contextChanged = (
   );
 };
 
-/** Closes every transient surface, as switching targets does. */
-const resetTransient = (model: Model): Model =>
+/**
+ * Closes every transient surface, as switching targets does. A notice about another draft than the
+ * one left (an answer that came while the user was elsewhere) waits to show on its own draft.
+ */
+const resetTransient = (model: Model, left: Option.Option<string>): Model =>
   modifyFields(model, {
     triggerMenu: () => Option.none(),
     dismissedTrigger: () => Option.none(),
     popover: () => Option.none(),
     history: () => Option.none(),
-    notice: () => Option.none(),
+    notice: (notice) =>
+      Option.filter(
+        notice,
+        ({ draftKey: key }) =>
+          Option.isSome(key) && !Option.contains(left, key.value)
+      ),
   });
 
 /** At `/` with the hero's draft id known, the command that moves the URL to `/new/<id>`. */
@@ -343,7 +354,11 @@ export const inform = (
 ): Update.Return<Model, Message, Services> => {
   const retargeted = !sameTarget(model.context.target, context.target);
   const informed = modifyFields(model, { context: () => context });
-  const next = retargeted ? resetTransient(informed) : informed;
+
+  const next = retargeted
+    ? resetTransient(informed, draftKey(model))
+    : informed;
+
   const end = activeDraft(next).text.length;
 
   return {
@@ -413,7 +428,10 @@ const refreshTriggerMenu: Step = (model) => {
       Option.contains(withMenu.pathSearch.projectId, candidate.id)
     );
 
-  return answered || Option.contains(withMenu.pathSearch.pending, query)
+  // With no project there is nothing to search: the menu asks for one instead of spinning.
+  return answered ||
+    Option.isNone(project) ||
+    Option.contains(withMenu.pathSearch.pending, query)
     ? { model: withMenu }
     : {
         model: modifyFields(withMenu, {
@@ -462,7 +480,9 @@ const clearSentDraft = (model: Model): Model =>
   );
 
 const notice = (model: Model, text: string): UpdateReturn => ({
-  model: modifyFields(model, { notice: () => Option.some(text) }),
+  model: modifyFields(model, {
+    notice: () => Option.some({ draftKey: draftKey(model), text }),
+  }),
 });
 
 /** Hands a validated turn to the Command that mints its ids, emptying the draft at once. */
@@ -512,6 +532,7 @@ const dispatchTurn = (
                 whenBusy: mode === "steer" ? "steer" : "followUp",
                 content,
                 attachments,
+                draftKey: Option.getOrElse(draftKey(model), () => ""),
               }),
             ],
           };
@@ -569,6 +590,59 @@ const dispatchTurn = (
       },
     }
   );
+};
+
+/**
+ * The save of what this tab changed in its drafts since it last read or wrote them. A draft still
+ * `sending` is written as sent, unless the user has typed into its key since.
+ */
+const saveDraftsCommand = (model: Model) =>
+  SaveDrafts({
+    version: model.draftsVersion,
+    base: model.storedDrafts,
+    drafts: { ...model.sending, ...model.drafts },
+  });
+
+/**
+ * The composer once storage holds `stored`: it becomes the base of the next save, and the drafts
+ * take every draft this tab did not change since `written`, so other tabs' drafts show here.
+ */
+const syncDrafts = (
+  model: Model,
+  written: Model["drafts"],
+  stored: Model["drafts"]
+): Model =>
+  modifyFields(model, {
+    storedDrafts: () => stored,
+    drafts: (drafts) => rebaseDrafts(written, drafts, stored),
+  });
+
+/**
+ * Drops from every draft the attachment ids its tray holds no ready item for: one the brain swept
+ * after a day, or one removed just before the page died. Run once, when the second of the two
+ * stores answers at start. The drafts as last read lose the same ids, so this is no edit of this
+ * tab's: a save does not write these drafts over another tab's newer words, and a draft's stale
+ * ids leave storage with the next edit of it.
+ */
+const reconcileAttachments = (model: Model): Model => {
+  const dropUnready = (drafts: Model["drafts"]): Model["drafts"] =>
+    Record.map(drafts, (draft, key) => {
+      const ready = Tray.readyIds(model.attachments, key);
+
+      return Array.every(draft.attachments, (id) => ready.includes(id))
+        ? draft
+        : {
+            ...draft,
+            attachments: Array.filter(draft.attachments, (id) =>
+              ready.includes(id)
+            ),
+          };
+    });
+
+  return modifyFields(model, {
+    drafts: dropUnready,
+    storedDrafts: dropUnready,
+  });
 };
 
 /** Changes the ready attachment ids of the draft at `key`, open or not. */
@@ -638,7 +712,10 @@ const applyTray = (model: Model, result: Tray.UpdateReturn): TrayApplied => {
   });
 };
 
-/** Sends the turn, and lets the tray forget the attachments it carried. */
+/**
+ * Sends the turn, and lets the tray forget the attachments it carried. The draft as sent is kept in
+ * `sending` until the outbox holds its turn, so a save in between still writes its words.
+ */
 const dispatch = (
   model: Model,
   intent: SubmitIntent,
@@ -659,7 +736,10 @@ const dispatch = (
 
         return {
           ...sent,
-          model: cleared.model,
+          model: modifyFields(cleared.model, {
+            sending: (sending) =>
+              Record.set(sending, sentKey, activeDraft(model)),
+          }),
           commands: Array.appendAll(sent.commands ?? [], cleared.commands),
         };
       },
@@ -675,13 +755,13 @@ const submit = (model: Model, intent: SubmitIntent): UpdateReturn => {
   const draft = activeDraft(model);
   const key = draftKey(model);
 
+  // The tray is what the user sees and what the turn carries; the draft's ids only follow it.
   const submission = submitComposerDraft(
     draft.text,
     "turn",
-    draft.attachments.length > 0 ||
-      Option.exists(key, (current) =>
-        Tray.hasAttachments(model.attachments, current)
-      )
+    Option.exists(key, (current) =>
+      Tray.hasAttachments(model.attachments, current)
+    )
   );
 
   return ComposerSubmission.match(submission, {
@@ -1021,11 +1101,25 @@ const saveSettingsStep = (model: Model): UpdateReturn => ({
   commands: [SaveSettings({ settings: model.settings })],
 });
 
+/**
+ * True for a search of the pending query in the target project. An answer for another project (the
+ * user picked a new one meanwhile) leaves the query pending for the new project's answer.
+ */
+const answersPathSearch = (
+  model: Model,
+  projectId: ProjectId,
+  query: string
+): boolean =>
+  Option.contains(model.pathSearch.pending, query) &&
+  Option.exists(targetProject(model), (project) => project.id === projectId);
+
 const step = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
+    // Typing dismisses the notice shown on this draft, not one waiting on another draft.
     ChangedDraft: ({ value }) => ({
       model: modifyFields(setText(model, value), {
-        notice: () => Option.none(),
+        notice: (current) =>
+          Option.isSome(shownNotice(model)) ? Option.none() : current,
       }),
     }),
     ChangedSelection: ({ end, start }) =>
@@ -1193,7 +1287,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
     }),
     ClickedStartWithoutProject: () => ({
       model: closePopover(model),
-      commands: [EnsureScratch()],
+      commands: [EnsureScratch({ draftKey: draftKey(model) })],
     }),
     PickedEnvMode: ({ mode }) =>
       changeDraft(model, (draft) => ({ ...draft, envMode: mode })),
@@ -1241,14 +1335,20 @@ const step = (model: Model, message: Message): UpdateReturn =>
     DetectedPlatform: ({ isMac }) => ({
       model: modifyFields(model, { isMac: () => isMac }),
     }),
-    LoadedDrafts: ({ drafts }) => ({
-      model: modifyFields(model, {
-        // Edits made before storage answered win over what was saved.
-        drafts: (current) =>
-          Record.union(drafts, current, (_saved, edited) => edited),
-        draftsLoaded: () => true,
-      }),
-    }),
+    LoadedDrafts: ({ drafts }) => {
+      // Edits made before storage answered win over what was saved.
+      const loaded = modifyFields(
+        syncDrafts(model, model.storedDrafts, drafts),
+        { draftsLoaded: () => true }
+      );
+
+      return {
+        model:
+          !model.draftsLoaded && model.attachments.loaded
+            ? reconcileAttachments(loaded)
+            : loaded,
+      };
+    },
     LoadedSettings: ({ settings }) => ({
       model: modifyFields(model, { settings: () => settings }),
     }),
@@ -1262,31 +1362,30 @@ const step = (model: Model, message: Message): UpdateReturn =>
     MovedHeroToDraftUrl: () => keep(model),
     ElapsedDraftDebounce: ({ version }) =>
       version === model.draftsVersion && version > model.savedVersion
-        ? { model, commands: [SaveDrafts({ version, drafts: model.drafts })] }
+        ? { model, commands: [saveDraftsCommand(model)] }
         : keep(model),
     HidPage: () =>
       model.draftsVersion > model.savedVersion
-        ? {
-            model,
-            commands: [
-              SaveDrafts({
-                version: model.draftsVersion,
-                drafts: model.drafts,
-              }),
-            ],
-          }
+        ? { model, commands: [saveDraftsCommand(model)] }
         : keep(model),
-    CompletedSaveDrafts: ({ saved, version }) =>
-      saved
-        ? {
-            model: modifyFields(model, {
-              savedVersion: (current) => Math.max(current, version),
-            }),
-          }
-        : notice(
+    // Saving merges into what the other tab wrote, and its answer brings those drafts here.
+    ChangedStoredDrafts: () => ({
+      model,
+      commands: [saveDraftsCommand(model)],
+    }),
+    CompletedSaveDrafts: ({ stored, version, written }) =>
+      Option.match(stored, {
+        onNone: () =>
+          notice(
             model,
             "Drafts could not be saved on this device. Keep this page open until you send."
           ),
+        onSome: (drafts) => ({
+          model: modifyFields(syncDrafts(model, written, drafts), {
+            savedVersion: (current) => Math.max(current, version),
+          }),
+        }),
+      }),
     CompletedSaveSettings: () => keep(model),
 
     SucceededModels: ({ catalog, epoch }) =>
@@ -1301,11 +1400,11 @@ const step = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
     ElapsedPathSearchDebounce: ({ projectId, query }) =>
-      Option.contains(model.pathSearch.pending, query)
+      answersPathSearch(model, projectId, query)
         ? { model, commands: [SearchEntries({ projectId, query })] }
         : keep(model),
     SucceededPathSearch: ({ projectId, query, result }) =>
-      Option.contains(model.pathSearch.pending, query)
+      answersPathSearch(model, projectId, query)
         ? {
             model: modifyFields(model, {
               pathSearch: () => ({
@@ -1319,7 +1418,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
           }
         : keep(model),
     FailedPathSearch: ({ message: reason, projectId, query }) =>
-      Option.contains(model.pathSearch.pending, query)
+      answersPathSearch(model, projectId, query)
         ? {
             model: modifyFields(model, {
               pathSearch: () => ({
@@ -1344,26 +1443,48 @@ const step = (model: Model, message: Message): UpdateReturn =>
       })),
       commands: [FocusEditor()],
     }),
-    PreparedTurn: ({ attachments, item, navigateTo }) => ({
-      model,
-      outMessage: OutMessage.Submitted({ item, navigateTo, attachments }),
-    }),
+    // The root queues and saves the turn in this same update, so the emptied draft is saved now
+    // rather than after the pause: a page that dies next has the words in exactly one store.
+    PreparedTurn: ({ attachments, draftKey: key, item, navigateTo }) => {
+      const sent = modifyFields(model, {
+        sending: (sending) => Record.remove(sending, key),
+        draftsVersion: (version) => version + 1,
+      });
+
+      return {
+        model: sent,
+        commands: [saveDraftsCommand(sent)],
+        outMessage: OutMessage.Submitted({ item, navigateTo, attachments }),
+      };
+    },
     FailedPrepareTurn: ({
       attachments,
       draft,
       draftKey: key,
       message: reason,
     }) => {
-      const restored = restoreDraft(model, key, draft, attachments);
+      const restored = restoreDraft(
+        modifyFields(model, {
+          sending: (sending) => Record.remove(sending, key),
+        }),
+        key,
+        draft,
+        attachments
+      );
 
       return {
         model: modifyFields(restored.model, {
-          notice: () => Option.some(reason),
+          notice: () =>
+            Option.some({ draftKey: Option.some(key), text: reason }),
         }),
         commands: restored.commands ?? [],
       };
     },
-    FailedRequest: ({ message: reason }) => notice(model, reason),
+    FailedRequest: ({ draftKey: key, message: reason }) => ({
+      model: modifyFields(model, {
+        notice: () => Option.some({ draftKey: key, text: reason }),
+      }),
+    }),
     FailedLoad: ({ message: reason, projectId, what }) => {
       if (what === "models") {
         return {
@@ -1396,13 +1517,20 @@ const step = (model: Model, message: Message): UpdateReturn =>
     },
     CompletedRequest: () => keep(model),
     CompletedEditorCommand: () => keep(model),
-    GotAttachmentsMessage: ({ message: trayMessage }) =>
-      withTray(
+    GotAttachmentsMessage: ({ message: trayMessage }) => {
+      const next = withTray(
         model,
         Tray.update(model.attachments, trayMessage, {
           draftKey: draftKey(model),
         })
-      ),
+      );
+
+      return !model.attachments.loaded &&
+        next.model.attachments.loaded &&
+        next.model.draftsLoaded
+        ? { ...next, model: reconcileAttachments(next.model) }
+        : next;
+    },
   });
 
 /** The composer's update. */

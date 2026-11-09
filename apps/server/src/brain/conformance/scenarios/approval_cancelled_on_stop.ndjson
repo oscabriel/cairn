@@ -13,3 +13,4 @@
 {"type":"expect_view","path":["pendingApprovals"],"equals":0}
 {"type":"expect_view","path":["decisions"],"equals":[{"status":"cancelled","decidedBy":"system","reason":null}]}
 {"type":"expect_event_count","event":{"_tag":"MessageCommitted","text":"never seen"},"count":0}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.tool-result","role":"toolResult","text":"<harness>\n[error] Tool gate was aborted\n</harness>","images":0,"toolCalls":[],"toolName":"gate","isError":true}}

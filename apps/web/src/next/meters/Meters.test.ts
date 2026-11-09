@@ -175,6 +175,17 @@ const unknownReadings = (root: VNode): ReadonlyArray<string> => {
   return found;
 };
 
+/** The usage page's context with one row at `totalTokens`. */
+const row = (totalTokens: number) => ({
+  threads: [
+    {
+      threadId: threadA,
+      title: "Port the parser",
+      spend: summary(totalTokens, 1_200_000, 0, "within"),
+    },
+  ],
+});
+
 describe("the usage page", () => {
   it("asks the brain for each section once the page opens on a client", () => {
     const closed = inform(initial, context({ page: "closed" }));
@@ -307,5 +318,43 @@ describe("the usage page", () => {
         assert.lengthOf(commands, 0);
       })
     );
+  });
+
+  it("keeps one spend roll-up out at a time during a run, and asks again for spend that came meanwhile", () => {
+    const opened = inform(initial, context({}));
+
+    const answeredOnce = update(
+      opened.model,
+      Message.ReceivedSpend({ epoch: 1, spend: SPEND })
+    ).model;
+
+    const first = inform(answeredOnce, context(row(120_000)));
+    const second = inform(first.model, context(row(150_000)));
+
+    assert.deepStrictEqual(
+      [first.commands ?? [], second.commands ?? []].map((commands) =>
+        commands.map((command) => command.name)
+      ),
+      [["FetchSpend"], []],
+      "a second spend.get went out while the first was still out"
+    );
+
+    // The first answer is older than the rows: the newer spend is asked for now.
+    const answered = update(
+      second.model,
+      Message.ReceivedSpend({ epoch: 1, spend: SPEND })
+    );
+
+    assert.deepStrictEqual(
+      (answered.commands ?? []).map((command) => command.name),
+      ["FetchSpend"]
+    );
+
+    const settled = update(
+      answered.model,
+      Message.ReceivedSpend({ epoch: 1, spend: SPEND })
+    );
+
+    assert.lengthOf(settled.commands ?? [], 0);
   });
 });

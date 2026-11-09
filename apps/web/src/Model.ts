@@ -30,6 +30,8 @@ export const SentTurn = Schema.Struct({
   attachments: Schema.Array(AttachmentRef),
   /** The brain acknowledged it; a launch then waits for its shell row to leave `preparing`. */
   acknowledged: Schema.Boolean,
+  /** Sent from the scratch overlay, so a refusal puts its words back there, not in the composer. */
+  fromScratch: Schema.Boolean,
 });
 
 export type SentTurn = typeof SentTurn.Type;
@@ -44,12 +46,29 @@ export const Model = Schema.Struct({
   shell: Schema.Option(ShellSnapshot),
   /** Mutations waiting for the brain, oldest first. */
   outbox: Schema.Array(OutboxItem),
+  /** The outbox as this tab last read or wrote it in storage; a save writes what changed since. */
+  outboxStored: Schema.Array(OutboxItem),
   /** The key of the outbox item sent on the current epoch and not yet answered. */
   outboxInFlight: Schema.Option(Schema.String),
   /** Retryable failures of the outbox's head in a row; the next resend waits by this attempt. */
   outboxAttempt: Schema.Int,
+  /**
+   * The key of the item waiting out its resend backoff after the brain answered "not now"; nothing
+   * is sent until its timer elapses, or a new epoch starts.
+   */
+  outboxResend: Schema.Option(Schema.String),
   /** Turns not yet settled by the brain, by outbox key. Kept in memory only. */
   sentTurns: Schema.Record(Schema.String, SentTurn),
+  /**
+   * Keys of the items another tab queued, folded in from storage after this page started. This tab
+   * sends them too, but a refused turn is the queuing tab's to put back: it alone has the record.
+   */
+  outboxAdopted: Schema.Array(Schema.String),
+  /**
+   * Adopted turns the brain refused here: left in the outbox for the tab that queued them, and not
+   * sent from this tab again.
+   */
+  outboxLeft: Schema.Array(Schema.String),
   /** A message for the user about something that did not work. */
   notice: Schema.Option(Schema.String),
   thread: Thread.Model.Model,

@@ -905,33 +905,48 @@ const bodyOf = (model: Model, h: H, request: PendingRequest) =>
     Criteria: (body) => criteriaBody(model, h, request, body),
   });
 
+/** What the undo bar says: when the answers go, and what a due window waits for. */
+const undoTitle = (model: Model, state: "waiting" | "due"): string => {
+  if (state !== "due") {
+    return "Sending your answers in 3 seconds.";
+  }
+
+  // Due and still here: connected, it waits for the answer on its way; offline, for Cairn.
+  return model.hasClient
+    ? "Sending your answers after the ones on their way."
+    : "Sending your answers once Cairn is back.";
+};
+
 const undoBar = (model: Model, h: H, approvalId: ApprovalId): Html =>
-  Option.isSome(
-    Option.filter(model.undo, (undo) => undo.approvalId === approvalId)
-  )
-    ? banner(
-        h,
-        {
-          tone: "waiting",
-          mark: Option.none(),
-          title: "Sending your answers in 3 seconds.",
-          detail: Option.none(),
-          actions: [
-            actionButton(
-              h,
-              "undo",
-              {
-                variant: "secondary",
-                size: "small",
-                onClick: Option.some(Message.ClickedUndo()),
-              },
-              "Undo"
-            ),
-          ],
-        },
-        [h.DataAttribute("testid", "request-card-undo")]
-      )
-    : h.empty;
+  Option.match(
+    Option.filter(model.undo, (undo) => undo.approvalId === approvalId),
+    {
+      onNone: () => h.empty,
+      onSome: (undo) =>
+        banner(
+          h,
+          {
+            tone: "waiting",
+            mark: Option.none(),
+            title: undoTitle(model, undo.state),
+            detail: Option.none(),
+            actions: [
+              actionButton(
+                h,
+                "undo",
+                {
+                  variant: "secondary",
+                  size: "small",
+                  onClick: Option.some(Message.ClickedUndo()),
+                },
+                "Undo"
+              ),
+            ],
+          },
+          [h.DataAttribute("testid", "request-card-undo")]
+        ),
+    }
+  );
 
 const failureBar = (model: Model, h: H): Html =>
   Option.match(model.failure, {

@@ -9,6 +9,7 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import {
   DateTime,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -896,6 +897,57 @@ describe("the usage service", () => {
         ])
       )
     )
+  );
+
+  it.effect(
+    "keeps a rejection limited over a probe that started before it, and probes again after",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<true>();
+
+        yield* Effect.gen(function* () {
+          const usage = yield* ClaudeUsage;
+
+          yield* booted;
+
+          // A probe starts while the turn generates.
+          const probing = yield* Effect.forkChild(usage.probe);
+
+          yield* until(Effect.map(probeCount, (n) => n === 2));
+          yield* TestClock.adjust("1 second");
+
+          // The turn is rejected, then the probe answers what the CLI read before it.
+          yield* usage.observe(
+            info({
+              status: "rejected",
+              rateLimitType: "five_hour",
+              utilization: 1,
+              resetsAt: 1_792_111_800,
+            })
+          );
+          yield* Deferred.succeed(gate, true);
+          yield* Fiber.join(probing);
+
+          const after = yield* usage.current;
+
+          expect([
+            after.state,
+            after.windows.find((window) => window.id === "five_hour")
+              ?.exhausted,
+          ]).toStrictEqual(["limited", true]);
+
+          // A fresh probe follows, so the windows around the spent one are read after it.
+          yield* until(Effect.map(probeCount, (n) => n === 3));
+        }).pipe(
+          Effect.provide(
+            usageLayer([
+              answer(),
+              Effect.andThen(Deferred.await(gate), answer()),
+              Effect.never,
+            ])
+          )
+        );
+      })
   );
 
   it.effect(

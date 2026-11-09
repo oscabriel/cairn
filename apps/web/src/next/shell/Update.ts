@@ -171,9 +171,56 @@ const findAwaitedProject = (model: Model): InformReturn =>
     }
   );
 
-/** The context told: the rail follows the route, and finds a folder just added. */
+/** Whether the shell `context` holds `threadId`'s row. */
+const holdsRow = (context: ShellContext, threadId: string): boolean =>
+  Option.exists(context.shell, (shell) =>
+    shell.threads.some((thread) => thread.id === threadId)
+  );
+
+/**
+ * Forgets the scratch thread once its row leaves the shell (cleared from another tab or device), so
+ * the next turn launches a new one rather than going to a deleted thread. A thread whose row has not
+ * shown yet is kept: its launch may still be on its way.
+ */
+const forgetClearedScratch = (
+  before: ShellContext,
+  result: InformReturn
+): InformReturn => {
+  const { model } = result;
+
+  return Option.match(
+    Option.filter(
+      model.scratch.threadId,
+      (threadId) =>
+        holdsRow(before, threadId) &&
+        Option.isSome(model.context.shell) &&
+        !holdsRow(model.context, threadId)
+    ),
+    {
+      onNone: () => result,
+      onSome: () => ({
+        model: modifyFields(model, {
+          scratch: (scratch) =>
+            modifyFields(scratch, { threadId: () => Option.none() }),
+        }),
+        commands: Array.append(
+          result.commands ?? [],
+          SaveScratch({ threadId: Option.none() })
+        ),
+      }),
+    }
+  );
+};
+
+/**
+ * The context told: the rail follows the route, finds a folder just added, and lets go of a scratch
+ * thread cleared elsewhere.
+ */
 const informContext = (model: Model, context: ShellContext): InformReturn =>
-  findAwaitedProject(followRoute(model, context));
+  forgetClearedScratch(
+    model.context,
+    findAwaitedProject(followRoute(model, context))
+  );
 
 /**
  * Takes what the root knows. When the route opens another thread, the rail follows it to its
@@ -219,18 +266,26 @@ const confirmRefresh = (model: Model): UpdateReturn =>
             (thread) => thread.id === confirm.replaces
           ),
           {
+            // Said on the confirm, the surface that asked, which keeps the typed message.
             onNone: () => ({
               model: modifyFields(model, {
-                refresh: () => Option.none(),
-                failure: () =>
-                  Option.some(
-                    "That project thread is gone; open the project again to refresh it."
-                  ),
+                refresh: () =>
+                  Option.some({
+                    ...confirm,
+                    failure: Option.some(
+                      "That project thread is gone; open the project again to refresh it."
+                    ),
+                  }),
               }),
             }),
             onSome: (replaced) => ({
               model: modifyFields(model, {
-                refresh: () => Option.some({ ...confirm, isSending: true }),
+                refresh: () =>
+                  Option.some({
+                    ...confirm,
+                    isSending: true,
+                    failure: Option.none(),
+                  }),
               }),
               commands: [
                 PrepareRefresh({
@@ -276,7 +331,11 @@ const sendScratch = (model: Model): UpdateReturn => {
     }),
     onSome: (picked) => ({
       model: modifyFields(model, {
-        scratch: (scratch) => modifyFields(scratch, { isBusy: () => true }),
+        scratch: (scratch) =>
+          modifyFields(scratch, {
+            isBusy: () => true,
+            sentDraft: () => Option.some(scratch.draft),
+          }),
         failure: () => Option.none(),
       }),
       commands: [
@@ -290,6 +349,22 @@ const sendScratch = (model: Model): UpdateReturn => {
     }),
   });
 };
+
+/**
+ * The scratch field once its turn is minted: the words sent leave it, and whatever was typed after
+ * them stays. A draft rewritten meanwhile is kept whole.
+ */
+const draftAfterSend = (
+  draft: string,
+  sentDraft: Option.Option<string>
+): string =>
+  Option.match(
+    Option.filter(sentDraft, (sent) => draft.startsWith(sent)),
+    {
+      onNone: () => draft,
+      onSome: (sent) => draft.slice(sent.length).trimStart(),
+    }
+  );
 
 /** Shows or hides the scratch overlay; shown, its field takes focus from whatever held it. */
 const setScratchOpen = (model: Model, isOpen: boolean): UpdateReturn => ({
@@ -366,10 +441,11 @@ const browseFolders = (
   state: AddProjectState,
   path: Option.Option<string>
 ): UpdateReturn => {
-  const request = state.request + 1;
+  const request = model.folderRequests + 1;
 
   return {
     model: modifyFields(model, {
+      folderRequests: () => request,
       addProject: () =>
         Option.some({
           ...state,
@@ -385,13 +461,19 @@ const browseFolders = (
 const isAwaitedListing = (model: Model, request: number): boolean =>
   Option.exists(model.addProject, (state) => state.request === request);
 
+/** True when the open picker's create on its way is `folder`'s. */
+const isAddingFolder = (model: Model, folder: string): boolean =>
+  Option.exists(model.addProject, (state) =>
+    Option.contains(state.adding, folder)
+  );
+
 /**
  * Adds the picker's folder: a folder that is already a project selects that project instead, and
  * any other goes to the brain, which checks it and makes the project.
  */
 const submitAddProject = (model: Model): UpdateReturn =>
   Option.match(
-    Option.filter(model.addProject, (state) => !state.isAdding),
+    Option.filter(model.addProject, (state) => Option.isNone(state.adding)),
     {
       onNone: () => ({ model }),
       onSome: (state) => {
@@ -412,7 +494,7 @@ const submitAddProject = (model: Model): UpdateReturn =>
               addProject: () =>
                 Option.some({
                   ...state,
-                  isAdding: true,
+                  adding: Option.some(folder),
                   failure: Option.none(),
                 }),
             }),
@@ -429,13 +511,11 @@ const submitAddProject = (model: Model): UpdateReturn =>
  * the user browses.
  */
 export const openAddProject = (model: Model): InformReturn => {
-  const request = Option.match(model.addProject, {
-    onNone: () => 0,
-    onSome: (state) => state.request + 1,
-  });
+  const request = model.folderRequests + 1;
 
   return {
     model: modifyFields(model, {
+      folderRequests: () => request,
       isSheetOpen: () => false,
       refresh: () => Option.none(),
       addProject: () =>
@@ -444,7 +524,7 @@ export const openAddProject = (model: Model): InformReturn => {
           listing: FolderListing.Loading({ path: Option.none() }),
           request,
           home: Option.flatMap(model.addProject, (state) => state.home),
-          isAdding: false,
+          adding: Option.none(),
           failure: Option.none(),
         }),
     }),
@@ -462,6 +542,25 @@ export const followDraftProject =
     model: modifyFields(model, {
       selectedProjectId: () => Option.some(projectId),
     }),
+  });
+
+/**
+ * A scratch turn the brain refused, or a scratch launch that failed, back in the scratch field
+ * ahead of nothing or after what is typed there now. A launch that did not start leaves no thread,
+ * so the next turn launches a new one.
+ */
+export const restoreScratchTurn =
+  (text: string, launched: boolean) =>
+  (model: Model): InformReturn => ({
+    model: modifyFields(model, {
+      scratch: (scratch) =>
+        modifyFields(scratch, {
+          draft: (draft) =>
+            draft.trim() === "" ? text : `${draft}\n\n${text}`,
+          threadId: (threadId) => (launched ? Option.none() : threadId),
+        }),
+    }),
+    commands: launched ? [SaveScratch({ threadId: Option.none() })] : [],
   });
 
 const closeAddProject = (model: Model): UpdateReturn => ({
@@ -517,18 +616,24 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         : { model },
     SubmittedAddProject: () => submitAddProject(model),
     ClickedCancelAddProject: () => closeAddProject(model),
+    // An add's answer reaches only the picker adding that folder: one the user closed (and maybe
+    // reopened since) lets it go, and nothing opens.
     AddedProject: ({ folder }) => ({
-      model: modifyFields(model, {
-        addProject: () => Option.none(),
-        awaitedFolder: () => Option.some(folder),
-      }),
+      model: isAddingFolder(model, folder)
+        ? modifyFields(model, {
+            addProject: () => Option.none(),
+            awaitedFolder: () => Option.some(folder),
+          })
+        : model,
     }),
-    FailedAddProject: ({ message: reason }) =>
-      setAddProject(model, (state) => ({
-        ...state,
-        isAdding: false,
-        failure: Option.some(reason),
-      })),
+    FailedAddProject: ({ folder, message: reason }) =>
+      isAddingFolder(model, folder)
+        ? setAddProject(model, (state) => ({
+            ...state,
+            adding: Option.none(),
+            failure: Option.some(reason),
+          }))
+        : { model },
     FoundAddedProject: ({ projectId }) => openProject(model, projectId),
 
     ClickedThread: ({ threadId }) =>
@@ -570,6 +675,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
                 replaces: thread.id,
                 text: "",
                 isSending: false,
+                failure: Option.none(),
               }),
             failure: () => Option.none(),
           }),
@@ -627,8 +733,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           scratch: (scratch) =>
             modifyFields(scratch, {
               threadId: () => Option.some(threadId),
-              draft: () => "",
+              draft: (draft) => draftAfterSend(draft, scratch.sentDraft),
               isBusy: () => false,
+              sentDraft: () => Option.none(),
             }),
         }),
         commands: isNew
@@ -685,9 +792,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedPrepare: ({ message: text }) => ({
       model: modifyFields(model, {
         failure: () => Option.some(text),
-        scratch: (scratch) => modifyFields(scratch, { isBusy: () => false }),
-        refresh: (refresh) =>
-          Option.map(refresh, (confirm) => ({ ...confirm, isSending: false })),
+        scratch: (scratch) =>
+          modifyFields(scratch, {
+            isBusy: () => false,
+            sentDraft: () => Option.none(),
+          }),
       }),
     }),
     ClickedDismissFailure: () => ({

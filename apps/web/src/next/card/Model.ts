@@ -37,6 +37,11 @@ export const PendingSend = Schema.Struct({
   answers: Schema.Array(CardAnswer),
   /** The timer generation the window's end belongs to. */
   timer: Schema.Int,
+  /**
+   * `waiting` while the window runs; `due` once it ended with the answers still here, because
+   * Cairn was reconnecting or another answer was in flight: they go as soon as neither holds.
+   */
+  state: Schema.Literals(["waiting", "due"]),
 });
 
 export type PendingSend = typeof PendingSend.Type;
@@ -96,7 +101,10 @@ export const Model = Schema.Struct({
    */
   sent: Schema.Record(Schema.String, Schema.String),
   undo: Schema.Option(PendingSend),
-  /** Bumped by every pick, Undo and Send, so a timer from an earlier one does nothing. */
+  /**
+   * Bumped by every pick, Undo and Send, so a timer from an earlier one does nothing; carried over a
+   * thread switch, since a switch stops no timer.
+   */
   timer: Schema.Int,
   /** Why the last answer did not go. */
   failure: Schema.Option(Schema.String),

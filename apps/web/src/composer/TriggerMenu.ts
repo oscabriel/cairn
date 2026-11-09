@@ -184,6 +184,31 @@ const itemsFor = (
 export const menuSearchKey = (trigger: ComposerTrigger): string =>
   `${trigger.kind}:${trigger.query}`;
 
+/** The path menu's text when the draft has no project whose files it could search. */
+const NO_PROJECT_TEXT = "Choose a project to search its files.";
+
+/**
+ * Why the path menu lists nothing: no project to search, or the failure of the answered search.
+ * Other menus have none.
+ */
+const menuError = (
+  model: Model,
+  trigger: ComposerTrigger
+): Option.Option<string> => {
+  if (trigger.kind !== "path") {
+    return Option.none();
+  }
+
+  if (Option.isNone(targetProject(model))) {
+    return Option.some(NO_PROJECT_TEXT);
+  }
+
+  return Option.isNone(model.pathSearch.pending) &&
+    model.pathSearch.query === trigger.query.trim()
+    ? model.pathSearch.error
+    : Option.none();
+};
+
 /** The open menu's contents, or none when no menu is open. */
 export const menuContents = (model: Model): Option.Option<MenuContents> =>
   Option.map(model.triggerMenu, (menu) => {
@@ -194,14 +219,10 @@ export const menuContents = (model: Model): Option.Option<MenuContents> =>
       items,
       loading:
         menu.trigger.kind === "path"
-          ? Option.isSome(model.pathSearch.pending)
+          ? Option.isSome(model.pathSearch.pending) &&
+            Option.isSome(targetProject(model))
           : menu.trigger.kind !== "slash-model" && skillsPending(model),
-      error:
-        menu.trigger.kind === "path" &&
-        Option.isNone(model.pathSearch.pending) &&
-        model.pathSearch.query === menu.trigger.query.trim()
-          ? model.pathSearch.error
-          : Option.none(),
+      error: menuError(model, menu.trigger),
       activeId: resolveComposerMenuActiveItemId(
         items.map((item) => item.id),
         menu.highlighted,

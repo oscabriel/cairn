@@ -12,7 +12,8 @@
 // - `executor` (only with `executorApp: true`): `apps.list`, Executor's own management tool.
 //
 // `execute` runs no code: it asks for one approval (a `spike.mark` of `from-program`) and
-// completes with the program echoed once accepted.
+// completes with the program echoed once accepted. With `programPauses` above 1, each accept runs
+// that round's mark and pauses again (`from-program-2`, ...) until the last round completes.
 //
 // Ported from cairn-v1, apps/server/test/fake-executor.ts at 1a5cd4a. Changed: a `github`
 // stand-in app, a hanging tool, counters for refreshes and refused refresh tokens, a grant seeded
@@ -68,6 +69,18 @@ export interface FakeExecutorHandle {
     failTokenOnce: number | undefined;
     /** When set, `initialize` requests are never answered: a connect that hangs. */
     hangInitialize: boolean;
+    /** When set, the next tool call answers this HTTP status instead: an Executor that is up but failing. */
+    failCallOnce: number | undefined;
+    /** When set, OAuth discovery (`/.well-known/...`) is never answered: a sign-in that stalls. */
+    hangDiscovery: boolean;
+    /** When set, the token endpoint is never answered: a code exchange or refresh that stalls. */
+    hangToken: boolean;
+    /** How many approvals an `execute` program asks for, one after another (1 by default). */
+    programPauses: number;
+    /** How many of the next client registrations are held, each until `releaseRegister()`. */
+    holdRegisters: number;
+    /** Client registrations being held. */
+    registersHeld: number;
     /** `initialize` requests: one per MCP session opened. */
     sessionsOpened: number;
     /** Every tool call, in order. */
@@ -83,6 +96,8 @@ export interface FakeExecutorHandle {
   consent(authorizationUrl: string): { code: string; state: string };
   /** Executor restarts: every session and pending request is gone; grants stay. */
   restart(): void;
+  /** Executor goes down: it stops listening and drops every open connection. */
+  stop(): void;
   /** Revokes every access token, so the next request needs a refresh. */
   expireAccess(): void;
   /** Revokes every refresh token too: the grant is gone and needs a sign-in. */
@@ -95,6 +110,10 @@ export interface FakeExecutorHandle {
   endSessions(): void;
   /** Answers every `spike.hang` call waiting. */
   release(): void;
+  /** Answers the oldest client registration being held. */
+  releaseRegister(): void;
+  /** Drops every request `hangDiscovery` or `hangToken` stalled. */
+  dropStalled(): void;
   /** Calls to one tool. */
   calls(tool: string): ReadonlyArray<{ tool: string; args: JsonRecord }>;
 }
@@ -161,7 +180,13 @@ const build = (now: () => number, mintToken: () => string) => {
   const pending = new Map<string, Pending>();
   const ended = new Map<string, "answered" | "expired">();
   const marks: Array<string> = [];
-  const codes = new Map<string, { challenge: string; redirect: string }>();
+
+  /** Each authorization code's PKCE challenge, redirect and client. */
+  const codes = new Map<
+    string,
+    { challenge: string; redirect: string; clientId: string }
+  >();
+
   const accessTokens = new Set<string>();
   const refreshTokens = new Set<string>();
   /** Each token's approving browser session, and the sessions that have expired. */
@@ -169,6 +194,8 @@ const build = (now: () => number, mintToken: () => string) => {
   const endedSessions = new Set<number>();
   let approvals = 0;
   const hanging: Array<() => void> = [];
+  const heldRegisters: Array<() => void> = [];
+  const stalled: Array<() => void> = [];
   let registrations = 0;
   let next = 0;
 
@@ -178,6 +205,12 @@ const build = (now: () => number, mintToken: () => string) => {
     refreshes: 0,
     invalidGrants: 0,
     hangInitialize: false,
+    failCallOnce: undefined,
+    hangDiscovery: false,
+    hangToken: false,
+    programPauses: 1,
+    holdRegisters: 0,
+    registersHeld: 0,
     failTokenOnce: undefined,
     sessionsOpened: 0,
     log: [],
@@ -415,6 +448,20 @@ const build = (now: () => number, mintToken: () => string) => {
     const { code } = request.input;
 
     if (Predicate.isString(code)) {
+      const round = Predicate.isNumber(request.input.round)
+        ? request.input.round
+        : 1;
+
+      if (round < state.programPauses) {
+        run(request.path, request.input);
+
+        return ask("tools.spike.mark", {
+          id: `from-program-${round + 1}`,
+          code,
+          round: round + 1,
+        });
+      }
+
       return {
         status: "completed",
         execution: {
@@ -577,6 +624,16 @@ const build = (now: () => number, mintToken: () => string) => {
 
       state.log.push({ tool: name, args });
 
+      if (state.failCallOnce !== undefined) {
+        const status = state.failCallOnce;
+
+        state.failCallOnce = undefined;
+        response.writeHead(status);
+        response.end("Internal Server Error");
+
+        return;
+      }
+
       const value = await tool(name, args);
 
       json(
@@ -624,7 +681,8 @@ const build = (now: () => number, mintToken: () => string) => {
       if (
         code === undefined ||
         code.challenge !== challenge ||
-        code.redirect !== form.get("redirect_uri")
+        code.redirect !== form.get("redirect_uri") ||
+        code.clientId !== form.get("client_id")
       ) {
         json(response, 400, { error: "invalid_grant" });
 
@@ -671,17 +729,46 @@ const build = (now: () => number, mintToken: () => string) => {
   ) => {
     registrations += 1;
 
+    const clientId = `client_${registrations}`;
+
     const body = Option.getOrElse(
       decodeBody(await readBody(request)),
       (): JsonRecord => ({})
     );
 
-    json(response, 201, { ...body, client_id: `client_${registrations}` });
+    if (state.holdRegisters > 0) {
+      state.holdRegisters -= 1;
+      state.registersHeld += 1;
+
+      const { promise, resolve } = Promise.withResolvers<null>();
+
+      heldRegisters.push(() => {
+        resolve(null);
+      });
+      await promise;
+    }
+
+    json(response, 201, { ...body, client_id: clientId });
   };
 
   const handle = async (request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url ?? "/", origin);
     const { pathname, searchParams } = url;
+
+    if (
+      (state.hangDiscovery && pathname.startsWith("/.well-known/")) ||
+      (state.hangToken && pathname === "/auth/token")
+    ) {
+      const { promise, resolve } = Promise.withResolvers<null>();
+
+      stalled.push(() => {
+        resolve(null);
+      });
+      await promise;
+      response.destroy();
+
+      return;
+    }
 
     if (pathname.startsWith("/.well-known/oauth-protected-resource")) {
       const connection = searchParams.get("connection");
@@ -765,6 +852,7 @@ const build = (now: () => number, mintToken: () => string) => {
       codes.set(code, {
         challenge: searchParams.get("code_challenge") ?? "",
         redirect: searchParams.get("redirect_uri") ?? "",
+        clientId: searchParams.get("client_id") ?? "",
       });
 
       return { code, state: searchParams.get("state") ?? "" };
@@ -772,6 +860,10 @@ const build = (now: () => number, mintToken: () => string) => {
     restart: () => {
       sessions.clear();
       pending.clear();
+    },
+    stop: () => {
+      server.closeAllConnections();
+      server.close();
     },
     expireAccess: () => {
       accessTokens.clear();
@@ -790,6 +882,14 @@ const build = (now: () => number, mintToken: () => string) => {
         resolve();
       }
     },
+    releaseRegister: () => {
+      heldRegisters.shift()?.();
+    },
+    dropStalled: () => {
+      for (const resolve of stalled.splice(0)) {
+        resolve();
+      }
+    },
     calls: (name) => state.log.filter((entry) => entry.tool === name),
   };
 
@@ -798,6 +898,14 @@ const build = (now: () => number, mintToken: () => string) => {
     controls,
     setOrigin: (value: string) => {
       origin = value;
+    },
+    releaseRegisters: () => {
+      for (const resolve of [
+        ...heldRegisters.splice(0),
+        ...stalled.splice(0),
+      ]) {
+        resolve();
+      }
     },
   };
 };
@@ -834,6 +942,7 @@ export const startFakeExecutor: Effect.Effect<
     () =>
       Effect.callback<boolean>((resume) => {
         built.controls.release();
+        built.releaseRegisters();
         built.server.closeAllConnections();
         built.server.close(() => {
           resume(Effect.succeed(true));

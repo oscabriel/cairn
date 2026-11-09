@@ -1,14 +1,18 @@
 // The Executor tool suite on the fake Executor: the approval sandwich (accept in one call, decline,
-// expiry, a rerun after `started`), a session lost to an Executor restart, `input-required`
-// cancelled, the boot sweep, one refresh shared by concurrent calls, and a sign-in after the grant
-// was revoked. Ported in part from cairn-v1, apps/server/test/executor.test.ts at 1a5cd4a.
+// expiry, a rerun after `started`, a ledger failure on a program's later pause), a session lost to
+// an Executor restart, `input-required` cancelled, the boot sweep, one refresh shared by concurrent
+// calls, a sign-in after the grant was revoked, a sign-in beside a call or a second sign-in, a
+// sign-in or callback whose OAuth requests stall, a call whose `done` mark fails after it ran, and
+// the status after Executor goes down or answers a server error. Ported in part from cairn-v1,
+// apps/server/test/executor.test.ts at 1a5cd4a.
 
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Layer, Option, Result } from "effect";
 
+import { ApprovalLedgerError } from "../brain/CairnDocs.ts";
 import { ExecutorGrant, ExecutorGrantError } from "./ExecutorGrant.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";
-import { RERUN_AFTER_START } from "./ExecutorReply.ts";
+import { INTERRUPTED, REFUSED, RERUN_AFTER_START } from "./ExecutorReply.ts";
 import type { JsonObject } from "./ExecutorReply.ts";
 import { ExecutorSweep } from "./ExecutorSweep.ts";
 import { fakeLink, firstAttempt, memoryLedger } from "./ExecutorTestKit.ts";
@@ -137,6 +141,85 @@ describe("the gated call", () => {
       )
   );
 
+  it.live(
+    "reports a ledger failure on a program's later pause as may have run, not refused",
+    () =>
+      withFake(
+        (fake) =>
+          Effect.gen(function* () {
+            const { ledger } = firstAttempt();
+            let notes = 0;
+
+            const outcome = yield* gatedCall(
+              {
+                ...ledger,
+                noteExecutorRequest: (requestId) => {
+                  notes += 1;
+
+                  return notes === 2
+                    ? Effect.fail(
+                        new ApprovalLedgerError({
+                          message: "Recording approval call-1 failed: closed.",
+                          approvalId: ledger.approvalId,
+                          reason: "store_failed",
+                        })
+                      )
+                    : ledger.noteExecutorRequest(requestId);
+                },
+              },
+              {
+                kind: "execute",
+                request: { code: "twice()" },
+                summary: "program",
+                payload: Option.none(),
+                acceptedBy: Option.some("full-access"),
+              }
+            );
+
+            assert.isTrue(outcome.isError);
+            assert.include(outcome.text, INTERRUPTED);
+            assert.notInclude(outcome.text, REFUSED);
+            assert.deepStrictEqual(fake.marks, ["from-program"]);
+          }),
+        {
+          setup: (fake) => {
+            fake.state.programPauses = 2;
+          },
+        }
+      )
+  );
+
+  it.live(
+    "keeps the call's own outcome when recording done fails after it ran",
+    () =>
+      withFake((fake) =>
+        Effect.gen(function* () {
+          const { ledger } = firstAttempt();
+
+          const outcome = yield* gatedCall(
+            {
+              ...ledger,
+              finish: Effect.fail(
+                new ApprovalLedgerError({
+                  message: "Recording approval call-1 failed: closed.",
+                  approvalId: ledger.approvalId,
+                  reason: "store_failed",
+                })
+              ),
+            },
+            callRequest("tools.spike.mark", { id: "ran" })
+          );
+
+          assert.isFalse(outcome.isError, outcome.text);
+          assert.deepStrictEqual(Option.getOrNull(outcome.value), {
+            marked: "ran",
+            count: 1,
+          });
+          assert.deepStrictEqual(fake.marks, ["ran"]);
+        })
+      )
+  );
+
   it.live("reports an expired Executor request as not run", () =>
     withFake(
       (fake) =>
@@ -235,7 +318,7 @@ describe("the link", () => {
             fake.restart();
 
             const outcome = yield* Fiber.join(running).pipe(
-              Effect.timeout(Duration.seconds(5))
+              Effect.timeout(Duration.seconds(3))
             );
 
             assert.isTrue(outcome.isError);
@@ -423,7 +506,7 @@ describe("the link under a failing Executor or store", () => {
                 Effect.flip(link.call("search", { query: "mark" })),
               ],
               { concurrency: "unbounded" }
-            ).pipe(Effect.timeout(Duration.seconds(5)));
+            ).pipe(Effect.timeout(Duration.seconds(3)));
 
             assert.strictEqual(first.reason, "unreachable");
             assert.strictEqual(second.reason, "unreachable");
@@ -455,6 +538,235 @@ describe("the link under a failing Executor or store", () => {
             assert.strictEqual(fake.state.invalidGrants, 0);
           }),
         { link: { grantStore: refusingSaves } }
+      )
+  );
+});
+
+/** Polls `done` every 10 ms until it holds, for up to five seconds. */
+const eventually = (done: () => boolean) =>
+  Effect.gen(function* () {
+    for (let tries = 0; tries < 500 && !done(); tries += 1) {
+      yield* Effect.sleep("10 millis");
+    }
+
+    assert.isTrue(done(), "the condition never held");
+  });
+
+/** Consents on `page` as the user's browser would, then answers Cairn's callback. */
+const consentAndCallBack = (fake: FakeExecutorHandle, page: string) =>
+  Effect.gen(function* () {
+    const link = yield* ExecutorLink;
+    const { code, state } = fake.consent(page);
+
+    return yield* link
+      .callback({
+        state: Option.some(state),
+        code: Option.some(code),
+        iss: Option.none(),
+        error: Option.none(),
+        errorDescription: Option.none(),
+      })
+      .pipe(Effect.result);
+  });
+
+/** A link whose grant was revoked and whose sessions Executor forgot: it needs sign-in. */
+const revoked = (fake: FakeExecutorHandle) =>
+  Effect.gen(function* () {
+    const link = yield* ExecutorLink;
+
+    yield* link.call("skills", {});
+    fake.revoke();
+    fake.restart();
+    yield* link.call("skills", {}).pipe(Effect.flip);
+    assert.strictEqual((yield* link.status).state, "needs-sign-in");
+  });
+
+describe("a sign-in beside other flows", () => {
+  it.live(
+    "keeps the consent page's client when a call needs sign-in during it",
+    () =>
+      withFake((fake) =>
+        Effect.gen(function* () {
+          const link = yield* ExecutorLink;
+
+          yield* revoked(fake);
+
+          // The sign-in's registration and any other flow's are held, so the other's lands last.
+          fake.state.holdRegisters = 2;
+
+          const signingIn = yield* Effect.forkChild(link.signIn);
+
+          yield* eventually(() => fake.state.registersHeld === 1);
+
+          const calling = yield* Effect.forkChild(
+            link.call("skills", {}).pipe(Effect.result)
+          );
+
+          yield* Effect.sleep("300 millis");
+          fake.releaseRegister();
+
+          const page = yield* Fiber.join(signingIn);
+
+          fake.releaseRegister();
+          yield* Fiber.join(calling);
+
+          const answered = yield* consentAndCallBack(fake, page);
+
+          assert.isTrue(
+            Result.isSuccess(answered),
+            Result.isFailure(answered) ? answered.failure.message : ""
+          );
+          assert.strictEqual((yield* link.status).state, "connected");
+        })
+      )
+  );
+
+  it.live(
+    "a sign-in whose discovery stalls gives up and lets calls through",
+    () =>
+      withFake(
+        (fake) =>
+          Effect.gen(function* () {
+            const link = yield* ExecutorLink;
+
+            yield* revoked(fake);
+            fake.state.hangDiscovery = true;
+
+            const signingIn = yield* Effect.forkChild(
+              link.signIn.pipe(Effect.flip)
+            );
+
+            yield* Effect.sleep("100 millis");
+
+            // The call waits on the lock the sign-in holds, then gets its own connect budget.
+            const [failedSignIn, failedCall] = yield* Effect.all(
+              [Fiber.join(signingIn), Effect.flip(link.call("skills", {}))],
+              { concurrency: "unbounded" }
+            ).pipe(Effect.timeout(Duration.seconds(3)));
+
+            assert.strictEqual(failedSignIn.reason, "failed");
+            assert.isFalse(failedCall.sent);
+
+            // With discovery answering again, a new sign-in still works.
+            fake.state.hangDiscovery = false;
+            fake.dropStalled();
+
+            const answered = yield* consentAndCallBack(
+              fake,
+              yield* link.signIn
+            );
+
+            assert.isTrue(
+              Result.isSuccess(answered),
+              Result.isFailure(answered) ? answered.failure.message : ""
+            );
+          }),
+        {
+          link: {
+            signInTimeout: Duration.millis(400),
+            connectTimeout: Duration.millis(400),
+          },
+        }
+      )
+  );
+
+  it.live(
+    "a callback whose code exchange stalls gives up and leaves the link asking for sign-in",
+    () =>
+      withFake(
+        (fake) =>
+          Effect.gen(function* () {
+            const link = yield* ExecutorLink;
+
+            yield* revoked(fake);
+
+            const page = yield* link.signIn;
+
+            fake.state.hangToken = true;
+
+            const answered = yield* consentAndCallBack(fake, page).pipe(
+              Effect.timeout(Duration.seconds(3))
+            );
+
+            assert.isTrue(Result.isFailure(answered));
+            assert.strictEqual((yield* link.status).state, "needs-sign-in");
+
+            const failedCall = yield* Effect.flip(link.call("skills", {})).pipe(
+              Effect.timeout(Duration.seconds(3))
+            );
+
+            assert.isFalse(failedCall.sent);
+          }),
+        {
+          link: {
+            signInTimeout: Duration.millis(400),
+            connectTimeout: Duration.millis(400),
+          },
+        }
+      )
+  );
+
+  it.live("answers a second sign-in with the consent page of the first", () =>
+    withFake((fake) =>
+      Effect.gen(function* () {
+        const link = yield* ExecutorLink;
+
+        yield* revoked(fake);
+
+        const pages = yield* Effect.all([link.signIn, link.signIn], {
+          concurrency: "unbounded",
+        });
+
+        // Every page handed out completes its callback.
+        for (const page of new Set(pages)) {
+          const answered = yield* consentAndCallBack(fake, page);
+
+          assert.isTrue(
+            Result.isSuccess(answered),
+            Result.isFailure(answered) ? answered.failure.message : ""
+          );
+        }
+
+        assert.strictEqual((yield* link.status).state, "connected");
+      })
+    )
+  );
+});
+
+describe("the link's status", () => {
+  it.live("leaves connected when a call fails because Executor went down", () =>
+    withFake((fake) =>
+      Effect.gen(function* () {
+        const link = yield* ExecutorLink;
+
+        yield* link.call("skills", {});
+        assert.strictEqual((yield* link.status).state, "connected");
+
+        fake.stop();
+
+        const failed = yield* link.call("skills", {}).pipe(Effect.flip);
+
+        assert.strictEqual(failed.reason, "transport");
+        assert.notStrictEqual((yield* link.status).state, "connected");
+      })
+    )
+  );
+
+  it.live(
+    "stays connected when Executor answers a call with a server error",
+    () =>
+      withFake((fake) =>
+        Effect.gen(function* () {
+          const link = yield* ExecutorLink;
+
+          yield* link.call("skills", {});
+          fake.state.failCallOnce = 500;
+
+          const failed = yield* link.call("skills", {}).pipe(Effect.flip);
+
+          assert.strictEqual(failed.reason, "transport");
+          assert.strictEqual((yield* link.status).state, "connected");
+        })
       )
   );
 });

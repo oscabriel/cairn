@@ -411,12 +411,17 @@ export class Budgets extends Context.Service<
           const before = yield* book.stand(limit.threadId, after);
 
           // At the line at an epoch not acted on: a raise accepted that did not clear the spend, or
-          // a declared scope whose first transitions nobody acted on.
+          // a declared scope whose first transitions nobody acted on. Past the warning line at an
+          // epoch not acted on: a warning whose step failed. Both are reported until acted on.
           const unacted =
             after.state === "exhausted" &&
             !Option.contains(yield* book.actedOf(limit.threadId), limit.epoch);
 
-          if (before.state !== after.state || unacted) {
+          const unwarned =
+            after.state === "warned" &&
+            !Option.contains(yield* book.warnedOf(limit.threadId), limit.epoch);
+
+          if (before.state !== after.state || unacted || unwarned) {
             moved.push({ limit, before, after });
           }
         }

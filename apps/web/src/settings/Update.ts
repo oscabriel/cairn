@@ -69,10 +69,11 @@ const skillsCommands = (model: Model, reload: boolean) =>
     ],
   });
 
-/** Asks the brain for every section of the page. */
+/** Asks the brain for every section of the page; the server settings' read is numbered. */
 const loadSections = (model: Model): UpdateReturn => ({
   model: modifyFields(model, {
     loadedEpoch: () => Option.some(model.context.epoch),
+    serverAsked: (asked) => asked + 1,
     server: reloading,
     catalog: reloading,
     providers: reloading,
@@ -81,7 +82,10 @@ const loadSections = (model: Model): UpdateReturn => ({
       Option.isSome(model.skillsProject) ? reloading(skills) : skills,
   }),
   commands: [
-    FetchServerSettings({ epoch: model.context.epoch }),
+    FetchServerSettings({
+      epoch: model.context.epoch,
+      request: model.serverAsked + 1,
+    }),
     FetchCatalog({ epoch: model.context.epoch }),
     FetchProviders({ epoch: model.context.epoch }),
     FetchExecutorStatus({ epoch: model.context.epoch }),
@@ -141,10 +145,18 @@ const NO_CHANGE: SettingsPatch = {
   defaultBudget: Option.none(),
 };
 
-const sendPatch = (model: Model, patch: SettingsPatch): UpdateReturn => ({
-  model: modifyFields(model, { notice: () => Option.none() }),
-  commands: [UpdateServerSettings({ patch })],
-});
+/** Sends one change, numbered so its answer is only shown while no newer call's answer is. */
+const sendPatch = (model: Model, patch: SettingsPatch): UpdateReturn => {
+  const request = model.serverAsked + 1;
+
+  return {
+    model: modifyFields(model, {
+      notice: () => Option.none(),
+      serverAsked: () => request,
+    }),
+    commands: [UpdateServerSettings({ request, patch })],
+  };
+};
 
 const decodeAutoSettleDays = Schema.decodeUnknownOption(
   Schema.FiniteFromString.pipe(
@@ -188,6 +200,22 @@ const answer = (
   model: epoch === model.context.epoch ? write(model) : model,
 });
 
+/**
+ * The Skills section's answer for `projectId`, written when it is still the page's epoch and the
+ * section still shows that project: a slower answer for a project the user left is dropped.
+ */
+const skillsAnswer = (
+  model: Model,
+  epoch: number,
+  projectId: ProjectId,
+  skills: Model["skills"]
+): UpdateReturn =>
+  Option.contains(model.skillsProject, projectId)
+    ? answer(model, epoch, (current) =>
+        modifyFields(current, { skills: () => skills })
+      )
+    : { model };
+
 /** The settings page's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
@@ -224,9 +252,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           : [],
     }),
 
-    ReceivedServerSettings: ({ epoch, settings }) =>
+    ReceivedServerSettings: ({ epoch, request, settings }) =>
       answer(model, epoch, (current) =>
-        modifyFields(current, { server: () => AsyncData.succeed(settings) })
+        request > current.serverShown
+          ? modifyFields(current, {
+              server: () => AsyncData.succeed(settings),
+              serverShown: () => request,
+            })
+          : current
       ),
     ReceivedCatalog: ({ catalog, epoch }) =>
       answer(model, epoch, (current) =>
@@ -242,10 +275,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       answer(model, epoch, (current) =>
         modifyFields(current, { executor: () => AsyncData.succeed(status) })
       ),
-    ReceivedSkills: ({ epoch, skills }) =>
-      answer(model, epoch, (current) =>
-        modifyFields(current, { skills: () => AsyncData.succeed(skills) })
-      ),
+    ReceivedSkills: ({ epoch, projectId, skills }) =>
+      skillsAnswer(model, epoch, projectId, AsyncData.succeed(skills)),
+    FailedSkills: ({ epoch, message: text, projectId }) =>
+      skillsAnswer(model, epoch, projectId, AsyncData.fail(text)),
     FailedLoad: ({ epoch, message: text, section }) =>
       answer(model, epoch, (current) => {
         const failed = AsyncData.fail(text);
@@ -262,9 +295,6 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           ),
           Match.when("executor", () =>
             modifyFields(current, { executor: () => failed })
-          ),
-          Match.when("skills", () =>
-            modifyFields(current, { skills: () => failed })
           ),
           Match.exhaustive
         );
@@ -304,8 +334,15 @@ export const update = (model: Model, message: Message): UpdateReturn =>
             bridgeGenerationCap: Option.some(cap),
           }),
       }),
-    SucceededServerUpdate: ({ settings }) => ({
-      model: modifyFields(model, { server: () => AsyncData.succeed(settings) }),
+    SucceededServerUpdate: ({ request, settings }) => ({
+      model:
+        request > model.serverChangeShown
+          ? modifyFields(model, {
+              server: () => AsyncData.succeed(settings),
+              serverShown: (shown) => Math.max(shown, request),
+              serverChangeShown: () => request,
+            })
+          : model,
     }),
     FailedServerUpdate: ({ message: text }) => ({
       model: modifyFields(model, { notice: () => Option.some(text) }),

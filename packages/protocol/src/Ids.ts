@@ -45,6 +45,10 @@ export const CommandId = Uuid7.pipe(Schema.brand("CommandId"));
 
 export type CommandId = typeof CommandId.Type;
 
+/** When `commandId` was minted, in epoch milliseconds: a UUIDv7's first 48 bits. */
+export const commandMintedAtMillis = (commandId: CommandId): number =>
+  Number.parseInt(commandId.replaceAll("-", "").slice(0, 12), 16);
+
 /**
  * One turn input (send, steer, follow-up), minted by the client and handed to pi-durable as the
  * submission's `requestId`, so a resent input is admitted once.

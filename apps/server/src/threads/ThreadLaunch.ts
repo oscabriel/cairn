@@ -570,13 +570,22 @@ export class ThreadLaunch extends Context.Service<
                 branch: Option.getOrElse(planned.branch, () => ""),
               });
 
+              // A temporary branch the plan minted was free when planned (`temporaryBranchName`),
+              // so what git made or found at its planned branch and path is this launch's own,
+              // whichever attempt made it: a resume after a crash inside `git worktree add` finds
+              // it rather than makes it (ChildWorkspaces' rule). A branch the user named may be
+              // someone else's, so there only what git says it made counts.
+              const minted = Option.isNone(fresh.branch);
+
               return {
                 ...planned,
                 phase: "workspace" as const,
                 cwd: Option.some(made.worktreePath),
                 worktreePath: Option.some(made.worktreePath),
-                worktreeCreated: planned.worktreeCreated || made.created,
-                branchCreated: planned.branchCreated || made.branchCreated,
+                worktreeCreated:
+                  planned.worktreeCreated || made.created || minted,
+                branchCreated:
+                  planned.branchCreated || made.branchCreated || minted,
               };
             }),
         }).pipe(
@@ -587,7 +596,36 @@ export class ThreadLaunch extends Context.Service<
         );
       });
 
-      // Removes the workspace the launch made: its worktree, or its scratch folder. Failures log.
+      // Releases a launch's scratch folder while it is still the launch's own: until the thread is
+      // ensured on it (T18). From then on the thread's conversation runs there, so a failure or a
+      // stop keeps it. Failures log.
+      const releaseScratch = Effect.fnUntraced(function* (
+        row: LaunchRow,
+        project: ProjectShell
+      ) {
+        if (
+          project.kind !== "scratch" ||
+          row.phase === "ensured" ||
+          Option.isNone(row.cwd)
+        ) {
+          return;
+        }
+
+        yield* scratch.releaseFolder(row.cwd.value).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("launch cleanup failed").pipe(
+              Effect.annotateLogs({
+                event: "launch_cleanup_failed",
+                threadId: row.input.threadId,
+                cause: String(cause),
+              })
+            )
+          )
+        );
+      });
+
+      // Removes the workspace the launch made and still owns: its worktree, or its scratch folder
+      // before the thread was ensured on it. Failures log.
       const discardWorkspace = Effect.fnUntraced(function* (row: LaunchRow) {
         const project = yield* projects.get(row.input.projectId);
 
@@ -596,20 +634,7 @@ export class ThreadLaunch extends Context.Service<
         }
 
         yield* cleanUp(row, project.value.shell);
-
-        if (project.value.shell.kind === "scratch" && Option.isSome(row.cwd)) {
-          yield* scratch.releaseFolder(row.cwd.value).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("launch cleanup failed").pipe(
-                Effect.annotateLogs({
-                  event: "launch_cleanup_failed",
-                  threadId: row.input.threadId,
-                  cause: String(cause),
-                })
-              )
-            )
-          );
-        }
+        yield* releaseScratch(row, project.value.shell);
       });
 
       // A launch row whose thread row was never committed: the brain stopped between the two
@@ -709,20 +734,27 @@ export class ThreadLaunch extends Context.Service<
               () => projectShell.workspaceRoot
             );
 
-            yield* seam
-              .ensureThread({
-                threadId: input.threadId,
-                projectId: input.projectId,
-                model: input.model,
-                thinkingLevel: input.thinkingLevel,
-                cwd,
-                instructions: Option.none(),
-                runtimeMode: input.runtimeMode,
-              })
-              .pipe(Effect.mapError(stepFailed("ensure")));
+            // Ensured and recorded as one step: a stop that interrupts the launch finds the row
+            // `ensured` once the thread runs in its folder, so it never releases a scratch folder
+            // a conversation already uses.
+            yield* Effect.uninterruptible(
+              Effect.gen(function* () {
+                yield* seam
+                  .ensureThread({
+                    threadId: input.threadId,
+                    projectId: input.projectId,
+                    model: input.model,
+                    thinkingLevel: input.thinkingLevel,
+                    cwd,
+                    instructions: Option.none(),
+                    runtimeMode: input.runtimeMode,
+                  })
+                  .pipe(Effect.mapError(stepFailed("ensure")));
 
-            row = { ...row, phase: "ensured" };
-            yield* launches.update(row);
+                row = { ...row, phase: "ensured" };
+                yield* launches.update(row);
+              })
+            );
           }
 
           // Released before the submit, so the run's own activity (from the shell projector)
@@ -811,26 +843,7 @@ export class ThreadLaunch extends Context.Service<
               // A rename still running would race the removal of its branch.
               yield* FiberMap.remove(naming, `branch:${input.threadId}`);
               yield* cleanUp(row, projectShell);
-
-              // A scratch folder is the launch's own until the thread is ensured on it (T18).
-              if (
-                projectShell.kind === "scratch" &&
-                row.phase !== "ensured" &&
-                Option.isSome(row.cwd)
-              ) {
-                yield* scratch.releaseFolder(row.cwd.value).pipe(
-                  Effect.catchCause((released) =>
-                    Effect.logWarning("launch cleanup failed").pipe(
-                      Effect.annotateLogs({
-                        event: "launch_cleanup_failed",
-                        threadId: input.threadId,
-                        cause: String(released),
-                      })
-                    )
-                  )
-                );
-              }
-
+              yield* releaseScratch(row, projectShell);
               yield* markFailed(row, message);
 
               if (row.phase === "ensured") {
@@ -893,6 +906,12 @@ export class ThreadLaunch extends Context.Service<
           )
         );
         yield* markFailed(row, STOPPED_BEFORE_START);
+
+        // An ensured thread's conversation exists, so it says why too, as the failure path does.
+        if (row.phase === "ensured") {
+          yield* noteFailure(row, STOPPED_BEFORE_START);
+        }
+
         yield* launches.remove(row.input.commandId);
         yield* Effect.logInfo("thread launch stopped").pipe(
           Effect.annotateLogs({

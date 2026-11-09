@@ -23,10 +23,12 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
+import { SHELL_COMMAND_RESEND_WINDOW } from "@cairn/protocol/ShellCommands";
 import {
   Array as Arr,
   Context,
   DateTime,
+  Duration,
   Effect,
   Layer,
   Option,
@@ -52,6 +54,22 @@ export const READ_PAGE_SIZE = 500;
 
 /** The log keeps this many newest events; a resume from before them gets a snapshot. */
 export const SHELL_EVENT_RETENTION = 5000;
+
+/**
+ * Receipts are kept this long after their command was answered, however many events follow: four
+ * times the window a client resends an unanswered command in (`SHELL_COMMAND_RESEND_WINDOW`), so a
+ * resend always finds its first answer.
+ */
+export const COMMAND_RECEIPT_RETENTION = Duration.times(
+  SHELL_COMMAND_RESEND_WINDOW,
+  4
+);
+
+/**
+ * At most this many receipts past the retention are deleted per prune, oldest first. Each commit
+ * writes one, so the table still shrinks, and a prune's delete stays small.
+ */
+const RECEIPT_PRUNE_BATCH = 100;
 
 /** A committed shell event. Thin: which row changed and how, never the row itself. */
 export type StoredShellEvent = PlannedShellEvent & {
@@ -138,7 +156,10 @@ export class EventStore extends Context.Service<
       Arr.NonEmptyReadonlyArray<StoredShellEvent>,
       ShellStoreError
     >;
-    /** Deletes all but the newest `SHELL_EVENT_RETENTION` events and the receipts they cover. */
+    /**
+     * Deletes all but the newest `SHELL_EVENT_RETENTION` events, and the oldest receipts answered
+     * more than `COMMAND_RECEIPT_RETENTION` ago.
+     */
     readonly prune: Effect.Effect<void, ShellStoreError>;
     /** The newest committed sequence; 0 before the first event. Never goes down. */
     readonly latestSequence: Effect.Effect<number, ShellStoreError>;
@@ -239,16 +260,29 @@ export class EventStore extends Context.Service<
         const latest = yield* latestSequence;
         const floor = latest - SHELL_EVENT_RETENTION;
 
-        if (floor <= 0) {
-          return;
+        if (floor > 0) {
+          yield* sql`DELETE FROM shell_events WHERE sequence <= ${floor}`.pipe(
+            shellStoreFailure("EventStore.prune")
+          );
         }
 
-        yield* sql`DELETE FROM shell_events WHERE sequence <= ${floor}`.pipe(
-          shellStoreFailure("EventStore.prune")
-        );
-        yield* sql`DELETE FROM command_receipts WHERE result_sequence <= ${floor}`.pipe(
-          shellStoreFailure("EventStore.prune")
-        );
+        // A receipt outlives its events: a resend must find it until clients stop resending. The
+        // batch is the oldest expired receipts by age, found through the `accepted_at` index
+        // (migration 0014), so receipts a clock that ran ahead stamped in the future never hold
+        // back older ones, and a prune reads only the rows it deletes.
+        const cutoff =
+          DateTime.toEpochMillis(yield* DateTime.now) -
+          Duration.toMillis(COMMAND_RECEIPT_RETENTION);
+
+        yield* sql`
+          DELETE FROM command_receipts
+          WHERE command_id IN (
+            SELECT command_id FROM command_receipts
+            WHERE accepted_at < ${cutoff}
+            ORDER BY accepted_at
+            LIMIT ${RECEIPT_PRUNE_BATCH}
+          )
+        `.pipe(shellStoreFailure("EventStore.prune"));
       }).pipe(Effect.withSpan("EventStore.prune"));
 
       const readPage = (afterSequence: number, throughSequence: number) =>

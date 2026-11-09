@@ -110,6 +110,7 @@ export const CreateProject = Command.define("CreateProject", {
         onSuccess: () => Message.AddedProject({ folder }),
         onFailure: (failure) =>
           Message.FailedAddProject({
+            folder,
             message: failureMessage(
               failure,
               "The project could not be added. Try again."

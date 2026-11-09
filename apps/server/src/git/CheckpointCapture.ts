@@ -203,7 +203,8 @@ export class CheckpointCapture extends Context.Service<
     ): Effect.Effect<Option.Option<CheckpointCommit>>;
     /**
      * The boot repair: sweeps scratch indexes a kill left in each live thread's repository, then
-     * captures the end of a thread's last run when no checkpoint covers it.
+     * captures the end of a thread's last run when no checkpoint covers it, or else writes its
+     * newest end checkpoint's entry again in case a kill lost it.
      */
     readonly repair: Effect.Effect<void>;
   }
@@ -418,6 +419,26 @@ export class CheckpointCapture extends Context.Service<
           cwd.value,
           checkpointRefsOf(threadId)
         );
+
+        // The newest end ref may have lost its entry to a kill between the two writes, and harness
+        // events are not replayed: write it again (its request id makes this a no-op when it
+        // landed), before any repair capture, which would make it no longer the newest. The run's
+        // user entry is not known here, so a rewritten card has no placement.
+        const newestEnd = Option.fromNullishOr(
+          captured.findLast((found) => Option.contains(found.point, "end"))
+        );
+
+        if (Option.isSome(newestEnd)) {
+          yield* lockOf(threadId).withPermits(1)(
+            writeEntry(
+              cwd.value,
+              threadId,
+              captured,
+              newestEnd.value,
+              Option.none()
+            )
+          );
+        }
 
         if (missedRunEnd(captured, completedMillis)) {
           yield* runEnded(

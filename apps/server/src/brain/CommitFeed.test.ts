@@ -43,7 +43,7 @@ import { Subagents } from "../subagents/Subagents.ts";
 import { bindCriteria, markByUser } from "../verdicts/Verdicts.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
-import { ThreadMeta } from "./CairnDocs.ts";
+import { Approvals, ThreadMeta, UNDECIDED } from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
 import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
@@ -56,6 +56,8 @@ import { piConversationId } from "./PiIds.ts";
 const PARENT = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d1");
 
 const CHILD = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d2");
+
+const OTHER = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d3");
 
 const PROJECT = ProjectId.make("commit-feed-test");
 
@@ -808,6 +810,93 @@ describe("CommitFeed subagent events", () => {
             [PARENT, { total: 2, met: 0, failed: 0 }],
             [PARENT, { total: 2, met: 1, failed: 0 }],
             [PARENT, null],
+          ]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "two threads' records with the same id each report their own status changes",
+    () =>
+      withBrain(({ seam, brain, events, parentConversation }) =>
+        Effect.gen(function* () {
+          const other = yield* seam.ensureThread({
+            threadId: OTHER,
+            projectId: PROJECT,
+            model: FAUX_MODEL,
+            thinkingLevel: "off",
+            cwd: process.cwd(),
+            instructions: Option.none(),
+            runtimeMode: "full-access",
+          });
+
+          const otherConversation = piConversationId(other.conversationId);
+          const raiseId = "budget-raise-0";
+
+          // A budget raise at epoch 0, as BudgetSources.askRaise writes it, in each scope's thread.
+          const ask = (conversationId: Fixture["parentConversation"]) =>
+            commit(brain, async (tx) => {
+              const { items } = await tx.doc(Approvals, conversationId);
+
+              items[raiseId] = {
+                id: raiseId,
+                toolTaskId: 0,
+                tool: "budget_raise",
+                kind: "tool-call",
+                summary: "Raise the budget",
+                status: "pending",
+                askedAt: 1,
+                expiresAt: Number.MAX_SAFE_INTEGER,
+                answeredAt: null,
+                run: null,
+                executorRequestId: null,
+                ...UNDECIDED,
+              };
+            });
+
+          const accept = (conversationId: Fixture["parentConversation"]) =>
+            commit(brain, async (tx) => {
+              const { items } = await tx.doc(Approvals, conversationId);
+              const record = items[raiseId];
+
+              if (record !== undefined) {
+                record.status = "accepted";
+                record.answeredAt = 2;
+                record.decidedBy = { kind: "user" };
+              }
+            });
+
+          const updates = Effect.map(Ref.get(events), (all) =>
+            all.flatMap((event) =>
+              Predicate.isTagged(event, "RuntimeRequestUpdated") &&
+              event.id === raiseId
+                ? [`${event.threadId}:${event.status}`]
+                : []
+            )
+          );
+
+          const reach = (count: number) =>
+            waitFor(
+              Effect.map(updates, (found) =>
+                found.length >= count ? Option.some(true) : Option.none()
+              )
+            ).pipe(Effect.timeoutOption(Duration.seconds(2)));
+
+          yield* ask(parentConversation);
+          yield* reach(1);
+          yield* ask(otherConversation);
+          yield* reach(2);
+          yield* accept(otherConversation);
+          yield* reach(3);
+          yield* accept(parentConversation);
+          yield* reach(4);
+
+          assert.deepStrictEqual(yield* updates, [
+            `${PARENT}:pending`,
+            `${OTHER}:pending`,
+            `${OTHER}:accepted`,
+            `${PARENT}:accepted`,
           ]);
         })
       ),

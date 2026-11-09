@@ -179,6 +179,33 @@ export const heldLaunchInserts = (
     })
   ).pipe(Layer.provide(LaunchStore.layerNoDeps));
 
+/**
+ * The launch store, with the update that records a launch `ensured` held before it writes: it opens
+ * `reached`, then waits until `release` opens, so a test can stop a launch between its ensure and
+ * that update.
+ */
+export const heldEnsuredUpdates = (
+  reached: Latch.Latch,
+  release: Latch.Latch
+) =>
+  Layer.effect(
+    LaunchStore,
+    Effect.gen(function* () {
+      const real = yield* LaunchStore;
+
+      return LaunchStore.of({
+        ...real,
+        update: (row) =>
+          row.phase === "ensured"
+            ? reached.open.pipe(
+                Effect.andThen(release.await),
+                Effect.andThen(real.update(row))
+              )
+            : real.update(row),
+      });
+    })
+  ).pipe(Layer.provide(LaunchStore.layerNoDeps));
+
 /** The migrations a thread test's database needs. */
 export const threadMigrations = {
   "0001_Shell": Shell0001,

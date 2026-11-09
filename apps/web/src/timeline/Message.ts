@@ -16,16 +16,18 @@ export const Message = defineMessageUnion({
   ToggledChangedFiles: { rowId: Schema.String },
   ClickedScrollToEnd: {},
   ClickedLoadEarlier: { threadId: Schema.String, before: EntryId },
-  /** A history page, with the cursor it was asked from. */
+  /** A history page, with the cursor it was asked from and the request it answers. */
   LoadedEarlier: {
     threadId: Schema.String,
+    request: Schema.Int,
     before: EntryId,
     page: HistoryPage,
   },
-  FailedEarlier: { threadId: Schema.String },
-  /** Retry on a failed turn's error: its prompt goes out again. */
+  FailedEarlier: { threadId: Schema.String, request: Schema.Int },
+  /** Retry on a failed turn's error: its prompt goes out again, once per failed turn. */
   ClickedRetry: {
     threadId: Schema.String,
+    turnId: Schema.String,
     text: Schema.String,
     attachments: Schema.Array(AttachmentId),
     skillRefs: Schema.Array(Schema.String),

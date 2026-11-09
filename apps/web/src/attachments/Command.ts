@@ -121,10 +121,12 @@ export const LoadSaved = Command.define("LoadSaved", {
   execute: Effect.map(loadSaved, (drafts) => Message.LoadedSaved({ drafts })),
 });
 
-/** Writes the ready attachments of every draft. */
+/** Writes the ready attachments this tab added or removed since `base`, as it last read or wrote them. */
 export const SaveReady = Command.define("SaveReady", {
-  args: { drafts: SavedAttachments },
+  args: { base: SavedAttachments, drafts: SavedAttachments },
   messages: [Message.CompletedSave],
-  execute: ({ drafts }) =>
-    Effect.map(saveSaved(drafts), (saved) => Message.CompletedSave({ saved })),
+  execute: ({ base, drafts }) =>
+    Effect.map(saveSaved(base, drafts), (stored) =>
+      Message.CompletedSave({ written: drafts, stored })
+    ),
 });

@@ -12,7 +12,9 @@
 //    covers this call, so Executor's prompt never meets a person. A program may pause again for
 //    each nested call; each is accepted the same way, because the program was approved once, as
 //    the program (ADR 0031), in every mode.
-// 4. Mark `done` (`ledger.finish`) once the outcome is known.
+// 4. Mark `done` (`ledger.finish`) once the outcome is known. A mark that fails is logged and the
+//    call's own outcome still answers: the call ran, and the record left at `started` keeps a
+//    rerun from sending it again.
 //
 // `input-required` forms are cancelled with a clear error: Cairn has no form renderer yet. A
 // failure after an accept was sent leaves the outcome unknown and is reported as "may have run",
@@ -67,6 +69,9 @@ export interface GatedRequest {
   /** The mode that lets the call through without asking (the record is still written). */
   readonly acceptedBy: Option.Option<RuntimeMode>;
 }
+
+/** What a failure says about the call: nothing ran before an accept, it may have run after one. */
+const refusalText = (accepted: boolean) => (accepted ? INTERRUPTED : REFUSED);
 
 const callFailure = (error: ExecutorCallError, accepted: boolean) => {
   if (error.reason === "sign_in_required") {
@@ -123,9 +128,7 @@ export const gatedCall = Effect.fn("GatedCall.run")(function* (
       const text =
         reply.text === "" ? "Executor refused the request." : reply.text;
 
-      return Effect.succeed(
-        failed(`${text} ${accepted ? INTERRUPTED : REFUSED}`)
-      );
+      return Effect.succeed(failed(`${text} ${refusalText(accepted)}`));
     }
 
     return matchOutcome(outcomeOf(reply.structured.value), {
@@ -157,8 +160,11 @@ export const gatedCall = Effect.fn("GatedCall.run")(function* (
 
           return yield* step(resumed.success, true, round + 1);
         }).pipe(
+          // A later pause of a program fails after earlier accepts ran nested calls.
           Effect.catchTag("ApprovalLedgerError", (ledgerFailure) =>
-            Effect.succeed(failed(`${ledgerFailure.message} ${REFUSED}`))
+            Effect.succeed(
+              failed(`${ledgerFailure.message} ${refusalText(accepted)}`)
+            )
           )
         ),
       InputRequired: ({ requestId, name }) =>
@@ -175,7 +181,7 @@ export const gatedCall = Effect.fn("GatedCall.run")(function* (
         if (!accepted) {
           return Effect.succeed(
             failed(
-              `Executor no longer has this request (${reason}).${detail} ${REFUSED}`
+              `Executor no longer has this request (${reason}).${detail} ${refusalText(false)}`
             )
           );
         }
@@ -243,7 +249,21 @@ export const gatedCall = Effect.fn("GatedCall.run")(function* (
 
     const outcome = yield* drive;
 
-    yield* ledger.finish;
+    // The call already ran (or failed) on Executor: its outcome is the answer whatever the record
+    // says. A record left at `started` makes a rerun refuse, which is the safe side.
+    yield* ledger.finish.pipe(
+      Effect.catchTag("ApprovalLedgerError", (error) =>
+        Effect.logWarning(
+          "an Executor call ran but its approval was not marked done"
+        ).pipe(
+          Effect.annotateLogs({
+            event: "executor_finish_unrecorded",
+            approvalId: error.approvalId,
+            cause: error.message,
+          })
+        )
+      )
+    );
 
     return outcome;
   });

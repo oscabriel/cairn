@@ -17,13 +17,18 @@
 
 import type { ModelRef } from "@cairn/protocol/Models";
 import { Type } from "@earendil-works/pi-ai";
-import type { ToolExecutionApi } from "@earendil-works/pi-durable";
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import type { ToolExecutionApi, Tx } from "@earendil-works/pi-durable";
+import {
+  DEFAULT_RESTART_LIMIT,
+  defineExtension,
+  defineTool,
+} from "@earendil-works/pi-durable";
 import { Effect, Option, Result } from "effect";
 
 import { approvalLedger } from "../brain/CairnDocs.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { taskOf } from "../subagents/Delivery.ts";
 import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import {
   CRITERIA_TTL_MILLIS,
@@ -38,6 +43,7 @@ import {
   proposalsOf,
 } from "./GoalCriteria.ts";
 import { GoalDoc, judgeState, JudgeRunsDoc, NO_GOAL } from "./GoalDocs.ts";
+import type { JudgeRunItemState } from "./GoalDocs.ts";
 import { judgeRunId, judgeRunTask } from "./JudgeRun.ts";
 import type { JudgeFaults, JudgeModels } from "./JudgeRun.ts";
 import { judgeModelRefusal, judgeSpecOf } from "./ModelJudge.ts";
@@ -131,6 +137,38 @@ const inChild = async (
   api: ToolExecutionApi,
   context: Parameters<ToolExecutionApi["agent"]>[0]
 ) => isLinked(await api.snapshot(ChildDoc, api.conversationId, context));
+
+/**
+ * The first of `items` (unsettled index items of one criterion) whose judge run can still settle
+ * it. An item whose task is gone, ended without its completing commit (a fault), or parked by the
+ * crash-loop guard can never settle on its own: it is settled here at `now`, in the asking commit,
+ * so the criterion is queued afresh rather than waiting on it for good. Table reads: call it
+ * before the commit's first table write.
+ */
+const liveRunOf = async (
+  tx: Tx,
+  items: ReadonlyArray<JudgeRunItemState>,
+  now: number
+): Promise<Option.Option<JudgeRunItemState>> => {
+  for (const item of items) {
+    // oxlint-disable-next-line no-await-in-loop -- one task read per unsettled item, in order
+    const task = await tx.task(taskOf(item.taskId));
+
+    const live =
+      task !== undefined &&
+      task.state.status !== "completing" &&
+      task.state.status !== "terminal" &&
+      (task.restarts ?? 0) < DEFAULT_RESTART_LIMIT;
+
+    if (live) {
+      return Option.some(item);
+    }
+
+    item.settledAt = now;
+  }
+
+  return Option.none();
+};
 
 /** The goals extension over `models` (the model judge's resolver and caller) and `faults`. */
 export const goalsExtension = (
@@ -237,12 +275,20 @@ export const goalsExtension = (
           return { taskId: mine.taskId, fresh: false };
         }
 
-        const live = Object.values(runs.items).find(
-          (item) => item.criterionId === criterion.id && item.settledAt === null
+        const live = await liveRunOf(
+          tx,
+          Object.values(runs.items).filter(
+            (item) =>
+              item.criterionId === criterion.id &&
+              (item.changedAt === undefined ||
+                item.changedAt === criterion.changedAt) &&
+              item.settledAt === null
+          ),
+          api.now()
         );
 
-        if (live !== undefined) {
-          return { taskId: live.taskId, fresh: false };
+        if (Option.isSome(live)) {
+          return { taskId: live.value.taskId, fresh: false };
         }
 
         const taskId = await tx.createTask(
@@ -258,6 +304,7 @@ export const goalsExtension = (
         runs.items[String(api.taskId)] = {
           taskId,
           criterionId: criterion.id,
+          changedAt: criterion.changedAt,
           queuedAt: api.now(),
           settledAt: null,
         };

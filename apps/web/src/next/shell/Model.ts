@@ -43,6 +43,8 @@ export const RefreshConfirm = Schema.Struct({
   text: Schema.String,
   /** The launch is being prepared; the confirm takes no second click. */
   isSending: Schema.Boolean,
+  /** Why the last Refresh did nothing, drawn on the confirm, which stays open with its message. */
+  failure: Schema.Option(Schema.String),
 });
 
 export type RefreshConfirm = typeof RefreshConfirm.Type;
@@ -55,6 +57,11 @@ export const ScratchState = Schema.Struct({
   draft: Schema.String,
   /** A turn or the clear is being prepared. */
   isBusy: Schema.Boolean,
+  /**
+   * The draft as it was when the turn being prepared was sent; once the turn is minted, only that
+   * much leaves the field, so words typed meanwhile stay.
+   */
+  sentDraft: Schema.Option(Schema.String),
 });
 
 export type ScratchState = typeof ScratchState.Type;
@@ -136,8 +143,9 @@ export const FolderListing = defineTaggedUnion({
 export type FolderListing = typeof FolderListing.Type;
 
 /**
- * The open add-project picker: the folder typed or browsed to, the listing beside it (bumped per
- * request, so a slow answer for a folder the user left is dropped), the home folder once the first
+ * The open add-project picker: the folder typed or browsed to, the listing beside it and the number
+ * of the request it waits for (from the shell's `folderRequests`, so a slow answer for a folder the
+ * user left, in this picker or one closed before, is dropped), the home folder once the first
  * listing named it (a typed `~` is read against it), and the create on its way or refused.
  */
 export const AddProjectState = Schema.Struct({
@@ -145,7 +153,8 @@ export const AddProjectState = Schema.Struct({
   listing: FolderListing,
   request: Schema.Int,
   home: Schema.Option(Schema.String),
-  isAdding: Schema.Boolean,
+  /** The folder whose create is on its way; only its answer reaches this picker. */
+  adding: Schema.Option(Schema.String),
   failure: Schema.Option(Schema.String),
 });
 
@@ -166,9 +175,11 @@ export const Model = Schema.Struct({
   scratch: ScratchState,
   work: WorkState,
   goal: GoalPanelState,
-  /** Why the last refresh or scratch turn could not be prepared. */
+  /** Why the last scratch turn could not be prepared; drawn in the scratch overlay's foot only. */
   failure: Schema.Option(Schema.String),
   addProject: Schema.Option(AddProjectState),
+  /** Folder listings asked so far, across every opening of the picker; each carries its number. */
+  folderRequests: Schema.Int,
   /** The folder just added: the rail selects its project once the shell shows it. */
   awaitedFolder: Schema.Option(Schema.String),
 });
@@ -198,10 +209,12 @@ export const initial: Model = {
     threadId: Option.none(),
     draft: "",
     isBusy: false,
+    sentDraft: Option.none(),
   },
   work: initialWork,
   goal: initialGoalPanel,
   failure: Option.none(),
   addProject: Option.none(),
+  folderRequests: 0,
   awaitedFolder: Option.none(),
 };

@@ -8,7 +8,15 @@ import { Option } from "effect";
 import { Message, OutMessage } from "./Message.ts";
 import { AttachmentStatus, initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import { mustWait, readyIds, requestSend, update } from "./Update.ts";
+import {
+  mustWait,
+  noteNotSent,
+  noticeFor,
+  readyIds,
+  requestSend,
+  update,
+  waitsFor,
+} from "./Update.ts";
 import type { UpdateReturn } from "./Update.ts";
 
 const draftKey = "thread:019a0000-0000-7000-8000-000000000001";
@@ -141,7 +149,7 @@ describe("a send during uploads", () => {
     const waiting = requestSend(dropped, draftKey, "foreground");
 
     assert.isUndefined(waiting.outMessage);
-    assert.isTrue(Option.isSome(waiting.model.waitingSend));
+    assert.isTrue(waitsFor(waiting.model, draftKey));
 
     const one = succeed(waiting.model, "attachment-1");
 
@@ -172,7 +180,60 @@ describe("a send during uploads", () => {
     const waiting = requestSend(refused.model, draftKey, "foreground");
 
     assert.isUndefined(waiting.outMessage);
-    assert.isTrue(Option.isNone(waiting.model.waitingSend));
-    assert.isTrue(Option.isSome(waiting.model.notice));
+    assert.isFalse(waitsFor(waiting.model, draftKey));
+    assert.isTrue(Option.isSome(noticeFor(waiting.model, draftKey)));
+  });
+
+  it("keeps each draft's waiting send and note apart", () => {
+    const other = "thread:019a0000-0000-7000-8000-000000000002";
+    const otherContext = { draftKey: Option.some(other) };
+
+    const waitingA = requestSend(drop(1).model, draftKey, "foreground");
+
+    const droppedB = update(
+      waitingA.model,
+      Message.DroppedFiles({ files: [pdf(9)] }),
+      otherContext
+    );
+
+    const waitingB = requestSend(droppedB.model, other, "foreground");
+
+    const answeredA = update(
+      waitingB.model,
+      Message.SucceededUpload({
+        localId: "attachment-1",
+        ref: ref("attachment-1"),
+        pasteToRequestMs: Option.none(),
+      }),
+      otherContext
+    );
+
+    assert.deepStrictEqual(
+      answeredA.outMessage,
+      OutMessage.ReadyToSend({ draftKey, intent: "foreground" }),
+      "A's send is released when A's upload answers, though B also waits"
+    );
+    assert.isTrue(waitsFor(answeredA.model, other));
+
+    const notedA = noteNotSent(answeredA.model, draftKey);
+
+    const pastedB = update(
+      notedA,
+      Message.DroppedFiles({ files: [pdf(10)] }),
+      otherContext
+    );
+
+    assert.isTrue(
+      Option.isSome(noticeFor(pastedB.model, draftKey)),
+      "a file added in B leaves A's note"
+    );
+
+    const dismissedB = update(
+      pastedB.model,
+      Message.ClickedDismissNotice(),
+      otherContext
+    );
+
+    assert.isTrue(Option.isSome(noticeFor(dismissedB.model, draftKey)));
   });
 });

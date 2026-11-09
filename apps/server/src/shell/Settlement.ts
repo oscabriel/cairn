@@ -2,7 +2,8 @@
 // (isAutoSettlementCandidate, isSnoozed, threadHasQueuedTurnStart, resolveAutoSettlementAt and the
 // sweep) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the candidate rules (not archived, no
 // manual settle state, not pinned, auto-settle on, no pending request, not running, no queued turn
-// within a 2 minute grace, not snoozed), the snooze that a failure wakes early, the inactivity rule
+// within a 2 minute grace, not snoozed), the snooze that a failure wakes early (read through the
+// client's `effectiveSnoozed`, one rule for both sides), the inactivity rule
 // measured from the latest activity or snooze wake, and a sweep that commits a guarded
 // `ThreadAutoSettle` per thread. Changed: every pull request branch is gone, the sweep runs every 5
 // minutes, a second fiber ends snoozes when their time comes, the inactivity window is one server
@@ -28,6 +29,7 @@
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { hasLiveChildren } from "@cairn/client-logic/SubagentTally";
+import { effectiveSnoozed } from "@cairn/client-logic/ThreadSettled";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import {
   Context,
@@ -114,30 +116,12 @@ export const threadHasQueuedTurnStart = (
 };
 
 /**
- * Whether a thread is snoozed at `nowMs`. A pending request wakes it, and so does a run that failed
- * after the snooze began, so a broken thread never hides.
+ * Whether a thread is snoozed at `nowMs`: the client's own rule (`effectiveSnoozed`), so the sweep
+ * and the sidebar never disagree. A request for the user (the thread's or a subagent's below it)
+ * wakes it, and so does a run that failed after the snooze began, so a broken thread never hides.
  */
-export const isSnoozed = (shell: ThreadShell, nowMs: number): boolean => {
-  const until = millis(shell.snoozedUntil);
-
-  if (Option.isNone(until) || until.value <= nowMs) {
-    return false;
-  }
-
-  if (Option.isSome(shell.pendingRuntimeRequest)) {
-    return false;
-  }
-
-  const snoozedAt = millis(shell.snoozedAt);
-  const completedAt = millis(shell.latestRunCompletedAt);
-
-  const wokeOnFailure =
-    shell.activity === "failed" &&
-    (Option.isNone(snoozedAt) ||
-      (Option.isSome(completedAt) && completedAt.value > snoozedAt.value));
-
-  return !wokeOnFailure;
-};
+export const isSnoozed = (shell: ThreadShell, nowMs: number): boolean =>
+  effectiveSnoozed(shell, DateTime.makeUnsafe(nowMs));
 
 /** Whether the sweep may consider settling `row` at `nowMs`. */
 export const isAutoSettlementCandidate = (

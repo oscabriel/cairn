@@ -73,6 +73,7 @@ const page = inform(initial, {
   epoch: 2,
   hasClient: true,
   launching: false,
+  queuedPrompts: [],
 }).model;
 
 /** The same page while the thread's launch is on its way to the brain. */
@@ -81,6 +82,7 @@ const launchingPage = inform(page, {
   epoch: 2,
   hasClient: true,
   launching: true,
+  queuedPrompts: [],
 }).model;
 
 const missing = (watch: number) =>
@@ -177,6 +179,7 @@ describe("the thread page", () => {
       epoch: 3,
       hasClient: false,
       launching: false,
+      queuedPrompts: [],
     }).model;
 
     expect(reconnected.status._tag).toBe("Loading");
@@ -187,6 +190,7 @@ describe("the thread page", () => {
       epoch: 2,
       hasClient: true,
       launching: false,
+      queuedPrompts: [],
     }).model;
 
     expect(Option.isNone(other.view)).toBeTruthy();
@@ -259,6 +263,7 @@ describe("the thread page", () => {
         epoch: 2,
         hasClient: true,
         launching: false,
+        queuedPrompts: [],
       }
     ).model;
 
@@ -272,6 +277,7 @@ describe("the thread page", () => {
       epoch: 2,
       hasClient: true,
       launching: true,
+      queuedPrompts: [],
     }).model;
 
     expect(known.status._tag).toBe("Loading");
@@ -450,6 +456,7 @@ describe("a launch that failed in the background", () => {
     for (const next of [
       RootMessage.GotComposerMessage({
         message: ComposerMessage.PreparedTurn({
+          draftKey: `draft:${threadId}`,
           item: launch,
           navigateTo: Option.none(),
           attachments: [],

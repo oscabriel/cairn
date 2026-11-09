@@ -28,6 +28,7 @@ import { piConversationId } from "../brain/PiIds.ts";
 import { ledgerProblems, WorkflowsDoc } from "./WorkflowDocs.ts";
 import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
 import { isNodeBrief, LAUNCH_TOOL, launchAnswered } from "./WorkflowLaunch.ts";
+import type { WorkflowPlan } from "./WorkflowPlan.ts";
 import {
   ALT_MODEL,
   KIT_SPEC,
@@ -36,6 +37,8 @@ import {
   openKit,
   pause,
   PLAN_PREFIX,
+  plant,
+  plantDefaults,
 } from "./WorkflowTestKit.ts";
 import type { KitBrain, WorkEffect } from "./WorkflowTestKit.ts";
 import { NO_WORKFLOW_FAULTS } from "./WorkflowTools.ts";
@@ -160,6 +163,10 @@ const flow = (
     readonly stopAt?: "launch" | "card";
     /** Project recipes a reference may name, source by name. */
     readonly projectRecipes?: Readonly<Record<string, string>>;
+    /** What the thread holds before the model proposes: launches planted on its ledger. */
+    readonly before?: (
+      brain: KitBrain
+    ) => Effect.Effect<void, never, WorkflowPlan>;
   }
 ) =>
   Effect.gen(function* () {
@@ -184,6 +191,10 @@ const flow = (
           await open.harness.close(context);
         })
     );
+
+    if (options.before !== undefined) {
+      yield* options.before(brain);
+    }
 
     return yield* Effect.promise(async (): Promise<Flow> => {
       const cards = new Set<string>();
@@ -460,6 +471,48 @@ describe("launch approval and the envelope on pi-durable", () => {
           outcome.reply,
           "declined workflow kit-flow: not this one"
         );
+      }),
+    30_000
+  );
+
+  it.live(
+    "a second Go on a script with an approved launch left over runs the newer launch and supersedes the older",
+    () =>
+      Effect.gen(function* () {
+        // A launch the user said Go to whose run stopped before it called codemode: its record is
+        // accepted, so the stop's cancel leaves its row approved.
+        const script =
+          workflow(`const a = await agent("node:a", { label: "a" });
+return { a, args, total: budget.total };`);
+
+        const outcome = yield* flow(script, {
+          launches: [GO],
+          before: (brain) =>
+            plant(
+              brain,
+              script,
+              {
+                ...plantDefaults("wf-stale"),
+                args: { question: "stale" },
+                budget: { ...DEFAULT_BUDGET, maxTokens: 700_000 },
+              },
+              context
+            ).pipe(Effect.orDie, Effect.asVoid),
+        });
+
+        const stale = outcome.ledger.items["wf-stale"];
+        const fresh = outcome.rows.find((row) => row.id !== "wf-stale");
+
+        assert.deepStrictEqual(outcome.problems, []);
+        assert.strictEqual(fresh?.state, "finished", "the newer Go ran");
+        assert.strictEqual(stale?.state, "declined", "the older Go ended");
+        assert.deepStrictEqual(stale?.decidedBy, {
+          kind: "system",
+          why: "superseded",
+        });
+        assert.deepStrictEqual(stale?.nodes, {});
+        assert.notInclude(outcome.reply, "stale");
+        assert.notInclude(outcome.reply, "700000");
       }),
     30_000
   );

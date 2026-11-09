@@ -2,13 +2,19 @@
 // judges/transcript-scroll.ts, over the same submodel.
 
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
-import { EntryId } from "@cairn/protocol/Ids";
-import { ConversationView, Entry } from "@cairn/protocol/Thread";
+import { EntryId, RequestId, ThreadId } from "@cairn/protocol/Ids";
+import { ConversationView, Entry, SendInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema } from "effect";
 
 import coding from "../../../../judges/fixtures/transcripts/coding.json" with { type: "json" };
+import { OutboxItem } from "../connection/Outbox.ts";
 import { latestCheckpointTurn } from "../diff/Toggle.ts";
+import { Message as RootMessage } from "../Message.ts";
+import { Message as ThreadMessage } from "../page/thread/Message.ts";
+import { AppRoute } from "../Route.ts";
+import { connectingModel } from "../TestFixtures.ts";
+import { update as rootUpdate } from "../Update.ts";
 import { growReply, startReply, syntheticThread } from "./harness/Fixture.ts";
 import { Message as ListMessage } from "./list/Message.ts";
 import { Message } from "./Message.ts";
@@ -76,7 +82,12 @@ describe("paging and Retry", () => {
 
     const loaded = update(
       asked.model,
-      Message.LoadedEarlier({ threadId: "a", before, page })
+      Message.LoadedEarlier({
+        threadId: "a",
+        request: asked.model.historyRequest,
+        before,
+        page,
+      })
     );
 
     assert.strictEqual(loaded.model.history, "idle");
@@ -84,9 +95,74 @@ describe("paging and Retry", () => {
     assert.isUndefined(
       update(
         asked.model,
-        Message.LoadedEarlier({ threadId: "b", before, page })
+        Message.LoadedEarlier({
+          threadId: "b",
+          request: asked.model.historyRequest,
+          before,
+          page,
+        })
       ).outMessage
     );
+  });
+
+  it("applies only the latest page request's answer, across a switch away and back", () => {
+    const before = EntryId.make(11);
+    const page = { entries: [], hasMore: false };
+
+    const first = update(
+      shown("a"),
+      Message.ClickedLoadEarlier({ threadId: "a", before })
+    );
+
+    const away = switchThread(first.model, Option.some("b")).model;
+    const back = switchThread(away, Option.some("a")).model;
+
+    const second = update(
+      back,
+      Message.ClickedLoadEarlier({ threadId: "a", before })
+    );
+
+    assert.strictEqual(second.model.history, "loading");
+
+    const requestOf = (result: typeof first): number =>
+      result.model.historyRequest;
+
+    const staleFailure = update(
+      second.model,
+      Message.FailedEarlier({ threadId: "a", request: requestOf(first) })
+    );
+
+    assert.strictEqual(
+      staleFailure.model.history,
+      "loading",
+      "the first request's failure leaves the second one loading"
+    );
+
+    const staleSuccess = update(
+      staleFailure.model,
+      Message.LoadedEarlier({
+        threadId: "a",
+        request: requestOf(first),
+        before,
+        page,
+      })
+    );
+
+    assert.strictEqual(staleSuccess.model.history, "loading");
+    assert.isUndefined(staleSuccess.outMessage);
+
+    const answered = update(
+      staleSuccess.model,
+      Message.LoadedEarlier({
+        threadId: "a",
+        request: requestOf(second),
+        before,
+        page,
+      })
+    );
+
+    assert.strictEqual(answered.model.history, "idle");
+    assert.strictEqual(answered.outMessage?._tag, "ReceivedHistory");
   });
 
   it("prepares a Retry as a send and hands it up", () => {
@@ -94,6 +170,7 @@ describe("paging and Retry", () => {
       shown("01890a5d-ac96-774b-bcce-b302099a8057"),
       Message.ClickedRetry({
         threadId: "01890a5d-ac96-774b-bcce-b302099a8057",
+        turnId: "turn:3",
         text: "again",
         attachments: [],
         skillRefs: [],
@@ -106,12 +183,116 @@ describe("paging and Retry", () => {
         shown("a"),
         Message.ClickedRetry({
           threadId: "a",
+          turnId: "turn:3",
           text: "x",
           attachments: [],
           skillRefs: [],
         })
       ).commands ?? [],
       0
+    );
+  });
+
+  it("sends a failed turn's prompt once however often Retry is pressed", () => {
+    const threadId = "01890a5d-ac96-774b-bcce-b302099a8057";
+
+    const retry = Message.ClickedRetry({
+      threadId,
+      turnId: "turn:3",
+      text: "again",
+      attachments: [],
+      skillRefs: [],
+    });
+
+    const first = update(shown(threadId), retry);
+
+    assert.lengthOf(first.commands ?? [], 1);
+
+    const prepared = update(
+      first.model,
+      Message.PreparedRetry({
+        item: OutboxItem.Send({
+          input: SendInput.make({
+            threadId: ThreadId.make(threadId),
+            input: {
+              requestId: RequestId.make("01890a5d-ac96-774b-bcce-b302099a8058"),
+              text: "again",
+              attachments: [],
+              skillRefs: [],
+            },
+            whenBusy: "followUp",
+          }),
+        }),
+      })
+    );
+
+    assert.strictEqual(prepared.outMessage?._tag, "RequestedSend");
+
+    const second = update(prepared.model, retry);
+
+    assert.lengthOf(
+      second.commands ?? [],
+      0,
+      "a second Retry on the same failed turn queues no second send"
+    );
+
+    const away = switchThread(second.model, Option.some("b")).model;
+    const back = switchThread(away, Option.some(threadId)).model;
+
+    assert.lengthOf(update(back, retry).commands ?? [], 0);
+    assert.lengthOf(
+      update(back, Message.ClickedRetry({ ...retry, turnId: "turn:4" }))
+        .commands ?? [],
+      1,
+      "a later failed turn can be retried"
+    );
+  });
+
+  it("sends nothing when the failed turn's Retry already waits in the outbox, after a reload or from another tab", () => {
+    const threadId = "01890a5d-ac96-774b-bcce-b302099a8057";
+
+    const queued = OutboxItem.Send({
+      input: SendInput.make({
+        threadId: ThreadId.make(threadId),
+        input: {
+          requestId: RequestId.make("req-retry-1"),
+          text: "again",
+          attachments: [],
+          skillRefs: [],
+        },
+        whenBusy: "followUp",
+      }),
+    });
+
+    // The page loaded with the retry in the saved outbox; its in-memory retry mark is gone.
+    const reloaded = rootUpdate(
+      {
+        ...connectingModel,
+        route: AppRoute.Thread({ threadId: ThreadId.make(threadId) }),
+        outbox: [queued],
+        outboxStored: [queued],
+      },
+      RootMessage.DismissedNotice()
+    ).model;
+
+    const pressed = rootUpdate(
+      reloaded,
+      RootMessage.GotThreadMessage({
+        message: ThreadMessage.GotTimelineMessage({
+          message: Message.ClickedRetry({
+            threadId,
+            turnId: "turn:3",
+            text: "again",
+            attachments: [],
+            skillRefs: [],
+          }),
+        }),
+      })
+    );
+
+    assert.deepStrictEqual(
+      (pressed.commands ?? []).map(({ name }) => name),
+      []
     );
   });
 

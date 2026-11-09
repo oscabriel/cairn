@@ -33,7 +33,7 @@ export const Message = defineMessageUnion({
   ClickedCancelAddProject: {},
   /** The brain made the project for `folder`; the rail selects it once the shell shows it. */
   AddedProject: { folder: Schema.String },
-  FailedAddProject: { message: Schema.String },
+  FailedAddProject: { folder: Schema.String, message: Schema.String },
   /** The added folder's project is in the shell: select it, as its bubble would. */
   FoundAddedProject: { projectId: ProjectId },
 
@@ -70,7 +70,7 @@ export const Message = defineMessageUnion({
   /** The scratch thread this device held when it last saved, read at start. */
   LoadedScratch: { threadId: Schema.Option(ThreadId) },
   CompletedSaveScratch: {},
-  /** A refresh or a scratch turn could not be prepared. */
+  /** A scratch turn could not be prepared. */
   FailedPrepare: { message: Schema.String },
   ClickedDismissFailure: {},
   /** A field the overlay or the confirm opened with took focus, or was gone. */

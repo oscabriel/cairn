@@ -2,10 +2,14 @@
 // apps/web/src/components/Sidebar.snooze.ts at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: when a
 // snooze ends early (a request for the user or a fresh failure, never a completed run), the
 // queued-turn grace window, the snooze presets with their local calendar rules, and the wake labels.
-// Changed: rows are Cairn's shell rows, so "blocked on you" is `pendingRuntimeRequest`, a failure is
+// Changed: rows are Cairn's shell rows, so "blocked on you" is `pendingRuntimeRequest` or a subagent
+// below asking (the row's tally, as t3code counts `pendingSubagentRequest`), a failure is
 // `activity: "failed"` with its run's completion time, and a queued start is `activity: "preparing"`
 // or a user message no run has picked up yet; "now" is a `DateTime` the caller reads from `Clock`;
-// the custom snooze dialog is not ported.
+// the custom snooze dialog is not ported. The server's settlement sweep reads `effectiveSnoozed`
+// too, so the two sides cannot disagree, and the brain records an early wake on the row when it
+// happens (`ThreadActivityUpdate`), so answering the request that woke a thread does not put it
+// back to sleep: the rules here only cover the moment before that commit.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -49,6 +53,7 @@ export type SnoozeInput = Pick<
   | "updatedAt"
   | "snoozedUntil"
   | "snoozedAt"
+  | "subagents"
 >;
 
 /**
@@ -90,36 +95,49 @@ export const hasQueuedTurnStart = (
   });
 };
 
-/** When the latest run failed, when the thread is failed. */
-const failureEdgeAt = (thread: SnoozeInput): Option.Option<DateTime.Utc> =>
-  thread.activity === "failed"
-    ? Option.some(
-        Option.getOrElse(thread.latestRunCompletedAt, () => thread.updatedAt)
-      )
-    : Option.none();
+/**
+ * True when the thread failed after it was snoozed (or carries no snooze time). The failure's time
+ * is its run's completion; a launch failure has none, so only the brain's recorded wake ends a
+ * snooze for it, never a later change that moves `updatedAt`.
+ */
+const failedSinceSnooze = (thread: SnoozeInput): boolean =>
+  thread.activity === "failed" &&
+  Option.match(thread.snoozedAt, {
+    onNone: () => true,
+    onSome: (snoozedAt) =>
+      Option.exists(thread.latestRunCompletedAt, (failedAt) =>
+        DateTime.isGreaterThan(failedAt, snoozedAt)
+      ),
+  });
 
-const failedSinceSnooze = (thread: SnoozeInput): Option.Option<DateTime.Utc> =>
-  Option.filter(failureEdgeAt(thread), (failedAt) =>
-    Option.match(thread.snoozedAt, {
-      onNone: () => true,
-      onSome: (snoozedAt) => DateTime.isGreaterThan(failedAt, snoozedAt),
-    })
-  );
+/** When the failure that ended a snooze happened, when one did and its time is known. */
+const failureWakeAt = (thread: SnoozeInput): Option.Option<DateTime.Utc> =>
+  failedSinceSnooze(thread) ? thread.latestRunCompletedAt : Option.none();
+
+/** True while a subagent somewhere below the thread waits on the user. */
+const subagentAsks = (thread: SnoozeInput): boolean =>
+  thread.subagents.asking > 0;
 
 /**
- * Only a request for the user or a failure after the snooze ends a snooze early. A completed run
- * never does: a snoozed long-running thread stays hidden until its timer.
+ * Only a request for the user (the thread's own or a subagent's below it) or a failure after the
+ * snooze ends a snooze early. A completed run never does: a snoozed long-running thread stays
+ * hidden until its timer.
  */
 export const threadRaisedHandWhileSnoozed = (thread: SnoozeInput): boolean =>
   Option.isSome(thread.pendingRuntimeRequest) ||
-  Option.isSome(failedSinceSnooze(thread));
+  subagentAsks(thread) ||
+  failedSinceSnooze(thread);
 
-/** True when a snooze or settle is allowed now: nothing waits on the user or on a queued start. */
+/**
+ * True when a snooze or settle is allowed now: nothing waits on the user (the thread or a subagent
+ * below it) or on a queued start.
+ */
 export const canSnooze = (thread: SnoozeInput, now: DateTime.Utc): boolean =>
   Option.isNone(thread.pendingRuntimeRequest) &&
+  !subagentAsks(thread) &&
   !hasQueuedTurnStart(thread, now);
 
-/** True while the thread belongs on the snoozed shelf. */
+/** True while the thread belongs on the snoozed shelf. The brain's settlement sweep reads it too. */
 export const effectiveSnoozed = (
   thread: SnoozeInput,
   now: DateTime.Utc
@@ -139,7 +157,7 @@ export const threadWokeAt = (
 ): Option.Option<DateTime.Utc> =>
   Option.flatMap(thread.snoozedUntil, (wakeAt) => {
     if (threadRaisedHandWhileSnoozed(thread)) {
-      return Option.orElse(failedSinceSnooze(thread), () =>
+      return Option.orElse(failureWakeAt(thread), () =>
         Option.orElse(
           Option.map(
             thread.pendingRuntimeRequest,

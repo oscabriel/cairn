@@ -7,14 +7,30 @@
 // The outbox runs only while the connection is `Live`, one item at a time and in order: the head is
 // sent, an acknowledgement drops it and sends the next. A retryable failure leaves it at the head,
 // sent again after a backoff or by the next connection; any other failure drops it, because sending
-// it again cannot succeed.
+// it again cannot succeed. A shell command older than `SHELL_COMMAND_RESEND_WINDOW` is dropped
+// unsent: the brain may have forgotten its receipt, and planning it again would act on a thread
+// that has moved on since.
+//
+// Every tab of the browser shares the saved outbox: a save writes only the items this tab queued or
+// dropped, and another tab's write is folded in (`TabChanges.ts`).
 
+import { commandMintedAtMillis } from "@cairn/protocol/Ids";
 import { ThreadLaunchInput } from "@cairn/protocol/Launch";
-import { ShellCommand } from "@cairn/protocol/ShellCommands";
+import {
+  SHELL_COMMAND_RESEND_WINDOW,
+  ShellCommand,
+} from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
-import { Array, Effect, Option, Predicate, Schema } from "effect";
+import { Array, Duration, Effect, Option, Predicate, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { defineTaggedUnion } from "foldkit/schema";
+
+import {
+  applyListChanges,
+  listChanges,
+  mergeList,
+  mergeStored,
+} from "../storage/TabChanges.ts";
 
 /** One mutation waiting for the brain's acknowledgement. */
 export const OutboxItem = defineTaggedUnion({
@@ -82,6 +98,18 @@ export const enqueueDispatch = (
   });
 };
 
+/**
+ * Whether `item` is a shell command minted more than `SHELL_COMMAND_RESEND_WINDOW` before
+ * `nowMillis`, and so must not be sent again.
+ */
+export const outlivedResendWindow = (
+  item: OutboxItem,
+  nowMillis: number
+): boolean =>
+  Predicate.isTagged(item, "Dispatch") &&
+  nowMillis - commandMintedAtMillis(item.command.commandId) >
+    Duration.toMillis(SHELL_COMMAND_RESEND_WINDOW);
+
 /** Removes the item with `key`: it was acknowledged, or it can never succeed. */
 export const remove = (
   outbox: ReadonlyArray<OutboxItem>,
@@ -126,15 +154,44 @@ export const loadOutbox: Effect.Effect<
   });
 }).pipe(Effect.orElseSucceed(() => []));
 
-/** Saves the outbox, replacing what was saved. A full or refused storage is reported as false. */
+const outboxChanges = listChanges(outboxKey);
+
+const applyOutboxChanges = applyListChanges(outboxKey);
+
+/**
+ * Saves the items this tab queued or dropped since `base` (the outbox as it last read or wrote it)
+ * into what storage holds now, so another tab's waiting items are kept, and writes back an item of
+ * this tab's that another tab's write dropped without removing it. Answers what storage holds
+ * afterwards, or none when storage was full or refused.
+ */
 export const saveOutbox = (
+  base: ReadonlyArray<OutboxItem>,
   outbox: ReadonlyArray<OutboxItem>
-): Effect.Effect<boolean, never, KeyValueStore.KeyValueStore> =>
-  Effect.gen(function* () {
-    const store = yield* KeyValueStore.KeyValueStore;
-    const json = yield* encodeOutboxJson(outbox);
+): Effect.Effect<
+  Option.Option<ReadonlyArray<OutboxItem>>,
+  never,
+  KeyValueStore.KeyValueStore
+> =>
+  mergeStored(
+    OUTBOX_STORAGE_KEY,
+    loadOutbox,
+    mergeList(outboxKey)(base, outbox),
+    (next) =>
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
 
-    yield* store.set(OUTBOX_STORAGE_KEY, json);
+        yield* store.set(OUTBOX_STORAGE_KEY, yield* encodeOutboxJson(next));
+      })
+  );
 
-    return true;
-  }).pipe(Effect.orElseSucceed(() => false));
+/**
+ * This tab's outbox once storage holds `stored`: what it queued or dropped since `written` (what it
+ * last wrote or read) stays, and every other item is as stored, so another tab's waiting items are
+ * sent from here too (the brain admits each once) and items it settled leave.
+ */
+export const rebaseOutbox = (
+  written: ReadonlyArray<OutboxItem>,
+  mine: ReadonlyArray<OutboxItem>,
+  stored: ReadonlyArray<OutboxItem>
+): ReadonlyArray<OutboxItem> =>
+  applyOutboxChanges(stored, outboxChanges(written, mine));

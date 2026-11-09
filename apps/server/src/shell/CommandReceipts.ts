@@ -2,7 +2,8 @@
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: one receipt per command id holding the sequence
 // it committed at or the rejection it got, so a resent command returns the first answer instead of
 // running twice. Changed: one receipt kind, the rejection stored as its encoded error, and receipts
-// pruned with the events they cover.
+// pruned by age (`COMMAND_RECEIPT_RETENTION`), outliving the events they cover so a client's late
+// resend still finds its first answer.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //

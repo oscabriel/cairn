@@ -29,6 +29,7 @@ import {
 import { Message, OutMessage } from "./Message.ts";
 import { AttachmentStatus, initial } from "./Model.ts";
 import type { Item, Model, SendIntent } from "./Model.ts";
+import { rebaseSaved } from "./Saved.ts";
 import type { SavedAttachments } from "./Saved.ts";
 import { MAX_CONCURRENT_UPLOADS } from "./UploadQueue.ts";
 
@@ -96,6 +97,29 @@ export const readyIds = (
 ): ReadonlyArray<AttachmentId> =>
   Array.getSomes(itemsOf(model, draftKey).map(readyRef)).map(({ id }) => id);
 
+/** True while `draftKey`'s send waits for its uploads. */
+export const waitsFor = (model: Model, draftKey: string): boolean =>
+  Record.has(model.waitingSends, draftKey);
+
+/** `draftKey`'s tray note, if it has one. */
+export const noticeFor = (
+  model: Model,
+  draftKey: string
+): Option.Option<string> => Record.get(model.notices, draftKey);
+
+const setNotice = (
+  model: Model,
+  draftKey: string,
+  text: Option.Option<string>
+): Model =>
+  modifyFields(model, {
+    notices: (notices) =>
+      Option.match(text, {
+        onNone: () => Record.remove(notices, draftKey),
+        onSome: (note) => Record.set(notices, draftKey, note),
+      }),
+  });
+
 /** True when the draft has any attachment, ready or not. */
 export const hasAttachments = (model: Model, draftKey: string): boolean =>
   Array.some(model.items, (item) => item.draftKey === draftKey);
@@ -114,9 +138,14 @@ const savedFrom = (items: ReadonlyArray<Item>): SavedAttachments =>
       })
   );
 
-/** The save of every ready attachment, once the saved ones were read (else they would be lost). */
+/**
+ * The save of what this tab changed in the ready attachments, once the saved ones were read (else
+ * this tab would not know which of them it removed).
+ */
 const saveCommands = (model: Model): ReadonlyArray<TrayCommand> =>
-  model.loaded ? [SaveReady({ drafts: savedFrom(model.items) })] : [];
+  model.loaded
+    ? [SaveReady({ base: model.stored, drafts: savedFrom(model.items) })]
+    : [];
 
 const revokeCommands = (
   items: ReadonlyArray<Item>
@@ -180,39 +209,48 @@ const pump = (model: Model) => {
   return { model: modifyFields(model, { items: () => items }), commands };
 };
 
+const stopWaiting = (model: Model, draftKey: string): Model =>
+  modifyFields(model, {
+    waitingSends: (waiting) => Record.remove(waiting, draftKey),
+  });
+
 /**
- * Settles a waiting send: it fires when the draft has nothing pending and nothing failed, and is
- * dropped with a note when an attachment failed for good.
+ * Settles every draft's waiting send: one fires when its draft has nothing pending and nothing
+ * failed, and one is dropped with a note in its own draft when an attachment failed for good. One
+ * change settles at most one upload, so at most one send fires; another ready one fires on the next.
  */
 const settleWaitingSend = (model: Model): UpdateReturn =>
-  Option.match(model.waitingSend, {
-    onNone: () => ({ model }),
-    onSome: ({ draftKey, intent }) => {
-      const items = itemsOf(model, draftKey);
+  Array.reduce(
+    Record.toEntries(model.waitingSends),
+    { model },
+    (settled: UpdateReturn, [draftKey, intent]): UpdateReturn => {
+      const items = itemsOf(settled.model, draftKey);
 
       if (Array.some(items, isPending)) {
-        return { model };
+        return settled;
       }
 
       if (Array.some(items, isFailed)) {
         return {
-          model: modifyFields(model, {
-            waitingSend: () => Option.none(),
-            notice: () =>
-              Option.some({
-                draftKey,
-                text: "An attachment did not upload, so the message was not sent. Retry or remove it, then send again.",
-              }),
-          }),
+          ...settled,
+          model: setNotice(
+            stopWaiting(settled.model, draftKey),
+            draftKey,
+            Option.some(
+              "An attachment did not upload, so the message was not sent. Retry or remove it, then send again."
+            )
+          ),
         };
       }
 
-      return {
-        model: modifyFields(model, { waitingSend: () => Option.none() }),
-        outMessage: OutMessage.ReadyToSend({ draftKey, intent }),
-      };
-    },
-  });
+      return settled.outMessage === undefined
+        ? {
+            model: stopWaiting(settled.model, draftKey),
+            outMessage: OutMessage.ReadyToSend({ draftKey, intent }),
+          }
+        : settled;
+    }
+  );
 
 /** Pumps the queue and settles a waiting send after a change, keeping `commands` first. */
 const afterChange = (
@@ -299,14 +337,16 @@ const addFiles = (
     }
   }
 
-  const next = modifyFields(model, {
-    items: (items) => [...items, ...added],
-    nextLocalId: (id) => id + admission.admitted.length,
-    notice: () =>
-      admission.refusals.length === 0
-        ? Option.none()
-        : Option.some({ draftKey, text: admission.refusals.join(" ") }),
-  });
+  const next = setNotice(
+    modifyFields(model, {
+      items: (items) => [...items, ...added],
+      nextLocalId: (id) => id + admission.admitted.length,
+    }),
+    draftKey,
+    admission.refusals.length === 0
+      ? Option.none()
+      : Option.some(admission.refusals.join(" "))
+  );
 
   return afterChange(next, commands);
 };
@@ -426,6 +466,37 @@ const restoreSaved = (model: Model, saved: SavedAttachments): Model => {
   });
 };
 
+const isIn = (saved: SavedAttachments, item: Item, ref: AttachmentRef) =>
+  Option.exists(Record.get(saved, item.draftKey), (refs) =>
+    refs.some(({ id }) => id === ref.id)
+  );
+
+/**
+ * The tray once storage holds `stored`: it becomes the base of the next save, and the ready items
+ * follow every attachment this tab did not add or remove since `written`, so one another tab
+ * removed goes and one it added comes in. Items still on their way stay.
+ */
+const syncSaved = (
+  model: Model,
+  written: SavedAttachments,
+  stored: SavedAttachments
+) => {
+  const target = rebaseSaved(written, savedFrom(model.items), stored);
+
+  const isGone = (item: Item): boolean =>
+    Option.exists(readyRef(item), (ref) => !isIn(target, item, ref));
+
+  const dropped = Array.filter(model.items, isGone);
+  const kept = Array.filter(model.items, (item) => !isGone(item));
+
+  const next = modifyFields(
+    restoreSaved(modifyFields(model, { items: () => kept }), target),
+    { stored: () => stored }
+  );
+
+  return { model: next, commands: revokeCommands(dropped) };
+};
+
 /** The tray's update; `context` names the draft that is open now. */
 export const update = (
   model: Model,
@@ -442,9 +513,13 @@ export const update = (
     ClickedRemove: ({ localId }) => removeItem(model, localId),
     ClickedRetry: ({ localId }) =>
       afterChange(replaceItem(model, localId, requeue), []),
-    ClickedDismissNotice: () => ({
-      model: modifyFields(model, { notice: () => Option.none() }),
-    }),
+    ClickedDismissNotice: () =>
+      Option.match(context.draftKey, {
+        onNone: () => ({ model }),
+        onSome: (draftKey) => ({
+          model: setNotice(model, draftKey, Option.none()),
+        }),
+      }),
 
     PreparedImage: ({ file, localId, previewUrl }) =>
       Option.match(findItem(model, localId), {
@@ -537,25 +612,33 @@ export const update = (
     CompletedRevokePreview: () => ({ model }),
 
     LoadedSaved: ({ drafts }) => {
-      const restored = restoreSaved(model, drafts);
+      // Attachments made ready before storage answered stay, and are saved beside the rest.
+      const restored = syncSaved(model, model.stored, drafts);
 
-      return { model: restored, commands: saveCommands(restored) };
+      return {
+        model: restored.model,
+        commands: [...restored.commands, ...saveCommands(restored.model)],
+      };
     },
-    CompletedSave: ({ saved }) =>
-      saved
-        ? { model }
-        : Option.match(context.draftKey, {
+    // Saving merges into what the other tab wrote, and its answer brings those attachments here.
+    ChangedStoredAttachments: () => ({ model, commands: saveCommands(model) }),
+    CompletedSave: ({ stored, written }) =>
+      Option.match(stored, {
+        onSome: (saved) => syncSaved(model, written, saved),
+        onNone: () =>
+          Option.match(context.draftKey, {
             onNone: () => ({ model }),
             onSome: (draftKey) => ({
-              model: modifyFields(model, {
-                notice: () =>
-                  Option.some({
-                    draftKey,
-                    text: "Attachments could not be saved on this device. Send before you reload this page.",
-                  }),
-              }),
+              model: setNotice(
+                model,
+                draftKey,
+                Option.some(
+                  "Attachments could not be saved on this device. Send before you reload this page."
+                )
+              ),
             }),
           }),
+      }),
   });
 
 /**
@@ -568,14 +651,17 @@ export const requestSend = (
   intent: SendIntent
 ): UpdateReturn =>
   afterChange(
-    modifyFields(model, {
-      items: (items) =>
-        items.map((item) =>
-          item.draftKey === draftKey ? requeue(item) : item
-        ),
-      waitingSend: () => Option.some({ draftKey, intent }),
-      notice: () => Option.none(),
-    }),
+    setNotice(
+      modifyFields(model, {
+        items: (items) =>
+          items.map((item) =>
+            item.draftKey === draftKey ? requeue(item) : item
+          ),
+        waitingSends: (waiting) => Record.set(waiting, draftKey, intent),
+      }),
+      draftKey,
+      Option.none()
+    ),
     []
   );
 
@@ -607,13 +693,13 @@ export const restore = (
 
 /** Says in `draftKey`'s tray that its send was let go when the user moved to another draft. */
 export const noteNotSent = (model: Model, draftKey: string): Model =>
-  modifyFields(model, {
-    notice: () =>
-      Option.some({
-        draftKey,
-        text: "Not sent: its attachments finished after you moved away. Press Send again.",
-      }),
-  });
+  setNotice(
+    model,
+    draftKey,
+    Option.some(
+      "Not sent: its attachments finished after you moved away. Press Send again."
+    )
+  );
 
 /** Forgets a draft's attachments after its turn was sent: the brain has claimed them. */
 export const clearSent = (
@@ -622,13 +708,17 @@ export const clearSent = (
 ): Update.Return<Model, Message, Services> => {
   const sent = itemsOf(model, draftKey);
 
-  const next = modifyFields(model, {
-    items: (items) => Array.filter(items, (item) => item.draftKey !== draftKey),
-    waitingSend: (waiting) =>
-      Option.filter(waiting, (send) => send.draftKey !== draftKey),
-    notice: (notice) =>
-      Option.filter(notice, (note) => note.draftKey !== draftKey),
-  });
+  const next = setNotice(
+    stopWaiting(
+      modifyFields(model, {
+        items: (items) =>
+          Array.filter(items, (item) => item.draftKey !== draftKey),
+      }),
+      draftKey
+    ),
+    draftKey,
+    Option.none()
+  );
 
   return {
     model: next,

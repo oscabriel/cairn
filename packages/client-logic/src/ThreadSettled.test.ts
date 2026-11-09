@@ -3,7 +3,8 @@
 // the snooze, early wake, queued start, wake label and preset cases. Changed: rows are Cairn's shell
 // rows, a session error is `activity: "failed"`, an approval or question is `pendingRuntimeRequest`,
 // and dates are built in a named zone (America/Chicago) so the calendar cases do not depend on the
-// machine's zone. Removed: malformed date cases, the 12 or 24 hour setting and subagent requests.
+// machine's zone, and a subagent's request reaches its parent through the row's tally. Removed:
+// malformed date cases and the 12 or 24 hour setting.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -228,6 +229,32 @@ describe(effectiveSnoozed, () => {
 
     assert.isTrue(effectiveSnoozed(thread, NOW));
     assert.isTrue(Option.isNone(threadWokeAt(thread, NOW)));
+  });
+});
+
+describe("a snooze and the server's rule", () => {
+  it("stays snoozed on a launch failure seen before the snooze, however late the row changes", () => {
+    // The launch failed with no run, was snoozed after, then renamed: only `updatedAt` moved.
+    const renamed: ThreadShell = {
+      ...snoozed(FUTURE_WAKE),
+      activity: "failed",
+      lastErrorClass: Option.some("unknown"),
+      updatedAt: time("2026-04-10T11:30:00.000Z"),
+    };
+
+    assert.isTrue(effectiveSnoozed(renamed, NOW));
+    assert.isTrue(Option.isNone(threadWokeAt(renamed, NOW)));
+  });
+
+  it("wakes when a subagent below asks the user, and refuses a snooze while it does", () => {
+    const asking: ThreadShell = {
+      ...snoozed(FUTURE_WAKE),
+      subagents: { working: 0, asking: 1, settled: 0, failed: 0 },
+    };
+
+    assert.isFalse(effectiveSnoozed(asking, NOW));
+    assert.isTrue(threadRaisedHandWhileSnoozed(asking));
+    assert.isFalse(canSnooze({ ...asking, snoozedUntil: Option.none() }, NOW));
   });
 });
 

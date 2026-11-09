@@ -294,7 +294,7 @@ export const addProjectPicker = (
                       variant: "primary",
                       onClick: Option.some(Message.SubmittedAddProject()),
                       isDisabled: isBlank,
-                      isBusy: state.isAdding,
+                      isBusy: Option.isSome(state.adding),
                       attributes: [
                         h.DataAttribute("testid", "add-project-submit"),
                       ],

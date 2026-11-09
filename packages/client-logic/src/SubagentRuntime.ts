@@ -70,7 +70,7 @@ export const SPAWN_TOOL = "subagent_spawn";
 
 /**
  * Where one child stands, as its row shows it. Before any child: `go` while its brief waits for
- * Go, `declined`, `expired` or `cancelled` once the brief ended without one, and `unstarted` once
+ * Go, `declined`, `sent-back`, `expired` or `cancelled` once the brief ended without one, and `unstarted` once
  * Go's start told the parent it started nothing (a model, budget, workspace or brain room refused
  * it). A started child's live
  * states come from its own row (`threadStatus`); at rest, from its latest settlement: `done`,
@@ -79,6 +79,7 @@ export const SPAWN_TOOL = "subagent_spawn";
 export type SubagentState =
   | "go"
   | "declined"
+  | "sent-back"
   | "expired"
   | "cancelled"
   | "unstarted"
@@ -103,6 +104,7 @@ export interface SubagentLabel {
 export const SUBAGENT_LABELS: Readonly<Record<SubagentState, SubagentLabel>> = {
   go: { word: "Waiting for Go", tone: "attention" },
   declined: { word: "Declined", tone: "muted" },
+  "sent-back": { word: "Sent back", tone: "muted" },
   expired: { word: "Expired", tone: "muted" },
   cancelled: { word: "Cancelled", tone: "muted" },
   unstarted: { word: "Not started", tone: "error" },
@@ -120,6 +122,7 @@ export const SUBAGENT_LABELS: Readonly<Record<SubagentState, SubagentLabel>> = {
 
 const TERMINAL: ReadonlySet<SubagentState> = new Set<SubagentState>([
   "declined",
+  "sent-back",
   "expired",
   "cancelled",
   "unstarted",
@@ -235,6 +238,7 @@ const TALLY_OF: Readonly<Record<SubagentState, TallyKey>> = {
   failed: "failed",
   stopped: "stopped",
   declined: "not started",
+  "sent-back": "not started",
   expired: "not started",
   cancelled: "not started",
   unstarted: "not started",
@@ -584,8 +588,9 @@ const byAsking = (a: ApprovalRecord, b: ApprovalRecord): number =>
 /**
  * Each spawn call paired with its brief, oldest first. The newest call takes the newest brief not
  * yet taken whose summary is its description: calls of one step ask in the same instant, so the
- * tool task that asked orders them. A refused call has no brief, and a call whose brief is not in
- * the document yet (or is older than what is loaded) stays unpaired and is left out.
+ * tool task that asked orders them. A call only takes a brief asked at or after its own message. A
+ * refused call has no brief, and a call whose brief is not in the document yet (or is older than
+ * what is loaded) stays unpaired and is left out.
  */
 export const linkSpawnCalls = (
   calls: ReadonlyArray<SpawnCall>,
@@ -607,9 +612,12 @@ export const linkSpawnCalls = (
       continue;
     }
 
+    // A call's brief is asked by its own tool task, after the message that made the call: an
+    // older brief is another call's, never this one's.
     const brief = spawnBriefs.findLast(
       (candidate) =>
         !taken.has(candidate.id) &&
+        candidate.askedAt >= call.createdAt &&
         candidate.summary.trim() === call.description
     );
 
@@ -710,7 +718,7 @@ const BRIEF_STATE: Readonly<Record<ApprovalRecord["status"], SubagentState>> = {
   declined: "declined",
   expired: "expired",
   cancelled: "cancelled",
-  revised: "cancelled",
+  revised: "sent-back",
 };
 
 const SETTLED_STATE: Readonly<Record<SettlementOutcome, SubagentState>> = {

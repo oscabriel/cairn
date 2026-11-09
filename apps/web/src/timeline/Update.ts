@@ -9,7 +9,7 @@
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import type { EntryId } from "@cairn/protocol/Ids";
 import { ThreadId } from "@cairn/protocol/Ids";
-import { Option, Record, Schema } from "effect";
+import { Array, Equivalence, Option, Record, Schema } from "effect";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
@@ -24,7 +24,7 @@ import type * as ListModel from "./list/Model.ts";
 import * as List from "./list/Update.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { Model, ThreadUi } from "./Model.ts";
-import { freshUi, SAVED_THREAD_LIMIT } from "./Model.ts";
+import { freshUi, promptKey, SAVED_THREAD_LIMIT } from "./Model.ts";
 import { itemKeys, transcriptForKeys } from "./Rows.ts";
 import { subagentKeysOf } from "./Subagents.ts";
 
@@ -85,16 +85,31 @@ const loadEarlier = (
   model: Model,
   threadId: string,
   before: EntryId
-): Return =>
-  model.history === "loading"
-    ? { model }
-    : {
-        model: modifyFields(model, { history: () => "loading" as const }),
-        commands: [LoadEarlier({ threadId, before })],
-      };
+): Return => {
+  if (model.history === "loading") {
+    return { model };
+  }
+
+  const request = model.historyRequest + 1;
+
+  return {
+    model: modifyFields(model, {
+      history: () => "loading" as const,
+      historyRequest: () => request,
+    }),
+    commands: [LoadEarlier({ threadId, request, before })],
+  };
+};
 
 const isCurrent = (model: Model, threadId: string): boolean =>
   Option.contains(model.threadId, threadId);
+
+/** True for the answer to the latest page request of the thread shown. */
+const answersLatest = (
+  model: Model,
+  threadId: string,
+  request: number
+): boolean => isCurrent(model, threadId) && request === model.historyRequest;
 
 /** The transcript's update. */
 export const update = (model: Model, message: Message): UpdateReturn =>
@@ -127,26 +142,36 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedScrollToEnd: () => ({ model: modifyList(model, List.scrollToEnd) }),
     ClickedLoadEarlier: ({ before, threadId }) =>
       loadEarlier(model, threadId, before),
-    LoadedEarlier: ({ before, page, threadId }) =>
-      isCurrent(model, threadId)
+    LoadedEarlier: ({ before, page, request, threadId }) =>
+      answersLatest(model, threadId, request)
         ? {
             model: modifyFields(model, { history: () => "idle" as const }),
             outMessage: OutMessage.ReceivedHistory({ before, page }),
           }
         : { model },
-    FailedEarlier: ({ threadId }) =>
-      isCurrent(model, threadId)
+    FailedEarlier: ({ request, threadId }) =>
+      answersLatest(model, threadId, request)
         ? { model: modifyFields(model, { history: () => "failed" as const }) }
         : { model },
-    ClickedRetry: ({ attachments, skillRefs, text, threadId }) =>
+    ClickedRetry: ({ attachments, skillRefs, text, threadId, turnId }) =>
       Option.match(decodeThreadId(threadId), {
         onNone: () => ({ model }),
-        onSome: (id) => ({
-          model,
-          commands: [
-            PrepareRetry({ threadId: id, text, attachments, skillRefs }),
-          ],
-        }),
+        onSome: (id) =>
+          !isCurrent(model, threadId) ||
+          Option.contains(model.ui.retriedTurnId, turnId) ||
+          model.queuedPrompts.includes(promptKey(text, attachments, skillRefs))
+            ? { model }
+            : {
+                model: modifyFields(model, {
+                  ui: (ui) =>
+                    modifyFields(ui, {
+                      retriedTurnId: () => Option.some(turnId),
+                    }),
+                }),
+                commands: [
+                  PrepareRetry({ threadId: id, text, attachments, skillRefs }),
+                ],
+              },
       }),
     PreparedRetry: ({ item }) => ({
       model,
@@ -199,6 +224,18 @@ const saveCurrent = (model: Model): Pick<Model, "saved" | "savedOrder"> => {
   };
 };
 
+/** The transcript told which prompts wait in the outbox for the shown thread. */
+export const informQueued = (
+  model: Model,
+  queuedPrompts: ReadonlyArray<string>
+): Model =>
+  Array.makeEquivalence(Equivalence.strictEqual<string>())(
+    model.queuedPrompts,
+    queuedPrompts
+  )
+    ? model
+    : modifyFields(model, { queuedPrompts: () => queuedPrompts });
+
 /**
  * Shows `threadId`: the current thread's list and open folds are saved, and the new thread's saved
  * ones come back (or a fresh list at its end). A no-op for the thread already shown.
@@ -223,6 +260,8 @@ export const switchThread = (
       saved: () => saved,
       savedOrder: () => savedOrder,
       history: () => "idle" as const,
+      // A page still on its way for the thread left answers a request that is no longer latest.
+      historyRequest: (request) => request + 1,
       copiedRowId: () => Option.none(),
     }),
   };

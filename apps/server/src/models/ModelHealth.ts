@@ -318,6 +318,11 @@ export interface HealthRecord {
   readonly limit: Option.Option<HealthLimit>;
   /** The newest failure, as `sanitizeError` words. */
   readonly error: Option.Option<string>;
+  /**
+   * When a login or logout last reset the provider. Outcomes of requests made before it describe
+   * the old credential and never count, whenever they arrive.
+   */
+  readonly resetAt: Option.Option<number>;
 }
 
 /** A provider nothing has been heard from. */
@@ -328,6 +333,7 @@ export const EMPTY_HEALTH: HealthRecord = {
   transient: [],
   limit: Option.none(),
   error: Option.none(),
+  resetAt: Option.none(),
 };
 
 /** A response or run that reached a provider. */
@@ -418,28 +424,35 @@ const applyFailure = (
         : record.transient,
     limit,
     error: isNewest ? Option.some(errorOf(kind, message)) : record.error,
+    resetAt: record.resetAt,
   };
 };
 
 /**
  * `record` with `outcome` folded in. Order-free: stamps keep their maximum and the transient list
  * keeps the newest `STREAK`, so outcomes applied out of order give the same record. A success clears
- * nothing; `healthState` counts only what is newer than `lastOk`.
+ * nothing; `healthState` counts only what is newer than `lastOk`. An outcome of a request made
+ * before `resetAt` is dropped, so a reset is order-free too.
  */
 export const applyOutcome = (
   record: HealthRecord,
   outcome: HealthOutcome
 ): HealthRecord =>
-  HealthOutcome.$match(outcome, {
-    Succeeded: (success) => ({
-      ...record,
-      lastOk: newest(
-        record.lastOk,
-        Option.some(DateTime.toEpochMillis(success.at))
-      ),
-    }),
-    Failed: (failure) => applyFailure(record, failure.at, failure.message),
-  });
+  Option.exists(
+    record.resetAt,
+    (resetAt) => DateTime.toEpochMillis(outcome.at) < resetAt
+  )
+    ? record
+    : HealthOutcome.$match(outcome, {
+        Succeeded: (success) => ({
+          ...record,
+          lastOk: newest(
+            record.lastOk,
+            Option.some(DateTime.toEpochMillis(success.at))
+          ),
+        }),
+        Failed: (failure) => applyFailure(record, failure.at, failure.message),
+      });
 
 /**
  * The provider's state at `now`: `failing` after an auth failure newer than the last success;
@@ -478,6 +491,16 @@ export const healthState = (record: HealthRecord, now: number): HealthState => {
 
   return Option.isSome(record.lastOk) ? "ok" : "unknown";
 };
+
+/** `record` reset at `at`: nothing heard, and no outcome of a request made before `at` counts. */
+const resetHealth = (record: HealthRecord, at: number): HealthRecord => ({
+  ...EMPTY_HEALTH,
+  resetAt: newest(record.resetAt, Option.some(at)),
+});
+
+/** Whether anything was heard from the provider since its last reset. */
+const heard = (record: HealthRecord) =>
+  Option.isSome(record.lastOk) || Option.isSome(record.lastFail);
 
 /**
  * What one provider response says about its provider, for an `afterResponse` hook: an `error` stop
@@ -544,6 +567,7 @@ const Row = Schema.Struct({
   limited_at: Schema.NullOr(Schema.Int),
   limited_until: Schema.NullOr(Schema.Int),
   error: Schema.NullOr(Schema.String),
+  reset_at: Schema.NullOr(Schema.Int),
 });
 
 const decodeRow = Schema.decodeUnknownEffect(Row);
@@ -563,6 +587,7 @@ const recordOfRow = (row: typeof Row.Type): HealthRecord => ({
   })),
   // Stored words are sanitized again, so a row written by hand cannot carry text through.
   error: Option.map(Option.fromNullOr(row.error), sanitizeError),
+  resetAt: Option.fromNullOr(row.reset_at),
 });
 
 const reportOf = (
@@ -601,11 +626,12 @@ export class ModelHealth extends Context.Service<
     ): Effect.Effect<void, ModelHealthError>;
     /** The provider's health now; `unknown` for a provider never heard from. */
     stateOf(provider: string): Effect.Effect<ProviderHealth>;
-    /** Every provider heard from, by id. */
+    /** Every provider heard from since its last reset, by id. */
     readonly all: Effect.Effect<ReadonlyArray<ProviderHealth>>;
     /**
      * Forgets everything heard from the provider, for a login or logout: a new login mends a broken
-     * one and may lift a limit, so the old record says nothing about it.
+     * one and may lift a limit, so the old record says nothing about it. Outcomes of requests made
+     * before the reset are ignored when they arrive later.
      */
     reset(provider: string): Effect.Effect<void, ModelHealthError>;
   }
@@ -651,6 +677,44 @@ export class ModelHealth extends Context.Service<
 
       const writes = yield* Semaphore.make(1);
 
+      // Writes `next` as the provider's row, then in memory. Callers hold `writes`.
+      const store = Effect.fnUntraced(function* (
+        current: ReadonlyMap<string, HealthRecord>,
+        provider: string,
+        next: HealthRecord,
+        now: number
+      ) {
+        yield* sql`
+          INSERT INTO model_health (
+            provider_id, last_ok, last_fail, last_auth, transient_json,
+            limited_at, limited_until, error, reset_at, updated_at
+          ) VALUES (
+            ${provider},
+            ${Option.getOrNull(next.lastOk)},
+            ${Option.getOrNull(next.lastFail)},
+            ${Option.getOrNull(next.lastAuth)},
+            ${encodeTransient(next.transient)},
+            ${Option.getOrNull(Option.map(next.limit, (limit) => limit.at))},
+            ${Option.getOrNull(Option.flatMap(next.limit, (limit) => limit.until))},
+            ${Option.getOrNull(next.error)},
+            ${Option.getOrNull(next.resetAt)},
+            ${now}
+          )
+          ON CONFLICT (provider_id) DO UPDATE SET
+            last_ok = excluded.last_ok,
+            last_fail = excluded.last_fail,
+            last_auth = excluded.last_auth,
+            transient_json = excluded.transient_json,
+            limited_at = excluded.limited_at,
+            limited_until = excluded.limited_until,
+            error = excluded.error,
+            reset_at = excluded.reset_at,
+            updated_at = excluded.updated_at
+        `;
+
+        yield* Ref.set(records, new Map(current).set(provider, next));
+      });
+
       const record = Effect.fn("ModelHealth.record")(
         function* (provider: string, outcome: HealthOutcome) {
           yield* writes.withPermits(1)(
@@ -662,35 +726,12 @@ export class ModelHealth extends Context.Service<
                 outcome
               );
 
-              const now = yield* Clock.currentTimeMillis;
-
-              yield* sql`
-                INSERT INTO model_health (
-                  provider_id, last_ok, last_fail, last_auth, transient_json,
-                  limited_at, limited_until, error, updated_at
-                ) VALUES (
-                  ${provider},
-                  ${Option.getOrNull(next.lastOk)},
-                  ${Option.getOrNull(next.lastFail)},
-                  ${Option.getOrNull(next.lastAuth)},
-                  ${encodeTransient(next.transient)},
-                  ${Option.getOrNull(Option.map(next.limit, (limit) => limit.at))},
-                  ${Option.getOrNull(Option.flatMap(next.limit, (limit) => limit.until))},
-                  ${Option.getOrNull(next.error)},
-                  ${now}
-                )
-                ON CONFLICT (provider_id) DO UPDATE SET
-                  last_ok = excluded.last_ok,
-                  last_fail = excluded.last_fail,
-                  last_auth = excluded.last_auth,
-                  transient_json = excluded.transient_json,
-                  limited_at = excluded.limited_at,
-                  limited_until = excluded.limited_until,
-                  error = excluded.error,
-                  updated_at = excluded.updated_at
-              `;
-
-              yield* Ref.set(records, new Map(current).set(provider, next));
+              yield* store(
+                current,
+                provider,
+                next,
+                yield* Clock.currentTimeMillis
+              );
             })
           );
         },
@@ -723,6 +764,7 @@ export class ModelHealth extends Context.Service<
         const current = yield* Ref.get(records);
 
         return [...current.entries()]
+          .filter(([, health]) => heard(health))
           .toSorted(([a], [b]) => a.localeCompare(b))
           .map(([provider, health]) => reportOf(provider, health, now));
       }).pipe(Effect.withSpan("ModelHealth.all"));
@@ -731,14 +773,15 @@ export class ModelHealth extends Context.Service<
         function* (provider: string) {
           yield* writes.withPermits(1)(
             Effect.gen(function* () {
-              yield* sql`DELETE FROM model_health WHERE provider_id = ${provider}`;
+              const current = yield* Ref.get(records);
+              const now = yield* Clock.currentTimeMillis;
 
-              yield* Ref.update(records, (current) => {
-                const next = new Map(current);
-                next.delete(provider);
-
-                return next;
-              });
+              yield* store(
+                current,
+                provider,
+                resetHealth(current.get(provider) ?? EMPTY_HEALTH, now),
+                now
+              );
             })
           );
         },

@@ -34,6 +34,7 @@ import {
   CODEX_PROVIDER,
 } from "../../apps/server/src/models/CredentialStore.ts";
 import { redirectFetch } from "../../apps/server/src/models/FakeCodexAuth.ts";
+import { ModelHealth } from "../../apps/server/src/models/ModelHealth.ts";
 import { OAuthStore } from "../../apps/server/src/models/OAuthStore.ts";
 
 const { positionals, values } = parseArgs({
@@ -67,6 +68,7 @@ globalThis.fetch = redirectFetch(fake, globalThis.fetch);
 
 const BrainLayer = CodexLogin.layer.pipe(
   Layer.provideMerge(OAuthStore.layerWith(lock)),
+  Layer.provideMerge(ModelHealth.layerNoDeps),
   Layer.provideMerge(
     Database.layer({
       filename: db,

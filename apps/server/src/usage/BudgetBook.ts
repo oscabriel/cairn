@@ -107,6 +107,8 @@ interface BookState {
   readonly standings: ReadonlyMap<ThreadId, ScopeStanding>;
   /** The epoch at which the guard last acted on each scope at its line. */
   readonly acted: ReadonlyMap<ThreadId, number>;
+  /** The epoch at which the guard last acted on each scope past its warning line. */
+  readonly warned: ReadonlyMap<ThreadId, number>;
   readonly parents: Parents;
 }
 
@@ -114,6 +116,7 @@ const EMPTY: BookState = {
   limits: new Map(),
   standings: new Map(),
   acted: new Map(),
+  warned: new Map(),
   parents: new Map(),
 };
 
@@ -123,7 +126,7 @@ export class BudgetBook extends Context.Service<
   {
     /** Sets (or raises) a scope; its standing is kept until the next evaluation. */
     set(limit: ScopeLimit): Effect.Effect<void>;
-    /** Forgets a scope, with its standing and the epoch the guard acted on. */
+    /** Forgets a scope, with its standing and the epochs the guard acted on. */
     remove(threadId: ThreadId): Effect.Effect<void>;
     /**
      * Records that the guard acted on a scope at its line at `epoch` (stopped it, wrote its notice,
@@ -133,6 +136,13 @@ export class BudgetBook extends Context.Service<
     markActed(threadId: ThreadId, epoch: number): Effect.Effect<void>;
     /** The epoch the guard last acted on `threadId`'s scope at its line, if it has. */
     actedOf(threadId: ThreadId): Effect.Effect<Option.Option<number>>;
+    /**
+     * Records that the guard acted on a scope past its warning line at `epoch` (wrote its warning).
+     * Until it has, an evaluation that finds the scope there reports it again.
+     */
+    markWarned(threadId: ThreadId, epoch: number): Effect.Effect<void>;
+    /** The epoch the guard last acted on `threadId`'s scope past its warning line, if it has. */
+    warnedOf(threadId: ThreadId): Effect.Effect<Option.Option<number>>;
     /** Every scope. */
     readonly limits: Effect.Effect<ReadonlyArray<ScopeLimit>>;
     /** The scope `threadId` heads, if any. */
@@ -174,12 +184,14 @@ export class BudgetBook extends Context.Service<
           const limits = new Map(current.limits);
           const standings = new Map(current.standings);
           const acted = new Map(current.acted);
+          const warned = new Map(current.warned);
 
           limits.delete(threadId);
           standings.delete(threadId);
           acted.delete(threadId);
+          warned.delete(threadId);
 
-          return { ...current, limits, standings, acted };
+          return { ...current, limits, standings, acted, warned };
         });
       });
 
@@ -221,6 +233,15 @@ export class BudgetBook extends Context.Service<
         actedOf: (threadId) =>
           Effect.map(Ref.get(state), (current) =>
             Option.fromUndefinedOr(current.acted.get(threadId))
+          ),
+        markWarned: (threadId, epoch) =>
+          Ref.update(state, (current) => ({
+            ...current,
+            warned: new Map(current.warned).set(threadId, epoch),
+          })),
+        warnedOf: (threadId) =>
+          Effect.map(Ref.get(state), (current) =>
+            Option.fromUndefinedOr(current.warned.get(threadId))
           ),
         limits: Effect.map(Ref.get(state), (current) => [
           ...current.limits.values(),

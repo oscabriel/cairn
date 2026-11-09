@@ -1,4 +1,5 @@
 import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
+import { ApprovalId } from "@cairn/protocol/Ids";
 import {
   ProjectCreate,
   ProjectDelete,
@@ -12,12 +13,17 @@ import {
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
 import { assert, describe, it } from "@effect/vitest";
-import { DateTime, Duration, Effect, Option } from "effect";
+import { Clock, DateTime, Duration, Effect, Option } from "effect";
 import type { Scope, Layer } from "effect";
 import { TestClock } from "effect/testing";
 
 import { EventSink } from "./EventSink.ts";
-import { EventStore, SHELL_EVENT_RETENTION } from "./EventStore.ts";
+import {
+  COMMAND_RECEIPT_RETENTION,
+  EventStore,
+  SHELL_EVENT_RETENTION,
+} from "./EventStore.ts";
+import { isSnoozed } from "./Settlement.ts";
 import {
   emptyActivityPatch,
   ThreadActivityUpdate,
@@ -423,6 +429,150 @@ const tally = (working: number, asking: number) =>
     },
   });
 
+/** Snoozes thread 1 for an hour. */
+const snooze = () =>
+  commit(
+    ThreadSnooze.make({
+      commandId: nextCommandId(),
+      threadId,
+      until: DateTime.makeUnsafe(3_600_000),
+    })
+  );
+
+/** Commits an activity patch to thread 1. */
+const update = (patch: Partial<typeof emptyActivityPatch>) =>
+  commit(
+    ThreadActivityUpdate.make({
+      commandId: nextCommandId(),
+      threadId,
+      patch: { ...emptyActivityPatch, ...patch },
+    })
+  );
+
+/** Thread 1's stored row, with its server-only wake time. */
+const wokeRow = Effect.gen(function* () {
+  const row = yield* (yield* ThreadRows).get(threadId);
+
+  assert.isTrue(Option.isSome(row));
+
+  return Option.getOrThrow(row);
+});
+
+describe("a snooze that ends early", () => {
+  it.effect("stays ended once the request that woke it is answered", () =>
+    run(
+      Effect.gen(function* () {
+        yield* seed;
+        yield* snooze();
+        yield* TestClock.adjust(Duration.seconds(10));
+
+        yield* update({
+          activity: Option.some("waiting"),
+          pendingRuntimeRequest: Option.some(
+            Option.some({
+              id: ApprovalId.make("apr_wake"),
+              kind: "tool-call",
+              createdAt: DateTime.makeUnsafe(10_000),
+              origin: Option.none(),
+            })
+          ),
+        });
+        yield* TestClock.adjust(Duration.seconds(10));
+        yield* update({
+          activity: Option.some("running"),
+          pendingRuntimeRequest: Option.some(Option.none()),
+        });
+
+        const row = yield* wokeRow;
+
+        assert.isFalse(isSnoozed(row.shell, 20_000));
+        assert.isTrue(Option.isNone(row.shell.snoozedUntil));
+        assert.deepStrictEqual(
+          row.lastSnoozeWakeAt,
+          Option.some(DateTime.makeUnsafe(10_000))
+        );
+      })
+    )
+  );
+
+  it.effect("ends on a launch failure, which has no run to complete", () =>
+    run(
+      Effect.gen(function* () {
+        yield* seed;
+        yield* snooze();
+        yield* TestClock.adjust(Duration.seconds(10));
+
+        yield* update({
+          activity: Option.some("failed"),
+          lastError: Option.some(Option.some("the launch failed")),
+          lastErrorClass: Option.some(Option.some("unknown")),
+        });
+
+        const row = yield* wokeRow;
+
+        assert.isTrue(Option.isNone(row.shell.snoozedUntil));
+        assert.deepStrictEqual(
+          row.lastSnoozeWakeAt,
+          Option.some(DateTime.makeUnsafe(10_000))
+        );
+      })
+    )
+  );
+
+  it.effect(
+    "ends when a subagent asks, and a thread whose subagent asks cannot be snoozed",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+          yield* snooze();
+          yield* TestClock.adjust(Duration.seconds(10));
+
+          yield* update({
+            subagents: Option.some({
+              working: 0,
+              asking: 1,
+              settled: 0,
+              failed: 0,
+            }),
+          });
+
+          assert.isTrue(Option.isNone((yield* wokeRow).shell.snoozedUntil));
+          assert.strictEqual(
+            yield* refusal(
+              ThreadSnooze.make({
+                commandId: nextCommandId(),
+                threadId,
+                until: DateTime.makeUnsafe(3_600_000),
+              })
+            ),
+            "ShellCommandConflict"
+          );
+        })
+      )
+  );
+
+  it.effect("refuses to snooze a thread that is still being launched", () =>
+    run(
+      Effect.gen(function* () {
+        yield* seed;
+        yield* update({ activity: Option.some("preparing") });
+
+        assert.strictEqual(
+          yield* refusal(
+            ThreadSnooze.make({
+              commandId: nextCommandId(),
+              threadId,
+              until: DateTime.makeUnsafe(3_600_000),
+            })
+          ),
+          "ShellCommandConflict"
+        );
+      })
+    )
+  );
+});
+
 describe("subagents on the shelf", () => {
   /** Thread 2, a subagent of thread 1. */
   const seedChild = Effect.gen(function* () {
@@ -625,7 +775,7 @@ describe("subagents on the shelf", () => {
 
 describe("the event log", () => {
   it.effect(
-    "keeps the newest 5,000 events and the receipts they cover",
+    "keeps the newest 5,000 events",
     () =>
       run(
         Effect.gen(function* () {
@@ -650,6 +800,120 @@ describe("the event log", () => {
             floor,
             Option.some(latest - SHELL_EVENT_RETENTION + 1)
           );
+        })
+      ),
+    { timeout: 60_000 }
+  );
+
+  it.effect(
+    "answers a command resent after 5,000 newer events with its first answer",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+
+          const settle = ThreadSettle.make({
+            commandId: nextCommandId(),
+            threadId,
+          });
+
+          const first = yield* commit(settle);
+
+          yield* commit(
+            ThreadUnsettle.make({ commandId: nextCommandId(), threadId })
+          );
+
+          for (let n = 1; n <= SHELL_EVENT_RETENTION + 1; n += 1) {
+            yield* commit(
+              ThreadVisit.make({
+                commandId: nextCommandId(),
+                threadId,
+                at: DateTime.makeUnsafe(n),
+              })
+            );
+          }
+
+          const resent = yield* commit(settle);
+
+          assert.strictEqual(resent.sequence, first.sequence);
+          assert.isTrue(Option.isNone((yield* thread(1)).settledAt));
+        })
+      ),
+    { timeout: 60_000 }
+  );
+
+  it.effect("forgets a receipt once it is older than the retention", () =>
+    run(
+      Effect.gen(function* () {
+        yield* seed;
+
+        const settle = ThreadSettle.make({
+          commandId: nextCommandId(),
+          threadId,
+        });
+
+        const first = yield* commit(settle);
+
+        yield* TestClock.adjust(COMMAND_RECEIPT_RETENTION);
+        yield* commit(
+          ThreadUnsettle.make({ commandId: nextCommandId(), threadId })
+        );
+        assert.strictEqual((yield* commit(settle)).sequence, first.sequence);
+
+        yield* TestClock.adjust(Duration.millis(1));
+        yield* commit(
+          ThreadUnsettle.make({ commandId: nextCommandId(), threadId })
+        );
+
+        assert.isAbove((yield* commit(settle)).sequence, first.sequence);
+      })
+    )
+  );
+
+  it.effect(
+    "forgets an old receipt behind receipts stamped by a clock that ran ahead",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seed;
+
+          const start = yield* Clock.currentTimeMillis;
+
+          // The clock runs a year ahead for more commits than one prune looks at, then is set right.
+          yield* TestClock.setTime(
+            start + Duration.toMillis(Duration.days(365))
+          );
+
+          for (let n = 1; n <= 150; n += 1) {
+            yield* commit(
+              ThreadVisit.make({
+                commandId: nextCommandId(),
+                threadId,
+                at: DateTime.makeUnsafe(n),
+              })
+            );
+          }
+
+          yield* TestClock.setTime(start);
+
+          const settle = ThreadSettle.make({
+            commandId: nextCommandId(),
+            threadId,
+          });
+
+          const first = yield* commit(settle);
+
+          yield* TestClock.adjust(
+            Duration.sum(COMMAND_RECEIPT_RETENTION, Duration.millis(1))
+          );
+          yield* commit(
+            ThreadUnsettle.make({ commandId: nextCommandId(), threadId })
+          );
+          yield* commit(
+            ThreadUnsettle.make({ commandId: nextCommandId(), threadId })
+          );
+
+          assert.isAbove((yield* commit(settle)).sequence, first.sequence);
         })
       ),
     { timeout: 60_000 }

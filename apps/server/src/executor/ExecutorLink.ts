@@ -18,8 +18,15 @@
 //   grant, a grant that cannot be read, or another process holds it). A grant layer that fails
 //   (a bad grant file, no `flock`, an unwritable state directory) leaves the link `disabled` with
 //   the error as its detail: Executor is a service the brain can lose, never a reason not to boot.
+//   A call whose connection breaks on the current session moves the status to `unreachable`; a
+//   request timeout or an HTTP error Executor answered itself leaves it.
 // - Sign-in. `signIn` starts an OAuth authorization from Cairn's own callback
-//   (`/oauth/executor/callback`) when the grant no longer works, and `callback` finishes it.
+//   (`/oauth/executor/callback`) when the grant no longer works, and `callback` finishes it. Both
+//   run their OAuth flow holding the lock sessions open under, and a 401 elsewhere during one asks
+//   for sign-in rather than starting a flow, so the consent page's client, verifier and state stay
+//   the stored ones. Each flow gives up after `signInTimeout` (aborting its requests), so a stalled
+//   Executor never holds that lock for longer. A second `signIn` while one runs gets the same
+//   consent page.
 //
 // Only `main.ts` composes `ExecutorLink.layer`; dev and judge brains compose `layerFake`, a fake
 // Executor on a loopback port with a grant in memory, and tests that need no Executor compose
@@ -35,7 +42,9 @@ import {
   McpAuthRequiredError,
   McpClient,
   McpError,
+  McpHttpError,
   McpSessionExpiredError,
+  McpTimeoutError,
   StreamableHttpTransport,
 } from "@earendil-works/pi-mcp";
 import type {
@@ -85,6 +94,13 @@ const REQUEST_TIMEOUT_MS = 6 * 60_000;
  */
 export const CONNECT_TIMEOUT = Duration.seconds(20);
 
+/**
+ * How long a sign-in's OAuth flow (the consent page's, or the callback's code exchange) may take.
+ * It holds the lock every session open waits on, and pi-mcp's flow requests have no limit of
+ * their own.
+ */
+export const SIGN_IN_TIMEOUT = Duration.seconds(30);
+
 /** A ping's own limit. */
 const PING_TIMEOUT_MS = 5000;
 
@@ -102,10 +118,13 @@ export const ExecutorLinkOptions = Context.Reference<{
   readonly pingInterval: Duration.Duration;
   /** How long opening a session may take. */
   readonly connectTimeout: Duration.Duration;
+  /** How long a sign-in's OAuth flow may hold the session lock. */
+  readonly signInTimeout: Duration.Duration;
 }>("cairn/server/executor/ExecutorLink/ExecutorLinkOptions", {
   defaultValue: () => ({
     pingInterval: Duration.seconds(15),
     connectTimeout: CONNECT_TIMEOUT,
+    signInTimeout: SIGN_IN_TIMEOUT,
   }),
 });
 
@@ -209,6 +228,16 @@ const grantRefused = (cause: unknown) =>
   cause instanceof McpOAuthAuthorizationRequiredError ||
   cause instanceof McpAuthRequiredError;
 
+/**
+ * Whether `cause` says Executor itself could not be reached: the connection failed or closed, or
+ * a proxy in front of it answered that it is down. A request timeout or an HTTP error Executor
+ * answered itself (a 500) comes from an Executor that is up.
+ */
+const connectionLost = (cause: unknown) =>
+  cause instanceof McpHttpError
+    ? cause.status === 502 || cause.status === 503 || cause.status === 504
+    : !(cause instanceof McpTimeoutError);
+
 /** A call refused before anything was sent: there is no usable grant. */
 const disabledCall = (detail: string) =>
   Effect.fail(
@@ -227,6 +256,26 @@ const signInFailure =
       reason,
       cause,
     });
+
+/**
+ * Bounds a sign-in's OAuth flow, which holds the session lock: past `limit` it is interrupted,
+ * which aborts its requests through the signal `tryPromise` hands it.
+ */
+const withinSignInBudget =
+  (limit: Duration.Duration) =>
+  <A, R>(flow: Effect.Effect<A, ExecutorSignInError, R>) =>
+    flow.pipe(
+      Effect.timeoutOrElse({
+        duration: limit,
+        orElse: () =>
+          Effect.fail(
+            new ExecutorSignInError({
+              message: `Executor sign-in failed: Executor did not answer the OAuth flow within ${Duration.format(limit)}. Check that Executor is up, then start it again from Cairn's settings.`,
+              reason: "failed",
+            })
+          ),
+      })
+    );
 
 /** Closes a client, ignoring a failure: the session is being dropped either way. */
 const closeQuietly = (client: McpClient) =>
@@ -321,7 +370,7 @@ export class ExecutorLink extends Context.Service<
       const grant = yield* ExecutorGrant;
       const config = yield* ServerConfig;
       const options = yield* ExecutorLinkOptions;
-      const { connectTimeout } = options;
+      const { connectTimeout, signInTimeout } = options;
       const run = yield* FiberSet.makeRuntimePromise();
       const layerScope = yield* Effect.scope;
       const redirectUrl = `${config.origin}${CALLBACK_PATH}`;
@@ -441,8 +490,21 @@ export class ExecutorLink extends Context.Service<
         onRedirect: ignoreRedirect,
       });
 
-      // One adapter for every session: concurrent 401s share one refresh.
-      const authProvider = adaptOAuthProvider(provider);
+      // One adapter for every session: concurrent 401s share one refresh. While a sign-in runs
+      // its flow, a 401 elsewhere asks for sign-in instead of starting a flow of its own, which
+      // could register another client or save another verifier under the consent page's feet.
+      const adapter = adaptOAuthProvider(provider);
+
+      const authProvider: typeof adapter = {
+        token: async () => await adapter.token(),
+        onUnauthorized: async (context) => {
+          if (provider.signingIn) {
+            throw new McpOAuthAuthorizationRequiredError();
+          }
+
+          await adapter.onUnauthorized?.(context);
+        },
+      };
 
       const current = yield* Ref.make(Option.none<Session>());
       const opening = yield* Semaphore.make(1);
@@ -451,13 +513,17 @@ export class ExecutorLink extends Context.Service<
       const closeClient = (client: McpClient) =>
         closeQuietly(client).pipe(Effect.forkIn(layerScope), Effect.asVoid);
 
-      /** Stops handing `session` to new calls, if it is still current. */
+      /** Stops handing `session` to new calls, if it is still current; true when it was. */
       const forget = Effect.fnUntraced(function* (session: Session) {
         const now = yield* Ref.get(current);
 
         if (Option.isSome(now) && now.value === session) {
           yield* Ref.set(current, Option.none());
+
+          return true;
         }
+
+        return false;
       });
 
       /**
@@ -473,14 +539,18 @@ export class ExecutorLink extends Context.Service<
       /**
        * One request on `session` failed: new calls get a new session, and the client is closed
        * once its siblings had their request timeout to finish. Their own replies classify them,
-       * so a refused sibling is resent rather than reported as possibly run.
+       * so a refused sibling is resent rather than reported as possibly run. True when `session`
+       * was current.
        */
       const retire = Effect.fnUntraced(function* (session: Session) {
-        yield* forget(session);
+        const wasCurrent = yield* forget(session);
+
         yield* closeQuietly(session.client).pipe(
           Effect.delay(Duration.millis(REQUEST_TIMEOUT_MS)),
           Effect.forkIn(layerScope)
         );
+
+        return wasCurrent;
       });
 
       const open = opening.withPermits(1)(
@@ -649,7 +719,14 @@ export class ExecutorLink extends Context.Service<
         }
 
         // The transport broke after the request left: drop the session, the next call opens one.
-        yield* retire(session);
+        // When the connection itself was lost, Executor stopped answering, so the status leaves
+        // connected until an open reaches it again.
+        if ((yield* retire(session)) && connectionLost(cause)) {
+          yield* setStatus(
+            "unreachable",
+            Option.some(`Executor stopped answering: ${errorText(cause)}`)
+          );
+        }
 
         return new ExecutorCallError({
           message: `Executor ${tool} failed after it was sent: ${errorText(cause)}.`,
@@ -767,26 +844,8 @@ export class ExecutorLink extends Context.Service<
         }
       });
 
-      const signIn = Effect.gen(function* () {
-        // The grant still works: nothing to sign in to, and closing a live session would cut
-        // calls in flight.
-        const working = yield* open.pipe(Effect.result);
-
-        if (Result.isSuccess(working)) {
-          return yield* new ExecutorSignInError({
-            message:
-              "Executor is already connected with a working grant, so no sign-in is needed.",
-            reason: "already_connected",
-          });
-        }
-
-        if (working.failure.reason !== "sign_in_required") {
-          return yield* new ExecutorSignInError({
-            message: `Executor sign-in could not start: ${working.failure.message}`,
-            reason: "failed",
-          });
-        }
-
+      // The consent page of a new sign-in; the caller holds `opening`.
+      const consentPage = Effect.gen(function* () {
         yield* reset;
 
         const registeredFor = yield* grant.clientRedirect.pipe(
@@ -797,7 +856,7 @@ export class ExecutorLink extends Context.Service<
           Option.isNone(registeredFor) || registeredFor.value !== redirectUrl;
 
         const authorizeUrl = yield* Effect.tryPromise({
-          try: async () => {
+          try: async (signal) => {
             // A fresh `state` and verifier for each sign-in; a client registered for another
             // redirect (`grant.ts`'s local one) is replaced.
             await provider.invalidateCredentials("verifier");
@@ -823,6 +882,7 @@ export class ExecutorLink extends Context.Service<
                 serverUrl,
                 resourceMetadataUrl,
                 skipRefresh: true,
+                signal,
               });
 
               return result === "REDIRECT" ? provider.redirect : Option.none();
@@ -831,7 +891,7 @@ export class ExecutorLink extends Context.Service<
             }
           },
           catch: signInFailure("failed"),
-        });
+        }).pipe(withinSignInBudget(signInTimeout));
 
         if (Option.isNone(authorizeUrl)) {
           return yield* new ExecutorSignInError({
@@ -873,7 +933,76 @@ export class ExecutorLink extends Context.Service<
         );
 
         return authorizeUrl.value.href;
-      }).pipe(Effect.withSpan("ExecutorLink.signIn"));
+      });
+
+      const startSignIn = Effect.gen(function* () {
+        // The grant still works: nothing to sign in to, and closing a live session would cut
+        // calls in flight.
+        const working = yield* open.pipe(Effect.result);
+
+        if (Result.isSuccess(working)) {
+          return yield* new ExecutorSignInError({
+            message:
+              "Executor is already connected with a working grant, so no sign-in is needed.",
+            reason: "already_connected",
+          });
+        }
+
+        if (working.failure.reason !== "sign_in_required") {
+          return yield* new ExecutorSignInError({
+            message: `Executor sign-in could not start: ${working.failure.message}`,
+            reason: "failed",
+          });
+        }
+
+        // The rest holds `opening`, so no session opens (and no 401 runs a flow of its own) between
+        // invalidating the client and verifier and recording the consent page's state.
+        return yield* opening.withPermits(1)(consentPage);
+      });
+
+      // The sign-in in flight: a second one joins it and gets its consent page, rather than
+      // replacing the state and verifier the first page was built from.
+      const signingIn = yield* Ref.make(
+        Option.none<Deferred.Deferred<string, ExecutorSignInError>>()
+      );
+
+      const signIn = Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const fresh = yield* Deferred.make<string, ExecutorSignInError>();
+
+          const [flight, mine] = yield* Ref.modify(
+            signingIn,
+            (
+              running
+            ): readonly [
+              readonly [
+                Deferred.Deferred<string, ExecutorSignInError>,
+                boolean,
+              ],
+              Option.Option<Deferred.Deferred<string, ExecutorSignInError>>,
+            ] =>
+              Option.isSome(running)
+                ? [[running.value, false], running]
+                : [[fresh, true], Option.some(fresh)]
+          );
+
+          if (mine) {
+            // In the layer's scope, so a caller that stops waiting never cancels a sign-in others
+            // joined. The flight ends before its answer is out, so a sign-in started after the
+            // answer is a new one.
+            yield* Effect.forkIn(
+              Effect.onExit(startSignIn, (exit) =>
+                Ref.set(signingIn, Option.none()).pipe(
+                  Effect.andThen(Deferred.done(fresh, exit))
+                )
+              ),
+              layerScope
+            );
+          }
+
+          return yield* restore(Deferred.await(flight));
+        })
+      ).pipe(Effect.withSpan("ExecutorLink.signIn"));
 
       const callback = Effect.fn("ExecutorLink.callback")(function* (
         query: CallbackQuery
@@ -906,8 +1035,9 @@ export class ExecutorLink extends Context.Service<
         const code = query.code.value;
         const iss = Option.getOrUndefined(query.iss);
 
+        // Under `opening`, as a sign-in's start is: no other flow runs while the code is exchanged.
         yield* Effect.tryPromise({
-          try: async () => {
+          try: async (signal) => {
             provider.signingIn = true;
 
             try {
@@ -915,6 +1045,7 @@ export class ExecutorLink extends Context.Service<
                 serverUrl,
                 resourceMetadataUrl,
                 authorizationCode: code,
+                signal,
               };
 
               if (iss !== undefined) {
@@ -928,6 +1059,8 @@ export class ExecutorLink extends Context.Service<
           },
           catch: signInFailure("failed"),
         }).pipe(
+          withinSignInBudget(signInTimeout),
+          opening.withPermits(1),
           Effect.tapError((error) =>
             setStatus("needs-sign-in", Option.some(error.message))
           )

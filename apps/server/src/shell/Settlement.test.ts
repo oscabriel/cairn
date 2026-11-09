@@ -1,4 +1,5 @@
 import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
+import { effectiveSnoozed } from "@cairn/client-logic/ThreadSettled";
 import { ApprovalId } from "@cairn/protocol/Ids";
 import { BARE_ROW_FIELDS } from "@cairn/protocol/Shell";
 import type { ThreadShell } from "@cairn/protocol/Shell";
@@ -234,6 +235,48 @@ describe(isSnoozed, () => {
         NOW
       )
     );
+  });
+});
+
+describe("the snooze rule the client reads", () => {
+  const snoozed = {
+    snoozedUntil: Option.some(at(NOW + DAY)),
+    snoozedAt: Option.some(at(NOW - DAY)),
+  };
+
+  it.each([
+    { name: "a quiet snoozed thread", shell: snoozed, expected: true },
+    {
+      name: "a launch failure before the snooze, renamed after it",
+      shell: {
+        ...snoozed,
+        activity: "failed" as const,
+        updatedAt: at(NOW - 1000),
+      },
+      expected: true,
+    },
+    {
+      name: "a run that failed after the snooze",
+      shell: {
+        ...snoozed,
+        activity: "failed" as const,
+        latestRunCompletedAt: Option.some(at(NOW - 1000)),
+      },
+      expected: false,
+    },
+    {
+      name: "a subagent asking the user",
+      shell: {
+        ...snoozed,
+        subagents: { working: 0, asking: 1, settled: 0, failed: 0 },
+      },
+      expected: false,
+    },
+  ])("agrees with the client on $name", ({ shell, expected }) => {
+    const thread = row(shell).shell;
+
+    assert.strictEqual(isSnoozed(thread, NOW), expected);
+    assert.strictEqual(effectiveSnoozed(thread, at(NOW)), expected);
   });
 });
 

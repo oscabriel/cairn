@@ -2,7 +2,7 @@
 // save. Each reads what it needs from the resources the runtime provides (the connection, the
 // browser's key-value store) and answers with one Message.
 
-import { Duration, Effect, Random, Schema } from "effect";
+import { Clock, Duration, Effect, Random, Schema } from "effect";
 import type { KeyValueStore } from "effect/persistence";
 import { Command } from "foldkit";
 import { load, pushUrl } from "foldkit/navigation";
@@ -17,7 +17,12 @@ import {
   isRetryable,
   isTransport,
 } from "./connection/Failure.ts";
-import { OutboxItem, outboxKey, saveOutbox } from "./connection/Outbox.ts";
+import {
+  OutboxItem,
+  outboxKey,
+  outlivedResendWindow,
+  saveOutbox,
+} from "./connection/Outbox.ts";
 import { backoffDelayMs } from "./connection/Reconnect.ts";
 import { reloadIfStale } from "./load/StaleBuild.ts";
 import { Message } from "./Message.ts";
@@ -130,18 +135,40 @@ const sendItem = (client: CairnClient, item: OutboxItem) =>
     Launch: ({ input }) => Effect.asVoid(client["thread.launch"](input)),
   });
 
-/** Sends one outbox item over the current epoch's client. */
+/** A shell command that outlived its resend window; it is dropped unsent. */
+class StaleOutboxItem extends Schema.TaggedError<StaleOutboxItem>()(
+  "StaleOutboxItem",
+  {
+    message: Schema.String,
+    retryable: Schema.Boolean,
+  }
+) {}
+
+/**
+ * Sends one outbox item over the current epoch's client; a shell command past its resend window
+ * fails unsent and not retryable, so the outbox drops it.
+ */
 export const SendOutboxItem = Command.define("SendOutboxItem", {
   args: { epoch: Schema.Int, item: OutboxItem },
   messages: [Message.AcknowledgedOutboxItem, Message.FailedOutboxItem],
   execute: ({ epoch, item }) =>
-    withBoundary(
-      Effect.gen(function* () {
-        const client = yield* CairnConnection.get;
+    Effect.gen(function* () {
+      if (outlivedResendWindow(item, yield* Clock.currentTimeMillis)) {
+        return yield* new StaleOutboxItem({
+          message:
+            "A change made over a week ago was never confirmed, so it was not sent again. Check the thread and redo it if it is still wanted.",
+          retryable: false,
+        });
+      }
 
-        yield* sendItem(client, item);
-      })
-    ).pipe(
+      return yield* withBoundary(
+        Effect.gen(function* () {
+          const client = yield* CairnConnection.get;
+
+          yield* sendItem(client, item);
+        })
+      );
+    }).pipe(
       answeredInTime,
       Effect.match({
         onSuccess: () =>
@@ -158,12 +185,12 @@ export const SendOutboxItem = Command.define("SendOutboxItem", {
     ),
 });
 
-/** Saves the outbox to localStorage. */
+/** Saves to localStorage what this tab changed in the outbox since `base`, as it last read or wrote it. */
 export const SaveOutbox = Command.define("SaveOutbox", {
-  args: { outbox: Schema.Array(OutboxItem) },
+  args: { base: Schema.Array(OutboxItem), outbox: Schema.Array(OutboxItem) },
   messages: [Message.CompletedSaveOutbox],
-  execute: ({ outbox }) =>
-    Effect.map(saveOutbox(outbox), (saved) =>
-      Message.CompletedSaveOutbox({ saved })
+  execute: ({ base, outbox }) =>
+    Effect.map(saveOutbox(base, outbox), (stored) =>
+      Message.CompletedSaveOutbox({ written: outbox, stored })
     ),
 });

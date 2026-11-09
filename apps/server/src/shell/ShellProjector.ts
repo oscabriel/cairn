@@ -26,6 +26,8 @@
 // after pi-durable committed the run and before the shell did. Unset, nothing waits.
 
 import { goalOf, goalTallyOf } from "@cairn/client-logic/GoalProgress";
+import { byCardOrder } from "@cairn/client-logic/PendingRequests";
+import type { RequestOrderKey } from "@cairn/client-logic/PendingRequests";
 import { tallyOfRegistry } from "@cairn/client-logic/SubagentTally";
 import { isAddedUserPart } from "@cairn/protocol/Attachments";
 import type { TaskId, ThreadId } from "@cairn/protocol/Ids";
@@ -204,6 +206,14 @@ const withFields = (
   return { ...next, fields: { ...next.fields, activity: activityOf(next) } };
 };
 
+/** A row request's place in the card's order, keyed as the card keys its records. */
+const orderKeyOf = (request: PendingRuntimeRequest): RequestOrderKey => ({
+  id: request.id,
+  kind: request.kind,
+  askedAt: DateTime.toEpochMillis(request.createdAt),
+});
+
+/** Sets the row's requests; its head is the one the card shows first (`byCardOrder`). */
 const withApprovals = (
   projection: ThreadProjection,
   approvals: ReadonlyArray<PendingRuntimeRequest>
@@ -211,7 +221,11 @@ const withApprovals = (
   withFields(
     { ...projection, approvals },
     {
-      pendingRuntimeRequest: Option.fromUndefinedOr(approvals[0]),
+      pendingRuntimeRequest: Option.fromUndefinedOr(
+        approvals.toSorted((a, b) =>
+          byCardOrder(orderKeyOf(a), orderKeyOf(b))
+        )[0]
+      ),
       pendingCount: approvals.length,
     }
   );

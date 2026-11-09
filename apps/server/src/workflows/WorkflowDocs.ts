@@ -336,6 +336,24 @@ export const declineRow = (
   return true;
 };
 
+/**
+ * Moves an `approved` row that never ran to `declined`, decided by the system as `superseded`: a
+ * newer Go of the same script took its place, so the gate (which runs one approved row per script
+ * hash) can only ever run the newer one. False when the row is not `approved`.
+ */
+export const supersedeRow = (row: WorkflowItemState, at: number): boolean => {
+  if (row.state !== "approved") {
+    return false;
+  }
+
+  row.state = "declined";
+  row.decidedBy = { kind: "system", why: "superseded" };
+  row.decidedAt = at;
+  row.endedAt = at;
+
+  return true;
+};
+
 /** The record tool of a workflow node's own brief, one per node kind. */
 export const NODE_BRIEF_TOOLS: ReadonlySet<string> = new Set([
   "agent",

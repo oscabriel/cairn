@@ -1,8 +1,9 @@
 // Scene tests for the request card (plan 6A): what it shows for an approval, a question and a
 // brief; that a question advances only after its pause and only for the pick that armed it; that
 // Send waits out the undo window and Undo sends nothing; that one answer is in flight at a time and
-// an answered request hides until the stream settles it; and that a request settled elsewhere
-// closes with its line and keeps what the user typed.
+// an answered request hides until the stream settles it; that a request settled elsewhere
+// closes with its line and keeps what the user typed; and that an answer's lifecycle survives a
+// dropped connection, a thread switch and another request answered during its undo window.
 
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
@@ -609,4 +610,226 @@ describe("the root's connection, as the card is told it", () => {
       [false, true]
     );
   });
+});
+
+const oneQuestion = record({
+  ...questionFields,
+  payload: {
+    type: "questions",
+    questions: [questionFields.payload.questions[0] ?? null],
+  },
+});
+
+const threadY = ThreadId.make("01890a5d-ac96-774b-bcce-b302099a0002");
+
+interface Step {
+  readonly model: Model;
+  readonly commands: NonNullable<ReturnType<typeof update>["commands"]>;
+}
+
+/** Runs messages through `update` from `model`, keeping the last step's commands. */
+const run = (model: Model, ...messages: ReadonlyArray<Message>): Step => {
+  let step: Step = { model, commands: [] };
+
+  for (const message of messages) {
+    const next = update(step.model, message);
+
+    step = { model: next.model, commands: next.commands ?? [] };
+  }
+
+  return step;
+};
+
+const informed = (
+  model: Model,
+  approvals: Json,
+  hasClient = true,
+  thread = threadId
+): Step => {
+  const next = inform(model, {
+    threadId: Option.some(thread),
+    approvals,
+    hasClient,
+  });
+
+  return { model: next.model, commands: next.commands ?? [] };
+};
+
+const responds = (step: Step) =>
+  step.commands.filter((command) => command.name === RespondToRequest.name);
+
+/** A one-question card picked "SQLite", with its undo window open (timer 2). */
+const inUndoWindow = (approvals: Json): Model =>
+  run(
+    showing(approvals),
+    Message.PickedOption({ approvalId: qId, index: 0, label: "SQLite" }),
+    Message.ElapsedAdvance({ approvalId: qId, index: 0, timer: 1 })
+  ).model;
+
+describe("the request card's answer lifecycle", () => {
+  it("sends the answers once the connection is back when the undo window ended while it was down", () => {
+    const opened = inUndoWindow(doc(oneQuestion));
+
+    assert.isTrue(Option.isSome(opened.undo));
+
+    const offline = informed(opened, opened.approvals, false);
+
+    const elapsed = run(
+      offline.model,
+      Message.ElapsedUndo({ approvalId: qId, timer: 2 })
+    );
+
+    assert.lengthOf(responds(elapsed), 0);
+
+    // The bar says when they go now, and Undo still takes them back.
+    Scene.scene(
+      config,
+      Scene.given(elapsed.model),
+      Scene.expect(Scene.testId("request-card-undo")).toContainText(
+        "Sending your answers once Cairn is back."
+      ),
+      Scene.expect(Scene.role("button", { name: "Undo" })).toExist()
+    );
+
+    const back = informed(elapsed.model, elapsed.model.approvals, true);
+
+    assert.deepStrictEqual(
+      responds(back).map((command) => command.args),
+      [
+        {
+          threadId,
+          approvalId: qId,
+          decision: "accept",
+          reason: Option.none(),
+          answers: Option.some([{ index: 0, picks: ["SQLite"], custom: null }]),
+        },
+      ],
+      "the answers go once Cairn is back"
+    );
+  });
+
+  it("says the answers wait for the answer on its way, not for Cairn, while connected", () => {
+    const opened = inUndoWindow(doc(oneQuestion));
+
+    const elapsed = run(
+      { ...opened, sending: Option.some(aId) },
+      Message.ElapsedUndo({ approvalId: qId, timer: 2 })
+    );
+
+    assert.lengthOf(responds(elapsed), 0);
+
+    Scene.scene(
+      config,
+      Scene.given(elapsed.model),
+      Scene.expect(Scene.testId("request-card-undo")).toContainText(
+        "Sending your answers after the ones on their way."
+      )
+    );
+  });
+
+  it("does not let an undo window's timer from before a thread switch end a later window", () => {
+    const opened = inUndoWindow(doc(oneQuestion));
+    const away = informed(opened, null, true, threadY).model;
+    const back = informed(away, doc(oneQuestion)).model;
+
+    const reopened = run(
+      back,
+      Message.PickedOption({ approvalId: qId, index: 0, label: "Postgres" })
+    );
+
+    const advanced = update(
+      reopened.model,
+      Message.ElapsedAdvance({
+        approvalId: qId,
+        index: 0,
+        timer: reopened.model.timer,
+      })
+    ).model;
+
+    // The first window's wait, which no thread switch stops, ends now.
+    const early = run(
+      advanced,
+      Message.ElapsedUndo({ approvalId: qId, timer: 2 })
+    );
+
+    assert.lengthOf(
+      responds(early),
+      0,
+      "the earlier window's timer sent the new answers"
+    );
+    assert.isTrue(Option.isSome(early.model.undo));
+  });
+
+  it("applies a respond answer only to the request it was for", () => {
+    const bId = ApprovalId.make("a-2");
+
+    const sentA = run(
+      showing(doc(approval)),
+      Message.ClickedAccept({ approvalId: aId, decision: "accept" })
+    ).model;
+
+    const onY = informed(sentA, doc(record({ id: "a-2" })), true, threadY);
+
+    const sentB = run(
+      onY.model,
+      Message.ClickedAccept({ approvalId: bId, decision: "accept" })
+    );
+
+    assert.lengthOf(responds(sentB), 1);
+
+    const failedA = run(
+      sentB.model,
+      Message.FailedRespond({
+        approvalId: aId,
+        message: "The answer did not reach Cairn. Try again.",
+      })
+    ).model;
+
+    assert.deepStrictEqual(
+      [failedA.failure, failedA.sending],
+      [Option.none(), Option.some(bId)],
+      "A's failure landed on B's card"
+    );
+
+    const succeededA = run(
+      sentB.model,
+      Message.SucceededRespond({ approvalId: aId })
+    ).model;
+
+    assert.deepStrictEqual(succeededA.sending, Option.some(bId));
+  });
+
+  it.each(["after", "before"] as const)(
+    "sends a question's answers when an approval that arrived in its undo window is answered %s the window ends",
+    (order) => {
+      const opened = inUndoWindow(doc(oneQuestion));
+      const withApproval = informed(opened, doc(approval, oneQuestion)).model;
+
+      const approved = run(
+        withApproval,
+        Message.ClickedAccept({ approvalId: aId, decision: "accept" })
+      );
+
+      assert.lengthOf(responds(approved), 1);
+
+      const steps =
+        order === "after"
+          ? [
+              Message.SucceededRespond({ approvalId: aId }),
+              Message.ElapsedUndo({ approvalId: qId, timer: 2 }),
+            ]
+          : [
+              Message.ElapsedUndo({ approvalId: qId, timer: 2 }),
+              Message.SucceededRespond({ approvalId: aId }),
+            ];
+
+      const settled = run(approved.model, ...steps);
+
+      assert.deepStrictEqual(
+        responds(settled).map((command) => command.args?.approvalId),
+        [qId],
+        "the question's answers were never sent"
+      );
+    }
+  );
 });

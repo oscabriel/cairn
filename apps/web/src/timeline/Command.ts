@@ -22,13 +22,14 @@ const COPIED_FOR = Duration.millis(1500);
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
-/** Pages in the entries before `before`. */
+/** Pages in the entries before `before`; the answer carries `request`, the request's number. */
 export const LoadEarlier = Command.define("LoadEarlier", {
-  args: { threadId: Schema.String, before: EntryId },
+  args: { threadId: Schema.String, request: Schema.Int, before: EntryId },
   messages: [Message.LoadedEarlier, Message.FailedEarlier],
-  execute: ({ before, threadId }) =>
+  execute: ({ before, request, threadId }) =>
     Option.match(decodeThreadId(threadId), {
-      onNone: () => Effect.succeed(Message.FailedEarlier({ threadId })),
+      onNone: () =>
+        Effect.succeed(Message.FailedEarlier({ threadId, request })),
       onSome: (id) =>
         Effect.flatMap(CairnConnection.get, (client) =>
           client["thread.history"]({
@@ -40,8 +41,8 @@ export const LoadEarlier = Command.define("LoadEarlier", {
           withBoundary,
           Effect.match({
             onSuccess: (page) =>
-              Message.LoadedEarlier({ threadId, before, page }),
-            onFailure: () => Message.FailedEarlier({ threadId }),
+              Message.LoadedEarlier({ threadId, request, before, page }),
+            onFailure: () => Message.FailedEarlier({ threadId, request }),
           })
         ),
     }),

@@ -40,7 +40,7 @@ import { Message } from "./Message.ts";
 import { AttachmentStatus } from "./Model.ts";
 import type { Item, Model } from "./Model.ts";
 import { AttachmentPaste } from "./Paste.ts";
-import { itemsOf, readyRef } from "./Update.ts";
+import { itemsOf, noticeFor, readyRef, waitsFor } from "./Update.ts";
 
 /** What accepts the Attach button's picker offers (plan section 3, 3B). */
 export const ATTACH_ACCEPT = "image/*,application/pdf,.docx,text/*";
@@ -268,12 +268,7 @@ const noticeView = (
   draftKey: string,
   h: HtmlBuilder<Message>
 ): Html => {
-  const waiting = Option.exists(
-    model.waitingSend,
-    (send) => send.draftKey === draftKey
-  );
-
-  if (waiting) {
+  if (waitsFor(model, draftKey)) {
     return h.div(
       [
         h.DataAttribute("testid", "attachment-waiting"),
@@ -284,34 +279,31 @@ const noticeView = (
     );
   }
 
-  return Option.match(
-    Option.filter(model.notice, (notice) => notice.draftKey === draftKey),
-    {
-      onNone: () => h.empty,
-      onSome: ({ text }) =>
-        h.div(
-          [
-            h.DataAttribute("testid", "attachment-notice"),
-            h.Role("status"),
-            h.Class(
-              "mb-2 flex items-start gap-2 text-destructive-foreground text-xs"
-            ),
-          ],
-          [
-            h.span([h.Class("min-w-0 flex-1")], [text]),
-            h.button(
-              [
-                h.Type("button"),
-                h.AriaLabel("Dismiss"),
-                h.Class("shrink-0 underline-offset-4 hover:underline"),
-                h.OnClick(Message.ClickedDismissNotice()),
-              ],
-              ["Dismiss"]
-            ),
-          ]
-        ),
-    }
-  );
+  return Option.match(noticeFor(model, draftKey), {
+    onNone: () => h.empty,
+    onSome: (text) =>
+      h.div(
+        [
+          h.DataAttribute("testid", "attachment-notice"),
+          h.Role("status"),
+          h.Class(
+            "mb-2 flex items-start gap-2 text-destructive-foreground text-xs"
+          ),
+        ],
+        [
+          h.span([h.Class("min-w-0 flex-1")], [text]),
+          h.button(
+            [
+              h.Type("button"),
+              h.AriaLabel("Dismiss"),
+              h.Class("shrink-0 underline-offset-4 hover:underline"),
+              h.OnClick(Message.ClickedDismissNotice()),
+            ],
+            ["Dismiss"]
+          ),
+        ]
+      ),
+  });
 };
 
 /** What the composer tells the tray's view: the draft that is open now. */
@@ -333,11 +325,8 @@ export const trayView = Submodel.defineView<Model, Message, TrayInputs>(
         const files = Array.filter(items, (item) => !item.isImage);
 
         const hasNote =
-          Option.exists(
-            model.waitingSend,
-            (send) => send.draftKey === draftKey
-          ) ||
-          Option.exists(model.notice, (notice) => notice.draftKey === draftKey);
+          waitsFor(model, draftKey) ||
+          Option.isSome(noticeFor(model, draftKey));
 
         if (items.length === 0 && !hasNote) {
           return h.empty;

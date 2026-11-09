@@ -209,6 +209,8 @@ const build = (
     childAgent: (typed) => child.agent(typed),
     workspaces,
     settleDelayMillis: tuning.settleDelayMillis,
+    wakeDelayMillis: tuning.wakeDelayMillis,
+    wokenDelayMillis: tuning.wokenDelayMillis,
     briefFaults,
     models,
     budgets,

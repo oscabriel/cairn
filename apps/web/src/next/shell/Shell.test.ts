@@ -3,6 +3,7 @@
 // function, the header's word for the open thread, and the update's navigation, refresh and scratch
 // flows (what it asks the root for, and the turns and commands it mints).
 
+import { rowId } from "@cairn/client-logic/ShellRowTestKit";
 import { RequestId } from "@cairn/protocol/Ids";
 import { SendInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
@@ -463,5 +464,248 @@ describe("the shell's update", () => {
       assert.isTrue(Option.isNone(cleared.model.scratch.threadId));
       assert.strictEqual(cleared.outMessage?._tag, "RequestedOutbox");
     }
+  });
+});
+
+const ready = (model: Model, draft: string): Model => ({
+  ...model,
+  context: {
+    ...model.context,
+    defaults: Option.some({
+      model: { provider: "opencode-go", modelId: "small" },
+      thinkingLevel: "medium",
+    }),
+  },
+  scratch: { ...model.scratch, isOpen: true, draft },
+});
+
+const withoutScratchRow = {
+  ...SHELL,
+  snapshotSequence: 2,
+  threads: SHELL.threads.filter((thread) => thread.id !== SCRATCH_THREAD),
+};
+
+const listing = (path: string) => ({
+  path,
+  parent: Option.none<string>(),
+  entries: [],
+});
+
+describe("the shell's stale answers and overlays", () => {
+  it("forgets a scratch thread whose row left the shell, so the next turn launches a new one", () => {
+    const holding: Model = ready(
+      {
+        ...onProjectThread,
+        started: true,
+        scratch: {
+          ...onProjectThread.scratch,
+          threadId: Option.some(SCRATCH_THREAD),
+        },
+      },
+      "Is it still there?"
+    );
+
+    // Another tab pressed Clear: the brain deleted the thread and its row left the shell.
+    const cleared = inform(holding, {
+      ...holding.context,
+      shell: Option.some(withoutScratchRow),
+    });
+
+    const sent = update(cleared.model, Message.PressedScratchEnter());
+
+    assert.deepStrictEqual(
+      (sent.commands ?? []).map((command) => [
+        command.name,
+        command.args?.threadId,
+      ]),
+      [["PrepareScratchTurn", Option.none()]],
+      "the turn went to the cleared thread"
+    );
+    assert.deepStrictEqual(
+      (cleared.commands ?? []).map((command) => [command.name, command.args]),
+      [["SaveScratch", { threadId: Option.none() }]]
+    );
+
+    // A thread launched here whose row has not shown yet (its launch is on its way) is kept.
+    const launched = rowId(91);
+
+    const launching = inform(
+      {
+        ...cleared.model,
+        scratch: { ...cleared.model.scratch, threadId: Option.some(launched) },
+      },
+      { ...cleared.model.context, shell: Option.some(SHELL) }
+    );
+
+    assert.deepStrictEqual(
+      launching.model.scratch.threadId,
+      Option.some(launched)
+    );
+    assert.lengthOf(launching.commands ?? [], 0);
+  });
+
+  it("keeps what was typed in the scratch field while a turn was being prepared", () => {
+    const typed = ready(
+      { ...onProjectThread, started: true },
+      "What is fsync?"
+    );
+
+    const sent = update(typed, Message.PressedScratchEnter());
+
+    const more = update(
+      sent.model,
+      Message.ChangedScratchDraft({ value: "What is fsync? and fdatasync?" })
+    ).model;
+
+    const prepared = update(
+      more,
+      Message.PreparedScratchTurn({
+        item: OutboxItem.Send({
+          input: SendInput.make({
+            threadId: SCRATCH_THREAD,
+            input: {
+              requestId: RequestId.make("req-2"),
+              text: "What is fsync?",
+              attachments: [],
+              skillRefs: [],
+            },
+            whenBusy: "followUp",
+          }),
+        }),
+        threadId: SCRATCH_THREAD,
+      })
+    ).model;
+
+    assert.strictEqual(
+      prepared.scratch.draft,
+      "and fdatasync?",
+      "the words typed after the send were wiped"
+    );
+  });
+
+  it("drops a listing asked by a picker the user closed, after it reopens", () => {
+    let model: Model = { ...onProjectThread, started: true };
+
+    const requests: Array<number> = [];
+
+    for (const message of [
+      Message.ClickedAddProject(),
+      Message.ClickedBrowseFolder({ path: "/home/u/big" }),
+      Message.PressedEscape(),
+      Message.ClickedAddProject(),
+      Message.ClickedBrowseFolder({ path: "/home/u/small" }),
+    ]) {
+      const next = update(model, message);
+
+      ({ model } = next);
+
+      for (const command of next.commands ?? []) {
+        const request = command.args?.request;
+
+        if (command.name === "BrowseFolders" && Predicate.isNumber(request)) {
+          requests.push(request);
+        }
+      }
+    }
+
+    const [, big = 0, , small = 0] = requests;
+
+    for (const message of [
+      Message.ReceivedFolders({
+        request: small,
+        result: listing("/home/u/small"),
+      }),
+      Message.ReceivedFolders({ request: big, result: listing("/home/u/big") }),
+    ]) {
+      ({ model } = update(model, message));
+    }
+
+    assert.deepStrictEqual(
+      Option.map(model.addProject, (state) =>
+        Predicate.isTagged(state.listing, "Loaded")
+          ? state.listing.result.path
+          : state.listing._tag
+      ),
+      Option.some("/home/u/small"),
+      "the closed picker's listing replaced the open one's"
+    );
+  });
+
+  it("applies an add's answer only to the picker that is adding that folder", () => {
+    let model: Model = { ...onProjectThread, started: true };
+
+    for (const message of [
+      Message.ClickedAddProject(),
+      Message.ChangedAddProjectFolder({ value: "/home/u/x" }),
+      Message.SubmittedAddProject(),
+      Message.PressedEscape(),
+      Message.ClickedAddProject(),
+      Message.ChangedAddProjectFolder({ value: "/home/u/y" }),
+    ]) {
+      ({ model } = update(model, message));
+    }
+
+    const refused = update(
+      model,
+      Message.FailedAddProject({
+        folder: "/home/u/x",
+        message: "That folder is already a project.",
+      })
+    ).model;
+
+    assert.deepStrictEqual(
+      Option.map(refused.addProject, (state) => state.failure),
+      Option.some(Option.none()),
+      "X's refusal was written into Y's picker"
+    );
+
+    const added = update(model, Message.AddedProject({ folder: "/home/u/x" }));
+
+    assert.isTrue(
+      Option.isSome(added.model.addProject),
+      "X's answer closed Y's picker"
+    );
+    assert.isTrue(Option.isNone(added.model.awaitedFolder));
+  });
+
+  it("says on the refresh confirm that its project thread is gone, keeping the first message", () => {
+    let typed: Model = { ...onProjectThread, started: true };
+
+    for (const message of [
+      Message.ClickedRefresh(),
+      Message.ChangedRefreshText({ value: "Start on L7." }),
+    ]) {
+      ({ model: typed } = update(typed, message));
+    }
+
+    // Another device archived the project thread: its row left the shell.
+    const gone = inform(typed, {
+      ...typed.context,
+      shell: Option.some({
+        ...SHELL,
+        snapshotSequence: 2,
+        threads: SHELL.threads.filter((thread) => thread.id !== PROJECT_THREAD),
+      }),
+    }).model;
+
+    const confirmed = update(gone, Message.ClickedConfirmRefresh()).model;
+
+    assert.deepStrictEqual(
+      Option.map(confirmed.refresh, (confirm) => [
+        confirm.text,
+        confirm.failure,
+      ]),
+      Option.some([
+        "Start on L7.",
+        Option.some(
+          "That project thread is gone; open the project again to refresh it."
+        ),
+      ]),
+      "the confirm closed with nothing on screen"
+    );
+    assert.isTrue(
+      Option.isNone(confirmed.failure),
+      "the scratch overlay holds the refresh's failure"
+    );
   });
 });

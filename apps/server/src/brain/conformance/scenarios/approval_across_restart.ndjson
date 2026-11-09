@@ -12,3 +12,4 @@
 {"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
 {"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"open the gate","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["gate"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"accepted","images":0,"toolCalls":[],"toolName":"gate","isError":false},{"kind":"pi.assistant","role":"assistant","text":"the gate opened after a restart","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
 {"type":"expect_view","path":["approvals"],"equals":[{"status":"accepted","tool":"gate"}]}
+{"type":"expect_event_count","event":{"_tag":"RunStarted","threadId":"$parent"},"count":2}

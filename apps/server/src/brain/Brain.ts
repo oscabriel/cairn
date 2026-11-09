@@ -2,7 +2,8 @@
 //
 // - Install: the extension set in its fixed order, once, before `Harness.open`.
 // - Open does not schedule work. Boot runs its repairs and then `resume()`; a supervisor reopen
-//   (below) resumes at once, because its repairs already ran.
+//   (below) resumes at once only once boot resumed, because then its repairs already ran. A reopen
+//   before that waits for boot's `resume()`, which resumes whichever Session is open.
 // - Supervisor: a storage error fails the Session, which closes itself (`closed` resolves
 //   `failed`) and ends every watch with `session_failed`. The supervisor reopens from storage with
 //   backoff, and every client stream restarts from a fresh snapshot of the new Harness.
@@ -10,8 +11,11 @@
 //   resumes it, so no commit of a resumed task is missed across a reopen.
 // - Reports: `onReport` only enqueues; a fiber logs each report, and `task_parked` reports feed
 //   `Parked`. pi-durable drops a throwing report callback, so nothing here may throw.
-// - Close: on scope close, `harness.close` with a 5 s timeout. A task that ignores its signal keeps
-//   close pending; past the timeout the process exits anyway and the task counts one restart.
+// - Close: on scope close, the supervisor stops first, so a reopen it was making either published
+//   its Session or opened nothing (an open that hangs gives up at `BrainOpenTimeout`); then
+//   `harness.close` with a 5 s timeout. A task that ignores its
+//   signal keeps close pending; past the timeout the process exits anyway and the task counts one
+//   restart.
 //
 // Open and close follow cairn-v1, apps/server/src/Harnesses.ts at 1a5cd4a; the boot order and
 // retry come from spikes/3-workflows/brain.ts and spikes/4-approvals/brain.ts in this repo.
@@ -40,6 +44,7 @@ import {
 import type { Scope } from "effect";
 
 import { Arms } from "./Arms.ts";
+import { BrainOpenTimeout } from "./BrainOpenTimeout.ts";
 import { BrainStore } from "./BrainStore.ts";
 import { durable, errorText } from "./Durable.ts";
 import { Extensions } from "./Extensions.ts";
@@ -112,7 +117,10 @@ export class Brain extends Context.Service<
     readonly subscribeCommits: (
       listener: CommitListener
     ) => Effect.Effect<void, never, Scope.Scope>;
-    /** Lets the Harness schedule work. Boot calls it after its repairs. */
+    /**
+     * Lets the Harness schedule work, and every Session the supervisor reopens later. Boot calls it
+     * after its repairs. Fails only once the brain is closing.
+     */
     readonly resume: Effect.Effect<void, BrainUnavailable>;
     /** The Harness clock, epoch milliseconds. */
     now(): number;
@@ -162,6 +170,8 @@ export class Brain extends Context.Service<
 
       const current = yield* SubscriptionRef.make(Option.none<BrainSession>());
       const down = yield* Ref.make<BrainUnavailable["state"]>("opening");
+      // Set by boot's `resume`, after its repairs: until then no Session schedules work.
+      const resumed = yield* Ref.make(false);
 
       let generation = 0;
 
@@ -224,6 +234,50 @@ export class Brain extends Context.Service<
 
       yield* SubscriptionRef.set(current, Option.some(first));
 
+      // Added before the supervisor is forked, so on close the supervisor stops first: a reopen
+      // attempt in flight finishes and publishes, and this closes whatever Session is open.
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          yield* Ref.set(down, "closing");
+
+          const open = yield* SubscriptionRef.getAndSet(current, Option.none());
+
+          if (Option.isSome(open)) {
+            yield* durable("close", async (context) => {
+              await open.value.harness.close(context);
+            }).pipe(
+              Effect.timeout(CLOSE_TIMEOUT),
+              Effect.catch((error) =>
+                Effect.logWarning("brain close did not finish").pipe(
+                  Effect.annotateLogs({ error: errorText(error) })
+                )
+              )
+            );
+          }
+        })
+      );
+
+      const openTimeout = yield* BrainOpenTimeout;
+
+      // One reopen attempt, whole or not at all: a Session it opens is published before the
+      // supervisor can stop, so the close finalizer closes it. It schedules work only once boot
+      // resumed (its repairs ran); before that, boot's `resume` resumes it. An open that hangs
+      // fails the attempt at `openTimeout`, so it cannot hold a shutdown for good: the timeout
+      // cancels the open's context, and pi-durable closes what a failed open opened.
+      const reopen = Effect.uninterruptible(
+        Effect.gen(function* () {
+          const next = yield* openSession.pipe(Effect.timeout(openTimeout));
+
+          yield* SubscriptionRef.set(current, Option.some(next));
+
+          if (yield* Ref.get(resumed)) {
+            next.harness.resume();
+          }
+
+          return next;
+        })
+      );
+
       // Reopens after the Session fails; ends after a clean close.
       const supervise = (session: BrainSession): Effect.Effect<void> =>
         Effect.gen(function* () {
@@ -241,7 +295,7 @@ export class Brain extends Context.Service<
             Effect.annotateLogs({ error: errorText(end.error) })
           );
 
-          const next = yield* openSession.pipe(
+          const next = yield* reopen.pipe(
             Effect.tapError((error) =>
               Effect.logError("brain reopen failed").pipe(
                 Effect.annotateLogs({ error: error.message })
@@ -251,35 +305,10 @@ export class Brain extends Context.Service<
             Effect.orDie
           );
 
-          next.harness.resume();
-          yield* SubscriptionRef.set(current, Option.some(next));
-
           return yield* supervise(next);
         });
 
       yield* supervise(first).pipe(Effect.forkScoped);
-
-      yield* Effect.addFinalizer(() =>
-        Effect.gen(function* () {
-          const open = yield* SubscriptionRef.get(current);
-
-          yield* Ref.set(down, "closing");
-          yield* SubscriptionRef.set(current, Option.none());
-
-          if (Option.isSome(open)) {
-            yield* durable("close", async (context) => {
-              await open.value.harness.close(context);
-            }).pipe(
-              Effect.timeout(CLOSE_TIMEOUT),
-              Effect.catch((error) =>
-                Effect.logWarning("brain close did not finish").pipe(
-                  Effect.annotateLogs({ error: errorText(error) })
-                )
-              )
-            );
-          }
-        })
-      );
 
       const session = Effect.gen(function* () {
         const open = yield* SubscriptionRef.get(current);
@@ -321,8 +350,25 @@ export class Brain extends Context.Service<
           Stream.map((open) => open.value),
           Stream.changesWith((a, b) => a.generation === b.generation)
         ),
-        resume: Effect.map(session, ({ harness }) => {
-          harness.resume();
+        resume: Effect.gen(function* () {
+          yield* Ref.set(resumed, true);
+
+          const open = yield* SubscriptionRef.get(current);
+          const state = yield* Ref.get(down);
+
+          // A Session the supervisor is reopening resumes as it opens; a closing brain does not.
+          if (Option.isNone(open) && state === "closing") {
+            return yield* new BrainUnavailable({
+              message: `The brain is ${state}. Try again in a moment.`,
+              state,
+            });
+          }
+
+          if (Option.isSome(open)) {
+            open.value.harness.resume();
+          }
+
+          return yield* Effect.void;
         }),
         now,
       });

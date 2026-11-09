@@ -41,6 +41,7 @@ import type {
   ConversationDocToken,
   ConversationId as PiConversationId,
   ConversationView as PiConversationView,
+  Cursor,
   InputSubmissionDraft,
   JsonObject,
   LiveState,
@@ -93,7 +94,7 @@ import {
   ThreadReceipt,
   writeMode,
 } from "./CairnDocs.ts";
-import type { AnsweredHook } from "./CairnDocs.ts";
+import type { AnsweredHook, ApprovalRecord } from "./CairnDocs.ts";
 import { CommitFeed, RUN_TASK } from "./CommitFeed.ts";
 import { durable, errorText, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
@@ -219,6 +220,9 @@ const STOP_HANDOVERS = 4;
  * aborts is not waited out.
  */
 const STOP_SETTLE = Duration.seconds(2);
+
+/** How many conversations one page of `inspect`'s scan for pending records reads. */
+const INSPECT_SCAN_PAGE = 200;
 
 /** `pi.live.run`: the task that owns a busy conversation's run, and the run's inputs. */
 type LiveRun = NonNullable<LiveState["run"]>;
@@ -1474,30 +1478,67 @@ const layerNoDeps = Layer.effect(
         }
       }
 
+      // `inspect()` reports live work only, so a thread waiting on the user with nothing running
+      // (a criteria proposal, a halted scope's raise) is found by its records: every conversation
+      // is read, as the boot repairs read them.
+      const pendingOf = new Map<PiConversationId, Array<ApprovalRecord>>();
+      let cursor: Option.Option<Cursor> = Option.none();
+
+      do {
+        const after = Option.getOrUndefined(cursor);
+
+        const page = yield* call(
+          Option.none(),
+          "conversations.scan",
+          async (context) =>
+            await session.storage.scanConversations(
+              {},
+              INSPECT_SCAN_PAGE,
+              after,
+              context
+            )
+        );
+
+        for (const conversation of page.items) {
+          const approvals = yield* call(
+            Option.none(),
+            "approvals.read",
+            async (context) =>
+              await session.harness.snapshot(
+                Approvals,
+                conversation.id,
+                context
+              )
+          );
+
+          const pending = Object.values(approvals?.items ?? {}).filter(
+            (item) => item.status === "pending"
+          );
+
+          if (pending.length > 0) {
+            pendingOf.set(conversation.id, pending);
+            slot(conversation.id);
+          }
+        }
+
+        cursor = Option.fromUndefinedOr(page.next);
+      } while (Option.isSome(cursor));
+
       const states: Array<LiveThreadState> = [];
 
       for (const [conversationId, found] of byConversation) {
         const threadId = yield* threadOf(session, conversationId);
 
         if (Option.isSome(threadId)) {
-          const approvals = yield* call(
-            threadId,
-            "approvals.read",
-            async (context) =>
-              await session.harness.snapshot(Approvals, conversationId, context)
-          );
-
-          const pending = Object.values(approvals?.items ?? {})
-            .filter((item) => item.status === "pending")
-            .map((item) => ({
-              id: ApprovalId.make(item.id),
-              kind: item.kind,
-              askedAt: item.askedAt,
-              route: item.route,
-              origin: Option.map(Option.fromNullOr(item.mirrorOf), (mirror) =>
-                ThreadId.make(mirror.threadId)
-              ),
-            }));
+          const pending = (pendingOf.get(conversationId) ?? []).map((item) => ({
+            id: ApprovalId.make(item.id),
+            kind: item.kind,
+            askedAt: item.askedAt,
+            route: item.route,
+            origin: Option.map(Option.fromNullOr(item.mirrorOf), (mirror) =>
+              ThreadId.make(mirror.threadId)
+            ),
+          }));
 
           states.push({
             threadId: threadId.value,

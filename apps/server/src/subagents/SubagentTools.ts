@@ -206,6 +206,17 @@ export interface SubagentToolOptions {
    * settle a shared run first.
    */
   readonly settleDelayMillis: (quiet: boolean) => number;
+  /**
+   * How long a reporter waits, once it decided to wake its parent, before it submits the wake, and
+   * a brief's tell before it reads the parent and submits: none in production. A test holds a
+   * wake or a tell there to land a stop or another settlement first.
+   */
+  readonly wakeDelayMillis: number;
+  /**
+   * How long a reporter waits, once it submitted a wake, before the commit that ends it: none in
+   * production. A test holds a reporter there to land another settlement while its wake runs.
+   */
+  readonly wokenDelayMillis: number;
   /** How long a brief stays answerable before it expires and its parent is told: a week. */
   readonly briefTtlMillis: number;
   /** How many children the whole brain may hold live (`MAX_LIVE_CHILDREN_PER_BRAIN`). */
@@ -217,6 +228,8 @@ export const DEFAULT_TOOL_OPTIONS: SubagentToolOptions = {
   questionTtlMillis: GATED_APPROVAL_TTL_MILLIS,
   questionWindowMillis: QUESTION_WINDOW_MILLIS,
   settleDelayMillis: () => 0,
+  wakeDelayMillis: 0,
+  wokenDelayMillis: 0,
   briefTtlMillis: BRIEF_TTL_MILLIS,
   maxLivePerBrain: MAX_LIVE_CHILDREN_PER_BRAIN,
 };

@@ -376,6 +376,8 @@ interface SubmissionEnd {
   readonly lastEntry: Option.Option<number>;
   readonly status: RunStatus;
   readonly failure: Option.Option<RunFailureInfo>;
+  /** A failed run's own words: the provider's error message. */
+  readonly detail: Option.Option<string>;
 }
 
 interface Submission {
@@ -647,7 +649,8 @@ const settleInputs = (
   thread: ScriptedThread,
   run: Run,
   status: RunStatus,
-  failureInfo: Option.Option<RunFailureInfo>
+  failureInfo: Option.Option<RunFailureInfo>,
+  detail: Option.Option<string>
 ) => {
   for (const id of run.inputs.splice(0)) {
     const submission = thread.byId.get(id);
@@ -659,6 +662,7 @@ const settleInputs = (
         lastEntry: Option.fromUndefinedOr(thread.entries.at(-1)?.id),
         status,
         failure: failureInfo,
+        detail,
       });
     }
   }
@@ -922,6 +926,10 @@ const viewOf = (
 /** The model context: the active entries' messages, in order. */
 const contextOf = (thread: ScriptedThread): ReadonlyArray<Message> =>
   thread.entries.slice(thread.head).flatMap((entry) => entry.model ?? []);
+
+/** Whether any record of the thread's own is pending. */
+const anyPending = (thread: ScriptedThread) =>
+  [...thread.approvals.values()].some((record) => record.status === "pending");
 
 /** Tool calls of the newest answer that have no result yet. */
 const pendingCalls = (thread: ScriptedThread): ReadonlyArray<ToolCall> => {
@@ -1266,6 +1274,7 @@ const endUnplaced = (submission: Submission) => {
     lastEntry: Option.none(),
     status: "interrupted",
     failure: Option.none(),
+    detail: Option.none(),
   });
 };
 
@@ -1394,6 +1403,12 @@ const layerNoDeps = Layer.effectContext(
     >();
 
     const runs = new Map<ThreadId, Fiber.Fiber<void>>();
+    /**
+     * Runs this instance resumed and has not announced yet. pi-durable's commit feed reports a run
+     * it never saw start once the run hands over to its next generation, after a tool round; a run
+     * that ends in the request it was making when the brain stopped is never announced.
+     */
+    const unannounced = new Set<ThreadId>();
     const reporting = new Set<number>();
     // Briefs whose expiry this instance watches, by thread and approval id.
     const expiring = new Set<string>();
@@ -1509,16 +1524,35 @@ const layerNoDeps = Layer.effectContext(
       }
     };
 
-    /** A child waits while any record of its own is pending, and works again once none is. */
-    const recordsChanged = (child: ScriptedThread, changes: Changes) => {
-      const pending = [...child.approvals.values()].some(
-        (record) => record.status === "pending"
+    /** Whether a reporter of the child has a parent's answer to a relayed question to hand it. */
+    const answerAhead = (child: ScriptedThread) =>
+      [...store.reporters.values()].some(
+        (reporter) =>
+          reporter.child === child.threadId &&
+          (reporter.phase === "answer" ||
+            (reporter.phase === "ask" &&
+              Option.exists(
+                reporter.asked,
+                ({ approvalId }) =>
+                  child.approvals.get(approvalId)?.status === "accepted"
+              )))
       );
+
+    /**
+     * A child waits while any record of its own is pending, and works again once none is, while
+     * it has work: a run of its own, or a parent's answer on its way to it. A child with neither
+     * (stopped, or idle) keeps its status until its settlement.
+     */
+    const recordsChanged = (child: ScriptedThread, changes: Changes) => {
+      const pending = anyPending(child);
 
       for (const { item } of Option.toArray(linkOf(child))) {
         if (pending) {
           setChildStatus(child, "waiting", changes);
-        } else if (item.status === "waiting") {
+        } else if (
+          item.status === "waiting" &&
+          (Option.isSome(child.run) || answerAhead(child))
+        ) {
           setChildStatus(child, "working", changes);
         }
       }
@@ -1558,15 +1592,20 @@ const layerNoDeps = Layer.effectContext(
       }
 
       changes.touched.add(thread);
-      changes.events.push(
-        MessageCommitted.make({
-          threadId: thread.threadId,
-          entryId: EntryId.make(entry.id),
-          role: "user",
-          text: messageText(message),
-          at: DateTime.makeUnsafe(at),
-        })
-      );
+
+      // A user's message only: an input of another kind (a brief's answer) is no message, as
+      // pi-durable's commit feed reports none for it.
+      if (entry.kind === "pi.user" || entry.kind === "cairn.user") {
+        changes.events.push(
+          MessageCommitted.make({
+            threadId: thread.threadId,
+            entryId: EntryId.make(entry.id),
+            role: "user",
+            text: messageText(message),
+            at: DateTime.makeUnsafe(at),
+          })
+        );
+      }
     };
 
     /** Places the notes a running thread queued: writes go first at every boundary. */
@@ -1829,6 +1868,7 @@ const layerNoDeps = Layer.effectContext(
       thread: ScriptedThread,
       status: RunStatus,
       failureInfo: Option.Option<RunFailureInfo>,
+      detail: Option.Option<string>,
       at: number,
       changes: Changes
     ) => {
@@ -1838,7 +1878,8 @@ const layerNoDeps = Layer.effectContext(
 
       const run = thread.run.value;
 
-      settleInputs(thread, run, status, failureInfo);
+      unannounced.delete(thread.threadId);
+      settleInputs(thread, run, status, failureInfo, detail);
 
       thread.run = Option.none();
       thread.halted = status !== "completed";
@@ -1877,14 +1918,14 @@ const layerNoDeps = Layer.effectContext(
         thread.queue.length > 0 ? thread.queue.splice(nextIndex, 1) : [];
 
       if (next === undefined || Option.isNone(thread.run)) {
-        endRun(thread, "completed", Option.none(), at, changes);
+        endRun(thread, "completed", Option.none(), Option.none(), at, changes);
 
         return;
       }
 
       const run = thread.run.value;
 
-      settleInputs(thread, run, "completed", Option.none());
+      settleInputs(thread, run, "completed", Option.none(), Option.none());
       run.segment = nextId();
       changes.touched.add(thread);
       place(thread, next, at, changes);
@@ -2355,7 +2396,14 @@ const layerNoDeps = Layer.effectContext(
               !child.byRequest.has(continuationOf(reporter, child.threadId))))
       );
 
-      if (Option.isNone(child.run) && !undelivered) {
+      // With no run, a child whose question to its parent is pending waits on it.
+      if (Option.isSome(child.run)) {
+        return;
+      }
+
+      if (anyPending(child)) {
+        setChildStatus(child, "waiting", changes);
+      } else if (!undelivered) {
         setChildStatus(child, "settled", changes);
       }
     };
@@ -2597,7 +2645,9 @@ const layerNoDeps = Layer.effectContext(
 
       const failureMessage = Option.orElse(noResult, () =>
         end.status === "failed"
-          ? Option.some("The child's run failed before it answered.")
+          ? Option.some(
+              `The child's run failed before it answered: ${Option.getOrElse(end.detail, () => "failed")}`
+            )
           : Option.none()
       );
 
@@ -3048,7 +3098,116 @@ const layerNoDeps = Layer.effectContext(
         )
       );
 
-    /** One reporter, from wherever it stood: deliver, then report. */
+    /**
+     * Admits `input` to the child and settles the run that ends it, in two critical sections;
+     * false when the submission never ended.
+     */
+    const deliverAndSettle = (
+      reporter: Reporter,
+      child: ScriptedThread,
+      input: AdmitInput
+    ) =>
+      Effect.gen(function* () {
+        const submission = yield* locked((at, changes) =>
+          Effect.sync(() => admit(child, input, at, changes))
+        );
+
+        const end = yield* awaitThread(child, () => submission.ended);
+
+        yield* locked((at, changes) =>
+          Effect.sync(() => {
+            for (const found of Option.toArray(end)) {
+              settle(reporter, submission, found, at, changes);
+            }
+          })
+        );
+
+        return Option.isSome(end);
+      });
+
+    /**
+     * One step of a reporter, by its phase; false when it cannot go on. Each step moves the phase
+     * on in its last critical section, and the answer's run may ask again (`ask`).
+     */
+    const reporterStep = (
+      reporter: Reporter,
+      child: ScriptedThread
+    ): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        const { phase } = reporter;
+
+        if (phase === "deliver") {
+          return yield* deliverAndSettle(reporter, child, reporter);
+        }
+
+        // A typed child that ended without a result: its one nudge, and the run that answers it.
+        if (phase === "nudge") {
+          return yield* deliverAndSettle(reporter, child, {
+            requestId: SubagentRequestIds.nudge(
+              child.threadId,
+              reporter.nudgeSeq
+            ),
+            content: [{ type: "text", text: NUDGE_TEXT }],
+            entry: Option.none(),
+            whenBusy: "followUp",
+          });
+        }
+
+        // A question the child's final answer became: answered, the child gets the answer as the
+        // run's next input; otherwise (expired at its expiry, declined or cancelled) the run's own
+        // answer settles as its result after all.
+        if (phase === "ask") {
+          const asked = Option.getOrUndefined(reporter.asked);
+
+          if (asked === undefined) {
+            return false;
+          }
+
+          const expiresAt =
+            child.approvals.get(asked.approvalId)?.expiresAt ?? 0;
+
+          const remaining = Math.max(0, expiresAt - (yield* now));
+
+          const settled = yield* settledRecord(child, asked.approvalId).pipe(
+            Effect.timeoutOption(Duration.millis(remaining))
+          );
+
+          yield* locked((at, changes) =>
+            Effect.sync(() => {
+              if (Option.isNone(settled)) {
+                expireRecord(child, asked.approvalId, at, changes);
+              }
+
+              questionAnswered(reporter, child, asked, at, changes);
+            })
+          );
+
+          return true;
+        }
+
+        if (phase === "answer") {
+          return yield* deliverAndSettle(reporter, child, {
+            requestId: continuationOf(reporter, child.threadId),
+            content: [{ type: "text", text: reporter.answerText }],
+            entry: Option.none(),
+            whenBusy: "followUp",
+          });
+        }
+
+        if (phase === "report") {
+          yield* locked((at, changes) =>
+            Effect.sync(() => {
+              report(reporter, at, changes);
+            })
+          );
+
+          return true;
+        }
+
+        return false;
+      });
+
+    /** One reporter, from wherever it stood, step by step until it is done. */
     const runReporter = (reporter: Reporter): Effect.Effect<void> =>
       Effect.gen(function* () {
         const child = store.threads.get(reporter.child);
@@ -3057,114 +3216,10 @@ const layerNoDeps = Layer.effectContext(
           return;
         }
 
-        if (reporter.phase === "deliver") {
-          const submission = yield* locked((at, changes) =>
-            Effect.sync(() => admit(child, reporter, at, changes))
-          );
+        let going = true;
 
-          const end = yield* awaitThread(child, () => submission.ended);
-
-          yield* locked((at, changes) =>
-            Effect.sync(() => {
-              for (const found of Option.toArray(end)) {
-                settle(reporter, submission, found, at, changes);
-              }
-            })
-          );
-        }
-
-        // A typed child that ended without a result: its one nudge, and the run that answers it.
-        if (reporter.phase === "nudge") {
-          const submission = yield* locked((at, changes) =>
-            Effect.sync(() =>
-              admit(
-                child,
-                {
-                  requestId: SubagentRequestIds.nudge(
-                    child.threadId,
-                    reporter.nudgeSeq
-                  ),
-                  content: [{ type: "text", text: NUDGE_TEXT }],
-                  entry: Option.none(),
-                  whenBusy: "followUp",
-                },
-                at,
-                changes
-              )
-            )
-          );
-
-          const end = yield* awaitThread(child, () => submission.ended);
-
-          yield* locked((at, changes) =>
-            Effect.sync(() => {
-              for (const found of Option.toArray(end)) {
-                settle(reporter, submission, found, at, changes);
-              }
-            })
-          );
-        }
-
-        // A question the child's final answer became: answered, the child gets the answer as the
-        // run's next input; otherwise (expired at its expiry, declined or cancelled) the run's own
-        // answer settles as its result after all.
-        if (reporter.phase === "ask") {
-          for (const asked of Option.toArray(reporter.asked)) {
-            const expiresAt =
-              child.approvals.get(asked.approvalId)?.expiresAt ?? 0;
-
-            const remaining = Math.max(0, expiresAt - (yield* now));
-
-            const settled = yield* settledRecord(child, asked.approvalId).pipe(
-              Effect.timeoutOption(Duration.millis(remaining))
-            );
-
-            yield* locked((at, changes) =>
-              Effect.sync(() => {
-                if (Option.isNone(settled)) {
-                  expireRecord(child, asked.approvalId, at, changes);
-                }
-
-                questionAnswered(reporter, child, asked, at, changes);
-              })
-            );
-          }
-        }
-
-        if (reporter.phase === "answer") {
-          const submission = yield* locked((at, changes) =>
-            Effect.sync(() =>
-              admit(
-                child,
-                {
-                  requestId: continuationOf(reporter, child.threadId),
-                  content: [{ type: "text", text: reporter.answerText }],
-                  entry: Option.none(),
-                  whenBusy: "followUp",
-                },
-                at,
-                changes
-              )
-            )
-          );
-
-          const end = yield* awaitThread(child, () => submission.ended);
-
-          yield* locked((at, changes) =>
-            Effect.sync(() => {
-              for (const found of Option.toArray(end)) {
-                settle(reporter, submission, found, at, changes);
-              }
-            })
-          );
-        }
-
-        if (reporter.phase === "report") {
-          yield* locked((at, changes) =>
-            Effect.sync(() => {
-              report(reporter, at, changes);
-            })
-          );
+        while (going && reporter.phase !== "done") {
+          going = yield* reporterStep(reporter, child);
         }
       });
 
@@ -3370,9 +3425,7 @@ const layerNoDeps = Layer.effectContext(
 
               const expired = copyRecord(current);
 
-              expired.status = "expired";
-              expired.answeredAt = at;
-              expired.decidedBy = { kind: "expiry" };
+              expirePending(expired, at);
               thread.approvals.set(briefId, expired);
               changes.touched.add(thread);
               changes.events.push(
@@ -3961,7 +4014,40 @@ const layerNoDeps = Layer.effectContext(
                 (Option.isSome(thread.run) && heldByRun(record))
             );
 
-            endRun(thread, "interrupted", Option.none(), at, changes);
+            // Every call of the stopped round gets its aborted result, as pi-durable writes it, so
+            // no later run executes it again.
+            if (Option.isSome(thread.run)) {
+              for (const call of pendingCalls(thread)) {
+                appendEntry(thread, "pi.tool-result", {
+                  model: [
+                    {
+                      role: "toolResult",
+                      toolCallId: call.id,
+                      toolName: call.name,
+                      content: [
+                        {
+                          type: "text",
+                          text: `<harness>\n[error] Tool ${call.name} was aborted\n</harness>`,
+                        },
+                      ],
+                      isError: true,
+                      timestamp: at,
+                    },
+                  ],
+                  data: { diagnostics: [] },
+                });
+                changes.touched.add(thread);
+              }
+            }
+
+            endRun(
+              thread,
+              "interrupted",
+              Option.none(),
+              Option.none(),
+              at,
+              changes
+            );
 
             // The run's tools waited on these; nobody can answer them now (ADR 0029).
             for (const record of held) {
@@ -4141,6 +4227,18 @@ const layerNoDeps = Layer.effectContext(
                   return;
                 }
 
+                if (unannounced.delete(thread.threadId)) {
+                  for (const run of Option.toArray(thread.run)) {
+                    changes.events.push(
+                      RunStarted.make({
+                        threadId: thread.threadId,
+                        runId: RunId.make(run.runId),
+                        at: DateTime.makeUnsafe(at),
+                      })
+                    );
+                  }
+                }
+
                 placeWrites(thread, at, changes);
 
                 const steerIndex = thread.queue.findIndex(
@@ -4204,6 +4302,9 @@ const layerNoDeps = Layer.effectContext(
                         })
                       )
                     : Option.none(),
+                  answer.stopReason === "error"
+                    ? Option.some(answer.errorMessage ?? "model_error")
+                    : Option.none(),
                   at,
                   changes
                 );
@@ -4239,13 +4340,16 @@ const layerNoDeps = Layer.effectContext(
     // After a restart, runs the store left in progress ask the model again, and reporters carry
     // on from the phase they reached, once resumed.
     const resume = Effect.gen(function* () {
-      yield* Effect.forEach(
-        [...store.threads.values()].filter(
-          (thread) => Option.isSome(thread.run) && !runs.has(thread.threadId)
-        ),
-        startRun,
-        { discard: true }
+      // A resumed run is announced at its next tool round's end (`unannounced`).
+      const resumed = [...store.threads.values()].filter(
+        (thread) => Option.isSome(thread.run) && !runs.has(thread.threadId)
       );
+
+      for (const thread of resumed) {
+        unannounced.add(thread.threadId);
+      }
+
+      yield* Effect.forEach(resumed, startRun, { discard: true });
       yield* Effect.forEach(store.reporters.values(), startReporter, {
         discard: true,
       });

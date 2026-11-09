@@ -17,6 +17,7 @@ import {
   CONNECT_TIMEOUT,
   ExecutorLink,
   ExecutorLinkOptions,
+  SIGN_IN_TIMEOUT,
 } from "./ExecutorLink.ts";
 import type { FakeExecutorHandle } from "./FakeExecutor.ts";
 
@@ -127,6 +128,7 @@ export const fakeLink = (
     >;
     readonly pingInterval?: Duration.Duration;
     readonly connectTimeout?: Duration.Duration;
+    readonly signInTimeout?: Duration.Duration;
     /** Wraps the grant store, to make it fail. */
     readonly grantStore?: (
       memory: Layer.Layer<ExecutorGrant>
@@ -146,6 +148,7 @@ export const fakeLink = (
       Layer.succeed(ExecutorLinkOptions, {
         pingInterval: options.pingInterval ?? Duration.seconds(15),
         connectTimeout: options.connectTimeout ?? CONNECT_TIMEOUT,
+        signInTimeout: options.signInTimeout ?? SIGN_IN_TIMEOUT,
       })
     )
   );

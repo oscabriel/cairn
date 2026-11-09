@@ -6,7 +6,15 @@ import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ShellCommand } from "@cairn/protocol/ShellCommands";
-import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
+import {
+  Array,
+  Equal,
+  Equivalence,
+  Option,
+  Predicate,
+  Record,
+  Schema,
+} from "effect";
 import { Update, Url } from "foldkit";
 import type { Runtime } from "foldkit";
 import { UrlRequest } from "foldkit/navigation";
@@ -31,7 +39,9 @@ import {
   enqueue,
   enqueueDispatch,
   nextToSend,
+  OutboxItem,
   outboxKey,
+  rebaseOutbox,
   remove,
 } from "./connection/Outbox.ts";
 import {
@@ -105,6 +115,7 @@ import {
   update as updateSidebar,
 } from "./sidebar/Update.ts";
 import { threadRowOf } from "./ThreadRow.ts";
+import { promptKey } from "./timeline/Model.ts";
 
 type UpdateReturn = Update.Return<Model, Message, Services>;
 
@@ -139,9 +150,16 @@ const informThread = Update.foldChild({
   toParentMessage: toGotThreadMessage,
 });
 
+/**
+ * The outbox items this tab still sends: every queued item except those it was refused and left
+ * for the tab that queued them.
+ */
+const outboxSent = (model: Model): ReadonlyArray<OutboxItem> =>
+  model.outbox.filter((item) => !model.outboxLeft.includes(outboxKey(item)));
+
 /** Whether `threadId`'s launch is on its way: queued in the outbox, or its shell row is preparing. */
 const isLaunching = (model: Model, threadId: ThreadId): boolean =>
-  model.outbox.some(
+  outboxSent(model).some(
     (item) =>
       Predicate.isTagged(item, "Launch") && item.input.threadId === threadId
   ) ||
@@ -150,6 +168,29 @@ const isLaunching = (model: Model, threadId: ThreadId): boolean =>
       (thread) => thread.id === threadId && thread.activity === "preparing"
     )
   );
+
+/** The prompts (`promptKey`) of the sends to `threadId` waiting in the outbox. */
+const queuedPromptsFor = (
+  model: Model,
+  threadId: Option.Option<ThreadId>
+): ReadonlyArray<string> =>
+  Option.match(threadId, {
+    onNone: () => [],
+    onSome: (id) =>
+      outboxSent(model).flatMap((item) =>
+        Predicate.isTagged(item, "Send") && item.input.threadId === id
+          ? [
+              promptKey(
+                item.input.input.text,
+                item.input.input.attachments,
+                item.input.input.skillRefs
+              ),
+            ]
+          : []
+      ),
+  });
+
+const samePrompts = Array.makeEquivalence(Equivalence.strictEqual<string>());
 
 /** Tells the thread page the routed thread and the connection; a no-op when nothing changed. */
 const syncThread: Step = (model) => {
@@ -160,27 +201,39 @@ const syncThread: Step = (model) => {
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
     launching: Option.exists(threadId, (id) => isLaunching(model, id)),
+    queuedPrompts: queuedPromptsFor(model, threadId),
   };
 
   const unchanged =
     Equal.equals(model.thread.threadId, context.threadId) &&
     model.thread.epoch === context.epoch &&
     model.thread.hasClient === context.hasClient &&
-    model.thread.launching === context.launching;
+    model.thread.launching === context.launching &&
+    samePrompts(model.thread.timeline.queuedPrompts, context.queuedPrompts);
 
   return unchanged ? { model } : informThread(model, context);
 };
 
-/** Saves the outbox as it now is. */
+/** Saves what this tab changed in the outbox since it last read or wrote it. */
 const persist: Step = (model) => ({
   model,
-  commands: [SaveOutbox({ outbox: model.outbox })],
+  commands: [SaveOutbox({ base: model.outboxStored, outbox: model.outbox })],
 });
 
-/** Sends the outbox's head when the connection is live and nothing is in flight. */
+/**
+ * Sends the outbox's head when the connection is live, nothing is in flight, and no item is
+ * waiting out its resend backoff.
+ */
 const sendNext: Step = (model) =>
   Option.match(
-    nextToSend(model.outbox, model.outboxInFlight, isLive(model.connection)),
+    Option.filter(
+      nextToSend(
+        outboxSent(model),
+        model.outboxInFlight,
+        isLive(model.connection)
+      ),
+      () => Option.isNone(model.outboxResend)
+    ),
     {
       onNone: () => ({ model }),
       onSome: (item) => ({
@@ -221,6 +274,8 @@ const enterBackoff: Step = (model) => {
       connection: () => next.connection,
       hello: () => Option.none(),
       outboxInFlight: () => Option.none(),
+      // The next connection sends the head at once.
+      outboxResend: () => Option.none(),
     }),
     commands: Option.match(next.wait, {
       onNone: () => [],
@@ -568,6 +623,7 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
                     item,
                     attachments,
                     acknowledged: false,
+                    fromScratch: false,
                   }),
           }),
           [
@@ -724,46 +780,114 @@ const launchedThread = (sent: SentTurn): Option.Option<ThreadId> =>
     ? Option.some(sent.item.input.threadId)
     : Option.none();
 
+/** The thread a turn goes to; none for a shell command. */
+const turnThread = (item: SentTurn["item"]): Option.Option<ThreadId> =>
+  OutboxItem.match(item, {
+    Send: ({ input }) => Option.some(input.threadId),
+    Launch: ({ input }) => Option.some(input.threadId),
+    Dispatch: () => Option.none(),
+  });
+
+/** The words a turn sends. */
+const turnText = (item: SentTurn["item"]): string =>
+  OutboxItem.match(item, {
+    Send: ({ input }) => input.input.text,
+    Launch: ({ input }) => input.initialMessage.text,
+    Dispatch: () => "",
+  });
+
+/** True when `threadId` is the scratch overlay's thread. */
+const isScratchThread = (model: Model, threadId: ThreadId): boolean =>
+  Option.contains(model.nextShell.scratch.threadId, threadId);
+
+/** Puts a refused scratch turn back in the scratch overlay's field. */
+const restoreScratchTurn = (text: string, launched: boolean): Step =>
+  Update.foldChildStep({
+    update: NextShell.restoreScratchTurn(text, launched),
+    read: readNextShell,
+    write: writeNextShell,
+    toParentMessage: toGotNextShellMessage,
+  });
+
 /** The text of the notice raised when the outbox cannot be saved; it clears once a save works. */
 const UNSAVED_NOTICE =
   "Unsent changes could not be saved on this device. Keep this page open until they are sent.";
 
 /**
  * Restores the turn `key` names and forgets it. A refused launch the user is waiting on, on its
- * thread's page, opens its draft again.
+ * thread's page, opens its draft again. A turn with no record (the page reloaded since it was
+ * queued, and records live in memory) comes back from `refused`, the outbox item itself: its words
+ * and settings, but not its attachments, whose refs only the record kept.
  */
 const restoreSent =
-  (key: string): Step =>
+  (key: string, refused: Option.Option<SentTurn["item"]>): Step =>
   (model) =>
-    Option.match(Record.get(model.sentTurns, key), {
-      onNone: () => ({ model }),
-      onSome: (sent) => {
-        const forgotten = modifyFields(model, {
-          sentTurns: (turns) => Record.remove(turns, key),
-        });
+    Option.match(
+      Option.orElse(Record.get(model.sentTurns, key), () =>
+        Option.map(refused, (item): SentTurn => ({
+          item,
+          attachments: [],
+          acknowledged: false,
+          // With no record the origin is unknown; the scratch thread's turns go back to the overlay.
+          fromScratch: Option.exists(turnThread(item), (threadId) =>
+            isScratchThread(model, threadId)
+          ),
+        }))
+      ),
+      {
+        onNone: () => ({ model }),
+        onSome: (sent) => {
+          const forgotten = modifyFields(model, {
+            sentTurns: (turns) => Record.remove(turns, key),
+          });
 
-        const reopen = Option.filter(launchedThread(sent), (threadId) =>
-          Option.contains(routedThreadId(model.route), threadId)
-        );
+          if (sent.fromScratch) {
+            return restoreScratchTurn(
+              turnText(sent.item),
+              Option.isSome(launchedThread(sent))
+            )(forgotten);
+          }
 
-        return Update.combine(forgotten, [
-          restoreComposerTurn(sent),
-          (next) => ({
-            model: next,
-            commands: Option.match(reopen, {
-              onNone: () => [],
-              onSome: (threadId) => [
-                NavigateInternal({
-                  url: draftRouter({
-                    draftId: Composer.retryDraftId(threadId),
+          const reopen = Option.filter(launchedThread(sent), (threadId) =>
+            Option.contains(routedThreadId(model.route), threadId)
+          );
+
+          return Update.combine(forgotten, [
+            restoreComposerTurn(sent),
+            (next) => ({
+              model: next,
+              commands: Option.match(reopen, {
+                onNone: () => [],
+                onSome: (threadId) => [
+                  NavigateInternal({
+                    url: draftRouter({
+                      draftId: Composer.retryDraftId(threadId),
+                    }),
                   }),
-                }),
-              ],
+                ],
+              }),
             }),
-          }),
-        ]);
-      },
-    });
+          ]);
+        },
+      }
+    );
+
+/**
+ * The record of the turn `key` once the brain acknowledged it, here or in the tab whose answer
+ * removed it from the outbox (a tab leaves another's refused turn queued): a launch waits for its
+ * shell row, and a send is done.
+ */
+const settleAcknowledged = (
+  turns: Model["sentTurns"],
+  key: string
+): Model["sentTurns"] =>
+  Option.match(Record.get(turns, key), {
+    onNone: () => turns,
+    onSome: (sent) =>
+      Option.isSome(launchedThread(sent))
+        ? Record.set(turns, key, { ...sent, acknowledged: true })
+        : Record.remove(turns, key),
+  });
 
 /**
  * Follows acknowledged launches in the shell: a thread that started forgets its launch, and one
@@ -798,7 +922,7 @@ const followLaunches: Step = (model) =>
         model,
         settled.map(({ failed, key }): Step =>
           failed
-            ? restoreSent(key)
+            ? restoreSent(key, Option.none())
             : (current) => ({
                 model: modifyFields(current, {
                   sentTurns: (turns) => Record.remove(turns, key),
@@ -819,7 +943,21 @@ const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
       ({ item, navigateTo }) =>
       (model) =>
         Update.combine(
-          modifyFields(model, { outbox: (outbox) => enqueue(outbox, item) }),
+          modifyFields(model, {
+            outbox: (outbox) => enqueue(outbox, item),
+            // A scratch turn is kept like the composer's, so a refusal puts it back in the overlay.
+            sentTurns: (sent) =>
+              Option.exists(turnThread(item), (threadId) =>
+                isScratchThread(model, threadId)
+              )
+                ? Record.set(sent, outboxKey(item), {
+                    item,
+                    attachments: [],
+                    acknowledged: false,
+                    fromScratch: true,
+                  })
+                : sent,
+          }),
           [
             persist,
             sendNext,
@@ -939,13 +1077,18 @@ const syncScratchThread: Step = (model) => {
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
     launching: Option.exists(threadId, (id) => isLaunching(model, id)),
+    queuedPrompts: queuedPromptsFor(model, threadId),
   };
 
   const unchanged =
     Equal.equals(model.scratchThread.threadId, context.threadId) &&
     model.scratchThread.epoch === context.epoch &&
     model.scratchThread.hasClient === context.hasClient &&
-    model.scratchThread.launching === context.launching;
+    model.scratchThread.launching === context.launching &&
+    samePrompts(
+      model.scratchThread.timeline.queuedPrompts,
+      context.queuedPrompts
+    );
 
   return unchanged ? { model } : informScratchThread(model, context);
 };
@@ -1049,14 +1192,9 @@ const step = (received: Message): Step =>
                 ? Option.none()
                 : inFlight,
             outboxAttempt: () => 0,
-            sentTurns: (turns) =>
-              Option.match(Record.get(turns, key), {
-                onNone: () => turns,
-                onSome: (sent) =>
-                  Option.isSome(launchedThread(sent))
-                    ? Record.set(turns, key, { ...sent, acknowledged: true })
-                    : Record.remove(turns, key),
-              }),
+            outboxResend: (waiting) =>
+              Option.filter(waiting, (waitingKey) => waitingKey !== key),
+            sentTurns: (turns) => settleAcknowledged(turns, key),
           }),
           [persist, sendNext, followLaunches]
         ),
@@ -1083,9 +1221,33 @@ const step = (received: Message): Step =>
             model: modifyFields(model, {
               outboxInFlight: () => Option.none(),
               outboxAttempt: () => attempt,
+              outboxResend: () => Option.some(key),
             }),
             commands: [WaitToResend({ epoch, key, attempt })],
           };
+        }
+
+        const refused = Array.findFirst(
+          model.outbox,
+          (item) => outboxKey(item) === key
+        );
+
+        // Another tab's turn stays queued for that tab, which puts it back with its attachments.
+        if (
+          model.outboxAdopted.includes(key) &&
+          Option.exists(
+            refused,
+            (item) => !Predicate.isTagged(item, "Dispatch")
+          )
+        ) {
+          return sendNext(
+            modifyFields(model, {
+              outboxInFlight: () => Option.none(),
+              outboxAttempt: () => 0,
+              outboxLeft: (left) => [...left, key],
+              notice: () => Option.some(message),
+            })
+          );
         }
 
         return Update.combine(
@@ -1095,31 +1257,60 @@ const step = (received: Message): Step =>
             outboxAttempt: () => 0,
             notice: () => Option.some(message),
           }),
-          [restoreSent(key), persist, sendNext]
+          [
+            restoreSent(
+              key,
+              model.outboxAdopted.includes(key) ? Option.none() : refused
+            ),
+            persist,
+            sendNext,
+          ]
         );
       },
     ElapsedResend:
       ({ epoch, key }) =>
       (model) =>
-        // A timer from an earlier epoch, or for an item already answered, sends nothing: the head
-        // must still be this item, and sendNext refuses while another send is in flight.
-        isCurrentEpoch(model, epoch) &&
-        Option.exists(
-          Array.head(model.outbox),
-          (head) => outboxKey(head) === key
-        )
-          ? sendNext(model)
+        // A timer from an earlier epoch, or for an item no longer waiting, sends nothing; the wait
+        // over, the head goes (this item, unless another tab's answer removed it meanwhile).
+        isCurrentEpoch(model, epoch) && Option.contains(model.outboxResend, key)
+          ? sendNext(modifyFields(model, { outboxResend: () => Option.none() }))
           : { model },
+    // Saving merges into what the other tab wrote, and its answer brings those items here.
+    ChangedStoredOutbox: () => persist,
     CompletedSaveOutbox:
-      ({ saved }) =>
-      (model) => ({
-        model: modifyFields(model, {
-          notice: (notice) =>
-            saved
-              ? Option.filter(notice, (text) => text !== UNSAVED_NOTICE)
-              : Option.some(UNSAVED_NOTICE),
+      ({ stored, written }) =>
+      (model) =>
+        Option.match(stored, {
+          onNone: () => ({
+            model: modifyFields(model, {
+              notice: () => Option.some(UNSAVED_NOTICE),
+            }),
+          }),
+          onSome: (saved) => {
+            const outbox = rebaseOutbox(written, model.outbox, saved);
+            const keys = outbox.map(outboxKey);
+            const held = model.outbox.map(outboxKey);
+            const settled = Array.filter(held, (key) => !keys.includes(key));
+
+            return Update.combine(
+              modifyFields(model, {
+                outbox: () => outbox,
+                outboxStored: () => saved,
+                outboxAdopted: (adopted) => [
+                  ...Array.filter(adopted, (key) => keys.includes(key)),
+                  ...Array.filter(keys, (key) => !held.includes(key)),
+                ],
+                outboxLeft: (left) =>
+                  Array.filter(left, (key) => keys.includes(key)),
+                sentTurns: (turns) =>
+                  Array.reduce(settled, turns, settleAcknowledged),
+                notice: (notice) =>
+                  Option.filter(notice, (text) => text !== UNSAVED_NOTICE),
+              }),
+              [sendNext, followLaunches]
+            );
+          },
         }),
-      }),
     DismissedNotice: () => (model) => ({
       model: modifyFields(model, { notice: () => Option.none() }),
     }),
@@ -1201,9 +1392,13 @@ export const init: Runtime.RoutingApplicationInit<
       hello: Option.none(),
       shell: Option.map(flags.boot, (boot) => boot.shell),
       outbox: flags.outbox,
+      outboxStored: flags.outbox,
       outboxInFlight: Option.none(),
       outboxAttempt: 0,
+      outboxResend: Option.none(),
       sentTurns: {},
+      outboxAdopted: [],
+      outboxLeft: [],
       notice: Option.none(),
       thread: Thread.Model.initial,
       sidebar: initialSidebar,

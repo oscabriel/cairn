@@ -21,7 +21,7 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import { Schema } from "effect";
+import { Duration, Schema } from "effect";
 
 import {
   CommandId,
@@ -175,3 +175,10 @@ export const DispatchResult = Schema.Struct({
 });
 
 export type DispatchResult = typeof DispatchResult.Type;
+
+/**
+ * How long a client may resend a shell command it never saw answered, counted from its command
+ * id's mint time. The brain keeps receipts several times longer, so every resend a client makes
+ * finds its first answer instead of being planned again against a row that moved on.
+ */
+export const SHELL_COMMAND_RESEND_WINDOW = Duration.days(7);

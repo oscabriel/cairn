@@ -108,6 +108,11 @@ export interface JudgeRunItemState {
   /** The `cairn.judge-run` task. */
   taskId: number;
   criterionId: string;
+  /**
+   * The criterion's `changedAt` when queued: a run judges the criterion as it stood then, so a
+   * later criterion that reuses the id is not this run's. Absent on items queued before it was kept.
+   */
+  changedAt?: number;
   queuedAt: number;
   /** Set by the run's completing commit; a run with none is still going. */
   settledAt: number | null;

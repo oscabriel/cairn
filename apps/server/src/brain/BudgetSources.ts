@@ -69,7 +69,7 @@ import { piConversationId } from "./PiIds.ts";
 /** The tool name a raise record carries. */
 export const RAISE_TOOL = "budget_raise";
 
-/** How long a raise waits before a waiting reader would call it expired: nothing waits on it. */
+/** The `expiresAt` a raise carries; a raise never lapses (`neverLapses` in `CairnDocs.ts`, ADR 0029). */
 const RAISE_TTL_MILLIS = 7 * 24 * 3_600_000;
 
 /** The approval id of the raise asked at `epoch`. */

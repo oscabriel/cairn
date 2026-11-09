@@ -303,9 +303,9 @@ export const footerView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const { layout, width } = model.footer;
   const draft = activeDraft(model);
 
+  // The tray is what the user sees; a draft's saved ids alone are not content.
   const hasContent =
     draft.text.trim().length > 0 ||
-    draft.attachments.length > 0 ||
     Option.exists(draftKey(model), (key) =>
       hasAttachments(model.attachments, key)
     );

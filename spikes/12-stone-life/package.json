@@ -1,0 +1,16 @@
+{
+  "name": "spike-12-stone-life",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/sandbox": "1.0.2",
+    "@earendil-works/chord": "1.4.0",
+    "@earendil-works/pi-env": "1.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261021.1",
+    "alchemy": "2.0.0-beta.83",
+    "effect": "4.0.5"
+  },
+  "pnpm": { "overrides": { "effect": "4.0.5" } }
+}

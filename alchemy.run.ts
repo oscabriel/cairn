@@ -1,5 +1,5 @@
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
 import { Effect } from "effect";
 
 // The one Stack. It owns every Cloudflare resource; the brain on the Beelink is not an Alchemy resource.

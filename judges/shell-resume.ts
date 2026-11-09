@@ -32,7 +32,7 @@ import {
   ThreadUnsettle,
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
-import { NodeRuntime, NodeServices, NodeSocket } from "@effect/platform-node";
+import { NodeRuntime, NodeServices, NodeWS } from "@effect/platform-node";
 import {
   Clock,
   DateTime,
@@ -50,6 +50,7 @@ import {
 } from "effect";
 import { HttpServer } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
+import { Socket } from "effect/socket";
 
 import { AppLayer, ScriptedBrain } from "../apps/server/src/AppLayer.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
@@ -241,10 +242,10 @@ const runClient = (
         pingTimeout: "8 seconds",
       }).pipe(
         Layer.provide(
-          NodeSocket.layerWebSocket(
+          Socket.layerWebSocket(
             `ws://127.0.0.1:${proxyPort}/ws?protocol=${PROTOCOL_VERSION}`,
             { headers: CADDY_HEADERS }
-          )
+          ).pipe(Layer.provide(NodeWS.layerWebSocketConstructor))
         ),
         Layer.provide(RpcSerialization.layerJson)
       )

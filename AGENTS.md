@@ -14,7 +14,7 @@ One person's agent harness control plane: a web app whose brain (pi-durable) run
 
 - Read `node_modules/effect/AGENTS.md` before writing Effect code, then the installed source for the module you use. Effect 4 differs from what you remember.
 - Read installed `node_modules` source for alchemy and the `@earendil-works/*` (pi) packages before using their APIs. For pi-durable, read `docs/spec.md` §12 ("API footguns") before writing harness code.
-- Alchemy is pinned at `2.0.0-beta.83`: import `alchemy/Cloudflare`. The docs at main.alchemy.run describe the unpublished `@alchemy.run/cloudflare`; trust the installed source where they differ.
+- Alchemy is pinned at `2.0.0-beta.85`: import `@alchemy.run/cloudflare` and `@alchemy.run/github`. Trust the installed source where the docs at main.alchemy.run differ.
 
 ## Code
 

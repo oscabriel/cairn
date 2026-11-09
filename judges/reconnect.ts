@@ -29,7 +29,7 @@ import { CommandId } from "@cairn/protocol/Ids";
 import { CairnRpcs, PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
 import { ProjectCreate } from "@cairn/protocol/ShellCommands";
-import { NodeSocket } from "@effect/platform-node";
+import { NodeWS } from "@effect/platform-node";
 import {
   Effect,
   Layer,
@@ -41,6 +41,7 @@ import {
 } from "effect";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError } from "effect/rpc";
+import { Socket } from "effect/socket";
 import { createServer as createViteServer } from "vite";
 
 import { chromium } from "./lib/Browser.ts";
@@ -156,10 +157,10 @@ const ProtocolLive = RpcClient.layerProtocolSocket({
   retryPolicy: Schedule.recurs(0),
 }).pipe(
   Layer.provide(
-    NodeSocket.layerWebSocket(
+    Socket.layerWebSocket(
       `ws://${LOOPBACK}:${brainPort}/ws?protocol=${PROTOCOL_VERSION}`,
       { headers: { origin, host: new URL(origin).host } }
-    )
+    ).pipe(Layer.provide(NodeWS.layerWebSocketConstructor))
   ),
   Layer.provide(RpcSerialization.layerJson)
 );

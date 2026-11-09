@@ -9,7 +9,7 @@ import os from "node:os";
 import { Internal, NotFound, Unavailable } from "@cairn/protocol/Errors";
 import { ProjectId } from "@cairn/protocol/Ids";
 import { CairnRpcs, PROTOCOL_VERSION } from "@cairn/protocol/Rpc";
-import { NodeServices, NodeSocket } from "@effect/platform-node";
+import { NodeServices, NodeWS } from "@effect/platform-node";
 import { assert, layer } from "@effect/vitest";
 import {
   Cause,
@@ -25,6 +25,7 @@ import {
 } from "effect";
 import { HttpServer } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
+import { Socket } from "effect/socket";
 
 import { AppLayer, ScriptedBrain } from "../AppLayer.ts";
 import { ServerConfig } from "../Config.ts";
@@ -115,10 +116,10 @@ const connect = Effect.fnUntraced(function* (headers: Record<string, string>) {
       retryPolicy: Schedule.recurs(0),
     }).pipe(
       Layer.provide(
-        NodeSocket.layerWebSocket(
+        Socket.layerWebSocket(
           `ws://127.0.0.1:${port}/ws?protocol=${PROTOCOL_VERSION}`,
           { headers }
-        )
+        ).pipe(Layer.provide(NodeWS.layerWebSocketConstructor))
       ),
       Layer.provide(RpcSerialization.layerJson)
     )

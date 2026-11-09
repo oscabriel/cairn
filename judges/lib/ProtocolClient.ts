@@ -4,8 +4,8 @@
 //   const client = yield* ProtocolClient.cairn({ base: "http://127.0.0.1:3774", origin: "https://code.gneiss.run" })
 //   const hello = yield* client["session.hello"]()
 //
-// Node's WebSocket cannot set `Origin`, so the socket comes from `NodeSocket.layerWebSocket` with handshake
-// headers, which uses the `ws` package. A client never reconnects by itself (`retryPolicy: recurs(0)`): when
+// Node's global WebSocket ignores a custom `Host`, so the socket is built on `NodeWS`'s constructor, which
+// uses the `ws` package and sends every handshake header. A client never reconnects by itself (`retryPolicy: recurs(0)`): when
 // its socket drops, every call fails with an `RpcClientError` and the judge decides what to do, usually
 // opening a new client in a new scope. That is also the browser's rule (plan, "Client connection rules").
 
@@ -14,11 +14,12 @@ import {
   PROTOCOL_QUERY_PARAM,
   PROTOCOL_VERSION,
 } from "@cairn/protocol/Rpc";
-import { NodeSocket } from "@effect/platform-node";
+import { NodeWS } from "@effect/platform-node";
 import { Effect, Layer, Schedule } from "effect";
 import type { Duration, Scope } from "effect";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { Rpc, RpcClientError, RpcGroup } from "effect/rpc";
+import { Socket } from "effect/socket";
 
 export interface ProtocolClientOptions {
   /** The server's base URL, `http://127.0.0.1:<port>` or `https://code.gneiss.run`. */
@@ -58,13 +59,13 @@ export const layerProtocol = (
     pingTimeout: options.pingTimeout ?? "8 seconds",
   }).pipe(
     Layer.provide(
-      NodeSocket.layerWebSocket(
+      Socket.layerWebSocket(
         socketUrl(options.base, options.protocol ?? PROTOCOL_VERSION),
         {
           headers: { ...options.headers, Origin: options.origin },
           openTimeout: options.openTimeout ?? "5 seconds",
         }
-      )
+      ).pipe(Layer.provide(NodeWS.layerWebSocketConstructor))
     ),
     Layer.provide(RpcSerialization.layerJson)
   );

@@ -96,14 +96,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -1673,17 +1669,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/LiveStreamOverflowEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/LiveStreamOverflowEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -2270,23 +2262,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -2794,26 +2782,22 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              },
-              {
-                "$ref": "#/$defs/AttachmentRejectedEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
+          },
+          {
+            "$ref": "#/$defs/AttachmentRejectedEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -3222,26 +3206,22 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              },
-              {
-                "$ref": "#/$defs/AttachmentRejectedEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
+          },
+          {
+            "$ref": "#/$defs/AttachmentRejectedEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -3612,23 +3592,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -3953,23 +3929,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -4312,23 +4284,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -4796,23 +4764,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -5130,23 +5094,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -5867,17 +5827,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -6143,17 +6099,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -6411,17 +6363,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -6680,17 +6628,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -6974,14 +6918,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -7159,17 +7099,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -7426,17 +7362,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -7676,17 +7608,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/AttachmentRejectedEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/AttachmentRejectedEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -7880,17 +7808,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -8143,17 +8067,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -8392,17 +8312,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -8707,14 +8623,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -8884,14 +8796,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -9109,14 +9017,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -9289,17 +9193,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -9537,17 +9437,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -9776,14 +9672,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -9926,14 +9818,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -10092,23 +9980,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -10420,14 +10304,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -10585,14 +10465,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -10870,14 +10746,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -11291,23 +11163,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -11723,14 +11591,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -12106,17 +11970,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -12427,20 +12287,16 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -12688,14 +12544,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -12839,23 +12691,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -13277,23 +13125,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -13618,23 +13462,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -13952,23 +13792,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -14291,23 +14127,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -14708,17 +14540,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -14984,14 +14812,10 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -15324,17 +15148,13 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -15542,23 +15362,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -15870,23 +15686,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"
@@ -16198,23 +16010,19 @@
       "schema": {
         "anyOf": [
           {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/UnavailableEncoded"
-              },
-              {
-                "$ref": "#/$defs/InternalEncoded"
-              },
-              {
-                "$ref": "#/$defs/NotFoundEncoded"
-              },
-              {
-                "$ref": "#/$defs/InvalidInputEncoded"
-              },
-              {
-                "$ref": "#/$defs/ConflictEncoded"
-              }
-            ]
+            "$ref": "#/$defs/UnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InternalEncoded"
+          },
+          {
+            "$ref": "#/$defs/NotFoundEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidInputEncoded"
+          },
+          {
+            "$ref": "#/$defs/ConflictEncoded"
           },
           {
             "$ref": "#/$defs/UnauthorizedEncoded"

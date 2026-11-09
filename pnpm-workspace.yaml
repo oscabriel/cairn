@@ -19,34 +19,34 @@ catalog:
   "@effect/vitest": 4.1.2
   effect: 4.1.2
   # The Agent SDK with its bundled `claude`, and the MCP SDK and zod it speaks through.
-  "@anthropic-ai/claude-agent-sdk": 0.3.305
-  "@modelcontextprotocol/sdk": 1.32.1
+  "@anthropic-ai/claude-agent-sdk": 0.3.321
+  "@modelcontextprotocol/sdk": 1.32.2
   zod: 4.6.7
   # Foldkit and the web build.
-  "@foldkit/oxlint-plugin": 0.15.3
+  "@foldkit/oxlint-plugin": 0.15.4
   "@foldkit/ui": 0.170.0
   "@foldkit/vite-plugin": 0.29.0
-  "@tailwindcss/vite": 4.3.3
+  "@tailwindcss/vite": 4.3.5
   foldkit: 0.170.0
-  happy-dom: 20.14.6
-  lucide: 1.61.0
-  shiki: 4.5.0
-  tailwindcss: 4.3.3
-  vite: 8.3.5
+  happy-dom: 21.0.4
+  lucide: 1.70.0
+  shiki: 4.6.0
+  tailwindcss: 4.3.5
+  vite: 8.3.7
   # Document text.
   mammoth: 1.13.0
-  unpdf: 1.9.1
+  unpdf: 2.1.0
   # Toolchain. oxlint-tsgolint and @effect/tsgo build on TypeScript's Go port, so they move with
   # `typescript`; oxlint and @oxlint/plugins share one release.
   alchemy: 2.0.0-beta.85
   "@alchemy.run/cloudflare": 2.0.0-beta.85
   "@alchemy.run/github": 2.0.0-beta.85
-  "@effect/tsgo": 0.55.0
-  "@oxlint/plugins": 1.89.0
-  oxlint: 1.89.0
-  oxlint-tsgolint: 7.0.2004
+  "@effect/tsgo": 0.67.5
+  "@oxlint/plugins": 1.92.0
+  oxlint: 1.92.0
+  oxlint-tsgolint: 7.0.2006
   typescript: 7.0.2
-  vitest: 5.0.5
+  vitest: 5.1.0
 
 overrides:
   effect: 4.1.2

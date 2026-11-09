@@ -613,11 +613,10 @@ describe("contrast of the next tokens", () => {
 
     // One look: no `data-look` in tokens.css or anywhere in next/ (the catalogue's
     // `data-look-state` and `data-look-catalogue` name specimens, not a look).
-    const switches = [tokensPath, ...nextFiles(nextDirectory)].flatMap(
-      (file) =>
-        LOOK_SWITCH.test(withoutComments(readFileSync(file, "utf-8")))
-          ? [path.relative(root, file)]
-          : []
+    const switches = [tokensPath, ...nextFiles(nextDirectory)].flatMap((file) =>
+      LOOK_SWITCH.test(withoutComments(readFileSync(file, "utf-8")))
+        ? [path.relative(root, file)]
+        : []
     );
 
     assert.deepStrictEqual(switches, []);

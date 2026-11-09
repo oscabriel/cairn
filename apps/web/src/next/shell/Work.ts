@@ -424,11 +424,7 @@ const childRow = (h: H, child: LineageChild, work: WorkState): Html => {
   );
 };
 
-const moreButton = (
-  h: H,
-  hidden: number,
-  group: "active" | "previous"
-): Html =>
+const moreButton = (h: H, hidden: number, group: "active" | "previous"): Html =>
   hidden <= 0
     ? h.empty
     : h.button(

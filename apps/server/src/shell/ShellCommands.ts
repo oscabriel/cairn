@@ -1635,16 +1635,14 @@ export const planShellCommand = (
       ),
 
     ThreadSnoozeExpire: (expire) =>
-      Result.flatMap(
-        unarchivedThread(command, state, expire.threadId),
-        (row) =>
-          sameTime(row.shell.snoozedUntil, Option.some(expire.snoozedUntil))
-            ? threadPlan(unsnooze(row, now), "thread.unsnoozed")
-            : conflict(
-                command,
-                "stale_state",
-                `thread ${expire.threadId} was snoozed again or woken since its timer was set.`
-              )
+      Result.flatMap(unarchivedThread(command, state, expire.threadId), (row) =>
+        sameTime(row.shell.snoozedUntil, Option.some(expire.snoozedUntil))
+          ? threadPlan(unsnooze(row, now), "thread.unsnoozed")
+          : conflict(
+              command,
+              "stale_state",
+              `thread ${expire.threadId} was snoozed again or woken since its timer was set.`
+            )
       ),
   });
 };

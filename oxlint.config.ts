@@ -15,6 +15,9 @@ const vitestForEffect = {
       // `expect` inside `it.effect(() => Effect.gen(...))` is not seen as
       // inside a test block.
       "vitest/no-standalone-expect": "off",
+      // Test files kept ultracite 8.0's exception: mock factories use
+      // Promise.resolve and reject. The rule itself is on in `rules` below.
+      "promise/prefer-await-to-then": "off",
     },
   })),
 };
@@ -366,6 +369,9 @@ export default defineConfig({
     "max-classes-per-file": "off",
     "no-redeclare": "off",
     "oxc/no-accumulating-spread": "error",
+    // ultracite 8.1 turned this off for its false reports on Zod's `.catch()`; Cairn kept it on
+    // before that release and keeps it now, so a dependency bump does not loosen the gate.
+    "promise/prefer-await-to-then": "error",
     "require-yield": "off",
     // Effect's own style wins over ultracite's here (ADR 0004): Schema field order is meaningful,
     // service shapes use method signatures, Effect writes `Array<A>`/`ReadonlyArray<A>`, and

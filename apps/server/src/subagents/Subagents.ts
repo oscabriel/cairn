@@ -53,7 +53,6 @@ import { listParent, SPAWN_TOOL } from "./BrainCap.ts";
 import { BriefFaults, NO_BRIEF_FAULTS } from "./BriefFaults.ts";
 import type { BriefFaultHooks } from "./BriefFaults.ts";
 import { conversationOf } from "./Delivery.ts";
-import { CheckTask } from "./DoneWhenCheck.ts";
 import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
 import type {
   BudgetAccess,
@@ -236,7 +235,7 @@ const build = (
         tasks.StartChild,
         tasks.BriefTell,
         tasks.Reporter,
-        CheckTask,
+        tasks.Check,
       ],
     }),
   };

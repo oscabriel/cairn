@@ -14,6 +14,8 @@ import type { Brief } from "@cairn/protocol/Policy";
 import type { SubagentSettlement } from "@cairn/protocol/Subagents";
 import { Match, Option } from "effect";
 
+import { fencedText } from "./Fence.ts";
+
 /**
  * The first input a child receives: its brief's title and task, then why, and the command its
  * parent named for when the work is done (ADR 0055), which the child is asked to run.
@@ -59,10 +61,15 @@ const OUTCOME_WORDS: Readonly<Record<SubagentSettlement["outcome"], string>> = {
 /** How much of a check's output tail the note quotes, from its end. */
 const CHECK_TAIL_LIMIT = 800;
 
+/** The fences a check's quoted output must not open or close: its own, and the note's result's. */
+const CHECK_OUTPUT_TAGS = ["check_output", "subagent_result"];
+
 /**
  * A settlement's check (ADR 0055) as its note says it: the brief's command and its verdict, by an
  * outside judge, with the exit code and the end of its output when it was not met, or why Cairn
- * did not run it. The output is quoted inside a `<check_output>` block, read as data.
+ * did not run it. The output is quoted inside a `<check_output>` block, read as data, fenced as the
+ * model judge fences a transcript's turns (`Fence.ts`, ADR 0055 decision 4): a child's output can
+ * neither close the block nor read as Cairn's words.
  */
 export const renderCheck = (
   check: NonNullable<SubagentSettlement["check"]>
@@ -91,9 +98,9 @@ export const renderCheck = (
 
   return [
     verdict,
-    "Its output ends:",
+    "Its output ends (role labels and these tags removed, angle brackets and ampersands written &lt; &gt; &amp;):",
     "<check_output>",
-    tail,
+    fencedText(tail, CHECK_OUTPUT_TAGS),
     "</check_output>",
   ];
 };
@@ -244,6 +251,9 @@ export const SPAWN_WAITING =
 export const SubagentToolText = {
   /** `subagent_status` for a thread with no subagents. */
   noSubagents: "No subagents.",
+  /** A settled child's status while Cairn runs its brief's `done_when` command (ADR 0055). */
+  checking: (argv: ReadonlyArray<string>) =>
+    `checking: Cairn runs \`${argv.join(" ")}\`, and its result note follows`,
   /** One child's line in `subagent_status`. */
   statusLine: (
     child: string,

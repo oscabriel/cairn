@@ -13,9 +13,10 @@
 //   run is still going is not queued again. It returns "queued", never a verdict. Without a
 //   criterion it lists the goal. A `user` judge is the user's to mark; nothing is queued.
 //
-// A subagent's result goes to its parent, which accepts it (its brief's `done_when` command is shown
-// and given to the child, not run, ADR 0055), so both tools refuse in a child: goals
-// live on the threads the user talks to, the project thread first among them (2026-10-29).
+// A subagent's result goes to its parent, which accepts it (Cairn runs its brief's `done_when`
+// command when the child's run completes, and the result's note says the verdict, ADR 0055), so
+// both tools refuse in a child: goals live on the threads the user talks to, the project thread
+// first among them (2026-10-29).
 
 import { TaskId } from "@cairn/protocol/Ids";
 import type { ModelRef } from "@cairn/protocol/Models";

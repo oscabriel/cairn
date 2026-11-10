@@ -57,6 +57,9 @@ export const SubagentFaults = Context.Reference<SubagentFaultSet>(
  * - reporter-submitted: the reporter's input is admitted to the child; the reporter still delivers.
  * - reporter-answered: the child's run that ended the input settled; nothing of the reporter's is.
  * - reporter-settled: the settlement is committed; no note is written.
+ * - reporter-checking: the settlement's `done_when` check is created and the reporter is in
+ *   `check` (ADR 0055); it does not wait on the check yet.
+ * - check-judged: the check task has its verdict (the command ran, or why not); it is not committed.
  * - reporter-noted: the note is written; the wake is not submitted.
  * - reporter-woken: the wake is submitted; the settlement is not marked delivered.
  * - nudge-marked: a typed child's nudge is decided and marked; the nudge is not submitted.
@@ -81,6 +84,8 @@ export const SUBAGENT_CRASH_POINTS = [
   "reporter-submitted",
   "reporter-answered",
   "reporter-settled",
+  "reporter-checking",
+  "check-judged",
   "reporter-noted",
   "reporter-woken",
   "nudge-marked",

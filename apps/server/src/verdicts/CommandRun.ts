@@ -5,12 +5,17 @@
 // (`subagents/DoneWhenCheck.ts`, ADR 0055) runs the brief's command this way in the child's
 // conversation, so both record the same evidence.
 //
-// An `exec` the task's abort or the brain's close cut off rejects with its error (code `aborted`):
-// nothing is recorded, and the caller decides what a rerun does.
+// The command gets exactly the environment a thread's gated `bash` gets: the brain's without
+// `CAIRN_*` (`threadProcessEnv`, `brain/Arms.ts`), with inheritance off, since pi-durable's default
+// execution inherits `process.env` whole. An `exec` the task's abort or the brain's close cut off
+// rejects with its error (code `aborted`): nothing is recorded, and the caller decides what a rerun
+// does.
 
 import type { Context as ChordContext } from "@earendil-works/chord/context";
 import type { TaskRuntime } from "@earendil-works/pi-durable";
 import { Option } from "effect";
+
+import { threadProcessEnv } from "../brain/Arms.ts";
 
 /** How much of a command's output a run keeps, from its end. */
 export const TAIL_LIMIT = 4000;
@@ -65,12 +70,17 @@ export const runCommand = async (
     return Option.none();
   }
 
+  // Read once per run, as gated `bash` reads it per call.
+  const processEnv = threadProcessEnv(process.env);
+
   let output = "";
 
   const result = await env.exec(
     command.argv,
     {
       cwd: agent.cwd,
+      env: processEnv,
+      inheritEnv: false,
       timeout: command.timeoutSec,
       onOutput: (text) => {
         output = tailOf(output + text, TAIL_LIMIT);
@@ -90,6 +100,8 @@ export const runCommand = async (
     ["git", "rev-parse", "HEAD"],
     {
       cwd: agent.cwd,
+      env: processEnv,
+      inheritEnv: false,
       timeout: SHA_TIMEOUT_SEC,
       onOutput: (text, _context, info) => {
         if (info.stream === "stdout") {

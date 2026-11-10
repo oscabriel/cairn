@@ -201,13 +201,13 @@ import {
 } from "./Delivery.ts";
 import type { SettlementState } from "./Delivery.ts";
 import {
-  CheckTask,
   CheckWhy,
   checkNotRun,
   checkOfOutcome,
+  checkTaskWith,
   doneWhenCommandOf,
 } from "./DoneWhenCheck.ts";
-import type { CheckCommand } from "./DoneWhenCheck.ts";
+import type { CheckCommand, CheckTaskDefinition } from "./DoneWhenCheck.ts";
 import { needsDecision } from "./NeedsDecision.ts";
 import {
   endUnanswered,
@@ -1858,6 +1858,13 @@ const firstReason = (
 ): string => reasons.find(([applies]) => applies)?.[1] ?? "none";
 
 /**
+ * Whether `seq` is `item`'s latest settlement, the one whose check `cairn.child` shows (ADR 0055):
+ * an earlier settlement's check, ending later, never overwrites a later run's.
+ */
+const isLatest = (item: Readonly<SubagentItemState>, seq: number): boolean =>
+  item.settlements.at(-1)?.seq === seq;
+
+/**
  * What follows a settled run, in the commit that settled it (ADR 0055). A brief that names a
  * `done_when` command and a run that completed: the check task, created in the child's
  * conversation so the command runs in the child's folder through its arms, and the `check`
@@ -1867,6 +1874,7 @@ const firstReason = (
  */
 const afterSettled = async (
   tx: Tx,
+  checkDefinition: CheckTaskDefinition,
   parent: ConversationId,
   item: SubagentItemState,
   child: ConversationId,
@@ -1909,7 +1917,7 @@ const afterSettled = async (
     };
   }
 
-  const checkTask = await tx.createTask(CheckTask, command.value, {
+  const checkTask = await tx.createTask(checkDefinition, command.value, {
     ...BACKGROUND,
     conversationId: child,
   });
@@ -1945,6 +1953,9 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     questionTtlMillis,
     questionWindowMillis,
   } = dependencies;
+
+  /** The `done_when` check task, crashing where `crashAt` plants (ADR 0055). */
+  const Check = checkTaskWith(crashAt);
 
   /**
    * A submit's request id: `requestId` itself, or with `freshIds` planted one minted again on every
@@ -2403,6 +2414,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     return await afterSettled(
       tx,
+      Check,
       parent,
       item,
       child,
@@ -2510,6 +2522,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     return await afterSettled(
       tx,
+      Check,
       parent,
       item,
       child,
@@ -2653,7 +2666,11 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     item.delivered = Math.max(item.delivered, seq);
 
-    if (checkpoint.phase === "check" && settlement.check !== undefined) {
+    if (
+      checkpoint.phase === "check" &&
+      settlement.check !== undefined &&
+      isLatest(item, seq)
+    ) {
       const link = await tx.doc(ChildDoc, child);
 
       link.check = settlement.check;
@@ -2890,6 +2907,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const { settlement, quiet, command, checkTask } = task.state.checkpoint;
         const parent = runtime.conversationId;
 
+        crashAt("reporter-checking");
+
         // The check task runs the command in the child once; a rerun of this phase waits on it
         // again (`DoneWhenCheck.ts`).
         const settled = await runtime.waitForTask(taskOf(checkTask), context);
@@ -2902,8 +2921,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
         await runtime.commit(async (tx) => {
           const registry = await tx.doc(SubagentsDoc, parent);
+          const item = registry.items[input.key];
 
-          if (registry.items[input.key] !== undefined) {
+          // The work panel shows the latest run's check, never an earlier one ending later.
+          if (item !== undefined && isLatest(item, settlement.seq)) {
             const link = await tx.doc(ChildDoc, conversationOf(input.child));
 
             link.check = check;
@@ -3882,6 +3903,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     StartChild,
     BriefTell,
     Reporter,
+    Check,
     newReporter,
     briefAnswered,
   };

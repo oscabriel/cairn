@@ -13,10 +13,11 @@
 // project and launches its project thread through the protocol.
 //
 // Last comes the crossing, untimed: with the gate held it kills and restarts the brain once more,
-// adds the project `last` and launches its project thread straight to the brain, waits for the
-// brain to settle, and only then opens the gate. So `last` and its project thread reach the page
-// through its reconnect alone (the replay after its cursor, or a snapshot), and nothing is added
-// after it.
+// adds the project `last` and launches its project thread straight to the brain, waits until the
+// turn of every thread it launched has ended, checks that the gate refused the page and that the
+// page is still not Live, and only then opens the gate. So `last` and its project thread reach the
+// page through its reconnect alone (the replay after its cursor, or a snapshot), and nothing is
+// added after it.
 //
 // Passes when every round's first frame came within the budget, the page's final list (the rail's
 // folder projects, the selected one and its project thread) equals a fresh snapshot from the brain,
@@ -72,6 +73,7 @@ import { FAUX_MODEL } from "../apps/server/src/brain/FauxModels.ts";
 import { projectIdFor } from "../apps/server/src/shell/ShellCommands.ts";
 import { chromium } from "./lib/Browser.ts";
 import { recordOnExit } from "./lib/Record.ts";
+import { endedRows, isSettled } from "./lib/TurnsEnded.ts";
 
 recordOnExit(import.meta);
 
@@ -285,12 +287,19 @@ const addProject = async (name: string): Promise<ProjectId> => {
   return projectIdFor(commandId);
 };
 
+/** Every thread this judge launched, whose turns must end before the brain counts as settled. */
+const launched: Array<ThreadId> = [];
+
 /** Launches the project's first top-level thread, which becomes its project thread (ADR 0048). */
 const launchProjectThread = async (projectId: ProjectId, name: string) => {
+  const threadId = ThreadId.make(uuidv7());
+
+  launched.push(threadId);
+
   const result = await withClient((client) =>
     client["thread.launch"]({
       commandId: decodeCommandId(uuidv7()),
-      threadId: ThreadId.make(uuidv7()),
+      threadId,
       projectId,
       title: Option.some(name),
       model: FAUX_MODEL,
@@ -337,12 +346,13 @@ const brainShell = async () => {
  * held, it closes each new one at once, as a brain still down would. Connections already through
  * stay until either side closes.
  */
-const gate = { held: false };
+const gate = { held: false, refused: 0 };
 
 const gateSockets = new Set<NetSocket>();
 
 const gateServer = createNetServer((page) => {
   if (gate.held) {
+    gate.refused += 1;
     page.destroy();
 
     return;
@@ -376,26 +386,47 @@ if (gateAddress === null || Predicate.isString(gateAddress)) {
 let brain = await startBrain();
 
 /**
- * Waits until the brain's shell sequence holds still for a second (a launched thread's turn on the
- * faux model has ended), so no live update follows what the page is about to read.
+ * Waits until the turn of every thread this judge launched has ended in the brain's shell, and a
+ * second read shows the same rows (`lib/TurnsEnded.ts`), so no live update for them follows what
+ * the page is about to read. The dev brain's demo thread keeps moving the shell's sequence; its row
+ * is not read.
  */
 const brainSettled = async (): Promise<void> => {
   const deadline = Date.now() + 30_000;
-  let last = -1;
-  let still = 0;
+  let previous = Option.none<string>();
 
-  while (still < 4) {
-    if (Date.now() > deadline) {
-      throw new Error("judges/reconnect.ts: the brain's shell never settled.");
+  for (;;) {
+    const snapshot = await brainShell();
+
+    const current = Option.flatMap(snapshot, (shell) =>
+      endedRows(shell, launched)
+    );
+
+    if (isSettled(previous, current)) {
+      return;
     }
 
-    const sequence = Option.match(await brainShell(), {
-      onNone: () => -1,
-      onSome: (shell) => shell.snapshotSequence,
-    });
+    if (Date.now() > deadline) {
+      const rows = Option.match(snapshot, {
+        onNone: () => "no snapshot",
+        onSome: (shell) =>
+          JSON.stringify(
+            shell.threads
+              .filter((row) => launched.includes(row.id))
+              .map((row) => ({
+                title: row.title,
+                activity: row.activity,
+                completed: Option.isSome(row.latestRunCompletedAt),
+              }))
+          ),
+      });
 
-    still = sequence === last ? still + 1 : 0;
-    last = sequence;
+      throw new Error(
+        `judges/reconnect.ts: the launched threads' turns never ended and held still: ${rows}`
+      );
+    }
+
+    previous = current;
     await sleep(250);
   }
 };
@@ -577,9 +608,9 @@ for (let round = 1; round <= rounds; round += 1) {
 }
 
 // The crossing: `last` and its project thread are made while the gate keeps the page away, so they
-// reach it through its reconnect alone. The brain settles first, so no live update for an earlier
-// round's thread arrives after the reconnect, and again before the gate opens, so none for `last`
-// does either.
+// reach it through its reconnect alone. Every launched thread's turn ends first, so no live update
+// for an earlier round's thread arrives after the reconnect, and again before the gate opens, so
+// none for `last` does either.
 const LAST = "last";
 
 await brainSettled();
@@ -595,6 +626,16 @@ brain = await startBrain();
 await launchProjectThread(await addProject(LAST), LAST);
 
 await brainSettled();
+
+// The gate held: the page tried to reconnect and was refused, and is still not Live, so a change
+// that routes the page around the gate fails this run and not only the control.
+const liveWhileHeld = (await page.locator(live).count()) > 0;
+
+if (gate.refused === 0 || liveWhileHeld) {
+  throw new Error(
+    `judges/reconnect.ts: the gate did not hold the page away (it refused ${gate.refused} connections; the page was ${liveWhileHeld ? "" : "not "}Live).`
+  );
+}
 
 const openedAt = Date.now();
 

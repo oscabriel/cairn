@@ -10,7 +10,7 @@ import { TestClock } from "effect/testing";
 
 import { CairnConnection } from "../connection/Connection.ts";
 import { Message } from "./Message.ts";
-import { initial } from "./Model.ts";
+import { AttachmentStatus, initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
   loadSaved,
@@ -138,6 +138,45 @@ const runSaves = (result: {
       (command) => command.effect
     ).pipe(Effect.provideService(CairnConnection._tag, disconnected));
   });
+
+/** The store as it is now, but refusing every write, as a full localStorage does. */
+const refusingStore = Effect.gen(function* () {
+  const store = yield* KeyValueStore.KeyValueStore;
+
+  return KeyValueStore.make({
+    ...store,
+    set: (key) =>
+      Effect.fail(
+        new KeyValueStore.KeyValueStoreError({
+          message: "quota exceeded",
+          method: "set",
+          key,
+        })
+      ),
+  });
+});
+
+/** `tab` once `answers` arrived, in order, with `context`'s draft open. */
+const answeredIn = (
+  tab: Model,
+  answers: ReadonlyArray<Message>,
+  context: { readonly draftKey: Option.Option<string> }
+) => {
+  let model = tab;
+
+  for (const answer of answers) {
+    ({ model } = update(model, answer, context));
+  }
+
+  return model;
+};
+
+/** The local id of the ready item holding attachment `id`. */
+const localIdOf = (tab: Model, id: string) =>
+  tab.items.find(
+    ({ status }) =>
+      AttachmentStatus.guards.Ready(status) && status.ref.id === id
+  )?.localId ?? "";
 
 describe("saved attachments in two tabs", () => {
   it.effect("keep each other's attachments", () =>
@@ -501,6 +540,118 @@ describe("saved attachments in one tab", () => {
           later: ["att_a"],
           stored: ["att_a"],
         });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "stay gone once removed, when a refused add had a later save on its way that storage took",
+    () =>
+      Effect.gen(function* () {
+        const inA = { draftKey: Option.some("thread:a") };
+        const full = yield* refusingStore;
+
+        // One attachment ready and saved: the tab and storage agree.
+        const first = restore({ ...initial, loaded: true }, "thread:a", [
+          ref("att_a"),
+        ]);
+
+        const saved = answeredIn(first.model, yield* runSaves(first), inA);
+
+        // S1 adds `att_b`; before it answers, S2 takes `att_a` out. S1 is refused, S2 is taken
+        // and writes `att_b` back, so storage holds `att_b` alone.
+        const added = restore(saved, "thread:a", [ref("att_b")]);
+
+        const removedA = update(
+          added.model,
+          Message.ClickedRemove({ localId: localIdOf(added.model, "att_a") }),
+          inA
+        );
+
+        const addedAnswers = yield* runSaves(added).pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, full)
+        );
+
+        const removedAnswers = yield* runSaves(removedA);
+
+        const tab = answeredIn(
+          removedA.model,
+          [...addedAnswers, ...removedAnswers],
+          inA
+        );
+
+        // Removing `att_b` takes it out of storage too, and its answer does not bring it back.
+        const removedB = update(
+          tab,
+          Message.ClickedRemove({ localId: localIdOf(tab, "att_b") }),
+          inA
+        );
+
+        const later = answeredIn(
+          removedB.model,
+          yield* runSaves(removedB),
+          inA
+        );
+
+        const stored = yield* storedSaved;
+
+        expect({
+          tray: readyIds(tab, "thread:a"),
+          later: readyIds(later, "thread:a"),
+          stored: stored["thread:a"]?.map(({ id }) => id) ?? [],
+        }).toStrictEqual({ tray: ["att_b"], later: [], stored: [] });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
+  it.effect(
+    "stay gone once a turn whose send and put-back saves were both refused is sent again",
+    () =>
+      Effect.gen(function* () {
+        const inA = { draftKey: Option.some("thread:a") };
+        const full = yield* refusingStore;
+
+        // One attachment ready and saved: the tab and storage agree.
+        const first = restore({ ...initial, loaded: true }, "thread:a", [
+          ref("att_a"),
+        ]);
+
+        const saved = answeredIn(first.model, yield* runSaves(first), inA);
+
+        // The send's save S1 is refused; the turn is put back before S1 answers, and its save S2
+        // is refused too.
+        const sent = clearSent(saved, "thread:a");
+        const back = restore(sent.model, "thread:a", [ref("att_a")]);
+
+        const sentAnswers = yield* runSaves(sent).pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, full)
+        );
+
+        const backAnswers = yield* runSaves(back).pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, full)
+        );
+
+        const tab = answeredIn(
+          back.model,
+          [...sentAnswers, ...backAnswers],
+          inA
+        );
+
+        // Storage takes writes again, and the brain takes the turn sent again: its save takes the
+        // attachment out, so a reload does not restore it.
+        const sentAgain = clearSent(tab, "thread:a");
+
+        const later = answeredIn(
+          sentAgain.model,
+          yield* runSaves(sentAgain),
+          inA
+        );
+
+        const stored = yield* storedSaved;
+
+        expect({
+          tray: readyIds(tab, "thread:a"),
+          later: readyIds(later, "thread:a"),
+          stored: stored["thread:a"]?.map(({ id }) => id) ?? [],
+        }).toStrictEqual({ tray: ["att_a"], later: [], stored: [] });
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 });

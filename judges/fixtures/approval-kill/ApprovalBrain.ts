@@ -34,34 +34,33 @@ import { DEFAULT_RESTART_LIMIT, LiveDoc } from "@earendil-works/pi-durable";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Duration, Effect, Layer, Option } from "effect";
 
+import {
+  answerApproval,
+  cancelAbandonedApprovalsAtBoot,
+  expireLapsedApprovalsAtBoot,
+} from "../../../apps/server/src/approvals/ApprovalLedger.ts";
 import { KEPT_WAITS } from "../../../apps/server/src/BootRepairs.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
-import {
-  answerApproval,
-  Approvals,
-  cancelAbandonedApprovalsAtBoot,
-  expireLapsedApprovalsAtBoot,
-} from "../../../apps/server/src/brain/CairnDocs.ts";
+import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
-import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
-import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
-import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import {
+  FauxModels,
   FAUX_MODEL,
-  ModelSource,
-} from "../../../apps/server/src/brain/ModelSource.ts";
+} from "../../../apps/server/src/brain/FauxModels.ts";
+import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import { PiDurableHarness } from "../../../apps/server/src/brain/PiDurableHarness.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { RestartLimit } from "../../../apps/server/src/brain/RestartLimit.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
+import { ExtensionSet } from "../../../apps/server/src/ExtensionSet.ts";
 import { Git } from "../../../apps/server/src/git/Git.ts";
 import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
 import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
-import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
+import { ReachServicesTest } from "../../../apps/server/src/reach/ReachTestKit.ts";
 import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
 import { workspacesAt } from "../../../apps/server/src/workspaces/ChildWorkspacesTestKit.ts";
 
@@ -110,7 +109,7 @@ const brain = PiDurableHarness.layer.pipe(
     )
   ),
   Layer.provideMerge(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 4000,
       settings: { retry: { enabled: false } },
     })

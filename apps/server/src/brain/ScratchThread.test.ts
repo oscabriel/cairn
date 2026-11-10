@@ -39,9 +39,8 @@ import {
 import { TitleModel } from "../threads/TitleModel.ts";
 import { Brain } from "./Brain.ts";
 import { piDurableLayer } from "./conformance/Targets.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL } from "./ModelSource.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 
 const rootWorkspace = RootWorkspace.make({ branch: Option.none() });

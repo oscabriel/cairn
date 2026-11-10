@@ -16,8 +16,8 @@ import type { ConversationId, TaskId, Tx } from "@earendil-works/pi-durable";
 
 import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import { SubagentParentsDoc, SubagentsDoc } from "../brain/SubagentDocs.ts";
 import { conversationOf } from "./Delivery.ts";
-import { SubagentParentsDoc, SubagentsDoc } from "./SubagentDocs.ts";
 
 /** The tool whose brief records start a subagent at Go. */
 export const SPAWN_TOOL = "subagent_spawn";

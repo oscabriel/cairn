@@ -4,8 +4,8 @@ import type { JsonObject } from "@earendil-works/pi-ai";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Result, Schema } from "effect";
 
-import { UNDECIDED } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import { UNDECIDED } from "./ApprovalLedger.ts";
 import { askUserResult, questionAskOf } from "./AskUser.ts";
 
 const isQuestionsPayload = Schema.is(QuestionsPayload);

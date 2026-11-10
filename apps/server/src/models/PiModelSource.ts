@@ -240,6 +240,11 @@ const REFUSAL_STATUS: Record<
     detail: (provider) =>
       `This brain does not hold Cairn's ${signInName(provider)} sign-in; only the deployed brain does.`,
   },
+  oauth_unavailable: {
+    state: "missing",
+    detail: (provider) =>
+      `This brain could not take Cairn's OAuth lock when it started, so it keeps no ${signInName(provider)} sign-in. Check that flock is installed and the state directory is writable, then restart the brain.`,
+  },
   oauth: {
     state: "refused",
     detail: (provider) =>

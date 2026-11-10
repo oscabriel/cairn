@@ -52,8 +52,6 @@ import {
 import { SqlClient } from "effect/sql";
 
 import { ServerConfig } from "../Config.ts";
-import { Database } from "../db/Database.ts";
-import { migrations } from "../db/Migrations.ts";
 import { Projects } from "../projects/Projects.ts";
 import { ArtifactFaults } from "./ArtifactFaults.ts";
 import { ArtifactPublisher } from "./ArtifactPublisher.ts";
@@ -735,33 +733,4 @@ export class Artifacts extends Context.Service<
     Layer.provide(Projects.layerNoDeps),
     Layer.provide(NodeServices.layer)
   );
-
-  /**
-   * For tests and judge brains that build the extension set: a fake porch serving
-   * `plans.example.test` from a temp folder, a fresh migrated in-memory `cairn.sqlite`, and a temp
-   * data folder, all removed with the layer's scope. Nothing outside the temp folder is touched.
-   */
-  static readonly layerTest = Layer.unwrap(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-
-      const root = yield* fs.makeTempDirectoryScoped({
-        prefix: "cairn-artifacts-test-",
-      });
-
-      const artifacts = path.join(root, "artifacts");
-      yield* fs.makeDirectory(artifacts);
-
-      return Artifacts.layer.pipe(
-        Layer.provide(ArtifactPublisher.layer),
-        Layer.provide(
-          PorchClient.layerFake({ domain: "example.test", artifacts })
-        ),
-        Layer.provide(Database.layerTest(migrations)),
-        Layer.provide(
-          ServerConfig.layerWith({ dataDir: path.join(root, "data") })
-        )
-      );
-    })
-  ).pipe(Layer.provide(NodeServices.layer), Layer.orDie);
 }

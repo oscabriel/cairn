@@ -8,7 +8,7 @@ import path from "node:path";
 import type { ModelDefaults } from "@cairn/protocol/Models";
 import type { VapidKey } from "@cairn/protocol/Push";
 import type { Hello } from "@cairn/protocol/Rpc";
-import { PROTOCOL_VERSION, Viewer } from "@cairn/protocol/Rpc";
+import { CairnRpcs, PROTOCOL_VERSION, Viewer } from "@cairn/protocol/Rpc";
 import { Context, DateTime, Effect, FileSystem, Layer, Option } from "effect";
 
 import { ServerConfig } from "../Config.ts";
@@ -67,12 +67,13 @@ export class SessionHello extends Context.Service<
   );
 }
 
-/** The `session.*` handlers. Needs `SessionHello`; reads `Viewer` per request. */
-export const sessionHandlers = Effect.gen(function* () {
-  const hello = yield* SessionHello;
+/** The `session.hello` handler. Needs `SessionHello`; reads `Viewer` per request. */
+export const SessionHandlers = CairnRpcs.toLayerHandler(
+  "session.hello",
+  Effect.gen(function* () {
+    const hello = yield* SessionHello;
 
-  return {
-    "session.hello": () =>
+    return () =>
       Effect.gen(function* () {
         const viewer = yield* Viewer;
 
@@ -86,6 +87,6 @@ export const sessionHandlers = Effect.gen(function* () {
         };
 
         return answer;
-      }),
-  };
-});
+      });
+  })
+);

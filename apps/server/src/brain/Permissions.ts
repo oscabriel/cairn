@@ -32,11 +32,12 @@ import type {
 } from "@earendil-works/pi-durable";
 import { Effect, Option } from "effect";
 
-import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
-import { approvalLedger, Permissions, settlementText } from "./CairnDocs.ts";
-import type { ApprovalLedgerError } from "./CairnDocs.ts";
+import type { ApprovalLedgerError } from "../approvals/ApprovalLedger.ts";
+import { settlementText, approvalLedger } from "../approvals/ApprovalLedger.ts";
+import { Permissions } from "./CairnDocs.ts";
 import type { DurableRunner } from "./Durable.ts";
 import { piConversationId } from "./PiIds.ts";
+import { ChildDoc, isLinked } from "./SubagentDocs.ts";
 
 /**
  * What a tool does, as the modes see it: `read` only reads; `edit` writes files; `command` runs a

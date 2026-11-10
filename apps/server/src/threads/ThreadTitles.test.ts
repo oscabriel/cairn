@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 
-import { FauxModels } from "../brain/FauxModels.ts";
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
+import type { ModelSource } from "../brain/ModelSource.ts";
 import { scriptedAnswer } from "../brain/ScriptedHarness.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import {
@@ -21,7 +21,7 @@ import { TitleModel } from "./TitleModel.ts";
 /** The thread every naming call is made for. */
 const THREAD = testThreadId(1);
 
-const Faux = ModelSource.layerFaux({ tokensPerSecond: 10_000, settings: {} });
+const Faux = FauxModels.layer({ tokensPerSecond: 10_000, settings: {} });
 
 const naming = (model: Layer.Layer<TitleModel, never, ModelSource>) =>
   Layer.mergeAll(ThreadTitles.layerNoDeps, BranchNames.layerNoDeps).pipe(

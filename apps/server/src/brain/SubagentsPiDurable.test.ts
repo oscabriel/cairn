@@ -70,11 +70,6 @@ import {
 } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { childThreadIdOf } from "../subagents/Delivery.ts";
-import {
-  ChildDoc,
-  EscalationsDoc,
-  SubagentsDoc,
-} from "../subagents/SubagentDocs.ts";
 import { repairSubagentRows, SubagentRows } from "../subagents/SubagentRows.ts";
 import { steerReporter } from "../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
@@ -86,11 +81,11 @@ import { Brain } from "./Brain.ts";
 import { Approvals, Permissions } from "./CairnDocs.ts";
 import { piDurableLayer } from "./conformance/Targets.ts";
 import { durable } from "./Durable.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL } from "./ModelSource.ts";
 import { piConversationId } from "./PiIds.ts";
+import { ChildDoc, EscalationsDoc, SubagentsDoc } from "./SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 import { SubagentToolText } from "./SubagentText.ts";
 

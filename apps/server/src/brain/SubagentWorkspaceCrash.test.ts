@@ -45,7 +45,7 @@ import {
 import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
-import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
+import { repairChildWorkspacesAtBoot } from "../subagents/ChildWorkspaceRepair.ts";
 import {
   Subagents,
   subagentsExtension,
@@ -66,14 +66,13 @@ import { ChildWorkspaceStore } from "../workspaces/ChildWorkspaceStore.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { brainExtensions } from "./BrainTestKit.ts";
-import { repairChildWorkspacesAtBoot } from "./ChildWorkspaceRepair.ts";
 import { durable, durableRunner } from "./Durable.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
+import { ChildDoc, SubagentsDoc } from "./SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 
 isolateGitEnvironment();
@@ -146,7 +145,7 @@ const brainAt = (
       })
     ),
     Layer.provideMerge(
-      ModelSource.layerFaux({
+      FauxModels.layer({
         tokensPerSecond: 4000,
         settings: { retry: { enabled: false } },
       })

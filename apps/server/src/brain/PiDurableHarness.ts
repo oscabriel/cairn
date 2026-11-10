@@ -75,37 +75,28 @@ import {
   Stream,
 } from "effect";
 
-import { BriefFaults } from "../subagents/BriefFaults.ts";
-import { holdWakes } from "../subagents/Delivery.ts";
 import {
-  ChildDoc,
-  EscalationsDoc,
-  SubagentsDoc,
-} from "../subagents/SubagentDocs.ts";
-import { answerBrief, steerReporter } from "../subagents/Subagents.ts";
-import { GoalDoc } from "../verdicts/GoalDocs.ts";
-import { criteriaAnswered } from "../verdicts/Verdicts.ts";
-import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
-import { launchAnswered } from "../workflows/WorkflowLaunch.ts";
+  refusalText,
+  relayedQuestion,
+  cancelStoppedApprovals,
+  answerApproval,
+} from "../approvals/ApprovalLedger.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession, BrainUnavailable } from "./Brain.ts";
 import { BrainStore } from "./BrainStore.ts";
 import {
-  answerApproval,
   Approvals,
   Permissions,
-  cancelStoppedApprovals,
-  refusalText,
-  relayedQuestion,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
 } from "./CairnDocs.ts";
-import type { AnsweredHook, ApprovalRecord } from "./CairnDocs.ts";
+import type { ApprovalRecord } from "./CairnDocs.ts";
 import { CommitFeed, documentValue, RUN_TASK } from "./CommitFeed.ts";
 import { documentCall, durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
+import { Extensions } from "./Extensions.ts";
 import { HarnessError, HarnessSeam } from "./HarnessSeam.ts";
 import type {
   ApprovalAnswerInput,
@@ -123,6 +114,7 @@ import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
 import { PendingApprovals } from "./PendingApprovals.ts";
 import { parentCeiling } from "./Permissions.ts";
 import { piConversationId, piEntryId, piSubmissionId } from "./PiIds.ts";
+import { EscalationsDoc, SubagentsDoc } from "./SubagentDocs.ts";
 import { SubagentCrashes, SubagentFaults } from "./SubagentFaults.ts";
 import {
   WINDOW_POLICY,
@@ -169,20 +161,11 @@ const holdsPending = (value: JsonObject | null): boolean => {
 type Writable<A> = { -readonly [K in keyof A]: A[K] };
 
 /**
- * The `cairn.*` documents the thread stream carries beside pi-durable's own view documents: every
- * `cairn.*` kind of `VISIBLE_DOCUMENTS` that a token exists for. A package that defines another
- * visible document adds its token here, and the stream watches it with no other edit.
+ * The thread's own `cairn.*` documents, which the thread stream always carries first: its approval
+ * records and its permission mode. The installed features' follow (`Extensions.documents`).
  */
-export const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> =
-  [
-    Approvals,
-    Permissions,
-    SubagentsDoc,
-    ChildDoc,
-    EscalationsDoc,
-    WorkflowsDoc,
-    GoalDoc,
-  ];
+export const THREAD_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> =
+  [Approvals, Permissions];
 
 const encoder = new TextEncoder();
 
@@ -361,17 +344,15 @@ const layerNoDeps = Layer.effectContext(
     const feed = yield* CommitFeed;
     const crashes = yield* SubagentCrashes;
     const faults = yield* SubagentFaults;
-    // Where a judge brain kills itself inside a brief's Go commit; none elsewhere.
-    const briefAnswered = answerBrief(yield* BriefFaults);
 
-    // What an answer does in its own commit: a workflow launch's row takes it (ADR 0032), a
-    // subagent's brief starts its child or tells its parent (ADR 0030), and an accepted criteria
-    // proposal binds its criteria (ADR 0026).
-    const answered: AnsweredHook = async (tx, conversationId, record) => {
-      await launchAnswered(tx, conversationId, record);
-      await briefAnswered(tx, conversationId, record);
-      await criteriaAnswered(tx, conversationId, record);
-    };
+    // The features' part of the seam, from the installed set: what an answer does in its own
+    // commit (a workflow launch's row takes it, ADR 0032; a subagent's brief starts its child or
+    // tells its parent, ADR 0030; accepted criteria bind, ADR 0026), a submit's reporter for a
+    // subagent's input, a Stop all's hold on wakes, and the `cairn.*` documents the thread stream
+    // watches beside pi-durable's own view documents (each visible `cairn.*` kind,
+    // `StreamDocuments.test.ts`).
+    const { answered, steer, holdWakes, documents } = yield* Extensions;
+    const streamDocuments = [...THREAD_DOCUMENTS, ...documents];
 
     // A stop finishes here once it started aborting, whatever happens to its caller.
     const layerScope = yield* Effect.scope;
@@ -632,7 +613,7 @@ const layerNoDeps = Layer.effectContext(
       });
 
       // A user's input to a subagent gets its reporter first, so its result reaches the parent.
-      const reported = yield* steerReporter(
+      const reported = yield* steer(
         session.harness,
         conversation.id,
         draft
@@ -1134,30 +1115,28 @@ const layerNoDeps = Layer.effectContext(
 
             // The `cairn.*` documents are not among pi-durable's built-in view documents; the
             // stream watches each one beside the conversation and adds it to the view.
-            const docWatches = yield* Effect.forEach(
-              STREAM_DOCUMENTS,
-              (token) =>
-                Effect.acquireRelease(
-                  call(
-                    Option.some(threadId),
-                    `watch-${token.definition.kind}`,
-                    async (context) =>
-                      await session.harness.watchDoc(
-                        token,
-                        conversation.id,
-                        context
-                      )
-                  ),
-                  (handle) =>
-                    Effect.promise(async () => {
-                      await handle?.stop();
-                    })
-                ).pipe(
-                  Effect.map((handle) => ({
-                    kind: token.definition.kind,
-                    handle: Option.fromUndefinedOr(handle),
-                  }))
-                )
+            const docWatches = yield* Effect.forEach(streamDocuments, (token) =>
+              Effect.acquireRelease(
+                call(
+                  Option.some(threadId),
+                  `watch-${token.definition.kind}`,
+                  async (context) =>
+                    await session.harness.watchDoc(
+                      token,
+                      conversation.id,
+                      context
+                    )
+                ),
+                (handle) =>
+                  Effect.promise(async () => {
+                    await handle?.stop();
+                  })
+              ).pipe(
+                Effect.map((handle) => ({
+                  kind: token.definition.kind,
+                  handle: Option.fromUndefinedOr(handle),
+                }))
+              )
             );
 
             const projector = windowedProjector();
@@ -1313,7 +1292,7 @@ const layerNoDeps = Layer.effectContext(
       const session = yield* open(Option.some(threadId));
       const conversationId = yield* conversationIdOf(session, threadId);
 
-      const token = STREAM_DOCUMENTS.find(
+      const token = streamDocuments.find(
         (candidate) => candidate.definition.kind === kind
       );
 

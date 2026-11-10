@@ -40,6 +40,11 @@ import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import { Effect, Exit, Option, Predicate, Result } from "effect";
 
 import type { DurableRunner } from "../brain/Durable.ts";
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { NODE_TOOLS, rewriteScript } from "./Prelude.ts";
 import {
   BUILT_IN_RECIPES,
@@ -49,14 +54,8 @@ import {
   isLaunchOfRun,
   LaunchRunsDoc,
   WorkflowSourcesDoc,
-  WorkflowsDoc,
 } from "./WorkflowDocs.ts";
-import type {
-  LaunchRunsState,
-  WorkflowItemState,
-  WorkflowSourcesState,
-  WorkflowsState,
-} from "./WorkflowDocs.ts";
+import type { LaunchRunsState, WorkflowSourcesState } from "./WorkflowDocs.ts";
 import {
   isWorkflowSource,
   parseWorkflowScript,

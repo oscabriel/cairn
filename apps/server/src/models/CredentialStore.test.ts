@@ -72,7 +72,8 @@ const storeWith = (
 /** Cairn's own sign-ins in memory, recording every write it took. */
 const memorySource = (
   held: boolean,
-  initial: Option.Option<OAuthCredential>
+  initial: Option.Option<OAuthCredential>,
+  lockFailure: Option.Option<string> = Option.none()
 ) => {
   let stored = initial;
   const writes: Array<string> = [];
@@ -80,6 +81,7 @@ const memorySource = (
   const source: OAuthCredentialSource = {
     providers: OAUTH_PROVIDERS,
     held,
+    lockFailure,
     read: async () => await Promise.resolve(Option.getOrUndefined(stored)),
     modify: async (provider, update) => {
       const next = await update(Option.getOrUndefined(stored));
@@ -330,19 +332,32 @@ describe("the credential store with Cairn's own sign-ins", () => {
       })
   );
 
-  it.effect("tells a signed-out store from one this brain does not hold", () =>
-    Effect.gen(function* () {
-      const signedOut = yield* Effect.promise(
-        async () => await refusalOf(memorySource(true, Option.none()).source)
-      );
+  it.effect(
+    "tells a signed-out store from one this brain does not hold or could not lock",
+    () =>
+      Effect.gen(function* () {
+        const signedOut = yield* Effect.promise(
+          async () => await refusalOf(memorySource(true, Option.none()).source)
+        );
 
-      const elsewhere = yield* Effect.promise(
-        async () =>
-          await refusalOf(memorySource(false, Option.some(OAUTH)).source)
-      );
+        const elsewhere = yield* Effect.promise(
+          async () =>
+            await refusalOf(memorySource(false, Option.some(OAUTH)).source)
+        );
 
-      assert.deepStrictEqual(signedOut, [["openai-codex", "signed_out"]]);
-      assert.deepStrictEqual(elsewhere, [["openai-codex", "not_holder"]]);
-    })
+        const lockFailed = yield* Effect.promise(
+          async () =>
+            await refusalOf(
+              memorySource(false, Option.none(), Option.some("flock missing"))
+                .source
+            )
+        );
+
+        assert.deepStrictEqual(signedOut, [["openai-codex", "signed_out"]]);
+        assert.deepStrictEqual(elsewhere, [["openai-codex", "not_holder"]]);
+        assert.deepStrictEqual(lockFailed, [
+          ["openai-codex", "oauth_unavailable"],
+        ]);
+      })
   );
 });

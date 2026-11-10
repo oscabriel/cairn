@@ -11,9 +11,9 @@
 // model for a judge here: that is the user's pick. The user would otherwise only learn it when the
 // judge refused to run.
 //
-// The rules live once, over a goal host: pi-durable's store (the deployed brain), or the scripted
-// harness's goals (`ScriptedGoals`), so a judge over the scripted brain binds, refuses and marks as
-// the deployed brain does, through the same verdict writer.
+// The rules live once, over a goal host (`goalBookOver`): pi-durable's store (the deployed brain),
+// or the scripted harness's goals (`ScriptedGoalBook.ts`), so a judge over the scripted brain binds,
+// refuses and marks as the deployed brain does, through the same verdict writer.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { ConversationId as ProtocolConversationId } from "@cairn/protocol/Ids";
@@ -24,20 +24,17 @@ import type {
 } from "@cairn/protocol/Policy";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import type { ConversationId } from "@earendil-works/pi-durable";
-import { Clock, Context, Effect, Layer, Option, Result, Schema } from "effect";
+import { Context, Effect, Layer, Option, Result, Schema } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { piConversationId } from "../brain/PiIds.ts";
-import { ScriptedGoals } from "../brain/ScriptedHarness.ts";
+import { ChildDoc, isLinked } from "../brain/SubagentDocs.ts";
 import { ModelSpecs } from "../models/ModelSpecs.ts";
-import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import { judgeModelRefusal, judgeSpecOf } from "./ModelJudge.ts";
 import {
-  applyBind,
-  applyMark,
   BindOutcome,
   bindCriteria,
   markByUser,
@@ -84,7 +81,7 @@ const storeFailed = (threadId: ThreadId) => (cause: DurableCallError) =>
   );
 
 /** A thread the brain does not hold. */
-const missing = (threadId: ThreadId) =>
+export const missing = (threadId: ThreadId) =>
   failure(
     threadId,
     "thread_not_found",
@@ -92,7 +89,7 @@ const missing = (threadId: ThreadId) =>
   );
 
 /** A thread as its goal reads it: whether it is a subagent, and the model it runs on. */
-interface GoalThread<Key> {
+export interface GoalThread<Key> {
   /** Where the host finds the thread's goal again. */
   readonly key: Key;
   readonly child: boolean;
@@ -100,7 +97,7 @@ interface GoalThread<Key> {
 }
 
 /** Where goals live: pi-durable's store, or the scripted harness's. */
-interface GoalHost<Key> {
+export interface GoalHost<Key> {
   /** The thread; none when the brain does not hold it. */
   readonly threadOf: (
     threadId: ThreadId
@@ -123,8 +120,11 @@ interface GoalHost<Key> {
   ) => Effect.Effect<MarkOutcome, GoalError>;
 }
 
-/** The goal service's rules over a host. */
-const bookOver = <Key>(host: GoalHost<Key>): GoalBook["Service"] => {
+/**
+ * The goal service's rules over a host: `GoalBook.layer` runs them over pi-durable's store, and
+ * `ScriptedGoalBook` over the scripted harness's goals.
+ */
+export const goalBookOver = <Key>(host: GoalHost<Key>): GoalBook["Service"] => {
   /** The thread, refused when the brain does not hold it or it is a subagent. */
   const threadOf = Effect.fn("GoalBook.threadOf")(function* (
     threadId: ThreadId
@@ -386,67 +386,18 @@ export class GoalBook extends Context.Service<
         ).pipe(Effect.mapError(storeFailed(input.threadId)));
       });
 
-      return bookOver<ConversationId>({ threadOf, resolveJudge, bind, mark });
+      return goalBookOver<ConversationId>({
+        threadOf,
+        resolveJudge,
+        bind,
+        mark,
+      });
     })
   );
 
   /** Over `ModelSpecs.layerNoDeps`; the root gives `Brain` and the catalog's sources. */
   static readonly layer = GoalBook.layerNoDeps.pipe(
     Layer.provide(ModelSpecs.layerNoDeps)
-  );
-
-  /**
-   * Over the scripted harness's goals (`ScriptedGoals`): the same rules and the same verdict
-   * writer, a model judge on the model it names, or the goal thread's. For the judges' scripted brains.
-   */
-  static readonly layerScripted = Layer.effect(
-    GoalBook,
-    Effect.gen(function* () {
-      const goals = yield* ScriptedGoals;
-
-      /** One change through the verdict writer; a thread gone since it was read is missing. */
-      const change = <A>(
-        threadId: ThreadId,
-        apply: (goal: Parameters<typeof applyBind>[0], at: number) => A
-      ) =>
-        Effect.gen(function* () {
-          const at = yield* Clock.currentTimeMillis;
-
-          const outcome = yield* goals.change(threadId, (goal) =>
-            apply(goal, at)
-          );
-
-          if (Option.isNone(outcome)) {
-            return yield* missing(threadId);
-          }
-
-          return outcome.value;
-        });
-
-      return bookOver<ThreadId>({
-        threadOf: (threadId) =>
-          Effect.map(goals.thread(threadId), (found) =>
-            Option.map(found, (thread) => ({
-              key: threadId,
-              child: thread.child,
-              model: Option.some(thread.model),
-            }))
-          ),
-        resolveJudge: (_threadId, spec) =>
-          Effect.succeed(goals.resolveJudge(spec)),
-        bind: (threadId, key, input) =>
-          change(key, (goal, at) => applyBind(goal, input, at)),
-        mark: (input, key) =>
-          change(key, (goal, at) =>
-            applyMark(goal, {
-              criterionId: input.criterionId,
-              ok: input.ok,
-              note: input.note,
-              at,
-            })
-          ),
-      });
-    })
   );
 
   /** For brains with no goals at all, which refuse every change as unavailable. */

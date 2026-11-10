@@ -47,10 +47,9 @@ import {
   HarnessBoot,
   withCatalog,
 } from "../apps/server/src/AppLayer.ts";
-import { BudgetSources } from "../apps/server/src/brain/BudgetSources.ts";
 import { EventReactors } from "../apps/server/src/brain/EventReactors.ts";
+import { FauxModels } from "../apps/server/src/brain/FauxModels.ts";
 import { HarnessSeam } from "../apps/server/src/brain/HarnessSeam.ts";
-import { ModelSource } from "../apps/server/src/brain/ModelSource.ts";
 import {
   ScriptedHarness,
   ScriptedModel,
@@ -62,12 +61,13 @@ import { SpendFeed } from "../apps/server/src/brain/SpendFeed.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
 import { ExecutorLink } from "../apps/server/src/executor/ExecutorLink.ts";
 import { Identity } from "../apps/server/src/http/Identity.ts";
-import { ReachMachine } from "../apps/server/src/reach/ReachLayer.ts";
+import { ReachMachine } from "../apps/server/src/reach/ReachTestKit.ts";
 import { EventSink } from "../apps/server/src/shell/EventSink.ts";
 import {
   ProjectRegister,
   ThreadCreate,
 } from "../apps/server/src/shell/ShellCommands.ts";
+import { BudgetSources } from "../apps/server/src/usage/BudgetSources.ts";
 import { GoalBook } from "../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../apps/server/src/workflows/WorkflowStop.ts";
 import { chromium } from "./lib/Browser.ts";
@@ -145,7 +145,7 @@ const Harness = Layer.mergeAll(
   Layer.provide(Model),
   Layer.provide(ScriptedTools.layerEcho),
   Layer.provideMerge(
-    withCatalog(ModelSource.layerFaux({ tokensPerSecond: 200, settings: {} }))
+    withCatalog(FauxModels.layer({ tokensPerSecond: 200, settings: {} }))
   )
 );
 

@@ -58,7 +58,7 @@
 //   The relay (ADR 0027): an untyped child's run that completed with a plain answer whose last line
 //   asks for a decision (`needsDecision`), with no `report` and not a user's own steer, settles
 //   nothing yet. Its commit writes a question record (`source: "answer"`, route parent) in the
-//   child's ledger and the same kind of run mark, and `ask` routes it (approvals/QuestionRoute.ts):
+//   child's ledger and the same kind of run mark, and `ask` routes it (QuestionRoute.ts):
 //   answered, `answer` gives the child the answer as the run's next input, whose run settles them
 //   all; declined, expired or cancelled, the run's own answer settles as its result after all. `report` writes the
 //   settlement's note and decides the wake by the parent's state; `wake` submits the wake and marks
@@ -114,21 +114,14 @@ import {
 } from "@earendil-works/pi-durable";
 import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
 
-import { needsDecision } from "../approvals/NeedsDecision.ts";
 import {
-  endUnanswered,
-  placedMemoOf,
-  questionRecord,
-  relayedAsk,
-  routeQuestion,
-} from "../approvals/QuestionRoute.ts";
-import type { RouteIo } from "../approvals/QuestionRoute.ts";
+  expirePending,
+  RELAYED_QUESTION_TOOL,
+  cancelRecord,
+} from "../approvals/ApprovalLedger.ts";
 import {
   Approvals,
-  cancelRecord,
-  expirePending,
   Permissions,
-  RELAYED_QUESTION_TOOL,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
@@ -144,6 +137,20 @@ import {
   readNote,
 } from "../brain/NoteAdmission.ts";
 import { classifyRunFailure } from "../brain/RunFailure.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  isJsonRecord,
+  isLinked,
+  jsonRecordOf,
+  markInputs,
+  SubagentsDoc,
+} from "../brain/SubagentDocs.ts";
+import type {
+  RunMarkState,
+  SubagentItemState,
+  SubagentsState,
+} from "../brain/SubagentDocs.ts";
 import type {
   SubagentCrashPoint,
   SubagentFaultSet,
@@ -189,20 +196,15 @@ import {
   taskOf,
 } from "./Delivery.ts";
 import type { SettlementState } from "./Delivery.ts";
+import { needsDecision } from "./NeedsDecision.ts";
 import {
-  ChildDoc,
-  EscalationsDoc,
-  isJsonRecord,
-  isLinked,
-  jsonRecordOf,
-  markInputs,
-  SubagentsDoc,
-} from "./SubagentDocs.ts";
-import type {
-  RunMarkState,
-  SubagentItemState,
-  SubagentsState,
-} from "./SubagentDocs.ts";
+  endUnanswered,
+  placedMemoOf,
+  questionRecord,
+  relayedAsk,
+  routeQuestion,
+} from "./QuestionRoute.ts";
+import type { RouteIo } from "./QuestionRoute.ts";
 import { failsVisibly } from "./TaskFailures.ts";
 import type { FailedPhase } from "./TaskFailures.ts";
 import { awaitDoc, runWait } from "./Waits.ts";

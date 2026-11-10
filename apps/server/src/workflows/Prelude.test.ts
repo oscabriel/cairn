@@ -6,12 +6,12 @@ import type { CodemodeResult, CodemodeTool } from "@earendil-works/pi-codemode";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Schema } from "effect";
 
+import { isRewrittenWorkflow } from "../brain/CodeMode.ts";
 import {
   AgentCall,
   RUNNABLE_PRELUDE_VERSIONS,
   BAKE_CLOSING,
   BAKE_OPENING,
-  isRewrittenWorkflow,
   NODE_TOOLS,
   PRELUDE_OPENING,
   PRELUDE_SOURCE,

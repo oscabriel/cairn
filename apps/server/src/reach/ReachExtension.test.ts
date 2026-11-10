@@ -36,14 +36,15 @@ import { migrations } from "../db/Migrations.ts";
 import { ArtifactPublisher } from "./ArtifactPublisher.ts";
 import { Artifacts } from "./Artifacts.ts";
 import { THREAD_A } from "./ArtifactScenarios.ts";
-import { makeFakePorch, PorchClient, PorchError } from "./PorchClient.ts";
+import { makeFakePorch } from "./FakePorch.ts";
+import { FakePortalUnitsLayer } from "./FakePortalUnits.ts";
+import { PorchClient, PorchError } from "./PorchClient.ts";
 import {
   PORTAL_CLOSE_TOOL,
   PORTAL_LIST_TOOL,
   PORTAL_OPEN_TOOL,
   PortalTools,
 } from "./PortalTools.ts";
-import { PortalUnits } from "./PortalUnits.ts";
 import {
   ARTIFACT_LIST_TOOL,
   ARTIFACT_PUBLISH_TOOL,
@@ -51,8 +52,9 @@ import {
   ReachTools,
   REACH_EXTENSION,
 } from "./ReachExtension.ts";
-import { ReachServices, ReachServicesTest } from "./ReachLayer.ts";
+import { ReachServices } from "./ReachLayer.ts";
 import { ReachStatus } from "./ReachStatus.ts";
+import { ReachServicesTest } from "./ReachTestKit.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -352,7 +354,7 @@ const toolsOver = (
 const servicesOver = (porch: PorchClient["Service"]) =>
   ReachServices.pipe(
     Layer.provideMerge(Layer.succeed(PorchClient, porch)),
-    Layer.provide(PortalUnits.layerFake),
+    Layer.provide(FakePortalUnitsLayer),
     Layer.provide(Database.layerTest(migrations)),
     Layer.provide(
       ServerConfig.layerWith({

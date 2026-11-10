@@ -39,12 +39,9 @@ import {
 } from "effect";
 import { Type } from "typebox";
 
-import {
-  approvalLedger,
-  settlementText,
-  ThreadMeta,
-} from "../brain/CairnDocs.ts";
-import type { ApprovalLedgerError } from "../brain/CairnDocs.ts";
+import type { ApprovalLedgerError } from "../approvals/ApprovalLedger.ts";
+import { settlementText, approvalLedger } from "../approvals/ApprovalLedger.ts";
+import { ThreadMeta } from "../brain/CairnDocs.ts";
 import {
   callAsks,
   cutSummary,

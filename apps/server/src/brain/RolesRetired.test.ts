@@ -30,10 +30,8 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option, Schema } from "effect";
 
-import { SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { GoalDoc } from "../verdicts/GoalDocs.ts";
 import type { JudgeRefState } from "../verdicts/GoalDocs.ts";
-import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { Brain } from "./Brain.ts";
 import { Approvals, ThreadReceipt } from "./CairnDocs.ts";
 import {
@@ -43,6 +41,8 @@ import {
   retireWorkflowRoles,
 } from "./RolesRetired.ts";
 import { SpendFeed } from "./SpendFeed.ts";
+import { SubagentsDoc } from "./SubagentDocs.ts";
+import { WorkflowsDoc } from "./WorkflowsDoc.ts";
 
 const context = BACKGROUND_CONTEXT;
 

@@ -91,7 +91,7 @@ const RAW_APPENDS = {
   // head is checked for staleness first, as a write submission's is.
   "brain/NoteAdmission.ts": 2,
   // A display-only budget notice (no model content), held back behind a queued reset.
-  "brain/BudgetSources.ts": 1,
+  "usage/BudgetSources.ts": 1,
   // A display-only workflow budget notice, guarded the same way.
   "workflows/WorkflowBudget.ts": 1,
 } satisfies Readonly<Record<string, number>>;

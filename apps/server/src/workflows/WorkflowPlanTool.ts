@@ -32,17 +32,22 @@ import { Effect, Option, Result, Schema } from "effect";
 import { Type } from "typebox";
 
 import {
-  approvalIdOf,
-  approvalLedger,
-  Approvals,
   copyRecord,
   UNDECIDED,
-} from "../brain/CairnDocs.ts";
+  approvalIdOf,
+  approvalLedger,
+} from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import type { DurableRunner } from "../brain/Durable.ts";
 import { emit } from "../brain/Events.ts";
 import { cutSummary, readPermissions } from "../brain/Permissions.ts";
-import { plainCopy } from "../subagents/SubagentDocs.ts";
+import { plainCopy } from "../brain/SubagentDocs.ts";
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { budgetAsked, MAX_TOKENS, MAX_USD } from "../usage/DefaultBudget.ts";
 import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import {
@@ -56,9 +61,7 @@ import {
   resultRefOf,
   workflowIdOf,
   WorkflowSourcesDoc,
-  WorkflowsDoc,
 } from "./WorkflowDocs.ts";
-import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
 import {
   applyLaunchAnswer,
   LAUNCH_TOOL,

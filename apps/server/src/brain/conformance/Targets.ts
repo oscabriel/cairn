@@ -47,7 +47,6 @@ import { messageText } from "../CommitFeed.ts";
 import { durable } from "../Durable.ts";
 import { FauxModels } from "../FauxModels.ts";
 import { HarnessSeam } from "../HarnessSeam.ts";
-import { ModelSource } from "../ModelSource.ts";
 import { PiDurableHarness } from "../PiDurableHarness.ts";
 import {
   ScriptedBoot,
@@ -216,7 +215,7 @@ export const piDurableLayer = (
       })
     ),
     Layer.provideMerge(
-      ModelSource.layerFaux({
+      FauxModels.layer({
         tokensPerSecond: 2000,
         // A delta of 64 tokens (256 characters), not pi-ai's 3 to 5: an answer streams as long,
         // but a long one is a few timers and deltas, not hundreds. With small deltas, the two

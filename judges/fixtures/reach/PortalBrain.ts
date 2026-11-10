@@ -43,6 +43,10 @@ import {
   PorchSettings,
 } from "../../../apps/server/src/reach/PorchClient.ts";
 import {
+  answerPortalClose,
+  answerPortalStart,
+} from "../../../apps/server/src/reach/PortalHandlers.ts";
+import {
   judgePortalFaults,
   Portals,
   PortalSettings,
@@ -53,10 +57,6 @@ import {
   startPortalSweep,
   stopPortalSweep,
 } from "../../../apps/server/src/reach/ReachRepair.ts";
-import {
-  answerPortalClose,
-  answerPortalStart,
-} from "../../../apps/server/src/rpc/PortalHandlers.ts";
 
 const { values } = parseArgs({
   options: {

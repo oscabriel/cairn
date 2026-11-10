@@ -49,7 +49,7 @@ import {
 } from "effect";
 import { Type } from "typebox";
 
-import { BridgeCwd } from "../../apps/server/src/brain/BridgeCwdExtension.ts";
+import { BridgeCwd } from "../../apps/server/src/models/BridgeCwdExtension.ts";
 import {
   checkResultSchema,
   MAX_RESULT_ATTEMPTS,

@@ -27,10 +27,10 @@ import type { JsonValue } from "@earendil-works/chord/json";
 import type { JsonObject } from "@earendil-works/pi-durable";
 import { Predicate } from "effect";
 
-import type { SubagentsState } from "../subagents/SubagentDocs.ts";
 import type { GoalState } from "../verdicts/GoalDocs.ts";
-import type { WorkflowsState } from "../workflows/WorkflowDocs.ts";
 import type { ApprovalsState } from "./CairnDocs.ts";
+import type { SubagentsState } from "./SubagentDocs.ts";
+import type { WorkflowsState } from "./WorkflowsDoc.ts";
 
 const isObject = (value: JsonValue | undefined): value is JsonObject =>
   Predicate.isObject(value) && !Array.isArray(value);

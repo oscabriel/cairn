@@ -14,9 +14,8 @@ import type { FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { Effect, Fiber, Layer, Option, Predicate, Stream } from "effect";
 
 import { testBrain } from "../brain/BrainTestKit.ts";
-import { FauxModels } from "../brain/FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { PiConfig } from "../models/PiConfig.ts";
 import { PiHost } from "./PiHost.ts";
 import type { InstanceScope, PiHostPolicy } from "./PiHostPolicy.ts";

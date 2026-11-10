@@ -22,13 +22,13 @@ import {
 } from "effect";
 import { HttpRouter } from "effect/http";
 
-import { EntryImageRoute } from "../brain/EntryImageRoute.ts";
+import { FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { ScriptedHarness } from "../brain/ScriptedHarness.ts";
 import { Database } from "../db/Database.ts";
 import { Launches0002 } from "../db/migrations/0002Launches.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
+import { EntryImageRoute } from "../http/EntryImageRoute.ts";
 import { LaunchStore } from "../threads/LaunchStore.ts";
 import { ThreadLaunch } from "../threads/ThreadLaunch.ts";
 import { LaunchWait } from "../threads/Threads.ts";

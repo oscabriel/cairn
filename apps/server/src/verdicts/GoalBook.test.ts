@@ -18,11 +18,11 @@ import { Context, Effect, Layer, Option, Result } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
+import { ChildDoc } from "../brain/SubagentDocs.ts";
 import { ModelSpecError, ModelSpecs } from "../models/ModelSpecs.ts";
-import { goalErrorOf } from "../rpc/GoalHandlers.ts";
-import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { GoalBook } from "./GoalBook.ts";
 import { GoalDoc } from "./GoalDocs.ts";
+import { goalErrorOf } from "./GoalHandlers.ts";
 import { openGoalKit } from "./GoalTestKit.ts";
 import type { GoalKit } from "./GoalTestKit.ts";
 import { NO_JUDGE_FAULTS } from "./JudgeRun.ts";

@@ -1,0 +1,77 @@
+// A handler for every RPC that fails with a typed `Unavailable`, for tests that serve one domain's
+// handlers over a complete group: `Layer.mergeAll` keeps the last handler for a tag, so the domain's
+// layer, listed after `StubHandlers`, replaces its entries. Production never serves a stub: the
+// group in `Handlers.ts` is built from the real handlers only, so a missing one is a compile error.
+
+import { Unavailable } from "@cairn/protocol/Errors";
+import { CairnRpcs } from "@cairn/protocol/Rpc";
+import { Effect, Stream } from "effect";
+
+const unavailable = (tag: string) =>
+  new Unavailable({
+    message: `${tag} is not available on this brain yet. Nothing ran; update the brain and retry.`,
+  });
+
+const unary = (tag: string) => () => Effect.fail(unavailable(tag));
+
+const stream = (tag: string) => () => Stream.fail(unavailable(tag));
+
+/** Every RPC in `CairnRpcs`, each failing with `Unavailable`. */
+export const stubHandlers = {
+  "session.hello": unary("session.hello"),
+  "shell.subscribe": stream("shell.subscribe"),
+  "shell.dispatch": unary("shell.dispatch"),
+  "shell.previousThreads": unary("shell.previousThreads"),
+  "shell.earlierThread": unary("shell.earlierThread"),
+  "thread.launch": unary("thread.launch"),
+  "thread.send": unary("thread.send"),
+  "thread.stop": unary("thread.stop"),
+  "thread.withdraw": unary("thread.withdraw"),
+  "thread.configure": unary("thread.configure"),
+  "thread.respond": unary("thread.respond"),
+  "thread.subscribe": stream("thread.subscribe"),
+  "thread.history": unary("thread.history"),
+  "thread.entry": unary("thread.entry"),
+  "projects.browse": unary("projects.browse"),
+  "projects.ensureScratch": unary("projects.ensureScratch"),
+  "projects.searchEntries": unary("projects.searchEntries"),
+  "git.branches": unary("git.branches"),
+  "attachments.createUploadUrl": unary("attachments.createUploadUrl"),
+  "attachments.discard": unary("attachments.discard"),
+  "diff.turn": unary("diff.turn"),
+  "diff.full": unary("diff.full"),
+  "models.list": unary("models.list"),
+  "providers.status": unary("providers.status"),
+  "usage.subscribe": stream("usage.subscribe"),
+  "skills.list": unary("skills.list"),
+  "skills.reload": unary("skills.reload"),
+  "executor.status": unary("executor.status"),
+  "executor.signIn": unary("executor.signIn"),
+  "push.subscribe": unary("push.subscribe"),
+  "push.unsubscribe": unary("push.unsubscribe"),
+  "presence.report": unary("presence.report"),
+  "settings.get": unary("settings.get"),
+  "settings.update": unary("settings.update"),
+  "models.check": unary("models.check"),
+  "spend.get": unary("spend.get"),
+  "budget.declare": unary("budget.declare"),
+  "budget.get": unary("budget.get"),
+  "providers.login.start": stream("providers.login.start"),
+  "providers.login.cancel": unary("providers.login.cancel"),
+  "providers.logout": unary("providers.logout"),
+  "goal.setCriteria": unary("goal.setCriteria"),
+  "goal.mark": unary("goal.mark"),
+  "workflow.stop": unary("workflow.stop"),
+  "workflow.stopNode": unary("workflow.stopNode"),
+  "workflow.list": unary("workflow.list"),
+  "workflow.eventStatus": unary("workflow.eventStatus"),
+  "reach.list": unary("reach.list"),
+  "artifact.revoke": unary("artifact.revoke"),
+  "portal.close": unary("portal.close"),
+  "portal.start": unary("portal.start"),
+} as const;
+
+/** The stub table as a handler layer, to merge a domain's handlers over. */
+export const StubHandlers = CairnRpcs.toLayer(
+  Effect.succeed(CairnRpcs.of(stubHandlers))
+);

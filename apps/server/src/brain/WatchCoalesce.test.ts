@@ -11,8 +11,8 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result, Stream } from "effect";
 
 import { testBrain } from "./BrainTestKit.ts";
+import { FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL } from "./ModelSource.ts";
 
 const harness = testBrain({
   model: { tokensPerSecond: 4000, settings: {} },

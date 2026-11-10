@@ -20,7 +20,7 @@ import { commitWrites } from "@earendil-works/pi-durable/testing";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import type { SubagentItemState } from "./SubagentDocs.ts";
+import type { SubagentItemState } from "../brain/SubagentDocs.ts";
 import { REPORTER_TASK, workAhead } from "./SubagentTasks.ts";
 
 const context = BACKGROUND_CONTEXT;

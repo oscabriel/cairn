@@ -43,7 +43,6 @@ import {
 } from "effect";
 import { Type } from "typebox";
 
-import { Git } from "../git/Git.ts";
 import { threadProcessEnv } from "./Arms.ts";
 import {
   MIN_TRAILER_GIT,
@@ -56,6 +55,7 @@ import { durableRunner } from "./Durable.ts";
 import type { DurableRunner } from "./Durable.ts";
 import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
+import { GitVersion } from "./GitVersion.ts";
 import { gatedTool } from "./Permissions.ts";
 
 /** The name of the extension, as pi-durable selects it. */
@@ -320,25 +320,19 @@ export class CodingTools extends Context.Service<
   CodingTools,
   { readonly extension: CairnExtension }
 >()("cairn/server/brain/CodingTools") {
-  /** Over the ambient `Git`, asked for its version once to decide the commit trailer. */
+  /**
+   * Over git's version (`GitVersion`, asked once when the brain starts) to decide the commit
+   * trailer: `GitVersionLive` in the extension set.
+   */
   static readonly layerNoDeps = Layer.effect(
     CodingTools,
     Effect.gen(function* () {
-      const git = yield* Git;
+      // A git that cannot run reported its failure in the line, and the trailer stays off.
+      const { line: output } = yield* GitVersion;
 
       const images = yield* Effect.promise(
         async () => await createNodePhotonImages()
       );
-
-      // A git that cannot run reports its failure here, and the trailer stays off.
-      const output = yield* git
-        .run("CodingTools.gitVersion", ".", ["version"])
-        .pipe(
-          Effect.map((result) => result.stdout),
-          Effect.catchTag("GitError", (failure) =>
-            Effect.succeed(failure.message)
-          )
-        );
 
       const trailer = Option.exists(parseGitVersion(output), supportsTrailer);
 
@@ -360,10 +354,5 @@ export class CodingTools extends Context.Service<
         },
       });
     })
-  );
-
-  /** With Node's git. */
-  static readonly layer = CodingTools.layerNoDeps.pipe(
-    Layer.provide(Git.layer)
   );
 }

@@ -13,6 +13,7 @@ import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql";
 
 import { Database } from "../db/Database.ts";
+import { DatabaseLive } from "../db/DatabaseLive.ts";
 import { migrations } from "../db/Migrations.ts";
 
 /** The settings table could not be read or written. Nothing changed; retry. */
@@ -258,3 +259,13 @@ export class SettingsStore extends Context.Service<
     Layer.provide(Database.layerTest(migrations))
   );
 }
+
+/**
+ * The brain's settings, over `DatabaseLive`: the reference the brain's tools, the settings RPCs
+ * and the entry points provide. `SettingsStore.layerNoDeps` is for assemblies over their own
+ * `SqlClient` (the shell store, test brains); over the one production database the memo map builds
+ * its one reference once, so both are one store.
+ */
+export const SettingsLive = SettingsStore.layerNoDeps.pipe(
+  Layer.provide(DatabaseLive)
+);

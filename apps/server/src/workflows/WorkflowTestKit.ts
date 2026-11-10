@@ -69,7 +69,8 @@ import {
 } from "effect";
 import { Type } from "typebox";
 
-import { Approvals, UNDECIDED } from "../brain/CairnDocs.ts";
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { CodeMode } from "../brain/CodeMode.ts";
 import { messageText } from "../brain/CommitFeed.ts";
@@ -84,9 +85,10 @@ import {
 } from "../brain/Events.ts";
 import type { Reactor } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
+import { plainCopy } from "../brain/SubagentDocs.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { FAILURE_WORDS, parseModelSpec } from "../models/ModelSpecs.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../models/ResultTool.ts";
-import { plainCopy } from "../subagents/SubagentDocs.ts";
 import { fixedDefaultBudget } from "../usage/DefaultBudget.ts";
 import { NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
 import type { BudgetPushSink } from "./WorkflowBudget.ts";
@@ -94,7 +96,6 @@ import {
   approveRecord,
   LaunchRunsDoc,
   proposedRecord,
-  WorkflowsDoc,
 } from "./WorkflowDocs.ts";
 import { LAUNCH_TOOL } from "./WorkflowLaunch.ts";
 import { toLaunch, WorkflowPlan } from "./WorkflowPlan.ts";

@@ -31,9 +31,9 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result } from "effect";
 
 import { projectView, wireProjector } from "../brain/ThreadWire.ts";
+import type { WorkflowsState } from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { testLimit } from "../EventuallyTestKit.ts";
-import { WorkflowsDoc } from "./WorkflowDocs.ts";
-import type { WorkflowsState } from "./WorkflowDocs.ts";
 import {
   KitLayer,
   kitParts,

@@ -45,11 +45,12 @@ import type {
 import { DEFAULT_RESTART_LIMIT } from "@earendil-works/pi-durable";
 import { Effect, Function, Option, Schema } from "effect";
 
-import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
+import { approvalIdOf } from "../approvals/ApprovalLedger.ts";
 import { Brain } from "./Brain.ts";
-import { Approvals, approvalIdOf } from "./CairnDocs.ts";
+import { Approvals } from "./CairnDocs.ts";
 import { durable, errorText } from "./Durable.ts";
 import { piEntryId } from "./PiIds.ts";
+import { WorkflowsDoc } from "./WorkflowsDoc.ts";
 
 /** How many crashes in a row Cairn lets a task take before boot ends it: pi-durable's default. */
 export const CRASH_LIMIT = DEFAULT_RESTART_LIMIT;

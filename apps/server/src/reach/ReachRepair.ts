@@ -14,29 +14,16 @@
 
 import { Effect } from "effect";
 
-import type { BootRepair } from "../BootRepairs.ts";
+import type { BootRepair } from "../BootRepair.ts";
+import { bootRepair } from "../BootRepair.ts";
 import { shutdownHook } from "../Shutdown.ts";
 import { Portals } from "./Portals.ts";
 
-/**
- * The boot repair that reconciles portal rows, units and porches. A failure is logged and boot goes
- * on, as `bootRepair` does (built here by hand, since this module cannot import `BootRepairs.ts`).
- */
-export const portalReconcile: BootRepair<Portals> = {
-  name: "portal reconcile",
-  repair: Portals.use((portals) => portals.reconcile).pipe(
-    Effect.asVoid,
-    Effect.catchCause((cause) =>
-      Effect.logError("boot repair failed").pipe(
-        Effect.annotateLogs({
-          event: "boot_repair_failed",
-          repair: "portal reconcile",
-          cause: String(cause),
-        })
-      )
-    )
-  ),
-};
+/** The boot repair that reconciles portal rows, units and porches. A failure is logged and boot goes on. */
+export const portalReconcile = bootRepair(
+  "portal reconcile",
+  Portals.use((portals) => portals.reconcile).pipe(Effect.asVoid)
+);
 
 /** The boot repair that starts the portal sweep; listed after `portalReconcile`. */
 export const startPortalSweep: BootRepair<Portals> = {

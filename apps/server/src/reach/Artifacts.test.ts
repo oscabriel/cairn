@@ -38,9 +38,11 @@ import {
   THREAD_A,
 } from "./ArtifactScenarios.ts";
 import type { ArtifactStage } from "./ArtifactScenarios.ts";
-import { makeFakePorch, PorchClient } from "./PorchClient.ts";
+import { makeFakePorch } from "./FakePorch.ts";
+import { PorchClient } from "./PorchClient.ts";
 import type { PublishReceipt } from "./PorchClient.ts";
 import { ReachLister } from "./ReachLister.ts";
+import { ArtifactsTest } from "./ReachTestKit.ts";
 
 const DOMAIN = "example.test";
 
@@ -464,7 +466,7 @@ describe("Artifacts over the fake porch", () => {
 const folder = (workspaceRoot: string) =>
   projectSlugOf({ kind: "folder", workspaceRoot });
 
-describe("Artifacts.layerTest", () => {
+describe("the artifacts test layer", () => {
   it.live("publishes through its own fake porch and temp folders", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -487,7 +489,7 @@ describe("Artifacts.layerTest", () => {
             name: Option.none(),
             project: Option.some(SCENARIO_PROJECT),
           });
-        }).pipe(Effect.provide(Artifacts.layerTest));
+        }).pipe(Effect.provide(ArtifactsTest));
 
         assert.strictEqual(
           published.row.url,

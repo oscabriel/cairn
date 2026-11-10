@@ -48,15 +48,16 @@ import { Brain } from "../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../apps/server/src/brain/BrainConfig.ts";
 import { childWorkspacesAt } from "../../apps/server/src/brain/conformance/Targets.ts";
 import { durable } from "../../apps/server/src/brain/Durable.ts";
-import { ExtensionSet } from "../../apps/server/src/brain/ExtensionSet.ts";
+import { FAUX_MODEL } from "../../apps/server/src/brain/FauxModels.ts";
 import { HarnessSeam } from "../../apps/server/src/brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../../apps/server/src/brain/HarnessSeam.ts";
-import { FAUX_MODEL } from "../../apps/server/src/brain/ModelSource.ts";
 import { PiDurableHarness } from "../../apps/server/src/brain/PiDurableHarness.ts";
 import { piConversationId } from "../../apps/server/src/brain/PiIds.ts";
+import { SubagentsDoc } from "../../apps/server/src/brain/SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "../../apps/server/src/brain/SubagentFaults.ts";
 import { ServerConfig } from "../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../apps/server/src/executor/ExecutorLink.ts";
+import { ExtensionSet } from "../../apps/server/src/ExtensionSet.ts";
 import { BridgeProvider } from "../../apps/server/src/models/BridgeProvider.ts";
 import { ModelHealth } from "../../apps/server/src/models/ModelHealth.ts";
 import {
@@ -66,12 +67,11 @@ import {
 import { readResult } from "../../apps/server/src/models/ResultTool.ts";
 import { SettingsStore } from "../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../apps/server/src/pi-host/PiHost.ts";
-import { ReachServicesTest } from "../../apps/server/src/reach/ReachLayer.ts";
+import { ReachServicesTest } from "../../apps/server/src/reach/ReachTestKit.ts";
 import {
   createProject,
   testThreadId,
 } from "../../apps/server/src/shell/ShellTestKit.ts";
-import { SubagentsDoc } from "../../apps/server/src/subagents/SubagentDocs.ts";
 import { Subagents } from "../../apps/server/src/subagents/Subagents.ts";
 import { judgeTrial, REPORT_SCHEMA, TASK } from "./TypedResults.ts";
 import type { Trial } from "./TypedResults.ts";

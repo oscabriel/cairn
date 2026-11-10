@@ -15,11 +15,12 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Result } from "effect";
 import { Type } from "typebox";
 
-import { approvalLedger, Approvals } from "../brain/CairnDocs.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
 import { durable, durableRunner } from "../brain/Durable.ts";
 import type { DurableRunner } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { approvalLedger } from "./ApprovalLedger.ts";
 import {
   ASK_USER_DESCRIPTION,
   ASK_USER_TOOL,

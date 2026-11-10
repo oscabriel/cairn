@@ -170,7 +170,7 @@ export class ExecutorSweep extends Context.Service<
 }
 
 /**
- * The boot repair's effect. `BootRepairs.ts` lists it as
+ * The boot repair's effect. The executor manifest (`ExecutorFeature.ts`) lists it as
  * `bootRepair("executor-sweep", sweepUnfinishedExecutorRequests)`, before any repair that can
  * start scheduling.
  */

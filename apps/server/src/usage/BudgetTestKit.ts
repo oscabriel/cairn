@@ -21,7 +21,6 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { BudgetSources, BudgetSourceError } from "../brain/BudgetSources.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent, StopOptions } from "../brain/HarnessSeam.ts";
 import { ModelSource } from "../brain/ModelSource.ts";
@@ -43,6 +42,7 @@ import { BudgetBook, hasLimits } from "./BudgetBook.ts";
 import type { BudgetMode, ScopeLimit } from "./BudgetBook.ts";
 import { BudgetGuard } from "./BudgetGuard.ts";
 import { Budgets } from "./Budgets.ts";
+import { BudgetSources, BudgetSourceError } from "./BudgetSources.ts";
 import { SpendLedger } from "./SpendLedger.ts";
 
 /** A budget of `tokens` tokens, warning at 80 percent. */

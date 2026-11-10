@@ -54,6 +54,8 @@ import { ThreadMeta } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import { ChildDoc, isLinked, SubagentsDoc } from "../brain/SubagentDocs.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { PI_DEFAULT_THINKING } from "../models/PiModelSource.ts";
 import { CommandReceipts } from "../shell/CommandReceipts.ts";
 import { EventSink } from "../shell/EventSink.ts";
@@ -61,9 +63,7 @@ import { ThreadCreate } from "../shell/ShellCommands.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import { derivedCommandId } from "../threads/ThreadLaunch.ts";
 import { placeholderTitle, ThreadTitles } from "../threads/ThreadTitles.ts";
-import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { conversationOf } from "./Delivery.ts";
-import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
 
 /** How many conversations the boot repair reads per page. */
 const SCAN_PAGE = 200;

@@ -33,6 +33,7 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
 import {
   eventuallySome as waitFor,
   testLimit,
@@ -41,12 +42,11 @@ import {
 import { bindCriteria, markByUser } from "../verdicts/Verdicts.ts";
 import { Brain } from "./Brain.ts";
 import { testBrain } from "./BrainTestKit.ts";
-import { UNDECIDED, Approvals, ThreadMeta } from "./CairnDocs.ts";
+import { Approvals, ThreadMeta } from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL } from "./ModelSource.ts";
 import { piConversationId } from "./PiIds.ts";
 
 const PARENT = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d1");

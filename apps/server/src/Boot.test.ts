@@ -29,17 +29,18 @@ import { TestClock } from "effect/testing";
 import {
   HarnessBoot,
   PiDurableBrain,
-  ScriptedBrain,
   ThreadsLive,
   withCatalog,
+  HandlersLayer,
 } from "./AppLayer.ts";
 import { runBoot } from "./Boot.ts";
 import { endCrashLoopedTasks } from "./brain/CrashLimit.ts";
+import { FauxModels, FAUX_MODEL } from "./brain/FauxModels.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
+import { ScriptedBrain } from "./DevLayer.ts";
 import { eventuallyTrue, testLimit } from "./EventuallyTestKit.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Diffs } from "./git/Diffs.ts";
@@ -53,12 +54,8 @@ import { isolatePiSetup } from "./models/PiConfigTestKit.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { PushLayer } from "./push/PushLayer.ts";
-import {
-  ReachMachine,
-  ReachServices,
-  ReachServicesTest,
-} from "./reach/ReachLayer.ts";
-import { HandlersLayer } from "./rpc/Handlers.ts";
+import { ReachServices } from "./reach/ReachLayer.ts";
+import { ReachMachine, ReachServicesTest } from "./reach/ReachTestKit.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { EventSink } from "./shell/EventSink.ts";
 import { ProjectorSignals } from "./shell/ProjectorSignals.ts";
@@ -366,7 +363,7 @@ const PROJECT = createProject(1);
 const brainFor = (dataDir: string) =>
   PiDurableBrain({
     models: withCatalog(
-      ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} })
+      FauxModels.layer({ tokensPerSecond: 2000, settings: {} })
     ),
   }).pipe(
     Layer.provideMerge(ExecutorLink.layerDisabled),

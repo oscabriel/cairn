@@ -27,6 +27,7 @@ import { durable, durableRunner, runnerOf } from "../brain/Durable.ts";
 import type { DurableCallError, DurableRunner } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { ChildDoc, isLinked, SubagentsDoc } from "../brain/SubagentDocs.ts";
 import {
   NO_SUBAGENT_CRASHES,
   NO_SUBAGENT_FAULTS,
@@ -52,7 +53,6 @@ import { listParent, SPAWN_TOOL } from "./BrainCap.ts";
 import { BriefFaults, NO_BRIEF_FAULTS } from "./BriefFaults.ts";
 import type { BriefFaultHooks } from "./BriefFaults.ts";
 import { conversationOf } from "./Delivery.ts";
-import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
 import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
 import type {
   BudgetAccess,

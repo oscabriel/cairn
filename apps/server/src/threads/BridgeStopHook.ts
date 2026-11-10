@@ -9,7 +9,7 @@
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { DateTime, Effect, Option } from "effect";
 
-import { BridgeCwd } from "../brain/BridgeCwdExtension.ts";
+import { BridgeCwd } from "../models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "../models/BridgeProvider.ts";
 import type { StopHook } from "./StopHooks.ts";
 

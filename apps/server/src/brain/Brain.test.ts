@@ -36,10 +36,9 @@ import { BrainOpenTimeout } from "./BrainOpenTimeout.ts";
 import { BrainStore } from "./BrainStore.ts";
 import { brainExtensions } from "./BrainTestKit.ts";
 import { CommitFeed } from "./CommitFeed.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 
 const isRunTerminal = (
@@ -96,7 +95,7 @@ const brainLayer = (dataDir: string, failNext: { value: boolean }) => {
     ),
     Layer.provide(brainExtensions()),
     Layer.provideMerge(
-      ModelSource.layerFaux({
+      FauxModels.layer({
         tokensPerSecond: 2000,
         // pi-durable 1.5 charges a request the failure cut off as a failed attempt instead of
         // resending it, so the reopened Session answers through one quick retry.
@@ -359,7 +358,7 @@ describe("Brain supervisor", () => {
               Layer.provide(Arms.layer),
               Layer.provide(brainExtensions()),
               Layer.provideMerge(
-                ModelSource.layerFaux({
+                FauxModels.layer({
                   tokensPerSecond: 2000,
                   settings: { retry: { enabled: false } },
                 })
@@ -468,7 +467,7 @@ describe("Brain supervisor", () => {
               Layer.provide(Arms.layer),
               Layer.provide(brainExtensions()),
               Layer.provideMerge(
-                ModelSource.layerFaux({
+                FauxModels.layer({
                   tokensPerSecond: 2000,
                   settings: { retry: { enabled: false } },
                 })

@@ -1,7 +1,7 @@
 // The pieces of subagent delivery that run inside one pi-durable transaction (ADR 0028): whether a
 // parent is halted (the wake rule), the child's thread id, a settlement as the reporter's
 // checkpoint keeps it and a registry status change. The escalation that turns a child's question
-// to the user is the question route's (approvals/QuestionRoute.ts). None of them awaits anything
+// to the user is the question route's (QuestionRoute.ts). None of them awaits anything
 // outside the transaction, and the table reads are named, so a caller can make them before its
 // first table write.
 
@@ -21,9 +21,12 @@ import { Option } from "effect";
 
 import { RUN_TASK } from "../brain/CommitFeed.ts";
 import { piConversationId, piTaskId } from "../brain/PiIds.ts";
+import { WakeHoldDoc } from "../brain/SubagentDocs.ts";
+import type {
+  SubagentItemState,
+  SubagentsState,
+} from "../brain/SubagentDocs.ts";
 import { EscalationWhy } from "../brain/SubagentText.ts";
-import { WakeHoldDoc } from "./SubagentDocs.ts";
-import type { SubagentItemState, SubagentsState } from "./SubagentDocs.ts";
 
 /** A stored conversation id as pi-durable types it. */
 export const conversationOf = (id: number): PiConversationId =>

@@ -20,11 +20,11 @@ import type { Budget } from "@cairn/protocol/Spend";
 import { Option, Result, Schema } from "effect";
 
 import type { ApprovalPayloadState } from "../brain/CairnDocs.ts";
+import { jsonRecordOf, plainCopy } from "../brain/SubagentDocs.ts";
+import type { JsonRecord } from "../brain/SubagentDocs.ts";
 import { SubagentToolText } from "../brain/SubagentText.ts";
 import { checkResultSchema } from "../models/ResultTool.ts";
 import { budgetAsked } from "../usage/DefaultBudget.ts";
-import { jsonRecordOf, plainCopy } from "./SubagentDocs.ts";
-import type { JsonRecord } from "./SubagentDocs.ts";
 
 /** What `subagent_spawn` was called with, after its flat arguments are read. */
 export interface SpawnArguments {

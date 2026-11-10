@@ -131,7 +131,7 @@ export const threadStreamHandlers = Effect.gen(function* () {
   };
 });
 
-/** The handlers of the thread stream's RPCs, to merge over the stubs in `rpc/Handlers.ts`. */
+/** The handlers of the thread stream's RPCs, served through `rpc/Handlers.ts`. */
 export const ThreadStreamHandlers = {
   layer: Layer.mergeAll(
     CairnRpcs.toLayerHandler(

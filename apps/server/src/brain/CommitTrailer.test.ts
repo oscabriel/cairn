@@ -36,9 +36,8 @@ import {
   trailerCommand,
   withTrailerHook,
 } from "./CommitTrailer.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL } from "./ModelSource.ts";
 
 const harness = testBrain();
 

@@ -49,10 +49,9 @@ import {
   HarnessBoot,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
-import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
+import { BudgetSources } from "../../../apps/server/src/usage/BudgetSources.ts";
 import type { ImportedEntry } from "../../../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
-import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
 import {
   piConversationId,
   piEntryId,
@@ -71,7 +70,7 @@ import type { ScriptedGoals } from "../../../apps/server/src/brain/ScriptedHarne
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
-import { ReachMachine } from "../../../apps/server/src/reach/ReachLayer.ts";
+import { ReachMachine } from "../../../apps/server/src/reach/ReachTestKit.ts";
 import { Identity } from "../../../apps/server/src/http/Identity.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import {
@@ -82,8 +81,10 @@ import {
 } from "../../../apps/server/src/shell/ShellCommands.ts";
 import type { ThreadActivityPatch } from "../../../apps/server/src/shell/ShellCommands.ts";
 import { CAIRN_USER_ENTRY } from "../../../apps/server/src/threads/TurnContent.ts";
-import { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";
+import type { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
+import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
+import { ScriptedGoalBook } from "../../../apps/server/src/verdicts/ScriptedGoalBook.ts";
 
 const root = path.join(import.meta.dirname, "../../..");
 
@@ -634,7 +635,7 @@ export const startCairn = async (
   });
 
   const models = withCatalog(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 200,
       settings: {},
       // The model t3code's baseline shows, so the footer folds at the same widths.
@@ -649,7 +650,7 @@ export const startCairn = async (
     BudgetSources.layerNone,
     brain.stops ?? WorkflowStops.layerOff,
     // The scripted harness's goals, so a goal binds, refuses and is marked as on pi-durable.
-    GoalBook.layerScripted
+    ScriptedGoalBook
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),
     Layer.provideMerge(Layer.succeed(ScriptedStore, store)),

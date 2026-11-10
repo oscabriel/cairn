@@ -117,8 +117,9 @@ const { durable } = await import("../apps/server/src/brain/Durable.ts");
 
 const { HarnessSeam } = await import("../apps/server/src/brain/HarnessSeam.ts");
 
-const { FAUX_MODEL, ModelSource } =
-  await import("../apps/server/src/brain/ModelSource.ts");
+const { FAUX_MODEL } = await import("../apps/server/src/brain/FauxModels.ts");
+
+const { ModelSource } = await import("../apps/server/src/brain/ModelSource.ts");
 
 const { piConversationId } = await import("../apps/server/src/brain/PiIds.ts");
 

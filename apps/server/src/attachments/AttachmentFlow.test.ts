@@ -30,9 +30,8 @@ import {
 } from "effect";
 
 import { PiDurableBrain } from "../AppLayer.ts";
-import { FauxModels } from "../brain/FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { testLimit, slackened } from "../EventuallyTestKit.ts";
@@ -42,7 +41,7 @@ import { isolatePiSetup } from "../models/PiConfigTestKit.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
+import { ReachServicesTest } from "../reach/ReachTestKit.ts";
 import { ShellLayer } from "../shell/ShellLayer.ts";
 import { TurnContent, textStage } from "../threads/TurnContent.ts";
 import { attachmentStage } from "./AttachmentStage.ts";
@@ -118,7 +117,7 @@ const stack = (dir: string) => {
       return PiDurableBrain({
         models: PiModelSource.layerFromModelSource.pipe(
           Layer.provideMerge(
-            ModelSource.layerFaux({ tokensPerSecond: 5000, settings: {} })
+            FauxModels.layer({ tokensPerSecond: 5000, settings: {} })
           )
         ),
         extraExtensions: [log],

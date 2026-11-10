@@ -17,8 +17,8 @@ import {
   Schedule,
 } from "effect";
 
+import { FAUX_MODEL } from "./brain/FauxModels.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
-import { FAUX_MODEL } from "./brain/ModelSource.ts";
 import { EventSink } from "./shell/EventSink.ts";
 import { ProjectRegister, ThreadCreate } from "./shell/ShellCommands.ts";
 

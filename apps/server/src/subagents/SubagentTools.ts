@@ -44,34 +44,32 @@ import { defineTool } from "@earendil-works/pi-durable";
 import { Duration, Effect, Function, Option, Result } from "effect";
 import { Type } from "typebox";
 
+import type { ApprovalSettlement } from "../approvals/ApprovalLedger.ts";
 import {
-  endUnanswered,
-  escalateIn,
-  MAX_ESCALATE_REASON,
-  MAX_QUESTION_LENGTH,
-  MAX_QUESTION_OPTIONS,
-  placedMemoOf,
-  QUESTION_WINDOW_MILLIS,
-  questionRecord,
-  routeQuestion,
-} from "../approvals/QuestionRoute.ts";
-import type { RouteIo } from "../approvals/QuestionRoute.ts";
-import { BRIEF_TTL_MILLIS } from "../brain/BriefTtl.ts";
-import {
-  applyAnswer,
+  UNDECIDED,
   approvalIdOf,
   approvalLedger,
-  Approvals,
+  applyAnswer,
   cancelAbandonedApprovals,
-  ThreadMeta,
-  UNDECIDED,
-} from "../brain/CairnDocs.ts";
-import type { ApprovalSettlement } from "../brain/CairnDocs.ts";
+} from "../approvals/ApprovalLedger.ts";
+import { BRIEF_TTL_MILLIS } from "../brain/BriefTtl.ts";
+import { Approvals, ThreadMeta } from "../brain/CairnDocs.ts";
 import type { DurableRunner } from "../brain/Durable.ts";
 import {
   GATED_APPROVAL_TTL_MILLIS,
   readPermissions,
 } from "../brain/Permissions.ts";
+import {
+  ChildDoc,
+  isLinked,
+  markQuestion,
+  SubagentsDoc,
+} from "../brain/SubagentDocs.ts";
+import type {
+  ChildState,
+  JsonRecord,
+  SubagentItemState,
+} from "../brain/SubagentDocs.ts";
 import type {
   SubagentCrashPoint,
   SubagentFaultSet,
@@ -98,16 +96,17 @@ import {
 import { briefOf, briefPayload } from "./Briefs.ts";
 import { conversationOf, setStatus } from "./Delivery.ts";
 import {
-  ChildDoc,
-  isLinked,
-  markQuestion,
-  SubagentsDoc,
-} from "./SubagentDocs.ts";
-import type {
-  ChildState,
-  JsonRecord,
-  SubagentItemState,
-} from "./SubagentDocs.ts";
+  endUnanswered,
+  escalateIn,
+  MAX_ESCALATE_REASON,
+  MAX_QUESTION_LENGTH,
+  MAX_QUESTION_OPTIONS,
+  placedMemoOf,
+  QUESTION_WINDOW_MILLIS,
+  questionRecord,
+  routeQuestion,
+} from "./QuestionRoute.ts";
+import type { RouteIo } from "./QuestionRoute.ts";
 import { START_TASK } from "./SubagentTasks.ts";
 import type { ModelAccess, SubagentTasks } from "./SubagentTasks.ts";
 import { awaitDoc, runWait } from "./Waits.ts";

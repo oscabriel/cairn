@@ -49,8 +49,6 @@ import {
   Stream,
 } from "effect";
 
-import { BudgetSources } from "../brain/BudgetSources.ts";
-import type { BudgetSourceError } from "../brain/BudgetSources.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { cutText, Notifier } from "../push/Notifier.ts";
@@ -71,6 +69,8 @@ import {
   warningText,
 } from "./Budgets.ts";
 import type { Transition } from "./Budgets.ts";
+import { BudgetSources } from "./BudgetSources.ts";
+import type { BudgetSourceError } from "./BudgetSources.ts";
 import { SpendLedger } from "./SpendLedger.ts";
 import type { SpendLedgerError } from "./SpendLedger.ts";
 

@@ -28,9 +28,9 @@
 //   Executor never holds that lock for longer. A second `signIn` while one runs gets the same
 //   consent page.
 //
-// Only `main.ts` composes `ExecutorLink.layer`; dev and judge brains compose `layerFake`, a fake
-// Executor on a loopback port with a grant in memory, and tests that need no Executor compose
-// `layerDisabled` (Composition.test.ts greps for both rules).
+// Only `main.ts` composes `ExecutorLink.layer`; dev and judge brains compose `FakeExecutorLink`
+// (`FakeExecutor.ts`), a fake Executor on a loopback port with a grant in memory, and tests that
+// need no Executor compose `layerDisabled` (Composition.test.ts greps for both rules).
 //
 // Ported from cairn-v1, apps/server/src/Executor.ts at 1a5cd4a (`makeConnection`, `call`, `lose`,
 // `ping`, `check`, `connect`, `callback`, `CairnOAuthProvider`). Changed: one grant from the
@@ -80,7 +80,6 @@ import { ServerConfig } from "../Config.ts";
 import { ExecutorGrant } from "./ExecutorGrant.ts";
 import { parseReply } from "./ExecutorReply.ts";
 import type { ExecutorReply, JsonObject } from "./ExecutorReply.ts";
-import { startFakeExecutor } from "./FakeExecutor.ts";
 
 /** The path of the OAuth redirect Executor sends a sign-in back to. */
 export const CALLBACK_PATH = "/oauth/executor/callback";
@@ -1135,19 +1134,5 @@ export class ExecutorLink extends Context.Service<
         })
       )
     )
-  );
-
-  /**
-   * A link to a fake Executor on a free loopback port, with a grant in memory: dev and judge
-   * brains. Never touches the deployed grant. Needs `ServerConfig`.
-   */
-  static readonly layerFake = Layer.unwrap(
-    Effect.gen(function* () {
-      const fake = yield* startFakeExecutor;
-
-      return ExecutorLink.layerNoDeps.pipe(
-        Layer.provide(ExecutorGrant.layerMemory(Option.some(fake.issueGrant())))
-      );
-    })
   );
 }

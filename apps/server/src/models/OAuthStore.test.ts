@@ -2,7 +2,7 @@
 // times, one holder, one write at a time, a write that outlives its caller's interruption, and the
 // pi-ai-facing source refusing an API key. Assertions read tokens the test minted, never real ones.
 
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -101,6 +101,8 @@ describe("the OAuth store", () => {
 
       assert.isTrue(first.held);
       assert.isFalse(second.held);
+      // Another brain holds it: not a lock that failed.
+      assert.isTrue(Option.isNone(second.lockFailure));
       assert.isTrue(Option.isNone(yield* second.read("openai-codex")));
       assert.isTrue(Option.isNone(yield* second.signedIn("openai-codex")));
 
@@ -140,6 +142,34 @@ describe("the OAuth store", () => {
       Effect.scoped,
       Effect.provide(Layer.mergeAll(Sql, NodeServices.layer))
     )
+  );
+
+  it.live(
+    "degrades to unavailable when the lock cannot be taken, instead of failing boot",
+    () =>
+      Effect.gen(function* () {
+        // The lock's folder cannot be made: its parent is a file.
+        const blocked = path.join(lockPath(), "under-a-file", "oauth.lock");
+
+        writeFileSync(path.dirname(path.dirname(blocked)), "");
+
+        const store = yield* holderAt(blocked);
+
+        assert.isFalse(store.held);
+        assert.isTrue(Option.isSome(store.lockFailure));
+        assert.isTrue(Option.isNone(yield* store.read("openai-codex")));
+        assert.isTrue(Option.isNone(yield* store.signedIn("openai-codex")));
+
+        const refused = yield* store
+          .signIn("openai-codex", credential("rt_1"))
+          .pipe(Effect.flip);
+
+        assert.strictEqual(refused.reason, "unavailable");
+        assert.include(refused.message, "could not be taken");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(Sql, NodeServices.layer))
+      )
   );
 
   it.live("frees the lock when its holder's scope closes", () =>

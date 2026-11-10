@@ -41,7 +41,6 @@ import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { HealthOutcome, ModelHealth } from "../models/ModelHealth.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
-import { SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { Subagents } from "../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
@@ -53,12 +52,12 @@ import { Approvals } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
 import { childWorkspacesAt } from "./conformance/Targets.ts";
 import { durable } from "./Durable.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
+import { SubagentsDoc } from "./SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 import { renderBriefAnswer, SubagentToolText } from "./SubagentText.ts";
 
@@ -87,7 +86,7 @@ const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
     Layer.provideMerge(ModelHealth.layerTest),
     Layer.provideMerge(SettingsStore.layerTest),
     Layer.provideMerge(
-      ModelSource.layerFaux({
+      FauxModels.layer({
         tokensPerSecond: 2000,
         settings: { retry: { enabled: false } },
       })

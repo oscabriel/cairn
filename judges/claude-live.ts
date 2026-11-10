@@ -88,8 +88,8 @@ import {
 } from "effect";
 import { Type } from "typebox";
 
-import { BridgeCwd } from "../apps/server/src/brain/BridgeCwdExtension.ts";
 import { CodeMode } from "../apps/server/src/brain/CodeMode.ts";
+import { BridgeCwd } from "../apps/server/src/models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "../apps/server/src/models/BridgeProvider.ts";
 
 const CASES = [

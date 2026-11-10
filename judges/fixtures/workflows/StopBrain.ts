@@ -47,13 +47,13 @@ import {
   Approvals,
   ThreadReceipt,
 } from "../../../apps/server/src/brain/CairnDocs.ts";
-import { ChildDoc } from "../../../apps/server/src/subagents/SubagentDocs.ts";
+import { ChildDoc } from "../../../apps/server/src/brain/SubagentDocs.ts";
+import type { WorkflowItemState } from "../../../apps/server/src/brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../../../apps/server/src/brain/WorkflowsDoc.ts";
 import {
   isWorkflowEnded,
   ledgerProblems,
-  WorkflowsDoc,
 } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
-import type { WorkflowItemState } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
 import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
 import {
   codemodeResultText,

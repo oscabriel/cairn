@@ -87,20 +87,19 @@ import {
 import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
 import { Type } from "typebox";
 
+import type { ApprovalRequest } from "../approvals/ApprovalLedger.ts";
 import {
   approvalIdOf,
   approvalLedger,
-  Approvals,
   emitBriefApproved,
+} from "../approvals/ApprovalLedger.ts";
+import {
+  Approvals,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
 } from "../brain/CairnDocs.ts";
-import type {
-  ApprovalRecord,
-  ApprovalRequest,
-  JsonRecord,
-} from "../brain/CairnDocs.ts";
+import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
 import { ScriptSlots } from "../brain/CodeMode.ts";
 import type { DurableRunner } from "../brain/Durable.ts";
 import { emit } from "../brain/Events.ts";
@@ -112,13 +111,15 @@ import {
   readPermissions,
 } from "../brain/Permissions.ts";
 import { usageLimitOf } from "../brain/RunFailure.ts";
+import { ChildDoc, isLinked } from "../brain/SubagentDocs.ts";
+import type { WorkflowItemState } from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { parseModelSpec, specOf } from "../models/ModelSpecs.ts";
 import {
   childThreadIdOf,
   conversationOf,
   taskOf,
 } from "../subagents/Delivery.ts";
-import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import { nodeChildTools } from "../subagents/Subagents.ts";
 import { failsVisibly } from "../subagents/TaskFailures.ts";
 import type { FailedPhase } from "../subagents/TaskFailures.ts";
@@ -156,9 +157,8 @@ import {
   nextIndex,
   nodeIdOf,
   nodeRequestIdOf,
-  WorkflowsDoc,
 } from "./WorkflowDocs.ts";
-import type { NodeItemState, WorkflowItemState } from "./WorkflowDocs.ts";
+import type { NodeItemState } from "./WorkflowDocs.ts";
 import { workflowGate } from "./WorkflowGate.ts";
 import {
   briefWithin,

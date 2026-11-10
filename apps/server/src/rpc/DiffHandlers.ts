@@ -25,7 +25,7 @@ export const diffFailure = (
         requestId,
       });
 
-/** The diff handlers, to merge over the stubs in `rpc/Handlers.ts`. Needs `Diffs`. */
+/** The diff handlers, served through `rpc/Handlers.ts`. Needs `Diffs`. */
 export const DiffHandlers = {
   layer: Layer.mergeAll(
     CairnRpcs.toLayerHandler(

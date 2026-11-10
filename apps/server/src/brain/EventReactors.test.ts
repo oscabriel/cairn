@@ -74,7 +74,7 @@ import {
   reactor,
 } from "./Events.ts";
 import { Extensions } from "./Extensions.ts";
-import { ModelSource } from "./ModelSource.ts";
+import { FauxModels } from "./FauxModels.ts";
 import { piConversationId, piEntryId } from "./PiIds.ts";
 
 /** What the test reactors write, through `tx` only. */
@@ -239,9 +239,7 @@ const brainLayer = (
         Effect.succeed({ order: 900, extension: TestTasks }),
       ])
     ),
-    Layer.provide(
-      ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} })
-    ),
+    Layer.provide(FauxModels.layer({ tokensPerSecond: 2000, settings: {} })),
     Layer.provide(BrainConfig.layerFrom(dataDir))
   );
 

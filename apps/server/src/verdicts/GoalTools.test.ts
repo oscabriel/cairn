@@ -18,7 +18,6 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 
 import { judgeChip, judgeWarning } from "@cairn/client-logic/GoalProgress";
 import {
@@ -38,7 +37,7 @@ import { Effect, Option, Result, Schema } from "effect";
 import { answerApproval } from "../approvals/ApprovalLedger.ts";
 import { Approvals } from "../brain/CairnDocs.ts";
 import { ChildDoc } from "../brain/SubagentDocs.ts";
-import { testLimit } from "../EventuallyTestKit.ts";
+import { eventually, testLimit } from "../EventuallyTestKit.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { taskOf } from "../subagents/Delivery.ts";
 import { JudgeRunsDoc } from "./GoalDocs.ts";
@@ -854,11 +853,11 @@ describe("the goal tools under a Harness", () => {
         };
 
         // The command has started: the kill lands inside the judge run.
-        for (let waited = 0; lines() === 0 && waited < 100; waited += 1) {
-          yield* Effect.promise(async () => {
-            await sleep(20);
-          });
-        }
+        yield* eventually(
+          Effect.sync(lines),
+          (count) => count > 0,
+          "the judge command's first run"
+        );
 
         assert.strictEqual(lines(), 1);
 

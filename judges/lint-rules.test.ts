@@ -203,9 +203,9 @@ const cases: ReadonlyArray<RuleCase> = [
   {
     code: "automation(no-raw-test-limit)",
     fires:
-      'import { it } from "@effect/vitest";\n\nit("waits", () => {}, 30_000);',
+      'import { it } from "@effect/vitest";\n\nconst LIMIT = 30_000;\n\nit("waits", () => {}, LIMIT);',
     quiet:
-      'import { it } from "@effect/vitest";\n\nimport { testLimit } from "../EventuallyTestKit.ts";\n\nit("waits", () => {}, testLimit(30_000));',
+      'import { it } from "@effect/vitest";\n\nimport { testLimit } from "../EventuallyTestKit.ts";\n\nconst LIMIT = testLimit(30_000);\n\nit("waits", () => {}, LIMIT);',
     testFile: true,
   },
   {

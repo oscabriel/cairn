@@ -22,7 +22,7 @@ import path from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Option, Result } from "effect";
 
-import { testLimit } from "../EventuallyTestKit.ts";
+import { slackened, testLimit } from "../EventuallyTestKit.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import { runScenario } from "./conformance/HarnessConformance.ts";
 import { piDurableTargetWith } from "./conformance/Targets.ts";
@@ -50,7 +50,11 @@ const passes = (name: string, wokenDelayMillis = 0) =>
         wakeDelayMillis: WAKE_DELAY_MILLIS,
         wokenDelayMillis,
       }),
-      { timeout: Duration.seconds(5), mutations: new Set(), awaitAtRest: false }
+      {
+        timeout: slackened(Duration.seconds(5)),
+        mutations: new Set(),
+        awaitAtRest: false,
+      }
     );
 
     assert.deepStrictEqual(outcome.failure, Option.none());

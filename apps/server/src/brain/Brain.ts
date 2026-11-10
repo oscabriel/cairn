@@ -214,7 +214,7 @@ export class Brain extends Context.Service<
             )
         );
 
-        return yield* Effect.sync(() => {
+        const opened = yield* Effect.sync(() => {
           generation += 1;
 
           const session: BrainSession = { harness, storage, generation };
@@ -228,6 +228,15 @@ export class Brain extends Context.Service<
 
           return session;
         });
+
+        yield* Effect.logInfo("brain session opened").pipe(
+          Effect.annotateLogs({
+            event: "brain_session_opened",
+            generation: opened.generation,
+          })
+        );
+
+        return opened;
       });
 
       const first = yield* openSession.pipe(Effect.orDie);

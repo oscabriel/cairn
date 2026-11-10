@@ -13,6 +13,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Predicate, Result } from "effect";
 
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
+import { durableRunner } from "../brain/Durable.ts";
 import {
   isWorkflowEnded,
   settledTokens,
@@ -190,10 +191,12 @@ const stopper = () => new AbortController();
 
 /** How `untilStopped` ended: `settled`, or the message it rejected with. */
 const endingOf = (signal: AbortSignal, work: Promise<number>) =>
-  Effect.tryPromise({
-    try: async () => await untilStopped(signal, work),
-    catch: (cause) => (cause instanceof Error ? cause.message : "rejected"),
-  }).pipe(
+  Effect.flatMap(durableRunner, (run) =>
+    Effect.tryPromise({
+      try: async () => await untilStopped(run, signal, work),
+      catch: (cause) => (cause instanceof Error ? cause.message : "rejected"),
+    })
+  ).pipe(
     Effect.match({
       onFailure: (message) => message,
       onSuccess: (value) => `settled ${String(value)}`,

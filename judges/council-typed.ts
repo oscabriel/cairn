@@ -50,6 +50,7 @@ import {
 
 import { BridgeCwd } from "../apps/server/src/brain/BridgeCwdExtension.ts";
 import { CodeMode } from "../apps/server/src/brain/CodeMode.ts";
+import { durableRunner } from "../apps/server/src/brain/Durable.ts";
 import { ModelSource } from "../apps/server/src/brain/ModelSource.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
 import { BridgeProvider } from "../apps/server/src/models/BridgeProvider.ts";
@@ -337,6 +338,8 @@ const runCouncil = Effect.gen(function* () {
           async () => await openCouncilStore(path.join(lifeDir, "store.sqlite"))
         );
 
+  const run = yield* durableRunner;
+
   const brain = yield* Effect.acquireRelease(
     Effect.promise(
       async () =>
@@ -345,6 +348,7 @@ const runCouncil = Effect.gen(function* () {
           [
             codemode.extension.extension,
             workflowExtension({
+              run,
               resolveModel,
               plan,
               faults: NO_WORKFLOW_FAULTS,

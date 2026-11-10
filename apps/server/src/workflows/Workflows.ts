@@ -10,6 +10,7 @@
 
 import { Context, Effect, FileSystem, Layer, Option, Result } from "effect";
 
+import { runnerOf } from "../brain/Durable.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { isRoleName, ModelSpecs } from "../models/ModelSpecs.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
@@ -127,6 +128,7 @@ export class Workflows extends Context.Service<
 
       return Workflows.of({
         extension: workflowExtension({
+          run: runnerOf(context),
           resolveModel,
           plan: planAccess(
             yield* WorkflowPlan,

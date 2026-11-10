@@ -67,6 +67,7 @@ import {
   UNDECIDED,
 } from "../brain/CairnDocs.ts";
 import type { ApprovalSettlement } from "../brain/CairnDocs.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import {
   GATED_APPROVAL_TTL_MILLIS,
   readPermissions,
@@ -260,8 +261,10 @@ type CapRefusal =
 export const routeIo = (
   api: ToolExecutionApi,
   context: ChordContext,
+  run: DurableRunner,
   offered: () => void = Function.constVoid
 ): RouteIo => ({
+  run,
   observer: api,
   now: () => api.now(),
   placedAt: async (approvalId, candidate) =>
@@ -307,6 +310,7 @@ export const subagentToolSet = (
   faults: SubagentFaultSet,
   tasks: SubagentTasks,
   models: ModelAccess,
+  run: DurableRunner,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
   crashAt: (point: SubagentCrashPoint) => void = Function.constVoid,
   defaults: DefaultBudgetAccess = NO_DEFAULT_BUDGET
@@ -614,6 +618,7 @@ export const subagentToolSet = (
       const before = settledCount(now);
 
       const later = await runWait(
+        run,
         awaitDoc(api, SubagentsDoc, api.conversationId, (value) => {
           const items = chosen(Object.values(value?.items ?? {}));
 
@@ -651,12 +656,14 @@ export const subagentToolSet = (
       await conversation?.abort(context);
 
       // The stopped run's held records can never be answered now (ADR 0029).
-      await Effect.runPromise(
+      await run.promise(
         cancelAbandonedApprovals(api, child, api.now(), "run-stopped").pipe(
           Effect.catchTag("DurableCallError", (failure) =>
             Effect.logWarning("stopped subagent left approvals pending").pipe(
               Effect.annotateLogs({
                 event: "subagent_stop_cancel_failed",
+                conversationId: api.conversationId,
+                childThreadId: named.value.threadId,
                 cause: failure.message,
               })
             )
@@ -664,6 +671,13 @@ export const subagentToolSet = (
         ),
         { signal: context.abortSignal }
       );
+
+      run.line("subagent stopped", {
+        event: "subagent_stopped",
+        conversationId: api.conversationId,
+        childThreadId: named.value.threadId,
+        by: "parent",
+      });
 
       return said(SubagentToolText.stopped(named.value.threadId));
     },
@@ -900,6 +914,7 @@ export const subagentToolSet = (
       crashAt("question-recorded");
 
       const settled = runWait(
+        run,
         approvalLedger(api).awaitSettlement.pipe(
           Effect.catchTag("ApprovalLedgerError", (failure) =>
             Effect.succeed({
@@ -913,7 +928,7 @@ export const subagentToolSet = (
       );
 
       await routeQuestion(
-        routeIo(api, context, () => {
+        routeIo(api, context, run, () => {
           crashAt("question-routed");
         }),
         {

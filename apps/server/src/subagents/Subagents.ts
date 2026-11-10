@@ -23,8 +23,8 @@ import { Context, Effect, Layer, Option, Predicate, Result } from "effect";
 
 import { BriefTtl } from "../brain/BriefTtl.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { durable } from "../brain/Durable.ts";
-import type { DurableCallError } from "../brain/Durable.ts";
+import { durable, durableRunner, runnerOf } from "../brain/Durable.ts";
+import type { DurableCallError, DurableRunner } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import {
@@ -204,13 +204,15 @@ const build = (
   models: ModelAccess,
   crashes: SubagentCrashHooks,
   budgets: BudgetAccess,
-  defaults: DefaultBudgetAccess
+  defaults: DefaultBudgetAccess,
+  run: DurableRunner
 ) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
   const child: ChildAgentHolder = { agent: () => ({}) };
 
   const tasks: SubagentTasks = subagentTaskSet({
+    run,
     faults,
     childAgent: (typed) => child.agent(typed),
     workspaces,
@@ -230,6 +232,7 @@ const build = (
     faults,
     tasks,
     models,
+    run,
     tuning,
     crashes.at,
     defaults
@@ -258,11 +261,13 @@ const build = (
  * The subagents extension with `faults` planted, making children's workspaces with `workspaces`;
  * the conformance suite's mutation check uses it, a test that needs a question to expire soon
  * passes `tuning`, and a judge brain's `crashes` kill it at its crash points. A spawn's brief
- * starts from `defaults`, the server's default budget (ADR 0047).
+ * starts from `defaults`, the server's default budget (ADR 0047). Its tools and tasks run their
+ * Effects through `run`.
  */
 export const subagentsExtension = (
   faults: SubagentFaultSet,
   workspaces: ChildWorkspaceAccess,
+  run: DurableRunner,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
   briefFaults: BriefFaultHooks = NO_BRIEF_FAULTS,
   models: ModelAccess = NO_MODELS,
@@ -279,13 +284,15 @@ export const subagentsExtension = (
     models,
     crashes,
     budgets,
-    defaults
+    defaults,
+    run
   ).extension,
 });
 
 /**
  * The task definitions host code creates tasks from. pi-durable runs a task by its registered name,
- * so the installed extension's code runs it, faults included.
+ * so the installed extension's code runs it, faults included; this copy's code never runs, so its
+ * runner has no context to carry.
  */
 const host = build(
   NO_SUBAGENT_FAULTS,
@@ -295,7 +302,8 @@ const host = build(
   NO_MODELS,
   NO_SUBAGENT_CRASHES,
   ADMIT_ALL,
-  NO_DEFAULT_BUDGET
+  NO_DEFAULT_BUDGET,
+  runnerOf(Context.empty())
 );
 
 const hostTasks = host.tasks;
@@ -430,6 +438,7 @@ export class Subagents extends Context.Service<
           extension: subagentsExtension(
             faults,
             workspaces,
+            yield* durableRunner,
             tuning,
             yield* BriefFaults,
             modelAccess(yield* ModelSpecs, yield* Effect.context()),
@@ -467,6 +476,7 @@ export class Subagents extends Context.Service<
         extension: subagentsExtension(
           faults,
           workspaces,
+          yield* durableRunner,
           { ...DEFAULT_TOOL_OPTIONS, briefTtlMillis },
           briefFaults,
           modelAccess(yield* ModelSpecs, yield* Effect.context()),

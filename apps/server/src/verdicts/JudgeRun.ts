@@ -36,6 +36,7 @@ import { Data, Effect, Match, Option, Predicate, Result, Schema } from "effect";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
 import { errorText } from "../brain/Durable.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { applyNote, noteEntry, readNote } from "../brain/NoteAdmission.ts";
 import { isRoleName } from "../models/ModelSpecs.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
@@ -265,10 +266,14 @@ const criterionOf = (
   );
 
 /**
- * The judge-run task over `models` and `faults`. Defined per extension so its model calls run
- * through the layer's context; pi-durable runs a task by its registered name.
+ * The judge-run task over `models` and `faults`. Defined per extension so its model calls and its
+ * own Effects run through the layer's context (`run`); pi-durable runs a task by its registered name.
  */
-export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
+export const judgeRunTask = (
+  models: JudgeModels,
+  faults: JudgeFaults,
+  run: DurableRunner
+) => {
   type Runtime = TaskRuntime<JudgeRunInput, JudgeRunState, null, object>;
 
   const runCommand = async (
@@ -607,7 +612,7 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
         // the task with its index item unsettled, and goal_check would wait on it for good: the
         // run completes instead, with no verdict and a note that says why. An abort rethrows, so
         // the abort handler settles the item and a rerun judges again.
-        const attempt = await Effect.runPromise(
+        const attempt = await run.promise(
           Effect.result(
             Effect.tryPromise({
               try: judging,

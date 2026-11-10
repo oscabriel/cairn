@@ -16,10 +16,11 @@
 
 import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { Effect, Layer, Option, Predicate } from "effect";
+import { Context, Effect, Layer, Option, Predicate } from "effect";
 import { Type } from "typebox";
 
 import { approvalLedger, settlementText } from "../CairnDocs.ts";
+import { runnerOf } from "../Durable.ts";
 import { ExtensionOrder } from "../Extensions.ts";
 import type { CairnExtension } from "../Extensions.ts";
 import { callAsks, gatedTool, readPermissions } from "../Permissions.ts";
@@ -28,6 +29,12 @@ import { ScriptedTools } from "../ScriptedHarness.ts";
 
 /** A day: approvals in scenarios never expire on their own. */
 const APPROVAL_TTL_MILLIS = 86_400_000;
+
+/**
+ * The scenarios' tools are one value shared by every brain the suite builds, so they run on
+ * Effect's defaults, as they always have; no scenario reads their lines.
+ */
+const run = runnerOf(Context.empty());
 
 const echo = defineTool({
   name: "echo",
@@ -53,7 +60,7 @@ const askLedger = async (
 ) => {
   const ledger = approvalLedger(api);
 
-  const settlement = await Effect.runPromise(
+  const settlement = await run.promise(
     Effect.gen(function* () {
       yield* ledger.ask({
         tool: request.tool,
@@ -133,7 +140,8 @@ const writerTool = (writer: Writer) =>
       },
     }),
     writer.action,
-    (args) => `${writer.name} ${args.label}`
+    (args) => `${writer.name} ${args.label}`,
+    run
   );
 
 /** The conformance tools as a Cairn extension for the pi-durable side. */

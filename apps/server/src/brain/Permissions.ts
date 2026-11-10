@@ -35,6 +35,7 @@ import { Effect, Option } from "effect";
 import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import { approvalLedger, Permissions, settlementText } from "./CairnDocs.ts";
 import type { ApprovalLedgerError } from "./CairnDocs.ts";
+import type { DurableRunner } from "./Durable.ts";
 import { piConversationId } from "./PiIds.ts";
 
 /**
@@ -211,12 +212,14 @@ export type Summarize<A> = (args: A) => string;
 
 /**
  * `tool` as a replay-safe tool gated by the thread's mode, with an effect mark before its effect
- * (module header). The wrapped tool's own `execute` runs at most once per tool task.
+ * (module header). The wrapped tool's own `execute` runs at most once per tool task; its approval
+ * runs through `run`.
  */
 export const gatedTool = <T extends ToolRegistration>(
   tool: T,
   action: GatedAction,
-  summarize: Summarize<Parameters<T["execute"]>[0]>
+  summarize: Summarize<Parameters<T["execute"]>[0]>,
+  run: DurableRunner
 ): T => ({
   ...tool,
   replay: "safe",
@@ -230,7 +233,7 @@ export const gatedTool = <T extends ToolRegistration>(
     const permissions = await readPermissions(api, context);
 
     if (callAsks(permissions, tool.name, action)) {
-      const refusal = await Effect.runPromise(
+      const refusal = await run.promise(
         approve(api, tool.name, summarize(args)),
         { signal: context.abortSignal }
       );

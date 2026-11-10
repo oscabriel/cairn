@@ -192,6 +192,13 @@ const cases: ReadonlyArray<RuleCase> = [
       'import { Clock } from "effect";\n\nexport const now = Clock.currentTimeMillis;',
   },
   {
+    code: "automation(no-bare-effect-run)",
+    fires:
+      'import { Effect } from "effect";\n\nexport const f = async () => await Effect.runPromise(Effect.log("x"));',
+    quiet:
+      'import { Context, Effect } from "effect";\n\nexport const f = async () =>\n  await Effect.runPromiseWith(Context.empty())(Effect.log("x"));',
+  },
+  {
     code: "automation(no-silent-error-swallow)",
     fires:
       'import { Effect } from "effect";\n\nexport const f = (e: Effect.Effect<number, string>) =>\n  e.pipe(Effect.catch(() => Effect.void));',

@@ -39,6 +39,7 @@ import {
   UNDECIDED,
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { emit } from "../brain/Events.ts";
 import { cutSummary, readPermissions } from "../brain/Permissions.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
@@ -263,7 +264,7 @@ const bindToLiveRun = async (
 };
 
 /** `workflow_plan`, over the dry run. */
-export const planTool = (plan: PlanAccess) => {
+export const planTool = (plan: PlanAccess, runner: DurableRunner) => {
   /** Dry-runs, then writes the row, the record and the event once; the refusal's words otherwise. */
   const propose = async (
     api: ToolExecutionApi,
@@ -465,7 +466,7 @@ export const planTool = (plan: PlanAccess) => {
         return refused(problem.value);
       }
 
-      const settlement = await Effect.runPromise(
+      const settlement = await runner.promise(
         approvalLedger(api).awaitSettlement.pipe(Effect.result),
         { signal: context.abortSignal }
       );

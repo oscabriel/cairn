@@ -84,7 +84,7 @@ import {
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
 import { documentCall, durable, handOff } from "./Durable.ts";
-import type { DurableCallError } from "./Durable.ts";
+import type { DurableCallError, LineFields } from "./Durable.ts";
 import { emit } from "./Events.ts";
 import { PendingApprovals } from "./PendingApprovals.ts";
 import { piConversationId, piTaskId } from "./PiIds.ts";
@@ -707,11 +707,26 @@ const neverLapses = (record: ApprovalRecord): boolean =>
 const pendingMirror = (record: ApprovalRecord): boolean =>
   record.status === "pending" && record.mirrorOf !== null;
 
-/** The ledger of one tool invocation, committing through that invocation's own `commit`. */
+/**
+ * The ledger of one tool invocation, committing through that invocation's own `commit`. It writes
+ * a lifecycle line when a record is asked for and when the wait for it settles, on the context the
+ * calling tool runs it with.
+ */
 export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
   const approvalId = approvalIdOf(api.taskId);
   const { conversationId } = api;
   const fail = storeFailed(approvalId);
+
+  /** One lifecycle line about this call's record. */
+  const line = (message: string, fields: LineFields) =>
+    Effect.logInfo(message).pipe(
+      Effect.annotateLogs({
+        conversationId,
+        taskId: api.taskId,
+        approvalId,
+        ...fields,
+      })
+    );
 
   // Applies `change` to this call's record in one transaction; none when it has no record.
   const change = <A>(
@@ -728,9 +743,14 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
         }, context)
     ).pipe(Effect.mapError(fail));
 
-  const ask = (request: ApprovalRequest) =>
-    change("approvals.ask", (items) => {
+  const ask = (request: ApprovalRequest) => {
+    // Whether the record was there already: a rerun after a restart asks again and finds it.
+    let again = false;
+
+    return change("approvals.ask", (items) => {
       const existing = items[approvalId];
+
+      again = existing !== undefined;
 
       if (existing !== undefined) {
         return copyRecord(existing);
@@ -763,7 +783,18 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
       items[approvalId] = record;
 
       return copyRecord(record);
-    });
+    }).pipe(
+      Effect.tap((record) =>
+        line(again ? "approval asked again" : "approval asked", {
+          event: "approval_asked",
+          tool: record.tool,
+          kind: record.kind,
+          status: record.status,
+          again,
+        })
+      )
+    );
+  };
 
   const expire = change("approvals.expire", (items) => {
     const current = items[approvalId];
@@ -825,6 +856,21 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
     Effect.map((doc) => Option.fromUndefinedOr(doc?.items[approvalId]))
   );
 
+  /**
+   * The settlement, with its lifecycle line: its status and how the wait ended (`how`). Only the
+   * status is read: an expiry's settlement still points into its commit's settled overlay, where
+   * reading the decider throws.
+   */
+  const settled = (settlement: ApprovalSettlement, how: string) =>
+    Effect.as(
+      line("approval settled", {
+        event: "approval_settled",
+        status: settlement.status,
+        how,
+      }),
+      settlement
+    );
+
   const awaitSettlement = Effect.gen(function* () {
     const record = yield* read;
 
@@ -833,7 +879,7 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
     }
 
     if (record.value.status !== "pending") {
-      return settlementOf(record.value);
+      return yield* settled(settlementOf(record.value), "found-settled");
     }
 
     const remaining = Math.max(0, record.value.expiresAt - api.now());
@@ -845,13 +891,14 @@ export const approvalLedger = (api: ToolExecutionApi): ApprovalLedger => {
     );
 
     if (Option.isSome(answer)) {
-      return answer.value;
+      return yield* settled(answer.value, "answered");
     }
 
     const expired = yield* expire;
 
     return yield* Effect.fromOption(expired).pipe(
-      Effect.mapError(() => missing(approvalId))
+      Effect.mapError(() => missing(approvalId)),
+      Effect.flatMap((settlement) => settled(settlement, "expired"))
     );
   });
 

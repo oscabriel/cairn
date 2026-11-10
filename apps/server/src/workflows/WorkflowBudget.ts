@@ -1116,7 +1116,7 @@ const onSpent = async (tx: Tx, line: LineEvent, at: number): Promise<void> => {
 
 /**
  * The budget reactor (`cairn.workflow-budget`, from `now`: its stopper reaches into running work,
- * so a deploy that adds it does not replay old lines). Hand-off: listed in `ReactorSet.ts`.
+ * so a deploy that adds it does not replay old lines). Listed in the workflows manifest.
  */
 export const workflowBudgetReactor: Reactor = reactor(
   BUDGET_REACTOR,

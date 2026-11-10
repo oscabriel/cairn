@@ -14,9 +14,10 @@ import {
   MAX_WORKFLOW_WORKERS,
   ScriptSlots,
   WaitingSandbox,
+  isRewrittenWorkflow,
 } from "../brain/CodeMode.ts";
 import { slackened } from "../EventuallyTestKit.ts";
-import { isRewrittenWorkflow, rewriteScript } from "./Prelude.ts";
+import { rewriteScript } from "./Prelude.ts";
 import { parseWorkflowScript } from "./WorkflowScript.ts";
 
 const SANDBOX = {

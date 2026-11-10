@@ -58,6 +58,7 @@ import { Effect, Option, Predicate } from "effect";
 
 import { answerApproval } from "../../../apps/server/src/approvals/ApprovalLedger.ts";
 import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
+import { PRELUDE_MARK } from "../../../apps/server/src/brain/CodeMode.ts";
 import { endCrashLoopedIn } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { ChildDoc } from "../../../apps/server/src/brain/SubagentDocs.ts";
 import type {
@@ -66,7 +67,6 @@ import type {
 } from "../../../apps/server/src/brain/WorkflowsDoc.ts";
 import { WorkflowsDoc } from "../../../apps/server/src/brain/WorkflowsDoc.ts";
 import { taskOf } from "../../../apps/server/src/subagents/Delivery.ts";
-import { PRELUDE_MARK } from "../../../apps/server/src/workflows/Prelude.ts";
 import { STOPPER_TASK } from "../../../apps/server/src/workflows/WorkflowBudget.ts";
 import {
   isWorkflowEnded,

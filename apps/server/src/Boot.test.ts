@@ -31,6 +31,7 @@ import {
   PiDurableBrain,
   ThreadsLive,
   withCatalog,
+  HandlersLayer,
 } from "./AppLayer.ts";
 import { runBoot } from "./Boot.ts";
 import { endCrashLoopedTasks } from "./brain/CrashLimit.ts";
@@ -58,7 +59,6 @@ import {
   ReachServices,
   ReachServicesTest,
 } from "./reach/ReachLayer.ts";
-import { HandlersLayer } from "./rpc/Handlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { EventSink } from "./shell/EventSink.ts";
 import { ProjectorSignals } from "./shell/ProjectorSignals.ts";

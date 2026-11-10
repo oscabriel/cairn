@@ -42,9 +42,22 @@ import {
   Semaphore,
 } from "effect";
 
-import { isRewrittenWorkflow } from "../workflows/Prelude.ts";
 import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
+
+/**
+ * The comment that opens the workflow prelude (`workflows/Prelude.ts`): what marks a rewritten
+ * workflow script, which takes its slot from the workflow pool.
+ */
+export const PRELUDE_MARK = "/* Cairn workflow prelude v";
+
+/**
+ * True when `source` looks like a script `rewriteScript` produced, the prelude appended. A substring
+ * test, so a raw script holding that text in a string passes too: it picks a slot pool and guards
+ * nothing. The gate decides by the approved row's hash, never by this.
+ */
+export const isRewrittenWorkflow = (source: string): boolean =>
+  source.includes(`\n});\n${PRELUDE_MARK}`);
 
 /** Memory one script's VM may use. */
 const MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;

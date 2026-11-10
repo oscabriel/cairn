@@ -45,7 +45,6 @@ import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
-import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
 import {
   FauxModels,
   FAUX_MODEL,
@@ -55,6 +54,7 @@ import { PiDurableHarness } from "../../../apps/server/src/brain/PiDurableHarnes
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { RestartLimit } from "../../../apps/server/src/brain/RestartLimit.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
+import { ExtensionSet } from "../../../apps/server/src/ExtensionSet.ts";
 import { Git } from "../../../apps/server/src/git/Git.ts";
 import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";

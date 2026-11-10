@@ -25,6 +25,7 @@ import { NonNegativeInt } from "@cairn/protocol/Ids";
 import { MAX_ITEMS_PER_CALL } from "@cairn/protocol/Workflows";
 import { Option, Schema } from "effect";
 
+import { PRELUDE_MARK } from "../brain/CodeMode.ts";
 import type { WorkflowScript } from "./WorkflowScript.ts";
 
 /**
@@ -42,9 +43,6 @@ export const PRELUDE_VERSION = 4;
  * on version 3 is still going). Version 2 (before ADR 0043) is retired.
  */
 export const RUNNABLE_PRELUDE_VERSIONS: ReadonlySet<number> = new Set([3, 4]);
-
-/** The comment that opens `PRELUDE_SOURCE`: what marks a rewritten script. */
-export const PRELUDE_MARK = "/* Cairn workflow prelude v";
 
 /** The nested tools the prelude calls, all `callers: ["tools"]`. */
 export const NODE_TOOLS = [
@@ -366,14 +364,6 @@ export interface PreludeBake {
  */
 export const PRELUDE_OPENING =
   "const __cairnBaked = __cairnBake(), WORKFLOW = __cairnBaked.workflowId, SAMPLE = __cairnBaked.sample, __cairnPreludeLine = __cairnBaked.preludeLine, __cairnPending = [], args = __cairnFreeze(__cairnBaked.args), budget = __cairnBudget(__cairnBaked.budgetTokens); let __cairnPhase = null; agent.full = __cairnAgentFull; await tools.workflow_begin(__cairnBaked.begin); return await __cairnRun(async () => {";
-
-/**
- * True when `source` looks like a script `rewriteScript` produced, the prelude appended. A substring
- * test, so a raw script holding that text in a string passes too: it picks a slot pool and guards
- * nothing. The gate decides by the approved row's hash, never by this.
- */
-export const isRewrittenWorkflow = (source: string): boolean =>
-  source.includes(`\n});\n${PRELUDE_MARK}`);
 
 /** The number of line breaks in `text`. */
 const breaks = (text: string) => text.split("\n").length - 1;

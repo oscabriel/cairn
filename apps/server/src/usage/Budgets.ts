@@ -23,8 +23,6 @@ import { Micros, SpendScope } from "@cairn/protocol/Spend";
 import type { Budget, BudgetState, Spend } from "@cairn/protocol/Spend";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
-import { BudgetSources } from "../brain/BudgetSources.ts";
-import type { BudgetSourceError } from "../brain/BudgetSources.ts";
 import { BudgetBook, DELEGATING_TOOLS, WIND_DOWN_TOOLS } from "./BudgetBook.ts";
 import type {
   BudgetLimit,
@@ -34,6 +32,8 @@ import type {
   ScopeSpent,
   ScopeStanding,
 } from "./BudgetBook.ts";
+import { BudgetSources } from "./BudgetSources.ts";
+import type { BudgetSourceError } from "./BudgetSources.ts";
 import { SpendLedger, tokenTotal } from "./SpendLedger.ts";
 import type { SpendLedgerError } from "./SpendLedger.ts";
 

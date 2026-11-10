@@ -67,15 +67,10 @@ import { Type } from "typebox";
 
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
-import {
-  BudgetSources,
-  raiseIdOf,
-} from "../../../apps/server/src/brain/BudgetSources.ts";
 import { ThreadReceipt } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
 import type { CairnExtension } from "../../../apps/server/src/brain/Extensions.ts";
-import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import {
   BASE_HARNESS_SETTINGS,
@@ -87,13 +82,13 @@ import { SpendFeed } from "../../../apps/server/src/brain/SpendFeed.ts";
 import { Database } from "../../../apps/server/src/db/Database.ts";
 import { migrations } from "../../../apps/server/src/db/Migrations.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
+import { ExtensionSet } from "../../../apps/server/src/ExtensionSet.ts";
 import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
 import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import { Notifier } from "../../../apps/server/src/push/Notifier.ts";
 import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
-import { declareBudget } from "../../../apps/server/src/rpc/SpendHandlers.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import { ShellStoreLayer } from "../../../apps/server/src/shell/ShellLayer.ts";
 import {
@@ -108,6 +103,11 @@ import { SUBAGENT_STATUS_TOOL } from "../../../apps/server/src/subagents/Subagen
 import { BudgetBook } from "../../../apps/server/src/usage/BudgetBook.ts";
 import { BudgetGuard } from "../../../apps/server/src/usage/BudgetGuard.ts";
 import { Budgets } from "../../../apps/server/src/usage/Budgets.ts";
+import {
+  BudgetSources,
+  raiseIdOf,
+} from "../../../apps/server/src/usage/BudgetSources.ts";
+import { declareBudget } from "../../../apps/server/src/usage/SpendHandlers.ts";
 import { SpendLedger } from "../../../apps/server/src/usage/SpendLedger.ts";
 
 const { values } = parseArgs({

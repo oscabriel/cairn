@@ -6,12 +6,12 @@
 import { Effect, Layer } from "effect";
 
 import { HarnessBoot, withCatalog } from "./AppLayer.ts";
-import { BudgetSources } from "./brain/BudgetSources.ts";
 import { EventReactors } from "./brain/EventReactors.ts";
 import { FauxModels } from "./brain/FauxModels.ts";
 import { ScriptedHarness } from "./brain/ScriptedHarness.ts";
 import { SpendFeed } from "./brain/SpendFeed.ts";
 import { Skills } from "./skills/SkillsLayer.ts";
+import { BudgetSources } from "./usage/BudgetSources.ts";
 import { GoalBook } from "./verdicts/GoalBook.ts";
 import { WorkflowStops } from "./workflows/WorkflowStop.ts";
 

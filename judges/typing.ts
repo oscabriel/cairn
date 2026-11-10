@@ -47,7 +47,6 @@ import {
   HarnessBoot,
   withCatalog,
 } from "../apps/server/src/AppLayer.ts";
-import { BudgetSources } from "../apps/server/src/brain/BudgetSources.ts";
 import { EventReactors } from "../apps/server/src/brain/EventReactors.ts";
 import { FauxModels } from "../apps/server/src/brain/FauxModels.ts";
 import { HarnessSeam } from "../apps/server/src/brain/HarnessSeam.ts";
@@ -68,6 +67,7 @@ import {
   ProjectRegister,
   ThreadCreate,
 } from "../apps/server/src/shell/ShellCommands.ts";
+import { BudgetSources } from "../apps/server/src/usage/BudgetSources.ts";
 import { GoalBook } from "../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../apps/server/src/workflows/WorkflowStop.ts";
 import { chromium, IPHONE_15 } from "./lib/Browser.ts";

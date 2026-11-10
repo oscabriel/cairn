@@ -49,7 +49,7 @@ import {
   HarnessBoot,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
-import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
+import { BudgetSources } from "../../../apps/server/src/usage/BudgetSources.ts";
 import type { ImportedEntry } from "../../../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import {

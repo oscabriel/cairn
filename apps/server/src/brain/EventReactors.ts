@@ -41,7 +41,7 @@ import {
   Stream,
 } from "effect";
 
-import type { BootRepair } from "../BootRepairs.ts";
+import type { BootRepair } from "../BootRepair.ts";
 import { shutdownHook } from "../Shutdown.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainUnavailable } from "./Brain.ts";

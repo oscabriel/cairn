@@ -14,6 +14,7 @@ import path from "node:path";
 import { Layer } from "effect";
 
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { ExtensionSet } from "../ExtensionSet.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
 import { isolatePiSetup } from "../models/PiConfigTestKit.ts";
@@ -24,7 +25,6 @@ import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { Subagents } from "../subagents/Subagents.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import type { CairnExtension } from "./Extensions.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 

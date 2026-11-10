@@ -45,6 +45,7 @@ import {
 import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
+import { repairChildWorkspacesAtBoot } from "../subagents/ChildWorkspaceRepair.ts";
 import {
   Subagents,
   subagentsExtension,
@@ -65,7 +66,6 @@ import { ChildWorkspaceStore } from "../workspaces/ChildWorkspaceStore.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { brainExtensions } from "./BrainTestKit.ts";
-import { repairChildWorkspacesAtBoot } from "./ChildWorkspaceRepair.ts";
 import { durable, durableRunner } from "./Durable.ts";
 import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";

@@ -62,7 +62,7 @@ import {
 } from "../../../apps/server/src/brain/Extensions.ts";
 import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
-import { ReactorSet } from "../../../apps/server/src/brain/ReactorSet.ts";
+import { ReactorSet } from "../../../apps/server/src/ReactorSet.ts";
 
 const { values } = parseArgs({
   options: {

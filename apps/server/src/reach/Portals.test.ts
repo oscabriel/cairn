@@ -26,8 +26,8 @@ import { TestClock } from "effect/testing";
 
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
-import { answerPortalClose, answerPortalStart } from "../rpc/PortalHandlers.ts";
 import { makeFakePorch, PorchClient } from "./PorchClient.ts";
+import { answerPortalClose, answerPortalStart } from "./PortalHandlers.ts";
 import {
   isPortalName,
   judgePortalFaults,

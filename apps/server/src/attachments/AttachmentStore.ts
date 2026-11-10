@@ -32,7 +32,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import type { BootRepair } from "../BootRepairs.ts";
+import type { BootRepair } from "../BootRepair.ts";
 import { ServerConfig } from "../Config.ts";
 
 /** How long an unclaimed upload, a `.part` file or a file with no row is kept. */

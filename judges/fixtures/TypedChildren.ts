@@ -48,7 +48,6 @@ import { Brain } from "../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../apps/server/src/brain/BrainConfig.ts";
 import { childWorkspacesAt } from "../../apps/server/src/brain/conformance/Targets.ts";
 import { durable } from "../../apps/server/src/brain/Durable.ts";
-import { ExtensionSet } from "../../apps/server/src/brain/ExtensionSet.ts";
 import { FAUX_MODEL } from "../../apps/server/src/brain/FauxModels.ts";
 import { HarnessSeam } from "../../apps/server/src/brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../../apps/server/src/brain/HarnessSeam.ts";
@@ -58,6 +57,7 @@ import { SubagentsDoc } from "../../apps/server/src/brain/SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "../../apps/server/src/brain/SubagentFaults.ts";
 import { ServerConfig } from "../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../apps/server/src/executor/ExecutorLink.ts";
+import { ExtensionSet } from "../../apps/server/src/ExtensionSet.ts";
 import { BridgeProvider } from "../../apps/server/src/models/BridgeProvider.ts";
 import { ModelHealth } from "../../apps/server/src/models/ModelHealth.ts";
 import {

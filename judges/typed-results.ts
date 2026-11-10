@@ -69,8 +69,8 @@ import {
   Schema,
 } from "effect";
 
-import { BridgeCwd } from "../apps/server/src/brain/BridgeCwdExtension.ts";
 import { ModelSource } from "../apps/server/src/brain/ModelSource.ts";
+import { BridgeCwd } from "../apps/server/src/models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "../apps/server/src/models/BridgeProvider.ts";
 import { PiModelSource } from "../apps/server/src/models/PiModelSource.ts";
 import {

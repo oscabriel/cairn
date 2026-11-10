@@ -228,7 +228,15 @@ _Avoid_: MCP gateway, tool server
 
 _Avoid_: bridge (that is the Claude provider), MCP gateway
 
-**Extension (Cairn's)**: A pi-durable extension Cairn installs in the brain (coding tools, code mode, Executor's tools, the skills, context and Cairn sections, judge tools), in one fixed order.
+**Extension (Cairn's)**: A pi-durable extension Cairn installs in the brain (coding tools, code mode, Executor's tools, the skills, context and Cairn sections, judge tools), in one fixed order: each carries its `ExtensionOrder` key, and a feature lists its extensions in its manifest.
+
+**Feature**: A part of the product with its own folder under `apps/server/src` that registers with the brain and the app through one manifest: approvals, subagents, workflows, verdicts (goals), usage, reach, Executor, the pi host, models, skills, attachments and push. The brain's own folders (`brain/`, the shell, threads, projects, git, http, rpc) are not features.
+
+**Manifest**: A feature's one declaration of everything it registers, in a `<Folder>Feature.ts` file of its folder (`CairnFeature` in `brain/Feature.ts`): its extensions and their own services, the `cairn.*` documents the thread stream carries, what an answer does for its records, its part of a submit and a Stop all, its boot repairs, close hooks and reactors, the waits the crash limit keeps, its RPC handlers, and the layers it runs over pi-durable and in the app. `apps/server/src/Features.ts` lists every manifest in order (ADR 0053).
+
+_Avoid_: plugin, registry entry
+
+**Feature seam**: Where the brain and the app meet the features: `Features.ts`'s one ordered list of manifests, which each consumer folds whole (the extension set, the reactor host, the boot repairs, the close hooks, the RPC group, the app). The brain defines the manifest's shape and imports no feature folder but the approval ledger (ADR 0053).
 
 **Skill catalog**: The skills a thread can use, per working directory: the project's `.agents/skills` up to the git root first, then the user's skills as pi resolves them.
 
@@ -242,7 +250,7 @@ _Avoid_: plugin
 
 **Guard**: The brain's check on every request and socket: the right host, the owner's Tailscale login copied from Caddy, and the exact origin of Cairn's page.
 
-**Boot repair**: A step the brain runs after the Harness opens and before it accepts sockets, in the fixed order listed in `apps/server/src/BootRepairs.ts`.
+**Boot repair**: A step the brain runs after the Harness opens and before it accepts sockets, in the fixed order of its `RepairOrder` key (`apps/server/src/BootRepair.ts`); `apps/server/src/BootRepairs.ts` gathers the brain's and every manifest's and states the rule the order keeps.
 
 **Stop hook**: A step that runs after a thread's run ends interrupted, whoever stopped it, in the order given to `StopHooks`; the bridge's explicit abort of a held child is one.
 
@@ -252,7 +260,7 @@ _Avoid_: plugin
 
 **Boot reconcile**: The shell projector's pass at boot, after the harness resumes, that rebuilds every thread row from `inspect()` and the rows themselves, so an event lost to a crash cannot leave a row wrong. _Avoid_: replay.
 
-**Close hook**: A step SIGTERM runs after every socket has closed and before the stores close, in the fixed order listed in `apps/server/src/ShutdownHooks.ts`, each with its own timeout.
+**Close hook**: A step SIGTERM runs after every socket has closed and before the stores close, in the fixed order `apps/server/src/ShutdownHooks.ts` folds from the manifests (in list order, the brain's own last), each with its own timeout.
 
 **Command receipt**: The shell store's record of a command id's first answer (the sequence it committed at, or its rejection), so a resent command lands once. Receipts are kept for four times the outbox's resend window, however many events follow.
 

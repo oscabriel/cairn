@@ -17,7 +17,6 @@ import { Effect, Layer } from "effect";
 
 import { withCatalog } from "./AppLayer.ts";
 import { Brain } from "./brain/Brain.ts";
-import { BridgeCwd } from "./brain/BridgeCwdExtension.ts";
 import { EventReactors } from "./brain/EventReactors.ts";
 import { Extensions } from "./brain/Extensions.ts";
 import { FauxModels } from "./brain/FauxModels.ts";
@@ -28,6 +27,7 @@ import { Database } from "./db/Database.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Identity } from "./http/Identity.ts";
 import { MainLayer } from "./MainLayer.ts";
+import { BridgeCwd } from "./models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "./models/BridgeProvider.ts";
 import { ModelHealth } from "./models/ModelHealth.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";

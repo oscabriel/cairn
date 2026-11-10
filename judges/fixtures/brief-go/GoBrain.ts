@@ -59,11 +59,9 @@ import {
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
-import { repairChildWorkspacesAtBoot } from "../../../apps/server/src/brain/ChildWorkspaceRepair.ts";
 import { messageText } from "../../../apps/server/src/brain/CommitFeed.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
-import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
 import {
   FauxModels,
   FAUX_MODEL,
@@ -77,6 +75,7 @@ import {
 } from "../../../apps/server/src/brain/SubagentDocs.ts";
 import { BRIEF_ANSWER_ENTRY } from "../../../apps/server/src/brain/SubagentText.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
+import { ExtensionSet } from "../../../apps/server/src/ExtensionSet.ts";
 import { Git } from "../../../apps/server/src/git/Git.ts";
 import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
@@ -88,6 +87,7 @@ import {
   BriefFaults,
 } from "../../../apps/server/src/subagents/BriefFaults.ts";
 import type { BriefFaultHooks } from "../../../apps/server/src/subagents/BriefFaults.ts";
+import { repairChildWorkspacesAtBoot } from "../../../apps/server/src/subagents/ChildWorkspaceRepair.ts";
 import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
 import {
   START_TASK,

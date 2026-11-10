@@ -6,13 +6,13 @@ import { Layer } from "effect";
 
 import { AttachmentRoute } from "../attachments/AttachmentRoute.ts";
 import { UploadRoute } from "../attachments/UploadRoute.ts";
-import { EntryImageRoute } from "../brain/EntryImageRoute.ts";
 import { ExecutorCallbackRoute } from "../executor/ExecutorCallbackRoute.ts";
 import { LoadRoute } from "../load/LoadRoute.ts";
 import { ProjectFaviconRoute } from "../projects/ProjectFaviconRoute.ts";
 import { NightlyFailedRoute } from "../push/NightlyFailedRoute.ts";
 import { ShellSnapshotRoute } from "../shell/ShellSnapshotRoute.ts";
 import { BuildRoute } from "./Build.ts";
+import { EntryImageRoute } from "./EntryImageRoute.ts";
 import { Guard } from "./Guard.ts";
 import { HealthRoute } from "./Health.ts";
 import { AuthRoute } from "./Identity.ts";

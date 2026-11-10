@@ -73,14 +73,14 @@ const restrictions = {
       {
         name: "@earendil-works/pi-durable",
         message:
-          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts) (coding standard S42).",
+          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts, usage/BudgetSources.ts) (coding standard S42).",
       },
     ],
     patterns: [
       {
         group: ["@earendil-works/pi-durable/**"],
         message:
-          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts) (coding standard S42).",
+          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts, usage/BudgetSources.ts) (coding standard S42).",
       },
     ],
   },
@@ -226,6 +226,8 @@ const zones: ReadonlyArray<{
       server("verdicts/**"),
       server("reach/**"),
       server("models/ResultTool.ts"),
+      server("usage/BudgetSources.ts"),
+      server("usage/BudgetSources.test.ts"),
     ],
     allowed: ["durable", "piAi"],
   },
@@ -234,7 +236,11 @@ const zones: ReadonlyArray<{
     files: [server("pi-host/**")],
     allowed: ["durable", "piAi", "codingAgent"],
   },
-  { files: [server("**/*Extension.ts")], allowed: ["durable", "piAi"] },
+  // An extension's test drives it on a pi-durable Harness, wherever the extension lives.
+  {
+    files: [server("**/*Extension.ts"), server("**/*Extension.test.ts")],
+    allowed: ["durable", "piAi"],
+  },
   // Upload-time image fitting runs pi-durable's Photon processor (plan section 1, "Attachments").
   { files: [server("attachments/ImagePrepare.ts")], allowed: ["durable"] },
   {

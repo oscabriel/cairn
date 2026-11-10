@@ -48,13 +48,13 @@ import {
   Schema,
 } from "effect";
 
-import { BridgeCwd } from "../apps/server/src/brain/BridgeCwdExtension.ts";
 import { CodeMode } from "../apps/server/src/brain/CodeMode.ts";
 import { durableRunner } from "../apps/server/src/brain/Durable.ts";
 import { ModelSource } from "../apps/server/src/brain/ModelSource.ts";
 import type { WorkflowItemState } from "../apps/server/src/brain/WorkflowsDoc.ts";
 import { WorkflowsDoc } from "../apps/server/src/brain/WorkflowsDoc.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
+import { BridgeCwd } from "../apps/server/src/models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "../apps/server/src/models/BridgeProvider.ts";
 import {
   ExtraProviders,

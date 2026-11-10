@@ -1,10 +1,11 @@
-// The brain's layer graph: each package's layer is added here. Each entry point provides what it
-// chooses itself: the identity rules, the settings source, logging, the harness behind the seam
-// (`PiDurableBrain`, or `ScriptedBrain` from `DevLayer.ts`) and the Executor link
-// (`ExecutorLink.layer`, `FakeExecutorLink` or `layerDisabled`).
-// Build order is shutdown order reversed: whatever the close hooks need is built before
-// `Shutdown`, and the HTTP server after it, so on SIGTERM the sockets close first, then the hooks
-// run, then the stores and the Harness close.
+// The brain's layer graph: the brain's own layers and every feature's, folded from `Features.ts`
+// (ADR 0053): the RPC handlers, the services a feature runs over pi-durable and what the app runs
+// for it. Each entry point provides what it chooses itself: the identity rules, the settings
+// source, logging, the harness behind the seam (`PiDurableBrain`, or `ScriptedBrain` from
+// `DevLayer.ts`) and the Executor link (`ExecutorLink.layer`, `FakeExecutorLink` or
+// `layerDisabled`). Build order is shutdown order reversed: whatever the close hooks need is built
+// before `Shutdown`, and the HTTP server after it, so on SIGTERM the sockets close first, then the
+// hooks run, then the stores and the Harness close.
 
 import { NodeServices } from "@effect/platform-node";
 import { Context, Effect, Layer } from "effect";
@@ -14,18 +15,16 @@ import { BootLayer } from "./Boot.ts";
 import { runBootRepairs } from "./BootRepairs.ts";
 import { Brain } from "./brain/Brain.ts";
 import { BrainConfig } from "./brain/BrainConfig.ts";
-import { BridgeCwd } from "./brain/BridgeCwdExtension.ts";
-import { BudgetSources } from "./brain/BudgetSources.ts";
 import type { CairnExtension } from "./brain/Extensions.ts";
-import { ExtensionSet } from "./brain/ExtensionSet.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
 import type { ModelSource } from "./brain/ModelSource.ts";
 import { PiDurableHarness } from "./brain/PiDurableHarness.ts";
-import { ReactorSet } from "./brain/ReactorSet.ts";
-import { SpendFeed } from "./brain/SpendFeed.ts";
 import { ServerConfig } from "./Config.ts";
 import { DatabaseLive } from "./db/DatabaseLive.ts";
 import { ExecutorSweep } from "./executor/ExecutorSweep.ts";
+import { ExtensionSet } from "./ExtensionSet.ts";
+import { FEATURES } from "./Features.ts";
+import type { Feature } from "./Features.ts";
 import {
   CHECKPOINT_ENTRY_KIND,
   CheckpointCapture,
@@ -39,6 +38,8 @@ import { HttpLive } from "./http/Http.ts";
 import { BootData } from "./load/BootData.ts";
 import { PeerPath } from "./load/PeerPath.ts";
 import { MemoryWatch } from "./MemoryWatch.ts";
+import { BridgeCwd } from "./models/BridgeCwdExtension.ts";
+import { SessionHelloWithModels } from "./models/ModelHandlers.ts";
 import { ModelHealthLive } from "./models/ModelHealth.ts";
 import { PiModelSource } from "./models/PiModelSource.ts";
 import { SettingsLive } from "./models/SettingsStore.ts";
@@ -46,20 +47,17 @@ import { FileSearch } from "./projects/FileSearch.ts";
 import { FolderRules } from "./projects/FolderRules.ts";
 import { ScratchProject } from "./projects/ScratchProject.ts";
 import { Worktrees } from "./projects/Worktrees.ts";
-import { ExecutorSignInPush } from "./push/ExecutorSignInPush.ts";
+import { SessionHelloWithPush } from "./push/PushHandlers.ts";
 import { PushLayer } from "./push/PushLayer.ts";
 import { ReachLive } from "./reach/ReachLayer.ts";
-import { HandlersLayer } from "./rpc/Handlers.ts";
-import { SessionHelloWithModels } from "./rpc/ModelHandlers.ts";
-import { SessionHelloWithPush } from "./rpc/PushHandlers.ts";
+import { ReactorSet } from "./ReactorSet.ts";
+import { handlersOf, servesEveryRpc } from "./rpc/Handlers.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { ShellLayer } from "./shell/ShellLayer.ts";
 import { ShellProjector } from "./shell/ShellProjector.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
 import { Skills } from "./skills/SkillsLayer.ts";
-import { QuestionRoutes } from "./subagents/QuestionRoute.ts";
-import { SubagentRows } from "./subagents/SubagentRows.ts";
 import { Subagents } from "./subagents/Subagents.ts";
 import { BranchNames } from "./threads/BranchNames.ts";
 import { bridgeStopHook } from "./threads/BridgeStopHook.ts";
@@ -75,14 +73,22 @@ import { BudgetGuard } from "./usage/BudgetGuard.ts";
 import { Budgets } from "./usage/Budgets.ts";
 import { ClaudeSignals } from "./usage/ClaudeSignals.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
-import { GoalBook } from "./verdicts/GoalBook.ts";
-import { WorkflowPlan } from "./workflows/WorkflowPlan.ts";
-import {
-  WorkflowBudgetPush,
-  WorkflowPushes,
-} from "./workflows/WorkflowPushes.ts";
-import { WorkflowStops } from "./workflows/WorkflowStop.ts";
+import { WorkflowPushes } from "./workflows/WorkflowPushes.ts";
 import { ChildWorkspaces } from "./workspaces/ChildWorkspaces.ts";
+
+/** The services every feature runs over pi-durable, beside the harness. */
+export const harnessLayersOf = (features: ReadonlyArray<Feature>) =>
+  features.map((feature): Feature["harnessLayer"] => feature.harnessLayer);
+
+/** What the app runs for every feature: its fibers and the services only it gives the app. */
+export const appLayersOf = (features: ReadonlyArray<Feature>) =>
+  features.map((feature): Feature["appLayer"] => feature.appLayer);
+
+/**
+ * Every RPC handler, the brain's own and every feature's, held to the whole group of `CairnRpcs`:
+ * a feature whose handlers are missing from its manifest is a compile error here.
+ */
+export const HandlersLayer = servesEveryRpc(handlersOf(FEATURES));
 
 /**
  * How boot hands the harness its work after the repairs. pi-durable does not resume on open, so
@@ -197,10 +203,7 @@ export const PiDurableBrain = <Models = never>(options: {
   return Layer.mergeAll(
     resume,
     ReactorSet.layer,
-    SpendFeed.layer,
-    BudgetSources.layer,
-    WorkflowStops.layer,
-    GoalBook.layer
+    ...harnessLayersOf(FEATURES)
   ).pipe(
     Layer.provideMerge(PiDurableHarness.layer),
     Layer.provide(
@@ -262,12 +265,8 @@ const BudgetsLive = BudgetGuard.layerNoDeps.pipe(
 export const AppLayer = Layer.mergeAll(
   HttpLive,
   Boot,
-  ExecutorSignInPush,
   MemoryWatch.pipe(Layer.provide(NodeServices.layer)),
-  SubagentRows,
-  QuestionRoutes,
-  WorkflowPlan.layer,
-  WorkflowBudgetPush
+  ...appLayersOf(FEATURES)
 ).pipe(
   Layer.provide(HandlersLayer),
   Layer.provide(BootData),

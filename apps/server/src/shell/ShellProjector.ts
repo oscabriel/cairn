@@ -73,6 +73,7 @@ import type {
   RunFailureInfo,
   RuntimeRequestUpdated,
 } from "../brain/HarnessSeam.ts";
+import { RunEnds } from "../brain/RunEnds.ts";
 import { EventSink } from "./EventSink.ts";
 import { ProjectorSignals } from "./ProjectorSignals.ts";
 import type { ProjectorSignal } from "./ProjectorSignals.ts";
@@ -449,15 +450,22 @@ export const unseenFailureOf = (
 
 /**
  * When the boot reconcile ends a run nobody saw end: when it failed (`unseenFailureOf`), if the
- * harness kept that time; otherwise now, the reconcile's own time (`ReconciledEnds`). Only an
- * ended-unseen row has one.
+ * harness kept that time; else when it ended, if the harness kept that (`runEnd`, `RunEnds`), the
+ * time RunTerminal would have carried; otherwise now, the reconcile's own time (`ReconciledEnds`).
+ * Dated by the run, the row's end precedes the turn's end checkpoint, so a later boot's checkpoint
+ * repair never takes that checkpoint for a missed one; dated now, it may. Only an ended-unseen row
+ * has one.
  */
 export const reconciledEndOf = (
   failure: Option.Option<LastRunFailure>,
+  runEnd: Option.Option<DateTime.Utc>,
   now: DateTime.Utc
 ): { readonly at: DateTime.Utc; readonly dated: "run" | "reconcile" } =>
   Option.match(
-    Option.flatMap(failure, (found) => found.at),
+    Option.orElse(
+      Option.flatMap(failure, (found) => found.at),
+      () => runEnd
+    ),
     {
       onNone: () => ({ at: now, dated: "reconcile" as const }),
       onSome: (at) => ({ at, dated: "run" as const }),
@@ -469,14 +477,16 @@ export const reconciledEndOf = (
  * `inspect()`; none means no run, no queue, no approval and no failure kept. A row that was busy
  * with no live run left ends: the run ended while nothing watched it. It ends `failed`, with the
  * failure's class and words, when the harness kept the newest run's failure (server-edges.V5), and
- * `idle` otherwise; it is dated by `reconciledEndOf`. A run that started and failed inside one
- * projector window, with the kill in that window too, left the row idle, so it stays idle though the
- * harness kept the failure: the same gap as a goal's within one window. An approval the row does not name yet (its
- * event was lost to a crash) is named from `inspect()`'s record: its kind and when it was asked.
+ * `idle` otherwise; it is dated by `reconciledEndOf`, with `runEnd` the harness's end of the run
+ * the row names. A run that started and failed inside one projector window, with the kill in that
+ * window too, left the row idle, so it stays idle though the harness kept the failure: the same gap
+ * as a goal's within one window. An approval the row does not name yet (its event was lost to a
+ * crash) is named from `inspect()`'s record: its kind and when it was asked.
  */
 export const reconcileProjection = (
   projection: ThreadProjection,
   live: Option.Option<LiveThreadState>,
+  runEnd: Option.Option<DateTime.Utc>,
   now: DateTime.Utc
 ): ThreadProjection => {
   const { fields } = projection;
@@ -518,7 +528,7 @@ export const reconcileProjection = (
     }),
     waitingFor: asking ? "parent" : "none",
     latestRunCompletedAt: ended
-      ? Option.some(reconciledEndOf(failure, now).at)
+      ? Option.some(reconciledEndOf(failure, runEnd, now).at)
       : fields.latestRunCompletedAt,
   };
 
@@ -822,6 +832,7 @@ export class ShellProjector extends Context.Service<
       const rows = yield* ThreadRows;
       const signals = yield* ProjectorSignals;
       const reconciled = yield* ReconciledEnds;
+      const runEnds = yield* RunEnds;
       const scope = yield* Effect.scope;
 
       const lock = yield* Semaphore.make(1);
@@ -1122,6 +1133,19 @@ export class ShellProjector extends Context.Service<
           .document(threadId, kind)
           .pipe(Effect.timeout("2 seconds"), Effect.option);
 
+      /** When the run a row names ended, read only for a run that ended unseen. */
+      const unseenRunEnd = (
+        threadId: ThreadId,
+        projection: ThreadProjection,
+        ended: boolean
+      ): Effect.Effect<Option.Option<DateTime.Utc>> =>
+        ended
+          ? Option.match(projection.fields.activeRunId, {
+              onNone: () => Effect.succeedNone,
+              onSome: (runId) => runEnds.endOf(threadId, runId),
+            })
+          : Effect.succeedNone;
+
       const reconcileThreads = Effect.fnUntraced(function* (
         only: Option.Option<ThreadId>,
         withMessages: boolean
@@ -1170,13 +1194,16 @@ export class ShellProjector extends Context.Service<
             Option.fromUndefinedOr(approvalMemory.get(threadId))
           );
 
-          let projection = reconcileProjection(before, state, now);
+          const ended = endedUnseen(before, state);
+          const runEnd = yield* unseenRunEnd(threadId, before, ended);
+
+          let projection = reconcileProjection(before, state, runEnd, now);
 
           // Recorded before the end is committed, so the notifier never reads it unrecorded.
           if (
-            endedUnseen(before, state) &&
-            reconciledEndOf(unseenFailureOf(before, state), now).dated ===
-              "reconcile"
+            ended &&
+            reconciledEndOf(unseenFailureOf(before, state), runEnd, now)
+              .dated === "reconcile"
           ) {
             yield* reconciled.record(threadId, now);
           }

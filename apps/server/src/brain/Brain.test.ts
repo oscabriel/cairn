@@ -76,6 +76,19 @@ const hanging = (storage: Storage, reached: () => void): Storage => {
   return storage;
 };
 
+/** Storage that calls `closed` when it is closed. */
+const recordingClose = (storage: Storage, closed: () => void): Storage => {
+  const close = storage.close.bind(storage);
+
+  storage.close = async (context) => {
+    closed();
+
+    await close(context);
+  };
+
+  return storage;
+};
+
 /** The production seam and brain over a temporary store whose commits the test can fail. */
 const brainLayer = (dataDir: string, failNext: { value: boolean }) => {
   const store = Layer.effect(
@@ -405,16 +418,21 @@ describe("Brain supervisor", () => {
 
             assert.strictEqual(unavailable.state, "closing");
 
-            // Whatever the reopen opened was closed with the brain: its storage takes no commit.
+            // Whatever the reopen opened is closed as it lands, the close having begun: its
+            // storage takes no commit.
             if (Option.isSome(storage)) {
-              const after = yield* Effect.promise(
-                async () =>
-                  await storage.value
-                    .commit([], Function.constVoid, BACKGROUND_CONTEXT)
-                    .then(
-                      () => "open",
-                      () => "closed"
-                    )
+              const after = yield* eventually(
+                Effect.promise(
+                  async () =>
+                    await storage.value
+                      .commit([], Function.constVoid, BACKGROUND_CONTEXT)
+                      .then(
+                        () => "open",
+                        () => "closed"
+                      )
+                ),
+                (found) => found === "closed",
+                "the late reopen's storage to close"
               );
 
               assert.strictEqual(after, "closed");
@@ -440,6 +458,7 @@ describe("Brain supervisor", () => {
             const failNext = { value: false };
             const opens = yield* Ref.make(0);
             const hung = yield* Latch.make(false);
+            const hungClosed = yield* Latch.make(false);
             const run = Effect.runPromiseWith(yield* Effect.context());
 
             // The second open (the supervisor's reopen) never finishes opening its Harness.
@@ -453,9 +472,14 @@ describe("Brain supervisor", () => {
                     const storage = failing(yield* real.open, failNext);
 
                     return count === 2
-                      ? hanging(storage, () => {
-                          void run(hung.open);
-                        })
+                      ? recordingClose(
+                          hanging(storage, () => {
+                            void run(hung.open);
+                          }),
+                          () => {
+                            void run(hungClosed.open);
+                          }
+                        )
                       : storage;
                   }),
                 })
@@ -508,6 +532,141 @@ describe("Brain supervisor", () => {
               Option.isSome(closed),
               "the brain's close never ended"
             );
+
+            // The open that never finished opened its storage: the brain's close closed it.
+            const storageClosed = yield* hungClosed.await.pipe(
+              Effect.timeoutOption(Duration.millis(500))
+            );
+
+            assert.isTrue(
+              Option.isSome(storageClosed),
+              "the hung reopen's storage was left open past the brain's close"
+            );
+          }),
+        (dataDir) =>
+          Effect.sync(() => {
+            rmSync(dataDir, { recursive: true, force: true });
+          })
+      ),
+    testLimit(30_000)
+  );
+  it.live(
+    "a reopen whose open lands after its timeout closes what it opened",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() =>
+          mkdtempSync(path.join(tmpdir(), "cairn-brain-test-"))
+        ),
+        (dataDir) =>
+          Effect.gen(function* () {
+            const failNext = { value: false };
+            const opens = yield* Ref.make(0);
+            const late = yield* Latch.make(false);
+            const landed = yield* Latch.make(false);
+            const lateClosed = yield* Latch.make(false);
+            const run = Effect.runPromiseWith(yield* Effect.context());
+
+            // The second open (the supervisor's first reopen) answers only once the test lets it,
+            // after that reopen timed out: a stalled disk that comes back.
+            const store = Layer.effect(
+              BrainStore,
+              Effect.map(BrainStore, (real) =>
+                BrainStore.of({
+                  ...real,
+                  open: Effect.gen(function* () {
+                    const count = yield* Ref.updateAndGet(opens, (n) => n + 1);
+
+                    if (count !== 2) {
+                      return failing(yield* real.open, failNext);
+                    }
+
+                    return yield* Effect.promise(async () => {
+                      await run(late.await);
+
+                      const storage = recordingClose(
+                        await run(real.open),
+                        () => {
+                          void run(lateClosed.open);
+                        }
+                      );
+
+                      void run(landed.open);
+
+                      return storage;
+                    });
+                  }),
+                })
+              )
+            ).pipe(Layer.provide(BrainStore.layer));
+
+            const layer = Brain.layerNoDeps.pipe(
+              Layer.provide(store),
+              Layer.provide(Arms.layer),
+              Layer.provide(brainExtensions()),
+              Layer.provideMerge(
+                FauxModels.layer({
+                  tokensPerSecond: 2000,
+                  settings: { retry: { enabled: false } },
+                })
+              ),
+              Layer.provide(BrainConfig.layerFrom(dataDir)),
+              Layer.provide(
+                Layer.succeed(BrainOpenTimeout, Duration.millis(300))
+              )
+            );
+
+            const scope = yield* Scope.make();
+            const context = yield* Layer.buildWithScope(layer, scope);
+            const brain = Context.get(context, Brain);
+            const { harness } = yield* brain.session;
+
+            // A storage failure: the Session fails, and the supervisor's first reopen stalls.
+            failNext.value = true;
+            yield* Effect.promise(
+              async () =>
+                await harness
+                  .commit(async (tx) => {
+                    await tx.createConversation({
+                      ownership: { kind: "ownerless" },
+                    });
+                  }, BACKGROUND_CONTEXT)
+                  .then(
+                    () => "committed",
+                    () => "failed"
+                  )
+            );
+
+            // The stalled reopen timed out and the next one opened the brain again.
+            const reopened = yield* eventually(
+              brain.session.pipe(Effect.option),
+              Option.exists((session) => session.generation > 1),
+              "a reopen after the stalled one"
+            );
+
+            assert.isAbove(
+              yield* Ref.get(opens),
+              2,
+              "the brain reopened without giving up on the stalled open"
+            );
+            assert.deepStrictEqual(
+              Option.map(reopened, (session) => session.generation),
+              Option.some(2)
+            );
+
+            // The stalled open now lands; nothing waits for it, so what it opened is closed.
+            yield* late.open;
+            yield* landed.await;
+
+            const closed = yield* lateClosed.await.pipe(
+              Effect.timeoutOption(slackened(Duration.seconds(5)))
+            );
+
+            assert.isTrue(
+              Option.isSome(closed),
+              "the storage of the reopen that timed out was never closed"
+            );
+
+            yield* Scope.close(scope, Exit.void);
           }),
         (dataDir) =>
           Effect.sync(() => {

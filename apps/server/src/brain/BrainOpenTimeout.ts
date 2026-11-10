@@ -1,7 +1,7 @@
-// How long the brain's supervisor lets one reopen of its Session take. A reopen holds the brain's
-// shutdown until it ends (`Brain.ts`), so an open that hangs would hold it for good; past this the
-// attempt fails, its open is cancelled, and the supervisor retries, or stops if the brain closes.
-// Production and dev never change it; a test gives it a fraction of a second.
+// How long the brain's supervisor waits for one reopen of its Session. Past this it gives the open
+// up (`Brain.ts`): the open is cancelled, what it opened is closed as it lands, and the supervisor
+// retries, or stops if the brain closes. Production and dev never change it; a test gives it a
+// fraction of a second.
 
 import { Context, Duration } from "effect";
 

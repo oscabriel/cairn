@@ -15,7 +15,10 @@
 // judge accepts it through `thread.respond` after the restart), mid-commit (after pi-durable
 // committed a run's end and before the shell row did, held by `CAIRN_JUDGE_HOLD_PROJECTOR_MS`),
 // mid-commit-failed (the same, for a run whose model request failed: the boot reconcile ends the
-// row failed with the failure's class, server-edges.V5),
+// row failed with the failure's class, server-edges.V5); both run over a git project and kill once
+// the turn's end checkpoint landed, then restart cleanly once more after the reconcile ended the
+// run: that boot's checkpoint repair must not take the checkpoint for a missed one and add a
+// `repair-` turn (after-review D1),
 // send-in-flight (the kill lands before `thread.send` answers; the client resends the same request
 // id), mid-upload (the kill lands while a 20 MB upload streams to its `.part` file; the client
 // retries with a new signed URL and sends the turn), during-launch (the kill lands inside
@@ -1287,6 +1290,8 @@ interface Plan {
   readonly properties?: Readonly<Record<string, string>>;
   readonly expect: Expectation;
   readonly worktree?: boolean;
+  /** The project folder is a git repository, so the thread's turns get checkpoints. */
+  readonly repo?: boolean;
   /** Runs on the real Claude bridge (`judge-main.ts --models real`). */
   readonly bridge?: boolean;
   /** The thread's first message. */
@@ -1693,9 +1698,30 @@ const GATE_TASK =
 /** The error the mid-commit-failed window's model request fails with: a 400 is never retried. */
 const REFUSED = "400 the judge script refused this request";
 
+/** The run ids of the end checkpoints in the brain's project folder (`Cairn-Point: end`). */
+const endCheckpointRuns = (brain: Brain): ReadonlyArray<string> =>
+  execFileSync(
+    "git",
+    [
+      "-C",
+      brain.project,
+      "for-each-ref",
+      "refs/cairn/checkpoints",
+      "--format=%(trailers:key=Cairn-Point,valueonly=true,separator=%x2C)%09%(trailers:key=Cairn-Run,valueonly=true,separator=%x2C)",
+    ],
+    { encoding: "utf-8" }
+  )
+    .split("\n")
+    .flatMap((line) => {
+      const [point, run] = line.split("\t");
+
+      return point === "end" && run !== undefined && run !== "" ? [run] : [];
+    });
+
 /**
- * Waits until the projector holds a run's end (`CAIRN_JUDGE_HOLD_PROJECTOR_MS`), kills the brain
- * there and measures the restart; answers what was committed before the kill.
+ * Waits until the projector holds a run's end (`CAIRN_JUDGE_HOLD_PROJECTOR_MS`) and the turn's end
+ * checkpoint landed (the window's project is a git repository), kills the brain there and measures
+ * the restart; answers what was committed before the kill.
  */
 const killWhileHeld = (context: RunContext) =>
   Effect.gen(function* () {
@@ -1706,12 +1732,38 @@ const killWhileHeld = (context: RunContext) =>
       { timeout: "60 seconds" }
     );
 
+    yield* until(
+      "the turn's end checkpoint",
+      Effect.sync(() => endCheckpointRuns(context.brain).length > 0),
+      "4 seconds"
+    );
+
     const committed = entriesOf(yield* viewOf(context.follower));
     const restart = yield* crash(context.brain);
 
     yield* measureRestart(context, restart);
 
     return committed;
+  });
+
+/**
+ * After the restart's reconcile ended the run the kill cut off from the shell: one more clean
+ * restart, whose boot runs the checkpoint repair over that row. The turn's end checkpoint landed
+ * before the kill, so the repair must add no `repair-` turn (after-review D1).
+ */
+const rebootWithoutRepairTurn = (context: RunContext) =>
+  Effect.gen(function* () {
+    const restart = yield* cleanRestart(context.brain);
+
+    yield* measureRestart(context, restart);
+
+    const ended = endCheckpointRuns(context.brain);
+
+    context.measures.notes.push(
+      `end checkpoints after the second boot: ${ended.join(", ")}`
+    );
+    context.measures.checks.noRepairTurn =
+      ended.length > 0 && !ended.some((run) => run.startsWith("repair-"));
   });
 
 /** A second turn, so the view moves on after the restart too. */
@@ -1845,6 +1897,7 @@ const plans: Readonly<Record<WindowName, Plan>> = {
   "mid-commit": {
     message: script("text 20"),
     env: { CAIRN_JUDGE_HOLD_PROJECTOR_MS: "5000" },
+    repo: true,
     expect: { marks: [], userEntries: 2 },
     run: (context) =>
       Effect.gen(function* () {
@@ -1857,6 +1910,7 @@ const plans: Readonly<Record<WindowName, Plan>> = {
           `${CONVERGE_MS} millis`
         );
 
+        yield* rebootWithoutRepairTurn(context);
         yield* sendAfterRestart(context);
 
         return { committed };
@@ -1865,6 +1919,7 @@ const plans: Readonly<Record<WindowName, Plan>> = {
   "mid-commit-failed": {
     message: script(`fail ${JSON.stringify(REFUSED)}`),
     env: { CAIRN_JUDGE_HOLD_PROJECTOR_MS: "5000" },
+    repo: true,
     expect: { marks: [], userEntries: 2 },
     run: (context) =>
       Effect.gen(function* () {
@@ -1888,6 +1943,7 @@ const plans: Readonly<Record<WindowName, Plan>> = {
 
         context.measures.checks.reconciledAsFailed = true;
 
+        yield* rebootWithoutRepairTurn(context);
         yield* sendAfterRestart(context);
 
         return { committed };
@@ -2599,7 +2655,7 @@ const runWindow = (window: WindowName, run: number, shared: Shared) => {
     where.unit = brain.unit;
     where.dir = brain.dir;
 
-    if (plan.worktree === true) {
+    if (plan.worktree === true || plan.repo === true) {
       initRepo(brain.project);
     }
 

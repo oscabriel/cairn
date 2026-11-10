@@ -1,7 +1,7 @@
 // The look rules (plan look track L3 and L5, surfaces note "Structure rules without a baseline",
 // ADR 0040), run in a Chromium page: the rules a pixel baseline would have implied for new screens.
 // judges/look-rules.ts holds the look catalogue at `/__look` to them, and judges/look.ts holds
-// each named state of the real `next` client to them. Each rule that reads the page is a
+// each named state of the real client to them. Each rule that reads the page is a
 // self-contained function, because the browser driver sends its source into the page:
 //   touch     every control (a button, link, field, menu item, `[role=button]` or `[data-action]`)
 //             is at least 44 by 44 px, the box a finger hits (WCAG 2.5.5; the tokens'

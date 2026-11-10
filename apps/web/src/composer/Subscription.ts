@@ -53,7 +53,7 @@ const pathContains = (event: Event, selector: string): boolean =>
 
 /**
  * Whether the editor is drawn. On the phone the request card takes the composer's slot and the
- * editor is hidden (`next/card/card.css`): a key then lands nowhere rather than in a draft the user
+ * editor is hidden (`card/card.css`): a key then lands nowhere rather than in a draft the user
  * cannot see (W-1).
  */
 const editorShown = (): boolean =>

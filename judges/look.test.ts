@@ -29,7 +29,7 @@ import type { FrozenRound, Image } from "./lib/LookFreeze.ts";
 
 const root = path.join(import.meta.dirname, "..");
 
-const TOKENS_PATH = "apps/web/src/next/tokens.css";
+const TOKENS_PATH = "apps/web/src/tokens.css";
 
 const tokens = readFileSync(path.join(root, TOKENS_PATH), "utf-8");
 
@@ -235,7 +235,7 @@ describe("a frozen fixture round", () => {
 
     expect(changed).not.toBe(tokens);
     expect(tokensFinding(round, changed)).toMatch(
-      /^apps\/web\/src\/next\/tokens\.css hashes [0-9a-f]{12}, round 7 froze [0-9a-f]{12}: a token changed/u
+      /^apps\/web\/src\/tokens\.css hashes [0-9a-f]{12}, round 7 froze [0-9a-f]{12}: a token changed/u
     );
     expect(
       tokensFinding(round, withToken("--radius-small", "7px"))

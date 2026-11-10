@@ -27,8 +27,7 @@ import {
 import { noticeFor, readyIds } from "../attachments/Update.ts";
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
-import { view } from "../next/composer/View.ts";
-import { fetchChunk } from "../next/page/Chunks.ts";
+import { fetchChunk } from "../page/Chunks.ts";
 import { AppRoute } from "../Route.ts";
 import {
   ConfigureThread,
@@ -75,9 +74,10 @@ import {
   update,
 } from "./Update.ts";
 import type { UpdateReturn } from "./Update.ts";
+import { view } from "./View.ts";
 
 /** The saved drafts this build can decode. */
-// The popovers are their own chunk (`next/page/Chunks.ts`); the scenes draw them once it is in.
+// The popovers are their own chunk (`page/Chunks.ts`); the scenes draw them once it is in.
 await Effect.runPromise(fetchChunk("popovers"));
 
 const storedDrafts = Effect.map(readDrafts, ({ value }) => value);

@@ -93,7 +93,7 @@ export const JUDGES: ReadonlyArray<Judge> = [
     name: "contrast.test",
     files: ["contrast.test.ts"],
     proves:
-      "Every design token text pair meets WCAG AA in both themes, and next/ uses no colour but the tokens (ADR 0040).",
+      "Every design token text pair meets WCAG AA in both themes, and the view code uses no colour but the tokens (ADR 0040).",
     runs: ["check"],
     cost: free,
     needs: [],

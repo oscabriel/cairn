@@ -433,7 +433,7 @@ export interface LoadSample {
 
 const decodeFrameAt = Schema.decodeUnknownSync(Schema.Finite);
 
-/** When the `next` frame was on the page, in the page's clock (polled every 16 ms). */
+/** When the frame was on the page, in the page's clock (polled every 16 ms). */
 const nextFrameAt = async (page: Page): Promise<number> => {
   const handle = await page.waitForFunction(
     () =>

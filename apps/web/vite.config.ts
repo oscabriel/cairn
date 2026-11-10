@@ -10,7 +10,7 @@ import type { Plugin } from "vite";
 const brain = process.env.CAIRN_DEV_BRAIN;
 
 /** The look catalogue's page, which `/__look` serves. */
-const LOOK_CATALOGUE = "/src/next/ui/catalogue/index.html";
+const LOOK_CATALOGUE = "/src/ui/catalogue/index.html";
 
 /**
  * Serves the look catalogue at `/__look` (with its query) from the dev server only: `apply:
@@ -44,7 +44,7 @@ const proxy =
 /**
  * One entry script (ADR 0021): every module the entry reaches statically goes into the entry
  * chunk, and only what the views fetched on demand alone import goes into their chunks
- * (`src/next/page/Chunks.ts`). Rolldown's automatic splitting would otherwise put the modules the
+ * (`src/page/Chunks.ts`). Rolldown's automatic splitting would otherwise put the modules the
  * entry shares with those chunks into common chunks of their own, each one more request before the
  * page is interactive (`Budget.test.ts` holds the entry to one file).
  */

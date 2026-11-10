@@ -39,13 +39,12 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { Folder, FolderPlus, Search, Star } from "lucide";
 
 import { filterBranches, resolveEnvModeLabel } from "../hero/ContextStrip.ts";
-import { FOCUS_RING_INSET } from "../next/ui/Classes.ts";
+import { FOCUS_RING_INSET } from "../ui/Classes.ts";
 import {
   COMBOBOX_ITEM_CLASS,
   COMBOBOX_LIST_CLASS,
   COMBOBOX_POPUP_CLASS,
 } from "../ui/Combobox.ts";
-import { MENU_ITEM_CLASS, POPUP_CLASS } from "./Classes.ts";
 import {
   activeDraft,
   isDraftTarget,
@@ -69,6 +68,7 @@ import {
   thinkingLevels,
 } from "./Models.ts";
 import type { PickerRailItem } from "./Models.ts";
+import { MENU_ITEM_CLASS, POPUP_CLASS } from "./PopoverClasses.ts";
 import { providerMark } from "./ProviderMark.ts";
 
 const ROW_CLASS =

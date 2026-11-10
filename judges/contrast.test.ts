@@ -1,6 +1,6 @@
 // Contrast judge (plan look track L2, surfaces note "Tokens and where they live", ADR 0040): every
-// text and background pair `apps/web/src/next/tokens.css` names meets WCAG AA in both themes of the
-// one look (Stone revised, plan look track L2b), and the `next` views use no colour but the tokens.
+// text and background pair `apps/web/src/tokens.css` names meets WCAG AA in both themes of the
+// one look (Stone revised, plan look track L2b), and the views use no colour but the tokens.
 //
 // The pairs come from the token names (the families tokens.css's header lists), so a token added
 // to a family joins its pairs without editing this file. Text is 4.5:1 (WCAG 1.4.3, AA for normal
@@ -19,8 +19,10 @@
 // `drop-shadow-blue-400`; the palettes are read from the installed Tailwind's theme.css), no
 // arbitrary colour (`bg-[#fff]`, `bg-[red]`), no colour literal (hex, `rgb()`, `hsl()`,
 // `oklch()`...) and no named colour in a colour property (`{ color: "white" }`, `fill: red`) in
-// `next/` outside tokens.css or in any file a `next` view imports. The token forms `text-(--ink-2)` and `text-[color:var(--ink-2)]`
-// pass. Comments and tests are skipped. The same files hold no classic colour name (styles.css's
+// the client's view code: every source file under `apps/web/src` but tokens.css, styles.css (the
+// Tailwind build, whose classic theme the tokens' bridge points at) and the transcript harness (a
+// judge's page). The token forms
+// `text-(--ink-2)` and `text-[color:var(--ink-2)]` pass. Comments and tests are skipped. The same files hold no classic colour name (styles.css's
 // `text-muted-foreground`, `bg-accent/60`, `border-border`: names outside the tokens, which the
 // pairs above do not judge) and no glass utility (`dropdown-glass`, a backdrop blur), but those an
 // exact, reasoned list keeps.
@@ -37,9 +39,14 @@ import { assert, describe, it } from "@effect/vitest";
 
 const root = path.join(import.meta.dirname, "..");
 
-const nextDirectory = path.join(root, "apps/web/src/next");
+const webSource = path.join(root, "apps/web/src");
 
-const tokensPath = path.join(nextDirectory, "tokens.css");
+const tokensPath = path.join(webSource, "tokens.css");
+
+const stylesPath = path.join(webSource, "styles.css");
+
+/** The transcript harness, a judge's page (`judges/transcript-scroll.ts`) outside the frame. */
+const harnessPath = path.join(webSource, "timeline/harness");
 
 const TEXT_RATIO = 4.5;
 
@@ -544,20 +551,31 @@ const plant = (
 
 const SCANNED = /\.(?:ts|css|html)$/u;
 
-const nextFiles = (directory: string): ReadonlyArray<string> =>
+/** The source files under `directory`, tests, tokens.css, styles.css and the harness left out. */
+const sourcesUnder = (directory: string): ReadonlyArray<string> =>
   readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = path.join(directory, entry.name);
 
     if (entry.isDirectory()) {
-      return nextFiles(entryPath);
+      return entryPath === harnessPath ? [] : sourcesUnder(entryPath);
     }
 
     return SCANNED.test(entry.name) &&
       !entry.name.endsWith(".test.ts") &&
-      entryPath !== tokensPath
+      entryPath !== tokensPath &&
+      entryPath !== stylesPath
       ? [entryPath]
       : [];
   });
+
+/**
+ * The client's view code: every source file under `apps/web/src`, tests, tokens.css, styles.css
+ * and the transcript harness left out. Since the fork was folded into the feature folders (ADR 0040, 2026-11-10) this is every
+ * region the frame draws, the classic ones it still draws among them (the composer's editor and
+ * popovers, the transcript's rows), so none escapes the lint (U-13).
+ */
+const viewFiles = (): ReadonlyArray<string> =>
+  sourcesUnder(webSource).toSorted();
 
 /** The file's text without block, HTML and line comments. */
 const withoutComments = (text: string): string =>
@@ -569,56 +587,11 @@ const withoutComments = (text: string): string =>
 /** A look switch: a `data-look` attribute or selector, or a view writing one. */
 const LOOK_SWITCH = /data-look(?![\w-])|DataAttribute\(\s*["']look["']/u;
 
-const webSource = path.join(root, "apps/web/src");
-
-/** A relative import or re-export in a module: `from "./x.ts"`, `import "./x.css"`, `import("./x.ts")`. */
-const RELATIVE_IMPORT =
-  /(?:\bfrom\s+|\bimport\s*\(?\s*)["'](?<specifier>\.{1,2}\/[^"']+)["']/gu;
-
-/**
- * Every source file a `next` view reaches through relative imports, `next/` itself included: the
- * classic regions a `next` view still draws (the composer's editor and popovers, the transcript's
- * rows) are held to the lint too, so none escapes it (U-13). Within `apps/web/src`, tests and
- * tokens.css left out.
- */
-const nextReach = (): ReadonlyArray<string> => {
-  const seen = new Set<string>();
-  const pending = [...nextFiles(nextDirectory)];
-
-  for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
-    if (!seen.has(file)) {
-      seen.add(file);
-
-      if (file.endsWith(".ts")) {
-        const text = withoutComments(readFileSync(file, "utf-8"));
-
-        for (const match of text.matchAll(RELATIVE_IMPORT)) {
-          const target = path.resolve(
-            path.dirname(file),
-            match.groups?.specifier ?? ""
-          );
-
-          if (
-            target.startsWith(`${webSource}${path.sep}`) &&
-            SCANNED.test(target) &&
-            !target.endsWith(".test.ts") &&
-            target !== tokensPath
-          ) {
-            pending.push(target);
-          }
-        }
-      }
-    }
-  }
-
-  return [...seen].toSorted();
-};
-
 const tokensText = readFileSync(tokensPath, "utf-8");
 
 const tokens = readTokens(tokensText);
 
-describe("contrast of the next tokens", () => {
+describe("contrast of the design tokens", () => {
   it("reads colours the way CSS draws them", () => {
     const white = parseHex("#ffffff");
     const black = parseHex("#000");
@@ -659,9 +632,9 @@ describe("contrast of the next tokens", () => {
     assert.isAbove(light.length, 30);
     assert.deepStrictEqual(colourNames(tokens.declared("dark")), light);
 
-    // One look: no `data-look` in tokens.css or anywhere in next/ (the catalogue's
+    // One look: no `data-look` in tokens.css or anywhere in the view code (the catalogue's
     // `data-look-state` and `data-look-catalogue` name specimens, not a look).
-    const switches = [tokensPath, ...nextFiles(nextDirectory)].flatMap((file) =>
+    const switches = [tokensPath, ...viewFiles()].flatMap((file) =>
       LOOK_SWITCH.test(withoutComments(readFileSync(file, "utf-8")))
         ? [path.relative(root, file)]
         : []
@@ -896,7 +869,7 @@ const NAMED =
 const COLOUR_PROPERTY =
   "[\\w-]*(?:color|Color)|background|fill|stroke|border(?:-[a-z]+)?|outline|(?:box-|text-)?shadow|boxShadow|textShadow";
 
-/** What `next/` code may not hold: palette utilities, arbitrary colours and colour literals. */
+/** What view code may not hold: palette utilities, arbitrary colours and colour literals. */
 const FORBIDDEN: ReadonlyArray<RegExp> = [
   new RegExp(
     `(?<![\\w-])(?:${UTILITY})-(?:(?:${PALETTE})-\\d{2,3}|${BARE})(?![\\w-])`,
@@ -931,7 +904,7 @@ const stylesText = readFileSync(
 
 /**
  * The classic colour names: every Tailwind colour styles.css declares (`--color-<name>`) that is
- * not a `next` token (`muted-foreground`, `accent`, `popover`, `border`, `placeholder`...). Inside
+ * not a design token (`muted-foreground`, `accent`, `popover`, `border`, `placeholder`...). Inside
  * the frame tokens.css's bridge points them at token values, but the contrast judge reads only the
  * tokens' pairs, so a class drawn with one (the placeholder at `text-placeholder/75`, 3.95:1)
  * escapes it. Read from styles.css, so a classic name added there is linted too.
@@ -953,7 +926,7 @@ const CLASSIC_NAMES: ReadonlyArray<string> = [
 
 /**
  * The glass utilities: styles.css's translucent, blurred grounds (`dropdown-glass`...) and
- * Tailwind's backdrop blur. A `next` ground is opaque: --surface-overlay under a popover.
+ * Tailwind's backdrop blur. A ground on the tokens is opaque: --surface-overlay under a popover.
  */
 const GLASS_UTILITIES: ReadonlyArray<string> = [
   ...[...stylesText.matchAll(/@utility\s+(?<name>[\w-]*glass[\w-]*)/gu)].map(
@@ -980,7 +953,7 @@ const classicIn = (text: string): ReadonlyArray<string> => {
 };
 
 /**
- * The colours the lint lets stand in a file a `next` view reaches, each for its reason, exactly: a
+ * The colours the lint lets stand in a file of the view code, each for its reason, exactly: a
  * new colour in one of these files fails as anywhere else, and so does one of these gone, so the
  * list cannot outlive what it excuses.
  */
@@ -1004,7 +977,7 @@ const ALLOWED = {
   "apps/web/src/composer/ProviderMark.ts": ["#d97757"],
   // The favicon's badge, drawn on a canvas for the browser's tab, outside the frame.
   "apps/web/src/shell/Notifications.ts": ["#e5484d"],
-  // The markdown alerts' palette classes, whose hues next/timeline/timeline.css overrides with the
+  // The markdown alerts' palette classes, whose hues timeline/timeline.css overrides with the
   // tone tokens inside the frame.
   "apps/web/src/timeline/markdown/View.ts": [
     "border-blue-500",
@@ -1021,7 +994,7 @@ const ALLOWED = {
 } satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
 /**
- * The classic colour names a file a `next` view reaches still draws with, exactly, each file for
+ * The classic colour names a file of the view code still draws with, exactly, each file for
  * its reason. A new one fails as anywhere else, and so does one of these gone, so the list cannot
  * outlive what it excuses. The regions U-13 redrew (the composer's placeholder and popovers, the
  * hero's project picker) are not here and cannot be.
@@ -1067,8 +1040,8 @@ const ALLOWED_CLASSIC = {
     "text-muted-foreground",
     "text-foreground",
   ],
-  // Reached but never drawn in the frame: the classic diff panel, off behind
-  // next/diff/Panel.ts's DIFF_PANEL_ENABLED (its view is only the panel's lazy import and its
+  // View code never drawn in the frame: the classic diff panel, off behind
+  // diff/Panel.ts's DIFF_PANEL_ENABLED (its view is only the panel's lazy import and its
   // placeholder is drawn only while the panel is on), the classic changed-files card (a type
   // import), and the classic button and header classes only those draw.
   "apps/web/src/diff/Card.ts": [
@@ -1130,7 +1103,7 @@ const ALLOWED_CLASSIC = {
     "bg-background",
     "text-muted-foreground",
   ],
-  "apps/web/src/ui/Button.ts": [
+  "apps/web/src/diff/PanelButton.ts": [
     "ring-ring",
     "ring-offset-background",
     "border-primary",
@@ -1167,7 +1140,7 @@ const ALLOWED_CLASSIC = {
   ],
 } satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
-describe("colours in next", () => {
+describe("colours in the view code", () => {
   it("finds palette utilities and literals in code, not in comments or token names", () => {
     assert.deepStrictEqual(
       coloursIn(
@@ -1225,14 +1198,14 @@ describe("colours in next", () => {
     assert.sameMembers([...TAILWIND_COLOURS.bare], ["black", "white"]);
   });
 
-  it("finds none in next outside tokens.css, nor in any file a next view imports", () => {
-    const files = nextReach();
+  it("finds none in the view code, but those listed", () => {
+    const files = viewFiles();
 
-    // The reach goes past next/: the classic regions a next view still draws are in it (U-13).
+    // The classic regions the frame still draws are view code too (U-13).
     for (const classic of [
       "apps/web/src/composer/Editor.ts",
       "apps/web/src/composer/Popovers.ts",
-      "apps/web/src/composer/Classes.ts",
+      "apps/web/src/composer/PopoverClasses.ts",
     ]) {
       assert.include(
         files.map((file) => path.relative(root, file)),
@@ -1281,15 +1254,15 @@ describe("colours in next", () => {
     );
   });
 
-  it("finds no classic colour name or glass in any file a next view reaches, but those listed", () => {
-    const files = nextReach().map((file) => path.relative(root, file));
+  it("finds no classic colour name or glass in the view code, but those listed", () => {
+    const files = viewFiles().map((file) => path.relative(root, file));
 
     // The regions U-13 redrew on the tokens are in the reach and hold none: the composer's
     // placeholder, its popovers and the hero's project picker.
     for (const redrawn of [
       "apps/web/src/composer/Editor.ts",
       "apps/web/src/composer/Popovers.ts",
-      "apps/web/src/composer/Classes.ts",
+      "apps/web/src/composer/PopoverClasses.ts",
       "apps/web/src/composer/Footer.ts",
       "apps/web/src/ui/Combobox.ts",
     ]) {

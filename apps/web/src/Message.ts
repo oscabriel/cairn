@@ -8,15 +8,15 @@ import { Url } from "foldkit";
 import { defineMessageUnion } from "foldkit/message";
 import { UrlRequest } from "foldkit/navigation";
 
+import { Message as RequestCardMessage } from "./card/Message.ts";
 import { Message as ComposerMessage } from "./composer/Message.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
-import { Message as RequestCardMessage } from "./next/card/Message.ts";
-import { Message as MetersMessage } from "./next/meters/Message.ts";
-import { Message as ChunkMessage } from "./next/page/Chunks.ts";
-import { Message as NextShellMessage } from "./next/shell/Message.ts";
+import { Message as MetersMessage } from "./meters/Message.ts";
+import { Message as ChunkMessage } from "./page/Chunks.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Message as PushMessage } from "./push/Message.ts";
 import { Message as SettingsMessage } from "./settings/Message.ts";
+import { Message as NextShellMessage } from "./shell/Message.ts";
 
 /** Everything the root reacts to. */
 export const Message = defineMessageUnion({
@@ -78,7 +78,7 @@ export const Message = defineMessageUnion({
   GotPushMessage: { message: PushMessage },
   GotSettingsMessage: { message: SettingsMessage },
   GotNextShellMessage: { message: NextShellMessage },
-  /** A Message of the scratch thread's page, inside the `next` shell's overlay. */
+  /** A Message of the scratch thread's page, inside the shell's overlay. */
   GotScratchThreadMessage: { message: Thread.Message },
   GotRequestCardMessage: { message: RequestCardMessage },
   GotMetersMessage: { message: MetersMessage },

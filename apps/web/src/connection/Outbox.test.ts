@@ -33,8 +33,8 @@ import { SaveDrafts } from "../composer/Command.ts";
 import { Message as ComposerMessage } from "../composer/Message.ts";
 import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
-import { Message as NextShellMessage } from "../next/shell/Message.ts";
 import { AppRoute } from "../Route.ts";
+import { Message as NextShellMessage } from "../shell/Message.ts";
 import {
   connectingModel,
   hello,

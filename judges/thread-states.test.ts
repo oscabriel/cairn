@@ -706,7 +706,7 @@ describe("thread states doc", () => {
     ]);
     assert.notStrictEqual(heldNotShown, doc);
     assert.deepStrictEqual(labelLies(heldNotShown), [
-      'UsageReading unsupported says "Not shown yet", but apps/web/src/next/settings/View.ts reads UsageReading',
+      'UsageReading unsupported says "Not shown yet", but apps/web/src/settings/View.ts reads UsageReading',
     ]);
     assert.deepStrictEqual(citationLies(deletedPath), [
       "apps/web/src/sidebar/Row.ts: no such file",

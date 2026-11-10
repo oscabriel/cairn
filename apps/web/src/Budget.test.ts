@@ -12,7 +12,7 @@ import type { Rolldown } from "vite";
 
 /**
  * Entry JS ceiling, gzip bytes (315.5 KiB): 316,724 B measured on 2026-11-10, once the views a cold
- * load never draws became chunks of their own (`next/page/Chunks.ts`, finding W-8), with about 2%
+ * load never draws became chunks of their own (`page/Chunks.ts`, finding W-8), with about 2%
  * headroom. ADR 0021 states the same number.
  *
  * What earns a raise: a named feature drawn on a thread list or a thread's first page, which
@@ -44,30 +44,30 @@ const DEFERRED: ReadonlyArray<{
   readonly view: string;
   readonly module: string;
 }> = [
-  { view: "the settings page", module: "src/next/settings/View.ts" },
-  { view: "the settings page's push switch", module: "src/next/push/View.ts" },
+  { view: "the settings page", module: "src/settings/View.ts" },
+  { view: "the settings page's push switch", module: "src/push/View.ts" },
   {
     view: "the usage page and its budget forms",
-    module: "src/next/meters/UsageView.ts",
+    module: "src/meters/UsageView.ts",
   },
   {
     view: "the model picker and the composer's menus",
     module: "src/composer/Popovers.ts",
   },
-  { view: "the add-project picker", module: "src/next/shell/AddProject.ts" },
-  { view: "the work panel", module: "src/next/shell/WorkPanel.ts" },
-  { view: "the goal panel", module: "src/next/shell/GoalPanel.ts" },
-  { view: "the refresh confirm", module: "src/next/shell/Refresh.ts" },
+  { view: "the add-project picker", module: "src/shell/AddProject.ts" },
+  { view: "the work panel", module: "src/shell/WorkPanel.ts" },
+  { view: "the goal panel", module: "src/shell/GoalPanel.ts" },
+  { view: "the refresh confirm", module: "src/shell/Refresh.ts" },
   {
     view: "the rename and remove dialog",
-    module: "src/next/shell/ManageDialog.ts",
+    module: "src/shell/ManageDialog.ts",
   },
   { view: "the diff panel", module: "src/diff/View.ts" },
   { view: "syntax highlighting", module: "node_modules/@shikijs/core/" },
 ];
 
 /** The dev-only look catalogue's folder, as a manifest key starts. */
-const LOOK_CATALOGUE_FOLDER = "src/next/ui/catalogue/";
+const LOOK_CATALOGUE_FOLDER = "src/ui/catalogue/";
 
 /** The attribute only the look catalogue's view writes (`data-look-catalogue`). */
 const LOOK_CATALOGUE_MARKER = "look-catalogue";
@@ -328,7 +328,7 @@ describe("the bundle budget", () => {
           );
         }
 
-        // The look catalogue (`next/ui/catalogue`, `/__look`) is for the dev server only: no
+        // The look catalogue (`ui/catalogue`, `/__look`) is for the dev server only: no
         // chunk comes from its folder and no emitted file carries its marker.
         assert.deepStrictEqual(
           Object.keys(manifest).filter((key) =>

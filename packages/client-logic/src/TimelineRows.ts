@@ -121,7 +121,7 @@ type RowContent =
       readonly createdAt: number;
       readonly turnId: string;
       readonly label: string;
-      /** The hidden work's tally ("4 edits · 9 reads"), drawn by the `next` fold line. */
+      /** The hidden work's tally ("4 edits · 9 reads"), drawn by the fold line. */
       readonly tally: ReadonlyArray<FoldTallyPart>;
       readonly expanded: boolean;
     }

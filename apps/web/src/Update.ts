@@ -13,6 +13,14 @@ import type { Runtime } from "foldkit";
 import { UrlRequest } from "foldkit/navigation";
 import { modifyFields } from "foldkit/struct";
 
+import type { Message as RequestCardMessage } from "./card/Message.ts";
+import { OutMessage as RequestCardOutMessage } from "./card/Message.ts";
+import {
+  approvalsDocumentOf,
+  initial as initialRequestCard,
+} from "./card/Model.ts";
+import type { CardContext, Model as RequestCardModel } from "./card/Model.ts";
+import { requestCard as RequestCard } from "./card/Update.ts";
 import {
   CheckServerBuild,
   LoadExternal,
@@ -56,32 +64,12 @@ import {
   woke,
 } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
+import type { Message as MetersMessage } from "./meters/Message.ts";
+import { initial as initialMeters } from "./meters/Model.ts";
+import type { MetersPage, Model as MetersModel } from "./meters/Model.ts";
+import { meters as Meters } from "./meters/Update.ts";
 import type { Flags, Model, SentTurn } from "./Model.ts";
-import type { Message as RequestCardMessage } from "./next/card/Message.ts";
-import { OutMessage as RequestCardOutMessage } from "./next/card/Message.ts";
-import {
-  approvalsDocumentOf,
-  initial as initialRequestCard,
-} from "./next/card/Model.ts";
-import type {
-  CardContext,
-  Model as RequestCardModel,
-} from "./next/card/Model.ts";
-import { requestCard as RequestCard } from "./next/card/Update.ts";
-import type { Message as MetersMessage } from "./next/meters/Message.ts";
-import { initial as initialMeters } from "./next/meters/Model.ts";
-import type { MetersPage, Model as MetersModel } from "./next/meters/Model.ts";
-import { meters as Meters } from "./next/meters/Update.ts";
-import * as Chunks from "./next/page/Chunks.ts";
-import * as Hold from "./next/shell/Hold.ts";
-import { OutMessage as NextShellOutMessage } from "./next/shell/Message.ts";
-import type { Message as NextShellMessage } from "./next/shell/Message.ts";
-import { initial as initialNextShell } from "./next/shell/Model.ts";
-import type {
-  Model as NextShellModel,
-  ShellContext as NextShellContext,
-} from "./next/shell/Model.ts";
-import * as NextShell from "./next/shell/Update.ts";
+import * as Chunks from "./page/Chunks.ts";
 import * as Thread from "./page/thread/index.ts";
 import { pushContextOf, samePushContext } from "./push/Context.ts";
 import { OutMessage as PushOutMessage } from "./push/Message.ts";
@@ -106,7 +94,16 @@ import {
   inform as informSettingsModel,
   update as updateSettings,
 } from "./settings/Update.ts";
+import * as Hold from "./shell/Hold.ts";
+import { OutMessage as NextShellOutMessage } from "./shell/Message.ts";
+import type { Message as NextShellMessage } from "./shell/Message.ts";
+import { initial as initialNextShell } from "./shell/Model.ts";
+import type {
+  Model as NextShellModel,
+  ShellContext as NextShellContext,
+} from "./shell/Model.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
+import * as NextShell from "./shell/Update.ts";
 import { threadRowOf } from "./ThreadRow.ts";
 import type { QueuedSend } from "./timeline/Model.ts";
 import { promptKey, sameSends } from "./timeline/Model.ts";
@@ -1189,7 +1186,7 @@ const followLaunches: Step = (model) =>
   });
 
 /**
- * What the `next` shell hands up: an item for the outbox (and where to go), a path to open, or a
+ * What the shell hands up: an item for the outbox (and where to go), a path to open, or a
  * new draft in the project the rail picked.
  */
 const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
@@ -1253,7 +1250,7 @@ const informNextShell = Update.foldChild({
   toParentMessage: toGotNextShellMessage,
 });
 
-/** Tells the `next` shell the shell, the route, the connection and the clock, when they changed. */
+/** Tells the shell the shell, the route, the connection and the clock, when they changed. */
 const syncNextShell: Step = (model) => {
   const current = model.nextShell.context;
 
@@ -1321,7 +1318,7 @@ const foldScratchThreadMessage = Update.foldChild({
 });
 
 /**
- * Tells the scratch thread's page which thread the `next` shell's overlay shows: its scratch thread
+ * Tells the scratch thread's page which thread the shell's overlay shows: its scratch thread
  * while the overlay is open, none while it is hidden, so a hidden overlay holds no stream.
  */
 const syncScratchThread: Step = (current) => {

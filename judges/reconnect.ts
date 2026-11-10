@@ -317,7 +317,7 @@ page.on("websocket", (socket) => {
   });
 });
 
-// The shell's connection mark (`next/shell/ConnectionMark.ts`) is visually hidden while Live, so the
+// The shell's connection mark (`shell/ConnectionMark.ts`) is visually hidden while Live, so the
 // Live waits ask for it attached, not visible; the mark shows while the socket is down.
 const live = '[data-testid="connection-state"][data-state="Live"]';
 

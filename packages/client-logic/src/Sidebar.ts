@@ -8,7 +8,7 @@
 // partition stays for the day an inbox comes back, and the thread-state judge reads it. Removed
 // with the classic sidebar: settled paging, receding rows, search and its highlights, preferred-id
 // ordering, where to go after a row leaves, the row accessibility label, and the project monogram
-// and colour. Added: the `next` sidebar's managed list in the work panel's shape, asking rows first
+// and colour. Added: the sidebar's managed list in the work panel's shape, asking rows first
 // and the resting ones apart (`managedGroupsOf`, U-9); the shell's Previous and Next thread walk its
 // drawn rows with `resolveAdjacentThreadId`.
 //
@@ -164,7 +164,7 @@ export const resolveAdjacentThreadId = <T>(input: {
   });
 };
 
-/** A `next` sidebar's managed list in the work panel's shape (U-9). */
+/** A sidebar's managed list in the work panel's shape (U-9). */
 export interface ManagedGroups<Row> {
   /** Rows that ask the user first, then the other live ones (working, waiting, held). */
   readonly live: ReadonlyArray<Row>;

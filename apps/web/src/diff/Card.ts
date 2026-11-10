@@ -39,7 +39,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { File, FileDiff, FolderOpen } from "lucide";
 
 import { icon } from "../composer/Icon.ts";
-import { button, buttonDefaults } from "../ui/Button.ts";
+import { button, buttonDefaults } from "./PanelButton.ts";
 
 /** What the card shows and the Message it sends to open the diff. */
 export interface ChangedFilesCardInput<Message> {

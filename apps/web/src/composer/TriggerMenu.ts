@@ -4,8 +4,8 @@
 // lines, and the listbox labels. Changed: Cairn's suggestions are its `/model` command, pi skills
 // (`/skill:<name>` and `$<name>`), the brain's file search and, for `/model <query>`, the models
 // themselves; there are no pull requests, threads or provider commands. The rows are computed here
-// from the Model, so update and view read the same list; the `next` composer draws the drawer
-// (`next/composer/TriggerMenu.ts`), since the classic one went with the classic views (W-6).
+// from the Model, so update and view read the same list; the composer draws the drawer
+// (`composer/TriggerMenuView.ts`), since the classic one went with the classic views (W-6).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //

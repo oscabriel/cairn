@@ -105,7 +105,7 @@ export interface TurnFold {
   readonly createdAt: number;
   readonly hiddenEntryIds: ReadonlySet<string>;
   readonly label: string;
-  /** What the hidden work was, counted by kind (`FoldTally.ts`); the `next` fold line shows it. */
+  /** What the hidden work was, counted by kind (`FoldTally.ts`); the fold line shows it. */
   readonly tally: ReadonlyArray<FoldTallyPart>;
 }
 

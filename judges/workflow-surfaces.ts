@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one step after another, on purpose */
 // The workflow surfaces judge (plan 6F, the behaviour scripts `launch-approval` and `steps`;
-// surfaces note "Judges", S7 and S8; ADR 0032): the real web client on the `next` views
+// surfaces note "Judges", S7 and S8; ADR 0032): the real web client
 // over a real in-process brain on the scripted harness (judges/fixtures/parity/
 // CairnApp.ts with the proposing parent of judges/fixtures/workflows/LaunchBrain.ts, whose
 // `workflow_plan` asks the launch approval as a brief and plays the workflow's ledger, and whose

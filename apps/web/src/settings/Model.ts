@@ -1,7 +1,7 @@
 // The settings page's state: what the root tells it (the connection, whether the page is open, the
 // projects), this device's settings, and what the brain answered for each section. Plan windows
 // arrive on their own stream whenever a client exists, because the composer's meter reads them on
-// every page. It also tracks the `next` views' chunk, since the `ui` setting it follows lives here.
+// every page.
 
 import { ExecutorStatus } from "@cairn/protocol/Executor";
 import { ProjectId } from "@cairn/protocol/Ids";

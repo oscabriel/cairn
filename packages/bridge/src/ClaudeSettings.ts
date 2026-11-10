@@ -25,6 +25,12 @@ export interface ClaudeSettingsValue {
   readonly liveChildren: number;
   /** A generating child silent this long is stalled, unless it waits on a tool or announced a retry. */
   readonly stallAfter: Duration.Duration;
+  /**
+   * How long a child held on a tool call, with no provider call open, keeps living. Past it the
+   * child is killed and its session is resumed from the stamp at the next call, so a stop that
+   * never reached the bridge cannot keep a child for Claude Code's four-hour tool timeout (T-2).
+   */
+  readonly heldTimeToLive: Duration.Duration;
 }
 
 /** Settings of the Claude bridge; defaults suit the brain on the Beelink. */
@@ -39,6 +45,7 @@ export const ClaudeSettings = Context.Reference<ClaudeSettingsValue>(
       idleTimeToLive: Duration.minutes(10),
       liveChildren: 12,
       stallAfter: Duration.seconds(90),
+      heldTimeToLive: Duration.minutes(30),
     }),
   }
 );

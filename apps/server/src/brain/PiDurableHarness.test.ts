@@ -13,7 +13,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import type { Harness } from "@earendil-works/pi-durable";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import {
   Array as Arr,
   Context,
@@ -60,6 +60,7 @@ import { FauxModels } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
 import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
+import { PendingApprovals } from "./PendingApprovals.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
 
@@ -382,6 +383,7 @@ const openBrain = (dataDir: string) =>
     const context = yield* Layer.build(harnessLayer(dataDir));
     const seam = Context.get(context, HarnessSeam);
     const brain = Context.get(context, Brain);
+    const pending = Context.get(context, PendingApprovals);
     const { faux } = Context.get(context, FauxModels);
     const run = Effect.runPromiseWith(yield* Effect.context());
     const events = yield* Ref.make<ReadonlyArray<HarnessEvent>>([]);
@@ -393,7 +395,7 @@ const openBrain = (dataDir: string) =>
       Effect.forkScoped
     );
 
-    return { seam, brain, faux, run, events };
+    return { seam, brain, pending, faux, run, events };
   });
 
 /** Ensures the thread and returns its pi-durable conversation id. */
@@ -896,5 +898,90 @@ describe("PiDurableHarness inspect", () => {
         )
       ),
     30_000
+  );
+});
+
+describe("the boot's approval reads (T-6)", () => {
+  it.live(
+    "one scan of every conversation serves both boot sweeps and every inspect; a record committed after it is still found",
+    () =>
+      withDataDir((dataDir) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const THREADS = 40;
+            const { seam, brain, pending } = yield* openBrain(dataDir);
+
+            const conversations = yield* Effect.forEach(
+              Arr.range(1, THREADS),
+              (n) =>
+                Effect.map(
+                  seam.ensureThread({
+                    threadId: ThreadId.make(
+                      `0190f0c0-0000-7000-8000-${String(n).padStart(12, "0")}`
+                    ),
+                    projectId: ProjectId.make("boot-reads-test"),
+                    model: FAUX_MODEL,
+                    thinkingLevel: "off",
+                    cwd: process.cwd(),
+                    instructions: Option.none(),
+                    runtimeMode: "full-access",
+                  }),
+                  ({ conversationId }) => piConversationId(conversationId)
+                )
+            );
+
+            const { harness } = yield* Effect.orDie(brain.session);
+
+            // Every read of `cairn.approvals`, whoever reads it.
+            const reads = vi.spyOn(harness, "snapshot");
+
+            const approvalReads = () =>
+              reads.mock.calls.filter(([token]) => Object.is(token, Approvals))
+                .length;
+
+            yield* Effect.gen(function* () {
+              yield* cancelAbandonedApprovalsAtBoot;
+              yield* expireLapsedApprovalsAtBoot;
+            }).pipe(
+              Effect.provideService(Brain, brain),
+              Effect.provideService(PendingApprovals, pending)
+            );
+            yield* brain.resume;
+            yield* seam.inspect;
+            yield* seam.inspect;
+
+            const afterBoot = approvalReads();
+
+            // A record that lands after the scan, in an idle thread: the commits keep the scan.
+            const target = conversations.at(-1);
+
+            assert.isDefined(target);
+
+            yield* Effect.promise(async () => {
+              await harness.commit(async (tx) => {
+                const { items } = await tx.doc(Approvals, target);
+
+                items["criteria-late"] = proposedCriteria(
+                  "criteria-late",
+                  Number.MAX_SAFE_INTEGER
+                );
+              }, BACKGROUND_CONTEXT);
+            });
+
+            const states = yield* seam.inspect;
+
+            assert.deepStrictEqual(
+              [
+                afterBoot,
+                states.flatMap((state) =>
+                  state.pendingApprovals.map((record) => record.id)
+                ),
+              ],
+              [THREADS, ["criteria-late"]]
+            );
+          })
+        )
+      ),
+    60_000
   );
 });

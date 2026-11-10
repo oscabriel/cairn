@@ -1,7 +1,8 @@
-// What else runs when a thread is stopped, after the harness stopped its run. A held Claude query
-// outlives its generation signal, so the bridge's explicit abort hooks in here (it arrives with the
-// bridge wiring); the default runs nothing. A hook's failure is logged, never the stop's failure:
-// the run is already stopped.
+// What else runs when a thread's run was stopped: `Threads` runs the hooks for each RunTerminal
+// that ends a run `interrupted`, whoever stopped it (a user, the budget stopper, a workflow's stop,
+// `subagent_stop`). A held Claude query outlives its generation signal, so the bridge's explicit
+// abort hooks in here (it arrives with the bridge wiring); the default runs nothing. A hook's
+// failure is logged, never the stop's failure: the run is already stopped.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Context, Effect, Layer } from "effect";

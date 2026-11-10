@@ -2,7 +2,12 @@
 // change the model or thinking level, and answer an approval. Each is a thin call into the harness
 // seam, which keeps them idempotent (a turn by its request id) and durable. A turn sent while its
 // thread launches follows the launch to its end. Stop keeps queued inputs unless asked to clear
-// them (plan D16), then runs the stop hooks; a stop during the launch cancels the launch.
+// them (plan D16); a stop during the launch cancels the launch.
+//
+// The stop hooks run from the one place every stop passes: each RunTerminal that ends a run
+// `interrupted`. A stop that never comes through here (the budget stopper's `seam.stop`, a
+// workflow's stop, the model's `subagent_stop`, a stop whose caller went away before it finished)
+// still reaches the bridge that way, and so does every descendant a Stop all stopped (T-2).
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type {
@@ -15,13 +20,16 @@ import type {
   WithdrawResult,
 } from "@cairn/protocol/Thread";
 import {
+  Cause,
   Clock,
   Context,
   Duration,
   Effect,
   Layer,
   Option,
+  Predicate,
   Schema,
+  Stream,
 } from "effect";
 
 import type { HarnessError } from "../brain/HarnessSeam.ts";
@@ -256,18 +264,11 @@ export class Threads extends Context.Service<
           () => "keep" as const
         );
 
-        const descendants = yield* seam.stop(input.threadId, {
+        // Each run this ends (the thread's, and with Stop all each working descendant's) ends
+        // `interrupted`, and that RunTerminal runs the stopped thread's hooks.
+        yield* seam.stop(input.threadId, {
           clearQueue: input.clearQueue,
           subagents,
-        });
-
-        yield* stopHooks.run(input.threadId);
-
-        // Stop all stopped those descendants' runs too, so each gets its own hooks (a child on the
-        // bridge holds a Claude Code session of its own); a settled child the harness left alone,
-        // and a working one under it, keep theirs.
-        yield* Effect.forEach(descendants, (child) => stopHooks.run(child), {
-          discard: true,
         });
       });
 
@@ -341,6 +342,32 @@ export class Threads extends Context.Service<
           launch: input.launch,
         });
       });
+
+      // A hook's failure is logged by `StopHooks`; a defect here is logged too, and the loop goes
+      // on, so one bad stop cannot leave every later held child alive.
+      yield* seam.events.pipe(
+        Stream.filter(
+          (event) =>
+            Predicate.isTagged(event, "RunTerminal") &&
+            event.status === "interrupted"
+        ),
+        Stream.runForEach((event) =>
+          stopHooks.run(event.threadId).pipe(
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) =>
+                Effect.logError("stop hooks failed").pipe(
+                  Effect.annotateLogs({
+                    event: "stop_hooks_defect",
+                    threadId: event.threadId,
+                    cause: Cause.pretty(cause),
+                  })
+                )
+            )
+          )
+        ),
+        Effect.forkScoped({ startImmediately: true })
+      );
 
       return Threads.of({ send, stop, withdraw, configure, respond });
     })

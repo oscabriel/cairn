@@ -8,7 +8,8 @@
 // closes. Changed: one conversation per pi provider session id with no module state; an Effect state
 // machine whose mutations run under one lock; the resume decision table (`ClaudeResume`) replaces
 // v1's native resume, fork and rebuild; a finished child stays alive and takes the next prompt; a
-// generating child holds a `ClaudeSlots` permit; a stall watchdog fails a silent turn.
+// generating child holds a `ClaudeSlots` permit; a stall watchdog fails a silent turn, and a child
+// held on a tool call with no provider call open dies at its own time to live.
 //
 // MIT License
 //
@@ -137,6 +138,11 @@ export interface ClaudeConversation {
   call(call: ConversationCall): Effect.Effect<void>;
   /** Kills the conversation's child, if it has one. */
   kill(kind: Exclude<KillKind, "failed">): Effect.Effect<void>;
+  /**
+   * Kills the child for a stopped thread, unless a provider call is open on it: that call ends by
+   * its own abort signal, and one that opened after the stop belongs to a later run (T-2).
+   */
+  readonly stop: Effect.Effect<void>;
   /** Whether a child is alive now. */
   readonly alive: Effect.Effect<boolean>;
 }
@@ -164,6 +170,8 @@ interface Child {
   permit: boolean;
   turn: Option.Option<Deferred.Deferred<TurnOutcome>>;
   heldWait: Option.Option<Deferred.Deferred<true>>;
+  /** When the child was last held on a tool call, in clock millis. */
+  heldSince: number;
   /** The current turn's gate in front of pi's sink: it holds a reply's `done` until the entry is written. */
   doneGate: Option.Option<DoneGate>;
   lastActivity: number;
@@ -341,6 +349,7 @@ export const openConversation = Effect.fnUntraced(function* (
 
   const now = () => clock.currentTimeMillisUnsafe();
   const stallMs = Duration.toMillis(settings.stallAfter);
+  const heldMs = Duration.toMillis(settings.heldTimeToLive);
 
   let current: Option.Option<Child> = Option.none();
   const uncertain = new Set<string>();
@@ -544,6 +553,7 @@ export const openConversation = Effect.fnUntraced(function* (
 
       if (end.kind === "tool-use") {
         child.heldWait = Option.some(yield* Deferred.make<true>());
+        child.heldSince = now();
         yield* settleTurn(child, "tool-use");
 
         const orphans = orphansOf(child);
@@ -735,6 +745,28 @@ export const openConversation = Effect.fnUntraced(function* (
                 })
               );
               yield* killChild(child, "failed", STREAM_STALLED_TEXT);
+
+              return;
+            }
+
+            // A child held on a tool call with no provider call open waits on pi alone. Its own
+            // deadline frees it if nothing ever delivers (a stop that missed the bridge); the next
+            // call resumes the session from the stamp (T-2).
+            const heldTooLong =
+              Option.isNone(child.killed) &&
+              Option.isSome(child.heldWait) &&
+              !child.stream.open &&
+              at - child.heldSince > heldMs;
+
+            if (heldTooLong) {
+              yield* Effect.logWarning("claude held child timed out").pipe(
+                Effect.annotateLogs({
+                  event: "claude_held_timeout",
+                  sessionId: deps.piSessionId,
+                  pendingToolUseIds: [...child.pendingCalls.keys()].join(","),
+                })
+              );
+              yield* killChild(child, "abort", "Operation aborted");
             }
           })
         );
@@ -839,6 +871,7 @@ export const openConversation = Effect.fnUntraced(function* (
         permit: false,
         turn: Option.none(),
         heldWait: Option.none(),
+        heldSince: 0,
         doneGate: Option.none(),
         lastActivity: now(),
         quietUntil: 0,
@@ -1387,6 +1420,13 @@ export const openConversation = Effect.fnUntraced(function* (
   return {
     call,
     kill: (kind) => locked(killCurrent(kind)),
+    stop: locked(
+      Effect.gen(function* () {
+        if (Option.isSome(current) && !current.value.stream.open) {
+          yield* killChild(current.value, "abort", "Operation aborted");
+        }
+      })
+    ),
     alive: locked(Effect.sync(() => Option.isSome(current))),
   } satisfies ClaudeConversation;
 });

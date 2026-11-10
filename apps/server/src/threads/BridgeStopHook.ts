@@ -1,8 +1,10 @@
 // The bridge's stop hook: a stopped thread's Claude Code children are killed. pi-durable aborts the
 // run's generation, but a child held on a tool call outlives it (its query waits for the tool's
-// result), so without this the child would keep its session and its memory until the idle time to
-// live. The killed sessions are forked on their next call, so the thread resumes natively. Runs
-// for both stops (keeping or clearing the queue); a thread with no live child is a no-op.
+// result, and holds its conversation so it is never evicted), so without this the child would keep
+// its session and its memory until the bridge's held time to live. The killed sessions are forked
+// on their next call, so the thread resumes natively. Runs for every interrupted run, whoever
+// stopped it; a thread with no live child is a no-op, and a child with a provider call open (a
+// later run's) is left to its own abort signal.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { Effect, Option } from "effect";

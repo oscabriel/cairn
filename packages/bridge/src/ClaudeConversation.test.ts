@@ -911,6 +911,78 @@ describe("held rounds pi is not in", () => {
   });
 });
 
+describe("a held child with no provider call open (T-2)", () => {
+  it.effect(
+    "is killed once it has waited the held time to live, and its handler is released",
+    () => {
+      const released: Array<ClaudeToolResult> = [];
+
+      const script: FakeScript = (io) =>
+        Effect.gen(function* () {
+          yield* io.nextPrompt;
+          yield* io.emit(
+            initEvent(SCRIPT_SESSION, ["mark"]),
+            ...toolTurn("m1", "u1", "toolu_1", "mark")
+          );
+          released.push(yield* io.callTool("mark", "toolu_1"));
+
+          return yield* Effect.never;
+        });
+
+      return Effect.gen(function* () {
+        const claude = yield* Claude;
+        const held = yield* call([system, user("mark it")]);
+
+        yield* settle;
+
+        const before = yield* claude.hasChild("conv-1");
+
+        // Steps, not one jump: the watchdog's 5 second sleep may not be registered yet.
+        for (let step = 0; step < 29; step += 1) {
+          yield* TestClock.adjust("1 minute");
+          yield* settle;
+        }
+
+        const beforeDeadline = yield* claude.hasChild("conv-1");
+
+        for (let step = 0; step < 2; step += 1) {
+          yield* TestClock.adjust("1 minute");
+          yield* settle;
+        }
+
+        yield* until(Effect.sync(() => released.length > 0));
+
+        expect([
+          held.stopReason,
+          before,
+          beforeDeadline,
+          yield* claude.hasChild("conv-1"),
+          released.map((result) => result.isError),
+        ]).toStrictEqual(["toolUse", true, true, false, [true]]);
+      }).pipe(Effect.provide(bridge([script])));
+    }
+  );
+
+  it.effect(
+    "a stop's abort leaves a child alone while a provider call is open on it: that call ends by its own signal",
+    () =>
+      Effect.gen(function* () {
+        const claude = yield* Claude;
+        const turn = yield* Effect.forkChild(call([system, user("hi")]));
+
+        yield* until(Effect.map(runs, (started) => started.length === 1));
+        yield* settle;
+        yield* claude.abortConversation("conv-1");
+        yield* settle;
+
+        expect([
+          yield* claude.hasChild("conv-1"),
+          turn.pollUnsafe() === undefined,
+        ]).toStrictEqual([true, true]);
+      }).pipe(Effect.provide(bridge([goesQuiet])))
+  );
+});
+
 describe("aborts", () => {
   it.effect(
     "kill a held tool call on an explicit abort, release its handler, and fork the session next time",

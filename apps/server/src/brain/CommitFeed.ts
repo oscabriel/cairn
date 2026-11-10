@@ -61,6 +61,7 @@ import type {
   TaskRecord,
 } from "@earendil-works/pi-durable";
 import {
+  Cause,
   Context,
   DateTime,
   Effect,
@@ -170,6 +171,8 @@ interface FeedState {
   readonly tallies: Map<PiConversationId, string>;
   /** Each goal thread's last goal tally, as JSON. */
   readonly goals: Map<PiConversationId, string>;
+  /** What the publication being read carried that fits no event, for its log line (T-4). */
+  readonly rejected: Array<string>;
 }
 
 const isRecord = (value: JsonValue | undefined): value is JsonObject =>
@@ -200,7 +203,27 @@ const usageTotals = (value: JsonObject | null) => {
   return { input, output };
 };
 
-const timeOf = (millis: number) => DateTime.makeUnsafe(millis);
+/** A commit's time: none for a value that is not one (an entry with no numeric timestamp). */
+const timeOf = (millis: number) => DateTime.make(millis);
+
+/**
+ * An event decoded from what a commit carried. A value that fits no event (a fractional token
+ * count, a time that is not one) is noted in `state.rejected` and makes no event: a validating
+ * `.make` would throw there and end the feed's fiber, and every thread's events with it (T-4).
+ */
+const fitted = <A>(
+  state: FeedState,
+  what: string,
+  event: Option.Option<A>
+): Array<A> => {
+  if (Option.isNone(event)) {
+    state.rejected.push(what);
+
+    return [];
+  }
+
+  return [event.value];
+};
 
 type RunStatus = (typeof RunTerminal.Type)["status"];
 
@@ -217,21 +240,33 @@ const taskEvents = (
   const events: Array<HarnessEvent> = [];
 
   if (task.kind === COMPACTION_TASK) {
+    const taskId = TaskId.makeOption(task.id);
+
     if (!state.startedCompactions.has(task.id)) {
       state.startedCompactions.add(task.id);
       events.push(
-        CompactionStarted.make({ threadId, taskId: TaskId.make(task.id) })
+        ...fitted(
+          state,
+          "CompactionStarted",
+          Option.flatMap(taskId, (id) =>
+            CompactionStarted.makeOption({ threadId, taskId: id })
+          )
+        )
       );
     }
 
     if (task.state.status === "terminal") {
+      const failed = task.state.outcome.status !== "completed";
+
       state.startedCompactions.delete(task.id);
       events.push(
-        CompactionEnded.make({
-          threadId,
-          taskId: TaskId.make(task.id),
-          failed: task.state.outcome.status !== "completed",
-        })
+        ...fitted(
+          state,
+          "CompactionEnded",
+          Option.flatMap(taskId, (id) =>
+            CompactionEnded.makeOption({ threadId, taskId: id, failed })
+          )
+        )
       );
     }
   }
@@ -248,44 +283,59 @@ const runEnd = (
   run: { readonly runId: number; readonly lastTaskId: number },
   ended: Option.Option<AnyTask>,
   now: number
-) => {
-  let status: RunStatus = "completed";
-  let failure = Option.none<RunFailureInfo>();
-  let at = now;
+): Array<HarnessEvent> => {
+  const ending = Option.flatMap(ended, (task) =>
+    task.state.status === "terminal"
+      ? Option.some({ outcome: task.state.outcome, at: task.endedAt ?? now })
+      : Option.none()
+  );
 
-  if (Option.isSome(ended) && ended.value.state.status === "terminal") {
-    const { outcome } = ended.value.state;
-
-    at = ended.value.endedAt ?? now;
-
-    if (outcome.status === "aborted") {
-      status = "interrupted";
-    } else if (outcome.status !== "completed") {
-      const detail = outcome.error?.detail;
-
-      const reason =
-        isRecord(detail) && Predicate.isString(detail.reason)
-          ? Option.some(detail.reason)
-          : Option.none<string>();
-
-      status = "failed";
-      failure = Option.some(
-        classifyRunFailure({
-          message: outcome.error?.message ?? outcome.reason ?? "",
-          reason,
-          at: timeOf(at),
-        })
-      );
-    }
-  }
-
-  return RunTerminal.make({
-    threadId,
-    runId: RunId.make(run.runId),
-    status,
-    failure,
-    at: timeOf(at),
+  const at = Option.match(ending, {
+    onNone: () => now,
+    onSome: (terminal) => terminal.at,
   });
+
+  const event = Option.flatMap(
+    Option.all({ runId: RunId.makeOption(run.runId), time: timeOf(at) }),
+    ({ runId, time }) => {
+      let status: RunStatus = "completed";
+      let failure = Option.none<RunFailureInfo>();
+
+      if (Option.isSome(ending)) {
+        const { outcome } = ending.value;
+
+        if (outcome.status === "aborted") {
+          status = "interrupted";
+        } else if (outcome.status !== "completed") {
+          const detail = outcome.error?.detail;
+
+          const reason =
+            isRecord(detail) && Predicate.isString(detail.reason)
+              ? Option.some(detail.reason)
+              : Option.none<string>();
+
+          status = "failed";
+          failure = Option.some(
+            classifyRunFailure({
+              message: outcome.error?.message ?? outcome.reason ?? "",
+              reason,
+              at: time,
+            })
+          );
+        }
+      }
+
+      return RunTerminal.makeOption({
+        threadId,
+        runId,
+        status,
+        failure,
+        at: time,
+      });
+    }
+  );
+
+  return fitted(state, "RunTerminal", event);
 };
 
 /** RunStarted and RunTerminal from one `pi.live` change. */
@@ -312,13 +362,17 @@ const liveEvents = (
         lastTaskId: taskId.value,
       });
 
-      return [
-        RunStarted.make({
-          threadId,
-          runId: RunId.make(taskId.value),
-          at: timeOf(now),
-        }),
-      ];
+      return fitted(
+        state,
+        "RunStarted",
+        Option.flatMap(
+          Option.all({
+            runId: RunId.makeOption(taskId.value),
+            at: timeOf(now),
+          }),
+          ({ runId, at }) => RunStarted.makeOption({ threadId, runId, at })
+        )
+      );
     }
 
     current.lastTaskId = taskId.value;
@@ -335,15 +389,13 @@ const liveEvents = (
 
     return last === undefined
       ? []
-      : [
-          runEnd(
-            state,
-            threadId,
-            { runId: last.id, lastTaskId: last.id },
-            Option.some(last),
-            now
-          ),
-        ];
+      : runEnd(
+          state,
+          threadId,
+          { runId: last.id, lastTaskId: last.id },
+          Option.some(last),
+          now
+        );
   }
 
   state.runs.delete(conversationId);
@@ -358,7 +410,7 @@ const liveEvents = (
       )
   );
 
-  return [runEnd(state, threadId, current, ended, now)];
+  return runEnd(state, threadId, current, ended, now);
 };
 
 /**
@@ -387,12 +439,16 @@ const subagentEvents = (
       ) {
         state.subagents.set(at, status.value);
         events.push(
-          SubagentUpdated.make({
-            threadId,
-            child: child.value,
-            status: status.value,
-            tally,
-          })
+          ...fitted(
+            state,
+            "SubagentUpdated",
+            SubagentUpdated.makeOption({
+              threadId,
+              child: child.value,
+              status: status.value,
+              tally,
+            })
+          )
         );
       }
     }
@@ -401,7 +457,13 @@ const subagentEvents = (
   const counted = JSON.stringify(tally);
 
   if (events.length === 0 && state.tallies.get(conversationId) !== counted) {
-    events.push(SubagentTallyUpdated.make({ threadId, tally }));
+    events.push(
+      ...fitted(
+        state,
+        "SubagentTallyUpdated",
+        SubagentTallyUpdated.makeOption({ threadId, tally })
+      )
+    );
   }
 
   state.tallies.set(conversationId, counted);
@@ -425,7 +487,11 @@ const goalEvents = (
 
   state.goals.set(conversationId, counted);
 
-  return [GoalUpdated.make({ threadId, tally })];
+  return fitted(
+    state,
+    "GoalUpdated",
+    GoalUpdated.makeOption({ threadId, tally })
+  );
 };
 
 /**
@@ -461,19 +527,25 @@ const documentEvents = (
 
     state.queueLengths.set(conversationId, length);
 
-    return [QueueChanged.make({ threadId, length })];
+    return fitted(
+      state,
+      "QueueChanged",
+      QueueChanged.makeOption({ threadId, length })
+    );
   }
 
   if (kind === "pi.usage") {
     const totals = usageTotals(value);
 
-    return [
-      UsageUpdated.make({
+    return fitted(
+      state,
+      "UsageUpdated",
+      UsageUpdated.makeOption({
         threadId,
         inputTokens: totals.input,
         outputTokens: totals.output,
-      }),
-    ];
+      })
+    );
   }
 
   if (kind === GOAL_DOCUMENT) {
@@ -513,14 +585,18 @@ const documentEvents = (
             `${status.value}:${toParent}`
           );
           events.push(
-            RuntimeRequestUpdated.make({
-              threadId,
-              id: id.value,
-              kind: requestKind.value,
-              status: status.value,
-              route: record.route === "parent" ? "parent" : undefined,
-              origin: Option.getOrUndefined(origin),
-            })
+            ...fitted(
+              state,
+              "RuntimeRequestUpdated",
+              RuntimeRequestUpdated.makeOption({
+                threadId,
+                id: id.value,
+                kind: requestKind.value,
+                status: status.value,
+                route: record.route === "parent" ? "parent" : undefined,
+                origin: Option.getOrUndefined(origin),
+              })
+            )
           );
         }
       }
@@ -584,13 +660,25 @@ const ensuredEvents = (
       const threadId = decodeThreadId(documentValue(change)?.threadId);
 
       if (Option.isSome(threadId)) {
+        const parent = Option.fromUndefinedOr(
+          parents.get(change.conversationId)
+        );
+
         state.threads.set(change.conversationId, threadId);
         ensured.push(
-          ThreadEnsured.make({
-            threadId: threadId.value,
-            conversationId: ConversationId.make(change.conversationId),
-            parent: Option.fromUndefinedOr(parents.get(change.conversationId)),
-          })
+          ...fitted(
+            state,
+            "ThreadEnsured",
+            Option.flatMap(
+              ConversationId.makeOption(change.conversationId),
+              (conversationId) =>
+                ThreadEnsured.makeOption({
+                  threadId: threadId.value,
+                  conversationId,
+                  parent,
+                })
+            )
+          )
         );
       }
     }
@@ -644,15 +732,22 @@ const publicationEvents = (
       const message = entry.model?.[0];
 
       if (Option.isSome(role) && message !== undefined) {
-        messages.push(
-          MessageCommitted.make({
-            threadId: threadId.value,
-            entryId: EntryId.make(entry.id),
-            role: role.value,
-            text: messageText(message),
+        const event = Option.flatMap(
+          Option.all({
+            entryId: EntryId.makeOption(entry.id),
             at: timeOf(message.timestamp),
-          })
+          }),
+          ({ entryId, at }) =>
+            MessageCommitted.makeOption({
+              threadId: threadId.value,
+              entryId,
+              role: role.value,
+              text: messageText(message),
+              at,
+            })
         );
+
+        messages.push(...fitted(state, "MessageCommitted", event));
       }
     } else if (
       change.type === "document" &&
@@ -708,6 +803,7 @@ export class CommitFeed extends Context.Service<
         subagents: new Map(),
         tallies: new Map(),
         goals: new Map(),
+        rejected: [],
       };
 
       // Conversations this commit names that the feed has not met: read their metadata first.
@@ -764,15 +860,48 @@ export class CommitFeed extends Context.Service<
         );
       });
 
+      const consume = Effect.fnUntraced(function* (
+        session: BrainSession,
+        publication: CommitPublication
+      ) {
+        yield* learn(session, publication);
+
+        state.rejected.length = 0;
+
+        const events = publicationEvents(state, publication, brain.now());
+
+        if (state.rejected.length > 0) {
+          yield* Effect.logWarning(
+            "commit feed dropped values that fit no event"
+          ).pipe(
+            Effect.annotateLogs({
+              event: "commit_feed_value_rejected",
+              seq: publication.seq,
+              rejected: state.rejected.join(","),
+            })
+          );
+        }
+
+        yield* PubSub.publishAll(hub, events);
+      });
+
+      // Supervised per commit: whatever one commit throws is logged with its sequence and the
+      // loop takes the next, so one bad value cannot silence every thread until a restart (T-4).
       yield* Queue.take(inbox).pipe(
         Effect.flatMap(({ session, publication }) =>
-          Effect.gen(function* () {
-            yield* learn(session, publication);
-
-            const events = publicationEvents(state, publication, brain.now());
-
-            yield* PubSub.publishAll(hub, events);
-          })
+          consume(session, publication).pipe(
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) =>
+                Effect.logError("commit feed skipped a commit").pipe(
+                  Effect.annotateLogs({
+                    event: "commit_feed_commit_skipped",
+                    seq: publication.seq,
+                    cause: Cause.pretty(cause),
+                  })
+                )
+            )
+          )
         ),
         Effect.forever,
         Effect.forkScoped

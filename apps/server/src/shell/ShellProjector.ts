@@ -19,7 +19,11 @@
 // registry counted after their commit, and the boot reconcile counts the registry again for every
 // row with a child row (ADR 0028). A goal thread's `goal` tally is set from each GoalUpdated, which
 // carries the goal counted after its commit, and the boot reconcile counts the goal document again
-// for every row with no lineage (a subagent holds no goal; ADR 0026).
+// for every row with no lineage (a subagent holds no goal; ADR 0026) whose goal can have moved: one
+// running at the crash or named by `inspect()`, or one that holds a goal already (a judge or a
+// user's mark changes it while the thread is idle). Those reads are one document each
+// (`seam.document`); only a row that can have changed mounts its view, for its newest message
+// (T-6).
 //
 // For the durability judge only: `CAIRN_JUDGE_HOLD_PROJECTOR_MS` makes the projector log
 // `projector_holding` and wait that long before committing a run's end, so a `kill -9` can land
@@ -43,6 +47,7 @@ import { NO_SUBAGENTS, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
 import type { ConversationView } from "@cairn/protocol/Thread";
 import {
   Array as Arr,
+  Cause,
   Clock,
   Config,
   Context,
@@ -684,6 +689,28 @@ const readFailed = (failure: ShellStoreError) =>
 
 const emptyReport: ReconcileReport = { threads: 0, live: 0, patched: 0 };
 
+/**
+ * One event or signal the projector cannot apply (a defect) is logged and skipped, so the loop goes
+ * on and every other row keeps updating (T-4); the boot reconcile repairs the row.
+ */
+const skipDefect =
+  (tag: string, threadId: ThreadId) =>
+  <E, R>(effect: Effect.Effect<void, E, R>) =>
+    effect.pipe(
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logError("projector skipped an event").pipe(
+            Effect.annotateLogs({
+              event: "projector_event_skipped",
+              tag,
+              threadId,
+              cause: Cause.pretty(cause),
+            })
+          )
+      )
+    );
+
 const failedReconcile =
   (operation: string) => (failure: HarnessError | ShellStoreError) =>
     Effect.logError("projector reconcile failed").pipe(
@@ -970,7 +997,8 @@ export class ShellProjector extends Context.Service<
           );
         }).pipe(
           Effect.catchTag("ShellStoreError", readFailed),
-          lock.withPermits(1)
+          lock.withPermits(1),
+          skipDefect(event._tag, event.threadId)
         );
 
       const onSignal = (signal: ProjectorSignal) =>
@@ -978,7 +1006,8 @@ export class ShellProjector extends Context.Service<
           applySignal(projection, signal)
         ).pipe(
           Effect.catchTag("ShellStoreError", readFailed),
-          lock.withPermits(1)
+          lock.withPermits(1),
+          skipDefect("ProjectorSignal", signal.threadId)
         );
 
       // One pass over the threads pending now: a failed flush puts its thread back in `pending`,
@@ -1007,6 +1036,16 @@ export class ShellProjector extends Context.Service<
           Effect.timeout("2 seconds"),
           Effect.orElseSucceed(() => Option.none<ConversationView>())
         );
+
+      /**
+       * One document of a thread, read once with no watch (the inner option is none while the
+       * thread never wrote it); none when it cannot be read within two seconds, and the row's
+       * field is left as it is.
+       */
+      const documentOf = (threadId: ThreadId, kind: string) =>
+        harness
+          .document(threadId, kind)
+          .pipe(Effect.timeout("2 seconds"), Effect.option);
 
       const reconcileThreads = Effect.fnUntraced(function* (
         only: Option.Option<ThreadId>,
@@ -1068,28 +1107,40 @@ export class ShellProjector extends Context.Service<
             (parents.has(threadId) ||
               !sameTally(row.shell.subagents, NO_SUBAGENTS));
 
-          // A goal a crash cut off from its row: only a thread with no lineage holds one.
-          const readGoal = boot && Option.isNone(row.shell.lineage);
+          // A goal a crash cut off from its row: only a thread with no lineage holds one, and only
+          // one that ran, or holds a goal a judge or a mark can move, can have changed.
+          const readGoal =
+            boot &&
+            Option.isNone(row.shell.lineage) &&
+            (mayHaveMissed || Option.isSome(row.shell.goal));
 
-          const view =
-            readMessage || readTally || readGoal
-              ? yield* snapshotOf(threadId)
-              : Option.none<ConversationView>();
+          if (readGoal) {
+            const goal = yield* documentOf(threadId, GOAL_DOCUMENT);
 
-          if (readGoal && Option.isSome(view)) {
-            projection = withFields(projection, {
-              goal: goalTallyOf(goalOf(view.value.docs[GOAL_DOCUMENT])),
-            });
+            if (Option.isSome(goal)) {
+              projection = withFields(projection, {
+                goal: goalTallyOf(goalOf(Option.getOrUndefined(goal.value))),
+              });
+            }
           }
 
-          if (readTally && Option.isSome(view)) {
-            projection = withFields(projection, {
-              subagents: tallyOfRegistry(view.value.docs[SUBAGENTS_DOCUMENT]),
-            });
+          if (readTally) {
+            const registry = yield* documentOf(threadId, SUBAGENTS_DOCUMENT);
+
+            if (Option.isSome(registry)) {
+              projection = withFields(projection, {
+                subagents: tallyOfRegistry(
+                  Option.getOrUndefined(registry.value)
+                ),
+              });
+            }
           }
 
           if (readMessage) {
-            const message = Option.flatMap(view, latestMessageOf);
+            const message = Option.flatMap(
+              yield* snapshotOf(threadId),
+              latestMessageOf
+            );
 
             if (Option.isSome(message)) {
               projection = withFields(projection, {

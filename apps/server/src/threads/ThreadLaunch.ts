@@ -80,7 +80,6 @@ import { isLiveThread, ThreadRows } from "../shell/ThreadRows.ts";
 import { BranchNames } from "./BranchNames.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import type { LaunchRow, LaunchStoreError } from "./LaunchStore.ts";
-import { StopHooks } from "./StopHooks.ts";
 import { placeholderTitle, ThreadTitles } from "./ThreadTitles.ts";
 import { logTurnSubmitted, TurnContent } from "./TurnContent.ts";
 import type { TurnContentError } from "./TurnContent.ts";
@@ -223,7 +222,7 @@ export class ThreadLaunch extends Context.Service<
   }
 >()("cairn/server/threads/ThreadLaunch") {
   /**
-   * Needs the shell store, `LaunchStore`, the projects services, `HarnessSeam`, `StopHooks` and
+   * Needs the shell store, `LaunchStore`, the projects services, `HarnessSeam` and
    * `TurnContent`.
    */
   static readonly layerNoDeps = Layer.effect(
@@ -238,7 +237,6 @@ export class ThreadLaunch extends Context.Service<
       const scratch = yield* ScratchProject;
       const worktrees = yield* Worktrees;
       const seam = yield* HarnessSeam;
-      const stopHooks = yield* StopHooks;
       const turns = yield* TurnContent;
       const titles = yield* ThreadTitles;
       const branchNames = yield* BranchNames;
@@ -973,14 +971,10 @@ export class ThreadLaunch extends Context.Service<
             return;
           }
 
-          const descendants = yield* seam.stop(threadId, {
+          // Its interrupted runs reach the stop hooks through `Threads` (T-2).
+          yield* seam.stop(threadId, {
             clearQueue: true,
             subagents: "stop",
-          });
-
-          yield* stopHooks.run(threadId);
-          yield* Effect.forEach(descendants, (child) => stopHooks.run(child), {
-            discard: true,
           });
           yield* Effect.logInfo("replaced project thread stopped").pipe(
             Effect.annotateLogs({

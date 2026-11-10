@@ -17,7 +17,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { Message } from "@earendil-works/pi-ai";
-import { defineDoc, InboxDoc } from "@earendil-works/pi-durable";
+import { defineDoc, InboxDoc, UsageDoc } from "@earendil-works/pi-durable";
 import type { Tx } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -901,6 +901,71 @@ describe("CommitFeed subagent events", () => {
             `${OTHER}:accepted`,
             `${PARENT}:accepted`,
           ]);
+        })
+      ),
+    30_000
+  );
+});
+
+describe("CommitFeed with a value that fits no event (T-4)", () => {
+  it.live(
+    "drops the value, and the commits after it still become events",
+    () =>
+      withBrain(({ brain, events, parentConversation }) =>
+        Effect.gen(function* () {
+          // A fractional token count fits no UsageUpdated (`NonNegativeInt`).
+          yield* commit(brain, async (tx) => {
+            const usage = await tx.doc(UsageDoc, parentConversation);
+
+            usage.models["faux/half"] = {
+              input: 1.5,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 1.5,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            };
+          });
+          yield* commit(brain, async (tx) => {
+            await bindCriteria(
+              tx,
+              parentConversation,
+              {
+                objective: Option.some("Ship it"),
+                criteria: [{ text: "Reads well", judge: { kind: "user" } }],
+                mode: "replace",
+              },
+              10
+            );
+          });
+
+          const goals = yield* waitFor(
+            Effect.map(Ref.get(events), (all) => {
+              const found = all.flatMap((event) =>
+                Predicate.isTagged(event, "GoalUpdated") ? [event] : []
+              );
+
+              return found.length > 0 ? Option.some(found) : Option.none();
+            })
+          );
+
+          const usage = (yield* Ref.get(events)).flatMap((event) =>
+            Predicate.isTagged(event, "UsageUpdated") ? [event] : []
+          );
+
+          assert.deepStrictEqual(
+            [
+              goals.map((event) => Option.getOrNull(event.tally)),
+              usage.some((event) => event.inputTokens === 1.5),
+            ],
+            [[{ total: 1, met: 0, failed: 0 }], false]
+          );
         })
       ),
     30_000

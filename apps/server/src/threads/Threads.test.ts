@@ -341,9 +341,38 @@ describe("thread commands", () => {
         );
 
         assert.strictEqual(queueLength(after), 1);
-        assert.include(yield* Ref.get(stopped), threadId);
+        yield* eventually(Ref.get(stopped), (all) => all.includes(threadId));
       })
     )
+  );
+
+  it.live(
+    "a stop that does not go through Threads.stop (the budget stopper's seam.stop) still runs the stop hooks (T-2)",
+    () =>
+      withThread((threadId) =>
+        Effect.gen(function* () {
+          yield* send(threadId, "r1", "followUp");
+          yield* eventually(liveState(threadId), isRunning);
+          yield* Ref.set(stopped, []);
+
+          yield* (yield* HarnessSeam).stop(threadId, {
+            clearQueue: true,
+            subagents: "keep",
+          });
+
+          const hooked = yield* eventually(Ref.get(stopped), (all) =>
+            all.includes(threadId)
+          ).pipe(
+            Effect.asSome,
+            Effect.catchTag("TimeoutError", () =>
+              Effect.succeed(Option.none<ReadonlyArray<ThreadId>>())
+            )
+          );
+
+          assert.deepStrictEqual(hooked, Option.some([threadId]));
+        })
+      ),
+    15_000
   );
 
   it.live(
@@ -413,15 +442,15 @@ describe("thread commands", () => {
 
           yield* Ref.set(stopped, []);
 
+          // The parent has no run to interrupt, so Stop keeping its children runs no hook.
           yield* (yield* Threads).stop({
             threadId,
             clearQueue: false,
             subagents: Option.some("keep"),
           });
 
-          assert.deepStrictEqual(yield* Ref.get(stopped), [threadId]);
-
-          yield* Ref.set(stopped, []);
+          yield* Effect.sleep(Duration.millis(200));
+          assert.deepStrictEqual(yield* Ref.get(stopped), []);
 
           yield* (yield* Threads).stop({
             threadId,
@@ -429,10 +458,12 @@ describe("thread commands", () => {
             subagents: Option.some("stop"),
           });
 
-          assert.deepStrictEqual(yield* Ref.get(stopped), [
-            threadId,
-            workingChild,
-          ]);
+          // The working child's run ended interrupted, so its hooks ran; nothing else's did.
+          yield* eventually(Ref.get(stopped), (all) =>
+            all.includes(workingChild)
+          );
+          yield* Effect.sleep(Duration.millis(200));
+          assert.deepStrictEqual(yield* Ref.get(stopped), [workingChild]);
           assert.deepStrictEqual(
             [
               isRunning(yield* liveState(workingChild)),

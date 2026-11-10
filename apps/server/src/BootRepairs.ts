@@ -13,6 +13,9 @@
 // portal rows, units and porches, then start the portal sweep; then start the durable event
 // reactors, last, so they run after every repair and before resume and ready. Orphaned `claude`
 // processes are only logged, by the bridge's boot lines (`BridgeProvider.ts`), not repaired here.
+// The two approval sweeps and the reconcile's `inspect()` share one scan of every conversation's
+// `cairn.approvals` (`PendingApprovals`): the first sweep makes it, and each later reader reads
+// only the conversations that hold a pending record.
 //
 // The ordering rule: pi-durable schedules nothing until the Harness resumes, or until something
 // submits to it or waits on it, so a repair that needs a quiet Harness (one that reads or removes

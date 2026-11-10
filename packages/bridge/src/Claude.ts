@@ -29,7 +29,12 @@ import {
 import { ClaudeAccount } from "./ClaudeAccount.ts";
 import { openConversation } from "./ClaudeConversation.ts";
 import type { RateLimitInfo } from "./ClaudeEvents.ts";
-import { BRIDGE_FAILED_TEXT, CAPACITY_TEXT } from "./ClaudeGuards.ts";
+import {
+  ABORTED_TEXT,
+  BRIDGE_FAILED_TEXT,
+  CAPACITY_TEXT,
+  realAbortOf,
+} from "./ClaudeGuards.ts";
 import { claudeModels } from "./ClaudeModels.ts";
 import { ClaudeOneShot } from "./ClaudeOneShot.ts";
 import type { ClaudeCall } from "./ClaudeProvider.ts";
@@ -72,8 +77,10 @@ export class Claude extends Context.Service<
       note: ConversationNote
     ): Effect.Effect<void>;
     /**
-     * Kills the child of `sessionId`. A held tool call outlives its generation, so a user's stop
-     * reaches the bridge only this way. The session is forked on its next call.
+     * Kills the child of `sessionId` for a stopped thread, unless a provider call is open on it
+     * (that call ends by its own abort signal; one opened after the stop belongs to a later run).
+     * A held tool call outlives its generation, so a stop reaches a held child only this way, or
+     * by the held time to live. The session is forked on its next call.
      */
     abortConversation(sessionId: string): Effect.Effect<void>;
     /** Shutdown has begun: an `AbortError` from now on means close, leaving sessions resumable. */
@@ -136,7 +143,7 @@ export class Claude extends Context.Service<
       // idle entries too (a conversation keeps its child for `idleTimeToLive`), so a new
       // conversation at the cap evicts the least recently used idle one instead of failing, as
       // the idle time to live would have later. A held tool call keeps its call in flight, so it
-      // is never evicted.
+      // is never evicted; its child's held time to live ends it instead (`ClaudeSettings`).
       const usage = yield* Ref.make(
         new Map<string, { readonly inFlight: number; readonly at: number }>()
       );
@@ -218,6 +225,29 @@ export class Claude extends Context.Service<
           sink.end();
         });
 
+      const abortedSink = (
+        sink: Parameters<ClaudeCall>[3],
+        model: Parameters<ClaudeCall>[0]
+      ) =>
+        Effect.sync(() => {
+          sink.push({
+            type: "error",
+            reason: "aborted",
+            error: {
+              role: "assistant",
+              content: [],
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              usage: emptyUsage(),
+              stopReason: "aborted",
+              errorMessage: ABORTED_TEXT,
+              timestamp: clock.currentTimeMillisUnsafe(),
+            },
+          });
+          sink.end();
+        });
+
       const handle = (
         ...[model, context, options, sink]: Parameters<ClaudeCall>
       ) =>
@@ -229,19 +259,36 @@ export class Claude extends Context.Service<
           const sessionId = options?.sessionId;
 
           // Summarizer calls, and calls with no session to join, are one-shots in their own child.
+          // Each holds a one-shot permit while it runs (`ClaudeSlots`, T-8); a stop while it waits
+          // for one ends it at once, with no child started.
           if (options?.cacheRetention === "none" || sessionId === undefined) {
             const place = yield* placeOf(sessionId ?? "");
 
-            yield* oneShot.run(
-              {
-                model,
-                messages,
-                reasoning,
-                signal,
-                cwd: place.cwd,
-                startedAt: clock.currentTimeMillisUnsafe(),
-              },
-              sink
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const permitted = yield* Effect.raceFirst(
+                  Effect.as(slots.takeOneShot, true),
+                  Effect.as(realAbortOf(signal), false)
+                );
+
+                if (!permitted) {
+                  yield* abortedSink(sink, model);
+
+                  return;
+                }
+
+                yield* oneShot.run(
+                  {
+                    model,
+                    messages,
+                    reasoning,
+                    signal,
+                    cwd: place.cwd,
+                    startedAt: clock.currentTimeMillisUnsafe(),
+                  },
+                  sink
+                );
+              })
             );
 
             return;
@@ -336,7 +383,7 @@ export class Claude extends Context.Service<
             yield* Effect.scoped(
               Effect.flatMap(
                 RcMap.get(conversations, sessionId),
-                (conversation) => conversation.kill("abort")
+                (conversation) => conversation.stop
               )
             ).pipe(Effect.ignore);
           }

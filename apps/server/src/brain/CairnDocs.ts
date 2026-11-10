@@ -86,6 +86,7 @@ import type { BrainSession } from "./Brain.ts";
 import { documentCall, durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
 import { emit } from "./Events.ts";
+import { PendingApprovals } from "./PendingApprovals.ts";
 import { piConversationId, piTaskId } from "./PiIds.ts";
 
 /** The creation receipt of one thread: the conversation it lives in, 0 until created. */
@@ -1690,9 +1691,11 @@ export const cancelAbandonedApprovals = (
 const SCAN_PAGE = 200;
 
 /**
- * Visits every conversation's `cairn.approvals` (every one, not only those with live tasks) with
- * `visit`, which returns how many records it changed. Returns the total. The boot repairs read
- * records this way before the Harness resumes.
+ * Visits every conversation's `cairn.approvals` that holds a pending record (every one, not only
+ * those with live tasks) with `visit`, which returns how many records it changed. Returns the
+ * total. The boot repairs read records this way before the Harness resumes. With
+ * `PendingApprovals` (the brain's one scan per boot, T-6) only those conversations are read;
+ * without it, every conversation is.
  */
 const sweepApprovals = (
   session: BrainSession,
@@ -1705,6 +1708,22 @@ const sweepApprovals = (
     const { harness, storage } = session;
     let cursor: Option.Option<Cursor> = Option.none();
     let changed = 0;
+
+    const index = yield* Effect.serviceOption(PendingApprovals);
+
+    if (Option.isSome(index)) {
+      for (const conversationId of yield* index.value.conversations) {
+        const approvals = yield* durable(
+          "approvals.read",
+          async (context) =>
+            await harness.snapshot(Approvals, conversationId, context)
+        );
+
+        changed += yield* visit(conversationId, approvals?.items ?? {});
+      }
+
+      return changed;
+    }
 
     do {
       const after = Option.getOrUndefined(cursor);

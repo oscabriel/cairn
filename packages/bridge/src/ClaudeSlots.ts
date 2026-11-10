@@ -1,11 +1,20 @@
 // The generation semaphore (plan D8): at most `size` Claude Code children generate at once. A child
 // held across a tool call holds no permit, so a parent waiting on a subagent never holds the slot
 // its child needs. The usage service resizes it (2F, in its own layer); the shell reads who waits.
+//
+// One-shot children (compaction summaries, titles, branch names, any sessionless call) take a
+// permit of a second, smaller semaphore (T-8): at most `ONE_SHOT_SLOTS`, and never more than
+// `size`, so a resize that protects the plan windows reaches them too. They do not share the
+// conversations' permits, so a burst of launches naming a Claude title model never starves a turn.
 
+import type { Scope } from "effect";
 import { Context, Effect, Layer, PubSub, Ref, Semaphore, Stream } from "effect";
 
 /** The generation permits a fresh bridge starts with. */
 export const DEFAULT_SLOTS = 4;
+
+/** The most one-shot children generating at once, when `size` allows that many. */
+export const ONE_SHOT_SLOTS = 2;
 
 const without = (list: ReadonlyArray<string>, id: string) => {
   const index = list.indexOf(id);
@@ -25,6 +34,11 @@ export class ClaudeSlots extends Context.Service<
   {
     /** Takes a permit for `sessionId`, waiting (and reporting the wait) while every permit is taken. */
     acquire(sessionId: string): Effect.Effect<void>;
+    /**
+     * Takes a one-shot permit until the scope closes, waiting while every one is taken. The wait is
+     * interruptible; a permit taken is always returned with the scope.
+     */
+    readonly takeOneShot: Effect.Effect<void, never, Scope.Scope>;
     /** Returns one permit `sessionId` holds. */
     release(sessionId: string): Effect.Effect<void>;
     /** The number of permits. */
@@ -46,6 +60,7 @@ export class ClaudeSlots extends Context.Service<
       let permits = DEFAULT_SLOTS;
 
       const semaphore = yield* Semaphore.make(permits);
+      const oneShots = yield* Semaphore.make(Math.min(ONE_SHOT_SLOTS, permits));
       const waitingRef = yield* Ref.make<ReadonlyArray<string>>([]);
       const holders = yield* Ref.make<ReadonlyArray<string>>([]);
       const changes = yield* PubSub.unbounded<SlotWait>();
@@ -96,10 +111,12 @@ export class ClaudeSlots extends Context.Service<
       const resize = Effect.fn("ClaudeSlots.resize")(function* (size: number) {
         permits = Math.max(1, Math.trunc(size));
         yield* Semaphore.resize(semaphore, permits);
+        yield* Semaphore.resize(oneShots, Math.min(ONE_SHOT_SLOTS, permits));
       });
 
       return ClaudeSlots.of({
         acquire,
+        takeOneShot: Semaphore.takeScoped(oneShots, 1),
         release,
         size: Effect.sync(() => permits),
         resize,

@@ -33,6 +33,7 @@
 // `$<alias>` for an id. Inputs for them: `respond` takes `answer` (custom text) and `picks` (option
 // labels) for a question; `respond_race {threads}` answers the first pending record of each thread
 // at once (a question answered from both threads); `stop_all` stops the parent and its subagents;
+// `remove` makes the stop archiving or deleting the parent makes (Stop all, queue cleared);
 // `mode {mode}` sets a thread's permission mode,
 // with `expect.error` when it must be refused.
 //
@@ -138,6 +139,7 @@ export const TranscriptLine = Schema.Union([
       "stop",
       "stop_clear",
       "stop_all",
+      "remove",
       "withdraw",
       "respond",
       "respond_race",

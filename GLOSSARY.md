@@ -104,7 +104,7 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Tally**: A parent row's count of its subagents (working, asking, settled, failed), from its registry. A settled child whose result is not yet delivered counts as working.
 
-**Stop all**: A parent row's stop that also stops each working subagent, and theirs in turn (`thread.stop` with `subagents: stop`); a settled child and anything under it are left as they are.
+**Stop all**: A parent row's stop that also stops each working subagent, and theirs in turn (`thread.stop` with `subagents: stop`); a settled child with no run, and anything under it, is left as it is. It holds the parent's wakes until its next run, so a stopped child's result reaches it as a note and never wakes it, even when its last run had completed. Archiving or deleting a thread makes this stop.
 
 **Crash point**: A named place in a subagent's delivery where a judge brain kills itself (`SubagentCrashes`), so the kill judge lands a `kill -9` inside each window. Production plants none.
 
@@ -124,7 +124,7 @@ _Avoid_: using it for a thread's settle state, which is **Settle**
 
 **Note**: A transcript entry the model reads but that starts no run (a passive write with model content), such as a subagent's settlement in its parent. An idle thread places it at once, a running one at its next boundary ahead of queued inputs, and a stop keeps it.
 
-**Wake**: The separate input that follows a note when the parent should act on it. A quiet spawn, a user's own steer to the child, a usage-limit failure, or a parent the user stopped or whose run failed gets the note without a wake. At most one wake waits in a running parent's queue.
+**Wake**: The separate input that follows a note when the parent should act on it. A quiet spawn, a user's own steer to the child, a usage-limit failure, or a parent the user stopped (Stop all included) or whose run failed gets the note without a wake. At most one wake waits in a running parent's queue.
 
 **Reporter**: The task that delivers one input to a subagent and its result back to the parent, under request ids derived from the child and the settlement's seq, so each lands once across a restart.
 

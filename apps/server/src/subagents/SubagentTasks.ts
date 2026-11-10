@@ -124,6 +124,7 @@ import {
 import type { RouteIo } from "../approvals/QuestionRoute.ts";
 import {
   Approvals,
+  cancelRecord,
   expirePending,
   Permissions,
   RELAYED_QUESTION_TOOL,
@@ -148,6 +149,7 @@ import type {
 import {
   BRIEF_ANSWER_ENTRY,
   NO_RESULT_ERROR,
+  questionFailedText,
   renderAnswer,
   renderBrief,
   renderBriefAnswer,
@@ -1042,6 +1044,16 @@ type ReporterState =
   | { phase: "answer"; seq: number; text: string }
   | { phase: "report"; settlement: SettlementState; quiet: boolean }
   | { phase: "wake"; settlement: SettlementState; wakes: Array<WakeState> };
+
+/** A reporter following a question its child's answer became. */
+type AskState = Extract<ReporterState, { phase: "ask" }>;
+
+/** The answer to a child's relayed question, as the child's next input reads it. */
+const answerTextOf = (record: Readonly<ApprovalRecord>): string =>
+  renderAnswer(
+    record.decidedBy?.kind === "thread" ? "parent" : "user",
+    record.answer?.answers?.[0]
+  );
 
 /** What a brief's tasks act on: its approval record in the parent's `cairn.approvals`. */
 export interface BriefInput {
@@ -2327,11 +2339,111 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   };
 
   /**
+   * Settles the run whose answer became a question that ended unanswered (the `ask` phase's commit):
+   * the question's ending reaches its mirror and the registry (`endUnanswered`), and the run's own
+   * answer is its result after all, once, reported next.
+   */
+  const settleUnanswered = async (
+    tx: Tx,
+    parent: ConversationId,
+    input: ReporterInput,
+    asked: AskState,
+    now: number
+  ): Promise<NextTaskState<ReporterState, null>> => {
+    const child = conversationOf(input.child);
+
+    // Table reads first.
+    const live = await tx.doc(LiveDoc, child);
+    const current = await tx.doc(SubagentsDoc, parent);
+    const item = current.items[input.key];
+
+    const ahead =
+      item !== undefined && (await workAhead(tx, child, item, input.requestId));
+
+    await endUnanswered(tx, {
+      parentConversationId: parent,
+      childConversationId: child,
+      approvalId: asked.approvalId,
+      now,
+    });
+
+    const mark = item?.runs.find(
+      (found) => found.phase === "nudge" && found.seq === asked.seq
+    );
+
+    if (item === undefined || mark === undefined) {
+      return completed();
+    }
+
+    const next = item.settlements.length + 1;
+    const settling = { ...asked.settlement, seq: next };
+
+    item.settlements.push({
+      seq: next,
+      outcome: settling.outcome,
+      answerEntry: asked.answerEntry,
+      reportedAt: now,
+      inputs: [...markInputs(item, mark)],
+    });
+    item.runs.push({ run: mark.run, phase: "settled", seq: next });
+    settleUnlessWorking(item, live.run !== undefined, ahead);
+
+    return {
+      status: "running",
+      checkpoint: {
+        phase: "report",
+        settlement: settling,
+        quiet: asked.quiet,
+      },
+    };
+  };
+
+  /**
+   * An `ask` phase that threw (O-3): its run's settlement is decided already, and nothing follows
+   * the question any more. An answer that took goes to the child as the `answer` phase would send
+   * it. Otherwise a question still pending is cancelled with the failure as its reason, and the
+   * run settles as an unanswered question's does, its own answer reported next: the row leaves
+   * `waiting` and no answer is taken that nothing would deliver.
+   */
+  const askFailed = async (
+    tx: Tx,
+    failed: FailedPhase<ReporterInput, ReporterState>,
+    asked: AskState
+  ): Promise<NextTaskState<ReporterState, null>> => {
+    const { conversationId: parent, input, why, at } = failed;
+    const { items } = await tx.doc(Approvals, conversationOf(input.child));
+    const record = items[asked.approvalId];
+
+    if (record?.status === "accepted") {
+      return {
+        status: "running",
+        checkpoint: {
+          phase: "answer",
+          seq: asked.seq,
+          text: answerTextOf(record),
+        },
+      };
+    }
+
+    if (record !== undefined) {
+      cancelRecord(
+        record,
+        at,
+        "run-stopped",
+        Option.some(questionFailedText(why))
+      );
+    }
+
+    return await settleUnanswered(tx, parent, input, asked, at);
+  };
+
+  /**
    * A reporter whose phase threw (O-3). Once its run settled (`report`, `wake`), the settlement's
-   * note is made sure of and marked delivered: a throw can lose the wake, never the result. Before
-   * that, the input settles `failed` in one commit, its note saying the child's result was not read,
-   * so the parent sees the failure, the child's row leaves `working`, and the parent can send the
-   * work again. An input a settlement already names settles nothing more.
+   * note is made sure of and marked delivered: a throw can lose the wake, never the result. A
+   * relayed question's run is settled too (`askFailed`). Before that, the input settles `failed` in
+   * one commit, its note saying the child's result was not read, so the parent sees the failure,
+   * the child's row leaves `working`, and the parent can send the work again. An input a settlement
+   * already names settles nothing more.
    */
   const reporterFailed = async (
     tx: Tx,
@@ -2339,6 +2451,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   ): Promise<NextTaskState<ReporterState, null>> => {
     const { conversationId: parent, input, checkpoint, why, at } = failed;
     const child = conversationOf(input.child);
+
+    if (checkpoint.phase === "ask") {
+      return await askFailed(tx, failed, checkpoint);
+    }
 
     const decided =
       checkpoint.phase === "report" || checkpoint.phase === "wake"
@@ -2533,8 +2649,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       ask: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
 
-        const { seq, approvalId, question, settlement, answerEntry, quiet } =
-          task.state.checkpoint;
+        const { seq, approvalId, question } = task.state.checkpoint;
 
         const parent = runtime.conversationId;
 
@@ -2570,10 +2685,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const record = approvals?.items[approvalId];
 
         if (record?.status === "accepted") {
-          const text = renderAnswer(
-            record.decidedBy?.kind === "thread" ? "parent" : "user",
-            record.answer?.answers?.[0]
-          );
+          const text = answerTextOf(record);
 
           await runtime.commit(
             () => ({
@@ -2588,49 +2700,14 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
         // Unanswered: the run's own answer is its result after all, once.
         await runtime.commit(
-          async (tx): Promise<NextTaskState<ReporterState, null>> => {
-            // Table reads first.
-            const live = await tx.doc(LiveDoc, child);
-            const current = await tx.doc(SubagentsDoc, parent);
-            const item = current.items[input.key];
-
-            const ahead =
-              item !== undefined &&
-              (await workAhead(tx, child, item, input.requestId));
-
-            await endUnanswered(tx, {
-              parentConversationId: parent,
-              childConversationId: child,
-              approvalId,
-              now: runtime.now(),
-            });
-
-            const mark = item?.runs.find(
-              (found) => found.phase === "nudge" && found.seq === seq
-            );
-
-            if (item === undefined || mark === undefined) {
-              return completed();
-            }
-
-            const next = item.settlements.length + 1;
-            const settling = { ...settlement, seq: next };
-
-            item.settlements.push({
-              seq: next,
-              outcome: settling.outcome,
-              answerEntry,
-              reportedAt: runtime.now(),
-              inputs: [...markInputs(item, mark)],
-            });
-            item.runs.push({ run: mark.run, phase: "settled", seq: next });
-            settleUnlessWorking(item, live.run !== undefined, ahead);
-
-            return {
-              status: "running",
-              checkpoint: { phase: "report", settlement: settling, quiet },
-            };
-          },
+          async (tx) =>
+            await settleUnanswered(
+              tx,
+              parent,
+              input,
+              task.state.checkpoint,
+              runtime.now()
+            ),
           context
         );
       }),

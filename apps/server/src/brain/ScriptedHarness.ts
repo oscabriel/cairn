@@ -40,7 +40,8 @@
 //   an answer to either settles both once. A child's approvals are never routed to the parent.
 // - A child's permission mode is the narrower of its own and its parent's, read at each ask, and
 //   `configure` refuses a child's widening.
-// - Stopping a parent leaves its children working unless the stop says `subagents: "stop"`.
+// - Stopping a parent leaves its children working unless the stop says `subagents: "stop"`, which
+//   also halts the parent while its last run had completed, so no stopped child wakes it.
 // The pi-durable side builds the same behaviour as its subagents extension; `SubagentFaults` can
 // break this one on purpose for the conformance suite's mutation check.
 
@@ -4089,6 +4090,10 @@ const layerNoDeps = Layer.effectContext(
         if (options.subagents !== "stop") {
           return stopped;
         }
+
+        // The user stopped this thread with its children, so their stopped results wake no one,
+        // even when its last run had completed (ADR 0028); its next user input clears the hold.
+        thread.halted = true;
 
         for (const item of thread.subagents.values()) {
           const child = store.threads.get(item.threadId);

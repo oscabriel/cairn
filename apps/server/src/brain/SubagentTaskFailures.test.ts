@@ -13,6 +13,7 @@
 //
 // Kept under `brain/`, where pi-durable may be imported in a test (S42).
 
+import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -20,6 +21,10 @@ import path from "node:path";
 import { ApprovalId, ProjectId } from "@cairn/protocol/Ids";
 import type { ConversationId, ThreadId } from "@cairn/protocol/Ids";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type {
+  FauxResponseFactory,
+  FauxResponseStep,
+} from "@earendil-works/pi-ai/providers/faux";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Context,
@@ -169,7 +174,7 @@ const ensure = (threadId: ThreadId) =>
 /** Over a fresh brain with `planted`'s throw: the parent thread, resumed. */
 const withBrain = <A, E>(
   planted: Planted,
-  responses: ReadonlyArray<ReturnType<typeof fauxAssistantMessage>>,
+  responses: ReadonlyArray<FauxResponseStep>,
   body: (running: Running) => Effect.Effect<A, E, Services>
 ) =>
   Effect.acquireUseRelease(
@@ -219,6 +224,15 @@ const SPAWN = [
   ),
   fauxAssistantMessage("Waiting for Go."),
 ];
+
+/** A model answer that never comes: the run goes on until it is aborted. */
+const untilAborted: FauxResponseFactory = async (_context, options) => {
+  if (options?.signal !== undefined) {
+    await once(options.signal, "abort");
+  }
+
+  return fauxAssistantMessage("", { stopReason: "aborted" });
+};
 
 const ask = Effect.flatMap(HarnessSeam, (seam) =>
   seam.submit(PARENT, {
@@ -400,6 +414,82 @@ describe("a subagent task whose phase throws (O-3)", () => {
 
             assert.include(transcript, "Cairn could not follow this input");
             assert.include(transcript, PLANTED);
+          })
+      ),
+    30_000
+  );
+
+  it.live(
+    "Stop all still stops a child whose reporter threw while its run goes on",
+    () =>
+      withBrain(
+        { crash: "reporter-submitted" },
+        [...SPAWN, untilAborted],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
+            yield* ask;
+            yield* answer(yield* firstBrief(events), "accept");
+
+            const item = yield* deliveredItem(parent);
+
+            assert.strictEqual(item.status, "settled");
+
+            yield* Effect.flatMap(HarnessSeam, (seam) =>
+              seam.stop(PARENT, { clearQueue: true, subagents: "stop" })
+            );
+
+            yield* waitFor(
+              Effect.map(Ref.get(events), (all) =>
+                Option.fromUndefinedOr(
+                  all.find(
+                    (event) =>
+                      Predicate.isTagged(event, "RunTerminal") &&
+                      event.threadId !== PARENT &&
+                      event.status === "interrupted"
+                  )
+                )
+              )
+            );
+          })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a reporter that throws while its child's question is out settles the child's answer and ends the question",
+    () =>
+      withBrain(
+        { crash: "relayed-asked" },
+        [
+          ...SPAWN,
+          fauxAssistantMessage("I found 3 files. Should I delete them?"),
+          fauxAssistantMessage("Understood."),
+        ],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
+            yield* ask;
+            yield* answer(yield* firstBrief(events), "accept");
+
+            const item = yield* deliveredItem(parent);
+
+            assert.strictEqual(item.status, "settled");
+            assert.deepStrictEqual(
+              item.settlements.map((mark) => mark.outcome),
+              ["completed"]
+            );
+            assert.deepStrictEqual(
+              Object.values(item.questions).map((question) => question.state),
+              ["cancelled"]
+            );
+            assert.deepStrictEqual(
+              item.runs.map((mark) => mark.phase),
+              ["nudge", "settled"]
+            );
+
+            yield* transcriptHolds(
+              parent,
+              "<subagent_result>\nI found 3 files. Should I delete them?\n</subagent_result>"
+            );
           })
       ),
     30_000

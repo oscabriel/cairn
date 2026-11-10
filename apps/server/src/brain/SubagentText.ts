@@ -179,6 +179,13 @@ export const renderBriefAnswer = (title: string, answer: BriefAnswer): string =>
 export const reporterFailedText = (why: string): string =>
   `Cairn could not follow this input to its end, so the child's result for it was not read: ${why} Ask the child with subagent_send to report again.`;
 
+/**
+ * Why a child's relayed question was cancelled when the reporter following it threw (O-3): the
+ * child's answer that asked it is reported as the run's result instead.
+ */
+export const questionFailedText = (why: string): string =>
+  `Cairn could not follow this question to its end, so the child's answer is reported as its result: ${why}`;
+
 /** What `subagent_spawn` returns: the brief waits for the user, and the tool does not. */
 export const SPAWN_WAITING =
   "The brief is waiting for the user's Go. You will be told when it is answered.";

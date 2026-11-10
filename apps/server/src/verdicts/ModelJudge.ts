@@ -6,10 +6,10 @@
 //
 // The transcript is the judged model's own context, so the judge reads it as structured turns, not
 // one flattened string (review finding O-5): each message is fenced in a `<turn>` whose `from` (user,
-// assistant or tool) Cairn sets, and role labels (`user:`, `tool result (bash):`) and the fences'
-// own tags are stripped from every turn's text, so an assistant message cannot forge a user's
-// confirmation, a tool's output or the transcript's end. The system prompt weighs tool turns over
-// assistant prose.
+// assistant or tool) Cairn sets, role labels (`user:`, `tool result (bash):`, `**User:**`) and the
+// fences' own tags are stripped from every turn's text until none is left, and its angle brackets
+// are escaped, so an assistant message cannot forge a user's confirmation, a tool's output or the
+// transcript's end. The system prompt weighs tool turns over assistant prose.
 //
 // A judge on the thread's own model would grade its own work, so it is refused unless the user
 // named that model for the judge (ADR 0055, narrowing ADR 0043's default): a judge that names no
@@ -61,13 +61,28 @@ export const judgeSpecOf = (spec: string | null): Option.Option<string> =>
  */
 export type JudgePick = "none" | "proposed" | "user";
 
+/**
+ * Whether two refs are one model: the same model id, whichever provider serves it, so the thread's
+ * model reached through another provider (the bridge's model through opencode-go, say) is still its
+ * own.
+ */
 const sameModel = (a: ModelRef, b: ModelRef): boolean =>
-  a.provider === b.provider && a.modelId === b.modelId;
+  a.modelId.toLowerCase() === b.modelId.toLowerCase();
+
+/** Where the thread reaches its model, when not through the judge's provider. */
+const reachedThrough = (judge: ModelRef, thread: Option.Option<ModelRef>) =>
+  Option.match(
+    Option.filter(thread, (found) => found.provider !== judge.provider),
+    {
+      onNone: () => "",
+      onSome: (found) => ` (the thread reaches it through ${found.provider})`,
+    }
+  );
 
 /**
  * Why `judge` may not judge a thread on `thread`; none when it may. The Claude bridge is refused,
- * since it answers conversations, not one plain request; and the thread's own model is refused
- * unless the user picked it for the judge, since it would grade its own work.
+ * since it answers conversations, not one plain request; and the thread's own model, through any
+ * provider, is refused unless the user picked it for the judge, since it would grade its own work.
  */
 export const judgeModelRefusal = (
   judge: ModelRef,
@@ -89,7 +104,7 @@ export const judgeModelRefusal = (
 
   return own
     ? Option.some(
-        `${modelText(judge)} is this thread's own model, so a judge on it would grade its own work. Name another model for the judge (call models to see them); a judge runs on the thread's own model only when the user names that model for it.`
+        `${modelText(judge)} is this thread's own model${pick === "none" ? "" : reachedThrough(judge, thread)}, so a judge on it would grade its own work. Name another model for the judge (call models to see them); a judge runs on the thread's own model only when the user names that model for it.`
       )
     : Option.none();
 };
@@ -158,16 +173,40 @@ export const judgeTurnOf = (message: Message): Option.Option<JudgeTurn> => {
   });
 };
 
-/** A role label at a line's start: `user:`, `Assistant:`, `tool result (bash):`, `system:`. */
+/**
+ * A role label at a line's start, plain or in Markdown: `user:`, `Assistant:`, `tool result
+ * (bash):`, `**User:**`, `- system:`.
+ */
 const ROLE_LABEL =
-  /^[ \t]*(?:user|assistant|system|developer|tool(?:[ \t]+(?:result|output|call))?)[ \t]*(?:\([^)\n]*\))?[ \t]*:[ \t]*/gimu;
+  /^[ \t>*_#`~+-]*(?:user|human|assistant|system|developer|tool(?:[ \t]+(?:result|output|call))?)[ \t]*(?:\([^)\n]*\))?[ \t*_`]*:[ \t*_`]*/gimu;
 
 /** A tag of the judge's own fences, or one that forges a verdict. */
 const FENCE_TAG = /<\/?[ \t]*(?:transcript|turn|verdict)\b[^>]*>/giu;
 
-/** A turn's text with role labels and the fences' tags removed, so it can only be its own words. */
-const cleanText = (text: string): string =>
+/** One pass of the cleaning: the fences' tags, then role labels. */
+const cleanOnce = (text: string): string =>
   text.replaceAll(FENCE_TAG, "").replaceAll(ROLE_LABEL, "");
+
+/**
+ * A turn's text as the judge reads it, so it can only be its own words: role labels and the fences'
+ * tags removed until none is left (removing `<turn>` from `<tu<turn>rn>` builds another, as removing
+ * one of two labels leaves the other), then every `<`, `>` and `&` left escaped, so no tag in it,
+ * however it was built, opens or closes a fence.
+ */
+const cleanText = (text: string): string => {
+  let current = text;
+  let next = cleanOnce(current);
+
+  while (next !== current) {
+    current = next;
+    next = cleanOnce(current);
+  }
+
+  return current
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+};
 
 /** A tool's name as a fence attribute: its plain characters only. */
 const toolAttribute = (tool: string): string =>
@@ -222,7 +261,7 @@ export const modelJudgePrompt = (ask: ModelJudgeAsk): string =>
     `Criterion: ${ask.criterion}`,
     `Rubric: ${ask.rubric}`,
     "",
-    "Transcript (the end of the goal thread, one fenced turn per message; role labels and tags inside a turn's text were removed):",
+    "Transcript (the end of the goal thread, one fenced turn per message; role labels and tags inside a turn's text were removed, and its angle brackets and ampersands are written &lt; &gt; &amp;):",
     "<transcript>",
     transcriptOf(ask.turns),
     "</transcript>",

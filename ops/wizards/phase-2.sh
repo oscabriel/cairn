@@ -253,7 +253,9 @@ if want 1; then
 fi
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
-# Caddy and porch (ADR 0038, docs/phase-2/notes/reach.md R2). Every file edit is computed by
+# Caddy and porch (ADR 0038, docs/phase-2/notes/reach.md R2), shelved with porch on 2026-10-29. Its
+# owner-only and stream-close-delay edits also run alone in ops/wizards/phase-3.sh stage 1, since
+# neither needs porch; run here after that, they change nothing. Every file edit is computed by
 # ops/wizards/reach-edits.ts, shown as a diff, and applied only on yes; the Caddyfile is edited as
 # a candidate beside the live file, validated and fmt-checked inside the live container, and only
 # then installed and reloaded. porch import is never run.
@@ -263,6 +265,8 @@ if want 2; then
   say "Each edit is shown as a diff first; nothing changes until you answer yes."
   warn "plans.gneiss.run becomes owner-only: anyone you shared a plan link with needs your login."
   note "Cairn never runs porch import: it rewrites hand-written routes and drops their forward_auth."
+  note "The owner-only guard and stream_close_delay need no porch and have their own stage,"
+  note "ops/wizards/phase-3.sh 1. Once that has run, this stage finds both already in place."
 
   CADDY_DIR=~/caddy
   CADDYFILE=$CADDY_DIR/conf/Caddyfile

@@ -21,8 +21,6 @@ import type { ModelRef } from "@cairn/protocol/Models";
 import type { Message } from "@earendil-works/pi-ai";
 import { Option } from "effect";
 
-import { isRoleName } from "../models/ModelSpecs.ts";
-
 /** The provider the Claude bridge registers: it answers conversations, not one plain request. */
 export const BRIDGE_PROVIDER = "claude-bridge";
 
@@ -47,12 +45,9 @@ export const MODEL_JUDGE_SYSTEM = [
 export const modelText = (model: ModelRef): string =>
   `${model.provider}/${model.modelId}`;
 
-/**
- * The spec a model judge names; none when it names none, or names a role (a judge recorded before
- * ADR 0043), which reads as none: the judge would run on the goal thread's model.
- */
+/** The spec a model judge names; none when it names none. */
 export const judgeSpecOf = (spec: string | null): Option.Option<string> =>
-  Option.filter(Option.fromNullOr(spec), (named) => !isRoleName(named));
+  Option.fromNullOr(spec);
 
 /**
  * Who chose a model judge's model: nobody (`none`: it names none, so it is the thread's own), the

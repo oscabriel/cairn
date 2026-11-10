@@ -62,7 +62,8 @@ import {
 import type { ProjectId } from "@cairn/protocol/Ids";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { ModelSpec } from "@cairn/protocol/ModelSpecs";
-import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
+import type { ResolvedModel } from "@cairn/protocol/ModelSpecs";
+import { Brief as BriefSchema, GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import type { Brief, RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
@@ -81,6 +82,7 @@ import {
   ThreadOpsItem,
   ThreadSnapshotItem,
 } from "@cairn/protocol/Thread";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { copyJson, isJsonValue } from "@earendil-works/chord/json";
 import type {
@@ -127,12 +129,7 @@ import {
   questionRecord,
   relayedAsk,
 } from "../approvals/QuestionRoute.ts";
-import {
-  FAILURE_WORDS,
-  isRoleName,
-  ParsedSpec,
-  parseModelSpec,
-} from "../models/ModelSpecs.ts";
+import { FAILURE_WORDS, parseModelSpec } from "../models/ModelSpecs.ts";
 import {
   attemptStateOf,
   CAP_TEXT,
@@ -147,10 +144,12 @@ import {
   validateResult,
 } from "../models/ResultTool.ts";
 import type { ResultState } from "../models/ResultTool.ts";
+import { plainCopy } from "../subagents/SubagentDocs.ts";
 import { NO_GOAL } from "../verdicts/GoalDocs.ts";
 import type { GoalState } from "../verdicts/GoalDocs.ts";
 import { BriefTtl } from "./BriefTtl.ts";
 import type {
+  ApprovalPayloadState,
   ApprovalRecord,
   ApprovalSettlement,
   AnswerOutcome,
@@ -314,7 +313,7 @@ export interface ScriptedToolApi {
    */
   askBrief(
     summary: string,
-    payload: JsonRecord
+    payload: ApprovalPayloadState
   ): Effect.Effect<Option.Option<ApprovalRecord>>;
   /**
    * Replaces one of the thread's documents the stream carries (`cairn.workflows`, as a scripted
@@ -1140,12 +1139,12 @@ const decodeModelRef = Schema.decodeUnknownOption(ModelRef);
 
 const decodeThinkingLevel = Schema.decodeUnknownOption(ThinkingLevel);
 
-/** A resolution as the dispatch record keeps it: plain JSON. */
+/** A resolution as the dispatch record keeps it. */
 const resolvedJson = (
   spec: string,
   model: ModelRef,
   thinkingLevel: ThinkingLevel | null
-): JsonRecord => ({
+): DocumentState<typeof ResolvedModel> => ({
   spec,
   model: { provider: model.provider, modelId: model.modelId },
   thinkingLevel,
@@ -1154,18 +1153,15 @@ const resolvedJson = (
 
 /**
  * What a named model runs a child on in the scripted harness, which has no catalog: the model as
- * named, at its level. Nothing is checked for readiness, and nothing is priced. A role name, from a
- * new call, is refused as the real harness refuses it (ADR 0043).
+ * named, at its level. Nothing is checked for readiness, and nothing is priced.
  */
-const scriptedResolve = (spec: string): Result.Result<JsonRecord, string> =>
+const scriptedResolve = (
+  spec: string
+): Result.Result<DocumentState<typeof ResolvedModel>, string> =>
   Option.match(parseModelSpec(spec), {
     onNone: () => Result.fail(`"${spec}": ${FAILURE_WORDS.invalid_spec}.`),
-    onSome: (parsed) =>
-      ParsedSpec.$match(parsed, {
-        Named: ({ model, level }) =>
-          Result.succeed(resolvedJson(spec, model, Option.getOrNull(level))),
-        Role: () => Result.fail(`"${spec}": ${FAILURE_WORDS.role_removed}.`),
-      }),
+    onSome: ({ model, level }) =>
+      Result.succeed(resolvedJson(spec, model, Option.getOrNull(level))),
   });
 
 /** The brief a `subagent_spawn` call proposes, frozen into its record. */
@@ -1186,10 +1182,6 @@ const briefOf = (
   }
 
   const model = Option.map(textArgument(call, "model"), (text) => text.trim());
-
-  if (Option.isSome(model) && isRoleName(model.value)) {
-    return Result.fail(SubagentToolText.roleRemoved(model.value));
-  }
 
   const spec = Option.flatMap(model, decodeModelSpec);
 
@@ -1218,8 +1210,7 @@ const briefOf = (
     workspace: isolation === "worktree" ? "worktree" : "shared",
     base: null,
     writes: [],
-    role: Option.getOrNull(spec),
-    model: null,
+    model: Option.getOrNull(spec),
     thinking: null,
     mode,
     mayCommit: false,
@@ -1230,31 +1221,11 @@ const briefOf = (
   });
 };
 
-/** A brief as its record's payload holds it: plain JSON. */
-const briefPayload = (brief: Brief): JsonRecord => ({
-  type: brief.type,
-  title: brief.title,
-  task: brief.task,
-  why: brief.why,
-  avoid: [...brief.avoid],
-  doneWhen: brief.doneWhen.map((criterion) => ({
-    text: criterion.text,
-    judge: { kind: criterion.judge.kind },
-  })),
-  workspace: brief.workspace,
-  base: brief.base,
-  writes: [...brief.writes],
-  role: brief.role,
-  model: brief.model === null ? null : { ...brief.model },
-  thinking: brief.thinking,
-  mode: brief.mode,
-  mayCommit: brief.mayCommit,
-  budget: { ...brief.budget, planGuard: null },
-  resultSchema:
-    brief.resultSchema === null ? null : copyRecordJson(brief.resultSchema),
-  wake: brief.wake,
-  decisions: [],
-});
+const encodeBrief = Schema.encodeSync(BriefSchema);
+
+/** A brief as its record's payload holds it. */
+const briefPayload = (brief: Brief): ApprovalPayloadState =>
+  plainCopy(encodeBrief(brief));
 
 /** A settlement as a note's `data` holds it. */
 const settlementData = (settlement: SubagentSettlement): JsonValue => ({
@@ -2139,11 +2110,8 @@ const layerNoDeps = Layer.effectContext(
       }
 
       // The named model is checked again at Go (ADR 0043); one that no longer resolves starts
-      // nothing. A role a brief recorded before then names reads as none: the parent's model.
-      const named =
-        brief.role === null || isRoleName(brief.role)
-          ? Option.none<string>()
-          : Option.some(brief.role);
+      // nothing.
+      const named = Option.fromNullOr(brief.model);
 
       const dispatch = Option.match(named, {
         onNone: () => Result.succeed(Option.none<JsonRecord>()),
@@ -3361,7 +3329,7 @@ const layerNoDeps = Layer.effectContext(
                 run: null,
                 executorRequestId: null,
                 ...UNDECIDED,
-                payload: copyRecordJson(payload),
+                payload: plainCopy(payload),
                 answer: null,
                 decidedBy: null,
               };
@@ -3501,8 +3469,8 @@ const layerNoDeps = Layer.effectContext(
             return refused(brief.failure);
           }
 
-          if (brief.success.role !== null) {
-            const resolved = scriptedResolve(brief.success.role);
+          if (brief.success.model !== null) {
+            const resolved = scriptedResolve(brief.success.model);
 
             if (Result.isFailure(resolved)) {
               return refused(SubagentToolText.modelRefused(resolved.failure));

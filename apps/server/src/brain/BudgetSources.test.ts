@@ -38,7 +38,7 @@ import {
   ThreadReceipt,
   UNDECIDED,
 } from "./CairnDocs.ts";
-import type { ApprovalRecord } from "./CairnDocs.ts";
+import type { ApprovalPayloadState, ApprovalRecord } from "./CairnDocs.ts";
 import { EventsDoc, eventKind } from "./Events.ts";
 import { piConversationId } from "./PiIds.ts";
 
@@ -73,7 +73,7 @@ const record = (
 });
 
 /** A brief payload that decodes as the protocol's `Brief`, with `budget`. */
-const briefPayload = (budget: Budget) => ({
+const briefPayload = (budget: Budget): ApprovalPayloadState => ({
   type: "brief",
   title: "Count the files in the repo",
   task: "Count them.",
@@ -83,7 +83,6 @@ const briefPayload = (budget: Budget) => ({
   workspace: "shared",
   base: null,
   writes: [],
-  role: null,
   model: null,
   thinking: null,
   mode: "approval-required",

@@ -41,7 +41,7 @@ const row = (
         scriptHash: HASH,
         maxNodes: 1,
         maxConcurrent: 1,
-        roles: [
+        models: [
           { spec: ModelSpec.make("faux/kit"), readonly: false, arms: "host" },
         ],
         modes: [],

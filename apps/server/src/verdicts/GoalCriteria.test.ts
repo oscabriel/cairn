@@ -89,7 +89,7 @@ describe("goal_criteria's arguments", () => {
           rubric: "clear",
         },
       ]),
-      'criteria[1].model: "@judge" is a role, and roles'
+      'criteria[1].model: "@judge": it is not provider/modelId[:level]'
     );
     assert.include(
       refusalOf([{ text: "Reads well", judge: "model" }]),

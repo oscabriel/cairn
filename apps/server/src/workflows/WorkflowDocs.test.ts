@@ -12,7 +12,7 @@ import { Option, Schema } from "effect";
 
 import { UNDECIDED } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { plainCopy } from "../subagents/SubagentDocs.ts";
 import {
   approveRecord,
   dispatchedCount,
@@ -27,7 +27,7 @@ const envelope: Envelope = {
   scriptHash: "sha256-abc",
   maxNodes: 3,
   maxConcurrent: 2,
-  roles: [
+  models: [
     {
       spec: ModelSpec.make("opencode-go/gpt-6-luna"),
       readonly: true,
@@ -68,7 +68,7 @@ const record = (status: ApprovalRecord["status"]): ApprovalRecord => ({
   run: null,
   executorRequestId: null,
   ...UNDECIDED,
-  payload: jsonRecordOf(Schema.encodeSync(WorkflowLaunch)(launch)),
+  payload: plainCopy(Schema.encodeSync(WorkflowLaunch)(launch)),
 });
 
 const node = (
@@ -84,7 +84,7 @@ const node = (
   index: 0,
   requestId: nodeRequestIdOf("wf-7", id),
   briefId,
-  role: "@worker",
+  model: "faux/kit",
   provider: "faux",
   modelId: "kit",
   effort: null,

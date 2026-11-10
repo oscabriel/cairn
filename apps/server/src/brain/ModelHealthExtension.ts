@@ -1,5 +1,5 @@
 // The `model-health` extension: after each provider response it records one outcome per request
-// in `ModelHealth`, so role resolution can pass over a provider that is failing or limited.
+// in `ModelHealth`, so a model check can refuse a provider that is failing or limited.
 //
 // pi-durable's `afterResponse` fires for every terminal attempt, before the generation decides
 // whether to retry (`classify` in pi-durable's `harness/generation.js`). Recording every attempt

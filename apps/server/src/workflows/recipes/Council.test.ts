@@ -95,26 +95,19 @@ const NODE_MODELS = [
 
 /**
  * A named model resolves to the faux model it names, as `ModelSpecs` does: `faux/advisor-1` runs on
- * `advisor-1`, which behaves as `advisor`. A role name, which only a script written before ADR 0043
- * holds, names none.
+ * `advisor-1`, which behaves as `advisor`.
  */
 const resolveModel: ModelResolver = async (spec) => {
-  if (spec.startsWith("@")) {
-    return await Promise.resolve(Result.succeed(Option.none()));
-  }
-
   const name = spec.replace(/^faux\//u, "");
 
   return await Promise.resolve(
     NODE_MODELS.some((model) => model === name)
-      ? Result.succeed(
-          Option.some({
-            spec,
-            provider: KIT_MODEL.provider,
-            modelId: name,
-            thinkingLevel: Option.none(),
-          })
-        )
+      ? Result.succeed({
+          spec,
+          provider: KIT_MODEL.provider,
+          modelId: name,
+          thinkingLevel: Option.none(),
+        })
       : Result.fail(
           `ModelSpecs.resolve refused "${spec}": it is not in the model catalog.`
         )
@@ -557,7 +550,7 @@ describe("the council recipe on a faux model", () => {
 
           // A child of its own, on the model the report ran on.
           assert.notStrictEqual(resumed.conversationId, report.conversationId);
-          assert.strictEqual(resumed.role, report.role);
+          assert.strictEqual(resumed.model, report.model);
 
           // Its own receipt: one tool call (its submit_result), not the report's too.
           assert.strictEqual(resumed.receipt?.toolCalls, 1);
@@ -778,9 +771,9 @@ return { first: first.status, second: second.status };`),
         );
 
         assert.strictEqual(run.row.state, "finished", run.resultText);
-        assert.strictEqual(nodeOf(run, "first").role, "faux/advisor-1");
+        assert.strictEqual(nodeOf(run, "first").model, "faux/advisor-1");
         // Not the resumed node's model: the envelope granted the thread's model at this call site.
-        assert.strictEqual(nodeOf(run, "second").role, KIT_SPEC);
+        assert.strictEqual(nodeOf(run, "second").model, KIT_SPEC);
       })
   );
 

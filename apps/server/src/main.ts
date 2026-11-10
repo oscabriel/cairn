@@ -61,7 +61,7 @@ const MainLayer = AppLayer.pipe(
   Layer.provide(Harness),
   // The same reference `AppLayer` uses, so the brain's health feed and the login RPCs share one store.
   Layer.provide(ModelHealthLive),
-  // The same reference `AppLayer` uses, so the `roles` tool and the settings RPCs share one store.
+  // The same reference `AppLayer` uses, so the brain's tools and the settings RPCs share one store.
   Layer.provide(SettingsLive),
   // The same reference `AppLayer` uses, so the `cairn.reach` tools and the reach RPCs share one
   // portal store, over the user's porch and `cairn-portal-*` units; a unit gets PATH and the locale.

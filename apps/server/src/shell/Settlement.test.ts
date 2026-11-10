@@ -93,7 +93,15 @@ const oneSettledChild = (delivered: number) =>
     items: {
       "call-1": {
         status: "settled",
-        settlements: [{ outcome: "completed" }],
+        settlements: [
+          {
+            seq: 1,
+            outcome: "completed",
+            answerEntry: null,
+            reportedAt: 1,
+            inputs: [],
+          },
+        ],
         delivered,
       },
     },

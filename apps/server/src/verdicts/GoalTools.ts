@@ -176,8 +176,8 @@ export const goalsExtension = (
 
   /**
    * Why a model judge cannot run on a thread on `threadModel`; none when it can. A named model must
-   * be ready and may not be the Claude bridge; one naming none (or a role, recorded before ADR
-   * 0043) would run on the thread's own and is refused (ADR 0055). `by` says who named the model:
+   * be ready and may not be the Claude bridge; one naming none would run on the thread's own and is
+   * refused (ADR 0055). `by` says who named the model:
    * the thread's model may not propose itself, while a bound criterion's model is the user's pick.
    */
   const judgeCannotRun = async (

@@ -7,8 +7,8 @@
 // - a second check of a criterion whose run is going queues nothing;
 // - `goal_criteria` asks the user and binds nothing; accepting binds the criteria, declining binds
 //   none, and a proposal judged by `true` reads as deciding nothing on the card;
-// - a model judge that names no model (or a role, recorded before ADR 0043) runs on the thread's own
-//   model, one of the thread's family runs when named, and one on the Claude bridge is refused and
+// - a model judge that names no model is refused (it would run on the thread's own model), one of
+//   the thread's family runs when named, and one on the Claude bridge is refused and
 //   runs nothing; each verdict records its model and reply, having read the rubric and transcript;
 // - a subagent's thread has no goal tools;
 // - a kill during a judge run (the Harness closed while its command runs, then reopened on the same
@@ -86,9 +86,6 @@ const judgesAnswering = (
       prompts.push(prompt);
 
       return await Promise.resolve(Result.succeed(reply));
-    },
-    roleNameRead: async () => {
-      await Promise.resolve();
     },
   };
 };
@@ -465,7 +462,6 @@ describe("the goal tools under a Harness", () => {
             callTool("goal_check", { criterion: "c2" }, "t2"),
             callTool("goal_check", { criterion: "c3" }, "t3"),
             callTool("goal_check", { criterion: "c4" }, "t4"),
-            callTool("goal_check", { criterion: "c5" }, "t5"),
           ],
           judges,
           faults: NO_JUDGE_FAULTS,
@@ -479,8 +475,6 @@ describe("the goal tools under a Harness", () => {
             text: "Tests pass, judged by a cousin",
             judge: modelJudge("opencode-go/claude-haiku-5-5"),
           },
-          // A judge recorded before ADR 0043 names a role: it reads as none.
-          { text: "Tests pass, judged by a role", judge: modelJudge("@judge") },
           {
             text: "Tests pass, judged on the bridge",
             judge: modelJudge("claude-bridge/claude-haiku-5-5"),
@@ -508,7 +502,7 @@ describe("the goal tools under a Harness", () => {
           async () => await toolResults(conversation, context)
         );
 
-        assert.include(results.get("t4") ?? "", "Claude bridge");
+        assert.include(results.get("t3") ?? "", "Claude bridge");
         assert.strictEqual(judges.prompts.length, 2);
         assert.include(
           judges.prompts[0] ?? "",
@@ -528,7 +522,6 @@ describe("the goal tools under a Harness", () => {
           [
             ["open", null],
             ["met", "opencode-go/claude-haiku-5-5"],
-            ["open", null],
             ["open", null],
             ["met", "anthropic/claude-test"],
           ]

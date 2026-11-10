@@ -40,8 +40,7 @@
 //
 // A node runs on the model its call names (`model`, ADR 0043), checked by `ModelSpecs` right before
 // the commit that creates its child, or on the launching thread's model and level when it names
-// none. A script approved before ADR 0043 may still pass `role`: a role name there reads as no
-// model named (logged by the resolver), a model spec as named. A node that is
+// none. A node that is
 // not settled, or whose conversation is gone, cannot be resumed: the script sees `null` and the
 // council falls back to a fresh node.
 //
@@ -112,7 +111,7 @@ import {
   readPermissions,
 } from "../brain/Permissions.ts";
 import { usageLimitOf } from "../brain/RunFailure.ts";
-import { isRoleName, parseModelSpec, specOf } from "../models/ModelSpecs.ts";
+import { parseModelSpec, specOf } from "../models/ModelSpecs.ts";
 import {
   childThreadIdOf,
   conversationOf,
@@ -130,7 +129,6 @@ import {
   LogCall,
   PhaseCall,
   PRELUDE_VERSION,
-  ROLE_OPTION,
   RUNNABLE_PRELUDE_VERSIONS,
   VerifyCall,
 } from "./Prelude.ts";
@@ -273,13 +271,12 @@ export interface ResolvedNodeModel {
 
 /**
  * Resolves the model spec a node names right before the commit that creates its child (2D's
- * dispatch rule, ADR 0043): a named model, checked for readiness; or none for a role name a script
- * approved before ADR 0043 still passes, which runs on the launching thread's model (the resolver
- * logs it). Fails with the words the script's `agent.full` shows.
+ * dispatch rule, ADR 0043): a named model, checked for readiness. Fails with the words the script's
+ * `agent.full` shows.
  */
 export type ModelResolver = (
   spec: string
-) => Promise<Result.Result<Option.Option<ResolvedNodeModel>, string>>;
+) => Promise<Result.Result<ResolvedNodeModel, string>>;
 
 /** Where a judge may hold a node, so its `kill -9` lands there. */
 export type HoldPoint =
@@ -430,8 +427,7 @@ interface Dispatch {
   readonly label: string;
   readonly phase: Option.Option<string>;
   /**
-   * The model spec the call names: `model`, or the `role` of a script approved before ADR 0043.
-   * None runs on the launching thread's model and level.
+   * The model spec the call names (`model`). None runs on the launching thread's model and level.
    */
   readonly spec: Option.Option<string>;
   readonly schema: Option.Option<JsonRecord>;
@@ -461,8 +457,6 @@ interface ReserveInput {
   readonly caller: Caller;
   readonly dispatch: Dispatch;
   readonly model: Result.Result<ResolvedNodeModel, string>;
-  /** The launching thread's model: what a role name in a stored envelope grants. */
-  readonly threadModel: Option.Option<ModelRef>;
   /** The launching thread's effective mode: the child's. */
   readonly mode: RuntimeMode;
   /** The launching conversation's cwd, where the child works (shared checkout); none without one. */
@@ -497,7 +491,7 @@ const reservedRow = (
     index: nextIndex(row),
     requestId: nodeRequestIdOf(row.id, nodeId),
     briefId: null,
-    role: Result.match(input.model, {
+    model: Result.match(input.model, {
       onFailure: () => Option.getOrNull(dispatch.spec),
       onSuccess: (model) => model.spec,
     }),
@@ -560,7 +554,6 @@ const askOf = (row: WorkflowItemState, input: ReserveInput) => ({
   readonly: input.dispatch.readonly,
   mode: input.mode,
   dispatched: dispatchedCount(row),
-  threadModel: input.threadModel,
 });
 
 /**
@@ -606,7 +599,7 @@ const nodeRecordOf = (
       workflowName: row.name,
       label: dispatch.label,
       prompt: promptOf(dispatch),
-      spec: Option.filter(dispatch.spec, (spec) => !isRoleName(spec)),
+      spec: dispatch.spec,
       effort: dispatch.effort,
       readonly: dispatch.readonly,
       mode: input.mode,
@@ -699,16 +692,11 @@ const linkChild = async (
 
 /**
  * The model spec a node call names, or the refusal the script sees (no row is written for it):
- * `model` as written, refused when it is a role name or no spec; else the `role` of a script
- * approved before ADR 0043 (prelude version 2 sends every script's there, and version 3 passes
- * one on), which the resolver reads.
+ * `model` as written, refused when it is no spec; none when the call names none.
  */
 const namedSpecOf = (
   tool: string,
-  given: {
-    readonly model: Option.Option<string>;
-    readonly role: Option.Option<string>;
-  }
+  given: { readonly model: Option.Option<string> }
 ): Result.Result<Option.Option<string>, string> => {
   const model = Option.filter(
     Option.map(given.model, (text) => text.trim()),
@@ -716,18 +704,7 @@ const namedSpecOf = (
   );
 
   if (Option.isNone(model)) {
-    return Result.succeed(
-      Option.filter(
-        Option.map(given.role, (text) => text.trim()),
-        (text) => text !== ""
-      )
-    );
-  }
-
-  if (isRoleName(model.value)) {
-    return Result.fail(
-      `${tool}(): model \`${summaryOf(model.value)}\` is a role, and roles were removed. Name a model as provider/modelId[:level] (the models tool lists them), or leave model out to run on the launching thread's model.`
-    );
+    return Result.succeed(Option.none());
   }
 
   return Option.match(
@@ -1927,35 +1904,29 @@ export const workflowExtension = (
     threadModel: Option.Option<ModelRef>,
     threadLevel: string | undefined
   ): Promise<Result.Result<ResolvedNodeModel, string>> => {
-    const named = Option.isSome(dispatch.spec)
-      ? await resolveModel(dispatch.spec.value)
-      : Result.succeed(Option.none<ResolvedNodeModel>());
+    if (Option.isSome(dispatch.spec)) {
+      return await resolveModel(dispatch.spec.value);
+    }
 
-    return Result.flatMap(named, (found) =>
-      Option.match(found, {
-        onSome: (resolved) => Result.succeed(resolved),
-        onNone: () =>
-          Option.match(threadModel, {
-            onNone: () =>
-              Result.fail(
-                'the launching thread runs on no model; name one with model: "provider/modelId[:level]"'
-              ),
-            onSome: (model) => {
-              const thinkingLevel = Option.filter(
-                Option.fromUndefinedOr(threadLevel),
-                isThinkingLevel
-              );
+    return Option.match(threadModel, {
+      onNone: () =>
+        Result.fail(
+          'the launching thread runs on no model; name one with model: "provider/modelId[:level]"'
+        ),
+      onSome: (model) => {
+        const thinkingLevel = Option.filter(
+          Option.fromUndefinedOr(threadLevel),
+          isThinkingLevel
+        );
 
-              return Result.succeed<ResolvedNodeModel>({
-                spec: specOf(model, thinkingLevel),
-                provider: model.provider,
-                modelId: model.modelId,
-                thinkingLevel,
-              });
-            },
-          }),
-      })
-    );
+        return Result.succeed<ResolvedNodeModel>({
+          spec: specOf(model, thinkingLevel),
+          provider: model.provider,
+          modelId: model.modelId,
+          thinkingLevel,
+        });
+      },
+    });
   };
 
   /** What the reserve commit needs from outside it: the node's model and the thread's mode. */
@@ -1994,7 +1965,7 @@ export const workflowExtension = (
       known === undefined || isWaitingNode(known)
         ? await nodeModelOf(dispatch, threadModel, agent.thinkingLevel)
         : Result.succeed<ResolvedNodeModel>({
-            spec: known.role ?? "",
+            spec: known.model ?? "",
             provider: known.provider ?? "",
             modelId: known.modelId ?? "",
             thinkingLevel: Option.filter(
@@ -2011,7 +1982,6 @@ export const workflowExtension = (
       caller,
       dispatch,
       model,
-      threadModel,
       mode,
       cwd: Option.filter(
         Option.fromUndefinedOr(agent.cwd),
@@ -2204,9 +2174,7 @@ export const workflowExtension = (
         return refused(caller.failure);
       }
 
-      // `role` reaches a node only from a script approved before ADR 0043 (the dry run refuses a
-      // new one), and `namedSpecOf` reads it.
-      const unknown = given.unknownOptions.filter((key) => key !== ROLE_OPTION);
+      const unknown = given.unknownOptions;
 
       if (unknown.length > 0) {
         return refused(`agent(): unknown options ${unknown.join(", ")}.`);

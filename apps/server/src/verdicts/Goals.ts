@@ -146,15 +146,7 @@ const judgeModels = Effect.gen(function* () {
       )
     );
 
-  const roleNameRead: JudgeModels["roleNameRead"] = async (spec, runId) => {
-    await run(
-      Effect.logInfo(
-        "a model judge recorded before roles were removed names a role; it runs on the goal thread's model"
-      ).pipe(Effect.annotateLogs({ event: "legacy_role_read", spec, runId }))
-    );
-  };
-
-  return { resolve, ask, roleNameRead } satisfies JudgeModels;
+  return { resolve, ask } satisfies JudgeModels;
 });
 
 /** The goals extension, for the installed set. */

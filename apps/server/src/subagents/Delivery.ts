@@ -9,11 +9,10 @@ import { createHash } from "node:crypto";
 
 import { ConversationId, TaskId, ThreadId } from "@cairn/protocol/Ids";
 import type {
-  SettlementOutcome,
   SubagentSettlement,
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord/json";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import type {
   ConversationId as PiConversationId,
   Tx,
@@ -121,21 +120,8 @@ export const childThreadIdOf = (
   );
 };
 
-/** A settlement as a reporter's checkpoint and a note's `data` hold it: plain JSON. */
-export interface SettlementState {
-  [key: string]: JsonValue;
-  subagent: string;
-  seq: number;
-  outcome: SettlementOutcome;
-  summary: string;
-  divergence: string;
-  payload: JsonValue;
-  commit: string | null;
-  branch: string | null;
-  turns: { [key: string]: JsonValue; thisRun: number; total: number };
-  error: string | null;
-  usageLimit: boolean;
-}
+/** A settlement as a reporter's checkpoint and a note's `data` hold it: the protocol's. */
+export type SettlementState = DocumentState<typeof SubagentSettlement>;
 
 /** The protocol's settlement of a stored one. */
 export const settlementOf = (state: SettlementState): SubagentSettlement => ({

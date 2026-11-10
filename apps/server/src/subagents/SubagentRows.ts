@@ -23,15 +23,17 @@
 import { CommandId, EntryId, ThreadId } from "@cairn/protocol/Ids";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import type { RuntimeMode } from "@cairn/protocol/Policy";
-import { RuntimeMode as RuntimeModeSchema } from "@cairn/protocol/Policy";
 import { ThreadRename } from "@cairn/protocol/ShellCommands";
 import {
   CHILD_DOCUMENT,
+  ChildDocument,
   ChildWorktree,
+  DispatchRecord,
+  SubagentRecord,
   SUBAGENTS_DOCUMENT,
 } from "@cairn/protocol/Subagents";
 import type { ThreadLineage } from "@cairn/protocol/Subagents";
-import { WORKFLOWS_DOCUMENT } from "@cairn/protocol/Workflows";
+import { NodeRecord, WORKFLOWS_DOCUMENT } from "@cairn/protocol/Workflows";
 import type { ConversationId, Cursor } from "@earendil-works/pi-durable";
 import {
   Cause,
@@ -43,6 +45,7 @@ import {
   Predicate,
   Schema,
   Stream,
+  Struct,
 } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
@@ -78,7 +81,7 @@ export interface ChildRowSource {
   /** A workflow node's own level; none takes the parent's (a dispatched subagent's row). */
   readonly thinkingLevel: Option.Option<ThinkingLevel>;
   readonly runtimeMode: RuntimeMode;
-  /** The child's own worktree (a writing role's); none for a shared child, on its parent's. */
+  /** The child's own worktree (a writer's); none for a shared child, on its parent's. */
   readonly worktree: Option.Option<ChildWorktree>;
 }
 
@@ -90,35 +93,53 @@ const nonEmpty = (value: string | undefined): Option.Option<string> =>
     ? Option.some(value)
     : Option.none();
 
-/** The part of a registry item's `dispatch` record a row reads. */
-const decodeDispatched = Schema.decodeUnknownOption(
-  Schema.Struct({ resolved: Schema.Struct({ model: ModelRef }) })
+/**
+ * The part of a registry item's `dispatch` record a row reads: the protocol's `DispatchRecord`'s
+ * resolved model, and only that, so a resolved spec no `ModelSpec` may name (an OpenRouter `~`
+ * alias a parent ran on, recorded unchecked) still gives the row its model.
+ */
+const DispatchedModel = DispatchRecord.mapFields(
+  Struct.pick(["resolved"])
+).mapFields(
+  Struct.evolve({
+    resolved: (resolved) => resolved.mapFields(Struct.pick(["model"])),
+  })
 );
+
+const decodeDispatched = Schema.decodeUnknownOption(DispatchedModel);
 
 const decodeWorktree = Schema.decodeUnknownOption(ChildWorktree);
 
-/** The dispatched model, when the record names a real one. */
-const dispatchedModel = (dispatch: Schema.Json | undefined) =>
-  decodeDispatched(dispatch).pipe(
-    Option.map((found) => found.resolved.model),
+/** The model a decoded dispatch names, when it is a real one. */
+const realModel = (dispatched: typeof DispatchedModel.Type) =>
+  Option.some(dispatched.resolved.model).pipe(
     Option.filter((model) => model.provider !== "unknown")
   );
 
-/** The part of a parent's `cairn.workflows` a row reads: each node's child, model, level and effort. */
+/** The dispatched model, when the record names a real one. */
+const dispatchedModel = (dispatch: Schema.Json | undefined) =>
+  Option.flatMap(decodeDispatched(dispatch), realModel);
+
+/**
+ * The part of a parent's `cairn.workflows` a row reads: each node's child, model, level, effort
+ * and label, as the protocol's `NodeRecord` has them.
+ */
 const NodeLedger = Schema.Struct({
   items: Schema.Record(
     Schema.String,
     Schema.Struct({
       nodes: Schema.Record(
         Schema.String,
-        Schema.Struct({
-          childThreadId: Schema.NullOr(Schema.String),
-          provider: Schema.NullOr(Schema.String),
-          modelId: Schema.NullOr(Schema.String),
-          effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
-          thinkingLevel: Schema.optionalKey(Schema.NullOr(Schema.String)),
-          label: Schema.optionalKey(Schema.String),
-        })
+        NodeRecord.mapFields(
+          Struct.pick([
+            "childThreadId",
+            "provider",
+            "modelId",
+            "effort",
+            "thinkingLevel",
+            "label",
+          ])
+        )
       ),
     })
   ),
@@ -149,7 +170,7 @@ export interface NodeRun {
 }
 
 /**
- * What a workflow node's child runs on: its node's resolved role and the level its row recorded,
+ * What a workflow node's child runs on: its node's resolved model and the level its row recorded,
  * from the parent's `cairn.workflows` (`ledger`); a row written before the level was recorded falls
  * back to its effort, and one with neither runs at the model's default level, pi's
  * (`PI_DEFAULT_THINKING`), as a new thread does. None when no node names `threadId` as its child.
@@ -269,23 +290,18 @@ export const childRowSource = (
     });
   });
 
-/** What a seam-read row source reads of a child's `cairn.child`. */
+/** What a seam-read row source reads of a child's `cairn.child`: the protocol's `ChildDocument`. */
 const decodeLink = Schema.decodeUnknownOption(
-  Schema.Struct({
-    key: Schema.String,
-    parentThreadId: ThreadId,
-    rootThreadId: ThreadId,
-    permissionMode: RuntimeModeSchema,
-  })
+  ChildDocument.mapFields(
+    Struct.pick(["key", "parentThreadId", "rootThreadId", "permissionMode"])
+  )
 );
 
-/** What a seam-read row source reads of the parent's registry item. */
+/** What a seam-read row source reads of the parent's registry item; of its dispatch, the model. */
 const decodeItem = Schema.decodeUnknownOption(
-  Schema.Struct({
-    description: Schema.String,
-    dispatch: Schema.Json,
-    worktree: Schema.Json,
-  })
+  SubagentRecord.mapFields(
+    Struct.pick(["description", "dispatch", "worktree"])
+  ).mapFields(Struct.evolve({ dispatch: () => DispatchedModel }))
 );
 
 const decodeItems = Schema.decodeUnknownOption(
@@ -342,11 +358,13 @@ export const seamRowSource = Effect.fn("SubagentRows.seamRowSource")(function* (
     ),
     label,
     ...modelAndLevel(
-      Option.flatMap(item, ({ dispatch }) => dispatchedModel(dispatch)),
+      Option.flatMap(item, ({ dispatch }) => realModel(dispatch)),
       () => workflowNodeRun(ledger, threadId)
     ),
     runtimeMode: permissionMode,
-    worktree: Option.flatMap(item, ({ worktree }) => decodeWorktree(worktree)),
+    worktree: Option.flatMap(item, ({ worktree }) =>
+      Option.fromNullOr(worktree)
+    ),
   });
 });
 

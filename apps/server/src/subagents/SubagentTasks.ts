@@ -86,6 +86,7 @@ import {
   SUBAGENT_RESULT_ENTRY,
 } from "@cairn/protocol/Subagents";
 import type { SettlementOutcome } from "@cairn/protocol/Subagents";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import type {
@@ -161,7 +162,6 @@ import {
   TYPED_RESULT_SUMMARY,
 } from "../brain/SubagentText.ts";
 import type { BriefAnswer } from "../brain/SubagentText.ts";
-import { isRoleName } from "../models/ModelSpecs.ts";
 import {
   CAP_TEXT,
   markOf,
@@ -198,7 +198,6 @@ import {
   SubagentsDoc,
 } from "./SubagentDocs.ts";
 import type {
-  JsonRecord,
   RunMarkState,
   SubagentItemState,
   SubagentsState,
@@ -1673,11 +1672,6 @@ export interface ModelAccess {
   readonly resolve: (
     spec: string
   ) => Promise<Result.Result<ResolvedModel, ModelFailure>>;
-  /**
-   * Logs that a brief recorded before ADR 0043 named a role (`spec`), which reads as no model
-   * named: its child runs on the parent's model.
-   */
-  readonly roleNameRead: (spec: string, approvalId: string) => Promise<void>;
 }
 
 /**
@@ -2991,22 +2985,28 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     // The child runs on what its dispatch record names (2D's rule): the model the brief named,
     // checked at Go, or for a brief that names none the parent's model and thinking level.
-    const resolved: JsonRecord = Option.match(reads.dispatch, {
-      onNone: () => ({
-        spec: `${parentModel.provider}/${parentModel.modelId}`,
-        model: { provider: parentModel.provider, modelId: parentModel.modelId },
-        thinkingLevel: Option.getOrNull(reads.thinkingLevel),
-        // The parent's model as a spec, resolved at Go, prices it; unresolved, it runs anyway (the
-        // parent's model) and the record says unpriced.
-        priced: Option.exists(reads.literal, (found) => found.priced),
-      }),
-      onSome: (found) => ({
-        spec: found.spec,
-        model: { ...found.model },
-        thinkingLevel: found.thinkingLevel,
-        priced: found.priced,
-      }),
-    });
+    const resolved: DocumentState<typeof ResolvedModel> = Option.match(
+      reads.dispatch,
+      {
+        onNone: () => ({
+          spec: `${parentModel.provider}/${parentModel.modelId}`,
+          model: {
+            provider: parentModel.provider,
+            modelId: parentModel.modelId,
+          },
+          thinkingLevel: Option.getOrNull(reads.thinkingLevel),
+          // The parent's model as a spec, resolved at Go, prices it; unresolved, it runs anyway (the
+          // parent's model) and the record says unpriced.
+          priced: Option.exists(reads.literal, (found) => found.priced),
+        }),
+        onSome: (found) => ({
+          spec: found.spec,
+          model: { ...found.model },
+          thinkingLevel: found.thinkingLevel,
+          priced: found.priced,
+        }),
+      }
+    );
 
     const model = Option.match(reads.dispatch, {
       onNone: () => reads.model,
@@ -3217,17 +3217,6 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       parent,
       record.id
     );
-
-    // A brief recorded before ADR 0043 may name a role: it reads as no model named, so its child
-    // runs on the parent's model, and the read is logged.
-    const roleName = Option.filter(
-      Option.flatMap(brief, (found) => Option.fromNullOr(found.role)),
-      isRoleName
-    );
-
-    if (Option.isSome(roleName)) {
-      await dependencies.models.roleNameRead(roleName.value, record.id);
-    }
 
     const named = Option.flatMap(brief, namedSpecOf);
 

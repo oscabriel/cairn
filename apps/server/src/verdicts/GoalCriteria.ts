@@ -7,7 +7,7 @@ import { CriterionProposal } from "@cairn/protocol/Policy";
 import type { JudgeRef } from "@cairn/protocol/Policy";
 import { Match, Option, Result, Schema } from "effect";
 
-import { FAILURE_WORDS, isRoleName } from "../models/ModelSpecs.ts";
+import { FAILURE_WORDS, parseModelSpec } from "../models/ModelSpecs.ts";
 import type { GoalState, JudgeRefState } from "./GoalDocs.ts";
 import { judgeSpecOf } from "./ModelJudge.ts";
 
@@ -70,9 +70,11 @@ const judgeOf = (
   }
 
   if (args.judge === "model") {
-    if (args.model !== undefined && isRoleName(args.model)) {
+    const model = args.model?.trim() ?? "";
+
+    if (model !== "" && Option.isNone(parseModelSpec(model))) {
       return Result.fail(
-        `${at}.model: "${args.model.trim()}" is a role, and ${FAILURE_WORDS.role_removed}.`
+        `${at}.model: "${model}": ${FAILURE_WORDS.invalid_spec}. Name a model as provider/modelId[:level], or leave it out.`
       );
     }
 

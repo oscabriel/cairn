@@ -2,7 +2,7 @@
 // exactly when the commit that emitted it does; a reactor handles each of its events once, oldest
 // first, skipping other kinds; a throwing handler rolls back its writes with its cursor and is
 // retried; an event a handler keeps failing on, or cannot read, is dead-lettered once, pushed, and
-// the reactor goes on (the 7B incident replayed on the production budget reactor); the log rotates monthly and a reactor follows the marker into the next log; a task a
+// the reactor goes on (the 7B incident replayed on the production budget reactor); the log rotates monthly and a reactor follows the marker into the next log, and `cairn.events` decodes with the protocol's `EventsDocument`; a task a
 // handler creates runs once; the status counts what is pending; an entry is the protocol's
 // envelope; a new reactor starts where its `from` says; a Session reopen wakes the reactors; `stop`
 // waits for the step in flight; and a bad reactor name kills the layer. The kill -9 half of the
@@ -15,7 +15,7 @@ import path from "node:path";
 import { ConversationId } from "@cairn/protocol/Ids";
 import { Budget, DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
-import { EventEnvelope } from "@cairn/protocol/Workflows";
+import { EventEnvelope, EventsDocument } from "@cairn/protocol/Workflows";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { SessionDocToken, Storage, Tx } from "@earendil-works/pi-durable";
 import {
@@ -774,6 +774,10 @@ describe("durable events", () => {
               logConversationId: second.logConversationId ?? 0,
               entryId: late,
             });
+            // What the host committed is the protocol's `cairn.events`.
+            assert.isTrue(
+              Option.isSome(Schema.decodeOption(EventsDocument)(state))
+            );
           })
       ),
     20_000

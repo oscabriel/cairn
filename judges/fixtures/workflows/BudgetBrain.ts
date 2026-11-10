@@ -178,14 +178,12 @@ const effect = (line: WorkEffect) => {
 /** A model a node names resolves to the faux model this brain runs; none runs on the thread's. */
 const resolveModel = async (spec: string) =>
   await Promise.resolve(
-    Result.succeed(
-      Option.some({
-        spec,
-        provider: FAUX_MODEL.provider,
-        modelId: FAUX_MODEL.modelId,
-        thinkingLevel: Option.none(),
-      })
-    )
+    Result.succeed({
+      spec,
+      provider: FAUX_MODEL.provider,
+      modelId: FAUX_MODEL.modelId,
+      thinkingLevel: Option.none(),
+    })
   );
 
 /** This brain plants its launch, so its model never proposes one. */

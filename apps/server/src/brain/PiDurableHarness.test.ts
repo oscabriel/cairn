@@ -813,7 +813,17 @@ describe("PiDurableHarness inspect", () => {
                     anchorTaskId: 1,
                     briefApprovalId: "brief-1",
                     description: "a child",
-                    dispatch: {},
+                    dispatch: {
+                      spec: null,
+                      resolved: {
+                        spec: "faux/scripted",
+                        model: { provider: "faux", modelId: "scripted" },
+                        thinkingLevel: null,
+                        priced: false,
+                      },
+                      previewed: null,
+                      dispatchedAt: 1,
+                    },
                     isolation: "shared",
                     worktree: null,
                     status: "working",

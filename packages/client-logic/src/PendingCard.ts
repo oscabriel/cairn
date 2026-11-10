@@ -155,10 +155,7 @@ const judgedLines = (brief: Brief): ReadonlyArray<CardLine> => {
     : [[BriefJudgeText.doneWhenLabel, commands.join("; ")], judged];
 };
 
-/**
- * Who runs a brief: the model it names, else its parent's model, which a role recorded before
- * ADR 0043 runs on too.
- */
+/** Who runs a brief: the model it names, else its parent's model. */
 const whoText = (brief: Brief): string =>
   Option.match(briefSpec(brief), {
     onNone: () => "The parent's model",

@@ -6,9 +6,8 @@
 // - a named `provider/modelId:level` is the child's model and level (`pi.agent`), as its dispatch
 //   record names;
 // - a named model that is not ready is refused at the ask with its reason, and a role name
-//   (`@worker`) from a new call is refused as removed;
+//   (`@worker`) is refused as no model;
 // - a model that was ready at the ask but not at Go starts nothing, and the parent is told once;
-// - a brief recorded before ADR 0043 that names `@worker` runs on the parent's model at Go;
 // - the brain-wide cap (`maxLivePerBrain`, 32 in production, 2 here) counts every thread's
 //   children: a second thread's spawn past it is refused, while its own cap of 8 is far off;
 // - a budget covering the parent at its line when the user says Go starts nothing (ADR 0036, the
@@ -477,7 +476,12 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
 
               return Object.values(approvals?.items ?? {})
                 .filter((record) => record.tool === "subagent_spawn")
-                .map((record) => [record.summary, record.payload?.budget]);
+                .map((record) => [
+                  record.summary,
+                  record.payload?.type === "brief"
+                    ? record.payload.budget
+                    : undefined,
+                ]);
             });
 
             assert.deepStrictEqual(Object.fromEntries(budgets), {
@@ -490,7 +494,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
   );
 
   it.live(
-    "a named model that is not ready, or a role name, is refused at the ask with its reason",
+    "a named model that is not ready, or a role name, which is no model, is refused at the ask with its reason",
     () =>
       withBrain(
         DEFAULT_TOOL_OPTIONS,
@@ -520,7 +524,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             assert.include(transcript, "it is not in the model catalog");
             assert.include(
               transcript,
-              JSON.stringify(SubagentToolText.roleRemoved("@worker")).slice(
+              JSON.stringify(SubagentToolText.modelInvalid("@worker")).slice(
                 1,
                 -1
               )
@@ -592,61 +596,6 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
                   Option.isNone(event.parent)
               )
             );
-          })
-      ),
-    30_000
-  );
-
-  it.live(
-    "a brief recorded before roles were removed that names @worker runs on the parent's model",
-    () =>
-      withBrain(
-        DEFAULT_TOOL_OPTIONS,
-        [
-          fauxAssistantMessage(spawnCall("Count the files", null, "c1"), {
-            stopReason: "toolUse",
-          }),
-          fauxAssistantMessage("Waiting for Go."),
-          fauxAssistantMessage("There are 3 files."),
-          fauxAssistantMessage("Noted."),
-        ],
-        ({ events, parent }) =>
-          Effect.gen(function* () {
-            yield* ask(PARENT, "r1");
-
-            const brief = yield* firstBrief(events, PARENT);
-
-            yield* runsEnded(events, PARENT, 1);
-
-            // The pending record as a brain before ADR 0043 froze it: its brief names `@worker`.
-            yield* read("test.legacy", async (harness, context) => {
-              await harness.commit(async (tx) => {
-                const ledger = await tx.doc(
-                  Approvals,
-                  piConversationId(parent)
-                );
-
-                const payload = ledger.items[brief]?.payload;
-
-                if (payload !== undefined && payload !== null) {
-                  payload.role = "@worker";
-                }
-              }, context);
-            });
-
-            yield* go(PARENT, brief);
-
-            const child = yield* firstChild(events);
-            const found = yield* dispatchOf(parent, child);
-
-            assert.deepStrictEqual(found.model, FAUX_MODEL);
-            assert.strictEqual(found.thinkingLevel, "off");
-            assert.strictEqual(found.dispatch?.spec, null);
-            assert.deepInclude(found.dispatch?.resolved ?? {}, {
-              spec: "faux/scripted",
-              model: FAUX_MODEL,
-              thinkingLevel: "off",
-            });
           })
       ),
     30_000

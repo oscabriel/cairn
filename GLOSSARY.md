@@ -178,7 +178,7 @@ _Avoid_: grant (in prose), allowance
 
 **Call site**: One row of a launch card's table: a script `line:column` with its model, label, phase, schema name, whether it may write, and how many times it may run at most.
 
-**Model spec**: What a brief, a workflow node, a recipe argument or a goal's model judge names to pick the model a child runs on: `provider/modelId`, with `:level` for a thinking level (`opencode-go/gpt-6-luna:high`). Naming none runs the child on its parent's model and level (ADR 0043). A named model is checked when the child is created (in the catalog, a usable credential, its provider neither failing nor past a spent plan window) and refused with the reason, never replaced. The `models` tool lists what a child can run on now. A role name (`@worker`) in a record written before ADR 0043 reads as no model named.
+**Model spec**: What a brief, a workflow node, a recipe argument or a goal's model judge names to pick the model a child runs on: `provider/modelId`, with `:level` for a thinking level (`opencode-go/gpt-6-luna:high`). Naming none runs the child on its parent's model and level (ADR 0043). A named model is checked when the child is created (in the catalog, a usable credential, its provider neither failing nor past a spent plan window) and refused with the reason, never replaced. The `models` tool lists what a child can run on now. A role name (`@worker`) is no model spec: the records that held one were migrated when roles were retired (ADR 0052), and a new one is refused as not `provider/modelId`.
 
 _Avoid_: role, alias, binding
 
@@ -259,6 +259,8 @@ _Avoid_: plugin
 **Dead letter**: An event a reactor passed without handling it, recorded with its error in `cairn.event-dead-letters`: its handler failed on it five times in a row, or could not read it at all. The reactor goes on to the next event; the dead letter is logged, shown as the reactor's last failure and pushed (ADR 0033).
 
 **Pi host**: The brain service that loads the allowlisted pi TUI extensions (pi-web-access, pi-fff) and offers their tools to every thread as pi-durable tools, one instance per brain or per folder (ADR 0039).
+
+**Stored shape**: The shape a pi-durable document or a `cairn.sqlite` row is kept in. A change to a document's shape bumps its `version` with a `migrate` that rewrites the old shape when the store hands the document out; a change to a row's JSON gets a numbered migration; a reader that still tolerates an old shape is a shim, and carries the date after which it goes (ADR 0052). A writer's state type is derived from the protocol's schema of the document (`DocumentState`), so the two cannot drift. _Avoid_: legacy reader, compat.
 
 **Events log**: The brain's structured JSON log lines (Effect's `Logger.formatJson`). Judges and the deploy check read it by event name (the `event` annotation), for example `listening` with the bound port.
 

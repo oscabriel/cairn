@@ -104,8 +104,7 @@ export const workspaceAccess = (
  * `ModelSpecs.resolve` for the spawn and the start task, which run outside Effect: the resolution,
  * or why not, in the error's words for the parent. A `ModelSpecError` is final (the model is not
  * ready, or the spec is none); `ModelSpecsUnavailable` is a read that failed and says nothing about
- * the model, so it is marked `retry`. A brief recorded before ADR 0043 that names a role is logged
- * through `roleNameRead`. It runs with `context`, the layer's (S43).
+ * the model, so it is marked `retry`. It runs with `context`, the layer's (S43).
  */
 export const modelAccess = (
   specs: ModelSpecs["Service"],
@@ -126,19 +125,6 @@ export const modelAccess = (
           )
         )
       ),
-    roleNameRead: async (spec, approvalId) => {
-      await run(
-        Effect.logInfo(
-          "a brief recorded before roles were removed names a role; its child runs on the parent's model"
-        ).pipe(
-          Effect.annotateLogs({
-            event: "legacy_role_read",
-            spec,
-            approvalId,
-          })
-        )
-      );
-    },
   };
 };
 
@@ -182,9 +168,6 @@ const NO_MODELS: ModelAccess = {
         why: "This brain checks no models; leave model out.",
       })
     ),
-  roleNameRead: async () => {
-    await Promise.resolve();
-  },
 };
 
 /** No workspaces: for the host's copy of the task definitions, whose start task never runs. */

@@ -24,7 +24,7 @@ const node = (id: string, overrides: Json = {}): Json => ({
   index: 0,
   requestId: `wf-wf-1-${id}`,
   briefId: "launch-1",
-  role: "opencode-go/gpt-6-luna:high",
+  model: "opencode-go/gpt-6-luna:high",
   provider: "faux",
   modelId: "scripted",
   effort: null,
@@ -185,7 +185,6 @@ describe("what the work panel says of a node and a run", () => {
         state: "failed",
         error: "The bridge did not answer.",
       }),
-      node("n-old", { role: "@scout", provider: null, modelId: null }),
     ]);
 
     assert.strictEqual(
@@ -199,10 +198,6 @@ describe("what the work panel says of a node and a run", () => {
     assert.strictEqual(
       nodeDetailText(memberOf(group, "n-failed")),
       "faux/scripted · The bridge did not answer."
-    );
-    assert.strictEqual(
-      nodeDetailText(memberOf(group, "n-old")),
-      "this thread's model"
     );
   });
 

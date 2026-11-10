@@ -31,6 +31,8 @@
 import type { ModelRef } from "@cairn/protocol/Models";
 import { JsonObject } from "@cairn/protocol/Policy";
 import { RESULT_DOCUMENT } from "@cairn/protocol/Subagents";
+import type { ResultDocument } from "@cairn/protocol/Subagents";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { copyJson } from "@earendil-works/chord/json";
@@ -132,14 +134,11 @@ export const ResultToolText = {
 
 // Documents.
 
-/** `cairn.result` as the document holds it: the protocol's `ResultDocument` as plain JSON. */
-export interface ResultState {
-  [key: string]: JsonValue;
-  result: JsonValue;
-  divergence: string;
-  /** 0 until the commit that accepts a result, which writes the whole document at once. */
-  attempts: number;
-}
+/**
+ * `cairn.result` as the document holds it: the protocol's `ResultDocument`. `attempts` is 0 only in
+ * the initial value, which is never committed: the commit that accepts a result writes it whole.
+ */
+export type ResultState = DocumentState<typeof ResultDocument>;
 
 /**
  * `cairn.result` on the child: the first value `submit_result` accepted. Created only in the
@@ -711,7 +710,7 @@ export const readAttemptState = async (
 
 /**
  * The model that produced the child's last assistant message, which is what the result came
- * from: read from the transcript, never from the role table.
+ * from: read from the transcript, never from what the brief named.
  */
 export const returnedModelOf = (
   messages: ReadonlyArray<Message>

@@ -17,10 +17,7 @@
 // `layerOff` is for the scripted brain, which has no pi-durable store and records no spend.
 
 import { ConversationId, ThreadId } from "@cairn/protocol/Ids";
-import {
-  WORKFLOWS_DOCUMENT,
-  WorkflowsDocument,
-} from "@cairn/protocol/Workflows";
+import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import type {
   CommitPublication,
@@ -33,6 +30,7 @@ import type {
 import { UsageDoc } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 
+import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
 import { ThreadMeta, ThreadReceipt } from "./CairnDocs.ts";
@@ -527,32 +525,16 @@ export class SpendFeed extends Context.Service<
             ConversationId.make(receipt.conversationId)
           );
 
-          const record = yield* durable(
-            "workflows.find",
-            async (context) =>
-              await open.storage.findDocument(
-                {
-                  kind: WORKFLOWS_DOCUMENT,
-                  scope: { kind: "conversation", conversationId },
-                },
-                "current",
-                context
-              )
-          );
-
-          if (record === undefined) {
-            return Option.none<ReadonlyArray<ThreadId>>();
-          }
-
-          const stored = yield* durable(
+          // Through the document's token, so a ledger stored at an older version is migrated
+          // (ADR 0052) before it is decoded.
+          const ledger = yield* durable(
             "workflows.read",
             async (context) =>
-              await open.storage.document(record.id, "current", context)
+              await open.harness.snapshot(WorkflowsDoc, conversationId, context)
           );
 
-          const workflow = Option.flatMap(
-            decodeWorkflows(stored?.value),
-            (doc) => Option.fromUndefinedOr(doc.items[workflowId])
+          const workflow = Option.flatMap(decodeWorkflows(ledger), (doc) =>
+            Option.fromUndefinedOr(doc.items[workflowId])
           );
 
           return Option.map(workflow, (found) =>

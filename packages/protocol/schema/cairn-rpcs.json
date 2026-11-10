@@ -16,7 +16,7 @@
         "properties": {
           "protocol": {
             "type": "number",
-            "enum": [2]
+            "enum": [3]
           },
           "build": {
             "type": "string",
@@ -12698,7 +12698,7 @@
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "model": {
                           "type": "object",
@@ -12758,7 +12758,6 @@
                       "type": "string",
                       "enum": [
                         "invalid_spec",
-                        "role_removed",
                         "unknown_model",
                         "missing_credential",
                         "limited",
@@ -14999,7 +14998,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                             },
                             {
                               "type": "null"

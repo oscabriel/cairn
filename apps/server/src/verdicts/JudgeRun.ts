@@ -37,7 +37,6 @@ import { Data, Effect, Match, Option, Predicate, Result, Schema } from "effect";
 import { ThreadMeta } from "../brain/CairnDocs.ts";
 import { errorText } from "../brain/Durable.ts";
 import { applyNote, noteEntry, readNote } from "../brain/NoteAdmission.ts";
-import { isRoleName } from "../models/ModelSpecs.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
 import type {
   CriterionStateDoc,
@@ -114,11 +113,6 @@ export type JudgeModelCall = (
 export interface JudgeModels {
   readonly resolve: JudgeModelResolver;
   readonly ask: JudgeModelCall;
-  /**
-   * Logs that a judge recorded before ADR 0043 names a role (`spec`), which reads as no model
-   * named: it runs on the goal thread's model.
-   */
-  readonly roleNameRead: (spec: string, runId: string) => Promise<void>;
 }
 
 /**
@@ -368,10 +362,6 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
     runId: string,
     context: ChordContext
   ): Promise<Judged> => {
-    if (judge.spec !== null && isRoleName(judge.spec)) {
-      await models.roleNameRead(judge.spec, runId);
-    }
-
     const named = judgeSpecOf(judge.spec);
     const agent = await runtime.agent(context);
 

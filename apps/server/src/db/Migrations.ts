@@ -28,6 +28,7 @@ import { ChildWorkspaces0012 } from "./migrations/0012ChildWorkspaces.ts";
 import { ModelHealthReset0013 } from "./migrations/0013ModelHealthReset.ts";
 import { CommandReceiptAge0014 } from "./migrations/0014CommandReceiptAge.ts";
 import { ParkedRemoved0015 } from "./migrations/0015ParkedRemoved.ts";
+import { RolesRetired0016 } from "./migrations/0016RolesRetired.ts";
 
 /** Every cairn.sqlite migration, keyed <NNNN>_<Name>; one id space. */
 export const migrations: MigrationRecord = {
@@ -46,4 +47,5 @@ export const migrations: MigrationRecord = {
   "0013_ModelHealthReset": ModelHealthReset0013,
   "0014_CommandReceiptAge": CommandReceiptAge0014,
   "0015_ParkedRemoved": ParkedRemoved0015,
+  "0016_RolesRetired": RolesRetired0016,
 };

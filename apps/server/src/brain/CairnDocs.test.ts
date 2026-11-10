@@ -30,7 +30,7 @@ import { escalateIn, mirrorIdOf } from "../approvals/QuestionRoute.ts";
 import {
   ChildDoc,
   EscalationsDoc,
-  jsonRecordOf,
+  plainCopy,
   SubagentsDoc,
 } from "../subagents/SubagentDocs.ts";
 import { proposedRecord, WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
@@ -50,6 +50,7 @@ import {
   UNDECIDED,
 } from "./CairnDocs.ts";
 import type {
+  ApprovalPayloadState,
   ApprovalRecord,
   ApprovalsState,
   JsonRecord,
@@ -187,7 +188,7 @@ const LAUNCH = WorkflowLaunch.make({
     scriptHash: "sha256-abc",
     maxNodes: 1,
     maxConcurrent: 8,
-    roles: [
+    models: [
       {
         spec: ModelSpec.make("faux/scripted"),
         readonly: false,
@@ -201,7 +202,7 @@ const LAUNCH = WorkflowLaunch.make({
 });
 
 /** A workflow launch approval's frozen payload. */
-const LAUNCH_PAYLOAD = jsonRecordOf(Schema.encodeSync(WorkflowLaunch)(LAUNCH));
+const LAUNCH_PAYLOAD = plainCopy(Schema.encodeSync(WorkflowLaunch)(LAUNCH));
 
 describe("cairn.approvals version 1 to 2", () => {
   it.live(
@@ -309,7 +310,7 @@ describe("cairn.approvals version 1 to 2", () => {
             reason: "not today",
             answeredAt: 1_761_600_500_000,
           });
-          assert.match(reread.old, /newer version 2 than 1/u);
+          assert.match(reread.old, /newer version 3 than 1/u);
         } finally {
           rmSync(root, { recursive: true, force: true });
         }
@@ -352,7 +353,7 @@ describe("cairn.approvals version 1 to 2", () => {
 });
 
 describe("an answer to a record", () => {
-  const questions: JsonRecord = {
+  const questions: ApprovalPayloadState = {
     type: "questions",
     questions: [
       {
@@ -393,10 +394,12 @@ describe("an answer to a record", () => {
 
           applyAnswer(asked, byUser(decision, reason), 1500);
 
+          const after: Readonly<JsonRecord> = asked;
+
           for (const [key, value] of Object.entries(before)) {
             if (!moves.has(key)) {
               assert.deepStrictEqual(
-                asked[key],
+                after[key],
                 value,
                 `${kind} ${decision}: ${key}`
               );
@@ -979,7 +982,17 @@ const escalatedChildQuestion = async (
       anchorTaskId: 1,
       briefApprovalId: "brief-1",
       description: "a child",
-      dispatch: {},
+      dispatch: {
+        spec: null,
+        resolved: {
+          spec: "faux/scripted",
+          model: { provider: "faux", modelId: "scripted" },
+          thinkingLevel: null,
+          priced: false,
+        },
+        previewed: null,
+        dispatchedAt: 1,
+      },
       isolation: "shared",
       worktree: null,
       status: "working",
@@ -1146,7 +1159,17 @@ describe("an escalated question's mirror", () => {
                 anchorTaskId: 1,
                 briefApprovalId: "brief-1",
                 description: "a child",
-                dispatch: {},
+                dispatch: {
+                  spec: null,
+                  resolved: {
+                    spec: "faux/scripted",
+                    model: { provider: "faux", modelId: "scripted" },
+                    thinkingLevel: null,
+                    priced: false,
+                  },
+                  previewed: null,
+                  dispatchedAt: 1,
+                },
                 isolation: "shared",
                 worktree: null,
                 status: "working",

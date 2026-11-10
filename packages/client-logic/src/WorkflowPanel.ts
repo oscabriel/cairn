@@ -67,7 +67,7 @@ export const nodeDetailText = (member: StepsNode): string => {
 
   const model =
     node.provider === null || node.modelId === null
-      ? Option.toArray(Option.map(Option.fromNullOr(node.role), specText))
+      ? Option.toArray(Option.map(Option.fromNullOr(node.model), specText))
       : [`${node.provider}/${node.modelId}${level}`];
 
   const used =

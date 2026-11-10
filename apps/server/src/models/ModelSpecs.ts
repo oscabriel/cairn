@@ -5,9 +5,8 @@
 // `resolve` runs the check for the commit that creates a child, `check` previews it for the brief
 // card and `models.check`, and `list` answers the `models` tool.
 //
-// A role name (`@worker`) is no spec any more. A new call that passes one is refused with
-// `role_removed`; a record written before ADR 0043 that still holds one reads as no model named, and
-// its caller decides that with `isRoleName` before it resolves anything.
+// A role name (`@worker`) is no spec: it fails as `invalid_spec`, as any other text that is not
+// `provider/modelId[:level]` does (ADR 0052 retired the records that held one).
 //
 // Every call reads the world as it is then: pi's catalog, which models have a usable credential,
 // `ModelHealth`, and the Claude plan's windows. The pure half (`parseModelSpec`, `resolveIn`,
@@ -25,16 +24,7 @@ import {
   ModelSpec,
 } from "@cairn/protocol/ModelSpecs";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import {
-  Clock,
-  Context,
-  Data,
-  Effect,
-  Layer,
-  Option,
-  Result,
-  Schema,
-} from "effect";
+import { Clock, Context, Effect, Layer, Option, Result, Schema } from "effect";
 
 import { ModelSource } from "../brain/ModelSource.ts";
 import { BridgeProvider } from "./BridgeProvider.ts";
@@ -79,40 +69,22 @@ export const specOf = (
     onSome: (found) => `${modelText(model)}:${found}`,
   });
 
-/**
- * Whether `text` is a role name (`@worker`, `@scout:high`): no spec since ADR 0043. A record written
- * before it reads one as no model named; a new call is refused. Only the first character is read,
- * since a model id may hold `@` but a provider never starts with one.
- */
-export const isRoleName = (text: string): boolean =>
-  text.trim().startsWith("@");
-
-/** A spec parsed: a model with an optional level, or a role name from before ADR 0043. */
-export type ParsedSpec = Data.TaggedEnum<{
-  Named: {
-    readonly spec: ModelSpec;
-    readonly model: ModelRef;
-    readonly level: Option.Option<ThinkingLevel>;
-  };
-  Role: { readonly spec: ModelSpec };
-}>;
-
-/** Builds and matches `ParsedSpec` values. */
-export const ParsedSpec = Data.taggedEnum<ParsedSpec>();
+/** A spec parsed: the model it names, with an optional level. */
+export interface ParsedSpec {
+  readonly spec: ModelSpec;
+  readonly model: ModelRef;
+  readonly level: Option.Option<ThinkingLevel>;
+}
 
 const decodeSpec = Schema.decodeOption(ModelSpec);
 
 /**
- * Parses what a tool, script or brief passes where a model goes: `provider/modelId[:level]`, or a
- * role name. A trailing `:level` is always read as the thinking level, so a model id that itself
- * ends in `:high` cannot be named. None for anything else.
+ * Parses what a tool, script or brief passes where a model goes: `provider/modelId[:level]`. A
+ * trailing `:level` is always read as the thinking level, so a model id that itself ends in `:high`
+ * cannot be named. None for anything else.
  */
 export const parseModelSpec = (text: string): Option.Option<ParsedSpec> =>
   Option.flatMap(decodeSpec(text.trim()), (spec) => {
-    if (spec.startsWith("@")) {
-      return Option.some(ParsedSpec.Role({ spec }));
-    }
-
     const colon = spec.lastIndexOf(":");
     const tail = colon === -1 ? "" : spec.slice(colon + 1);
 
@@ -126,16 +98,12 @@ export const parseModelSpec = (text: string): Option.Option<ParsedSpec> =>
 
     return slash <= 0 || modelId === ""
       ? Option.none()
-      : Option.some(
-          ParsedSpec.Named({ spec, model: { provider, modelId }, level })
-        );
+      : Option.some({ spec, model: { provider, modelId }, level });
   });
 
-/** The model a spec names, without its level; none for a role name or no spec. */
+/** The model a spec names, without its level; none for no spec. */
 export const modelOfSpec = (text: string): Option.Option<ModelRef> =>
-  Option.flatMap(parseModelSpec(text), (parsed) =>
-    ParsedSpec.$is("Named")(parsed) ? Option.some(parsed.model) : Option.none()
-  );
+  Option.map(parseModelSpec(text), (parsed) => parsed.model);
 
 /**
  * Everything one check reads, taken at the call: pi's catalog, whether a model's credential is
@@ -221,7 +189,7 @@ const resolvedOn = (
 /**
  * Resolves `text` against `world`: a named model that is in the catalog, has a usable credential
  * and is neither failing nor limited, at the spec's level held to the levels it takes. Fails with
- * the reason a brief card blocks Go on: not a spec, a role name, or why the model is not ready.
+ * the reason a brief card blocks Go on: not a spec, or why the model is not ready.
  */
 export const resolveIn = (
   world: ModelWorld,
@@ -233,13 +201,11 @@ export const resolveIn = (
     return Result.fail(unresolved("invalid_spec"));
   }
 
-  return ParsedSpec.$match(parsed.value, {
-    Role: () => Result.fail(unresolved("role_removed")),
-    Named: ({ spec, model, level }) =>
-      Option.match(unreadyOf(world, model), {
-        onNone: () => Result.succeed(resolvedOn(world, spec, model, level)),
-        onSome: (reason) => Result.fail(unresolved(reason)),
-      }),
+  const { spec, model, level } = parsed.value;
+
+  return Option.match(unreadyOf(world, model), {
+    onNone: () => Result.succeed(resolvedOn(world, spec, model, level)),
+    onSome: (reason) => Result.fail(unresolved(reason)),
   });
 };
 
@@ -260,8 +226,6 @@ export const checkIn = (
 /** The words for each reason a spec did not resolve, for errors and the brief card. */
 export const FAILURE_WORDS: Readonly<Record<ModelCheckFailure, string>> = {
   invalid_spec: "it is not provider/modelId[:level]",
-  role_removed:
-    "roles (@worker, @scout, @judge, @verifier) were removed; name a model as provider/modelId[:level], or leave it out to run on your own model",
   unknown_model: "it is not in the model catalog",
   missing_credential: "its provider has no usable credential",
   limited: "its plan limit is reached",
@@ -513,7 +477,6 @@ export class ModelSpecError extends Schema.TaggedError<ModelSpecError>()(
     spec: Schema.String,
     reason: Schema.Literals([
       "invalid_spec",
-      "role_removed",
       "unknown_model",
       "missing_credential",
       "limited",
@@ -614,7 +577,7 @@ export class ModelSpecs extends Context.Service<
   {
     /**
      * Resolves a named spec for the commit that creates a child. Fails with `ModelSpecError` when
-     * the spec is not one, is a role name, or names a model that is not ready.
+     * the spec is not one, or names a model that is not ready.
      */
     resolve(
       spec: string

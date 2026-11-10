@@ -11,7 +11,7 @@
 import { Context, Effect, FileSystem, Layer, Option, Result } from "effect";
 
 import type { CairnExtension } from "../brain/Extensions.ts";
-import { isRoleName, ModelSpecs } from "../models/ModelSpecs.ts";
+import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { defaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
@@ -100,29 +100,18 @@ export class Workflows extends Context.Service<
           },
       });
 
-      // A role name reaches a node only from a script approved before ADR 0043; it reads as no
-      // model named, so the node runs on the launching thread's model.
       const resolveModel: ModelResolver = async (spec) =>
         await run(
-          isRoleName(spec)
-            ? Effect.logInfo(
-                "workflow node read a role as the launching thread's model"
-              ).pipe(
-                Effect.annotateLogs({ event: "workflow_legacy_role", spec }),
-                Effect.as(Result.succeed(Option.none<ResolvedNodeModel>()))
-              )
-            : specs.resolve(spec).pipe(
-                Effect.map((resolved) =>
-                  Option.some<ResolvedNodeModel>({
-                    spec: resolved.spec,
-                    provider: resolved.model.provider,
-                    modelId: resolved.model.modelId,
-                    thinkingLevel: Option.fromNullOr(resolved.thinkingLevel),
-                  })
-                ),
-                Effect.mapError((error) => error.message),
-                Effect.result
-              )
+          specs.resolve(spec).pipe(
+            Effect.map((resolved): ResolvedNodeModel => ({
+              spec: resolved.spec,
+              provider: resolved.model.provider,
+              modelId: resolved.model.modelId,
+              thinkingLevel: Option.fromNullOr(resolved.thinkingLevel),
+            })),
+            Effect.mapError((error) => error.message),
+            Effect.result
+          )
         );
 
       return Workflows.of({

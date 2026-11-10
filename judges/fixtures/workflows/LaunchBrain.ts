@@ -52,7 +52,7 @@ import type {
   ScriptedToolApi,
   ScriptedToolResult,
 } from "../../../apps/server/src/brain/ScriptedHarness.ts";
-import { jsonRecordOf } from "../../../apps/server/src/subagents/SubagentDocs.ts";
+import { plainCopy } from "../../../apps/server/src/subagents/SubagentDocs.ts";
 import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
 import type { CairnBrain } from "../parity/CairnApp.ts";
 import { PARITY_THREAD_ID } from "../parity/CairnApp.ts";
@@ -213,7 +213,7 @@ export const launchOf = (
       scriptHash: `hash-${workflowId}`,
       maxNodes: 4,
       maxConcurrent: 3,
-      roles: [{ spec, readonly: true, arms: "host" }],
+      models: [{ spec, readonly: true, arms: "host" }],
       modes: [],
       writes: [],
       budget: { ...DEFAULT_BUDGET, maxListMicros: Micros.make(2_000_000) },
@@ -244,7 +244,7 @@ const nodeOf = (
     index,
     requestId: `wf-${workflowId}-${id}`,
     briefId: null,
-    role: ModelSpec.make(spec),
+    model: ModelSpec.make(spec),
     provider: "faux",
     modelId: "scripted",
     effort: null,
@@ -303,7 +303,7 @@ const play = Effect.fnUntraced(function* (
   hold: boolean
 ) {
   const now = yield* Clock.currentTimeMillis;
-  const spec = launch.envelope.roles[0]?.spec ?? "faux/scripted";
+  const spec = launch.envelope.models[0]?.spec ?? "faux/scripted";
   const asks: Array<StopAsk> = [];
 
   let record: WorkflowRecord = {
@@ -336,9 +336,7 @@ const play = Effect.fnUntraced(function* (
   const write = () =>
     api.writeDocument(
       WORKFLOWS_DOCUMENT,
-      jsonRecordOf(encodeLedger({ items: { [record.id]: record } })) ?? {
-        items: {},
-      }
+      plainCopy(encodeLedger({ items: { [record.id]: record } }))
     );
 
   const setNode = (node: NodeRecord) => {
@@ -497,11 +495,7 @@ const planTool = Effect.fnUntraced(function* (
 
   const workflowId = `wf-${call.id}`;
   const launch = launchOf(workflowId, model, tag);
-  const payload = jsonRecordOf(encodeLaunch(launch));
-
-  if (payload === null) {
-    return { text: "the launch did not encode", isError: true };
-  }
+  const payload = plainCopy(encodeLaunch(launch));
 
   const answered = yield* api.askBrief(
     `Launch workflow ${launch.name}`,

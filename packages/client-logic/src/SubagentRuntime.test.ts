@@ -44,6 +44,7 @@ import {
   isActiveSubagentState,
   isTerminalSubagentState,
   parentThreadIdOf,
+  registryChildrenOf,
   spawnCallsOf,
   subagentDetailPreview,
   subagentGroupSummary,
@@ -172,7 +173,17 @@ const registryItem = (fields: { readonly [key: string]: Json }): Json => ({
   anchorTaskId: 7,
   briefApprovalId: "call-1",
   description: "Count the files",
-  dispatch: { spec: null, resolved: null, previewed: null, dispatchedAt: 2000 },
+  dispatch: {
+    spec: null,
+    resolved: {
+      spec: "faux/scripted",
+      model: { provider: "faux", modelId: "scripted" },
+      thinkingLevel: null,
+      priced: false,
+    },
+    previewed: null,
+    dispatchedAt: 2000,
+  },
   isolation: "shared",
   worktree: null,
   status: "working",
@@ -751,6 +762,47 @@ describe("a child's row", () => {
       onlyRow({ status: "accepted", started: { childThreadId: CHILD_B } })
         .state,
       "working"
+    );
+  });
+
+  it("reads a child whose parent runs on a model id no spec may name", () => {
+    // An OpenRouter alias: `~` is outside `ModelSpec`, and the dispatch records the parent's model
+    // unchecked when the brief names none. The registry reader reads only when it was dispatched.
+    const item = registryItem({
+      status: "settled",
+      settlements: [
+        {
+          seq: 1,
+          outcome: "completed",
+          answerEntry: 9,
+          reportedAt: 6000,
+          inputs: [],
+        },
+      ],
+      delivered: 1,
+      dispatch: {
+        spec: null,
+        resolved: {
+          spec: "openrouter/~anthropic/claude-sonnet-latest",
+          model: {
+            provider: "openrouter",
+            modelId: "~anthropic/claude-sonnet-latest",
+          },
+          thinkingLevel: null,
+          priced: true,
+        },
+        previewed: null,
+        dispatchedAt: 2000,
+      },
+    });
+
+    assert.deepStrictEqual(
+      [...registryChildrenOf(items(item)).values()].map((child) => [
+        child.threadId,
+        child.dispatchedAt,
+        child.settlements.map(({ outcome }) => outcome),
+      ]),
+      [[CHILD_A, 2000, ["completed"]]]
     );
   });
 

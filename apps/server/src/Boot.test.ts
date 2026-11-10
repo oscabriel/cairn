@@ -281,7 +281,7 @@ const upgradeStatus = Effect.gen(function* () {
     const request = http.request({
       host: "127.0.0.1",
       port,
-      path: "/ws?protocol=2",
+      path: "/ws?protocol=3",
       headers: {
         connection: "Upgrade",
         upgrade: "websocket",

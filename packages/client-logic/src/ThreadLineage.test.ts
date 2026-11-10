@@ -282,10 +282,36 @@ const item = (
   settlements: ReadonlyArray<{ outcome: string; reportedAt: number }>
 ) => ({
   threadId,
+  conversationId: 2,
+  anchorTaskId: 7,
   briefApprovalId: `brief-${threadId}`,
+  description: "Count the files",
+  dispatch: {
+    spec: null,
+    resolved: {
+      spec: "faux/scripted",
+      model: { provider: "faux", modelId: "scripted" },
+      thinkingLevel: null,
+      priced: false,
+    },
+    previewed: null,
+    dispatchedAt: 1,
+  },
+  isolation: "shared",
+  worktree: null,
   status: "settled",
-  dispatch: { dispatchedAt: 1 },
-  settlements,
+  wake: "answer",
+  settlements: settlements.map((settlement, index) => ({
+    seq: index + 1,
+    outcome: settlement.outcome,
+    answerEntry: null,
+    reportedAt: settlement.reportedAt,
+    inputs: [],
+  })),
+  runs: [],
+  delivered: settlements.length,
+  questions: {},
+  inputs: {},
 });
 
 describe("the registry's settlements", () => {

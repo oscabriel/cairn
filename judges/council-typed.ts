@@ -148,14 +148,12 @@ const resolveModel: ModelResolver = async (spec) =>
     Option.match(Option.fromUndefinedOr(MODELS.get(spec)), {
       onNone: () => Result.fail(`the judge names no model ${spec}`),
       onSome: (model) =>
-        Result.succeed(
-          Option.some({
-            spec,
-            provider: model.provider,
-            modelId: model.modelId,
-            thinkingLevel: Option.none(),
-          })
-        ),
+        Result.succeed({
+          spec,
+          provider: model.provider,
+          modelId: model.modelId,
+          thinkingLevel: Option.none(),
+        }),
     })
   );
 
@@ -180,7 +178,8 @@ const decodeRoster = Schema.decodeUnknownOption(Schema.fromJsonString(Roster));
 /** One node's line. */
 interface NodeLine {
   readonly node: string;
-  readonly role: string | null;
+  /** The model spec the node asked for. */
+  readonly spec: string | null;
   readonly model: string;
   readonly state: string;
   readonly schemaAttempts: number;
@@ -265,7 +264,7 @@ const waitForEnd = (brain: KitBrain) =>
 
 /** What is wrong with one node, if anything. */
 const nodeFailures = (node: NodeItemState): ReadonlyArray<string> => {
-  const want = MODELS.get(node.role ?? "");
+  const want = MODELS.get(node.model ?? "");
   const ran = `${node.provider ?? ""}/${node.modelId ?? ""}`;
   const found: Array<string> = [];
 
@@ -284,7 +283,7 @@ const nodeFailures = (node: NodeItemState): ReadonlyArray<string> => {
 
 const lineOf = (node: NodeItemState): NodeLine => ({
   node: node.label,
-  role: node.role,
+  spec: node.model,
   model: `${node.provider ?? ""}/${node.modelId ?? ""}`,
   state: node.state,
   schemaAttempts: node.schemaAttempts,

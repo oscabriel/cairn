@@ -3,9 +3,13 @@
 // dropped. On the usage page, new spend on the thread rows asks for the roll-up again, one question
 // at a time. One budget form is open at a time (ADR 0047): the default a brief or workflow starts
 // from, saved through `settings.update`, or a thread's own budget, through `budget.declare`; each in
-// dollars at list price and tokens, both empty for no limit.
+// dollars at list price and tokens, both empty for no limit. A thread's form is filled from the
+// line the thread stands at (`budget.get`) before it takes typing or a save, since a save replaces
+// that line whole. While a save is out its form stays open and no other opens, and each answer
+// lands only on the form it was sent from.
 
 import { budgetDraftOf, budgetOfDraft } from "@cairn/client-logic/Meters";
+import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ShellSnapshot } from "@cairn/protocol/Shell";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
@@ -14,7 +18,12 @@ import type { Update } from "foldkit";
 import * as AsyncData from "foldkit/asyncData";
 import { modifyFields } from "foldkit/struct";
 
-import { FetchMetersSettings, FetchSpend, SaveBudget } from "./Command.ts";
+import {
+  FetchMetersSettings,
+  FetchSpend,
+  FetchThreadBudget,
+  SaveBudget,
+} from "./Command.ts";
 import type { Services } from "./Command.ts";
 import { Message } from "./Message.ts";
 import type {
@@ -161,35 +170,85 @@ export const inform = (model: Model, context: MetersContext): UpdateReturn => {
   return askNewSpend(next);
 };
 
+/** The budget a form writes its two limits over: no limit but `budget`'s warning line (ADR 0047). */
+const baseOf = (budget: Budget): Budget => ({
+  ...DEFAULT_BUDGET,
+  warnAt: budget.warnAt,
+});
+
+/** Whether `budget` sets a limit the form offers. */
+const hasLimit = (budget: Budget): boolean =>
+  budget.maxListMicros !== null || budget.maxTokens !== null;
+
+/** Whether two targets set the same budget. */
+const sameTarget = (a: BudgetTarget, b: BudgetTarget): boolean =>
+  Predicate.isTagged(a, "Thread")
+    ? Predicate.isTagged(b, "Thread") && a.threadId === b.threadId
+    : Predicate.isTagged(b, "Default");
+
+/** Whether a save is out for the open form. */
+const savingNow = (model: Model): boolean =>
+  Option.exists(model.form, (form) => form.saving);
+
+/** A form at `line`, filled from `budget`. */
+const filledForm = (
+  target: BudgetTarget,
+  line: BudgetForm["line"],
+  budget: Budget
+): BudgetForm => ({
+  target,
+  line,
+  base: baseOf(budget),
+  ...budgetDraftOf(budget),
+  saving: false,
+  error: Option.none(),
+});
+
 /**
- * The budget a form starts from and writes over: the default's own warning line, a thread's the
- * default line of 80 percent. Only dollars and tokens are offered (ADR 0047), so the form writes no
- * other limit.
+ * Opens the form for `target`: the default's filled from the settings on the page, a thread's
+ * empty and closed to saves until `budget.get` says the line it stands at.
  */
-const baseOf = (model: Model, target: BudgetTarget): Budget =>
-  Predicate.isTagged(target, "Default")
-    ? {
-        ...DEFAULT_BUDGET,
-        warnAt: Option.match(AsyncData.getData(model.server), {
-          onNone: () => DEFAULT_BUDGET.warnAt,
-          onSome: (settings) => settings.defaultBudget.warnAt,
-        }),
-      }
-    : DEFAULT_BUDGET;
+const openForm = (model: Model, target: BudgetTarget): UpdateReturn => {
+  const opened = (form: BudgetForm) =>
+    modifyFields(model, {
+      form: () => Option.some(form),
+      saved: () => Option.none(),
+    });
 
-/** A form for `target`, filled from the default it changes, empty for a thread. */
-const formFor = (model: Model, target: BudgetTarget): BudgetForm => {
-  const draft = Predicate.isTagged(target, "Default")
-    ? Option.match(AsyncData.getData(model.server), {
-        onNone: () => budgetDraftOf(DEFAULT_BUDGET),
-        onSome: (settings) => budgetDraftOf(settings.defaultBudget),
-      })
-    : budgetDraftOf(DEFAULT_BUDGET);
+  if (Predicate.isTagged(target, "Thread")) {
+    return {
+      model: opened(filledForm(target, "reading", DEFAULT_BUDGET)),
+      commands: [FetchThreadBudget({ threadId: target.threadId })],
+    };
+  }
 
-  return { target, ...draft, saving: false, error: Option.none() };
+  const current = Option.match(AsyncData.getData(model.server), {
+    onNone: () => DEFAULT_BUDGET,
+    onSome: (settings) => settings.defaultBudget,
+  });
+
+  return { model: opened(filledForm(target, "read", current)) };
 };
 
-/** Changes the open form as typed, unless its save is out; a new word clears the last error. */
+/** Changes the open form while it is still reading `threadId`'s line. */
+const answerRead = (
+  model: Model,
+  threadId: ThreadId,
+  change: (form: BudgetForm) => BudgetForm
+): UpdateReturn => ({
+  model: modifyFields(model, {
+    form: (form) =>
+      Option.map(form, (open) =>
+        open.line === "reading" &&
+        Predicate.isTagged(open.target, "Thread") &&
+        open.target.threadId === threadId
+          ? change(open)
+          : open
+      ),
+  }),
+});
+
+/** Changes the open form as typed, unless it is not filled yet or its save is out. */
 const typeForm = (
   model: Model,
   change: (form: BudgetForm) => BudgetForm
@@ -197,25 +256,34 @@ const typeForm = (
   model: modifyFields(model, {
     form: (form) =>
       Option.map(form, (open) =>
-        open.saving ? open : change({ ...open, error: Option.none() })
+        open.saving || open.line !== "read"
+          ? open
+          : change({ ...open, error: Option.none() })
       ),
   }),
 });
 
-/** What a saved form set, in words. */
-const savedText = (target: BudgetTarget): string =>
-  Predicate.isTagged(target, "Thread")
-    ? `Budget set for ${target.title}. At its line the thread and its subagents stop.`
-    : "Default budget saved. Briefs and workflows proposed from now on start from it.";
+/** What a saved form set, in words: removed when it named no limit. */
+const savedText = (target: BudgetTarget, budget: Budget): string => {
+  if (Predicate.isTagged(target, "Thread")) {
+    return hasLimit(budget)
+      ? `Budget set for ${target.title}. At its line the thread and its subagents stop.`
+      : `Budget removed for ${target.title}: it has no line of its own now.`;
+  }
+
+  return hasLimit(budget)
+    ? "Default budget saved. Briefs and workflows proposed from now on start from it."
+    : "Default budget removed. Briefs and workflows proposed from now on have no limit unless their model names one.";
+};
 
 /** Saves the open form's budget, or says why it is not one. */
 const saveForm = (model: Model): UpdateReturn =>
   Option.match(
-    Option.filter(model.form, (form) => !form.saving),
+    Option.filter(model.form, (form) => !form.saving && form.line === "read"),
     {
       onNone: () => ({ model }),
       onSome: (form) =>
-        Result.match(budgetOfDraft(baseOf(model, form.target), form), {
+        Result.match(budgetOfDraft(form.base, form), {
           onFailure: (problem) => ({
             model: modifyFields(model, {
               form: () => Option.some({ ...form, error: Option.some(problem) }),
@@ -288,24 +356,42 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         };
       }),
     ClickedRetry: () => (canAsk(model) ? loadSections(model) : { model }),
-    ClickedEditBudget: ({ target }) => ({
-      model: modifyFields(model, {
-        form: () => Option.some(formFor(model, target)),
-        saved: () => Option.none(),
-      }),
-    }),
+    // A save that is out keeps its form: another row's form waits for its answer.
+    ClickedEditBudget: ({ target }) =>
+      savingNow(model) ? { model } : openForm(model, target),
+    ReceivedThreadBudget: ({ threadId, budget }) =>
+      answerRead(model, threadId, (form) =>
+        filledForm(
+          form.target,
+          "read",
+          Option.getOrElse(budget, () => DEFAULT_BUDGET)
+        )
+      ),
+    FailedThreadBudget: ({ threadId, message: text }) =>
+      answerRead(model, threadId, (form) => ({
+        ...form,
+        line: "unread",
+        error: Option.some(
+          `${text} Its budget cannot be changed until it is read: cancel and set it again.`
+        ),
+      })),
     ChangedBudgetDollars: ({ value }) =>
       typeForm(model, (form) => ({ ...form, dollars: value })),
     ChangedBudgetTokens: ({ value }) =>
       typeForm(model, (form) => ({ ...form, tokens: value })),
     ClickedSaveBudget: () => saveForm(model),
-    ClickedCancelBudget: () => ({
-      model: modifyFields(model, { form: () => Option.none() }),
-    }),
-    SavedBudget: ({ target, settings }) => ({
+    ClickedCancelBudget: () =>
+      savingNow(model)
+        ? { model }
+        : { model: modifyFields(model, { form: () => Option.none() }) },
+    SavedBudget: ({ target, budget, settings }) => ({
       model: modifyFields(model, {
-        form: () => Option.none(),
-        saved: () => Option.some(savedText(target)),
+        form: (form) =>
+          Option.filter(
+            form,
+            (open) => !(open.saving && sameTarget(open.target, target))
+          ),
+        saved: () => Option.some(savedText(target, budget)),
         server: (server) =>
           Option.match(settings, {
             onNone: () => server,
@@ -313,14 +399,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           }),
       }),
     }),
-    FailedSaveBudget: ({ message: text }) => ({
+    FailedSaveBudget: ({ target, message: text }) => ({
       model: modifyFields(model, {
         form: (form) =>
-          Option.map(form, (open) => ({
-            ...open,
-            saving: false,
-            error: Option.some(text),
-          })),
+          Option.map(form, (open) =>
+            open.saving && sameTarget(open.target, target)
+              ? { ...open, saving: false, error: Option.some(text) }
+              : open
+          ),
       }),
     }),
   });

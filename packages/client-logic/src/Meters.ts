@@ -241,12 +241,24 @@ export interface BudgetDraft {
   readonly tokens: string;
 }
 
-/** The field's starting text for `budget`. */
+/**
+ * List-price micros as a dollar field's text: cents always, and as many more digits as the micros
+ * need (`2.50`, `0.125`, `0.000001`), so the text reads back to the same micros.
+ */
+const dollarsDraftOf = (micros: number): string => {
+  const whole = Math.floor(micros / 1_000_000);
+
+  const fraction = String(micros % 1_000_000)
+    .padStart(6, "0")
+    .replace(/0{1,4}$/u, "");
+
+  return `${String(whole)}.${fraction}`;
+};
+
+/** The field's starting text for `budget`: each limit to its last micro or token. */
 export const budgetDraftOf = (budget: Budget): BudgetDraft => ({
   dollars:
-    budget.maxListMicros === null
-      ? ""
-      : (budget.maxListMicros / 1_000_000).toFixed(2),
+    budget.maxListMicros === null ? "" : dollarsDraftOf(budget.maxListMicros),
   tokens: budget.maxTokens === null ? "" : String(budget.maxTokens),
 });
 
@@ -261,10 +273,12 @@ const dollarsOfDraft = (text: string): Result.Result<number | null, string> => {
   const dollars = /^\d+(?:\.\d+)?$/u.test(plain) ? Number(plain) : Number.NaN;
   const micros = Math.round(dollars * 1_000_000);
 
-  return Number.isFinite(dollars) && micros > 0
+  // Past the largest whole number of micros a double holds exactly (about $9 billion) there is no
+  // limit Cairn can keep, so the field refuses it rather than letting `Micros` throw.
+  return Number.isSafeInteger(micros) && micros > 0
     ? Result.succeed(micros)
     : Result.fail(
-        "Dollars must be an amount above zero, like 2.50, or empty for no dollar limit."
+        "Dollars must be an amount above zero and under $9,000,000,000, like 2.50, or empty for no dollar limit."
       );
 };
 

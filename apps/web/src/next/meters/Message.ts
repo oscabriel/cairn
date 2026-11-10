@@ -1,7 +1,8 @@
-// The meters' Messages: what the brain answered for each section.
+// The meters' Messages: what the brain answered for each section, and the budget form's steps.
 
+import { ThreadId } from "@cairn/protocol/Ids";
 import { ServerSettings } from "@cairn/protocol/Settings";
-import { Spend } from "@cairn/protocol/Spend";
+import { Budget, Spend } from "@cairn/protocol/Spend";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 
@@ -26,16 +27,24 @@ export const Message = defineMessageUnion({
   ClickedRetry: {},
   /** Opens the budget form for the default or a thread (ADR 0047). */
   ClickedEditBudget: { target: BudgetTarget },
+  /** `budget.get` answered: the line a thread's own scope stands at, none for no line. */
+  ReceivedThreadBudget: {
+    threadId: ThreadId,
+    budget: Schema.Option(Budget),
+  },
+  /** `budget.get` failed, in the brain's words. */
+  FailedThreadBudget: { threadId: ThreadId, message: Schema.String },
   ChangedBudgetDollars: { value: Schema.String },
   ChangedBudgetTokens: { value: Schema.String },
   ClickedSaveBudget: {},
   ClickedCancelBudget: {},
-  /** The brain took the form's budget; for the default, with the settings it now holds. */
+  /** The brain took `budget` for `target`; for the default, with the settings it now holds. */
   SavedBudget: {
     target: BudgetTarget,
+    budget: Budget,
     settings: Schema.Option(ServerSettings),
   },
-  FailedSaveBudget: { message: Schema.String },
+  FailedSaveBudget: { target: BudgetTarget, message: Schema.String },
 });
 
 /** A meters Message. */

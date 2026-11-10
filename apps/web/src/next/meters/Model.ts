@@ -3,12 +3,12 @@
 // page already streams, the thread rows' spend) arrives as its context; what it asks the brain for
 // (the whole roll-up and the server settings with the default budget) is held per epoch, as the
 // settings page holds its sections; the one budget form the user has open (the default, or a
-// thread's own budget, ADR 0047) is held beside them. Only this module and the Messages load with
+// thread's own budget, filled from the line it stands at, ADR 0047) is held beside them. Only this module and the Messages load with
 // the entry; the update and views come with the `next` chunk.
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import { ServerSettings } from "@cairn/protocol/Settings";
-import { Spend, SpendSummary } from "@cairn/protocol/Spend";
+import { Budget, Spend, SpendSummary } from "@cairn/protocol/Spend";
 import { UsageSnapshot } from "@cairn/protocol/Usage";
 import { Option, Schema } from "effect";
 import * as AsyncData from "foldkit/asyncData";
@@ -51,9 +51,22 @@ export const BudgetTarget = Schema.Union([
 
 export type BudgetTarget = typeof BudgetTarget.Type;
 
+/**
+ * Where a form's starting line stands: a thread's form is `reading` until `budget.get` answers,
+ * `read` once it is filled from the line the thread stands at, and `unread` when that failed; the
+ * default's is `read` at once, from the settings on the page. Only a `read` form takes typing or a
+ * save, so a save never replaces a limit the user did not see.
+ */
+export const FormLine = Schema.Literals(["reading", "read", "unread"]);
+
+export type FormLine = typeof FormLine.Type;
+
 /** An open budget form: its target, dollars and tokens as typed, and where its save stands. */
 export const BudgetForm = Schema.Struct({
   target: BudgetTarget,
+  line: FormLine,
+  /** The budget the form starts from and writes its two limits over (its warning line kept). */
+  base: Budget,
   dollars: Schema.String,
   tokens: Schema.String,
   saving: Schema.Boolean,

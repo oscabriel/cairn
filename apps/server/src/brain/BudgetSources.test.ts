@@ -4,7 +4,10 @@
 // the budget and counts an epoch; a raise is asked and a notice written once per id, the notice
 // landing in the transcript without starting a run.
 
-import { ThreadId } from "@cairn/protocol/Ids";
+import {
+  ConversationId as StoredConversationId,
+  ThreadId,
+} from "@cairn/protocol/Ids";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
@@ -36,6 +39,8 @@ import {
   UNDECIDED,
 } from "./CairnDocs.ts";
 import type { ApprovalRecord } from "./CairnDocs.ts";
+import { EventsDoc, eventKind } from "./Events.ts";
+import { piConversationId } from "./PiIds.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -160,6 +165,29 @@ const family = (harness: Harness, budget: Budget) =>
     }, context);
 
     return { parent, child };
+  });
+
+/** The kinds of the events in the log, oldest first. */
+const eventsOf = (harness: Harness) =>
+  Effect.promise(async () => {
+    const state = await harness.snapshot(EventsDoc, context);
+
+    if (state === undefined || state.logConversationId === null) {
+      return [];
+    }
+
+    const log = piConversationId(
+      StoredConversationId.make(state.logConversationId)
+    );
+
+    return await harness.commit(async (tx) => {
+      const page = await tx.scanEntries(
+        { conversationId: log, order: "ascending" },
+        500
+      );
+
+      return page.items.map((entry) => entry.kind);
+    }, context);
   });
 
 const sourcesOver = (harness: Harness, storage: MemoryStorage) =>
@@ -390,6 +418,14 @@ describe("budget sources over a Harness", () => {
         assert.deepStrictEqual(stale?.decidedBy, { kind: "user" });
         assert.strictEqual(stale?.reason, RAISE_REPLACED);
 
+        // The user's decline is an answer, so its commit carries the answer's event (ADR 0033).
+        assert.deepStrictEqual(
+          (yield* eventsOf(harness)).filter(
+            (kind) => kind === eventKind("approval.answered")
+          ).length,
+          1
+        );
+
         // A raise asked after the declare, accepted, raises the declared budget.
         const later: Budget = { ...declared, maxTokens: 10_000 };
 
@@ -405,6 +441,26 @@ describe("budget sources over a Harness", () => {
             ]),
             Option.some([later, 3])
           );
+        }).pipe(Effect.provide(sourcesOver(harness, storage)));
+      }).pipe(Effect.scoped)
+  );
+
+  it.live(
+    "a declare with no limit on a subagent leaves it no budget of its own, its brief's included",
+    () =>
+      Effect.gen(function* () {
+        const { harness, storage } = yield* openHarness;
+
+        yield* family(harness, BRIEF_BUDGET);
+
+        yield* Effect.gen(function* () {
+          const sources = yield* BudgetSources;
+
+          assert.isTrue(Option.isSome(yield* sources.scopeOf(CHILD)));
+
+          yield* sources.declare(CHILD, DEFAULT_BUDGET, "stop");
+
+          assert.deepStrictEqual(yield* sources.scopeOf(CHILD), Option.none());
         }).pipe(Effect.provide(sourcesOver(harness, storage)));
       }).pipe(Effect.scoped)
   );

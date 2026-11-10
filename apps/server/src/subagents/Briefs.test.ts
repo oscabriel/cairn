@@ -58,6 +58,34 @@ describe("a spawn's brief budget", () => {
     assert.deepStrictEqual(budgetOf(SPAWN, DEFAULT_BUDGET), DEFAULT_BUDGET);
   });
 
+  it("refuses a dollar budget no micro count can hold, in words, instead of throwing", () => {
+    for (const usd of [10_000_000_000, 2_000_000, 1e-7]) {
+      const brief = briefOf(
+        { ...SPAWN, maxUsd: Option.some(usd) },
+        "full-access",
+        DEFAULT
+      );
+
+      assert.isTrue(
+        Result.isFailure(brief) && brief.failure.includes("max_usd"),
+        String(usd)
+      );
+    }
+
+    for (const tokens of [2 ** 60]) {
+      const brief = briefOf(
+        { ...SPAWN, maxTokens: Option.some(tokens) },
+        "full-access",
+        DEFAULT
+      );
+
+      assert.isTrue(
+        Result.isFailure(brief) && brief.failure.includes("max_tokens"),
+        String(tokens)
+      );
+    }
+  });
+
   it("carries only the limits a card shows: no turns, minutes or plan guard from the default", () => {
     assert.deepStrictEqual(
       budgetOf(SPAWN, {

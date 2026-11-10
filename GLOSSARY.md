@@ -382,13 +382,13 @@ _Avoid_: cost (for a plan's figure)
 
 **Default budget**: The server setting a brief or a workflow's launch starts from for each limit its model's call does not name, changed on the usage page. A proposal freezes what it started from, so a later change moves no budget already asked.
 
-**Budget scope**: A thread and its lineage subtree under one budget. A subagent's comes from its brief, as the user set it at Go; a thread's own is declared from the usage page (`budget.declare`, a `stop` scope), and a declare replaces the raises accepted before it. A goal's `drain` scope has no caller yet.
+**Budget scope**: A thread and its lineage subtree under one budget. A subagent's comes from its brief, as the user set it at Go; a thread's own is declared from the usage page (`budget.declare`, a `stop` scope), whose form opens filled with the line the thread stands at (`budget.get`). A declare replaces that line whole, raises included; one with no limit removes it, a subagent's brief budget too. A goal's `drain` scope has no caller yet.
 
 **Budget mode**: How a scope acts at its limit: `stop` (every thread of the scope stops, overshooting by at most one response per running child) or `drain` (no new subagent work starts; running children finish under their own budgets).
 
 **Budget guard**: What acts once per epoch when a scope crosses its warning line or its limit: a notice, a push, the stop or drain, and the raise.
 
-**Raise**: A `budget_raise` approval proposing the larger of double the line and the spend plus one line. Each accepted raise starts a new epoch, as does each declare. A workflow's raise names the run (its scope is the workflow id) and raises that run only. Its card names the scope by its title, reads what it spent against its line and the line proposed, and offers Decline and Approve only. A thread's raise still pending when a new budget is declared is declined in the declare's commit.
+**Raise**: A `budget_raise` approval proposing the larger of double the line and the spend plus one line. Each accepted raise starts a new epoch, as does each declare. A workflow's raise names the run (its scope is the workflow id) and raises that run only. Its card names the scope by its title, reads what it spent against its line and the line proposed, and offers Decline and Approve only. A thread's raise still pending when a new budget is declared is declined, as the user's answer, in the declare's commit.
 
 **Workflow meter**: What a workflow run spent, summed over its nodes' children (tokens, list-price dollars priced one response at a time, model turns) and written into its ledger row in the commit that reserves a node, the one that settles a node, and, while a node runs, at most once a second. The first commit that reaches the warning line or the limit marks it and emits `workflow.budget.soft` or `workflow.budget.spent`, once per epoch.
 

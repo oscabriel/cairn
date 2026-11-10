@@ -41,7 +41,7 @@ import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { emit } from "../brain/Events.ts";
 import { cutSummary, readPermissions } from "../brain/Permissions.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
-import { budgetAsked } from "../usage/DefaultBudget.ts";
+import { budgetAsked, MAX_TOKENS, MAX_USD } from "../usage/DefaultBudget.ts";
 import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import {
   BUILT_IN_RECIPES,
@@ -273,10 +273,16 @@ export const planTool = (plan: PlanAccess) => {
       return Option.some(fallback.failure);
     }
 
-    const budget = budgetAsked(fallback.success, {
+    const asked = budgetAsked(fallback.success, {
       maxTokens: Option.fromUndefinedOr(args.max_tokens),
       maxUsd: Option.fromUndefinedOr(args.max_usd),
     });
+
+    if (Result.isFailure(asked)) {
+      return Option.some(asked.failure);
+    }
+
+    const budget = asked.success;
 
     // A reference to a project recipe proposes the recipe's own script, kept for the gate; one to a
     // built-in is resolved by the dry run and the gate alike.
@@ -382,13 +388,15 @@ export const planTool = (plan: PlanAccess) => {
       max_tokens: Type.Optional(
         Type.Integer({
           minimum: 1,
+          maximum: MAX_TOKENS,
           description:
             "A token budget for the whole workflow; leave it out for the user's default.",
         })
       ),
       max_usd: Type.Optional(
         Type.Number({
-          exclusiveMinimum: 0,
+          minimum: 1e-6,
+          maximum: MAX_USD,
           description:
             "A list-price dollar budget for the whole workflow; leave it out for the user's default.",
         })

@@ -9,7 +9,9 @@
 // `to`, oldest first; the count of accepted raises plus the count of declares is the scope's epoch.
 // A declare replaces the raises accepted before it and declines one still pending, in its commit.
 // A brief's budget stops (`stop`); a declared one keeps its mode. A budget with no enforced limit is
-// no scope.
+// no scope. A declared budget with no limit is still the thread's declared budget: it stands over
+// the brief's too, so a subagent whose budget the user removes on the usage page (which showed
+// the line it removes) runs with no line of its own, its parent's scope still binding it.
 //
 // The guard asks a raise as a pending record of its own (`toolTaskId` 0, tool `budget_raise`, kind
 // `tool-call`), keyed `budget-raise-<epoch>`, so asking again after a crash finds it; its payload
@@ -60,6 +62,7 @@ import {
   applyAnswer,
   Approvals,
   cancelAbandonedApprovals,
+  emitAnswered,
   ThreadMeta,
   ThreadReceipt,
   UNDECIDED,
@@ -426,12 +429,14 @@ export class BudgetSources extends Context.Service<
 
         // One commit: the budget, the raises it replaces, and the decline of a raise still pending
         // for the scope (a workflow's raise is the run's, and stays), so the card never offers a
-        // raise of a line that no longer holds.
+        // raise of a line that no longer holds. The user set the new line, so the decline is the
+        // user's answer, and carries the answer's event (`emitAnswered`, ADR 0033).
         return yield* durable("budget.declare", async (context) => {
           await open.harness.commit(async (tx) => {
             const doc = await tx.doc(BudgetDoc, id);
             const approvals = await tx.doc(Approvals, id);
             const records = Object.values(approvals.items);
+            const declined: Array<ApprovalRecord> = [];
 
             for (const record of records) {
               if (
@@ -440,8 +445,7 @@ export class BudgetSources extends Context.Service<
                 Option.exists(
                   decodeRaise(record.payload),
                   (raise) => !raise.scope.startsWith("wf-")
-                )
-              ) {
+                ) &&
                 applyAnswer(
                   record,
                   {
@@ -452,7 +456,9 @@ export class BudgetSources extends Context.Service<
                     launch: Option.none(),
                   },
                   now
-                );
+                ) === "answered"
+              ) {
+                declined.push(record);
               }
             }
 
@@ -460,6 +466,11 @@ export class BudgetSources extends Context.Service<
             doc.mode = mode;
             doc.declares = (doc.declares ?? 0) + 1;
             doc.raisesBefore = acceptedRaises(records).length;
+
+            for (const record of declined) {
+              // oxlint-disable-next-line no-await-in-loop -- one event per record, in order
+              await emitAnswered(tx, id, record, now);
+            }
           }, context);
         }).pipe(Effect.mapError(failed("BudgetSources.declare")));
       });

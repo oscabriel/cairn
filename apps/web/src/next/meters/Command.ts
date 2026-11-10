@@ -1,6 +1,8 @@
-// The meters' Commands: one question to the brain per section, and the save of a budget form. Each
-// answers with one Message; a failure carries the brain's sentence when it sent one.
+// The meters' Commands: one question to the brain per section, the read of the line a thread's
+// budget form starts from, and the save of a budget form. Each answers with one Message; a failure
+// carries the brain's sentence when it sent one.
 
+import { ThreadId } from "@cairn/protocol/Ids";
 import { Budget, SpendScope } from "@cairn/protocol/Spend";
 import { Effect, Option, Predicate, Schema } from "effect";
 import { Command } from "foldkit";
@@ -41,6 +43,33 @@ export const FetchSpend = Command.define("FetchSpend", {
     ),
 });
 
+/** Reads the line `threadId`'s own scope stands at (`budget.get`), for its budget form. */
+export const FetchThreadBudget = Command.define("FetchThreadBudget", {
+  args: { threadId: ThreadId },
+  messages: [Message.ReceivedThreadBudget, Message.FailedThreadBudget],
+  execute: ({ threadId }) =>
+    withBoundary(
+      Effect.gen(function* () {
+        const client = yield* CairnConnection.get;
+
+        return yield* client["budget.get"]({ threadId });
+      })
+    ).pipe(
+      Effect.match({
+        onSuccess: ({ budget }) =>
+          Message.ReceivedThreadBudget({ threadId, budget }),
+        onFailure: (failure) =>
+          Message.FailedThreadBudget({
+            threadId,
+            message: failureMessage(
+              failure,
+              "This thread's budget could not be read."
+            ),
+          }),
+      })
+    ),
+});
+
 /**
  * Saves a budget form's budget (ADR 0047): the server's default through `settings.update`, every
  * other setting left as it is, or a thread's own through `budget.declare`.
@@ -74,9 +103,11 @@ export const SaveBudget = Command.define("SaveBudget", {
       })
     ).pipe(
       Effect.match({
-        onSuccess: (settings) => Message.SavedBudget({ target, settings }),
+        onSuccess: (settings) =>
+          Message.SavedBudget({ target, budget, settings }),
         onFailure: (failure) =>
           Message.FailedSaveBudget({
+            target,
             message: failureMessage(failure, "The budget was not saved."),
           }),
       })

@@ -180,8 +180,9 @@ export interface ApprovalAnswerInput {
   /** A question record's answers; any other kind refuses them. */
   readonly answers: Option.Option<ReadonlyArray<QuestionAnswer>>;
   /**
-   * A workflow launch card's edits (its budget and role overrides), with Go or Run on 1 first on a
-   * launch approval only; any other record or decision refuses them (ADR 0032).
+   * A card's edits: a workflow launch's budget and role overrides, with Go or Run on 1 first on a
+   * launch approval (ADR 0032), or a subagent brief's budget, with Go (ADR 0047); any other record
+   * or decision refuses them (`launchFit`).
    */
   readonly launch: Option.Option<LaunchEdits>;
 }

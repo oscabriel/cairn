@@ -81,7 +81,11 @@ import {
   SubagentToolText,
 } from "../brain/SubagentText.ts";
 import { offerResultTool } from "../models/ResultTool.ts";
-import { NO_DEFAULT_BUDGET } from "../usage/DefaultBudget.ts";
+import {
+  MAX_TOKENS,
+  MAX_USD,
+  NO_DEFAULT_BUDGET,
+} from "../usage/DefaultBudget.ts";
 import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import {
   countLive,
@@ -349,13 +353,15 @@ export const subagentToolSet = (
       max_tokens: Type.Optional(
         Type.Integer({
           minimum: 1,
+          maximum: MAX_TOKENS,
           description:
             "A token budget for the child; leave it out for the user's default. The child stops at it.",
         })
       ),
       max_usd: Type.Optional(
         Type.Number({
-          exclusiveMinimum: 0,
+          minimum: 1e-6,
+          maximum: MAX_USD,
           description:
             "A list-price dollar budget for the child; leave it out for the user's default. The child stops at it.",
         })

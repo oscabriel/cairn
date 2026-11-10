@@ -13,7 +13,7 @@ import * as AsyncData from "foldkit/asyncData";
 import type { Html } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 
-import { SaveBudget } from "./Command.ts";
+import { FetchThreadBudget, SaveBudget } from "./Command.ts";
 import { Message } from "./Message.ts";
 import { BudgetTarget, initial } from "./Model.ts";
 import type { MetersContext, Model } from "./Model.ts";
@@ -385,6 +385,7 @@ describe("the usage page's budgets (ADR 0047)", () => {
         SaveBudget,
         Message.SavedBudget({
           target: DEFAULT_TARGET,
+          budget: saved,
           settings: Option.some({ ...SETTINGS, defaultBudget: saved }),
         })
       ),
@@ -407,6 +408,8 @@ describe("the usage page's budgets (ADR 0047)", () => {
       title: "Port the parser",
     });
 
+    const budget = { ...DEFAULT_BUDGET, maxTokens: 300_000 };
+
     Scene.scene(
       usageConfig,
       Scene.given(loaded({})),
@@ -416,17 +419,19 @@ describe("the usage page's budgets (ADR 0047)", () => {
         ),
         Scene.click(Scene.role("button", { name: "Set budget" }))
       ),
-      Scene.type(Scene.label("Tokens"), "300000"),
-      Scene.click(Scene.role("button", { name: "Save budget" })),
-      Scene.Command.expectExact(
-        SaveBudget({
-          target,
-          budget: { ...DEFAULT_BUDGET, maxTokens: 300_000 },
+      Scene.Command.resolve(
+        FetchThreadBudget,
+        Message.ReceivedThreadBudget({
+          threadId: threadA,
+          budget: Option.none(),
         })
       ),
+      Scene.type(Scene.label("Tokens"), "300000"),
+      Scene.click(Scene.role("button", { name: "Save budget" })),
+      Scene.Command.expectExact(SaveBudget({ target, budget })),
       Scene.Command.resolve(
         SaveBudget,
-        Message.SavedBudget({ target, settings: Option.none() })
+        Message.SavedBudget({ target, budget, settings: Option.none() })
       ),
       Scene.expect(Scene.testId("usage-budget-saved")).toContainText(
         "Budget set for Port the parser"
@@ -450,6 +455,230 @@ describe("the usage page's budgets (ADR 0047)", () => {
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
+    );
+  });
+
+  const threadTarget = BudgetTarget.members[1].make({
+    threadId: threadA,
+    title: "Port the parser",
+  });
+
+  const standing = {
+    ...DEFAULT_BUDGET,
+    maxListMicros: Micros.make(5_000_000),
+    maxTokens: 500_000,
+    warnAt: 0.9,
+  };
+
+  it("fills a thread's form from the line it stands at, so a save keeps the limits left alone", () => {
+    Scene.scene(
+      usageConfig,
+      Scene.given(loaded({})),
+      Scene.inside(
+        Scene.selector(
+          `[data-testid="usage-thread"][data-thread-id="${threadA}"]`
+        ),
+        Scene.click(Scene.role("button", { name: "Set budget" }))
+      ),
+      Scene.Command.expectExact(FetchThreadBudget({ threadId: threadA })),
+      // Nothing can be saved over a line not read yet.
+      Scene.expect(
+        Scene.role("button", { name: "Save budget" })
+      ).toBeDisabled(),
+      Scene.expect(Scene.testId("usage-budget-form-hint")).toContainText(
+        "Reading"
+      ),
+      Scene.Command.resolve(
+        FetchThreadBudget,
+        Message.ReceivedThreadBudget({
+          threadId: threadA,
+          budget: Option.some(standing),
+        })
+      ),
+      Scene.expect(Scene.label("Dollars at API list price")).toHaveValue(
+        "5.00"
+      ),
+      Scene.expect(Scene.label("Tokens")).toHaveValue("500000"),
+      Scene.type(Scene.label("Dollars at API list price"), "10"),
+      Scene.click(Scene.role("button", { name: "Save budget" })),
+      Scene.Command.expectExact(
+        SaveBudget({
+          target: threadTarget,
+          budget: { ...standing, maxListMicros: Micros.make(10_000_000) },
+        })
+      ),
+      Scene.Command.resolve(
+        SaveBudget,
+        Message.SavedBudget({
+          target: threadTarget,
+          budget: { ...standing, maxListMicros: Micros.make(10_000_000) },
+          settings: Option.none(),
+        })
+      ),
+      Scene.expect(Scene.testId("usage-budget-saved")).toContainText(
+        "Budget set for Port the parser"
+      ),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("says a thread's budget was removed when the save names no limit", () => {
+    const removed = { ...standing, maxListMicros: null, maxTokens: null };
+
+    Scene.scene(
+      usageConfig,
+      Scene.given(loaded({})),
+      Scene.inside(
+        Scene.selector(
+          `[data-testid="usage-thread"][data-thread-id="${threadA}"]`
+        ),
+        Scene.click(Scene.role("button", { name: "Set budget" }))
+      ),
+      Scene.Command.resolve(
+        FetchThreadBudget,
+        Message.ReceivedThreadBudget({
+          threadId: threadA,
+          budget: Option.some(standing),
+        })
+      ),
+      Scene.type(Scene.label("Dollars at API list price"), ""),
+      Scene.type(Scene.label("Tokens"), ""),
+      Scene.click(Scene.role("button", { name: "Save budget" })),
+      Scene.Command.expectExact(
+        SaveBudget({ target: threadTarget, budget: removed })
+      ),
+      Scene.Command.resolve(
+        SaveBudget,
+        Message.SavedBudget({
+          target: threadTarget,
+          budget: removed,
+          settings: Option.none(),
+        })
+      ),
+      Scene.expect(Scene.testId("usage-budget-saved")).toContainText(
+        "Budget removed for Port the parser"
+      ),
+      Scene.expect(Scene.testId("usage-budget-saved")).not.toContainText(
+        "At its line"
+      ),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("keeps a thread's form closed to saves when its line could not be read", () => {
+    Scene.scene(
+      usageConfig,
+      Scene.given(loaded({})),
+      Scene.inside(
+        Scene.selector(
+          `[data-testid="usage-thread"][data-thread-id="${threadA}"]`
+        ),
+        Scene.click(Scene.role("button", { name: "Set budget" }))
+      ),
+      Scene.Command.resolve(
+        FetchThreadBudget,
+        Message.FailedThreadBudget({
+          threadId: threadA,
+          message: "The brain is restarting.",
+        })
+      ),
+      Scene.expect(Scene.testId("usage-budget-form-hint")).toContainText(
+        "The brain is restarting."
+      ),
+      Scene.expect(
+        Scene.role("button", { name: "Save budget" })
+      ).toBeDisabled(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("keeps the form whose save is out, and lands each answer only on its own form", () => {
+    const threadBTarget = BudgetTarget.members[1].make({
+      threadId: threadB,
+      title: "Free model notes",
+    });
+
+    const budget = { ...DEFAULT_BUDGET, maxTokens: 300_000 };
+
+    const opened = update(
+      loaded({}),
+      Message.ClickedEditBudget({ target: threadTarget })
+    ).model;
+
+    const read = update(
+      opened,
+      Message.ReceivedThreadBudget({ threadId: threadA, budget: Option.none() })
+    ).model;
+
+    const typed = update(
+      read,
+      Message.ChangedBudgetTokens({ value: "300000" })
+    ).model;
+
+    const saving = update(typed, Message.ClickedSaveBudget());
+
+    assert.deepStrictEqual(
+      (saving.commands ?? []).map((command) => command.name),
+      ["SaveBudget"]
+    );
+
+    // Another row's Set budget, and Cancel, wait for the save's answer.
+    const other = update(
+      saving.model,
+      Message.ClickedEditBudget({ target: threadBTarget })
+    );
+
+    const cancelled = update(other.model, Message.ClickedCancelBudget());
+
+    assert.lengthOf(other.commands ?? [], 0);
+    assert.deepStrictEqual(
+      Option.map(cancelled.model.form, (form) => form.target),
+      Option.some(threadTarget)
+    );
+
+    // An answer for another form never closes this one or writes its error here.
+    const stray = update(
+      cancelled.model,
+      Message.FailedSaveBudget({
+        target: threadBTarget,
+        message: "Not this one.",
+      })
+    ).model;
+
+    assert.deepStrictEqual(
+      Option.map(stray.form, (form) => [form.saving, form.error]),
+      Option.some([true, Option.none()])
+    );
+
+    const strayed = update(
+      stray,
+      Message.SavedBudget({
+        target: threadBTarget,
+        budget,
+        settings: Option.none(),
+      })
+    ).model;
+
+    assert.isTrue(Option.isSome(strayed.form));
+
+    const landed = update(
+      strayed,
+      Message.SavedBudget({
+        target: threadTarget,
+        budget,
+        settings: Option.none(),
+      })
+    ).model;
+
+    assert.isTrue(Option.isNone(landed.form));
+    assert.isTrue(
+      Option.exists(landed.saved, (text) => text.includes("Port the parser"))
     );
   });
 });

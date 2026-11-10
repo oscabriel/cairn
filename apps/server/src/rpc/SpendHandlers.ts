@@ -8,10 +8,18 @@
 // once. It is a `stop` scope: at its line every thread in it stops. A thread the shell does not hold
 // (or no longer does) answers `NotFound`; one the brain has not started yet, or a store that cannot
 // be reached, `Unavailable` with the guard's words; a ledger that cannot be read, `Internal`.
+//
+// `budget.get` (ADR 0047): the line a thread's own scope stands at now, read from the documents, so
+// the usage page's form starts from it and a save never drops a limit the user did not see. A
+// thread the shell does not hold answers `NotFound`; a store that cannot be reached, `Unavailable`.
 
 import { Internal, NotFound, Unavailable } from "@cairn/protocol/Errors";
 import { CairnRpcs } from "@cairn/protocol/Rpc";
-import type { BudgetDeclareInput, SpendGetInput } from "@cairn/protocol/Spend";
+import type {
+  BudgetDeclareInput,
+  BudgetGetInput,
+  SpendGetInput,
+} from "@cairn/protocol/Spend";
 import { Effect, Layer, Option } from "effect";
 
 import { isLiveThread, ThreadRows } from "../shell/ThreadRows.ts";
@@ -52,6 +60,58 @@ export const answerSpend = (
     })
   );
 
+/** Fails `NotFound`, naming what was not done, unless the shell holds `threadId` live. */
+const liveThread = (
+  rows: ThreadRows["Service"],
+  threadId: BudgetGetInput["threadId"],
+  undone: string
+) =>
+  rows.get(threadId).pipe(
+    Effect.flatMap((row) =>
+      Option.isSome(Option.filter(row, isLiveThread))
+        ? Effect.void
+        : Effect.fail(
+            new NotFound({
+              message: `Thread ${threadId} is not in the shell, so ${undone}.`,
+              resource: "thread",
+              id: threadId,
+            })
+          )
+    )
+  );
+
+/** `budget.get`'s answer: the line the thread's own scope stands at, through the guard. */
+export const readBudget = (
+  guard: BudgetGuard["Service"],
+  rows: ThreadRows["Service"],
+  input: BudgetGetInput
+) =>
+  Effect.gen(function* () {
+    yield* liveThread(rows, input.threadId, "its budget was not read");
+
+    return { budget: yield* guard.line(input.threadId) };
+  }).pipe(
+    Effect.catchTags({
+      BudgetSourceError: (failure) =>
+        Effect.fail(new Unavailable({ message: publicText(failure.message) })),
+      ShellStoreError: (failure) =>
+        Effect.logError("budget not read").pipe(
+          Effect.annotateLogs({
+            event: "budget_get_failed",
+            error: failure.message,
+          }),
+          Effect.andThen(
+            Effect.fail(
+              new Internal({
+                message:
+                  "Reading the thread failed, so its budget was not read. Retry, and check the brain's log (budget_get_failed) if it repeats.",
+              })
+            )
+          )
+        ),
+    })
+  );
+
 /** `budget.declare`'s answer: the thread's own budget, declared through the guard. */
 export const declareBudget = (
   guard: BudgetGuard["Service"],
@@ -59,15 +119,7 @@ export const declareBudget = (
   input: BudgetDeclareInput
 ) =>
   Effect.gen(function* () {
-    const row = yield* rows.get(input.threadId);
-
-    if (Option.isNone(Option.filter(row, isLiveThread))) {
-      return yield* new NotFound({
-        message: `Thread ${input.threadId} is not in the shell, so no budget was set.`,
-        resource: "thread",
-        id: input.threadId,
-      });
-    }
+    yield* liveThread(rows, input.threadId, "no budget was set");
 
     return yield* guard.declare(input.threadId, input.budget, "stop");
   }).pipe(
@@ -107,7 +159,10 @@ export const declareBudget = (
     })
   );
 
-/** `spend.get` and `budget.declare`. Needs `SpendLedger`, `BudgetGuard` and `ThreadRows`. */
+/**
+ * `spend.get`, `budget.declare` and `budget.get`. Needs `SpendLedger`, `BudgetGuard` and
+ * `ThreadRows`.
+ */
 export const SpendHandlers = Layer.mergeAll(
   CairnRpcs.toLayerHandler(
     "spend.get",
@@ -120,6 +175,15 @@ export const SpendHandlers = Layer.mergeAll(
       const rows = yield* ThreadRows;
 
       return (input) => declareBudget(guard, rows, input);
+    })
+  ),
+  CairnRpcs.toLayerHandler(
+    "budget.get",
+    Effect.gen(function* () {
+      const guard = yield* BudgetGuard;
+      const rows = yield* ThreadRows;
+
+      return (input) => readBudget(guard, rows, input);
     })
   )
 );

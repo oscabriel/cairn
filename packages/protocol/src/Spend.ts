@@ -163,8 +163,10 @@ export const DEFAULT_BUDGET: Budget = {
 
 /**
  * `budget.declare` input: a budget of the thread's own over it and its lineage subtree, replacing
- * one declared before (ADR 0047). It is a `stop` scope: at its line every thread in it stops. A
- * budget with no limit removes the declared one.
+ * the line it stood at (ADR 0047): one declared before, or a subagent's brief budget, raises
+ * included. It is a `stop` scope: at its line every thread in it stops. A budget with no limit
+ * leaves the thread no line of its own (a subagent's brief budget included); a parent's scope
+ * still binds it.
  */
 export const BudgetDeclareInput = Schema.Struct({
   threadId: ThreadId,
@@ -172,3 +174,21 @@ export const BudgetDeclareInput = Schema.Struct({
 });
 
 export type BudgetDeclareInput = typeof BudgetDeclareInput.Type;
+
+/** `budget.get` input: the thread whose own line is read. */
+export const BudgetGetInput = Schema.Struct({
+  threadId: ThreadId,
+});
+
+export type BudgetGetInput = typeof BudgetGetInput.Type;
+
+/**
+ * `budget.get`'s answer: the line a thread's own scope stands at now (declared, else a subagent's
+ * brief budget, as raised), none when it has no line of its own. The usage page fills its budget
+ * form from it, so a save never drops a limit the user did not see.
+ */
+export const ThreadBudget = Schema.Struct({
+  budget: Schema.OptionFromNullOr(Budget),
+});
+
+export type ThreadBudget = typeof ThreadBudget.Type;

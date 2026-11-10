@@ -46,7 +46,8 @@ const decodeModelSpec = Schema.decodeOption(ModelSpec);
 /**
  * The brief a spawn proposes, in `mode` (the parent's effective mode, which a child never widens),
  * with the budget the call asks over `fallback`, the server's default (ADR 0047); fails with the
- * text the model reads when `result_schema` is not a JSON Schema object.
+ * text the model reads when `result_schema` is not a JSON Schema object, or a budget it names is out
+ * of range.
  */
 export const briefOf = (
   args: SpawnArguments,
@@ -83,6 +84,15 @@ export const briefOf = (
     }
   }
 
+  const budget = budgetAsked(fallback, {
+    maxTokens: args.maxTokens,
+    maxUsd: args.maxUsd,
+  });
+
+  if (Result.isFailure(budget)) {
+    return Result.fail(budget.failure);
+  }
+
   return Result.succeed({
     type: "brief",
     title: args.description,
@@ -102,10 +112,7 @@ export const briefOf = (
     thinking: null,
     mode,
     mayCommit: false,
-    budget: budgetAsked(fallback, {
-      maxTokens: args.maxTokens,
-      maxUsd: args.maxUsd,
-    }),
+    budget: budget.success,
     resultSchema: Option.getOrNull(Option.flatMap(schema, Option.fromNullOr)),
     wake: Option.contains(args.wake, "quiet") ? "quiet" : "answer",
     decisions: [],

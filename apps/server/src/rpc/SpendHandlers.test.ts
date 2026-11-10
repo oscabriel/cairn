@@ -1,8 +1,10 @@
 // `budget.declare` (ADR 0047) over the budget guard's test world (`BudgetTestKit.ts`: the real book,
 // ledger, `Budgets` and guard, in-memory sources, a seam that records stops): a thread budget the
 // user sets stops the thread and its subtree at its line, as a brief's budget does, and asks a
-// raise; a thread the shell does not hold is `NotFound`.
+// raise; a thread the shell does not hold is `NotFound`. `budget.get` reads the line a declare would
+// replace, so the form that changes it starts from it.
 
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Option, Predicate, Ref, Result } from "effect";
 
@@ -18,7 +20,7 @@ import {
   tokenBudget,
   withThreads,
 } from "../usage/BudgetTestKit.ts";
-import { declareBudget } from "./SpendHandlers.ts";
+import { declareBudget, readBudget } from "./SpendHandlers.ts";
 
 const ROOT = testThreadId(1);
 
@@ -114,5 +116,66 @@ describe("budget.declare", () => {
           0
         );
       }).pipe(Effect.provide(GuardWorld))
+  );
+});
+
+const read = (threadId: typeof ROOT) =>
+  Effect.gen(function* () {
+    return yield* readBudget(yield* BudgetGuard, yield* ThreadRows, {
+      threadId,
+    }).pipe(Effect.result);
+  });
+
+describe("budget.get", () => {
+  it.live(
+    "reads the line a thread's own scope stands at, none before one is set or after it is removed",
+    () =>
+      Effect.gen(function* () {
+        yield* withThreads([[2, 1]]);
+
+        assert.deepStrictEqual(
+          yield* read(ROOT),
+          Result.succeed({ budget: Option.none() })
+        );
+
+        yield* declare(ROOT, 100);
+
+        assert.deepStrictEqual(
+          yield* read(ROOT),
+          Result.succeed({ budget: Option.some(tokenBudget(100)) })
+        );
+
+        // The child has no line of its own: the root's binds it.
+        assert.deepStrictEqual(
+          yield* read(CHILD),
+          Result.succeed({ budget: Option.none() })
+        );
+
+        const removed = yield* declareBudget(
+          yield* BudgetGuard,
+          yield* ThreadRows,
+          { threadId: ROOT, budget: DEFAULT_BUDGET }
+        ).pipe(Effect.result);
+
+        assert.isTrue(Result.isSuccess(removed), JSON.stringify(removed));
+        assert.deepStrictEqual(
+          yield* read(ROOT),
+          Result.succeed({ budget: Option.none() })
+        );
+      }).pipe(Effect.provide(GuardWorld))
+  );
+
+  it.live("a thread the shell does not hold is NotFound", () =>
+    Effect.gen(function* () {
+      yield* withThreads([]);
+
+      const found = yield* read(testThreadId(9));
+
+      assert.isTrue(
+        Result.isFailure(found) &&
+          Predicate.isTagged(found.failure, "NotFound"),
+        JSON.stringify(found)
+      );
+    }).pipe(Effect.provide(GuardWorld))
   );
 });

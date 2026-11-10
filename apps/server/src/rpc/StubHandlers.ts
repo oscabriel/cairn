@@ -53,6 +53,7 @@ export const stubHandlers = {
   "models.check": unary("models.check"),
   "spend.get": unary("spend.get"),
   "budget.declare": unary("budget.declare"),
+  "budget.get": unary("budget.get"),
   "providers.login.start": stream("providers.login.start"),
   "providers.login.cancel": unary("providers.login.cancel"),
   "providers.logout": unary("providers.logout"),

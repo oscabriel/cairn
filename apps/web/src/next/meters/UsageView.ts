@@ -4,7 +4,8 @@
 // reads), and the budgets (the default a brief or launch starts from, then each thread with one).
 // The default changes in place (Change default budget), and each thread with spend recorded takes a
 // budget of its own from its row (Set budget, `budget.declare`; ADR 0047), both in dollars at list
-// price and tokens.
+// price and tokens. A thread's form opens filled with the line the thread stands at, and takes no
+// typing or save until that line is read.
 // Unknown is never drawn as zero: an unpriced model reads "No price" with its tokens, an unread
 // window reads Unknown on a hatched track, Codex with no login says so in place of its windows,
 // and a thread with no spend recorded is not listed. Every reading carries `data-known`, which the
@@ -184,12 +185,18 @@ const formIsFor = (model: Model, target: BudgetTarget): boolean =>
     (form) => targetKey(form.target) === targetKey(target)
   );
 
+/** A form's hint: while its line is read, what it is waiting for; otherwise `hint`. */
+const formHint = (form: BudgetForm, hint: string): string =>
+  form.line === "reading" ? "Reading this thread's budget..." : hint;
+
 /**
  * A budget form (ADR 0047): dollars at list price and tokens, both empty for no limit, then Save
- * and Cancel; the last save's error in place of its hint.
+ * and Cancel; the last save's error in place of its hint. Only a form filled from its line takes
+ * typing or a save.
  */
 const budgetFormView = (h: H, form: BudgetForm, hint: string): Html => {
   const id = targetKey(form.target);
+  const closed = form.saving || form.line !== "read";
 
   return h.div(
     [
@@ -209,7 +216,7 @@ const budgetFormView = (h: H, form: BudgetForm, hint: string): Html => {
                 `usage-budget-dollars-${id}`,
                 "Dollars at API list price"
               ),
-              isDisabled: form.saving,
+              isDisabled: closed,
             },
             {
               value: form.dollars,
@@ -223,7 +230,7 @@ const budgetFormView = (h: H, form: BudgetForm, hint: string): Html => {
             h,
             {
               ...fieldDefaults<Message>(`usage-budget-tokens-${id}`, "Tokens"),
-              isDisabled: form.saving,
+              isDisabled: closed,
             },
             {
               value: form.tokens,
@@ -245,7 +252,7 @@ const budgetFormView = (h: H, form: BudgetForm, hint: string): Html => {
             )
           ),
         ],
-        [Option.getOrElse(form.error, () => hint)]
+        [Option.getOrElse(form.error, () => formHint(form, hint))]
       ),
       h.div(
         [h.Class("flex flex-wrap justify-end gap-(--space-2)")],
@@ -269,6 +276,7 @@ const budgetFormView = (h: H, form: BudgetForm, hint: string): Html => {
               variant: "primary",
               size: "small",
               onClick: Option.some(Message.ClickedSaveBudget()),
+              isDisabled: form.line !== "read",
               isBusy: form.saving,
               attributes: [h.DataAttribute("action", "save-budget")],
             },
@@ -366,7 +374,7 @@ const threadLedger = (
                       budgetFormView(
                         h,
                         form,
-                        "This thread's own budget: at its line it and its subagents stop, and a raise is asked. Leave both empty for no limit."
+                        "This thread's own budget, filled with the line it stands at: at its line it and its subagents stop, and a raise is asked. Leave both empty to remove it."
                       ),
                     ]
                   )

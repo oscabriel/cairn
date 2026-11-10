@@ -18,8 +18,12 @@
 # one `judges/run-set.ts` holds for the whole pre-deploy set, so the two never share the machine. It
 # waits up to `CAIRN_NIGHTLY_LOCK_WAIT` seconds (default 90 minutes, inside the unit's 3 hours) for
 # a holder; a night still waiting then is skipped, since it judged nothing, and exits 0. A second
-# skipped night in a row fails, so a stuck holder cannot silence the nightly. The durability runs it
-# starts record as within the nightly (`CAIRN_JUDGE_OUTER`, judges/lib/Record.ts).
+# skipped night in a row fails, so a stuck holder cannot silence the nightly. It takes the lock
+# itself: a caller that already holds it (a hand run wrapped in `flock /tmp/cairn-judge.lock`, an
+# ancestor of this process) is seen by `judges/lib/lock-held-by-caller.sh` and the script runs under
+# that caller's lock; a holder that is not an ancestor must set CAIRN_JUDGE_LOCK_HELD=1, or the
+# nightly waits for it and skips. The durability runs it starts record as within the nightly
+# (`CAIRN_JUDGE_OUTER`, judges/lib/Record.ts).
 set -euo pipefail
 
 self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
@@ -42,10 +46,11 @@ done
 mkdir -p "$HOME/cairn-judges"
 log="${CAIRN_DURABILITY_LOG:-$HOME/cairn-judges/durability-$(date +%Y-%m-%d).jsonl}"
 
-# The judge lock: run this script again under it, unless this process already holds it.
+# The judge lock: run this script again under it, unless this process or its caller already holds it
+# (a hand run wrapped in `flock <lock>`, whose lock a second `flock` here would wait on until skipped).
 skipped=$HOME/cairn-judges/nightly-skipped
-if [[ ${CAIRN_JUDGE_LOCK_HELD:-} != 1 ]]; then
-	lock=${CAIRN_JUDGE_LOCK:-/tmp/cairn-judge.lock}
+lock=${CAIRN_JUDGE_LOCK:-/tmp/cairn-judge.lock}
+if [[ ${CAIRN_JUDGE_LOCK_HELD:-} != 1 ]] && ! bash judges/lib/lock-held-by-caller.sh "$lock"; then
 	set +e
 	CAIRN_JUDGE_LOCK_HELD=1 flock --wait "${CAIRN_NIGHTLY_LOCK_WAIT:-5400}" --conflict-exit-code 75 \
 		"$lock" bash "$self" "$@"
@@ -54,7 +59,7 @@ if [[ ${CAIRN_JUDGE_LOCK_HELD:-} != 1 ]]; then
 	if ((status != 75)); then
 		exit "$status"
 	fi
-	echo "{\"nightly\":\"skipped\",\"reason\":\"another judge held $lock\"}" | tee -a "$log"
+	echo "{\"nightly\":\"skipped\",\"reason\":\"another judge held $lock (this script takes it itself; a holder that is not its caller must set CAIRN_JUDGE_LOCK_HELD=1)\"}" | tee -a "$log"
 	if [[ -f $skipped ]]; then
 		echo "the nightly could not take the judge lock $lock and skipped the night before too ($(cat "$skipped")); see what holds it" >&2
 		exit 1

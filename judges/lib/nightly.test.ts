@@ -55,8 +55,11 @@ const homeOf = (name: string) => {
   return home;
 };
 
-/** Runs the nightly without its slow and bridge steps, waiting at most a second for the lock. */
-const runNightly = (home: string) => {
+/**
+ * Runs the nightly without its slow and bridge steps, waiting at most a second for the lock;
+ * `wrapped` runs it as a hand run by convention, `flock <lock> bash nightly.sh`.
+ */
+const runNightly = (home: string, wrapped = false) => {
   rmSync(calls, { force: true });
 
   // Empty, as the timer leaves them: no lock held, no outer judge.
@@ -71,10 +74,13 @@ const runNightly = (home: string) => {
     CAIRN_DURABILITY_LOG: path.join(home, "durability.jsonl"),
   };
 
-  const done = spawnSync("bash", [nightly, "--no-slow", "--no-bridge"], {
-    encoding: "utf-8",
-    env,
-  });
+  const command = ["bash", nightly, "--no-slow", "--no-bridge"];
+
+  const [program = "bash", ...args] = wrapped
+    ? ["flock", lock, ...command]
+    : command;
+
+  const done = spawnSync(program, args, { encoding: "utf-8", env });
 
   return {
     status: done.status,
@@ -136,6 +142,23 @@ describe("nightly.sh and the judge lock", () => {
     assert.match(
       result.calls[3] ?? "",
       /judges\/lib\/append-record\.ts --file fixtures\/durability\/nightly\.sh /u
+    );
+  });
+
+  it("runs its steps under a caller that already holds the lock, as a hand run wraps it", () => {
+    const home = homeOf("wrapped");
+
+    const result = runNightly(home, true);
+
+    assert.strictEqual(result.status, 0, result.out);
+    assert.notInclude(result.out, '"nightly":"skipped"');
+    assert.lengthOf(result.calls, 4, result.out);
+    assert.isTrue(
+      result.calls.every((call) => call.startsWith("held|")),
+      result.out
+    );
+    assert.isFalse(
+      existsSync(path.join(home, "cairn-judges", "nightly-skipped"))
     );
   });
 

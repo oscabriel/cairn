@@ -10,7 +10,10 @@
 // for the whole set. The nightly (`judges/fixtures/durability/nightly.sh`) takes it too, so the set
 // waits for a running nightly and a nightly waits for the set (skipping the night if it waits too
 // long). A judge run by hand takes it only when its caller does (`flock /tmp/cairn-judge.lock node
-// judges/<judge>.ts`): the judges themselves do not.
+// judges/<judge>.ts`): the judges themselves do not. This script takes it itself, so a caller that
+// already holds it (`flock /tmp/cairn-judge.lock node judges/run-set.ts`, an ancestor of this
+// process) is seen by `judges/lib/lock-held-by-caller.sh` and the set runs under that caller's lock;
+// a holder that is not an ancestor must set CAIRN_JUDGE_LOCK_HELD=1, or the set waits for it.
 //
 // Each judge records itself when it ends (`judges/lib/Record.ts`), tagged with this run's id in
 // `CAIRN_JUDGE_RUN`; a judge that died without writing its line gets one here, from its exit code.
@@ -48,9 +51,19 @@ if (values.list) {
 
 const lock = process.env.CAIRN_JUDGE_LOCK ?? "/tmp/cairn-judge.lock";
 
-// Take the lock once for the whole set: run this script again under `flock`.
-if (process.env.CAIRN_JUDGE_LOCK_HELD !== "1") {
-  process.stderr.write(`waiting for the judge lock ${lock}\n`);
+/** Whether a process this one descends from holds the lock (a caller that wrapped it in `flock`). */
+const heldByCaller = () =>
+  spawnSync("bash", [
+    path.join(import.meta.dirname, "lib", "lock-held-by-caller.sh"),
+    lock,
+  ]).status === 0;
+
+// Take the lock once for the whole set: run this script again under `flock`, unless this process
+// or its caller already holds it (a second `flock` here would wait on that caller forever).
+if (process.env.CAIRN_JUDGE_LOCK_HELD !== "1" && !heldByCaller()) {
+  process.stderr.write(
+    `waiting for the judge lock ${lock} (this script takes it itself; a holder that is not its caller must set CAIRN_JUDGE_LOCK_HELD=1)\n`
+  );
 
   const locked = spawnSync(
     "flock",

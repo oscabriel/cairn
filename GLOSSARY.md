@@ -430,7 +430,7 @@ _Avoid_: reviewer (alone), checker
 
 **Judge set**: The free judges that need no model, no deployed brain, no Docker and no porch, which `node judges/run-set.ts` runs in order under the judge lock before a deploy. `ops/cairn/deploy.sh` refuses a commit without a passing set on a clean tree, unless `--override`. _Avoid_: the gate (that is `pnpm check`).
 
-**Judge lock**: `flock /tmp/cairn-judge.lock`, so two judges never share the Beelink's ports, units and CPU. `judges/run-set.ts` holds it for the whole set and the nightly takes it before it starts (a night that cannot take it in 90 minutes is skipped, and a second in a row fails); a judge run by hand holds it only when its caller wraps it in `flock`, as agents and the user do by convention.
+**Judge lock**: `flock /tmp/cairn-judge.lock`, so two judges never share the Beelink's ports, units and CPU. `judges/run-set.ts` holds it for the whole set and the nightly takes it before it starts (a night that cannot take it in 90 minutes is skipped, and a second in a row fails); a judge run by hand holds it only when its caller wraps it in `flock`, as agents and the user do by convention. The set and the nightly take it themselves, and run under a caller's lock when the caller that wrapped them already holds it (`judges/lib/lock-held-by-caller.sh`); any other holder that starts them must set `CAIRN_JUDGE_LOCK_HELD=1`.
 
 **Attachment**: A file the user adds to a message: an image, a document or text. The brain prepares it when it is uploaded, and the model gets it as content.
 

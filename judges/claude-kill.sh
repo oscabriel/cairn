@@ -20,6 +20,9 @@ cases=("$@")
 
 failures=0
 
+# Its durability windows record as within this judge (judges/lib/Record.ts), not as the matrix's own.
+export CAIRN_JUDGE_OUTER=${CAIRN_JUDGE_OUTER:-claude-kill.sh}
+
 for name in "${cases[@]}"; do
 	case "$name" in
 	streaming) window=bridge-streaming ;;

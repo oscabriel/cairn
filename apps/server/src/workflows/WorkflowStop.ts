@@ -61,13 +61,9 @@ import { ThreadReceipt } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError, DurableRunner } from "../brain/Durable.ts";
 import { emit } from "../brain/Events.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { conversationOf, taskOf } from "../subagents/Delivery.ts";
-import {
-  isNodeEnded,
-  isWorkflowEnded,
-  resultRefOf,
-  WorkflowsDoc,
-} from "./WorkflowDocs.ts";
+import { isNodeEnded, isWorkflowEnded, resultRefOf } from "./WorkflowDocs.ts";
 
 // Abort polling.
 

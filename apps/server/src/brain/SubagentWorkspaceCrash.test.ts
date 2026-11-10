@@ -45,7 +45,6 @@ import {
 import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
-import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import {
   Subagents,
   subagentsExtension,
@@ -73,6 +72,7 @@ import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
+import { ChildDoc, SubagentsDoc } from "./SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 
 isolateGitEnvironment();

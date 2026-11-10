@@ -23,12 +23,12 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Result } from "effect";
 import { Type } from "typebox";
 
-import { approvalLedger } from "../brain/CairnDocs.ts";
+import { approvalLedger } from "../approvals/ApprovalLedger.ts";
 import type { DurableRunner } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { ChildDoc, isLinked } from "../brain/SubagentDocs.ts";
 import { taskOf } from "../subagents/Delivery.ts";
-import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import {
   CRITERIA_TTL_MILLIS,
   criteriaSummary,

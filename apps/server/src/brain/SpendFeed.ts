@@ -30,12 +30,12 @@ import type {
 import { UsageDoc } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 
-import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
 import { ThreadMeta, ThreadReceipt } from "./CairnDocs.ts";
 import { durable } from "./Durable.ts";
 import { piConversationId } from "./PiIds.ts";
+import { WorkflowsDoc } from "./WorkflowsDoc.ts";
 
 /** How many records one page of a scan reads. */
 const SCAN_PAGE = 200;

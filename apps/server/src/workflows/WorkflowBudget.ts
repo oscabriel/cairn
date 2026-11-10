@@ -60,12 +60,8 @@ import type {
 import { defineTask, InboxDoc, UsageDoc } from "@earendil-works/pi-durable";
 import { Option, Schema } from "effect";
 
-import {
-  Approvals,
-  cancelRecord,
-  ThreadMeta,
-  UNDECIDED,
-} from "../brain/CairnDocs.ts";
+import { UNDECIDED, cancelRecord } from "../approvals/ApprovalLedger.ts";
+import { Approvals, ThreadMeta } from "../brain/CairnDocs.ts";
 import type {
   ApprovalPayloadState,
   ApprovalRecord,
@@ -80,6 +76,8 @@ import {
 import type { EventRecord, Reactor } from "../brain/Events.ts";
 import { applyNote, hasQueuedReset, readNote } from "../brain/NoteAdmission.ts";
 import { piEntryId } from "../brain/PiIds.ts";
+import type { WorkflowItemState } from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import {
   catalogLookupOf,
   listMicrosOf,
@@ -87,12 +85,8 @@ import {
 } from "../models/ModelPrice.ts";
 import { conversationOf } from "../subagents/Delivery.ts";
 import { failsVisibly } from "../subagents/TaskFailures.ts";
-import { isWorkflowEnded, usageTotals, WorkflowsDoc } from "./WorkflowDocs.ts";
-import type {
-  BudgetState,
-  NodeItemState,
-  WorkflowItemState,
-} from "./WorkflowDocs.ts";
+import { isWorkflowEnded, usageTotals } from "./WorkflowDocs.ts";
+import type { BudgetState, NodeItemState } from "./WorkflowDocs.ts";
 
 /** The least time between two meter commits of one workflow from its running nodes. */
 export const METER_INTERVAL_MILLIS = 1000;

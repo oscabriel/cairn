@@ -22,7 +22,7 @@ import {
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 
-import { ChildDoc } from "../subagents/SubagentDocs.ts";
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
 import {
@@ -32,15 +32,11 @@ import {
   RAISE_REPLACED,
   RAISE_TOOL,
 } from "./BudgetSources.ts";
-import {
-  Approvals,
-  ThreadMeta,
-  ThreadReceipt,
-  UNDECIDED,
-} from "./CairnDocs.ts";
+import { Approvals, ThreadMeta, ThreadReceipt } from "./CairnDocs.ts";
 import type { ApprovalPayloadState, ApprovalRecord } from "./CairnDocs.ts";
 import { EventsDoc, eventKind } from "./Events.ts";
 import { piConversationId } from "./PiIds.ts";
+import { ChildDoc } from "./SubagentDocs.ts";
 
 const context = BACKGROUND_CONTEXT;
 

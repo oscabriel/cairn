@@ -9,8 +9,11 @@ import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../brain/WorkflowsDoc.ts";
 import { proposedRecord } from "./WorkflowDocs.ts";
-import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
 import { approvedRowFor } from "./WorkflowGate.ts";
 import type { GateView } from "./WorkflowGate.ts";
 

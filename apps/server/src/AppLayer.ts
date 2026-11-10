@@ -9,7 +9,6 @@
 import { NodeServices } from "@effect/platform-node";
 import { Context, Effect, Layer } from "effect";
 
-import { QuestionRoutes } from "./approvals/QuestionRoute.ts";
 import { AttachmentsLayer } from "./attachments/AttachmentsLayer.ts";
 import { BootLayer } from "./Boot.ts";
 import { runBootRepairs } from "./BootRepairs.ts";
@@ -59,6 +58,7 @@ import { ShellProjector } from "./shell/ShellProjector.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
 import { Skills } from "./skills/SkillsLayer.ts";
+import { QuestionRoutes } from "./subagents/QuestionRoute.ts";
 import { SubagentRows } from "./subagents/SubagentRows.ts";
 import { Subagents } from "./subagents/Subagents.ts";
 import { BranchNames } from "./threads/BranchNames.ts";

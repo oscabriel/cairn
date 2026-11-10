@@ -43,7 +43,7 @@ import {
   ResultToolText,
   returnedModelOf,
 } from "../models/ResultTool.ts";
-import { ChildDoc, jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { ChildDoc, jsonRecordOf } from "./SubagentDocs.ts";
 
 const context = BACKGROUND_CONTEXT;
 

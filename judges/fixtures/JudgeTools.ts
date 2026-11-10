@@ -19,7 +19,7 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Predicate } from "effect";
 import { Type } from "typebox";
 
-import { approvalLedger } from "../../apps/server/src/brain/CairnDocs.ts";
+import { approvalLedger } from "../../apps/server/src/approvals/ApprovalLedger.ts";
 import { ExtensionOrder } from "../../apps/server/src/brain/Extensions.ts";
 import type { CairnExtension } from "../../apps/server/src/brain/Extensions.ts";
 

@@ -115,20 +115,30 @@ import {
   SubscriptionRef,
 } from "effect";
 
+import type {
+  ApprovalSettlement,
+  RecordAnswer,
+  AnswerOutcome,
+} from "../approvals/ApprovalLedger.ts";
+import {
+  settlementOf,
+  copyRecord,
+  UNDECIDED,
+  approvalIdOf,
+  expirePending,
+  refusalText,
+  applyAnswer,
+  heldByRun,
+  RELAYED_QUESTION_TOOL,
+  relayedQuestion,
+  cancelRecord,
+} from "../approvals/ApprovalLedger.ts";
 import {
   ASK_USER_TOOL,
   askUserResult,
   QUESTION_TTL_MILLIS,
   questionAskOf,
 } from "../approvals/AskUser.ts";
-import { needsDecision } from "../approvals/NeedsDecision.ts";
-import {
-  MAX_ESCALATE_REASON,
-  MAX_QUESTION_LENGTH,
-  MAX_QUESTION_OPTIONS,
-  questionRecord,
-  relayedAsk,
-} from "../approvals/QuestionRoute.ts";
 import { FAILURE_WORDS, parseModelSpec } from "../models/ModelSpecs.ts";
 import {
   attemptStateOf,
@@ -144,30 +154,21 @@ import {
   validateResult,
 } from "../models/ResultTool.ts";
 import type { ResultState } from "../models/ResultTool.ts";
-import { plainCopy } from "../subagents/SubagentDocs.ts";
+import { needsDecision } from "../subagents/NeedsDecision.ts";
+import {
+  MAX_ESCALATE_REASON,
+  MAX_QUESTION_LENGTH,
+  MAX_QUESTION_OPTIONS,
+  questionRecord,
+  relayedAsk,
+} from "../subagents/QuestionRoute.ts";
 import { NO_GOAL } from "../verdicts/GoalDocs.ts";
 import type { GoalState } from "../verdicts/GoalDocs.ts";
 import { BriefTtl } from "./BriefTtl.ts";
 import type {
   ApprovalPayloadState,
   ApprovalRecord,
-  ApprovalSettlement,
-  AnswerOutcome,
   JsonRecord,
-  RecordAnswer,
-} from "./CairnDocs.ts";
-import {
-  applyAnswer,
-  approvalIdOf,
-  cancelRecord,
-  copyRecord,
-  expirePending,
-  heldByRun,
-  RELAYED_QUESTION_TOOL,
-  refusalText,
-  relayedQuestion,
-  settlementOf,
-  UNDECIDED,
 } from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
 import {
@@ -202,6 +203,7 @@ import type {
 import type { ThreadPermissions } from "./Permissions.ts";
 import { piConversationId, piEntryId, piTaskId } from "./PiIds.ts";
 import { classifyRunFailure } from "./RunFailure.ts";
+import { plainCopy } from "./SubagentDocs.ts";
 import { SubagentFaults } from "./SubagentFaults.ts";
 import {
   BRIEF_ANSWER_ENTRY,

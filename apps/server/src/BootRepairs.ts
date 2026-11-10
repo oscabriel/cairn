@@ -26,12 +26,12 @@
 
 import { Effect } from "effect";
 
-import { sweepAttachmentUploads } from "./attachments/AttachmentStore.ts";
-import type { AttachmentStore } from "./attachments/AttachmentStore.ts";
 import {
   cancelAbandonedApprovalsAtBoot,
   expireLapsedApprovalsAtBoot,
-} from "./brain/CairnDocs.ts";
+} from "./approvals/ApprovalLedger.ts";
+import { sweepAttachmentUploads } from "./attachments/AttachmentStore.ts";
+import type { AttachmentStore } from "./attachments/AttachmentStore.ts";
 import { repairChildWorkspacesAtBoot } from "./brain/ChildWorkspaceRepair.ts";
 import { endCrashLoopedTasks } from "./brain/CrashLimit.ts";
 import type { KeptWaits } from "./brain/CrashLimit.ts";

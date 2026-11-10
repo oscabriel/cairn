@@ -34,15 +34,15 @@ import { DEFAULT_RESTART_LIMIT, LiveDoc } from "@earendil-works/pi-durable";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Duration, Effect, Layer, Option } from "effect";
 
+import {
+  answerApproval,
+  cancelAbandonedApprovalsAtBoot,
+  expireLapsedApprovalsAtBoot,
+} from "../../../apps/server/src/approvals/ApprovalLedger.ts";
 import { KEPT_WAITS } from "../../../apps/server/src/BootRepairs.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
-import {
-  answerApproval,
-  Approvals,
-  cancelAbandonedApprovalsAtBoot,
-  expireLapsedApprovalsAtBoot,
-} from "../../../apps/server/src/brain/CairnDocs.ts";
+import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
 import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";

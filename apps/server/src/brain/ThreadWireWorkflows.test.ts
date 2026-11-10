@@ -26,13 +26,10 @@ import type { ConversationView as PiConversationView } from "@earendil-works/pi-
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Result } from "effect";
 
-import type {
-  NodeItemState,
-  WorkflowItemState,
-  WorkflowsState,
-} from "../workflows/WorkflowDocs.ts";
+import type { NodeItemState } from "../workflows/WorkflowDocs.ts";
 import { piConversationId } from "./PiIds.ts";
 import { projectView, wireProjector } from "./ThreadWire.ts";
+import type { WorkflowItemState, WorkflowsState } from "./WorkflowsDoc.ts";
 
 /** A small deterministic generator (Park and Miller), so a failure reproduces from its seed. */
 const random = (seed: number) => {

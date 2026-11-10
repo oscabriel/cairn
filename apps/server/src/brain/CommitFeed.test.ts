@@ -33,6 +33,7 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
 import {
   eventuallySome as waitFor,
   testLimit,
@@ -41,7 +42,7 @@ import {
 import { bindCriteria, markByUser } from "../verdicts/Verdicts.ts";
 import { Brain } from "./Brain.ts";
 import { testBrain } from "./BrainTestKit.ts";
-import { UNDECIDED, Approvals, ThreadMeta } from "./CairnDocs.ts";
+import { Approvals, ThreadMeta } from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
 import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";

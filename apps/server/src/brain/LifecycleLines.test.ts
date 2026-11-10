@@ -19,13 +19,14 @@ import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Logger, Option, References, Result } from "effect";
 
 import {
-  answerApproval,
-  Approvals,
-  cancelAbandonedApprovals,
-  cancelStoppedApprovals,
   UNDECIDED,
-} from "./CairnDocs.ts";
-import type { ApprovalRecord, RecordAnswer } from "./CairnDocs.ts";
+  cancelStoppedApprovals,
+  answerApproval,
+  cancelAbandonedApprovals,
+} from "../approvals/ApprovalLedger.ts";
+import type { RecordAnswer } from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "./CairnDocs.ts";
+import type { ApprovalRecord } from "./CairnDocs.ts";
 import { runScenario } from "./conformance/HarnessConformance.ts";
 import { piDurableTarget } from "./conformance/Targets.ts";
 import { parseTranscript } from "./conformance/Transcript.ts";

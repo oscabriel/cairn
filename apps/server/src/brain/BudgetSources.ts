@@ -48,24 +48,16 @@ import { defineDoc, InboxDoc } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
 import {
-  ChildDoc,
-  isLinked,
-  plainCopy,
-  SubagentsDoc,
-} from "../subagents/SubagentDocs.ts";
+  UNDECIDED,
+  applyAnswer,
+  emitAnswered,
+  cancelAbandonedApprovals,
+} from "../approvals/ApprovalLedger.ts";
 import { hasLimits } from "../usage/BudgetBook.ts";
 import type { BudgetMode, ScopeLimit } from "../usage/BudgetBook.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
-import {
-  applyAnswer,
-  Approvals,
-  cancelAbandonedApprovals,
-  emitAnswered,
-  ThreadMeta,
-  ThreadReceipt,
-  UNDECIDED,
-} from "./CairnDocs.ts";
+import { Approvals, ThreadMeta, ThreadReceipt } from "./CairnDocs.ts";
 import type {
   ApprovalPayloadState,
   ApprovalRecord,
@@ -76,6 +68,7 @@ import { durable } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
 import { applyNote, hasQueuedReset, readNote } from "./NoteAdmission.ts";
 import { piConversationId } from "./PiIds.ts";
+import { ChildDoc, isLinked, plainCopy, SubagentsDoc } from "./SubagentDocs.ts";
 
 /** The tool name a raise record carries. */
 export const RAISE_TOOL = "budget_raise";

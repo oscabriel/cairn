@@ -21,7 +21,7 @@ import { defineDoc } from "@earendil-works/pi-durable";
 import { Schema } from "effect";
 
 import { migrateGoal } from "../brain/RolesRetired.ts";
-import { plainCopy } from "../subagents/SubagentDocs.ts";
+import { plainCopy } from "../brain/SubagentDocs.ts";
 
 /** A judge as a document holds it: the protocol's `JudgeRef`. */
 export type JudgeRefState = DocumentState<typeof JudgeRef>;

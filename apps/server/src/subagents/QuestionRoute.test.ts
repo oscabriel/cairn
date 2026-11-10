@@ -52,6 +52,7 @@ import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { piConversationId } from "../brain/PiIds.ts";
+import { EscalationsDoc, SubagentsDoc } from "../brain/SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "../brain/SubagentFaults.ts";
 import { EscalationWhy } from "../brain/SubagentText.ts";
 import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
@@ -64,14 +65,13 @@ import {
   testThreadId,
 } from "../shell/ShellTestKit.ts";
 import type { ThreadRows } from "../shell/ThreadRows.ts";
-import { EscalationsDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
-import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
-import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
 import {
   escalateStrandedQuestions,
   QuestionRoutes,
   watchFor,
 } from "./QuestionRoute.ts";
+import { DEFAULT_TOOL_OPTIONS } from "./SubagentTools.ts";
+import type { SubagentToolOptions } from "./SubagentTools.ts";
 
 const PARENT = testThreadId(1);
 

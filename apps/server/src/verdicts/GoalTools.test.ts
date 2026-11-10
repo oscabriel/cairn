@@ -35,11 +35,12 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result, Schema } from "effect";
 
-import { answerApproval, Approvals } from "../brain/CairnDocs.ts";
+import { answerApproval } from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
+import { ChildDoc } from "../brain/SubagentDocs.ts";
 import { testLimit } from "../EventuallyTestKit.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { taskOf } from "../subagents/Delivery.ts";
-import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { JudgeRunsDoc } from "./GoalDocs.ts";
 import {
   callTool,

@@ -52,7 +52,7 @@ import type {
   ScriptedToolApi,
   ScriptedToolResult,
 } from "../../../apps/server/src/brain/ScriptedHarness.ts";
-import { plainCopy } from "../../../apps/server/src/subagents/SubagentDocs.ts";
+import { plainCopy } from "../../../apps/server/src/brain/SubagentDocs.ts";
 import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
 import type { CairnBrain } from "../parity/CairnApp.ts";
 import { PARITY_THREAD_ID } from "../parity/CairnApp.ts";

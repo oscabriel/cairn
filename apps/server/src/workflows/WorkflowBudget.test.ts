@@ -19,6 +19,8 @@ import { DateTime, Effect, Option, Predicate } from "effect";
 
 import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import type { WorkflowItemState } from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { testLimit } from "../EventuallyTestKit.ts";
 import {
   effectiveBudget,
@@ -31,8 +33,8 @@ import {
   workflowRaiseIdOf,
 } from "./WorkflowBudget.ts";
 import type { WorkflowBudgetPush } from "./WorkflowBudget.ts";
-import type { BudgetState, WorkflowItemState } from "./WorkflowDocs.ts";
-import { isNodeEnded, isWorkflowEnded, WorkflowsDoc } from "./WorkflowDocs.ts";
+import type { BudgetState } from "./WorkflowDocs.ts";
+import { isNodeEnded, isWorkflowEnded } from "./WorkflowDocs.ts";
 import { isNodeBrief } from "./WorkflowLaunch.ts";
 import { BUDGET_STOP_TEXT, CHILD_STOPPED_TEXT } from "./WorkflowNodes.ts";
 import {

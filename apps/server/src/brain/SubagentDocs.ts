@@ -1,7 +1,9 @@
 // The subagents' documents inside pi-durable's store (ADR 0028), as plain JSON (S23): the parent's
 // `cairn.subagents` registry and the child's `cairn.child` link. Their shapes are the protocol's
 // `SubagentsDocument` and `ChildDocument` (packages/protocol/src/Subagents.ts); kinds are protocol
-// and never change. Both start empty in a fork, which is another thread.
+// and never change. Both start empty in a fork, which is another thread. They are declared with the
+// brain's documents because the seam (a Stop all, a steer), the permission gate and the approval
+// ledger (a child's question and its parent's mirror) read them, besides the subagents' own tools.
 //
 // - `cairn.subagents` (on the parent) holds one item per child, keyed by the brief's approval id,
 //   written by the commit that starts the child and changed by its reporters and its questions.
@@ -10,7 +12,7 @@
 //   tool reads the brief's schema from it.
 // - `cairn.escalations` (on the parent) indexes the child questions escalated to the user, by the
 //   child's approval id, written in the escalation commit beside the parent's mirror record
-//   (approvals/QuestionRoute.ts) and resolved when the question is answered or ends.
+//   (subagents/QuestionRoute.ts) and resolved when the question is answered or ends.
 
 import { DEFAULT_RUNTIME_MODE } from "@cairn/protocol/Policy";
 import {
@@ -35,7 +37,7 @@ import { defineDoc } from "@earendil-works/pi-durable";
 import { Option, Predicate } from "effect";
 import type { Schema } from "effect";
 
-import { migrateSubagents } from "../brain/RolesRetired.ts";
+import { migrateSubagents } from "./RolesRetired.ts";
 
 /** A JSON object as a document holds it. */
 export interface JsonRecord {

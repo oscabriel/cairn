@@ -9,7 +9,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Layer, Option, Result } from "effect";
 
-import { ApprovalLedgerError } from "../brain/CairnDocs.ts";
+import { ApprovalLedgerError } from "../approvals/ApprovalLedger.ts";
 import { eventuallyTrue, slackened } from "../EventuallyTestKit.ts";
 import { ExecutorGrant, ExecutorGrantError } from "./ExecutorGrant.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";

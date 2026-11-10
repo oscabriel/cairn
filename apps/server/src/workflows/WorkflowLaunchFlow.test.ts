@@ -19,20 +19,20 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
 import {
-  answerApproval,
-  Approvals,
   cancelStoppedApprovals,
-} from "../brain/CairnDocs.ts";
+  answerApproval,
+} from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { EventsDoc, eventKind } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { testLimit } from "../EventuallyTestKit.ts";
-import {
-  ledgerProblems,
-  WorkflowSourcesDoc,
-  WorkflowsDoc,
-} from "./WorkflowDocs.ts";
-import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
+import { ledgerProblems, WorkflowSourcesDoc } from "./WorkflowDocs.ts";
 import { isNodeBrief, LAUNCH_TOOL, launchAnswered } from "./WorkflowLaunch.ts";
 import type { WorkflowPlan } from "./WorkflowPlan.ts";
 import {

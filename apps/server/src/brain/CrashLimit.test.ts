@@ -29,10 +29,11 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Function, Option, Schema } from "effect";
 import { Type } from "typebox";
 
+import { approvalIdOf } from "../approvals/ApprovalLedger.ts";
 import { KEPT_WAITS } from "../BootRepairs.ts";
 import { eventuallyTrue, testLimit } from "../EventuallyTestKit.ts";
 import { conversationOf, taskOf } from "../subagents/Delivery.ts";
-import { Approvals, approvalIdOf } from "./CairnDocs.ts";
+import { Approvals } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
 import {
   CRASH_LIMIT,

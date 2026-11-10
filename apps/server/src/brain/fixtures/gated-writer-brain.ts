@@ -37,11 +37,10 @@ import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { Clock, Context, Effect, Option, Predicate, Schema } from "effect";
 
 import {
-  answerApproval,
   approvalLedger,
-  Approvals,
-  writeMode,
-} from "../CairnDocs.ts";
+  answerApproval,
+} from "../../approvals/ApprovalLedger.ts";
+import { Approvals, writeMode } from "../CairnDocs.ts";
 import { gatedBash } from "../CodingTools.ts";
 import { runnerOf } from "../Durable.ts";
 import {

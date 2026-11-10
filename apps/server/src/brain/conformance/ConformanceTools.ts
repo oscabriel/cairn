@@ -19,7 +19,10 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer, Option, Predicate } from "effect";
 import { Type } from "typebox";
 
-import { approvalLedger, settlementText } from "../CairnDocs.ts";
+import {
+  settlementText,
+  approvalLedger,
+} from "../../approvals/ApprovalLedger.ts";
 import { runnerOf } from "../Durable.ts";
 import { ExtensionOrder } from "../Extensions.ts";
 import type { CairnExtension } from "../Extensions.ts";

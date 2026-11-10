@@ -8,6 +8,8 @@
 import type { Extension } from "@earendil-works/pi-durable";
 import { Context, Effect, Layer } from "effect";
 
+import type { AnsweredHook } from "../approvals/ApprovalLedger.ts";
+
 /** Install order, which is also prompt order. Gaps leave room; existing keys never move. */
 export const ExtensionOrder = {
   codingTools: 100,
@@ -47,20 +49,31 @@ export interface CairnExtension {
 /** The installed extension set, in install order. Built once per process. */
 export class Extensions extends Context.Service<
   Extensions,
-  { readonly installed: ReadonlyArray<Extension> }
+  {
+    readonly installed: ReadonlyArray<Extension>;
+    /**
+     * What an answer does inside its commit besides settling the record, for the records the
+     * installed features own (a brief's Go starts its child, a launch's Go approves its row,
+     * accepted criteria bind). Each hook acts on its own records only, so their order is free.
+     */
+    readonly answered: AnsweredHook;
+  }
 >()("cairn/server/brain/Extensions") {
   /**
-   * The set built from `sources`, sorted by order. Two extensions with one name or one order key
-   * are a wiring bug, so the layer dies naming them.
+   * The set built from `sources`, sorted by order, with the features' `answered` hooks run in
+   * turn. Two extensions with one name or one order key are a wiring bug, so the layer dies
+   * naming them.
    */
-  static readonly fromSources = <E, R>(
-    sources: ReadonlyArray<Effect.Effect<CairnExtension, E, R>>
+  static readonly fromSources = <E, R, HR = never>(
+    sources: ReadonlyArray<Effect.Effect<CairnExtension, E, R>>,
+    answered: ReadonlyArray<Effect.Effect<AnsweredHook, never, HR>> = []
   ) =>
     Layer.effect(
       Extensions,
       Effect.gen(function* () {
         const collected = yield* Effect.all(sources);
         const sorted = collected.toSorted((a, b) => a.order - b.order);
+        const hooks = yield* Effect.all(answered);
 
         const names = new Set<string>();
         const orders = new Set<number>();
@@ -78,6 +91,12 @@ export class Extensions extends Context.Service<
 
         return Extensions.of({
           installed: sorted.map(({ extension }) => extension),
+          answered: async (tx, conversationId, record) => {
+            for (const hook of hooks) {
+              // oxlint-disable-next-line no-await-in-loop -- writes of one commit, in turn
+              await hook(tx, conversationId, record);
+            }
+          },
         });
       })
     );

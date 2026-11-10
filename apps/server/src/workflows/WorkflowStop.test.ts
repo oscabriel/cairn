@@ -14,17 +14,14 @@ import { Effect, Option, Predicate, Result } from "effect";
 
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
 import { durableRunner } from "../brain/Durable.ts";
-import { eventuallySome, testLimit } from "../EventuallyTestKit.ts";
-import {
-  isWorkflowEnded,
-  settledTokens,
-  WorkflowsDoc,
-} from "./WorkflowDocs.ts";
 import type {
-  NodeItemState,
   WorkflowItemState,
   WorkflowsState,
-} from "./WorkflowDocs.ts";
+} from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
+import { eventuallySome, testLimit } from "../EventuallyTestKit.ts";
+import { isWorkflowEnded, settledTokens } from "./WorkflowDocs.ts";
+import type { NodeItemState } from "./WorkflowDocs.ts";
 import {
   stopNodeIn,
   stopWorkflowIn,

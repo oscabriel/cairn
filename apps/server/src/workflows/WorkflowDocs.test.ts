@@ -10,9 +10,10 @@ import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema } from "effect";
 
-import { UNDECIDED } from "../brain/CairnDocs.ts";
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { plainCopy } from "../subagents/SubagentDocs.ts";
+import { plainCopy } from "../brain/SubagentDocs.ts";
+import type { WorkflowItemState } from "../brain/WorkflowsDoc.ts";
 import {
   approveRecord,
   dispatchedCount,
@@ -21,7 +22,7 @@ import {
   nodeRequestIdOf,
   proposedRecord,
 } from "./WorkflowDocs.ts";
-import type { NodeItemState, WorkflowItemState } from "./WorkflowDocs.ts";
+import type { NodeItemState } from "./WorkflowDocs.ts";
 
 const envelope: Envelope = {
   scriptHash: "sha256-abc",

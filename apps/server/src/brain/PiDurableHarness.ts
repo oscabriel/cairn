@@ -75,37 +75,31 @@ import {
   Stream,
 } from "effect";
 
-import { BriefFaults } from "../subagents/BriefFaults.ts";
-import { holdWakes } from "../subagents/Delivery.ts";
 import {
-  ChildDoc,
-  EscalationsDoc,
-  SubagentsDoc,
-} from "../subagents/SubagentDocs.ts";
-import { answerBrief, steerReporter } from "../subagents/Subagents.ts";
+  refusalText,
+  relayedQuestion,
+  cancelStoppedApprovals,
+  answerApproval,
+} from "../approvals/ApprovalLedger.ts";
+import { holdWakes } from "../subagents/Delivery.ts";
+import { steerReporter } from "../subagents/Subagents.ts";
 import { GoalDoc } from "../verdicts/GoalDocs.ts";
-import { criteriaAnswered } from "../verdicts/Verdicts.ts";
-import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
-import { launchAnswered } from "../workflows/WorkflowLaunch.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession, BrainUnavailable } from "./Brain.ts";
 import { BrainStore } from "./BrainStore.ts";
 import {
-  answerApproval,
   Approvals,
   Permissions,
-  cancelStoppedApprovals,
-  refusalText,
-  relayedQuestion,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
 } from "./CairnDocs.ts";
-import type { AnsweredHook, ApprovalRecord } from "./CairnDocs.ts";
+import type { ApprovalRecord } from "./CairnDocs.ts";
 import { CommitFeed, documentValue, RUN_TASK } from "./CommitFeed.ts";
 import { documentCall, durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
+import { Extensions } from "./Extensions.ts";
 import { HarnessError, HarnessSeam } from "./HarnessSeam.ts";
 import type {
   ApprovalAnswerInput,
@@ -123,6 +117,7 @@ import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
 import { PendingApprovals } from "./PendingApprovals.ts";
 import { parentCeiling } from "./Permissions.ts";
 import { piConversationId, piEntryId, piSubmissionId } from "./PiIds.ts";
+import { ChildDoc, EscalationsDoc, SubagentsDoc } from "./SubagentDocs.ts";
 import { SubagentCrashes, SubagentFaults } from "./SubagentFaults.ts";
 import {
   WINDOW_POLICY,
@@ -137,6 +132,7 @@ import {
   projectEntry,
 } from "./ThreadWire.ts";
 import type { ThreadWireError } from "./ThreadWire.ts";
+import { WorkflowsDoc } from "./WorkflowsDoc.ts";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
@@ -361,17 +357,10 @@ const layerNoDeps = Layer.effectContext(
     const feed = yield* CommitFeed;
     const crashes = yield* SubagentCrashes;
     const faults = yield* SubagentFaults;
-    // Where a judge brain kills itself inside a brief's Go commit; none elsewhere.
-    const briefAnswered = answerBrief(yield* BriefFaults);
-
-    // What an answer does in its own commit: a workflow launch's row takes it (ADR 0032), a
-    // subagent's brief starts its child or tells its parent (ADR 0030), and an accepted criteria
-    // proposal binds its criteria (ADR 0026).
-    const answered: AnsweredHook = async (tx, conversationId, record) => {
-      await launchAnswered(tx, conversationId, record);
-      await briefAnswered(tx, conversationId, record);
-      await criteriaAnswered(tx, conversationId, record);
-    };
+    // What an answer does in its own commit, from the features that own the records: a workflow
+    // launch's row takes it (ADR 0032), a subagent's brief starts its child or tells its parent
+    // (ADR 0030), and an accepted criteria proposal binds its criteria (ADR 0026).
+    const { answered } = yield* Extensions;
 
     // A stop finishes here once it started aborting, whatever happens to its caller.
     const layerScope = yield* Effect.scope;

@@ -4,6 +4,7 @@
 
 import { Effect, Layer } from "effect";
 
+import type { AnsweredHook } from "../approvals/ApprovalLedger.ts";
 import { askUserSource } from "../approvals/AskUserTool.ts";
 import { ProviderRequestLog } from "../attachments/ProviderRequestExtension.ts";
 import { ExecutorExtension } from "../executor/ExecutorExtension.ts";
@@ -13,9 +14,12 @@ import { ResultTool } from "../models/ResultTool.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
 import { ReachTools } from "../reach/ReachExtension.ts";
 import { skillExtensionSources } from "../skills/SkillsLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
+import { BriefFaults } from "../subagents/BriefFaults.ts";
+import { answerBrief, Subagents } from "../subagents/Subagents.ts";
 import { BudgetBook } from "../usage/BudgetBook.ts";
 import { Goals } from "../verdicts/Goals.ts";
+import { criteriaAnswered } from "../verdicts/Verdicts.ts";
+import { launchAnswered } from "../workflows/WorkflowLaunch.ts";
 import { WorkflowPushes } from "../workflows/WorkflowPushes.ts";
 import { Workflows } from "../workflows/Workflows.ts";
 import { BridgeCwd } from "./BridgeCwdExtension.ts";
@@ -106,13 +110,25 @@ const dependencies = Layer.mergeAll(
   Goals.layer.pipe(Layer.provide(ModelSpecs.layerNoDeps))
 );
 
+// What an answer does in its own commit, from the features that own the records: a workflow
+// launch's row takes it (ADR 0032), a subagent's brief starts its child or tells its parent (ADR
+// 0030; a judge brain kills itself inside the Go commit through `BriefFaults`), and an accepted
+// criteria proposal binds its criteria (ADR 0026).
+const answered: ReadonlyArray<Effect.Effect<AnsweredHook>> = [
+  Effect.succeed(launchAnswered),
+  Effect.map(BriefFaults, answerBrief),
+  Effect.succeed(criteriaAnswered),
+];
+
 /** The installed set: production extensions, plus any a composition root adds (judges). */
 export const ExtensionSet = {
-  layer: Extensions.fromSources(production).pipe(Layer.provide(dependencies)),
+  layer: Extensions.fromSources(production, answered).pipe(
+    Layer.provide(dependencies)
+  ),
   /** The production set plus `extra`, for `judge-main.ts` and tests. */
   withExtra: (extra: ReadonlyArray<CairnExtension>) =>
-    Extensions.fromSources([
-      ...production,
-      ...extra.map((extension) => Effect.succeed(extension)),
-    ]).pipe(Layer.provide(dependencies)),
+    Extensions.fromSources(
+      [...production, ...extra.map((extension) => Effect.succeed(extension))],
+      answered
+    ).pipe(Layer.provide(dependencies)),
 };

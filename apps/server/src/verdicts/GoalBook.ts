@@ -31,8 +31,8 @@ import { ThreadReceipt } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
 import type { DurableCallError } from "../brain/Durable.ts";
 import { piConversationId } from "../brain/PiIds.ts";
+import { ChildDoc, isLinked } from "../brain/SubagentDocs.ts";
 import { ModelSpecs } from "../models/ModelSpecs.ts";
-import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import { judgeModelRefusal, judgeSpecOf } from "./ModelJudge.ts";
 import {
   BindOutcome,

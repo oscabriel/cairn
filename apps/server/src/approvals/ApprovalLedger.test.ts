@@ -26,37 +26,40 @@ import { commitWrites } from "@earendil-works/pi-durable/testing";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
 
-import { escalateIn, mirrorIdOf } from "../approvals/QuestionRoute.ts";
 import {
-  ChildDoc,
-  EscalationsDoc,
-  plainCopy,
-  SubagentsDoc,
-} from "../subagents/SubagentDocs.ts";
-import { proposedRecord, WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
-import {
-  answerApproval,
-  applyAnswer,
   Approvals,
-  cancelAbandonedApprovals,
-  cancelStoppedApprovals,
-  copyRecord,
-  expirePending,
-  heldByRun,
   migrateApprovals,
-  RELAYED_QUESTION_TOOL,
   ThreadMeta,
   ThreadReceipt,
-  UNDECIDED,
-} from "./CairnDocs.ts";
+} from "../brain/CairnDocs.ts";
 import type {
   ApprovalPayloadState,
   ApprovalRecord,
   ApprovalsState,
   JsonRecord,
-  RecordAnswer,
-} from "./CairnDocs.ts";
-import { piTaskId } from "./PiIds.ts";
+} from "../brain/CairnDocs.ts";
+import { piTaskId } from "../brain/PiIds.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  plainCopy,
+  SubagentsDoc,
+} from "../brain/SubagentDocs.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
+import { escalateIn, mirrorIdOf } from "../subagents/QuestionRoute.ts";
+import { proposedRecord } from "../workflows/WorkflowDocs.ts";
+import {
+  copyRecord,
+  UNDECIDED,
+  expirePending,
+  applyAnswer,
+  heldByRun,
+  RELAYED_QUESTION_TOOL,
+  cancelStoppedApprovals,
+  answerApproval,
+  cancelAbandonedApprovals,
+} from "./ApprovalLedger.ts";
+import type { RecordAnswer } from "./ApprovalLedger.ts";
 
 const context = BACKGROUND_CONTEXT;
 

@@ -28,11 +28,9 @@
 import type { RuntimeMode } from "@cairn/protocol/Policy";
 import { Duration, Effect, Option, Ref, Result } from "effect";
 
-import { settlementOf, settlementText } from "../brain/CairnDocs.ts";
-import type {
-  ApprovalLedger,
-  ApprovalPayloadState,
-} from "../brain/CairnDocs.ts";
+import { settlementOf, settlementText } from "../approvals/ApprovalLedger.ts";
+import type { ApprovalLedger } from "../approvals/ApprovalLedger.ts";
+import type { ApprovalPayloadState } from "../brain/CairnDocs.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";
 import type { ExecutorCallError } from "./ExecutorLink.ts";
 import {

@@ -53,20 +53,25 @@ import {
   Stream,
 } from "effect";
 
+import {
+  copyRecord,
+  UNDECIDED,
+  settleRecord,
+} from "../approvals/ApprovalLedger.ts";
 import { Brain } from "../brain/Brain.ts";
 import type { BrainSession } from "../brain/Brain.ts";
-import {
-  Approvals,
-  copyRecord,
-  settleRecord,
-  ThreadMeta,
-  ThreadReceipt,
-  UNDECIDED,
-} from "../brain/CairnDocs.ts";
+import { Approvals, ThreadMeta, ThreadReceipt } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { durable, errorText } from "../brain/Durable.ts";
 import type { DurableRunner } from "../brain/Durable.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  isLinked,
+  markQuestion,
+  SubagentsDoc,
+} from "../brain/SubagentDocs.ts";
 import {
   EscalationWhy,
   renderQuestion,
@@ -75,16 +80,9 @@ import {
 } from "../brain/SubagentText.ts";
 import { EventStore } from "../shell/EventStore.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
-import { conversationOf, parentHalt } from "../subagents/Delivery.ts";
-import {
-  ChildDoc,
-  EscalationsDoc,
-  isLinked,
-  markQuestion,
-  SubagentsDoc,
-} from "../subagents/SubagentDocs.ts";
-import { awaitDoc } from "../subagents/Waits.ts";
+import { conversationOf, parentHalt } from "./Delivery.ts";
 import { decisionOptions } from "./NeedsDecision.ts";
+import { awaitDoc } from "./Waits.ts";
 
 /** How long a parent's model may hold a question it was shown before the user gets it. */
 export const QUESTION_WINDOW_MILLIS = 15 * 60 * 1000;

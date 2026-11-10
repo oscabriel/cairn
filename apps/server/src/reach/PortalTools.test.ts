@@ -37,12 +37,8 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import {
-  answerApproval,
-  Approvals,
-  ThreadMeta,
-  writeMode,
-} from "../brain/CairnDocs.ts";
+import { answerApproval } from "../approvals/ApprovalLedger.ts";
+import { Approvals, ThreadMeta, writeMode } from "../brain/CairnDocs.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { testLimit, slackened } from "../EventuallyTestKit.ts";

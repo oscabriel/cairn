@@ -54,6 +54,7 @@ import { HarnessSeam } from "../../apps/server/src/brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../../apps/server/src/brain/HarnessSeam.ts";
 import { PiDurableHarness } from "../../apps/server/src/brain/PiDurableHarness.ts";
 import { piConversationId } from "../../apps/server/src/brain/PiIds.ts";
+import { SubagentsDoc } from "../../apps/server/src/brain/SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "../../apps/server/src/brain/SubagentFaults.ts";
 import { ServerConfig } from "../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../apps/server/src/executor/ExecutorLink.ts";
@@ -71,7 +72,6 @@ import {
   createProject,
   testThreadId,
 } from "../../apps/server/src/shell/ShellTestKit.ts";
-import { SubagentsDoc } from "../../apps/server/src/subagents/SubagentDocs.ts";
 import { Subagents } from "../../apps/server/src/subagents/Subagents.ts";
 import { judgeTrial, REPORT_SCHEMA, TASK } from "./TypedResults.ts";
 import type { Trial } from "./TypedResults.ts";

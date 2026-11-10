@@ -69,8 +69,8 @@ import { Type } from "typebox";
 
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
-import { ChildDoc } from "../subagents/SubagentDocs.ts";
-import type { ChildState } from "../subagents/SubagentDocs.ts";
+import { ChildDoc } from "../brain/SubagentDocs.ts";
+import type { ChildState } from "../brain/SubagentDocs.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const RESULTS_EXTENSION = "cairn.results";

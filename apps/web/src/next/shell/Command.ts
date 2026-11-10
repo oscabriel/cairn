@@ -8,7 +8,8 @@
 // sends. The add-project picker lists folders on the Beelink (`projects.browse`) and adds one with
 // `shell.dispatch` (`ProjectCreate`), so a refused folder answers in the picker itself. The
 // "Previous" fold reads a project's earlier project threads a page at a time
-// (`shell.previousThreads`, ADR 0048), and the menus' renames and removes go straight to
+// (`shell.previousThreads`, ADR 0048), a page opened directly on a thread the shell does not hold
+// asks whether it is one (`shell.earlierThread`), and the menus' renames and removes go straight to
 // `shell.dispatch` too, so a refusal answers in the dialog that asked.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
@@ -456,6 +457,32 @@ export const FetchPreviousThreads = Command.define("FetchPreviousThreads", {
               fallback: "The earlier project threads could not be read.",
             }),
           }),
+      })
+    ),
+});
+
+/**
+ * Asks the brain whether a thread a page was opened on directly (a reload, a link, Back) is an
+ * earlier project thread (`shell.earlierThread`, ADR 0048). Any failure, its `NotFound` for a
+ * thread that is not one included, answers none: the page then stays as it was.
+ */
+export const LookUpEarlierThread = Command.define("LookUpEarlierThread", {
+  args: { threadId: ThreadId },
+  messages: [Message.LookedUpEarlierThread],
+  execute: ({ threadId }) =>
+    withBoundary(
+      Effect.flatMap(CairnConnection.get, (client) =>
+        client["shell.earlierThread"]({ threadId })
+      )
+    ).pipe(
+      Effect.match({
+        onSuccess: (thread) =>
+          Message.LookedUpEarlierThread({
+            threadId,
+            thread: Option.some(thread),
+          }),
+        onFailure: () =>
+          Message.LookedUpEarlierThread({ threadId, thread: Option.none() }),
       })
     ),
 });

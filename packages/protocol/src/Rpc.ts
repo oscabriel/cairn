@@ -56,11 +56,13 @@ import {
 } from "./Reach.ts";
 import { ServerSettings, SettingsPatch } from "./Settings.ts";
 import {
+  EarlierThreadInput,
   PreviousThreadsInput,
   PreviousThreadsPage,
   ProjectShell,
   ShellStreamItem,
   SubscribeShellInput,
+  ThreadShell,
 } from "./Shell.ts";
 import { DispatchResult, ShellCommand } from "./ShellCommands.ts";
 import { SkillList, SkillsInput } from "./Skills.ts";
@@ -168,6 +170,13 @@ export const CairnRpcs = RpcGroup.make(
   Rpc.make("shell.previousThreads", {
     payload: PreviousThreadsInput,
     success: PreviousThreadsPage,
+    error: Lookup,
+  }),
+  // One earlier project thread by its id, for a page opened on it directly (ADR 0048); `NotFound`
+  // when the thread is not one: live, a child, deleted or missing.
+  Rpc.make("shell.earlierThread", {
+    payload: EarlierThreadInput,
+    success: ThreadShell,
     error: Lookup,
   }),
 

@@ -3,12 +3,14 @@
 // of its own, as classic's `hero/Hero.ts` does). The headline and the composer box sit together in
 // the middle of the page, one lane wide; with no project to offer, the hero asks for one first.
 // The `/`, `@` and `$` menu's drawer opens over the headline here rather than in the page's flow,
-// so the centred block keeps its height and the box being typed in never moves (U-21).
+// so the centred block keeps its height and the box being typed in never moves, and its list is
+// never taller than the space above the box, so a short page never hides its first rows (U-21).
 
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { draftProject } from "../../composer/Drafts.ts";
+import { KeepDrawerRoom } from "../../composer/HeroDrawerRoom.ts";
 import type { Message } from "../../composer/Message.ts";
 import type { Model } from "../../composer/Model.ts";
 import { cardView } from "../composer/Card.ts";
@@ -19,10 +21,17 @@ import { hasNoProjects, headlineView, noProjectsView } from "./Headline.ts";
 /**
  * The trigger menu's drawer (`next/composer/TriggerMenu.ts`, `data-composer-drawer-layer`) taken out
  * of the hero's flow and laid over the space above the box, so opening it, or the list growing and
- * shrinking as it filters, moves neither the headline nor the box.
+ * shrinking as it filters, moves neither the headline nor the box. Its list is never taller than
+ * that space (`--hero-drawer-room`, kept by `KeepDrawerRoom`), so its first rows never sit above
+ * the page's top, where no scroll reaches; it scrolls inside itself instead.
  */
-const DRAWER_OVER_HEADLINE =
-  "[&_[data-composer-drawer-layer]]:absolute [&_[data-composer-drawer-layer]]:inset-x-0 [&_[data-composer-drawer-layer]]:bottom-full";
+const DRAWER_OVER_HEADLINE = [
+  "[&_[data-composer-drawer-layer]]:absolute",
+  "[&_[data-composer-drawer-layer]]:inset-x-0",
+  "[&_[data-composer-drawer-layer]]:bottom-full",
+  // `--hero-drawer-room` is `composer/HeroDrawerRoom.ts`'s property, written out so the stylesheet build sees it.
+  "[&_[data-slot=command-list]]:max-h-[min(18rem,var(--hero-drawer-room,18rem))]",
+].join(" ");
 
 const page = (h: HtmlBuilder<Message>, child: Html): Html =>
   h.div(
@@ -53,6 +62,7 @@ export const heroView = (model: Model, h: HtmlBuilder<Message>): Html => {
     h.div(
       [
         h.DataAttribute("chat-composer-overlay", "true"),
+        h.OnMount(KeepDrawerRoom()),
         h.Class(
           "chat-composer-lane my-auto w-full px-(--space-3) py-(--space-6) sm:px-(--space-5)"
         ),

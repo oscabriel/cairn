@@ -2,6 +2,7 @@
 // judges read (`#root`, the sidebar wrapper and inset slots, the sidebar state), marked
 // `data-ui="next"`, with the notice bar the root hands it.
 
+import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
 import { Mount } from "foldkit";
@@ -23,7 +24,7 @@ import { ObserveList } from "../timeline/list/Place.ts";
 import { update } from "../Update.ts";
 import { view } from "./Frame.ts";
 import { hooksOf } from "./Hooks.ts";
-import { LoadScratch } from "./shell/Command.ts";
+import { LoadScratch, LookUpEarlierThread } from "./shell/Command.ts";
 import { Message as ShellMessage } from "./shell/Message.ts";
 import { initial as initialShell } from "./shell/Model.ts";
 
@@ -99,6 +100,15 @@ describe("the next frame", () => {
       Scene.Command.resolve(
         LoadScratch,
         ShellMessage.LoadedScratch({ threadId: Option.none() })
+      ),
+      // The live shell does not hold the thread, so the shell asks whether it is an earlier
+      // project thread (ADR 0048); it is not.
+      Scene.Command.resolve(
+        LookUpEarlierThread,
+        ShellMessage.LookedUpEarlierThread({
+          threadId: ThreadId.make("01890a5d-ac96-774b-bcce-b302099a8057"),
+          thread: Option.none(),
+        })
       ),
       // Then the composer docks under the transcript.
       Scene.Mount.resolve(ComposerInput, ComposerMessage.FocusedEditor()),

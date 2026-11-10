@@ -316,6 +316,15 @@ export const PreviousThreadsPage = Schema.Struct({
 
 export type PreviousThreadsPage = typeof PreviousThreadsPage.Type;
 
+/**
+ * `shell.earlierThread` input (ADR 0048): a thread a page was opened on directly (a reload, a link,
+ * the browser's Back) that the shell does not hold, asked for to learn whether it is an earlier
+ * project thread.
+ */
+export const EarlierThreadInput = Schema.Struct({ threadId: ThreadId });
+
+export type EarlierThreadInput = typeof EarlierThreadInput.Type;
+
 /** `shell.subscribe` input. */
 export const SubscribeShellInput = Schema.Struct({
   /** Resume after this sequence; none starts with a snapshot. */

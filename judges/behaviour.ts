@@ -26,6 +26,9 @@
 //                    then fail (the rest of the fold rule passes there; 1,440 and 1,180 px keep
 //                    room even so, and 390 px folds to icons either way);
 //   trigger-slash    `/` at line start opens the slash-command menu;
+//   trigger-short-390  on a 390 by 520 phone page (its keyboard up), `/` on the hero opens the
+//                    menu without moving the box, its first option inside the page and uncovered
+//                    (the drawer fits the room above the box, U-21);
 //   trigger-literal  `/tmp/x` leaves no menu open;
 //   trigger-at       `@READ` lists README (the time from the keystroke is recorded);
 //   trigger-skill    `$` opens the skill menu;
@@ -84,8 +87,8 @@
 //   shell-previous-<w>    after the refresh, cairn's list folds its earlier project thread under
 //                         "Previous (1)" (ADR 0048); the row opens the seeded thread read only: the
 //                         header says "earlier project thread", its transcript shows, its work panel
-//                         toggle reaches its subagents, no composer is drawn, and the bar's button
-//                         opens the current project thread;
+//                         toggle reaches its subagents, no composer is drawn, a reload of its page
+//                         keeps it read only, and the bar's button opens the current project thread;
 //   shell-start-1440      myr's bubble opens a draft of myr's own; its first message launches in
 //                         myr and becomes its project thread, and cairn keeps its own;
 //   shell-draft-project-1440  the hero's project picker chooses oscargabriel-dev: the rail and the
@@ -847,16 +850,32 @@ const shellChecks = async (browser: Browser, hero: string) => {
         const work = await page.getByTestId("work-toggle").count();
 
         await shot(page, "earlier-thread", width);
+
+        // Reached with no fold click (a reload, as a link or Back would), it is still read only.
+        await page.reload({ waitUntil: "networkidle" });
+
+        const reloaded = await page
+          .getByTestId("earlier-thread-lane")
+          .waitFor({ state: "visible", timeout: 10_000 })
+          .then(
+            () => true,
+            () => false
+          );
+
+        const reloadedComposers = await page
+          .getByTestId("composer-editor")
+          .count();
+
         await page.getByTestId("earlier-thread-open-project").click();
         await page.waitForURL((url) => url.pathname === current, {
           timeout: 5000,
         });
 
-        return `fold ${title}, row is the seeded thread ${listed.length === 1 && projectThreadUrl.endsWith(listed[0] ?? "-")}, read only ${lane && composers === 0}, role ${role}, transcript ${transcript}, work panel ${work > 0}, back to the project thread true`;
+        return `fold ${title}, row is the seeded thread ${listed.length === 1 && projectThreadUrl.endsWith(listed[0] ?? "-")}, read only ${lane && composers === 0}, after a reload ${reloaded && reloadedComposers === 0}, role ${role}, transcript ${transcript}, work panel ${work > 0}, back to the project thread true`;
       },
       (detail) =>
         detail ===
-        "fold Previous (1), row is the seeded thread true, read only true, role earlier project thread, transcript true, work panel true, back to the project thread true"
+        "fold Previous (1), row is the seeded thread true, read only true, after a reload true, role earlier project thread, transcript true, work panel true, back to the project thread true"
     );
   }
 
@@ -1796,6 +1815,63 @@ try {
 
       return "slash-command menu open";
     }
+  );
+
+  // A phone with its keyboard up leaves the hero a short page: the menu's drawer lies over the
+  // headline, so it must fit the room above the box, or its first rows sit above the page's top
+  // where no scroll reaches (U-21).
+  await check(
+    chromiumBrowser,
+    "trigger-short-390",
+    { ...PHONE, viewport: { width: 390, height: 520 } },
+    hero,
+    async (page) => {
+      const box = page.locator("[data-chat-composer-form]").first();
+
+      await editor(page).click();
+
+      const closed = await box.boundingBox();
+
+      await page.keyboard.type("/");
+      await menu(page, "slash-command").waitFor({ timeout: 3000 });
+
+      const opened = await box.boundingBox();
+      const before = closed?.y ?? Number.NaN;
+      const after = opened?.y ?? Number.NaN;
+
+      const scroller = await page.getByTestId("hero").boundingBox();
+
+      const option = menu(page, "slash-command")
+        .locator('[role="option"]')
+        .first();
+
+      const first = await option.boundingBox();
+
+      const inside =
+        scroller !== null &&
+        first !== null &&
+        first.y >= scroller.y - 0.5 &&
+        first.y + first.height <= scroller.y + scroller.height + 0.5;
+
+      // Nothing covers it: the topmost element at its middle is the option or inside it.
+      const uncovered = await option.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+
+        const top = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2
+        );
+
+        return top !== null && element.contains(top);
+      });
+
+      await shot(page, "hero-menu-short", 390);
+
+      return `first option inside the page ${inside}, uncovered ${uncovered}, box still ${Math.abs(after - before) < 1}`;
+    },
+    (detail) =>
+      detail ===
+      "first option inside the page true, uncovered true, box still true"
   );
 
   await check(

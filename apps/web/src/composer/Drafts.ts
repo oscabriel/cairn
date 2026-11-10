@@ -133,18 +133,20 @@ export const pickableProjects = (model: Model): ReadonlyArray<ProjectShell> =>
   folderProjectsByRecent(model.context.projects);
 
 /**
- * The project a new thread launches in: the one the draft chose, else the hero's default (the most
- * recently updated folder project). None when there is no project (the hero then offers to start
- * without one).
+ * The project a new thread launches in: the one the draft chose while it still exists, else the
+ * hero's default (the most recently updated folder project), so a draft whose project was removed
+ * names and launches in the default rather than quietly in the scratch project. None when there is
+ * no project (the hero then offers to start without one).
  */
 export const draftProject = (model: Model): Option.Option<ProjectShell> => {
   const draft = activeDraft(model);
 
-  return Option.match(draft.projectId, {
-    onNone: () => defaultProjectOf(model.context.projects),
-    onSome: (id) =>
-      Array.findFirst(model.context.projects, (project) => project.id === id),
-  });
+  return Option.orElse(
+    Option.flatMap(draft.projectId, (id) =>
+      Array.findFirst(model.context.projects, (project) => project.id === id)
+    ),
+    () => defaultProjectOf(model.context.projects)
+  );
 };
 
 /**

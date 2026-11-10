@@ -1197,6 +1197,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
     BlurredEditor: () => ({
       model: modifyFields(model, { focused: () => false }),
     }),
+    StartedHeroDrawerRoom: () => ({ model }),
     PressedSubmitKey: ({ intent }) => submit(model, intent),
     PressedMenuKey: ({ key }) => menuKey(model, key),
     PressedHistoryKey: ({ direction }) => recallHistory(model, direction),

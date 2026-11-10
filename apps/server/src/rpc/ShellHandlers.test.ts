@@ -2,7 +2,8 @@
 // review): a hung thread that is deleted must free its run, its queue and its Claude Code child.
 // Clearing a scratch thread stops its run and its subagents' first and releases its folder after
 // the commit; a clear refused for a folder project's thread stops and releases nothing.
-// `shell.previousThreads` pages a project's earlier project threads (ADR 0048).
+// `shell.previousThreads` pages a project's earlier project threads, and `shell.earlierThread`
+// answers one by its id (ADR 0048).
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { ProjectId } from "@cairn/protocol/Ids";
@@ -371,6 +372,33 @@ describe("shell.previousThreads", () => {
             [testThreadId(13), testThreadId(11)]
           );
           assert.isTrue(Option.isNone(whole.next));
+        })
+      )
+  );
+
+  it.effect(
+    "shell.earlierThread answers an earlier project thread by its id, and NotFound for any other thread",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const { client, projectId } = yield* seedRefreshed;
+
+          const found = yield* client["shell.earlierThread"]({
+            threadId: testThreadId(13),
+          });
+
+          assert.strictEqual(found.id, testThreadId(13));
+          assert.strictEqual(found.projectId, projectId);
+          assert.isTrue(Option.isSome(found.archivedAt));
+
+          // 15 is the live project thread, 14 was deleted, 12 is a live child and 99 never existed.
+          for (const n of [15, 14, 12, 99]) {
+            const refused = yield* client["shell.earlierThread"]({
+              threadId: testThreadId(n),
+            }).pipe(Effect.flip);
+
+            assert.strictEqual(refused._tag, "NotFound", `thread ${n}`);
+          }
         })
       )
   );

@@ -113,6 +113,14 @@ export const Message = defineMessageUnion({
   FailedPreviousThreads: { request: Schema.Int, message: Schema.String },
   /** An earlier project thread's row: open it, read only. */
   ClickedPreviousThread: { thread: ThreadShell },
+  /**
+   * The brain's answer about a thread a page was opened on directly: the earlier project thread it
+   * is, or none (not one, or the brain could not be asked).
+   */
+  LookedUpEarlierThread: {
+    threadId: ThreadId,
+    thread: Schema.Option(ThreadShell),
+  },
   /** The read-only bar of an earlier project thread: open its project's project thread. */
   ClickedOpenProjectThread: { projectId: ProjectId },
 

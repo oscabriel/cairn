@@ -45,6 +45,11 @@ export const Message = defineMessageUnion({
   ChangedSelection: { start: Schema.Int, end: Schema.Int },
   FocusedEditor: {},
   BlurredEditor: {},
+  /**
+   * The hero keeps its menu drawer's room (the space above the box) measured while it is shown
+   * (`HeroDrawerRoom.ts`); nothing in the Model changes.
+   */
+  StartedHeroDrawerRoom: {},
   PressedSubmitKey: { intent: SubmitIntent },
   PressedMenuKey: { key: MenuKey },
   /** ArrowUp on the first line or ArrowDown on the last, with nothing selected. */

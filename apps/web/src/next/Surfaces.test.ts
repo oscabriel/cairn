@@ -18,6 +18,7 @@ import { composerOn, project, threadId } from "../composer/ComposerFixtures.ts";
 import { activeDraft } from "../composer/Drafts.ts";
 import { ComposerInput } from "../composer/Editor.ts";
 import { MeasureFooter } from "../composer/Footer.ts";
+import { KeepDrawerRoom } from "../composer/HeroDrawerRoom.ts";
 import { Message as ComposerMessage } from "../composer/Message.ts";
 import { ComposerTarget } from "../composer/Model.ts";
 import {
@@ -95,6 +96,10 @@ describe("the next composer", () => {
       { update: composerUpdate, view: composerView },
       Scene.given(composerOn(ComposerTarget.Home())),
       ...acknowledgeMounts,
+      Scene.Mount.resolve(
+        KeepDrawerRoom,
+        ComposerMessage.StartedHeroDrawerRoom()
+      ),
       Scene.expect(
         Scene.role("heading", { name: "What should we build?" })
       ).toExist(),

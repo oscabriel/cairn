@@ -17,9 +17,10 @@
 
 import { LINEAGE_PAGE } from "@cairn/client-logic/ThreadLineage";
 import { threadStatus } from "@cairn/client-logic/ThreadState";
+import { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
-import { Array, Equal, Option, Predicate, Record } from "effect";
+import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
@@ -32,6 +33,7 @@ import {
   FetchPreviousThreads,
   FocusField,
   LoadScratch,
+  LookUpEarlierThread,
   PrepareProjectDraft,
   PrepareRefresh,
   PrepareScratchClear,
@@ -88,6 +90,8 @@ type UpdateReturn = Update.ReturnWithOutMessage<
 >;
 
 type InformReturn = Update.Return<Model, Message, Services>;
+
+const isThreadId = Schema.is(ThreadId);
 
 const routedThreadId = (context: ShellContext): Option.Option<string> =>
   Predicate.isTagged(context.route, "Thread")
@@ -175,10 +179,41 @@ const followRoute = (model: Model, context: ShellContext): Model => {
   });
 };
 
+/** The fold reading its first page again for `projectId` under `key`, keeping `isOpen`. */
+const readPrevious = (
+  model: Model,
+  key: string,
+  projectId: ProjectId,
+  isOpen: boolean
+): InformReturn => {
+  const { previous } = model;
+  const request = previous.request + 1;
+  const sameProject = Option.contains(previous.projectId, projectId);
+
+  return {
+    model: modifyFields(model, {
+      previous: () =>
+        modifyFields(previous, {
+          key: () => Option.some(key),
+          projectId: () => Option.some(projectId),
+          isOpen: () => sameProject && isOpen,
+          rows: (rows) => (sameProject ? rows : Option.none()),
+          isLoading: () => true,
+          request: () => request,
+          failure: () => Option.none(),
+        }),
+    }),
+    commands: [
+      FetchPreviousThreads({ request, projectId, after: Option.none() }),
+    ],
+  };
+};
+
 /**
  * Reads the selected project's earlier project threads when the project or its project thread
  * changed since the fold last read them (a refresh moves the mark), or when the connection came
- * back with nothing read yet. Rows read for the same project stay shown while the new page loads.
+ * back with nothing read yet or after a read that failed. Rows read for the same project stay
+ * shown while the new page loads.
  */
 const syncPrevious = (model: Model, before: ShellContext): InformReturn =>
   Option.match(previousKeyOf(model), {
@@ -189,33 +224,14 @@ const syncPrevious = (model: Model, before: ShellContext): InformReturn =>
 
       const reconnected =
         !before.hasClient &&
-        Option.isNone(previous.rows) &&
+        (Option.isNone(previous.rows) || Option.isSome(previous.failure)) &&
         !previous.isLoading;
 
       if (!model.context.hasClient || (!changed && !reconnected)) {
         return { model };
       }
 
-      const request = previous.request + 1;
-      const sameProject = Option.contains(previous.projectId, projectId);
-
-      return {
-        model: modifyFields(model, {
-          previous: () =>
-            modifyFields(previous, {
-              key: () => Option.some(key),
-              projectId: () => Option.some(projectId),
-              isOpen: (open) => sameProject && open,
-              rows: (rows) => (sameProject ? rows : Option.none()),
-              isLoading: () => true,
-              request: () => request,
-              failure: () => Option.none(),
-            }),
-        }),
-        commands: [
-          FetchPreviousThreads({ request, projectId, after: Option.none() }),
-        ],
-      };
+      return readPrevious(model, key, projectId, previous.isOpen);
     },
   });
 
@@ -276,8 +292,39 @@ const forgetClearedScratch = (
 };
 
 /**
- * The context told: the rail follows the route, finds a folder just added, and lets go of a scratch
- * thread cleared elsewhere.
+ * Asks the brain about the routed thread when the live shell does not hold it and neither the fold
+ * nor an earlier answer says it is an earlier project thread: a page reloaded or linked on one, from
+ * any project. Asked once per thread, and again when the connection comes back. A launch the shell
+ * has not shown yet is asked about too; the brain answers that it is not one.
+ */
+const syncEarlier = (model: Model, before: ShellContext): InformReturn => {
+  const { context, previous } = model;
+
+  const unknown = Option.filter(
+    Option.filter(routedThreadId(context), isThreadId),
+    (threadId) =>
+      context.hasClient &&
+      Option.isSome(context.shell) &&
+      !holdsRow(context, threadId) &&
+      Option.isNone(openEarlierThreadOf(model)) &&
+      (!Option.contains(previous.askedAbout, threadId) || !before.hasClient)
+  );
+
+  return Option.match(unknown, {
+    onNone: () => ({ model }),
+    onSome: (threadId) => ({
+      model: modifyFields(model, {
+        previous: (fold) =>
+          modifyFields(fold, { askedAbout: () => Option.some(threadId) }),
+      }),
+      commands: [LookUpEarlierThread({ threadId })],
+    }),
+  });
+};
+
+/**
+ * The context told: the rail follows the route, finds a folder just added, lets go of a scratch
+ * thread cleared elsewhere, reads the "Previous" fold and asks about a routed thread it cannot place.
  */
 const informContext = (model: Model, context: ShellContext): InformReturn => {
   const told = forgetClearedScratch(
@@ -286,10 +333,14 @@ const informContext = (model: Model, context: ShellContext): InformReturn => {
   );
 
   const read = syncPrevious(told.model, model.context);
+  const asked = syncEarlier(read.model, model.context);
 
   return {
-    model: read.model,
-    commands: Array.appendAll(told.commands ?? [], read.commands ?? []),
+    model: asked.model,
+    commands: Array.appendAll(
+      Array.appendAll(told.commands ?? [], read.commands ?? []),
+      asked.commands ?? []
+    ),
   };
 };
 
@@ -648,6 +699,34 @@ const setPrevious = (
 ): UpdateReturn => ({
   model: modifyFields(model, { previous: change }),
 });
+
+/**
+ * The fold's header: shows or hides the rows. Opening a fold whose last read failed reads it
+ * again, as its failure line says.
+ */
+const openPrevious = (model: Model): UpdateReturn => {
+  const { previous } = model;
+
+  const retry =
+    !previous.isOpen &&
+    Option.isSome(previous.failure) &&
+    !previous.isLoading &&
+    model.context.hasClient;
+
+  return Option.match(
+    Option.filter(
+      Option.all({ key: previous.key, projectId: previous.projectId }),
+      () => retry
+    ),
+    {
+      onNone: () =>
+        setPrevious(model, (current) =>
+          modifyFields(current, { isOpen: (open) => !open })
+        ),
+      onSome: ({ key, projectId }) => readPrevious(model, key, projectId, true),
+    }
+  );
+};
 
 /** Reads the fold's next page, after the rows it shows. */
 const morePrevious = (model: Model): UpdateReturn => {
@@ -1115,10 +1194,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         modifyFields(work, { failure: () => Option.none() })
       ),
 
-    ClickedPreviousThreads: () =>
-      setPrevious(model, (previous) =>
-        modifyFields(previous, { isOpen: (open) => !open })
-      ),
+    ClickedPreviousThreads: () => openPrevious(model),
     ClickedMorePreviousThreads: () => morePrevious(model),
     ReceivedPreviousThreads: ({ more, page, request }) =>
       request === model.previous.request
@@ -1159,6 +1235,17 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         }),
         threadRouter({ threadId: thread.id })
       ),
+    // Its project becomes the selected one, so the fold reads that project's rows.
+    LookedUpEarlierThread: ({ thread, threadId }) =>
+      Option.isSome(thread) && thread.value.id === threadId
+        ? syncPrevious(
+            modifyFields(model, {
+              previous: (previous) =>
+                modifyFields(previous, { opened: () => thread }),
+            }),
+            model.context
+          )
+        : { model },
     ClickedOpenProjectThread: ({ projectId }) => openProject(model, projectId),
 
     ClickedMenu: ({ target }) => ({

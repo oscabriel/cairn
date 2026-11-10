@@ -936,6 +936,140 @@ describe("the Previous fold (ADR 0048)", () => {
     assert.isFalse(isEarlierThreadOpen(onProjectThread));
   });
 
+  it("keeps an earlier project thread read only when Back or a later click reaches it, not only the last fold click", () => {
+    const { model } = withFoldAsked();
+
+    const other = shellRow(43, {
+      projectId: CAIRN,
+      archivedAt: Option.some(NOW),
+    });
+
+    const read = update(
+      model,
+      Message.ReceivedPreviousThreads({
+        request: 1,
+        page: { threads: [earlier, other], next: Option.none() },
+        more: false,
+      })
+    ).model;
+
+    // Opened `other` from the fold, then Back to `earlier` (the route moves; no click).
+    const clicked = update(
+      read,
+      Message.ClickedPreviousThread({ thread: other })
+    ).model;
+
+    const back = inform(clicked, {
+      ...clicked.context,
+      route: AppRoute.Thread({ threadId: earlier.id }),
+    }).model;
+
+    assert.isTrue(isEarlierThreadOpen(back));
+    assert.strictEqual(headerContentOf(back).title, earlier.title);
+    assert.deepStrictEqual(
+      Option.getOrThrow(sidebarContentOf(back).previous).rows.map(
+        (row) => [row.thread.id, row.isOpen] as const
+      ),
+      [
+        [earlier.id, true],
+        [other.id, false],
+      ]
+    );
+
+    // A refresh that replaced the project thread, then Back to it: the fold holds it, no click.
+    const backFromRefresh = inform(read, {
+      ...read.context,
+      route: AppRoute.Thread({ threadId: other.id }),
+    }).model;
+
+    assert.isTrue(isEarlierThreadOpen(backFromRefresh));
+  });
+
+  it("asks the brain about a thread a reload or a link opened that neither the shell nor the fold holds", () => {
+    // An earlier project thread of myr's, while the fold reads cairn's (the hero's default).
+    const myrs = shellRow(44, {
+      projectId: MYR,
+      title: "myr's last project thread",
+      archivedAt: Option.some(NOW),
+    });
+
+    const reloaded = shellModelOn(AppRoute.Thread({ threadId: myrs.id }));
+    const told = inform(reloaded, reloaded.context);
+
+    const asked = (told.commands ?? []).find(
+      (command) => command.name === "LookUpEarlierThread"
+    );
+
+    assert.deepStrictEqual(asked?.args, { threadId: myrs.id });
+    assert.isFalse(isEarlierThreadOpen(told.model));
+
+    // Told again before the answer, it is not asked twice.
+    assert.isUndefined(
+      (inform(told.model, told.model.context).commands ?? []).find(
+        (command) => command.name === "LookUpEarlierThread"
+      )
+    );
+
+    const answered = update(
+      told.model,
+      Message.LookedUpEarlierThread({
+        threadId: myrs.id,
+        thread: Option.some(myrs),
+      })
+    ).model;
+
+    assert.isTrue(isEarlierThreadOpen(answered));
+    assert.strictEqual(headerContentOf(answered).title, myrs.title);
+    assert.strictEqual(Option.getOrThrow(selectedProjectOf(answered)).id, MYR);
+
+    // A thread the brain says is not an earlier one (a launch the shell has not shown yet) keeps
+    // its composer.
+    const launching = update(
+      told.model,
+      Message.LookedUpEarlierThread({
+        threadId: myrs.id,
+        thread: Option.none(),
+      })
+    ).model;
+
+    assert.isFalse(isEarlierThreadOpen(launching));
+
+    // A thread the shell holds is never asked about.
+    assert.isUndefined(
+      (inform(onProjectThread, onProjectThread.context).commands ?? []).find(
+        (command) => command.name === "LookUpEarlierThread"
+      )
+    );
+  });
+
+  it("reads the fold again when it is opened after a failed read", () => {
+    const { model } = withFoldAsked();
+
+    const failed = update(
+      model,
+      Message.FailedPreviousThreads({
+        request: 1,
+        message: "Cairn is reconnecting. Open it again once it is back.",
+      })
+    ).model;
+
+    const reopened = update(failed, Message.ClickedPreviousThreads());
+
+    assert.deepStrictEqual(
+      (reopened.commands ?? []).find(
+        (command) => command.name === "FetchPreviousThreads"
+      )?.args,
+      { request: 2, projectId: CAIRN, after: Option.none() }
+    );
+    assert.isTrue(reopened.model.previous.isOpen);
+    assert.isTrue(Option.isNone(reopened.model.previous.failure));
+
+    // Opening it with nothing wrong reads nothing.
+    assert.isUndefined(
+      update(model, Message.ClickedPreviousThreads()).commands?.[0]
+    );
+  });
+
   it("reads the next page after the rows shown and adds it below them", () => {
     const { model } = withFoldAsked();
     const cursor = { archivedAt: NOW, threadId: earlier.id };
@@ -1093,37 +1227,43 @@ describe("the project and thread menus (U-10)", () => {
     assert.isUndefined(other.outMessage);
   });
 
+  it("offers no thread menu on a project thread, whose header shows its project's name, not its own", () => {
+    assert.isTrue(Option.isNone(headerContentOf(onProjectThread).menu));
+  });
+
   it("renames the open thread from the header's menu, and Escape closes the dialog then the menu", () => {
-    const header = headerContentOf(onProjectThread);
+    const managedId = rowId(3);
+    const onManaged = shellModelOn(AppRoute.Thread({ threadId: managedId }));
+    const header = headerContentOf(onManaged);
 
     assert.deepStrictEqual(
       Option.map(header.menu, (menu) => menu.threadId),
-      Option.some(PROJECT_THREAD)
+      Option.some(managedId)
     );
 
-    const rename = ManageAction.RenameThread({ threadId: PROJECT_THREAD });
+    const rename = ManageAction.RenameThread({ threadId: managedId });
 
     const renaming = update(
-      onProjectThread,
+      onManaged,
       Message.ClickedManage({ action: rename })
     ).model;
 
     assert.strictEqual(
       Option.getOrThrow(renaming.manage).text,
-      threadOf(PROJECT_THREAD).title
+      threadOf(managedId).title
     );
     assert.deepStrictEqual(
       dispatched(update(renaming, Message.ClickedConfirmManage())),
-      { action: rename, text: threadOf(PROJECT_THREAD).title }
+      { action: rename, text: threadOf(managedId).title }
     );
     assert.isTrue(
       Option.isNone(update(renaming, Message.PressedEscape()).model.manage)
     );
 
     const menu = update(
-      onProjectThread,
+      onManaged,
       Message.ClickedMenu({
-        target: MenuTarget.Thread({ threadId: PROJECT_THREAD }),
+        target: MenuTarget.Thread({ threadId: managedId }),
       })
     ).model;
 
@@ -1137,7 +1277,7 @@ describe("the project and thread menus (U-10)", () => {
         update(
           menu,
           Message.ClickedMenu({
-            target: MenuTarget.Thread({ threadId: PROJECT_THREAD }),
+            target: MenuTarget.Thread({ threadId: managedId }),
           })
         ).model.menu
       )

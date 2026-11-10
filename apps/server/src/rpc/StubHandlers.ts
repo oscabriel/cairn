@@ -20,6 +20,7 @@ export const stubHandlers = {
   "shell.subscribe": stream("shell.subscribe"),
   "shell.dispatch": unary("shell.dispatch"),
   "shell.previousThreads": unary("shell.previousThreads"),
+  "shell.earlierThread": unary("shell.earlierThread"),
   "thread.launch": unary("thread.launch"),
   "thread.send": unary("thread.send"),
   "thread.stop": unary("thread.stop"),

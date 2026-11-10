@@ -2,8 +2,8 @@
 // project, its project thread and the threads it manages, each with its status from the one
 // thread-state function (`ThreadState.ts`), and what the chat header says about the open thread.
 // On the hero and a draft's page the selected project is the draft's, so the rail, the list and the
-// hero name one project (U-21). An earlier project thread opened from the "Previous" fold is read
-// from the fold, since archived rows are not in the shell (ADR 0048). Pure, so the views, the
+// hero name one project (U-21). An earlier project thread the route opens is read from the
+// "Previous" fold or the brain's answer for it, since archived rows are not in the shell (ADR 0048). Pure, so the views, the
 // catalogue and the tests read the same answers.
 
 import {
@@ -101,17 +101,31 @@ const openProjectId = (model: Model): Option.Option<ProjectId> =>
     )
   );
 
-/** The earlier project thread the route opens, when it was opened from the "Previous" fold. */
-export const openEarlierThreadOf = (model: Model): Option.Option<ThreadShell> =>
-  Predicate.isTagged(model.context.route, "Thread") &&
-  Option.isNone(openThreadOf(model))
-    ? Option.filter(
-        model.previous.opened,
-        (thread) =>
-          Predicate.isTagged(model.context.route, "Thread") &&
-          thread.id === model.context.route.threadId
-      )
-    : Option.none();
+/**
+ * The earlier project thread the route opens, however the page was reached (a fold click, Back, a
+ * reload or a link): a thread the shell does not hold that the fold's rows hold, or that was opened
+ * last (from the fold, or as the brain answered for it).
+ */
+export const openEarlierThreadOf = (
+  model: Model
+): Option.Option<ThreadShell> => {
+  const { route } = model.context;
+
+  if (
+    !Predicate.isTagged(route, "Thread") ||
+    Option.isSome(openThreadOf(model))
+  ) {
+    return Option.none();
+  }
+
+  const isRouted = (thread: ThreadShell) => thread.id === route.threadId;
+
+  return Option.orElse(Option.filter(model.previous.opened, isRouted), () =>
+    Option.flatMap(model.previous.rows, (rows) =>
+      Array.findFirst(rows.threads, isRouted)
+    )
+  );
+};
 
 /**
  * The project the sidebar shows. On the hero and a draft's page it is the draft's project, the one

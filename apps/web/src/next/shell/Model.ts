@@ -167,8 +167,16 @@ export const PreviousState = Schema.Struct({
   /** The number of the page asked last; an answer to an older one is dropped. */
   request: Schema.Int,
   failure: Schema.Option(Schema.String),
-  /** The earlier project thread opened from the fold, read only: its header and its page read it. */
+  /**
+   * The earlier project thread opened last, from the fold or as the brain answered for a page
+   * opened on it directly, read only: its header and its page read it (as they read the fold's rows).
+   */
   opened: Schema.Option(ThreadShell),
+  /**
+   * The thread last asked of the brain (`shell.earlierThread`): one a page was opened on that
+   * neither the shell nor the fold holds. It is asked once per route, and again on a reconnect.
+   */
+  askedAbout: Schema.Option(ThreadId),
 });
 
 export type PreviousState = typeof PreviousState.Type;
@@ -183,6 +191,7 @@ export const initialPrevious: PreviousState = {
   request: 0,
   failure: Option.none(),
   opened: Option.none(),
+  askedAbout: Option.none(),
 };
 
 /** How many earlier project threads one page of the fold reads. */

@@ -242,10 +242,18 @@ export const headerContentOf = (model: Model): HeaderContent => {
         ),
         status: Option.some(row),
         canRefresh: role === "project-thread",
-        menu: Option.some({
-          threadId: thread.id,
-          isOpen: isMenuOpen(model, MenuTarget.Thread({ threadId: thread.id })),
-        }),
+        // The project thread's header and row name its project, not the thread, so a rename of it
+        // would change nothing on screen: it has no thread menu.
+        menu:
+          role === "project-thread"
+            ? Option.none()
+            : Option.some({
+                threadId: thread.id,
+                isOpen: isMenuOpen(
+                  model,
+                  MenuTarget.Thread({ threadId: thread.id })
+                ),
+              }),
         scratchHint,
       };
     },

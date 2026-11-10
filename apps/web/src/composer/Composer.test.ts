@@ -51,12 +51,14 @@ import { composerContext } from "./Context.ts";
 import {
   activeDraft,
   DRAFTS_STORAGE_KEY,
+  draftProject,
   loadDrafts,
   saveDrafts,
   shownNotice,
 } from "./Drafts.ts";
 import { ComposerInput } from "./Editor.ts";
 import { MeasureFooter } from "./Footer.ts";
+import { drawerRoomOf, KeepDrawerRoom } from "./HeroDrawerRoom.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
@@ -277,8 +279,15 @@ describe("composer triggers", () => {
       "the menu lists the picked project's files"
     );
 
+    // A draft whose project is gone falls back to the default project, so only a shell with no
+    // project at all leaves it with none.
     const orphaned = afterAll(
-      pickDraftProject(base, draftId, ProjectId.make("prj_gone")),
+      pickDraftProject(
+        inform(composerOn(target), { ...contextFor(target), projects: [] })
+          .model,
+        draftId,
+        ProjectId.make("prj_gone")
+      ),
       typed
     );
 
@@ -1709,6 +1718,7 @@ describe("the new-thread hero", () => {
       { update, view },
       Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
       ...acknowledgeMounts,
+      Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
       Scene.expect(Scene.testId("hero-headline")).toContainText(
         "What should we build"
       ),
@@ -1724,6 +1734,72 @@ describe("the new-thread hero", () => {
       Scene.tap((simulation) => {
         assert.lengthOf(simulation.commands, 0);
       })
+    );
+  });
+
+  it("keeps the menu drawer's list within the room above the box, measured on the page (U-21)", () => {
+    // Box 200 px below the scroller's top, unscrolled: 200 px of room.
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 0, boxTop: 256 }),
+      200
+    );
+    // Scrolled 120 px: the room is still counted from the top a scroll reaches.
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 120, boxTop: 136.6 }),
+      200
+    );
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 0, boxTop: 40 }),
+      0
+    );
+
+    Scene.scene(
+      { update, view },
+      Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
+      ...acknowledgeMounts,
+      Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
+      ...typeWithCaret("/"),
+      Scene.expect(menu).toExist(),
+      Scene.expect(Scene.selector("[data-chat-composer-stack]")).toHaveClass(
+        "[&_[data-slot=command-list]]:max-h-[min(18rem,var(--hero-drawer-room,18rem))]"
+      )
+    );
+  });
+
+  it("launches a draft whose project was removed in the hero's default project, not the scratch project", () => {
+    const myr = ProjectShell.make({
+      ...project,
+      id: ProjectId.make("prj_myr"),
+      title: "myr",
+      workspaceRoot: "/home/user/myr",
+    });
+
+    const target = ComposerTarget.Draft({ draftId });
+
+    const picked = pickDraftProject(
+      inform(composerOn(target), {
+        ...contextFor(target),
+        projects: [project, myr],
+      }).model,
+      draftId,
+      myr.id
+    );
+
+    assert.strictEqual(Option.getOrThrow(draftProject(picked)).id, myr.id);
+
+    // myr is removed from its menu: the shell no longer holds it.
+    const removed = inform(picked, {
+      ...contextFor(target),
+      projects: [project],
+    }).model;
+
+    assert.strictEqual(Option.getOrThrow(draftProject(removed)).id, project.id);
+
+    const typed = update(removed, Message.ChangedDraft({ value: "go" })).model;
+
+    assert.deepStrictEqual(
+      launchOf(typed)?.args?.projectId,
+      Option.some(project.id)
     );
   });
 

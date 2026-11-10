@@ -81,6 +81,7 @@ import {
   ThreadCreate,
 } from "../../../apps/server/src/shell/ShellCommands.ts";
 import type { ThreadActivityPatch } from "../../../apps/server/src/shell/ShellCommands.ts";
+import { CAIRN_USER_ENTRY } from "../../../apps/server/src/threads/TurnContent.ts";
 import { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
 
@@ -93,6 +94,9 @@ export const PARITY_THREAD_ID = ThreadId.make(
 );
 
 const PROJECT_ID = ProjectId.make("prj_parity_judge");
+
+/** Who the seeded thread's user messages are from. */
+const SEEDED_SENDER = "owner@github";
 
 /** What the Cairn half is seeded with. */
 export interface CairnSeed {
@@ -427,7 +431,7 @@ export const putChangedFiles = (
     // The seeded thread holds the imported turns; one without a user entry is a broken harness.
     const lastUser = yield* Effect.orDie(
       Effect.fromNullishOr(
-        thread.entries.findLast((entry) => entry.kind === "pi.user")
+        thread.entries.findLast((entry) => entry.kind === CAIRN_USER_ENTRY)
       )
     );
 
@@ -539,12 +543,25 @@ const seedLayer = (
         const id = store.ids.next;
 
         store.ids.next += 1;
-        thread.entries.push({
-          id: piEntryId(EntryId.make(id)),
-          conversationId,
-          kind: entry.kind,
-          model: [...entry.model],
-        });
+        // t3code's user messages were the user's own: recorded as Cairn records a send (a
+        // `cairn.user` entry naming its sender), since the transcript draws a `pi.user` entry as a
+        // brain input.
+        thread.entries.push(
+          entry.kind === "pi.user"
+            ? {
+                id: piEntryId(EntryId.make(id)),
+                conversationId,
+                kind: CAIRN_USER_ENTRY,
+                model: [...entry.model],
+                data: { from: SEEDED_SENDER, attachments: [] },
+              }
+            : {
+                id: piEntryId(EntryId.make(id)),
+                conversationId,
+                kind: entry.kind,
+                model: [...entry.model],
+              }
+        );
       }
 
       // The harness publishes its view on a change it made; an unchanged setting is such a change

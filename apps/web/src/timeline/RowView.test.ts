@@ -8,9 +8,10 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 import { describe, expect, it } from "vitest";
 
+import { rowView as nextRowView } from "../next/timeline/RowView.ts";
 import type { Message } from "./Message.ts";
 import { freshUi } from "./Model.ts";
-import { transcriptOf } from "./Rows.ts";
+import { transcriptOf, withPendingSends } from "./Rows.ts";
 import type { ListItem } from "./Rows.ts";
 import { rowView } from "./RowView.ts";
 
@@ -111,6 +112,125 @@ const config = (item: ListItem) => ({
       historyCursor: Option.none(),
       subagents: Option.none(),
     }),
+});
+
+/** A wake and the brief that starts a child, as the brain writes them: `pi.user` entries. */
+const brainInputs = Schema.decodeSync(ConversationView)({
+  conversation: { id: 1 },
+  entries: [
+    {
+      id: 7,
+      conversationId: 1,
+      kind: "pi.user",
+      model: [
+        {
+          role: "user",
+          content:
+            'Subagent "Probe the bridge" reported; its result is in the note above.',
+          timestamp: 1_760_000_000_000,
+        },
+      ],
+    },
+  ],
+  docs: {},
+});
+
+const pendingRow = (): ListItem => {
+  const item = withPendingSends(
+    transcriptOf(
+      THREAD_ID,
+      Option.none(),
+      freshUi(Option.some(THREAD_ID)),
+      Option.none()
+    ),
+    [
+      {
+        requestId: "req-1",
+        text: "keep the budget under $5",
+        attachments: [],
+        attachmentNames: [],
+        skillRefs: [],
+      },
+    ]
+  ).items.at(-1);
+
+  if (item === undefined) {
+    throw new Error("the transcript has no pending row");
+  }
+
+  return item;
+};
+
+const nextConfig = (item: ListItem) => ({
+  update: (model: null) => ({ model }),
+  view: (_model: null, h: HtmlBuilder<Message>): Html =>
+    nextRowView(h, item, {
+      threadId: THREAD_ID,
+      workspaceRoot: Option.none(),
+      highlightedLanguages: [],
+      highlightedCode: 0,
+      copiedRowId: Option.none(),
+      expanded: false,
+      retryPrompt: Option.none(),
+      history: "idle",
+      historyCursor: Option.none(),
+      subagents: Option.none(),
+    }),
+});
+
+describe("a brain input row", () => {
+  it("is a quiet line naming the subagent row, never the user's bubble or copy button", () => {
+    const transcript = transcriptOf(
+      THREAD_ID,
+      Option.some({
+        seq: 0,
+        view: brainInputs,
+        entriesOffset: 0,
+        hasMoreHistory: false,
+        older: [],
+      }),
+      freshUi(Option.some(THREAD_ID)),
+      Option.none()
+    );
+
+    const [row] = transcript.items;
+
+    if (row === undefined) {
+      throw new Error("the transcript has no row");
+    }
+
+    Scene.scene(
+      nextConfig(row),
+      Scene.given(null),
+      Scene.expect(Scene.testId("brain-input")).toHaveText(
+        /Subagent "Probe the bridge" reported; its result is on its subagent row above\./u
+      ),
+      Scene.expectAll(Scene.all.testId("user-message")).toHaveCount(0),
+      Scene.expectAll(Scene.all.testId("message-copy")).toHaveCount(0),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
+});
+
+describe("a pending row", () => {
+  it("draws the queued words in the user's bubble, marked not yet sent, with no copy button", () => {
+    Scene.scene(
+      nextConfig(pendingRow()),
+      Scene.given(null),
+      Scene.expect(Scene.selector("[data-user-message-body]")).toHaveText(
+        "keep the budget under $5"
+      ),
+      Scene.expect(Scene.testId("not-sent")).toHaveText("Not sent yet"),
+      Scene.expectAll(Scene.all.testId("pending-message")).toHaveCount(1),
+      Scene.expectAll(Scene.all.testId("user-message")).toHaveCount(0),
+      Scene.expectAll(Scene.all.testId("message-copy")).toHaveCount(0),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
 });
 
 describe("the user message row", () => {

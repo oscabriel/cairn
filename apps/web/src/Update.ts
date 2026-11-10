@@ -6,15 +6,8 @@ import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ShellCommand } from "@cairn/protocol/ShellCommands";
-import {
-  Array,
-  Equal,
-  Equivalence,
-  Option,
-  Predicate,
-  Record,
-  Schema,
-} from "effect";
+import type { TurnInput } from "@cairn/protocol/Thread";
+import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import { Update, Url } from "foldkit";
 import type { Runtime } from "foldkit";
 import { UrlRequest } from "foldkit/navigation";
@@ -40,9 +33,9 @@ import * as Composer from "./composer/Update.ts";
 import {
   enqueue,
   enqueueDispatch,
-  nextToSend,
   OutboxItem,
   outboxKey,
+  readyToSend,
   rebaseOutbox,
   remove,
 } from "./connection/Outbox.ts";
@@ -118,7 +111,8 @@ import {
   update as updateSidebar,
 } from "./sidebar/Update.ts";
 import { threadRowOf } from "./ThreadRow.ts";
-import { promptKey } from "./timeline/Model.ts";
+import type { QueuedSend } from "./timeline/Model.ts";
+import { sameSends } from "./timeline/Model.ts";
 
 type UpdateReturn = Update.Return<Model, Message, Services>;
 
@@ -172,28 +166,51 @@ const isLaunching = (model: Model, threadId: ThreadId): boolean =>
     )
   );
 
-/** The prompts (`promptKey`) of the sends to `threadId` waiting in the outbox. */
-const queuedPromptsFor = (
+/** The turn an outbox item sends to `threadId`: a send's, or a launch's first message. */
+const turnTo = (
+  item: OutboxItem,
+  threadId: ThreadId
+): Option.Option<TurnInput> => {
+  if (Predicate.isTagged(item, "Send") && item.input.threadId === threadId) {
+    return Option.some(item.input.input);
+  }
+
+  return Predicate.isTagged(item, "Launch") && item.input.threadId === threadId
+    ? Option.some(item.input.initialMessage)
+    : Option.none();
+};
+
+/** The sends to `threadId` waiting in the outbox, with the names of the attachments this tab knows. */
+const queuedSendsFor = (
   model: Model,
   threadId: Option.Option<ThreadId>
-): ReadonlyArray<string> =>
+): ReadonlyArray<QueuedSend> =>
   Option.match(threadId, {
     onNone: () => [],
     onSome: (id) =>
       outboxSent(model).flatMap((item) =>
-        Predicate.isTagged(item, "Send") && item.input.threadId === id
-          ? [
-              promptKey(
-                item.input.input.text,
-                item.input.input.attachments,
-                item.input.input.skillRefs
-              ),
-            ]
-          : []
+        Option.match(turnTo(item, id), {
+          onNone: () => [],
+          onSome: (turn) => {
+            const refs = model.sentTurns[outboxKey(item)]?.attachments ?? [];
+
+            return [
+              {
+                requestId: outboxKey(item),
+                text: turn.text,
+                attachments: turn.attachments,
+                attachmentNames: turn.attachments.map(
+                  (attachmentId) =>
+                    refs.find((ref) => ref.id === attachmentId)?.name ??
+                    "Attachment"
+                ),
+                skillRefs: turn.skillRefs,
+              },
+            ];
+          },
+        })
       ),
   });
-
-const samePrompts = Array.makeEquivalence(Equivalence.strictEqual<string>());
 
 /** Tells the thread page the routed thread and the connection; a no-op when nothing changed. */
 const syncThread: Step = (model) => {
@@ -204,7 +221,7 @@ const syncThread: Step = (model) => {
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
     launching: Option.exists(threadId, (id) => isLaunching(model, id)),
-    queuedPrompts: queuedPromptsFor(model, threadId),
+    queuedSends: queuedSendsFor(model, threadId),
   };
 
   const unchanged =
@@ -212,7 +229,7 @@ const syncThread: Step = (model) => {
     model.thread.epoch === context.epoch &&
     model.thread.hasClient === context.hasClient &&
     model.thread.launching === context.launching &&
-    samePrompts(model.thread.timeline.queuedPrompts, context.queuedPrompts);
+    sameSends(model.thread.timeline.queuedSends, context.queuedSends);
 
   return unchanged ? { model } : informThread(model, context);
 };
@@ -224,29 +241,34 @@ const persist: Step = (model) => ({
 });
 
 /**
- * Sends the outbox's head when the connection is live, nothing is in flight, and no item is
- * waiting out its resend backoff.
+ * Sends each lane's head when the connection is live, unless that lane has an item in flight or
+ * waiting out its resend backoff (`readyToSend`).
  */
-const sendNext: Step = (model) =>
-  Option.match(
-    Option.filter(
-      nextToSend(
-        outboxSent(model),
-        model.outboxInFlight,
-        isLive(model.connection)
-      ),
-      () => Option.isNone(model.outboxResend)
-    ),
-    {
-      onNone: () => ({ model }),
-      onSome: (item) => ({
-        model: modifyFields(model, {
-          outboxInFlight: () => Option.some(outboxKey(item)),
-        }),
-        commands: [SendOutboxItem({ epoch: model.connection.epoch, item })],
-      }),
-    }
+const sendNext: Step = (model) => {
+  const ready = readyToSend(
+    outboxSent(model),
+    model.outboxInFlight,
+    model.outboxResend,
+    isLive(model.connection)
   );
+
+  return ready.length === 0
+    ? { model }
+    : {
+        model: modifyFields(model, {
+          outboxInFlight: (inFlight) => [...inFlight, ...ready.map(outboxKey)],
+        }),
+        commands: ready.map((item) =>
+          SendOutboxItem({ epoch: model.connection.epoch, item })
+        ),
+      };
+};
+
+/** `keys` without `key`. */
+const without = (
+  keys: ReadonlyArray<string>,
+  key: string
+): ReadonlyArray<string> => Array.filter(keys, (other) => other !== key);
 
 /** The thread page's Messages; a Retry from the transcript joins the outbox. */
 const foldThreadMessage = Update.foldChild({
@@ -276,9 +298,9 @@ const enterBackoff: Step = (model) => {
     model: modifyFields(model, {
       connection: () => next.connection,
       hello: () => Option.none(),
-      outboxInFlight: () => Option.none(),
-      // The next connection sends the head at once.
-      outboxResend: () => Option.none(),
+      outboxInFlight: () => [],
+      // The next connection sends each lane's head at once.
+      outboxResend: () => [],
     }),
     commands: Option.match(next.wait, {
       onNone: () => [],
@@ -1072,7 +1094,7 @@ const syncScratchThread: Step = (model) => {
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
     launching: Option.exists(threadId, (id) => isLaunching(model, id)),
-    queuedPrompts: queuedPromptsFor(model, threadId),
+    queuedSends: queuedSendsFor(model, threadId),
   };
 
   const unchanged =
@@ -1080,10 +1102,7 @@ const syncScratchThread: Step = (model) => {
     model.scratchThread.epoch === context.epoch &&
     model.scratchThread.hasClient === context.hasClient &&
     model.scratchThread.launching === context.launching &&
-    samePrompts(
-      model.scratchThread.timeline.queuedPrompts,
-      context.queuedPrompts
-    );
+    sameSends(model.scratchThread.timeline.queuedSends, context.queuedSends);
 
   return unchanged ? { model } : informScratchThread(model, context);
 };
@@ -1184,12 +1203,9 @@ const step = (received: Message): Step =>
           modifyFields(model, {
             outbox: (outbox) => remove(outbox, key),
             outboxInFlight: (inFlight) =>
-              isCurrentEpoch(model, epoch) && Option.contains(inFlight, key)
-                ? Option.none()
-                : inFlight,
-            outboxAttempt: () => 0,
-            outboxResend: (waiting) =>
-              Option.filter(waiting, (waitingKey) => waitingKey !== key),
+              isCurrentEpoch(model, epoch) ? without(inFlight, key) : inFlight,
+            outboxAttempt: (attempts) => Record.remove(attempts, key),
+            outboxResend: (waiting) => without(waiting, key),
             sentTurns: (turns) => settleAcknowledged(turns, key),
           }),
           [persist, sendNext, followLaunches]
@@ -1202,22 +1218,24 @@ const step = (received: Message): Step =>
         }
 
         if (retryable && transport) {
-          // Left at the head; the connection reports the loss and the next live one sends it.
+          // Left at its lane's head; the connection reports the loss and the next live one sends it.
           return {
-            model: modifyFields(model, { outboxInFlight: () => Option.none() }),
+            model: modifyFields(model, {
+              outboxInFlight: (inFlight) => without(inFlight, key),
+            }),
           };
         }
 
         if (retryable) {
           // The brain answered "not now" on a socket that stays up: sent again after a backoff
-          // (or by the next connection, if this one drops first).
-          const attempt = model.outboxAttempt + 1;
+          // (or by the next connection, if this one drops first); its lane waits, the others go on.
+          const attempt = (model.outboxAttempt[key] ?? 0) + 1;
 
           return {
             model: modifyFields(model, {
-              outboxInFlight: () => Option.none(),
-              outboxAttempt: () => attempt,
-              outboxResend: () => Option.some(key),
+              outboxInFlight: (inFlight) => without(inFlight, key),
+              outboxAttempt: (attempts) => Record.set(attempts, key, attempt),
+              outboxResend: (waiting) => [...without(waiting, key), key],
             }),
             commands: [WaitToResend({ epoch, key, attempt })],
           };
@@ -1238,8 +1256,8 @@ const step = (received: Message): Step =>
         ) {
           return sendNext(
             modifyFields(model, {
-              outboxInFlight: () => Option.none(),
-              outboxAttempt: () => 0,
+              outboxInFlight: (inFlight) => without(inFlight, key),
+              outboxAttempt: (attempts) => Record.remove(attempts, key),
               outboxLeft: (left) => [...left, key],
               notice: () => Option.some(message),
             })
@@ -1249,8 +1267,8 @@ const step = (received: Message): Step =>
         return Update.combine(
           modifyFields(model, {
             outbox: (outbox) => remove(outbox, key),
-            outboxInFlight: () => Option.none(),
-            outboxAttempt: () => 0,
+            outboxInFlight: (inFlight) => without(inFlight, key),
+            outboxAttempt: (attempts) => Record.remove(attempts, key),
             notice: () => Option.some(message),
           }),
           [
@@ -1268,8 +1286,12 @@ const step = (received: Message): Step =>
       (model) =>
         // A timer from an earlier epoch, or for an item no longer waiting, sends nothing; the wait
         // over, the head goes (this item, unless another tab's answer removed it meanwhile).
-        isCurrentEpoch(model, epoch) && Option.contains(model.outboxResend, key)
-          ? sendNext(modifyFields(model, { outboxResend: () => Option.none() }))
+        isCurrentEpoch(model, epoch) && model.outboxResend.includes(key)
+          ? sendNext(
+              modifyFields(model, {
+                outboxResend: (waiting) => without(waiting, key),
+              })
+            )
           : { model },
     // Saving merges into what the other tab wrote, and its answer brings those items here.
     ChangedStoredOutbox: () => persist,
@@ -1385,9 +1407,9 @@ export const init: Runtime.RoutingApplicationInit<
       shell: Option.map(flags.boot, (boot) => boot.shell),
       outbox: flags.outbox,
       outboxStored: flags.outbox,
-      outboxInFlight: Option.none(),
-      outboxAttempt: 0,
-      outboxResend: Option.none(),
+      outboxInFlight: [],
+      outboxAttempt: {},
+      outboxResend: [],
       sentTurns: {},
       outboxAdopted: [],
       outboxLeft: [],

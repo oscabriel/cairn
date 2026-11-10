@@ -4,12 +4,15 @@
 // each keyed by the id the client minted (`requestId` or `commandId`), so the brain's receipts make
 // a resend after an unknown outcome harmless.
 //
-// The outbox runs only while the connection is `Live`, one item at a time and in order: the head is
-// sent, an acknowledgement drops it and sends the next. A retryable failure leaves it at the head,
-// sent again after a backoff or by the next connection; any other failure drops it, because sending
-// it again cannot succeed. A shell command older than `SHELL_COMMAND_RESEND_WINDOW` is dropped
-// unsent: the brain may have forgotten its receipt, and planning it again would act on a thread
-// that has moved on since.
+// The outbox runs only while the connection is `Live`, in lanes: each thread's sends and launch wait
+// in that thread's lane, and shell commands in the shell's (a command naming a thread whose launch
+// is still waiting joins that thread's lane, so it never reaches the brain before the thread). Each
+// lane sends one item at a time and in order: its head is sent, an acknowledgement drops it and
+// sends the next, so a launch the brain holds for minutes holds only its own thread. A retryable
+// failure leaves an item at its lane's head, sent again after a backoff or by the next connection;
+// any other failure drops it, because sending it again cannot succeed. A shell command older than
+// `SHELL_COMMAND_RESEND_WINDOW` is dropped unsent: the brain may have forgotten its receipt, and
+// planning it again would act on a thread that has moved on since.
 //
 // Every tab of the browser shares the saved outbox: a save writes only the items this tab queued or
 // dropped, and another tab's write is folded in (`TabChanges.ts`). Items are read one by one: an
@@ -89,7 +92,7 @@ const visitedThread = (item: OutboxItem): Option.Option<string> =>
 export const enqueueDispatch = (
   outbox: ReadonlyArray<OutboxItem>,
   command: ShellCommand,
-  inFlight: Option.Option<string>
+  inFlight: ReadonlyArray<string>
 ): ReadonlyArray<OutboxItem> => {
   const item = OutboxItem.Dispatch({ command });
 
@@ -100,7 +103,7 @@ export const enqueueDispatch = (
         Array.filter(
           outbox,
           (waiting) =>
-            Option.contains(inFlight, outboxKey(waiting)) ||
+            inFlight.includes(outboxKey(waiting)) ||
             !Option.contains(visitedThread(waiting), threadId)
         ),
         item
@@ -120,6 +123,44 @@ export const outlivedResendWindow = (
   nowMillis - commandMintedAtMillis(item.command.commandId) >
     Duration.toMillis(SHELL_COMMAND_RESEND_WINDOW);
 
+/** The shell commands' lane. */
+const SHELL_LANE = "shell";
+
+/** A thread's lane. */
+const threadLane = (threadId: string): string => `thread:${threadId}`;
+
+/** The thread a shell command names, when it names one. */
+const commandThread = (command: ShellCommand): Option.Option<string> =>
+  Predicate.hasProperty(command, "threadId") &&
+  Predicate.isString(command.threadId)
+    ? Option.some(command.threadId)
+    : Option.none();
+
+/**
+ * The lane `item` waits in within `outbox`: its thread's for a send or a launch, the shell's for a
+ * shell command, unless the command names a thread whose launch `outbox` still holds.
+ */
+export const outboxLane = (
+  item: OutboxItem,
+  outbox: ReadonlyArray<OutboxItem>
+): string =>
+  OutboxItem.match(item, {
+    Send: ({ input }) => threadLane(input.threadId),
+    Launch: ({ input }) => threadLane(input.threadId),
+    Dispatch: ({ command }) =>
+      Option.match(
+        Option.filter(commandThread(command), (threadId) =>
+          Array.some(
+            outbox,
+            (waiting) =>
+              Predicate.isTagged(waiting, "Launch") &&
+              waiting.input.threadId === threadId
+          )
+        ),
+        { onNone: () => SHELL_LANE, onSome: threadLane }
+      ),
+  });
+
 /** Removes the item with `key`: it was acknowledged, or it can never succeed. */
 export const remove = (
   outbox: ReadonlyArray<OutboxItem>,
@@ -128,15 +169,40 @@ export const remove = (
   Array.filter(outbox, (item) => outboxKey(item) !== key);
 
 /**
- * The item to send now: the head, when the connection is live and nothing is in flight. Items go
- * one at a time so the brain sees them in the order they were made.
+ * The items to send now, while the connection is live: each lane's head, unless an item of that
+ * lane is in flight (`inFlight`) or waiting out its resend backoff (`waiting`). A lane sends one
+ * item at a time, so the brain sees a thread's sends in the order they were made.
  */
-export const nextToSend = (
+export const readyToSend = (
   outbox: ReadonlyArray<OutboxItem>,
-  inFlight: Option.Option<string>,
+  inFlight: ReadonlyArray<string>,
+  waiting: ReadonlyArray<string>,
   live: boolean
-): Option.Option<OutboxItem> =>
-  live && Option.isNone(inFlight) ? Array.head(outbox) : Option.none();
+): ReadonlyArray<OutboxItem> => {
+  if (!live) {
+    return [];
+  }
+
+  const busy = new Set(
+    Array.filter(outbox, (item) => {
+      const key = outboxKey(item);
+
+      return inFlight.includes(key) || waiting.includes(key);
+    }).map((item) => outboxLane(item, outbox))
+  );
+
+  const heads = new Map<string, OutboxItem>();
+
+  for (const item of outbox) {
+    const lane = outboxLane(item, outbox);
+
+    if (!heads.has(lane)) {
+      heads.set(lane, item);
+    }
+  }
+
+  return [...heads].flatMap(([lane, item]) => (busy.has(lane) ? [] : [item]));
+};
 
 /** The key an item has wherever it sits in the stored JSON, read even from an item that does not decode. */
 const OutboxItemKey = Schema.Union([

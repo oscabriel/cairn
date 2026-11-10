@@ -20,7 +20,7 @@ import { Message as ListMessage } from "./list/Message.ts";
 import { Message } from "./Message.ts";
 import { initial, isFollowingEnd } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import { itemKeys, transcriptOf } from "./Rows.ts";
+import { itemKeys, transcriptOf, withPendingSends } from "./Rows.ts";
 import { afterView, switchThread, update } from "./Update.ts";
 
 const codingState: ThreadViewState = {
@@ -338,6 +338,64 @@ describe("paging and Retry", () => {
         update(current, Message.ExpiredCopied({ version: 2 })).model.copiedRowId
       )
     );
+  });
+});
+
+describe("a send waiting in the outbox", () => {
+  const threadId = "01890a5d-ac96-774b-bcce-b302099a8057";
+
+  const queued = OutboxItem.Send({
+    input: SendInput.make({
+      threadId: ThreadId.make(threadId),
+      input: {
+        requestId: RequestId.make("req-pending-1"),
+        text: "keep the budget under $5",
+        attachments: [],
+        skillRefs: [],
+      },
+      whenBusy: "followUp",
+    }),
+  });
+
+  it("shows as a pending user row after the thread's rows until the brain acknowledges it", () => {
+    // The socket is down: the send waits in the outbox, and the thread page is told of it.
+    const waiting = rootUpdate(
+      {
+        ...connectingModel,
+        route: AppRoute.Thread({ threadId: ThreadId.make(threadId) }),
+        outbox: [queued],
+        outboxStored: [queued],
+      },
+      RootMessage.DismissedNotice()
+    ).model;
+
+    const sends = waiting.thread.timeline.queuedSends;
+
+    const transcript = withPendingSends(
+      transcriptOf(
+        threadId,
+        Option.some(codingState),
+        initial.ui,
+        Option.none()
+      ),
+      sends
+    );
+
+    const last = transcript.items.at(-1);
+
+    assert.deepStrictEqual(
+      last?.kind === "pending"
+        ? [last.id, last.message.role, last.message.sender, last.message.text]
+        : [],
+      ["pending:req-pending-1", "user", "user", "keep the budget under $5"]
+    );
+
+    const acknowledged = rootUpdate(
+      waiting,
+      RootMessage.AcknowledgedOutboxItem({ epoch: 0, key: "req-pending-1" })
+    ).model;
+
+    assert.deepStrictEqual(acknowledged.thread.timeline.queuedSends, []);
   });
 });
 

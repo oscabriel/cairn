@@ -8,7 +8,8 @@
 // The view may be a window: older entries are left out (`hasMoreHistory`), and op indices count
 // from the window's start. `entriesOffset` counts only the left-out entries the brain's first read
 // held, not the thread's length (ADR 0020's note). Pages from `thread.history` are kept apart, in
-// `older`, so they never shift the indices ops address.
+// `older`, so they never shift the indices ops address, and a snapshot keeps them while its window
+// starts at the entry they end before, so a reconnect keeps what the user paged in.
 
 import type {
   Entry,
@@ -182,17 +183,56 @@ const applyOps = (
   return Result.succeed(current);
 };
 
+/** The entry a window starts at, when it holds any. */
+const windowStart = (view: ConversationView): Option.Option<Entry["id"]> =>
+  Option.map(Option.fromUndefinedOr(view.entries[0]), (entry) => entry.id);
+
 /**
- * Applies one thread stream item. A snapshot always succeeds and replaces everything, history
- * included; ops need a snapshot first and a `seq` that moves forward.
+ * The state a snapshot makes. Paged-in history ends right before the window it was read for, so it
+ * is kept when the new window starts at that same entry of the same conversation (a reconnect, or
+ * a refused op's resubscribe, on a thread that did not move): what is still left out is what the
+ * pages did not reach. A window that moved drops the pages, which would leave a hole before it.
+ */
+const fromSnapshot = (
+  state: Option.Option<ThreadViewState>,
+  snapshot: Extract<ThreadStreamItem, { readonly _tag: "Snapshot" }>
+): ThreadViewState => {
+  const { entriesOffset, hasMoreHistory, seq, view } = snapshot;
+
+  const kept = Option.filter(
+    state,
+    (previous) =>
+      previous.older.length > 0 &&
+      hasMoreHistory &&
+      previous.view.conversation.id === view.conversation.id &&
+      Option.isSome(windowStart(view)) &&
+      Option.getOrUndefined(windowStart(previous.view)) ===
+        Option.getOrUndefined(windowStart(view))
+  );
+
+  return Option.match(kept, {
+    onNone: () => ({ seq, view, entriesOffset, hasMoreHistory, older: [] }),
+    onSome: (previous) => ({
+      seq,
+      view,
+      entriesOffset: Math.max(0, entriesOffset - previous.older.length),
+      hasMoreHistory: previous.hasMoreHistory,
+      older: previous.older,
+    }),
+  });
+};
+
+/**
+ * Applies one thread stream item. A snapshot always succeeds and replaces the view, and the paged-in
+ * history too unless the window still starts where it did (`fromSnapshot`); ops need a snapshot
+ * first and a `seq` that moves forward.
  */
 export const applyThreadStreamItem = (
   state: Option.Option<ThreadViewState>,
   item: ThreadStreamItem
 ): Result.Result<ThreadViewState, ThreadViewError> =>
   Match.valueTags(item, {
-    Snapshot: ({ entriesOffset, hasMoreHistory, seq, view }) =>
-      Result.succeed({ seq, view, entriesOffset, hasMoreHistory, older: [] }),
+    Snapshot: (snapshot) => Result.succeed(fromSnapshot(state, snapshot)),
     Ops: ({ ops, seq }) => {
       if (Option.isNone(state)) {
         return refuse("no_snapshot", "Ops arrived before the first snapshot.");

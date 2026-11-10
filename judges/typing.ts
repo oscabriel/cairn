@@ -8,14 +8,15 @@
 // app's own layers with the scripted harness (a thread seeded with --history entries, then a new
 // exchange every 250 ms for the length of the run), and the web client's Vite server proxying to it.
 // Each key goes out on its own schedule, so a slow frame cannot make the typist wait for the app.
-// Then three more checks on the same page: IME composition of 日本 (through CDP), and the menu case
-// (typing `@`, `/` and `$` opens each of the composer's menus, which the judge waits for, and typing
-// on through them loses no character).
+// Then more checks on the same page: IME composition of 日本 (through CDP), the menu case (typing
+// `@`, `/` and `$` opens each of the composer's menus, which the judge waits for, and typing on
+// through them loses no character), and the price case (a message ending in a dollar amount opens
+// no skill menu, and Enter sends it).
 // While the typist types, Foldkit's slow-view warnings (dev builds, views over 16 ms) are counted
 // and summed, with the Message tags that triggered them, as `slowViews`.
 // Prints one JSON line and exits 0 when nothing was dropped or reordered, IME and the menu case are
-// intact, the transcript streamed (at least half the judge's own exchanges landed, `stream: ok`),
-// and the page logged no error.
+// intact, the price was sent, the transcript streamed (at least half the judge's own exchanges
+// landed, `stream: ok`), and the page logged no error.
 /* oxlint-disable no-await-in-loop -- the typist sends one key after another, on purpose */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -342,6 +343,12 @@ const MENU_TEXT = MENU_PIECES.map(([piece]) => piece).join("");
 /** How long the menu case waits for one menu to open. */
 const MENU_WAIT_MS = 5000;
 
+/** The price case's message: it ends in a dollar amount, which is a price, not a skill query. */
+const PRICE_TEXT = "keep the budget under $5";
+
+/** How long the price case waits for the sent message to show in the transcript. */
+const PRICE_WAIT_MS = 10_000;
+
 /** With --url the page's own brain is not the judge's to stop. */
 const stopNothing = async (): Promise<void> => {
   // Nothing to stop.
@@ -568,6 +575,44 @@ if (menuValue !== MENU_TEXT) {
   menu = `menus did not open: ${menusMissed.join(", ")}`;
 }
 
+// The price case (t3code's 1ee02417): a message ending in `$5` opens no skill menu, and Enter sends
+// it: the composer empties and the words show in the transcript.
+await composer.fill("");
+
+await page.waitForTimeout(200);
+
+await typeAt(PRICE_TEXT);
+
+await page.waitForTimeout(500);
+
+const priceMenus = await page
+  .locator('[data-testid="composer-menu"][data-trigger="skill"]')
+  .count();
+
+await page.keyboard.press("Enter");
+
+const priceShown = await page
+  .getByTestId("user-message")
+  .filter({ hasText: PRICE_TEXT })
+  .first()
+  .waitFor({ state: "attached", timeout: PRICE_WAIT_MS })
+  .then(
+    () => true,
+    () => false
+  );
+
+const priceLeft = await composer.inputValue();
+
+let price = "ok";
+
+if (priceMenus > 0) {
+  price = "the skill menu opened on a price";
+} else if (priceLeft !== "") {
+  price = `not sent: ${JSON.stringify(priceLeft)}`;
+} else if (!priceShown) {
+  price = "sent, but not shown in the transcript";
+}
+
 const slowSorted = slowViews.durations.toSorted((left, right) => left - right);
 
 const result = {
@@ -600,6 +645,7 @@ const result = {
   imeVia,
   menu,
   menusSeen: menusSeen.toSorted(),
+  price,
   errors,
 };
 
@@ -613,6 +659,7 @@ process.exitCode =
   result.match &&
   ime === "ok" &&
   menu === "ok" &&
+  price === "ok" &&
   stream !== "dead" &&
   errors.length === 0
     ? 0

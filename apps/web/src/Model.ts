@@ -48,15 +48,15 @@ export const Model = Schema.Struct({
   outbox: Schema.Array(OutboxItem),
   /** The outbox as this tab last read or wrote it in storage; a save writes what changed since. */
   outboxStored: Schema.Array(OutboxItem),
-  /** The key of the outbox item sent on the current epoch and not yet answered. */
-  outboxInFlight: Schema.Option(Schema.String),
-  /** Retryable failures of the outbox's head in a row; the next resend waits by this attempt. */
-  outboxAttempt: Schema.Int,
+  /** The keys of the outbox items sent on the current epoch and not yet answered, one per lane. */
+  outboxInFlight: Schema.Array(Schema.String),
+  /** Retryable failures in a row, by the key of the lane head they befell; its resend waits by them. */
+  outboxAttempt: Schema.Record(Schema.String, Schema.Int),
   /**
-   * The key of the item waiting out its resend backoff after the brain answered "not now"; nothing
-   * is sent until its timer elapses, or a new epoch starts.
+   * The keys of the items waiting out their resend backoff after the brain answered "not now";
+   * nothing more of their lanes is sent until a timer elapses, or a new epoch starts.
    */
-  outboxResend: Schema.Option(Schema.String),
+  outboxResend: Schema.Array(Schema.String),
   /** Turns not yet settled by the brain, by outbox key. Kept in memory only. */
   sentTurns: Schema.Record(Schema.String, SentTurn),
   /**

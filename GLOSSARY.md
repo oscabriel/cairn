@@ -44,7 +44,7 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Scratch thread**: A thread in the scratch project, for a one-off question: it runs in a throwaway folder of its own under the data directory. Clearing it stops its run and its subagents', deletes them from the shell and removes its folder; a boot repair removes any scratch folder whose thread is gone.
 
-**Turn**: One user message and everything the model did in answer to it, up to the next user message: its thoughts, tool calls and replies. The transcript folds a settled turn's work behind one row.
+**Turn**: One user message and everything the model did in answer to it, up to the next user message: its thoughts, tool calls and replies. A brain input starts a turn the same way. The transcript folds a settled turn's work behind one row.
 
 **Fold**: The "Worked for <duration>" (or "You stopped after <duration>") row that stands in for a settled turn's intermediate work, leaving its final answer visible. On `next` the fold line also counts the work it hides by kind, its fold tally: "Worked for 3m 41s · 4 edits · 9 reads · 2 commands · 2 agents" (`client-logic/FoldTally.ts`); only tool calls count.
 
@@ -125,6 +125,10 @@ _Avoid_: using it for a thread's settle state, which is **Settle**
 **Note**: A transcript entry the model reads but that starts no run (a passive write with model content), such as a subagent's settlement in its parent. An idle thread places it at once, a running one at its next boundary ahead of queued inputs, and a stop keeps it.
 
 **Wake**: The separate input that follows a note when the parent should act on it. A quiet spawn, a user's own steer to the child, a usage-limit failure, or a parent the user stopped or whose run failed gets the note without a wake. At most one wake waits in a running parent's queue.
+
+**Brain input**: An input the brain writes into a thread on its own rather than the user: a wake, a subagent's question to its parent, the brief that starts a child, a typed child's nudge, a brief's answer told to its parent, a parent's or a workflow's message. The user's own message is a `cairn.user` entry that names its sender (`data.from`); a brain input is a `pi.user` entry or a brief's answer. The transcript draws it as a quiet line in the notice row's style, never as the user's message, without the instructions meant only for the model, and a turn it started offers no Retry.
+
+_Avoid_: system message, user message (for these)
 
 **Reporter**: The task that delivers one input to a subagent and its result back to the parent, under request ids derived from the child and the settlement's seq, so each lands once across a restart.
 
@@ -312,7 +316,7 @@ _Avoid_: plugin
 
 **Hero**: The new-thread page: "What should we build in <project>?" above the composer, with the project picker and the workspace strip. Its default project is the most recently updated folder project. When the project it names has a project thread, Send opens that thread with the message and its attachments waiting unsent in its composer, rather than starting a thread (ADR 0048). Its `/`, `@` and `$` menu opens over the headline, so the box never moves.
 
-**Outbox**: The browser's list of sends not yet acknowledged. It resends them after a reconnect, and the brain admits each one once. A shell command older than the resend window (seven days) is dropped unsent.
+**Outbox**: The browser's list of sends not yet acknowledged. It resends them after a reconnect, and the brain admits each one once. A shell command older than the resend window (seven days) is dropped unsent. It sends in lanes, one item at a time in each: a thread's sends and launch in that thread's lane, shell commands in the shell's (one naming a thread whose launch still waits joins that thread's), so a launch the brain holds holds only its own thread. A send waiting in it shows at the end of its thread's transcript as a pending row, the user's message dimmed and marked "Not sent yet", until the brain has it.
 
 **Connection mark**: The chat header's word for a socket that is not live, beside a spinner in the waiting tone: Connecting on the page's first dial, Reconnecting while it dials again or waits to, Catching up while the shell stream brings the page current. Hidden while the page is live. A page whose dials keep failing asks the server which build it serves over plain HTTP and reloads for a new one.
 

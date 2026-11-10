@@ -206,12 +206,12 @@ describe("the connection state machine", () => {
       given({
         ...liveModel(1),
         hello: Option.some(hello),
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       }),
       message(Message.LostConnection({ epoch: 1, reason: "closed" })),
       model((current) => {
         expect(Option.isNone(current.hello)).toBeTruthy();
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       }),
       Command.resolve(
         WaitForBackoff,

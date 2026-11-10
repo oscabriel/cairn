@@ -2159,9 +2159,36 @@ describe("the new-thread hero", () => {
       Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
       ...typeWithCaret("/"),
       Scene.expect(menu).toExist(),
+      // At most 18rem, at most the room less a margin, so its top never meets the page's top
+      // edge; at least one whole row (a touch row and the list's padding), however little room.
       Scene.expect(Scene.selector("[data-chat-composer-stack]")).toHaveClass(
-        "[&_[data-slot=command-list]]:max-h-[min(18rem,var(--hero-drawer-room,18rem))]"
+        "[&_[data-slot=command-list]]:max-h-[max(calc(var(--hit-target)_+_2_*_var(--space-1-5)),min(18rem,calc(var(--hero-drawer-room,18rem)_-_var(--space-3))))]"
       )
+    );
+  });
+
+  it("hides the headline while a menu's drawer lies over it, so the drawer never cuts a control (U-21)", () => {
+    const headline = Scene.selector("[data-hero-headline-block]");
+
+    Scene.scene(
+      { update, view },
+      Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
+      ...acknowledgeMounts,
+      Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
+      Scene.expect(headline).not.toHaveClass("invisible"),
+      ...typeWithCaret("/"),
+      Scene.expect(menu).toExist(),
+      // Kept in the flow, so the box stays where it was; not drawn, so the drawer's top edge
+      // lands on nothing whatever its height, and the picker cannot be reached under it.
+      Scene.expect(headline).toHaveClass("invisible"),
+      Scene.expect(headline).toContainText("What should we build"),
+      ...typeWithCaret(""),
+      Scene.expect(menu).not.toExist(),
+      Scene.expect(headline).not.toHaveClass("invisible"),
+      // Hiding it is the view's alone: no command runs for it.
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
     );
   });
 

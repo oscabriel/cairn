@@ -5,6 +5,9 @@
 // The `/`, `@` and `$` menu's drawer opens over the headline here rather than in the page's flow,
 // so the centred block keeps its height and the box being typed in never moves, and its list is
 // never taller than the space above the box, so a short page never hides its first rows (U-21).
+// While it is open the headline keeps its place but is not drawn: the drawer's height follows its
+// rows, so its top edge would otherwise land anywhere in the question or the project picker and
+// leave a sliver of either showing above it.
 
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -16,21 +19,23 @@ import { draftProject } from "../composer/Drafts.ts";
 import { KeepDrawerRoom } from "../composer/HeroDrawerRoom.ts";
 import type { Message } from "../composer/Message.ts";
 import type { Model } from "../composer/Model.ts";
+import { menuContents } from "../composer/TriggerMenu.ts";
 import { hasNoProjects, headlineView, noProjectsView } from "./Headline.ts";
 
 /**
  * The trigger menu's drawer (`composer/TriggerMenuView.ts`, `data-composer-drawer-layer`) taken out
  * of the hero's flow and laid over the space above the box, so opening it, or the list growing and
- * shrinking as it filters, moves neither the headline nor the box. Its list is never taller than
- * that space (`--hero-drawer-room`, kept by `KeepDrawerRoom`), so its first rows never sit above
- * the page's top, where no scroll reaches; it scrolls inside itself instead.
+ * shrinking as it filters, moves neither the headline nor the box. Its list is at most 18rem and at
+ * most that space less a margin (`--hero-drawer-room`, kept by `KeepDrawerRoom`), so its first rows
+ * never sit above the page's top, where no scroll reaches, nor touch it; it scrolls inside itself
+ * instead. However little room there is, it holds one whole row (a touch row and its padding).
  */
 const DRAWER_OVER_HEADLINE = [
   "[&_[data-composer-drawer-layer]]:absolute",
   "[&_[data-composer-drawer-layer]]:inset-x-0",
   "[&_[data-composer-drawer-layer]]:bottom-full",
   // `--hero-drawer-room` is `composer/HeroDrawerRoom.ts`'s property, written out so the stylesheet build sees it.
-  "[&_[data-slot=command-list]]:max-h-[min(18rem,var(--hero-drawer-room,18rem))]",
+  "[&_[data-slot=command-list]]:max-h-[max(calc(var(--hit-target)_+_2_*_var(--space-1-5)),min(18rem,calc(var(--hero-drawer-room,18rem)_-_var(--space-3))))]",
 ].join(" ");
 
 const page = (h: HtmlBuilder<Message>, child: Html): Html =>
@@ -74,7 +79,18 @@ export const heroView = (model: Model, h: HtmlBuilder<Message>): Html => {
             h.Class(`${STACK_CLASS} ${DRAWER_OVER_HEADLINE}`),
           ],
           [
-            h.div([h.Class("pb-(--space-6)")], [headlineView(model, h)]),
+            h.div(
+              [
+                h.DataAttribute("hero-headline-block", ""),
+                // Not drawn under an open menu's drawer, but kept in the flow (see the header).
+                h.Class(
+                  Option.isSome(menuContents(model))
+                    ? "invisible pb-(--space-6)"
+                    : "pb-(--space-6)"
+                ),
+              ],
+              [headlineView(model, h)]
+            ),
             cardView(model, contextStripView(model, h), h),
           ]
         ),

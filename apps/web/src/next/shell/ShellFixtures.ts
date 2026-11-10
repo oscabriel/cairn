@@ -19,6 +19,7 @@ import { DateTime, Option } from "effect";
 import { AppRoute } from "../../Route.ts";
 import type { Model } from "./Model.ts";
 import { initial } from "./Model.ts";
+import { syncVisits } from "./Visits.ts";
 
 /** The project with a project thread. */
 export const CAIRN = ProjectId.make("prj_cairn");
@@ -130,18 +131,19 @@ export const SHELL: ShellSnapshot = {
   ],
 };
 
-/** The shell Model over the fixture, on `route`. */
-export const shellModelOn = (route: AppRoute): Model => ({
-  ...initial,
-  context: {
-    ...initial.context,
-    shell: Option.some(SHELL),
-    route,
-    hasClient: true,
+/** The shell Model over the fixture, on `route`, its favicon's number already counted. */
+export const shellModelOn = (route: AppRoute): Model =>
+  syncVisits({
+    ...initial,
+    context: {
+      ...initial.context,
+      shell: Option.some(SHELL),
+      route,
+      hasClient: true,
+    },
     nowMs: DateTime.toEpochMillis(NOW),
-  },
-  favicons: { [DEV]: "loaded", [MYR]: "missing", [CAIRN]: "missing" },
-});
+    favicons: { [DEV]: "loaded", [MYR]: "missing", [CAIRN]: "missing" },
+  }).model;
 
 /** The shell Model on the project thread. */
 export const onProjectThread: Model = shellModelOn(

@@ -24,7 +24,6 @@ import * as Thread from "./page/thread/index.ts";
 import { subscriptions as pushSubscriptions } from "./push/Subscription.ts";
 import { subscriptions as settingsSubscriptions } from "./settings/Subscription.ts";
 import { subscribeShell } from "./shell/ShellStore.ts";
-import { subscriptions as sidebarSubscriptions } from "./sidebar/Subscription.ts";
 import { storageChanges } from "./storage/TabChanges.ts";
 
 const describe = (cause: Cause.Cause<unknown>): string =>
@@ -146,14 +145,6 @@ const composerSubscriptions = Subscription.lift(Composer.subscriptions)<
   toParentMessage: (message) => Message.GotComposerMessage({ message }),
 });
 
-const liftedSidebarSubscriptions = Subscription.lift(sidebarSubscriptions)<
-  Model,
-  Message
->({
-  read: (model) => Option.some(model.sidebar),
-  toParentMessage: (message) => Message.GotSidebarMessage({ message }),
-});
-
 const liftedPushSubscriptions = Subscription.lift(pushSubscriptions)<
   Model,
   Message
@@ -170,7 +161,7 @@ const liftedSettingsSubscriptions = Subscription.lift(settingsSubscriptions)<
   toParentMessage: (message) => Message.GotSettingsMessage({ message }),
 });
 
-// The `next` shell's keys (the scratch thread's Cmd+J or Ctrl+J).
+// The `next` shell's clock and keys (the key binding table, the scratch thread's Cmd+J or Ctrl+J).
 const liftedNextShellSubscriptions = Subscription.lift(nextShellSubscriptions)<
   Model,
   Message
@@ -193,7 +184,6 @@ export const subscriptions = Subscription.aggregate(
   rootSubscriptions,
   threadSubscriptions,
   composerSubscriptions,
-  liftedSidebarSubscriptions,
   liftedPushSubscriptions,
   liftedSettingsSubscriptions,
   liftedNextShellSubscriptions,

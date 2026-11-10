@@ -21,9 +21,8 @@ import { DateTime, Option } from "effect";
 
 import { projectMarkOf, requestsOf } from "../next/shell/Derived.ts";
 import { initial as initialShell } from "../next/shell/Model.ts";
+import { syncVisits } from "../next/shell/Visits.ts";
 import { AppRoute } from "../Route.ts";
-import { initial as initialSidebar } from "../sidebar/Model.ts";
-import { inform as informSidebar } from "../sidebar/Update.ts";
 import { pushContextOf } from "./Context.ts";
 
 const PROJECT = ProjectId.make("prj_1");
@@ -138,21 +137,24 @@ const REVIEW_CASES: ReadonlyArray<{
   },
 ];
 
-/** The favicon's number, as the headless sidebar's update sets it for this shell. */
+/** The favicon's number, as the shell's update sets it for this shell. */
 const faviconOf = (
   shell: ShellSnapshot,
   openThreadId: Option.Option<ThreadShell["id"]> = none
 ): number =>
-  informSidebar(
-    { ...initialSidebar, nowMs: DateTime.toEpochMillis(NOW) },
-    {
+  syncVisits({
+    ...initialShell,
+    context: {
+      ...initialShell.context,
       shell: Option.some(shell),
-      openThreadId,
-      openDraftId: Option.none(),
-      scratchThreadId: Option.none(),
-      connection: "Live",
-    }
-  ).model.badgeCount;
+      route: Option.match(openThreadId, {
+        onNone: () => AppRoute.Hero(),
+        onSome: (threadId) => AppRoute.Thread({ threadId }),
+      }),
+      isLive: true,
+    },
+    nowMs: DateTime.toEpochMillis(NOW),
+  }).model.badgeCount;
 
 describe("needs you", () => {
   it.each(REVIEW_CASES)(
@@ -174,11 +176,8 @@ describe("needs you", () => {
 
       const shellModel = {
         ...initialShell,
-        context: {
-          ...initialShell.context,
-          shell: Option.some(shell),
-          nowMs: DateTime.toEpochMillis(NOW),
-        },
+        context: { ...initialShell.context, shell: Option.some(shell) },
+        nowMs: DateTime.toEpochMillis(NOW),
       };
 
       const rail = projectMarkOf(shellModel, project, requestsOf(shellModel));
@@ -245,8 +244,8 @@ describe("needs you", () => {
           ...initialShell.context,
           route: AppRoute.Thread({ threadId: PROJECT_THREAD }),
           shell: Option.some(shell),
-          nowMs: DateTime.toEpochMillis(NOW),
         },
+        nowMs: DateTime.toEpochMillis(NOW),
       };
 
       return {

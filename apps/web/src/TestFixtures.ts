@@ -19,7 +19,6 @@ import * as Thread from "./page/thread/index.ts";
 import * as Push from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
 import * as Settings from "./settings/Model.ts";
-import { initial as initialSidebar } from "./sidebar/Model.ts";
 
 /** An empty shell at sequence 0. */
 export const emptySnapshot: ShellSnapshot = Schema.decodeSync(ShellSnapshot)({
@@ -46,7 +45,6 @@ export const connectingModel: Model = {
   outboxLeft: [],
   notice: Option.none(),
   thread: Thread.Model.initial,
-  sidebar: initialSidebar,
   composer: Composer.initial,
   push: Push.initial,
   settings: Settings.initial,

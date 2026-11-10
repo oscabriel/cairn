@@ -1,9 +1,9 @@
 // Ported from github.com/pingdotgg/t3code, apps/web/src/timestampFormat.test.ts ("relative time
 // boundaries", "formatShortTimestamp") and packages/shared/src/orchestrationTiming.test.ts
-// ("formatDuration") at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the boundary, duration and
-// locale cases. Removed: the host-locale and 12 or 24 hour setting cases (not ported), and the
-// invalid-input cases (Cairn's times are decoded `DateTime`s). Added: the sidebar's compact age and
-// working duration labels.
+// ("formatDuration") at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the boundary and duration
+// cases. Removed: the host-locale and 12 or 24 hour setting cases (not ported), the invalid-input
+// cases (Cairn's times are decoded `DateTime`s), and the locale cases with the calendar labels they
+// read (ADR 0050). Added: the sidebar's compact age and working duration labels.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -26,11 +26,9 @@ import { assert, describe, it } from "@effect/vitest";
 import { DateTime } from "effect";
 
 import {
-  calendarDaysBetween,
   formatDuration,
   formatRelativeTimeLabel,
   formatSidebarAge,
-  formatTimeOfDay,
   formatWorkingDurationLabel,
   msUntilRelativeTimeChange,
   relativeTimeElapsedMs,
@@ -39,9 +37,6 @@ import {
 const time = (iso: string) => DateTime.makeUnsafe(iso);
 
 const nowMs = Date.parse("2026-04-07T12:00:00.000Z");
-
-// ICU can separate the day period with a narrow no-break space.
-const plainSpaces = (text: string) => text.replaceAll(/[  ]/gu, " ");
 
 describe("relative time boundaries", () => {
   it("waits for the label to change instead of the next second", () => {
@@ -162,36 +157,4 @@ describe(formatDuration, () => {
       assert.strictEqual(formatDuration(durationMs), "0ms");
     }
   );
-});
-
-describe(formatTimeOfDay, () => {
-  it.each([
-    ["en-GB", "15:44"],
-    ["en-US", "3:44 PM"],
-  ])("honours %s", (locale, expected) => {
-    const at = DateTime.makeZonedUnsafe("2026-04-07T15:44:00.000Z", {
-      timeZone: "UTC",
-    });
-
-    assert.strictEqual(plainSpaces(formatTimeOfDay(at, locale)), expected);
-  });
-});
-
-describe(calendarDaysBetween, () => {
-  it("counts local calendar days, not 24 hour spans", () => {
-    const zone = { timeZone: "America/Chicago" };
-
-    const lateEvening = DateTime.makeZonedUnsafe(
-      "2026-04-08T04:30:00.000Z",
-      zone
-    );
-
-    const nextMorning = DateTime.makeZonedUnsafe(
-      "2026-04-08T14:00:00.000Z",
-      zone
-    );
-
-    assert.strictEqual(calendarDaysBetween(lateEvening, nextMorning), 1);
-    assert.strictEqual(calendarDaysBetween(nextMorning, lateEvening), -1);
-  });
 });

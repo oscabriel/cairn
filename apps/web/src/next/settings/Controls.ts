@@ -8,7 +8,6 @@ import * as Switch from "@foldkit/ui/switch";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { classNames } from "../../ui/ClassNames.ts";
-import type { SelectOption } from "../../ui/Select.ts";
 import {
   DISABLED,
   FEEDBACK_MOTION,
@@ -25,6 +24,12 @@ const SELECT_CLASS = classNames(
   FEEDBACK_MOTION,
   DISABLED
 );
+
+/** One choice: what is sent and what is shown. */
+export interface SelectOption {
+  readonly value: string;
+  readonly label: string;
+}
 
 /** A select's state and wiring; its label is for assistive technology, the row says it aloud. */
 export interface SelectConfig<Message> {

@@ -16,7 +16,6 @@ import { Message as NextShellMessage } from "./next/shell/Message.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Message as PushMessage } from "./push/Message.ts";
 import { Message as SettingsMessage } from "./settings/Message.ts";
-import { Message as SidebarMessage } from "./sidebar/Message.ts";
 
 /** Everything the root reacts to. */
 export const Message = defineMessageUnion({
@@ -74,7 +73,6 @@ export const Message = defineMessageUnion({
   DismissedNotice: {},
 
   GotThreadMessage: { message: Thread.Message },
-  GotSidebarMessage: { message: SidebarMessage },
   GotComposerMessage: { message: ComposerMessage },
   GotPushMessage: { message: PushMessage },
   GotSettingsMessage: { message: SettingsMessage },

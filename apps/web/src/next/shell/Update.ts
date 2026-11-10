@@ -13,8 +13,12 @@
 // The "Previous" fold reads the selected project's earlier project threads whenever the project
 // or its project thread changes, and opens one read only (ADR 0048). The project and thread menus
 // open rename and remove dialogs whose commands go straight to the brain; removing the project
-// the open thread is in goes back to the hero.
+// the open thread is in goes back to the hero. The keys (`Keys.ts`, ADR 0050) open a new thread as
+// ADR 0048 says and walk the rows the sidebar draws; the clock's ticks, the rows and the route keep
+// the visits and the favicon's number current (`Visits.ts`).
 
+import { newThreadOpens } from "@cairn/client-logic/ProjectThread";
+import { resolveAdjacentThreadId } from "@cairn/client-logic/Sidebar";
 import { LINEAGE_PAGE } from "@cairn/client-logic/ThreadLineage";
 import { threadStatus } from "@cairn/client-logic/ThreadState";
 import { ThreadId } from "@cairn/protocol/Ids";
@@ -24,7 +28,12 @@ import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
-import { heroRouter, settingsRouter, threadRouter } from "../../Route.ts";
+import {
+  draftRouter,
+  heroRouter,
+  settingsRouter,
+  threadRouter,
+} from "../../Route.ts";
 import { ADD_PROJECT_ID } from "./AddProject.ts";
 import {
   BrowseFolders,
@@ -32,13 +41,16 @@ import {
   DispatchManage,
   FetchPreviousThreads,
   FocusField,
+  DetectPlatform,
   LoadScratch,
   LookUpEarlierThread,
+  PrepareDraft,
   PrepareProjectDraft,
   PrepareRefresh,
   PrepareScratchClear,
   PrepareScratchTurn,
   MarkCriterion,
+  ReadClock,
   SaveScratch,
   SelectAddedProject,
   StopChild,
@@ -54,11 +66,14 @@ import {
   projectThreadFor,
   railProjectsOf,
   scratchRowOf,
+  selectedProjectOf,
   threadRoleOf,
   threadsOf,
 } from "./Derived.ts";
+import { drawnRowsOf } from "./Keys.ts";
 import { MANAGE_TEXT_ID } from "./Manage.ts";
 import { Message, OutMessage } from "./Message.ts";
+import type { ShortcutCommand } from "./Message.ts";
 import {
   FIRST_CHILD_ROWS,
   FolderListing,
@@ -80,6 +95,7 @@ import type {
 } from "./Model.ts";
 import { REFRESH_TEXT_ID } from "./Refresh.ts";
 import { SCRATCH_EDITOR_ID } from "./Scratch.ts";
+import { routedThreadIdOf, syncVisits } from "./Visits.ts";
 
 /** The usage page's path. */
 export const USAGE_PATH = "/usage";
@@ -347,20 +363,34 @@ const informContext = (model: Model, context: ShellContext): InformReturn => {
   };
 };
 
+/** The visits and the favicon brought in line after a step, the step's Commands first. */
+const withVisits = (
+  model: Model,
+  commands: InformReturn["commands"]
+): InformReturn => {
+  const synced = syncVisits(model);
+
+  return {
+    model: synced.model,
+    commands: Array.appendAll(commands ?? [], synced.commands ?? []),
+  };
+};
+
 /**
  * Takes what the root knows. When the route opens another thread, the rail follows it to its
- * project, and the phone's sheet closes. The first time, it reads which scratch thread this device
- * held.
+ * project, and the phone's sheet closes; the visits and the favicon follow the rows and the route.
+ * The first time, it reads which scratch thread this device held, the clock and the platform.
  */
 export const inform = (model: Model, context: ShellContext): InformReturn => {
-  const told = informContext(model, context);
+  const informed = informContext(model, context);
+  const told = withVisits(informed.model, informed.commands);
   const found = told.commands ?? [];
 
   return model.started
     ? told
     : {
         model: modifyFields(told.model, { started: () => true }),
-        commands: [LoadScratch(), ...found],
+        commands: [LoadScratch(), ReadClock(), DetectPlatform(), ...found],
       };
 };
 
@@ -889,9 +919,100 @@ const closeAddProject = (model: Model): UpdateReturn => ({
   model: modifyFields(model, { addProject: () => Option.none() }),
 });
 
-/** The shell's update. */
-export const update = (model: Model, message: Message): UpdateReturn =>
+/**
+ * New thread (ADR 0048): the project thread of the project the sidebar shows, when it has one; a
+ * project with none gets a draft of its own, as a click on its rail bubble does; with no folder
+ * project at all, a new draft.
+ */
+const openNewThread = (model: Model): UpdateReturn => {
+  const projects = Option.match(model.context.shell, {
+    onNone: () => [],
+    onSome: (shell) => shell.projects,
+  });
+
+  const selected = Option.map(
+    selectedProjectOf(model),
+    (project) => project.id
+  );
+
+  return Option.match(newThreadOpens(projects, selected), {
+    onNone: () =>
+      Option.match(selected, {
+        onNone: () => ({ model, commands: [PrepareDraft()] }),
+        onSome: (projectId) => startProjectThread(model, projectId),
+      }),
+    onSome: (threadId) =>
+      Option.contains(routedThreadIdOf(model), threadId)
+        ? { model }
+        : navigate(model, threadRouter({ threadId })),
+  });
+};
+
+/** A thread row: open its thread. */
+const openThread = (model: Model, threadId: ThreadId): UpdateReturn =>
+  navigate(model, threadRouter({ threadId }));
+
+/** An earlier project thread's row: open it read only, holding its row for its header and page. */
+const openEarlierThread = (model: Model, thread: ThreadShell): UpdateReturn =>
+  navigate(
+    modifyFields(model, {
+      previous: (previous) =>
+        modifyFields(previous, { opened: () => Option.some(thread) }),
+    }),
+    threadRouter({ threadId: thread.id })
+  );
+
+/** Previous or Next thread: the row above or below the open thread, as the sidebar draws them. */
+const traverse = (
+  model: Model,
+  direction: "previous" | "next"
+): UpdateReturn => {
+  const rows = drawnRowsOf(model);
+
+  const target = Option.flatMap(
+    resolveAdjacentThreadId({
+      threadIds: rows.map((row) => row.threadId),
+      currentThreadId: Option.map(routedThreadIdOf(model), String),
+      direction,
+    }),
+    (threadId) => Array.findFirst(rows, (row) => row.threadId === threadId)
+  );
+
+  return Option.match(target, {
+    onNone: () => ({ model }),
+    // The row opens as a click on it would.
+    onSome: (row) =>
+      Option.match(row.earlier, {
+        onNone: () => openThread(model, row.threadId),
+        onSome: (thread) => openEarlierThread(model, thread),
+      }),
+  });
+};
+
+/** What each key binding does. */
+const SHORTCUTS: Readonly<
+  Record<ShortcutCommand, (model: Model) => UpdateReturn>
+> = {
+  "chat.new": openNewThread,
+  "thread.previous": (model) => traverse(model, "previous"),
+  "thread.next": (model) => traverse(model, "next"),
+};
+
+const step = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
+    Ticked: ({ nowMs }) =>
+      syncVisits(modifyFields(model, { nowMs: () => nowMs })),
+    DetectedPlatform: ({ isMac }) => ({
+      model: modifyFields(model, { isMac: () => isMac }),
+    }),
+    CompletedSetBadge: () => ({ model }),
+    MintedVisit: ({ command }) => ({
+      model,
+      outMessage: OutMessage.RequestedDispatch({ command }),
+    }),
+    PressedShortcut: ({ command }) => SHORTCUTS[command](model),
+    PreparedDraft: ({ draftId }) => navigate(model, draftRouter({ draftId })),
+
     ClickedProject: ({ projectId }) => openProject(model, projectId),
 
     ClickedAddProject: () => openAddProject(model),
@@ -958,8 +1079,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         : { model },
     FoundAddedProject: ({ projectId }) => openProject(model, projectId),
 
-    ClickedThread: ({ threadId }) =>
-      navigate(model, threadRouter({ threadId })),
+    ClickedThread: ({ threadId }) => openThread(model, threadId),
     ClickedStartProjectThread: ({ projectId }) =>
       startProjectThread(model, projectId),
     PreparedProjectDraft: ({ projectId, draftId }) => ({
@@ -1308,14 +1428,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
             })
           )
         : { model },
-    ClickedPreviousThread: ({ thread }) =>
-      navigate(
-        modifyFields(model, {
-          previous: (previous) =>
-            modifyFields(previous, { opened: () => Option.some(thread) }),
-        }),
-        threadRouter({ threadId: thread.id })
-      ),
+    ClickedPreviousThread: ({ thread }) => openEarlierThread(model, thread),
     // Its project becomes the selected one, so the fold reads that project's rows.
     LookedUpEarlierThread: ({ thread, threadId }) =>
       Option.isSome(thread) && thread.value.id === threadId
@@ -1424,3 +1537,19 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         modifyFields(goal, { failure: () => Option.none() })
       ),
   });
+
+/**
+ * The shell's update. A change to the scratch thread this page holds moves the favicon's number,
+ * which counts it.
+ */
+export const update = (model: Model, message: Message): UpdateReturn => {
+  const stepped = step(model, message);
+
+  if (Equal.equals(stepped.model.scratch.threadId, model.scratch.threadId)) {
+    return stepped;
+  }
+
+  const synced = withVisits(stepped.model, stepped.commands);
+
+  return { ...stepped, model: synced.model, commands: synced.commands ?? [] };
+};

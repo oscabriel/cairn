@@ -32,7 +32,6 @@ import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
-import { shouldRecedeSidebarThread } from "./Sidebar.ts";
 import {
   pendingSubagentRequests,
   subagentRequestFor,
@@ -41,6 +40,7 @@ import type { SubagentRequest } from "./SubagentRollup.ts";
 import {
   HOLD_LABELS,
   isRunLive,
+  isThreadWoke,
   STATE_LOOKS,
   THREAD_LABELS,
   ThreadHold,
@@ -239,15 +239,6 @@ describe(threadStatus, () => {
       "ready"
     );
     assert.strictEqual(wordOf(limited), "Limited");
-    assert.isFalse(
-      shouldRecedeSidebarThread({
-        status: "limited",
-        isUnread: false,
-        isWoke: false,
-        isActive: false,
-        isSelected: false,
-      })
-    );
   });
 
   it("reports failed only while the latest run failed", () => {
@@ -388,15 +379,6 @@ describe(threadState, () => {
     assert.strictEqual(state.status, "waiting");
     assert.strictEqual(state.category, "active");
     assert.deepStrictEqual(state.label, Option.some(THREAD_LABELS.waiting));
-    assert.isTrue(
-      shouldRecedeSidebarThread({
-        status: state.status,
-        isUnread: state.isUnread,
-        isWoke: false,
-        isActive: false,
-        isSelected: false,
-      })
-    );
 
     const settled = stateOf({
       ...thread,
@@ -560,5 +542,60 @@ describe(isRunLive, () => {
     assert.isTrue(
       isRunLive({ activity: "idle", activeRunId: Option.some(RunId.make(1)) })
     );
+  });
+});
+
+describe(isThreadWoke, () => {
+  it("says a snooze ended unseen until the user looks", () => {
+    const woken: ThreadShell = {
+      ...base,
+      snoozedUntil: Option.some(time("2026-04-10T10:00:00Z")),
+      snoozedAt: Option.some(time("2026-04-10T09:00:00Z")),
+    };
+
+    assert.isTrue(isThreadWoke(woken, NOW));
+    assert.isFalse(
+      isThreadWoke(
+        {
+          ...woken,
+          lastVisitedAt: Option.some(time("2026-04-10T11:00:00Z")),
+        },
+        NOW
+      )
+    );
+  });
+});
+
+// ADR 0050: the shelf is fenced. Nothing draws settled or pinned, so a settle or a pin a thread
+// still carries from before the cutover changes nothing its state shows.
+describe("the fenced shelf", () => {
+  it("leaves a thread's state alone whether it is settled or pinned", () => {
+    const woke: ThreadShell = {
+      ...base,
+      snoozedUntil: Option.some(time("2026-04-10T10:00:00Z")),
+      snoozedAt: Option.some(time("2026-04-10T09:00:00Z")),
+      lastVisitedAt: Option.some(time("2026-04-10T09:30:00Z")),
+    };
+
+    const done: ThreadShell = {
+      ...base,
+      latestRunCompletedAt: Option.some(time("2026-04-10T11:00:00Z")),
+      lastVisitedAt: Option.some(time("2026-04-10T10:00:00Z")),
+    };
+
+    for (const thread of [base, woke, done]) {
+      for (const shelved of [
+        {
+          settledOverride: Option.some("settled" as const),
+          settledAt: Option.some(time("2026-04-10T11:30:00Z")),
+        },
+        { pinnedAt: Option.some(time("2026-04-10T11:30:00Z")) },
+      ]) {
+        assert.deepStrictEqual(
+          stateOf({ ...thread, ...shelved }),
+          stateOf(thread)
+        );
+      }
+    }
   });
 });

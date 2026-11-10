@@ -206,7 +206,7 @@ stateDiagram-v2
 | `running`, `waiting` | `idle` | Boot finds no live run for a busy row | The boot reconcile ends the run it missed (`endedUnseen`) | `apps/server/src/shell/ShellProjector.ts` (`reconcileProjection`, `endedUnseen`) |
 | `waitingFor` `none` | `claude_slot` and back | A Claude conversation of the thread waits for, then gets, a slot | `ClaudeSignals` sends the change; `applySignal` merges it; RunTerminal and the boot reconcile reset it to `none` | `apps/server/src/usage/ClaudeSignals.ts` (`applyWait`), `apps/server/src/shell/ShellProjector.ts` (`applySignal`) |
 | `usageLimitResetAt` none | set | A run failed with `usage_limit` | `ClaudeSignals` sends the latest reset of every spent plan window | `apps/server/src/usage/ClaudeSignals.ts` |
-| shelf | settled | Quiet for `autoSettleDays` | `Settlement.sweep` every 5 minutes commits `ThreadAutoSettle`, refused if the row changed since the sweep read it | `apps/server/src/shell/Settlement.ts` (`isAutoSettlementCandidate`, `sweep`), `apps/server/src/shell/ShellCommands.ts` (`ThreadAutoSettle`) |
+| shelf | settled | Quiet for `autoSettleDays` | `Settlement.sweep` commits `ThreadAutoSettle`, refused if the row changed since the sweep read it; nothing runs the sweep since the shelf was fenced (ADR 0050) | `apps/server/src/shell/Settlement.ts` (`isAutoSettlementCandidate`, `sweep`), `apps/server/src/shell/ShellCommands.ts` (`ThreadAutoSettle`) |
 | snoozed | active | The wake time comes | `Settlement.wakeSnoozed` commits `ThreadSnoozeExpire`, refused if the snooze changed | `apps/server/src/shell/Settlement.ts` (`wakeSnoozed`), `apps/server/src/shell/ShellCommands.ts` (`ThreadSnoozeExpire`) |
 
 ### Caused by an arm
@@ -254,7 +254,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `WaitingFor` | `claude_slot` | Banner "Waiting for a Claude slot": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
 | `WaitingFor` | `parent` | The child's managed row in the sidebar says "Asked its parent"; its ancestors are not lit and show no parent banner, since the user is not asked yet (6D). | Sidebar row |
 | `WaitingFor` | `none` | Nothing. | None |
-| `SettledOverride` | `settled` | Nothing: the sidebar draws no shelves and no page offers Settle or Unsettle; the brain still settles quiet threads and the row keeps the field. | None |
+| `SettledOverride` | `settled` | Nothing: the sidebar draws no shelves and no page or key offers Settle or Unsettle; the brain no longer settles quiet threads and the row keeps the field (ADR 0050). | None |
 | `SettledOverride` | `active` | Nothing, as for `settled`. | None |
 | `RuntimeRequestKind` | `executor-call` | "Approval". | Sidebar row |
 | `RuntimeRequestKind` | `tool-call` | "Approval". | Sidebar row |

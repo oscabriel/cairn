@@ -6,8 +6,13 @@
 // the text only when the row has no room for both. Statuses are status chips (a provider ready, a
 // credential missing); plan windows are grey bars, with the waiting tone only on a spent one. The
 // model list is folded until opened, so the page reads as settings, not as a catalog
-// (the user, 2026-11-01: too dense, and every select ran the row's full width).
+// (the user, 2026-11-01: too dense, and every select ran the row's full width). A setting whose
+// feature has no surface is hidden while that is so, and its stored value kept (U-10, ADR 0050):
+// Confirm thread deletion (no view deletes a thread), Auto-settle (no view draws the settled
+// shelf) and Diff layout (the diff panel is off). The Keyboard section lists every key the shell
+// answers (U-11), from the shell's own table.
 
+import { BRIDGE_PROVIDER } from "@cairn/client-logic/Meters";
 import { skillsPromptTokens } from "@cairn/client-logic/SkillsPrompt";
 import type { ExecutorStatus } from "@cairn/protocol/Executor";
 import type { ModelCatalog, ProviderStatus } from "@cairn/protocol/Models";
@@ -20,7 +25,6 @@ import * as AsyncData from "foldkit/asyncData";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { ChevronRight } from "lucide";
 
-import { BRIDGE_PROVIDER } from "../../composer/UsageMeter.ts";
 import type {
   BooleanSettingKey,
   ChoiceSettingKey,
@@ -32,7 +36,8 @@ import { formatDayTime, formatUsed } from "../../settings/Time.ts";
 import { modelValue } from "../../settings/Update.ts";
 import type { Child } from "../../ui/Child.ts";
 import { classNames } from "../../ui/ClassNames.ts";
-import type { SelectOption } from "../../ui/Select.ts";
+import { DIFF_PANEL_ENABLED } from "../diff/Panel.ts";
+import { keyboardRowsOf } from "../shell/Keys.ts";
 import { button, buttonDefaults } from "../ui/Button.ts";
 import {
   FEEDBACK_MOTION,
@@ -44,14 +49,31 @@ import {
 } from "../ui/Classes.ts";
 import { glyph } from "../ui/Glyph.ts";
 import type { StatusMark } from "../ui/Glyph.ts";
+import { kbd } from "../ui/Kbd.ts";
 import { statusChip } from "../ui/StatusChip.ts";
 import type { Tone } from "../ui/Tone.ts";
 import { select, switchControl } from "./Controls.ts";
+import type { SelectOption } from "./Controls.ts";
 
-/** What the root passes in: the push toggle. */
+/** What the root passes in: the push toggle, and whether the keys read as an Apple platform's. */
 export interface SettingsViewInputs {
   readonly notifications: () => Html;
+  readonly isMac: boolean;
 }
+
+/**
+ * Whether each setting whose feature can lack a surface is drawn now (U-10, ADR 0050). No view
+ * deletes a thread (only the scratch thread's Clear), so Confirm thread deletion has nothing to
+ * ask; no view draws the settled shelf and the sweep is off, so Auto-settle moves nothing; Diff
+ * layout lays out the diff panel, off while `DIFF_PANEL_ENABLED` is.
+ */
+const SURFACED: Readonly<
+  Record<"confirm-delete" | "auto-settle" | "diff-layout", boolean>
+> = {
+  "confirm-delete": false,
+  "auto-settle": false,
+  "diff-layout": DIFF_PANEL_ENABLED,
+};
 
 const none = Option.none<string>();
 
@@ -315,6 +337,29 @@ const autoSettleOptions = (current: number): ReadonlyArray<SelectOption> =>
 const generalSection = (model: Model, h: HtmlBuilder<Message>): Html => {
   const { client } = model;
 
+  const autoSettleRows = SURFACED["auto-settle"]
+    ? pending(h, "auto-settle", model.server, (settings: ServerSettings) => [
+        row(
+          h,
+          "auto-settle",
+          "Auto-settle",
+          Option.some(
+            "Quiet threads move to the settled shelf on every device."
+          ),
+          Option.some(
+            choice(
+              h,
+              "settings-auto-settle",
+              "Auto-settle",
+              String(settings.autoSettleDays),
+              autoSettleOptions(settings.autoSettleDays),
+              (value) => Message.SelectedAutoSettleDays({ value })
+            )
+          )
+        ),
+      ])
+    : [];
+
   return section(
     h,
     { id: "general", title: "General", headerAction: Option.none() },
@@ -360,20 +405,22 @@ const generalSection = (model: Model, h: HtmlBuilder<Message>): Html => {
           ])
         )
       ),
-      row(
-        h,
-        "confirm-delete",
-        "Confirm thread deletion",
-        Option.some("Ask before a thread is deleted."),
-        Option.some(
-          clientToggle(
+      SURFACED["confirm-delete"]
+        ? row(
             h,
-            client,
-            "confirmThreadDelete",
-            "Confirm thread deletion"
+            "confirm-delete",
+            "Confirm thread deletion",
+            Option.some("Ask before a thread is deleted."),
+            Option.some(
+              clientToggle(
+                h,
+                client,
+                "confirmThreadDelete",
+                "Confirm thread deletion"
+              )
+            )
           )
-        )
-      ),
+        : h.empty,
       row(
         h,
         "composer-collapse",
@@ -388,26 +435,7 @@ const generalSection = (model: Model, h: HtmlBuilder<Message>): Html => {
           )
         )
       ),
-      ...pending(h, "auto-settle", model.server, (settings: ServerSettings) => [
-        row(
-          h,
-          "auto-settle",
-          "Auto-settle",
-          Option.some(
-            "Quiet threads move to the settled shelf on every device."
-          ),
-          Option.some(
-            choice(
-              h,
-              "settings-auto-settle",
-              "Auto-settle",
-              String(settings.autoSettleDays),
-              autoSettleOptions(settings.autoSettleDays),
-              (value) => Message.SelectedAutoSettleDays({ value })
-            )
-          )
-        ),
-      ]),
+      ...autoSettleRows,
     ]
   );
 };
@@ -490,21 +518,47 @@ const appearanceSection = (model: Model, h: HtmlBuilder<Message>): Html => {
           ])
         )
       ),
-      row(
-        h,
-        "diff-layout",
-        "Diff layout",
-        none,
-        Option.some(
-          clientChoice(h, client, "diffLayout", "Diff layout", [
-            { value: "stacked", label: "Stacked" },
-            { value: "split", label: "Side by side" },
-          ])
-        )
-      ),
+      SURFACED["diff-layout"]
+        ? row(
+            h,
+            "diff-layout",
+            "Diff layout",
+            none,
+            Option.some(
+              clientChoice(h, client, "diffLayout", "Diff layout", [
+                { value: "stacked", label: "Stacked" },
+                { value: "split", label: "Side by side" },
+              ])
+            )
+          )
+        : h.empty,
     ]
   );
 };
+
+/** Every key the shell answers, each with what it does and its chords (U-11). */
+const keyboardSection = (
+  inputs: SettingsViewInputs,
+  h: HtmlBuilder<Message>
+): Html =>
+  section(
+    h,
+    { id: "keyboard", title: "Keyboard", headerAction: Option.none() },
+    keyboardRowsOf(inputs.isMac).map((each) =>
+      row(
+        h,
+        `key-${each.id}`,
+        each.title,
+        Option.some(each.description),
+        Option.some(
+          h.div(
+            [h.Class("flex flex-wrap items-center gap-(--space-1)")],
+            each.keys.map((key) => kbd(h, key))
+          )
+        )
+      )
+    )
+  );
 
 const notificationsSection = (
   inputs: SettingsViewInputs,
@@ -1081,6 +1135,7 @@ export const view = Submodel.defineView<Model, Message, SettingsViewInputs>(
           noticeView(model, h),
           generalSection(model, h),
           appearanceSection(model, h),
+          keyboardSection(inputs, h),
           notificationsSection(inputs, h),
           providersSection(model, h),
           modelsSection(model, h),

@@ -1,5 +1,6 @@
-// Scene tests for the user message row, rendered from a thread's view through the transcript's own
-// derivation, as the thread page draws it.
+// Scene tests for the user message row, the brain-input row and the pending row, rendered from a
+// thread's view through the transcript's own derivation and drawn by the `next` row view, as the
+// thread page draws them.
 
 import { AttachmentId } from "@cairn/protocol/Ids";
 import { ConversationView, ProjectedImage } from "@cairn/protocol/Thread";
@@ -8,11 +9,10 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import * as Scene from "foldkit/scene";
 import { describe, expect, it } from "vitest";
 
-import { rowView as nextRowView } from "../next/timeline/RowView.ts";
-import type { Message } from "./Message.ts";
-import { freshUi } from "./Model.ts";
-import { transcriptOf, withPendingSends } from "./Rows.ts";
-import type { ListItem } from "./Rows.ts";
+import type { Message } from "../../timeline/Message.ts";
+import { freshUi } from "../../timeline/Model.ts";
+import { transcriptOf, withPendingSends } from "../../timeline/Rows.ts";
+import type { ListItem } from "../../timeline/Rows.ts";
 import { rowView } from "./RowView.ts";
 
 const THREAD_ID = "01890a5d-ac96-774b-bcce-b302099a8057";
@@ -97,23 +97,6 @@ const userRow = (view: ConversationView): ListItem => {
   return row;
 };
 
-const config = (item: ListItem) => ({
-  update: (model: null) => ({ model }),
-  view: (_model: null, h: HtmlBuilder<Message>): Html =>
-    rowView(h, item, {
-      threadId: THREAD_ID,
-      workspaceRoot: Option.none(),
-      highlightedLanguages: [],
-      highlightedCode: 0,
-      copiedRowId: Option.none(),
-      expanded: false,
-      retryPrompt: Option.none(),
-      history: "idle",
-      historyCursor: Option.none(),
-      subagents: Option.none(),
-    }),
-});
-
 /** A wake and the brief that starts a child, as the brain writes them: `pi.user` entries. */
 const brainInputs = Schema.decodeSync(ConversationView)({
   conversation: { id: 1 },
@@ -162,10 +145,10 @@ const pendingRow = (sent = false): ListItem => {
   return item;
 };
 
-const nextConfig = (item: ListItem) => ({
+const config = (item: ListItem) => ({
   update: (model: null) => ({ model }),
   view: (_model: null, h: HtmlBuilder<Message>): Html =>
-    nextRowView(h, item, {
+    rowView(h, item, {
       threadId: THREAD_ID,
       workspaceRoot: Option.none(),
       highlightedLanguages: [],
@@ -201,7 +184,7 @@ describe("a brain input row", () => {
     }
 
     Scene.scene(
-      nextConfig(row),
+      config(row),
       Scene.given(null),
       Scene.expect(Scene.testId("brain-input")).toHaveText(
         /Subagent "Probe the bridge" reported; its result is on its subagent row above\./u
@@ -218,7 +201,7 @@ describe("a brain input row", () => {
 describe("a pending row", () => {
   it("draws the queued words in the user's bubble, marked not yet sent, with no copy button", () => {
     Scene.scene(
-      nextConfig(pendingRow()),
+      config(pendingRow()),
       Scene.given(null),
       Scene.expect(Scene.selector("[data-user-message-body]")).toHaveText(
         "keep the budget under $5"
@@ -235,7 +218,7 @@ describe("a pending row", () => {
 
   it("says the words are sent once the brain has them and their own row has not come", () => {
     Scene.scene(
-      nextConfig(pendingRow(true)),
+      config(pendingRow(true)),
       Scene.given(null),
       Scene.expect(Scene.testId("pending-state")).toHaveText("Sent"),
       Scene.expectAll(Scene.all.testId("pending-message")).toHaveCount(1),

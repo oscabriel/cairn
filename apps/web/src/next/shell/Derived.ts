@@ -247,8 +247,7 @@ export const projectMarkOf = (
   }
 
   return listedThreadsOf(project, threads).some(
-    (thread) =>
-      rowStatusOf(thread, requests, model.context.nowMs).category === "active"
+    (thread) => rowStatusOf(thread, requests, model.nowMs).category === "active"
   )
     ? "working"
     : "none";

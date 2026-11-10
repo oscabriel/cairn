@@ -13,7 +13,6 @@ import * as Scene from "foldkit/scene";
 
 import { Message as ComposerMessage } from "../composer/Message.ts";
 import { defaultSettings as defaultComposerSettings } from "../composer/Model.ts";
-import { leadingWindow, usageMeterView } from "../composer/UsageMeter.ts";
 import { Message as RootMessage } from "../Message.ts";
 import { view } from "../next/settings/View.ts";
 import { liveModel } from "../TestFixtures.ts";
@@ -147,6 +146,7 @@ const loaded: Model = {
 
 const sceneView = Scene.withViewInputs(view, {
   notifications: () => null,
+  isMac: false,
 });
 
 const config = { update, view: sceneView() };
@@ -306,6 +306,58 @@ describe("the settings page", () => {
     );
   });
 
+  // U-10 and ADR 0050: no view deletes a thread, draws the settled shelf or opens a diff, so their
+  // settings are not offered; their stored values stay.
+  it("hides the settings whose feature has no surface, keeping their stored values", () => {
+    Scene.scene(
+      config,
+      Scene.given(loaded),
+      Scene.expect(
+        Scene.selector('[data-settings-row="confirm-delete"]')
+      ).toBeAbsent(),
+      Scene.expect(
+        Scene.selector('[data-settings-row="auto-settle"]')
+      ).toBeAbsent(),
+      Scene.expect(
+        Scene.selector('[data-settings-row="diff-layout"]')
+      ).toBeAbsent(),
+      Scene.expect(Scene.selector("#settings-auto-settle")).toBeAbsent(),
+      Scene.expect(Scene.selector("#settings-theme")).toExist(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+    assert.isTrue(loaded.client.confirmThreadDelete);
+    assert.strictEqual(loaded.client.diffLayout, "stacked");
+  });
+
+  // U-11: every key the shell answers is listed (`Keys.test.ts` holds that they are the only ones).
+  it("lists the keys the shell answers in its Keyboard section", () => {
+    Scene.scene(
+      config,
+      Scene.given(loaded),
+      Scene.expect(Scene.testId("settings-section-keyboard")).toExist(),
+      Scene.expect(
+        Scene.selector('[data-settings-row="key-new-thread"]')
+      ).toContainText("Ctrl+N"),
+      Scene.expect(
+        Scene.selector('[data-settings-row="key-previous-thread"]')
+      ).toContainText("Ctrl+Shift+["),
+      Scene.expect(
+        Scene.selector('[data-settings-row="key-next-thread"]')
+      ).toContainText("Ctrl+Shift+]"),
+      Scene.expect(
+        Scene.selector('[data-settings-row="key-scratch"]')
+      ).toContainText("Ctrl+J"),
+      Scene.expect(
+        Scene.selector('[data-settings-row="key-close"]')
+      ).toContainText("Esc"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
   it("shows providers, plan windows, skills and Executor from the brain's answers", () => {
     Scene.scene(
       config,
@@ -374,56 +426,6 @@ describe("the settings page", () => {
         { name: "a", description: "b", source: "user", modelInvocable: true },
       ]),
       100
-    );
-  });
-});
-
-describe("the composer usage meter", () => {
-  it("leads with the window nearest its limit and reads unknown, never 0%", () => {
-    const { usage } = loaded;
-
-    assert.isTrue(
-      Option.exists(
-        leadingWindow({ usage, provider: "claude-bridge" }),
-        (window) => window.id === "five_hour"
-      )
-    );
-    assert.isTrue(
-      Option.isNone(leadingWindow({ usage, provider: "opencode-go" }))
-    );
-
-    const unknownOnly = Option.some({
-      providers: [
-        {
-          provider: "claude-bridge",
-          reading: "read" as const,
-          windows: [
-            {
-              id: "seven_day",
-              label: "Weekly",
-              used: Option.none(),
-              resetsAt: Option.none(),
-              exhausted: false,
-            },
-          ],
-          checkedAt: Option.none(),
-        },
-      ],
-    });
-
-    Scene.scene(
-      {
-        update: (model: number) => ({ model }),
-        view: (_model: number, h) =>
-          usageMeterView(h, { usage: unknownOnly, provider: "claude-bridge" }),
-      },
-      Scene.given(0),
-      Scene.expect(Scene.testId("composer-usage-meter")).toHaveText(
-        "Weekly unknown"
-      ),
-      Scene.tap(({ commands }) => {
-        assert.lengthOf(commands, 0);
-      })
     );
   });
 });

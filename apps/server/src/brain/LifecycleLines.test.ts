@@ -25,6 +25,7 @@ import {
   cancelAbandonedApprovals,
 } from "../approvals/ApprovalLedger.ts";
 import type { RecordAnswer } from "../approvals/ApprovalLedger.ts";
+import { slackened, testLimit } from "../EventuallyTestKit.ts";
 import { Approvals } from "./CairnDocs.ts";
 import type { ApprovalRecord } from "./CairnDocs.ts";
 import { runScenario } from "./conformance/HarnessConformance.ts";
@@ -262,6 +263,51 @@ describe("the approval ledger's host-side settlements", () => {
         });
       })
   );
+
+  it.effect("a cancel that ends no record leaves no line", () =>
+    Effect.gen(function* () {
+      const lines: Array<Line> = [];
+      const { session, conversationId } = yield* seeded;
+
+      // A stop whose run held no record, then a boot repair that finds nothing left to cancel.
+      const stopped = yield* cancelStoppedApprovals(
+        session,
+        conversationId,
+        [],
+        1500
+      ).pipe(Effect.provide(keeping(lines)));
+
+      const first = yield* cancelAbandonedApprovals(
+        session,
+        conversationId,
+        1600,
+        "boot"
+      ).pipe(Effect.provide(keeping(lines)));
+
+      const again = yield* cancelAbandonedApprovals(
+        session,
+        conversationId,
+        1700,
+        "boot"
+      ).pipe(Effect.provide(keeping(lines)));
+
+      assert.deepStrictEqual(stopped, []);
+      assert.deepStrictEqual(first, ["call-gone", "call-free"]);
+      assert.deepStrictEqual(again, []);
+
+      assert.deepStrictEqual(
+        eventsOf(lines, "approvals_cancelled").map((line) => [
+          line.annotations.why,
+          line.annotations.cancelled,
+        ]),
+        [["boot", 2]]
+      );
+
+      yield* Effect.promise(async () => {
+        await session.close(context);
+      });
+    })
+  );
 });
 
 const scenarios = path.join(import.meta.dirname, "conformance", "scenarios");
@@ -276,7 +322,7 @@ const runKeeping = (name: string, lines: Array<Line>) =>
     );
 
     const outcome = yield* runScenario(scenario, piDurableTarget, {
-      timeout: Duration.seconds(10),
+      timeout: slackened(Duration.seconds(10)),
       mutations: new Set(),
       awaitAtRest: false,
     }).pipe(Effect.provide(keeping(lines)));
@@ -320,7 +366,7 @@ describe("the journal's map from a thread to its conversation", () => {
           parent?.conversationId
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -341,6 +387,6 @@ describe("the journal's map from a thread to its conversation", () => {
           [["run-stopped", 1]]
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 });

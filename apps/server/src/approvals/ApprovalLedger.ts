@@ -1051,19 +1051,24 @@ export const relayedQuestion = (record: ApprovalRecord) =>
 /** A stored task id as pi-durable types it. */
 const piTaskOf = (id: number) => piTaskId(TaskId.make(id));
 
-/** The lifecycle line of a system cancel: which records of `conversationId` it ended, and why. */
+/**
+ * The lifecycle line of a system cancel: which records of `conversationId` it ended, and why. A
+ * cancel that ended none took no decision, so it leaves no line.
+ */
 const cancelledLine =
   (conversationId: ConversationId, why: CancelWhy) =>
   (ids: ReadonlyArray<string>) =>
-    Effect.logInfo("approvals cancelled").pipe(
-      Effect.annotateLogs({
-        event: "approvals_cancelled",
-        conversationId,
-        why,
-        cancelled: ids.length,
-        approvalIds: ids.join(","),
-      })
-    );
+    ids.length === 0
+      ? Effect.void
+      : Effect.logInfo("approvals cancelled").pipe(
+          Effect.annotateLogs({
+            event: "approvals_cancelled",
+            conversationId,
+            why,
+            cancelled: ids.length,
+            approvalIds: ids.join(","),
+          })
+        );
 
 /** Why the system cancelled a record: a stop, or boot finding its tool task abandoned. */
 export type CancelWhy = "run-stopped" | "boot";

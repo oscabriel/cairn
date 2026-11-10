@@ -28,7 +28,6 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   ConfigProvider,
   Context,
-  Duration,
   Effect,
   Layer,
   Option,
@@ -37,6 +36,7 @@ import {
 } from "effect";
 
 import { askUserSource } from "../approvals/AskUserTool.ts";
+import { eventually, testLimit } from "../EventuallyTestKit.ts";
 import { observabilityLayer } from "../Observability.ts";
 import { durable } from "./Durable.ts";
 import { Extensions } from "./Extensions.ts";
@@ -63,21 +63,13 @@ const linesOf = (file: string, event: string) =>
       decoded.annotations.event === event ? [decoded.annotations] : []
     );
 
-/** Polls `file` for `event` lines for up to ten seconds; whatever it found by then. */
+/** The `event` lines of `file`, once there is one (`eventually`'s deadline, scaled by the slack). */
 const awaitLines = (file: string, event: string) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = linesOf(file, event);
-
-      if (found.length > 0) {
-        return found;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return linesOf(file, event);
-  });
+  eventually(
+    Effect.sync(() => linesOf(file, event)),
+    (found) => found.length > 0,
+    `a ${event} line in the events log`
+  );
 
 /** The installed `ask_user` over the app's logging, which appends to `events`. */
 const askUserIn = (events: string) =>
@@ -175,7 +167,7 @@ describe("the runner pi-durable callbacks run on", () => {
             rmSync(dir, { recursive: true, force: true });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.effect("opens a span named by each pi-durable call's operation", () =>

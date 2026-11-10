@@ -1,6 +1,8 @@
 // The `next` settings page as the frame places it (plan look track L7): the settings Submodel
 // drawn with the `next` view (`View.ts`), with the push toggle (`next/push/View.ts`) in its
-// notifications section. The page comes with the `next` chunk, so it needs no chunk of its own as classic's does.
+// notifications section. This module is the `settings` chunk (`next/page/Chunks.ts`), loaded when
+// the route first needs it, so import it only through the chunk: a static import pulls the
+// settings view back into the entry.
 
 import type { Html, HtmlBuilder } from "foldkit/html";
 

@@ -23,6 +23,8 @@ interface RuleCase {
   readonly fires: string;
   /** A module the rule must leave alone. */
   readonly quiet: string;
+  /** The rule applies to test files only: its probes are named `*.test.ts`. */
+  readonly testFile?: boolean;
 }
 
 const cases: ReadonlyArray<RuleCase> = [
@@ -199,6 +201,14 @@ const cases: ReadonlyArray<RuleCase> = [
       'import { Effect } from "effect";\nimport type { Context } from "effect";\n\nexport const f = async (context: Context.Context<never>) =>\n  await Effect.runPromiseWith(context)(Effect.log("x"));',
   },
   {
+    code: "automation(no-raw-test-limit)",
+    fires:
+      'import { it } from "@effect/vitest";\n\nit("waits", () => {}, 30_000);',
+    quiet:
+      'import { it } from "@effect/vitest";\n\nimport { testLimit } from "../EventuallyTestKit.ts";\n\nit("waits", () => {}, testLimit(30_000));',
+    testFile: true,
+  },
+  {
     code: "automation(no-silent-error-swallow)",
     fires:
       'import { Effect } from "effect";\n\nexport const f = (e: Effect.Effect<number, string>) =>\n  e.pipe(Effect.catch(() => Effect.void));',
@@ -211,7 +221,8 @@ const cases: ReadonlyArray<RuleCase> = [
 const off: ReadonlyArray<string> = [];
 
 /** A probe file name, as `probeName` makes them. */
-const PROBE_FILE = /^LintRuleProbe\d+[0-9a-f]{8}(?:Fires|Quiet)\d+\.ts$/u;
+const PROBE_FILE =
+  /^LintRuleProbe\d+[0-9a-f]{8}(?:Fires|Quiet)\d+(?:\.test)?\.ts$/u;
 
 const sweepProbes = () => {
   for (const name of readdirSync(path.join(root, ZONE))) {
@@ -227,20 +238,24 @@ describe("the anti-slop and automation rules", () => {
   it("flag each rule's firing probe and leave its quiet probe alone", () => {
     const id = `${process.pid}${randomBytes(4).toString("hex")}`;
 
-    const probes = cases.flatMap((ruleCase, index) => [
-      {
-        ruleCase,
-        fires: true,
-        file: path.join(ZONE, `LintRuleProbe${id}Fires${index}.ts`),
-        source: ruleCase.fires,
-      },
-      {
-        ruleCase,
-        fires: false,
-        file: path.join(ZONE, `LintRuleProbe${id}Quiet${index}.ts`),
-        source: ruleCase.quiet,
-      },
-    ]);
+    const probes = cases.flatMap((ruleCase, index) => {
+      const suffix = ruleCase.testFile === true ? ".test.ts" : ".ts";
+
+      return [
+        {
+          ruleCase,
+          fires: true,
+          file: path.join(ZONE, `LintRuleProbe${id}Fires${index}${suffix}`),
+          source: ruleCase.fires,
+        },
+        {
+          ruleCase,
+          fires: false,
+          file: path.join(ZONE, `LintRuleProbe${id}Quiet${index}${suffix}`),
+          source: ruleCase.quiet,
+        },
+      ];
+    });
 
     let findings: ReturnType<typeof lint>;
 

@@ -344,6 +344,15 @@ export default defineConfig({
       ],
       rules: { "automation/no-bare-effect-run": "off" },
     },
+    {
+      // A test's own Vitest limit scales by the test slack (`testLimit`, glossary: Test slack).
+      files: [
+        server("**/*.test.ts"),
+        "judges/lib/**/*.test.ts",
+        "tools/**/*.test.ts",
+      ],
+      rules: { "automation/no-raw-test-limit": "error" },
+    },
     ...foldkitOverrides,
     ...boundaryOverrides,
     {

@@ -99,6 +99,7 @@ import {
 } from "./WorkflowDocs.ts";
 import { LAUNCH_TOOL } from "./WorkflowLaunch.ts";
 import { toLaunch, WorkflowPlan } from "./WorkflowPlan.ts";
+import type { ThreadModel } from "./WorkflowPlan.ts";
 import { planAccess } from "./Workflows.ts";
 import { parseWorkflowScript } from "./WorkflowScript.ts";
 import { workflowExtension } from "./WorkflowTools.ts";
@@ -695,6 +696,11 @@ export interface PlantInput {
    * run, since a planted launch comes before the run that runs it.
    */
   readonly run: Option.Option<number>;
+  /**
+   * The model and level of the thread the launch runs on, which the dry run grants to nodes that
+   * name none (ADR 0043): the kit's root thread unless a brain roots its thread on another.
+   */
+  readonly threadModel: ThreadModel;
 }
 
 /** The defaults: an accepted launch of the dry run's plan, run on all, from any run. */
@@ -707,6 +713,7 @@ export const plantDefaults = (workflowId: string): PlantInput => ({
   status: "accepted",
   envelope: (granted) => granted,
   run: Option.none(),
+  threadModel: { model: KIT_MODEL, thinkingLevel: Option.some(KIT_LEVEL) },
 });
 
 // The kit thread runs in the default mode, full access, which the plan grants as `workflow_plan` does.
@@ -736,10 +743,7 @@ export const plant = Effect.fn("WorkflowTestKit.plant")(function* (
     args: input.args,
     budget: input.budget,
     sample: input.sample,
-    threadModel: Option.some({
-      model: KIT_MODEL,
-      thinkingLevel: Option.some(KIT_LEVEL),
-    }),
+    threadModel: Option.some(input.threadModel),
   });
 
   const launch = toLaunch(run, {

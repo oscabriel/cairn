@@ -17,7 +17,7 @@
 // `layerOff` is for the scripted brain, which has no pi-durable store and records no spend.
 
 import { ConversationId, ThreadId } from "@cairn/protocol/Ids";
-import { WorkflowsDocument } from "@cairn/protocol/Workflows";
+import { NodeRecord } from "@cairn/protocol/Workflows";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import type {
   CommitPublication,
@@ -36,6 +36,7 @@ import { ThreadMeta, ThreadReceipt } from "./CairnDocs.ts";
 import { durable } from "./Durable.ts";
 import { piConversationId } from "./PiIds.ts";
 import { WorkflowsDoc } from "./WorkflowsDoc.ts";
+import type { WorkflowsState } from "./WorkflowsDoc.ts";
 
 /** How many records one page of a scan reads. */
 const SCAN_PAGE = 200;
@@ -117,7 +118,39 @@ const decodeUsageDoc = Schema.decodeUnknownOption(UsageDocJson);
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
-const decodeWorkflows = Schema.decodeUnknownOption(WorkflowsDocument);
+/**
+ * The leaves of a `cairn.workflows` ledger the feed reads: each node's child thread. Nothing else
+ * is decoded, so a field it never reads (a node's asked model, written unchecked from the launching
+ * thread's) cannot hide a run's children from the spend ledger.
+ */
+const WorkflowChildren = Schema.Struct({
+  items: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      nodes: Schema.Record(
+        Schema.String,
+        Schema.Struct({ childThreadId: NodeRecord.fields.childThreadId })
+      ),
+    })
+  ),
+});
+
+const decodeWorkflows = Schema.decodeUnknownOption(WorkflowChildren);
+
+/** The child threads of workflow `workflowId`'s nodes in a `cairn.workflows` ledger. */
+export const workflowChildThreads = (
+  ledger: Readonly<WorkflowsState> | undefined,
+  workflowId: string
+): Option.Option<ReadonlyArray<ThreadId>> =>
+  Option.map(
+    Option.flatMap(decodeWorkflows(ledger), (doc) =>
+      Option.fromUndefinedOr(doc.items[workflowId])
+    ),
+    (found) =>
+      Object.values(found.nodes).flatMap((node) =>
+        node.childThreadId === null ? [] : [node.childThreadId]
+      )
+  );
 
 const recorded = (usage: typeof UsageJson.Type): RecordedUsage => ({
   input: usage.input,
@@ -533,15 +566,7 @@ export class SpendFeed extends Context.Service<
               await open.harness.snapshot(WorkflowsDoc, conversationId, context)
           );
 
-          const workflow = Option.flatMap(decodeWorkflows(ledger), (doc) =>
-            Option.fromUndefinedOr(doc.items[workflowId])
-          );
-
-          return Option.map(workflow, (found) =>
-            Object.values(found.nodes).flatMap((node) =>
-              node.childThreadId === null ? [] : [node.childThreadId]
-            )
-          );
+          return workflowChildThreads(ledger, workflowId);
         },
         (effect, threadId) =>
           effect.pipe(

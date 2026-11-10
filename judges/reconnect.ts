@@ -10,9 +10,9 @@
 // marker that ends a replay) from the restarted brain's listening line. Between rounds it adds a
 // project through the protocol, so every reconnect has something new to pick up.
 //
-// Passes when every round's first frame came within the budget, the page's final project and
-// thread list equals a fresh snapshot from the brain, and the page raised no error. Prints one JSON
-// line and exits 0 on a pass.
+// Passes when every round's first frame came within the budget, the page's final list (the rail's
+// folder projects, the selected one and its project thread) equals a fresh snapshot from the
+// brain, and the page raised no error. Prints one JSON line and exits 0 on a pass.
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -92,7 +92,7 @@ const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-reconnect-"));
 
 const brainLog: Array<string> = [];
 
-/** A running brain and the time (ms since epoch) it said it listens. */
+/** A ready brain and the time (ms since epoch) it said it listens. */
 interface Brain {
   readonly process: ChildProcess;
   readonly listeningAt: number;
@@ -100,6 +100,11 @@ interface Brain {
 
 const isListeningLine = (line: string): boolean =>
   /listening\b/iu.test(line) && line.includes(`:${brainPort}`);
+
+// Boot's last line (`Boot.ts`). The listener is up before boot ends and answers `/ws` with 503 until
+// then, so the judge's own protocol client waits for it; the page's reconnect is still timed from
+// the listening line.
+const isReadyLine = (line: string): boolean => /^\s*event: ready$/u.test(line);
 
 const startBrain = async (): Promise<Brain> => {
   const child = spawn(
@@ -122,25 +127,36 @@ const startBrain = async (): Promise<Brain> => {
 
   const listening = Promise.withResolvers<number>();
 
+  const ready = Promise.withResolvers<true>();
+
   const onLine = (line: string) => {
     brainLog.push(line);
 
     if (isListeningLine(line)) {
       listening.resolve(Date.now());
     }
+
+    if (isReadyLine(line)) {
+      ready.resolve(true);
+    }
   };
 
   createInterface({ input: child.stdout }).on("line", onLine);
   createInterface({ input: child.stderr }).on("line", onLine);
   child.once("exit", (code, signal) => {
-    listening.reject(
-      new Error(
-        `judges/reconnect.ts: the brain exited (${String(code ?? signal)}) before it listened. Last lines:\n${brainLog.slice(-20).join("\n")}`
-      )
+    const exited = new Error(
+      `judges/reconnect.ts: the brain exited (${String(code ?? signal)}) before it was ready. Last lines:\n${brainLog.slice(-20).join("\n")}`
     );
+
+    listening.reject(exited);
+    ready.reject(exited);
   });
 
-  return { process: child, listeningAt: await listening.promise };
+  const listeningAt = await listening.promise;
+
+  await ready.promise;
+
+  return { process: child, listeningAt };
 };
 
 const killBrain = async (brain: Brain): Promise<void> => {
@@ -372,17 +388,42 @@ const attributes = async (selector: string, attribute: string) => {
   );
 };
 
-const pageIds = {
-  projects: await attributes("[data-testid=shell-project]", "data-project-id"),
-  threads: await attributes("[data-testid=shell-thread-row]", "data-thread-id"),
+// What the shell shows of the list: the rail's bubble per folder project (its title), the
+// selected bubble, and that project's project thread in the sidebar (glossary: Project rail).
+const [selectedTitle = null] = await attributes(
+  '[data-testid="rail-project"][aria-current="true"]',
+  "title"
+);
+
+const [pageProjectThread = null] = await attributes(
+  '[data-testid="shell-project-thread"]',
+  "data-thread-item"
+);
+
+const pageList = {
+  projects: await attributes('[data-testid="rail-project"]', "title"),
+  selected: selectedTitle,
+  projectThread: pageProjectThread,
 };
 
-const brainIds = Option.match(snapshot, {
-  onNone: () => ({ projects: [], threads: [] }),
-  onSome: (shell) => ({
-    projects: shell.projects.map((project) => String(project.id)),
-    threads: shell.threads.map((thread) => String(thread.id)),
-  }),
+const brainList = Option.match(snapshot, {
+  onNone: () => ({ projects: [], selected: null, projectThread: null }),
+  onSome: (shell) => {
+    const folders = shell.projects.filter(
+      (project) => project.kind === "folder"
+    );
+
+    const selected = folders.find((project) => project.title === selectedTitle);
+
+    return {
+      projects: folders.map((project) => project.title),
+      selected: selected === undefined ? null : selected.title,
+      projectThread:
+        selected === undefined
+          ? null
+          : Option.getOrNull(Option.map(selected.projectThreadId, String)),
+    };
+  },
 });
 
 const sameIds = (
@@ -393,8 +434,10 @@ const sameIds = (
 
 const listMatches =
   Option.isSome(snapshot) &&
-  sameIds(pageIds.projects, brainIds.projects) &&
-  sameIds(pageIds.threads, brainIds.threads);
+  sameIds(pageList.projects, brainList.projects) &&
+  pageList.selected !== null &&
+  pageList.selected === brainList.selected &&
+  pageList.projectThread === brainList.projectThread;
 
 await browser.close();
 
@@ -425,8 +468,8 @@ console.log(
       )
     ),
     listMatches,
-    page: pageIds,
-    brain: brainIds,
+    page: pageList,
+    brain: brainList,
     pageErrors,
   })
 );

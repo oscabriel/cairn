@@ -424,11 +424,16 @@ const fakeCheck = Effect.gen(function* () {
 
   const dataDir = path.join(scratch, "data");
   const home = path.join(scratch, "home");
-  const project = path.join(home, "project");
+
+  /** The folder of the project whose project thread is launch `n`. */
+  const projectFolder = (n: number) => path.join(home, `project-${String(n)}`);
 
   // The brain's folder rules admit projects under the home folder only; this process's home is a
   // throwaway one, so the judge never names a folder of the user's.
-  mkdirSync(project, { recursive: true });
+  for (const n of [1, 2, 3]) {
+    mkdirSync(projectFolder(n), { recursive: true });
+  }
+
   process.env.HOME = home;
 
   yield* Effect.addFinalizer(() =>
@@ -485,15 +490,18 @@ const fakeCheck = Effect.gen(function* () {
     return yield* Effect.fail("the judge brain lists no model");
   }
 
-  const projectCommand = testCommandId(1);
-
-  yield* client["shell.dispatch"](
-    ProjectCreate.make({
-      commandId: projectCommand,
-      workspaceRoot: project,
-      title: Option.none(),
-    })
-  );
+  // Each launch is the project thread of a folder project of its own. A second launch in one
+  // project refreshes its project thread, which stops the old thread's run and so cancels its
+  // request (ADR 0048), and the cases need their requests side by side.
+  for (const n of [1, 2, 3]) {
+    yield* client["shell.dispatch"](
+      ProjectCreate.make({
+        commandId: testCommandId(n),
+        workspaceRoot: projectFolder(n),
+        title: Option.none(),
+      })
+    );
+  }
 
   // `push.subscribe` admits https push services only, so the fake one's http endpoint is stored
   // through the brain's own subscription table, under the rule that admits it (phase 1 judges the
@@ -574,7 +582,7 @@ const fakeCheck = Effect.gen(function* () {
     const input: ThreadLaunchInput = {
       commandId: testCommandId(100 + n),
       threadId: testThreadId(n),
-      projectId: projectIdFor(projectCommand),
+      projectId: projectIdFor(testCommandId(n)),
       title: Option.some(title),
       model: { provider: model.provider, modelId: model.modelId },
       thinkingLevel: "off",
@@ -588,11 +596,7 @@ const fakeCheck = Effect.gen(function* () {
       },
     };
 
-    // Each later launch in the folder project refreshes its project thread, so it names the one
-    // before it (ADR 0048), as it replaced it unnamed before.
-    return client["thread.launch"](
-      n > 1 ? { ...input, replaces: testThreadId(n - 1) } : input
-    ).pipe(Effect.as(testThreadId(n)));
+    return client["thread.launch"](input).pipe(Effect.as(testThreadId(n)));
   };
 
   const presence = (visible: boolean, threadId: Option.Option<ThreadId>) =>

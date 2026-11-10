@@ -356,7 +356,7 @@ export const subagentToolSet = (
       done_when: Type.Optional(
         Type.Array(Type.String(), {
           description:
-            'The command, as an argv list run without a shell in the child\'s workspace, that exits 0 once the work is done, e.g. ["npm", "test"]. The user sees it on the brief before Go and the child is told to run it; Cairn does not run it yet, so you still judge the result. Leave it out when no command can tell.',
+            "The command, as an argv list run without a shell in the child's workspace, that exits 0 once the work is done, e.g. [\"npm\", \"test\"]. The user sees it on the brief before Go and the child is told to run it. Once the child's run completes, Cairn runs it in the child's workspace and the result's note says whether it was met; in a mode where a command asks first Cairn does not run it, and you judge the result. Leave it out when no command can tell.",
         })
       ),
       max_tokens: Type.Optional(

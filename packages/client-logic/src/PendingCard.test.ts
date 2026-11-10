@@ -59,6 +59,12 @@ const question: Question = {
   allowCustomAnswer: true,
 };
 
+/** A brief's "Done when" and "Judged by" lines. */
+const judgedLines = (found: Brief) =>
+  briefLines(found).filter(([label]) =>
+    ["Done when", "Judged by"].includes(label)
+  );
+
 describe("the request card's words", () => {
   it("names each body's kind and title", () => {
     const approval = RequestBody.Approval({
@@ -89,11 +95,11 @@ describe("the request card's words", () => {
       ["Do", "Count the TypeScript files under src."],
       ["Why", "To size the port."],
       ["Avoid", "editing files; network calls"],
+      ["Done when", "`pnpm test` exits 0"],
       [
-        "Done when",
-        "`pnpm test` exits 0 (the child is told to run it; Cairn does not run it yet)",
+        "Judged by",
+        "No outside judge in Auto-accept edits mode, where a command asks first; the parent accepts the result",
       ],
-      ["Judged by", "No outside judge; the parent accepts the result"],
       ["Where", "A worktree from the parent's HEAD; writes src/count"],
       ["Who", "opencode-go/gpt-6-luna at high, Auto-accept edits"],
       ["Budget", "$1.50 at API list price"],
@@ -102,6 +108,26 @@ describe("the request card's words", () => {
     assert.deepStrictEqual(
       briefLines({ ...brief, avoid: [] }).map(([label]) => label),
       ["Do", "Why", "Done when", "Judged by", "Where", "Who", "Budget"]
+    );
+  });
+
+  it("says Cairn runs a brief's command as an outside judge in full access, and in no mode that asks first (V-9)", () => {
+    assert.deepStrictEqual(judgedLines({ ...brief, mode: "full-access" }), [
+      ["Done when", "`pnpm test` exits 0"],
+      [
+        "Judged by",
+        "An outside judge: Cairn runs the command in the child's workspace when its run completes",
+      ],
+    ]);
+    assert.deepStrictEqual(
+      judgedLines({ ...brief, mode: "approval-required" }),
+      [
+        ["Done when", "`pnpm test` exits 0"],
+        [
+          "Judged by",
+          "No outside judge in Supervised mode, where a command asks first; the parent accepts the result",
+        ],
+      ]
     );
   });
 

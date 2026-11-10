@@ -82,6 +82,10 @@ The first column names the schema: the export that declares the union, or the ex
 | `SettlementOutcome` | `completed` | Ended | The child answered its input; the note carries its summary, divergence and payload. |
 | `SettlementOutcome` | `stopped` | Ended | The child's run was stopped; the note says so and the parent is not woken if the user stopped the parent. |
 | `SettlementOutcome` | `failed` | Failed | The child's run failed, or its result was invalid three times; `error` says why. A spent plan window (`usageLimit`) wakes nobody. |
+| `CheckRan.verdict` | `met` | Ended | Cairn ran the brief's `done_when` command in the child's workspace once its run completed, and it exited as the brief expects (ADR 0055); the settlement's `check` and the note say so. |
+| `CheckRan.verdict` | `notMet` | Failed | The command exited otherwise, timed out or could not start; the note gives the exit code (or why there is none) and the end of its output. A check Cairn did not run is `CheckNotRun`, whose `why` says why. |
+| `ChildCheck.verdict` | `pending` | Resting | The child's brief names a command, and no run of the child has completed since Go. |
+| `ChildCheck.verdict` | `running` | Active | Cairn runs the command; the result's note waits for its verdict. |
 | `WorkflowState` | `proposed` | Waiting on you | The launch approval waits for Go, Run on 1 first, or Decline. |
 | `WorkflowState` | `approved` | Resting | Go was given; nothing runs until the model calls `codemode` with the same script, in the run that proposed it. |
 | `WorkflowState` | `running` | Active | The script runs inside the launching thread's run. |
@@ -298,6 +302,10 @@ What the web client shows for each status today. One function gives a thread's s
 | `SettlementOutcome` | `completed` | "Done" on the child's subagent row and work panel entry, with its result's summary. | Transcript, work panel |
 | `SettlementOutcome` | `stopped` | "Stopped" on the child's subagent row and work panel entry. | Transcript, work panel |
 | `SettlementOutcome` | `failed` | "Failed" on the child's subagent row and work panel entry, with its error. | Transcript, work panel |
+| `CheckRan.verdict` | `met` | The child's last step, done: "Checked by an outside judge". The note reads "met, checked by an outside judge (exit 0)". | Work panel, transcript |
+| `CheckRan.verdict` | `notMet` | The child's last step, failed: "Not met by an outside judge", with "Exit 1" or the timeout. The note reads "not met, checked by an outside judge" and quotes the output's end. | Work panel, transcript |
+| `ChildCheck.verdict` | `pending` | The child's last step, to do: "Checked by an outside judge". | Work panel |
+| `ChildCheck.verdict` | `running` | The child's last step, now: "Checked by an outside judge". | Work panel |
 | `WorkflowState` | `proposed` | No word of its own: the launch card asks Go, Run on 1 first or Decline (a `brief` record). | Request card |
 | `WorkflowState` | `approved` | No word of its own: the steps panel offers Stop on the workflow. | Work panel |
 | `WorkflowState` | `running` | No word of its own: its nodes say theirs, the headline tallies them ("4 nodes · 2 working · 1 done"), and Stop is offered on it and on each live node. | Work panel |
@@ -323,7 +331,7 @@ No status is shown raw but a node's. Only portals (`PortalState`, 6I) are "Not s
 
 ## Source references
 
-- Protocol: `packages/protocol/src/Shell.ts` (`ThreadActivity`, `RunFailureClass`, `WaitingFor`, `PendingRuntimeRequest`, `SettledOverride`, `ThreadShell`), `packages/protocol/src/Policy.ts` (`RuntimeRequestKind`, `ApprovalStatus`, `CriterionState`), `packages/protocol/src/Executor.ts` (`ExecutorStatus`), `packages/protocol/src/Models.ts` (`ProviderStatus`), `packages/protocol/src/Subagents.ts` (`SubagentStatus`, `SettlementOutcome`), `packages/protocol/src/Workflows.ts` (`WorkflowState`, `NodeState`).
+- Protocol: `packages/protocol/src/Shell.ts` (`ThreadActivity`, `RunFailureClass`, `WaitingFor`, `PendingRuntimeRequest`, `SettledOverride`, `ThreadShell`), `packages/protocol/src/Policy.ts` (`RuntimeRequestKind`, `ApprovalStatus`, `CriterionState`), `packages/protocol/src/Executor.ts` (`ExecutorStatus`), `packages/protocol/src/Models.ts` (`ProviderStatus`), `packages/protocol/src/Subagents.ts` (`SubagentStatus`, `SettlementOutcome`, `CheckRan`, `ChildCheck`), `packages/protocol/src/Workflows.ts` (`WorkflowState`, `NodeState`).
 - Shell projector: `apps/server/src/shell/ShellProjector.ts` (`activityOf`, `reconcileProjection`).
 - Shell commands: `apps/server/src/shell/ShellCommands.ts` (`isThreadBusy`, `settle`).
 - Settlement: `apps/server/src/shell/Settlement.ts` (`threadHasQueuedTurnStart`, `isSnoozed`, `isAutoSettlementCandidate`).

@@ -101,16 +101,24 @@ export const criterionText = (criterion: CriterionProposal): string =>
 
 /**
  * The brief card's words for how a child's result is judged (V-9, ADR 0055). A brief's `doneWhen`
- * holds the command its parent named (`done_when`), frozen and shown before Go, which Cairn does
- * not run yet, and otherwise the parent or the workflow script accepting the result, which is no
- * outside judge. The card says so rather than "judged by you".
+ * holds the command its parent named (`done_when`), frozen and shown before Go, which Cairn runs
+ * in the child's workspace as an outside judge once the child's run completes; in a mode where a
+ * command asks first, Cairn does not run it unasked, and the card says so. Otherwise the parent or
+ * the workflow script accepts the result, which is no outside judge. The card says so rather than
+ * "judged by you".
  */
 export const BriefJudgeText = {
   doneWhenLabel: "Done when",
   judgedByLabel: "Judged by",
   /** A command the parent named for the child's result. */
   command: (argv: ReadonlyArray<string>, expectExit: number) =>
-    `\`${argv.join(" ")}\` exits ${String(expectExit)} (the child is told to run it; Cairn does not run it yet)`,
+    `\`${argv.join(" ")}\` exits ${String(expectExit)}`,
+  /** Who judges a brief's command: Cairn runs it once the child's run completes. */
+  commandJudge:
+    "An outside judge: Cairn runs the command in the child's workspace when its run completes",
+  /** A brief's command in a mode where a command asks first, which Cairn does not run unasked. */
+  notRunInMode: (mode: string, accepts: string) =>
+    `No outside judge in ${mode} mode, where a command asks first; ${accepts}`,
   /** Who accepts the result when nothing outside the work judges it. */
   noOutsideJudge: (accepts: string) => `No outside judge; ${accepts}`,
   /** Who accepts a result when the brief names nobody. */
@@ -141,18 +149,30 @@ const judgedLines = (brief: Brief): ReadonlyArray<CardLine> => {
     (criterion) => criterion.judge.kind !== "command"
   );
 
-  const judged: CardLine = [
-    BriefJudgeText.judgedByLabel,
-    BriefJudgeText.noOutsideJudge(
-      accepts === undefined
-        ? BriefJudgeText.parentAccepts
-        : acceptsClause(accepts.text)
-    ),
-  ];
+  const acceptedBy =
+    accepts === undefined
+      ? BriefJudgeText.parentAccepts
+      : acceptsClause(accepts.text);
 
-  return commands.length === 0
-    ? [judged]
-    : [[BriefJudgeText.doneWhenLabel, commands.join("; ")], judged];
+  if (commands.length === 0) {
+    return [
+      [BriefJudgeText.judgedByLabel, BriefJudgeText.noOutsideJudge(acceptedBy)],
+    ];
+  }
+
+  // Cairn runs the command as the child could: unasked only where a command does not ask first.
+  const judge =
+    brief.mode === "full-access"
+      ? BriefJudgeText.commandJudge
+      : BriefJudgeText.notRunInMode(
+          runtimeModePresentation[brief.mode].label,
+          acceptedBy
+        );
+
+  return [
+    [BriefJudgeText.doneWhenLabel, commands.join("; ")],
+    [BriefJudgeText.judgedByLabel, judge],
+  ];
 };
 
 /** Who runs a brief: the model it names, else its parent's model. */

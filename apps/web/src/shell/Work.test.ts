@@ -12,6 +12,7 @@ import {
 } from "@cairn/client-logic/ShellRowTestKit";
 import { ConversationId, EntryId, RunId, ThreadId } from "@cairn/protocol/Ids";
 import type { ShellSnapshot, ThreadShell } from "@cairn/protocol/Shell";
+import { CHILD_DOCUMENT } from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import * as Dialog from "@foldkit/ui/dialog";
@@ -294,7 +295,7 @@ describe("the work panel on a parent", () => {
       Scene.expect(
         Scene.selector(`[data-testid="work-children"] a[href="/t/${rowId(2)}"]`)
       ).toExist(),
-      Scene.expect(child(4)).toBeAbsent(),
+      Scene.expect(child(4)).not.toExist(),
       Scene.expect(Scene.testId("work-previous-toggle")).toContainText(
         "Previous (1)"
       ),
@@ -315,7 +316,7 @@ describe("the work panel on a parent", () => {
       Scene.expect(child(4)).toContainText("Done"),
       Scene.expect(
         Scene.role("button", { name: "Stop List the docs" })
-      ).toBeAbsent(),
+      ).not.toExist(),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
@@ -368,7 +369,7 @@ describe("the work panel on a parent", () => {
       Scene.expect(child(2)).toHaveAttr("data-stopping", "true"),
       Scene.expect(
         Scene.role("button", { name: "Stop Count the files" })
-      ).toBeAbsent(),
+      ).not.toExist(),
       Scene.expect(
         Scene.role("button", { name: "Stop Read the README" })
       ).toExist(),
@@ -402,10 +403,10 @@ describe("the work panel on a parent", () => {
       Scene.expect(child(3)).toHaveAttr("data-state", "limited"),
       Scene.expect(
         Scene.role("button", { name: "Stop Wait on its own child" })
-      ).toBeAbsent(),
+      ).not.toExist(),
       Scene.expect(
         Scene.role("button", { name: "Stop Hit the usage limit" })
-      ).toBeAbsent(),
+      ).not.toExist(),
       Scene.expect(
         Scene.role("button", { name: "Stop Count the files" })
       ).toExist(),
@@ -445,7 +446,7 @@ describe("the work panel on a parent", () => {
       Scene.expectAll(
         Scene.all.selector('[data-testid="work-child"]')
       ).toHaveCount(8),
-      Scene.expect(Scene.testId("work-children-more")).toBeAbsent(),
+      Scene.expect(Scene.testId("work-children-more")).not.toExist(),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })
@@ -456,7 +457,7 @@ describe("the work panel on a parent", () => {
     Scene.scene(
       appFor(inputs),
       givenWork({ isOpen: false }),
-      Scene.expect(Scene.testId("work-panel")).toBeAbsent(),
+      Scene.expect(Scene.testId("work-panel")).not.toExist(),
       Scene.expect(Scene.testId("work-toggle")).toHaveAttr(
         "aria-expanded",
         "false"
@@ -474,7 +475,7 @@ describe("the work panel on a parent", () => {
       appFor(inputs),
       givenWork(),
       Scene.expect(Scene.role("complementary", { name: "Work" })).toExist(),
-      Scene.expect(Scene.testId("work-scrim")).toBeAbsent(),
+      Scene.expect(Scene.testId("work-scrim")).not.toExist(),
       Scene.click(Scene.testId("work-close")),
       expectSent("ClickedCloseWork"),
       Scene.tap(({ commands }) => {
@@ -514,6 +515,12 @@ describe("the work panel on a parent", () => {
       })
     );
   });
+});
+
+/** A child's `cairn.child` with no report and `check`. */
+const childDoc = (check: Schema.Json | undefined) => ({
+  [CHILD_DOCUMENT]:
+    check === undefined ? { report: null } : { report: null, check },
 });
 
 describe("the work panel on a subagent", () => {
@@ -603,6 +610,68 @@ describe("the work panel on a subagent", () => {
       Scene.expect(
         Scene.selector('[data-testid="work-step"][data-step="working"]')
       ).toHaveAttr("data-step-state", "failed"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("adds the outside judge's check of a brief's done_when command (ADR 0055)", () => {
+    const done = childOf(6, "Fix the parser", answered);
+
+    const ran = {
+      argv: ["pnpm", "test"],
+      expectExit: 0,
+      tail: null,
+      sha: null,
+      note: null,
+      at: 1,
+    };
+
+    Scene.scene(
+      appFor(
+        inputsOf(
+          6,
+          [shellRow(PARENT), done],
+          childDoc({ ...ran, verdict: "met", exit: 0 })
+        )
+      ),
+      givenWork(),
+      Scene.expect(Scene.testId("work-toggle")).toContainText("5/5 steps"),
+      Scene.expect(
+        Scene.selector('[data-testid="work-step"][data-step="checked"]')
+      ).toHaveAttr("data-step-state", "done"),
+      Scene.expect(
+        Scene.selector('[data-testid="work-step"][data-step="checked"]')
+      ).toContainText("Checked by an outside judge")
+    );
+
+    Scene.scene(
+      appFor(
+        inputsOf(
+          6,
+          [shellRow(PARENT), done],
+          childDoc({ ...ran, verdict: "notMet", exit: 1 })
+        )
+      ),
+      givenWork(),
+      Scene.expect(Scene.testId("work-toggle")).toContainText("4/5 steps"),
+      Scene.expect(
+        Scene.selector('[data-testid="work-step"][data-step="checked"]')
+      ).toHaveAttr("data-step-state", "failed"),
+      Scene.expect(
+        Scene.selector('[data-testid="work-step"][data-step="checked"]')
+      ).toContainText("Not met by an outside judge")
+    );
+
+    // A brief that names no command has no checked step.
+    Scene.scene(
+      appFor(inputsOf(6, [shellRow(PARENT), done], childDoc(undefined))),
+      givenWork(),
+      Scene.expect(Scene.testId("work-toggle")).toContainText("4/4 steps"),
+      Scene.expect(
+        Scene.selector('[data-testid="work-step"][data-step="checked"]')
+      ).not.toExist(),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

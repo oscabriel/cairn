@@ -62,13 +62,19 @@ export interface WorkInputs {
 }
 
 /** What the panel reads of a `cairn.child` document, as the protocol's `ChildDocument` has it. */
-const ChildReportOf = ChildDocument.mapFields(Struct.pick(["report"]));
+const ChildStepsOf = ChildDocument.mapFields(Struct.pick(["report", "check"]));
 
-const decodeChildReport = Schema.decodeUnknownOption(ChildReportOf);
+const decodeChildSteps = Schema.decodeUnknownOption(ChildStepsOf);
 
 /** True when a `cairn.child` document holds the child's `report`. */
 const hasReportIn = (document: Schema.Json | undefined): boolean =>
-  Option.exists(decodeChildReport(document), ({ report }) => report !== null);
+  Option.exists(decodeChildSteps(document), ({ report }) => report !== null);
+
+/** The brief's `done_when` check a `cairn.child` document holds (ADR 0055), if it names one. */
+const checkIn = (document: Schema.Json | undefined) =>
+  Option.flatMap(decodeChildSteps(document), ({ check }) =>
+    Option.fromUndefinedOr(check)
+  );
 
 interface Memo {
   readonly shell: ShellSnapshot;
@@ -120,6 +126,7 @@ const deriveInputs = (
             ),
             hasReport: hasReportIn(docs[CHILD_DOCUMENT]),
             answered: lastRunAnsweredIn(entries),
+            check: checkIn(docs[CHILD_DOCUMENT]),
           })
         );
 

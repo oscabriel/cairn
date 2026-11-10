@@ -47,6 +47,7 @@
 // break this one on purpose for the conformance suite's mutation check.
 
 import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 
 import { isWiderThan, narrowerMode } from "@cairn/client-logic/EffectiveMode";
 import { goalOf, goalTallyOf } from "@cairn/client-logic/GoalProgress";
@@ -72,9 +73,12 @@ import {
   MAX_SUBAGENT_DEPTH,
   NO_SUBAGENTS,
   SUBAGENT_RESULT_ENTRY,
+  SubagentSettlement as SubagentSettlementSchema,
 } from "@cairn/protocol/Subagents";
 import type {
+  ChildCheck,
   SettlementOutcome,
+  SubagentCheck,
   SubagentSettlement,
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
@@ -155,6 +159,9 @@ import {
   validateResult,
 } from "../models/ResultTool.ts";
 import type { ResultState } from "../models/ResultTool.ts";
+import { doneWhenOf } from "../subagents/Briefs.ts";
+import { CheckWhy, doneWhenCommandOf } from "../subagents/DoneWhenCheck.ts";
+import type { CheckCommand } from "../subagents/DoneWhenCheck.ts";
 import { needsDecision } from "../subagents/NeedsDecision.ts";
 import {
   MAX_ESCALATE_REASON,
@@ -163,6 +170,7 @@ import {
   questionRecord,
   relayedAsk,
 } from "../subagents/QuestionRoute.ts";
+import { TAIL_LIMIT } from "../verdicts/CommandRun.ts";
 import { NO_GOAL } from "../verdicts/GoalDocs.ts";
 import type { GoalState } from "../verdicts/GoalDocs.ts";
 import { BriefTtl } from "./BriefTtl.ts";
@@ -202,6 +210,7 @@ import type {
   ThreadAgentChange,
   ThreadFrame,
 } from "./HarnessSeam.ts";
+import { callAsks } from "./Permissions.ts";
 import type { ThreadPermissions } from "./Permissions.ts";
 import { piConversationId, piEntryId, piTaskId } from "./PiIds.ts";
 import { classifyRunFailure, UNKNOWN_RUN_FAILURE } from "./RunFailure.ts";
@@ -443,6 +452,9 @@ interface ChildLink {
   report: Option.Option<ChildReport>;
   /** `cairn.result`: the first value `submit_result` accepted, kept for good. */
   result: Option.Option<ResultState>;
+  /** The brief's `done_when` command (ADR 0055), and its latest check, as `cairn.child` holds it. */
+  readonly command: Option.Option<CheckCommand>;
+  check: Option.Option<ChildCheckState>;
 }
 
 /** One child in its parent's `cairn.subagents`. */
@@ -837,6 +849,10 @@ const childDocument = (
     }),
   }),
   permissionMode: thread.permissions.mode,
+  ...Option.match(link.check, {
+    onNone: () => ({}),
+    onSome: (check) => ({ check }),
+  }),
 });
 
 /** A detached copy of a JSON object a brief or a goal holds. */
@@ -1173,6 +1189,18 @@ const scriptedResolve = (
       Result.succeed(resolvedJson(spec, model, Option.getOrNull(level))),
   });
 
+const decodeArgv = Schema.decodeUnknownOption(Schema.Array(Schema.String));
+
+/** A call's `done_when` as the spawn tool reads it: none when absent, empty when not a list. */
+const doneWhenArgument = (
+  call: ToolCall
+): Option.Option<ReadonlyArray<string>> =>
+  call.arguments.done_when === undefined
+    ? Option.none()
+    : Option.orElse(decodeArgv(call.arguments.done_when), () =>
+        Option.some([])
+      );
+
 /** The brief a `subagent_spawn` call proposes, frozen into its record. */
 const briefOf = (
   call: ToolCall,
@@ -1198,6 +1226,13 @@ const briefOf = (
     return Result.fail(SubagentToolText.modelInvalid(model.value));
   }
 
+  // A `done_when` that is not a command is refused at the ask, as pi-durable does.
+  const doneWhen = doneWhenOf(doneWhenArgument(call));
+
+  if (Result.isFailure(doneWhen)) {
+    return Result.fail(doneWhen.failure);
+  }
+
   // A schema the result tool cannot hold the child to is refused at the ask, as pi-durable does.
   if (isJsonRecord(resultSchema)) {
     const checked = checkResultSchema(resultSchema);
@@ -1213,9 +1248,7 @@ const briefOf = (
     task,
     why: Option.getOrElse(textArgument(call, "why"), () => ""),
     avoid: [],
-    doneWhen: [
-      { text: "The parent accepts the result.", judge: { kind: "user" } },
-    ],
+    doneWhen: doneWhen.success,
     workspace: isolation === "worktree" ? "worktree" : "shared",
     base: null,
     writes: [],
@@ -1236,20 +1269,87 @@ const encodeBrief = Schema.encodeSync(BriefSchema);
 const briefPayload = (brief: Brief): ApprovalPayloadState =>
   plainCopy(encodeBrief(brief));
 
-/** A settlement as a note's `data` holds it. */
-const settlementData = (settlement: SubagentSettlement): JsonValue => ({
-  subagent: settlement.subagent,
-  seq: settlement.seq,
-  outcome: settlement.outcome,
-  summary: settlement.summary,
-  divergence: settlement.divergence,
-  payload: copyJson(settlement.payload),
-  commit: settlement.commit,
-  branch: settlement.branch,
-  turns: { ...settlement.turns },
-  error: settlement.error,
-  usageLimit: settlement.usageLimit,
-});
+/** A child's check as `cairn.child` holds it. */
+type ChildCheckState = DocumentState<typeof ChildCheck>;
+
+/** The end of a command's output a check keeps, as pi-durable's check task keeps it. */
+const scriptedTail = (text: string): string =>
+  text.length > TAIL_LIMIT ? text.slice(-TAIL_LIMIT) : text;
+
+/** Why a scripted check has no exit code: it timed out, or could not start. */
+const scriptedNote = (
+  command: CheckCommand,
+  error: Error | undefined
+): string =>
+  error === undefined || error.message.includes("ETIMEDOUT")
+    ? `timed out after ${String(command.timeoutSec)} s`
+    : `${command.argv.join(" ")} could not run: ${error.message}`;
+
+/**
+ * A brief's `done_when` check as the check task makes it (`subagents/DoneWhenCheck.ts`): not run
+ * for a run that did not complete or a mode where a command asks first, otherwise the command run
+ * once in the child's folder with no shell, within its timeout. The scripted brain runs it
+ * synchronously; a judge's commands are quick.
+ */
+const scriptedCheck = (
+  command: CheckCommand,
+  outcome: SubagentSettlement["outcome"],
+  permissions: ThreadPermissions,
+  cwd: string,
+  at: number
+): SubagentCheck => {
+  const [file, ...args] = command.argv;
+  const argv: [string, ...Array<string>] = [file ?? "", ...args];
+
+  const notRun = (why: string): SubagentCheck => ({
+    verdict: "notRun",
+    argv,
+    expectExit: command.expectExit,
+    why,
+    at,
+  });
+
+  if (outcome !== "completed") {
+    return notRun(CheckWhy.outcome(outcome));
+  }
+
+  if (callAsks(permissions, "bash", "command")) {
+    return notRun(CheckWhy.mode(permissions.mode));
+  }
+
+  const ran = spawnSync(file ?? "", args, {
+    cwd,
+    encoding: "utf-8",
+    timeout: command.timeoutSec * 1000,
+  });
+
+  const head = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd,
+    encoding: "utf-8",
+  });
+
+  const sha = head.status === 0 ? head.stdout.trim() : "";
+  const timedOut = ran.error !== undefined || ran.status === null;
+  const exit = timedOut ? null : ran.status;
+  const tail = scriptedTail(`${ran.stdout ?? ""}${ran.stderr ?? ""}`);
+
+  return {
+    verdict: exit === command.expectExit ? "met" : "notMet",
+    argv,
+    expectExit: command.expectExit,
+    exit,
+    tail: tail === "" ? null : tail,
+    sha: /^[0-9a-f]{7,64}$/u.test(sha) ? sha : null,
+    note: timedOut ? scriptedNote(command, ran.error) : null,
+    at,
+  };
+};
+
+const encodeSettlement = Schema.encodeSync(SubagentSettlementSchema);
+
+/** A settlement as a note's `data` holds it, its check only when it has one. */
+const settlementData = (settlement: SubagentSettlement): JsonValue =>
+  plainCopy(encodeSettlement(settlement));
 
 /** An `ask_parent` call's options, when it gave a list of labels. */
 const decodeOptions = Schema.decodeUnknownOption(Schema.Array(Schema.String));
@@ -2189,6 +2289,15 @@ const layerNoDeps = Layer.effectContext(
               : copyRecordJson(brief.resultSchema),
           report: Option.none(),
           result: Option.none(),
+          command: doneWhenCommandOf(brief),
+          check: Option.map(
+            doneWhenCommandOf(brief),
+            (command): ChildCheckState => ({
+              verdict: "pending",
+              argv: [...command.argv],
+              expectExit: command.expectExit,
+            })
+          ),
         }),
       };
 
@@ -2818,8 +2927,36 @@ const layerNoDeps = Layer.effectContext(
         return;
       }
 
-      const settlement = reporter.settlement.value;
       const { item, link } = found.value;
+
+      // The brief's `done_when` check, once per settlement, before its note (ADR 0055).
+      const decided = reporter.settlement.value;
+
+      const settlement: SubagentSettlement =
+        Option.isSome(link.command) &&
+        decided.check === undefined &&
+        child !== undefined
+          ? {
+              ...decided,
+              check: scriptedCheck(
+                link.command.value,
+                decided.outcome,
+                {
+                  mode: effectiveMode(child),
+                  allow: child.permissions.allow,
+                },
+                child.agent.cwd,
+                at
+              ),
+            }
+          : decided;
+
+      reporter.settlement = Option.some(settlement);
+
+      if (settlement.check !== undefined && child !== undefined) {
+        link.check = Option.some(plainCopy(settlement.check));
+        changes.touched.add(child);
+      }
 
       const deliver = (ids: {
         readonly note: string;

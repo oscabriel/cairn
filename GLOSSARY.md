@@ -120,7 +120,7 @@ _Avoid_: child agent, worker
 
 **Lineage**: A subagent's place in the tree, on its row: its parent, its root, and how it relates to its parent. A row with a lineage is hidden from the sidebar, which shows it under its nearest ancestor that has a row.
 
-**Settlement**: A subagent's closed result for one input: completed, stopped or failed, with a summary, a divergence from its brief, a payload checked against the brief's schema, and its commit and branch. It reaches the parent as a note; waking the parent is a separate input.
+**Settlement**: A subagent's closed result for one input: completed, stopped or failed, with a summary, a divergence from its brief, a payload checked against the brief's schema, and its commit and branch. When the brief names a `done_when` command it also carries the check: met or not met by that command, which Cairn ran in the child's workspace, or not run and why (ADR 0055). It reaches the parent as a note, check included; waking the parent is a separate input that follows it.
 
 _Avoid_: using it for a thread's settle state, which is **Settle**
 
@@ -132,7 +132,7 @@ _Avoid_: using it for a thread's settle state, which is **Settle**
 
 _Avoid_: system message, user message (for these)
 
-**Reporter**: The task that delivers one input to a subagent and its result back to the parent, under request ids derived from the child and the settlement's seq, so each lands once across a restart.
+**Reporter**: The task that delivers one input to a subagent and its result back to the parent, under request ids derived from the child and the settlement's seq, so each lands once across a restart. When the brief names a `done_when` command, it waits for the check of a completed run before the note (ADR 0055).
 
 **Mirror**: The record that escalating a subagent's question places in its parent. An answer from either thread settles both, once.
 
@@ -352,7 +352,7 @@ _Avoid_: plugin
 
 _Avoid_: permission request, prompt (for the record)
 
-**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. A subagent's brief may name a command that exits 0 once the work is done (`done_when`), shown on the card before Go and given to the child, which Cairn does not run yet; otherwise no outside judge checks the result, and the parent (or the workflow script) accepts it (ADR 0055). It is an approval, and nothing delegated starts until the user answers it with Go or it fits its workflow's envelope.
+**Brief**: The written plan a subagent or stone starts from: what to do, why, and how its result will be judged. A subagent's brief may name a command that exits 0 once the work is done (`done_when`), shown on the card before Go and given to the child; Cairn runs it as an outside judge in the child's workspace once the child's run completes, and its verdict is the settlement's check (ADR 0055). In a mode where a command asks first Cairn does not run it, and without one no outside judge checks the result: the parent (or the workflow script) accepts it. It is an approval, and nothing delegated starts until the user answers it with Go or it fits its workflow's envelope.
 
 _Avoid_: task, spec, ticket
 
@@ -452,7 +452,7 @@ _Avoid_: e2e, test suite (for the recipe)
 
 **Landmark**: An element both apps mark with the same hook (`data-testid`, `data-timeline-row-kind`, `data-chat-*`, `data-composer-*`, `data-changed-files-*`, `data-slot`, `h1`), read with its box and computed tokens (`judges/fixtures/parity/Landmarks.ts`). _Avoid_: anchor (that word is the subagent anchor's).
 
-**Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a model judge or verifier on another model, or the user. A goal's model judge on the thread's own model is refused unless the user names that model for it (ADR 0055), and a subagent's parent accepting its result is not one.
+**Outside judge**: Anything other than the model that did the work that decides whether the work is right: a test, a conformance suite, a screenshot comparison, a model judge or verifier on another model, or the user. A goal's model judge on the thread's own model is refused unless the user names that model for it (ADR 0055), and a subagent's parent accepting its result is not one; a brief's `done_when` command, which Cairn runs when the child's run completes, is one.
 
 **Browser driver**: `judges/lib/Browser.ts`, what every browser judge drives system Chromium with over the DevTools protocol (ADR 0044). Chained locators with auto-waiting and strict single-match behaviour, real key events, touch, routes, screenshots, and nothing no judge calls.
 

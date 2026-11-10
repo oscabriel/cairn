@@ -17,6 +17,7 @@
 // and given to the child, not run, ADR 0055), so both tools refuse in a child: goals
 // live on the threads the user talks to, the project thread first among them (2026-10-29).
 
+import { TaskId } from "@cairn/protocol/Ids";
 import type { ModelRef } from "@cairn/protocol/Models";
 import type { ToolExecutionApi, Tx } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
@@ -27,8 +28,8 @@ import { approvalLedger } from "../approvals/ApprovalLedger.ts";
 import type { DurableRunner } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { piTaskId } from "../brain/PiIds.ts";
 import { ChildDoc, isLinked } from "../brain/SubagentDocs.ts";
-import { taskOf } from "../subagents/Delivery.ts";
 import {
   CRITERIA_TTL_MILLIS,
   criteriaSummary,
@@ -151,7 +152,7 @@ const liveRunOf = async (
 ): Promise<Option.Option<JudgeRunItemState>> => {
   for (const item of items) {
     // oxlint-disable-next-line no-await-in-loop -- one task read per unsettled item, in order
-    const task = await tx.task(taskOf(item.taskId));
+    const task = await tx.task(piTaskId(TaskId.make(item.taskId)));
 
     const live =
       task !== undefined &&

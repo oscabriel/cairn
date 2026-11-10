@@ -421,6 +421,19 @@ const CASES = {
     word: word("Working"),
     quoted: false,
   }),
+  // A brief's `done_when` check (ADR 0055): a step of the child's work panel and a line of its note.
+  "CheckRan.verdict met": elsewhere(
+    "a child's checked step, on its work panel, and its result's note (`SubagentSteps.test.ts` and `DoneWhenCheck.test.ts` hold the words)"
+  ),
+  "CheckRan.verdict notMet": elsewhere(
+    "a child's checked step, on its work panel, and its result's note (`SubagentSteps.test.ts` and `DoneWhenCheck.test.ts` hold the words)"
+  ),
+  "ChildCheck.verdict pending": elsewhere(
+    "a child's checked step, on its work panel (`SubagentSteps.test.ts` holds the words)"
+  ),
+  "ChildCheck.verdict running": elsewhere(
+    "a child's checked step, on its work panel (`SubagentSteps.test.ts` holds the words)"
+  ),
   // A settlement ends the child's input; the child's row says how its run ended.
   "SettlementOutcome completed": row(
     { ...base, id: threadId(2), lineage: child().lineage },

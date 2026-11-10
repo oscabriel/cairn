@@ -83,12 +83,12 @@ The first column names the schema: the export that declares the union, or the ex
 | `SettlementOutcome` | `stopped` | Ended | The child's run was stopped; the note says so and the parent is not woken if the user stopped the parent. |
 | `SettlementOutcome` | `failed` | Failed | The child's run failed, or its result was invalid three times; `error` says why. A spent plan window (`usageLimit`) wakes nobody. |
 | `WorkflowState` | `proposed` | Waiting on you | The launch approval waits for Go, Run on 1 first, or Decline. |
-| `WorkflowState` | `approved` | Resting | Go was given; nothing runs until the model calls `codemode` with the same script. |
+| `WorkflowState` | `approved` | Resting | Go was given; nothing runs until the model calls `codemode` with the same script, in the run that proposed it. |
 | `WorkflowState` | `running` | Active | The script runs inside the launching thread's run. |
 | `WorkflowState` | `finished` | Ended | The script returned; `outcome` says complete or partial, and why. |
 | `WorkflowState` | `failed` | Failed | The script threw, or its replay diverged. |
 | `WorkflowState` | `stopped` | Ended | The whole workflow was stopped; settled results stay. |
-| `WorkflowState` | `declined` | Ended | The launch approval was declined; nothing ran. |
+| `WorkflowState` | `declined` | Ended | The launch approval was declined, or Go was given and the run that proposed it ended first; nothing ran. |
 | `NodeState` | `reserved` | Active | The ledger row is written; the child is not created yet. |
 | `NodeState` | `running` | Active | The node's child runs. |
 | `NodeState` | `held` | Held | The child's run hit a spent plan window; the node waits for the reset and other providers' nodes go on. |

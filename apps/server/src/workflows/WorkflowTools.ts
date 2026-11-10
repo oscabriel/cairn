@@ -163,6 +163,7 @@ import {
   briefWithin,
   closeWaiting,
   isWaitingNode,
+  LaunchWatch,
   nodeBriefPayload,
   nodeBriefRecord,
 } from "./WorkflowLaunch.ts";
@@ -2501,7 +2502,12 @@ export const workflowExtension = (
         budget,
       ],
       hooks: [workflowGate],
-      tasks: [Watch, BudgetStopper, budgetPushTask(push ?? NO_BUDGET_PUSH)],
+      tasks: [
+        Watch,
+        BudgetStopper,
+        LaunchWatch,
+        budgetPushTask(push ?? NO_BUDGET_PUSH),
+      ],
     }),
   };
 };

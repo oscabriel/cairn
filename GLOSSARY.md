@@ -142,11 +142,11 @@ _Avoid_: pipeline, DAG, job
 
 **Node**: One `agent()` call of a workflow script, recorded as a row of the dispatch ledger: a child thread on the model its call names (none: the launching thread's), with no subagent tools of its own and no sidebar row.
 
-**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Send back returns it to its model with notes, and nothing runs; Decline ends it. The card reads numbers first (nodes, the estimate, whose unknown cost is never $0.00, the budget, what Go covers), then the model each call site runs on, then its arguments, folded. The card's budget edits travel in the answer, never in the frozen plan.
+**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Send back returns it to its model with notes, and nothing runs; Decline ends it. The card reads numbers first (nodes, the estimate, whose unknown cost is never $0.00, the budget, what Go covers), then the model each call site runs on, then its arguments, folded. The card's budget edits travel in the answer, never in the frozen plan. A launch belongs to the run that proposed it: the model runs it with `codemode` in that same run, and if the run ends first the row is declined (`run-stopped`), so Go is never a standing grant. Two Goes on one script in one run are two launches.
 
 _Avoid_: launch brief, plan approval
 
-**Envelope**: What a workflow's launch approval grants its nodes: the script's hash, the models its nodes run on (and whether each may write), the permission modes, a node cap and a budget. A node inside it gets its own brief, accepted with the envelope as decider in the commit that dispatches it; a node outside it (another model, a writer where the plan showed a reader, a wider mode, past the cap) raises its own brief card and waits for the user.
+**Envelope**: What a workflow's launch approval grants its nodes: the script's hash, the models its nodes run on (and whether each may write), the permission modes, a node cap and a budget. It grants per model, to a node from any call site, not per call site. A node inside it gets its own brief, accepted with the envelope as decider in the commit that dispatches it; a node outside it (another model, a writer where the plan showed a reader, a wider mode, past the cap) raises its own brief card and waits for the user.
 
 _Avoid_: grant (in prose), allowance
 
@@ -251,6 +251,8 @@ _Avoid_: plugin
 **Durable event**: A fact with several consumers (a node settled, a child's result, an approval answered), appended to the event conversation in the commit of the change it describes, so it exists exactly when the change does (ADR 0033). Not the events log.
 
 **Reactor**: A named handler of some durable event kinds that runs each event once, oldest first, in one commit with its cursor in `cairn.events`. It writes only through `tx` and creates pi-durable tasks for outside work. Its `from` (`now` or `start`) says where a newly added reactor's cursor starts. The brain's reactors are listed in `apps/server/src/brain/ReactorSet.ts`.
+
+**Dead letter**: An event a reactor passed without handling it, recorded with its error in `cairn.event-dead-letters`: its handler failed on it five times in a row, or could not read it at all. The reactor goes on to the next event; the dead letter is logged, shown as the reactor's last failure and pushed (ADR 0033).
 
 **Pi host**: The brain service that loads the allowlisted pi TUI extensions (pi-web-access, pi-fff) and offers their tools to every thread as pi-durable tools, one instance per brain or per folder (ADR 0039).
 

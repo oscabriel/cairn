@@ -3,9 +3,17 @@
 //
 // - A model's `codemode` call whose source is a workflow script (`export const meta = ...` first),
 //   or a recipe reference that names one (a built-in's by `resolveRecipe`, a project recipe's by the
-//   source its launch kept, `WorkflowSourcesDoc`), runs only when the thread's ledger holds an
-//   `approved` row for that exact source (its hash). The
-//   hook then rewrites the source behind the prelude (`rewriteScript`), baking in the row's id,
+//   source its launch kept, `WorkflowSourcesDoc`), runs only the row a `workflow_plan` call of the
+//   same run proposed and the user approved: the first `approved` row, in proposal order, that is
+//   bound to the live run (`LaunchRunsDoc`, `pi.live.run.first`) and holds that exact source (its
+//   hash; for a project recipe, its kept source by name). A row of a run that ended is no standing
+//   grant: it runs from no later run, and its launch watcher declines it (`WorkflowLaunch.ts`). Two
+//   approved rows of one script in one run are two launches, run one per call in proposal order,
+//   also when the model makes the calls in one message: the n-th call of a tool round that names a
+//   script takes the n-th of its rows, counting a row an earlier call of the round already began
+//   (`roundOf`), so calls that run side by side never take the same row. A hook cannot write a
+//   document, so this order, read from the round's assistant entry, is what keeps them apart.
+//   The hook then rewrites the source behind the prelude (`rewriteScript`), baking in the row's id,
 //   sample, token ceiling and arguments, and marks the call's own task with `GATE_MEMO`. pi-durable
 //   stores the rewritten source in the call's start data, so a replay runs what this hook wrote,
 //   and the hook does not run again. Any other workflow script is blocked with a refusal the model
@@ -24,19 +32,26 @@ import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   HookApi,
   HookRegistration,
+  LiveState,
   ToolHookCall,
 } from "@earendil-works/pi-durable";
-import { hook, ToolTask } from "@earendil-works/pi-durable";
+import { hook, LiveDoc, ToolTask } from "@earendil-works/pi-durable";
 import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
-import { Effect, Exit, Option, Predicate } from "effect";
+import { Effect, Exit, Option, Predicate, Result } from "effect";
 
 import { NODE_TOOLS, rewriteScript } from "./Prelude.ts";
 import {
   BUILT_IN_RECIPES,
   recipeReferenceOf,
 } from "./recipes/BuiltInRecipes.ts";
-import { WorkflowSourcesDoc, WorkflowsDoc } from "./WorkflowDocs.ts";
+import {
+  isLaunchOfRun,
+  LaunchRunsDoc,
+  WorkflowSourcesDoc,
+  WorkflowsDoc,
+} from "./WorkflowDocs.ts";
 import type {
+  LaunchRunsState,
   WorkflowItemState,
   WorkflowSourcesState,
   WorkflowsState,
@@ -68,20 +83,64 @@ export const NODE_TOOL_REFUSAL = (name: string) =>
 
 /** What the model is told when its workflow script has no approved launch. */
 export const UNAPPROVED_REFUSAL = (name: string) =>
-  `Workflow ${name} has no approved launch for this exact script. Propose it with workflow_plan and wait for Go, then run the same script with codemode; a script changed after Go needs a new launch.`;
+  `Workflow ${name} has no approved launch for this exact script in this run. Propose it with workflow_plan and wait for Go, then run the same script with codemode; a script changed after Go, or a launch approved in an earlier run, needs a new launch.`;
 
 const isNodeTool = (name: string): boolean =>
   NODE_TOOLS.some((tool) => tool === name);
 
-/** The first approved row of `ledger` bound to `hash`, in the order the rows were proposed. */
+/** What the gate reads to pick a row: the ledger, the run bindings and the live run. */
+export interface GateView {
+  readonly ledger: Readonly<WorkflowsState> | undefined;
+  readonly runs: Readonly<LaunchRunsState> | undefined;
+  /** The live run's first entry; none when no run is live. */
+  readonly run: Option.Option<number>;
+  /** The tasks of this tool round's `codemode` calls made before this one. */
+  readonly earlier: ReadonlySet<number>;
+}
+
+/**
+ * The rows the live run's calls of this round launch from, in the order they were proposed: the
+ * run's approved rows, and those an earlier call of the round already began, so a row keeps its
+ * place while that call runs it.
+ */
+const launchable = (view: GateView): ReadonlyArray<WorkflowItemState> =>
+  Object.values(view.ledger?.items ?? {}).filter(
+    (row) =>
+      isLaunchOfRun(view.runs, row.id, view.run) &&
+      (row.state === "approved" ||
+        (row.codemodeTaskId !== null && view.earlier.has(row.codemodeTaskId)))
+  );
+
+/**
+ * The row the `nth` call of this round that names `script` takes (0 for the first): the `nth` of
+ * `rows`, while it is still approved. None when there is no such row, or an earlier call took it.
+ */
+const nthApproved = <A extends { readonly row: WorkflowItemState }>(
+  rows: ReadonlyArray<A>,
+  nth: number
+): Option.Option<A> =>
+  Option.filter(
+    Option.fromUndefinedOr(rows[nth]),
+    (each) => each.row.state === "approved"
+  );
+
+/**
+ * The approved row of the live run that holds the script `hash` and that the `nth` call of the
+ * round naming that script takes, in proposal order.
+ */
 export const approvedRowFor = (
-  ledger: Readonly<WorkflowsState> | undefined,
-  hash: string
+  view: GateView,
+  hash: string,
+  nth: number
 ): Option.Option<WorkflowItemState> =>
-  Option.fromUndefinedOr(
-    Object.values(ledger?.items ?? {}).find(
-      (row) => row.state === "approved" && row.scriptHash === hash
-    )
+  Option.map(
+    nthApproved(
+      launchable(view)
+        .filter((row) => row.scriptHash === hash)
+        .map((row) => ({ row })),
+      nth
+    ),
+    (each) => each.row
   );
 
 /** The source a row lets run, rewritten behind the prelude with what the launch baked in. */
@@ -97,25 +156,155 @@ export const bakedSource = (
   });
 
 /**
- * The source an approved launch of the project recipe `name` was proposed with, the first such
- * row in proposal order; none when no launch of that name is approved.
+ * The approved row of the live run that launches the project recipe `name` and that the `nth` call
+ * of the round naming it takes, in proposal order, with the source its launch was proposed with
+ * (kept beside the ledger); none when the run has no such launch.
  */
-export const projectSourceFor = (
-  ledger: Readonly<WorkflowsState> | undefined,
+export const projectLaunchFor = (
+  view: GateView,
   sources: Readonly<WorkflowSourcesState> | undefined,
-  name: string
-): Option.Option<string> =>
-  Option.fromUndefinedOr(
-    Object.values(ledger?.items ?? {})
-      .filter((row) => row.state === "approved")
-      .map((row) => sources?.items[row.id])
-      .find((kept) => kept?.name === name)?.source
+  name: string,
+  nth: number
+): Option.Option<{
+  readonly row: WorkflowItemState;
+  readonly source: string;
+}> =>
+  nthApproved(
+    launchable(view).flatMap((row) => {
+      const kept = sources?.items[row.id];
+
+      return kept?.name === name ? [{ row, source: kept.source }] : [];
+    }),
+    nth
   );
 
-/** Lets `code` run when the ledger holds an approved row for its hash; blocks it otherwise. */
-const run = async (
+/**
+ * Reads `code` as a workflow script (a built-in reference as the recipe it names); the refusal's
+ * words when it cannot be read.
+ */
+const scriptOf = (code: string): Result.Result<WorkflowScript, string> => {
+  const parsed = Effect.runSyncExit(
+    Effect.flatMap(resolveRecipe(code), parseWorkflowScript)
+  );
+
+  if (Exit.isFailure(parsed)) {
+    return Result.fail(
+      Option.match(Exit.findErrorOption(parsed), {
+        onNone: () => "Workflow script cannot be read.",
+        onSome: (refusal) => refusal.message,
+      })
+    );
+  }
+
+  return Result.succeed(parsed.value);
+};
+
+/** How many tool results and other entries may follow a round's assistant entry while it runs. */
+const ROUND_SLACK = 32;
+
+/**
+ * What a `codemode` source launches, for counting the calls of a round that launch the same thing:
+ * a project recipe by name, or a script by its hash; none for anything the gate does not run.
+ */
+const launchKeyOf = (code: string): Option.Option<string> => {
+  if (!isWorkflowSource(code)) {
+    return Option.none();
+  }
+
+  const named = Option.filter(
+    recipeReferenceOf(code),
+    (name) => !BUILT_IN_RECIPES.has(name)
+  );
+
+  if (Option.isSome(named)) {
+    return Option.some(`recipe:${named.value}`);
+  }
+
+  return Option.map(
+    Result.getSuccess(scriptOf(code)),
+    (script) => `script:${script.hash}`
+  );
+};
+
+/**
+ * Where `call`, whose source is `code`, stands in its tool round: how many `codemode` calls before
+ * it launch the same thing (`nth`), and the tasks of every `codemode` call before it (`earlier`).
+ * The calls' sources come from the round's assistant entry, the newest one that holds `call`, and
+ * their tasks from `pi.live`'s tool slots. A call alone in its round, or one whose entry is not
+ * found, is first.
+ */
+const roundOf = async (
+  call: ToolHookCall,
   code: string,
-  ledger: Readonly<WorkflowsState> | undefined,
+  live: Readonly<LiveState> | undefined,
+  api: HookApi,
+  context: ChordContext
+): Promise<{ readonly nth: number; readonly earlier: ReadonlySet<number> }> => {
+  const slots = live?.tools ?? [];
+  const at = slots.findIndex((slot) => slot.callId === call.id);
+
+  const before = slots
+    .slice(0, Math.max(at, 0))
+    .filter((slot) => slot.name === CODEMODE_TOOL_NAME);
+
+  if (before.length === 0) {
+    return { nth: 0, earlier: new Set() };
+  }
+
+  const page = await api.entries(
+    { order: "descending" },
+    slots.length + ROUND_SLACK,
+    undefined,
+    context
+  );
+
+  const sources = new Map<string, string>();
+
+  for (const entry of page.items) {
+    const message = entry.model?.[0];
+
+    if (
+      message?.role === "assistant" &&
+      message.content.some(
+        (part) => part.type === "toolCall" && part.id === call.id
+      )
+    ) {
+      for (const part of message.content) {
+        const source: unknown =
+          part.type === "toolCall" ? part.arguments.code : undefined;
+
+        if (part.type === "toolCall" && Predicate.isString(source)) {
+          sources.set(part.id, source);
+        }
+      }
+
+      break;
+    }
+  }
+
+  const own = launchKeyOf(code);
+
+  return {
+    nth: before.filter((slot) => {
+      const source = sources.get(slot.callId);
+
+      return (
+        source !== undefined &&
+        Option.exists(own, (key) => Option.contains(launchKeyOf(source), key))
+      );
+    }).length,
+    earlier: new Set(
+      before.flatMap((slot) =>
+        slot.taskId === undefined ? [] : [Number(slot.taskId)]
+      )
+    ),
+  };
+};
+
+/** Lets `script` run as `row`: marks the call's task and bakes the row in. */
+const run = async (
+  script: WorkflowScript,
+  row: Readonly<WorkflowItemState>,
   call: ToolHookCall,
   api: HookApi,
   context: ChordContext
@@ -123,45 +312,22 @@ const run = async (
   | { readonly block: string }
   | { readonly arguments: { [key: string]: JsonValue } }
 > => {
-  // A recipe reference runs the recipe it names: the approved hash is the recipe's own.
-  const parsed = Effect.runSyncExit(
-    Effect.flatMap(resolveRecipe(code), parseWorkflowScript)
-  );
-
-  if (Exit.isFailure(parsed)) {
-    const failure = Exit.findErrorOption(parsed);
-
-    return {
-      block: Option.match(failure, {
-        onNone: () => "Workflow script cannot be read.",
-        onSome: (refusal) => refusal.message,
-      }),
-    };
-  }
-
-  const script = parsed.value;
-  const row = approvedRowFor(ledger, script.hash);
-
-  if (Option.isNone(row)) {
-    return { block: UNAPPROVED_REFUSAL(script.meta.name) };
-  }
-
   const mark = await api.memo<GateMark>(
     GATE_MEMO,
-    { workflowId: row.value.id, scriptHash: script.hash },
+    { workflowId: row.id, scriptHash: script.hash },
     context
   );
 
   // A retry of this hook before the call's intent was recorded finds its own mark; another
   // workflow's mark on this task is a wiring fault, and the call is blocked rather than misfiled.
-  if (mark.workflowId !== row.value.id) {
+  if (mark.workflowId !== row.id) {
     return {
-      block: `This codemode call is already bound to workflow ${mark.workflowId}; run workflow ${row.value.id} as its own call.`,
+      block: `This codemode call is already bound to workflow ${mark.workflowId}; run workflow ${row.id} as its own call.`,
     };
   }
 
   return {
-    arguments: { ...call.arguments, code: bakedSource(script, row.value) },
+    arguments: { ...call.arguments, code: bakedSource(script, row) },
   };
 };
 
@@ -191,10 +357,19 @@ const decide = async (
     return undefined;
   }
 
-  const ledger = await api.snapshot(WorkflowsDoc, api.conversationId, context);
+  const live = await api.snapshot(LiveDoc, api.conversationId, context);
+  const round = await roundOf(call, code, live, api, context);
 
-  // A reference to a project recipe runs the source its launch was approved with, which the plan
-  // kept beside the ledger; with no approved launch of that name it runs nothing.
+  const view: GateView = {
+    ledger: await api.snapshot(WorkflowsDoc, api.conversationId, context),
+    runs: await api.snapshot(LaunchRunsDoc, api.conversationId, context),
+    run: Option.fromUndefinedOr(live?.run?.first),
+    earlier: round.earlier,
+  };
+
+  // A reference to a project recipe runs the launch of that name its run proposed, with the
+  // source that launch was approved with, which the plan kept beside the ledger; with no approved
+  // launch of that name in this run it runs nothing.
   const named = Option.filter(
     recipeReferenceOf(code),
     (name) => !BUILT_IN_RECIPES.has(name)
@@ -207,16 +382,33 @@ const decide = async (
       context
     );
 
-    const kept = projectSourceFor(ledger, sources, named.value);
+    const launch = projectLaunchFor(view, sources, named.value, round.nth);
 
-    if (Option.isNone(kept)) {
+    if (Option.isNone(launch)) {
       return { block: UNAPPROVED_REFUSAL(named.value) };
     }
 
-    return await run(kept.value, ledger, call, api, context);
+    const kept = scriptOf(launch.value.source);
+
+    return Result.isFailure(kept)
+      ? { block: kept.failure }
+      : await run(kept.success, launch.value.row, call, api, context);
   }
 
-  return await run(code, ledger, call, api, context);
+  // A built-in recipe reference runs the recipe it names: the approved hash is the recipe's own.
+  const read = scriptOf(code);
+
+  if (Result.isFailure(read)) {
+    return { block: read.failure };
+  }
+
+  const row = approvedRowFor(view, read.success.hash, round.nth);
+
+  if (Option.isNone(row)) {
+    return { block: UNAPPROVED_REFUSAL(read.success.meta.name) };
+  }
+
+  return await run(read.success, row.value, call, api, context);
 };
 
 /** The gate hook, installed with the workflows extension. */

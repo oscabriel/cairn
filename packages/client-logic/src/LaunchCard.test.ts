@@ -152,7 +152,7 @@ describe("the launch card's numbers", () => {
       ["Go covers", "Up to 5 nodes, 2 at once"],
       [
         "Models",
-        "opencode-go/gpt-6-luna at high, reads only; faux/scripted, may write",
+        "Any node may run on opencode-go/gpt-6-luna at high, reads only; faux/scripted, may write",
       ],
       ["Phases", "Read, Judge"],
     ]);
@@ -200,7 +200,7 @@ describe("the launch card's call sites and arguments", () => {
     );
     assert.strictEqual(
       grantsText(old.envelope),
-      "this thread's model, reads only"
+      "Any node may run on this thread's model, reads only"
     );
   });
 

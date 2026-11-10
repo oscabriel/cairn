@@ -1,6 +1,6 @@
 // The workflows extension as the installed set takes it: `workflow_plan` for the model, and every
 // node tool the prelude calls, callable by tools alone (the model is never offered one), all
-// replay-safe, with the gate hook and the watcher task.
+// replay-safe, with the gate hook and the watcher tasks.
 
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
@@ -9,7 +9,7 @@ import { ExtensionOrder } from "../brain/Extensions.ts";
 import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { NODE_TOOLS } from "./Prelude.ts";
 import { PUSH_TASK, STOPPER_TASK } from "./WorkflowBudget.ts";
-import { LAUNCH_TOOL } from "./WorkflowLaunch.ts";
+import { LAUNCH_TOOL, LAUNCH_WATCH_TASK } from "./WorkflowLaunch.ts";
 import { Workflows } from "./Workflows.ts";
 import { WATCH_TASK, WORKFLOWS_EXTENSION } from "./WorkflowTools.ts";
 
@@ -24,7 +24,7 @@ const NoModels = Layer.succeed(
 
 describe("the workflows extension", () => {
   it.effect(
-    "carries workflow_plan, the prelude's node tools, the gate and the watcher",
+    "carries workflow_plan, the prelude's node tools, the gate and the watchers",
     () =>
       Effect.gen(function* () {
         const { extension } = yield* Workflows;
@@ -51,7 +51,7 @@ describe("the workflows extension", () => {
         assert.strictEqual(extension.extension.hooks?.length, 1);
         assert.deepStrictEqual(
           extension.extension.tasks?.map((task) => task.definition.name),
-          [WATCH_TASK, STOPPER_TASK, PUSH_TASK]
+          [WATCH_TASK, STOPPER_TASK, LAUNCH_WATCH_TASK, PUSH_TASK]
         );
       }).pipe(Effect.provide(Workflows.layer.pipe(Layer.provide(NoModels))))
   );

@@ -4,13 +4,13 @@ Rules are numbered so reviews can cite them ("breaks S28"). Effect's own guidanc
 
 ## Ground rules
 
-- **S1.** Read the installed source before writing against an API: `node_modules/effect`, `node_modules/alchemy`, and the package's `AGENTS.md` or `ai-docs`. Effect v4 and Alchemy beta differ from training data and from web docs.
+- **S1.** Read the installed source before writing against an API: `node_modules/effect`, `node_modules/alchemy` and `node_modules/@alchemy.run/*`, and the package's `AGENTS.md` or `ai-docs`. Effect v4 and Alchemy beta differ from training data and from web docs.
 - **S2.** Keep the lint gate strict. Fix the code, not the rule. Suppress only through the S21 protocol. Allow-list the unstable Effect modules we adopt once, in `allowedUnstableApis` in `tsconfig.base.json` (today `@effect/platform-node`, `effect/FileSystem`, `effect/http`, `effect/http-api`, `effect/observability`, `effect/rpc`, `effect/sql`), never per line.
 - **S3.** Write erasable TypeScript only: no `enum`, `namespace` or parameter properties (tsconfig `erasableSyntaxOnly`). Model a closed set with `Schema.Literals`.
 
 ## Modules and imports
 
-- **S4.** Import Effect from its barrel, `import { Effect, Schema } from "effect"`, and its feature modules from their 4.0.5 entrypoints: `effect/http`, `effect/http-api`, `effect/sql`, `effect/observability`, `effect/testing` (_lint_). Alchemy modules keep Alchemy's namespace form: `import * as Cloudflare from "alchemy/Cloudflare"`.
+- **S4.** Import Effect from its barrel, `import { Effect, Schema } from "effect"`, and its feature modules from their entrypoints at the catalog's pin: `effect/http`, `effect/http-api`, `effect/sql`, `effect/observability`, `effect/testing` (_lint_). Alchemy modules keep Alchemy's namespace form, from the packages S50 names: `import * as Alchemy from "alchemy"`, `import * as Cloudflare from "@alchemy.run/cloudflare"`.
 - **S5.** Name a module file in PascalCase after its main export (`ThreadStore.ts`). Configs and scripts are kebab-case (_lint_).
 - **S6.** Treat each `apps/*` as its own composition root: apps never import other apps, and `packages/*` never import apps. Move code into a package when a second consumer appears, not before. Inside an app, import by relative path.
 - **S7.** Use `Predicate` helpers (`Predicate.isString`, `Predicate.hasProperty`) instead of hand-written guards or `typeof` checks (_lint_ for `typeof`).
@@ -224,8 +224,8 @@ export class TurnStarter extends Context.Service<
 
 ## Infrastructure and Alchemy
 
-- **S50.** Import `alchemy/Cloudflare`, the beta.83 path. The `@alchemy.run/cloudflare` path shown at main.alchemy.run is not published yet; switch every file at once when it ships.
-- **S51.** `alchemy.run.ts` is the composition root and the only Stack. It yields resources that live elsewhere, one resource or layer per file, next to the code that uses it.
+- **S50.** Import Alchemy at the catalog's pin: the stack API from `alchemy`, and each provider from its own package, `@alchemy.run/cloudflare` and `@alchemy.run/github`. `alchemy/Cloudflare` and `alchemy/GitHub` no longer resolve: since beta.85 the `alchemy` package has no Cloudflare or GitHub module. Every Alchemy package moves in one change, every stack and spike with it, because all of them share the account's one Cloudflare state store; rewrite this rule and S4 in the same change as any pin move that changes an import.
+- **S51.** `alchemy.run.ts` is the composition root and the only Stack for what Cairn runs on Cloudflare. It yields resources that live elsewhere, one resource or layer per file, next to the code that uses it. The one other Stack is `stacks/github.ts`, credentials as code for CI (ADR 0051): it holds only the CI token and the repository secrets, deploys under its own profile, and never holds a resource the brain or a stone uses.
 - **S52.** Anchor every path a resource takes with `import.meta.url` or `import.meta.dirname`, never a cwd-relative string (_lint_ bans `__dirname`).
 
   ```ts
@@ -248,7 +248,7 @@ export class TurnStarter extends Context.Service<
 ## Observability
 
 - **S57.** Spans come from `Effect.fn("Owner.method")`; add `Effect.withSpan` and `Effect.annotateSpans` for meaningful sub-steps. Log with `Effect.log*` and `Effect.annotateLogs`, never `console`.
-- **S58.** Export spans and logs over OTLP with `effect/observability`, into Axiom. Provision the datasets (`otel:traces:v1`, `otel:logs:v1`) and the ingest token with `alchemy/Axiom`. On hosts Alchemy runs, provide `Axiom.Telemetry({ token, traces, logs })`. On the homelab server, provide `Otlp.layerFromConfig` with `OtlpSerialization.layerJson` and `FetchHttpClient.layer` at the entry point, configured through the standard `OTEL_EXPORTER_OTLP_*` variables.
+- **S58.** Export spans and logs over OTLP with `effect/observability`, into Axiom. Provision the datasets (`otel:traces:v1`, `otel:logs:v1`) and the ingest token with Alchemy's Axiom provider, which is not installed yet (no Axiom resource exists; ADR 0006 as amended): add it to the catalog with the other Alchemy packages when telemetry is built. On hosts Alchemy runs, provide `Axiom.Telemetry({ token, traces, logs })`. On the homelab server, provide `Otlp.layerFromConfig` with `OtlpSerialization.layerJson` and `FetchHttpClient.layer` at the entry point, configured through the standard `OTEL_EXPORTER_OTLP_*` variables.
 - **S59.** Give every inbound request one request id: return it in a response header, attach it to spans, and carry it in public errors. Keep span attribute names in one module.
 - **S60.** Traces from a running system are the primary evidence that runtime behaviour works.
 

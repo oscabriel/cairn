@@ -1,6 +1,6 @@
 # Cairn phase 3 build plan
 
-Decisions 1 to 5 in section 3 answered by the user on 2026-11-04, all yes, with M0 starting at one or two snapshots; decisions 6 to 9 stand as recommended unless the user objects. Written from the four area notes in `docs/phase-3/notes/` (`arms.md`, `bases.md`, `results.md`, `surfaces.md`), the kickoff's phase 3 section and Targets (`~/Developer/agent-artifacts/cairn/v2/KICKOFF.md`), ADRs 0001 to 0043 and `GLOSSARY.md`, at commit `a160935`. Pins are phase 2's: pi (`@earendil-works/*`) 1.4.0, Effect 4.0.5, Node 26.11, alchemy `2.0.0-beta.83`.
+Decisions 1 to 5 in section 3 answered by the user on 2026-11-04, all yes, with M0 starting at one or two snapshots; decisions 6 to 9 stand as recommended unless the user objects. Written from the four area notes in `docs/phase-3/notes/` (`arms.md`, `bases.md`, `results.md`, `surfaces.md`), the kickoff's phase 3 section and Targets (`~/Developer/agent-artifacts/cairn/v2/KICKOFF.md`), ADRs 0001 to 0043 and `GLOSSARY.md`, at commit `a160935`, against phase 2's pins. The tree has moved since: pi, Effect and Alchemy are at the `pnpm-workspace.yaml` catalog's pins, and Alchemy's providers are imported from `@alchemy.run/cloudflare` (ADR 0006 as amended). The notes' line references into `node_modules/alchemy/src/Cloudflare/` now live under `node_modules/@alchemy.run/cloudflare/src/`; what phase 3 needs (`Container`, `DurableObject` with containers, the pre-pushed image path, `Access`, `snapshotContainer`) is still there, so re-cite before relying on a line number. Node is 26.11 or later.
 
 The notes are the evidence, and this plan is the decision. Where they disagree, section 2 rules and the plan wins. An implementing agent given one package should read sections 1 and 2, its package row, the note the row cites, the ADRs it names and the installed source of every library it touches. Package ids are the notes' own: `A` is `arms.md`, `B` is `bases.md`, `RES` is `results.md` and `U` is `surfaces.md`.
 
@@ -17,11 +17,13 @@ Its gate (kickoff) is four targets, plus the user having used it:
 - **Idle cost.** Under $6 a month with no stones running.
 - **Tools.** Every MCP server answers a tool call through Executor from a stone. Playwright's server is gone (ADR 0044), so that leaves `convex` and whichever others remain.
 
+**Where M0 stands (2026-11-09).** Spike 11's part A failed its gate: ten stones at once after about 27 h unused had a median of 5.2 s and a worst of 127 s, with the stall in Cloudflare's first answer (`spikes/11-bases/NOTES.md`). Bases on snapshots are therefore not settled, and spike 11's parts B to F have not run. The user decides between a hedged second start (recommended to measure first, since it costs nothing at idle), a relaxed burst target and a warm pool (which breaks the Idle cost target). Until then, nothing in wave 2 or later starts on the assumption that bases are settled. Wave 1 is at home and does not depend on the answer. Spike 12 passed three clauses, one is undetermined and one was not run (`spikes/12-stone-life/NOTES.md`).
+
 The notes propose 49 packages. That is exactly the breadth-first shape that sank v1, so this plan cuts them into vertical milestones, each one a thing the user can use before the next starts:
 
 | Milestone | The user can | Ends with |
 | --- | --- | --- |
-| **M0 Measured** | Nothing yet: the unknowns get numbers | Spike notes, and the user's call if a gate fails |
+| **M0 Measured** | Nothing yet: the unknowns get numbers | Spike notes, and the user's call if a gate fails. Spike 11's part A failed on 2026-11-05, so that call is due (below) |
 | **M1 One stone** | Start a stone from the phone, talk to it, and see its work come home | Stone start and Tools targets pass; look round 12; the user works in one |
 | **M2 A stone's life** | Leave it asleep, wake it with a message, and ship a PR from it | Idle cost target passes; the user ships one real change |
 | **M3 Fan-out** | Launch ten stones and get one integrated branch | Fan-out target passes |
@@ -36,7 +38,7 @@ The notes propose 49 packages. That is exactly the breadth-first shape that sank
 | A stone as a thread | A `cairn.arms` document names a thread's arms (absent means host); a `stones` table holds lifecycle; `ThreadShell.stone` and lineage `stone` carry it to the UI. `Arms.placeOf` becomes the only reader of a thread's place. About 20 sites treat a thread's folder as a local path, and three fail silently (`git/Diffs.ts:186-192`, `brain/CodingTools.ts:248`, project skills and `AGENTS.md`). A `FakeStone` and a lint rule fence them. | `arms.md` 1, 2 |
 | The link | One relay process and one socket per awake stone, with no multiplexer and no Hub object. Newest pipe wins; boot reconcile over HTTPS. `apps/stones`, `packages/link`, `ops/stones`, all in the root stack. | `arms.md` 4 |
 | Claude on a stone | The `claude` child runs at home in a stable empty folder per stone, so stamps and native resume do not change (amends ADR 0017). Tools still run in the container through pi's MCP path. | `arms.md` 3 |
-| Bases | A base is a container snapshot, recorded in `cairn.sqlite`, reused by lockfile hash, setup hash and image digest. The base commit decides what a stone fetches, not whether the base is reused. The brain builds on a miss, with single flight by unique index. There is no `Quarry` object. | `bases.md` 1, 2, 5 |
+| Bases | Pending the user's call on spike 11 (decision 2). As planned: a base is a container snapshot, recorded in `cairn.sqlite`, reused by lockfile hash, setup hash and image digest. The base commit decides what a stone fetches, not whether the base is reused. The brain builds on a miss, with single flight by unique index. There is no `Quarry` object. | `bases.md` 1, 2, 5 |
 | Code in | A git bundle over the link. No git credential exists on Cloudflare in any form. | `bases.md` 3 |
 | Work home | Section 2, ruling 2. | `results.md` 1, 2 |
 | Integration | A new `integrate` prelude verb. A pure pick with `merge-tree`, `commit-tree` under a frozen date and a compare-and-swap ref, with no worktree, so a replay computes the same sha instead of recovering. One resolver attempt, then a conflict card. | `results.md` 3, 4 |
@@ -66,7 +68,7 @@ The notes were written in parallel. These are the places they disagreed or each 
 4. **Project secrets are out of phase 3.** `bases.md` recommends a named exception to "credentials never leave the Beelink". Ruling: don't take it until a project needs it. Every stone runs with `enableInternet: false` behind one handler from day one, open and logged, so an allowlist can be added without a redesign. B6, the allowlist half of B7, and B11 are deferred. This is user decision 5, because a dev server needing a real key cannot run in a stone until then.
 5. **Sizes.** Stones default to `standard-2`, set per project. Check runs and builders take the size spike 11 measures. A base's key holds the instance size only if spike 11 part B shows a snapshot cannot restore across sizes.
 6. **Caps.** A brain-wide cap on awake stones (default 10, a setting, ceiling 32) replaces the per-workflow limit of 8 (`Workflows.ts:35`) for stone nodes. Past it, a node queues with a row and a place. `bridgeGenerationCap` gets wired to `slotsFor`, staying at 4 until spike 15.
-7. **The coordinator rethink stays separate.** ADR 0042 is scrapped and nothing here assumes its design. Phase 3 uses only what is on `main` today: a project thread, and managed threads under it. A stone is never a project thread. If the rethink changes what a project thread is, the New stone button and the one lineage rule are all that move.
+7. **The coordinator question is answered before M3 starts.** ADR 0042 is scrapped and nothing here assumes its design. M1 and M2 use only what is on `main` today: a project thread, and managed threads under it, and a stone is never a project thread. M3 cannot be built that way. A workflow runs as one `codemode` call inside the launching thread's run (ADR 0012 as amended), and a steer is placed only at the run's next boundary, after that call returns. A ten-stone fan-out with check runs and an integrate loop holds the project thread, the user's one conversation in the project (ADR 0026), for an hour or more, and the deploy and pi bump guards block for the same span. So the question is not separable from M3: wave 4 waits for the user's answer. ADR 0049 (proposed) states the problem and recommends that a workflow run gets a managed thread of its own under the project thread; the coordinator rethink is the user's open design, and that ADR is a recommendation awaiting their word. If the rethink changes what a project thread is, the New stone button and the one lineage rule also move.
 
 ### Phase 2 gaps the notes found
 
@@ -91,7 +93,7 @@ The user answered yes to decisions 1 to 5 on 2026-11-04, with decision 1 staged:
 | # | Decision | Recommendation | The cost of the recommendation |
 | --- | --- | --- | --- |
 | 1 | Approve M0's spend, including about 10 snapshots that cannot be deleted | Yes | Under $2 of compute. The snapshots' storage is unpriced: a guess of $0.45 to $5.40 over their 30 days |
-| 2 | Build bases on snapshots: public beta, no published price, no delete call | Yes, with a stored-bytes meter and a capture cap, if spike 11 passes | Exposure to a later price. Cairn's `DirectoryBackup` is 525 MiB and takes at least 12.6 s to extract, so nothing else can meet Stone start on a real project |
+| 2 | Build bases on snapshots: public beta, no published price, no delete call | Yes, with a stored-bytes meter and a capture cap, if spike 11 passes. It did not pass on 2026-11-05 (the 24 h burst), so this is open again: see the spike's notes | Exposure to a later price. Cairn's `DirectoryBackup` is 525 MiB and takes at least 12.6 s to extract, so nothing else can meet Stone start on a real project |
 | 3 | Sleep keeps no disk (ruling 1) | Yes | Ignored files changed since the base are gone on wake. The alternative keeps them and buys an undeletable snapshot per sleep |
 | 4 | A stone's code never runs at home: checks run on Cloudflare | Yes | About $0.25 and several minutes for a Cairn-sized `pnpm check`, on top of the stone. A probe showed lefthook running a stone-edited `lefthook.yml` on `git push` at home, so this one is not paranoia |
 | 5 | No project secrets in phase 3 (ruling 4) | Yes, unless a project you want on stones needs a real key at once | Dev servers needing real keys, and private registries, fail until then. Run-time egress stays open, so a dependency could send source away; the seen-hosts log shows it afterwards |
@@ -147,6 +149,8 @@ These fence everything later, and they do not depend on M0's answers.
 
 ### Wave 2: one real stone (M1)
 
+Waits for the user's decision on spike 11 (decision 2): every package below that starts a stone assumes a base starts in time.
+
 | Package | What | Depends on | Judge |
 | --- | --- | --- | --- |
 | A4, B1 | Stone image per ruling 3, digest in a committed file | M0 | `stone-image` |
@@ -181,6 +185,8 @@ These fence everything later, and they do not depend on M0's answers.
 **Gate M2:** a stone sleeps, wakes on a message with its files, and ships a PR the user merges; the idle check holds under $6 on the dev stage. The user's own bill is the second judge, once a month has passed.
 
 ### Wave 4: fan-out (M3)
+
+Waits for the user's answer to the coordinator question (ruling 7, ADR 0049).
 
 | Package | What | Depends on | Judge |
 | --- | --- | --- | --- |
@@ -218,8 +224,11 @@ These fence everything later, and they do not depend on M0's answers.
 
 ## 6. What only the user can do
 
-In `ops/wizards/phase-3.sh`, kept short:
+In `ops/wizards/phase-3.sh`, kept short. Its first two stages exist (2026-11-09) and come before anything deploys:
 
+- Stage 1: make `plans.gneiss.run` owner-only and add `stream_close_delay` (ADR 0038's guard, split out of phase 2's shelved reach stage). A shared plan link stops opening for anyone else.
+- Stage 2: narrow the CI token to Workers Containers Write and decide whether the `admin` profile's stored Global API Key stays (ADR 0051).
+- Decide spike 11's option (the summary's "Where M0 stands") and answer the coordinator question before M3 (ruling 7, ADR 0049).
 - Sign off this plan. Section 3's first five are answered.
 - Say yes before each real-money run.
 - Ask Cloudflare what snapshots cost, if you can. It would close the largest unknown.
@@ -257,7 +266,7 @@ Written once section 3 is answered, so they record your answers rather than my g
 
 ## 8. Risks
 
-- **Snapshot restores are slow when cold.** Then Stone start fails for the case that matters, a first stone after a quiet day. Spike 11 finds this before anything is built on it.
+- **Snapshot restores are slow when cold.** Then Stone start fails for the case that matters, a first stone after a quiet day. Spike 11 found exactly this on 2026-11-05, before anything was built on it; the decision it needs is the user's.
 - **Cloudflare prices snapshots high, or changes the beta API.** Bases are always disposable: no Cairn data lives only in one.
 - **Check runs are too slow for real projects,** with Cairn's own check as the worst case. Then the user picks between trimming `checks.full` and `bwrap` at home, with the number in hand.
 - **The Beelink at ten stones.** `MemoryHigh` is 1.5G and the unit has already reached it, while ten stones need about 3.5 GB by arithmetic. Generation share is unmeasured until spike 15.

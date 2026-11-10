@@ -7,10 +7,12 @@ const owner = "oscabriel";
 
 const repository = "cairn";
 
-// Credentials as code for GitHub Actions. Deploy once, under the `admin` profile, which can mint tokens:
-//   pnpm alchemy deploy --config stacks/github.ts --profile admin
-// CI's only job today is building the stone base image and publishing it to registry.cloudflare.com,
-// so its token covers that and Alchemy's state store, nothing else.
+// Credentials as code for GitHub Actions (ADR 0051): the one Stack beside `alchemy.run.ts`. Deploy it
+// through `ops/wizards/phase-3.sh` stage 2, under the `admin` profile, which can mint tokens:
+//   pnpm exec alchemy deploy --config stacks/github.ts --profile admin
+// CI's only job is building the stone base image and pushing it to registry.cloudflare.com, which
+// needs registry credentials and nothing else, so the token holds Workers Containers Write alone.
+// No workflow runs Alchemy; one that does gets a token of its own, minted then.
 export default Alchemy.Stack(
   "CairnGitHub",
   {
@@ -26,13 +28,7 @@ export default Alchemy.Stack(
       policies: [
         {
           effect: "allow",
-          permissionGroups: [
-            "Workers Containers Write",
-            // Alchemy's state store reads its bearer token through an edge-preview Worker binding.
-            "Workers Scripts Write",
-            "Secrets Store Write",
-            "Account Settings Write",
-          ],
+          permissionGroups: ["Workers Containers Write"],
           resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
         },
       ],

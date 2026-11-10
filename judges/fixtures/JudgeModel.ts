@@ -9,6 +9,8 @@
 // - `text <n>` streams a reply of `n` words (at the layer's tokens per second);
 // - `say <json string>` replies with that string, newlines and all, for example
 //   `say "Which colour?"` (the subagent kill judge's child ends its answer in a question);
+// - `fail <json string>` fails the request with that error text, for example
+//   `fail "400 the judge script refused this request"` (a 400 is never retried, so the run fails);
 // - after the last step the model answers `done`.
 //
 // In a tool step's arguments the string `$subagent` stands for the newest subagent the context says
@@ -55,7 +57,8 @@ type Step =
       readonly args: Record<string, Schema.Json>;
     }
   | { readonly kind: "text"; readonly words: number }
-  | { readonly kind: "say"; readonly text: string };
+  | { readonly kind: "say"; readonly text: string }
+  | { readonly kind: "fail"; readonly error: string };
 
 const parseStep = (source: string): Option.Option<Step> => {
   const trimmed = source.trim();
@@ -77,6 +80,15 @@ const parseStep = (source: string): Option.Option<Step> => {
     return Option.map(decodeSaid(say.groups?.said ?? ""), (said) => ({
       kind: "say" as const,
       text: said,
+    }));
+  }
+
+  const fail = /^fail\s+(?<error>.+)$/su.exec(trimmed);
+
+  if (fail !== null) {
+    return Option.map(decodeSaid(fail.groups?.error ?? ""), (text) => ({
+      kind: "fail" as const,
+      error: text,
     }));
   }
 
@@ -202,6 +214,13 @@ export const answerTo = (
       ),
       { stopReason: "toolUse" }
     );
+  }
+
+  if (value.kind === "fail") {
+    return fauxAssistantMessage("", {
+      stopReason: "error",
+      errorMessage: value.error,
+    });
   }
 
   return fauxAssistantMessage(

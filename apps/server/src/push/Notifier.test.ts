@@ -30,6 +30,7 @@ import { Database } from "../db/Database.ts";
 import { Push0005 } from "../db/migrations/0005Push.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { EventStore } from "../shell/EventStore.ts";
+import { ReconciledEnds } from "../shell/ReconciledEnds.ts";
 import {
   emptyActivityPatch,
   ThreadActivityUpdate,
@@ -119,6 +120,7 @@ const StoreLayer = Layer.mergeAll(
   RequestRecords.layerNone
 ).pipe(
   Layer.provideMerge(ShellStoreLayer),
+  Layer.provideMerge(ReconciledEnds.layer),
   Layer.provideMerge(Database.layerTest(pushMigrations))
 );
 
@@ -478,6 +480,64 @@ describe(Notifier, () => {
           assert.strictEqual(
             message?.body,
             "Failed after 3s. The model provider refused the request."
+          );
+        })
+      );
+    }
+  );
+
+  it.effect(
+    "never words a run end the boot reconcile dated itself as finished after a time that counts the downtime in",
+    () => {
+      const service = fakePushService(() => 201);
+
+      return withNotifier(
+        service,
+        Effect.gen(function* () {
+          yield* subscribe("phone");
+          const ended = yield* makeThread(1);
+          const failed = yield* makeThread(2);
+          const reconciled = yield* ReconciledEnds;
+
+          // Both runs started an hour ago and ended unseen before a crash; the boot reconcile, with
+          // no time kept for either end, dates both now.
+          yield* reconciled.record(ended, at(NOW));
+          yield* reconciled.record(failed, at(NOW));
+          yield* runOnce(ended, { startedAt: NOW - 3_600_000, endedAt: NOW });
+          yield* runOnce(failed, {
+            startedAt: NOW - 3_600_000,
+            endedAt: NOW,
+            failed: true,
+          });
+          yield* waitUntil(() => service.attempts.length >= 1);
+
+          // A later commit on the thread that did not fail still shows the same end.
+          yield* patchThread(ended, { queueLength: Option.some(1) });
+          yield* idle;
+          yield* Notifier.use((notifier) => notifier.settle);
+
+          // The failure pushes as a failure, with no duration; the other end does not push.
+          assert.deepStrictEqual(
+            messagesTo(service.attempts, "phone").map((message) => [
+              message.title,
+              message.body,
+            ]),
+            [["Thread 2", "Failed. The model provider refused the request."]]
+          );
+
+          const sql = yield* SqlClient.SqlClient;
+
+          const claims = yield* sql<{
+            readonly key: string;
+            readonly outcome: string;
+          }>`SELECT key, outcome FROM notified_runs ORDER BY key`;
+
+          assert.deepStrictEqual(
+            claims.map((row) => [row.key, row.outcome]),
+            [
+              [`run:${ended}:${String(NOW)}`, "suppressed"],
+              [`run:${failed}:${String(NOW)}`, "sent"],
+            ]
           );
         })
       );

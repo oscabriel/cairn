@@ -1,6 +1,7 @@
 // The judge brain's scripted model (`fixtures/JudgeModel.ts`): a script line on a later line of a
-// message runs, and a tool step's `$subagent` stands for the newest subagent the context says
-// started, so the subagent kill judge's parent can answer its child's question by script.
+// message runs, a tool step's `$subagent` stands for the newest subagent the context says
+// started, so the subagent kill judge's parent can answer its child's question by script, and a
+// fail step fails the request.
 
 import type { Message } from "@earendil-works/pi-ai";
 import { assert, describe, it } from "@effect/vitest";
@@ -67,6 +68,17 @@ describe("the judge model", () => {
         part.type === "text" ? [part.text] : []
       ),
       ["Pick one.\nWhich colour?"]
+    );
+  });
+
+  it("fails a request with the error text a fail step names", () => {
+    const reply = answerTo([
+      user('judge: fail "400 the judge script refused this request"; text 5'),
+    ]);
+
+    assert.deepStrictEqual(
+      [reply.stopReason, reply.errorMessage],
+      ["error", "400 the judge script refused this request"]
     );
   });
 });

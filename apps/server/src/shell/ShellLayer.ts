@@ -6,6 +6,7 @@ import { Layer } from "effect";
 
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { EventSink } from "./EventSink.ts";
+import { ReconciledEnds } from "./ReconciledEnds.ts";
 import { Settlement } from "./Settlement.ts";
 import { ShellSnapshot } from "./ShellSnapshot.ts";
 import { ShellStream } from "./ShellStream.ts";
@@ -17,10 +18,13 @@ export const ShellStoreLayer = ShellStream.layerNoDeps.pipe(
 );
 
 /**
- * The shell store with settlement running, reading the server settings. Projector signals are not
- * defaulted here: the composition root gives the projector its real ones (T32).
+ * The shell store with settlement running, reading the server settings, and the run ends the boot
+ * reconcile dates itself (`ReconciledEnds`), which the projector and the notifier built over it
+ * share. Projector signals are not defaulted here: the composition root gives the projector its
+ * real ones (T32).
  */
 export const ShellLayer = Settlement.layerNoDeps.pipe(
   Layer.provide(SettingsStore.layerNoDeps),
-  Layer.provideMerge(ShellStoreLayer)
+  Layer.provideMerge(ShellStoreLayer),
+  Layer.provideMerge(ReconciledEnds.layer)
 );

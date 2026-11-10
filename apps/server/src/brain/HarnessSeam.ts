@@ -43,7 +43,7 @@ import type {
 } from "@cairn/protocol/Thread";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { Effect, Option, Stream } from "effect";
+import type { DateTime, Effect, Option, Stream } from "effect";
 import { Context, Schema } from "effect";
 
 /** Why a seam call failed. Callers translate each reason to the protocol error it means. */
@@ -202,13 +202,32 @@ export interface PendingApproval {
   readonly origin: Option.Option<ThreadId>;
 }
 
-/** A thread whose run, queue, approval or task needs attention at boot. */
+/**
+ * How a thread's newest run failed, as the harness keeps it after the run ended, so the boot
+ * reconcile can end a row whose RunTerminal a crash lost as failed (server-edges.V5).
+ */
+export interface LastRunFailure {
+  readonly failure: RunFailureInfo;
+  /** When the run failed; none when the harness kept no time for it. */
+  readonly at: Option.Option<DateTime.Utc>;
+}
+
+/**
+ * A thread whose run, queue, approval or task needs attention at boot, or whose newest run failed
+ * with no run live since.
+ */
 export interface LiveThreadState {
   readonly threadId: ThreadId;
   readonly conversationId: ConversationId;
   readonly runId: Option.Option<RunId>;
   readonly queueLength: number;
   readonly pendingApprovals: ReadonlyArray<PendingApproval>;
+  /**
+   * The newest run's failure while no run is live: a run that ended `failed` as RunTerminal reports
+   * it, and no run started after it. None while a run is live, and when the newest run answered,
+   * was stopped, or ended at a reset or a turn limit (which RunTerminal reports as `completed`).
+   */
+  readonly lastRunFailure: Option.Option<LastRunFailure>;
 }
 
 /** What an implementation can do, so judges skip what a backend does not model. */
@@ -475,7 +494,10 @@ export class HarnessSeam extends Context.Service<
     ): Effect.Effect<EntryImage, HarnessError>;
     /** Committed changes of every thread, in commit order. Each subscriber sees changes after it joined. */
     readonly events: Stream.Stream<HarnessEvent>;
-    /** Every thread with a run, a queue or an approval: the boot reconcile reads it. */
+    /**
+     * Every thread with a run, a queue or an approval, and every one whose newest run failed with
+     * no run since (`lastRunFailure`): the boot reconcile reads it.
+     */
     readonly inspect: Effect.Effect<
       ReadonlyArray<LiveThreadState>,
       HarnessError

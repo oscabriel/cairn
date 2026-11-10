@@ -287,8 +287,9 @@ export const normalizeDeviceView = (view: ConversationView): Json => {
 
 /**
  * `inspect`'s states as an `expect_inspect` line writes them: one per thread in `rank` order, with
- * whether a run is live, the queue's length and the pending records oldest first. Ids and times
- * differ by harness, so a thread is named by its alias and a record by its kind, route and origin.
+ * whether a run is live, the queue's length, the pending records oldest first and, only when the
+ * newest run failed with no run since, its failure's class. Ids and times differ by harness, so a
+ * thread is named by its alias and a record by its kind, route and origin.
  */
 export const normalizeInspection = (
   states: ReadonlyArray<LiveThreadState>,
@@ -297,21 +298,28 @@ export const normalizeInspection = (
 ): Json =>
   states
     .toSorted((a, b) => rank(a.threadId) - rank(b.threadId))
-    .map((state) => ({
-      thread: aliasOf(state.threadId),
-      running: Option.isSome(state.runId),
-      queueLength: state.queueLength,
-      pending: state.pendingApprovals
-        .toSorted((a, b) => a.askedAt - b.askedAt)
-        .map((record) => ({
-          kind: record.kind,
-          route: record.route,
-          origin: Option.match(record.origin, {
-            onNone: () => null,
-            onSome: aliasOf,
-          }),
-        })),
-    }));
+    .map((state) => {
+      const read = {
+        thread: aliasOf(state.threadId),
+        running: Option.isSome(state.runId),
+        queueLength: state.queueLength,
+        pending: state.pendingApprovals
+          .toSorted((a, b) => a.askedAt - b.askedAt)
+          .map((record) => ({
+            kind: record.kind,
+            route: record.route,
+            origin: Option.match(record.origin, {
+              onNone: () => null,
+              onSome: aliasOf,
+            }),
+          })),
+      };
+
+      return Option.match(state.lastRunFailure, {
+        onNone: (): Json => read,
+        onSome: (last): Json => ({ ...read, failure: last.failure.class }),
+      });
+    });
 
 /** The ids of pending approvals in a client's view, oldest first. */
 export const pendingApprovalIds = (view: ConversationView) => {

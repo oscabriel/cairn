@@ -4,7 +4,7 @@
 // page's top edge, where no scroll reaches (a phone with its keyboard up, a short window). That
 // space depends on where the centred block lands, which only the browser knows, so it is measured:
 // whenever the page or the block resizes, the room is written to `--hero-drawer-room` on the block,
-// and the hero's classes (`hero/Hero.ts`) cap the drawer's list by it. It lives with the
+// and the hero's classes (`hero/Hero.ts`) cap the drawer's list by it, less a margin. It lives with the
 // composer, whose Message it answers with, as `Footer.ts`'s measuring does.
 
 import { Effect } from "effect";

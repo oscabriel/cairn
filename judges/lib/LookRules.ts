@@ -177,6 +177,15 @@ export const overflowRule = ({
     return false;
   };
 
+  // A popover is placed outside its parents (over the composer, or as a sheet), as is the menu
+  // drawer where it leaves the flow (the hero's, laid over the headline above its box;
+  // hero/Hero.ts): only its own box holds its text, and the boxes around it never contained it.
+  // oxlint-disable-next-line unicorn/consistent-function-scoping -- runs in the page
+  const placedOutside = (box: Element, style: CSSStyleDeclaration): boolean =>
+    box.matches("[data-slot='popover-popup']") ||
+    (box.matches("[data-composer-drawer-layer]") &&
+      style.position === "absolute");
+
   const scope = document.querySelector(root);
 
   if (scope === null) {
@@ -238,12 +247,8 @@ export const overflowRule = ({
         text.bottom - rect.bottom
       );
 
-      // A popover is placed outside its parents (over the composer, or as a sheet): only its own
-      // box holds its text, and the boxes around it never contained it.
-      const popup = box.matches("[data-slot='popover-popup']");
-
       if (past <= tolerance) {
-        if (popup) {
+        if (placedOutside(box, style)) {
           break;
         }
 

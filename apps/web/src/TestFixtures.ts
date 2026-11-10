@@ -13,6 +13,7 @@ import { ConnectionState } from "./connection/Reconnect.ts";
 import type { Model } from "./Model.ts";
 import * as RequestCard from "./next/card/Model.ts";
 import * as Meters from "./next/meters/Model.ts";
+import * as Chunks from "./next/page/Chunks.ts";
 import * as Hold from "./next/shell/Hold.ts";
 import * as NextShell from "./next/shell/Model.ts";
 import * as Thread from "./page/thread/index.ts";
@@ -54,6 +55,7 @@ export const connectingModel: Model = {
   scratchThread: Thread.Model.initial,
   requestCard: RequestCard.initial,
   meters: Meters.initial,
+  chunks: Chunks.initial,
 };
 
 /** The same page once the shell is current on epoch `epoch`. */

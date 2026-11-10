@@ -11,6 +11,7 @@ import { OutboxItem } from "./connection/Outbox.ts";
 import { Connection } from "./connection/Reconnect.ts";
 import { Model as RequestCardModel } from "./next/card/Model.ts";
 import { Model as MetersModel } from "./next/meters/Model.ts";
+import { Model as ChunksModel } from "./next/page/Chunks.ts";
 import { Model as HoldModel } from "./next/shell/Hold.ts";
 import { Model as NextShellModel } from "./next/shell/Model.ts";
 import * as Thread from "./page/thread/index.ts";
@@ -108,6 +109,8 @@ export const Model = Schema.Struct({
   requestCard: RequestCardModel,
   /** The usage page the `next` views draw (plan 6G). */
   meters: MetersModel,
+  /** The views a cold load never draws, fetched as chunks on demand (`next/page/Chunks.ts`). */
+  chunks: ChunksModel,
 });
 
 export type Model = typeof Model.Type;

@@ -17,12 +17,10 @@ import {
   WEIGHT_STRONG,
 } from "../ui/Classes.ts";
 import { Message } from "./Message.ts";
+import { REFRESH_TEXT_ID } from "./Model.ts";
 import type { RefreshConfirm } from "./Model.ts";
 import type { Placement } from "./Scratch.ts";
 import { positionOf } from "./Scratch.ts";
-
-/** The id of the confirm's field, which takes focus when it opens. */
-export const REFRESH_TEXT_ID = "refresh-text";
 
 const TITLE_ID = "refresh-title";
 

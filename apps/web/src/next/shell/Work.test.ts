@@ -25,12 +25,8 @@ import type { WorkState } from "./Model.ts";
 import { initial, initialWork } from "./Model.ts";
 import { inform, update } from "./Update.ts";
 import type { WorkInputs } from "./Work.ts";
-import {
-  workInputsOf,
-  workPanelView,
-  workToggleText,
-  workToggleView,
-} from "./Work.ts";
+import { workInputsOf, workToggleText, workToggleView } from "./Work.ts";
+import { workPanelView } from "./WorkPanel.ts";
 
 const PARENT = 1;
 

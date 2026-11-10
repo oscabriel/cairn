@@ -28,6 +28,7 @@ import { noticeFor, readyIds } from "../attachments/Update.ts";
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
 import { view } from "../next/composer/View.ts";
+import { fetchChunk } from "../next/page/Chunks.ts";
 import { AppRoute } from "../Route.ts";
 import {
   FocusPopoverSearch,
@@ -68,6 +69,9 @@ import { contextChanged, inform, pickDraftProject, update } from "./Update.ts";
 import type { UpdateReturn } from "./Update.ts";
 
 /** The saved drafts this build can decode. */
+// The popovers are their own chunk (`next/page/Chunks.ts`); the scenes draw them once it is in.
+await Effect.runPromise(fetchChunk("popovers"));
+
 const storedDrafts = Effect.map(readDrafts, ({ value }) => value);
 
 const editor = Scene.testId("composer-editor");

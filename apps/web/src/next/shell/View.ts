@@ -14,9 +14,9 @@ import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { classNames } from "../../ui/ClassNames.ts";
+import { chunkModule } from "../page/Chunks.ts";
 import { buttonDefaults, button } from "../ui/Button.ts";
 import { TYPE } from "../ui/Classes.ts";
-import { addProjectPicker } from "./AddProject.ts";
 import {
   managedMetaOf,
   managedThreadsFor,
@@ -34,14 +34,12 @@ import {
 } from "./Derived.ts";
 import { headerActions, headerLead } from "./Header.ts";
 import type { HeaderContent } from "./Header.ts";
-import { manageDialog } from "./Manage.ts";
-import type { ManageNames } from "./Manage.ts";
+import type { ManageNames } from "./ManageDialog.ts";
 import { Message } from "./Message.ts";
 import { ManageAction, MenuTarget } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { projectFaviconUrl, rail } from "./Rail.ts";
 import type { RailBubble, RailDirection } from "./Rail.ts";
-import { refreshConfirm } from "./Refresh.ts";
 import { scratchFoot, scratchHead, scratchScrim } from "./Scratch.ts";
 import type { Placement } from "./Scratch.ts";
 import { sidebarList } from "./Sidebar.ts";
@@ -394,27 +392,35 @@ export interface PlacementInput {
   readonly placement: Placement;
 }
 
-/** The refresh confirm, while a refresh is being asked. */
+/** The refresh confirm, while a refresh is being asked and its chunk is in. */
 export const refreshView = Submodel.defineView<Model, Message, PlacementInput>(
   (model, { placement }, h) =>
-    refreshConfirm(
-      h,
-      model.refresh,
-      Option.getOrElse(
-        Option.map(selectedProjectOf(model), (project) => project.title),
-        () => "this project"
-      ),
-      placement
-    )
+    Option.match(chunkModule("refresh"), {
+      onNone: () => h.empty,
+      onSome: ({ refreshConfirm }) =>
+        refreshConfirm(
+          h,
+          model.refresh,
+          Option.getOrElse(
+            Option.map(selectedProjectOf(model), (project) => project.title),
+            () => "this project"
+          ),
+          placement
+        ),
+    })
 );
 
-/** The add-project picker, while it is open. */
+/** The add-project picker, while it is open and its chunk is in (`next/page/Chunks.ts`). */
 export const addProjectView = Submodel.defineView<
   Model,
   Message,
   PlacementInput
 >((model, { placement }, h) =>
-  addProjectPicker(h, model.addProject, placement)
+  Option.match(chunkModule("addProject"), {
+    onNone: () => h.empty,
+    onSome: ({ addProjectPicker }) =>
+      addProjectPicker(h, model.addProject, placement),
+  })
 );
 
 /** The scratch overlay's scrim. */
@@ -462,10 +468,14 @@ const manageNamesOf = (model: Model): ManageNames =>
       }),
   });
 
-/** The rename or remove dialog, while a menu item opened one. */
+/** The rename or remove dialog, while a menu item opened one and its chunk is in. */
 export const manageView = Submodel.defineView<Model, Message, PlacementInput>(
   (model, { placement }, h) =>
-    manageDialog(h, model.manage, manageNamesOf(model), placement)
+    Option.match(chunkModule("manageDialog"), {
+      onNone: () => h.empty,
+      onSome: ({ manageDialog }) =>
+        manageDialog(h, model.manage, manageNamesOf(model), placement),
+    })
 );
 
 /** True when the route shows an earlier project thread: its page is read only (ADR 0048). */

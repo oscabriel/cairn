@@ -9,12 +9,13 @@
 import "./tokens.css";
 // The transcript's subagent rows (plan 6C), registered with the transcript as this chunk loads.
 import "./timeline/SubagentRows.ts";
+import { Option } from "effect";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
 import { view as requestCardView } from "./card/View.ts";
-import { view as usageView } from "./meters/UsageView.ts";
+import { chunkModule } from "./page/Chunks.ts";
 import * as Pages from "./page/Regions.ts";
 import { parentBanner } from "./rollup/ParentBanner.ts";
 import { layout } from "./shell/Layout.ts";
@@ -44,13 +45,17 @@ const composerLane = (model: Model, h: H): ReadonlyArray<Html> => [
   Pages.dockedComposer(model, h),
 ];
 
-/** The usage page at `/usage` (plan 6G), opened from the shell's foot. */
+/** The usage page at `/usage` (plan 6G), opened from the shell's foot, once its chunk is in. */
 const usagePage = (model: Model, h: H): Html =>
-  h.submodel({
-    slotId: "usage-page",
-    model: model.meters,
-    view: usageView,
-    toParentMessage: (message) => Message.GotMetersMessage({ message }),
+  Option.match(chunkModule("usage"), {
+    onNone: () => h.empty,
+    onSome: ({ view: usageView }) =>
+      h.submodel({
+        slotId: "usage-page",
+        model: model.meters,
+        view: usageView,
+        toParentMessage: (message) => Message.GotMetersMessage({ message }),
+      }),
   });
 
 /** The app. */

@@ -15,7 +15,8 @@ import * as Scene from "foldkit/scene";
 
 import { AppRoute } from "../../Route.ts";
 import type { GoalInputs } from "./Goal.ts";
-import { goalChipView, goalInputsOf, goalPanelView } from "./Goal.ts";
+import { goalChipView, goalInputsOf } from "./Goal.ts";
+import { goalPanelView } from "./GoalPanel.ts";
 import { Message } from "./Message.ts";
 import type { GoalPanelState } from "./Model.ts";
 import { initial, initialGoalPanel, initialWork } from "./Model.ts";

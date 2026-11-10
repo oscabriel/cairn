@@ -303,6 +303,18 @@ export type PendingVisit = typeof PendingVisit.Type;
 /** How long a visit may wait for the brain to show it before it is forgotten. */
 export const PENDING_VISIT_TTL_MS = 15_000;
 
+/** The id of the rename dialog's name field, which takes focus when it opens (`-cancel` for a remove). */
+export const MANAGE_TEXT_ID = "manage-text";
+
+/** The id of the refresh confirm's field, which takes focus when it opens. */
+export const REFRESH_TEXT_ID = "refresh-text";
+
+/**
+ * The add-project picker's id, which takes focus when it opens. Here, not beside the picker's view,
+ * so the update that focuses it does not pull the view into the entry (`next/page/Chunks.ts`).
+ */
+export const ADD_PROJECT_ID = "add-project";
+
 /** The `next` shell's Model. */
 export const Model = Schema.Struct({
   context: ShellContext,

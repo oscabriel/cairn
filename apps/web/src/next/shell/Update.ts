@@ -34,7 +34,6 @@ import {
   settingsRouter,
   threadRouter,
 } from "../../Route.ts";
-import { ADD_PROJECT_ID } from "./AddProject.ts";
 import {
   BrowseFolders,
   CreateProject,
@@ -71,16 +70,18 @@ import {
   threadsOf,
 } from "./Derived.ts";
 import { drawnRowsOf } from "./Keys.ts";
-import { MANAGE_TEXT_ID } from "./Manage.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { ShortcutCommand } from "./Message.ts";
 import {
+  ADD_PROJECT_ID,
   FIRST_CHILD_ROWS,
   FolderListing,
   initialManagedList,
   initialPrevious,
+  MANAGE_TEXT_ID,
   ManageAction,
   MenuTarget,
+  REFRESH_TEXT_ID,
   stopKeyOf,
 } from "./Model.ts";
 import type {
@@ -93,7 +94,6 @@ import type {
   ShellContext,
   WorkState,
 } from "./Model.ts";
-import { REFRESH_TEXT_ID } from "./Refresh.ts";
 import { SCRATCH_EDITOR_ID } from "./Scratch.ts";
 import { routedThreadIdOf, syncVisits } from "./Visits.ts";
 

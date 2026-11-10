@@ -1,11 +1,13 @@
 // The page regions the `next` frame draws (plan look track L7): the composer (the hero on a
 // draft's page, the box docked under a thread), the thread page with its transcript, the chat
 // header's diff toggle, and the settings page. Each is a Submodel over its slice of the root Model,
-// lifted by a root Message.
+// lifted by a root Message. The settings page and the composer's popovers are drawn from their own
+// chunks (`Chunks.ts`) once those are in.
 //
 // The thread page and the composer are lazy views over their own inputs, each with its own cache
 // (a cached view belongs to one position in the tree), so a keystroke rebuilds only the composer
-// and a streamed token only the transcript.
+// and a streamed token only the transcript. The composer's inputs include its popovers' chunk, so
+// a popover opened before the chunk arrived is drawn when it does.
 
 import type { Entry } from "@cairn/protocol/Thread";
 import { Equal, Option } from "effect";
@@ -21,7 +23,8 @@ import { AppRoute } from "../../Route.ts";
 import { projectOf, threadRowOf } from "../../ThreadRow.ts";
 import { subagentRowsInput } from "../../timeline/Subagents.ts";
 import { view as composerView } from "../composer/View.ts";
-import { settingsPageView } from "../settings/Page.ts";
+import { chunkModule } from "./Chunks.ts";
+import type { ChunkState } from "./Chunks.ts";
 import * as Thread from "./Thread.ts";
 
 type H = HtmlBuilder<Message>;
@@ -32,7 +35,12 @@ const dockedComposerLazy = createLazy();
 
 const threadPageLazy = createLazy();
 
-const composer = (h: H, composerModel: Model["composer"]): Html =>
+/** The composer; `_popovers` is the popovers' chunk, an input only so the cache sees it arrive. */
+const composer = (
+  h: H,
+  composerModel: Model["composer"],
+  _popovers: ChunkState
+): Html =>
   h.submodel({
     slotId: "composer",
     model: composerModel,
@@ -42,7 +50,7 @@ const composer = (h: H, composerModel: Model["composer"]): Html =>
 
 /** The composer docked under an open thread's transcript. */
 export const dockedComposer = (model: Model, h: H): Html =>
-  dockedComposerLazy(composer, [h, model.composer]);
+  dockedComposerLazy(composer, [h, model.composer, model.chunks.popovers]);
 
 /**
  * The thread page. Its inputs arrive as plain strings ("" for none) so the lazy view compares them
@@ -179,10 +187,16 @@ const placeholder = (h: H, text: string): Html =>
 /** The routed page that is not a thread: the hero, a draft, settings, or not found. */
 export const page = (model: Model, h: H): Html =>
   AppRoute.match(model.route, {
-    Hero: () => heroComposerLazy(composer, [h, model.composer]),
-    Draft: () => heroComposerLazy(composer, [h, model.composer]),
+    Hero: () =>
+      heroComposerLazy(composer, [h, model.composer, model.chunks.popovers]),
+    Draft: () =>
+      heroComposerLazy(composer, [h, model.composer, model.chunks.popovers]),
     Thread: () => h.empty,
-    Settings: () => settingsPageView(model, h),
+    Settings: () =>
+      Option.match(chunkModule("settings"), {
+        onNone: () => h.empty,
+        onSome: ({ settingsPageView }) => settingsPageView(model, h),
+      }),
     Usage: () => h.empty,
     NotFound: ({ path }) => placeholder(h, `Nothing lives at ${path}.`),
   });

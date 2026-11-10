@@ -2,13 +2,14 @@
 // (`fixtures/spend/SpendBrain.ts`, Cairn's `Brain`, spend feed, ledger and shell store over a scratch
 // directory, never the deployed unit) runs turns on four threads while the judge `kill -9`s it,
 // again and again, each kill a random 100 to 1,500 ms after the brain says it is producing. The last
-// life retries every task the kills parked (five kills on one request park it), runs every turn and
-// writes its report.
+// life runs the brain's crash accounting (`CrashLimit.ts`, ADR 0046), runs every turn and writes its
+// report. pi-durable 1.5 charges a request a kill cut off as a failed attempt, so a turn the kills
+// land on ends instead of waiting.
 //
 //   node judges/spend-kill.ts [--case kills|control]... [--kills N] [--turns N] [--quick] [--keep]
 //
-// `--quick` kills 50 to 150 ms after the brain says it is producing, so five kills land on one
-// request and pi-durable parks it; `retriedParked` in the result counts what the last life retried.
+// `--quick` kills 50 to 150 ms after the brain says it is producing, so several kills land on one
+// request.
 //
 // Cases (default: both):
 // - kills: 12 kills over 48 turns, the real ledger.
@@ -42,6 +43,10 @@ import {
   Schema,
 } from "effect";
 
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
+
 const root = path.join(import.meta.dirname, "..");
 
 const brainScript = path.join(
@@ -57,7 +62,7 @@ const { values } = parseArgs({
     kills: { type: "string" },
     turns: { type: "string", default: "48" },
     keep: { type: "boolean", default: false },
-    // Kills 50 to 150 ms after producing, so several land on one request and park it.
+    // Kills 50 to 150 ms after producing, so several land on one request.
     quick: { type: "boolean", default: false },
   },
 });
@@ -124,9 +129,9 @@ const startBrain = (
       args.push("--control");
     }
 
-    // The last life retries what the kills parked: five kills on one request park it for good.
+    // The last life runs the brain's crash accounting before it resumes, as the brain's boot does.
     if (last) {
-      args.push("--retry-parked");
+      args.push("--crash-limit");
     }
 
     return spawn(process.execPath, args, {
@@ -374,12 +379,6 @@ const runCase = Effect.fn("spend-kill.case")(function* (spec: CaseSpec) {
   }
 
   const report = yield* decodeReport(readFileSync(reportFile, "utf-8"));
-  const retriedFile = path.join(dir, "retried.json");
-
-  // Tasks the kills parked, which the last life ran again.
-  const retriedParked = existsSync(retriedFile)
-    ? Number(readFileSync(retriedFile, "utf-8"))
-    : 0;
 
   const failures = check(spec, report);
 
@@ -395,7 +394,6 @@ const runCase = Effect.fn("spend-kill.case")(function* (spec: CaseSpec) {
     case: spec.name,
     pass: failures.length === 0,
     kills: landed,
-    retriedParked,
     turns,
     responses: Object.values(report.truth).reduce(
       (sum, truth) => sum + truth.responses,

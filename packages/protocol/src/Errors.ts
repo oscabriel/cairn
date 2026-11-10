@@ -50,7 +50,6 @@ export class NotFound extends Schema.TaggedError<NotFound>()("NotFound", {
     "thread",
     "entry",
     "attachment",
-    "task",
     "approval",
     "submission",
     "folder",

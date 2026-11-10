@@ -1,13 +1,13 @@
 // Whether a child has work ahead (`workAhead`), read over a real pi-durable store: another input's
-// reporter that will still hand the child a nudge counts, and one the crash-loop guard parked does
-// not, since it hands nothing until a retry.
+// reporter that will still hand the child a nudge counts, also one crashes cut off many times in a
+// row, since crashes never end a reporter (ADR 0046).
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { createModels } from "@earendil-works/pi-ai";
 import {
   createRegistry,
@@ -16,10 +16,11 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ConversationId, TaskId } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { commitWrites } from "@earendil-works/pi-durable/testing";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import type { SubagentItemState } from "./SubagentDocs.ts";
+import type { SubagentItemState } from "../brain/SubagentDocs.ts";
 import { REPORTER_TASK, workAhead } from "./SubagentTasks.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -48,7 +49,17 @@ const itemWith = (inputs: {
   anchorTaskId: 0,
   briefApprovalId: "brief",
   description: "Count the files",
-  dispatch: {},
+  dispatch: {
+    spec: null,
+    resolved: {
+      spec: "faux/scripted",
+      model: { provider: "faux", modelId: "scripted" },
+      thinkingLevel: null,
+      priced: false,
+    },
+    previewed: null,
+    dispatchedAt: 0,
+  },
   isolation: "shared",
   worktree: null,
   status: "working",
@@ -93,11 +104,12 @@ const aheadWithNudge = (restarts: number) =>
 
       await harness.close(context);
 
-      // The other input's reporter, as the crash-loop guard leaves it: live, in its nudge phase.
+      // The other input's reporter, live in its nudge phase after `restarts` crashes.
       const storage = await openNodeSqliteStorage(store);
       const id = await storage.mintId<TaskId<JsonValue>>();
 
-      await storage.commit(
+      await commitWrites(
+        storage,
         [
           {
             type: "task",
@@ -150,9 +162,11 @@ describe("a child's work ahead", () => {
     })
   );
 
-  it.live("a reporter the crash-loop guard parked is no work ahead", () =>
-    Effect.gen(function* () {
-      assert.isFalse(yield* aheadWithNudge(DEFAULT_RESTART_LIMIT));
-    })
+  it.live(
+    "a reporter crashes cut off past pi-durable's default limit is still work ahead",
+    () =>
+      Effect.gen(function* () {
+        assert.isTrue(yield* aheadWithNudge(DEFAULT_RESTART_LIMIT + 1));
+      })
   );
 });

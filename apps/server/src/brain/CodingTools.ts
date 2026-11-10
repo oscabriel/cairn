@@ -20,7 +20,6 @@
 // The search tools run `rg` and `fd` as argv arrays, with no shell between the model and the process.
 
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
 import type {
   ToolExecutionApi,
   ToolExecutionResult,
@@ -34,9 +33,16 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
-import { Array as Arr, Context, Effect, Layer, Option } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+} from "effect";
+import { Type } from "typebox";
 
-import { Git } from "../git/Git.ts";
 import { threadProcessEnv } from "./Arms.ts";
 import {
   MIN_TRAILER_GIT,
@@ -45,8 +51,11 @@ import {
   threadOfCall,
   withTrailerHook,
 } from "./CommitTrailer.ts";
+import { durableRunner } from "./Durable.ts";
+import type { DurableRunner } from "./Durable.ts";
 import { ExtensionOrder } from "./Extensions.ts";
 import type { CairnExtension } from "./Extensions.ts";
+import { GitVersion } from "./GitVersion.ts";
 import { gatedTool } from "./Permissions.ts";
 
 /** The name of the extension, as pi-durable selects it. */
@@ -207,25 +216,37 @@ export const bashTimeoutSeconds = (asked?: number): number =>
 const BASH_TIMEOUT_NOTE = `Without a timeout a command stops after ${BASH_DEFAULT_TIMEOUT_SECONDS} seconds; pass up to ${BASH_MAX_TIMEOUT_SECONDS} for a longer one.`;
 
 /** pi-durable's `bash` with a default and a maximum timeout, said in its description. */
-const boundedBash = (bash: ReturnType<typeof createBashTool>) => ({
-  ...bash,
-  description: `${bash.description} ${BASH_TIMEOUT_NOTE}`,
-  parameters: {
-    ...bash.parameters,
-    properties: {
-      ...bash.parameters.properties,
-      timeout: {
-        ...bash.parameters.properties.timeout,
-        description: `Timeout in seconds. ${BASH_TIMEOUT_NOTE}`,
+const boundedBash = (bash: ReturnType<typeof createBashTool>) => {
+  // pi-schema types every keyword `unknown`; the built-in `bash` schema has both as objects.
+  const { properties: declared } = bash.parameters;
+  const properties = Predicate.isObject(declared) ? declared : {};
+
+  const timeout =
+    Predicate.hasProperty(properties, "timeout") &&
+    Predicate.isObject(properties.timeout)
+      ? properties.timeout
+      : {};
+
+  return {
+    ...bash,
+    description: `${bash.description} ${BASH_TIMEOUT_NOTE}`,
+    parameters: {
+      ...bash.parameters,
+      properties: {
+        ...properties,
+        timeout: {
+          ...timeout,
+          description: `Timeout in seconds. ${BASH_TIMEOUT_NOTE}`,
+        },
       },
     },
-  },
-  execute: async (...[args, ...rest]: Parameters<typeof bash.execute>) =>
-    await bash.execute(
-      { ...args, timeout: bashTimeoutSeconds(args.timeout) },
-      ...rest
-    ),
-});
+    execute: async (...[args, ...rest]: Parameters<typeof bash.execute>) =>
+      await bash.execute(
+        { ...args, timeout: bashTimeoutSeconds(args.timeout) },
+        ...rest
+      ),
+  };
+};
 
 /** How the brain's `bash` is built. */
 export interface BashOptions {
@@ -237,10 +258,13 @@ export interface BashOptions {
 const TRAILER_ON: BashOptions = { trailer: true };
 
 /**
- * `bash` as the brain runs it: bounded, with a Cairn-free environment, gated by the mode, and with
- * the commit trailer hook unless `options.trailer` is off.
+ * `bash` as the brain runs it: bounded, with a Cairn-free environment, gated by the mode through
+ * `run`, and with the commit trailer hook unless `options.trailer` is off.
  */
-export const gatedBash = (options: BashOptions = TRAILER_ON) =>
+export const gatedBash = (
+  run: DurableRunner,
+  options: BashOptions = TRAILER_ON
+) =>
   gatedTool(
     boundedBash(
       createBashTool({
@@ -259,25 +283,31 @@ export const gatedBash = (options: BashOptions = TRAILER_ON) =>
       })
     ),
     "command",
-    (args) => `bash: ${args.command}`
+    (args) => `bash: ${args.command}`,
+    run
   );
 
 /** The coding tools, with `read` replay-safe and the writers gated by the thread's mode. */
-const codingTools = (images: ImageProcessor, bash: BashOptions) => {
+const codingTools = (
+  images: ImageProcessor,
+  bash: BashOptions,
+  run: DurableRunner
+) => {
   const read = createReadTool({ images });
 
   return defineExtension({
     name: CODING_TOOLS,
     tools: [
       { ...read, replay: "safe" as const },
-      gatedTool(createWriteTool(), "edit", (args) => `write ${args.path}`),
+      gatedTool(createWriteTool(), "edit", (args) => `write ${args.path}`, run),
       gatedTool(
         createEditTool(),
         "edit",
         (args) =>
-          `edit ${args.path} (${args.edits.length} ${args.edits.length === 1 ? "change" : "changes"})`
+          `edit ${args.path} (${args.edits.length} ${args.edits.length === 1 ? "change" : "changes"})`,
+        run
       ),
-      gatedBash(bash),
+      gatedBash(run, bash),
       grep,
       find,
       ls,
@@ -290,25 +320,19 @@ export class CodingTools extends Context.Service<
   CodingTools,
   { readonly extension: CairnExtension }
 >()("cairn/server/brain/CodingTools") {
-  /** Over the ambient `Git`, asked for its version once to decide the commit trailer. */
+  /**
+   * Over git's version (`GitVersion`, asked once when the brain starts) to decide the commit
+   * trailer: `GitVersionLive` in the extension set.
+   */
   static readonly layerNoDeps = Layer.effect(
     CodingTools,
     Effect.gen(function* () {
-      const git = yield* Git;
+      // A git that cannot run reported its failure in the line, and the trailer stays off.
+      const { line: output } = yield* GitVersion;
 
       const images = yield* Effect.promise(
         async () => await createNodePhotonImages()
       );
-
-      // A git that cannot run reports its failure here, and the trailer stays off.
-      const output = yield* git
-        .run("CodingTools.gitVersion", ".", ["version"])
-        .pipe(
-          Effect.map((result) => result.stdout),
-          Effect.catchTag("GitError", (failure) =>
-            Effect.succeed(failure.message)
-          )
-        );
 
       const trailer = Option.exists(parseGitVersion(output), supportsTrailer);
 
@@ -326,14 +350,9 @@ export class CodingTools extends Context.Service<
       return CodingTools.of({
         extension: {
           order: ExtensionOrder.codingTools,
-          extension: codingTools(images, { trailer }),
+          extension: codingTools(images, { trailer }, yield* durableRunner),
         },
       });
     })
-  );
-
-  /** With Node's git. */
-  static readonly layer = CodingTools.layerNoDeps.pipe(
-    Layer.provide(Git.layer)
   );
 }

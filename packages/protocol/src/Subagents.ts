@@ -184,7 +184,6 @@ export type ChildWorktree = typeof ChildWorktree.Type;
  * model the child runs on for life, and the card's preview when it differs.
  */
 export const DispatchRecord = Schema.Struct({
-  /** A record written before ADR 0043 may hold a role name here (`@worker`). */
   spec: Schema.NullOr(ModelSpec),
   resolved: ResolvedModel,
   /** The model the brief card showed, when it differs from `resolved`. */

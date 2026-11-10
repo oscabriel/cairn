@@ -9,7 +9,10 @@
 #      is missing, links its ops/cairn/cairn.service into ~/.config/systemd/user, and enables the unit.
 #      The unit then ships with each deploy. Starting it is ops/cairn/deploy.sh's job.
 #   4. Links the live worktree's cairn-nightly.service and cairn-nightly.timer (the durability matrix
-#      at 03:30, judges/fixtures/durability/nightly.sh) and enables and starts the timer.
+#      at 03:30, judges/fixtures/durability/nightly.sh) and cairn-nightly-failed.service (which the
+#      nightly's OnFailure= starts to push a failed night to the user's devices, ADR 0054), and
+#      enables and starts the timer. A deploy links any of these a later commit adds
+#      (ops/cairn/link-units.sh); only enabling the timer needs this script.
 #   5. Writes the user's login PATH (`$SHELL -lc`, each directory once) as the PATH line of
 #      ~/.config/cairn/brain.env, which both units read after their own PATH, so thread tools and claude
 #      children find bun, cargo and the rest (T28). Other lines in the file are kept. Rerun after adding a
@@ -101,8 +104,8 @@ main() {
 	# The links point into the live worktree, so it must carry the units: a link to a file the worktree
 	# lacks would dangle. A worktree older than the units needs a deploy first. --check, which changes
 	# nothing, verifies this checkout's copies instead.
-	local name source link sources=()
-	for name in cairn-nightly.service cairn-nightly.timer; do
+	local name source link sources=() linked=0
+	for name in cairn-nightly.service cairn-nightly.timer cairn-nightly-failed.service; do
 		source=$live/ops/cairn/$name
 		if [[ ! -f $source ]]; then
 			if [[ $check -eq 0 ]]; then
@@ -118,9 +121,11 @@ main() {
 			echo "ok: $link links the live worktree's $name"
 		else
 			say "link $link -> $source"
-			[[ $check -eq 1 ]] || ln -sfn "$source" "$link"
+			[[ $check -eq 1 ]] || { ln -sfn "$source" "$link" && linked=1; }
 		fi
 	done
+	# A unit linked for the first time is unknown to systemd until it reloads.
+	[[ $linked -eq 0 ]] || systemctl --user daemon-reload
 	systemd-analyze --user verify "${sources[@]}"
 	echo "ok: systemd-analyze --user verify ${sources[*]}"
 	if systemctl --user is-enabled --quiet cairn-nightly.timer 2>/dev/null; then

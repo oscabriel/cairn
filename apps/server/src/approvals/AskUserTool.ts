@@ -10,14 +10,17 @@
 // the run that asked. Routing a child's question to its parent first (ADR 0027) is the question
 // router's; here every question is the user's.
 
-import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Result } from "effect";
+import { Type } from "typebox";
 
-import { approvalLedger, Approvals } from "../brain/CairnDocs.ts";
-import { durable } from "../brain/Durable.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
+import { durable, durableRunner } from "../brain/Durable.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
+import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { approvalLedger } from "./ApprovalLedger.ts";
 import {
   ASK_USER_DESCRIPTION,
   ASK_USER_TOOL,
@@ -111,31 +114,47 @@ const askAndWait = (api: ToolExecutionApi, ask: QuestionAsk) =>
     })
   );
 
-/** `ask_user` as a pi-durable tool. */
-export const askUserTool = defineTool({
-  name: ASK_USER_TOOL,
-  description: ASK_USER_DESCRIPTION,
-  parameters,
-  replay: "safe",
-  callers: ["model"],
-  execute: async (args, api, context) => {
-    const ask = questionAskOf(args);
+/** `ask_user` as a pi-durable tool, waiting through `run`. */
+export const askUserTool = (run: DurableRunner) =>
+  defineTool({
+    name: ASK_USER_TOOL,
+    description: ASK_USER_DESCRIPTION,
+    parameters,
+    replay: "safe",
+    callers: ["model"],
+    execute: async (args, api, context) => {
+      const ask = questionAskOf(args);
 
-    if (Result.isFailure(ask)) {
-      return refusal(ask.failure);
-    }
+      if (Result.isFailure(ask)) {
+        return refusal(ask.failure);
+      }
 
-    return await Effect.runPromise(askAndWait(api, ask.success), {
-      signal: context.abortSignal,
-    });
-  },
-});
+      return await run.promise(askAndWait(api, ask.success), {
+        signal: context.abortSignal,
+      });
+    },
+  });
 
-/** The `ask_user` extension, installed at `order`; production passes `ExtensionOrder.askUser`. */
-export const askUserExtension = (order: number): CairnExtension => ({
+/**
+ * The `ask_user` extension, installed at `order` and running through `run`; production passes
+ * `ExtensionOrder.askUser` and the extension set's runner.
+ */
+export const askUserExtension = (
+  order: number,
+  run: DurableRunner
+): CairnExtension => ({
   order,
   extension: defineExtension({
     name: ASK_USER_EXTENSION,
-    tools: [askUserTool],
+    tools: [askUserTool(run)],
   }),
 });
+
+/**
+ * The installed set's `ask_user`: at its order key, running on the context of the layer that
+ * builds it.
+ */
+export const askUserSource: Effect.Effect<CairnExtension> = Effect.map(
+  durableRunner,
+  (run) => askUserExtension(ExtensionOrder.askUser, run)
+);

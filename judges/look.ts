@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one browser state after another, on purpose */
-// The look tool (plan look track L5, ADR 0040): captures named states of the real `next` client,
+// The look tool (plan look track L5, ADR 0040): captures named states of the real client,
 // holds each to the look rules, publishes them as a round for the user, freezes a round the user
 // approved, and checks today's client against the frozen round.
 //
@@ -92,6 +92,7 @@ import {
   sha256,
   shotName,
   shotVerdict,
+  TOKENS_PATH,
   tokensFinding,
 } from "./lib/LookFreeze.ts";
 import type { FrozenRound, ShotVerdict } from "./lib/LookFreeze.ts";
@@ -107,10 +108,11 @@ import {
   toneRule,
   touchRule,
 } from "./lib/LookRules.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const root = path.join(import.meta.dirname, "..");
-
-const TOKENS_PATH = "apps/web/src/next/tokens.css";
 
 const FROZEN_DIR = path.join(root, "judges/look/frozen");
 

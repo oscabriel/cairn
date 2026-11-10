@@ -11,6 +11,18 @@
 // forgets the record once the key is set again or a day has passed. An entry a tab holds that storage
 // lacks is removed from the tab only when such a record names it; otherwise the tab's save writes
 // it back.
+//
+// Two builds can share storage (a tab not yet reloaded after a deploy), so a value is read entry by
+// entry: an entry this build cannot decode is not shown, but storage still holds it, so it is never
+// taken for lost, and a save patches the stored value (sets and removes this tab's entries only),
+// writing every other entry back exactly as stored. A value unreadable as a whole (not JSON, or
+// another outer shape) is never written over: the tab reads and writes its copy under the value's
+// recovery key (`<key>:recovery`) instead. A tab of this build that sets an entry under the key of
+// one it cannot decode replaces it (a draft written in the same thread): its key is all it knows.
+//
+// The page says once that storage holds what it cannot show (`readShared`): what it told about is
+// written down (`<key>:told`), so an entry no build can read again does not raise the notice on
+// every load, and only an entry not told about yet raises it again.
 
 import type { Equivalence, Stream } from "effect";
 import { Array, Clock, Effect, Option, Record, Schema } from "effect";
@@ -98,6 +110,14 @@ export const REMOVAL_MEMORY_MS = 24 * 60 * 60 * 1000;
 /** The localStorage key the removals from the value at `key` are kept under. */
 export const removalsKey = (key: string): string => `${key}:removed`;
 
+/**
+ * The localStorage key a tab keeps its copy of the value at `key` under while the value there is
+ * unreadable as a whole, so the unreadable value is never written over.
+ */
+export const recoveryKey = (key: string): string => `${key}:recovery`;
+
+// The removals' shape. A change an older build cannot decode needs a new key (`<key>:removed2`):
+// a build that cannot read the removals reads them as none, and its next save writes over them.
 const RemovalsJson = Schema.fromJsonString(
   Schema.Record(Schema.String, Schema.Finite)
 );
@@ -134,20 +154,25 @@ export interface Merged<A> {
 /**
  * The merge of a save of `mine` (base `base`) into a stored record: this tab's changes, plus every
  * entry it holds that storage lacks and no removal names, so a write from a stale read is undone.
- * None when there is nothing to write.
+ * `held` names the entries storage holds that this build cannot decode: they are not lost. None
+ * when there is nothing to write.
  */
 export const mergeRecord =
   <A>(equivalence: Equivalence.Equivalence<A>) =>
   (base: Readonly<Record<string, A>>, mine: Readonly<Record<string, A>>) =>
   (
     stored: Readonly<Record<string, A>>,
-    removals: Removals
+    removals: Removals,
+    held: ReadonlyArray<string>
   ): Option.Option<Merged<Record<string, A>>> => {
     const changes = recordChanges(equivalence)(base, mine);
 
     const lost = Record.filter(
       mine,
-      (_value, key) => !Record.has(stored, key) && !Record.has(removals, key)
+      (_value, key) =>
+        !Record.has(stored, key) &&
+        !held.includes(key) &&
+        !Record.has(removals, key)
     );
 
     const set = { ...lost, ...changes.set };
@@ -167,10 +192,11 @@ export const mergeList =
   (base: ReadonlyArray<A>, mine: ReadonlyArray<A>) =>
   (
     stored: ReadonlyArray<A>,
-    removals: Removals
+    removals: Removals,
+    held: ReadonlyArray<string>
   ): Option.Option<Merged<ReadonlyArray<A>>> => {
     const changes = listChanges(keyOf)(base, mine);
-    const storedKeys = new Set(stored.map(keyOf));
+    const storedKeys = new Set([...stored.map(keyOf), ...held]);
     const addedKeys = new Set(changes.added.map(keyOf));
 
     const lost = Array.filter(mine, (item) => {
@@ -197,62 +223,407 @@ export const mergeList =
         });
   };
 
+/** A stored value as this build reads it. */
+export interface Readable<A, Raw> {
+  /** The entries this build decodes. */
+  readonly value: A;
+  /** The value as stored, which a save patches, so entries this build cannot decode stay as stored. */
+  readonly raw: Raw;
+  /** The keys of stored entries this build cannot decode but can still name: present, so not lost. */
+  readonly held: ReadonlyArray<string>;
+  /** One id per stored entry this build cannot decode (`unreadId`), which the page tells about once. */
+  readonly unread: ReadonlyArray<string>;
+}
+
+/** The id of a stored entry this build cannot decode: its key, or its JSON when it has none. */
+export const unreadId = (
+  key: Option.Option<string>,
+  json: Schema.Json
+): string => Option.getOrElse(key, () => `#${JSON.stringify(json)}`);
+
+/** How one shared value is kept as text: read entry by entry, and written as a patch. */
+export interface Persisted<A, Raw, R, E> {
+  /** The value when nothing is stored. */
+  readonly empty: Readable<A, Raw>;
+  /** True when `raw` holds no entry, read or not. */
+  readonly isEmpty: (raw: Raw) => boolean;
+  /** Reads stored text; none when the text is unreadable as a whole. */
+  readonly read: (
+    text: string
+  ) => Effect.Effect<Option.Option<Readable<A, Raw>>, never, R>;
+  /**
+   * The text of `raw` with the entries `merged` set (taken from its value) and removed, and every
+   * other entry as stored.
+   */
+  readonly write: (raw: Raw, merged: Merged<A>) => Effect.Effect<string, E, R>;
+}
+
+/** Where a shared value was read: the key it lives under now, and what it holds. */
+interface Found<A, Raw> {
+  readonly at: string;
+  readonly readable: Readable<A, Raw>;
+}
+
 /**
- * Writes one tab's changes into what storage holds at `key` now: `read` the stored value, `merge`
- * this tab's changes into it with the removals other tabs recorded (none when there is nothing to
- * write, so no other tab is woken), record this save's removals, and `write` the result. Answers
- * what storage holds afterwards, which the tab takes as its new base, or none when storage refused.
+ * Reads the value at `key`, or, when that value is unreadable as a whole, the tab's copy at its
+ * recovery key. None when both are unreadable. Fails when storage itself refuses.
  */
-export const mergeStored = <A, E, R>(
+const findStored = Effect.fnUntraced(function* <A, Raw, R, E>(
   key: string,
-  read: Effect.Effect<A, never, R>,
-  merge: (stored: A, removals: Removals) => Option.Option<Merged<A>>,
-  write: (next: A) => Effect.Effect<void, E, R>
-): Effect.Effect<Option.Option<A>, never, R | KeyValueStore.KeyValueStore> =>
+  persisted: Persisted<A, Raw, R, E>
+) {
+  const store = yield* KeyValueStore.KeyValueStore;
+
+  const readAt = (at: string) =>
+    Effect.flatMap(store.get(at), (text) =>
+      Option.match(Option.fromUndefinedOr(text), {
+        onNone: () => Effect.succeedSome(persisted.empty),
+        onSome: persisted.read,
+      })
+    );
+
+  const atKey = yield* readAt(key);
+
+  if (Option.isSome(atKey)) {
+    return Option.some<Found<A, Raw>>({ at: key, readable: atKey.value });
+  }
+
+  const atRecovery = yield* readAt(recoveryKey(key));
+
+  return Option.map(atRecovery, (readable): Found<A, Raw> => ({
+    at: recoveryKey(key),
+    readable,
+  }));
+});
+
+/** The unread id of a value at a key that is unreadable as a whole, its entries uncounted. */
+const UNREADABLE_VALUE = "*unreadable";
+
+/** The unread id of a copy at the recovery key once the value at the key reads again. */
+const LEFT_RECOVERY = "*recovery";
+
+/** What a page loads of a shared value. */
+export interface Stored<A> {
+  /** The entries this build decodes. */
+  readonly value: A;
+  /** The ids of what storage holds that this build cannot show, kept as stored. */
+  readonly unread: ReadonlyArray<string>;
+}
+
+/**
+ * Whether the recovery key of `key` holds a copy: once the value at the key reads again, nothing
+ * reads that copy, so the page must say it is there.
+ */
+const recoveryLeft = Effect.fnUntraced(function* <A, Raw, R, E>(
+  key: string,
+  persisted: Persisted<A, Raw, R, E>
+) {
+  const store = yield* KeyValueStore.KeyValueStore;
+  const text = yield* store.get(recoveryKey(key));
+
+  return yield* Option.match(Option.fromUndefinedOr(text), {
+    onNone: () => Effect.succeed(false),
+    onSome: (copy) =>
+      Effect.map(
+        persisted.read(copy),
+        (readable) =>
+          !Option.exists(readable, ({ raw }) => persisted.isEmpty(raw))
+      ),
+  });
+});
+
+/**
+ * Reads the shared value at `key` entry by entry. A missing value, or storage refusing, is the empty
+ * value: the page must start. A value unreadable as a whole stays where it is, and the tab's copy at
+ * the recovery key is read instead.
+ */
+export const loadShared = <A, Raw, R, E>(
+  key: string,
+  persisted: Persisted<A, Raw, R, E>
+): Effect.Effect<Stored<A>, never, R | KeyValueStore.KeyValueStore> =>
   Effect.gen(function* () {
-    const stored = yield* read;
-    const removals = yield* loadRemovals(key);
+    const found = yield* findStored(key, persisted);
 
-    return yield* Option.match(merge(stored, removals), {
-      onNone: () => Effect.succeed(stored),
-      onSome: (merged) =>
-        Effect.gen(function* () {
-          const store = yield* KeyValueStore.KeyValueStore;
-          const now = yield* Clock.currentTimeMillis;
+    if (Option.isNone(found)) {
+      return { value: persisted.empty.value, unread: [UNREADABLE_VALUE] };
+    }
 
-          const next: Record<string, number> = {
-            ...Record.filter(
-              removals,
-              (_at, removedKey) => !merged.set.includes(removedKey)
-            ),
-            ...Record.fromIterableWith(merged.removed, (removedKey) => [
-              removedKey,
-              now,
-            ]),
-          };
+    const { at, readable } = found.value;
 
-          // Removals first: a tab that reads the new value must find why an entry left it.
-          yield* store.set(removalsKey(key), yield* encodeRemovals(next));
-          yield* write(merged.value);
+    if (at !== key) {
+      return {
+        value: readable.value,
+        unread: [UNREADABLE_VALUE, ...readable.unread],
+      };
+    }
 
-          return merged.value;
-        }),
-    });
+    const left = yield* recoveryLeft(key, persisted);
+
+    return {
+      value: readable.value,
+      unread: left ? [...readable.unread, LEFT_RECOVERY] : readable.unread,
+    };
   }).pipe(
-    Effect.asSome,
-    Effect.orElseSucceed(() => Option.none())
+    Effect.orElseSucceed((): Stored<A> => ({
+      value: persisted.empty.value,
+      unread: [],
+    }))
+  );
+
+/** The localStorage key the ids of the unread entries the page last told about are kept under. */
+const toldKey = (key: string): string => `${key}:told`;
+
+// The told ids' shape. A change an older build cannot decode needs a new key (`<key>:told2`): a
+// build that cannot read them reads them as none, tells once more, and writes over them.
+const ToldJson = Schema.fromJsonString(Schema.Array(Schema.String));
+
+const decodeTold = Schema.decodeEffect(ToldJson);
+
+const encodeTold = Schema.encodeEffect(ToldJson);
+
+/**
+ * Whether the page should tell the user about `unread` (the unread ids at `key`): true when one of
+ * them was not told about at the last load. Writes the ids down as told, and forgets those no longer
+ * stored. Storage refusing tells.
+ */
+const tellOnce = (key: string, unread: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const store = yield* KeyValueStore.KeyValueStore;
+    const saved = yield* store.get(toldKey(key));
+
+    const told: ReadonlyArray<string> = yield* Option.match(
+      Option.fromUndefinedOr(saved),
+      {
+        onNone: () => Effect.succeed([]),
+        onSome: (text) =>
+          decodeTold(text).pipe(
+            Effect.orElseSucceed((): ReadonlyArray<string> => [])
+          ),
+      }
+    );
+
+    const ids = Array.dedupe(unread);
+    const tell = ids.some((id) => !told.includes(id));
+
+    if (tell || told.length !== ids.length) {
+      yield* ids.length === 0
+        ? store.remove(toldKey(key))
+        : store.set(toldKey(key), yield* encodeTold(ids));
+    }
+
+    return tell;
+  }).pipe(Effect.orElseSucceed(() => unread.length > 0));
+
+/** What a page loads of a shared value, and whether it tells the user storage holds more. */
+export interface Loaded<A> {
+  /** The entries this build decodes. */
+  readonly value: A;
+  /** Storage holds entries this build cannot show, kept as stored, that no load has told about. */
+  readonly tell: boolean;
+}
+
+/**
+ * `loadShared`, and whether the page should say storage holds entries it cannot show: once for each
+ * such entry (`tellOnce`), so one no build can read does not raise the notice on every load.
+ */
+export const readShared = <A, Raw, R, E>(
+  key: string,
+  persisted: Persisted<A, Raw, R, E>
+): Effect.Effect<Loaded<A>, never, R | KeyValueStore.KeyValueStore> =>
+  Effect.flatMap(loadShared(key, persisted), ({ unread, value }) =>
+    Effect.map(tellOnce(key, unread), (tell) => ({ value, tell }))
   );
 
 /**
- * `message` each time another tab writes `key` (or clears storage). The browser raises `storage`
- * only in the other tabs, never in the one that wrote.
+ * Writes one tab's changes into what storage holds at `key` now: read the stored value, `merge`
+ * this tab's changes into it with the removals other tabs recorded (none when there is nothing to
+ * write, so no other tab is woken), record this save's removals, and write the stored value patched
+ * with the merge. Answers what storage holds afterwards (the entries this build decodes), which the
+ * tab takes as its new base, or none when storage refused or nothing there could be read.
+ */
+export const mergeStored = <A, Raw, R, E>(
+  key: string,
+  persisted: Persisted<A, Raw, R, E>,
+  merge: (
+    stored: A,
+    removals: Removals,
+    held: ReadonlyArray<string>
+  ) => Option.Option<Merged<A>>
+): Effect.Effect<Option.Option<A>, never, R | KeyValueStore.KeyValueStore> =>
+  Effect.gen(function* () {
+    const found = yield* findStored(key, persisted);
+
+    if (Option.isNone(found)) {
+      return Option.none<A>();
+    }
+
+    const { at, readable } = found.value;
+    const removals = yield* loadRemovals(at);
+    const merged = merge(readable.value, removals, readable.held);
+
+    if (Option.isNone(merged)) {
+      return Option.some(readable.value);
+    }
+
+    const store = yield* KeyValueStore.KeyValueStore;
+    const now = yield* Clock.currentTimeMillis;
+    const text = yield* persisted.write(readable.raw, merged.value);
+
+    const next: Record<string, number> = {
+      ...Record.filter(
+        removals,
+        (_at, removedKey) => !merged.value.set.includes(removedKey)
+      ),
+      ...Record.fromIterableWith(merged.value.removed, (removedKey) => [
+        removedKey,
+        now,
+      ]),
+    };
+
+    // Removals first: a tab that reads the new value must find why an entry left it.
+    yield* store.set(removalsKey(at), yield* encodeRemovals(next));
+    yield* store.set(at, text);
+
+    return Option.some(merged.value.value);
+  }).pipe(Effect.orElseSucceed(() => Option.none<A>()));
+
+const RecordDocument = Schema.fromJsonString(
+  Schema.Record(Schema.String, Schema.Json)
+);
+
+const decodeRecordDocument = Schema.decodeOption(RecordDocument);
+
+const encodeRecordDocument = Schema.encodeEffect(RecordDocument);
+
+/** A record of entries kept as one JSON object, each entry read with `entry` on its own. */
+export const persistedRecord = <A>(
+  entry: Schema.Codec<A, Schema.Json>
+): Persisted<
+  Record<string, A>,
+  Readonly<Record<string, Schema.Json>>,
+  never,
+  Schema.SchemaError
+> => {
+  const decodeEntry = Schema.decodeOption(entry);
+  const encodeEntry = Schema.encodeEffect(entry);
+
+  return {
+    empty: { value: {}, raw: {}, held: [], unread: [] },
+    isEmpty: Record.isEmptyRecord,
+    read: (text) =>
+      Effect.succeed(
+        Option.map(decodeRecordDocument(text), (raw) => {
+          const decoded = Record.map(raw, (json) => decodeEntry(json));
+          const held = Record.keys(Record.filter(decoded, Option.isNone));
+
+          return {
+            value: Record.getSomes(decoded),
+            raw,
+            held,
+            unread: held,
+          };
+        })
+      ),
+    write: (raw, merged) =>
+      Effect.gen(function* () {
+        const set = yield* Effect.forEach(
+          Record.toEntries(
+            Record.filter(merged.value, (_value, key) =>
+              merged.set.includes(key)
+            )
+          ),
+          ([key, value]) =>
+            Effect.map(encodeEntry(value), (json) => [key, json] as const)
+        );
+
+        return yield* encodeRecordDocument({
+          ...Record.filter(raw, (_json, key) => !merged.removed.includes(key)),
+          ...Record.fromEntries(set),
+        });
+      }),
+  };
+};
+
+const ListDocument = Schema.fromJsonString(Schema.Array(Schema.Json));
+
+const decodeListDocument = Schema.decodeOption(ListDocument);
+
+const encodeListDocument = Schema.encodeEffect(ListDocument);
+
+/**
+ * A list of items kept as one JSON array, each item read with `item` on its own. `unreadKey` names
+ * an item this build cannot decode when its key is still where this build looks for it, so a tab
+ * of this build can remove it.
+ */
+export const persistedList = <A>(
+  item: Schema.Codec<A, Schema.Json>,
+  keyOf: (item: A) => string,
+  unreadKey: (json: Schema.Json) => Option.Option<string>
+): Persisted<
+  ReadonlyArray<A>,
+  ReadonlyArray<Schema.Json>,
+  never,
+  Schema.SchemaError
+> => {
+  const decodeItem = Schema.decodeOption(item);
+  const encodeItem = Schema.encodeEffect(item);
+
+  const keyOfJson = (json: Schema.Json): Option.Option<string> =>
+    Option.match(decodeItem(json), {
+      onNone: () => unreadKey(json),
+      onSome: (decoded) => Option.some(keyOf(decoded)),
+    });
+
+  return {
+    empty: { value: [], raw: [], held: [], unread: [] },
+    isEmpty: (raw) => raw.length === 0,
+    read: (text) =>
+      Effect.succeed(
+        Option.map(decodeListDocument(text), (raw) => {
+          const unread = raw.filter((json) => Option.isNone(decodeItem(json)));
+
+          return {
+            value: Array.getSomes(raw.map((json) => decodeItem(json))),
+            raw,
+            held: Array.getSomes(unread.map(unreadKey)),
+            unread: unread.map((json) => unreadId(unreadKey(json), json)),
+          };
+        })
+      ),
+    write: (raw, merged) =>
+      Effect.gen(function* () {
+        const kept = raw.filter(
+          (json) =>
+            !Option.exists(keyOfJson(json), (key) =>
+              merged.removed.includes(key)
+            )
+        );
+
+        const present = new Set(Array.getSomes(kept.map(keyOfJson)));
+
+        const added = yield* Effect.forEach(
+          merged.value.filter(
+            (value) =>
+              merged.set.includes(keyOf(value)) && !present.has(keyOf(value))
+          ),
+          (value) => encodeItem(value)
+        );
+
+        return yield* encodeListDocument([...kept, ...added]);
+      }),
+  };
+};
+
+/**
+ * `message` each time another tab writes `key` or its recovery key (or clears storage). The browser
+ * raises `storage` only in the other tabs, never in the one that wrote.
  */
 export const storageChanges = <A>(key: string, message: A): Stream.Stream<A> =>
   streamFromEventFilterMap({
     target: window,
     type: "storage",
     filterMapEvent: (event) =>
-      event.key === key || event.key === null
+      event.key === key || event.key === recoveryKey(key) || event.key === null
         ? Option.some(message)
         : Option.none(),
   });

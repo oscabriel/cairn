@@ -10,7 +10,7 @@
 // ancestors' in `readPermissions` (Permissions.ts), and Stop all stops each working child.
 
 import { ThreadId } from "@cairn/protocol/Ids";
-import { copyJson } from "@earendil-works/chord";
+import { copyJson } from "@earendil-works/chord/json";
 import type {
   AgentChange,
   ConversationId,
@@ -23,10 +23,11 @@ import { Context, Effect, Layer, Option, Predicate, Result } from "effect";
 
 import { BriefTtl } from "../brain/BriefTtl.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { durable } from "../brain/Durable.ts";
-import type { DurableCallError } from "../brain/Durable.ts";
+import { durable, durableRunner, runnerOf } from "../brain/Durable.ts";
+import type { DurableCallError, DurableRunner } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { ChildDoc, isLinked, SubagentsDoc } from "../brain/SubagentDocs.ts";
 import {
   NO_SUBAGENT_CRASHES,
   NO_SUBAGENT_FAULTS,
@@ -42,12 +43,16 @@ import { ModelSpecs } from "../models/ModelSpecs.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { BudgetBook } from "../usage/BudgetBook.ts";
 import { gateDecision } from "../usage/Budgets.ts";
+import {
+  defaultBudgetAccess,
+  NO_DEFAULT_BUDGET,
+} from "../usage/DefaultBudget.ts";
+import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import { listParent, SPAWN_TOOL } from "./BrainCap.ts";
 import { BriefFaults, NO_BRIEF_FAULTS } from "./BriefFaults.ts";
 import type { BriefFaultHooks } from "./BriefFaults.ts";
 import { conversationOf } from "./Delivery.ts";
-import { ChildDoc, isLinked, SubagentsDoc } from "./SubagentDocs.ts";
 import { inputPartsOf, subagentTaskSet } from "./SubagentTasks.ts";
 import type {
   BudgetAccess,
@@ -99,8 +104,7 @@ export const workspaceAccess = (
  * `ModelSpecs.resolve` for the spawn and the start task, which run outside Effect: the resolution,
  * or why not, in the error's words for the parent. A `ModelSpecError` is final (the model is not
  * ready, or the spec is none); `ModelSpecsUnavailable` is a read that failed and says nothing about
- * the model, so it is marked `retry`. A brief recorded before ADR 0043 that names a role is logged
- * through `roleNameRead`. It runs with `context`, the layer's (S43).
+ * the model, so it is marked `retry`. It runs with `context`, the layer's (S43).
  */
 export const modelAccess = (
   specs: ModelSpecs["Service"],
@@ -121,19 +125,6 @@ export const modelAccess = (
           )
         )
       ),
-    roleNameRead: async (spec, approvalId) => {
-      await run(
-        Effect.logInfo(
-          "a brief recorded before roles were removed names a role; its child runs on the parent's model"
-        ).pipe(
-          Effect.annotateLogs({
-            event: "legacy_role_read",
-            spec,
-            approvalId,
-          })
-        )
-      );
-    },
   };
 };
 
@@ -177,9 +168,6 @@ const NO_MODELS: ModelAccess = {
         why: "This brain checks no models; leave model out.",
       })
     ),
-  roleNameRead: async () => {
-    await Promise.resolve();
-  },
 };
 
 /** No workspaces: for the host's copy of the task definitions, whose start task never runs. */
@@ -198,13 +186,16 @@ const build = (
   briefFaults: BriefFaultHooks,
   models: ModelAccess,
   crashes: SubagentCrashHooks,
-  budgets: BudgetAccess
+  budgets: BudgetAccess,
+  defaults: DefaultBudgetAccess,
+  run: DurableRunner
 ) => {
   // The child's agent change names the tools, and the tools create the tasks, so the tasks read
   // the change through this holder, filled once the tools exist and before any task can run.
   const child: ChildAgentHolder = { agent: () => ({}) };
 
   const tasks: SubagentTasks = subagentTaskSet({
+    run,
     faults,
     childAgent: (typed) => child.agent(typed),
     workspaces,
@@ -220,7 +211,15 @@ const build = (
     crashAt: crashes.at,
   });
 
-  const tools = subagentToolSet(faults, tasks, models, tuning, crashes.at);
+  const tools = subagentToolSet(
+    faults,
+    tasks,
+    models,
+    run,
+    tuning,
+    crashes.at,
+    defaults
+  );
 
   child.agent = childAgentOf(tools);
 
@@ -244,16 +243,20 @@ const build = (
 /**
  * The subagents extension with `faults` planted, making children's workspaces with `workspaces`;
  * the conformance suite's mutation check uses it, a test that needs a question to expire soon
- * passes `tuning`, and a judge brain's `crashes` kill it at its crash points.
+ * passes `tuning`, and a judge brain's `crashes` kill it at its crash points. A spawn's brief
+ * starts from `defaults`, the server's default budget (ADR 0047). Its tools and tasks run their
+ * Effects through `run`.
  */
 export const subagentsExtension = (
   faults: SubagentFaultSet,
   workspaces: ChildWorkspaceAccess,
+  run: DurableRunner,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
   briefFaults: BriefFaultHooks = NO_BRIEF_FAULTS,
   models: ModelAccess = NO_MODELS,
   crashes: SubagentCrashHooks = NO_SUBAGENT_CRASHES,
-  budgets: BudgetAccess = ADMIT_ALL
+  budgets: BudgetAccess = ADMIT_ALL,
+  defaults: DefaultBudgetAccess = NO_DEFAULT_BUDGET
 ): CairnExtension => ({
   order: ExtensionOrder.subagents,
   extension: build(
@@ -263,13 +266,19 @@ export const subagentsExtension = (
     briefFaults,
     models,
     crashes,
-    budgets
+    budgets,
+    defaults,
+    run
   ).extension,
 });
 
 /**
  * The task definitions host code creates tasks from. pi-durable runs a task by its registered name,
- * so the installed extension's code runs it, faults included.
+ * so the installed extension's code runs its phases, faults included. This copy's own code runs
+ * only inside a host commit (`briefAnswered`, in the answer's commit), and that code must never use
+ * the runner: built at module load, it has no layer context to carry, so a line written through it
+ * would leave the events log. A lifecycle line about that commit belongs to the Effect code that
+ * runs it (`answerApproval`'s `approval_answered`).
  */
 const host = build(
   NO_SUBAGENT_FAULTS,
@@ -278,7 +287,10 @@ const host = build(
   NO_BRIEF_FAULTS,
   NO_MODELS,
   NO_SUBAGENT_CRASHES,
-  ADMIT_ALL
+  ADMIT_ALL,
+  NO_DEFAULT_BUDGET,
+  // oxlint-disable-next-line automation/no-bare-effect-run -- never used by host code (doc above)
+  runnerOf(Context.empty())
 );
 
 const hostTasks = host.tasks;
@@ -413,11 +425,13 @@ export class Subagents extends Context.Service<
           extension: subagentsExtension(
             faults,
             workspaces,
+            yield* durableRunner,
             tuning,
             yield* BriefFaults,
             modelAccess(yield* ModelSpecs, yield* Effect.context()),
             NO_SUBAGENT_CRASHES,
-            budgetAccess(yield* BudgetBook, yield* Effect.context())
+            budgetAccess(yield* BudgetBook, yield* Effect.context()),
+            defaultBudgetAccess(yield* SettingsStore, yield* Effect.context())
           ),
         });
       })
@@ -429,7 +443,8 @@ export class Subagents extends Context.Service<
   /**
    * The extension with the faults `SubagentFaults` and `BriefFaults` name and the crash points
    * `SubagentCrashes` plants (none, unless a test or a judge brain plants some), and briefs that
-   * live as long as `BriefTtl` says (a week), making children's worktrees with `ChildWorkspaces`.
+   * live as long as `BriefTtl` says (a week), making children's worktrees with `ChildWorkspaces`,
+   * a spawn's brief starting from the root's `SettingsStore` default budget (ADR 0047).
    */
   static readonly layer = Layer.effect(
     Subagents,
@@ -448,11 +463,13 @@ export class Subagents extends Context.Service<
         extension: subagentsExtension(
           faults,
           workspaces,
+          yield* durableRunner,
           { ...DEFAULT_TOOL_OPTIONS, briefTtlMillis },
           briefFaults,
           modelAccess(yield* ModelSpecs, yield* Effect.context()),
           crashes,
-          budgetAccess(yield* BudgetBook, yield* Effect.context())
+          budgetAccess(yield* BudgetBook, yield* Effect.context()),
+          defaultBudgetAccess(yield* SettingsStore, yield* Effect.context())
         ),
       });
     })

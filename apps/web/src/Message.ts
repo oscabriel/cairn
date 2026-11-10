@@ -8,16 +8,15 @@ import { Url } from "foldkit";
 import { defineMessageUnion } from "foldkit/message";
 import { UrlRequest } from "foldkit/navigation";
 
+import { Message as RequestCardMessage } from "./card/Message.ts";
 import { Message as ComposerMessage } from "./composer/Message.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
-import { Message as RequestCardMessage } from "./next/card/Message.ts";
-import { Message as MetersMessage } from "./next/meters/Message.ts";
-import { Message as NextShellMessage } from "./next/shell/Message.ts";
+import { Message as MetersMessage } from "./meters/Message.ts";
+import { Message as ChunkMessage } from "./page/Chunks.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Message as PushMessage } from "./push/Message.ts";
 import { Message as SettingsMessage } from "./settings/Message.ts";
-import { Message as ParkedMessage } from "./shell/Parked.ts";
-import { Message as SidebarMessage } from "./sidebar/Message.ts";
+import { Message as NextShellMessage } from "./shell/Message.ts";
 
 /** Everything the root reacts to. */
 export const Message = defineMessageUnion({
@@ -36,6 +35,8 @@ export const Message = defineMessageUnion({
   LostConnection: { epoch: Schema.Int, reason: Schema.String },
   /** The wait before attempt `attempt` of `epoch` is over. */
   ElapsedBackoff: { epoch: Schema.Int, attempt: Schema.Int },
+  /** The server's build was checked over HTTP; a page of another build has reloaded instead. */
+  CheckedServerBuild: {},
   /** The page came back online, was shown again, or became visible. */
   WokeUp: {},
 
@@ -73,16 +74,15 @@ export const Message = defineMessageUnion({
   DismissedNotice: {},
 
   GotThreadMessage: { message: Thread.Message },
-  GotSidebarMessage: { message: SidebarMessage },
   GotComposerMessage: { message: ComposerMessage },
   GotPushMessage: { message: PushMessage },
   GotSettingsMessage: { message: SettingsMessage },
-  GotParkedMessage: { message: ParkedMessage },
   GotNextShellMessage: { message: NextShellMessage },
-  /** A Message of the scratch thread's page, inside the `next` shell's overlay. */
+  /** A Message of the scratch thread's page, inside the shell's overlay. */
   GotScratchThreadMessage: { message: Thread.Message },
   GotRequestCardMessage: { message: RequestCardMessage },
   GotMetersMessage: { message: MetersMessage },
+  GotChunkMessage: { message: ChunkMessage },
 });
 
 export type Message = typeof Message.Type;

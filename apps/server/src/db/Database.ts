@@ -1,7 +1,9 @@
 // `cairn.sqlite`: Cairn's own tables (the shell store, launches, attachments, the Executor grant,
 // push) on one `node:sqlite` connection through Effect SQL. Opening it sets the pragmas, backs the
 // file up when a migration is pending (so a bad migration never costs the inbox), and migrates.
-// pi-durable's transcripts live in their own store, `brain.sqlite`, never here.
+// `Database.layerRollingCopy` adds the daily rolling copy (`RollingCopy.ts`, ADR 0016), which the
+// app's root installs and tests leave out. pi-durable's transcripts live in their own store,
+// `brain.sqlite`, never here.
 
 import path from "node:path";
 
@@ -17,6 +19,8 @@ import {
   Schema,
 } from "effect";
 import type { SqlClient, SqlError } from "effect/sql";
+
+import { foldIntoOneFile, startRollingCopy } from "./RollingCopy.ts";
 
 /** The migrations `cairn.sqlite` runs, keyed `<NNNN>_<Name>` (`db/Migrations.ts` owns the list). */
 export type MigrationRecord = Readonly<
@@ -180,6 +184,33 @@ export class Database extends Context.Service<
               }).pipe(Effect.mapError(openError(options.filename, "open")))
         )
       )
+    );
+
+  /**
+   * The daily rolling copy of the open file (`cairn-daily-<time>.sqlite` under `backups/`, newest
+   * three kept) through SQLite's online backup, folded into one file, for the life of the layer;
+   * each copy also goes to `copyDir` when one is set. Nothing for an in-memory database.
+   */
+  static readonly layerRollingCopy = (copyDir: Option.Option<string>) =>
+    Layer.effectDiscard(
+      Effect.gen(function* () {
+        const database = yield* Database;
+
+        if (database.filename === ":memory:") {
+          return;
+        }
+
+        yield* startRollingCopy({
+          source: database.filename,
+          prefix: "cairn-daily-",
+          directory: path.join(path.dirname(database.filename), "backups"),
+          copyDir,
+          copy: (target) =>
+            database
+              .backup(target)
+              .pipe(Effect.andThen(foldIntoOneFile(target))),
+        });
+      })
     );
 
   /** `layerNoDeps` with Node's file system. */

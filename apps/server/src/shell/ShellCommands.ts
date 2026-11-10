@@ -12,8 +12,8 @@
 // (one with a `lineage`) is never settled, snoozed, pinned or archived, since its parent's row
 // holds it, and a parent is not settled, by hand or by the sweep, while a child works or asks or
 // its result is still on the way (ADR 0028). A folder project has one project thread (the user,
-// 2026-10-29), marked on the project row: the create that makes it marks it, a refresh archives the
-// one it replaces and moves the mark in the same commit, and archiving or deleting the marked
+// 2026-10-29), marked on the project row: the create that makes it marks it, a refresh (which names
+// the one it replaces, ADR 0048) archives it and moves the mark in the same commit, and archiving or deleting the marked
 // thread clears the mark. Clearing a scratch thread deletes it and its subagents' rows.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
@@ -89,8 +89,9 @@ export const ThreadCreate = Schema.TaggedStruct("ThreadCreate", {
   /**
    * Present for a launch in a folder project: the thread becomes the project thread. With no live
    * project thread it marks it (first use); otherwise it refreshes it, archiving the old one in the
-   * same commit. `replaces`, when some, must name the current project thread, so a refresh racing
-   * another one is refused instead of archiving the thread the other made.
+   * same commit. A refresh must name the current project thread in `replaces` (ADR 0048), so a
+   * launch that names none, or a refresh racing another one, is refused instead of archiving a
+   * thread the user did not choose to replace.
    */
   projectThread: Schema.optionalKey(
     Schema.Struct({ replaces: Schema.OptionFromNullOr(ThreadId) })
@@ -119,7 +120,6 @@ export const ThreadActivityPatch = Schema.Struct({
   pendingCount: patchField(ThreadShell.fields.pendingCount),
   latestVisibleMessage: patchField(ThreadShell.fields.latestVisibleMessage),
   latestUserMessageAt: patchField(ThreadShell.fields.latestUserMessageAt),
-  parkedTaskIds: patchField(ThreadShell.fields.parkedTaskIds),
   provider: patchField(ThreadShell.fields.provider),
   modelId: patchField(ThreadShell.fields.modelId),
   thinkingLevel: patchField(ThreadShell.fields.thinkingLevel),
@@ -157,7 +157,6 @@ export const emptyActivityPatch: ThreadActivityPatch = {
   pendingCount: Option.none(),
   latestVisibleMessage: Option.none(),
   latestUserMessageAt: Option.none(),
-  parkedTaskIds: Option.none(),
   provider: Option.none(),
   modelId: Option.none(),
   thinkingLevel: Option.none(),
@@ -765,10 +764,6 @@ const applyPatch = (
       patch.latestUserMessageAt,
       () => shell.latestUserMessageAt
     ),
-    parkedTaskIds: Option.getOrElse(
-      patch.parkedTaskIds,
-      () => shell.parkedTaskIds
-    ),
     provider: Option.getOrElse(patch.provider, () => shell.provider),
     modelId: Option.getOrElse(patch.modelId, () => shell.modelId),
     thinkingLevel: Option.getOrElse(
@@ -1036,7 +1031,8 @@ const unarchivePlan = (
  * A new top-level thread in a folder project becomes its project thread: it is marked, and the live
  * project thread it replaces (if any) is archived in the same commit, so the project never has two
  * and never none between them. The launch stops the old one's run, queue and working children
- * just before this commit, as an archive does; it leaves the sidebar.
+ * just before this commit, as an archive does; it leaves the sidebar. Replacing one takes its name
+ * in `replaces` (ADR 0048): a create that names nothing while one is live is refused.
  */
 const planProjectThread = (
   command: ServerShellCommand,
@@ -1069,6 +1065,16 @@ const planProjectThread = (
       isLiveThread(row) &&
       Option.contains(project.shell.projectThreadId, row.shell.id)
   );
+
+  // Replacing a live project thread is a refresh, and a refresh names the thread it replaces
+  // (ADR 0048): a launch that names none while one is live would end it unasked.
+  if (Option.isNone(replaces) && Option.isSome(current)) {
+    return invalid(
+      command,
+      "replaces",
+      `${project.shell.title} already has a project thread (${current.value.shell.id}). Send your message there, or refresh it from its header to start a new one.`
+    );
+  }
 
   if (
     Option.isSome(replaces) &&
@@ -1247,7 +1253,6 @@ export const planShellCommand = (
             activeOrderKey: Option.none(),
             autoSettleDisabledAt: Option.none(),
             lastVisitedAt: Option.none(),
-            parkedTaskIds: [],
             ...BARE_ROW_FIELDS,
             lineage: create.lineage ?? Option.none(),
           };
@@ -1635,16 +1640,14 @@ export const planShellCommand = (
       ),
 
     ThreadSnoozeExpire: (expire) =>
-      Result.flatMap(
-        unarchivedThread(command, state, expire.threadId),
-        (row) =>
-          sameTime(row.shell.snoozedUntil, Option.some(expire.snoozedUntil))
-            ? threadPlan(unsnooze(row, now), "thread.unsnoozed")
-            : conflict(
-                command,
-                "stale_state",
-                `thread ${expire.threadId} was snoozed again or woken since its timer was set.`
-              )
+      Result.flatMap(unarchivedThread(command, state, expire.threadId), (row) =>
+        sameTime(row.shell.snoozedUntil, Option.some(expire.snoozedUntil))
+          ? threadPlan(unsnooze(row, now), "thread.unsnoozed")
+          : conflict(
+              command,
+              "stale_state",
+              `thread ${expire.threadId} was snoozed again or woken since its timer was set.`
+            )
       ),
   });
 };

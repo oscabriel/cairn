@@ -13,11 +13,11 @@ import path from "node:path";
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { CHILD_DOCUMENT, SUBAGENTS_DOCUMENT } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { Message } from "@earendil-works/pi-ai";
-import { defineDoc, InboxDoc } from "@earendil-works/pi-durable";
+import { defineDoc, InboxDoc, UsageDoc } from "@earendil-works/pi-durable";
 import type { Tx } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -33,24 +33,20 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
+import {
+  eventuallySome as waitFor,
+  testLimit,
+  slackened,
+} from "../EventuallyTestKit.ts";
 import { bindCriteria, markByUser } from "../verdicts/Verdicts.ts";
 import { Brain } from "./Brain.ts";
-import { BrainConfig } from "./BrainConfig.ts";
-import { Approvals, ThreadMeta, UNDECIDED } from "./CairnDocs.ts";
+import { testBrain } from "./BrainTestKit.ts";
+import { Approvals, ThreadMeta } from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
 
 const PARENT = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d1");
@@ -85,7 +81,7 @@ interface SubagentsState {
 
 const SubagentsDoc = defineDoc<SubagentsState>({
   kind: SUBAGENTS_DOCUMENT,
-  version: 1,
+  version: 2,
   scope: "conversation",
   history: "latest",
   fork: "initial",
@@ -94,41 +90,9 @@ const SubagentsDoc = defineDoc<SubagentsState>({
 });
 
 const harnessLayer = (dataDir: string) =>
-  PiDurableHarness.layer.pipe(
-    Layer.provide(
-      ExtensionSet.layer.pipe(
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(Subagents.layerTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
-    ),
-    Layer.provideMerge(
-      ModelSource.layerFaux({
-        tokensPerSecond: 2000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
-    Layer.provide(BrainConfig.layerFrom(dataDir))
-  );
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A>(find: Effect.Effect<Option.Option<A>>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
+  testBrain({
+    dataDir,
+    model: { tokensPerSecond: 2000, settings: { retry: { enabled: false } } },
   });
 
 interface Fixture {
@@ -283,7 +247,18 @@ const setSettledItem = (
       threadId: CHILD,
       status,
       delivered,
-      settlements: status === "settled" ? [{ outcome: "completed" }] : [],
+      settlements:
+        status === "settled"
+          ? [
+              {
+                seq: 1,
+                outcome: "completed",
+                answerEntry: null,
+                reportedAt: 1,
+                inputs: [],
+              },
+            ]
+          : [],
     };
   });
 
@@ -369,7 +344,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -391,21 +366,24 @@ describe("CommitFeed subagent events", () => {
           yield* setSettledItem(brain, parentConversation, "settled", 1);
           yield* waitFor(
             Effect.map(tallies, (found) =>
-              found.length >= 3 ? Option.some(true) : Option.none()
+              found.length >= 4 ? Option.some(true) : Option.none()
             )
           );
           // The same tally again is no event.
           yield* setSettledItem(brain, parentConversation, "settled", 1);
           yield* Effect.sleep(Duration.millis(200));
 
+          // The thread's creating commit wrote its empty registry, which pi-durable 1.5 publishes
+          // with its first value: one tally of nothing, before the child.
           assert.deepStrictEqual(yield* tallies, [
+            ["SubagentTallyUpdated", 0, 0],
             ["SubagentUpdated", 1, 0],
             ["SubagentUpdated", 1, 0],
             ["SubagentTallyUpdated", 0, 1],
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -470,7 +448,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -565,7 +543,7 @@ describe("CommitFeed subagent events", () => {
           assert.isBelow(read.indexOf("NOTE child done"), read.indexOf("two"));
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -628,7 +606,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a note queued during a run that is stopped is placed by the stop, ahead of a later note, its follow-up still queued",
@@ -698,7 +676,7 @@ describe("CommitFeed subagent events", () => {
           assert.strictEqual(yield* count("RunStarted"), 1);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a note queued during a run that fails is placed once the run ends, its follow-up still queued",
@@ -754,7 +732,7 @@ describe("CommitFeed subagent events", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -813,7 +791,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -881,7 +859,7 @@ describe("CommitFeed subagent events", () => {
               Effect.map(updates, (found) =>
                 found.length >= count ? Option.some(true) : Option.none()
               )
-            ).pipe(Effect.timeoutOption(Duration.seconds(2)));
+            ).pipe(Effect.timeoutOption(slackened(Duration.seconds(2))));
 
           yield* ask(parentConversation);
           yield* reach(1);
@@ -900,6 +878,71 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
+  );
+});
+
+describe("CommitFeed with a value that fits no event", () => {
+  it.live(
+    "drops the value, and the commits after it still become events",
+    () =>
+      withBrain(({ brain, events, parentConversation }) =>
+        Effect.gen(function* () {
+          // A fractional token count fits no UsageUpdated (`NonNegativeInt`).
+          yield* commit(brain, async (tx) => {
+            const usage = await tx.doc(UsageDoc, parentConversation);
+
+            usage.models["faux/half"] = {
+              input: 1.5,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 1.5,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            };
+          });
+          yield* commit(brain, async (tx) => {
+            await bindCriteria(
+              tx,
+              parentConversation,
+              {
+                objective: Option.some("Ship it"),
+                criteria: [{ text: "Reads well", judge: { kind: "user" } }],
+                mode: "replace",
+              },
+              10
+            );
+          });
+
+          const goals = yield* waitFor(
+            Effect.map(Ref.get(events), (all) => {
+              const found = all.flatMap((event) =>
+                Predicate.isTagged(event, "GoalUpdated") ? [event] : []
+              );
+
+              return found.length > 0 ? Option.some(found) : Option.none();
+            })
+          );
+
+          const usage = (yield* Ref.get(events)).flatMap((event) =>
+            Predicate.isTagged(event, "UsageUpdated") ? [event] : []
+          );
+
+          assert.deepStrictEqual(
+            [
+              goals.map((event) => Option.getOrNull(event.tally)),
+              usage.some((event) => event.inputTokens === 1.5),
+            ],
+            [[{ total: 1, met: 0, failed: 0 }], false]
+          );
+        })
+      ),
+    testLimit(30_000)
   );
 });

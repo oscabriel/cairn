@@ -7,19 +7,19 @@ import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { SendInput } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";
 
+import * as RequestCard from "./card/Model.ts";
 import * as Composer from "./composer/Model.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import { ConnectionState } from "./connection/Reconnect.ts";
+import * as Meters from "./meters/Model.ts";
 import type { Model } from "./Model.ts";
-import * as RequestCard from "./next/card/Model.ts";
-import * as Meters from "./next/meters/Model.ts";
-import * as NextShell from "./next/shell/Model.ts";
+import * as Chunks from "./page/Chunks.ts";
 import * as Thread from "./page/thread/index.ts";
 import * as Push from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
 import * as Settings from "./settings/Model.ts";
-import * as Parked from "./shell/Parked.ts";
-import { initial as initialSidebar } from "./sidebar/Model.ts";
+import * as Hold from "./shell/Hold.ts";
+import * as NextShell from "./shell/Model.ts";
 
 /** An empty shell at sequence 0. */
 export const emptySnapshot: ShellSnapshot = Schema.decodeSync(ShellSnapshot)({
@@ -36,24 +36,26 @@ export const connectingModel: Model = {
   shell: Option.none(),
   outbox: [],
   outboxStored: [],
-  outboxInFlight: Option.none(),
-  outboxAttempt: 0,
-  outboxResend: Option.none(),
+  outboxInFlight: [],
+  outboxAttempt: {},
+  outboxResend: [],
   sentTurns: {},
+  outboxSince: {},
+  outboxEchoes: [],
   outboxAdopted: [],
   outboxLeft: [],
   notice: Option.none(),
   thread: Thread.Model.initial,
-  sidebar: initialSidebar,
   composer: Composer.initial,
   push: Push.initial,
   settings: Settings.initial,
-  parked: Parked.initial,
+  hold: Hold.initial,
   // Started, as after the first update: its scratch thread read (`LoadScratch`) is not under test.
   nextShell: { ...NextShell.initial, started: true },
   scratchThread: Thread.Model.initial,
   requestCard: RequestCard.initial,
   meters: Meters.initial,
+  chunks: Chunks.initial,
 };
 
 /** The same page once the shell is current on epoch `epoch`. */
@@ -73,7 +75,7 @@ export const backingOff = (epoch: number, attempt: number): Model => ({
 
 /** A hello as the brain answers it. */
 export const hello: Hello = Schema.decodeSync(Schema.toCodecJson(Hello))({
-  protocol: 2,
+  protocol: 3,
   build: "test",
   serverTime: "2026-10-22T00:00:00.000Z",
   viewer: "owner@github",

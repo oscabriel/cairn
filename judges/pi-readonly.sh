@@ -39,6 +39,9 @@
 # FAIL lines and exit nonzero.
 set -euo pipefail
 
+# Records this run when it ends (judges/lib/record.sh, ADR 0054).
+source "$(dirname "$0")/lib/record.sh" && record_run pi-readonly.sh "$@"
+
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 agent=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
 agent=${agent%/}
@@ -133,7 +136,7 @@ const { HarnessSeam } = await import(`${src}/brain/HarnessSeam.ts`);
 const { PiHost } = await import(`${src}/pi-host/PiHost.ts`);
 const { ModelHealth } = await import(`${src}/models/ModelHealth.ts`);
 const { SettingsStore } = await import(`${src}/models/SettingsStore.ts`);
-const { ReachServicesTest } = await import(`${src}/reach/ReachLayer.ts`);
+const { ReachServicesTest } = await import(`${src}/reach/ReachTestKit.ts`);
 const { ThreadId, ProjectId } = await import("@cairn/protocol/Ids");
 const { OAuthStore } = await import(`${src}/models/OAuthStore.ts`);
 const { Database } = await import(`${src}/db/Database.ts`);

@@ -30,7 +30,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-import { Option } from "effect";
+import { Effect, Option } from "effect";
 
 import type { ToolDeclaration } from "./ClaudeMcp.ts";
 
@@ -214,6 +214,29 @@ export const abortKind = (signal: AbortSignal, closing: boolean): AbortKind => {
   return closing ? "closing" : "abort";
 };
 
+/** Succeeds once `signal` aborts for real (an `AbortError`), never when pi-durable ends the invocation. */
+export const realAbortOf = (
+  signal: Option.Option<AbortSignal>
+): Effect.Effect<true> =>
+  Option.match(signal, {
+    onNone: () => Effect.never,
+    onSome: (live) =>
+      Effect.callback<true>((resume) => {
+        const check = () => {
+          if (live.aborted && abortKind(live, false) !== "ended") {
+            resume(Effect.succeed(true));
+          }
+        };
+
+        check();
+        live.addEventListener("abort", check, { once: true });
+
+        return Effect.sync(() => {
+          live.removeEventListener("abort", check);
+        });
+      }),
+  });
+
 /** pi-coding-agent's preamble, the first section of every prompt it renders. */
 export const PI_PREAMBLE =
   "You are an expert coding assistant operating inside pi";
@@ -324,6 +347,9 @@ export const planQuotaExceededText = (
  * quota prefix): paying for a turn is a purposeful choice of an `anthropic` provider model.
  */
 export const PAID_CREDITS_TEXT = `${PLAN_QUOTA_PREFIX}: this turn started drawing on paid usage credits, which Claude subscription threads never use. Pick an anthropic provider model to pay for it, or send again after the plan window resets.`;
+
+/** The text pi shows for a request the user stopped. */
+export const ABORTED_TEXT = "Operation aborted";
 
 /** A child that died before its turn finished. Retryable: the resumed attempt is cheap. */
 export const CHILD_ENDED_TEXT =

@@ -11,6 +11,7 @@
 
 import {
   composerSubmissionIntentForKey,
+  isImeCompositionKey,
   SendShortcut,
 } from "@cairn/client-logic/ComposerLogic";
 import type { ComposerKeyEvent } from "@cairn/client-logic/ComposerLogic";
@@ -18,6 +19,7 @@ import { isPasteAsTextShortcut } from "@cairn/client-logic/TextPaste";
 import { Effect, Option, Queue, Schema, Stream } from "effect";
 import { Command, Mount } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
+import { afterPaint } from "foldkit/render";
 
 import { Message } from "./Message.ts";
 import type { MenuKey } from "./Message.ts";
@@ -73,8 +75,11 @@ const keyEvent = (event: KeyboardEvent): ComposerKeyEvent => ({
   altKey: event.altKey,
   ctrlKey: event.ctrlKey,
   metaKey: event.metaKey,
-  // Some browsers send the composition keydown as key "Process" without `isComposing`.
+  // Chromium sends the composition keydown as key "Process"; Safari sends the confirming Enter
+  // with keyCode 229 (`isImeCompositionKey` reads that one).
   isComposing: event.isComposing || event.key === "Process",
+  // oxlint-disable-next-line typescript/no-deprecated -- Safari marks its IME confirm keydown only by keyCode 229
+  keyCode: event.keyCode,
   repeat: event.repeat,
 });
 
@@ -88,7 +93,7 @@ const keydownMessage = (
 ): Option.Option<readonly [EditorMessage, boolean]> => {
   const key = keyEvent(event);
 
-  if (key.isComposing) {
+  if (isImeCompositionKey(key)) {
     return Option.none();
   }
 
@@ -179,6 +184,43 @@ export const ComposerInput = Mount.defineStream("ComposerInput", {
 
           let last = { start: -1, end: -1 };
 
+          // A press that moves focus off the editor (a mouse down on Send) reports the blur only
+          // once it ends, a task later so its click lands first: the blur lets a request card the
+          // typing guard held take the composer's slot on the phone, and a card drawn mid-press
+          // would take the click meant for Send (W-1). A blur with no press under way, or one
+          // that a touch tap makes after its pointer is up, is reported at once.
+          let pressing = false;
+          let blurWaiting = false;
+          let blurTimeout: ReturnType<typeof setTimeout> | undefined;
+
+          const endPress = () => {
+            pressing = false;
+
+            if (!blurWaiting) {
+              return;
+            }
+
+            blurWaiting = false;
+            blurTimeout = setTimeout(() => {
+              if (document.activeElement !== element) {
+                Queue.offerUnsafe(queue, Message.BlurredEditor());
+              }
+            }, 0);
+          };
+
+          const pressListeners: ReadonlyArray<
+            readonly [string, (event: Event) => void]
+          > = [
+            [
+              "pointerdown",
+              () => {
+                pressing = true;
+              },
+            ],
+            ["pointerup", endPress],
+            ["pointercancel", endPress],
+          ];
+
           if (element instanceof HTMLTextAreaElement) {
             const reportSelection = () => {
               const current = {
@@ -227,12 +269,19 @@ export const ComposerInput = Mount.defineStream("ComposerInput", {
               [
                 "focus",
                 () => {
+                  blurWaiting = false;
                   Queue.offerUnsafe(queue, Message.FocusedEditor());
                 },
               ],
               [
                 "blur",
                 () => {
+                  if (pressing) {
+                    blurWaiting = true;
+
+                    return;
+                  }
+
                   Queue.offerUnsafe(queue, Message.BlurredEditor());
                 },
               ]
@@ -241,14 +290,24 @@ export const ComposerInput = Mount.defineStream("ComposerInput", {
             for (const [type, listener] of listeners) {
               element.addEventListener(type, listener);
             }
+
+            for (const [type, listener] of pressListeners) {
+              window.addEventListener(type, listener, { capture: true });
+            }
           }
 
-          return listeners;
+          return { listeners, pressListeners, blurTimeout: () => blurTimeout };
         }),
-        (listeners) =>
+        ({ blurTimeout: pendingBlur, listeners, pressListeners }) =>
           Effect.sync(() => {
+            clearTimeout(pendingBlur());
+
             for (const [type, listener] of listeners) {
               element.removeEventListener(type, listener);
+            }
+
+            for (const [type, listener] of pressListeners) {
+              window.removeEventListener(type, listener, { capture: true });
             }
           })
       ).pipe(Effect.flatMap(() => Effect.never))
@@ -295,8 +354,29 @@ export const FocusEditor = Command.define("FocusEditor", {
   }),
 });
 
+/**
+ * Puts the keyboard back in the page's editor once the scratch overlay that took it from there has
+ * gone: the editor left the page while the overlay showed, so the overlay has nothing to give focus
+ * back to. Waits for the patch that brings the editor back, and a frame more, so the overlay has
+ * given the page back (no longer inert) first.
+ */
+export const ReturnFocusToEditor = Command.define("ReturnFocusToEditor", {
+  messages: [Message.CompletedEditorCommand],
+  execute: Effect.gen(function* () {
+    yield* afterPaint;
+
+    const editor = yield* liveEditor;
+
+    Option.map(editor, (element) => {
+      element.focus();
+    });
+
+    return Message.CompletedEditorCommand();
+  }),
+});
+
 const EDITOR_CLASS =
-  "-m-1 block max-h-52 min-h-19.5 w-[calc(100%+--spacing(2))] resize-none overflow-y-auto p-1 whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none [field-sizing:content]";
+  "-m-1 block max-h-52 min-h-19.5 w-[calc(100%+--spacing(2))] resize-none overflow-y-auto p-1 whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-ink-1 focus:outline-none [field-sizing:content]";
 
 /** What the editor shows and the flags its Mount reads. */
 export interface EditorInputs {
@@ -351,7 +431,7 @@ export const editorView = (
             [
               h.Attribute("aria-hidden", "true"),
               h.Class(
-                "pointer-events-none absolute inset-0 leading-relaxed text-placeholder/75"
+                "pointer-events-none absolute inset-0 leading-relaxed text-ink-3"
               ),
             ],
             [EDITOR_PLACEHOLDER]

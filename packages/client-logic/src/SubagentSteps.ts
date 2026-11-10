@@ -5,8 +5,8 @@
 // alike.
 //
 // The sketch's two further steps, "Checked by an outside judge" and "Leave the merge to you", have
-// no record on a child yet (judges bind to goals, ADR 0026, and integration is phase 3), so they
-// are not shown rather than shown as never done.
+// no record on a child yet (a brief's `done_when` command is frozen and shown but not run yet, ADR
+// 0055, and integration is phase 3), so they are not shown rather than shown as never done.
 
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import type { Entry } from "@cairn/protocol/Thread";
@@ -109,11 +109,10 @@ const LIVE: ReadonlySet<ThreadStatus> = new Set<ThreadStatus>([
   "asking-parent",
   "working",
   "waiting",
-  "parked",
   "limited",
 ]);
 
-/** What holds a live child other than its work: "Approval", "Asked its parent", "Parked". */
+/** What holds a live child other than its work: "Approval", "Asked its parent", "Limited". */
 const holdWordOf = (status: ThreadStatus): Option.Option<string> =>
   status === "ready" || status === "working"
     ? Option.none()

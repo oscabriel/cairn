@@ -6,12 +6,12 @@ import type { CodemodeResult, CodemodeTool } from "@earendil-works/pi-codemode";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Predicate, Schema } from "effect";
 
+import { isRewrittenWorkflow } from "../brain/CodeMode.ts";
 import {
   AgentCall,
   RUNNABLE_PRELUDE_VERSIONS,
   BAKE_CLOSING,
   BAKE_OPENING,
-  isRewrittenWorkflow,
   NODE_TOOLS,
   PRELUDE_OPENING,
   PRELUDE_SOURCE,
@@ -221,8 +221,8 @@ describe(rewriteScript, () => {
     assert.deepStrictEqual(
       { version: PRELUDE_VERSION, hash },
       {
-        version: 3,
-        hash: "d5514d910ba7437b",
+        version: 4,
+        hash: "6fabc1e06f6220da",
       }
     );
   });
@@ -391,7 +391,6 @@ await agent("y", { role: "@scout" });`);
 
         assert.deepInclude(call, {
           model: "opencode-go/gpt-6-luna:low",
-          role: null,
           schema: { type: "object" },
           readonly: true,
           key: "k",
@@ -399,24 +398,21 @@ await agent("y", { role: "@scout" });`);
           resume: null,
           unknownOptions: ["isolation"],
         });
-        // `role` (ADR 0043 removed roles) is passed on for a script approved before, and reported.
-        assert.deepInclude(legacy, {
-          model: null,
-          role: "@scout",
-          unknownOptions: ["role"],
-        });
+        // `role` (ADR 0043 removed roles) is an option like any other the prelude does not know.
+        assert.deepInclude(legacy, { model: null, unknownOptions: ["role"] });
+        assert.isFalse(Predicate.hasProperty(legacy, "role"));
       })
   );
 
-  it("reads a node call from prelude version 2, which named no model", () => {
-    // What a workflow started before ADR 0043 replays: its stored prelude sends `role`, no `model`.
-    const call = Schema.decodeSync(AgentCall)({
+  it("runs the prelude a workflow started on version 3 stored, whose calls also sent a null role", () => {
+    const call = Schema.decodeUnknownSync(AgentCall)({
       workflowId: "wf-7",
       prompt: "x",
       site: "3:7",
       label: null,
       phase: null,
-      role: "@scout",
+      model: null,
+      role: null,
       schema: null,
       key: null,
       readonly: true,
@@ -425,12 +421,12 @@ await agent("y", { role: "@scout" });`);
       unknownOptions: [],
     });
 
+    assert.isTrue(Option.isNone(call.model));
+    assert.isFalse(Object.hasOwn(call, "role"));
     assert.deepStrictEqual(
-      [call.model, call.role],
-      [Option.none(), Option.some("@scout")]
+      [...RUNNABLE_PRELUDE_VERSIONS],
+      [3, PRELUDE_VERSION]
     );
-    assert.isTrue(RUNNABLE_PRELUDE_VERSIONS.has(2));
-    assert.isTrue(RUNNABLE_PRELUDE_VERSIONS.has(PRELUDE_VERSION));
   });
 
   it.effect(

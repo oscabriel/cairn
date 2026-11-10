@@ -2,13 +2,17 @@
 // the fake porch: a Cairn thread (its `cairn.thread-meta` and `pi.agent` cwd) publishes, publishes
 // the same bytes again, lists and revokes, and the transcript carries `ArtifactDetails`; a path
 // outside the thread's folder and a conversation that is not a thread are tool errors the model
-// reads, not thrown ones.
+// reads, not thrown ones. And the fence while reach is shelved (ADR 0038): the extension carries its
+// six tools only when porch lists its porches as the set is built, and none while porch is not set
+// up or fails, so no model is offered a tool that cannot work.
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ArtifactDetails } from "@cairn/protocol/Reach";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -32,8 +36,15 @@ import { migrations } from "../db/Migrations.ts";
 import { ArtifactPublisher } from "./ArtifactPublisher.ts";
 import { Artifacts } from "./Artifacts.ts";
 import { THREAD_A } from "./ArtifactScenarios.ts";
-import { makeFakePorch, PorchClient } from "./PorchClient.ts";
-import { PortalTools } from "./PortalTools.ts";
+import { makeFakePorch } from "./FakePorch.ts";
+import { FakePortalUnitsLayer } from "./FakePortalUnits.ts";
+import { PorchClient, PorchError } from "./PorchClient.ts";
+import {
+  PORTAL_CLOSE_TOOL,
+  PORTAL_LIST_TOOL,
+  PORTAL_OPEN_TOOL,
+  PortalTools,
+} from "./PortalTools.ts";
 import {
   ARTIFACT_LIST_TOOL,
   ARTIFACT_PUBLISH_TOOL,
@@ -41,6 +52,9 @@ import {
   ReachTools,
   REACH_EXTENSION,
 } from "./ReachExtension.ts";
+import { ReachServices } from "./ReachLayer.ts";
+import { ReachStatus } from "./ReachStatus.ts";
+import { ReachServicesTest } from "./ReachTestKit.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -118,6 +132,7 @@ const runThread = (
           Layer.provide(Artifacts.layer),
           Layer.provide(ArtifactPublisher.layer),
           Layer.provide(Layer.succeed(PorchClient, fake.client)),
+          Layer.provide(ReachStatus.layer),
           Layer.provide(Database.layerTest(migrations)),
           Layer.provide(
             ServerConfig.layerWith({ dataDir: path.join(root, "data") })
@@ -284,6 +299,104 @@ describe("the cairn.reach artifact tools under a Harness", () => {
             text: "This conversation is not a Cairn thread, so it has no artifacts.",
           },
         ]
+      );
+    })
+  );
+});
+
+/** A porch whose every call fails with `reason`, as porch does before the wizard's reach stage. */
+const failingPorch = (
+  reason: "no-config" | "crashed"
+): PorchClient["Service"] => {
+  const fail = (operation: string) =>
+    Effect.fail(
+      new PorchError({
+        message: `porch ${operation} failed (${reason})`,
+        operation,
+        reason,
+        porchCode: Option.none(),
+        detail: reason,
+        retryable: false,
+      })
+    );
+
+  return {
+    version: fail("version"),
+    machine: fail("machine"),
+    publish: () => fail("publish"),
+    add: () => fail("add"),
+    remove: () => fail("rm"),
+    list: fail("ls"),
+    apply: fail("apply"),
+    doctor: fail("doctor"),
+  };
+};
+
+/** The reach tools over the reach services and `porch`; answers their tool names and reach state. */
+const toolsOver = (
+  services: Layer.Layer<ReachStatus | PortalTools | Artifacts | PorchClient>
+) =>
+  Effect.gen(function* () {
+    const built = yield* Layer.build(
+      ReachTools.layerAt(780).pipe(Layer.provideMerge(services))
+    );
+
+    const { extension } = Context.get(built, ReachTools).extension;
+
+    return {
+      name: extension.name,
+      tools: (extension.tools ?? []).map((tool) => tool.name).toSorted(),
+      porch: yield* Context.get(built, ReachStatus).porch,
+    };
+  }).pipe(Effect.scoped);
+
+/** The reach services over `porch`, fake units and an in-memory database. */
+const servicesOver = (porch: PorchClient["Service"]) =>
+  ReachServices.pipe(
+    Layer.provideMerge(Layer.succeed(PorchClient, porch)),
+    Layer.provide(FakePortalUnitsLayer),
+    Layer.provide(Database.layerTest(migrations)),
+    Layer.provide(
+      ServerConfig.layerWith({
+        dataDir: mkdtempSync(path.join(tmpdir(), "cairn-reach-fence-")),
+      })
+    ),
+    Layer.provide(NodeServices.layer),
+    Layer.orDie
+  );
+
+describe("the cairn.reach fence", () => {
+  it.live("carries the six tools when porch is set up", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(yield* toolsOver(ReachServicesTest), {
+        name: REACH_EXTENSION,
+        tools: [
+          ARTIFACT_LIST_TOOL,
+          ARTIFACT_PUBLISH_TOOL,
+          ARTIFACT_REVOKE_TOOL,
+          PORTAL_CLOSE_TOOL,
+          PORTAL_LIST_TOOL,
+          PORTAL_OPEN_TOOL,
+        ].toSorted(),
+        porch: "ready",
+      });
+    })
+  );
+
+  it.live("carries none while porch is not set up, and records it", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        yield* toolsOver(servicesOver(failingPorch("no-config"))),
+        { name: REACH_EXTENSION, tools: [], porch: "not set up" }
+      );
+    })
+  );
+
+  it.live("carries none when porch fails as the set is built", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(
+        yield* toolsOver(servicesOver(failingPorch("crashed"))),
+        { name: REACH_EXTENSION, tools: [], porch: "unknown" }
       );
     })
   );

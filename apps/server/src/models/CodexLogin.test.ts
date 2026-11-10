@@ -7,7 +7,7 @@
 // old login's health. The database is a temporary file and the lock a temporary path, never the
 // deployed ones.
 
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -124,6 +124,7 @@ const brainAt = (
 
       return {
         store,
+        credentials,
         login: Context.get(context, CodexLogin),
         health: Context.get(context, ModelHealth),
         models,
@@ -412,12 +413,20 @@ describe("the Codex sign-in against a fake OpenAI", () => {
       const fake = yield* fakeAuth();
       const brain = yield* brainAt(place());
 
+      const shown = yield* Deferred.make<true>();
+
       const first = yield* brain.login.start.pipe(
+        Stream.tap((step) =>
+          Predicate.isTagged(step, "DeviceCode")
+            ? Deferred.succeed(shown, true)
+            : Effect.void
+        ),
         Stream.runCollect,
         Effect.forkChild
       );
 
-      yield* Effect.sleep("200 millis");
+      // The first sign-in holds the slot once it shows its code.
+      yield* Deferred.await(shown);
 
       const busy = yield* Stream.runCollect(brain.login.start).pipe(
         Effect.flip
@@ -457,6 +466,52 @@ describe("the Codex sign-in against a fake OpenAI", () => {
 
       assert.strictEqual(available.length, 0);
     }).pipe(Effect.scoped)
+  );
+
+  it.live(
+    "tells a lock that could not be taken at boot from another brain holding it",
+    () =>
+      Effect.gen(function* () {
+        const where = place();
+
+        // The lock's folder cannot be made: its parent is a file. The store builds unavailable.
+        writeFileSync(path.dirname(where.lock), "");
+
+        const brain = yield* brainAt(where);
+
+        assert.isFalse(brain.store.held);
+
+        const steps = yield* Stream.runCollect(brain.login.start);
+
+        assert.deepStrictEqual(
+          steps.map((step) => labelOf(step)),
+          ["unavailable"]
+        );
+
+        const message = steps.flatMap((step) =>
+          Predicate.isTagged(step, "Failed") ? [step.message] : []
+        );
+
+        assert.notInclude(message.join("\n"), "Another Cairn brain");
+        assert.include(message.join("\n"), "could not set up its OAuth store");
+
+        const refused = yield* brain.login.logout.pipe(Effect.flip);
+
+        assert.strictEqual(refused.reason, "unavailable");
+        assert.include(refused.message, "could not be taken");
+
+        const entries = yield* Effect.promise(
+          async () => await brain.credentials.entries()
+        );
+
+        assert.deepStrictEqual(
+          entries.map((entry) => [
+            entry.provider,
+            Option.getOrElse(entry.refusal, () => "offered"),
+          ]),
+          [[CODEX_PROVIDER, "oauth_unavailable"]]
+        );
+      }).pipe(Effect.scoped)
   );
 
   it.live("answers unavailable on a brain without the OAuth store", () =>

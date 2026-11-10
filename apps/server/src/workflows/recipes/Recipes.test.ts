@@ -13,7 +13,6 @@ import { NodeServices } from "@effect/platform-node";
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 
-import { workflowHandlers } from "../../rpc/WorkflowHandlers.ts";
 import { EventSink } from "../../shell/EventSink.ts";
 import { projectIdFor } from "../../shell/ShellCommands.ts";
 import {
@@ -21,6 +20,7 @@ import {
   testCommandId,
   unknownProjectId,
 } from "../../shell/ShellTestKit.ts";
+import { workflowHandlers } from "../WorkflowHandlers.ts";
 import { parseWorkflowScript } from "../WorkflowScript.ts";
 import {
   BUILT_IN_RECIPES,

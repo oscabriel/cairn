@@ -21,6 +21,7 @@ import path from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Option, Result } from "effect";
 
+import { slackened, testLimit } from "../EventuallyTestKit.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
 import { runScenario } from "./conformance/HarnessConformance.ts";
@@ -49,7 +50,7 @@ const RESTART_TIMEOUT = Duration.millis(3000);
 const passes = (
   name: string,
   tuning: Partial<SubagentToolOptions>,
-  timeout = Duration.seconds(5)
+  timeout = slackened(Duration.seconds(5))
 ) =>
   Effect.gen(function* () {
     const scenario = Result.getOrThrow(
@@ -59,7 +60,7 @@ const passes = (
     const outcome = yield* runScenario(
       scenario,
       piDurableTargetWith({ ...DEFAULT_TOOL_OPTIONS, ...tuning }),
-      { timeout, mutations: new Set() }
+      { timeout, mutations: new Set(), awaitAtRest: false }
     );
 
     assert.deepStrictEqual(outcome.failure, Option.none());
@@ -70,13 +71,13 @@ describe("a child's question to its parent, with short timings", () => {
     "a reporter that relays two questions gives each its own window",
     () =>
       passes("relay_asks_twice", { questionWindowMillis: TWICE_WINDOW_MILLIS }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
     "a relayed question nobody answers expires, and the run's own answer settles once",
     () => passes("relay_expires", { questionTtlMillis: RELAY_TTL_MILLIS }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -87,7 +88,7 @@ describe("a child's question to its parent, with short timings", () => {
         { questionWindowMillis: RESTART_WINDOW_MILLIS },
         RESTART_TIMEOUT
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -98,6 +99,6 @@ describe("a child's question to its parent, with short timings", () => {
         { questionWindowMillis: RESTART_WINDOW_MILLIS },
         RESTART_TIMEOUT
       ),
-    30_000
+    testLimit(30_000)
   );
 });

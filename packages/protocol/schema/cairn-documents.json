@@ -197,7 +197,7 @@
                                           "anyOf": [
                                             {
                                               "type": "string",
-                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             {
                                               "type": "null"
@@ -305,7 +305,7 @@
                                         "anyOf": [
                                           {
                                             "type": "string",
-                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           {
                                             "type": "null"
@@ -367,35 +367,11 @@
                             "minLength": 1
                           }
                         },
-                        "role": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
                         "model": {
                           "anyOf": [
                             {
-                              "type": "object",
-                              "properties": {
-                                "provider": {
-                                  "type": "string",
-                                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                                  "minLength": 1
-                                },
-                                "modelId": {
-                                  "type": "string",
-                                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                                  "minLength": 1
-                                }
-                              },
-                              "required": ["provider", "modelId"],
-                              "additionalProperties": true
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                             },
                             {
                               "type": "null"
@@ -622,7 +598,6 @@
                         "workspace",
                         "base",
                         "writes",
-                        "role",
                         "model",
                         "thinking",
                         "mode",
@@ -698,7 +673,7 @@
                             "properties": {
                               "spec": {
                                 "type": "string",
-                                "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                               },
                               "label": {
                                 "type": "string",
@@ -863,14 +838,14 @@
                               "minimum": 1,
                               "maximum": 32
                             },
-                            "roles": {
+                            "models": {
                               "type": "array",
                               "items": {
                                 "type": "object",
                                 "properties": {
                                   "spec": {
                                     "type": "string",
-                                    "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                    "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                   },
                                   "readonly": {
                                     "type": "boolean"
@@ -1009,7 +984,7 @@
                             "scriptHash",
                             "maxNodes",
                             "maxConcurrent",
-                            "roles",
+                            "models",
                             "modes",
                             "writes",
                             "budget"
@@ -1254,7 +1229,7 @@
                                           "anyOf": [
                                             {
                                               "type": "string",
-                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             {
                                               "type": "null"
@@ -1362,7 +1337,7 @@
                                         "anyOf": [
                                           {
                                             "type": "string",
-                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           {
                                             "type": "null"
@@ -1415,6 +1390,27 @@
                           "type": "string",
                           "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
                           "minLength": 1
+                        },
+                        "title": {
+                          "type": "string",
+                          "maxLength": 4096
+                        },
+                        "spent": {
+                          "type": "object",
+                          "properties": {
+                            "tokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listMicros": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["tokens", "listMicros"],
+                          "additionalProperties": true
                         },
                         "from": {
                           "type": "object",
@@ -2183,7 +2179,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                             },
                             {
                               "type": "null"
@@ -2295,7 +2291,7 @@
                                   "anyOf": [
                                     {
                                       "type": "string",
-                                      "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                      "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                     },
                                     {
                                       "type": "null"
@@ -2456,14 +2452,14 @@
                     "minimum": 1,
                     "maximum": 32
                   },
-                  "roles": {
+                  "models": {
                     "type": "array",
                     "items": {
                       "type": "object",
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "readonly": {
                           "type": "boolean"
@@ -2602,7 +2598,7 @@
                   "scriptHash",
                   "maxNodes",
                   "maxConcurrent",
-                  "roles",
+                  "models",
                   "modes",
                   "writes",
                   "budget"
@@ -2792,7 +2788,7 @@
                       "anyOf": [
                         {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         {
                           "type": "null"
@@ -2804,7 +2800,7 @@
                       "properties": {
                         "spec": {
                           "type": "string",
-                          "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                          "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                         },
                         "model": {
                           "type": "object",
@@ -3339,7 +3335,7 @@
                                           "anyOf": [
                                             {
                                               "type": "string",
-                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             {
                                               "type": "null"
@@ -3447,7 +3443,7 @@
                                         "anyOf": [
                                           {
                                             "type": "string",
-                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           {
                                             "type": "null"
@@ -3509,35 +3505,11 @@
                             "minLength": 1
                           }
                         },
-                        "role": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
                         "model": {
                           "anyOf": [
                             {
-                              "type": "object",
-                              "properties": {
-                                "provider": {
-                                  "type": "string",
-                                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                                  "minLength": 1
-                                },
-                                "modelId": {
-                                  "type": "string",
-                                  "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
-                                  "minLength": 1
-                                }
-                              },
-                              "required": ["provider", "modelId"],
-                              "additionalProperties": true
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                             },
                             {
                               "type": "null"
@@ -3764,7 +3736,6 @@
                         "workspace",
                         "base",
                         "writes",
-                        "role",
                         "model",
                         "thinking",
                         "mode",
@@ -3840,7 +3811,7 @@
                             "properties": {
                               "spec": {
                                 "type": "string",
-                                "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                               },
                               "label": {
                                 "type": "string",
@@ -4005,14 +3976,14 @@
                               "minimum": 1,
                               "maximum": 32
                             },
-                            "roles": {
+                            "models": {
                               "type": "array",
                               "items": {
                                 "type": "object",
                                 "properties": {
                                   "spec": {
                                     "type": "string",
-                                    "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                    "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                   },
                                   "readonly": {
                                     "type": "boolean"
@@ -4151,7 +4122,7 @@
                             "scriptHash",
                             "maxNodes",
                             "maxConcurrent",
-                            "roles",
+                            "models",
                             "modes",
                             "writes",
                             "budget"
@@ -4396,7 +4367,7 @@
                                           "anyOf": [
                                             {
                                               "type": "string",
-                                              "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                              "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                             },
                                             {
                                               "type": "null"
@@ -4504,7 +4475,7 @@
                                         "anyOf": [
                                           {
                                             "type": "string",
-                                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                                           },
                                           {
                                             "type": "null"
@@ -4557,6 +4528,27 @@
                           "type": "string",
                           "pattern": "^\\S[\\s\\S]*\\S$|^\\S$|^$",
                           "minLength": 1
+                        },
+                        "title": {
+                          "type": "string",
+                          "maxLength": 4096
+                        },
+                        "spent": {
+                          "type": "object",
+                          "properties": {
+                            "tokens": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "listMicros": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["tokens", "listMicros"],
+                          "additionalProperties": true
                         },
                         "from": {
                           "type": "object",
@@ -5374,11 +5366,11 @@
                           }
                         ]
                       },
-                      "role": {
+                      "model": {
                         "anyOf": [
                           {
                             "type": "string",
-                            "pattern": "^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
+                            "pattern": "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$"
                           },
                           {
                             "type": "null"
@@ -5712,7 +5704,7 @@
                       "index",
                       "requestId",
                       "briefId",
-                      "role",
+                      "model",
                       "provider",
                       "modelId",
                       "effort",

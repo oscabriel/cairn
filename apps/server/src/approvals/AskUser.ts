@@ -11,11 +11,14 @@
 
 import { answerText } from "@cairn/client-logic/PendingRequests";
 import type { Question } from "@cairn/protocol/Policy";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { JsonObject } from "@earendil-works/pi-ai";
 import { Option, Result, Schema } from "effect";
 
-import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
+import type {
+  ApprovalPayloadState,
+  ApprovalRecord,
+} from "../brain/CairnDocs.ts";
 
 /** The tool's name. */
 export const ASK_USER_TOOL = "ask_user";
@@ -94,7 +97,7 @@ interface QuestionJson {
 
 /** A question record to ask: its frozen payload, the questions in it, and the card's one line. */
 export interface QuestionAsk {
-  readonly payload: JsonRecord;
+  readonly payload: ApprovalPayloadState;
   readonly questions: ReadonlyArray<Question>;
   readonly summary: string;
 }

@@ -9,6 +9,7 @@
 // run that ended (failed, or ran longer than 20 seconds) while no visible page reported showing the
 // thread in the last 30 seconds is pushed once, claimed in `notified_runs` under the thread and the
 // run's end time. Executor's needs-sign-in push is sent once until the link is signed in again.
+// The nightly's failure push (`NightlyFailedRoute.ts`) is sent each time the failed nightly asks.
 // A subagent's run end is never pushed (its result reaches its parent as a note, ADR 0028), and a
 // push is suppressed while a visible page shows its thread or any ancestor of it (`isWatchedTree`).
 // Approval push (briefs note B7, rules in `RequestPush.ts`): the same events push a request the
@@ -16,9 +17,14 @@
 // a subagent's request goes under its root thread, prefixed "<child> asks:"), worded from the
 // thread's records (`RequestRecords`); a sweep every 30 seconds pushes a request whose
 // first push was suppressed or missed once it is 60 seconds old and unwatched, and reminds once 15
-// minutes after its last push. The badge is `@cairn/client-logic/Badge`'s, the count the page shows.
+// minutes after its last push. The badge is `@cairn/client-logic/Badge`'s one counting rule, the count
+// the page shows (`badge`; BudgetGuard and the workflow budget pushes read it too).
 
-import { badgeOf, hasPendingRequest } from "@cairn/client-logic/Badge";
+import {
+  hasPendingRequest,
+  NO_PAGE,
+  needsYouCount,
+} from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ApprovalRecord } from "@cairn/protocol/Policy";
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
@@ -39,6 +45,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { Projects } from "../projects/Projects.ts";
 import { EventStore } from "../shell/EventStore.ts";
 import type { StoredShellEvent } from "../shell/EventStore.ts";
 import { isLiveThread, ThreadRows } from "../shell/ThreadRows.ts";
@@ -286,6 +293,18 @@ export const executorSignInMessage = (badge: number): PushMessage => ({
 /** The claim key of the needs-sign-in push. */
 export const EXECUTOR_SIGN_IN_KEY = "executor-sign-in";
 
+/** The tag of the nightly's failure push: each failed night replaces the last on the device. */
+export const NIGHTLY_FAILED_TAG = "nightly-failed";
+
+/** The nightly's failure push: fixed words, since nothing in it comes from the caller. */
+export const nightlyFailedMessage = (badge: number): PushMessage => ({
+  title: "The nightly judges failed",
+  body: "The durability nightly failed. Its log is today's durability file in ~/cairn-judges/, and journalctl --user -u cairn-nightly has the run.",
+  tag: NIGHTLY_FAILED_TAG,
+  url: "/",
+  badge,
+});
+
 /** The push for a request waiting on a thread (`RequestPush.ts`). */
 export const requestMessage = (
   push: RequestPush,
@@ -380,13 +399,25 @@ export class Notifier extends Context.Service<
     readonly executorNeedsSignIn: Effect.Effect<void>;
     /** Executor works again: the next lapse pushes again. */
     readonly executorSignedIn: Effect.Effect<void>;
+    /**
+     * Pushes "the nightly judges failed" to every device now and waits for each delivery. No claim:
+     * every failed night pushes, and the tag replaces the last one on the device.
+     */
+    readonly nightlyFailed: Effect.Effect<ReadonlyArray<DeliveryOutcome>>;
     /** Waits until every push started so far has been delivered or given up. */
     readonly settle: Effect.Effect<void>;
+    /**
+     * The app icon's badge every push carries: client-logic's one counting rule over the live
+     * projects and threads (`needsYouCount`), 0 when the store cannot be read. The brain cannot
+     * see the page: a scratch thread that needs the user is not in it, and a result the user
+     * watched land on the open thread is, until the visit is recorded.
+     */
+    readonly badge: Effect.Effect<number>;
   }
 >()("cairn/server/push/Notifier") {
   /**
    * The notifier and its event loop, which starts with the layer and stops with its scope. Needs
-   * the shell store (`EventStore`, `ThreadRows`), `SqlClient`, `PushSubscriptions`, `WebPush`,
+   * the shell store (`EventStore`, `ThreadRows`, `Projects`), `SqlClient`, `PushSubscriptions`, `WebPush`,
    * `Presence` and `RequestRecords`.
    */
   static readonly layerNoDeps = Layer.effect(
@@ -395,6 +426,7 @@ export class Notifier extends Context.Service<
       const sql = yield* SqlClient.SqlClient;
       const events = yield* EventStore;
       const threads = yield* ThreadRows;
+      const projects = yield* Projects;
       const subscriptions = yield* PushSubscriptions;
       const webPush = yield* WebPush;
       const presence = yield* Presence;
@@ -528,9 +560,22 @@ export class Notifier extends Context.Service<
           return rows.length > 0;
         });
 
-      // A subagent's row is hidden and its result reaches its parent: it never counts.
-      const badgeCount = threads.listLive.pipe(
-        Effect.map((rows) => badgeOf(rows.map((row) => row.shell))),
+      // The page's rule (C-4): a subagent's request counts on its root, its result never does, and
+      // only a project thread the sidebar lists counts. No page: the brain cannot see the scratch
+      // thread a page holds, nor the thread on its screen.
+      const badgeCount = Effect.all({
+        projects: projects.listActive,
+        threads: threads.listLive,
+      }).pipe(
+        Effect.map((live) =>
+          needsYouCount(
+            {
+              projects: live.projects,
+              threads: live.threads.map((row) => row.shell),
+            },
+            NO_PAGE
+          )
+        ),
         Effect.orElseSucceed(() => 0)
       );
 
@@ -900,6 +945,10 @@ export class Notifier extends Context.Service<
           Effect.withSpan("Notifier.executorSignedIn")
         );
 
+      const nightlyFailed = Effect.gen(function* () {
+        return yield* sendToAll(nightlyFailedMessage(yield* badgeCount));
+      }).pipe(Effect.withSpan("Notifier.nightlyFailed"));
+
       const readCursor =
         sql`SELECT sequence FROM push_cursor WHERE id = 1`.pipe(
           Effect.flatMap(decodeCursor),
@@ -985,7 +1034,9 @@ export class Notifier extends Context.Service<
         sweep,
         executorNeedsSignIn,
         executorSignedIn,
+        nightlyFailed,
         settle,
+        badge: badgeCount,
       });
     })
   );

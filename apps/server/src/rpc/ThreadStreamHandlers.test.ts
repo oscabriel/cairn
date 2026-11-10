@@ -4,13 +4,7 @@
 
 import path from "node:path";
 
-import {
-  EntryId,
-  ProjectId,
-  RequestId,
-  TaskId,
-  ThreadId,
-} from "@cairn/protocol/Ids";
+import { EntryId, ProjectId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { NewWorktreeWorkspace } from "@cairn/protocol/Launch";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
@@ -28,13 +22,13 @@ import {
 } from "effect";
 import { HttpRouter } from "effect/http";
 
-import { EntryImageRoute } from "../brain/EntryImageRoute.ts";
+import { FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { ScriptedHarness } from "../brain/ScriptedHarness.ts";
 import { Database } from "../db/Database.ts";
 import { Launches0002 } from "../db/migrations/0002Launches.ts";
-import { ShellProjector } from "../shell/ShellProjector.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
+import { EntryImageRoute } from "../http/EntryImageRoute.ts";
 import { LaunchStore } from "../threads/LaunchStore.ts";
 import { ThreadLaunch } from "../threads/ThreadLaunch.ts";
 import { LaunchWait } from "../threads/Threads.ts";
@@ -53,37 +47,25 @@ import {
   threadStreamHandlers,
 } from "./ThreadStreamHandlers.ts";
 
-const isNotFound = Predicate.isTagged("NotFound");
+isolateGitEnvironment();
 
-/** A projector for tests that retry no task, so `refresh` has nothing to recompute. */
-const IdleProjector = Layer.succeed(
-  ShellProjector,
-  ShellProjector.of({
-    reconcile: Effect.succeed({ threads: 0, live: 0, patched: 0 }),
-    refresh: () => Effect.void,
-    flushAll: Effect.void,
-  })
-);
+const isNotFound = Predicate.isTagged("NotFound");
 
 /** The scripted harness with an empty `thread_launches`: no thread is launching. */
 const HarnessNoLaunches = Layer.mergeAll(
   ScriptedHarness.layer,
-  IdleProjector,
   LaunchStore.layerNoDeps.pipe(
     Layer.provide(Database.layerTest({ "0002_Launches": Launches0002 }))
   )
 );
 
 const launchLayer = (dataDir: string, gate: Latch.Latch) =>
-  Layer.merge(
-    threadsTestLayer({
-      dataDir,
-      titleModel: TitleModelScripted({ held: false }),
-      model: HeldModel,
-      worktrees: heldWorktrees(gate),
-    }),
-    IdleProjector
-  );
+  threadsTestLayer({
+    dataDir,
+    titleModel: TitleModelScripted({ held: false }),
+    model: HeldModel,
+    worktrees: heldWorktrees(gate),
+  });
 
 /**
  * Runs `body` over the launch services and a repository at `repo/`, with worktree creation held
@@ -217,15 +199,6 @@ describe("thread stream handlers", () => {
       assert.strictEqual(
         isNotFound(missingEntry) ? missingEntry.resource : "",
         "entry"
-      );
-
-      const missingTask = yield* handlers
-        .retryTask({ threadId: THREAD, taskId: TaskId.make(77) })
-        .pipe(Effect.flip);
-
-      assert.strictEqual(
-        isNotFound(missingTask) ? missingTask.resource : "",
-        "task"
       );
 
       // The handler group builds over the seam.
@@ -403,50 +376,5 @@ describe("thread stream handlers", () => {
         yield* (yield* ThreadLaunch).settled(input.threadId);
       })
     )
-  );
-
-  it.effect(
-    "a retried task's row is refreshed at once, not at the next reconcile",
-    () =>
-      Effect.gen(function* () {
-        const refreshed: Array<string> = [];
-
-        const projector = ShellProjector.of({
-          reconcile: Effect.succeed({ threads: 0, live: 0, patched: 0 }),
-          refresh: (threadId) =>
-            Effect.sync(() => {
-              refreshed.push(threadId);
-            }),
-          flushAll: Effect.void,
-        });
-
-        const retrying = Layer.effect(
-          HarnessSeam,
-          HarnessSeam.useSync((seam) =>
-            HarnessSeam.of({ ...seam, retry: () => Effect.void })
-          )
-        ).pipe(Layer.provide(ScriptedHarness.layer));
-
-        const handlers = yield* threadStreamHandlers.pipe(
-          Effect.provideService(ShellProjector, projector),
-          Effect.provide(
-            Layer.merge(
-              retrying,
-              LaunchStore.layerNoDeps.pipe(
-                Layer.provide(
-                  Database.layerTest({ "0002_Launches": Launches0002 })
-                )
-              )
-            )
-          )
-        );
-
-        yield* handlers.retryTask({
-          threadId: THREAD,
-          taskId: TaskId.make(77),
-        });
-
-        assert.deepStrictEqual(refreshed, [THREAD]);
-      })
   );
 });

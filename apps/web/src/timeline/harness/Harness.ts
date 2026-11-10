@@ -17,7 +17,7 @@
 // (the extend check), and `wheel` stops following on any wheel up, even one a nested scroller
 // takes (the nested-wheel check).
 //
-// It draws the app's transcript (look track L7: `next/timeline/View.ts` and its rows, in the design
+// It draws the app's transcript (look track L7: `timeline/View.ts` and its rows, in the design
 // tokens).
 
 import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";
@@ -27,7 +27,6 @@ import { defineMessageUnion } from "foldkit/message";
 
 import { CairnConnection } from "../../connection/Connection.ts";
 import type { CairnConnectionService } from "../../connection/Connection.ts";
-import { view as nextTimelineView } from "../../next/timeline/View.ts";
 import { ThreadViewModel } from "../../page/thread/Model.ts";
 import type { BrokenControl } from "../list/Model.ts";
 import { Message as TimelineMessage } from "../Message.ts";
@@ -36,13 +35,14 @@ import {
   Model as TimelineModel,
 } from "../Model.ts";
 import { transcriptOf } from "../Rows.ts";
-
-import "../../next/tokens.css";
 import {
   afterView,
   switchThread,
   update as updateTimeline,
 } from "../Update.ts";
+
+import "../../tokens.css";
+import { view as nextTimelineView } from "../View.ts";
 import {
   commitReply,
   growReply,

@@ -10,14 +10,16 @@ import { TrimmedNonEmptyString } from "./Ids.ts";
 import { ModelRef, ThinkingLevel } from "./Models.ts";
 
 /**
- * A model spec, `provider/modelId[:level]`; a model id may hold `@` and `/` (a Workers AI id such as
- * `@cf/meta/...`). The pattern also takes `@name[:level]`: a role name from before ADR 0043, which
- * briefs, workflow scripts, envelopes and goal judges recorded then still hold. A stored role name
- * reads as no model named (the parent's); a new tool call that passes one is refused.
+ * A model spec, `provider/modelId[:level]`. A model id holds what pi-ai's catalog ids hold: letters,
+ * digits, `.`, `_`, `-`, and `/`, `:`, `@` and `~` (OpenRouter's `anthropic/claude-x:free` and
+ * `~anthropic/claude-haiku-latest`, Bedrock's `...-v1:0`, Workers AI's `@cf/meta/...`). A provider
+ * holds no `/`, so the first `/` ends it and any later one is the model id's. A trailing `:` and a
+ * level's name is always the level, so a model id that itself ends in one cannot be named; no
+ * catalog id does.
  */
 export const ModelSpec = Schema.String.check(
   Schema.isPattern(
-    /^(?:@[a-z0-9-]{1,24}|[A-Za-z0-9._-]+\/[A-Za-z0-9._:/@-]+?)(?::(?:off|minimal|low|medium|high|xhigh|max))?$/u
+    /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$/u
   )
 ).pipe(Schema.brand("ModelSpec"));
 
@@ -35,8 +37,7 @@ export type ModelUnready = typeof ModelUnready.Type;
 
 /**
  * A spec resolved to the model a child runs on, as the dispatch records it in documents
- * (`cairn.subagents`, the workflow ledger), so it is plain JSON: absent values are `null`. Records
- * written before ADR 0043 also hold `role`, `via`, `skipped` and `family`, which decoding ignores.
+ * (`cairn.subagents`), so it is plain JSON: absent values are `null`.
  */
 export const ResolvedModel = Schema.Struct({
   /** What was named, or the parent's `provider/modelId` when nothing was. */
@@ -57,13 +58,9 @@ export const ModelsCheckInput = Schema.Struct({
 
 export type ModelsCheckInput = typeof ModelsCheckInput.Type;
 
-/**
- * Why a spec did not resolve: not a spec (`invalid_spec`), a role name (`role_removed`, ADR 0043),
- * or a model that is not ready (`ModelUnready`).
- */
+/** Why a spec did not resolve: not a spec (`invalid_spec`), or a model that is not ready. */
 export const ModelCheckFailure = Schema.Literals([
   "invalid_spec",
-  "role_removed",
   ...ModelUnready.literals,
 ]);
 

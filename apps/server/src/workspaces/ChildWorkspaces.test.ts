@@ -16,6 +16,7 @@ import type { PlatformError } from "effect";
 
 import { Git } from "../git/Git.ts";
 import type { GitError } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { Worktrees } from "../projects/Worktrees.ts";
 import type { WorktreeError } from "../projects/Worktrees.ts";
 import {
@@ -39,6 +40,8 @@ import {
   thread,
   workspacesAt,
 } from "./ChildWorkspacesTestKit.ts";
+
+isolateGitEnvironment();
 
 const Platform = Layer.mergeAll(Git.layer, NodeServices.layer);
 

@@ -8,7 +8,12 @@
 // client does (a refused frame means a fresh subscription): the scenario's own thread from its
 // ensure, and each subagent from the event that first names it (ThreadAliases). Expectations wait
 // up to a timeout for the log or a client's normalized view to show what the line says, so the
-// suite judges what a client would see, not internal state.
+// suite judges what a client would see, not internal state. The seam's reads (`history`, `entry`,
+// `entryImage`, `inspect`) are judged by their own expectation lines, each called through the seam
+// until it reads what the line says. For the drift goldens, once the lines have held the run waits
+// for every thread to be at rest (no run live, and the log and each client agree on the last
+// message and on every approval record and child) before it records the events and views: the
+// lines need not wait for a run's last steps, and on a loaded machine either feed lags the other.
 
 import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
@@ -24,6 +29,7 @@ import {
   Fiber,
   Match,
   Option,
+  Predicate,
   Ref,
   Result,
   Schema,
@@ -32,6 +38,8 @@ import {
 import type { Scope } from "effect";
 import type { describe, it } from "vitest";
 
+import { TEST_SLACK } from "../../EventuallyTestKit.ts";
+import { FAUX_MODEL } from "../FauxModels.ts";
 import { HarnessEvent } from "../HarnessSeam.ts";
 import type {
   ApprovalAnswerInput,
@@ -39,16 +47,22 @@ import type {
   HarnessSeam,
   HarnessTurnInput,
 } from "../HarnessSeam.ts";
-import { FAUX_MODEL } from "../ModelSource.ts";
 import type { Mutation, MutationState } from "./Mutations.ts";
 import { breakSeam, faultsOf } from "./Mutations.ts";
 import {
+  COMMITTED_MESSAGE_KINDS,
   jsonContains,
   jsonEquals,
   normalizeDeviceView,
+  normalizeEntries,
+  normalizeEntry,
+  normalizeInspection,
+  normalizeText,
   normalizeView,
   pendingApprovalIds,
+  statusesIn,
   valueAt,
+  visibleEntries,
 } from "./Normalize.ts";
 import { responseScript } from "./ResponseScript.ts";
 import type { MakeTarget } from "./Targets.ts";
@@ -59,6 +73,9 @@ import {
   resolveAliases,
 } from "./ThreadAliases.ts";
 import type {
+  EntryImageLine,
+  EntryLine,
+  HistoryLine,
   InputLine,
   ModelLine,
   Scenario,
@@ -107,6 +124,13 @@ export interface RunOptions {
   readonly timeout: Duration.Duration;
   /** Breaks applied to every instance of the harness (the mutation check). */
   readonly mutations: ReadonlySet<Mutation>;
+  /**
+   * Whether the record waits, once the lines have held, for every thread to be at rest: no run
+   * live, and the events and its client's view agreeing. The run fails when they are not within
+   * `timeout`. On for the drift goldens, whose scenarios all end at rest; the suite judges the
+   * lines alone, and a tuned scenario may end mid-run.
+   */
+  readonly awaitAtRest: boolean;
 }
 
 const encodeEvent = Schema.encodeSync(Schema.toCodecJson(HarnessEvent));
@@ -115,6 +139,25 @@ const decodeApprovalId = Schema.decodeEffect(ApprovalId);
 
 const isModelLine = (line: TranscriptLine): line is ModelLine =>
   line.type === "model";
+
+/** A guard for the harness events tagged `tag`. */
+const isEvent =
+  <K extends HarnessEvent["_tag"]>(tag: K) =>
+  (event: HarnessEvent): event is Extract<HarnessEvent, { readonly _tag: K }> =>
+    Predicate.isTagged(event, tag);
+
+const isRunStarted = isEvent("RunStarted");
+
+const isRunTerminal = isEvent("RunTerminal");
+
+const isMessageCommitted = isEvent("MessageCommitted");
+
+/** Two records-to-status maps hold the same records with the same statuses. */
+const sameStatuses = (
+  a: ReadonlyMap<string, string>,
+  b: ReadonlyMap<string, string>
+) =>
+  a.size === b.size && [...a].every(([key, status]) => b.get(key) === status);
 
 /** A masked event: a JSON object. */
 interface Masked {
@@ -152,7 +195,7 @@ const maskEvent = (
         Option.some<Masked>({
           event: found._tag,
           role: found.role,
-          text: found.text,
+          text: normalizeText(found.text),
         }),
       QueueChanged: () => Option.none<Masked>(),
       RuntimeRequestUpdated: (found) =>
@@ -166,7 +209,6 @@ const maskEvent = (
         }),
       SubagentTallyUpdated: () => Option.none<Masked>(),
       GoalUpdated: () => Option.none<Masked>(),
-      TaskParked: () => Option.none<Masked>(),
       CompactionStarted: () =>
         Option.some<Masked>({ event: "CompactionStarted" }),
       CompactionEnded: (found) =>
@@ -187,7 +229,10 @@ const describeLine = (index: number, line: TranscriptLine) =>
 
 /** The user input a message line sends. */
 const turnInput = (line: InputLine): HarnessTurnInput => {
-  const text = { type: "text" as const, text: line.text ?? "" };
+  const text = {
+    type: "text" as const,
+    text: (line.text ?? "").repeat(line.repeat ?? 1),
+  };
 
   let whenBusy: HarnessTurnInput["whenBusy"] = line.whenBusy ?? "followUp";
 
@@ -261,6 +306,10 @@ const holds = (complaint: Option.Option<string>) =>
     onNone: () => Result.succeedNone,
     onSome: (text) => Result.fail(text),
   });
+
+/** A read the seam refused, as a complaint. */
+const refused = (call: string, failure: HarnessError) =>
+  Result.fail(`${call} failed with ${failure.reason}: ${failure.message}`);
 
 const fromSeam = (where: string) => (failure: HarnessError) =>
   new ScenarioFailure({ message: `${where}: ${failure.message}` });
@@ -864,6 +913,7 @@ export const runScenario = (
         stop: stopStep(false, "keep"),
         stop_clear: stopStep(true, "keep"),
         stop_all: stopStep(false, "stop"),
+        remove: stopStep(true, "stop"),
         withdraw: withdrawStep,
         respond: respondStep,
         respond_race: respondRaceStep,
@@ -1018,6 +1068,161 @@ export const runScenario = (
           return Result.succeedNone;
         });
 
+      const aliasOf = (threadId: ThreadId) =>
+        Option.getOrElse(aliases.aliasOf(threadId), () => "unknown");
+
+      /** The thread an alias names and the id of the visible entry at `at` in its client's view. */
+      const entryAt = (alias: string | undefined, at: number) =>
+        Effect.gen(function* () {
+          const threadId = aliases.idOf(alias ?? PARENT_ALIAS);
+
+          if (Option.isNone(threadId)) {
+            return Result.fail(
+              `no thread is known as ${alias ?? PARENT_ALIAS}`
+            );
+          }
+
+          const client = views.get(threadId.value);
+
+          const state =
+            client === undefined
+              ? Option.none<ThreadViewState>()
+              : yield* Ref.get(client);
+
+          if (Option.isNone(state)) {
+            return Result.fail("the client has no snapshot");
+          }
+
+          const found = visibleEntries(state.value.view.entries).at(at);
+
+          if (found === undefined) {
+            return Result.fail(`the client holds no visible entry ${at}`);
+          }
+
+          return Result.succeed({
+            threadId: threadId.value,
+            entryId: found.id,
+          });
+        });
+
+      /** A read's result against what the line wants. */
+      const compared = (read: Json, wanted: Json) =>
+        jsonEquals(read, resolveAliases(wanted, aliases))
+          ? Result.succeedNone
+          : Result.fail(`read ${JSON.stringify(read)}`);
+
+      const historyAt = (line: HistoryLine) =>
+        Effect.gen(function* () {
+          const located = yield* entryAt(line.thread, line.before);
+
+          if (Result.isFailure(located)) {
+            return Result.fail(located.failure);
+          }
+
+          const seam = yield* seamNow;
+
+          const page = yield* Effect.result(
+            seam.history(located.success.threadId, {
+              before: located.success.entryId,
+              limit: line.limit,
+            })
+          );
+
+          if (Result.isFailure(page)) {
+            return refused("history", page.failure);
+          }
+
+          return compared(
+            {
+              entries: normalizeEntries(page.success.entries),
+              hasMore: page.success.hasMore,
+            },
+            { entries: line.entries, hasMore: line.hasMore }
+          );
+        });
+
+      const entryRead = (line: EntryLine) =>
+        Effect.gen(function* () {
+          const located = yield* entryAt(line.thread, line.at);
+
+          if (Result.isFailure(located)) {
+            return Result.fail(located.failure);
+          }
+
+          const seam = yield* seamNow;
+
+          const read = yield* Effect.result(
+            seam.entry(located.success.threadId, located.success.entryId)
+          );
+
+          if (Result.isFailure(read)) {
+            return refused("entry", read.failure);
+          }
+
+          return compared(
+            {
+              entry: normalizeEntry(read.success.entry),
+              truncated: read.success.truncated,
+            },
+            { entry: line.equals, truncated: line.truncated }
+          );
+        });
+
+      const imageRead = (line: EntryImageLine) =>
+        Effect.gen(function* () {
+          const located = yield* entryAt(line.thread, line.at);
+
+          if (Result.isFailure(located)) {
+            return Result.fail(located.failure);
+          }
+
+          const seam = yield* seamNow;
+
+          const read = yield* Effect.result(
+            seam.entryImage(
+              located.success.threadId,
+              located.success.entryId,
+              line.index
+            )
+          );
+
+          if (Result.isFailure(read)) {
+            return refused("entryImage", read.failure);
+          }
+
+          return compared(
+            {
+              mimeType: read.success.mimeType,
+              base64: Buffer.from(read.success.bytes).toString("base64"),
+            },
+            { mimeType: line.mimeType, base64: line.base64 }
+          );
+        });
+
+      const inspection = (threads: Json) =>
+        Effect.gen(function* () {
+          const seam = yield* seamNow;
+          const read = yield* Effect.result(seam.inspect);
+
+          if (Result.isFailure(read)) {
+            return refused("inspect", read.failure);
+          }
+
+          const order = aliases.threads();
+
+          // A thread the scenario never met sorts last, as `unknown`.
+          const rank = (threadId: ThreadId) => {
+            const at = order.indexOf(threadId);
+
+            return at === -1 ? order.length : at;
+          };
+
+          return compared(
+            normalizeInspection(read.success, aliasOf, rank),
+            threads
+          );
+        });
+
       const play = (where: string, line: TranscriptLine) =>
         Match.value(line).pipe(
           Match.discriminatorsExhaustive("type")({
@@ -1053,6 +1258,14 @@ export const runScenario = (
                 where,
                 requestAt(found.thread, found.index, found)
               ),
+            expect_history: (found) =>
+              eventually(options.timeout, where, historyAt(found)),
+            expect_entry: (found) =>
+              eventually(options.timeout, where, entryRead(found)),
+            expect_entry_image: (found) =>
+              eventually(options.timeout, where, imageRead(found)),
+            expect_inspect: (found) =>
+              eventually(options.timeout, where, inspection(found.threads)),
           })
         );
 
@@ -1095,12 +1308,122 @@ export const runScenario = (
           return Result.succeedNone;
         });
 
+      /**
+       * Where the events and a thread's client disagree, or a run is still live: none once both
+       * show no live run, agree on the thread's last committed message, and agree on the status of
+       * each of its approval records and children. Either feed may lag the other.
+       */
+      const notAtRest = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const client = views.get(threadId);
+
+          const state =
+            client === undefined
+              ? Option.none<ThreadViewState>()
+              : yield* Ref.get(client);
+
+          if (Option.isNone(state)) {
+            return Option.some("its client has no snapshot");
+          }
+
+          const { view } = state.value;
+          const own = events.filter((event) => event.threadId === threadId);
+
+          const run = own.findLast(
+            (event) => isRunStarted(event) || isRunTerminal(event)
+          );
+
+          if (run !== undefined && isRunStarted(run)) {
+            return Option.some("its run has not ended in the events");
+          }
+
+          if (
+            Option.exists(
+              valueAt(normalizeView(view), ["running"]),
+              (running) => running === true
+            )
+          ) {
+            return Option.some("its run has not ended in its client's view");
+          }
+
+          const committed = own.findLast(isMessageCommitted)?.entryId;
+
+          const shown = view.entries.findLast((entry) =>
+            COMMITTED_MESSAGE_KINDS.has(entry.kind)
+          )?.id;
+
+          if (committed !== shown) {
+            return Option.some(
+              `its last committed message is entry ${committed ?? "none"} in the events, ${shown ?? "none"} in its client's view`
+            );
+          }
+
+          const approvals = new Map(
+            own
+              .values()
+              .filter(isEvent("RuntimeRequestUpdated"))
+              .map((event) => [event.id, event.status] as const)
+          );
+
+          if (
+            !sameStatuses(approvals, statusesIn(view, "cairn.approvals", "id"))
+          ) {
+            return Option.some(
+              "the events and its client's view disagree on its approval records"
+            );
+          }
+
+          const children = new Map(
+            own
+              .values()
+              .filter(isEvent("SubagentUpdated"))
+              .map((event) => [event.child, event.status] as const)
+          );
+
+          if (
+            !sameStatuses(
+              children,
+              statusesIn(view, "cairn.subagents", "threadId")
+            )
+          ) {
+            return Option.some(
+              "the events and its client's view disagree on its children"
+            );
+          }
+
+          return Option.none<string>();
+        });
+
+      /**
+       * Every thread the scenario met is at rest at once. The lines need not wait for a run's last
+       * steps, and on a loaded machine either feed lags the other, so the record waits for this.
+       */
+      const allAtRest = Effect.gen(function* () {
+        for (const threadId of aliases.threads()) {
+          const complaint = yield* notAtRest(threadId);
+
+          if (Option.isSome(complaint)) {
+            return Result.fail(`${aliasOf(threadId)}: ${complaint.value}`);
+          }
+        }
+
+        return Result.succeedNone;
+      });
+
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* startFeeds;
 
           for (const [index, line] of scenario.lines.entries()) {
             yield* play(describeLine(index, line), line);
+          }
+
+          if (options.awaitAtRest) {
+            yield* eventually(
+              options.timeout,
+              "every thread is at rest before the record",
+              allAtRest
+            );
           }
 
           for (const threadId of aliases.threads()) {
@@ -1112,9 +1435,6 @@ export const runScenario = (
           }
         })
       );
-
-      const aliasOf = (threadId: ThreadId) =>
-        Option.getOrElse(aliases.aliasOf(threadId), () => "unknown");
 
       // Each thread's events in the order they came, the scenario's own first, so a golden does
       // not depend on how two threads' work interleaved.
@@ -1188,7 +1508,7 @@ export const registerHarnessConformance = (
             throw new Error(`${scenario.name}: ${outcome.failure.value}`);
           }
         },
-        60_000
+        60_000 * TEST_SLACK
       );
     }
   });

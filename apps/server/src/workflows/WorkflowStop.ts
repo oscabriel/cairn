@@ -59,15 +59,11 @@ import { Brain } from "../brain/Brain.ts";
 import type { BrainUnavailable } from "../brain/Brain.ts";
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
 import { durable } from "../brain/Durable.ts";
-import type { DurableCallError } from "../brain/Durable.ts";
+import type { DurableCallError, DurableRunner } from "../brain/Durable.ts";
 import { emit } from "../brain/Events.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import { conversationOf, taskOf } from "../subagents/Delivery.ts";
-import {
-  isNodeEnded,
-  isWorkflowEnded,
-  resultRefOf,
-  WorkflowsDoc,
-} from "./WorkflowDocs.ts";
+import { isNodeEnded, isWorkflowEnded, resultRefOf } from "./WorkflowDocs.ts";
 
 // Abort polling.
 
@@ -80,9 +76,10 @@ export const throwIfStopped = (signal: AbortSignal | undefined): void => {
  * Settles as `work` does, or rejects with the signal's reason as soon as it aborts. `work` itself
  * is not cancelled: what it does after the stop cannot commit (pi-durable rejects a run
  * invocation's commit once its task carries an abort mark), and a late rejection of it is held by
- * the abandoned wait, never left unhandled.
+ * the abandoned wait, never left unhandled. The wait runs through `run`.
  */
 export const untilStopped = async <A>(
+  run: DurableRunner,
   signal: AbortSignal | undefined,
   work: Promise<A>
 ): Promise<A> => {
@@ -91,7 +88,7 @@ export const untilStopped = async <A>(
   }
 
   // The signal interrupts the wait (and only the wait) the moment it aborts.
-  const exit = await Effect.runPromiseExit(
+  const exit = await run.promiseExit(
     Effect.promise(async () => await work),
     { signal }
   );

@@ -8,7 +8,8 @@
 // - `model {label, hold?, text?, toolCalls?, stopReason?, errorMessage?}`: the next model answer,
 //   consumed in order by whichever request comes next. `hold` keeps it until `release {label}`.
 // - `input {step, ...}`: `ensure {runtimeMode?}` (full access by default), `ensure_race`,
-//   `subscribe`, `configure {runtimeMode}`, `message` (with `whenBusy`), `steer`, `follow_up`,
+//   `subscribe`, `configure {runtimeMode}`, `message` (with `whenBusy`, and `repeat` to send its
+//   `text` that many times over), `steer`, `follow_up`,
 //   `stop`, `stop_clear`, `withdraw {requestId}`, `respond {decision, reason?}`, `compact`,
 //   `restart`. `subscribe` opens the client's one subscription now, before any ensure,
 //   as a page opened on a launch does: it waits on `whenEnsured`, then watches, and is never
@@ -27,12 +28,29 @@
 //   requests its model saw: pi-durable's faux provider its context, the scripted model its
 //   request.
 //
+// The seam's reads (T-5 of the 2026-11-09 review), each waited for as an expectation is. An entry is
+// named by `at`, its position among the visible entries the thread's client holds (hidden
+// placeholders left out; negative counts from the end), and read entries are normalized as the
+// view's `transcript` is:
+// - `expect_history {before, limit, entries, hasMore}`: `history` up to `limit` entries before the
+//   one at `before` reads `entries` (hidden placeholders left out, as each harness writes its own
+//   prompt deltas; `limit` counts them) and `hasMore`.
+// - `expect_entry {at, equals, truncated}`: `entry` reads the entry at `at` whole, or, past the
+//   full-entry limit (256 KiB), as the stream cuts it with `truncated`. A text past 8192
+//   characters is written as its head, its length and its tail (`normalizeText`), so a text cut at
+//   the wire's 32 KiB reads apart from a whole one.
+// - `expect_entry_image {at, index, mimeType, base64}`: `entryImage` reads that image's bytes.
+// - `expect_inspect {threads}`: `inspect` lists exactly `threads`, in alias order, each as
+//   `{thread, running, queueLength, pending}`, its pending records oldest first as
+//   `{kind, route, origin}` (`origin` an alias or null).
+//
 // Threads (subagents, ADR 0028): `model`, `input`, `expect_view` and `expect_request` lines take an
 // optional `thread` alias (`parent`, the default, or `child1`, `child2`, ... in the order the
 // harness reports children; see ThreadAliases). Expected events and tool arguments write
 // `$<alias>` for an id. Inputs for them: `respond` takes `answer` (custom text) and `picks` (option
 // labels) for a question; `respond_race {threads}` answers the first pending record of each thread
 // at once (a question answered from both threads); `stop_all` stops the parent and its subagents;
+// `remove` makes the stop archiving or deleting the parent makes (Stop all, queue cleared);
 // `mode {mode}` sets a thread's permission mode,
 // with `expect.error` when it must be refused.
 //
@@ -76,6 +94,8 @@ const inputFields = {
   thread: Schema.optionalKey(Schema.String),
   requestId: Schema.optionalKey(Schema.String),
   text: Schema.optionalKey(Schema.String),
+  /** A message's `text` sent this many times over, for a text past the wire's limits. */
+  repeat: Schema.optionalKey(Schema.Int),
   image: Schema.optionalKey(Schema.Boolean),
   whenBusy: Schema.optionalKey(
     Schema.Literals(["steer", "followUp", "reject"])
@@ -138,6 +158,7 @@ export const TranscriptLine = Schema.Union([
       "stop",
       "stop_clear",
       "stop_all",
+      "remove",
       "withdraw",
       "respond",
       "respond_race",
@@ -176,6 +197,33 @@ export const TranscriptLine = Schema.Union([
     excludesTools: Schema.optionalKey(Schema.Array(Schema.String)),
     firstInput: Schema.optionalKey(Schema.String),
   }),
+  Schema.Struct({
+    type: Schema.Literal("expect_history"),
+    thread: Schema.optionalKey(Schema.String),
+    before: Schema.Int,
+    limit: Schema.Int,
+    entries: Json,
+    hasMore: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("expect_entry"),
+    thread: Schema.optionalKey(Schema.String),
+    at: Schema.Int,
+    equals: Json,
+    truncated: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("expect_entry_image"),
+    thread: Schema.optionalKey(Schema.String),
+    at: Schema.Int,
+    index: Schema.Int,
+    mimeType: Schema.String,
+    base64: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("expect_inspect"),
+    threads: Json,
+  }),
 ]);
 
 export type TranscriptLine = typeof TranscriptLine.Type;
@@ -185,6 +233,24 @@ export type ModelLine = Extract<TranscriptLine, { readonly type: "model" }>;
 
 /** An input line. */
 export type InputLine = Extract<TranscriptLine, { readonly type: "input" }>;
+
+/** An `expect_history` line. */
+export type HistoryLine = Extract<
+  TranscriptLine,
+  { readonly type: "expect_history" }
+>;
+
+/** An `expect_entry` line. */
+export type EntryLine = Extract<
+  TranscriptLine,
+  { readonly type: "expect_entry" }
+>;
+
+/** An `expect_entry_image` line. */
+export type EntryImageLine = Extract<
+  TranscriptLine,
+  { readonly type: "expect_entry_image" }
+>;
 
 /** A parsed scenario. */
 export interface Scenario {

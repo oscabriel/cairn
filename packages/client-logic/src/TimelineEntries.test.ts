@@ -387,6 +387,13 @@ describe("entries the recorder cannot provoke", () => {
     model: [{ role: "user", content, timestamp }],
   });
 
+  /** The user's own message, as `TurnContent` records it: a `cairn.user` entry naming its sender. */
+  const said = (id: number, content: Json, timestamp = 1000) => ({
+    ...user(id, content, timestamp),
+    kind: "cairn.user",
+    data: { from: "owner@github", attachments: [] },
+  });
+
   it("reads a failed answer as an error entry and a failed turn", () => {
     const timeline = entriesFromPi(
       view([
@@ -421,6 +428,113 @@ describe("entries the recorder cannot provoke", () => {
     assert.strictEqual(error?.id, "error:msg:turn:1:0");
   });
 
+  /** The one message `entry` reads as. */
+  const onlyMessage = (entry: Json) => {
+    const [message] = messages(entriesFromPi(view([entry])));
+
+    assert.isDefined(message);
+
+    return message;
+  };
+
+  describe("who sent an input", () => {
+    it("reads a cairn.user entry naming its sender as the user's own words", () => {
+      const message = onlyMessage(said(1, "fix the tests"));
+
+      assert.deepStrictEqual(
+        [message.role, message.sender, message.text],
+        ["user", "user", "fix the tests"]
+      );
+    });
+
+    it("reads a cairn.user entry without a sender as a brain input", () => {
+      const message = onlyMessage({
+        ...said(1, "fix the tests"),
+        data: { attachments: [] },
+      });
+
+      assert.strictEqual(message.sender, "brain");
+    });
+
+    it("reads a wake as a brain input that names the subagent row, not the note", () => {
+      const message = onlyMessage(
+        user(
+          1,
+          'Subagent "Probe the bridge" reported; its result is in the note above.'
+        )
+      );
+
+      assert.deepStrictEqual(
+        [message.role, message.sender, message.text],
+        [
+          "user",
+          "brain",
+          'Subagent "Probe the bridge" reported; its result is on its subagent row above.',
+        ]
+      );
+    });
+
+    it("reads a subagent's question without the instruction meant for the model", () => {
+      const message = onlyMessage(
+        user(
+          1,
+          'Subagent "Probe the bridge" asks: Which port?\nTry 3774 first.\nAnswer with subagent_reply, or escalate it to the user.'
+        )
+      );
+
+      assert.deepStrictEqual(
+        [message.sender, message.text],
+        [
+          "brain",
+          'Subagent "Probe the bridge" asks: Which port?\nTry 3774 first.',
+        ]
+      );
+    });
+
+    it("reads the brief that starts a child without the submit_result instruction", () => {
+      const message = onlyMessage(
+        user(
+          1,
+          "Count the tests\n\nCount the test files under apps.\n\nWhy: the plan needs it.\n\nFinish by calling submit_result with your result, which must match its schema, and how it differs from the brief."
+        )
+      );
+
+      assert.deepStrictEqual(
+        [message.sender, message.text],
+        [
+          "brain",
+          "Count the tests\n\nCount the test files under apps.\n\nWhy: the plan needs it.",
+        ]
+      );
+    });
+
+    it("reads a typed child's nudge as what Cairn asked, not the instruction", () => {
+      const message = onlyMessage(
+        user(
+          1,
+          "Your brief asked for a typed result and you have not submitted one. Call submit_result now with your result and its divergence from the brief."
+        )
+      );
+
+      assert.deepStrictEqual(
+        [message.sender, message.text],
+        [
+          "brain",
+          "Cairn asked the subagent for the typed result its brief names.",
+        ]
+      );
+    });
+
+    it("reads any other input the brain wrote as a brain input, word for word", () => {
+      const message = onlyMessage(user(1, "RUN:\nstep one"));
+
+      assert.deepStrictEqual(
+        [message.sender, message.text],
+        ["brain", "RUN:\nstep one"]
+      );
+    });
+  });
+
   /** A brief's answer in the parent's transcript, as the brain writes it. */
   const briefAnswer = (id: number, started: boolean, text: string) => ({
     id,
@@ -430,10 +544,10 @@ describe("entries the recorder cannot provoke", () => {
     data: { briefId: `brief-${id}`, decision: "declined", started },
   });
 
-  it("reads a brief that started nothing as the user's turn, and leaves Go's answer out", () => {
+  it("reads a brief that started nothing as a brain input that starts a turn, and leaves Go's answer out", () => {
     const timeline = entriesFromPi(
       view([
-        user(1, "delegate it"),
+        said(1, "delegate it"),
         briefAnswer(
           2,
           true,
@@ -448,10 +562,14 @@ describe("entries the recorder cannot provoke", () => {
     );
 
     assert.deepStrictEqual(
-      messages(timeline).map((message) => [message.role, message.text]),
+      messages(timeline).map((message) => [
+        message.role,
+        message.sender,
+        message.text,
+      ]),
       [
-        ["user", "delegate it"],
-        ["user", 'The user declined the brief "Rewrite": not now.'],
+        ["user", "user", "delegate it"],
+        ["user", "brain", 'The user declined the brief "Rewrite": not now.'],
       ]
     );
     assert.deepStrictEqual(

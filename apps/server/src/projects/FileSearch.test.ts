@@ -5,6 +5,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer } from "effect";
 
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import {
   entriesOf,
   FileSearch,
@@ -12,6 +13,8 @@ import {
   rankEntries,
 } from "./FileSearch.ts";
 import { Worktrees } from "./Worktrees.ts";
+
+isolateGitEnvironment();
 
 const TestLayer = FileSearch.layerNoDeps.pipe(
   Layer.provideMerge(Worktrees.layerNoDeps),

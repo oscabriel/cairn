@@ -1,5 +1,5 @@
 // The judge brain of `judges/workflow-budget.ts` (workflows note judge 4, plan 5B): Cairn's `Brain`
-// over a scratch directory (BrainStore, Parked, the reactor host), never the deployed unit's, with
+// over a scratch directory (BrainStore, the reactor host), never the deployed unit's, with
 // the code mode, workflows and results extensions and the kit's `work` tool, over pi-ai's faux
 // provider answering as the workflow kit's model does (apps/server/src/workflows/WorkflowTestKit.ts).
 // The reactor host runs the workflow budget reactor (`cairn.workflow-budget`) as the production
@@ -9,8 +9,12 @@
 //     [--control no-admission|no-stopper] [--hold-submit <label>]
 //     [--hold-reserve-until-spent <label>]
 //
-// - The first life plants an approved launch of the script with a token budget of `--max-tokens`
-//   (as 5A's answer path will); every life submits the run under one request id, so it is admitted
+// - The first life plants the launch of the script waiting on its card with no budget (its model
+//   named none, and the default sets none), and the user's Go carries a token budget of
+//   `--max-tokens` from the card's budget field: answered through `answerApproval` with
+//   `launchAnswered`, the path `thread.respond` takes (ADR 0047), so the run is held to the budget
+//   production sets, not one planted on its row. A life killed between the plant and the answer
+//   answers it on the next. Every life submits the run under one request id, so it is admitted
 //   once. Each life boots as the brain does: the reactor host starts, then the Harness resumes.
 // - Each node's child calls `work`, which appends `{node, what, at}` to `effects.log` (outside the
 //   store): `start` once per child, then `done` or `aborted`.
@@ -36,14 +40,16 @@ import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import { NodeRuntime } from "@effect/platform-node";
-import { Duration, Effect, Layer, Option, Result } from "effect";
+import { Context, Duration, Effect, Layer, Option, Result } from "effect";
 
+import { answerApproval } from "../../../apps/server/src/approvals/ApprovalLedger.ts";
 import { Arms } from "../../../apps/server/src/brain/Arms.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
 import { BrainStore } from "../../../apps/server/src/brain/BrainStore.ts";
 import { Approvals } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { CodeMode } from "../../../apps/server/src/brain/CodeMode.ts";
+import { runnerOf } from "../../../apps/server/src/brain/Durable.ts";
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
 import type { Reactor } from "../../../apps/server/src/brain/Events.ts";
 import {
@@ -51,14 +57,15 @@ import {
   Extensions,
 } from "../../../apps/server/src/brain/Extensions.ts";
 import type { CairnExtension } from "../../../apps/server/src/brain/Extensions.ts";
-import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
 import {
+  FauxModels,
   FAUX_MODEL,
-  ModelSource,
-} from "../../../apps/server/src/brain/ModelSource.ts";
-import { Parked } from "../../../apps/server/src/brain/Parked.ts";
+} from "../../../apps/server/src/brain/FauxModels.ts";
+import { ChildDoc } from "../../../apps/server/src/brain/SubagentDocs.ts";
+import type { WorkflowItemState } from "../../../apps/server/src/brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../../../apps/server/src/brain/WorkflowsDoc.ts";
 import { ResultTool } from "../../../apps/server/src/models/ResultTool.ts";
-import { ChildDoc } from "../../../apps/server/src/subagents/SubagentDocs.ts";
+import { NO_DEFAULT_BUDGET } from "../../../apps/server/src/usage/DefaultBudget.ts";
 import {
   STOPPER_TASK,
   workflowBudgetReactor,
@@ -66,9 +73,8 @@ import {
 import {
   isWorkflowEnded,
   ledgerProblems,
-  WorkflowsDoc,
 } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
-import type { WorkflowItemState } from "../../../apps/server/src/workflows/WorkflowDocs.ts";
+import { launchAnswered } from "../../../apps/server/src/workflows/WorkflowLaunch.ts";
 import { NO_PROJECT_RECIPES } from "../../../apps/server/src/workflows/WorkflowPlanTool.ts";
 import type { PlanAccess } from "../../../apps/server/src/workflows/WorkflowPlanTool.ts";
 import {
@@ -76,6 +82,7 @@ import {
   eventsOf,
   KIT_CWD,
   KitLayer,
+  launchApprovalIdOf,
   plant,
   plantDefaults,
   respond,
@@ -169,14 +176,12 @@ const effect = (line: WorkEffect) => {
 /** A model a node names resolves to the faux model this brain runs; none runs on the thread's. */
 const resolveModel = async (spec: string) =>
   await Promise.resolve(
-    Result.succeed(
-      Option.some({
-        spec,
-        provider: FAUX_MODEL.provider,
-        modelId: FAUX_MODEL.modelId,
-        thinkingLevel: Option.none(),
-      })
-    )
+    Result.succeed({
+      spec,
+      provider: FAUX_MODEL.provider,
+      modelId: FAUX_MODEL.modelId,
+      thinkingLevel: Option.none(),
+    })
   );
 
 /** This brain plants its launch, so its model never proposes one. */
@@ -184,9 +189,12 @@ const plan: PlanAccess = {
   dryRun: async () =>
     await Promise.resolve(Result.fail("the budget judge plants its launch")),
   projectRecipe: NO_PROJECT_RECIPES,
+  defaults: NO_DEFAULT_BUDGET,
 };
 
+// This script is its own entry point, with no app layer: the extension runs on Effect's defaults.
 const workflows = workflowExtension({
+  run: runnerOf(Context.empty()),
   resolveModel,
   plan,
   faults: {
@@ -232,10 +240,9 @@ const JudgeLayer = EventReactors.fromSources(reactorSources).pipe(
       Layer.provide(Arms.layer)
     )
   ),
-  Layer.provide(Parked.layer),
   Layer.provide(Extensions.fromSources(extensionSources)),
   Layer.provideMerge(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 50_000,
       settings: { retry: { enabled: false } },
     })
@@ -346,18 +353,58 @@ const program = Effect.gen(function* () {
     async () => await kit.harness.snapshot(WorkflowsDoc, kit.root, context)
   );
 
+  const launchId = launchApprovalIdOf(WF);
+
   if (ledger?.items[WF] === undefined) {
+    // The nodes name no model, so they run on this thread's, and the launch grants that one
+    // (ADR 0043), not the kit's root model this brain does not run.
     yield* plant(
       kit,
       source,
       {
         ...plantDefaults(WF),
-        budget: { ...DEFAULT_BUDGET, maxTokens },
+        status: "pending",
+        threadModel: { model: FAUX_MODEL, thinkingLevel: Option.none() },
       },
       context
     );
     say("planted");
   }
+
+  // `plant` writes the row approved; a launch still waiting on its card is `proposed`, as the
+  // `workflow_plan` commit leaves it, so Go's answer is what approves it.
+  yield* Effect.promise(async () => {
+    await kit.harness.commit(async (tx) => {
+      const approvals = await tx.doc(Approvals, kit.root);
+      const rows = await tx.doc(WorkflowsDoc, kit.root);
+      const row = rows.items[WF];
+
+      if (
+        approvals.items[launchId]?.status === "pending" &&
+        row?.state === "approved"
+      ) {
+        row.state = "proposed";
+        row.decidedBy = null;
+        row.decidedAt = null;
+      }
+    }, context);
+  });
+
+  // Go with the card's budget, as the user answers it; a later life finds it answered.
+  yield* answerApproval(
+    kit.harness,
+    kit.root,
+    launchId,
+    {
+      decision: "accept",
+      by: { kind: "user" },
+      reason: Option.none(),
+      answers: Option.none(),
+      launch: Option.some({ budget: { ...DEFAULT_BUDGET, maxTokens } }),
+    },
+    1,
+    launchAnswered
+  ).pipe(Effect.orDie);
 
   // Where this life found the run: whether the line was reached and a stopper still running, so
   // the judge can say which kills landed inside the stop.

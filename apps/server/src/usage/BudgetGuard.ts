@@ -14,10 +14,10 @@
 //   the guard acts again: a new notice and a new raise.
 // - A child that starts (`SubagentUpdated` working) is read as a scope of its own (its brief's).
 //
-// The guard acts on a scope at its line once per epoch (its count of accepted raises), and records
-// the epoch in the book when it has; an evaluation that finds a scope at its line at an epoch not
-// acted on reports it again, so a declared scope or a failed step is acted on by the next one. A
-// warning is recorded the same way. Each scope's step runs on its own, so one that fails never
+// The guard acts on a scope at its line once per epoch (its count of accepted raises plus its
+// count of declares, ADR 0047), and records the epoch in the book when it has; an evaluation that
+// finds a scope at its line at an epoch not acted on reports it again, so a declared scope or a
+// failed step is acted on by the next one. A warning is recorded the same way. Each scope's step runs on its own, so one that fails never
 // drops another's, and a scope whose step failed is evaluated again by every pass until it is
 // acted on, with a pass started for it after `RETRY_AFTER` when no spend moves. A pass whose reads
 // fail keeps the scopes it was retrying.
@@ -30,13 +30,11 @@
 // lineage read and one roll-up per scope, and the guard never falls behind the line.
 //
 // `boot` is the boot repair, run after the spend reconcile and before any repair that can start
-// scheduling (pi-durable's `retryTask` resumes it: the parked approval waits and subagent tasks) and
-// before the Harness resumes: it rebuilds the book from the documents and, for each scope at its
+// scheduling (`BootRepairs.ts` states the rule) and before the Harness resumes: it rebuilds the book from the documents and, for each scope at its
 // line in `stop` mode, marks its runs aborted, withdraws their queued inputs and cancels the
 // approvals they held, without starting scheduling, so a guard killed while stopping does not let
 // a stopped child run again after the restart, and the gate has a full book from the first call.
 
-import { badgeOf } from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { Budget } from "@cairn/protocol/Spend";
 import {
@@ -51,8 +49,6 @@ import {
   Stream,
 } from "effect";
 
-import { BudgetSources } from "../brain/BudgetSources.ts";
-import type { BudgetSourceError } from "../brain/BudgetSources.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { cutText, Notifier } from "../push/Notifier.ts";
@@ -73,6 +69,8 @@ import {
   warningText,
 } from "./Budgets.ts";
 import type { Transition } from "./Budgets.ts";
+import { BudgetSources } from "./BudgetSources.ts";
+import type { BudgetSourceError } from "./BudgetSources.ts";
 import { SpendLedger } from "./SpendLedger.ts";
 import type { SpendLedgerError } from "./SpendLedger.ts";
 
@@ -175,14 +173,22 @@ export class BudgetGuard extends Context.Service<
       live: boolean
     ): Effect.Effect<void>;
     /**
-     * Gives `threadId`'s subtree a budget of its own (`Budgets.declare`, a goal's) and acts at once
-     * on where it stands: a scope declared already past its line is stopped and told so.
+     * Gives `threadId`'s subtree a budget of its own (`Budgets.declare`: the user's, from
+     * `budget.declare`, ADR 0047), replacing the line it stood at, and acts at once on where it
+     * stands: a scope declared already past its line is stopped and told so.
      */
     declare(
       threadId: ThreadId,
       budget: Budget,
       mode: BudgetMode
     ): Effect.Effect<void, BudgetSourceError | SpendLedgerError>;
+    /**
+     * The line `threadId`'s own scope stands at, read from the documents (declared, else its
+     * brief's, as raised); none when it has no line of its own.
+     */
+    line(
+      threadId: ThreadId
+    ): Effect.Effect<Option.Option<Budget>, BudgetSourceError>;
   }
 >()("cairn/server/usage/BudgetGuard") {
   /**
@@ -222,10 +228,7 @@ export class BudgetGuard extends Context.Service<
         }
       });
 
-      const badge = threadRows.listLive.pipe(
-        Effect.map((rows) => badgeOf(rows.map((row) => row.shell))),
-        Effect.orElseSucceed(() => 0)
-      );
+      const { badge } = notifier;
 
       const push = Effect.fnUntraced(function* (
         threadId: ThreadId,
@@ -337,7 +340,14 @@ export class BudgetGuard extends Context.Service<
           Option.getOrElse(standing.reached, () => "tokens" as const)
         )}?`;
 
-        yield* sources.askRaise(limit, to, summary);
+        const row = yield* threadRows
+          .get(limit.threadId)
+          .pipe(Effect.orElseSucceed(() => Option.none()));
+
+        yield* sources.askRaise(limit, to, summary, {
+          title: Option.map(row, (found) => found.shell.title),
+          spent: standing.spent,
+        });
 
         // Last, so a step that failed above is acted on again by the next evaluation.
         yield* book.markActed(limit.threadId, limit.epoch);
@@ -492,13 +502,22 @@ export class BudgetGuard extends Context.Service<
         Effect.withSpan("BudgetGuard.boot")
       );
 
-      return BudgetGuard.of({ boot, act, declare });
+      const line = Effect.fn("BudgetGuard.line")(function* (
+        threadId: ThreadId
+      ) {
+        return Option.map(
+          yield* sources.scopeOf(threadId),
+          (scope) => scope.budget
+        );
+      });
+
+      return BudgetGuard.of({ boot, act, declare, line });
     })
   );
 }
 
 /**
  * The boot repair `BootRepairs.ts` lists right after the spend reconcile, both ahead of
- * `cancel abandoned approvals` and every repair that retries parked tasks (module header).
+ * `cancel abandoned approvals` and every repair that can start scheduling (module header).
  */
 export const budgetBootRepair = BudgetGuard.use((guard) => guard.boot);

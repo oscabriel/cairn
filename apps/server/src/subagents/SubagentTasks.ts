@@ -36,8 +36,8 @@
 //   conversation in that cwd with Cairn's thread identity and its `cairn.child` link, the registry
 //   item with its worktree and dispatch record, the first reporter and the parent's note that it
 //   started. A record already started changes nothing. A named model that is not ready or a
-//   workspace that cannot be made starts nothing, and the parent is told why. When the crash-loop
-//   guard parks it, it waits for a human Retry on the parent: the boot repair does not retry it.
+//   workspace that cannot be made starts nothing, and the parent is told why. Crashes never end it
+//   (`CrashLimit.ts` keeps it, ADR 0046): however often the brain dies, a Go'd brief starts once.
 // - BriefTell (`cairn.subagent-brief-tell`), created by the commit that settles a brief without a
 //   child (Decline, Send back, expiry, or a start that could not start): tells the parent as a
 //   follow-up input, or as a note when the parent is halted, under the answer's request id.
@@ -58,7 +58,7 @@
 //   The relay (ADR 0027): an untyped child's run that completed with a plain answer whose last line
 //   asks for a decision (`needsDecision`), with no `report` and not a user's own steer, settles
 //   nothing yet. Its commit writes a question record (`source: "answer"`, route parent) in the
-//   child's ledger and the same kind of run mark, and `ask` routes it (approvals/QuestionRoute.ts):
+//   child's ledger and the same kind of run mark, and `ask` routes it (QuestionRoute.ts):
 //   answered, `answer` gives the child the answer as the run's next input, whose run settles them
 //   all; declined, expired or cancelled, the run's own answer settles as its result after all. `report` writes the
 //   settlement's note and decides the wake by the parent's state; `wake` submits the wake and marks
@@ -86,7 +86,8 @@ import {
   SUBAGENT_RESULT_ENTRY,
 } from "@cairn/protocol/Subagents";
 import type { SettlementOutcome } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
+import type { DocumentState } from "@cairn/protocol/Thread";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import type {
   Agent,
@@ -107,33 +108,28 @@ import type {
 import {
   configure,
   ConversationBusy,
-  DEFAULT_RESTART_LIMIT,
   defineTask,
   InboxDoc,
   LiveDoc,
 } from "@earendil-works/pi-durable";
 import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
 
-import { needsDecision } from "../approvals/NeedsDecision.ts";
 import {
-  endUnanswered,
-  placedMemoOf,
-  questionRecord,
-  relayedAsk,
-  routeQuestion,
-} from "../approvals/QuestionRoute.ts";
-import type { RouteIo } from "../approvals/QuestionRoute.ts";
+  expirePending,
+  RELAYED_QUESTION_TOOL,
+  cancelRecord,
+} from "../approvals/ApprovalLedger.ts";
 import {
   Approvals,
-  expirePending,
   Permissions,
-  RELAYED_QUESTION_TOOL,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
 } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { messageText } from "../brain/CommitFeed.ts";
+import { documentCall } from "../brain/Durable.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import {
   admitNote,
   applyNote,
@@ -141,6 +137,20 @@ import {
   readNote,
 } from "../brain/NoteAdmission.ts";
 import { classifyRunFailure } from "../brain/RunFailure.ts";
+import {
+  ChildDoc,
+  EscalationsDoc,
+  isJsonRecord,
+  isLinked,
+  jsonRecordOf,
+  markInputs,
+  SubagentsDoc,
+} from "../brain/SubagentDocs.ts";
+import type {
+  RunMarkState,
+  SubagentItemState,
+  SubagentsState,
+} from "../brain/SubagentDocs.ts";
 import type {
   SubagentCrashPoint,
   SubagentFaultSet,
@@ -148,17 +158,18 @@ import type {
 import {
   BRIEF_ANSWER_ENTRY,
   NO_RESULT_ERROR,
+  questionFailedText,
   renderAnswer,
   renderBrief,
   renderBriefAnswer,
   renderQuestion,
   renderSettlement,
   renderWake,
+  reporterFailedText,
   SubagentRequestIds,
   TYPED_RESULT_SUMMARY,
 } from "../brain/SubagentText.ts";
 import type { BriefAnswer } from "../brain/SubagentText.ts";
-import { isRoleName } from "../models/ModelSpecs.ts";
 import {
   CAP_TEXT,
   markOf,
@@ -185,21 +196,17 @@ import {
   taskOf,
 } from "./Delivery.ts";
 import type { SettlementState } from "./Delivery.ts";
+import { needsDecision } from "./NeedsDecision.ts";
 import {
-  ChildDoc,
-  EscalationsDoc,
-  isJsonRecord,
-  isLinked,
-  jsonRecordOf,
-  markInputs,
-  SubagentsDoc,
-} from "./SubagentDocs.ts";
-import type {
-  JsonRecord,
-  RunMarkState,
-  SubagentItemState,
-  SubagentsState,
-} from "./SubagentDocs.ts";
+  endUnanswered,
+  placedMemoOf,
+  questionRecord,
+  relayedAsk,
+  routeQuestion,
+} from "./QuestionRoute.ts";
+import type { RouteIo } from "./QuestionRoute.ts";
+import { failsVisibly } from "./TaskFailures.ts";
+import type { FailedPhase } from "./TaskFailures.ts";
 import { awaitDoc, runWait } from "./Waits.ts";
 
 /** The anchor task's name. */
@@ -218,24 +225,17 @@ export const BRIEF_TELL_TASK = "cairn.subagent-brief-tell";
 export const REPORTER_TASK = "cairn.subagent-reporter";
 
 /**
- * The subagent tasks the boot repair retries when the crash-loop guard parked them. The anchor
- * completes in its first phase and waits on nothing, so the guard never parks it. The start task
- * is left out on purpose (ADR 0030): a parked start means something in the spawn path is broken,
- * and a boot retry would loop on it, so it waits for a human Retry on the parent.
+ * The subagent tasks boot's crash accounting never ends (`CrashLimit.ts`, ADR 0046): the brief and
+ * tell tasks sleep on pi-durable's clock and the reporter waits on its child, so a crash cuts them
+ * off without fault of their own, and the start task makes a Go'd child once however often the
+ * brain dies (ADR 0030). The anchor completes in its first phase and waits on nothing.
  */
-export const SUBAGENT_TASKS: ReadonlySet<string> = new Set([
+export const SUBAGENT_WAIT_TASKS: ReadonlySet<string> = new Set([
   BRIEF_TASK,
   BRIEF_TELL_TASK,
   REPORTER_TASK,
+  START_TASK,
 ]);
-
-/**
- * The tasks no boot repair retries when the crash-loop guard parked them, not even the retry of a
- * thread's parked approval waits (`retryParkedApprovalWaits`): the start task (ADR 0030). A parent
- * with another brief or gated call pending would otherwise have its parked start retried on every
- * boot, the crash loop the guard exists to stop. It waits for a human Retry on the parent.
- */
-export const HUMAN_RETRY_TASKS: ReadonlySet<string> = new Set([START_TASK]);
 
 /** A conversation-owned background task: a parent's Stop and idle waits never reach it. */
 const BACKGROUND = {
@@ -1047,6 +1047,16 @@ type ReporterState =
   | { phase: "report"; settlement: SettlementState; quiet: boolean }
   | { phase: "wake"; settlement: SettlementState; wakes: Array<WakeState> };
 
+/** A reporter following a question its child's answer became. */
+type AskState = Extract<ReporterState, { phase: "ask" }>;
+
+/** The answer to a child's relayed question, as the child's next input reads it. */
+const answerTextOf = (record: Readonly<ApprovalRecord>): string =>
+  renderAnswer(
+    record.decidedBy?.kind === "thread" ? "parent" : "user",
+    record.answer?.answers?.[0]
+  );
+
 /** What a brief's tasks act on: its approval record in the parent's `cairn.approvals`. */
 export interface BriefInput {
   [key: string]: JsonValue;
@@ -1078,16 +1088,29 @@ interface StartState {
 /**
  * Why an accepted brief started nothing: the model it names is not ready (`role`), the model
  * catalog could not be read however long it was retried (`roles`), the brain already had its most
- * children live (`room`), or no workspace could be made (`workspace`). The literals are kept from
- * before ADR 0043 because start and tell tasks persist them.
+ * children live (`room`), no workspace could be made (`workspace`), or the start task threw
+ * (`fault`, O-3). The literals are kept from before ADR 0043 because start and tell tasks persist
+ * them.
  */
 export interface StartFailure {
   [key: string]: JsonValue;
-  at: "budget" | "role" | "roles" | "room" | "workspace";
+  at: "budget" | "fault" | "role" | "roles" | "room" | "workspace";
   why: string;
   /** For `room`: how many children the brain had live. */
   live?: number;
 }
+
+/**
+ * A start failure as a lifecycle line says it: the stored `role` and `roles` (kept by ADR 0052's
+ * shim) in the words used since roles were retired, the rest as stored.
+ */
+const failureWord = (at: StartFailure["at"]): string => {
+  if (at === "role") {
+    return "model";
+  }
+
+  return at === "roles" ? "models" : at;
+};
 
 /** How long a start waits before it reads a model catalog it could not read again. */
 export const MODEL_REREAD_MILLIS = 30_000;
@@ -1099,7 +1122,7 @@ export const MODEL_REREADS = 20;
 export interface BriefTellInput {
   [key: string]: JsonValue;
   approvalId: string;
-  /** Whether the parent was halted (stopped, failed or parked) when the brief settled. */
+  /** Whether the parent was halted (stopped or failed) when the brief settled. */
   halted: boolean;
   /** Why an accepted brief started nothing; none for a declined, revised or expired one. */
   failure: StartFailure | null;
@@ -1123,6 +1146,7 @@ const answerOf = (
       room: { kind: "noRoom", live: failure.live ?? 0 },
       budget: { kind: "noBudget", why: failure.why },
       workspace: { kind: "noWorkspace", why: failure.why },
+      fault: { kind: "startFailed", why: failure.why },
     };
 
     return unstarted[failure.at];
@@ -1136,6 +1160,44 @@ const answerOf = (
     kind: record.status === "revised" ? "revised" : "declined",
     reason: Option.fromNullOr(record.reason),
   };
+};
+
+/**
+ * A tell whose phase threw (O-3): what it had to say lands as a note under the answer's request id,
+ * which wakes no one but reaches the parent's model on its next turn, and the brief's card shows it
+ * ended. A record that holds no brief tells nothing.
+ */
+const tellFailed = async (
+  tx: Tx,
+  failed: FailedPhase<BriefTellInput, BriefTellState>
+): Promise<NextTaskState<BriefTellState, null>> => {
+  const { conversationId, input, at } = failed;
+  const approvals = await tx.doc(Approvals, conversationId);
+  const record = approvals.items[input.approvalId];
+  const brief = briefOfPayload(record?.payload ?? null);
+
+  if (record !== undefined && Option.isSome(brief)) {
+    await admitNote(
+      tx,
+      conversationId,
+      SubagentRequestIds.briefAnswer(input.approvalId),
+      noteEntry({
+        kind: BRIEF_ANSWER_ENTRY,
+        data: {
+          briefId: input.approvalId,
+          decision: record.status,
+          started: false,
+        },
+        text: renderBriefAnswer(
+          brief.value.title,
+          answerOf(record, input.failure)
+        ),
+        at,
+      })
+    );
+  }
+
+  return completed();
 };
 
 /** A cwd to configure; none for the empty one a parent with no cwd gives a shared child. */
@@ -1251,9 +1313,8 @@ const HANDING_PHASES: ReadonlySet<JsonValue> = new Set([
 /**
  * Whether the child still has work ahead of it besides `mine` (table reads): another input of its
  * registry item not admitted yet, or another live reporter that will hand it an input (a nudge, or
- * the answer to a relayed question). A reporter the crash-loop guard parked hands nothing until a
- * retry, so it is no work ahead, as `parentHalt` reads a parked run; one marked for abort still
- * ends on its own.
+ * the answer to a relayed question). Crashes never end a reporter (`CrashLimit.ts` keeps it), and
+ * one marked for abort still ends on its own.
  */
 export const workAhead = async (
   tx: Tx,
@@ -1275,14 +1336,8 @@ export const workAhead = async (
     const task = await tx.task(taskOf(taskId));
     const state = task?.state;
 
-    const parked =
-      task !== undefined &&
-      !task.abortRequested &&
-      (task.restarts ?? 0) >= DEFAULT_RESTART_LIMIT;
-
     if (
       state !== undefined &&
-      !parked &&
       state.status !== "completing" &&
       state.status !== "terminal" &&
       isJsonRecord(state.checkpoint) &&
@@ -1545,7 +1600,7 @@ const tellParent = async <I, S, H extends object>(
   approvalId: string,
   halted: boolean,
   failure: StartFailure | null,
-  context: Parameters<typeof runWait>[1],
+  context: Parameters<typeof runWait>[2],
   delayMillis: number
 ) => {
   const parent = runtime.conversationId;
@@ -1575,42 +1630,39 @@ const tellParent = async <I, S, H extends object>(
     };
 
     // `halted` was read when the tell was decided; a parent the user stopped since is not started
-    // either (ADR 0028), so it is read again right before the submit. A rerun after the submit
-    // lands nothing more: the note and the input share one request id.
-    let noted = false;
+    // either (ADR 0028), so it is read again and the input admitted in the same commit
+    // (`submit(tx, draft)`, pi-durable 1.5), which also ends the task: a stop lands either before
+    // the read or after the input. The note and the input share one request id.
+    const conversation = await runtime.conversation(parent, context);
 
-    await runtime.commit(async (tx) => {
-      if (halted || (await parentHalted(tx, parent))) {
-        noted = true;
+    await runtime.commit(async (tx): Promise<NextTaskState<S, null>> => {
+      // Table reads, before any write.
+      const stopped = halted || (await parentHalted(tx, parent));
 
-        await admitNote(
-          tx,
-          parent,
-          requestId,
-          noteEntry({
-            kind: BRIEF_ANSWER_ENTRY,
-            data,
-            text,
-            at: runtime.now(),
-          })
-        );
-      }
+      await (stopped
+        ? admitNote(
+            tx,
+            parent,
+            requestId,
+            noteEntry({
+              kind: BRIEF_ANSWER_ENTRY,
+              data,
+              text,
+              at: runtime.now(),
+            })
+          )
+        : conversation?.submit(tx, {
+            type: "input",
+            requestId,
+            content: text,
+            whenBusy: "followUp",
+            entry: { kind: BRIEF_ANSWER_ENTRY, data },
+          }));
+
+      return completed();
     }, context);
 
-    if (!noted) {
-      const conversation = await runtime.conversation(parent, context);
-
-      await conversation?.submit(
-        {
-          type: "input",
-          requestId,
-          content: text,
-          whenBusy: "followUp",
-          entry: { kind: BRIEF_ANSWER_ENTRY, data },
-        },
-        context
-      );
-    }
+    return;
   }
 
   await runtime.commit(() => completed(), context);
@@ -1635,11 +1687,6 @@ export interface ModelAccess {
   readonly resolve: (
     spec: string
   ) => Promise<Result.Result<ResolvedModel, ModelFailure>>;
-  /**
-   * Logs that a brief recorded before ADR 0043 named a role (`spec`), which reads as no model
-   * named: its child runs on the parent's model.
-   */
-  readonly roleNameRead: (spec: string, approvalId: string) => Promise<void>;
 }
 
 /**
@@ -1654,6 +1701,8 @@ export interface BudgetAccess {
 
 /** The parts of the extension a task builds with. */
 export interface TaskDependencies {
+  /** Runs the tasks' Effects and writes their lifecycle lines, on the extension layer's context. */
+  readonly run: DurableRunner;
   readonly faults: SubagentFaultSet;
   /**
    * The agent change a child gets at creation: its tools instead of a parent's, and
@@ -1762,9 +1811,11 @@ const answerEntryOf = (settled: SettledSubmissionRecord) =>
 /** A route's view of a reporter task: its commits, its clock and its memo. */
 const taskRouteIo = (
   runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
-  context: Parameters<typeof runWait>[1],
-  crashAt: (point: SubagentCrashPoint) => void
+  context: Parameters<typeof runWait>[2],
+  crashAt: (point: SubagentCrashPoint) => void,
+  run: DurableRunner
 ): RouteIo => ({
+  run,
   observer: runtime,
   now: () => runtime.now(),
   placedAt: async (approvalId, candidate) =>
@@ -1781,9 +1832,15 @@ const taskRouteIo = (
   },
 });
 
+/** The first reason that applies, for a lifecycle line; `none` when none does. */
+const firstReason = (
+  reasons: ReadonlyArray<readonly [applies: boolean, why: string]>
+): string => reasons.find(([applies]) => applies)?.[1] ?? "none";
+
 /** The task definitions, closed over the extension's faults and the child's agent change. */
 export const subagentTaskSet = (dependencies: TaskDependencies) => {
   const {
+    run: runner,
     crashAt,
     faults,
     settleDelayMillis,
@@ -1810,7 +1867,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
   const followChild = async (
     runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
     input: ReporterInput,
-    context: Parameters<typeof runWait>[1]
+    context: Parameters<typeof runWait>[2]
   ) => {
     const child = conversationOf(input.child);
     const parent = runtime.conversationId;
@@ -1888,11 +1945,14 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     }
 
     await apply(watch.value);
-    watch.start(async (value) => {
-      try {
-        await apply(value);
-      } catch (error) {
-        runtime.report(error);
+    watch.start(async (call) => {
+      for (const value of Option.toArray(documentCall(call))) {
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- one value per call
+          await apply(value);
+        } catch (error) {
+          runtime.report(error);
+        }
       }
     });
 
@@ -1909,7 +1969,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     runtime: TaskRuntime<ReporterInput, ReporterState, null, object>,
     child: ConversationId,
     approvalId: string,
-    context: Parameters<typeof runWait>[1]
+    context: Parameters<typeof runWait>[2]
   ): Promise<void> => {
     const approvals = await runtime.snapshot(Approvals, child, context);
     const record = approvals?.items[approvalId];
@@ -1921,6 +1981,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     const remaining = Math.max(0, record.expiresAt - runtime.now());
 
     const found = await runWait(
+      runner,
       awaitDoc(runtime, Approvals, child, (value) => {
         const current = value?.items[approvalId];
 
@@ -2260,7 +2321,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     input: ReporterInput,
     current: string,
     submission: Submission,
-    context: Parameters<typeof runWait>[1],
+    context: Parameters<typeof runWait>[2],
     nudgeSeq: Option.Option<number>
   ) => {
     const unfollowChild = await followChild(runtime, input, context);
@@ -2297,12 +2358,209 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     );
   };
 
+  /**
+   * Settles the run whose answer became a question that ended unanswered (the `ask` phase's commit):
+   * the question's ending reaches its mirror and the registry (`endUnanswered`), and the run's own
+   * answer is its result after all, once, reported next.
+   */
+  const settleUnanswered = async (
+    tx: Tx,
+    parent: ConversationId,
+    input: ReporterInput,
+    asked: AskState,
+    now: number
+  ): Promise<NextTaskState<ReporterState, null>> => {
+    const child = conversationOf(input.child);
+
+    // Table reads first.
+    const live = await tx.doc(LiveDoc, child);
+    const current = await tx.doc(SubagentsDoc, parent);
+    const item = current.items[input.key];
+
+    const ahead =
+      item !== undefined && (await workAhead(tx, child, item, input.requestId));
+
+    await endUnanswered(tx, {
+      parentConversationId: parent,
+      childConversationId: child,
+      approvalId: asked.approvalId,
+      now,
+    });
+
+    const mark = item?.runs.find(
+      (found) => found.phase === "nudge" && found.seq === asked.seq
+    );
+
+    if (item === undefined || mark === undefined) {
+      return completed();
+    }
+
+    const next = item.settlements.length + 1;
+    const settling = { ...asked.settlement, seq: next };
+
+    item.settlements.push({
+      seq: next,
+      outcome: settling.outcome,
+      answerEntry: asked.answerEntry,
+      reportedAt: now,
+      inputs: [...markInputs(item, mark)],
+    });
+    item.runs.push({ run: mark.run, phase: "settled", seq: next });
+    settleUnlessWorking(item, live.run !== undefined, ahead);
+
+    return {
+      status: "running",
+      checkpoint: {
+        phase: "report",
+        settlement: settling,
+        quiet: asked.quiet,
+      },
+    };
+  };
+
+  /**
+   * An `ask` phase that threw (O-3): its run's settlement is decided already, and nothing follows
+   * the question any more. An answer that took goes to the child as the `answer` phase would send
+   * it. Otherwise a question still pending is cancelled with the failure as its reason, and the
+   * run settles as an unanswered question's does, its own answer reported next: the row leaves
+   * `waiting` and no answer is taken that nothing would deliver.
+   */
+  const askFailed = async (
+    tx: Tx,
+    failed: FailedPhase<ReporterInput, ReporterState>,
+    asked: AskState
+  ): Promise<NextTaskState<ReporterState, null>> => {
+    const { conversationId: parent, input, why, at } = failed;
+    const { items } = await tx.doc(Approvals, conversationOf(input.child));
+    const record = items[asked.approvalId];
+
+    if (record?.status === "accepted") {
+      return {
+        status: "running",
+        checkpoint: {
+          phase: "answer",
+          seq: asked.seq,
+          text: answerTextOf(record),
+        },
+      };
+    }
+
+    if (record !== undefined) {
+      cancelRecord(
+        record,
+        at,
+        "run-stopped",
+        Option.some(questionFailedText(why))
+      );
+    }
+
+    return await settleUnanswered(tx, parent, input, asked, at);
+  };
+
+  /**
+   * A reporter whose phase threw (O-3). Once its run settled (`report`, `wake`), the settlement's
+   * note is made sure of and marked delivered: a throw can lose the wake, never the result. A
+   * relayed question's run is settled too (`askFailed`). Before that, the input settles `failed` in
+   * one commit, its note saying the child's result was not read, so the parent sees the failure,
+   * the child's row leaves `working`, and the parent can send the work again. An input a settlement
+   * already names settles nothing more.
+   */
+  const reporterFailed = async (
+    tx: Tx,
+    failed: FailedPhase<ReporterInput, ReporterState>
+  ): Promise<NextTaskState<ReporterState, null>> => {
+    const { conversationId: parent, input, checkpoint, why, at } = failed;
+    const child = conversationOf(input.child);
+
+    if (checkpoint.phase === "ask") {
+      return await askFailed(tx, failed, checkpoint);
+    }
+
+    const decided =
+      checkpoint.phase === "report" || checkpoint.phase === "wake"
+        ? Option.some(checkpoint.settlement)
+        : Option.none<SettlementState>();
+
+    // Table reads first.
+    const registry = await tx.doc(SubagentsDoc, parent);
+    const item = registry.items[input.key];
+
+    const ahead =
+      item !== undefined && (await workAhead(tx, child, item, input.requestId));
+
+    const settled =
+      item?.settlements.some((mark) => mark.inputs.includes(input.requestId)) ??
+      true;
+
+    const seq = Option.match(decided, {
+      onNone: () => (item?.settlements.length ?? 0) + 1,
+      onSome: (found) => found.seq,
+    });
+
+    const note = SubagentRequestIds.note(input.childThreadId, seq);
+    const reads = await readNote(tx, parent, note);
+
+    if (item === undefined || (Option.isNone(decided) && settled)) {
+      return completed();
+    }
+
+    const settlement: SettlementState = Option.getOrElse(decided, () => ({
+      subagent: input.childThreadId,
+      seq,
+      outcome: "failed" as const,
+      summary: "",
+      divergence: "not reported",
+      payload: null,
+      commit: null,
+      branch: null,
+      turns: { thisRun: 0, total: 0 },
+      error: reporterFailedText(why),
+      usageLimit: false,
+    }));
+
+    if (Option.isNone(decided)) {
+      item.settlements.push({
+        seq,
+        outcome: "failed",
+        answerEntry: null,
+        reportedAt: at,
+        inputs: [input.requestId],
+      });
+      // Nothing follows the child's run now, so its row leaves `working` whether or not it runs.
+      settleUnlessWorking(item, false, ahead);
+    }
+
+    await applyNote(
+      tx,
+      parent,
+      note,
+      reads,
+      noteEntry({
+        kind: SUBAGENT_RESULT_ENTRY,
+        data: settlement,
+        text: renderSettlement(item.description, settlementOf(settlement)),
+        at,
+      })
+    );
+
+    item.delivered = Math.max(item.delivered, seq);
+
+    return completed();
+  };
+
+  const reporterPhase = failsVisibly<
+    ReporterInput,
+    ReporterState,
+    null,
+    object
+  >(reporterFailed);
+
   const Reporter = defineTask<ReporterInput, ReporterState, null>({
     name: REPORTER_TASK,
     version: 1,
     initial: () => ({ phase: "deliver" }),
     phases: {
-      deliver: async (task, runtime, context) => {
+      deliver: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
 
         const child = await runtime.conversation(
@@ -2366,8 +2624,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           Option.none()
         );
-      },
-      nudge: async (task, runtime, context) => {
+      }),
+      nudge: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
         const { seq } = task.state.checkpoint;
         const nudge = SubagentRequestIds.nudge(input.childThreadId, seq);
@@ -2405,14 +2663,13 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           Option.some(seq)
         );
-      },
+      }),
       // A question the child's final answer became: routed to the parent (ADR 0027), then the
       // answer goes to the child, or the run's own answer settles when none came.
-      ask: async (task, runtime, context) => {
+      ask: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
 
-        const { seq, approvalId, question, settlement, answerEntry, quiet } =
-          task.state.checkpoint;
+        const { seq, approvalId, question } = task.state.checkpoint;
 
         const parent = runtime.conversationId;
 
@@ -2426,7 +2683,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const settled = settledOrExpired(runtime, child, approvalId, context);
 
         await routeQuestion(
-          taskRouteIo(runtime, context, crashAt),
+          taskRouteIo(runtime, context, crashAt, runner),
           {
             parent,
             child,
@@ -2448,10 +2705,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         const record = approvals?.items[approvalId];
 
         if (record?.status === "accepted") {
-          const text = renderAnswer(
-            record.decidedBy?.kind === "thread" ? "parent" : "user",
-            record.answer?.answers?.[0]
-          );
+          const text = answerTextOf(record);
 
           await runtime.commit(
             () => ({
@@ -2466,54 +2720,19 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
         // Unanswered: the run's own answer is its result after all, once.
         await runtime.commit(
-          async (tx): Promise<NextTaskState<ReporterState, null>> => {
-            // Table reads first.
-            const live = await tx.doc(LiveDoc, child);
-            const current = await tx.doc(SubagentsDoc, parent);
-            const item = current.items[input.key];
-
-            const ahead =
-              item !== undefined &&
-              (await workAhead(tx, child, item, input.requestId));
-
-            await endUnanswered(tx, {
-              parentConversationId: parent,
-              childConversationId: child,
-              approvalId,
-              now: runtime.now(),
-            });
-
-            const mark = item?.runs.find(
-              (found) => found.phase === "nudge" && found.seq === seq
-            );
-
-            if (item === undefined || mark === undefined) {
-              return completed();
-            }
-
-            const next = item.settlements.length + 1;
-            const settling = { ...settlement, seq: next };
-
-            item.settlements.push({
-              seq: next,
-              outcome: settling.outcome,
-              answerEntry,
-              reportedAt: runtime.now(),
-              inputs: [...markInputs(item, mark)],
-            });
-            item.runs.push({ run: mark.run, phase: "settled", seq: next });
-            settleUnlessWorking(item, live.run !== undefined, ahead);
-
-            return {
-              status: "running",
-              checkpoint: { phase: "report", settlement: settling, quiet },
-            };
-          },
+          async (tx) =>
+            await settleUnanswered(
+              tx,
+              parent,
+              input,
+              task.state.checkpoint,
+              runtime.now()
+            ),
           context
         );
-      },
+      }),
       // The answer to the child's question, as the run's next input, settled as a nudge's is.
-      answer: async (task, runtime, context) => {
+      answer: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
         const { seq, text } = task.state.checkpoint;
         const requestId = SubagentRequestIds.answer(input.childThreadId, seq);
@@ -2551,8 +2770,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           Option.some(seq)
         );
-      },
-      report: async (task, runtime, context) => {
+      }),
+      report: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
         const { settlement, quiet } = task.state.checkpoint;
         const parent = runtime.conversationId;
@@ -2580,6 +2799,9 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
               },
             ];
 
+        // What the report's commit decided, for its lifecycle line.
+        let reported = { noted: false, wakes: false, withheld: "child-gone" };
+
         await runtime.commit(
           async (tx): Promise<NextTaskState<ReporterState, null>> => {
             // Table reads first.
@@ -2602,6 +2824,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             const item = registry.items[input.key];
 
             if (item === undefined) {
+              reported = { noted: false, wakes: false, withheld: "child-gone" };
+
               return completed();
             }
 
@@ -2631,6 +2855,20 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
               (faults.wakeStoppedParent || !halted) &&
               !queued;
 
+            reported = {
+              noted: notes.length > 0,
+              wakes,
+              withheld: wakes
+                ? "none"
+                : firstReason([
+                    [quiet, "quiet-input"],
+                    [item.wake !== "answer", "quiet-spawn"],
+                    [settlement.usageLimit, "usage-limit"],
+                    [halted && !faults.wakeStoppedParent, "parent-halted"],
+                    [queued, "wake-already-queued"],
+                  ]),
+            };
+
             return {
               status: "running",
               checkpoint: {
@@ -2647,8 +2885,29 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           },
           context
         );
-      },
-      wake: async (task, runtime, context) => {
+
+        const wakeWords = reported.wakes
+          ? "subagent result noted; parent to wake"
+          : "subagent result noted; parent not woken";
+
+        runner.line(
+          reported.withheld === "child-gone"
+            ? "subagent result not noted: child gone"
+            : wakeWords,
+          {
+            event: "subagent_reported",
+            conversationId: parent,
+            taskId: runtime.taskId,
+            childThreadId: input.childThreadId,
+            seq: settlement.seq,
+            outcome: settlement.outcome,
+            noted: reported.noted,
+            wake: reported.wakes,
+            withheld: reported.withheld,
+          }
+        );
+      }),
+      wake: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
         const { settlement, wakes } = task.state.checkpoint;
         const parent = runtime.conversationId;
@@ -2665,39 +2924,67 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             : undefined;
 
         // The wake was decided in the report's commit; a parent the user stopped since is not woken
-        // (ADR 0028). Read again right before the submit, and kept: a rerun submits nothing either.
-        let halted = false;
+        // (ADR 0028). Each wake reads that again and is admitted in the same commit
+        // (`submit(tx, draft)`, pi-durable 1.5), so a stop lands either before the read or after
+        // the wake. A stop found is kept in the checkpoint, so a rerun submits nothing either; a
+        // rerun after a wake submits it again under its request id, which lands once. pi-durable
+        // admits one submission per commit.
+        let woke = false;
 
-        if (wakes.length > 0 && !faults.wakeStoppedParent) {
-          await runtime.commit(async (tx) => {
-            halted = await parentHalted(tx, parent);
+        for (const wake of wakes) {
+          let stopped = false;
 
-            return halted
-              ? {
+          // oxlint-disable-next-line no-await-in-loop -- in order, one admission per commit
+          await runtime.commit(
+            async (
+              tx
+            ): Promise<NextTaskState<ReporterState, null> | undefined> => {
+              // A table read, before the admission's writes.
+              stopped =
+                !faults.wakeStoppedParent && (await parentHalted(tx, parent));
+
+              if (stopped) {
+                return {
                   status: "running",
                   checkpoint: { phase: "wake", settlement, wakes: [] },
-                }
-              : undefined;
-          }, context);
-        }
+                };
+              }
 
-        if (!halted) {
-          for (const wake of wakes) {
-            // oxlint-disable-next-line no-await-in-loop -- in order
-            await conversation?.submit(
-              {
+              await conversation?.submit(tx, {
                 type: "input",
                 requestId: submitId(wake.requestId, runtime.now()),
                 content: wake.text,
                 whenBusy: "followUp",
-              },
-              context
-            );
+              });
+
+              return undefined;
+            },
+            context
+          );
+
+          if (stopped) {
+            break;
           }
 
-          if (wakes.length > 0 && wokenDelayMillis > 0) {
-            await sleep(wokenDelayMillis);
-          }
+          woke = true;
+        }
+
+        if (wakes.length > 0) {
+          runner.line(
+            woke ? "parent woken" : "parent not woken: stopped since",
+            {
+              event: "subagent_wake",
+              conversationId: parent,
+              taskId: runtime.taskId,
+              childThreadId: input.childThreadId,
+              seq: settlement.seq,
+              woke,
+            }
+          );
+        }
+
+        if (woke && wokenDelayMillis > 0) {
+          await sleep(wokenDelayMillis);
         }
 
         crashAt("reporter-woken");
@@ -2712,7 +2999,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
           return completed();
         }, context);
-      },
+      }),
     },
     abort: async (_task, runtime, context) => {
       await runtime.commit(
@@ -2738,6 +3025,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
    * Starts a brief's child in one commit, once (ADR 0030): its anchor, its conversation with the
    * child's tools, its thread identity, link and mode, the registry item, the reporter of its first
    * input, and the parent's note that it started. A record already started changes nothing.
+   * Returns the child's conversation, or null when it started none.
    */
   const startChild = async (
     tx: Tx,
@@ -2745,7 +3033,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     parent: ConversationId,
     approvalId: string,
     reads: StartReads
-  ): Promise<void> => {
+  ): Promise<number | null> => {
     const noteId = SubagentRequestIds.briefAnswer(approvalId);
     const noteReads = await readNote(tx, parent, noteId);
     const approvals = await tx.doc(Approvals, parent);
@@ -2757,7 +3045,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       record.started !== null ||
       Option.isNone(brief)
     ) {
-      return;
+      return null;
     }
 
     const now = runtime.now();
@@ -2778,22 +3066,28 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     // The child runs on what its dispatch record names (2D's rule): the model the brief named,
     // checked at Go, or for a brief that names none the parent's model and thinking level.
-    const resolved: JsonRecord = Option.match(reads.dispatch, {
-      onNone: () => ({
-        spec: `${parentModel.provider}/${parentModel.modelId}`,
-        model: { provider: parentModel.provider, modelId: parentModel.modelId },
-        thinkingLevel: Option.getOrNull(reads.thinkingLevel),
-        // The parent's model as a spec, resolved at Go, prices it; unresolved, it runs anyway (the
-        // parent's model) and the record says unpriced.
-        priced: Option.exists(reads.literal, (found) => found.priced),
-      }),
-      onSome: (found) => ({
-        spec: found.spec,
-        model: { ...found.model },
-        thinkingLevel: found.thinkingLevel,
-        priced: found.priced,
-      }),
-    });
+    const resolved: DocumentState<typeof ResolvedModel> = Option.match(
+      reads.dispatch,
+      {
+        onNone: () => ({
+          spec: `${parentModel.provider}/${parentModel.modelId}`,
+          model: {
+            provider: parentModel.provider,
+            modelId: parentModel.modelId,
+          },
+          thinkingLevel: Option.getOrNull(reads.thinkingLevel),
+          // The parent's model as a spec, resolved at Go, prices it; unresolved, it runs anyway (the
+          // parent's model) and the record says unpriced.
+          priced: Option.exists(reads.literal, (found) => found.priced),
+        }),
+        onSome: (found) => ({
+          spec: found.spec,
+          model: { ...found.model },
+          thinkingLevel: found.thinkingLevel,
+          priced: found.priced,
+        }),
+      }
+    );
 
     const model = Option.match(reads.dispatch, {
       onNone: () => reads.model,
@@ -2931,6 +3225,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         at: now,
       })
     );
+
+    return child.id;
   };
 
   /** The task that tells the parent how a brief ended without a child. */
@@ -2939,8 +3235,10 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     version: 1,
     initial: () => ({ phase: "tell" }),
     phases: {
-      tell: async (task, runtime, context) => {
+      tell: failsVisibly(tellFailed)(async (task, runtime, context) => {
         const { approvalId, halted, failure } = task.input;
+
+        briefFaults.at("tell");
 
         await tellParent(
           runtime,
@@ -2950,7 +3248,16 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           wakeDelayMillis
         );
-      },
+
+        runner.line("parent told its brief started no child", {
+          event: "subagent_brief_told",
+          conversationId: runtime.conversationId,
+          taskId: runtime.taskId,
+          approvalId,
+          halted,
+          failure: failure === null ? null : failureWord(failure.at),
+        });
+      }),
     },
     abort: async (_task, runtime, context) => {
       await runtime.commit(
@@ -2989,7 +3296,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     runtime: TaskRuntime<BriefInput, StartState, null, object>,
     record: ApprovalRecord,
     checkpoint: StartState,
-    context: Parameters<typeof runWait>[1]
+    context: Parameters<typeof runWait>[2]
   ) => {
     const parent = runtime.conversationId;
     const brief = briefOfPayload(record.payload);
@@ -3003,16 +3310,29 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       record.id
     );
 
-    // A brief recorded before ADR 0043 may name a role: it reads as no model named, so its child
-    // runs on the parent's model, and the read is logged.
-    const roleName = Option.filter(
-      Option.flatMap(brief, (found) => Option.fromNullOr(found.role)),
-      isRoleName
-    );
-
-    if (Option.isSome(roleName)) {
-      await dependencies.models.roleNameRead(roleName.value, record.id);
-    }
+    /**
+     * The start's lifecycle line: the child started, or why it did not (yet). It names both
+     * threads with their conversations (`childConversationId` once one was made), so the journal
+     * maps a subagent's thread to its conversation where it is born.
+     */
+    const decided = (
+      outcome: string,
+      childConversationId: number | null = null
+    ) => {
+      runner.line(
+        outcome === "started" ? "subagent started" : "subagent not started",
+        {
+          event: "subagent_start",
+          conversationId: parent,
+          parentThreadId: parentMeta?.threadId ?? null,
+          taskId: runtime.taskId,
+          approvalId: record.id,
+          childThreadId,
+          childConversationId,
+          outcome,
+        }
+      );
+    };
 
     const named = Option.flatMap(brief, namedSpecOf);
 
@@ -3035,6 +3355,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           { phase: "start", unread },
           context
         );
+        decided("models-unread-retry");
 
         return;
       }
@@ -3050,6 +3371,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         },
         context
       );
+      decided(retry ? "models-unread" : "model-not-ready");
 
       return;
     }
@@ -3072,6 +3394,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         },
         context
       );
+      decided("budget-at-line");
 
       return;
     }
@@ -3099,14 +3422,23 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
 
     briefFaults.at("prepared");
 
+    // What the creating commit decided, and the child it made, for its lifecycle line.
+    let outcome = "started";
+    let childConversationId: number | null = null;
+
     await runtime.commit(
       async (tx): Promise<NextTaskState<StartState, null>> => {
+        outcome = "started";
+        childConversationId = null;
+
         // The brain's count again, without this start (BrainCap.ts): table reads, so first. The
         // spawn's own count keeps it under the cap; this catches two threads' spawns racing. A
         // worktree made for a brief refused here is removed by the boot's child workspace repair.
         const brain = await countLive(tx, START_TASK, runtime.taskId);
 
         if (Result.isFailure(prepared)) {
+          outcome = "no-workspace";
+
           await newTell(tx, parent, record.id, {
             at: "workspace",
             why: prepared.failure,
@@ -3116,6 +3448,8 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         }
 
         if (brain.live >= dependencies.maxLivePerBrain) {
+          outcome = "no-room";
+
           await newTell(tx, parent, record.id, {
             at: "room",
             why: "",
@@ -3126,7 +3460,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         }
 
         await listParent(tx, parent);
-        await startChild(tx, runtime, parent, record.id, {
+        childConversationId = await startChild(tx, runtime, parent, record.id, {
           parentLink: isLinked(parentLink)
             ? Option.some({
                 depth: parentLink.depth,
@@ -3145,8 +3479,32 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       },
       context
     );
+    decided(outcome, childConversationId);
 
     briefFaults.at("created");
+  };
+
+  /**
+   * A start whose phase threw (O-3): an accepted brief that started no child ends as a refused start
+   * does, with the tell that names the throw, so the parent hears and the card shows it ended. A
+   * worktree made before the throw is removed by the boot's child workspace repair.
+   */
+  const startFailed = async (
+    tx: Tx,
+    failed: FailedPhase<BriefInput, StartState>
+  ): Promise<NextTaskState<StartState, null>> => {
+    const { conversationId, input, why } = failed;
+    const approvals = await tx.doc(Approvals, conversationId);
+    const record = approvals.items[input.approvalId];
+
+    if (record?.status === "accepted" && record.started === null) {
+      await newTell(tx, conversationId, input.approvalId, {
+        at: "fault",
+        why,
+      });
+    }
+
+    return completed();
   };
 
   /**
@@ -3159,7 +3517,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     version: 1,
     initial: () => ({ phase: "start" }),
     phases: {
-      start: async (task, runtime, context) => {
+      start: failsVisibly(startFailed)(async (task, runtime, context) => {
         briefFaults.at("start");
 
         const approvals = await runtime.snapshot(
@@ -3181,7 +3539,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         }
 
         await start(runtime, record, task.state.checkpoint, context);
-      },
+      }),
     },
     abort: async (_task, runtime, context) => {
       await runtime.commit(
@@ -3267,10 +3625,14 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           return;
         }
 
+        let expired = false;
+
         await runtime.commit(
           async (tx): Promise<NextTaskState<BriefState, null>> => {
             const ledger = await tx.doc(Approvals, parent);
             const expiring = ledger.items[approvalId];
+
+            expired = false;
 
             // Answered meanwhile: the answering commit started the child or told the parent.
             if (expiring?.status !== "pending") {
@@ -3280,10 +3642,22 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
             await newTell(tx, parent, approvalId, null);
 
             expirePending(expiring, runtime.now());
+            expired = true;
 
             return completed();
           },
           context
+        );
+
+        runner.line(
+          expired ? "brief expired" : "brief answered before it expired",
+          {
+            event: "subagent_brief_ended",
+            conversationId: parent,
+            taskId: runtime.taskId,
+            approvalId,
+            expired,
+          }
         );
       },
       tell: async (task, runtime, context) => {

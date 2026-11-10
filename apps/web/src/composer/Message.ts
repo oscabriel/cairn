@@ -45,6 +45,11 @@ export const Message = defineMessageUnion({
   ChangedSelection: { start: Schema.Int, end: Schema.Int },
   FocusedEditor: {},
   BlurredEditor: {},
+  /**
+   * The hero keeps its menu drawer's room (the space above the box) measured while it is shown
+   * (`HeroDrawerRoom.ts`); nothing in the Model changes.
+   */
+  StartedHeroDrawerRoom: {},
   PressedSubmitKey: { intent: SubmitIntent },
   PressedMenuKey: { key: MenuKey },
   /** ArrowUp on the first line or ArrowDown on the last, with nothing selected. */
@@ -83,7 +88,14 @@ export const Message = defineMessageUnion({
   ChangedSoftwareKeyboard: { open: Schema.Boolean },
 
   DetectedPlatform: { isMac: Schema.Boolean },
-  LoadedDrafts: { drafts: Schema.Record(Schema.String, Draft) },
+  /**
+   * `tell`: storage also holds drafts this build cannot decode, kept as they are, that no load told
+   * the user about.
+   */
+  LoadedDrafts: {
+    drafts: Schema.Record(Schema.String, Draft),
+    tell: Schema.Boolean,
+  },
   LoadedSettings: { settings: ComposerSettings },
   MintedHomeDraft: { draftId: ThreadId },
   /** The hero's URL now names its draft (`/new/<draftId>`), so a reload restores it. */
@@ -159,9 +171,11 @@ export type Message = typeof Message.Type;
 export const OutMessage = defineMessageUnion({
   /**
    * Queue this mutation in the outbox, then go to `navigateTo` when there is one. `attachments` are
-   * the refs the turn carries, which the root keeps until the brain has the turn.
+   * the refs the turn carries, which the root keeps until the brain has the turn; `draftKey` is the
+   * draft it was sent from (the scratch overlay's for a scratch turn, wherever the composer is now).
    */
   Submitted: {
+    draftKey: Schema.String,
     item: OutboxItem,
     navigateTo: Schema.Option(Schema.String),
     attachments: Schema.Array(AttachmentRef),
@@ -170,6 +184,15 @@ export const OutMessage = defineMessageUnion({
   RequestedAddProject: {},
   /** The hero's project picker chose this project for the draft; the shell's rail follows it. */
   ChoseDraftProject: { projectId: ProjectId },
+  /** Storage holds drafts this build cannot decode, not told about yet; the root's notice says so. */
+  FoundUnreadDrafts: {},
+  /**
+   * The editor gained or lost focus, or the user typed into the draft: the request card's typing
+   * guard holds a request back while the user types (W-1).
+   */
+  Focused: {},
+  Blurred: {},
+  Typed: {},
 });
 
 export type OutMessage = typeof OutMessage.Type;

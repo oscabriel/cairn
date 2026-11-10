@@ -66,6 +66,7 @@ import {
   PorchSettings,
 } from "../apps/server/src/reach/PorchClient.ts";
 import { DOMAIN, ownerOnly } from "../ops/wizards/reach-edits.ts";
+import { recordOnExit } from "./lib/Record.ts";
 import {
   DEFAULT_CADDY_IMAGE,
   freePort,
@@ -73,6 +74,8 @@ import {
   startCaddy,
   ThrowawayCaddyError,
 } from "./lib/ThrowawayCaddy.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: {

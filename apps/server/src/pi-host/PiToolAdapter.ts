@@ -16,7 +16,7 @@
 // call to a `PiToolRunner`, which picks the extension instance and its context. Partial results
 // become running output; `details` is cloned to plain JSON, or dropped when it has no JSON form.
 
-import { isJsonValue } from "@earendil-works/chord";
+import { isJsonValue } from "@earendil-works/chord/json";
 import type {
   AgentToolResult,
   ToolDefinition,

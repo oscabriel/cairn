@@ -1,8 +1,9 @@
 // The server-owned settings (`settings.get`, `settings.update`), kept in `cairn.sqlite`'s
 // `settings` table so every device sees the same values: one row per setting, its value as the
 // setting's encoded JSON. A row that no longer decodes (a setting whose shape changed) reads as the
-// default and is logged; the next update writes it again. A row whose key is no setting any more
-// (`roleBindings`, the role table ADR 0043 removed) is never read, and stays where it is.
+// default and is logged; the next update writes it again. A row whose key is no setting any more is
+// never read; one that held retired data goes in a numbered migration (ADR 0052), as the role
+// table's `roleBindings` did (0016).
 
 import type { SettingsPatch } from "@cairn/protocol/Settings";
 import { ServerSettings } from "@cairn/protocol/Settings";
@@ -12,6 +13,7 @@ import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql";
 
 import { Database } from "../db/Database.ts";
+import { DatabaseLive } from "../db/DatabaseLive.ts";
 import { migrations } from "../db/Migrations.ts";
 
 /** The settings table could not be read or written. Nothing changed; retry. */
@@ -257,3 +259,13 @@ export class SettingsStore extends Context.Service<
     Layer.provide(Database.layerTest(migrations))
   );
 }
+
+/**
+ * The brain's settings, over `DatabaseLive`: the reference the brain's tools, the settings RPCs
+ * and the entry points provide. `SettingsStore.layerNoDeps` is for assemblies over their own
+ * `SqlClient` (the shell store, test brains); over the one production database the memo map builds
+ * its one reference once, so both are one store.
+ */
+export const SettingsLive = SettingsStore.layerNoDeps.pipe(
+  Layer.provide(DatabaseLive)
+);

@@ -299,9 +299,9 @@ fi
 if want 7; then
   stage "Alchemy: write the CI secrets to oscabriel/cairn"
   say "This deploys stacks/github.ts under the admin profile. It mints a Cloudflare"
-  say "token named cairn-ci (Workers Containers, Workers Scripts, Secrets Store and"
-  say "Account Settings write; nothing else) and saves it, with your account id, as"
-  say "the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets on oscabriel/cairn."
+  say "token named cairn-ci (Workers Containers write, nothing else; ADR 0051) and"
+  say "saves it, with your account id, as the CLOUDFLARE_API_TOKEN and"
+  say "CLOUDFLARE_ACCOUNT_ID secrets on oscabriel/cairn."
   say "The token value never appears on screen. Alchemy shows its plan and asks first."
   if confirm "Deploy stacks/github.ts now?"; then
     # The profile holds the Global API Key and has no other job; recreate it with stage 6 if the

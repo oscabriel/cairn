@@ -48,26 +48,26 @@ import {
   Schema,
 } from "effect";
 
-import { BridgeCwd } from "../apps/server/src/brain/BridgeCwdExtension.ts";
 import { CodeMode } from "../apps/server/src/brain/CodeMode.ts";
+import { durableRunner } from "../apps/server/src/brain/Durable.ts";
 import { ModelSource } from "../apps/server/src/brain/ModelSource.ts";
+import type { WorkflowItemState } from "../apps/server/src/brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../apps/server/src/brain/WorkflowsDoc.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
+import { BridgeCwd } from "../apps/server/src/models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "../apps/server/src/models/BridgeProvider.ts";
 import {
   ExtraProviders,
   PiModelSource,
 } from "../apps/server/src/models/PiModelSource.ts";
 import { ResultTool } from "../apps/server/src/models/ResultTool.ts";
+import { NO_DEFAULT_BUDGET } from "../apps/server/src/usage/DefaultBudget.ts";
 import {
   BUILT_IN_RECIPES,
   recipeReference,
 } from "../apps/server/src/workflows/recipes/BuiltInRecipes.ts";
 import { HOLD_RETRY_MILLIS } from "../apps/server/src/workflows/WorkflowBudget.ts";
-import { WorkflowsDoc } from "../apps/server/src/workflows/WorkflowDocs.ts";
-import type {
-  NodeItemState,
-  WorkflowItemState,
-} from "../apps/server/src/workflows/WorkflowDocs.ts";
+import type { NodeItemState } from "../apps/server/src/workflows/WorkflowDocs.ts";
 import { WorkflowPlan } from "../apps/server/src/workflows/WorkflowPlan.ts";
 import { planAccess } from "../apps/server/src/workflows/Workflows.ts";
 import {
@@ -147,14 +147,12 @@ const resolveModel: ModelResolver = async (spec) =>
     Option.match(Option.fromUndefinedOr(MODELS.get(spec)), {
       onNone: () => Result.fail(`the judge names no model ${spec}`),
       onSome: (model) =>
-        Result.succeed(
-          Option.some({
-            spec,
-            provider: model.provider,
-            modelId: model.modelId,
-            thinkingLevel: Option.none(),
-          })
-        ),
+        Result.succeed({
+          spec,
+          provider: model.provider,
+          modelId: model.modelId,
+          thinkingLevel: Option.none(),
+        }),
     })
   );
 
@@ -179,7 +177,8 @@ const decodeRoster = Schema.decodeUnknownOption(Schema.fromJsonString(Roster));
 /** One node's line. */
 interface NodeLine {
   readonly node: string;
-  readonly role: string | null;
+  /** The model spec the node asked for. */
+  readonly spec: string | null;
   readonly model: string;
   readonly state: string;
   readonly schemaAttempts: number;
@@ -264,7 +263,7 @@ const waitForEnd = (brain: KitBrain) =>
 
 /** What is wrong with one node, if anything. */
 const nodeFailures = (node: NodeItemState): ReadonlyArray<string> => {
-  const want = MODELS.get(node.role ?? "");
+  const want = MODELS.get(node.model ?? "");
   const ran = `${node.provider ?? ""}/${node.modelId ?? ""}`;
   const found: Array<string> = [];
 
@@ -283,7 +282,7 @@ const nodeFailures = (node: NodeItemState): ReadonlyArray<string> => {
 
 const lineOf = (node: NodeItemState): NodeLine => ({
   node: node.label,
-  role: node.role,
+  spec: node.model,
   model: `${node.provider ?? ""}/${node.modelId ?? ""}`,
   state: node.state,
   schemaAttempts: node.schemaAttempts,
@@ -308,6 +307,7 @@ const runCouncil = Effect.gen(function* () {
   const plan = planAccess(
     yield* WorkflowPlan,
     Option.none(),
+    NO_DEFAULT_BUDGET,
     yield* Effect.context()
   );
 
@@ -335,6 +335,8 @@ const runCouncil = Effect.gen(function* () {
           async () => await openCouncilStore(path.join(lifeDir, "store.sqlite"))
         );
 
+  const run = yield* durableRunner;
+
   const brain = yield* Effect.acquireRelease(
     Effect.promise(
       async () =>
@@ -343,6 +345,7 @@ const runCouncil = Effect.gen(function* () {
           [
             codemode.extension.extension,
             workflowExtension({
+              run,
               resolveModel,
               plan,
               faults: NO_WORKFLOW_FAULTS,

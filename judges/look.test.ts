@@ -23,13 +23,12 @@ import {
   parseFrozenRound,
   sha256,
   shotVerdict,
+  TOKENS_PATH,
   tokensFinding,
 } from "./lib/LookFreeze.ts";
 import type { FrozenRound, Image } from "./lib/LookFreeze.ts";
 
 const root = path.join(import.meta.dirname, "..");
-
-const TOKENS_PATH = "apps/web/src/next/tokens.css";
 
 const tokens = readFileSync(path.join(root, TOKENS_PATH), "utf-8");
 
@@ -235,11 +234,22 @@ describe("a frozen fixture round", () => {
 
     expect(changed).not.toBe(tokens);
     expect(tokensFinding(round, changed)).toMatch(
-      /^apps\/web\/src\/next\/tokens\.css hashes [0-9a-f]{12}, round 7 froze [0-9a-f]{12}: a token changed/u
+      /^apps\/web\/src\/tokens\.css hashes [0-9a-f]{12}, round 7 froze [0-9a-f]{12}: a token changed/u
     );
     expect(
       tokensFinding(round, withToken("--radius-small", "7px"))
     ).toBeDefined();
+  });
+
+  it("names today's tokens file when the round recorded it under its old path", () => {
+    const moved: FrozenRound = {
+      ...round,
+      tokens: { ...round.tokens, path: "apps/web/src/next/tokens.css" },
+    };
+
+    expect(tokensFinding(moved, withToken("--ink-1", "#fefefe"))).toMatch(
+      /^apps\/web\/src\/tokens\.css \(recorded as apps\/web\/src\/next\/tokens\.css\) hashes [0-9a-f]{12}, round 7 froze/u
+    );
   });
 
   it("fails when one cell's mean moves by one level", () => {

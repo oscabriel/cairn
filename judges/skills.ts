@@ -53,6 +53,10 @@ import {
   Stream,
 } from "effect";
 
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
+
 const spawned: Array<string> = [];
 
 // Count every child process, before anything that could start one loads: the brain's modules
@@ -113,8 +117,9 @@ const { durable } = await import("../apps/server/src/brain/Durable.ts");
 
 const { HarnessSeam } = await import("../apps/server/src/brain/HarnessSeam.ts");
 
-const { FAUX_MODEL, ModelSource } =
-  await import("../apps/server/src/brain/ModelSource.ts");
+const { FAUX_MODEL } = await import("../apps/server/src/brain/FauxModels.ts");
+
+const { ModelSource } = await import("../apps/server/src/brain/ModelSource.ts");
 
 const { piConversationId } = await import("../apps/server/src/brain/PiIds.ts");
 

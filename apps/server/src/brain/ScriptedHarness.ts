@@ -40,7 +40,8 @@
 //   an answer to either settles both once. A child's approvals are never routed to the parent.
 // - A child's permission mode is the narrower of its own and its parent's, read at each ask, and
 //   `configure` refuses a child's widening.
-// - Stopping a parent leaves its children working unless the stop says `subagents: "stop"`.
+// - Stopping a parent leaves its children working unless the stop says `subagents: "stop"`, which
+//   also halts the parent while its last run had completed, so no stopped child wakes it.
 // The pi-durable side builds the same behaviour as its subagents extension; `SubagentFaults` can
 // break this one on purpose for the conformance suite's mutation check.
 
@@ -61,7 +62,8 @@ import {
 import type { ProjectId } from "@cairn/protocol/Ids";
 import { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { ModelSpec } from "@cairn/protocol/ModelSpecs";
-import { GOAL_DOCUMENT } from "@cairn/protocol/Policy";
+import type { ResolvedModel } from "@cairn/protocol/ModelSpecs";
+import { Brief as BriefSchema, GOAL_DOCUMENT } from "@cairn/protocol/Policy";
 import type { Brief, RuntimeMode, WakeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
@@ -75,9 +77,14 @@ import type {
   SubagentSettlement,
   SubagentStatus,
 } from "@cairn/protocol/Subagents";
-import { ThreadOpsItem, ThreadSnapshotItem } from "@cairn/protocol/Thread";
-import type { JsonValue } from "@earendil-works/chord";
-import { copyJson, isJsonValue } from "@earendil-works/chord";
+import {
+  FULL_ENTRY_LIMIT_BYTES,
+  ThreadOpsItem,
+  ThreadSnapshotItem,
+} from "@cairn/protocol/Thread";
+import type { DocumentState } from "@cairn/protocol/Thread";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { copyJson, isJsonValue } from "@earendil-works/chord/json";
 import type {
   AssistantMessage,
   ImageContent,
@@ -108,26 +115,31 @@ import {
   SubscriptionRef,
 } from "effect";
 
+import type {
+  ApprovalSettlement,
+  RecordAnswer,
+  AnswerOutcome,
+} from "../approvals/ApprovalLedger.ts";
+import {
+  settlementOf,
+  copyRecord,
+  UNDECIDED,
+  approvalIdOf,
+  expirePending,
+  refusalText,
+  applyAnswer,
+  heldByRun,
+  RELAYED_QUESTION_TOOL,
+  relayedQuestion,
+  cancelRecord,
+} from "../approvals/ApprovalLedger.ts";
 import {
   ASK_USER_TOOL,
   askUserResult,
   QUESTION_TTL_MILLIS,
   questionAskOf,
 } from "../approvals/AskUser.ts";
-import { needsDecision } from "../approvals/NeedsDecision.ts";
-import {
-  MAX_ESCALATE_REASON,
-  MAX_QUESTION_LENGTH,
-  MAX_QUESTION_OPTIONS,
-  questionRecord,
-  relayedAsk,
-} from "../approvals/QuestionRoute.ts";
-import {
-  FAILURE_WORDS,
-  isRoleName,
-  ParsedSpec,
-  parseModelSpec,
-} from "../models/ModelSpecs.ts";
+import { FAILURE_WORDS, parseModelSpec } from "../models/ModelSpecs.ts";
 import {
   attemptStateOf,
   CAP_TEXT,
@@ -142,28 +154,21 @@ import {
   validateResult,
 } from "../models/ResultTool.ts";
 import type { ResultState } from "../models/ResultTool.ts";
+import { needsDecision } from "../subagents/NeedsDecision.ts";
+import {
+  MAX_ESCALATE_REASON,
+  MAX_QUESTION_LENGTH,
+  MAX_QUESTION_OPTIONS,
+  questionRecord,
+  relayedAsk,
+} from "../subagents/QuestionRoute.ts";
 import { NO_GOAL } from "../verdicts/GoalDocs.ts";
 import type { GoalState } from "../verdicts/GoalDocs.ts";
 import { BriefTtl } from "./BriefTtl.ts";
 import type {
+  ApprovalPayloadState,
   ApprovalRecord,
-  ApprovalSettlement,
-  AnswerOutcome,
   JsonRecord,
-  RecordAnswer,
-} from "./CairnDocs.ts";
-import {
-  applyAnswer,
-  approvalIdOf,
-  cancelRecord,
-  copyRecord,
-  expirePending,
-  heldByRun,
-  RELAYED_QUESTION_TOOL,
-  refusalText,
-  relayedQuestion,
-  settlementOf,
-  UNDECIDED,
 } from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
 import {
@@ -198,6 +203,7 @@ import type {
 import type { ThreadPermissions } from "./Permissions.ts";
 import { piConversationId, piEntryId, piTaskId } from "./PiIds.ts";
 import { classifyRunFailure } from "./RunFailure.ts";
+import { plainCopy } from "./SubagentDocs.ts";
 import { SubagentFaults } from "./SubagentFaults.ts";
 import {
   BRIEF_ANSWER_ENTRY,
@@ -222,6 +228,7 @@ import {
   projectEntry,
   wireProjector,
 } from "./ThreadWire.ts";
+import type { ProjectionMode } from "./ThreadWire.ts";
 
 type RunStatus = (typeof RunTerminal.Type)["status"];
 
@@ -308,7 +315,7 @@ export interface ScriptedToolApi {
    */
   askBrief(
     summary: string,
-    payload: JsonRecord
+    payload: ApprovalPayloadState
   ): Effect.Effect<Option.Option<ApprovalRecord>>;
   /**
    * Replaces one of the thread's documents the stream carries (`cairn.workflows`, as a scripted
@@ -918,7 +925,9 @@ const viewOf = (
     conversation: {
       id: piConversationId(ConversationId.make(thread.conversationId)),
     },
-    entries: thread.entries.slice(thread.head),
+    // pi-durable 1.5's view: the whole history in entry id order, a compaction's summary where it
+    // was written (the newest), not cutting the entries before it.
+    entries: thread.entries.toSorted((a, b) => a.id - b.id),
     docs,
   };
 };
@@ -1132,12 +1141,12 @@ const decodeModelRef = Schema.decodeUnknownOption(ModelRef);
 
 const decodeThinkingLevel = Schema.decodeUnknownOption(ThinkingLevel);
 
-/** A resolution as the dispatch record keeps it: plain JSON. */
+/** A resolution as the dispatch record keeps it. */
 const resolvedJson = (
   spec: string,
   model: ModelRef,
   thinkingLevel: ThinkingLevel | null
-): JsonRecord => ({
+): DocumentState<typeof ResolvedModel> => ({
   spec,
   model: { provider: model.provider, modelId: model.modelId },
   thinkingLevel,
@@ -1146,18 +1155,15 @@ const resolvedJson = (
 
 /**
  * What a named model runs a child on in the scripted harness, which has no catalog: the model as
- * named, at its level. Nothing is checked for readiness, and nothing is priced. A role name, from a
- * new call, is refused as the real harness refuses it (ADR 0043).
+ * named, at its level. Nothing is checked for readiness, and nothing is priced.
  */
-const scriptedResolve = (spec: string): Result.Result<JsonRecord, string> =>
+const scriptedResolve = (
+  spec: string
+): Result.Result<DocumentState<typeof ResolvedModel>, string> =>
   Option.match(parseModelSpec(spec), {
     onNone: () => Result.fail(`"${spec}": ${FAILURE_WORDS.invalid_spec}.`),
-    onSome: (parsed) =>
-      ParsedSpec.$match(parsed, {
-        Named: ({ model, level }) =>
-          Result.succeed(resolvedJson(spec, model, Option.getOrNull(level))),
-        Role: () => Result.fail(`"${spec}": ${FAILURE_WORDS.role_removed}.`),
-      }),
+    onSome: ({ model, level }) =>
+      Result.succeed(resolvedJson(spec, model, Option.getOrNull(level))),
   });
 
 /** The brief a `subagent_spawn` call proposes, frozen into its record. */
@@ -1178,10 +1184,6 @@ const briefOf = (
   }
 
   const model = Option.map(textArgument(call, "model"), (text) => text.trim());
-
-  if (Option.isSome(model) && isRoleName(model.value)) {
-    return Result.fail(SubagentToolText.roleRemoved(model.value));
-  }
 
   const spec = Option.flatMap(model, decodeModelSpec);
 
@@ -1210,8 +1212,7 @@ const briefOf = (
     workspace: isolation === "worktree" ? "worktree" : "shared",
     base: null,
     writes: [],
-    role: Option.getOrNull(spec),
-    model: null,
+    model: Option.getOrNull(spec),
     thinking: null,
     mode,
     mayCommit: false,
@@ -1222,31 +1223,11 @@ const briefOf = (
   });
 };
 
-/** A brief as its record's payload holds it: plain JSON. */
-const briefPayload = (brief: Brief): JsonRecord => ({
-  type: brief.type,
-  title: brief.title,
-  task: brief.task,
-  why: brief.why,
-  avoid: [...brief.avoid],
-  doneWhen: brief.doneWhen.map((criterion) => ({
-    text: criterion.text,
-    judge: { kind: criterion.judge.kind },
-  })),
-  workspace: brief.workspace,
-  base: brief.base,
-  writes: [...brief.writes],
-  role: brief.role,
-  model: brief.model === null ? null : { ...brief.model },
-  thinking: brief.thinking,
-  mode: brief.mode,
-  mayCommit: brief.mayCommit,
-  budget: { ...brief.budget, planGuard: null },
-  resultSchema:
-    brief.resultSchema === null ? null : copyRecordJson(brief.resultSchema),
-  wake: brief.wake,
-  decisions: [],
-});
+const encodeBrief = Schema.encodeSync(BriefSchema);
+
+/** A brief as its record's payload holds it. */
+const briefPayload = (brief: Brief): ApprovalPayloadState =>
+  plainCopy(encodeBrief(brief));
 
 /** A settlement as a note's `data` holds it. */
 const settlementData = (settlement: SubagentSettlement): JsonValue => ({
@@ -2131,11 +2112,8 @@ const layerNoDeps = Layer.effectContext(
       }
 
       // The named model is checked again at Go (ADR 0043); one that no longer resolves starts
-      // nothing. A role a brief recorded before then names reads as none: the parent's model.
-      const named =
-        brief.role === null || isRoleName(brief.role)
-          ? Option.none<string>()
-          : Option.some(brief.role);
+      // nothing.
+      const named = Option.fromNullOr(brief.model);
 
       const dispatch = Option.match(named, {
         onNone: () => Result.succeed(Option.none<JsonRecord>()),
@@ -3353,7 +3331,7 @@ const layerNoDeps = Layer.effectContext(
                 run: null,
                 executorRequestId: null,
                 ...UNDECIDED,
-                payload: copyRecordJson(payload),
+                payload: plainCopy(payload),
                 answer: null,
                 decidedBy: null,
               };
@@ -3493,8 +3471,8 @@ const layerNoDeps = Layer.effectContext(
             return refused(brief.failure);
           }
 
-          if (brief.success.role !== null) {
-            const resolved = scriptedResolve(brief.success.role);
+          if (brief.success.model !== null) {
+            const resolved = scriptedResolve(brief.success.model);
 
             if (Result.isFailure(resolved)) {
               return refused(SubagentToolText.modelRefused(resolved.failure));
@@ -4087,6 +4065,10 @@ const layerNoDeps = Layer.effectContext(
         if (options.subagents !== "stop") {
           return stopped;
         }
+
+        // The user stopped this thread with its children, so their stopped results wake no one,
+        // even when its last run had completed (ADR 0028); its next user input clears the hold.
+        thread.halted = true;
 
         for (const item of thread.subagents.values()) {
           const child = store.threads.get(item.threadId);
@@ -4681,7 +4663,8 @@ const layerNoDeps = Layer.effectContext(
             data: { reason: "manual" },
           });
 
-          // The view starts at the summary and keeps the newest entry verbatim, as pi-durable's does.
+          // The model's context starts at the summary and keeps the newest entry verbatim, as
+          // pi-durable's does; the view keeps every entry in id order (`viewOf`).
           const withHead: EntryRecord =
             kept === undefined ? entry : { ...entry, head: kept.id };
 
@@ -4725,7 +4708,7 @@ const layerNoDeps = Layer.effectContext(
                       seq: next,
                       view: snapshot,
                       entriesOffset: 0,
-                      hasMoreHistory: thread.head > 0,
+                      hasMoreHistory: false,
                     })
                   );
                 }
@@ -4827,13 +4810,24 @@ const layerNoDeps = Layer.effectContext(
     ) {
       const found = yield* findEntry(threadId, entryId);
 
-      const projected = yield* Effect.fromResult(
-        projectEntry(found, "full")
-      ).pipe(
-        Effect.mapError((cause) => failure("internal", threadId, cause.message))
-      );
+      const projected = (mode: ProjectionMode) =>
+        Effect.fromResult(projectEntry(found, mode)).pipe(
+          Effect.mapError((cause) =>
+            failure("internal", threadId, cause.message)
+          )
+        );
 
-      return { entry: projected, truncated: false };
+      const full = yield* projected("full");
+
+      // Past the full-entry limit the entry is read as the stream cuts it, as pi-durable's is.
+      if (
+        new TextEncoder().encode(JSON.stringify(full)).length <=
+        FULL_ENTRY_LIMIT_BYTES
+      ) {
+        return { entry: full, truncated: false };
+      }
+
+      return { entry: yield* projected("stream"), truncated: true };
     });
 
     const entryImage = Effect.fn("ScriptedHarness.entryImage")(function* (
@@ -4890,7 +4884,6 @@ const layerNoDeps = Layer.effectContext(
             conversationId: ConversationId.make(thread.conversationId),
             runId: Option.map(thread.run, (run) => RunId.make(run.runId)),
             queueLength: thread.queue.length,
-            parkedTaskIds: [],
             pendingApprovals: pending,
           });
         }
@@ -4916,16 +4909,6 @@ const layerNoDeps = Layer.effectContext(
       entryImage,
       events: Stream.fromPubSub(events),
       inspect,
-      // Nothing parks in a scripted store.
-      retry: (taskId) =>
-        Effect.fail(
-          new HarnessError({
-            message: `Task ${taskId} is not parked; the scripted harness parks nothing.`,
-            reason: "task_not_found",
-            retryable: false,
-            threadId: Option.none(),
-          })
-        ),
       capabilities: { durable: true, live: false },
     });
 

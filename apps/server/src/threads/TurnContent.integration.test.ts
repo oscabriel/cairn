@@ -37,17 +37,18 @@ import {
 } from "../attachments/AttachmentsTestLayer.ts";
 import { AttachmentStore } from "../attachments/AttachmentStore.ts";
 import { UploadTokens } from "../attachments/UploadTokens.ts";
-import { FauxModels } from "../brain/FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
+import { testLimit, slackened } from "../EventuallyTestKit.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
+import { isolatePiSetup } from "../models/PiConfigTestKit.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
 import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
+import { ReachServicesTest } from "../reach/ReachTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { projectIdFor } from "../shell/ShellCommands.ts";
 import { ShellLayer } from "../shell/ShellLayer.ts";
@@ -56,6 +57,9 @@ import { SkillCatalog } from "../skills/SkillCatalog.ts";
 import { makeFixtureHome } from "../skills/SkillsTestKit.ts";
 import { TurnContent } from "./TurnContent.ts";
 import { TurnContentLive } from "./TurnContentStages.ts";
+
+// The pi-durable brain below builds the brain's own pi setup: an empty one, never the user's.
+isolatePiSetup();
 
 const NONCES = ["heron-5821", "quartz-1907", "lantern-4466"];
 
@@ -86,7 +90,7 @@ const stack = (dir: string, userSkills: string) =>
       PiDurableBrain({
         models: PiModelSource.layerFromModelSource.pipe(
           Layer.provideMerge(
-            ModelSource.layerFaux({ tokensPerSecond: 5000, settings: {} })
+            FauxModels.layer({ tokensPerSecond: 5000, settings: {} })
           )
         ),
       }).pipe(
@@ -235,7 +239,7 @@ describe("turn content, every stage in order", () => {
           });
 
           const messages = yield* Deferred.await(seen).pipe(
-            Effect.timeout(Duration.seconds(20))
+            Effect.timeout(slackened(Duration.seconds(20)))
           );
 
           const texts = userTexts(messages);
@@ -279,6 +283,6 @@ describe("turn content, every stage in order", () => {
           assert.strictEqual(userEntries.length, 1);
         }).pipe(Effect.provide(stack(dir, `${fixture.home}/nobody`)));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    60_000
+    testLimit(60_000)
   );
 });

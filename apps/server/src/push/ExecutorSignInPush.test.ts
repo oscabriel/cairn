@@ -37,7 +37,9 @@ describe("the Executor sign-in push", () => {
         sweep: Effect.void,
         executorNeedsSignIn: note("needs"),
         executorSignedIn: note("signed-in"),
+        nightlyFailed: Effect.succeed([]),
         settle: Effect.void,
+        badge: Effect.succeed(0),
       });
 
       yield* Effect.gen(function* () {

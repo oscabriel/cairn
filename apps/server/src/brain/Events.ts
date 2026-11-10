@@ -28,8 +28,12 @@
 // A reactor handles each event of its kinds once, oldest first: one commit reads its cursor, finds
 // the next matching entry, runs the handler with that commit's `tx` and moves the cursor. A throw
 // rolls the handler's writes and the cursor back together, so database effects happen exactly once
-// per (event, reactor). A handler never awaits anything outside `tx` (spec 12, "Long transactions"):
-// outside work is a pi-durable task it creates through `tx.createTask`, with idempotent request ids.
+// per (event, reactor) for every event it can handle. An event it cannot handle (a step that keeps
+// failing on it, or that throws `UnreadableEvent`) is passed once with a dead letter
+// (`deadLetter`, `cairn.event-dead-letters`) and the reactor goes on (ADR 0033 as amended; the
+// host's limit is in `EventReactors.ts`). A handler never awaits anything outside `tx` (spec 12,
+// "Long transactions"): outside work is a pi-durable task it creates through `tx.createTask`, with
+// idempotent request ids.
 //
 // Rotation: the first event of a later UTC month opens a new log and appends a `cairn.events-rotated`
 // marker naming it to the old one, in the same commit. A cursor that reaches the marker follows it,
@@ -37,12 +41,14 @@
 // About 70 MB a year without it (the workflows note, "Operations").
 
 import { ConversationId, EntryId } from "@cairn/protocol/Ids";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import {
   EventEnvelope,
   EventName,
   EVENTS_DOCUMENT,
 } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
+import type { EventsDocument } from "@cairn/protocol/Workflows";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   Cursor,
   EntryRecord,
@@ -54,22 +60,11 @@ import { DateTime, Option, Predicate, Schema } from "effect";
 
 import { piConversationId, piEntryId } from "./PiIds.ts";
 
-/** Where one reactor has read to: its log and the last entry it passed there (null: none yet). */
-export interface EventCursorState {
-  [key: string]: JsonValue;
-  logConversationId: number;
-  entryId: number | null;
-}
+/** `cairn.events` state: the protocol's `EventsDocument` as its writer holds it. */
+export type EventsState = DocumentState<typeof EventsDocument>;
 
-/** `cairn.events` state; the plain JSON form of the protocol's `EventsDocument`. */
-export interface EventsState {
-  [key: string]: JsonValue;
-  /** The current log; null until the first event. */
-  logConversationId: number | null;
-  /** The UTC month the current log covers, `YYYY-MM`. */
-  logMonth: string | null;
-  cursors: { [reactor: string]: EventCursorState };
-}
+/** Where one reactor has read to: its log and the last entry it passed there (null: none yet). */
+export type EventCursorState = EventsState["cursors"][string];
 
 /** `cairn.events`: the current log and each reactor's cursor (session scope). */
 export const EventsDoc = defineDoc<EventsState>({
@@ -151,7 +146,9 @@ export type ReactorStart = "now" | "start";
  * A reactor: a name, the events it handles and the handler. `handle` runs inside the commit that
  * moves the reactor's cursor. It may read tables (only before its first table write), write
  * documents and entries through `tx`, emit events and create pi-durable tasks; it must not await
- * anything outside `tx`. A throw rolls back its writes and leaves the event pending.
+ * anything outside `tx`. A throw rolls back its writes and leaves the event pending, for the host
+ * to retry or dead-letter; a handler that cannot read an event's data at its version (`v`) throws
+ * `UnreadableEvent`, which the host dead-letters at once.
  */
 export interface Reactor {
   /**
@@ -218,7 +215,7 @@ const logId = (id: number): PiConversationId =>
 
 /**
  * The event an entry of the log holds, or none for an entry that is not a well-formed event. A
- * malformed event is never skipped silently: the reactor host fails on it (`readEvent`).
+ * malformed event is never skipped silently: the reactor host dead-letters it (`readEvent`).
  */
 const eventOf = (entry: EntryRecord): Option.Option<EventRecord> => {
   if (!entry.kind.startsWith(EVENT_KIND_PREFIX)) {
@@ -249,14 +246,34 @@ const eventOf = (entry: EntryRecord): Option.Option<EventRecord> => {
   });
 };
 
-/** The event in a log entry the scan matched; throws (failing the reactor's step) when malformed. */
+/**
+ * An event a reactor can never read: its entry is not a well-formed event, or its handler does not
+ * know the shape of its data at its version. A step that throws it is not retried: the host
+ * dead-letters the event at once (`deadLetter`).
+ */
+export class UnreadableEvent extends Schema.TaggedError<UnreadableEvent>()(
+  "UnreadableEvent",
+  {
+    message: Schema.String,
+    /** The event's log entry. */
+    eventId: EntryId,
+    kind: Schema.String,
+  }
+) {}
+
+/**
+ * The event in a log entry the scan matched; throws `UnreadableEvent` (failing the reactor's step,
+ * which the host dead-letters) when malformed.
+ */
 const readEvent = (entry: EntryRecord): EventRecord =>
   Option.getOrThrowWith(
     eventOf(entry),
     () =>
-      new Error(
-        `Event entry ${entry.id} (${entry.kind}) is not a well-formed event. It stays pending; repair the entry or the reactor.`
-      )
+      new UnreadableEvent({
+        message: `Event entry ${String(entry.id)} (${entry.kind}) is not a well-formed event, so no reactor can read it.`,
+        eventId: EntryId.make(entry.id),
+        kind: entry.kind,
+      })
   );
 
 /** The current log, opening a new one first when `at` falls in a later month than it covers. */
@@ -555,6 +572,118 @@ export const reactOnce = async (
   }
 
   return pending.event;
+};
+
+/**
+ * One event a reactor passed without handling it (ADR 0033 as amended): its handler failed on it
+ * past the host's limit, or could not read it at all.
+ */
+export interface DeadLetterState {
+  [key: string]: JsonValue;
+  reactor: string;
+  /** The event's log entry, and the log it is in. */
+  eventId: number;
+  logConversationId: number;
+  /** The entry's kind, `event.<name>`. */
+  kind: string;
+  /** The last failure's message. */
+  error: string;
+  /** Failed steps on the event, in the process that passed it. */
+  failures: number;
+  /** When it was passed, on the brain's clock. */
+  at: number;
+}
+
+/** How many dead letters `cairn.event-dead-letters` keeps: the newest, across reactors. */
+export const DEAD_LETTERS_KEPT = 200;
+
+/** `cairn.event-dead-letters` state: the newest dead letters, by `deadLetterKey`. */
+export interface DeadLettersState {
+  [key: string]: JsonValue;
+  items: { [key: string]: DeadLetterState };
+}
+
+/**
+ * `cairn.event-dead-letters`: the events reactors passed without handling (session scope), the
+ * newest `DEAD_LETTERS_KEPT`. The reactor host's status reads each reactor's last one.
+ */
+export const DeadLettersDoc = defineDoc<DeadLettersState>({
+  kind: "cairn.event-dead-letters",
+  version: 1,
+  scope: "session",
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
+});
+
+/** A dead letter's key: the reactor and the event, `<reactor>/<entry id>`. */
+export const deadLetterKey = (reactorName: string, eventId: number) =>
+  `${reactorName}/${String(eventId)}`;
+
+/** Why a reactor passes an event: its last error and how often its step failed on it. */
+export interface DeadLetterCause {
+  readonly eventId: EntryId;
+  readonly error: string;
+  readonly failures: number;
+  readonly at: number;
+}
+
+/**
+ * Passes event `cause.eventId` for `target` without handling it, in one commit: while that event is
+ * still the reactor's next pending one, its cursor moves past it and a dead letter records it. The
+ * log is read raw here, so an entry no reactor can read is passed too. Returns the letter, or none
+ * when the reactor's next event is another one (a step moved its cursor meanwhile).
+ */
+export const deadLetter = async (
+  tx: Tx,
+  target: Reactor,
+  kinds: ReadonlySet<string>,
+  cause: DeadLetterCause
+): Promise<Option.Option<DeadLetterState>> => {
+  const state = await tx.doc(EventsDoc);
+  const from = storedCursor(state, target.name);
+
+  if (Option.isNone(from)) {
+    return Option.none();
+  }
+
+  const next = await walk(tx, from.value, kinds, { count: false, limit: 0 });
+
+  if (
+    Option.isNone(next.found) ||
+    next.found.value.id !== Number(cause.eventId)
+  ) {
+    return Option.none();
+  }
+
+  const letter: DeadLetterState = {
+    reactor: target.name,
+    eventId: next.found.value.id,
+    logConversationId: next.cursor.logConversationId,
+    kind: next.found.value.kind,
+    error: cause.error,
+    failures: cause.failures,
+    at: cause.at,
+  };
+
+  const letters = await tx.doc(DeadLettersDoc);
+
+  letters.items[deadLetterKey(target.name, letter.eventId)] = { ...letter };
+
+  // The oldest go once more than the kept number are held.
+  const held = Object.entries(letters.items).toSorted(
+    ([, a], [, b]) => a.at - b.at || a.eventId - b.eventId
+  );
+
+  for (const [key] of held.slice(
+    0,
+    Math.max(held.length - DEAD_LETTERS_KEPT, 0)
+  )) {
+    Reflect.deleteProperty(letters.items, key);
+  }
+
+  state.cursors[target.name] = { ...next.cursor };
+
+  return Option.some(letter);
 };
 
 /**

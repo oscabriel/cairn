@@ -84,6 +84,21 @@ export const VISIBLE_DOCUMENTS: ReadonlyArray<string> = [
   WORKFLOWS_DOCUMENT,
 ];
 
+/**
+ * A value of encoded type `T` as a pi-durable writer holds it: the same plain JSON, mutable, since a
+ * transaction hands out a draft to change in place. A document schema's `Encoded` type is already
+ * plain JSON (no transformations, `JsonSchema.test.ts` holds that), so this is the only declaration
+ * a writer needs.
+ */
+export type PlainJson<T> = T extends string | number | boolean | null
+  ? T
+  : T extends ReadonlyArray<infer Item>
+    ? Array<PlainJson<Item>>
+    : { -readonly [Key in keyof T]: PlainJson<T[Key]> };
+
+/** What a document or entry schema `S` holds, as its pi-durable writer keeps it (`PlainJson`). */
+export type DocumentState<S extends Schema.Top> = PlainJson<S["Encoded"]>;
+
 const Segment = Schema.Union([Schema.String, Schema.Int]);
 
 const Path = Schema.Array(Segment);
@@ -201,7 +216,11 @@ export const ThreadSnapshotItem = Schema.TaggedStruct("Snapshot", {
   /** Per subscription, for tests and diagnostics; it starts at 0. */
   seq: NonNegativeInt,
   view: ConversationView,
-  /** How many older active entries the view leaves out; `thread.history` pages them in. */
+  /**
+   * How many entries the brain's first read of the thread held before the view's first entry.
+   * That read is itself a window over the history, so this is not the thread's length: 0 with
+   * `hasMoreHistory` true is normal. `thread.history` pages in everything before the view.
+   */
   entriesOffset: NonNegativeInt,
   hasMoreHistory: Schema.Boolean,
 });
@@ -340,8 +359,9 @@ export type ConfigureInput = typeof ConfigureInput.Type;
 /**
  * `thread.respond` input: an answer to one approval, question or brief. `reason` carries the
  * user's words on Decline or Send back (required for `revise`); `answers` answer a question's
- * payload by index; `launch` carries the user's edits to a workflow's launch card (its budget and
- * role overrides) with Go, stored as the answer's `launch` beside the untouched payload. On a
+ * payload by index; `launch` carries the user's edit to the budget on a workflow's launch card or a
+ * subagent's brief card with Go (ADR 0047), stored as the answer's `launch` beside the untouched
+ * payload. On a
  * parent's mirror of a child's escalated question it answers the child's record; whichever answer
  * lands second is `already_settled` (ADR 0027).
  */
@@ -357,11 +377,3 @@ export const RespondInput = Schema.Struct({
 });
 
 export type RespondInput = typeof RespondInput.Type;
-
-/** `thread.retryTask` input: run a parked task again. */
-export const RetryTaskInput = Schema.Struct({
-  threadId: ThreadId,
-  taskId: TaskId,
-});
-
-export type RetryTaskInput = typeof RetryTaskInput.Type;

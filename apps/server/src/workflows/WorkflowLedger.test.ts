@@ -5,26 +5,28 @@
 // row, and a node's tool result never carrying usage.
 
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
-import { ModelSpec } from "@cairn/protocol/ModelSpecs";
+import type { ModelRef } from "@cairn/protocol/Models";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { AgentDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
-import {
-  answerApproval,
-  Approvals,
-  ThreadMeta,
-  ThreadReceipt,
-} from "../brain/CairnDocs.ts";
+import { answerApproval } from "../approvals/ApprovalLedger.ts";
+import { Approvals, ThreadMeta, ThreadReceipt } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { ChildDoc } from "../subagents/SubagentDocs.ts";
+import { ChildDoc } from "../brain/SubagentDocs.ts";
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import { workflowNodeRun } from "../subagents/SubagentRows.ts";
 import { PRELUDE_VERSION, rewriteScript } from "./Prelude.ts";
-import { ledgerProblems, WorkflowsDoc } from "./WorkflowDocs.ts";
-import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
+import { ledgerProblems } from "./WorkflowDocs.ts";
 import { isNodeBrief, launchAnswered } from "./WorkflowLaunch.ts";
 import { parseWorkflowScript, scriptHash } from "./WorkflowScript.ts";
 import {
@@ -36,6 +38,7 @@ import {
   pause,
   plant,
   plantDefaults,
+  respond,
   runScript,
   ALT_MODEL,
   KIT_LEVEL,
@@ -54,6 +57,8 @@ const context = BACKGROUND_CONTEXT;
 const ANSWERED_AT = 2;
 
 const isWorkflowsDocument = Schema.is(WorkflowsDocument);
+
+const decodeWorkflows = Schema.decodeUnknownOption(WorkflowsDocument);
 
 const WF = "wf-1";
 
@@ -87,12 +92,12 @@ interface Identity {
   readonly model: string | null;
 }
 
-/** Waits until the workflow row has ended (its watcher wrote it), at most `ms`. */
+/** Waits until the workflow row has ended (its watcher wrote it), at most `ms` scaled by the slack. */
 const settledRow = async (
   brain: KitBrain,
   ms: number
 ): Promise<Readonly<WorkflowsState> | undefined> => {
-  const until = performance.now() + ms;
+  const until = performance.now() + testLimit(ms);
   let ledger = await brain.harness.snapshot(WorkflowsDoc, brain.root, context);
 
   while (performance.now() < until) {
@@ -243,6 +248,11 @@ const scenario = (
     readonly answer?: "accepted" | "declined";
     /** Answers every node's own pending brief so, through the host's answer path. */
     readonly briefs?: "accept" | "decline";
+    /**
+     * The root thread's model in place of the kit's, served by a faux provider of its own that
+     * answers as the kit's does.
+     */
+    readonly rootModel?: ModelRef;
   } = {}
 ) =>
   Effect.gen(function* () {
@@ -266,6 +276,25 @@ const scenario = (
           await open.harness.close(context);
         })
     );
+
+    for (const model of Option.toArray(
+      Option.fromUndefinedOr(options.rootModel)
+    )) {
+      const own = fauxProvider({
+        provider: model.provider,
+        models: [{ id: model.modelId }],
+        tokensPerSecond: 50_000,
+      });
+
+      own.setResponses(Array.from({ length: 5000 }, () => respond));
+      parts.models.setProvider(own.provider);
+
+      yield* Effect.promise(async () => {
+        const root = await brain.harness.conversation(brain.root, context);
+
+        await root?.configure({ model: { ...model } }, context);
+      });
+    }
 
     const planted = options.planted ?? Option.some({});
 
@@ -496,7 +525,7 @@ return { a, b, c };`)
       const outcome = yield* scenario(
         workflow(`return await agent("node:a", { label: "a" });`),
         {
-          run: `return await tools.agent({ workflowId: "${WF}", prompt: "node:a", site: null, label: "a", phase: null, role: null, schema: null, key: null, readonly: false, resume: null, effort: null, unknownOptions: [] });`,
+          run: `return await tools.agent({ workflowId: "${WF}", prompt: "node:a", site: null, label: "a", phase: null, model: null, schema: null, key: null, readonly: false, resume: null, effort: null, unknownOptions: [] });`,
         }
       );
 
@@ -534,7 +563,7 @@ return { a, b };`),
             planted: Option.some({
               envelope: (granted) => ({
                 ...granted,
-                roles: granted.roles.filter(
+                models: granted.models.filter(
                   (entry) => entry.spec !== ALT_MODEL
                 ),
               }),
@@ -585,7 +614,7 @@ return { a };`),
             planted: Option.some({
               envelope: (granted) => ({
                 ...granted,
-                roles: granted.roles.filter(
+                models: granted.models.filter(
                   (entry) => entry.spec !== ALT_MODEL
                 ),
               }),
@@ -616,7 +645,7 @@ return { a };`),
             planted: Option.some({
               envelope: (granted) => ({
                 ...granted,
-                roles: granted.roles.map((entry) => ({
+                models: granted.models.map((entry) => ({
                   ...entry,
                   readonly: true,
                 })),
@@ -836,7 +865,7 @@ return await verify(found, { claim: "a is fine" });`)
       const nodes = Object.values(Option.getOrThrow(outcome.row).nodes);
 
       assert.deepStrictEqual(
-        nodes.map((node) => [node.role, node.readonly, node.stage]),
+        nodes.map((node) => [node.model, node.readonly, node.stage]),
         [
           [KIT_SPEC, false, "answered"],
           [KIT_SPEC, true, "verified"],
@@ -888,7 +917,7 @@ return [a, b];`)
             node.thinkingLevel,
             Option.getOrUndefined(
               workflowNodeRun(
-                Option.some(outcome.ledger),
+                decodeWorkflows(outcome.ledger),
                 ThreadId.make(node.childThreadId ?? "")
               )
             )?.thinkingLevel,
@@ -919,7 +948,7 @@ return [a, b];`)
         assert.deepStrictEqual(
           nodes.map((node) => [
             node.label,
-            node.role,
+            node.model,
             `${node.provider ?? ""}/${node.modelId ?? ""}`,
             node.thinkingLevel,
             outcome.identities.get(node.id)?.model,
@@ -935,56 +964,24 @@ return [a, b];`)
   );
 
   it.live(
-    "runs a script approved before roles were removed: a role reads as the launching thread's model, inside an envelope keyed by role",
+    "runs a node that names no model on a launching thread's model whose id holds ~ and /, and the ledger decodes",
     () =>
       Effect.gen(function* () {
-        // The dry run refuses `role` now, so the script passes it only when it runs live, as a
-        // script approved before ADR 0043 does; its envelope is keyed by role as it was then.
+        // An OpenRouter alias as pi-ai lists it; the launch did not show it, so the node asks first.
+        const alias = { provider: "openrouter", modelId: "~kit/kit-latest" };
+
         const outcome = yield* scenario(
-          workflow(`const x = await agent("node:x", { label: "x" });
-const live = !String(x).startsWith("(dry run");
-const a = await agent("node:a", live ? { label: "a", role: "@scout" } : { label: "a" });
-const v = await verify(a, live ? { claim: "a", role: "@verifier" } : { claim: "a" });
-return { a, v };`),
-          {
-            planted: Option.some({
-              envelope: (granted) => ({
-                ...granted,
-                roles: [
-                  {
-                    spec: ModelSpec.make("@worker"),
-                    readonly: false,
-                    arms: "host",
-                  },
-                  {
-                    spec: ModelSpec.make("@verifier"),
-                    readonly: true,
-                    arms: "host",
-                  },
-                ],
-              }),
-            }),
-            briefs: "decline",
-          }
+          workflow(`return await agent("node:a", { label: "a" });`),
+          { rootModel: alias, briefs: "accept" }
         );
 
         assert.deepStrictEqual(outcome.problems, []);
-
-        const nodes = Object.values(Option.getOrThrow(outcome.row).nodes);
-        const kit = `${KIT_MODEL.provider}/${KIT_MODEL.modelId}`;
-
         assert.deepStrictEqual(
-          nodes.map((node) => [
-            node.label,
+          Object.values(Option.getOrThrow(outcome.row).nodes).map((node) => [
+            node.model,
             node.state,
-            `${node.provider ?? ""}/${node.modelId ?? ""}`,
-            outcome.records[node.briefId ?? ""]?.decidedBy?.kind,
           ]),
-          [
-            ["x", "settled", kit, "envelope"],
-            ["a", "settled", kit, "envelope"],
-            ["Verify: a", "settled", kit, "envelope"],
-          ]
+          [[`openrouter/~kit/kit-latest:${KIT_LEVEL}`, "settled"]]
         );
       })
   );
@@ -1050,7 +1047,7 @@ return { a, b, c };`)
   );
 
   it.live(
-    "refuses a node whose script names a role as its model, saying roles were removed",
+    "refuses a node whose script names a role name as its model: it is no model spec",
     () =>
       Effect.gen(function* () {
         const outcome = yield* scenario(
@@ -1063,7 +1060,7 @@ return [d.status, d.reason];`)
         assert.deepStrictEqual(outcome.problems, []);
         // The node tool refuses the call before any row: the script's `agent.full` sees it failed.
         assert.include(outcome.result, '["failed"');
-        assert.include(outcome.result, "is a role, and roles were removed");
+        assert.include(outcome.result, "is not provider/modelId[:level]");
         assert.deepStrictEqual(starts(outcome.effects), ["x"]);
       })
   );

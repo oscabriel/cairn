@@ -52,12 +52,13 @@ import { HttpServer } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { Socket } from "effect/socket";
 
-import { AppLayer, ScriptedBrain } from "../apps/server/src/AppLayer.ts";
+import { AppLayer } from "../apps/server/src/AppLayer.ts";
 import { ServerConfig } from "../apps/server/src/Config.ts";
+import { ScriptedBrain } from "../apps/server/src/DevLayer.ts";
 import { ExecutorLink } from "../apps/server/src/executor/ExecutorLink.ts";
 import { Identity, USER_HEADER } from "../apps/server/src/http/Identity.ts";
 import { Tailscale } from "../apps/server/src/http/Tailscale.ts";
-import { ReachMachine } from "../apps/server/src/reach/ReachLayer.ts";
+import { ReachMachine } from "../apps/server/src/reach/ReachTestKit.ts";
 import { EventSink } from "../apps/server/src/shell/EventSink.ts";
 import {
   emptyActivityPatch,
@@ -70,6 +71,9 @@ import {
   createThread,
   testThreadId,
 } from "../apps/server/src/shell/ShellTestKit.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const { values } = parseArgs({
   options: {

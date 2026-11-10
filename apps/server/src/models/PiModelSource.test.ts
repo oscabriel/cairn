@@ -13,7 +13,8 @@ import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
+import { ModelSource } from "../brain/ModelSource.ts";
 import { HarnessSettings } from "./HarnessSettings.ts";
 import { PiConfig } from "./PiConfig.ts";
 import {
@@ -153,7 +154,7 @@ describe("PiModelSource over a faux model source", () => {
       Effect.provide(
         PiModelSource.layerFromModelSource.pipe(
           Layer.provide(
-            ModelSource.layerFaux({ tokensPerSecond: 1000, settings: {} })
+            FauxModels.layer({ tokensPerSecond: 1000, settings: {} })
           )
         )
       )

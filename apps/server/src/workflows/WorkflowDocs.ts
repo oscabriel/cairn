@@ -1,7 +1,7 @@
-// The dispatch ledger (ADR 0012 as amended, ADR 0032, workflows note W3): one `cairn.workflows`
-// document on the thread whose model launched the script, `{ items: { [workflowId]: WorkflowRecord } }`
-// as plain JSON (S23). Its shapes are the protocol's `WorkflowsDocument` (packages/protocol/src/
-// Workflows.ts); the kind is protocol and never changes, and a fork starts with no workflows.
+// The dispatch ledger's rules (ADR 0012 as amended, ADR 0032, workflows note W3). The ledger is one
+// `cairn.workflows` document on the thread whose model launched the script, declared with the
+// brain's documents (`brain/WorkflowsDoc.ts`, with the row's decline and a record's launch, which
+// the approval ledger applies too); the sources and launch runs documents are declared here.
 //
 // The document is written only by the node tools (`WorkflowTools.ts`), their watcher task and
 // whoever proposes and answers a launch (5A), always through `tx`; the thread stream carries it, so
@@ -27,147 +27,36 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import { WorkflowLaunch } from "@cairn/protocol/Policy";
-import type { Envelope, NodeArms } from "@cairn/protocol/Policy";
-import { WORKFLOWS_DOCUMENT } from "@cairn/protocol/Workflows";
+import type { Decider, Envelope, WorkflowLaunch } from "@cairn/protocol/Policy";
+import type { Budget } from "@cairn/protocol/Spend";
+import type { DocumentState } from "@cairn/protocol/Thread";
 import type {
-  NodeRefusal,
-  NodeStage,
+  NodeReceipt,
+  NodeRecord,
   NodeState,
-  WorkflowOutcome,
   WorkflowState,
 } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
-import { copyJson } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { copyJson } from "@earendil-works/chord/json";
 import type { UsageState } from "@earendil-works/pi-durable";
 import { defineDoc } from "@earendil-works/pi-durable";
-import { Option, Schema } from "effect";
+import { Option } from "effect";
 
-import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
+import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../brain/WorkflowsDoc.ts";
+import { launchOf } from "../brain/WorkflowsDoc.ts";
 
-/** What a settled node used: the protocol's `NodeReceipt` as plain JSON. */
-export interface NodeReceiptState {
-  [key: string]: JsonValue;
-  answerEntry: number | null;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  listMicros: number | null;
-  toolCalls: number;
-  durationMs: number;
-}
+/** What a settled node used: the protocol's `NodeReceipt` as its writer holds it. */
+export type NodeReceiptState = DocumentState<typeof NodeReceipt>;
 
-/** One dispatch: the protocol's `NodeRecord` as plain JSON. */
-export interface NodeItemState {
-  [key: string]: JsonValue;
-  id: string;
-  workflowId: string;
-  key: string | null;
-  label: string;
-  phase: string | null;
-  index: number;
-  requestId: string;
-  briefId: string | null;
-  /**
-   * The model spec the node asked for (the script's, else the launching thread's model and level);
-   * a row written before ADR 0043 holds a role name. The wire name `role` is kept for those rows.
-   */
-  role: string | null;
-  provider: string | null;
-  modelId: string | null;
-  effort: string | null;
-  /** The level the child runs at (effort, else the spec's); null for the model's default. */
-  thinkingLevel?: string | null;
-  readonly: boolean;
-  arms: NodeArms;
-  state: NodeState;
-  stage: NodeStage;
-  childThreadId: string | null;
-  conversationId: number | null;
-  submissionId: number | null;
-  nestedTaskId: number | null;
-  attempt: number;
-  schemaAttempts: number;
-  receipt: NodeReceiptState | null;
-  result: JsonValue;
-  resultSummary: string | null;
-  refusal: NodeRefusal | null;
-  held: { [key: string]: JsonValue; until: number | null } | null;
-  startedAt: number | null;
-  endedAt: number | null;
-  error: string | null;
-}
+/** One dispatch: the protocol's `NodeRecord` as its writer holds it. */
+export type NodeItemState = DocumentState<typeof NodeRecord>;
 
-/** A launch's budget: the protocol's `Budget` as plain JSON. */
-export interface BudgetState {
-  [key: string]: JsonValue;
-  maxListMicros: number | null;
-  maxTokens: number | null;
-  maxTurns: number | null;
-  maxMinutes: number | null;
-  planGuard: JsonRecord | null;
-  warnAt: number;
-}
-
-/** One workflow: the protocol's `WorkflowRecord` as plain JSON. */
-export interface WorkflowItemState {
-  [key: string]: JsonValue;
-  id: string;
-  name: string;
-  description: string;
-  phases: Array<{
-    [key: string]: JsonValue;
-    title: string;
-    detail: string | null;
-  }>;
-  scriptHash: string;
-  scriptRef: string;
-  args: JsonValue;
-  state: WorkflowState;
-  outcome: WorkflowOutcome | null;
-  approvalId: string;
-  decidedBy: JsonRecord | null;
-  decidedAt: number | null;
-  sample: number | null;
-  budget: BudgetState;
-  estimate: JsonRecord | null;
-  codemodeTaskId: number | null;
-  startedAt: number | null;
-  endedAt: number | null;
-  result: string | null;
-  nodes: { [nodeId: string]: NodeItemState };
-  log: {
-    [taskId: string]: { [key: string]: JsonValue; at: number; text: string };
-  };
-  spent: {
-    [key: string]: JsonValue;
-    tokens: number;
-    listMicros: number;
-    unpricedTokens: number;
-  };
-  softAt: number | null;
-  spentAt: number | null;
-}
-
-/** `cairn.workflows` state. */
-export interface WorkflowsState {
-  [key: string]: JsonValue;
-  items: { [workflowId: string]: WorkflowItemState };
-}
-
-/** `cairn.workflows`: every workflow a thread launched, by id (the dispatch ledger). */
-export const WorkflowsDoc = defineDoc<WorkflowsState>({
-  kind: WORKFLOWS_DOCUMENT,
-  version: 1,
-  scope: "conversation",
-  history: "latest",
-  // A fork is another thread, which launched nothing.
-  fork: "initial",
-  initial: () => ({ items: {} }),
-  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
-});
+/** A launch's budget: the protocol's `Budget` as its writer holds it. */
+export type BudgetState = DocumentState<typeof Budget>;
 
 /** A project recipe launched by name: its `meta.name` and the source the user approved. */
 export interface WorkflowSourceState {
@@ -196,6 +85,55 @@ export const WorkflowSourcesDoc = defineDoc<WorkflowSourcesState>({
   initial: () => ({ items: {} }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
+
+/**
+ * The run a launch was proposed in: the run's first entry (`pi.live.run.first`, which stays the
+ * same from tool round to tool round), or null for a launch a test kit or judge fixture planted
+ * before the run that runs it existed (`WorkflowTestKit.plant`); `workflow_plan` never writes null.
+ */
+export interface LaunchRunState {
+  [key: string]: JsonValue;
+  run: number | null;
+}
+
+/** `cairn.workflow-launch-runs` state. */
+export interface LaunchRunsState {
+  [key: string]: JsonValue;
+  items: { [workflowId: string]: LaunchRunState };
+}
+
+/**
+ * Where `workflow_plan` binds each launch to the run that proposed it, in the commit that writes
+ * its `proposed` row: the gate runs an approved row only from that run (ADR 0032 as amended), and a
+ * row with no entry here (proposed before the binding existed) runs from none. Not on the thread
+ * stream.
+ */
+export const LaunchRunsDoc = defineDoc<LaunchRunsState>({
+  kind: "cairn.workflow-launch-runs",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ items: {} }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50,
+});
+
+/**
+ * Whether the launch `workflowId` may run from the run whose first entry is `run` (none: no run is
+ * live): bound to that run, or planted for any run. A launch with no binding runs from none.
+ */
+export const isLaunchOfRun = (
+  runs: Readonly<LaunchRunsState> | undefined,
+  workflowId: string,
+  run: Option.Option<number>
+): boolean => {
+  const bound = runs?.items[workflowId];
+
+  return (
+    bound !== undefined &&
+    (bound.run === null || Option.contains(run, bound.run))
+  );
+};
 
 // Ids. Every id the ledger mints matches the protocol's `RequestId` (`[A-Za-z0-9_-]{1,128}`).
 
@@ -300,7 +238,7 @@ export const proposedRecord = (input: ProposeInput): WorkflowItemState => {
  */
 export const approveRecord = (
   record: WorkflowItemState,
-  decidedBy: JsonRecord,
+  decidedBy: DocumentState<typeof Decider>,
   at: number
 ): boolean => {
   if (record.state !== "proposed") {
@@ -315,60 +253,29 @@ export const approveRecord = (
 };
 
 /**
- * Moves a `proposed` row to `declined`, from its launch approval settled any way but Go: Decline,
- * an expiry, or a stop that cancelled it. False when the row is not `proposed`.
+ * Moves an `approved` row that never ran to `declined`, decided by the system: `run-stopped` when
+ * the run it was proposed in ended before it called codemode (an approved launch is no standing
+ * grant), `superseded` when a newer Go of the same script found it left over from such a run. False
+ * when the row is not `approved`.
  */
-export const declineRow = (
+export const endApprovedRow = (
   row: WorkflowItemState,
-  record: ApprovalRecord
+  why: "run-stopped" | "superseded",
+  at: number
 ): boolean => {
-  if (row.state !== "proposed") {
-    return false;
-  }
-
-  const at = record.answeredAt ?? record.askedAt;
-
-  row.state = "declined";
-  row.decidedBy = record.decidedBy === null ? null : { ...record.decidedBy };
-  row.decidedAt = at;
-  row.endedAt = at;
-
-  return true;
-};
-
-/**
- * Moves an `approved` row that never ran to `declined`, decided by the system as `superseded`: a
- * newer Go of the same script took its place, so the gate (which runs one approved row per script
- * hash) can only ever run the newer one. False when the row is not `approved`.
- */
-export const supersedeRow = (row: WorkflowItemState, at: number): boolean => {
   if (row.state !== "approved") {
     return false;
   }
 
   row.state = "declined";
-  row.decidedBy = { kind: "system", why: "superseded" };
+  row.decidedBy = { kind: "system", why };
   row.decidedAt = at;
   row.endedAt = at;
 
   return true;
 };
 
-/** The record tool of a workflow node's own brief, one per node kind. */
-export const NODE_BRIEF_TOOLS: ReadonlySet<string> = new Set([
-  "agent",
-  "verify",
-]);
-
 // The envelope (ADR 0032): what a launch's Go granted, read from the accepted record's payload.
-
-const decodeLaunch = Schema.decodeUnknownOption(WorkflowLaunch);
-
-/** The launch a record's frozen payload holds; none when it holds another kind. */
-export const launchOf = (
-  record: ApprovalRecord
-): Option.Option<WorkflowLaunch> =>
-  record.payload === null ? Option.none() : decodeLaunch(record.payload);
 
 /** The envelope a launch approval's payload grants; none when the record carries no launch. */
 export const envelopeOf = (record: ApprovalRecord): Option.Option<Envelope> =>

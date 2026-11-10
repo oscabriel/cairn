@@ -3,24 +3,26 @@
 // stream follows both without the root reaching into the page's state.
 
 import { applyShellStreamItem } from "@cairn/client-logic/ShellReducer";
+import { userPromptsAfter } from "@cairn/client-logic/TimelineEntries";
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ProjectId } from "@cairn/protocol/Ids";
-import type { ShellCommand } from "@cairn/protocol/ShellCommands";
-import {
-  Array,
-  Equal,
-  Equivalence,
-  Option,
-  Predicate,
-  Record,
-  Schema,
-} from "effect";
+import type { TurnInput } from "@cairn/protocol/Thread";
+import { Array, Equal, Option, Predicate, Record, Schema } from "effect";
 import { Update, Url } from "foldkit";
 import type { Runtime } from "foldkit";
 import { UrlRequest } from "foldkit/navigation";
 import { modifyFields } from "foldkit/struct";
 
+import type { Message as RequestCardMessage } from "./card/Message.ts";
+import { OutMessage as RequestCardOutMessage } from "./card/Message.ts";
 import {
+  approvalsDocumentOf,
+  initial as initialRequestCard,
+} from "./card/Model.ts";
+import type { CardContext, Model as RequestCardModel } from "./card/Model.ts";
+import { requestCard as RequestCard } from "./card/Update.ts";
+import {
+  CheckServerBuild,
   LoadExternal,
   NavigateInternal,
   SaveOutbox,
@@ -32,20 +34,27 @@ import {
 import type { Services } from "./Command.ts";
 import { burnBusyBudget } from "./composer/Busy.ts";
 import { composerContext } from "./composer/Context.ts";
+import {
+  draftProject,
+  isDraftTarget,
+  SCRATCH_DRAFT_KEY,
+} from "./composer/Drafts.ts";
 import { OutMessage as ComposerOutMessage } from "./composer/Message.ts";
 import type { Message as ComposerMessage } from "./composer/Message.ts";
+import { queuedInputs } from "./composer/Queue.ts";
 import * as Composer from "./composer/Update.ts";
 import {
   enqueue,
   enqueueDispatch,
-  nextToSend,
   OutboxItem,
   outboxKey,
+  readyToSend,
   rebaseOutbox,
   remove,
 } from "./connection/Outbox.ts";
 import {
   acquired,
+  checksBuild,
   elapsed,
   hasClient,
   initialConnection,
@@ -55,30 +64,12 @@ import {
   woke,
 } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
+import type { Message as MetersMessage } from "./meters/Message.ts";
+import { initial as initialMeters } from "./meters/Model.ts";
+import type { MetersPage, Model as MetersModel } from "./meters/Model.ts";
+import { meters as Meters } from "./meters/Update.ts";
 import type { Flags, Model, SentTurn } from "./Model.ts";
-import type { Message as RequestCardMessage } from "./next/card/Message.ts";
-import { OutMessage as RequestCardOutMessage } from "./next/card/Message.ts";
-import {
-  approvalsDocumentOf,
-  initial as initialRequestCard,
-} from "./next/card/Model.ts";
-import type {
-  CardContext,
-  Model as RequestCardModel,
-} from "./next/card/Model.ts";
-import { requestCard as RequestCard } from "./next/card/Update.ts";
-import type { Message as MetersMessage } from "./next/meters/Message.ts";
-import { initial as initialMeters } from "./next/meters/Model.ts";
-import type { MetersPage, Model as MetersModel } from "./next/meters/Model.ts";
-import { meters as Meters } from "./next/meters/Update.ts";
-import { OutMessage as NextShellOutMessage } from "./next/shell/Message.ts";
-import type { Message as NextShellMessage } from "./next/shell/Message.ts";
-import { initial as initialNextShell } from "./next/shell/Model.ts";
-import type {
-  Model as NextShellModel,
-  ShellContext as NextShellContext,
-} from "./next/shell/Model.ts";
-import * as NextShell from "./next/shell/Update.ts";
+import * as Chunks from "./page/Chunks.ts";
 import * as Thread from "./page/thread/index.ts";
 import { pushContextOf, samePushContext } from "./push/Context.ts";
 import { OutMessage as PushOutMessage } from "./push/Message.ts";
@@ -103,19 +94,19 @@ import {
   inform as informSettingsModel,
   update as updateSettings,
 } from "./settings/Update.ts";
-import * as Parked from "./shell/Parked.ts";
+import * as Hold from "./shell/Hold.ts";
+import { OutMessage as NextShellOutMessage } from "./shell/Message.ts";
+import type { Message as NextShellMessage } from "./shell/Message.ts";
+import { initial as initialNextShell } from "./shell/Model.ts";
+import type {
+  Model as NextShellModel,
+  ShellContext as NextShellContext,
+} from "./shell/Model.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
-import { OutMessage as SidebarOutMessage } from "./sidebar/Message.ts";
-import type { Message as SidebarMessage } from "./sidebar/Message.ts";
-import { initial as initialSidebar } from "./sidebar/Model.ts";
-import type { Model as SidebarModel, SidebarContext } from "./sidebar/Model.ts";
-import {
-  inform as informSidebarModel,
-  init as initSidebar,
-  update as updateSidebar,
-} from "./sidebar/Update.ts";
+import * as NextShell from "./shell/Update.ts";
 import { threadRowOf } from "./ThreadRow.ts";
-import { promptKey } from "./timeline/Model.ts";
+import type { QueuedSend } from "./timeline/Model.ts";
+import { promptKey, sameSends } from "./timeline/Model.ts";
 
 type UpdateReturn = Update.Return<Model, Message, Services>;
 
@@ -169,39 +160,268 @@ const isLaunching = (model: Model, threadId: ThreadId): boolean =>
     )
   );
 
-/** The prompts (`promptKey`) of the sends to `threadId` waiting in the outbox. */
-const queuedPromptsFor = (
-  model: Model,
-  threadId: Option.Option<ThreadId>
-): ReadonlyArray<string> =>
-  Option.match(threadId, {
-    onNone: () => [],
-    onSome: (id) =>
-      outboxSent(model).flatMap((item) =>
-        Predicate.isTagged(item, "Send") && item.input.threadId === id
-          ? [
-              promptKey(
-                item.input.input.text,
-                item.input.input.attachments,
-                item.input.input.skillRefs
-              ),
-            ]
-          : []
-      ),
+/** The turn an outbox item sends to `threadId`: a send's, or a launch's first message. */
+const turnTo = (
+  item: OutboxItem,
+  threadId: ThreadId
+): Option.Option<TurnInput> => {
+  if (Predicate.isTagged(item, "Send") && item.input.threadId === threadId) {
+    return Option.some(item.input.input);
+  }
+
+  return Predicate.isTagged(item, "Launch") && item.input.threadId === threadId
+    ? Option.some(item.input.initialMessage)
+    : Option.none();
+};
+
+/** The thread an outbox item sends a turn to, with that turn; none for a shell command. */
+const turnOf = (
+  item: OutboxItem
+): Option.Option<{ readonly threadId: ThreadId; readonly turn: TurnInput }> =>
+  OutboxItem.match(item, {
+    Send: ({ input }) =>
+      Option.some({ threadId: input.threadId, turn: input.input }),
+    Launch: ({ input }) =>
+      Option.some({ threadId: input.threadId, turn: input.initialMessage }),
+    Dispatch: () => Option.none(),
   });
 
-const samePrompts = Array.makeEquivalence(Equivalence.strictEqual<string>());
+/** A turn as the transcript draws it, with the names of the attachments this tab knows. */
+const queuedSendOf = (
+  model: Model,
+  item: OutboxItem,
+  turn: TurnInput,
+  sent: boolean
+): QueuedSend => {
+  const refs = model.sentTurns[outboxKey(item)]?.attachments ?? [];
+
+  return {
+    requestId: outboxKey(item),
+    text: turn.text,
+    attachments: turn.attachments,
+    attachmentNames: turn.attachments.map(
+      (attachmentId) =>
+        refs.find((ref) => ref.id === attachmentId)?.name ?? "Attachment"
+    ),
+    skillRefs: turn.skillRefs,
+    sent,
+  };
+};
+
+/**
+ * Where a queued turn's own row will come after: a launch's anywhere in its new thread, a send's
+ * past the newest entry its thread showed when this tab first saw it queued (`outboxSince`); none
+ * for a send this page did not queue, or queued while no page showed its thread's view.
+ */
+const sinceOf = (model: Model, item: OutboxItem): Option.Option<number> =>
+  Predicate.isTagged(item, "Launch")
+    ? Option.some(0)
+    : Option.flatten(Record.get(model.outboxSince, outboxKey(item)));
+
+/**
+ * `since` with the items this page did not queue (read from storage at start, or adopted from
+ * another tab) noted as having no entry to come after: the brain may already hold their rows.
+ */
+const notQueuedHere = (
+  since: Model["outboxSince"],
+  keys: ReadonlyArray<string>
+): Model["outboxSince"] =>
+  Array.reduce(keys, since, (noted, key) =>
+    Record.set(noted, key, Option.none())
+  );
+
+/** The view `page` shows of `threadId`, when it shows that thread and its view arrived. */
+const shownView = (
+  page: Thread.Model.Model,
+  threadId: string
+): Option.Option<Thread.Model.ThreadViewModel> =>
+  Option.exists(page.threadId, (id) => id === threadId)
+    ? page.view
+    : Option.none();
+
+/**
+ * Whether `send`'s own row has come in `state`: a user row past `since` with its words,
+ * attachments and skills, or, once the brain acknowledged it, its words in the brain's queue
+ * (`pi.inbox`), which the composer lists from then on. A send first seen before its thread's view
+ * arrived, or one this page did not queue, has no `since`: it is matched only once acknowledged,
+ * then against any row, so it never waits for a row that came before it was seen.
+ */
+const hasCome = (
+  state: Thread.Model.ThreadViewModel,
+  send: QueuedSend,
+  since: Option.Option<number>
+): boolean => {
+  if (Option.isNone(since) && !send.sent) {
+    return false;
+  }
+
+  const key = promptKey(send.text, send.attachments, send.skillRefs);
+
+  return (
+    userPromptsAfter(
+      state.view.entries,
+      Option.getOrElse(since, () => -1)
+    ).some(
+      (prompt) =>
+        promptKey(prompt.text, prompt.attachments, prompt.skills) === key
+    ) ||
+    (send.sent &&
+      queuedInputs(Record.get(state.view.docs, "pi.inbox")).some(
+        (input) => input.text === send.text.trim()
+      ))
+  );
+};
+
+/**
+ * The sends to `threadId` whose own row `page` does not show yet: those the brain acknowledged
+ * (`outboxEchoes`), then those still in the outbox.
+ */
+const queuedSendsFor = (
+  model: Model,
+  page: Thread.Model.Model,
+  threadId: Option.Option<ThreadId>
+): ReadonlyArray<QueuedSend> =>
+  Option.match(threadId, {
+    onNone: () => [],
+    onSome: (id) => {
+      const state = shownView(page, id);
+
+      const pending = (send: QueuedSend, since: Option.Option<number>) =>
+        !Option.exists(state, (shown) => hasCome(shown, send, since));
+
+      const echoes = model.outboxEchoes.flatMap((awaited) =>
+        awaited.threadId === id && pending(awaited.send, awaited.since)
+          ? [awaited.send]
+          : []
+      );
+
+      const queued = outboxSent(model).flatMap((item) =>
+        Option.match(turnTo(item, id), {
+          onNone: () => [],
+          onSome: (turn) => {
+            const send = queuedSendOf(model, item, turn, false);
+
+            return pending(send, sinceOf(model, item)) ? [send] : [];
+          },
+        })
+      );
+
+      return [...echoes, ...queued];
+    },
+  });
+
+/** The newest entry of `threadId`'s view as a page of `model` shows it, when one does. */
+const newestShown = (model: Model, threadId: string): Option.Option<number> =>
+  Array.findFirst([model.thread, model.scratchThread], (page) =>
+    Option.flatMap(shownView(page, threadId), (state) =>
+      Option.fromUndefinedOr(state.view.entries.at(-1)?.id)
+    )
+  );
+
+/**
+ * Keeps the pending rows' bookkeeping for the thread `page` shows: notes where each send this page
+ * queued starts (`outboxSince`) in the update that first sees it, as none for good when no page
+ * showed its thread's view then (a view that comes later may already hold its row), forgets the
+ * records of items gone from the outbox, and drops the acknowledged sends whose row came or whose
+ * launch failed. `left` is the thread the page is leaving, whose acknowledged sends are dropped:
+ * their rows show as the brain's once the page is back.
+ */
+const trackSends = (
+  model: Model,
+  page: Thread.Model.Model,
+  left: Option.Option<string>
+): Model => {
+  const noted: { [key: string]: Option.Option<number> } = Record.filter(
+    model.outboxSince,
+    (_, key) => model.outbox.some((item) => outboxKey(item) === key)
+  );
+
+  for (const item of model.outbox) {
+    if (
+      Predicate.isTagged(item, "Send") &&
+      !Record.has(noted, outboxKey(item))
+    ) {
+      noted[outboxKey(item)] = newestShown(model, item.input.threadId);
+    }
+  }
+
+  const failed = (threadId: string): boolean =>
+    Option.exists(model.shell, (shell) =>
+      shell.threads.some(
+        (thread) => thread.id === threadId && thread.activity === "failed"
+      )
+    );
+
+  const echoes = model.outboxEchoes.filter(
+    (awaited) =>
+      !Option.contains(left, awaited.threadId) &&
+      !(awaited.launch && failed(awaited.threadId)) &&
+      !Option.exists(shownView(page, awaited.threadId), (state) =>
+        hasCome(state, awaited.send, awaited.since)
+      )
+  );
+
+  const sameSince =
+    Record.size(noted) === Record.size(model.outboxSince) &&
+    Record.every(noted, (value, key) => model.outboxSince[key] === value);
+
+  return sameSince && echoes.length === model.outboxEchoes.length
+    ? model
+    : modifyFields(model, {
+        outboxSince: () => (sameSince ? model.outboxSince : noted),
+        outboxEchoes: () => echoes,
+      });
+};
+
+/**
+ * Keeps an acknowledged send (or launch) to a thread a page shows as a pending row, marked sent,
+ * until its own row comes (`hasCome`): the acknowledgement and the row reach the page in either
+ * order, and a launch's first message waits behind its workspace for as long as that takes.
+ */
+const awaitEcho = (model: Model, key: string): Model["outboxEchoes"] => {
+  const awaited = Option.flatMap(
+    Array.findFirst(model.outbox, (item) => outboxKey(item) === key),
+    (item) =>
+      Option.map(
+        Option.filter(turnOf(item), ({ threadId }) =>
+          [model.thread, model.scratchThread].some((page) =>
+            Option.contains(page.threadId, threadId)
+          )
+        ),
+        ({ threadId, turn }) => ({
+          threadId,
+          send: queuedSendOf(model, item, turn, true),
+          since: sinceOf(model, item),
+          launch: Predicate.isTagged(item, "Launch"),
+        })
+      )
+  );
+
+  return Option.isSome(awaited) &&
+    !model.outboxEchoes.some(({ send }) => send.requestId === key)
+    ? [...model.outboxEchoes, awaited.value]
+    : model.outboxEchoes;
+};
 
 /** Tells the thread page the routed thread and the connection; a no-op when nothing changed. */
-const syncThread: Step = (model) => {
-  const threadId = routedThreadId(model.route);
+const syncThread: Step = (current) => {
+  const threadId = routedThreadId(current.route);
+
+  const model = trackSends(
+    current,
+    current.thread,
+    Option.filter(
+      current.thread.threadId,
+      (id) => !Option.contains(threadId, id)
+    )
+  );
 
   const context: Thread.PageContext = {
     threadId,
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
     launching: Option.exists(threadId, (id) => isLaunching(model, id)),
-    queuedPrompts: queuedPromptsFor(model, threadId),
+    queuedSends: queuedSendsFor(model, model.thread, threadId),
   };
 
   const unchanged =
@@ -209,7 +429,7 @@ const syncThread: Step = (model) => {
     model.thread.epoch === context.epoch &&
     model.thread.hasClient === context.hasClient &&
     model.thread.launching === context.launching &&
-    samePrompts(model.thread.timeline.queuedPrompts, context.queuedPrompts);
+    sameSends(model.thread.timeline.queuedSends, context.queuedSends);
 
   return unchanged ? { model } : informThread(model, context);
 };
@@ -221,29 +441,34 @@ const persist: Step = (model) => ({
 });
 
 /**
- * Sends the outbox's head when the connection is live, nothing is in flight, and no item is
- * waiting out its resend backoff.
+ * Sends each lane's head when the connection is live, unless that lane has an item in flight or
+ * waiting out its resend backoff (`readyToSend`).
  */
-const sendNext: Step = (model) =>
-  Option.match(
-    Option.filter(
-      nextToSend(
-        outboxSent(model),
-        model.outboxInFlight,
-        isLive(model.connection)
-      ),
-      () => Option.isNone(model.outboxResend)
-    ),
-    {
-      onNone: () => ({ model }),
-      onSome: (item) => ({
-        model: modifyFields(model, {
-          outboxInFlight: () => Option.some(outboxKey(item)),
-        }),
-        commands: [SendOutboxItem({ epoch: model.connection.epoch, item })],
-      }),
-    }
+const sendNext: Step = (model) => {
+  const ready = readyToSend(
+    outboxSent(model),
+    model.outboxInFlight,
+    model.outboxResend,
+    isLive(model.connection)
   );
+
+  return ready.length === 0
+    ? { model }
+    : {
+        model: modifyFields(model, {
+          outboxInFlight: (inFlight) => [...inFlight, ...ready.map(outboxKey)],
+        }),
+        commands: ready.map((item) =>
+          SendOutboxItem({ epoch: model.connection.epoch, item })
+        ),
+      };
+};
+
+/** `keys` without `key`. */
+const without = (
+  keys: ReadonlyArray<string>,
+  key: string
+): ReadonlyArray<string> => Array.filter(keys, (other) => other !== key);
 
 /** The thread page's Messages; a Retry from the transcript joins the outbox. */
 const foldThreadMessage = Update.foldChild({
@@ -273,13 +498,17 @@ const enterBackoff: Step = (model) => {
     model: modifyFields(model, {
       connection: () => next.connection,
       hello: () => Option.none(),
-      outboxInFlight: () => Option.none(),
-      // The next connection sends the head at once.
-      outboxResend: () => Option.none(),
+      outboxInFlight: () => [],
+      // The next connection sends each lane's head at once.
+      outboxResend: () => [],
     }),
     commands: Option.match(next.wait, {
       onNone: () => [],
-      onSome: (wait) => [WaitForBackoff(wait)],
+      // Dials refused a few times in a row may be a server that moved to another protocol.
+      onSome: (wait) =>
+        checksBuild(wait.attempt)
+          ? [WaitForBackoff(wait), CheckServerBuild()]
+          : [WaitForBackoff(wait)],
     }),
   };
 };
@@ -294,76 +523,6 @@ const writeComposer = (model: Model, composer: Model["composer"]): Model =>
   composer === model.composer
     ? model
     : modifyFields(model, { composer: () => composer });
-
-/** Queues each shell command in order. */
-const enqueueAll = (
-  model: Model,
-  commands: ReadonlyArray<ShellCommand>
-): Model["outbox"] => {
-  let next = model.outbox;
-
-  for (const command of commands) {
-    next = enqueueDispatch(next, command, model.outboxInFlight);
-  }
-
-  return next;
-};
-
-const toGotSidebarMessage = (message: SidebarMessage): Message =>
-  Message.GotSidebarMessage({ message });
-
-const readSidebar = (model: Model): Option.Option<SidebarModel> =>
-  Option.some(model.sidebar);
-
-const writeSidebar = (model: Model, sidebar: SidebarModel): Model =>
-  modifyFields(model, { sidebar: () => sidebar });
-
-/** The draft the route names, when it names one. */
-const routedDraftId = (route: AppRoute): Option.Option<string> =>
-  AppRoute.match(route, {
-    Hero: () => Option.none(),
-    Thread: () => Option.none(),
-    Draft: ({ draftId }) => Option.some(draftId),
-    Settings: () => Option.none(),
-    Usage: () => Option.none(),
-    NotFound: () => Option.none(),
-  });
-
-/** What the sidebar hands up: shell commands for the outbox. */
-const foldSidebarOutMessage = (outMessage: SidebarOutMessage): Step =>
-  SidebarOutMessage.match<Step>(outMessage, {
-    RequestedDispatch:
-      ({ commands }) =>
-      (model) =>
-        Update.combine(
-          modifyFields(model, { outbox: () => enqueueAll(model, commands) }),
-          [persist, sendNext]
-        ),
-  });
-
-const foldSidebarMessage = Update.foldChild({
-  update: updateSidebar,
-  read: readSidebar,
-  write: writeSidebar,
-  toParentMessage: toGotSidebarMessage,
-  foldOutMessage: foldSidebarOutMessage,
-});
-
-const informSidebar = Update.foldChild({
-  update: informSidebarModel,
-  read: readSidebar,
-  write: writeSidebar,
-  toParentMessage: toGotSidebarMessage,
-  foldOutMessage: foldSidebarOutMessage,
-});
-
-const startSidebar = Update.foldChildStep({
-  update: () => initSidebar(),
-  read: readSidebar,
-  write: writeSidebar,
-  toParentMessage: toGotSidebarMessage,
-  foldOutMessage: foldSidebarOutMessage,
-});
 
 const toGotPushMessage = (message: PushMessage): Message =>
   Message.GotPushMessage({ message });
@@ -414,6 +573,7 @@ const syncPush: Step = (model) => {
     hello: model.hello,
     shell: model.shell,
     openThreadId: routedThreadId(model.route),
+    scratchThreadId: model.nextShell.scratch.threadId,
   });
 
   return samePushContext(model.push.context, context)
@@ -465,46 +625,17 @@ const syncSettings: Step = (model) => {
     : informSettings(model, context);
 };
 
-const toGotParkedMessage = (message: Parked.Message): Message =>
-  Message.GotParkedMessage({ message });
-
-const readParked = (model: Model): Option.Option<Parked.Model> =>
-  Option.some(model.parked);
-
-const writeParked = (model: Model, parked: Parked.Model): Model =>
-  modifyFields(model, { parked: () => parked });
-
-const foldParkedMessage = Update.foldChild({
-  update: Parked.update,
-  read: readParked,
-  write: writeParked,
-  toParentMessage: toGotParkedMessage,
-});
-
-const informParked = Update.foldChild({
-  update: Parked.inform,
-  read: readParked,
-  write: writeParked,
-  toParentMessage: toGotParkedMessage,
-});
-
 const sameRow = Option.makeEquivalence<object>((left, right) => left === right);
 
-/** Tells the hold banner the open thread's shell row and the connection, when they changed. */
-const syncParked: Step = (model) => {
+/** Tells the hold banner the open thread's shell row, when it changed. */
+const syncHold: Step = (model) => {
   const thread = Option.flatMap(routedThreadId(model.route), (id) =>
     threadRowOf(model.shell, id)
   );
 
-  const connected = hasClient(model.connection);
-
-  const unchanged =
-    model.parked.hasClient === connected &&
-    sameRow(model.parked.thread, thread);
-
-  return unchanged
+  return sameRow(model.hold.thread, thread)
     ? { model }
-    : informParked(model, { thread, hasClient: connected });
+    : { model: modifyFields(model, { hold: () => ({ thread }) }) };
 };
 
 const toGotMetersMessage = (message: MetersMessage): Message =>
@@ -557,26 +688,60 @@ const syncMeters: Step = (model) => {
     : informMeters(model, context);
 };
 
-/** Tells the sidebar the shell, the open page and the connection, when they changed. */
-const syncSidebar: Step = (model) => {
-  const current = model.sidebar.context;
+const toGotChunkMessage = (message: Chunks.Message): Message =>
+  Message.GotChunkMessage({ message });
 
-  const context: SidebarContext = {
-    shell: model.shell,
-    openThreadId: routedThreadId(model.route),
-    openDraftId: routedDraftId(model.route),
-    scratchThreadId: model.nextShell.scratch.threadId,
-    connection: model.connection.state._tag,
-  };
+const readChunks = (model: Model): Option.Option<Chunks.Model> =>
+  Option.some(model.chunks);
 
-  const unchanged =
-    current.shell === context.shell &&
-    Equal.equals(current.openThreadId, context.openThreadId) &&
-    Equal.equals(current.openDraftId, context.openDraftId) &&
-    Equal.equals(current.scratchThreadId, context.scratchThreadId) &&
-    current.connection === context.connection;
+const writeChunks = (model: Model, chunks: Chunks.Model): Model =>
+  modifyFields(model, { chunks: () => chunks });
 
-  return unchanged ? { model } : informSidebar(model, context);
+/**
+ * A chunk its view waited for failed: the notice bar says which, and the view closes, so its
+ * control's next tap opens it again and asks again (a touch screen has no Escape).
+ */
+const foldChunkOutMessage = (outMessage: Chunks.OutMessage): Step =>
+  Chunks.OutMessage.match<Step>(outMessage, {
+    FailedChunk:
+      ({ chunk }) =>
+      (model) => ({
+        model: modifyFields(Chunks.closeWaiting(chunk, model), {
+          notice: () => Option.some(Chunks.failureNotice(chunk)),
+        }),
+      }),
+  });
+
+const foldChunkMessage = Update.foldChild({
+  update: Chunks.update,
+  read: readChunks,
+  write: writeChunks,
+  toParentMessage: toGotChunkMessage,
+  foldOutMessage: foldChunkOutMessage,
+});
+
+/** Starts the warm-up that fetches every chunk once the page is interactive. */
+const startChunks = Update.foldChildStep({
+  update: Chunks.start,
+  read: readChunks,
+  write: writeChunks,
+  toParentMessage: toGotChunkMessage,
+});
+
+const wantChunks = Update.foldChild({
+  update: Chunks.want,
+  read: readChunks,
+  write: writeChunks,
+  toParentMessage: toGotChunkMessage,
+});
+
+/** Asks for the chunks of the views the page now draws (W-8: they are not in the entry). */
+const syncChunks: Step = (model) => {
+  const wanted = Chunks.wantedChunks(model);
+
+  return Chunks.isServed(model.chunks, wanted)
+    ? { model }
+    : wantChunks(model, wanted);
 };
 
 const toGotNextShellMessage = (message: NextShellMessage): Message =>
@@ -607,13 +772,84 @@ const followDraftProject = (projectId: ProjectId): Step =>
     toParentMessage: toGotNextShellMessage,
   });
 
-/** What the composer hands up: a turn for the outbox (and where to go), a request for the add-project picker, or the draft's chosen project. */
+/**
+ * The notice raised when storage holds drafts or outbox items this build cannot decode (another
+ * build saved them), once for each (`readShared` in `storage/TabChanges.ts`).
+ */
+export const UNREAD_STORED_NOTICE =
+  "Some drafts or unsent changes were saved by another version of Cairn and cannot be used here. They stay on this device, though writing in one of those threads replaces its old draft.";
+
+const toGotRequestCardMessage = (message: RequestCardMessage): Message =>
+  Message.GotRequestCardMessage({ message });
+
+const readRequestCard = (model: Model): Option.Option<RequestCardModel> =>
+  Option.some(model.requestCard);
+
+const writeRequestCard = (model: Model, requestCard: RequestCardModel): Model =>
+  modifyFields(model, { requestCard: () => requestCard });
+
+// What the composer reports, told to the request card for its typing guard (W-1).
+
+const composerFocusedCard = Update.foldChildStep({
+  update: RequestCard.composerFocused,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
+
+const composerBlurredCard = Update.foldChildStep({
+  update: RequestCard.composerBlurred,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
+
+const composerTypedCard = Update.foldChildStep({
+  update: RequestCard.composerTyped,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
+
+const composerSentCard = Update.foldChildStep({
+  update: RequestCard.composerSent,
+  read: readRequestCard,
+  write: writeRequestCard,
+  toParentMessage: toGotRequestCardMessage,
+});
+
+/**
+ * After a turn the scratch overlay's composer sent (U-16): a launch's thread is the overlay's from
+ * now on, which the shell keeps; a send changes nothing there.
+ */
+const adoptScratchLaunch =
+  (item: SentTurn["item"]): Step =>
+  (model) =>
+    Predicate.isTagged(item, "Launch")
+      ? Update.foldChildStep({
+          update: NextShell.adoptScratchThread(item.input.threadId),
+          read: readNextShell,
+          write: writeNextShell,
+          toParentMessage: toGotNextShellMessage,
+        })(model)
+      : { model };
+
+/**
+ * What the composer hands up: a turn for the outbox (and where to go), a request for the
+ * add-project picker, the draft's chosen project, saved drafts it cannot show, or its focus and
+ * keystrokes, which the request card's typing guard reads.
+ */
 const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
   ComposerOutMessage.match<Step>(outMessage, {
     Submitted:
-      ({ attachments, item, navigateTo }) =>
-      (model) =>
-        Update.combine(
+      ({ attachments, draftKey, item, navigateTo }) =>
+      (model) => {
+        // The scratch overlay's turn, by the draft it was sent from, whether the overlay still
+        // shows or not: a refusal puts it back in the overlay, and the thread its first message
+        // launches is the overlay's from now on (U-16).
+        const fromScratch = draftKey === SCRATCH_DRAFT_KEY;
+
+        return Update.combine(
           modifyFields(model, {
             outbox: (outbox) => enqueue(outbox, item),
             sentTurns: (sent) =>
@@ -623,12 +859,14 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
                     item,
                     attachments,
                     acknowledged: false,
-                    fromScratch: false,
+                    fromScratch,
                   }),
           }),
           [
             persist,
             sendNext,
+            (next) =>
+              fromScratch ? adoptScratchLaunch(item)(next) : { model: next },
             (next) => ({
               model: next,
               commands: Option.match(navigateTo, {
@@ -636,11 +874,21 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
                 onSome: (url) => [NavigateInternal({ url })],
               }),
             }),
+            composerSentCard,
           ]
-        ),
+        );
+      },
     // The shell owns the add-project picker, and its rail follows the draft's project.
     RequestedAddProject: () => openShellAddProject,
     ChoseDraftProject: ({ projectId }) => followDraftProject(projectId),
+    FoundUnreadDrafts: () => (model) => ({
+      model: modifyFields(model, {
+        notice: () => Option.some(UNREAD_STORED_NOTICE),
+      }),
+    }),
+    Focused: () => composerFocusedCard,
+    Blurred: () => composerBlurredCard,
+    Typed: () => composerTypedCard,
   });
 
 const foldComposerMessage = Update.foldChild({
@@ -657,15 +905,6 @@ const informComposer = Update.foldChild({
   write: writeComposer,
   toParentMessage: toGotComposerMessage,
 });
-
-const toGotRequestCardMessage = (message: RequestCardMessage): Message =>
-  Message.GotRequestCardMessage({ message });
-
-const readRequestCard = (model: Model): Option.Option<RequestCardModel> =>
-  Option.some(model.requestCard);
-
-const writeRequestCard = (model: Model, requestCard: RequestCardModel): Model =>
-  modifyFields(model, { requestCard: () => requestCard });
 
 /** Folds a request card Message through the card's update. */
 const foldRequestCardMessage = Update.foldChild({
@@ -728,6 +967,16 @@ const syncComposer: Step = (model) => {
     threadView: Option.map(model.thread.view, (state) => state.view),
     defaults: Option.map(model.hello, (hello) => hello.defaults),
     usage: model.settings.usage,
+    // The shown scratch overlay's composer is the one composer (U-16).
+    scratch: model.nextShell.scratch.isOpen
+      ? Option.some({
+          threadId: model.nextShell.scratch.threadId,
+          threadView: Option.map(
+            model.scratchThread.view,
+            (state) => state.view
+          ),
+        })
+      : Option.none(),
   });
 
   return Composer.contextChanged(model.composer, context)
@@ -788,22 +1037,23 @@ const turnThread = (item: SentTurn["item"]): Option.Option<ThreadId> =>
     Dispatch: () => Option.none(),
   });
 
-/** The words a turn sends. */
-const turnText = (item: SentTurn["item"]): string =>
-  OutboxItem.match(item, {
-    Send: ({ input }) => input.input.text,
-    Launch: ({ input }) => input.initialMessage.text,
-    Dispatch: () => "",
-  });
-
 /** True when `threadId` is the scratch overlay's thread. */
 const isScratchThread = (model: Model, threadId: ThreadId): boolean =>
   Option.contains(model.nextShell.scratch.threadId, threadId);
 
-/** Puts a refused scratch turn back in the scratch overlay's field. */
-const restoreScratchTurn = (text: string, launched: boolean): Step =>
+/** Puts a refused scratch turn back in the scratch overlay's composer draft (U-16). */
+const restoreComposerScratchTurn = Update.foldChild({
+  update: (composer: Model["composer"], sent: SentTurn) =>
+    Composer.restoreScratchTurn(composer, sent.item, sent.attachments),
+  read: readComposer,
+  write: writeComposer,
+  toParentMessage: toGotComposerMessage,
+});
+
+/** A scratch launch failed: the shell lets its thread go, so the next turn launches a new one. */
+const forgetScratchLaunch = (threadId: ThreadId): Step =>
   Update.foldChildStep({
-    update: NextShell.restoreScratchTurn(text, launched),
+    update: NextShell.forgetScratchLaunch(threadId),
     read: readNextShell,
     write: writeNextShell,
     toParentMessage: toGotNextShellMessage,
@@ -842,10 +1092,12 @@ const restoreSent =
           });
 
           if (sent.fromScratch) {
-            return restoreScratchTurn(
-              turnText(sent.item),
-              Option.isSome(launchedThread(sent))
-            )(forgotten);
+            return Update.combine(forgotten, [
+              restoreComposerScratchTurn(sent),
+              ...Option.toArray(
+                Option.map(launchedThread(sent), forgetScratchLaunch)
+              ),
+            ]);
           }
 
           const reopen = Option.filter(launchedThread(sent), (threadId) =>
@@ -934,7 +1186,7 @@ const followLaunches: Step = (model) =>
   });
 
 /**
- * What the `next` shell hands up: an item for the outbox (and where to go), a path to open, or a
+ * What the shell hands up: an item for the outbox (and where to go), a path to open, or a
  * new draft in the project the rail picked.
  */
 const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
@@ -945,18 +1197,6 @@ const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
         Update.combine(
           modifyFields(model, {
             outbox: (outbox) => enqueue(outbox, item),
-            // A scratch turn is kept like the composer's, so a refusal puts it back in the overlay.
-            sentTurns: (sent) =>
-              Option.exists(turnThread(item), (threadId) =>
-                isScratchThread(model, threadId)
-              )
-                ? Record.set(sent, outboxKey(item), {
-                    item,
-                    attachments: [],
-                    acknowledged: false,
-                    fromScratch: true,
-                  })
-                : sent,
           }),
           [
             persist,
@@ -973,6 +1213,16 @@ const foldNextShellOutMessage = (outMessage: NextShellOutMessage): Step =>
     RequestedNavigate:
       ({ url }) =>
       (model) => ({ model, commands: [NavigateInternal({ url })] }),
+    RequestedDispatch:
+      ({ command }) =>
+      (model) =>
+        Update.combine(
+          modifyFields(model, {
+            outbox: (outbox) =>
+              enqueueDispatch(outbox, command, model.outboxInFlight),
+          }),
+          [persist, sendNext]
+        ),
     // The draft holds its project before its page opens, so the hero launches where the rail says.
     RequestedProjectDraft:
       ({ projectId, draftId }) =>
@@ -1000,7 +1250,7 @@ const informNextShell = Update.foldChild({
   toParentMessage: toGotNextShellMessage,
 });
 
-/** Tells the `next` shell the shell, the route, the connection and the clock, when they changed. */
+/** Tells the shell the shell, the route, the connection and the clock, when they changed. */
 const syncNextShell: Step = (model) => {
   const current = model.nextShell.context;
 
@@ -1008,9 +1258,12 @@ const syncNextShell: Step = (model) => {
     shell: model.shell,
     route: model.route,
     hasClient: hasClient(model.connection),
+    isLive: isLive(model.connection),
     defaults: Option.map(model.hello, (hello) => hello.defaults),
-    nowMs: model.sidebar.nowMs,
-    isMac: model.sidebar.isMac,
+    // The rail and the list show the project the hero names (U-21).
+    draftProjectId: isDraftTarget(model.composer)
+      ? Option.map(draftProject(model.composer), (project) => project.id)
+      : Option.none(),
   };
 
   // The first update starts the shell, even with nothing new to tell.
@@ -1019,9 +1272,9 @@ const syncNextShell: Step = (model) => {
     current.shell === context.shell &&
     Equal.equals(current.route, context.route) &&
     current.hasClient === context.hasClient &&
+    current.isLive === context.isLive &&
     Equal.equals(current.defaults, context.defaults) &&
-    current.nowMs === context.nowMs &&
-    current.isMac === context.isMac;
+    Equal.equals(current.draftProjectId, context.draftProjectId);
 
   return unchanged ? { model } : informNextShell(model, context);
 };
@@ -1065,19 +1318,28 @@ const foldScratchThreadMessage = Update.foldChild({
 });
 
 /**
- * Tells the scratch thread's page which thread the `next` shell's overlay shows: its scratch thread
+ * Tells the scratch thread's page which thread the shell's overlay shows: its scratch thread
  * while the overlay is open, none while it is hidden, so a hidden overlay holds no stream.
  */
-const syncScratchThread: Step = (model) => {
-  const { scratch } = model.nextShell;
+const syncScratchThread: Step = (current) => {
+  const { scratch } = current.nextShell;
   const threadId = scratch.isOpen ? scratch.threadId : Option.none();
+
+  const model = trackSends(
+    current,
+    current.scratchThread,
+    Option.filter(
+      current.scratchThread.threadId,
+      (id) => !Option.contains(threadId, id)
+    )
+  );
 
   const context: Thread.PageContext = {
     threadId,
     epoch: model.connection.epoch,
     hasClient: hasClient(model.connection),
     launching: Option.exists(threadId, (id) => isLaunching(model, id)),
-    queuedPrompts: queuedPromptsFor(model, threadId),
+    queuedSends: queuedSendsFor(model, model.scratchThread, threadId),
   };
 
   const unchanged =
@@ -1085,10 +1347,7 @@ const syncScratchThread: Step = (model) => {
     model.scratchThread.epoch === context.epoch &&
     model.scratchThread.hasClient === context.hasClient &&
     model.scratchThread.launching === context.launching &&
-    samePrompts(
-      model.scratchThread.timeline.queuedPrompts,
-      context.queuedPrompts
-    );
+    sameSends(model.scratchThread.timeline.queuedSends, context.queuedSends);
 
   return unchanged ? { model } : informScratchThread(model, context);
 };
@@ -1108,10 +1367,14 @@ const step = (received: Message): Step =>
             commands: [LoadExternal({ href })],
           }),
         }),
+    // A navigation is a new open: a page whose chunk failed asks for it again.
     ChangedUrl:
       ({ url }) =>
       (model) => ({
-        model: modifyFields(model, { route: () => urlToAppRoute(url) }),
+        model: modifyFields(model, {
+          route: () => urlToAppRoute(url),
+          chunks: Chunks.navigated,
+        }),
       }),
     CompletedNavigateInternal: () => (model) => ({ model }),
     CompletedLoadExternal: () => (model) => ({ model }),
@@ -1141,6 +1404,7 @@ const step = (received: Message): Step =>
           connection: (connection) => elapsed(connection, epoch, attempt),
         }),
       }),
+    CheckedServerBuild: () => (model) => ({ model }),
     WokeUp: () => (model) => ({
       model: modifyFields(model, { connection: woke }),
     }),
@@ -1188,13 +1452,12 @@ const step = (received: Message): Step =>
           modifyFields(model, {
             outbox: (outbox) => remove(outbox, key),
             outboxInFlight: (inFlight) =>
-              isCurrentEpoch(model, epoch) && Option.contains(inFlight, key)
-                ? Option.none()
-                : inFlight,
-            outboxAttempt: () => 0,
-            outboxResend: (waiting) =>
-              Option.filter(waiting, (waitingKey) => waitingKey !== key),
+              isCurrentEpoch(model, epoch) ? without(inFlight, key) : inFlight,
+            outboxAttempt: (attempts) => Record.remove(attempts, key),
+            outboxResend: (waiting) => without(waiting, key),
             sentTurns: (turns) => settleAcknowledged(turns, key),
+            // Its pending row stays until its own row comes, not only until this answer.
+            outboxEchoes: () => awaitEcho(model, key),
           }),
           [persist, sendNext, followLaunches]
         ),
@@ -1206,22 +1469,24 @@ const step = (received: Message): Step =>
         }
 
         if (retryable && transport) {
-          // Left at the head; the connection reports the loss and the next live one sends it.
+          // Left at its lane's head; the connection reports the loss and the next live one sends it.
           return {
-            model: modifyFields(model, { outboxInFlight: () => Option.none() }),
+            model: modifyFields(model, {
+              outboxInFlight: (inFlight) => without(inFlight, key),
+            }),
           };
         }
 
         if (retryable) {
           // The brain answered "not now" on a socket that stays up: sent again after a backoff
-          // (or by the next connection, if this one drops first).
-          const attempt = model.outboxAttempt + 1;
+          // (or by the next connection, if this one drops first); its lane waits, the others go on.
+          const attempt = (model.outboxAttempt[key] ?? 0) + 1;
 
           return {
             model: modifyFields(model, {
-              outboxInFlight: () => Option.none(),
-              outboxAttempt: () => attempt,
-              outboxResend: () => Option.some(key),
+              outboxInFlight: (inFlight) => without(inFlight, key),
+              outboxAttempt: (attempts) => Record.set(attempts, key, attempt),
+              outboxResend: (waiting) => [...without(waiting, key), key],
             }),
             commands: [WaitToResend({ epoch, key, attempt })],
           };
@@ -1242,8 +1507,8 @@ const step = (received: Message): Step =>
         ) {
           return sendNext(
             modifyFields(model, {
-              outboxInFlight: () => Option.none(),
-              outboxAttempt: () => 0,
+              outboxInFlight: (inFlight) => without(inFlight, key),
+              outboxAttempt: (attempts) => Record.remove(attempts, key),
               outboxLeft: (left) => [...left, key],
               notice: () => Option.some(message),
             })
@@ -1253,8 +1518,8 @@ const step = (received: Message): Step =>
         return Update.combine(
           modifyFields(model, {
             outbox: (outbox) => remove(outbox, key),
-            outboxInFlight: () => Option.none(),
-            outboxAttempt: () => 0,
+            outboxInFlight: (inFlight) => without(inFlight, key),
+            outboxAttempt: (attempts) => Record.remove(attempts, key),
             notice: () => Option.some(message),
           }),
           [
@@ -1272,8 +1537,12 @@ const step = (received: Message): Step =>
       (model) =>
         // A timer from an earlier epoch, or for an item no longer waiting, sends nothing; the wait
         // over, the head goes (this item, unless another tab's answer removed it meanwhile).
-        isCurrentEpoch(model, epoch) && Option.contains(model.outboxResend, key)
-          ? sendNext(modifyFields(model, { outboxResend: () => Option.none() }))
+        isCurrentEpoch(model, epoch) && model.outboxResend.includes(key)
+          ? sendNext(
+              modifyFields(model, {
+                outboxResend: (waiting) => without(waiting, key),
+              })
+            )
           : { model },
     // Saving merges into what the other tab wrote, and its answer brings those items here.
     ChangedStoredOutbox: () => persist,
@@ -1291,6 +1560,7 @@ const step = (received: Message): Step =>
             const keys = outbox.map(outboxKey);
             const held = model.outbox.map(outboxKey);
             const settled = Array.filter(held, (key) => !keys.includes(key));
+            const adopting = Array.filter(keys, (key) => !held.includes(key));
 
             return Update.combine(
               modifyFields(model, {
@@ -1298,8 +1568,9 @@ const step = (received: Message): Step =>
                 outboxStored: () => saved,
                 outboxAdopted: (adopted) => [
                   ...Array.filter(adopted, (key) => keys.includes(key)),
-                  ...Array.filter(keys, (key) => !held.includes(key)),
+                  ...adopting,
                 ],
+                outboxSince: (since) => notQueuedHere(since, adopting),
                 outboxLeft: (left) =>
                   Array.filter(left, (key) => keys.includes(key)),
                 sentTurns: (turns) =>
@@ -1323,10 +1594,6 @@ const step = (received: Message): Step =>
       ({ message: composerMessage }) =>
       (model) =>
         foldComposerMessage(model, composerMessage),
-    GotSidebarMessage:
-      ({ message: sidebarMessage }) =>
-      (model) =>
-        foldSidebarMessage(model, sidebarMessage),
     GotPushMessage:
       ({ message: pushMessage }) =>
       (model) =>
@@ -1335,10 +1602,6 @@ const step = (received: Message): Step =>
       ({ message: settingsMessage }) =>
       (model) =>
         foldSettingsMessage(model, settingsMessage),
-    GotParkedMessage:
-      ({ message: parkedMessage }) =>
-      (model) =>
-        foldParkedMessage(model, parkedMessage),
     GotNextShellMessage:
       ({ message: nextShellMessage }) =>
       (model) =>
@@ -1355,6 +1618,10 @@ const step = (received: Message): Step =>
       ({ message: metersMessage }) =>
       (model) =>
         foldMetersMessage(model, metersMessage),
+    GotChunkMessage:
+      ({ message: chunkMessage }) =>
+      (model) =>
+        foldChunkMessage(model, chunkMessage),
   });
 
 /** The root update. */
@@ -1365,15 +1632,15 @@ export const update = (model: Model, message: Message): UpdateReturn => {
     step(message),
     syncThread,
     syncComposer,
-    syncSidebar,
     syncPush,
     syncSettings,
     syncComposerSettings,
-    syncParked,
+    syncHold,
     syncNextShell,
     syncScratchThread,
     syncRequestCard,
     syncMeters,
+    syncChunks,
   ]);
 };
 
@@ -1393,23 +1660,27 @@ export const init: Runtime.RoutingApplicationInit<
       shell: Option.map(flags.boot, (boot) => boot.shell),
       outbox: flags.outbox,
       outboxStored: flags.outbox,
-      outboxInFlight: Option.none(),
-      outboxAttempt: 0,
-      outboxResend: Option.none(),
+      outboxInFlight: [],
+      outboxAttempt: {},
+      outboxResend: [],
       sentTurns: {},
+      outboxSince: notQueuedHere({}, flags.outbox.map(outboxKey)),
+      outboxEchoes: [],
       outboxAdopted: [],
       outboxLeft: [],
-      notice: Option.none(),
+      notice: flags.outboxUnread
+        ? Option.some(UNREAD_STORED_NOTICE)
+        : Option.none(),
       thread: Thread.Model.initial,
-      sidebar: initialSidebar,
       composer,
       push: initialPush,
       settings: initialSettings,
-      parked: Parked.initial,
+      hold: Hold.initial,
       nextShell: initialNextShell,
       scratchThread: Thread.Model.initial,
       requestCard: initialRequestCard,
       meters: initialMeters,
+      chunks: Chunks.initial,
     }),
     toParentMessage: toGotComposerMessage,
   });
@@ -1417,18 +1688,18 @@ export const init: Runtime.RoutingApplicationInit<
   const synced = Update.combine(started.model, [
     syncThread,
     syncComposer,
-    startSidebar,
-    syncSidebar,
     startPush,
     syncPush,
     startSettings,
     syncSettings,
     syncComposerSettings,
-    syncParked,
+    syncHold,
     syncNextShell,
     syncScratchThread,
     syncRequestCard,
     syncMeters,
+    startChunks,
+    syncChunks,
   ]);
 
   return {

@@ -29,7 +29,7 @@ import { parseArgs } from "node:util";
 
 import { ConversationId } from "@cairn/protocol/Ids";
 import type { EventName } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Tx } from "@earendil-works/pi-durable";
 import {
   defineDoc,
@@ -60,10 +60,9 @@ import {
   ExtensionOrder,
   Extensions,
 } from "../../../apps/server/src/brain/Extensions.ts";
-import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
-import { Parked } from "../../../apps/server/src/brain/Parked.ts";
+import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
-import { ReactorSet } from "../../../apps/server/src/brain/ReactorSet.ts";
+import { ReactorSet } from "../../../apps/server/src/ReactorSet.ts";
 
 const { values } = parseArgs({
   options: {
@@ -266,14 +265,13 @@ const JudgeLayer = hostLayer.pipe(
       Layer.provide(Arms.layer)
     )
   ),
-  Layer.provide(Parked.layer),
   Layer.provide(
     Extensions.fromSources([
       Effect.succeed({ order: ExtensionOrder.judge, extension: JudgeTasks }),
     ])
   ),
   Layer.provide(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 2000,
       settings: { retry: { enabled: false } },
     })

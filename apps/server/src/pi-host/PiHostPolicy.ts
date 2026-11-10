@@ -1,6 +1,6 @@
 // What the tools-only pi host may load and how each tool replays (ADR 0039). Loading a pi package
 // runs its code inside the brain, so the host loads only the packages named here, in the version
-// range named here, from the packages pi itself resolved and enabled in settings.json. Everything
+// ranges named here, from the packages pi itself resolved and enabled in settings.json. Everything
 // else the user's pi setup holds is left alone, each for a reason:
 //
 // - `pi-claude-bridge`: Cairn's bridge is native (ADR 0017).
@@ -43,8 +43,11 @@ export const piHostDirs = (root: string): PiHostDirs => ({
 export interface PiPackagePolicy {
   /** The npm name in the package's `package.json`. */
   readonly name: string;
-  /** The versions it may load, as `<major>.<minor>.x`. */
-  readonly versions: string;
+  /**
+   * The versions it may load: one `<major>.<minor>.x` range per minor someone vetted, never an
+   * open range. A range of any other form admits nothing.
+   */
+  readonly versions: ReadonlyArray<string>;
   readonly scope: InstanceScope;
   /** Flag values set on every instance before `session_start`. */
   readonly flags: (dirs: PiHostDirs) => ReadonlyMap<string, boolean | string>;
@@ -67,10 +70,24 @@ const noFlags = () => new Map<string, boolean | string>();
 
 const noEnv = () => new Map<string, string>();
 
-/** `pi-web-access`: web search and fetch. Its results map is keyed by response id, so one instance. */
+/**
+ * `pi-web-access`: web search and fetch. Its results map is keyed by response id, so one instance.
+ *
+ * Each minor is vetted against the tools-only contract before it is added: what it registers, what
+ * it runs at load, and its network destinations, child processes, file writes and dependencies.
+ *
+ * - 0.46 (2026-10-31): providers used only when named, a curl fetch option, and an upgrade notice
+ *   that writes to the agent dir only with a UI, which the host has none of.
+ * - 0.47 (2026-11-09, the registry's 0.47.0, the same bytes as the user's install): the same tools
+ *   with a reworded `proxy` description; no new load-time work beyond constants; two search
+ *   providers (`api.outcrawl.ai`, `sofya.co`) reached only when a call or `searchRouting` names
+ *   them; a `lockProxy` setting read from `~/.pi/web-search.json`; a GitHub clone's default folder
+ *   follows `TMPDIR` (still `/tmp` for the deployed unit); no new child process or dependency, and
+ *   no install script.
+ */
 const webAccess: PiPackagePolicy = {
   name: "pi-web-access",
-  versions: "0.46.x",
+  versions: ["0.46.x", "0.47.x"],
   scope: "brain",
   flags: noFlags,
   // Its fetch cache lives under ~/.pi otherwise; `PI_CODING_AGENT_DIR` stays unset, or the cache
@@ -84,7 +101,7 @@ const webAccess: PiPackagePolicy = {
 /** `pi-fff`: indexed `ffgrep` and `fffind`, bound to the folder of its `session_start`. */
 const fff: PiPackagePolicy = {
   name: "@ff-labs/pi-fff",
-  versions: "0.11.x",
+  versions: ["0.11.x"],
   scope: "folder",
   // Its frecency and history databases default to ~/.pi/agent/fff, which the host never writes.
   flags: (dirs) =>
@@ -158,7 +175,7 @@ export const decidePackage = (
 
   const found = Option.getOrElse(version, () => "unknown");
 
-  return versionInRange(found, named.versions)
+  return named.versions.some((range) => versionInRange(found, range))
     ? PackageDecision.Allowed({ policy: named })
     : PackageDecision.OutOfRange({ policy: named, version: found });
 };

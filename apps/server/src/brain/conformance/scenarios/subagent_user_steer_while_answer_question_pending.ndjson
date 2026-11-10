@@ -24,3 +24,4 @@
 {"type":"expect_view","path":["subagents",0,"status"],"equals":"working"}
 {"type":"release","label":"c3"}
 {"type":"expect_view","path":["subagents"],"equals":[{"status":"settled","settlements":2,"delivered":2,"questions":["answered"],"model":{"provider":"faux","modelId":"scripted"}}]}
+{"type":"expect_view","path":["transcript",-1],"equals":{"kind":"pi.assistant","role":"assistant","text":"src has 12 files.","images":0,"toolCalls":[],"toolName":null,"isError":null}}

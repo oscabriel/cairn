@@ -40,8 +40,7 @@
 //
 // A node runs on the model its call names (`model`, ADR 0043), checked by `ModelSpecs` right before
 // the commit that creates its child, or on the launching thread's model and level when it names
-// none. A script approved before ADR 0043 may still pass `role`: a role name there reads as no
-// model named (logged by the resolver), a model spec as named. A node that is
+// none. A node that is
 // not settled, or whose conversation is gone, cannot be resumed: the script sees `null` and the
 // council falls back to a fresh node.
 //
@@ -66,9 +65,8 @@ import { Budget, DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { MAX_SUBAGENT_DEPTH } from "@cairn/protocol/Subagents";
 import { MAX_WORKFLOW_NODES } from "@cairn/protocol/Workflows";
 import type { NodeRefusal } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   AgentChange,
   ConversationId,
@@ -87,22 +85,23 @@ import {
   UsageDoc,
 } from "@earendil-works/pi-durable";
 import { DateTime, Effect, Option, Predicate, Result, Schema } from "effect";
+import { Type } from "typebox";
 
+import type { ApprovalRequest } from "../approvals/ApprovalLedger.ts";
 import {
   approvalIdOf,
   approvalLedger,
-  Approvals,
   emitBriefApproved,
+} from "../approvals/ApprovalLedger.ts";
+import {
+  Approvals,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
 } from "../brain/CairnDocs.ts";
-import type {
-  ApprovalRecord,
-  ApprovalRequest,
-  JsonRecord,
-} from "../brain/CairnDocs.ts";
+import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
 import { ScriptSlots } from "../brain/CodeMode.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { emit } from "../brain/Events.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
@@ -112,14 +111,18 @@ import {
   readPermissions,
 } from "../brain/Permissions.ts";
 import { usageLimitOf } from "../brain/RunFailure.ts";
-import { isRoleName, parseModelSpec, specOf } from "../models/ModelSpecs.ts";
+import { ChildDoc, isLinked } from "../brain/SubagentDocs.ts";
+import type { WorkflowItemState } from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
+import { parseModelSpec, specOf } from "../models/ModelSpecs.ts";
 import {
   childThreadIdOf,
   conversationOf,
   taskOf,
 } from "../subagents/Delivery.ts";
-import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import { nodeChildTools } from "../subagents/Subagents.ts";
+import { failsVisibly } from "../subagents/TaskFailures.ts";
+import type { FailedPhase } from "../subagents/TaskFailures.ts";
 import {
   AgentCall,
   ApproveCall,
@@ -128,7 +131,6 @@ import {
   LogCall,
   PhaseCall,
   PRELUDE_VERSION,
-  ROLE_OPTION,
   RUNNABLE_PRELUDE_VERSIONS,
   VerifyCall,
 } from "./Prelude.ts";
@@ -155,14 +157,14 @@ import {
   nextIndex,
   nodeIdOf,
   nodeRequestIdOf,
-  WorkflowsDoc,
 } from "./WorkflowDocs.ts";
-import type { NodeItemState, WorkflowItemState } from "./WorkflowDocs.ts";
+import type { NodeItemState } from "./WorkflowDocs.ts";
 import { workflowGate } from "./WorkflowGate.ts";
 import {
   briefWithin,
   closeWaiting,
   isWaitingNode,
+  LaunchWatch,
   nodeBriefPayload,
   nodeBriefRecord,
 } from "./WorkflowLaunch.ts";
@@ -197,6 +199,22 @@ export const WORKFLOWS_EXTENSION = "cairn.workflows";
 
 /** The watcher task's name. */
 export const WATCH_TASK = "cairn.workflow-watch";
+
+/** How long a watcher whose wait threw sleeps before it watches its task again. */
+const WATCH_RETRY_MILLIS = 30_000;
+
+/** What a watcher watches: a node's task, or with no node the workflow's script call. */
+interface WatchInput {
+  workflowId: string;
+  nodeId: string | null;
+  target: number;
+}
+
+/** The node tool a script's `agent()` calls. */
+export const AGENT_TOOL = "agent";
+
+/** The node tool a script's `verify()` calls. */
+export const VERIFY_TOOL = "verify";
 
 /** The longest `log()` line a row keeps. */
 export const LOG_LINE_LIMIT = 2000;
@@ -254,13 +272,12 @@ export interface ResolvedNodeModel {
 
 /**
  * Resolves the model spec a node names right before the commit that creates its child (2D's
- * dispatch rule, ADR 0043): a named model, checked for readiness; or none for a role name a script
- * approved before ADR 0043 still passes, which runs on the launching thread's model (the resolver
- * logs it). Fails with the words the script's `agent.full` shows.
+ * dispatch rule, ADR 0043): a named model, checked for readiness. Fails with the words the script's
+ * `agent.full` shows.
  */
 export type ModelResolver = (
   spec: string
-) => Promise<Result.Result<Option.Option<ResolvedNodeModel>, string>>;
+) => Promise<Result.Result<ResolvedNodeModel, string>>;
 
 /** Where a judge may hold a node, so its `kill -9` lands there. */
 export type HoldPoint =
@@ -300,6 +317,8 @@ export const NO_WORKFLOW_FAULTS: WorkflowFaultSet = {
 
 /** What the extension is built with. */
 export interface WorkflowToolOptions {
+  /** Runs the tools' and tasks' Effects and writes their lines, on the extension layer's context. */
+  readonly run: DurableRunner;
   readonly resolveModel: ModelResolver;
   /** Parses and dry-runs a proposed script (`WorkflowPlan`), for `workflow_plan`. */
   readonly plan: PlanAccess;
@@ -411,8 +430,7 @@ interface Dispatch {
   readonly label: string;
   readonly phase: Option.Option<string>;
   /**
-   * The model spec the call names: `model`, or the `role` of a script approved before ADR 0043.
-   * None runs on the launching thread's model and level.
+   * The model spec the call names (`model`). None runs on the launching thread's model and level.
    */
   readonly spec: Option.Option<string>;
   readonly schema: Option.Option<JsonRecord>;
@@ -436,14 +454,20 @@ type Reserved =
   | { readonly kind: "waiting"; readonly row: NodeItemState }
   | { readonly kind: "problem"; readonly text: string };
 
+/** The admission line's words for what the reserve found or made. */
+const admissionMessage: Readonly<Record<Reserved["kind"], string>> = {
+  running: "workflow node admitted",
+  ended: "workflow node already ended",
+  waiting: "workflow node still waits for its own brief",
+  problem: "workflow node not admitted",
+};
+
 /** What the reserve commit is given, read before it. */
 interface ReserveInput {
   readonly nodeId: string;
   readonly caller: Caller;
   readonly dispatch: Dispatch;
   readonly model: Result.Result<ResolvedNodeModel, string>;
-  /** The launching thread's model: what a role name in a stored envelope grants. */
-  readonly threadModel: Option.Option<ModelRef>;
   /** The launching thread's effective mode: the child's. */
   readonly mode: RuntimeMode;
   /** The launching conversation's cwd, where the child works (shared checkout); none without one. */
@@ -478,7 +502,7 @@ const reservedRow = (
     index: nextIndex(row),
     requestId: nodeRequestIdOf(row.id, nodeId),
     briefId: null,
-    role: Result.match(input.model, {
+    model: Result.match(input.model, {
       onFailure: () => Option.getOrNull(dispatch.spec),
       onSuccess: (model) => model.spec,
     }),
@@ -541,7 +565,6 @@ const askOf = (row: WorkflowItemState, input: ReserveInput) => ({
   readonly: input.dispatch.readonly,
   mode: input.mode,
   dispatched: dispatchedCount(row),
-  threadModel: input.threadModel,
 });
 
 /**
@@ -587,7 +610,7 @@ const nodeRecordOf = (
       workflowName: row.name,
       label: dispatch.label,
       prompt: promptOf(dispatch),
-      spec: Option.filter(dispatch.spec, (spec) => !isRoleName(spec)),
+      spec: dispatch.spec,
       effort: dispatch.effort,
       readonly: dispatch.readonly,
       mode: input.mode,
@@ -680,16 +703,11 @@ const linkChild = async (
 
 /**
  * The model spec a node call names, or the refusal the script sees (no row is written for it):
- * `model` as written, refused when it is a role name or no spec; else the `role` of a script
- * approved before ADR 0043 (prelude version 2 sends every script's there, and version 3 passes
- * one on), which the resolver reads.
+ * `model` as written, refused when it is no spec; none when the call names none.
  */
 const namedSpecOf = (
   tool: string,
-  given: {
-    readonly model: Option.Option<string>;
-    readonly role: Option.Option<string>;
-  }
+  given: { readonly model: Option.Option<string> }
 ): Result.Result<Option.Option<string>, string> => {
   const model = Option.filter(
     Option.map(given.model, (text) => text.trim()),
@@ -697,18 +715,7 @@ const namedSpecOf = (
   );
 
   if (Option.isNone(model)) {
-    return Result.succeed(
-      Option.filter(
-        Option.map(given.role, (text) => text.trim()),
-        (text) => text !== ""
-      )
-    );
-  }
-
-  if (isRoleName(model.value)) {
-    return Result.fail(
-      `${tool}(): model \`${summaryOf(model.value)}\` is a role, and roles were removed. Name a model as provider/modelId[:level] (the models tool lists them), or leave model out to run on the launching thread's model.`
-    );
+    return Result.succeed(Option.none());
   }
 
   return Option.match(
@@ -940,7 +947,7 @@ const launchRecordOf = async (
 export const workflowExtension = (
   options: WorkflowToolOptions
 ): CairnExtension => {
-  const { resolveModel, faults, plan, holdRetryMillis, push } = options;
+  const { run, resolveModel, faults, plan, holdRetryMillis, push } = options;
 
   /** Each child's responses read so far, for the meter (WorkflowBudget.ts). */
   const cache = new SpendCache();
@@ -952,7 +959,7 @@ export const workflowExtension = (
   ): Promise<A> =>
     faults.deafToStop
       ? await work
-      : await untilStopped(context.abortSignal, work);
+      : await untilStopped(run, context.abortSignal, work);
 
   /** A judge's hold point, which a stop ends. */
   const hold = async (
@@ -1096,17 +1103,76 @@ export const workflowExtension = (
     return made;
   };
 
+  /**
+   * A watcher whose phase threw (O-3, `TaskFailures.ts`). While the task it watches still runs (its
+   * wait threw), it sleeps `WATCH_RETRY_MILLIS` and watches again, so a script that still runs is
+   * never ended under it. Once that task ended, its node ends `failed` as `endNode` ends one, with
+   * the failure as its error and the event the row follows (its spend uncounted: the meter's reads
+   * may be what threw), or its workflow ends as a script that faulted, so no row stays `running`
+   * for a task that ended.
+   */
+  const watchFailed = async (
+    tx: Tx,
+    failed: FailedPhase<WatchInput, { phase: "wait" }>
+  ): Promise<NextTaskState<{ phase: "wait" }, null>> => {
+    const { workflowId, nodeId, target } = failed.input;
+
+    // Table reads first.
+    const watched = await tx.task(taskOf(target));
+
+    if (watched !== undefined && watched.state.status !== "terminal") {
+      return {
+        status: "sleeping",
+        until: failed.at + WATCH_RETRY_MILLIS,
+        checkpoint: { phase: "wait" },
+      };
+    }
+
+    const ledger = await tx.doc(WorkflowsDoc, failed.conversationId);
+    const approvals = await tx.doc(Approvals, failed.conversationId);
+    const row = ledger.items[workflowId];
+
+    if (row !== undefined && nodeId !== null) {
+      await endNode(
+        tx,
+        row,
+        nodeId,
+        {
+          status: "faulted",
+          error: {
+            message: `Cairn could not record how it ended: ${failed.why}`,
+          },
+        },
+        failed.at,
+        new Map()
+      );
+    }
+
+    if (row !== undefined && nodeId === null) {
+      await endWorkflow(
+        tx,
+        row,
+        { status: "faulted", isError: true, text: failed.why },
+        failed.at,
+        approvals.items
+      );
+      slots.delete(workflowId);
+      meters.delete(workflowId);
+    }
+
+    return {
+      status: "terminal",
+      outcome: { status: "completed", result: null },
+    };
+  };
+
   /** Records how a node's task or a script call ended, once that task is terminal. */
-  const Watch = defineTask<
-    { workflowId: string; nodeId: string | null; target: number },
-    { phase: "wait" },
-    null
-  >({
+  const Watch = defineTask<WatchInput, { phase: "wait" }, null>({
     name: WATCH_TASK,
     version: 1,
     initial: () => ({ phase: "wait" }),
     phases: {
-      wait: async (task, runtime, context) => {
+      wait: failsVisibly(watchFailed)(async (task, runtime, context) => {
         const { workflowId, nodeId, target } = task.input;
         const settled = await runtime.waitForTask(taskOf(target), context);
         const { outcome } = settled.state;
@@ -1160,12 +1226,22 @@ export const workflowExtension = (
           context
         );
 
+        run.line(nodeId === null ? "workflow ended" : "workflow node ended", {
+          event: "workflow_watch",
+          conversationId: runtime.conversationId,
+          taskId: runtime.taskId,
+          workflowId,
+          nodeId,
+          target,
+          outcome: outcome.status,
+        });
+
         // The script call ended, so its workflow takes no more nodes: its slots and meter go.
         if (nodeId === null) {
           slots.delete(workflowId);
           meters.delete(workflowId);
         }
-      },
+      }),
     },
     abort: async (_task, runtime, context) => {
       await runtime.commit(
@@ -1289,6 +1365,17 @@ export const workflowExtension = (
       }
 
       const problem = await beginRow(api, caller.success, call.value, context);
+
+      run.line(
+        Option.isNone(problem) ? "workflow started" : "workflow not started",
+        {
+          event: "workflow_begin",
+          conversationId: api.conversationId,
+          taskId: api.taskId,
+          workflowId,
+          started: Option.isNone(problem),
+        }
+      );
 
       return Option.match(problem, {
         onSome: (text) => refused(`workflow_begin refused: ${text}.`),
@@ -1686,6 +1773,26 @@ export const workflowExtension = (
       context
     );
 
+    run.line(
+      Option.match(held, {
+        onNone: () => "workflow node not held",
+        // A rerun that finds this attempt already counted goes on at once.
+        onSome: (until) =>
+          until === 0
+            ? "workflow node hold already counted"
+            : "workflow node held for its usage limit",
+      }),
+      {
+        event: "workflow_node_held",
+        conversationId: api.conversationId,
+        taskId: api.taskId,
+        workflowId,
+        nodeId,
+        attempt,
+        until: Option.getOrNull(held),
+      }
+    );
+
     if (Option.isNone(held)) {
       return false;
     }
@@ -1849,35 +1956,29 @@ export const workflowExtension = (
     threadModel: Option.Option<ModelRef>,
     threadLevel: string | undefined
   ): Promise<Result.Result<ResolvedNodeModel, string>> => {
-    const named = Option.isSome(dispatch.spec)
-      ? await resolveModel(dispatch.spec.value)
-      : Result.succeed(Option.none<ResolvedNodeModel>());
+    if (Option.isSome(dispatch.spec)) {
+      return await resolveModel(dispatch.spec.value);
+    }
 
-    return Result.flatMap(named, (found) =>
-      Option.match(found, {
-        onSome: (resolved) => Result.succeed(resolved),
-        onNone: () =>
-          Option.match(threadModel, {
-            onNone: () =>
-              Result.fail(
-                'the launching thread runs on no model; name one with model: "provider/modelId[:level]"'
-              ),
-            onSome: (model) => {
-              const thinkingLevel = Option.filter(
-                Option.fromUndefinedOr(threadLevel),
-                isThinkingLevel
-              );
+    return Option.match(threadModel, {
+      onNone: () =>
+        Result.fail(
+          'the launching thread runs on no model; name one with model: "provider/modelId[:level]"'
+        ),
+      onSome: (model) => {
+        const thinkingLevel = Option.filter(
+          Option.fromUndefinedOr(threadLevel),
+          isThinkingLevel
+        );
 
-              return Result.succeed<ResolvedNodeModel>({
-                spec: specOf(model, thinkingLevel),
-                provider: model.provider,
-                modelId: model.modelId,
-                thinkingLevel,
-              });
-            },
-          }),
-      })
-    );
+        return Result.succeed<ResolvedNodeModel>({
+          spec: specOf(model, thinkingLevel),
+          provider: model.provider,
+          modelId: model.modelId,
+          thinkingLevel,
+        });
+      },
+    });
   };
 
   /** What the reserve commit needs from outside it: the node's model and the thread's mode. */
@@ -1916,7 +2017,7 @@ export const workflowExtension = (
       known === undefined || isWaitingNode(known)
         ? await nodeModelOf(dispatch, threadModel, agent.thinkingLevel)
         : Result.succeed<ResolvedNodeModel>({
-            spec: known.role ?? "",
+            spec: known.model ?? "",
             provider: known.provider ?? "",
             modelId: known.modelId ?? "",
             thinkingLevel: Option.filter(
@@ -1933,7 +2034,6 @@ export const workflowExtension = (
       caller,
       dispatch,
       model,
-      threadModel,
       mode,
       cwd: Option.filter(
         Option.fromUndefinedOr(agent.cwd),
@@ -1956,7 +2056,7 @@ export const workflowExtension = (
     input: ReserveInput,
     context: ChordContext
   ): Promise<Reserved> => {
-    const settled = await Effect.runPromise(
+    const settled = await run.promise(
       approvalLedger(api).awaitSettlement.pipe(Effect.result),
       { signal: context.abortSignal }
     );
@@ -1985,10 +2085,46 @@ export const workflowExtension = (
     const { dispatch } = input;
     const first = await reserve(api, input, context);
 
+    /**
+     * The node's lifecycle line: `message`, with how it stands (`outcome`, its row's state) and,
+     * once it has one, its child's thread and conversation, so the journal maps the node's thread
+     * to its conversation.
+     */
+    const nodeLine = (
+      message: string,
+      outcome: string,
+      row:
+        | (Pick<NodeItemState, "state"> &
+            Partial<Pick<NodeItemState, "childThreadId" | "conversationId">>)
+        | null
+    ) => {
+      run.line(message, {
+        event: "workflow_node",
+        conversationId: api.conversationId,
+        taskId: api.taskId,
+        workflowId: dispatch.workflowId,
+        nodeId: input.nodeId,
+        outcome,
+        state: row?.state ?? null,
+        childThreadId: row?.childThreadId ?? null,
+        childConversationId: row?.conversationId ?? null,
+      });
+    };
+
+    if (first.kind === "waiting") {
+      nodeLine("workflow node waits for its own brief", "waiting", null);
+    }
+
     const reserved =
       first.kind === "waiting"
         ? await awaitBrief(api, first.row, input, context)
         : first;
+
+    nodeLine(
+      admissionMessage[reserved.kind],
+      reserved.kind,
+      reserved.kind === "problem" ? null : reserved.row
+    );
 
     if (reserved.kind === "waiting") {
       const tool = dispatch.verify ? "verify" : "agent";
@@ -2050,6 +2186,12 @@ export const workflowExtension = (
       context
     );
 
+    nodeLine(
+      "workflow node settled",
+      Result.isSuccess(ending) ? "answered" : "failed",
+      Option.getOrNull(settled)
+    );
+
     if (Option.isSome(settled) && settled.value.state === "stopped") {
       return outcomeResult({
         status: "stopped",
@@ -2097,7 +2239,7 @@ export const workflowExtension = (
   };
 
   const agent = defineTool({
-    name: "agent",
+    name: AGENT_TOOL,
     description:
       "Called by the workflow prelude's agent(): runs one node of the workflow as a child conversation. Not for direct use.",
     parameters: anyObject,
@@ -2126,9 +2268,7 @@ export const workflowExtension = (
         return refused(caller.failure);
       }
 
-      // `role` reaches a node only from a script approved before ADR 0043 (the dry run refuses a
-      // new one), and `namedSpecOf` reads it.
-      const unknown = given.unknownOptions.filter((key) => key !== ROLE_OPTION);
+      const unknown = given.unknownOptions;
 
       if (unknown.length > 0) {
         return refused(`agent(): unknown options ${unknown.join(", ")}.`);
@@ -2189,7 +2329,7 @@ export const workflowExtension = (
   });
 
   const verify = defineTool({
-    name: "verify",
+    name: VERIFY_TOOL,
     description:
       "Called by the workflow prelude's verify(): checks one result against a claim in a fresh child. Not for direct use.",
     parameters: anyObject,
@@ -2301,7 +2441,7 @@ export const workflowExtension = (
         Option.map(choices, (labels) => labels.map(summaryOf))
       );
 
-      const settlement = await Effect.runPromise(
+      const settlement = await run.promise(
         Effect.gen(function* () {
           yield* ledger.ask(request);
 
@@ -2485,7 +2625,7 @@ export const workflowExtension = (
     extension: defineExtension({
       name: WORKFLOWS_EXTENSION,
       tools: [
-        planTool(plan),
+        planTool(plan, run),
         begin,
         agent,
         verify,
@@ -2494,8 +2634,13 @@ export const workflowExtension = (
         log,
         budget,
       ],
-      hooks: [workflowGate],
-      tasks: [Watch, BudgetStopper, budgetPushTask(push ?? NO_BUDGET_PUSH)],
+      hooks: [workflowGate(run)],
+      tasks: [
+        Watch,
+        BudgetStopper,
+        LaunchWatch,
+        budgetPushTask(push ?? NO_BUDGET_PUSH),
+      ],
     }),
   };
 };

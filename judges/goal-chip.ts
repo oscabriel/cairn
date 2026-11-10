@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one step after another, on purpose */
 // The goal chip judge (plan 6H, the behaviour script `goal-chip`; ADR 0026, briefs note B6): the
-// real web client on the `next` views over a real in-process brain on the scripted
+// real web client over a real in-process brain on the scripted
 // harness (judges/fixtures/parity/CairnApp.ts), its project thread given the goal of
 // judges/fixtures/surfaces/GoalBrain.ts, at 390 px as a phone (touch, coarse pointer) and at
 // 1,440 px, each width on a fresh brain. No model provider is called.
@@ -67,6 +67,9 @@ import {
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = ["mark", "count", "state"] as const;
 

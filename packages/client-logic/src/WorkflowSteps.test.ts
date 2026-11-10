@@ -66,7 +66,7 @@ const node = (index: number, overrides: Json = {}): Row => ({
   index,
   requestId: `wf-wf-1-n-${String(100 + index)}`,
   briefId: "launch-wf-1",
-  role: "faux/scripted",
+  model: "faux/scripted",
   provider: "faux",
   modelId: "kit",
   effort: null,
@@ -486,6 +486,35 @@ describe("reading the document", () => {
     assert.deepStrictEqual(
       membersOf(group).map((member) => member.node.label),
       ["alpha:0"]
+    );
+  });
+
+  it("keeps a node whose asked model is no spec, showing the model it resolved to", () => {
+    // The brain writes the launching thread's model unchecked, and a catalog refreshed from a
+    // provider can hold an id the spec pattern does not take (here with a space).
+    const group = only(
+      groupsOf(
+        workflow([
+          node(0),
+          node(1, {
+            model: "lmstudio/qwen 2.5:high",
+            provider: "lmstudio",
+            modelId: "qwen 2.5",
+          }),
+        ])
+      )
+    );
+
+    assert.deepStrictEqual(
+      membersOf(group).map((member) => [
+        member.node.label,
+        member.node.model,
+        member.node.modelId,
+      ]),
+      [
+        ["alpha:0", "faux/scripted", "kit"],
+        ["alpha:1", null, "qwen 2.5"],
+      ]
     );
   });
 

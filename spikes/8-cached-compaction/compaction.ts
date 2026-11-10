@@ -63,7 +63,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer, Option, Ref } from "effect";
 
-import { BridgeCwd } from "../../apps/server/src/brain/BridgeCwdExtension.ts";
+import { BridgeCwd } from "../../apps/server/src/models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "../../apps/server/src/models/BridgeProvider.ts";
 
 const MODEL = process.argv[2] ?? "claude-haiku-5-5";

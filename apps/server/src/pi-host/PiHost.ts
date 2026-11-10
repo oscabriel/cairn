@@ -508,7 +508,7 @@ export class PiHost extends Context.Service<
                     event: "pi_host_skipped",
                     package: found.name,
                     version,
-                    range: policy.versions,
+                    ranges: policy.versions.join(", "),
                   })
                 ),
             }

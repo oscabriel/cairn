@@ -1,7 +1,8 @@
 // Ported from github.com/pingdotgg/t3code, packages/shared/src/composerTrigger.test.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Changed: the currency-symbol skill cases are now a
 // literal `$` only (the other symbols must not trigger), and Cairn's own cases for `/` at a line
-// start, `@` searches and the stale-range refusal are added. MIT License, Copyright (c) 2026 T3
+// start, `@` searches and the stale-range refusal are added, and the price cases of t3code's later
+// fix (1ee02417, ported from the review's description; see ComposerTrigger.ts). MIT License, Copyright (c) 2026 T3
 // Tools Inc.; the full notice is in ComposerTrigger.ts.
 
 import { assert, describe, it } from "@effect/vitest";
@@ -10,6 +11,7 @@ import { Option } from "effect";
 import {
   applyTriggerReplacement,
   detectComposerTrigger,
+  isCurrencyAmountQuery,
   replaceTextRange,
   serializeComposerFileLink,
 } from "./ComposerTrigger.ts";
@@ -122,6 +124,29 @@ describe(detectComposerTrigger, () => {
     }
   );
 
+  it.each([
+    ["keep it under $5", "$5"],
+    ["about $0.25", "$0.25"],
+    ["raise it to $1,200", "$1,200"],
+    ["$2", "$2"],
+    ["is it $30?", "$30?"],
+    ["about $5k", "$5k"],
+    ["$10/month", "$10/month"],
+  ])("reads %j as a price, not a skill query", (text) => {
+    assert.isTrue(Option.isNone(at(text)));
+  });
+
+  it("still opens the skill menu on a bare $ and on a name", () => {
+    assert.deepStrictEqual(
+      Option.map(at("Use $"), ({ kind, query }) => [kind, query]),
+      Option.some(["skill", ""])
+    );
+    assert.deepStrictEqual(
+      Option.map(at("Use $last30days"), ({ kind, query }) => [kind, query]),
+      Option.some(["skill", "last30days"])
+    );
+  });
+
   it("detects an @ file search with its query", () => {
     assert.deepStrictEqual(
       at("look at @src"),
@@ -135,6 +160,22 @@ describe(detectComposerTrigger, () => {
       Option.some("a")
     );
   });
+});
+
+describe(isCurrencyAmountQuery, () => {
+  it.each(["5", "0.25", "1,200", "5k", "30?", "10/month"])(
+    "reads %j as an amount",
+    (query) => {
+      assert.isTrue(isCurrencyAmountQuery(query));
+    }
+  );
+
+  it.each(["", "review", "last30days", "k5"])(
+    "reads %j as a skill query",
+    (query) => {
+      assert.isFalse(isCurrencyAmountQuery(query));
+    }
+  );
 });
 
 describe(serializeComposerFileLink, () => {

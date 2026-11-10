@@ -5,9 +5,9 @@
 // invocation's own `commit`.
 
 import { EntryId as ProtocolEntryId } from "@cairn/protocol/Ids";
-import type { JsonValue } from "@earendil-works/chord";
-import { copyJson } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
+import { copyJson } from "@earendil-works/chord/json";
 import type { Message, Models } from "@earendil-works/pi-ai";
 import type {
   ConversationId,
@@ -28,6 +28,9 @@ import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
 import { messageText } from "../brain/CommitFeed.ts";
 import { emit } from "../brain/Events.ts";
 import { piEntryId } from "../brain/PiIds.ts";
+import { jsonRecordOf } from "../brain/SubagentDocs.ts";
+import type { WorkflowItemState } from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import {
   NUDGE_TEXT,
   nudgeDue,
@@ -35,7 +38,6 @@ import {
   readResult,
 } from "../models/ResultTool.ts";
 import { conversationOf } from "../subagents/Delivery.ts";
-import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
 import { isObjectRootSchema } from "./Prelude.ts";
 import type { NodeOutcome } from "./Prelude.ts";
 import {
@@ -53,13 +55,11 @@ import {
   resultRefOf,
   settledTokens,
   usageTotals,
-  WorkflowsDoc,
 } from "./WorkflowDocs.ts";
 import type {
   NodeItemState,
   NodeReceiptState,
   UsageTotals,
-  WorkflowItemState,
 } from "./WorkflowDocs.ts";
 import { GATE_MEMO } from "./WorkflowGate.ts";
 

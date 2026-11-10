@@ -15,8 +15,16 @@ import {
 import os from "node:os";
 import path from "node:path";
 
+import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Logger, References } from "effect";
+import {
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  References,
+} from "effect";
 
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
@@ -43,6 +51,39 @@ const vapidIn = (configDir: string) =>
   Vapid.use((vapid) => Effect.succeed(vapid.keys)).pipe(
     Effect.provide(
       Vapid.layer.pipe(Layer.provide(ServerConfig.layerWith({ configDir })))
+    )
+  );
+
+/**
+ * Node's file system, except that a write which may not replace a file (`wx`) creates it empty and
+ * fills it a while later, as `fs.writeFile` does in two steps; under load that gap is wide.
+ */
+const SlowFirstWrite = Layer.effect(
+  FileSystem.FileSystem,
+  Effect.map(FileSystem.FileSystem, (fs) =>
+    FileSystem.FileSystem.of({
+      ...fs,
+      writeFileString: (file, data, options) =>
+        options?.flag === "wx"
+          ? fs
+              .writeFileString(file, "", options)
+              .pipe(
+                Effect.andThen(Effect.sleep(Duration.millis(200))),
+                Effect.andThen(fs.writeFileString(file, data))
+              )
+          : fs.writeFileString(file, data, options),
+    })
+  )
+).pipe(Layer.provide(NodeServices.layer));
+
+/** The key a brain over `SlowFirstWrite` reads or makes in `configDir`. */
+const slowWriterIn = (configDir: string) =>
+  Vapid.use((vapid) => Effect.succeed(vapid.keys)).pipe(
+    Effect.provide(
+      Vapid.layerNoDeps.pipe(
+        Layer.provide(SlowFirstWrite),
+        Layer.provide(ServerConfig.layerWith({ configDir }))
+      )
     )
   );
 
@@ -139,6 +180,19 @@ describe(Vapid, () => {
       const info = yield* Effect.promise(async () => await stat(file));
 
       assert.strictEqual(info.mode % 0o1000, 0o600);
+    }).pipe(Effect.scoped)
+  );
+
+  it.live("never lets a racing brain read the key pair half written", () =>
+    Effect.gen(function* () {
+      const dir = yield* tempDir;
+
+      const [left, right] = yield* Effect.all(
+        [slowWriterIn(dir), slowWriterIn(dir)],
+        { concurrency: 2 }
+      );
+
+      assert.strictEqual(left.publicKey, right.publicKey);
     }).pipe(Effect.scoped)
   );
 });

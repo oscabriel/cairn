@@ -26,10 +26,11 @@ import { CodeMode } from "../brain/CodeMode.ts";
 import { CodingTools } from "../brain/CodingTools.ts";
 import { Extensions } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
-import { FauxModels } from "../brain/FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam, RuntimeRequestUpdated } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { PiDurableHarness } from "../brain/PiDurableHarness.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
+import { GitVersionLive } from "../git/GitVersionLive.ts";
 import {
   EXECUTOR_EXTENSION,
   EXECUTOR_TOOL_NAMES,
@@ -64,14 +65,18 @@ const sources: ReadonlyArray<
 
 const ExtensionsLive = Extensions.fromSources(sources).pipe(
   Layer.provide(
-    Layer.mergeAll(CodingTools.layer, CodeMode.layer, ExecutorExtension.layer)
+    Layer.mergeAll(
+      CodingTools.layerNoDeps.pipe(Layer.provide(GitVersionLive)),
+      CodeMode.layer,
+      ExecutorExtension.layer
+    )
   )
 );
 
 const harness = PiDurableHarness.layer.pipe(
   Layer.provideMerge(ExtensionsLive),
   Layer.provideMerge(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 4000,
       settings: { retry: { enabled: false } },
     })
@@ -209,7 +214,7 @@ describe("the Executor extension", () => {
         assert.strictEqual(fake.calls("resume").length, 1);
         assert.deepStrictEqual(yield* unfinishedExecutorRequests, []);
       }).pipe(Effect.provide(harness)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -327,6 +332,6 @@ describe("the Executor extension", () => {
         assert.include(records, '"decidedBy":{"kind":"user"}');
         assert.notInclude(records, "xxxxxxxx");
       }).pipe(Effect.provide(harness)),
-    30_000
+    testLimit(30_000)
   );
 });

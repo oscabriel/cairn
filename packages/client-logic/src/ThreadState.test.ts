@@ -6,7 +6,7 @@
 // while the latest run failed, Waiting static and Working timed, a finished thread whose background
 // work still runs reading Waiting and receding, and a nested subagent's approval bringing its root
 // back from Working. Changed: Cairn's shell rows and its one `threadState`, which also gives the
-// category, words, tone and hold. Added: parked, a brief's Go, a child asking its parent, queued
+// category, words, tone and hold. Added: a brief's Go, a child asking its parent, queued
 // input, the holds and their order, and the label fallbacks.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
@@ -26,25 +26,22 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import {
-  ApprovalId,
-  ProjectId,
-  RunId,
-  TaskId,
-  ThreadId,
-} from "@cairn/protocol/Ids";
+import { ApprovalId, ProjectId, RunId, ThreadId } from "@cairn/protocol/Ids";
 import type { RuntimeRequestKind } from "@cairn/protocol/Policy";
 import { BARE_ROW_FIELDS, ThreadShell } from "@cairn/protocol/Shell";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
-import { shouldRecedeSidebarThread } from "./Sidebar.ts";
 import {
   pendingSubagentRequests,
   subagentRequestFor,
 } from "./SubagentRollup.ts";
+import type { SubagentRequest } from "./SubagentRollup.ts";
 import {
   HOLD_LABELS,
+  isRunLive,
+  isThreadWoke,
+  STATE_LOOKS,
   THREAD_LABELS,
   ThreadHold,
   threadHold,
@@ -55,6 +52,9 @@ import {
 const time = (iso: string) => DateTime.makeUnsafe(iso);
 
 const NOW = time("2026-04-10T12:00:00.000Z");
+
+/** A state's word: sentence case, where Go and Claude are names. */
+const SENTENCE_CASE = /^[A-Z][a-z]+(?: (?:[a-z]+|Go|Claude))*$/u;
 
 const threadId = (suffix: number) =>
   ThreadId.make(
@@ -97,7 +97,6 @@ const base = ThreadShell.make({
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   ...BARE_ROW_FIELDS,
 });
 
@@ -110,6 +109,16 @@ const request = (kind: RuntimeRequestKind) =>
   });
 
 const none = Option.none();
+
+/** The status of a row asking `own`, whose descendants ask `rolled`. */
+const status = (
+  own: Option.Option<RuntimeRequestKind>,
+  rolled: Option.Option<SubagentRequest>
+) =>
+  threadStatus(
+    { ...base, pendingRuntimeRequest: Option.flatMap(own, request) },
+    rolled
+  );
 
 const stateOf = (thread: ThreadShell) =>
   threadState(thread, { now: NOW, subagentRequest: none });
@@ -230,15 +239,6 @@ describe(threadStatus, () => {
       "ready"
     );
     assert.strictEqual(wordOf(limited), "Limited");
-    assert.isFalse(
-      shouldRecedeSidebarThread({
-        status: "limited",
-        isUnread: false,
-        isWoke: false,
-        isActive: false,
-        isSelected: false,
-      })
-    );
   });
 
   it("reports failed only while the latest run failed", () => {
@@ -260,17 +260,6 @@ describe(threadStatus, () => {
     };
 
     assert.strictEqual(threadStatus(recovered, none), "ready");
-  });
-
-  it("reports parked when a task is parked, so the row can offer a retry", () => {
-    assert.strictEqual(
-      threadStatus({ ...base, activity: "parked" }, none),
-      "parked"
-    );
-    assert.strictEqual(
-      threadStatus({ ...base, parkedTaskIds: [TaskId.make(7)] }, none),
-      "parked"
-    );
   });
 
   it("says a child asked its parent while the parent decides, before its run's work", () => {
@@ -297,25 +286,20 @@ describe(threadStatus, () => {
 });
 
 describe(threadHold, () => {
-  it("holds for a parked task first, then a spent window, then a Claude slot", () => {
+  it("holds for a spent window first, then a Claude slot", () => {
     const all: ThreadShell = {
       ...base,
       activity: "failed",
       lastErrorClass: Option.some("usage_limit"),
       waitingFor: "claude_slot",
-      parkedTaskIds: [TaskId.make(3), TaskId.make(4)],
     };
 
     assert.deepStrictEqual(
       threadHold(all),
-      Option.some(ThreadHold.Parked({ taskId: TaskId.make(3) }))
-    );
-    assert.deepStrictEqual(
-      threadHold({ ...all, parkedTaskIds: [] }),
       Option.some(ThreadHold.Limited({ resetsAt: Option.none() }))
     );
     assert.deepStrictEqual(
-      threadHold({ ...all, parkedTaskIds: [], activity: "running" }),
+      threadHold({ ...all, activity: "running" }),
       Option.some(ThreadHold.WaitingForSlot({ threadId: base.id }))
     );
     assert.isTrue(Option.isNone(threadHold(base)));
@@ -323,13 +307,10 @@ describe(threadHold, () => {
 
   it("names each hold's badge", () => {
     assert.deepStrictEqual(
-      [
-        HOLD_LABELS.Parked.word,
-        HOLD_LABELS.Limited.word,
-        HOLD_LABELS.WaitingForSlot.word,
-      ],
-      ["Parked", "Limited", "Waiting"]
+      [HOLD_LABELS.Limited.word, HOLD_LABELS.WaitingForSlot.word],
+      ["Limited", "Waiting for a Claude slot"]
     );
+    assert.strictEqual(HOLD_LABELS.Limited, STATE_LOOKS.limited);
   });
 
   it("keeps a row working under a Claude slot hold, in the held category", () => {
@@ -398,15 +379,6 @@ describe(threadState, () => {
     assert.strictEqual(state.status, "waiting");
     assert.strictEqual(state.category, "active");
     assert.deepStrictEqual(state.label, Option.some(THREAD_LABELS.waiting));
-    assert.isTrue(
-      shouldRecedeSidebarThread({
-        status: state.status,
-        isUnread: state.isUnread,
-        isWoke: false,
-        isActive: false,
-        isSelected: false,
-      })
-    );
 
     const settled = stateOf({
       ...thread,
@@ -477,13 +449,153 @@ describe(threadState, () => {
     assert.strictEqual(asking.category, "waiting-on-you");
     assert.deepStrictEqual(asking.label, Option.some(THREAD_LABELS.approval));
     assert.strictEqual(rootState([root, child, grandchild]).status, "waiting");
+
+    // A child's brief reads on its ancestors as the child's own row reads it (U-14).
+    const briefing = rootState([
+      root,
+      { ...child, pendingRuntimeRequest: request("brief") },
+    ]);
+
+    assert.strictEqual(briefing.status, "go");
+    assert.strictEqual(briefing.category, "waiting-on-you");
+    assert.deepStrictEqual(briefing.label, Option.some(THREAD_LABELS.go));
+  });
+
+  it("keeps a rolled-up order: approval, then Go, then input, own or a descendant's", () => {
+    assert.strictEqual(status(Option.none(), Option.some("go")), "go");
+    assert.strictEqual(
+      status(Option.some("user-input"), Option.some("go")),
+      "go"
+    );
+    assert.strictEqual(
+      status(Option.some("brief"), Option.some("input")),
+      "go"
+    );
+    assert.strictEqual(
+      status(Option.some("brief"), Option.some("approval")),
+      "approval"
+    );
+    assert.strictEqual(
+      status(Option.some("tool-call"), Option.some("go")),
+      "approval"
+    );
   });
 
   it("gives every label words and a tone, and no label shows a raw status", () => {
     for (const [kind, label] of Object.entries(THREAD_LABELS)) {
       assert.strictEqual(label.kind, kind);
       assert.notStrictEqual(label.word, kind);
-      assert.match(label.word, /^[A-Z][a-z]+(?: [a-z]+)*$/u);
+      assert.match(label.word, SENTENCE_CASE);
+    }
+  });
+});
+
+describe("the state table", () => {
+  it("gives each state one word in sentence case, and no two states the same word", () => {
+    const looks = Object.values(STATE_LOOKS);
+
+    for (const look of looks) {
+      assert.match(look.word, SENTENCE_CASE);
+    }
+
+    assert.strictEqual(
+      new Set(looks.map((look) => look.word)).size,
+      looks.length
+    );
+  });
+
+  it("keeps the needs-you dot for the states that wait on the user", () => {
+    const needs = Object.entries(STATE_LOOKS)
+      .filter(([, look]) => look.mark === "needs")
+      .map(([name]) => name);
+
+    assert.deepStrictEqual(needs, ["approval", "go", "input"]);
+    assert.strictEqual(STATE_LOOKS.limited.mark, "warning");
+  });
+
+  it("is what the thread labels and the holds read", () => {
+    for (const [kind, label] of Object.entries(THREAD_LABELS)) {
+      const { word, tone, mark } = STATE_LOOKS[label.kind];
+
+      assert.strictEqual(label.kind, kind);
+      assert.deepStrictEqual(
+        { word: label.word, tone: label.tone, mark: label.mark },
+        { word, tone, mark }
+      );
+    }
+
+    assert.strictEqual(
+      HOLD_LABELS.WaitingForSlot,
+      STATE_LOOKS["waiting-for-slot"]
+    );
+  });
+});
+
+describe(isRunLive, () => {
+  it("is true while a run is held or the activity is busy", () => {
+    assert.deepStrictEqual(
+      (["idle", "preparing", "running", "waiting", "failed"] as const).map(
+        (activity) => isRunLive({ activity, activeRunId: Option.none() })
+      ),
+      [false, true, true, true, false]
+    );
+    assert.isTrue(
+      isRunLive({ activity: "idle", activeRunId: Option.some(RunId.make(1)) })
+    );
+  });
+});
+
+describe(isThreadWoke, () => {
+  it("says a snooze ended unseen until the user looks", () => {
+    const woken: ThreadShell = {
+      ...base,
+      snoozedUntil: Option.some(time("2026-04-10T10:00:00Z")),
+      snoozedAt: Option.some(time("2026-04-10T09:00:00Z")),
+    };
+
+    assert.isTrue(isThreadWoke(woken, NOW));
+    assert.isFalse(
+      isThreadWoke(
+        {
+          ...woken,
+          lastVisitedAt: Option.some(time("2026-04-10T11:00:00Z")),
+        },
+        NOW
+      )
+    );
+  });
+});
+
+// ADR 0050: the shelf is fenced. Nothing draws settled or pinned, so a settle or a pin a thread
+// still carries from before the cutover changes nothing its state shows.
+describe("the fenced shelf", () => {
+  it("leaves a thread's state alone whether it is settled or pinned", () => {
+    const woke: ThreadShell = {
+      ...base,
+      snoozedUntil: Option.some(time("2026-04-10T10:00:00Z")),
+      snoozedAt: Option.some(time("2026-04-10T09:00:00Z")),
+      lastVisitedAt: Option.some(time("2026-04-10T09:30:00Z")),
+    };
+
+    const done: ThreadShell = {
+      ...base,
+      latestRunCompletedAt: Option.some(time("2026-04-10T11:00:00Z")),
+      lastVisitedAt: Option.some(time("2026-04-10T10:00:00Z")),
+    };
+
+    for (const thread of [base, woke, done]) {
+      for (const shelved of [
+        {
+          settledOverride: Option.some("settled" as const),
+          settledAt: Option.some(time("2026-04-10T11:30:00Z")),
+        },
+        { pinnedAt: Option.some(time("2026-04-10T11:30:00Z")) },
+      ]) {
+        assert.deepStrictEqual(
+          stateOf({ ...thread, ...shelved }),
+          stateOf(thread)
+        );
+      }
     }
   });
 });

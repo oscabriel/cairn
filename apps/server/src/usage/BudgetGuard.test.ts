@@ -15,6 +15,10 @@ import { TestClock } from "effect/testing";
 
 import { RuntimeRequestUpdated } from "../brain/HarnessSeam.ts";
 import { FREE_KEY, SpendScript, usageOf } from "../brain/SpendTestKit.ts";
+import {
+  eventuallyTrue as eventually,
+  slackenedTries,
+} from "../EventuallyTestKit.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import type { BudgetMode } from "./BudgetBook.ts";
 import { BudgetGuard } from "./BudgetGuard.ts";
@@ -59,24 +63,13 @@ const spend = (conversation: number, thread: typeof ROOT, tokens: number) =>
     yield* settle;
   });
 
-/** Waits (up to two seconds) until `check` holds. */
-const eventually = (check: Effect.Effect<boolean>) =>
-  Effect.gen(function* () {
-    for (let tries = 0; tries < 100; tries += 1) {
-      if (yield* check) {
-        return true;
-      }
-
-      yield* Effect.sleep(Duration.millis(20));
-    }
-
-    return false;
-  });
-
-/** Moves the test clock in 20 ms steps, up to two seconds, until `check` holds. */
+/**
+ * Moves the test clock in 20 ms steps, up to two seconds scaled by the test slack, until `check`
+ * holds.
+ */
 const eventuallyOnClock = <R>(check: Effect.Effect<boolean, never, R>) =>
   Effect.gen(function* () {
-    for (let tries = 0; tries < 100; tries += 1) {
+    for (let tries = 0; tries < slackenedTries(100); tries += 1) {
       if (yield* check) {
         return true;
       }
@@ -534,7 +527,7 @@ describe("the budget guard", () => {
         yield* (yield* BudgetGuard).declare(CHILD, tokenBudget(100), "stop");
 
         assert.isTrue(
-          (yield* Ref.get(sources.notices)).has(`${CHILD} budget-stopped-0`)
+          (yield* Ref.get(sources.notices)).has(`${CHILD} budget-stopped-1`)
         );
         assert.deepStrictEqual(
           (yield* Ref.get(guard.stops)).map((stop) => stop.threadId),
@@ -546,7 +539,7 @@ describe("the budget guard", () => {
 
         assert.isFalse(
           (yield* Ref.get(sources.notices)).has(
-            `${GRANDCHILD} budget-stopped-0`
+            `${GRANDCHILD} budget-stopped-1`
           )
         );
 
@@ -555,7 +548,7 @@ describe("the budget guard", () => {
         assert.isTrue(
           yield* eventually(
             Effect.map(Ref.get(sources.notices), (map) =>
-              map.has(`${GRANDCHILD} budget-stopped-0`)
+              map.has(`${GRANDCHILD} budget-stopped-1`)
             )
           )
         );

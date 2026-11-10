@@ -1,10 +1,10 @@
 // Ported from github.com/pingdotgg/t3code, packages/client-runtime/src/state/threadSnoozed.test.ts and
 // apps/web/src/components/Sidebar.snooze.test.ts at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept:
-// the snooze, early wake, queued start, wake label and preset cases. Changed: rows are Cairn's shell
-// rows, a session error is `activity: "failed"`, an approval or question is `pendingRuntimeRequest`,
-// and dates are built in a named zone (America/Chicago) so the calendar cases do not depend on the
-// machine's zone, and a subagent's request reaches its parent through the row's tally. Removed:
-// malformed date cases and the 12 or 24 hour setting.
+// the snooze, early wake and queued start cases. Changed: rows are Cairn's shell rows, a session
+// error is `activity: "failed"`, an approval or question is `pendingRuntimeRequest`, and a
+// subagent's request reaches its parent through the row's tally. Removed: malformed date cases, the
+// 12 or 24 hour setting, and the wake label and preset cases, which went with the classic sidebar's
+// snooze menu (ADR 0050).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -29,12 +29,8 @@ import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
 import {
-  canSnooze,
   effectiveSnoozed,
   hasQueuedTurnStart,
-  resolveSnoozePresets,
-  snoozeWakeDescription,
-  snoozeWakeLabel,
   threadRaisedHandWhileSnoozed,
   threadWokeAt,
 } from "./ThreadSettled.ts";
@@ -53,24 +49,6 @@ const SNOOZED_AT = "2026-04-10T09:00:00.000Z";
 const FUTURE_WAKE = "2026-04-11T09:00:00.000Z";
 
 const PAST_WAKE = "2026-04-10T10:00:00.000Z";
-
-const ZONE = "America/Chicago";
-
-/** A local wall-clock time in Chicago. */
-const local = (
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute = 0
-) =>
-  DateTime.makeZonedUnsafe(
-    { year, month, day, hour, minute },
-    { timeZone: ZONE, adjustForTimeZone: true }
-  );
-
-const inChicago = (at: DateTime.Utc) =>
-  DateTime.makeZonedUnsafe(at, { timeZone: ZONE });
 
 const base = ThreadShell.make({
   id: ThreadId.make("0199f0c2-6a4e-7d4c-9a6b-2b9a1f3c4d01"),
@@ -108,7 +86,6 @@ const base = ThreadShell.make({
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   ...BARE_ROW_FIELDS,
 });
 
@@ -246,7 +223,7 @@ describe("a snooze and the server's rule", () => {
     assert.isTrue(Option.isNone(threadWokeAt(renamed, NOW)));
   });
 
-  it("wakes when a subagent below asks the user, and refuses a snooze while it does", () => {
+  it("wakes when a subagent below asks the user", () => {
     const asking: ThreadShell = {
       ...snoozed(FUTURE_WAKE),
       subagents: { working: 0, asking: 1, settled: 0, failed: 0 },
@@ -254,7 +231,6 @@ describe("a snooze and the server's rule", () => {
 
     assert.isFalse(effectiveSnoozed(asking, NOW));
     assert.isTrue(threadRaisedHandWhileSnoozed(asking));
-    assert.isFalse(canSnooze({ ...asking, snoozedUntil: Option.none() }, NOW));
   });
 });
 
@@ -271,33 +247,6 @@ describe(threadRaisedHandWhileSnoozed, () => {
       threadRaisedHandWhileSnoozed(pending(snoozed(FUTURE_WAKE), "user-input"))
     );
     assert.isTrue(threadRaisedHandWhileSnoozed(failed(snoozed(FUTURE_WAKE))));
-  });
-});
-
-describe(canSnooze, () => {
-  it("allows snoozing quiet and working threads alike", () => {
-    assert.isTrue(canSnooze(base, NOW));
-    assert.isTrue(canSnooze({ ...base, activity: "running" }, NOW));
-  });
-
-  it("refuses work blocked on the user", () => {
-    assert.isFalse(canSnooze(pending(base, "tool-call"), NOW));
-    assert.isFalse(canSnooze(pending(base, "user-input"), NOW));
-  });
-
-  it("refuses a queued start, the same invisible pending work rule as settle", () => {
-    assert.isFalse(
-      canSnooze(
-        { ...base, latestUserMessageAt: some("2026-04-10T11:59:30.000Z") },
-        NOW
-      )
-    );
-    assert.isTrue(
-      canSnooze(
-        { ...base, latestUserMessageAt: some("2026-04-10T11:00:00.000Z") },
-        NOW
-      )
-    );
   });
 });
 
@@ -375,157 +324,5 @@ describe(threadWokeAt, () => {
       iso(threadWokeAt(thread, NOW)),
       "2026-04-10T09:30:00.000Z"
     );
-  });
-});
-
-describe(snoozeWakeLabel, () => {
-  const now = time("2026-06-02T00:00:00.000Z");
-
-  it("formats remaining time coarsely, rounding up", () => {
-    assert.strictEqual(
-      snoozeWakeLabel(time("2026-06-02T00:30:00.000Z"), now),
-      "30m"
-    );
-    assert.strictEqual(
-      snoozeWakeLabel(time("2026-06-02T01:30:00.000Z"), now),
-      "2h"
-    );
-    assert.strictEqual(
-      snoozeWakeLabel(time("2026-06-03T02:00:00.000Z"), now),
-      "2d"
-    );
-  });
-
-  it("never reads zero or negative while still snoozed", () => {
-    assert.strictEqual(
-      snoozeWakeLabel(time("2026-06-02T00:00:30.000Z"), now),
-      "1m"
-    );
-    assert.strictEqual(
-      snoozeWakeLabel(time("2026-06-01T23:59:59.000Z"), now),
-      "now"
-    );
-  });
-});
-
-const presetIds = (now: DateTime.Zoned) =>
-  resolveSnoozePresets(now, "en-US").map((preset) => preset.id);
-
-const presetWake = (now: DateTime.Zoned, id: string) =>
-  inChicago(
-    Option.getOrThrow(
-      Option.fromUndefinedOr(
-        resolveSnoozePresets(now, "en-US").find((preset) => preset.id === id)
-      )
-    ).snoozedUntil
-  );
-
-describe(resolveSnoozePresets, () => {
-  it("offers one hour, three hours, evening, tomorrow and next week in the morning", () => {
-    const now = local(2026, 4, 8, 10);
-
-    assert.deepStrictEqual(presetIds(now), [
-      "hour",
-      "three-hours",
-      "evening",
-      "tomorrow",
-      "next-week",
-    ]);
-    assert.strictEqual(
-      DateTime.getPart(presetWake(now, "three-hours"), "hour"),
-      13
-    );
-    assert.strictEqual(
-      DateTime.getPart(presetWake(now, "evening"), "hour"),
-      18
-    );
-    assert.strictEqual(DateTime.getPart(presetWake(now, "tomorrow"), "day"), 9);
-    assert.strictEqual(
-      DateTime.getPart(presetWake(now, "tomorrow"), "hour"),
-      9
-    );
-    assert.strictEqual(
-      DateTime.getPart(presetWake(now, "next-week"), "weekDay"),
-      1
-    );
-    assert.strictEqual(
-      DateTime.getPart(presetWake(now, "next-week"), "day"),
-      13
-    );
-  });
-
-  it("labels each choice, with a time that complements the label", () => {
-    const presets = resolveSnoozePresets(local(2026, 4, 8, 10), "en-US");
-
-    assert.deepStrictEqual(
-      presets.map((preset) => preset.label),
-      ["In 1 hour", "In 3 hours", "This evening", "Tomorrow", "Next week"]
-    );
-
-    for (const preset of presets) {
-      assert.notInclude(preset.whenLabel.toLowerCase(), "tomorrow");
-    }
-
-    assert.match(presets[3]?.whenLabel ?? "", /9/u);
-    assert.match(presets[4]?.whenLabel ?? "", /Mon/u);
-  });
-
-  it("drops the evening choice once evening is near or past", () => {
-    assert.deepStrictEqual(presetIds(local(2026, 4, 8, 17, 30)), [
-      "hour",
-      "three-hours",
-      "tomorrow",
-      "next-week",
-    ]);
-    assert.deepStrictEqual(presetIds(local(2026, 4, 8, 21)), [
-      "hour",
-      "three-hours",
-      "tomorrow",
-      "next-week",
-    ]);
-  });
-
-  it("puts next week a full week out when today is Monday", () => {
-    const nextWeek = presetWake(local(2026, 4, 6, 10), "next-week");
-
-    assert.strictEqual(DateTime.getPart(nextWeek, "weekDay"), 1);
-    assert.strictEqual(DateTime.getPart(nextWeek, "day"), 13);
-  });
-
-  it("drops next week on Sundays, when it lands on the same Monday as tomorrow", () => {
-    const now = local(2026, 8, 30, 7, 1);
-
-    assert.deepStrictEqual(presetIds(now), [
-      "hour",
-      "three-hours",
-      "evening",
-      "tomorrow",
-    ]);
-    assert.strictEqual(
-      DateTime.getPart(presetWake(now, "tomorrow"), "weekDay"),
-      1
-    );
-  });
-
-  it("keeps tomorrow at 9 AM across a daylight-saving change", () => {
-    // Clocks move back in Chicago early on 1 November 2026.
-    const tomorrow = presetWake(local(2026, 10, 31, 23, 30), "tomorrow");
-
-    assert.strictEqual(DateTime.getPart(tomorrow, "day"), 1);
-    assert.strictEqual(DateTime.getPart(tomorrow, "hour"), 9);
-  });
-});
-
-describe(snoozeWakeDescription, () => {
-  const now = local(2026, 4, 8, 10);
-
-  const describeWake = (at: DateTime.Zoned) =>
-    snoozeWakeDescription(DateTime.toUtc(at), now, "en-US");
-
-  it("uses the bare time today, tomorrow next day, the weekday within the week", () => {
-    assert.notInclude(describeWake(local(2026, 4, 8, 18)), "tomorrow");
-    assert.include(describeWake(local(2026, 4, 9, 9)), "tomorrow");
-    assert.match(describeWake(local(2026, 4, 13, 9)), /Mon/u);
-    assert.match(describeWake(local(2026, 4, 20, 9)), /Apr 20/u);
   });
 });

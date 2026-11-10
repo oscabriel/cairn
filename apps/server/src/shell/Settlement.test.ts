@@ -72,7 +72,6 @@ const baseShell: ThreadShell = {
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   ...BARE_ROW_FIELDS,
 };
 
@@ -94,7 +93,15 @@ const oneSettledChild = (delivered: number) =>
     items: {
       "call-1": {
         status: "settled",
-        settlements: [{ outcome: "completed" }],
+        settlements: [
+          {
+            seq: 1,
+            outcome: "completed",
+            answerEntry: null,
+            reportedAt: 1,
+            inputs: [],
+          },
+        ],
         delivered,
       },
     },
@@ -324,27 +331,45 @@ const run = <A, E>(
     )
   );
 
-/** Thread 1, created now, then `days` of quiet; whether the sweep settled it. */
-const settledAfterQuiet = (days: number) =>
+/** Whether thread 1 is settled now. */
+const isSettled = Effect.gen(function* () {
+  const threads = yield* ThreadRows;
+  const found = yield* threads.get(testThreadId(1));
+
+  return Option.exists(found, (each) =>
+    Option.contains(each.shell.settledOverride, "settled")
+  );
+});
+
+/** Thread 1, created now, then `days` of quiet, then a sweep when `sweeps`; whether it settled. */
+const settledAfterQuiet = (days: number, sweeps = true) =>
   Effect.gen(function* () {
     const sink = yield* EventSink;
-    const threads = yield* ThreadRows;
+    const settlement = yield* Settlement;
     const { projectId, command } = createProject(1);
 
     yield* sink.commitCommand(command);
     yield* sink.commitCommand(createThread(projectId, 1));
     yield* TestClock.adjust(Duration.days(days));
 
-    const quiet = yield* threads.get(testThreadId(1));
+    if (sweeps) {
+      yield* settlement.sweep;
+    }
 
-    return Option.exists(quiet, (found) =>
-      Option.contains(found.shell.settledOverride, "settled")
-    );
+    return yield* isSettled;
   });
 
 describe("Settlement fibers", () => {
+  // Nothing draws the settled shelf since the 7A cutover, so nothing may settle a thread out of
+  // sight (ADR 0050): the layer runs only the snooze timer, and the sweep waits to be called.
+  it.effect("settles nothing on its own, however long a thread is quiet", () =>
+    Effect.gen(function* () {
+      expect(yield* run(settledAfterQuiet(10, false), 1)).toBeFalsy();
+    })
+  );
+
   it.effect(
-    "reads the auto-settle setting: 0 never settles, 1 settles after a day",
+    "reads the auto-settle setting when swept: 0 never settles, 1 settles after a day",
     () =>
       Effect.gen(function* () {
         expect(yield* run(settledAfterQuiet(10), 0)).toBeFalsy();
@@ -357,11 +382,13 @@ describe("Settlement fibers", () => {
       Effect.gen(function* () {
         const sink = yield* EventSink;
         const threads = yield* ThreadRows;
+        const settlement = yield* Settlement;
         const { projectId, command } = createProject(1);
 
         yield* sink.commitCommand(command);
         yield* sink.commitCommand(createThread(projectId, 1));
         yield* TestClock.adjust(Duration.days(2));
+        yield* settlement.sweep;
 
         const early = yield* threads.get(testThreadId(1));
 
@@ -373,6 +400,7 @@ describe("Settlement fibers", () => {
         yield* TestClock.adjust(
           Duration.days(1).pipe(Duration.sum(Duration.minutes(10)))
         );
+        yield* settlement.sweep;
 
         const late = yield* threads.get(testThreadId(1));
 
@@ -397,6 +425,7 @@ describe("Settlement fibers", () => {
       Effect.gen(function* () {
         const sink = yield* EventSink;
         const threads = yield* ThreadRows;
+        const settlement = yield* Settlement;
         const { projectId, command } = createProject(1);
 
         yield* sink.commitCommand(command);
@@ -408,6 +437,7 @@ describe("Settlement fibers", () => {
           })
         );
         yield* TestClock.adjust(Duration.days(4));
+        yield* settlement.sweep;
 
         const thread = yield* threads.get(testThreadId(1));
 

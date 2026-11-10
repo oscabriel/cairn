@@ -1,5 +1,5 @@
 // A fake Executor on 127.0.0.1, for the Executor tests and for every brain that must not hold the
-// real grant (`ExecutorLink.layerFake`: dev and judges). It serves Executor's OAuth surface
+// real grant (`FakeExecutorLink`: dev and judges). It serves Executor's OAuth surface
 // (protected-resource and authorization-server metadata, dynamic registration, PKCE code and
 // rotating refresh grants, where a reused refresh token is `invalid_grant`) and its MCP endpoint in
 // model mode, answering JSON. Sessions and pending requests live in memory, as in Executor, so
@@ -24,8 +24,19 @@ import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
 
-import { Clock, Effect, Option, Predicate, Random, Schema } from "effect";
+import {
+  Clock,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Random,
+  Schema,
+} from "effect";
 import type { Scope } from "effect";
+
+import { ExecutorGrant } from "./ExecutorGrant.ts";
+import { ExecutorLink } from "./ExecutorLink.ts";
 
 type Json = Schema.MutableJson;
 
@@ -960,3 +971,17 @@ export const startFakeExecutor: Effect.Effect<
     serverUrl: `${origin}/mcp?connection=${CONNECTION}`,
   };
 });
+
+/**
+ * A link to a fake Executor on a free loopback port, with a grant in memory: dev and judge
+ * brains. Never touches the deployed grant. Needs `ServerConfig`.
+ */
+export const FakeExecutorLink = Layer.unwrap(
+  Effect.gen(function* () {
+    const fake = yield* startFakeExecutor;
+
+    return ExecutorLink.layerNoDeps.pipe(
+      Layer.provide(ExecutorGrant.layerMemory(Option.some(fake.issueGrant())))
+    );
+  })
+);

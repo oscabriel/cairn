@@ -1,0 +1,1325 @@
+{
+  "events": [
+    {
+      "event": "ThreadEnsured"
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "turn 1"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "turn 1 done"
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    },
+    {
+      "event": "RunStarted"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "user",
+      "text": "turn 2"
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": ""
+    },
+    {
+      "event": "MessageCommitted",
+      "role": "assistant",
+      "text": "turn 2 done"
+    },
+    {
+      "event": "RunTerminal",
+      "status": "completed",
+      "failure": null
+    }
+  ],
+  "view": {
+    "transcript": [
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "turn 1",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": [
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo"
+        ],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-1",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-2",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-3",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-4",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-5",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-6",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-7",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-8",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-9",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-10",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-11",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-12",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-13",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-14",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-15",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-16",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-17",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-18",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-19",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-20",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-21",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-22",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-23",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-24",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-25",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-26",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-27",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-28",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-29",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-30",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-31",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-32",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-33",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-34",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-35",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-36",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-37",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-38",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-39",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-40",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-41",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-42",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-43",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-44",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-45",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-46",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-47",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-48",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-49",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-50",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-51",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-52",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-53",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-54",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-55",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-56",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-57",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-58",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-59",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t1-60",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "turn 1 done",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.user",
+        "role": "user",
+        "text": "turn 2",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "",
+        "images": 0,
+        "toolCalls": [
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo",
+          "echo"
+        ],
+        "toolName": null,
+        "isError": null
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-1",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-2",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-3",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-4",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-5",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-6",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-7",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-8",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-9",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-10",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-11",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-12",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-13",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-14",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-15",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-16",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-17",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-18",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-19",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-20",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-21",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-22",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-23",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-24",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-25",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-26",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-27",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-28",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-29",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-30",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-31",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-32",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-33",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-34",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-35",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-36",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-37",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-38",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-39",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-40",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-41",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-42",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-43",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-44",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-45",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-46",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-47",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-48",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-49",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-50",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-51",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-52",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-53",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-54",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-55",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-56",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-57",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-58",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-59",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.tool-result",
+        "role": "toolResult",
+        "text": "t2-60",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": "echo",
+        "isError": false
+      },
+      {
+        "kind": "pi.assistant",
+        "role": "assistant",
+        "text": "turn 2 done",
+        "images": 0,
+        "toolCalls": [],
+        "toolName": null,
+        "isError": null
+      }
+    ],
+    "transcriptLength": 126,
+    "queue": [],
+    "queueLength": 0,
+    "running": false,
+    "approvals": [],
+    "pendingApprovals": 0,
+    "decisions": [],
+    "model": {
+      "provider": "faux",
+      "modelId": "scripted"
+    },
+    "thinkingLevel": "off"
+  }
+}

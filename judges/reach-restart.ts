@@ -53,6 +53,7 @@ import {
   Schema,
 } from "effect";
 
+import { recordOnExit } from "./lib/Record.ts";
 import type { ThrowawayCaddyError } from "./lib/ThrowawayCaddy.ts";
 import {
   DEFAULT_CADDY_IMAGE,
@@ -61,6 +62,8 @@ import {
   startCaddy,
 } from "./lib/ThrowawayCaddy.ts";
 import * as Unit from "./lib/Unit.ts";
+
+recordOnExit(import.meta);
 
 const root = path.join(import.meta.dirname, "..");
 

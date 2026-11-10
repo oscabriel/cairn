@@ -7,8 +7,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { CriterionProposal } from "@cairn/protocol/Policy";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import {
   createModels,
@@ -27,10 +27,12 @@ import {
   MemoryStorage,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { Option } from "effect";
+import { Context, Option } from "effect";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
+import { runnerOf } from "../brain/Durable.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
 import type { GoalState, JudgeRunsState } from "./GoalDocs.ts";
 import { goalsExtension } from "./GoalTools.ts";
@@ -136,7 +138,8 @@ export const openGoalKit = async (
 ): Promise<GoalKit> =>
   await openKitWith(
     options,
-    goalsExtension(options.judges, options.faults),
+    // A kit opened outside Effect: the extension runs on Effect's defaults.
+    goalsExtension(options.judges, options.faults, runnerOf(Context.empty())),
     context
   );
 
@@ -214,14 +217,17 @@ export const readRuns = async (
 ): Promise<JudgeRunsState | undefined> =>
   await kit.harness.snapshot(JudgeRunsDoc, conversation.id, context);
 
-/** Waits until every queued judge run has settled, polling every 20 ms up to `limitMs`. */
+/**
+ * Waits until every queued judge run has settled, polling every 20 ms up to `limitMs` scaled by
+ * the test slack.
+ */
 export const waitForJudges = async (
   kit: GoalKit,
   conversation: Conversation,
   limitMs: number,
   context: ChordContext
 ): Promise<boolean> => {
-  const deadline = performance.now() + limitMs;
+  const deadline = performance.now() + testLimit(limitMs);
 
   while (performance.now() < deadline) {
     // oxlint-disable-next-line no-await-in-loop -- polling until the runs settle

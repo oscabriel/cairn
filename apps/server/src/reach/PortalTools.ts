@@ -21,7 +21,6 @@ import path from "node:path";
 import { ThreadId } from "@cairn/protocol/Ids";
 import { DEFAULT_PORTAL_TTL_HOURS } from "@cairn/protocol/Reach";
 import type { PortalDetails, PortalRow } from "@cairn/protocol/Reach";
-import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
 import type {
   ToolExecutionApi,
@@ -38,13 +37,11 @@ import {
   Predicate,
   Schema,
 } from "effect";
+import { Type } from "typebox";
 
-import {
-  approvalLedger,
-  settlementText,
-  ThreadMeta,
-} from "../brain/CairnDocs.ts";
-import type { ApprovalLedgerError } from "../brain/CairnDocs.ts";
+import type { ApprovalLedgerError } from "../approvals/ApprovalLedger.ts";
+import { settlementText, approvalLedger } from "../approvals/ApprovalLedger.ts";
+import { ThreadMeta } from "../brain/CairnDocs.ts";
 import {
   callAsks,
   cutSummary,

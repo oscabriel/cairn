@@ -122,8 +122,10 @@ const userEntry = (
   decodeEntry({
     id,
     conversationId,
-    kind: "pi.user",
+    // The user's own message, as `TurnContent` records it: a `pi.user` entry is a brain input.
+    kind: "cairn.user",
     model: [{ role: "user", content: [{ type: "text", text }], timestamp }],
+    data: { from: "owner@github", attachments: [] },
   });
 
 const assistantEntry = (

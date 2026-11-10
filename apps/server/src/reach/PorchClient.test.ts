@@ -14,12 +14,8 @@ import { SqlClient } from "effect/sql";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { ArtifactPublisher } from "./ArtifactPublisher.ts";
-import {
-  makeFakePorch,
-  PorchClient,
-  PorchError,
-  PorchSettings,
-} from "./PorchClient.ts";
+import { makeFakePorch } from "./FakePorch.ts";
+import { PorchClient, PorchError, PorchSettings } from "./PorchClient.ts";
 import {
   clientScenarios,
   publisherScenarios,

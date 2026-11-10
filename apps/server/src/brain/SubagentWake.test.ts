@@ -22,6 +22,7 @@ import path from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Option, Result } from "effect";
 
+import { slackened, testLimit } from "../EventuallyTestKit.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import { runScenario } from "./conformance/HarnessConformance.ts";
 import { piDurableTargetWith } from "./conformance/Targets.ts";
@@ -49,7 +50,11 @@ const passes = (name: string, wokenDelayMillis = 0) =>
         wakeDelayMillis: WAKE_DELAY_MILLIS,
         wokenDelayMillis,
       }),
-      { timeout: Duration.seconds(5), mutations: new Set() }
+      {
+        timeout: slackened(Duration.seconds(5)),
+        mutations: new Set(),
+        awaitAtRest: false,
+      }
     );
 
     assert.deepStrictEqual(outcome.failure, Option.none());
@@ -59,24 +64,24 @@ describe("a subagent's wake, held before its submit", () => {
   it.live(
     "two children settling together while their parent runs queue one wake",
     () => passes("two_children_one_wake"),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
     "a wake decided before the user stopped the parent does not start it again",
     () => passes("wake_after_parent_stop"),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
     "a declined brief's tell held past the user's stop does not start the parent again",
     () => passes("tell_after_parent_stop"),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
     "a child settling while another child's wake runs its idle parent wakes the parent again",
     () => passes("wake_after_idle_wake", WOKEN_DELAY_MILLIS),
-    30_000
+    testLimit(30_000)
   );
 });

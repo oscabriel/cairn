@@ -2,13 +2,14 @@
 // composition, with model health in reach so a test can mark a provider limited), ADR 0043:
 //
 // - a brief that names no model runs its child on the parent's model and level, and its dispatch
-//   record names them;
+//   record names them, and the registry decodes when that model's id holds `~` (an OpenRouter
+//   alias);
 // - a named `provider/modelId:level` is the child's model and level (`pi.agent`), as its dispatch
 //   record names;
 // - a named model that is not ready is refused at the ask with its reason, and a role name
-//   (`@worker`) from a new call is refused as removed;
-// - a model that was ready at the ask but not at Go starts nothing, and the parent is told once;
-// - a brief recorded before ADR 0043 that names `@worker` runs on the parent's model at Go;
+//   (`@worker`) is refused as no model;
+// - a model that was ready at the ask but not at Go starts nothing, and the parent is told once,
+//   with a lifecycle line whose failure says `model` (the stored literal `role` is ADR 0052's shim);
 // - the brain-wide cap (`maxLivePerBrain`, 32 in production, 2 here) counts every thread's
 //   children: a second thread's spawn past it is refused, while its own cap of 8 is far off;
 // - a budget covering the parent at its line when the user says Go starts nothing (ADR 0036, the
@@ -22,8 +23,15 @@ import path from "node:path";
 
 import { ApprovalId, ProjectId } from "@cairn/protocol/Ids";
 import type { ConversationId, ThreadId } from "@cairn/protocol/Ids";
-import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { ModelRef } from "@cairn/protocol/Models";
+import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
+import { SubagentsDocument } from "@cairn/protocol/Subagents";
+import {
+  createModels,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -32,87 +40,115 @@ import {
   Duration,
   Effect,
   Layer,
+  Logger,
   Option,
   Predicate,
+  References,
   Ref,
+  Schema,
   Stream,
 } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { HealthOutcome, ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
-import { SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { Subagents } from "../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
 import { BudgetBook } from "../usage/BudgetBook.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
+import { brainExtensions } from "./BrainTestKit.ts";
 import { Approvals } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
 import { childWorkspacesAt } from "./conformance/Targets.ts";
 import { durable } from "./Durable.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
+import { BASE_HARNESS_SETTINGS, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
+import { SubagentsDoc } from "./SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 import { renderBriefAnswer, SubagentToolText } from "./SubagentText.ts";
 
 const PARENT = testThreadId(1);
 
+/** A default budget set in the server settings: a dollar line and a token line. */
+const SET_DEFAULT = {
+  ...DEFAULT_BUDGET,
+  maxListMicros: Micros.make(1_000_000),
+  maxTokens: 300_000,
+};
+
 const OTHER_PARENT = testThreadId(2);
 
+/** The faux model the brain runs on unless a test names another. */
+const fauxModels = FauxModels.layer({
+  tokensPerSecond: 2000,
+  settings: { retry: { enabled: false } },
+});
+
+/** An OpenRouter alias as pi-ai lists one: its id holds `~` and `/`. */
+const ALIAS_MODEL: ModelRef = {
+  provider: "openrouter",
+  modelId: "~anthropic/claude-haiku-latest",
+};
+
+/** The alias as the only model, on a faux provider of its own, scripted through `FauxModels`. */
+const aliasModels = Layer.effectContext(
+  Effect.sync(() => {
+    const faux = fauxProvider({
+      provider: ALIAS_MODEL.provider,
+      models: [
+        { id: ALIAS_MODEL.modelId, contextWindow: 200_000, reasoning: true },
+      ],
+      tokensPerSecond: 2000,
+    });
+
+    const models = createModels();
+
+    models.setProvider(faux.provider);
+
+    return Context.make(
+      ModelSource,
+      ModelSource.of({
+        models: () => models,
+        settings: () => ({
+          ...BASE_HARNESS_SETTINGS,
+          retry: { enabled: false },
+        }),
+        completeSimple: () => Effect.die("these tests make no direct calls"),
+      })
+    ).pipe(Context.add(FauxModels, FauxModels.of({ faux })));
+  })
+);
+
 /** The brain the conformance suite runs, with `ModelHealth` left in reach. */
-const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
+const brainLayer = (
+  dataDir: string,
+  tuning: SubagentToolOptions,
+  models: typeof fauxModels = fauxModels
+) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
-      ExtensionSet.withExtra([conformanceTools]).pipe(
-        Layer.provide(Subagents.layerWith(NO_SUBAGENT_FAULTS, tuning)),
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
+      brainExtensions({
+        extra: [conformanceTools],
+        subagents: Subagents.layerWith(NO_SUBAGENT_FAULTS, tuning),
+      })
     ),
     // The book the production set's gate and Go's start task read (one, by the memo map).
     Layer.provideMerge(BudgetBook.layer),
     Layer.provideMerge(ModelHealth.layerTest),
     Layer.provideMerge(SettingsStore.layerTest),
-    Layer.provideMerge(
-      ModelSource.layerFaux({
-        tokensPerSecond: 2000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
+    Layer.provideMerge(models),
     Layer.provideMerge(childWorkspacesAt(dataDir)),
     Layer.provide(BrainConfig.layerFrom(dataDir))
   );
 
 type Services = Layer.Success<ReturnType<typeof brainLayer>>;
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A, E, R>(find: Effect.Effect<Option.Option<A>, E, R>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
-  });
 
 /** What a test body gets: the brain's events so far and the parent's conversation. */
 interface Running {
@@ -131,13 +167,13 @@ const spawnCall = (description: string, model: string | null, id: string) => {
   return fauxToolCall("subagent_spawn", { description, brief, model }, { id });
 };
 
-/** Ensures `threadId` on the faux model at level `off`. */
-const ensure = (threadId: ThreadId) =>
+/** Ensures `threadId` on `model` (the faux one unless named) at level `off`. */
+const ensure = (threadId: ThreadId, model: ModelRef = FAUX_MODEL) =>
   Effect.flatMap(HarnessSeam, (seam) =>
     seam.ensureThread({
       threadId,
       projectId: ProjectId.make("models"),
-      model: FAUX_MODEL,
+      model,
       thinkingLevel: "off",
       cwd: process.cwd(),
       instructions: Option.none(),
@@ -145,18 +181,25 @@ const ensure = (threadId: ThreadId) =>
     })
   );
 
-/** Over a fresh brain: the parent thread on the faux model at level `off`, resumed. */
+/**
+ * Over a fresh brain: the parent thread at level `off` on the faux model, or on the alias when
+ * `onAlias` says so, resumed.
+ */
 const withBrain = <A, E>(
   tuning: SubagentToolOptions,
   responses: ReadonlyArray<ReturnType<typeof fauxAssistantMessage>>,
-  body: (running: Running) => Effect.Effect<A, E, Services>
+  body: (running: Running) => Effect.Effect<A, E, Services>,
+  onAlias = false
 ) =>
   Effect.acquireUseRelease(
     Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-models-"))),
     (dataDir) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const context = yield* Layer.build(brainLayer(dataDir, tuning));
+          const context = yield* Layer.build(
+            brainLayer(dataDir, tuning, onAlias ? aliasModels : fauxModels)
+          );
+
           const seam = Context.get(context, HarnessSeam);
           const { faux } = Context.get(context, FauxModels);
           const events = yield* Ref.make<ReadonlyArray<HarnessEvent>>([]);
@@ -171,9 +214,10 @@ const withBrain = <A, E>(
           faux.setResponses([...responses]);
           yield* Context.get(context, Brain).resume;
 
-          const ensured = yield* ensure(PARENT).pipe(
-            Effect.provideContext(context)
-          );
+          const ensured = yield* ensure(
+            PARENT,
+            onAlias ? ALIAS_MODEL : FAUX_MODEL
+          ).pipe(Effect.provideContext(context));
 
           return yield* body({
             events,
@@ -333,6 +377,22 @@ const dispatchOf = (parent: ConversationId, child: ConversationId) =>
     };
   });
 
+/** The annotations of every logged line, as the app's JSON logger would write them. */
+type Annotations = ReturnType<
+  typeof References.CurrentLogAnnotations.defaultValue
+>;
+
+/** A logger that keeps the annotations of every line in `lines`. */
+const keeping = (lines: Array<Annotations>) =>
+  Logger.layer(
+    [
+      Logger.make((options) => {
+        lines.push(options.fiber.getRef(References.CurrentLogAnnotations));
+      }),
+    ],
+    { mergeWithExisting: false }
+  );
+
 const go = (threadId: ThreadId, approvalId: string) =>
   Effect.flatMap(HarnessSeam, (seam) =>
     seam.respond(threadId, ApprovalId.make(approvalId), {
@@ -381,7 +441,53 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
+  );
+
+  it.live(
+    "a brief that names no model runs on a parent's model whose id holds ~ and /, and the registry decodes",
+    () =>
+      withBrain(
+        DEFAULT_TOOL_OPTIONS,
+        [
+          fauxAssistantMessage(spawnCall("Count the files", null, "c1"), {
+            stopReason: "toolUse",
+          }),
+          fauxAssistantMessage("Waiting for Go."),
+          fauxAssistantMessage("There are 3 files."),
+          fauxAssistantMessage("Noted."),
+        ],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
+            yield* ask(PARENT, "r1");
+            yield* go(PARENT, yield* firstBrief(events, PARENT));
+
+            const child = yield* firstChild(events);
+            const found = yield* dispatchOf(parent, child);
+
+            const registry = yield* read(
+              "test.registry",
+              async (harness, context) =>
+                await harness.snapshot(
+                  SubagentsDoc,
+                  piConversationId(parent),
+                  context
+                )
+            );
+
+            assert.deepStrictEqual(found.model, ALIAS_MODEL);
+            assert.deepInclude(found.dispatch?.resolved ?? {}, {
+              spec: "openrouter/~anthropic/claude-haiku-latest",
+              model: ALIAS_MODEL,
+            });
+            assert.isTrue(
+              Schema.is(SubagentsDocument)(registry),
+              "the registry does not decode as the protocol's SubagentsDocument"
+            );
+          }),
+        true
+      ),
+    testLimit(30_000)
   );
 
   it.live(
@@ -417,11 +523,78 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
-    "a named model that is not ready, or a role name, is refused at the ask with its reason",
+    "a spawn's brief freezes the server's default budget, and each limit the call asks over it",
+    () =>
+      withBrain(
+        DEFAULT_TOOL_OPTIONS,
+        [
+          fauxAssistantMessage(
+            [
+              fauxToolCall(
+                "subagent_spawn",
+                { description: "Count the files", brief: "Count them." },
+                { id: "c1" }
+              ),
+              fauxToolCall(
+                "subagent_spawn",
+                {
+                  description: "Count the lines",
+                  brief: "Count them.",
+                  max_usd: 0.25,
+                },
+                { id: "c2" }
+              ),
+            ],
+            { stopReason: "toolUse" }
+          ),
+          fauxAssistantMessage("Waiting for Go."),
+        ],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
+            const settings = yield* SettingsStore;
+
+            yield* settings.update({
+              autoSettleDays: Option.none(),
+              titleModel: Option.none(),
+              bridgeEnabled: Option.none(),
+              bridgeGenerationCap: Option.none(),
+              defaultBudget: Option.some(SET_DEFAULT),
+            });
+            yield* ask(PARENT, "r1");
+            yield* runsEnded(events, PARENT, 1);
+
+            const budgets = yield* read("test.briefs", async (harness, at) => {
+              const approvals = await harness.snapshot(
+                Approvals,
+                piConversationId(parent),
+                at
+              );
+
+              return Object.values(approvals?.items ?? {})
+                .filter((record) => record.tool === "subagent_spawn")
+                .map((record) => [
+                  record.summary,
+                  record.payload?.type === "brief"
+                    ? record.payload.budget
+                    : undefined,
+                ]);
+            });
+
+            assert.deepStrictEqual(Object.fromEntries(budgets), {
+              "Count the files": { ...SET_DEFAULT },
+              "Count the lines": { ...SET_DEFAULT, maxListMicros: 250_000 },
+            });
+          })
+      ),
+    testLimit(30_000)
+  );
+
+  it.live(
+    "a named model that is not ready, or a role name, which is no model, is refused at the ask with its reason",
     () =>
       withBrain(
         DEFAULT_TOOL_OPTIONS,
@@ -451,7 +624,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             assert.include(transcript, "it is not in the model catalog");
             assert.include(
               transcript,
-              JSON.stringify(SubagentToolText.roleRemoved("@worker")).slice(
+              JSON.stringify(SubagentToolText.modelInvalid("@worker")).slice(
                 1,
                 -1
               )
@@ -459,13 +632,15 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             assert.deepStrictEqual(yield* pendingBriefs(events, PARENT), []);
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
     "a model ready at the ask but not at Go starts nothing, and the parent is told once",
-    () =>
-      withBrain(
+    () => {
+      const lines: Array<Annotations> = [];
+
+      return withBrain(
         DEFAULT_TOOL_OPTIONS,
         [
           fauxAssistantMessage(
@@ -523,64 +698,18 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
                   Option.isNone(event.parent)
               )
             );
+
+            // The journal says why in today's words, not the retired `role`.
+            assert.deepStrictEqual(
+              lines.flatMap((line) =>
+                line.event === "subagent_brief_told" ? [line.failure] : []
+              ),
+              ["model"]
+            );
           })
-      ),
-    30_000
-  );
-
-  it.live(
-    "a brief recorded before roles were removed that names @worker runs on the parent's model",
-    () =>
-      withBrain(
-        DEFAULT_TOOL_OPTIONS,
-        [
-          fauxAssistantMessage(spawnCall("Count the files", null, "c1"), {
-            stopReason: "toolUse",
-          }),
-          fauxAssistantMessage("Waiting for Go."),
-          fauxAssistantMessage("There are 3 files."),
-          fauxAssistantMessage("Noted."),
-        ],
-        ({ events, parent }) =>
-          Effect.gen(function* () {
-            yield* ask(PARENT, "r1");
-
-            const brief = yield* firstBrief(events, PARENT);
-
-            yield* runsEnded(events, PARENT, 1);
-
-            // The pending record as a brain before ADR 0043 froze it: its brief names `@worker`.
-            yield* read("test.legacy", async (harness, context) => {
-              await harness.commit(async (tx) => {
-                const ledger = await tx.doc(
-                  Approvals,
-                  piConversationId(parent)
-                );
-
-                const payload = ledger.items[brief]?.payload;
-
-                if (payload !== undefined && payload !== null) {
-                  payload.role = "@worker";
-                }
-              }, context);
-            });
-
-            yield* go(PARENT, brief);
-
-            const child = yield* firstChild(events);
-            const found = yield* dispatchOf(parent, child);
-
-            assert.deepStrictEqual(found.model, FAUX_MODEL);
-            assert.strictEqual(found.thinkingLevel, "off");
-            assert.strictEqual(found.dispatch?.spec, null);
-            assert.deepInclude(found.dispatch?.resolved ?? {}, {
-              spec: "faux/scripted",
-              model: FAUX_MODEL,
-              thinkingLevel: "off",
-            });
-          })
-      ),
-    30_000
+      ).pipe(Effect.provide(keeping(lines)));
+    },
+    testLimit(30_000)
   );
 
   it.live(
@@ -623,7 +752,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a budget at its line when the user says Go starts nothing, and the parent is told once",
@@ -684,6 +813,6 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

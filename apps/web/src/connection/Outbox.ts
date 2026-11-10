@@ -4,15 +4,20 @@
 // each keyed by the id the client minted (`requestId` or `commandId`), so the brain's receipts make
 // a resend after an unknown outcome harmless.
 //
-// The outbox runs only while the connection is `Live`, one item at a time and in order: the head is
-// sent, an acknowledgement drops it and sends the next. A retryable failure leaves it at the head,
-// sent again after a backoff or by the next connection; any other failure drops it, because sending
-// it again cannot succeed. A shell command older than `SHELL_COMMAND_RESEND_WINDOW` is dropped
-// unsent: the brain may have forgotten its receipt, and planning it again would act on a thread
-// that has moved on since.
+// The outbox runs only while the connection is `Live`, in lanes: each thread's sends and launch wait
+// in that thread's lane, and shell commands in the shell's (a command naming a thread whose launch
+// is still waiting joins that thread's lane, so it never reaches the brain before the thread). Each
+// lane sends one item at a time and in order: its head is sent, an acknowledgement drops it and
+// sends the next, so a launch the brain holds for minutes holds only its own thread. A retryable
+// failure leaves an item at its lane's head, sent again after a backoff or by the next connection;
+// any other failure drops it, because sending it again cannot succeed. A shell command older than
+// `SHELL_COMMAND_RESEND_WINDOW` is dropped unsent: the brain may have forgotten its receipt, and
+// planning it again would act on a thread that has moved on since.
 //
 // Every tab of the browser shares the saved outbox: a save writes only the items this tab queued or
-// dropped, and another tab's write is folded in (`TabChanges.ts`).
+// dropped, and another tab's write is folded in (`TabChanges.ts`). Items are read one by one: an
+// item this build cannot decode is kept as stored and sent by a build that can, and the page says
+// it holds sends it cannot show.
 
 import { commandMintedAtMillis } from "@cairn/protocol/Ids";
 import { ThreadLaunchInput } from "@cairn/protocol/Launch";
@@ -21,17 +26,25 @@ import {
   ShellCommand,
 } from "@cairn/protocol/ShellCommands";
 import { SendInput } from "@cairn/protocol/Thread";
-import { Array, Duration, Effect, Option, Predicate, Schema } from "effect";
-import { KeyValueStore } from "effect/persistence";
+import { Array, Duration, Match, Option, Predicate, Schema } from "effect";
+import type { Effect } from "effect";
+import type { KeyValueStore } from "effect/persistence";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import {
   applyListChanges,
   listChanges,
+  persistedList,
   mergeList,
   mergeStored,
+  readShared,
 } from "../storage/TabChanges.ts";
+import type { Loaded } from "../storage/TabChanges.ts";
 
+// The saved outbox is this union as it stands, with the protocol's inputs as they are, so a change to
+// `SendInput`, `ShellCommand` or `ThreadLaunchInput` is a change to it. Add a field as optional, or a
+// literal, and an older build keeps the items it cannot decode as stored (`TabChanges.ts`); change
+// what a stored field means, or the list's outer shape, and bump `OUTBOX_STORAGE_KEY`'s version.
 /** One mutation waiting for the brain's acknowledgement. */
 export const OutboxItem = defineTaggedUnion({
   /** `thread.send`, idempotent by its input's `requestId`. */
@@ -79,7 +92,7 @@ const visitedThread = (item: OutboxItem): Option.Option<string> =>
 export const enqueueDispatch = (
   outbox: ReadonlyArray<OutboxItem>,
   command: ShellCommand,
-  inFlight: Option.Option<string>
+  inFlight: ReadonlyArray<string>
 ): ReadonlyArray<OutboxItem> => {
   const item = OutboxItem.Dispatch({ command });
 
@@ -90,7 +103,7 @@ export const enqueueDispatch = (
         Array.filter(
           outbox,
           (waiting) =>
-            Option.contains(inFlight, outboxKey(waiting)) ||
+            inFlight.includes(outboxKey(waiting)) ||
             !Option.contains(visitedThread(waiting), threadId)
         ),
         item
@@ -110,6 +123,44 @@ export const outlivedResendWindow = (
   nowMillis - commandMintedAtMillis(item.command.commandId) >
     Duration.toMillis(SHELL_COMMAND_RESEND_WINDOW);
 
+/** The shell commands' lane. */
+const SHELL_LANE = "shell";
+
+/** A thread's lane. */
+const threadLane = (threadId: string): string => `thread:${threadId}`;
+
+/** The thread a shell command names, when it names one. */
+const commandThread = (command: ShellCommand): Option.Option<string> =>
+  Predicate.hasProperty(command, "threadId") &&
+  Predicate.isString(command.threadId)
+    ? Option.some(command.threadId)
+    : Option.none();
+
+/**
+ * The lane `item` waits in within `outbox`: its thread's for a send or a launch, the shell's for a
+ * shell command, unless the command names a thread whose launch `outbox` still holds.
+ */
+export const outboxLane = (
+  item: OutboxItem,
+  outbox: ReadonlyArray<OutboxItem>
+): string =>
+  OutboxItem.match(item, {
+    Send: ({ input }) => threadLane(input.threadId),
+    Launch: ({ input }) => threadLane(input.threadId),
+    Dispatch: ({ command }) =>
+      Option.match(
+        Option.filter(commandThread(command), (threadId) =>
+          Array.some(
+            outbox,
+            (waiting) =>
+              Predicate.isTagged(waiting, "Launch") &&
+              waiting.input.threadId === threadId
+          )
+        ),
+        { onNone: () => SHELL_LANE, onSome: threadLane }
+      ),
+  });
+
 /** Removes the item with `key`: it was acknowledged, or it can never succeed. */
 export const remove = (
   outbox: ReadonlyArray<OutboxItem>,
@@ -118,41 +169,84 @@ export const remove = (
   Array.filter(outbox, (item) => outboxKey(item) !== key);
 
 /**
- * The item to send now: the head, when the connection is live and nothing is in flight. Items go
- * one at a time so the brain sees them in the order they were made.
+ * The items to send now, while the connection is live: each lane's head, unless an item of that
+ * lane is in flight (`inFlight`) or waiting out its resend backoff (`waiting`). A lane sends one
+ * item at a time, so the brain sees a thread's sends in the order they were made.
  */
-export const nextToSend = (
+export const readyToSend = (
   outbox: ReadonlyArray<OutboxItem>,
-  inFlight: Option.Option<string>,
+  inFlight: ReadonlyArray<string>,
+  waiting: ReadonlyArray<string>,
   live: boolean
-): Option.Option<OutboxItem> =>
-  live && Option.isNone(inFlight) ? Array.head(outbox) : Option.none();
+): ReadonlyArray<OutboxItem> => {
+  if (!live) {
+    return [];
+  }
 
-const OutboxJson = Schema.fromJsonString(
-  Schema.toCodecJson(Schema.Array(OutboxItem))
+  const busy = new Set(
+    Array.filter(outbox, (item) => {
+      const key = outboxKey(item);
+
+      return inFlight.includes(key) || waiting.includes(key);
+    }).map((item) => outboxLane(item, outbox))
+  );
+
+  const heads = new Map<string, OutboxItem>();
+
+  for (const item of outbox) {
+    const lane = outboxLane(item, outbox);
+
+    if (!heads.has(lane)) {
+      heads.set(lane, item);
+    }
+  }
+
+  return [...heads].flatMap(([lane, item]) => (busy.has(lane) ? [] : [item]));
+};
+
+/** The key an item has wherever it sits in the stored JSON, read even from an item that does not decode. */
+const OutboxItemKey = Schema.Union([
+  Schema.TaggedStruct("Send", {
+    input: Schema.Struct({
+      input: Schema.Struct({ requestId: Schema.String }),
+    }),
+  }),
+  Schema.TaggedStruct("Dispatch", {
+    command: Schema.Struct({ commandId: Schema.String }),
+  }),
+  Schema.TaggedStruct("Launch", {
+    input: Schema.Struct({ commandId: Schema.String }),
+  }),
+]);
+
+const decodeOutboxItemKey = Schema.decodeUnknownOption(OutboxItemKey);
+
+const unreadOutboxKey = (json: Schema.Json): Option.Option<string> =>
+  Option.map(decodeOutboxItemKey(json), (item) =>
+    Match.valueTags(item, {
+      Send: ({ input }) => input.input.requestId,
+      Dispatch: ({ command }) => command.commandId,
+      Launch: ({ input }) => input.commandId,
+    })
+  );
+
+const persistedOutbox = persistedList(
+  Schema.toCodecJson(OutboxItem),
+  outboxKey,
+  unreadOutboxKey
 );
 
-const decodeOutboxJson = Schema.decodeEffect(OutboxJson);
-
-const encodeOutboxJson = Schema.encodeEffect(OutboxJson);
-
 /**
- * Reads the saved outbox. A missing or unreadable value is an empty outbox: the page must start
- * even when an older build saved something this one cannot read.
+ * Reads the saved outbox, and whether to tell the user storage holds items this build cannot decode
+ * (once for each, `readShared`). Missing storage is an empty outbox; an item this build cannot
+ * decode, or a value it cannot read at all, is left as stored, so the page starts with every item it
+ * can read and never writes over the rest.
  */
-export const loadOutbox: Effect.Effect<
-  ReadonlyArray<OutboxItem>,
+export const readOutbox: Effect.Effect<
+  Loaded<ReadonlyArray<OutboxItem>>,
   never,
   KeyValueStore.KeyValueStore
-> = Effect.gen(function* () {
-  const store = yield* KeyValueStore.KeyValueStore;
-  const saved = yield* store.get(OUTBOX_STORAGE_KEY);
-
-  return yield* Option.match(Option.fromUndefinedOr(saved), {
-    onNone: () => Effect.succeed([]),
-    onSome: decodeOutboxJson,
-  });
-}).pipe(Effect.orElseSucceed(() => []));
+> = readShared(OUTBOX_STORAGE_KEY, persistedOutbox);
 
 const outboxChanges = listChanges(outboxKey);
 
@@ -174,14 +268,8 @@ export const saveOutbox = (
 > =>
   mergeStored(
     OUTBOX_STORAGE_KEY,
-    loadOutbox,
-    mergeList(outboxKey)(base, outbox),
-    (next) =>
-      Effect.gen(function* () {
-        const store = yield* KeyValueStore.KeyValueStore;
-
-        yield* store.set(OUTBOX_STORAGE_KEY, yield* encodeOutboxJson(next));
-      })
+    persistedOutbox,
+    mergeList(outboxKey)(base, outbox)
   );
 
 /**

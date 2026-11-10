@@ -144,7 +144,6 @@ const ROW_DEFAULTS: ThreadShell = {
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   lineage: Option.none(),
   subagents: { working: 0, asking: 0, settled: 0, failed: 0 },
   goal: Option.none(),
@@ -207,11 +206,38 @@ describe("subagent request rollup", () => {
       pendingRuntimeRequest: request("brief"),
     };
 
-    assert.deepStrictEqual(subagentRequestOf(child), Option.some("approval"));
+    assert.deepStrictEqual(subagentRequestOf(child), Option.some("go"));
     assert.deepStrictEqual(
       [...pendingSubagentRequests([root, child])],
-      [[root.id, "approval"]]
+      [[root.id, "go"]]
     );
+  });
+
+  it("rolls a brief up as Go: below an approval, above a question (U-14)", () => {
+    const root = top("root");
+
+    const briefing = {
+      ...subagentOf("child", root.id),
+      pendingRuntimeRequest: request("brief"),
+    };
+
+    const asking = {
+      ...subagentOf("sibling", root.id),
+      pendingRuntimeRequest: request("user-input"),
+    };
+
+    const approving = {
+      ...subagentOf("review", root.id),
+      pendingRuntimeRequest: request("tool-call"),
+    };
+
+    const rollup = (threads: ReadonlyArray<RollupRow>) =>
+      pendingSubagentRequests(threads).get(root.id);
+
+    assert.strictEqual(rollup([root, asking, briefing]), "go");
+    assert.strictEqual(rollup([root, briefing, asking]), "go");
+    assert.strictEqual(rollup([root, briefing, approving]), "approval");
+    assert.strictEqual(rollup([root, approving, briefing]), "approval");
   });
 
   it("brings a nested subagent's approval to every ancestor, over input", () => {
@@ -246,12 +272,28 @@ describe("subagent request rollup", () => {
       asking.map((thread) => thread.id),
       [grandchild.id]
     );
-    assert.strictEqual(childInputsTitle(asking), "Subagent needs approval");
+    assert.strictEqual(childInputsTitle(asking), "Subagent · Approval");
     assert.strictEqual(
       childInputsTitle([approving, sibling]),
       "2 subagents need you"
     );
-    assert.strictEqual(childInputsTitle([sibling]), "Subagent needs input");
+    assert.strictEqual(childInputsTitle([sibling]), "Subagent · Input");
+  });
+
+  it("names a child's brief in the rows' word, Waiting for Go, never Approval (U-14)", () => {
+    const briefing = {
+      ...subagentOf("subagent", id("root")),
+      pendingRuntimeRequest: request("brief"),
+    };
+
+    assert.strictEqual(
+      childInputsTitle([briefing]),
+      "Subagent · Waiting for Go"
+    );
+    assert.strictEqual(
+      childInputsTitle([briefing, briefing]),
+      "2 subagents · Waiting for Go"
+    );
   });
 
   it("stops walking a lineage that loops or leaves the shell", () => {
@@ -312,7 +354,7 @@ describe("the parent banner", () => {
         found.title,
         found.request,
       ]),
-      Option.some(["Subagent needs approval", "approval"])
+      Option.some(["Subagent · Approval", "approval"])
     );
   });
 

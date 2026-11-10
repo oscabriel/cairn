@@ -22,6 +22,7 @@ import {
   RpcServer,
 } from "effect/rpc";
 
+import { slackened } from "../../apps/server/src/EventuallyTestKit.ts";
 import * as ProtocolClient from "./ProtocolClient.ts";
 
 const origin = "https://code.gneiss.run";
@@ -196,7 +197,7 @@ layer(ServerLayer, { excludeTestServices: true })("ProtocolClient", (it) => {
 
       const refused = yield* foreign
         .echo({ text: "x" })
-        .pipe(Effect.flip, Effect.timeout("3 seconds"));
+        .pipe(Effect.flip, Effect.timeout(slackened("3 seconds")));
 
       assert.instanceOf(refused, RpcClientError.RpcClientError);
 
@@ -213,7 +214,7 @@ layer(ServerLayer, { excludeTestServices: true })("ProtocolClient", (it) => {
 
       const incompatible = yield* stale
         .echo({ text: "x" })
-        .pipe(Effect.flip, Effect.timeout("3 seconds"));
+        .pipe(Effect.flip, Effect.timeout(slackened("3 seconds")));
 
       assert.instanceOf(incompatible, RpcClientError.RpcClientError);
     }).pipe(Effect.scoped)

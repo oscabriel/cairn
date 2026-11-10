@@ -28,7 +28,6 @@ import {
   ConversationId,
   EntryId,
   ProjectId,
-  TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
 import type { ModelListing } from "@cairn/protocol/Models";
@@ -50,10 +49,9 @@ import {
   HarnessBoot,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
-import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
+import { BudgetSources } from "../../../apps/server/src/usage/BudgetSources.ts";
 import type { ImportedEntry } from "../../../apps/server/src/brain/conformance/fixtures/T3Import.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
-import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
 import {
   piConversationId,
   piEntryId,
@@ -72,7 +70,7 @@ import type { ScriptedGoals } from "../../../apps/server/src/brain/ScriptedHarne
 import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
-import { ReachMachine } from "../../../apps/server/src/reach/ReachLayer.ts";
+import { ReachMachine } from "../../../apps/server/src/reach/ReachTestKit.ts";
 import { Identity } from "../../../apps/server/src/http/Identity.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import {
@@ -82,8 +80,11 @@ import {
   ThreadCreate,
 } from "../../../apps/server/src/shell/ShellCommands.ts";
 import type { ThreadActivityPatch } from "../../../apps/server/src/shell/ShellCommands.ts";
-import { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";
+import { CAIRN_USER_ENTRY } from "../../../apps/server/src/threads/TurnContent.ts";
+import type { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
+import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
+import { ScriptedGoalBook } from "../../../apps/server/src/verdicts/ScriptedGoalBook.ts";
 
 const root = path.join(import.meta.dirname, "../../..");
 
@@ -94,6 +95,9 @@ export const PARITY_THREAD_ID = ThreadId.make(
 );
 
 const PROJECT_ID = ProjectId.make("prj_parity_judge");
+
+/** Who the seeded thread's user messages are from. */
+const SEEDED_SENDER = "owner@github";
 
 /** What the Cairn half is seeded with. */
 export interface CairnSeed {
@@ -109,7 +113,7 @@ export type ManagedState =
   | "failed"
   | "done"
   | "idle"
-  | "parked";
+  | "limited";
 
 /** A thread the seeded project thread manages (a subagent row, ADR 0028). */
 export interface ManagedSeed {
@@ -126,7 +130,7 @@ export interface ProjectSeed {
 }
 
 /**
- * The `next` shell's seed (look track L6): the seeded thread made its project's project thread,
+ * The shell's seed (look track L6): the seeded thread made its project's project thread,
  * the threads it manages, and more projects for the rail. Classic judges pass none, so what they
  * capture is unchanged.
  */
@@ -142,7 +146,7 @@ export const NO_SHELL_SEED: ShellSeed = { managed: [], projects: [] };
 export const MANAGED_SEED: ShellSeed["managed"] = [
   { title: "Map the favicon resolver", state: "idle", usable: true },
   { title: "Brief: port the fold line tallies", state: "done", usable: false },
-  { title: "Steps panel projection", state: "parked", usable: false },
+  { title: "Steps panel projection", state: "limited", usable: false },
   { title: "Probe the bridge usage endpoint", state: "failed", usable: false },
   { title: "Review: steps panel", state: "working", usable: false },
   {
@@ -152,7 +156,7 @@ export const MANAGED_SEED: ShellSeed["managed"] = [
   },
 ];
 
-/** The `next` shell's seed: managed threads and two more rail projects, one with a favicon. */
+/** The shell's seed: managed threads and two more rail projects, one with a favicon. */
 export const SHELL_SEED: ShellSeed = {
   managed: MANAGED_SEED,
   projects: [
@@ -304,11 +308,14 @@ const PATCHES: Readonly<
     latestRunStartedAt: Option.some(Option.some(started)),
     latestRunCompletedAt: Option.some(Option.some(started)),
   }),
-  parked: (started) => ({
+  limited: (started) => ({
     ...emptyActivityPatch,
-    activity: Option.some("parked"),
+    activity: Option.some("failed"),
     latestRunStartedAt: Option.some(Option.some(started)),
-    parkedTaskIds: Option.some([TaskId.make(7)]),
+    lastError: Option.some(
+      Option.some("The model plan's usage limit was reached.")
+    ),
+    lastErrorClass: Option.some(Option.some("usage_limit")),
   }),
   idle: () => emptyActivityPatch,
 };
@@ -425,7 +432,7 @@ export const putChangedFiles = (
     // The seeded thread holds the imported turns; one without a user entry is a broken harness.
     const lastUser = yield* Effect.orDie(
       Effect.fromNullishOr(
-        thread.entries.findLast((entry) => entry.kind === "pi.user")
+        thread.entries.findLast((entry) => entry.kind === CAIRN_USER_ENTRY)
       )
     );
 
@@ -537,12 +544,25 @@ const seedLayer = (
         const id = store.ids.next;
 
         store.ids.next += 1;
-        thread.entries.push({
-          id: piEntryId(EntryId.make(id)),
-          conversationId,
-          kind: entry.kind,
-          model: [...entry.model],
-        });
+        // t3code's user messages were the user's own: recorded as Cairn records a send (a
+        // `cairn.user` entry naming its sender), since the transcript draws a `pi.user` entry as a
+        // brain input.
+        thread.entries.push(
+          entry.kind === "pi.user"
+            ? {
+                id: piEntryId(EntryId.make(id)),
+                conversationId,
+                kind: CAIRN_USER_ENTRY,
+                model: [...entry.model],
+                data: { from: SEEDED_SENDER, attachments: [] },
+              }
+            : {
+                id: piEntryId(EntryId.make(id)),
+                conversationId,
+                kind: entry.kind,
+                model: [...entry.model],
+              }
+        );
       }
 
       // The harness publishes its view on a change it made; an unchanged setting is such a change
@@ -564,7 +584,7 @@ const seedLayer = (
 export interface CairnOptions {
   /** The scripted model and tools; "Noted." and the echo tool when absent. */
   readonly brain?: CairnBrain;
-  /** The `next` shell's seed; none when absent, so classic judges capture what they did. */
+  /** The shell's seed; none when absent, so classic judges capture what they did. */
   readonly shell?: ShellSeed;
   /**
    * Listings the model picker shows after the faux model's, as if more providers were signed in
@@ -593,7 +613,7 @@ const withPickerModels = (extra: ReadonlyArray<ModelListing>) =>
 
 /**
  * Starts the brain and Vite, seeded; nothing listens outside loopback. A shell seed adds the
- * project thread's managed threads and more rail projects (the `next` shell's judges).
+ * project thread's managed threads and more rail projects (the shell's judges).
  */
 export const startCairn = async (
   seed: CairnSeed,
@@ -615,7 +635,7 @@ export const startCairn = async (
   });
 
   const models = withCatalog(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 200,
       settings: {},
       // The model t3code's baseline shows, so the footer folds at the same widths.
@@ -630,7 +650,7 @@ export const startCairn = async (
     BudgetSources.layerNone,
     brain.stops ?? WorkflowStops.layerOff,
     // The scripted harness's goals, so a goal binds, refuses and is marked as on pi-durable.
-    GoalBook.layerScripted
+    ScriptedGoalBook
   ).pipe(
     Layer.provideMerge(ScriptedHarness.layerNoDeps),
     Layer.provideMerge(Layer.succeed(ScriptedStore, store)),

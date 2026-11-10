@@ -1,5 +1,6 @@
-// Scene tests for the user message row, rendered from a thread's view through the transcript's own
-// derivation, as the thread page draws it.
+// Scene tests for the user message row, the brain-input row and the pending row, rendered from a
+// thread's view through the transcript's own derivation and drawn by the row view, as the
+// thread page draws them.
 
 import { AttachmentId } from "@cairn/protocol/Ids";
 import { ConversationView, ProjectedImage } from "@cairn/protocol/Thread";
@@ -10,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Message } from "./Message.ts";
 import { freshUi } from "./Model.ts";
-import { transcriptOf } from "./Rows.ts";
+import { transcriptOf, withPendingSends } from "./Rows.ts";
 import type { ListItem } from "./Rows.ts";
 import { rowView } from "./RowView.ts";
 
@@ -96,6 +97,54 @@ const userRow = (view: ConversationView): ListItem => {
   return row;
 };
 
+/** A wake and the brief that starts a child, as the brain writes them: `pi.user` entries. */
+const brainInputs = Schema.decodeSync(ConversationView)({
+  conversation: { id: 1 },
+  entries: [
+    {
+      id: 7,
+      conversationId: 1,
+      kind: "pi.user",
+      model: [
+        {
+          role: "user",
+          content:
+            'Subagent "Probe the bridge" reported; its result is in the note above.',
+          timestamp: 1_760_000_000_000,
+        },
+      ],
+    },
+  ],
+  docs: {},
+});
+
+const pendingRow = (sent = false): ListItem => {
+  const item = withPendingSends(
+    transcriptOf(
+      THREAD_ID,
+      Option.none(),
+      freshUi(Option.some(THREAD_ID)),
+      Option.none()
+    ),
+    [
+      {
+        requestId: "req-1",
+        text: "keep the budget under $5",
+        attachments: [],
+        attachmentNames: [],
+        skillRefs: [],
+        sent,
+      },
+    ]
+  ).items.at(-1);
+
+  if (item === undefined) {
+    throw new Error("the transcript has no pending row");
+  }
+
+  return item;
+};
+
 const config = (item: ListItem) => ({
   update: (model: null) => ({ model }),
   view: (_model: null, h: HtmlBuilder<Message>): Html =>
@@ -111,6 +160,74 @@ const config = (item: ListItem) => ({
       historyCursor: Option.none(),
       subagents: Option.none(),
     }),
+});
+
+describe("a brain input row", () => {
+  it("is a quiet line naming the subagent row, never the user's bubble or copy button", () => {
+    const transcript = transcriptOf(
+      THREAD_ID,
+      Option.some({
+        seq: 0,
+        view: brainInputs,
+        entriesOffset: 0,
+        hasMoreHistory: false,
+        older: [],
+      }),
+      freshUi(Option.some(THREAD_ID)),
+      Option.none()
+    );
+
+    const [row] = transcript.items;
+
+    if (row === undefined) {
+      throw new Error("the transcript has no row");
+    }
+
+    Scene.scene(
+      config(row),
+      Scene.given(null),
+      Scene.expect(Scene.testId("brain-input")).toHaveText(
+        /Subagent "Probe the bridge" reported; its result is on its subagent row above\./u
+      ),
+      Scene.expectAll(Scene.all.testId("user-message")).toHaveCount(0),
+      Scene.expectAll(Scene.all.testId("message-copy")).toHaveCount(0),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
+});
+
+describe("a pending row", () => {
+  it("draws the queued words in the user's bubble, marked not yet sent, with no copy button", () => {
+    Scene.scene(
+      config(pendingRow()),
+      Scene.given(null),
+      Scene.expect(Scene.selector("[data-user-message-body]")).toHaveText(
+        "keep the budget under $5"
+      ),
+      Scene.expect(Scene.testId("pending-state")).toHaveText("Not sent yet"),
+      Scene.expectAll(Scene.all.testId("pending-message")).toHaveCount(1),
+      Scene.expectAll(Scene.all.testId("user-message")).toHaveCount(0),
+      Scene.expectAll(Scene.all.testId("message-copy")).toHaveCount(0),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
+
+  it("says the words are sent once the brain has them and their own row has not come", () => {
+    Scene.scene(
+      config(pendingRow(true)),
+      Scene.given(null),
+      Scene.expect(Scene.testId("pending-state")).toHaveText("Sent"),
+      Scene.expectAll(Scene.all.testId("pending-message")).toHaveCount(1),
+      Scene.expectAll(Scene.all.testId("user-message")).toHaveCount(0),
+      Scene.tap(({ commands }) => {
+        expect(commands).toHaveLength(0);
+      })
+    );
+  });
 });
 
 describe("the user message row", () => {

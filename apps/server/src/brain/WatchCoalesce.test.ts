@@ -2,48 +2,21 @@
 // nothing reach it as a few frames, not one per revision, and applying them lands on the same view
 // a fresh snapshot shows.
 
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import path from "node:path";
 
 import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Option, Result, Stream } from "effect";
+import { Effect, Option, Result, Stream } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
-import { BrainConfig } from "./BrainConfig.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
+import { testBrain } from "./BrainTestKit.ts";
+import { FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
 
-const harness = PiDurableHarness.layer.pipe(
-  Layer.provideMerge(
-    ExtensionSet.layer.pipe(
-      Layer.provide(ExecutorLink.layerDisabled),
-      Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest),
-      Layer.provide(SettingsStore.layerTest),
-      Layer.provide(ReachServicesTest),
-      Layer.provide(Subagents.layerTest),
-      Layer.provide(PiModelSource.layerFromModelSource)
-    )
-  ),
-  Layer.provideMerge(
-    ModelSource.layerFaux({ tokensPerSecond: 4000, settings: {} })
-  ),
-  Layer.provide(
-    BrainConfig.layerFrom(mkdtempSync(path.join(tmpdir(), "cairn-watch-")))
-  )
-);
+const harness = testBrain({
+  model: { tokensPerSecond: 4000, settings: {} },
+});
 
 const THREAD = ThreadId.make("0190f0c0-0000-7000-8000-0000000000c1");
 

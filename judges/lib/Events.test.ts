@@ -6,7 +6,15 @@ import { assert, describe, layer } from "@effect/vitest";
 import { Effect, Fiber, FileSystem, Logger, Option, Stream } from "effect";
 import type { Scope } from "effect";
 
+import { slackened } from "../../apps/server/src/EventuallyTestKit.ts";
 import * as Events from "./Events.ts";
+
+/**
+ * How long a wait for a line the test is about to write may take before it fails the test: the
+ * line comes 100 ms on, so only a busy machine stretches it. The expiry case keeps its own
+ * 200 ms, since that expiry is what it judges.
+ */
+const BRAIN_LINE_WITHIN = slackened("5 seconds");
 
 const tempLog = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -116,7 +124,7 @@ describe("follow", () => {
           const path = yield* tempLog;
 
           const waiting = yield* Events.waitForListening(path, {
-            timeout: "5 seconds",
+            timeout: BRAIN_LINE_WITHIN,
           }).pipe(Effect.forkScoped);
 
           yield* Effect.sleep("100 millis");
@@ -137,7 +145,7 @@ describe("follow", () => {
 
         const waiting = yield* Events.waitForListening(path, {
           from,
-          timeout: "5 seconds",
+          timeout: BRAIN_LINE_WITHIN,
         }).pipe(Effect.forkScoped);
 
         yield* Effect.sleep("100 millis");
@@ -197,7 +205,7 @@ describe("follow", () => {
 
         const waiting = yield* Events.waitForListening(path, {
           from,
-          timeout: "5 seconds",
+          timeout: BRAIN_LINE_WITHIN,
         }).pipe(Effect.forkScoped);
 
         yield* Effect.sleep("100 millis");

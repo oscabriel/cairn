@@ -19,6 +19,8 @@
 // - abort: some node was stopped, and no node's work finished more than half a second after the
 //   line (a 6 s node running at the line never finishes);
 // - outcome: the run finished `partial`, `budget_spent`, and the script read `remaining() === 0`;
+//   its line is the budget the user set on its launch card with Go (the launch proposed none),
+//   through the answer path `thread.respond` takes (ADR 0047);
 // - once: every dispatched row has one child, no label two rows or two starts of its work, and every
 //   row names an accepted brief.
 //
@@ -38,6 +40,10 @@ import { parseArgs } from "node:util";
 
 import { NodeRuntime } from "@effect/platform-node";
 import { Console, Duration, Effect, Option, Result } from "effect";
+
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const root = path.join(import.meta.dirname, "..");
 
@@ -192,6 +198,9 @@ interface Report {
     readonly softAt: number | null;
     readonly spentAt: number | null;
     readonly spent: { readonly tokens: number };
+    /** The line the run was held to, from the Go that approved it. */
+    readonly budget: { readonly maxTokens: number | null };
+    readonly decidedBy: { readonly kind: string } | null;
     readonly nodes: Readonly<Record<string, Row>>;
   } | null;
   readonly events: ReadonlyArray<string>;
@@ -445,6 +454,18 @@ const checkOutcome = (checked: Checked, fail: Fail) => {
 
   if (!checked.report.result.includes('"remaining":0')) {
     fail("outcome", "the script did not read remaining() === 0 at the end");
+  }
+
+  // The launch proposed no budget; its line is the one the user set on the card with Go, which
+  // the production answer path wrote into the row (ADR 0047).
+  if (
+    workflow.budget.maxTokens !== MAX_TOKENS ||
+    workflow.decidedBy?.kind !== "user"
+  ) {
+    fail(
+      "outcome",
+      `the run was held to ${JSON.stringify(workflow.budget.maxTokens)} tokens, approved by ${JSON.stringify(workflow.decidedBy)}; want the card's ${String(MAX_TOKENS)}, by the user`
+    );
   }
 };
 

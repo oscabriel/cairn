@@ -18,8 +18,8 @@
 // child really saw rather than what the ledger says it saw.
 
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
-import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -36,15 +36,19 @@ import { Effect, Option, Result, Schema } from "effect";
 import { Approvals } from "../../brain/CairnDocs.ts";
 import { CodeMode } from "../../brain/CodeMode.ts";
 import { messageText } from "../../brain/CommitFeed.ts";
-import { RESULT_TOOL_NAME, ResultTool } from "../../models/ResultTool.ts";
-import { taskOf } from "../../subagents/Delivery.ts";
-import { HOLD_RETRY_MILLIS } from "../WorkflowBudget.ts";
-import { ledgerProblems, WorkflowsDoc } from "../WorkflowDocs.ts";
+import { durableRunner } from "../../brain/Durable.ts";
 import type {
-  NodeItemState,
   WorkflowItemState,
   WorkflowsState,
-} from "../WorkflowDocs.ts";
+} from "../../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../../brain/WorkflowsDoc.ts";
+import { testLimit } from "../../EventuallyTestKit.ts";
+import { RESULT_TOOL_NAME, ResultTool } from "../../models/ResultTool.ts";
+import { taskOf } from "../../subagents/Delivery.ts";
+import { NO_DEFAULT_BUDGET } from "../../usage/DefaultBudget.ts";
+import { HOLD_RETRY_MILLIS } from "../WorkflowBudget.ts";
+import { ledgerProblems } from "../WorkflowDocs.ts";
+import type { NodeItemState } from "../WorkflowDocs.ts";
 import { NO_PROJECT_RECIPES } from "../WorkflowPlanTool.ts";
 import {
   codemodeResultText,
@@ -94,26 +98,19 @@ const NODE_MODELS = [
 
 /**
  * A named model resolves to the faux model it names, as `ModelSpecs` does: `faux/advisor-1` runs on
- * `advisor-1`, which behaves as `advisor`. A role name, which only a script written before ADR 0043
- * holds, names none.
+ * `advisor-1`, which behaves as `advisor`.
  */
 const resolveModel: ModelResolver = async (spec) => {
-  if (spec.startsWith("@")) {
-    return await Promise.resolve(Result.succeed(Option.none()));
-  }
-
   const name = spec.replace(/^faux\//u, "");
 
   return await Promise.resolve(
     NODE_MODELS.some((model) => model === name)
-      ? Result.succeed(
-          Option.some({
-            spec,
-            provider: KIT_MODEL.provider,
-            modelId: name,
-            thinkingLevel: Option.none(),
-          })
-        )
+      ? Result.succeed({
+          spec,
+          provider: KIT_MODEL.provider,
+          modelId: name,
+          thinkingLevel: Option.none(),
+        })
       : Result.fail(
           `ModelSpecs.resolve refused "${spec}": it is not in the model catalog.`
         )
@@ -292,12 +289,12 @@ const resultOf = (run: Run): CouncilResult =>
     () => new Error(`not a council result: ${run.resultText}`)
   );
 
-/** Waits until the row has ended (its watcher wrote it), at most `ms`. */
+/** Waits until the row has ended (its watcher wrote it), at most `ms` scaled by the slack. */
 const endedRow = async (
   brain: KitBrain,
   ms: number
 ): Promise<Readonly<WorkflowsState> | undefined> => {
-  const until = performance.now() + ms;
+  const until = performance.now() + testLimit(ms);
 
   for (;;) {
     // oxlint-disable-next-line no-await-in-loop
@@ -358,6 +355,7 @@ const council = (
     registry.install(codemode.extension.extension);
     registry.install(
       workflowExtension({
+        run: yield* durableRunner,
         resolveModel,
         plan: {
           dryRun: async () =>
@@ -365,6 +363,7 @@ const council = (
               Result.fail("the council test plants its launch")
             ),
           projectRecipe: NO_PROJECT_RECIPES,
+          defaults: NO_DEFAULT_BUDGET,
         },
         faults: NO_WORKFLOW_FAULTS,
         hold: NO_HOLD,
@@ -555,7 +554,7 @@ describe("the council recipe on a faux model", () => {
 
           // A child of its own, on the model the report ran on.
           assert.notStrictEqual(resumed.conversationId, report.conversationId);
-          assert.strictEqual(resumed.role, report.role);
+          assert.strictEqual(resumed.model, report.model);
 
           // Its own receipt: one tool call (its submit_result), not the report's too.
           assert.strictEqual(resumed.receipt?.toolCalls, 1);
@@ -776,9 +775,9 @@ return { first: first.status, second: second.status };`),
         );
 
         assert.strictEqual(run.row.state, "finished", run.resultText);
-        assert.strictEqual(nodeOf(run, "first").role, "faux/advisor-1");
+        assert.strictEqual(nodeOf(run, "first").model, "faux/advisor-1");
         // Not the resumed node's model: the envelope granted the thread's model at this call site.
-        assert.strictEqual(nodeOf(run, "second").role, KIT_SPEC);
+        assert.strictEqual(nodeOf(run, "second").model, KIT_SPEC);
       })
   );
 

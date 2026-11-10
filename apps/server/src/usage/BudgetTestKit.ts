@@ -21,7 +21,6 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { BudgetSources, BudgetSourceError } from "../brain/BudgetSources.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent, StopOptions } from "../brain/HarnessSeam.ts";
 import { ModelSource } from "../brain/ModelSource.ts";
@@ -39,10 +38,11 @@ import {
   testThreadId,
 } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
-import { BudgetBook } from "./BudgetBook.ts";
+import { BudgetBook, hasLimits } from "./BudgetBook.ts";
 import type { BudgetMode, ScopeLimit } from "./BudgetBook.ts";
 import { BudgetGuard } from "./BudgetGuard.ts";
 import { Budgets } from "./Budgets.ts";
+import { BudgetSources, BudgetSourceError } from "./BudgetSources.ts";
 import { SpendLedger } from "./SpendLedger.ts";
 
 /** A budget of `tokens` tokens, warning at 80 percent. */
@@ -122,13 +122,23 @@ export const SourcesMemory = Layer.effectContext(
             });
           }
 
-          return Option.fromUndefinedOr(
-            (yield* Ref.get(record.scopes)).get(threadId)
+          // A budget with no enforced limit is no scope, as the documents read it.
+          return Option.filter(
+            Option.fromUndefinedOr(
+              (yield* Ref.get(record.scopes)).get(threadId)
+            ),
+            (scope) => hasLimits(scope.budget)
           );
         }),
+      // A declare starts an epoch of its own, as the documents count it (`BudgetSources`).
       declare: (threadId: ThreadId, budget: Budget, mode: BudgetMode) =>
         Ref.update(record.scopes, (map) =>
-          new Map(map).set(threadId, { threadId, budget, mode, epoch: 0 })
+          new Map(map).set(threadId, {
+            threadId,
+            budget,
+            mode,
+            epoch: (map.get(threadId)?.epoch ?? 0) + 1,
+          })
         ),
       askRaise: (limit, to) =>
         once(record.raises, `${limit.threadId} ${limit.epoch}`, to),
@@ -229,6 +239,7 @@ const GuardFakes = Layer.unwrap(
           Ref.update(record.pushes, (pushes) => [...pushes, message]).pipe(
             Effect.as(["delivered" as const])
           ),
+        badge: Effect.succeed(0),
       })
     );
   })

@@ -8,17 +8,26 @@
 // A passing run costs an agent one line of context instead of a few hundred; a failing run still
 // shows everything the step printed, in the order it printed it. The shape follows HumanLayer's
 // scripts/run-silent.ts (humanlayer/humanlayer at f16f286), rewritten for Node.
+//
+// The gate sets the test slack (`CAIRN_TEST_SLACK`, `test-slack.ts`) from the load when it starts,
+// before its own steps add to it, or to the caller's value when that is larger; the test step raises
+// it again if the load has risen by the time it starts. Every test deadline scales by it, and the
+// summary names the gate's value when it is above 1.
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
+import { testSlack } from "./test-slack.ts";
+
 const root = path.join(import.meta.dirname, "..");
 
 const bin = path.join(root, "node_modules", ".bin");
 
 const verbose = process.env.VERBOSE === "1";
+
+const slack = testSlack();
 
 interface Step {
   readonly name: string;
@@ -107,7 +116,7 @@ const runFrom = async (
   if (result.code !== 0) {
     process.stderr.write(result.output);
     process.stderr.write(
-      `check: ${step.name} failed with exit ${result.code} after ${seconds(started)} s\n`
+      `check: ${step.name} failed with exit ${result.code} after ${seconds(started)} s (test slack ${slack})\n`
     );
     process.exit(result.code);
   }
@@ -122,4 +131,8 @@ const runFrom = async (
 
 const ran = await runFrom(0, []);
 
-console.log(`check: ok in ${seconds(started)} s (${ran.join(", ")})`);
+const slackNote = slack > 1 ? `, test slack ${slack}` : "";
+
+console.log(
+  `check: ok in ${seconds(started)} s (${ran.join(", ")}${slackNote})`
+);

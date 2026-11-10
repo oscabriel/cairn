@@ -147,10 +147,9 @@ export const NodeRecord = Schema.Struct({
   briefId: Schema.NullOr(ApprovalId),
   /**
    * The model spec the node asked for: the script's, else the launching thread's model and level
-   * (ADR 0043); below, the model it ran on. The wire name `role` is kept for rows written before
-   * ADR 0043, when it held a role name (`@worker`).
+   * (ADR 0043); below, the model it ran on.
    */
-  role: Schema.NullOr(ModelSpec),
+  model: Schema.NullOr(ModelSpec),
   provider: Schema.NullOr(TrimmedNonEmptyString),
   modelId: Schema.NullOr(TrimmedNonEmptyString),
   effort: Schema.NullOr(TrimmedNonEmptyString),

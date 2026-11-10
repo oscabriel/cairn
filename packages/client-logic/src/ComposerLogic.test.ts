@@ -11,6 +11,7 @@ import { Option } from "effect";
 import {
   alternateFollowUp,
   composerSubmissionIntentForKey,
+  isImeCompositionKey,
   isPathSuggestionCurrent,
   isTypeToFocusKey,
   pastedPathQueryLength,
@@ -27,6 +28,7 @@ const enter: ComposerKeyEvent = {
   altKey: false,
   shiftKey: false,
   isComposing: false,
+  keyCode: 13,
   repeat: false,
 };
 
@@ -176,6 +178,27 @@ describe(composerSubmissionIntentForKey, () => {
 
   it("types every other key", () => {
     assert.strictEqual(intent({ key: "a" }), null);
+  });
+
+  it("leaves Safari's IME confirm keydown to the input method, and sends on the next Enter", () => {
+    // Safari's sequence for Enter accepting a kana or pinyin conversion: the keydowns while the
+    // composition runs, then, after `compositionend`, the confirming keydown with `isComposing`
+    // false and keyCode 229. Only the Enter after it is the user's.
+    const sequence: ReadonlyArray<Partial<ComposerKeyEvent>> = [
+      { key: "n", isComposing: true, keyCode: 229 },
+      { key: "Enter", isComposing: true, keyCode: 229 },
+      { key: "Enter", isComposing: false, keyCode: 229 },
+      { key: "Enter", isComposing: false, keyCode: 13 },
+    ];
+
+    assert.deepStrictEqual(
+      sequence.map((event) => intent(event)),
+      [null, null, null, "foreground"]
+    );
+    assert.deepStrictEqual(
+      sequence.map((event) => isImeCompositionKey({ ...enter, ...event })),
+      [true, true, true, false]
+    );
   });
 });
 

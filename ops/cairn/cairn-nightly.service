@@ -6,9 +6,14 @@
 # touches cairn.service, port 3774 or the Executor grant. The bridge steps spend a few cents of
 # Claude plan usage on Haiku; the whole run takes about an hour. The log is
 # ~/cairn-judges/durability-<date>.jsonl, and `systemctl --user status cairn-nightly` shows the verdict.
+# nightly.sh takes the judge lock first, so it waits for the pre-deploy set (judges/run-set.ts) and
+# never runs beside it; a night it cannot take the lock is skipped, and a second in a row fails.
+# A failed run starts cairn-nightly-failed.service, which asks the brain to push it to the user's
+# devices, so a red night is never silent (ADR 0054).
 # PATH here is a floor; brain.env's PATH (the login PATH install.sh writes) replaces it, as in cairn.service.
 [Unit]
 Description=Cairn durability matrix (nightly)
+OnFailure=cairn-nightly-failed.service
 
 [Service]
 Type=oneshot

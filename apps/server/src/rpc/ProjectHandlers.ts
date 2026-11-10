@@ -96,7 +96,7 @@ export const projectHandlers = Effect.gen(function* () {
   };
 });
 
-/** The project and git handlers, to merge over the stubs in `rpc/Handlers.ts`. */
+/** The project and git handlers, served through `rpc/Handlers.ts`. */
 export const ProjectHandlers = {
   layer: Layer.mergeAll(
     CairnRpcs.toLayerHandler(

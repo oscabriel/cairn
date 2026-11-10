@@ -55,7 +55,6 @@ const thread = ThreadShell.make({
   activeOrderKey: Option.none(),
   autoSettleDisabledAt: Option.none(),
   lastVisitedAt: Option.none(),
-  parkedTaskIds: [],
   ...BARE_ROW_FIELDS,
 });
 
@@ -113,7 +112,6 @@ describe("ShellStreamItem on the wire", () => {
       activeOrderKey: null,
       autoSettleDisabledAt: null,
       lastVisitedAt: null,
-      parkedTaskIds: [],
     };
 
     const codec = Schema.fromJsonString(Schema.toCodecJson(ThreadShell));

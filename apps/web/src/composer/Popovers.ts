@@ -39,14 +39,18 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { Folder, FolderPlus, Search, Star } from "lucide";
 
 import { filterBranches, resolveEnvModeLabel } from "../hero/ContextStrip.ts";
-import { FOCUS_RING_INSET } from "../next/ui/Classes.ts";
+import { FOCUS_RING_INSET } from "../ui/Classes.ts";
 import {
   COMBOBOX_ITEM_CLASS,
   COMBOBOX_LIST_CLASS,
   COMBOBOX_POPUP_CLASS,
 } from "../ui/Combobox.ts";
-import { MENU_ITEM_CLASS, POPUP_CLASS } from "./Classes.ts";
-import { activeDraft, isDraftTarget, pickableProjects } from "./Drafts.ts";
+import {
+  activeDraft,
+  isDraftTarget,
+  isScratchTarget,
+  pickableProjects,
+} from "./Drafts.ts";
 import { modeItems, overflowItems, thinkingItems } from "./Footer.ts";
 import { icon } from "./Icon.ts";
 import { Message } from "./Message.ts";
@@ -64,14 +68,15 @@ import {
   thinkingLevels,
 } from "./Models.ts";
 import type { PickerRailItem } from "./Models.ts";
+import { MENU_ITEM_CLASS, POPUP_CLASS } from "./PopoverClasses.ts";
 import { providerMark } from "./ProviderMark.ts";
 
 const ROW_CLASS =
-  "flex min-h-8 items-center rounded-sm px-2 py-1 text-base outline-none not-data-disabled:hover:bg-accent data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-selected:bg-foreground/[0.08] data-selected:text-foreground data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:opacity-64 sm:min-h-7 sm:text-sm group relative w-full !min-w-0 max-w-full cursor-pointer";
+  "flex min-h-8 items-center rounded-sm px-2 py-1 text-base outline-none not-data-disabled:hover:bg-select-2 data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-selected:bg-select-3 data-selected:text-ink-1 data-highlighted:bg-select-2 data-highlighted:text-ink-1 data-disabled:opacity-64 sm:min-h-7 sm:text-sm group relative w-full !min-w-0 max-w-full cursor-pointer";
 
-const STAR_CLASS = `relative inline-flex cursor-pointer items-center justify-center rounded-[var(--control-radius)] border border-transparent size-7 sm:size-6 pointer-coarse:size-11 text-muted-foreground hover:bg-accent hover:text-foreground -mr-1 shrink-0 ${FOCUS_RING_INSET}`;
+const STAR_CLASS = `relative inline-flex cursor-pointer items-center justify-center rounded-[var(--control-radius)] border border-transparent size-7 sm:size-6 pointer-coarse:size-11 text-ink-2 hover:bg-select-2 hover:text-ink-1 -mr-1 shrink-0 ${FOCUS_RING_INSET}`;
 
-const SEARCH_INPUT_CLASS = `w-full min-w-0 rounded-[inherit] bg-transparent placeholder:text-placeholder h-7.5 ps-5 leading-7.5 text-sm sm:h-6.5 sm:leading-6.5 pointer-coarse:h-11 ${FOCUS_RING_INSET}`;
+const SEARCH_INPUT_CLASS = `w-full min-w-0 rounded-[inherit] bg-transparent placeholder:text-ink-3 h-7.5 ps-5 leading-7.5 text-sm sm:h-6.5 sm:leading-6.5 pointer-coarse:h-11 ${FOCUS_RING_INSET}`;
 
 /** The rows of the open model picker, in display order, for keyboard movement. */
 export const pickerRows = (model: Model): ReadonlyArray<ModelListing> =>
@@ -183,7 +188,7 @@ const searchField = (
       h.div(
         [
           h.Class(
-            "relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring"
+            "relative -translate-y-px border-b border-stroke-1 pb-1.5 transition-colors focus-within:border-stroke-focus"
           ),
         ],
         [
@@ -191,7 +196,7 @@ const searchField = (
             h,
             Search,
             "search",
-            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55 pointer-coarse:top-3.5"
+            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-ink-3 pointer-coarse:top-3.5"
           ),
           h.input([
             h.Type("text"),
@@ -285,11 +290,7 @@ const modelRow = (
               ...Option.toArray(
                 Option.map(note, (text) =>
                   h.div(
-                    [
-                      h.Class(
-                        "truncate text-xs leading-snug text-muted-foreground/70"
-                      ),
-                    ],
+                    [h.Class("truncate text-xs leading-snug text-ink-3")],
                     [text]
                   )
                 )
@@ -321,7 +322,7 @@ const modelRow = (
   );
 };
 
-const RAIL_BUTTON_CLASS = `flex aspect-square w-full shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/10 hover:text-foreground aria-pressed:bg-foreground/[0.08] aria-pressed:text-foreground ${FOCUS_RING_INSET}`;
+const RAIL_BUTTON_CLASS = `flex aspect-square w-full shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-2 hover:bg-select-4 hover:text-ink-1 aria-pressed:bg-select-3 aria-pressed:text-ink-1 ${FOCUS_RING_INSET}`;
 
 const railButton = (
   h: HtmlBuilder<Message>,
@@ -363,7 +364,7 @@ const providerRail = (
       h.AriaLabel("Providers"),
       h.DataAttribute("model-picker-sidebar", "true"),
       h.Class(
-        "flex w-11 shrink-0 flex-col gap-1 overflow-y-auto border-border/70 border-e bg-muted/30 p-1 pointer-coarse:w-14"
+        "flex w-11 shrink-0 flex-col gap-1 overflow-y-auto border-stroke-1 border-e bg-select-1 p-1 pointer-coarse:w-14"
       ),
     ],
     pickerRail(model).map((item) =>
@@ -372,7 +373,7 @@ const providerRail = (
   );
 };
 
-const THINKING_CHOICE_CLASS = `inline-flex min-h-7 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-[calc(var(--radius)-2px)] px-1 text-xs text-muted-foreground hover:text-foreground aria-pressed:bg-background aria-pressed:font-medium aria-pressed:text-foreground pointer-coarse:min-h-11 ${FOCUS_RING_INSET}`;
+const THINKING_CHOICE_CLASS = `inline-flex min-h-7 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-[calc(var(--radius)-2px)] px-1 text-xs text-ink-2 hover:text-ink-1 aria-pressed:bg-surface-raised aria-pressed:font-medium aria-pressed:text-ink-1 pointer-coarse:min-h-11 ${FOCUS_RING_INSET}`;
 
 /**
  * The picker's thinking levels: their own band under the models, one segmented choice for the
@@ -391,18 +392,18 @@ const thinkingChoices = (model: Model, h: HtmlBuilder<Message>): Html => {
           h.AriaLabel("Thinking"),
           h.DataAttribute("testid", "composer-model-thinking"),
           h.Class(
-            "flex shrink-0 items-center gap-3 border-border border-t bg-muted/60 px-3 py-2 max-sm:flex-col max-sm:items-stretch max-sm:gap-1.5"
+            "flex shrink-0 items-center gap-3 border-stroke-1 border-t bg-select-1 px-3 py-2 max-sm:flex-col max-sm:items-stretch max-sm:gap-1.5"
           ),
         ],
         [
           h.div(
-            [h.Class("shrink-0 font-medium text-muted-foreground text-xs")],
+            [h.Class("shrink-0 font-medium text-ink-2 text-xs")],
             ["Thinking"]
           ),
           h.div(
             [
               h.Class(
-                "flex min-w-0 flex-1 gap-0.5 rounded-(--radius) border border-border/70 bg-foreground/[0.04] p-0.5"
+                "flex min-w-0 flex-1 gap-0.5 rounded-(--radius) border border-stroke-1 bg-select-1 p-0.5"
               ),
             ],
             levels.map((level) =>
@@ -441,7 +442,7 @@ const modelPicker = (
       h.DataAttribute("model-picker-content", "true"),
       h.DataAttribute("testid", "composer-model-list"),
       h.Class(
-        "relative flex max-h-[min(22rem,40dvh)] w-[min(24rem,calc(100vw-1rem))] flex-col overflow-hidden bg-muted/40 max-sm:max-h-[min(30rem,72dvh)] max-sm:w-full"
+        "relative flex max-h-[min(22rem,40dvh)] w-[min(24rem,calc(100vw-1rem))] flex-col overflow-hidden bg-surface-overlay max-sm:max-h-[min(30rem,72dvh)] max-sm:w-full"
       ),
     ],
     [
@@ -464,11 +465,7 @@ const modelPicker = (
                 empty
                   ? [
                       h.p(
-                        [
-                          h.Class(
-                            "p-2 text-center text-muted-foreground text-sm"
-                          ),
-                        ],
+                        [h.Class("p-2 text-center text-ink-2 text-sm")],
                         [
                           Option.isNone(model.catalog)
                             ? Option.getOrElse(
@@ -483,7 +480,7 @@ const modelPicker = (
                       h.div(
                         [
                           h.Class(
-                            "px-2 pt-1 pb-1 font-medium text-muted-foreground text-xs"
+                            "px-2 pt-1 pb-1 font-medium text-ink-2 text-xs"
                           ),
                         ],
                         [section.label]
@@ -557,7 +554,7 @@ const projectKeyMessage = (
 };
 
 const COMBOBOX_INPUT_CLASS =
-  "w-full min-w-0 rounded-[inherit] outline-none placeholder:text-placeholder [transition:background-color_5000000s_ease-in-out_0s] h-7.5 px-[calc(--spacing(2.5)-1px)] leading-7.5 sm:h-6.5 sm:leading-6.5";
+  "w-full min-w-0 rounded-[inherit] outline-none placeholder:text-ink-3 [transition:background-color_5000000s_ease-in-out_0s] h-7.5 px-[calc(--spacing(2.5)-1px)] leading-7.5 sm:h-6.5 sm:leading-6.5";
 
 /** One project row, t3code's combobox item: a folder mark and the title on up to two lines. */
 const projectItem = (
@@ -584,7 +581,7 @@ const projectItem = (
         [
           h.DataAttribute("slot", "combobox-item-content"),
           h.Class(
-            "flex min-w-0 flex-1 items-center gap-2 [&_svg:not([class*='text-'])]:text-muted-foreground"
+            "flex min-w-0 flex-1 items-center gap-2 [&_svg:not([class*='text-'])]:text-ink-2"
           ),
         ],
         [
@@ -629,7 +626,7 @@ const projectSearch = (
       h.div(
         [
           h.Class(
-            "relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring"
+            "relative -translate-y-px border-b border-stroke-1 pb-1.5 transition-colors focus-within:border-stroke-focus"
           ),
         ],
         [
@@ -637,10 +634,10 @@ const projectSearch = (
             h,
             Search,
             "search",
-            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55"
+            "pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-ink-3"
           ),
           h.div(
-            [h.Class("relative w-full text-foreground")],
+            [h.Class("relative w-full text-ink-1")],
             [
               h.span(
                 [
@@ -728,9 +725,7 @@ const projectPicker = (
       h.div([
         h.Role("status"),
         h.DataAttribute("slot", "combobox-empty"),
-        h.Class(
-          "not-empty:p-2 text-center text-base text-muted-foreground sm:text-sm"
-        ),
+        h.Class("not-empty:p-2 text-center text-base text-ink-2 sm:text-sm"),
       ]),
       h.div(
         [
@@ -796,7 +791,7 @@ const branchPicker = (
         branches.length === 0
           ? [
               h.p(
-                [h.Class("p-2 text-center text-muted-foreground text-sm")],
+                [h.Class("p-2 text-center text-ink-2 text-sm")],
                 [
                   Option.isNone(model.branches)
                     ? "Loading branches..."
@@ -827,16 +822,19 @@ const envModeMenu = (model: Model, h: HtmlBuilder<Message>): Html => {
       plainRow(h, mode, Message.PickedEnvMode({ mode }), [
         h.span([h.Class("flex-1")], [resolveEnvModeLabel(mode)]),
         current === mode
-          ? h.span([h.Class("text-muted-foreground text-xs")], ["Current"])
+          ? h.span([h.Class("text-ink-2 text-xs")], ["Current"])
           : h.empty,
       ])
     )
   );
 };
 
-/** Where the open popover sits: above the card for a docked composer, below it in the hero. */
+/**
+ * Where the open popover sits: above the card for a docked composer and the scratch overlay's, at
+ * the foot of their panes; below it in the hero.
+ */
 export const popoverSide = (model: Model): "top" | "bottom" =>
-  isDraftTarget(model) ? "bottom" : "top";
+  isDraftTarget(model) && !isScratchTarget(model) ? "bottom" : "top";
 
 /** The open popover's panel, with a backdrop that closes it, or nothing. */
 export const popoverView = (model: Model, h: HtmlBuilder<Message>): Html =>

@@ -5,11 +5,12 @@
 // within a 2 minute grace, not snoozed), the snooze that a failure wakes early (read through the
 // client's `effectiveSnoozed`, one rule for both sides), the inactivity rule
 // measured from the latest activity or snooze wake, and a sweep that commits a guarded
-// `ThreadAutoSettle` per thread. Changed: every pull request branch is gone, the sweep runs every 5
-// minutes, a second fiber ends snoozes when their time comes, the inactivity window is one server
-// setting (`autoSettleDays`, 0 turns it off), a subagent's row (one with a `lineage`) is never a
-// candidate, and a parent is not one while a child works or asks or its result is on the way
-// (ADR 0028; t3code has no subagents).
+// `ThreadAutoSettle` per thread. Changed: every pull request branch is gone, nothing runs the sweep
+// since the settled shelf stopped being drawn (ADR 0050; it ran every 5 minutes), a second fiber
+// ends snoozes when their time comes, the inactivity window is one server setting
+// (`autoSettleDays`, 0 turns it off), a subagent's row (one with a `lineage`) is never a candidate,
+// and a parent is not one while a child works or asks or its result is on the way (ADR 0028; t3code
+// has no subagents).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -39,7 +40,6 @@ import {
   Layer,
   Option,
   PubSub,
-  Schedule,
 } from "effect";
 
 import { SettingsStore } from "../models/SettingsStore.ts";
@@ -58,9 +58,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A user message this recent with no run after it counts as a turn about to start. */
 export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1000;
-
-/** How often the settlement sweep runs. */
-export const SETTLEMENT_SWEEP_INTERVAL = Duration.minutes(5);
 
 /** The longest the snooze fiber sleeps before looking again, whatever the next wake time. */
 const SNOOZE_CHECK_CEILING = Duration.minutes(5);
@@ -189,19 +186,20 @@ export const resolveAutoSettlementAt = (input: {
     : Option.none();
 };
 
-/** Settles quiet threads and ends snoozes on time, on the server, so every device agrees. */
+/**
+ * Ends snoozes on time, on the server, so every device agrees. The auto-settle sweep is kept but
+ * dormant (ADR 0050): nothing runs it while no surface draws the settled shelf.
+ */
 export class Settlement extends Context.Service<
   Settlement,
   {
-    /** Settles every quiet candidate once. Returns how many settled. */
+    /** Settles every quiet candidate once. Returns how many settled. Nothing runs it (ADR 0050). */
     readonly sweep: Effect.Effect<number, ShellStoreError>;
     /** Ends every snooze whose time has come. Returns how many woke. */
     readonly wakeSnoozed: Effect.Effect<number, ShellStoreError>;
   }
 >()("cairn/server/shell/Settlement") {
-  /**
-   * Starts the sweep (now, then every 5 minutes) and the snooze timer for the layer's lifetime.
-   */
+  /** Starts the snooze timer for the layer's lifetime; the sweep is not started (ADR 0050). */
   static readonly layerNoDeps = Layer.effect(
     Settlement,
     Effect.gen(function* () {
@@ -303,15 +301,8 @@ export class Settlement extends Context.Service<
         return woke;
       }).pipe(Effect.withSpan("Settlement.wakeSnoozed"));
 
-      yield* sweep.pipe(
-        Effect.catchTag("ShellStoreError", (failure) =>
-          Effect.logWarning("settlement sweep failed", {
-            error: failure.message,
-          }).pipe(Effect.as(0))
-        ),
-        Effect.repeat(Schedule.spaced(SETTLEMENT_SWEEP_INTERVAL)),
-        Effect.forkScoped
-      );
+      // The sweep is not started (ADR 0050): nothing draws the settled shelf since the 7A cutover,
+      // so no thread is settled while nothing shows it. `sweep` stays, tested, for an inbox's return.
 
       // Wake when the earliest snooze ends, or sooner when a new snooze lands.
       const snoozeChanges = yield* eventStore.subscribe;

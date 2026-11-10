@@ -11,8 +11,8 @@
 // arrives, storing it, resetting the provider's `ModelHealth` and offering `SignedIn` are one
 // uninterruptible step, so the last step says `SignedIn` exactly when the credential was stored. A
 // sign-out resets the health too: a new login mends a broken one and may lift a limit, so the old
-// record says nothing about it. A brain without the OAuth store, or one that does not hold its lock,
-// answers `Failed` with `unavailable`.
+// record says nothing about it. A brain without the OAuth store, one that does not hold its lock, or
+// one whose lock could not be taken at boot answers `Failed` with `unavailable`, and says which.
 
 import { LoginProgress } from "@cairn/protocol/Models";
 import type {
@@ -338,6 +338,12 @@ export class CodexLogin extends Context.Service<
             );
           }
 
+          if (Option.isSome(store.value.lockFailure)) {
+            return unavailable(
+              "This brain could not set up its OAuth store when it started, so it keeps no Codex sign-in. Check that flock is installed and that the state and data directories are writable and owned by you, then restart the brain."
+            );
+          }
+
           if (!store.value.held) {
             return unavailable(
               "Another Cairn brain holds the OAuth lock, so this one cannot sign in. Sign in on that brain."
@@ -375,7 +381,10 @@ export class CodexLogin extends Context.Service<
               new CodexLogoutError({
                 message: failure.message,
                 reason:
-                  failure.reason === "not_holder" ? "unavailable" : "storage",
+                  failure.reason === "not_holder" ||
+                  failure.reason === "unavailable"
+                    ? "unavailable"
+                    : "storage",
                 cause: failure,
               })
           )

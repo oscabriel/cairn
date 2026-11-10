@@ -200,7 +200,7 @@ The composer does nothing special. Send is Send, not Steer, since no run is live
 
 "Stone look" is unrelated, and two things collide:
 
-- **UI words: no collision found.** No string the user sees names the look (a grep for `"Stone` outside comments found none), and `next/tokens.css` names no token after it. Keep it that way.
+- **UI words: no collision found.** No string the user sees names the look (a grep for `"Stone` outside comments found none), and `apps/web/src/tokens.css` names no token after it. Keep it that way.
 - **Code and docs: real noise.** 14 lines under `apps`, `packages` and `judges` say "Stone look", so `grep -i stone` finds them beside every real hit; this note's own search started that way. The first package should change those comments to "the look", and the glossary's Look entry should gain `_Avoid_: "Stone look"`.
 
 ## 4. Portals

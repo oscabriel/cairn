@@ -48,7 +48,7 @@ import {
   registryChildrenOf,
   SUBAGENT_LABELS,
 } from "./SubagentRuntime.ts";
-import { threadStatus } from "./ThreadState.ts";
+import { STATE_LOOKS, threadStatus } from "./ThreadState.ts";
 
 /** Rows a lineage group shows before its first "Show more". */
 export const LINEAGE_FIRST_PAGE = 6;
@@ -82,10 +82,10 @@ export const showMoreCount = (hiddenCount: number): number =>
  */
 export type ChildStatus = SubagentState | "idle";
 
-/** Every child status's words and tone; a live one says what its own row says. */
+/** Every child status's look; a live one says what its own row says. */
 export const CHILD_LABELS: Readonly<Record<ChildStatus, SubagentLabel>> = {
   ...SUBAGENT_LABELS,
-  idle: { word: "Idle", tone: "muted" },
+  idle: STATE_LOOKS.idle,
 };
 
 /** True once a child is at rest: it shows under "Previous" and offers no Stop. */
@@ -93,9 +93,8 @@ export const isRestingChildStatus = (status: ChildStatus): boolean =>
   status === "idle" || isTerminalSubagentState(status);
 
 /**
- * Statuses a stop can end: a run working or held on a request. A `waiting` or `parked` child is
- * held by its own children or tasks, which a child's stop keeps, and a `limited` one has no run, so
- * none of them offers Stop.
+ * Statuses a stop can end: a run working or held on a request. A `waiting` child is held by its
+ * own children, which a child's stop keeps, and a `limited` one has no run, so neither offers Stop.
  */
 const STOPPABLE: ReadonlySet<ChildStatus> = new Set<ChildStatus>([
   "working",

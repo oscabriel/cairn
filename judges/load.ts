@@ -49,7 +49,10 @@ import { chromium } from "./lib/Browser.ts";
 import type { Browser, Page } from "./lib/Browser.ts";
 import * as Events from "./lib/Events.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
 import { loadVerdict, PHONE_AGENT, readLog } from "./phone-report.ts";
+
+recordOnExit(import.meta);
 
 export const REPO = path.join(import.meta.dirname, "..");
 
@@ -430,7 +433,7 @@ export interface LoadSample {
 
 const decodeFrameAt = Schema.decodeUnknownSync(Schema.Finite);
 
-/** When the `next` frame was on the page, in the page's clock (polled every 16 ms). */
+/** When the frame was on the page, in the page's clock (polled every 16 ms). */
 const nextFrameAt = async (page: Page): Promise<number> => {
   const handle = await page.waitForFunction(
     () =>

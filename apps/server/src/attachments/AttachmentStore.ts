@@ -32,7 +32,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import type { BootRepair } from "../BootRepairs.ts";
+import type { BootRepair } from "../BootRepair.ts";
 import { ServerConfig } from "../Config.ts";
 
 /** How long an unclaimed upload, a `.part` file or a file with no row is kept. */
@@ -597,8 +597,9 @@ export class AttachmentStore extends Context.Service<
             })
           )
         ),
-        Effect.delay(SWEEP_EVERY),
-        Effect.repeat(Schedule.spaced(SWEEP_EVERY)),
+        // The boot repair sweeps at boot; this one waits a day, sweeps, and again each day. One
+        // wait per round (not `delay` inside `repeat`, which waits twice and sweeps every other day).
+        Effect.schedule(Schedule.spaced(SWEEP_EVERY)),
         Effect.forkScoped
       );
 

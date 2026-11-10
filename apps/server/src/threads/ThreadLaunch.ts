@@ -80,7 +80,6 @@ import { isLiveThread, ThreadRows } from "../shell/ThreadRows.ts";
 import { BranchNames } from "./BranchNames.ts";
 import { LaunchStore } from "./LaunchStore.ts";
 import type { LaunchRow, LaunchStoreError } from "./LaunchStore.ts";
-import { StopHooks } from "./StopHooks.ts";
 import { placeholderTitle, ThreadTitles } from "./ThreadTitles.ts";
 import { logTurnSubmitted, TurnContent } from "./TurnContent.ts";
 import type { TurnContentError } from "./TurnContent.ts";
@@ -223,7 +222,7 @@ export class ThreadLaunch extends Context.Service<
   }
 >()("cairn/server/threads/ThreadLaunch") {
   /**
-   * Needs the shell store, `LaunchStore`, the projects services, `HarnessSeam`, `StopHooks` and
+   * Needs the shell store, `LaunchStore`, the projects services, `HarnessSeam` and
    * `TurnContent`.
    */
   static readonly layerNoDeps = Layer.effect(
@@ -238,7 +237,6 @@ export class ThreadLaunch extends Context.Service<
       const scratch = yield* ScratchProject;
       const worktrees = yield* Worktrees;
       const seam = yield* HarnessSeam;
-      const stopHooks = yield* StopHooks;
       const turns = yield* TurnContent;
       const titles = yield* ThreadTitles;
       const branchNames = yield* BranchNames;
@@ -926,7 +924,8 @@ export class ThreadLaunch extends Context.Service<
 
       /**
        * The live project thread a launch in `input.projectId` would replace, read just before its
-       * commit; none when `replaces` names another (the commit refuses that launch).
+       * commit: the one `replaces` names, when it is still the project thread. None when `replaces`
+       * names another or nothing (ADR 0048): the commit refuses that launch, so nothing is stopped.
        */
       const replacedBy = Effect.fnUntraced(function* (
         input: ThreadLaunchInput
@@ -941,7 +940,7 @@ export class ThreadLaunch extends Context.Service<
         if (
           Option.isNone(marked) ||
           marked.value === input.threadId ||
-          (input.replaces !== undefined && input.replaces !== marked.value)
+          input.replaces !== marked.value
         ) {
           return Option.none<ThreadId>();
         }
@@ -972,14 +971,10 @@ export class ThreadLaunch extends Context.Service<
             return;
           }
 
-          const descendants = yield* seam.stop(threadId, {
+          // Its interrupted runs reach the stop hooks through `Threads`.
+          yield* seam.stop(threadId, {
             clearQueue: true,
             subagents: "stop",
-          });
-
-          yield* stopHooks.run(threadId);
-          yield* Effect.forEach(descendants, (child) => stopHooks.run(child), {
-            discard: true,
           });
           yield* Effect.logInfo("replaced project thread stopped").pipe(
             Effect.annotateLogs({
@@ -1143,7 +1138,8 @@ export class ThreadLaunch extends Context.Service<
             });
 
             // Every top-level launch in a folder project is its project thread: the first marks
-            // it, a later one refreshes it. A scratch thread is one of many.
+            // it, a later one that names it in `replaces` refreshes it, and one that names nothing
+            // is refused (ADR 0048). A scratch thread is one of many.
             const create = scratchProject
               ? thread
               : ThreadCreate.make({

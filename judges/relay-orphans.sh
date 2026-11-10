@@ -11,6 +11,9 @@
 # Exit status is the number of failed cases.
 set -euo pipefail
 
+# Records this run when it ends (judges/lib/record.sh, ADR 0054).
+source "$(dirname "$0")/lib/record.sh" && record_run relay-orphans.sh "$@"
+
 unit=$1 health=$2 warm=$3 peer=${4:-}
 cgroup_of() { systemctl --user show -P ControlGroup "$1"; }
 procs() { cat "/sys/fs/cgroup$(cgroup_of "$unit")/cgroup.procs" 2>/dev/null || true; }

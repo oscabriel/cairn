@@ -77,10 +77,12 @@ const messageOf = (
     readonly createdAt: string;
     readonly updatedAt?: string;
     readonly streaming?: boolean;
+    readonly sender?: TimelineMessage["sender"];
   }
 ): TimelineMessage => ({
   id,
   role,
+  sender: options.sender ?? (role === "user" ? "user" : "brain"),
   text,
   turnId: options.turnId ?? TURN,
   entryId: Option.none(),
@@ -593,6 +595,76 @@ describe(deriveTimelineRows, () => {
       "error-entry",
     ]);
     assert.isTrue(rows.some((row) => row.kind === "error" && row.retryable));
+  });
+
+  describe("who sent the turn's input", () => {
+    const failedTurn = {
+      ...turn(TURN, "00", "09", "failed"),
+      error: Option.some("Boom"),
+    };
+
+    const failedAfter = (sender: TimelineMessage["sender"]) =>
+      rowsOf(
+        timelineOf(
+          [
+            message("input-entry", "user", 'Subagent "Probe" asks: Which?', {
+              createdAt: "00",
+              sender,
+            }),
+            work("error-entry", "09", {
+              kind: "error",
+              status: "failed",
+              detail: Option.some("Boom"),
+            }),
+          ],
+          { turns: [failedTurn] }
+        )
+      );
+
+    it("keeps the user's own message a message row that a failed turn can Retry", () => {
+      const rows = failedAfter("user");
+
+      assert.deepStrictEqual(
+        rows.flatMap((row) =>
+          row.kind === "message" ? [row.message.sender] : []
+        ),
+        ["user"]
+      );
+      assert.isTrue(rows.some((row) => row.kind === "error" && row.retryable));
+    });
+
+    it("draws a brain input as its own row, and offers no Retry that would send its words as the user's", () => {
+      const rows = failedAfter("brain");
+
+      assert.deepStrictEqual(
+        rows.map((row) => row.kind),
+        ["brain-input", "error"]
+      );
+      assert.isFalse(rows.some((row) => row.kind === "error" && row.retryable));
+    });
+
+    it("folds a settled turn a brain input started, like any other", () => {
+      const rows = rowsOf(
+        timelineOf(
+          [
+            message("wake-entry", "user", 'Subagent "Probe" reported.', {
+              createdAt: "00",
+              sender: "brain",
+            }),
+            work("command-entry", "02"),
+            message("assistant-entry", "assistant", "Done.", {
+              createdAt: "05",
+            }),
+          ],
+          { turns: [turn(TURN, "00", "05", "completed")] }
+        )
+      );
+
+      assert.deepStrictEqual(
+        rows.map((row) => row.kind),
+        ["brain-input", "turn-fold", "message"]
+      );
+    });
   });
 
   it("renders a single completed tool call directly", () => {

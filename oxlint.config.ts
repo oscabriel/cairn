@@ -15,6 +15,9 @@ const vitestForEffect = {
       // `expect` inside `it.effect(() => Effect.gen(...))` is not seen as
       // inside a test block.
       "vitest/no-standalone-expect": "off",
+      // Test files kept ultracite 8.0's exception: mock factories use
+      // Promise.resolve and reject. The rule itself is on in `rules` below.
+      "promise/prefer-await-to-then": "off",
     },
   })),
 };
@@ -70,14 +73,14 @@ const restrictions = {
       {
         name: "@earendil-works/pi-durable",
         message:
-          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts) (coding standard S42).",
+          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts, usage/BudgetSources.ts) (coding standard S42).",
       },
     ],
     patterns: [
       {
         group: ["@earendil-works/pi-durable/**"],
         message:
-          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts) (coding standard S42).",
+          "pi-durable is imported only under apps/server/src/brain/, in *Extension.ts files, in judges/fixtures/ and in phase 2's tool folders (subagents/, approvals/, workflows/, verdicts/, reach/, pi-host/, models/ResultTool.ts, usage/BudgetSources.ts) (coding standard S42).",
       },
     ],
   },
@@ -223,6 +226,8 @@ const zones: ReadonlyArray<{
       server("verdicts/**"),
       server("reach/**"),
       server("models/ResultTool.ts"),
+      server("usage/BudgetSources.ts"),
+      server("usage/BudgetSources.test.ts"),
     ],
     allowed: ["durable", "piAi"],
   },
@@ -231,7 +236,11 @@ const zones: ReadonlyArray<{
     files: [server("pi-host/**")],
     allowed: ["durable", "piAi", "codingAgent"],
   },
-  { files: [server("**/*Extension.ts")], allowed: ["durable", "piAi"] },
+  // An extension's test drives it on a pi-durable Harness, wherever the extension lives.
+  {
+    files: [server("**/*Extension.ts"), server("**/*Extension.test.ts")],
+    allowed: ["durable", "piAi"],
+  },
   // Upload-time image fitting runs pi-durable's Photon processor (plan section 1, "Attachments").
   { files: [server("attachments/ImagePrepare.ts")], allowed: ["durable"] },
   {
@@ -315,6 +324,35 @@ export default defineConfig({
       files: ["judges/**"],
       rules: { "automation/no-ambient-nondeterminism": "off" },
     },
+    {
+      // Code the app's layers built runs its Effects on their context (coding standard S43).
+      files: ["apps/server/src/**", "packages/bridge/src/**"],
+      rules: { "automation/no-bare-effect-run": "error" },
+    },
+    {
+      // What runs outside the app's layers: entry points, the extraction worker (its own thread),
+      // fixtures (their own processes), tests, test kits and the conformance suite.
+      files: [
+        server("main.ts"),
+        server("dev-main.ts"),
+        server("judge-main.ts"),
+        server("attachments/ExtractWorker.ts"),
+        server("brain/conformance/**"),
+        "**/fixtures/**",
+        "**/*.test.ts",
+        "**/*TestKit.ts",
+      ],
+      rules: { "automation/no-bare-effect-run": "off" },
+    },
+    {
+      // A test's own Vitest limit scales by the test slack (`testLimit`, glossary: Test slack).
+      files: [
+        server("**/*.test.ts"),
+        "judges/lib/**/*.test.ts",
+        "tools/**/*.test.ts",
+      ],
+      rules: { "automation/no-raw-test-limit": "error" },
+    },
     ...foldkitOverrides,
     ...boundaryOverrides,
     {
@@ -366,6 +404,9 @@ export default defineConfig({
     "max-classes-per-file": "off",
     "no-redeclare": "off",
     "oxc/no-accumulating-spread": "error",
+    // ultracite 8.1 turned this off for its false reports on Zod's `.catch()`; Cairn kept it on
+    // before that release and keeps it now, so a dependency bump does not loosen the gate.
+    "promise/prefer-await-to-then": "error",
     "require-yield": "off",
     // Effect's own style wins over ultracite's here (ADR 0004): Schema field order is meaningful,
     // service shapes use method signatures, Effect writes `Array<A>`/`ReadonlyArray<A>`, and

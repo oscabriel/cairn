@@ -26,6 +26,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Option } from "effect";
 
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { COMMIT_OPTIONS } from "../threads/ThreadsTestKit.ts";
 import {
   buildTemporaryWorktreeBranchName,
@@ -37,6 +38,8 @@ import {
   worktreeRepoKey,
   Worktrees,
 } from "./Worktrees.ts";
+
+isolateGitEnvironment();
 
 const TestLayer = Worktrees.layerNoDeps.pipe(
   Layer.provideMerge(Git.layerNoDeps),

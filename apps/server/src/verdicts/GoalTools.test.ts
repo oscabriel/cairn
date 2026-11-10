@@ -7,20 +7,17 @@
 // - a second check of a criterion whose run is going queues nothing;
 // - `goal_criteria` asks the user and binds nothing; accepting binds the criteria, declining binds
 //   none, and a proposal judged by `true` reads as deciding nothing on the card;
-// - a model judge that names no model (or a role, recorded before ADR 0043) runs on the thread's own
-//   model, one of the thread's family runs when named, and one on the Claude bridge is refused and
+// - a model judge that names no model is refused (it would run on the thread's own model), one of
+//   the thread's family runs when named, and one on the Claude bridge is refused and
 //   runs nothing; each verdict records its model and reply, having read the rubric and transcript;
 // - a subagent's thread has no goal tools;
 // - a kill during a judge run (the Harness closed while its command runs, then reopened on the same
-//   store) reruns the command and records one verdict and one note;
-// - a judge run the crash-loop guard parked does not hold its criterion: a second check settles
-//   its item and queues a fresh run.
+//   store) reruns the command and records one verdict and one note.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 
 import { judgeChip, judgeWarning } from "@cairn/client-logic/GoalProgress";
 import {
@@ -32,17 +29,17 @@ import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { ApprovalRecord as ApprovalRecordSchema } from "@cairn/protocol/Policy";
 import type { JudgeRef } from "@cairn/protocol/Policy";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import {
-  DEFAULT_RESTART_LIMIT,
-  MemoryStorage,
-} from "@earendil-works/pi-durable";
+import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result, Schema } from "effect";
 
-import { answerApproval, Approvals } from "../brain/CairnDocs.ts";
+import { answerApproval } from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
+import { ChildDoc } from "../brain/SubagentDocs.ts";
+import { eventually, testLimit } from "../EventuallyTestKit.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { taskOf } from "../subagents/Delivery.ts";
-import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { JudgeRunsDoc } from "./GoalDocs.ts";
 import {
   callTool,
@@ -60,6 +57,8 @@ import type { GoalKit, KitModel } from "./GoalTestKit.ts";
 import { NO_JUDGE_FAULTS } from "./JudgeRun.ts";
 import type { JudgeModels } from "./JudgeRun.ts";
 import { bindCriteria, criteriaAnswered } from "./Verdicts.ts";
+
+isolateGitEnvironment();
 
 const context = BACKGROUND_CONTEXT;
 
@@ -88,9 +87,6 @@ const judgesAnswering = (
       prompts.push(prompt);
 
       return await Promise.resolve(Result.succeed(reply));
-    },
-    roleNameRead: async () => {
-      await Promise.resolve();
     },
   };
 };
@@ -450,7 +446,7 @@ describe("the goal tools under a Harness", () => {
   );
 
   it.live(
-    "a model judge runs on the thread's own model when it names none, of any family when named, never on the bridge",
+    "a model judge names its model: of any family, the thread's own when the user named it, never none or the bridge (ADR 0055)",
     () =>
       Effect.gen(function* () {
         const cwd = yield* scratch;
@@ -473,18 +469,21 @@ describe("the goal tools under a Harness", () => {
         });
 
         const conversation = yield* thread(kit, cwd, [
-          // Names no model: the thread's own judges (ADR 0043).
+          // Names no model: the thread's own would judge its own work, so it is refused (ADR 0055).
           { text: "Tests pass", judge: modelJudge(null) },
           // The thread's family, named: no longer refused.
           {
             text: "Tests pass, judged by a cousin",
             judge: modelJudge("opencode-go/claude-haiku-5-5"),
           },
-          // A judge recorded before ADR 0043 names a role: it reads as none.
-          { text: "Tests pass, judged by a role", judge: modelJudge("@judge") },
           {
             text: "Tests pass, judged on the bridge",
             judge: modelJudge("claude-bridge/claude-haiku-5-5"),
+          },
+          // The thread's own model, named in criteria the user bound: the user's pick.
+          {
+            text: "Tests pass, judged by the thread's model",
+            judge: modelJudge("anthropic/claude-test"),
           },
         ]);
 
@@ -504,8 +503,8 @@ describe("the goal tools under a Harness", () => {
           async () => await toolResults(conversation, context)
         );
 
-        assert.include(results.get("t4") ?? "", "Claude bridge");
-        assert.strictEqual(judges.prompts.length, 3);
+        assert.include(results.get("t3") ?? "", "Claude bridge");
+        assert.strictEqual(judges.prompts.length, 2);
         assert.include(
           judges.prompts[0] ?? "",
           "Rubric: A test run with no failures"
@@ -522,15 +521,21 @@ describe("the goal tools under a Harness", () => {
             criterion.verdict?.evidence.model ?? null,
           ]),
           [
-            ["met", "anthropic/claude-test"],
-            ["met", "opencode-go/claude-haiku-5-5"],
-            ["met", "anthropic/claude-test"],
             ["open", null],
+            ["met", "opencode-go/claude-haiku-5-5"],
+            ["open", null],
+            ["met", "anthropic/claude-test"],
           ]
         );
         assert.include(
-          goal?.criteria[0]?.verdict?.evidence.note ?? "",
+          goal?.criteria[1]?.verdict?.evidence.note ?? "",
           "12 passed"
+        );
+
+        // The refusal reaches the thread's model as goal_check's answer, in words the user reads.
+        assert.include(
+          results.get("t1") ?? "",
+          "is this thread's own model, so a judge on it would grade its own work"
         );
       }).pipe(Effect.scoped)
   );
@@ -571,7 +576,7 @@ describe("the goal tools under a Harness", () => {
         async () => await toolResults(conversation, context)
       );
 
-      assert.include(results.get("t1") ?? "", "brief's done-when criteria");
+      assert.include(results.get("t1") ?? "", "its parent, which accepts it");
     }).pipe(Effect.scoped)
   );
 
@@ -652,7 +657,7 @@ describe("the goal tools under a Harness", () => {
         assert.strictEqual(goal?.criteria[0]?.state, "met");
         assert.isAtLeast(notes.length, 1);
       }).pipe(Effect.scoped),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -721,7 +726,7 @@ describe("the goal tools under a Harness", () => {
           "the dead item is settled"
         );
       }).pipe(Effect.scoped),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -802,7 +807,7 @@ describe("the goal tools under a Harness", () => {
 
         assert.include(results.get("t2") ?? "", "Queued judge run judge-");
       }).pipe(Effect.scoped),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -848,11 +853,11 @@ describe("the goal tools under a Harness", () => {
         };
 
         // The command has started: the kill lands inside the judge run.
-        for (let waited = 0; lines() === 0 && waited < 100; waited += 1) {
-          yield* Effect.promise(async () => {
-            await sleep(20);
-          });
-        }
+        yield* eventually(
+          Effect.sync(lines),
+          (count) => count > 0,
+          "the judge command's first run"
+        );
 
         assert.strictEqual(lines(), 1);
 
@@ -898,118 +903,6 @@ describe("the goal tools under a Harness", () => {
         assert.strictEqual(goal?.criteria[0]?.tries, 1);
         assert.strictEqual(notes.length, 1);
       }).pipe(Effect.scoped),
-    30_000
-  );
-
-  it.live(
-    "a judge run the crash-loop guard parked does not hold its criterion",
-    () =>
-      Effect.gen(function* () {
-        const cwd = yield* scratch;
-        const store = path.join(cwd, "brain.sqlite");
-
-        const options = {
-          storage: yield* Effect.promise(
-            async () => await openNodeSqliteStorage(store)
-          ),
-          model: CLAUDE,
-          responses: [callTool("goal_check", { criterion: "c1" }, "t1")],
-          judges: judgesAnswering("MET"),
-          faults: NO_JUDGE_FAULTS,
-        };
-
-        const first = yield* Effect.promise(
-          async () => await openGoalKit(options, context)
-        );
-
-        const conversation = yield* thread(first, cwd, [
-          { text: "Slow tests pass", judge: command(["sleep", "30"]) },
-        ]);
-
-        yield* Effect.promise(async () => {
-          await send(conversation, "Check.", "r-1", context);
-        });
-
-        const queued = yield* Effect.promise(
-          async () => await readRuns(first, conversation, context)
-        );
-
-        const [parkedKey, parkedItem] = Object.entries(
-          queued?.items ?? {}
-        )[0] ?? ["", undefined];
-
-        assert.isDefined(parkedItem);
-
-        yield* Effect.promise(async () => {
-          await first.close();
-        });
-
-        // As the crash-loop guard leaves a run cut off at the limit: live, and parked until a retry.
-        const storage = yield* Effect.promise(
-          async () => await openNodeSqliteStorage(store)
-        );
-
-        yield* Effect.promise(async () => {
-          const record = await storage.task(
-            taskOf(parkedItem?.taskId ?? 0),
-            context
-          );
-
-          assert.isDefined(record);
-
-          if (record !== undefined) {
-            await storage.commit(
-              [
-                {
-                  type: "task",
-                  value: { ...record, restarts: DEFAULT_RESTART_LIMIT },
-                },
-              ],
-              context
-            );
-          }
-        });
-
-        const second = yield* kitOver({
-          ...options,
-          storage,
-          responses: [
-            callTool("goal_check", { criterion: "c1" }, "t2"),
-            say("Queued again."),
-          ],
-        });
-
-        const again = yield* Effect.promise(
-          async () =>
-            await second.harness.conversation(conversation.id, context)
-        );
-
-        assert.isDefined(again);
-
-        if (again === undefined) {
-          return;
-        }
-
-        yield* Effect.promise(async () => {
-          await send(again, "Check again.", "r-2", context);
-        });
-
-        const results = yield* Effect.promise(
-          async () => await toolResults(again, context)
-        );
-
-        assert.include(results.get("t2") ?? "", "Queued judge run judge-");
-
-        const runs = yield* Effect.promise(
-          async () => await readRuns(second, again, context)
-        );
-
-        assert.strictEqual(Object.keys(runs?.items ?? {}).length, 2);
-        assert.isNotNull(
-          runs?.items[parkedKey]?.settledAt ?? null,
-          "the parked run's item is settled"
-        );
-      }).pipe(Effect.scoped),
-    30_000
+    testLimit(30_000)
   );
 });

@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one step after another, on purpose */
 // The workflow surfaces judge (plan 6F, the behaviour scripts `launch-approval` and `steps`;
-// surfaces note "Judges", S7 and S8; ADR 0032): the real web client on the `next` views
+// surfaces note "Judges", S7 and S8; ADR 0032): the real web client
 // over a real in-process brain on the scripted harness (judges/fixtures/parity/
 // CairnApp.ts with the proposing parent of judges/fixtures/workflows/LaunchBrain.ts, whose
 // `workflow_plan` asks the launch approval as a brief and plays the workflow's ledger, and whose
@@ -23,13 +23,14 @@
 //                    nothing, and Decline with a reason settles it, running nothing.
 //   steps            Go on a launch whose readers keep working: the header's button says "1
 //                    workflow" and opens the panel (a column beside the chat at 1,440, a bottom
-//                    sheet at 390), where the workflow's phases read Read running with its three
-//                    readers, each with Stop, and Judge not started. Stop on the second reader
-//                    sends one `workflow.stopNode` and stops it alone: it reads stopped, with no
+//                    sheet at 390), where the workflow's phases read Read Working with its three
+//                    readers, each with Stop, and Judge To do. Stop on the second reader asks
+//                    "Stop?" on its first press; the second sends one `workflow.stopNode` and
+//                    stops it alone: it reads stopped, with no
 //                    Stop, while the other two still run. The first reader, released, reads done
 //                    with its model and tokens. Stop workflow sends one `workflow.stop`: the
 //                    third reader reads stopped, the workflow stopped with no Stop left, the tally
-//                    "3 nodes · 1 done · 2 stopped", Judge not started, and the model reads that
+//                    "3 nodes · 1 done · 2 stopped", Judge To do, and the model reads that
 //                    3 of 4 nodes ran. Nothing scrolls sideways; at 390 every control is 44 px.
 //
 // Broken controls, each planted in the page by this judge (never in the app), each of which must
@@ -61,6 +62,9 @@ import {
 } from "./fixtures/workflows/LaunchBrain.ts";
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Page } from "./lib/Browser.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = ["double", "sample", "stop"] as const;
 
@@ -643,7 +647,7 @@ const steps = async (
     `the readers read ${JSON.stringify(running.nodes)}`
   );
   expect(
-    running.phases.join(",") === "Read=running,Judge=not started",
+    running.phases.join(",") === "Read=Working,Judge=To do",
     `the phases read ${JSON.stringify(running.phases)}`
   );
   // Three node Stops and the workflow's.
@@ -679,12 +683,24 @@ const steps = async (
 
   expect(small.length === 0, `small targets in the panel: ${small.join(", ")}`);
 
-  // Stop on the second reader stops it alone.
+  // Stop on the second reader stops it alone, on its second press: the first asks "Stop?" (U-3).
   const beforeNode = sentCount(frames, "workflow.stopNode");
 
-  await nodeRow(page, second ?? "")
-    .locator('[data-testid="work-node-stop"]')
-    .click();
+  const nodeStop = nodeRow(page, second ?? "").locator(
+    '[data-testid="work-node-stop"]'
+  );
+
+  await nodeStop.click();
+  await until(
+    async () => {
+      const text = await nodeStop.textContent();
+
+      return text?.trim() ?? "";
+    },
+    (text) => text === "Stop?",
+    5000
+  );
+  await nodeStop.click();
 
   const afterNode = await until(
     async () => await ledgerOf(page),
@@ -754,7 +770,7 @@ const steps = async (
     `the tally reads ${JSON.stringify(stopped.tally)}`
   );
   expect(
-    stopped.phases.join(",") === "Read=stopped,Judge=not started" &&
+    stopped.phases.join(",") === "Read=Stopped,Judge=To do" &&
       !stopped.nodes.some((node) => node.startsWith(JUDGE)),
     `the phases read ${JSON.stringify(stopped.phases)}`
   );

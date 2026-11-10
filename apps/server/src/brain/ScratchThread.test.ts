@@ -17,18 +17,11 @@ import {
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
-import {
-  Context,
-  Duration,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Schedule,
-} from "effect";
+import { Context, Effect, FileSystem, Layer, Option } from "effect";
 import type { Scope } from "effect";
 import { RpcTest } from "effect/rpc";
 
+import { eventually, testLimit } from "../EventuallyTestKit.ts";
 import { FolderRules } from "../projects/FolderRules.ts";
 import { folderClaimant, ScratchProject } from "../projects/ScratchProject.ts";
 import { ShellHandlers } from "../rpc/ShellHandlers.ts";
@@ -46,9 +39,8 @@ import {
 import { TitleModel } from "../threads/TitleModel.ts";
 import { Brain } from "./Brain.ts";
 import { piDurableLayer } from "./conformance/Targets.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL } from "./ModelSource.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 
 const rootWorkspace = RootWorkspace.make({ branch: Option.none() });
@@ -120,18 +112,6 @@ const withData = <A, E>(
       Effect.provide(layerFor(dataDir, brain))
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
-
-const eventually = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  check: (value: A) => boolean
-) =>
-  read.pipe(
-    Effect.repeat({
-      until: check,
-      schedule: Schedule.spaced(Duration.millis(10)),
-    }),
-    Effect.timeout(Duration.seconds(5))
-  );
 
 const isRunning = Effect.fn("test.isRunning")(function* (threadId: ThreadId) {
   const states = yield* (yield* HarnessSeam).inspect;
@@ -248,7 +228,7 @@ const clearCase = (harness: HarnessName) => {
           }),
         harness
       ),
-    30_000
+    testLimit(30_000)
   );
 };
 

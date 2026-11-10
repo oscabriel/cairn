@@ -11,22 +11,28 @@
 import { ConversationId } from "@cairn/protocol/Ids";
 import { Brief, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision, LaunchEdits } from "@cairn/protocol/Policy";
-import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
+import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
+import type { Budget } from "@cairn/protocol/Spend";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
 import {
-  answerApproval,
-  Approvals,
   cancelStoppedApprovals,
-} from "../brain/CairnDocs.ts";
+  answerApproval,
+} from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { EventsDoc, eventKind } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
-import { ledgerProblems, WorkflowsDoc } from "./WorkflowDocs.ts";
-import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
+import { ledgerProblems, WorkflowSourcesDoc } from "./WorkflowDocs.ts";
 import { isNodeBrief, LAUNCH_TOOL, launchAnswered } from "./WorkflowLaunch.ts";
 import type { WorkflowPlan } from "./WorkflowPlan.ts";
 import {
@@ -36,9 +42,13 @@ import {
   KitLayer,
   openKit,
   pause,
+  PLAN_ONLY_PREFIX,
   PLAN_PREFIX,
+  PLAN_TWICE_PREFIX,
+  PLAN_TWICE_TOGETHER_PREFIX,
   plant,
   plantDefaults,
+  TWICE_ARGS,
 } from "./WorkflowTestKit.ts";
 import type { KitBrain, WorkEffect } from "./WorkflowTestKit.ts";
 import { NO_WORKFLOW_FAULTS } from "./WorkflowTools.ts";
@@ -163,10 +173,19 @@ const flow = (
     readonly stopAt?: "launch" | "card";
     /** Project recipes a reference may name, source by name. */
     readonly projectRecipes?: Readonly<Record<string, string>>;
+    /** The server's default budget; no limit when absent. */
+    readonly defaultBudget?: Budget;
     /** What the thread holds before the model proposes: launches planted on its ledger. */
     readonly before?: (
       brain: KitBrain
     ) => Effect.Effect<void, never, WorkflowPlan>;
+    /** How the model proposes: `PLAN_PREFIX` unless a case says otherwise. */
+    readonly prefix?: string;
+    /**
+     * An earlier run on the thread, whose launch cards take the first answers: sent and run to its
+     * end before the case's own input, with `between` run between the two (a recipe file edited).
+     */
+    readonly earlier?: { readonly input: string; readonly between: () => void };
   }
 ) =>
   Effect.gen(function* () {
@@ -174,6 +193,7 @@ const flow = (
 
     const parts = yield* kitParts({
       projectRecipes: options.projectRecipes ?? {},
+      defaultBudget: options.defaultBudget ?? DEFAULT_BUDGET,
       faults: options.faults ?? NO_WORKFLOW_FAULTS,
       hold: async () => {},
       effect: (line) => {
@@ -259,10 +279,23 @@ const flow = (
 
       const root = await brain.harness.conversation(brain.root, context);
 
+      if (options.earlier !== undefined) {
+        await root?.submit(
+          {
+            type: "input",
+            content: options.earlier.input,
+            requestId: "plan-0",
+          },
+          context
+        );
+        await brain.harness.waitForIdle(context);
+        options.earlier.between();
+      }
+
       await root?.submit(
         {
           type: "input",
-          content: `${PLAN_PREFIX}${script}`,
+          content: `${options.prefix ?? PLAN_PREFIX}${script}`,
           requestId: "plan-1",
         },
         context
@@ -314,6 +347,26 @@ const workflow = (body: string, name = "kit-flow") =>
 
 const GO: LaunchAnswer = { decision: "accept", edits: Option.none() };
 
+/** A project recipe launched by reference, as the model proposes and runs it. */
+const RECIPE_REFERENCE = `export const meta = { name: "kit-recipe" };`;
+
+/** The recipe's file before an edit, and after it. */
+const OLD_RECIPE = workflow(
+  `return await agent("node:old", { label: "old" });`,
+  "kit-recipe"
+);
+
+const NEW_RECIPE = workflow(
+  `return await agent("node:new", { label: "new" });`,
+  "kit-recipe"
+);
+
+/** A recipe whose one node is named by its launch's arguments. */
+const ASKING_RECIPE = workflow(
+  `return await agent("node:" + args.question, { label: args.question });`,
+  "kit-recipe"
+);
+
 const starts = (effects: ReadonlyArray<WorkEffect>) =>
   effects
     .flatMap((line) => (line.what === "start" ? [line.node] : []))
@@ -354,7 +407,7 @@ describe("launch approval and the envelope on pi-durable", () => {
 
         assert.deepStrictEqual(plan.nodes, { count: 5, unbounded: false });
         assert.deepStrictEqual(
-          plan.envelope.roles.map((entry) => entry.spec),
+          plan.envelope.models.map((entry) => entry.spec),
           [KIT_SPEC]
         );
         assert.strictEqual(plan.envelope.maxNodes, 5);
@@ -400,7 +453,7 @@ describe("launch approval and the envelope on pi-durable", () => {
         assert.strictEqual(count("brief.approved"), 6);
         assert.include(outcome.reply, "done");
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -429,7 +482,7 @@ describe("launch approval and the envelope on pi-durable", () => {
         assert.deepStrictEqual(starts(outcome.effects), ["a", "b", "c", "d"]);
         assert.include(outcome.reply, '"e":null');
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -451,7 +504,7 @@ describe("launch approval and the envelope on pi-durable", () => {
           "e",
         ]);
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -472,7 +525,7 @@ describe("launch approval and the envelope on pi-durable", () => {
           "declined workflow kit-flow: not this one"
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -514,7 +567,148 @@ return { a, args, total: budget.total };`);
         assert.notInclude(outcome.reply, "stale");
         assert.notInclude(outcome.reply, "700000");
       }),
-    30_000
+    testLimit(30_000)
+  );
+
+  it.live(
+    "a Go whose run ends before codemode ends with it, and a newer Go of the recipe, its file since changed, runs the new file",
+    () =>
+      Effect.gen(function* () {
+        // The first run proposes the project recipe, gets Go and answers without running it; the
+        // file is edited; the second run proposes it again, gets Go and runs it.
+        const recipes = { "kit-recipe": OLD_RECIPE };
+
+        const outcome = yield* flow(RECIPE_REFERENCE, {
+          launches: [GO, GO],
+          projectRecipes: recipes,
+          earlier: {
+            input: `${PLAN_ONLY_PREFIX}${RECIPE_REFERENCE}`,
+            between: () => {
+              recipes["kit-recipe"] = NEW_RECIPE;
+            },
+          },
+        });
+
+        const [left, newer] = outcome.rows;
+
+        assert.deepStrictEqual(outcome.problems, []);
+        assert.strictEqual(newer?.state, "finished", "the newer Go ran");
+        assert.deepStrictEqual(starts(outcome.effects), ["new"]);
+        assert.strictEqual(left?.state, "declined", "the older Go ended");
+        assert.deepStrictEqual(left?.decidedBy, {
+          kind: "system",
+          why: "run-stopped",
+        });
+        assert.deepStrictEqual(left?.nodes, {});
+      }),
+    testLimit(30_000)
+  );
+
+  it.live(
+    "an approved launch of a recipe left over from an ended run never runs, and the newer Go runs the new file",
+    () =>
+      Effect.gen(function* () {
+        // The leftover row as an earlier run left it, bound to that run, with the old file's
+        // source kept beside the ledger.
+        const outcome = yield* flow(RECIPE_REFERENCE, {
+          launches: [GO],
+          projectRecipes: { "kit-recipe": NEW_RECIPE },
+          before: (brain) =>
+            Effect.gen(function* () {
+              yield* plant(
+                brain,
+                OLD_RECIPE,
+                {
+                  ...plantDefaults("wf-left"),
+                  args: { question: "left over" },
+                  run: Option.some(999_999),
+                },
+                context
+              ).pipe(Effect.orDie);
+
+              yield* Effect.promise(async () => {
+                await brain.harness.commit(async (tx) => {
+                  const sources = await tx.doc(WorkflowSourcesDoc, brain.root);
+
+                  sources.items["wf-left"] = {
+                    name: "kit-recipe",
+                    source: OLD_RECIPE,
+                  };
+                }, context);
+              });
+            }),
+        });
+
+        const left = outcome.ledger.items["wf-left"];
+        const newer = outcome.rows.find((row) => row.id !== "wf-left");
+
+        assert.deepStrictEqual(outcome.problems, []);
+        assert.strictEqual(newer?.state, "finished", "the newer Go ran");
+        assert.deepStrictEqual(starts(outcome.effects), ["new"]);
+        assert.deepStrictEqual(left?.nodes, {});
+        assert.notInclude(outcome.reply, "left over");
+      }),
+    testLimit(30_000)
+  );
+
+  it.live(
+    "two Goes on one recipe with different arguments run both launches, each with its own arguments",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* flow(RECIPE_REFERENCE, {
+          prefix: PLAN_TWICE_PREFIX,
+          launches: [GO, GO],
+          projectRecipes: { "kit-recipe": ASKING_RECIPE },
+        });
+
+        assert.deepStrictEqual(outcome.problems, []);
+        // The two proposals run in parallel, so either may be written first.
+        assert.sameDeepMembers(
+          outcome.rows.map((row) => [row.state, row.args]),
+          TWICE_ARGS.map((args) => ["finished", args])
+        );
+        assert.deepStrictEqual(starts(outcome.effects), ["first", "second"]);
+      }),
+    testLimit(30_000)
+  );
+
+  it.live(
+    "two Goes on one recipe run both launches when the model runs them in one message",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* flow(RECIPE_REFERENCE, {
+          prefix: PLAN_TWICE_TOGETHER_PREFIX,
+          launches: [GO, GO],
+          projectRecipes: { "kit-recipe": ASKING_RECIPE },
+        });
+
+        assert.deepStrictEqual(outcome.problems, []);
+        assert.sameDeepMembers(
+          outcome.rows.map((row) => [row.state, row.args]),
+          TWICE_ARGS.map((args) => ["finished", args])
+        );
+        assert.deepStrictEqual(starts(outcome.effects), ["first", "second"]);
+      }),
+    testLimit(30_000)
+  );
+
+  it.live(
+    "two Goes on one inline script run both launches when the model runs them in one message",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* flow(ASKING_RECIPE, {
+          prefix: PLAN_TWICE_TOGETHER_PREFIX,
+          launches: [GO, GO],
+        });
+
+        assert.deepStrictEqual(outcome.problems, []);
+        assert.sameDeepMembers(
+          outcome.rows.map((row) => [row.state, row.args]),
+          TWICE_ARGS.map((args) => ["finished", args])
+        );
+        assert.deepStrictEqual(starts(outcome.effects), ["first", "second"]);
+      }),
+    testLimit(30_000)
   );
 
   it.live(
@@ -542,7 +736,7 @@ return { a, args, total: budget.total };`);
         assert.strictEqual(row?.state, "finished");
         assert.deepStrictEqual(starts(outcome.effects), ["a"]);
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -560,7 +754,7 @@ return { a, args, total: budget.total };`);
         assert.deepStrictEqual(Object.keys(outcome.records), []);
         assert.include(outcome.reply, "no project recipe");
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -584,7 +778,7 @@ return { a, args, total: budget.total };`);
           "sent workflow kit-flow back: fewer nodes"
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -605,15 +799,45 @@ return { a, args, total: budget.total };`);
             ]?.payload
           );
 
-        assert.strictEqual(briefOf("e").role, ALT_MODEL);
-        assert.isNull(briefOf("a").role);
+        assert.strictEqual(briefOf("e").model, ALT_MODEL);
+        assert.isNull(briefOf("a").model);
 
         const e = nodes.find((node) => node.label === "e");
 
         assert.deepStrictEqual([e?.provider, e?.modelId], ["faux", "kit-alt"]);
         assert.deepStrictEqual(outcome.problems, []);
       }),
-    30_000
+    testLimit(30_000)
+  );
+
+  it.live(
+    "a launch its model gives no budget carries the server's default, frozen in its payload and row",
+    () =>
+      Effect.gen(function* () {
+        const fallback: Budget = {
+          ...DEFAULT_BUDGET,
+          maxListMicros: Micros.make(3_000_000),
+          maxTokens: 700_000,
+        };
+
+        const outcome = yield* flow(
+          workflow(`const a = await agent("node:a", { label: "a" });
+return { a, total: budget.total };`),
+          { launches: [GO], defaultBudget: fallback }
+        );
+
+        const [row] = outcome.rows;
+        const launch = outcome.records[row?.approvalId ?? ""];
+
+        assert.deepStrictEqual(
+          decodeLaunch(launch?.payload).envelope.budget,
+          fallback
+        );
+        assert.strictEqual(row?.budget.maxTokens, 700_000);
+        assert.strictEqual(row?.budget.maxListMicros, 3_000_000);
+        assert.include(outcome.reply, '"total":700000');
+      }),
+    testLimit(30_000)
   );
 
   it.live(
@@ -640,7 +864,7 @@ return { a, total: budget.total };`),
         });
         assert.include(outcome.reply, '"total":900000');
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -678,7 +902,7 @@ return { a, total: budget.total };`),
           "accept_sample"
         );
       }),
-    45_000
+    testLimit(45_000)
   );
 
   it.live(
@@ -691,7 +915,7 @@ return { a, total: budget.total };`),
         assert.deepStrictEqual(Object.keys(outcome.records), []);
         assert.include(outcome.reply, "dispatched no node");
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -722,7 +946,7 @@ return { a, total: budget.total };`),
           )
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -753,6 +977,6 @@ return { a, total: budget.total };`),
           )
         );
       }),
-    30_000
+    testLimit(30_000)
   );
 });

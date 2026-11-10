@@ -10,7 +10,6 @@ import {
   coversText,
   estimateCostText,
   estimateText,
-  grantsText,
   launchNumbers,
   nodesText,
 } from "./LaunchCard.ts";
@@ -63,7 +62,7 @@ const launch: WorkflowLaunch = {
     scriptHash: "abc",
     maxNodes: 5,
     maxConcurrent: 2,
-    roles: [
+    models: [
       {
         spec: ModelSpec.make("opencode-go/gpt-6-luna:high"),
         readonly: true,
@@ -152,7 +151,7 @@ describe("the launch card's numbers", () => {
       ["Go covers", "Up to 5 nodes, 2 at once"],
       [
         "Models",
-        "opencode-go/gpt-6-luna at high, reads only; faux/scripted, may write",
+        "Any node may run on opencode-go/gpt-6-luna at high, reads only; faux/scripted, may write",
       ],
       ["Phases", "Read, Judge"],
     ]);
@@ -177,31 +176,6 @@ describe("the launch card's call sites and arguments", () => {
         detail: "faux/scripted · writes · depends on the data",
       },
     ]);
-  });
-
-  it("reads a role a launch recorded before roles were removed as this thread's model", () => {
-    const old: WorkflowLaunch = {
-      ...launch,
-      callSites: launch.callSites.map((site) => ({
-        ...site,
-        spec: ModelSpec.make("@scout"),
-      })),
-      envelope: {
-        ...launch.envelope,
-        roles: [
-          { spec: ModelSpec.make("@scout"), readonly: true, arms: "host" },
-        ],
-      },
-    };
-
-    assert.deepStrictEqual(
-      callSiteRows(old).map((row) => row.model),
-      ["this thread's model", "this thread's model"]
-    );
-    assert.strictEqual(
-      grantsText(old.envelope),
-      "this thread's model, reads only"
-    );
   });
 
   it("folds the arguments as JSON, and none when there are none", () => {

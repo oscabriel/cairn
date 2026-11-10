@@ -2,7 +2,7 @@
 /* oxlint-disable no-await-in-loop -- a judge drives one step after another, on purpose */
 // The subagent flows judge (plan 6J, the behaviour script for steer, stop and escalated-question
 // flows; subagents note S7 and "Judges", "Steerable from the UI"; ADR 0027, ADR 0028): the real
-// web client on the `next` views over a real in-process brain on the scripted harness
+// web client over a real in-process brain on the scripted harness
 // (judges/fixtures/parity/CairnApp.ts with the delegating model of
 // judges/fixtures/subagents/FlowsBrain.ts), at 390 px as a phone (touch, coarse pointer) and at
 // 1,440 px, each width on a fresh brain. No model provider is called.
@@ -79,6 +79,9 @@ import {
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Locator, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = ["steer", "stop", "card"] as const;
 
@@ -968,7 +971,20 @@ const runWidth = async (browser: Browser, width: number) => {
         `the panel's row for the child says ${JSON.stringify(before)}`
       );
 
-      await press(childRow.locator('[data-testid="work-child-stop"]'), width);
+      // A row's Stop asks "Stop?" on its first press and stops on the second (U-3).
+      const rowStop = childRow.locator('[data-testid="work-child-stop"]');
+
+      await press(rowStop, width);
+      await until(
+        async () => {
+          const text = await rowStop.textContent();
+
+          return text?.trim() ?? "";
+        },
+        (text) => text === "Stop?",
+        5000
+      );
+      await press(rowStop, width);
 
       const moved = await until(
         async () =>

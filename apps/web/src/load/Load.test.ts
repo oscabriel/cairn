@@ -4,12 +4,21 @@
 
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option } from "effect";
+import { vi } from "vitest";
 
 import { socketUrl } from "../connection/Connection.ts";
 import { BOOT_ELEMENT_ID } from "../shell/ShellStore.ts";
 import { earlySocketUrl } from "./EarlySocket.ts";
 import { requestsBefore } from "./LoadMark.ts";
-import { readPageBuild, shouldReload } from "./StaleBuild.ts";
+import {
+  checkServerBuild,
+  readPageBuild,
+  RELOADED_FOR_KEY,
+  shouldReload,
+} from "./StaleBuild.ts";
+
+/** What `GET /api/build` answers for a server on build `bbbbbbbbbbbb`. */
+const buildAnswer = () => Response.json({ build: "bbbbbbbbbbbb" });
 
 describe("stale build", () => {
   it("reloads once for a server build other than the page's", () => {
@@ -31,7 +40,7 @@ describe("stale build", () => {
       element.type = "application/json";
       element.textContent = JSON.stringify({
         shell: { snapshotSequence: 0, projects: [], threads: [] },
-        protocol: 2,
+        protocol: 3,
         build: "0123456789ab",
         vapidPublicKey: null,
       });
@@ -48,6 +57,47 @@ describe("stale build", () => {
       assert.deepStrictEqual(withBoot, Option.some("0123456789ab"));
       assert.deepStrictEqual(withNull, Option.none());
     })
+  );
+
+  it.effect(
+    "asks `GET /api/build` over HTTP and reloads once for the build it answers",
+    () =>
+      Effect.gen(function* () {
+        const element = document.createElement("script");
+
+        element.id = BOOT_ELEMENT_ID;
+        element.type = "application/json";
+        element.textContent = JSON.stringify({ build: "aaaaaaaaaaaa" });
+        document.head.append(element);
+        sessionStorage.removeItem(RELOADED_FOR_KEY);
+
+        // The route's answer, as `apps/server/src/http/Build.ts` writes it (its test asks the same path).
+        const fetchBuild = vi
+          .fn<typeof fetch>()
+          .mockResolvedValueOnce(buildAnswer())
+          .mockResolvedValueOnce(buildAnswer());
+
+        vi.stubGlobal("fetch", fetchBuild);
+
+        const reload = vi.spyOn(location, "reload").mockReturnValue();
+
+        yield* checkServerBuild;
+        // The page did not reload after all (the tab kept it): the same build never reloads twice.
+        yield* checkServerBuild;
+
+        const asked = fetchBuild.mock.calls.map(([input]) => input);
+        const reloadedFor = sessionStorage.getItem(RELOADED_FOR_KEY);
+        const reloads = reload.mock.calls.length;
+
+        element.remove();
+        sessionStorage.removeItem(RELOADED_FOR_KEY);
+        reload.mockRestore();
+        vi.unstubAllGlobals();
+
+        assert.deepStrictEqual(asked, ["/api/build", "/api/build"]);
+        assert.strictEqual(reloads, 1);
+        assert.strictEqual(reloadedFor, "bbbbbbbbbbbb");
+      })
   );
 });
 

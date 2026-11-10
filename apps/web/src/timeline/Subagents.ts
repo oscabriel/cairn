@@ -1,14 +1,13 @@
-// The transcript's subagent rows (plan 6C; surfaces note S4), for the `next` views only: a group of
+// The transcript's subagent rows (plan 6C; surfaces note S4): a group of
 // the children a parent spawned between two of its messages, placed after the work that spawned
-// them, and at the top of a child's transcript the way back to its parent. Classic draws neither:
-// the thread page passes the shell rows these rows read only when the `next` frame draws.
+// them, and at the top of a child's transcript the way back to its parent. The thread page passes
+// the shell rows these rows read.
 //
 // The items come from the thread's own view (its spawn calls, briefs, registry and notes), so their
 // keys never depend on the shell; each row's live state comes from the children's shell rows,
 // which `subagentShellsOf` narrows to the open thread's children and keeps as one object while
 // none of them changed, so an unrelated shell change redraws no row. The rows themselves are drawn
-// by `next/timeline/SubagentRows.ts`, which the `next` chunk registers here when it loads, so the
-// entry carries only this module.
+// by `timeline/SubagentRows.ts`, which registers them here when the frame (`Frame.ts`) loads it.
 
 import type { SubagentRequest } from "@cairn/client-logic/SubagentRollup";
 import { pendingSubagentRequests } from "@cairn/client-logic/SubagentRollup";
@@ -57,7 +56,7 @@ export interface SubagentShells {
   readonly parentTitle: Option.Option<string>;
 }
 
-/** The rows' views, from the `next` chunk. */
+/** The rows' views, from `SubagentRows.ts`. */
 export interface SubagentRowViews {
   /** `toggle` folds or opens the group: the transcript's own Message, made by its row view. */
   readonly group: (
@@ -83,16 +82,16 @@ export interface SubagentRowViews {
   ) => ReadonlyArray<string>;
 }
 
-// Held outside the Model on purpose, as `next/FrameLoad.ts` holds the frame: a module is code, not
-// state. One key, set once when the `next` chunk loads.
+// Held outside the Model on purpose, as `page/Chunks.ts` holds its chunks: a module is code, not
+// state. One key, set once when `SubagentRows.ts` loads.
 const registered = new Map<"views", SubagentRowViews>();
 
-/** Registers the rows' views; the `next` chunk calls it as it loads. */
+/** Registers the rows' views; `SubagentRows.ts` calls it as it loads. */
 export const registerSubagentRowViews = (views: SubagentRowViews): void => {
   registered.set("views", views);
 };
 
-/** The rows' views, once the `next` chunk registered them. */
+/** The rows' views, once `SubagentRows.ts` registered them. */
 export const subagentRowViews = (): Option.Option<SubagentRowViews> =>
   Option.fromUndefinedOr(registered.get("views"));
 
@@ -204,11 +203,11 @@ export const subagentShellsOf = (
 };
 
 // ---------------------------------------------------------------------------------------------
-// Items, placed by the `next` chunk (`next/timeline/SubagentItems.ts`) once it registered
+// Items, placed by `timeline/SubagentItems.ts` once `SubagentRows.ts` registered
 
 /**
  * The transcript's items with the open thread's subagent groups and, for a subagent, the way back
- * to its parent; `items` itself until the `next` chunk registered its placing.
+ * to its parent; `items` itself until `SubagentRows.ts` registered its placing.
  */
 export const withSubagentItems = (
   items: ReadonlyArray<ListItem>,
@@ -222,7 +221,7 @@ export const withSubagentItems = (
 
 /**
  * Every key a subagent item of `state` can take, for the list to keep their heights when the view
- * changes shape; none until the `next` chunk registered.
+ * changes shape; none until `SubagentRows.ts` registered.
  */
 export const subagentKeysOf = (
   state: Option.Option<ThreadViewState>

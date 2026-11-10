@@ -1,9 +1,8 @@
-// Ported from github.com/pingdotgg/t3code, packages/client-runtime/src/state/{models.ts
-// (presentThreadShell, shellRuntime, resolveThreadWorkingStartedAt), threadShell.ts (the
-// presentation's use of the wire row)} at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the
-// presentation answers "is it working, since when, does it need me, is there news" from server
-// fields alone, so every device agrees. Changed: Cairn's `activity` replaces t3code's run status
-// union, times stay DateTime values, environments, subagents and pull requests are gone.
+// Ported from github.com/pingdotgg/t3code, packages/client-runtime/src/state/models.ts
+// (presentThreadShell's unseen completion) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: news
+// is read from server fields alone, so every device agrees. Changed: times stay DateTime values.
+// The rest of the presentation (`presentThreadShell`) had no reader once the classic views went
+// (C-12); the one thread-state function (`ThreadState.ts`) answers those questions.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -25,37 +24,6 @@
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { DateTime, Option } from "effect";
 
-/** The latest run of a thread, as the sidebar and the hero read it. */
-export interface RunSummary {
-  readonly requestedAt: Option.Option<DateTime.Utc>;
-  readonly startedAt: Option.Option<DateTime.Utc>;
-  readonly completedAt: Option.Option<DateTime.Utc>;
-}
-
-/** A thread row with the questions every surface asks of it already answered. */
-export interface ThreadPresentation {
-  /** The wire row this presentation was made from; compare it by identity to skip work. */
-  readonly source: ThreadShell;
-  /** Preparing or running: the model or a tool is busy right now. */
-  readonly isWorking: boolean;
-  /** When the current work began: the active run's start, else when it was requested. */
-  readonly workingStartedAt: Option.Option<DateTime.Utc>;
-  /** The latest run, when the thread has had one. */
-  readonly latestRun: Option.Option<RunSummary>;
-  /** A tool call is held for the user's approval. */
-  readonly hasPendingApproval: boolean;
-  /** The agent asked the user a question or a sign-in is needed. */
-  readonly hasPendingUserInput: boolean;
-  /** A run finished after the user last looked at the thread. */
-  readonly hasUnseenCompletion: boolean;
-  /** pi-durable parked at least one task; the row offers a retry. */
-  readonly isParked: boolean;
-  /** The latest run failed. */
-  readonly isFailed: boolean;
-  /** Waiting for a free Claude slot, not for the user. */
-  readonly isWaitingForClaudeSlot: boolean;
-}
-
 const isAfter = (left: DateTime.Utc, right: DateTime.Utc) =>
   DateTime.isGreaterThan(left, right);
 
@@ -72,50 +40,3 @@ export const hasUnseenCompletion = (thread: ThreadShell): boolean =>
         onSome: (visitedAt) => isAfter(completedAt, visitedAt),
       }),
   });
-
-/** Presents one wire row. Pure: the same row always gives an equal presentation. */
-export const presentThreadShell = (thread: ThreadShell): ThreadPresentation => {
-  const isWorking =
-    thread.activity === "preparing" || thread.activity === "running";
-
-  const hasRun =
-    Option.isSome(thread.latestRunRequestedAt) ||
-    Option.isSome(thread.latestRunStartedAt) ||
-    Option.isSome(thread.latestRunCompletedAt);
-
-  const requestKind = Option.map(
-    thread.pendingRuntimeRequest,
-    (request) => request.kind
-  );
-
-  return {
-    source: thread,
-    isWorking,
-    workingStartedAt:
-      isWorking || thread.activity === "waiting"
-        ? Option.orElse(
-            thread.latestRunStartedAt,
-            () => thread.latestRunRequestedAt
-          )
-        : Option.none(),
-    latestRun: hasRun
-      ? Option.some({
-          requestedAt: thread.latestRunRequestedAt,
-          startedAt: thread.latestRunStartedAt,
-          completedAt: thread.latestRunCompletedAt,
-        })
-      : Option.none(),
-    hasPendingApproval: Option.exists(
-      requestKind,
-      (kind) => kind === "executor-call" || kind === "tool-call"
-    ),
-    hasPendingUserInput: Option.exists(
-      requestKind,
-      (kind) => kind === "user-input" || kind === "sign-in"
-    ),
-    hasUnseenCompletion: hasUnseenCompletion(thread),
-    isParked: thread.activity === "parked" || thread.parkedTaskIds.length > 0,
-    isFailed: thread.activity === "failed",
-    isWaitingForClaudeSlot: thread.waitingFor === "claude_slot",
-  };
-};

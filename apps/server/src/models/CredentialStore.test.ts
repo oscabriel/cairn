@@ -1,8 +1,9 @@
 // Judges the brain's credential store over pi's auth.json: only literal API keys pass, `anthropic`
 // and `openai-codex` are never read from it, every OAuth credential and every subscription token is
 // ignored, and nothing is ever written to it. `openai-codex` is served and written only by Cairn's
-// own OAuth source. Assertions are on provider ids and types only, never on a key's value; the real
-// file's case reads the user's auth.json the same way and prints nothing.
+// own OAuth source. Assertions are on provider ids and types only, never on a key's value. Every
+// case reads a fixture file in a temporary folder; the user's real auth.json is judged by
+// `judges/pi-readonly.sh`, outside the gate.
 
 import {
   existsSync,
@@ -11,7 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { OAuthCredential } from "@earendil-works/pi-ai";
@@ -71,7 +72,8 @@ const storeWith = (
 /** Cairn's own sign-ins in memory, recording every write it took. */
 const memorySource = (
   held: boolean,
-  initial: Option.Option<OAuthCredential>
+  initial: Option.Option<OAuthCredential>,
+  lockFailure: Option.Option<string> = Option.none()
 ) => {
   let stored = initial;
   const writes: Array<string> = [];
@@ -79,6 +81,7 @@ const memorySource = (
   const source: OAuthCredentialSource = {
     providers: OAUTH_PROVIDERS,
     held,
+    lockFailure,
     read: async () => await Promise.resolve(Option.getOrUndefined(stored)),
     modify: async (provider, update) => {
       const next = await update(Option.getOrUndefined(stored));
@@ -220,36 +223,6 @@ describe("the credential store over pi's auth.json", () => {
       assert.isFalse(existsSync(authPath));
     })
   );
-
-  const realAuth = path.join(homedir(), ".pi", "agent", "auth.json");
-
-  it.effect.skipIf(!existsSync(realAuth))(
-    "reads the user's auth.json as API keys only, never anthropic or openai-codex",
-    () =>
-      Effect.gen(function* () {
-        const before = statSync(realAuth);
-        const store = new CairnCredentialStore(realAuth);
-
-        const listed = yield* Effect.promise(async () => await store.list());
-
-        assert.isTrue(listed.every((info) => info.type === "api_key"));
-        assert.isFalse(
-          listed.some(
-            (info) =>
-              info.providerId === "anthropic" ||
-              info.providerId === "openai-codex"
-          )
-        );
-
-        for (const id of ["anthropic", "openai-codex"]) {
-          const read = yield* Effect.promise(async () => await store.read(id));
-
-          assert.isUndefined(read);
-        }
-
-        assert.strictEqual(statSync(realAuth).mtimeMs, before.mtimeMs);
-      })
-  );
 });
 
 /** The OAuth providers' verdicts over an empty pi file and `source`. */
@@ -359,19 +332,32 @@ describe("the credential store with Cairn's own sign-ins", () => {
       })
   );
 
-  it.effect("tells a signed-out store from one this brain does not hold", () =>
-    Effect.gen(function* () {
-      const signedOut = yield* Effect.promise(
-        async () => await refusalOf(memorySource(true, Option.none()).source)
-      );
+  it.effect(
+    "tells a signed-out store from one this brain does not hold or could not lock",
+    () =>
+      Effect.gen(function* () {
+        const signedOut = yield* Effect.promise(
+          async () => await refusalOf(memorySource(true, Option.none()).source)
+        );
 
-      const elsewhere = yield* Effect.promise(
-        async () =>
-          await refusalOf(memorySource(false, Option.some(OAUTH)).source)
-      );
+        const elsewhere = yield* Effect.promise(
+          async () =>
+            await refusalOf(memorySource(false, Option.some(OAUTH)).source)
+        );
 
-      assert.deepStrictEqual(signedOut, [["openai-codex", "signed_out"]]);
-      assert.deepStrictEqual(elsewhere, [["openai-codex", "not_holder"]]);
-    })
+        const lockFailed = yield* Effect.promise(
+          async () =>
+            await refusalOf(
+              memorySource(false, Option.none(), Option.some("flock missing"))
+                .source
+            )
+        );
+
+        assert.deepStrictEqual(signedOut, [["openai-codex", "signed_out"]]);
+        assert.deepStrictEqual(elsewhere, [["openai-codex", "not_holder"]]);
+        assert.deepStrictEqual(lockFailed, [
+          ["openai-codex", "oauth_unavailable"],
+        ]);
+      })
   );
 });

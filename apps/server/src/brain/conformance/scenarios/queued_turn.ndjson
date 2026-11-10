@@ -7,6 +7,7 @@
 {"type":"input","step":"follow_up","requestId":"r2","text":"two"}
 {"type":"expect_event","event":{"_tag":"QueueChanged","length":1}}
 {"type":"expect_view","path":["queue"],"equals":[{"mode":"followUp","text":"two"}]}
+{"type":"expect_inspect","threads":[{"thread":"parent","running":true,"queueLength":1,"pending":[]}]}
 {"type":"release","label":"m1"}
 {"type":"expect_event","event":{"_tag":"MessageCommitted","role":"assistant","text":"first answer"}}
 {"type":"expect_event","event":{"_tag":"MessageCommitted","role":"user","text":"two"}}

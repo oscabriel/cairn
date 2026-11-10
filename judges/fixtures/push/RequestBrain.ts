@@ -15,14 +15,10 @@ import { Clock, Effect, Layer, Predicate } from "effect";
 import {
   AppLayer,
   HarnessBoot,
-  ModelHealthLive,
-  ReachLive,
-  SettingsLive,
   withCatalog,
 } from "../../../apps/server/src/AppLayer.ts";
-import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
-import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
+import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
 import {
   ScriptedBoot,
   ScriptedHarness,
@@ -35,15 +31,19 @@ import type { ScriptedRequest } from "../../../apps/server/src/brain/ScriptedHar
 import { SpendFeed } from "../../../apps/server/src/brain/SpendFeed.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import type { ServerSettings } from "../../../apps/server/src/Config.ts";
-import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
+import { FakeExecutorLink } from "../../../apps/server/src/executor/FakeExecutor.ts";
 import { Identity } from "../../../apps/server/src/http/Identity.ts";
+import { ModelHealthLive } from "../../../apps/server/src/models/ModelHealth.ts";
+import { SettingsLive } from "../../../apps/server/src/models/SettingsStore.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import { NotifierSettings } from "../../../apps/server/src/push/Notifier.ts";
+import { ReachLive } from "../../../apps/server/src/reach/ReachLayer.ts";
 import {
   judgePortalSettings,
   ReachMachine,
-} from "../../../apps/server/src/reach/ReachLayer.ts";
+} from "../../../apps/server/src/reach/ReachTestKit.ts";
 import { Skills } from "../../../apps/server/src/skills/SkillsLayer.ts";
+import { BudgetSources } from "../../../apps/server/src/usage/BudgetSources.ts";
 import { GoalBook } from "../../../apps/server/src/verdicts/GoalBook.ts";
 import { WorkflowStops } from "../../../apps/server/src/workflows/WorkflowStop.ts";
 
@@ -164,7 +164,7 @@ const Harness = Layer.mergeAll(
   ),
   Layer.provideMerge(Skills.local),
   Layer.provideMerge(
-    withCatalog(ModelSource.layerFaux({ tokensPerSecond: 200, settings: {} }))
+    withCatalog(FauxModels.layer({ tokensPerSecond: 200, settings: {} }))
   )
 );
 
@@ -190,7 +190,7 @@ export const requestBrain = (options: RequestBrainOptions) =>
         process.env.PATH ?? "/usr/bin:/bin"
       )
     ),
-    Layer.provide(ExecutorLink.layerFake),
+    Layer.provide(FakeExecutorLink),
     Layer.provide(Identity.layerLoopbackOwner),
     Layer.provide(Layer.succeed(NotifierSettings, options.notifier)),
     Layer.provide(ServerConfig.layerWith(options.config)),

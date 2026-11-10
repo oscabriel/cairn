@@ -55,10 +55,24 @@ import {
   ReachListInput,
 } from "./Reach.ts";
 import { ServerSettings, SettingsPatch } from "./Settings.ts";
-import { ProjectShell, ShellStreamItem, SubscribeShellInput } from "./Shell.ts";
+import {
+  EarlierThreadInput,
+  PreviousThreadsInput,
+  PreviousThreadsPage,
+  ProjectShell,
+  ShellStreamItem,
+  SubscribeShellInput,
+  ThreadShell,
+} from "./Shell.ts";
 import { DispatchResult, ShellCommand } from "./ShellCommands.ts";
 import { SkillList, SkillsInput } from "./Skills.ts";
-import { Spend, SpendGetInput } from "./Spend.ts";
+import {
+  BudgetDeclareInput,
+  BudgetGetInput,
+  Spend,
+  SpendGetInput,
+  ThreadBudget,
+} from "./Spend.ts";
 import {
   ConfigureInput,
   EntryInput,
@@ -66,7 +80,6 @@ import {
   HistoryInput,
   HistoryPage,
   RespondInput,
-  RetryTaskInput,
   SendInput,
   SendResult,
   StopInput,
@@ -85,7 +98,7 @@ import {
 } from "./Workflows.ts";
 
 /** The wire protocol this package describes. Bumped on any change an older client cannot read. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** The query parameter that carries the protocol version on the WebSocket upgrade. */
 export const PROTOCOL_QUERY_PARAM = "protocol";
@@ -157,6 +170,20 @@ export const CairnRpcs = RpcGroup.make(
     success: DispatchResult,
     error: Change,
   }),
+  // A project's earlier project threads, a page at a time (ADR 0048); archived rows stay out of
+  // the stream.
+  Rpc.make("shell.previousThreads", {
+    payload: PreviousThreadsInput,
+    success: PreviousThreadsPage,
+    error: Lookup,
+  }),
+  // One earlier project thread by its id, for a page opened on it directly (ADR 0048); `NotFound`
+  // when the thread is not one: live, a child, deleted or missing.
+  Rpc.make("shell.earlierThread", {
+    payload: EarlierThreadInput,
+    success: ThreadShell,
+    error: Lookup,
+  }),
 
   Rpc.make("thread.launch", {
     payload: ThreadLaunchInput,
@@ -176,7 +203,6 @@ export const CairnRpcs = RpcGroup.make(
   }),
   Rpc.make("thread.configure", { payload: ConfigureInput, error: Change }),
   Rpc.make("thread.respond", { payload: RespondInput, error: Change }),
-  Rpc.make("thread.retryTask", { payload: RetryTaskInput, error: Change }),
 
   // Stream 2: pi-durable's view of one conversation; a fresh snapshot on every subscribe.
   Rpc.make("thread.subscribe", {
@@ -283,6 +309,14 @@ export const CairnRpcs = RpcGroup.make(
   Rpc.make("spend.get", {
     payload: SpendGetInput,
     success: Spend,
+    error: Lookup,
+  }),
+  // A thread's own budget, a `stop` scope over its lineage subtree (ADR 0047).
+  Rpc.make("budget.declare", { payload: BudgetDeclareInput, error: Change }),
+  // The line a thread's own scope stands at, for the form that changes it (ADR 0047).
+  Rpc.make("budget.get", {
+    payload: BudgetGetInput,
+    success: ThreadBudget,
     error: Lookup,
   }),
   Rpc.make("providers.login.start", {

@@ -4,7 +4,7 @@
 // passes (wave 2 decision). Each case that must fail names the one thing that fails it.
 
 import type { ModelRef } from "@cairn/protocol/Models";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Message } from "@earendil-works/pi-ai";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";

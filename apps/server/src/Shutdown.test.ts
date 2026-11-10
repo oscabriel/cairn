@@ -25,6 +25,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 
+import { testLimit, slackened } from "./EventuallyTestKit.ts";
 import { Shutdown, shutdownHook } from "./Shutdown.ts";
 
 const judgeMain = path.join(import.meta.dirname, "judge-main.ts");
@@ -58,7 +59,7 @@ const openSocket = (port: number) =>
     const request = http.request({
       host: "127.0.0.1",
       port,
-      path: "/ws?protocol=2",
+      path: "/ws?protocol=3",
       headers: {
         host: "127.0.0.1",
         origin: "http://127.0.0.1",
@@ -171,7 +172,11 @@ describe("SIGTERM", () => {
         const dataDir = mkdtempSync(path.join(os.tmpdir(), "cairn-shutdown-"));
         const eventsLog = path.join(dataDir, "events.log");
         const child = yield* startJudgeBrain(dataDir, eventsLog);
-        const port = yield* readyPort(child).pipe(Effect.timeout("15 seconds"));
+
+        const port = yield* readyPort(child).pipe(
+          Effect.timeout(slackened("15 seconds"))
+        );
+
         const socket = yield* openSocket(port);
         const received: Array<Buffer> = [];
 
@@ -185,7 +190,7 @@ describe("SIGTERM", () => {
         child.kill("SIGTERM");
 
         const exitCode = yield* Fiber.join(exit).pipe(
-          Effect.timeout("10 seconds")
+          Effect.timeout(slackened("10 seconds"))
         );
 
         const elapsed = (yield* Clock.currentTimeMillis) - before;
@@ -216,7 +221,7 @@ describe("SIGTERM", () => {
         assert.isAbove(events.indexOf("closed"), events.indexOf("closing"));
         assert.isBelow(closedMs[0] ?? Number.POSITIVE_INFINITY, 5000);
       }),
-    30_000
+    testLimit(30_000)
   );
 });
 

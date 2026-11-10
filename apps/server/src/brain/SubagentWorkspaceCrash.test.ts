@@ -42,14 +42,10 @@ import {
   Stream,
 } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { ChildDoc, SubagentsDoc } from "../subagents/SubagentDocs.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
+import { repairChildWorkspacesAtBoot } from "../subagents/ChildWorkspaceRepair.ts";
 import {
   Subagents,
   subagentsExtension,
@@ -69,16 +65,17 @@ import {
 import { ChildWorkspaceStore } from "../workspaces/ChildWorkspaceStore.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
-import { repairChildWorkspacesAtBoot } from "./ChildWorkspaceRepair.ts";
-import { durable } from "./Durable.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { brainExtensions } from "./BrainTestKit.ts";
+import { durable, durableRunner } from "./Durable.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
+import { ChildDoc, SubagentsDoc } from "./SubagentDocs.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
+
+isolateGitEnvironment();
 
 /** The parent's thread. */
 const PARENT = ThreadId.make("0190f0c0-0000-7000-8000-000000000170");
@@ -106,22 +103,6 @@ const RESUMED_RESPONSES = [
   fauxAssistantMessage("Noted."),
 ];
 
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A, E, R>(find: Effect.Effect<Option.Option<A>, E, R>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
-  });
-
 /** The first event `pick` accepts, waited for. */
 const eventWhere = <A>(
   events: Ref.Ref<ReadonlyArray<HarnessEvent>>,
@@ -142,36 +123,29 @@ const brainAt = (
 ) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
-      ExtensionSet.layer.pipe(
-        Layer.provide(
-          Layer.effect(
-            Subagents,
-            Effect.gen(function* () {
-              const workspaces = workspaceAccess(
-                yield* ChildWorkspaces,
-                yield* Effect.context()
-              );
+      brainExtensions({
+        subagents: Layer.effect(
+          Subagents,
+          Effect.gen(function* () {
+            const workspaces = workspaceAccess(
+              yield* ChildWorkspaces,
+              yield* Effect.context()
+            );
 
-              return Subagents.of({
-                extension: subagentsExtension(
-                  NO_SUBAGENT_FAULTS,
-                  access(workspaces),
-                  DEFAULT_TOOL_OPTIONS
-                ),
-              });
-            })
-          )
+            return Subagents.of({
+              extension: subagentsExtension(
+                NO_SUBAGENT_FAULTS,
+                access(workspaces),
+                yield* durableRunner,
+                DEFAULT_TOOL_OPTIONS
+              ),
+            });
+          })
         ),
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
+      })
     ),
     Layer.provideMerge(
-      ModelSource.layerFaux({
+      FauxModels.layer({
         tokensPerSecond: 4000,
         settings: { retry: { enabled: false } },
       })
@@ -418,6 +392,6 @@ describe("a crash between a child's worktree and its creating commit", () => {
             rmSync(dir, { recursive: true, force: true });
           })
       ),
-    60_000
+    testLimit(60_000)
   );
 });

@@ -27,15 +27,18 @@ import {
 import { noticeFor, readyIds } from "../attachments/Update.ts";
 import { CairnConnection } from "../connection/Connection.ts";
 import { OutboxItem } from "../connection/Outbox.ts";
-import { view } from "../next/composer/View.ts";
+import { fetchChunk } from "../page/Chunks.ts";
 import { AppRoute } from "../Route.ts";
 import {
+  ConfigureThread,
   FocusPopoverSearch,
   MoveHeroToDraftUrl,
+  OpenProjectThread,
   PrepareLaunch,
   PrepareSend,
   SaveDrafts,
   SearchEntries,
+  StopThread,
   WithdrawQueued,
 } from "./Command.ts";
 import {
@@ -50,19 +53,34 @@ import { composerContext } from "./Context.ts";
 import {
   activeDraft,
   DRAFTS_STORAGE_KEY,
-  loadDrafts,
+  draftProject,
+  readDrafts,
   saveDrafts,
   shownNotice,
 } from "./Drafts.ts";
-import { ComposerInput } from "./Editor.ts";
+import { ComposerInput, ReturnFocusToEditor } from "./Editor.ts";
 import { MeasureFooter } from "./Footer.ts";
+import { drawerRoomOf, KeepDrawerRoom } from "./HeroDrawerRoom.ts";
 import { Message, OutMessage } from "./Message.ts";
 import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
 import type { Model } from "./Model.ts";
-import { pickerRows } from "./Popovers.ts";
+import { pickerRows, popoverSide } from "./Popovers.ts";
 import { menuContents } from "./TriggerMenu.ts";
-import { contextChanged, inform, pickDraftProject, update } from "./Update.ts";
+import {
+  contextChanged,
+  inform,
+  pickDraftProject,
+  restoreScratchTurn,
+  update,
+} from "./Update.ts";
 import type { UpdateReturn } from "./Update.ts";
+import { view } from "./View.ts";
+
+/** The saved drafts this build can decode. */
+// The popovers are their own chunk (`page/Chunks.ts`); the scenes draw them once it is in.
+await Effect.runPromise(fetchChunk("popovers"));
+
+const storedDrafts = Effect.map(readDrafts, ({ value }) => value);
 
 const editor = Scene.testId("composer-editor");
 
@@ -276,8 +294,15 @@ describe("composer triggers", () => {
       "the menu lists the picked project's files"
     );
 
+    // A draft whose project is gone falls back to the default project, so only a shell with no
+    // project at all leaves it with none.
     const orphaned = afterAll(
-      pickDraftProject(base, draftId, ProjectId.make("prj_gone")),
+      pickDraftProject(
+        inform(composerOn(target), { ...contextFor(target), projects: [] })
+          .model,
+        draftId,
+        ProjectId.make("prj_gone")
+      ),
       typed
     );
 
@@ -384,7 +409,8 @@ const viewWith = (live: string) =>
       {
         id: 1,
         conversationId: 1,
-        kind: "pi.user",
+        kind: "cairn.user",
+        data: { from: "owner@loopback", attachments: [] },
         model: [
           {
             role: "user",
@@ -399,6 +425,24 @@ const viewWith = (live: string) =>
         kind: "pi.assistant",
         model: [
           { role: "assistant", content: [{ type: "text", text: "Done." }] },
+        ],
+      },
+      {
+        // A brain input: a subagent's question, which the user never typed.
+        id: 3,
+        conversationId: 1,
+        kind: "pi.user",
+        model: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: 'Subagent "Probe" asks: which port?\nAnswer with subagent_reply, or escalate it to the user.',
+              },
+            ],
+            timestamp: 3,
+          },
         ],
       },
     ],
@@ -416,10 +460,11 @@ const contextOf = (conversation: ConversationView) =>
     threadView: Option.some(conversation),
     defaults: Option.none(),
     usage: Option.none(),
+    scratch: Option.none(),
   });
 
 describe("prompt history", () => {
-  it("recalls the user's prompt from the thread's view with the up arrow", () => {
+  it("recalls the user's own prompt from the thread's view with the up arrow, not a brain input after it", () => {
     const informed = inform(onThread, contextOf(viewWith(""))).model;
 
     const recalled = update(
@@ -704,13 +749,13 @@ describe("composer drafts", () => {
       Effect.gen(function* () {
         yield* saveDrafts({}, back.drafts);
 
-        return yield* loadDrafts;
+        return yield* storedDrafts;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
     const reloaded = update(
       inform(initial, contextFor(ComposerTarget.Thread({ threadId }))).model,
-      Message.LoadedDrafts({ drafts: saved })
+      Message.LoadedDrafts({ drafts: saved, tell: false })
     ).model;
 
     assert.strictEqual(activeDraft(reloaded).text, "half a thought");
@@ -786,7 +831,8 @@ const runSaves = (result: UpdateReturn) =>
 
 /** A tab on `target` whose drafts were read from an empty store. */
 const freshTab = (target: ComposerTarget): Model =>
-  update(composerOn(target), Message.LoadedDrafts({ drafts: {} })).model;
+  update(composerOn(target), Message.LoadedDrafts({ drafts: {}, tell: false }))
+    .model;
 
 /** Types `value` into `tab`'s open draft, lets the saver's pause run out, and takes its answer. */
 const typeAndSave = (tab: Model, value: string) =>
@@ -821,7 +867,7 @@ describe("drafts in two tabs", () => {
       yield* typeAndSave(tabA, "half a thought");
       yield* typeAndSave(tabB, "another");
 
-      const stored = yield* loadDrafts;
+      const stored = yield* storedDrafts;
 
       assert.deepStrictEqual(
         {
@@ -862,7 +908,7 @@ describe("drafts in two tabs", () => {
             heardAgain.drafts[xKey]?.text,
             heardAgain.drafts[yKey]?.text,
           ],
-          stored: Object.keys(yield* loadDrafts),
+          stored: Object.keys(yield* storedDrafts),
         },
         {
           heard: ["half a thought", "mine"],
@@ -898,7 +944,7 @@ describe("drafts in two tabs", () => {
         assert.deepStrictEqual(
           {
             open: activeDraft(heard).text,
-            stored: Object.keys(yield* loadDrafts).toSorted(),
+            stored: Object.keys(yield* storedDrafts).toSorted(),
           },
           { open: "hello", stored: [xKey, yKey].toSorted() }
         );
@@ -909,7 +955,10 @@ describe("drafts in two tabs", () => {
 /** `model` after both stores answered with what they hold now, drafts first or tray first. */
 const reload = (model: Model, traysFirst: boolean) =>
   Effect.gen(function* () {
-    const drafts = Message.LoadedDrafts({ drafts: yield* loadDrafts });
+    const drafts = Message.LoadedDrafts({
+      drafts: yield* storedDrafts,
+      tell: false,
+    });
 
     const tray = Message.GotAttachmentsMessage({
       message: AttachmentsMessage.LoadedSaved({ drafts: yield* loadSaved }),
@@ -982,7 +1031,7 @@ describe("drafts after a reload", () => {
         yield* saveDrafts({ [key]: old }, { [key]: { ...old, text: "newer" } });
         yield* runSaves(update(reloaded, Message.HidPage()));
 
-        assert.strictEqual((yield* loadDrafts)[key]?.text, "newer");
+        assert.strictEqual((yield* storedDrafts)[key]?.text, "newer");
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
 
@@ -1084,7 +1133,7 @@ describe("drafts after a reload", () => {
             launching: (sent.commands ?? []).some(
               ({ name }) => name === PrepareLaunch.name
             ),
-            saved: (yield* loadDrafts)[`draft:${draftId}`]?.text,
+            saved: (yield* storedDrafts)[`draft:${draftId}`]?.text,
           },
           { launching: true, saved: "start the migration" }
         );
@@ -1142,6 +1191,7 @@ describe("composer sends", () => {
       ),
       Story.expectOutMessage(
         OutMessage.Submitted({
+          draftKey: `thread:${threadId}`,
           item: OutboxItem.Send({
             input: {
               threadId,
@@ -1414,6 +1464,114 @@ describe("composer sends", () => {
     );
   });
 
+  it("opens the project thread with the draft's words and attachments instead of launching while its project has one (ADR 0048)", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b0a";
+    const key = `draft:${draftId}`;
+    const to = `thread:${otherThreadId}`;
+
+    const ref = {
+      id: AttachmentId.make("att_9"),
+      name: "plan.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 12,
+      kind: "pdf" as const,
+      sha256: "0".repeat(64),
+    };
+
+    const base = composerOn(ComposerTarget.Draft({ draftId }));
+
+    const ready: Model = {
+      ...base,
+      context: {
+        ...base.context,
+        projects: [{ ...project, projectThreadId: Option.some(otherThreadId) }],
+      },
+      drafts: {
+        [key]: {
+          ...emptyDraft,
+          text: "and one more thing",
+          attachments: [ref.id],
+        },
+      },
+      attachments: {
+        ...base.attachments,
+        loaded: true,
+        nextLocalId: 2,
+        items: [
+          {
+            localId: "attachment-1",
+            draftKey: key,
+            name: ref.name,
+            mimeType: ref.mimeType,
+            sizeBytes: ref.sizeBytes,
+            isImage: false,
+            file: Option.none(),
+            previewUrl: Option.none(),
+            pastedAt: Option.none(),
+            pasteToRequestMs: Option.none(),
+            attempts: 1,
+            status: AttachmentStatus.Ready({ ref }),
+          },
+        ],
+      },
+    };
+
+    const sent = update(
+      ready,
+      Message.PressedSubmitKey({ intent: "foreground" })
+    );
+
+    const names = (sent.commands ?? []).map(({ name }) => name);
+
+    assert.deepStrictEqual(
+      {
+        launched: names.includes(PrepareLaunch.name),
+        opened: (sent.commands ?? []).find(
+          ({ name }) => name === OpenProjectThread.name
+        )?.args,
+        outMessage: sent.outMessage,
+        heroDraft: sent.model.drafts[key],
+        moved: sent.model.drafts[to]?.text,
+        movedAttachments: sent.model.drafts[to]?.attachments,
+        tray: readyIds(sent.model.attachments, to),
+        heroTray: readyIds(sent.model.attachments, key),
+      },
+      {
+        launched: false,
+        opened: { threadId: otherThreadId },
+        outMessage: undefined,
+        heroDraft: undefined,
+        moved: "and one more thing",
+        movedAttachments: [ref.id],
+        tray: [ref.id],
+        heroTray: [],
+      }
+    );
+
+    // On the project thread's page its composer holds the words, unsent, and says why.
+    const opened = inform(
+      sent.model,
+      contextFor(ComposerTarget.Thread({ threadId: otherThreadId }))
+    ).model;
+
+    assert.strictEqual(activeDraft(opened).text, "and one more thing");
+    assert.match(
+      Option.getOrElse(shownNotice(opened), () => ""),
+      /already has a project thread/u
+    );
+  });
+
+  it("still launches the first thread of a project with no project thread", () => {
+    const draftId = "019a0000-0000-7000-8000-000000000b0b";
+
+    const typed = update(
+      composerOn(ComposerTarget.Draft({ draftId })),
+      Message.ChangedDraft({ value: "begin" })
+    ).model;
+
+    assert.isDefined(launchOf(typed));
+  });
+
   it.effect(
     "puts back the text, both ready attachments and the picked model when a launch cannot start",
     () =>
@@ -1592,6 +1750,365 @@ describe("composer sends", () => {
   });
 });
 
+/**
+ * True when the scratch overlay, shown over a thread's page whose editor did or did not hold the
+ * keyboard, then hidden, puts the keyboard back in that editor.
+ */
+const refocusedAfterScratch = (focused: boolean): boolean => {
+  const shown = inform(
+    { ...onThread, focused },
+    contextFor(ComposerTarget.Scratch({ threadId: Option.none() }))
+  ).model;
+
+  return (
+    inform(shown, contextFor(ComposerTarget.Thread({ threadId }))).commands ??
+    []
+  ).some((command) => command.name === ReturnFocusToEditor.name);
+};
+
+/** The thread controls whose failure the composer that used them shows. */
+const THREAD_CONTROLS: ReadonlySet<string> = new Set([
+  StopThread.name,
+  WithdrawQueued.name,
+  ConfigureThread.name,
+]);
+
+describe("the scratch overlay's composer (U-16)", () => {
+  const firstMessage = composerOn(
+    ComposerTarget.Scratch({ threadId: Option.none() })
+  );
+
+  const onScratch = composerOn(
+    ComposerTarget.Scratch({ threadId: Option.some(threadId) })
+  );
+
+  /** The scratch thread with a run working, as its shell row says. */
+  const running: Model = {
+    ...onScratch,
+    context: {
+      ...onScratch.context,
+      thread: Option.map(onScratch.context.thread, (row) => ({
+        ...row,
+        activity: "running" as const,
+      })),
+    },
+  };
+
+  const ref = {
+    id: AttachmentId.make("att_7"),
+    name: "screenshot.png",
+    mimeType: "image/png",
+    sizeBytes: 12,
+    kind: "image" as const,
+    sha256: "0".repeat(64),
+  };
+
+  /** The scratch draft with a pasted screenshot ready to go. */
+  const withScreenshot = (model: Model): Model => ({
+    ...model,
+    drafts: {
+      scratch: { ...emptyDraft, text: "what is this?", attachments: [ref.id] },
+    },
+    attachments: {
+      ...model.attachments,
+      loaded: true,
+      nextLocalId: 2,
+      items: [
+        {
+          localId: "attachment-1",
+          draftKey: "scratch",
+          name: ref.name,
+          mimeType: ref.mimeType,
+          sizeBytes: ref.sizeBytes,
+          isImage: true,
+          file: Option.none(),
+          previewUrl: Option.none(),
+          pastedAt: Option.none(),
+          pasteToRequestMs: Option.none(),
+          attempts: 1,
+          status: AttachmentStatus.Ready({ ref }),
+        },
+      ],
+    },
+  });
+
+  it("launches its first message in the scratch project and stays in the overlay, with the model picked on it", () => {
+    const picked = { provider: "opencode-go", modelId: "glm-5" };
+
+    const typed = afterAll(firstMessage, [
+      Message.PickedModel({ model: picked }),
+      Message.ChangedDraft({ value: "what does fsync promise?" }),
+    ]);
+
+    const launch = launchOf(typed);
+
+    assert.deepStrictEqual(
+      {
+        draftKey: launch?.args?.draftKey,
+        draftId: launch?.args?.draftId,
+        projectId: launch?.args?.projectId,
+        stay: launch?.args?.stay,
+        model: launch?.args?.model,
+        runtimeMode: launch?.args?.runtimeMode,
+        content: launch?.args?.content,
+      },
+      {
+        draftKey: "scratch",
+        draftId: Option.none(),
+        projectId: Option.none(),
+        stay: true,
+        model: picked,
+        runtimeMode: "full-access",
+        content: {
+          text: "what does fsync promise?",
+          attachments: [],
+          skillRefs: [],
+        },
+      }
+    );
+  });
+
+  it("keeps its draft under its own key, apart from the page's thread", () => {
+    const typed = update(
+      onScratch,
+      Message.ChangedDraft({ value: "and on a rename?" })
+    ).model;
+
+    const onPage = inform(
+      typed,
+      contextFor(ComposerTarget.Thread({ threadId }))
+    ).model;
+
+    const shownAgain = inform(
+      onPage,
+      contextFor(ComposerTarget.Scratch({ threadId: Option.some(threadId) }))
+    ).model;
+
+    assert.deepStrictEqual(
+      {
+        scratch: typed.drafts.scratch?.text,
+        thread: typed.drafts[`thread:${threadId}`]?.text,
+        onPage: activeDraft(onPage).text,
+        shownAgain: activeDraft(shownAgain).text,
+      },
+      {
+        scratch: "and on a rename?",
+        thread: undefined,
+        onPage: "",
+        shownAgain: "and on a rename?",
+      }
+    );
+  });
+
+  it("sends to the scratch thread once it exists, queued while it runs or steering on the alternate key", () => {
+    const typed = update(
+      running,
+      Message.ChangedDraft({ value: "also check ext4" })
+    ).model;
+
+    const sendOf = (intent: "foreground" | "alternate") =>
+      (update(typed, Message.PressedSubmitKey({ intent })).commands ?? []).find(
+        (command) => command.name === PrepareSend.name
+      );
+
+    assert.deepStrictEqual(
+      [sendOf("foreground"), sendOf("alternate")].map((send) => ({
+        threadId: send?.args?.threadId,
+        whenBusy: send?.args?.whenBusy,
+        draftKey: send?.args?.draftKey,
+      })),
+      [
+        { threadId, whenBusy: "followUp", draftKey: "scratch" },
+        { threadId, whenBusy: "steer", draftKey: "scratch" },
+      ]
+    );
+  });
+
+  it("stops the scratch thread's run from its Stop", () => {
+    const stop = (
+      update(running, Message.ClickedStop({ clearQueue: false })).commands ?? []
+    ).find((command) => command.name === StopThread.name);
+
+    assert.deepStrictEqual(stop?.args, {
+      threadId,
+      clearQueue: false,
+      draftKey: Option.some("scratch"),
+    });
+  });
+
+  it("carries the scratch draft's screenshot in its turn, and a refused turn comes back to the scratch draft with it", () => {
+    const sent = update(
+      withScreenshot(onScratch),
+      Message.ClickedSend({ alternate: false })
+    );
+
+    const send = (sent.commands ?? []).find(
+      (command) => command.name === PrepareSend.name
+    );
+
+    const item = OutboxItem.Send({
+      input: {
+        threadId,
+        input: {
+          requestId: RequestId.make("req-7"),
+          text: "what is this?",
+          attachments: [ref.id],
+          skillRefs: [],
+        },
+        whenBusy: "followUp",
+      },
+    });
+
+    const restored = restoreScratchTurn(sent.model, item, [ref]).model;
+
+    assert.deepStrictEqual(
+      {
+        content: send?.args?.content,
+        refs: send?.args?.attachments,
+        emptied: activeDraft(sent.model).text,
+        text: restored.drafts.scratch?.text,
+        tray: readyIds(restored.attachments, "scratch"),
+        thread: restored.drafts[`thread:${threadId}`],
+      },
+      {
+        content: {
+          text: "what is this?",
+          attachments: [ref.id],
+          skillRefs: [],
+        },
+        refs: [ref],
+        emptied: "",
+        text: "what is this?",
+        tray: [ref.id],
+        thread: undefined,
+      }
+    );
+  });
+
+  it("puts the keyboard back in the page's editor when the overlay opened from it closes, and only then", () => {
+    assert.deepStrictEqual(
+      {
+        fromEditor: refocusedAfterScratch(true),
+        fromElsewhere: refocusedAfterScratch(false),
+      },
+      { fromEditor: true, fromElsewhere: false }
+    );
+  });
+
+  it("launches the scratch thread with full access whatever mode was picked, and offers no other", () => {
+    const typed = afterAll(firstMessage, [
+      Message.PickedRuntimeMode({ mode: "approval-required" }),
+      Message.ChangedDraft({ value: "what does fsync promise?" }),
+    ]);
+
+    // The overlay cannot answer approvals: the request card serves the routed page's thread.
+    assert.strictEqual(launchOf(typed)?.args?.runtimeMode, "full-access");
+  });
+
+  it("holds a second first message while the scratch thread's launch is being prepared", () => {
+    const typed = update(
+      firstMessage,
+      Message.ChangedDraft({ value: "what does fsync promise?" })
+    ).model;
+
+    const sent = update(typed, Message.ClickedSend({ alternate: false })).model;
+
+    const again = update(
+      update(sent, Message.ChangedDraft({ value: "and fdatasync?" })).model,
+      Message.ClickedSend({ alternate: false })
+    );
+
+    assert.deepStrictEqual(
+      {
+        launches: (again.commands ?? []).filter(
+          (command) => command.name === PrepareLaunch.name
+        ).length,
+        kept: activeDraft(again.model).text,
+        said: Option.isSome(shownNotice(again.model)),
+      },
+      { launches: 0, kept: "and fdatasync?", said: true }
+    );
+  });
+
+  it.effect(
+    "shows a failed Stop, withdraw or model change in the overlay, not on the thread's own page",
+    () =>
+      Effect.gen(function* () {
+        const disconnected = yield* Ref.make(Option.none());
+
+        const failedFrom = (result: UpdateReturn) =>
+          Effect.gen(function* () {
+            const command = (result.commands ?? []).find((each) =>
+              THREAD_CONTROLS.has(each.name)
+            );
+
+            const answer = yield* (
+              command?.effect ?? Effect.die("no request")
+            ).pipe(Effect.provideService(CairnConnection._tag, disconnected));
+
+            return Option.isSome(
+              shownNotice(update(result.model, answer).model)
+            );
+          });
+
+        const stopped = yield* failedFrom(
+          update(running, Message.ClickedStop({ clearQueue: false }))
+        );
+
+        const withdrawn = yield* failedFrom(
+          update(
+            running,
+            Message.ClickedWithdraw({ submissionId: SubmissionId.make(4) })
+          )
+        );
+
+        const configured = yield* failedFrom(
+          update(
+            running,
+            Message.PickedModel({
+              model: { provider: "opencode-go", modelId: "glm-5" },
+            })
+          )
+        );
+
+        assert.deepStrictEqual(
+          { stopped, withdrawn, configured },
+          { stopped: true, withdrawn: true, configured: true }
+        );
+      })
+  );
+
+  it("closes an open menu on an Escape from anywhere in the box, so the overlay around it stays", () => {
+    // Focus stays on a menu's trigger, outside the menu: the box takes the Escape (and keeps it
+    // from the dialog) rather than the menu alone. The docked box is the same card.
+    Scene.scene(
+      { update, view },
+      Scene.given({
+        ...onThread,
+        popover: Option.some(Popover.RuntimeMode()),
+      }),
+      ...acknowledgeMounts,
+      Scene.keydown(Scene.selector('[data-slot="composer-shell"]'), "Escape"),
+      Scene.expectHandled(),
+      Scene.expect(Scene.testId("composer-popover-RuntimeMode")).not.toExist(),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("opens its menus above the box, at the overlay's foot", () => {
+    assert.deepStrictEqual(
+      [
+        popoverSide(firstMessage),
+        popoverSide(onScratch),
+        popoverSide(composerOn(ComposerTarget.Home())),
+      ],
+      ["top", "top", "bottom"]
+    );
+  });
+});
+
 describe("the new-thread hero", () => {
   const draftId = "019a0000-0000-7000-8000-000000000b02";
 
@@ -1600,6 +2117,7 @@ describe("the new-thread hero", () => {
       { update, view },
       Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
       ...acknowledgeMounts,
+      Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
       Scene.expect(Scene.testId("hero-headline")).toContainText(
         "What should we build"
       ),
@@ -1615,6 +2133,97 @@ describe("the new-thread hero", () => {
       Scene.tap((simulation) => {
         assert.lengthOf(simulation.commands, 0);
       })
+    );
+  });
+
+  it("keeps the menu drawer's list within the room above the box, measured on the page (U-21)", () => {
+    // Box 200 px below the scroller's top, unscrolled: 200 px of room.
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 0, boxTop: 256 }),
+      200
+    );
+    // Scrolled 120 px: the room is still counted from the top a scroll reaches.
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 120, boxTop: 136.6 }),
+      200
+    );
+    assert.strictEqual(
+      drawerRoomOf({ scrollerTop: 56, scrollTop: 0, boxTop: 40 }),
+      0
+    );
+
+    Scene.scene(
+      { update, view },
+      Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
+      ...acknowledgeMounts,
+      Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
+      ...typeWithCaret("/"),
+      Scene.expect(menu).toExist(),
+      // At most 18rem, at most the room less a margin, so its top never meets the page's top
+      // edge; at least one whole row (a touch row and the list's padding), however little room.
+      Scene.expect(Scene.selector("[data-chat-composer-stack]")).toHaveClass(
+        "[&_[data-slot=command-list]]:max-h-[max(calc(var(--hit-target)_+_2_*_var(--space-1-5)),min(18rem,calc(var(--hero-drawer-room,18rem)_-_var(--space-3))))]"
+      )
+    );
+  });
+
+  it("keeps the headline drawn behind a menu's drawer (U-21; the user, 2026-11-10)", () => {
+    const headline = Scene.selector("[data-hero-headline-block]");
+
+    Scene.scene(
+      { update, view },
+      Scene.given(composerOn(ComposerTarget.Draft({ draftId }))),
+      ...acknowledgeMounts,
+      Scene.Mount.resolve(KeepDrawerRoom, Message.StartedHeroDrawerRoom()),
+      Scene.expect(headline).not.toHaveClass("invisible"),
+      ...typeWithCaret("/"),
+      Scene.expect(menu).toExist(),
+      // The drawer lies over the headline; the headline is not hidden for it.
+      Scene.expect(headline).not.toHaveClass("invisible"),
+      Scene.expect(headline).toContainText("What should we build"),
+      ...typeWithCaret(""),
+      Scene.expect(menu).not.toExist(),
+      Scene.expect(headline).not.toHaveClass("invisible"),
+      Scene.tap((simulation) => {
+        assert.lengthOf(simulation.commands, 0);
+      })
+    );
+  });
+
+  it("launches a draft whose project was removed in the hero's default project, not the scratch project", () => {
+    const myr = ProjectShell.make({
+      ...project,
+      id: ProjectId.make("prj_myr"),
+      title: "myr",
+      workspaceRoot: "/home/user/myr",
+    });
+
+    const target = ComposerTarget.Draft({ draftId });
+
+    const picked = pickDraftProject(
+      inform(composerOn(target), {
+        ...contextFor(target),
+        projects: [project, myr],
+      }).model,
+      draftId,
+      myr.id
+    );
+
+    assert.strictEqual(Option.getOrThrow(draftProject(picked)).id, myr.id);
+
+    // myr is removed from its menu: the shell no longer holds it.
+    const removed = inform(picked, {
+      ...contextFor(target),
+      projects: [project],
+    }).model;
+
+    assert.strictEqual(Option.getOrThrow(draftProject(removed)).id, project.id);
+
+    const typed = update(removed, Message.ChangedDraft({ value: "go" })).model;
+
+    assert.deepStrictEqual(
+      launchOf(typed)?.args?.projectId,
+      Option.some(project.id)
     );
   });
 

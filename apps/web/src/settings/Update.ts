@@ -2,7 +2,6 @@
 // document and saved on every change. The brain is asked for each section when the page opens on a
 // client, and again on a new epoch; answers from another epoch are dropped. Server settings change
 // through `settings.update`, and the page shows what the brain answered rather than what was asked.
-// The first time the `ui` setting is `next`, it asks for the `next` views' chunk (ADR 0040).
 
 import { ProjectId } from "@cairn/protocol/Ids";
 import type { ModelRef } from "@cairn/protocol/Models";

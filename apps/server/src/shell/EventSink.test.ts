@@ -17,6 +17,7 @@ import { Clock, DateTime, Duration, Effect, Option } from "effect";
 import type { Scope, Layer } from "effect";
 import { TestClock } from "effect/testing";
 
+import { testLimit } from "../EventuallyTestKit.ts";
 import { EventSink } from "./EventSink.ts";
 import {
   COMMAND_RECEIPT_RETENTION,
@@ -655,7 +656,15 @@ describe("subagents on the shelf", () => {
                     items: {
                       "call-1": {
                         status: "settled",
-                        settlements: [{ outcome: "completed" }],
+                        settlements: [
+                          {
+                            seq: 1,
+                            outcome: "completed",
+                            answerEntry: null,
+                            reportedAt: 1,
+                            inputs: [],
+                          },
+                        ],
                         delivered,
                       },
                     },
@@ -802,7 +811,7 @@ describe("the event log", () => {
           );
         })
       ),
-    { timeout: 60_000 }
+    { timeout: testLimit(60_000) }
   );
 
   it.effect(
@@ -839,7 +848,7 @@ describe("the event log", () => {
           assert.isTrue(Option.isNone((yield* thread(1)).settledAt));
         })
       ),
-    { timeout: 60_000 }
+    { timeout: testLimit(60_000) }
   );
 
   it.effect("forgets a receipt once it is older than the retention", () =>
@@ -916,6 +925,6 @@ describe("the event log", () => {
           assert.isAbove((yield* commit(settle)).sequence, first.sequence);
         })
       ),
-    { timeout: 60_000 }
+    { timeout: testLimit(60_000) }
   );
 });

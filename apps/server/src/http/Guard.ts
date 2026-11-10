@@ -4,10 +4,11 @@
 // `Upgrade` is hop-by-hop and Caddy's auth subrequest never sees it), no cross-site request but a
 // top-level page load, and none at all on `/api` (403). `/api` answers are `no-store` unless their
 // route set a cache policy. `/api` is matched as the router reads it (any case, percent-decoded,
-// repeated slashes collapsed), so `/API`, `//api` and `/%61pi` get the same rules (T23). Two
-// loopback routes sit outside the host and identity rules: `/_cairn/auth` (Caddy's own subrequest,
-// which carries the peer it judges) and `/_cairn/health` (which refuses anything that came through
-// Caddy itself).
+// repeated slashes collapsed), so `/API`, `//api` and `/%61pi` get the same rules (T23). Three
+// loopback routes sit outside the host and identity rules, each for its one method:
+// `GET /_cairn/auth` (Caddy's own subrequest, which carries the peer it judges), `GET
+// /_cairn/health` and `POST /_cairn/notify/nightly-failed` (which refuse anything that came
+// through Caddy itself; `push/NightlyFailedRoute.ts`).
 // The Origin rule is cairn-v1 `apps/server/src/Http.ts` at 1a5cd4a, line 54.
 
 import { Effect, Option } from "effect";
@@ -19,8 +20,12 @@ import { pathnameOf } from "./Request.ts";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-/** Paths the guard lets through without the host and identity rules; each guards itself. */
-const SELF_GUARDED = new Set(["/_cairn/auth", "/_cairn/health"]);
+/** Paths the guard lets through without the host and identity rules, with their one method; each guards itself. */
+const SELF_GUARDED = new Map([
+  ["/_cairn/auth", "GET"],
+  ["/_cairn/health", "GET"],
+  ["/_cairn/notify/nightly-failed", "POST"],
+]);
 
 /** A percent-decoded path, or the path itself when its escapes are malformed. */
 const decoded = (path: string) => {
@@ -72,7 +77,7 @@ export const Guard = HttpRouter.middleware(
         const request = yield* HttpServerRequest.HttpServerRequest;
         const path = pathnameOf(request.url);
 
-        if (SELF_GUARDED.has(path) && request.method === "GET") {
+        if (SELF_GUARDED.get(path) === request.method) {
           return yield* httpEffect;
         }
 

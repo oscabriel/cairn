@@ -49,7 +49,7 @@ import { Budget } from "@cairn/protocol/Spend";
 import type { Budget as BudgetType } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
 import type { NoticeEntryData } from "@cairn/protocol/Thread";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage, Message, Models } from "@earendil-works/pi-ai";
 import type {
   ConversationId,
@@ -60,29 +60,33 @@ import type {
 import { defineTask, InboxDoc, UsageDoc } from "@earendil-works/pi-durable";
 import { Option, Schema } from "effect";
 
-import {
-  Approvals,
-  cancelRecord,
-  ThreadMeta,
-  UNDECIDED,
+import { UNDECIDED, cancelRecord } from "../approvals/ApprovalLedger.ts";
+import { Approvals, ThreadMeta } from "../brain/CairnDocs.ts";
+import type {
+  ApprovalPayloadState,
+  ApprovalRecord,
 } from "../brain/CairnDocs.ts";
-import type { ApprovalRecord, JsonRecord } from "../brain/CairnDocs.ts";
-import { emit, isEventObject, reactor } from "../brain/Events.ts";
-import type { Reactor } from "../brain/Events.ts";
+import {
+  emit,
+  eventKind,
+  isEventObject,
+  reactor,
+  UnreadableEvent,
+} from "../brain/Events.ts";
+import type { EventRecord, Reactor } from "../brain/Events.ts";
 import { applyNote, hasQueuedReset, readNote } from "../brain/NoteAdmission.ts";
 import { piEntryId } from "../brain/PiIds.ts";
+import type { WorkflowItemState } from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
 import {
   catalogLookupOf,
   listMicrosOf,
   priceOf,
 } from "../models/ModelPrice.ts";
 import { conversationOf } from "../subagents/Delivery.ts";
-import { isWorkflowEnded, usageTotals, WorkflowsDoc } from "./WorkflowDocs.ts";
-import type {
-  BudgetState,
-  NodeItemState,
-  WorkflowItemState,
-} from "./WorkflowDocs.ts";
+import { failsVisibly } from "../subagents/TaskFailures.ts";
+import { isWorkflowEnded, usageTotals } from "./WorkflowDocs.ts";
+import type { BudgetState, NodeItemState } from "./WorkflowDocs.ts";
 
 /** The least time between two meter commits of one workflow from its running nodes. */
 export const METER_INTERVAL_MILLIS = 1000;
@@ -711,6 +715,9 @@ const pause = async (millis: number, signal: AbortSignal): Promise<void> => {
   await sleep(millis, null, { signal }).catch(() => null);
 };
 
+/** How long a stopper whose pass threw waits before it stops the run's nodes again. */
+const STOP_RETRY_MILLIS = 30_000;
+
 /**
  * The stopper (`cairn.workflow-budget-stop`): created once by the budget reactor in the commit that
  * handles `workflow.budget.spent`, a background task of the launching conversation. It aborts the
@@ -720,7 +727,9 @@ const pause = async (millis: number, signal: AbortSignal): Promise<void> => {
  * nothing for a child already idle. It stops at once when the run leaves the line of its `epoch`
  * (a raise was accepted, so the nodes the raised budget admits are not its to stop). Last, it
  * marks the run `partial`, `budget_spent`, only while the run still stands at that line (its
- * watcher writes the same outcome when it ends).
+ * watcher writes the same outcome when it ends). A pass that throws (O-3, `TaskFailures.ts`) is
+ * reported and the stopper sleeps `STOP_RETRY_MILLIS` on pi-durable's clock and stops again, since
+ * its passes are safe to repeat and a run at its line must not keep its nodes.
  */
 export const BudgetStopper = defineTask<
   { workflowId: string; epoch?: number },
@@ -731,7 +740,20 @@ export const BudgetStopper = defineTask<
   version: 1,
   initial: () => ({ phase: "stop" }),
   phases: {
-    stop: async (task, runtime, context) => {
+    stop: failsVisibly<
+      { workflowId: string; epoch?: number },
+      { phase: "stop" },
+      null,
+      object
+    >(async (_tx, failed) => {
+      await Promise.resolve();
+
+      return {
+        status: "sleeping",
+        until: failed.at + STOP_RETRY_MILLIS,
+        checkpoint: { phase: "stop" },
+      };
+    })(async (task, runtime, context) => {
       const { workflowId } = task.input;
       const epoch = Option.fromUndefinedOr(task.input.epoch);
 
@@ -789,7 +811,7 @@ export const BudgetStopper = defineTask<
           outcome: { status: "completed", result: null },
         };
       }, context);
-    },
+    }),
   },
   abort: async (_task, runtime, context) => {
     await runtime.commit(
@@ -888,11 +910,24 @@ const LineEventData = Schema.Struct({
   budget: Budget,
 });
 
-const decodeLine = Schema.decodeUnknownOption(LineEventData);
+/** The decoder of a line event's data at each version it was written at (`EVENT_VERSIONS`). */
+const LINE_DECODERS: ReadonlyMap<
+  number,
+  (data: JsonValue) => Option.Option<typeof LineEventData.Type>
+> = new Map([[1, Schema.decodeUnknownOption(LineEventData)]]);
 
-/** Reads a line event's data; throws (the event stays pending, the status shows it) when malformed. */
-const lineOf = (data: JsonValue): LineEvent => {
-  const decoded = isEventObject(data) ? decodeLine(data) : Option.none();
+/**
+ * Reads a line event's data by the version it was written at (`event.v`). Throws `UnreadableEvent`
+ * for a version this reactor does not know or data that is not the meter's at its version: no
+ * retry can read it, so the host dead-letters it at once (ADR 0033 as amended).
+ */
+const lineOf = (event: EventRecord): LineEvent => {
+  const decode = Option.fromUndefinedOr(LINE_DECODERS.get(event.v));
+
+  const decoded = Option.flatMap(
+    Option.filter(decode, () => isEventObject(event.data)),
+    (read) => read(event.data)
+  );
 
   return Option.getOrThrowWith(
     Option.map(decoded, (line) => ({
@@ -904,9 +939,13 @@ const lineOf = (data: JsonValue): LineEvent => {
       budget: budgetJson(line.budget),
     })),
     () =>
-      new Error(
-        "A workflow budget event's data is not the meter's. It stays pending; repair the entry."
-      )
+      new UnreadableEvent({
+        message: Option.isNone(decode)
+          ? `Workflow budget event ${String(event.id)} (${event.name}) is at version ${String(event.v)}, which the budget reactor cannot read.`
+          : `Workflow budget event ${String(event.id)} (${event.name}) holds data that is not the meter's at version ${String(event.v)}.`,
+        eventId: event.id,
+        kind: eventKind(event.name),
+      })
   );
 };
 
@@ -917,9 +956,15 @@ const raiseRecord = (
   at: number,
   elapsedMillis: number
 ): ApprovalRecord => {
-  const payload: JsonRecord = {
+  // The card names the run and reads what it spent against its line (ADR 0047).
+  const payload: ApprovalPayloadState = {
     type: "budget-raise",
     scope: line.workflowId,
+    title: name,
+    spent: {
+      tokens: Math.round(line.meter.tokens),
+      listMicros: Math.round(line.meter.listMicros),
+    },
     from: { ...line.budget },
     to: raisedBudget(line.budget, line.meter, elapsedMillis),
   };
@@ -1071,13 +1116,13 @@ const onSpent = async (tx: Tx, line: LineEvent, at: number): Promise<void> => {
 
 /**
  * The budget reactor (`cairn.workflow-budget`, from `now`: its stopper reaches into running work,
- * so a deploy that adds it does not replay old lines). Hand-off: listed in `ReactorSet.ts`.
+ * so a deploy that adds it does not replay old lines). Listed in the workflows manifest.
  */
 export const workflowBudgetReactor: Reactor = reactor(
   BUDGET_REACTOR,
   { events: ["workflow.budget.soft", "workflow.budget.spent"], from: "now" },
   async (tx, event) => {
-    const line = lineOf(event.data);
+    const line = lineOf(event);
 
     const handle = event.name === "workflow.budget.spent" ? onSpent : onSoft;
 

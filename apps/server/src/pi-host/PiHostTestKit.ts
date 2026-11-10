@@ -13,19 +13,11 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { Effect, Fiber, Layer, Option, Predicate, Stream } from "effect";
 
-import { BrainConfig } from "../brain/BrainConfig.ts";
-import { ExtensionSet } from "../brain/ExtensionSet.ts";
-import { FauxModels } from "../brain/FauxModels.ts";
+import { FAUX_MODEL_OPTIONS, testBrain } from "../brain/BrainTestKit.ts";
+import type { FauxModelOptions } from "../brain/BrainTestKit.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
-import { PiDurableHarness } from "../brain/PiDurableHarness.ts";
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
 import { PiConfig } from "../models/PiConfig.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
 import { PiHost } from "./PiHost.ts";
 import type { InstanceScope, PiHostPolicy } from "./PiHostPolicy.ts";
 
@@ -102,14 +94,14 @@ export const fixturePolicy = (
   fixture: HostFixture,
   options: {
     readonly scope: InstanceScope;
-    readonly versions?: string;
+    readonly versions?: ReadonlyArray<string>;
     readonly folderInstances?: number;
   }
 ): PiHostPolicy => ({
   packages: [
     {
       name: "pi-host-fixture",
-      versions: options.versions ?? "1.2.x",
+      versions: options.versions ?? ["1.2.x"],
       scope: options.scope,
       flags: () =>
         new Map([
@@ -121,7 +113,7 @@ export const fixturePolicy = (
     },
     {
       name: "pi-host-provider",
-      versions: "1.0.x",
+      versions: ["1.0.x"],
       scope: "brain",
       flags: () => new Map(),
       env: () => new Map(),
@@ -146,33 +138,19 @@ export const hostLayer = (fixture: HostFixture, policy: PiHostPolicy) =>
 
 /**
  * A brain on the faux model with the production set, whose `cairn.pi-tools` extension comes from
- * `host`, and the host itself.
+ * `host`, and the host itself. `model` is what the faux model is built with, when a caller needs
+ * other settings than the kit's (a kill judge needs retries on: see `judges/fixtures/pi-host`).
  */
 export const brainLayer = <E>(
   host: Layer.Layer<PiHost, E>,
-  dataDir: string
-) => {
-  const extensions = ExtensionSet.layer.pipe(
-    Layer.provide(ExecutorLink.layerDisabled),
-    Layer.provide(ModelHealth.layerTest),
-    Layer.provide(SettingsStore.layerTest),
-    Layer.provide(ReachServicesTest),
-    Layer.provide(Subagents.layerTest),
-    Layer.provide(PiModelSource.layerFromModelSource)
-  );
-
-  return PiDurableHarness.layer.pipe(
-    Layer.provideMerge(extensions),
-    Layer.provideMerge(
-      ModelSource.layerFaux({
-        tokensPerSecond: 4000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
-    Layer.provide(BrainConfig.layerFrom(dataDir)),
-    Layer.provideMerge(host)
-  );
-};
+  dataDir: string,
+  model?: FauxModelOptions
+) =>
+  testBrain({
+    piHost: host,
+    dataDir,
+    model: model ?? FAUX_MODEL_OPTIONS,
+  }).pipe(Layer.provideMerge(host));
 
 const isRunEnd = Predicate.isTagged("RunTerminal");
 

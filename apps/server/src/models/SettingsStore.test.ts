@@ -1,10 +1,9 @@
 // Judges the server settings store on a migrated in-memory cairn.sqlite: defaults before anything
 // is set, a patch changes only its present keys and survives a fresh read, and a stored value that
-// no longer decodes reads as its default instead of failing every read. A role table a brain
-// stored before ADR 0043 removed roles stays in its row and breaks neither a read nor an update.
+// no longer decodes reads as its default instead of failing every read.
 
 import { assert, describe, it } from "@effect/vitest";
-import { Context, Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Database } from "../db/Database.ts";
@@ -81,59 +80,5 @@ describe("the server settings", () => {
         DEFAULT_SERVER_SETTINGS.bridgeGenerationCap
       );
     }).pipe(Effect.provide(TestLayer))
-  );
-
-  it.effect(
-    "reads and updates past a role table stored before roles were removed",
-    () =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-
-        // The row the role table's seed wrote on every brain before ADR 0043, as it encoded it.
-        const table = JSON.stringify({
-          "@worker": {
-            model: { provider: "claude-bridge", modelId: "claude-opus-5-5" },
-            thinkingLevel: "medium",
-            fallbacks: [],
-            note: null,
-          },
-          "@judge": {
-            model: { provider: "opencode-go", modelId: "gpt-6-luna" },
-            thinkingLevel: null,
-            fallbacks: [],
-            note: null,
-          },
-        });
-
-        yield* sql`
-          INSERT INTO settings (key, value_json, updated_at)
-          VALUES ('roleBindings', ${table}, 0)
-        `;
-
-        // A store built over the database, as a boot builds it.
-        const built = yield* Layer.build(SettingsStore.layerNoDeps);
-        const store = Context.get(built, SettingsStore);
-
-        assert.deepStrictEqual(yield* store.get, DEFAULT_SERVER_SETTINGS);
-
-        const updated = yield* store.update({
-          autoSettleDays: Option.some(5),
-          titleModel: Option.none(),
-          bridgeEnabled: Option.none(),
-          bridgeGenerationCap: Option.none(),
-          defaultBudget: Option.none(),
-        });
-
-        assert.strictEqual(updated.autoSettleDays, 5);
-
-        const rows = yield* sql<{
-          readonly value_json: string;
-        }>`SELECT value_json FROM settings WHERE key = 'roleBindings'`;
-
-        assert.deepStrictEqual(
-          rows.map((row) => row.value_json),
-          [table]
-        );
-      }).pipe(Effect.scoped, Effect.provide(TestLayer))
   );
 });

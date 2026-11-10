@@ -33,12 +33,6 @@ import {
 import { ServerConfig } from "../../Config.ts";
 import { Database } from "../../db/Database.ts";
 import { migrations } from "../../db/Migrations.ts";
-import { ExecutorLink } from "../../executor/ExecutorLink.ts";
-import { ModelHealth } from "../../models/ModelHealth.ts";
-import { PiModelSource } from "../../models/PiModelSource.ts";
-import { SettingsStore } from "../../models/SettingsStore.ts";
-import { PiHost } from "../../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../../reach/ReachLayer.ts";
 import { Subagents } from "../../subagents/Subagents.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../../subagents/SubagentTools.ts";
 import type { SubagentToolOptions } from "../../subagents/SubagentTools.ts";
@@ -46,14 +40,13 @@ import { ChildWorkspaces } from "../../workspaces/ChildWorkspaces.ts";
 import { Brain } from "../Brain.ts";
 import type { BrainSession } from "../Brain.ts";
 import { BrainConfig } from "../BrainConfig.ts";
+import { brainExtensions } from "../BrainTestKit.ts";
 import { BRIEF_TTL_MILLIS, BriefTtl } from "../BriefTtl.ts";
 import { ThreadMeta } from "../CairnDocs.ts";
 import { messageText } from "../CommitFeed.ts";
 import { durable } from "../Durable.ts";
-import { ExtensionSet } from "../ExtensionSet.ts";
 import { FauxModels } from "../FauxModels.ts";
 import { HarnessSeam } from "../HarnessSeam.ts";
-import { ModelSource } from "../ModelSource.ts";
 import { PiDurableHarness } from "../PiDurableHarness.ts";
 import {
   ScriptedBoot,
@@ -216,19 +209,20 @@ export const piDurableLayer = (
 ) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
-      ExtensionSet.withExtra([conformanceTools]).pipe(
-        Layer.provide(Subagents.layerWith(faults, tuning)),
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
+      brainExtensions({
+        extra: [conformanceTools],
+        subagents: Subagents.layerWith(faults, tuning),
+      })
     ),
     Layer.provideMerge(
-      ModelSource.layerFaux({
+      FauxModels.layer({
         tokensPerSecond: 2000,
+        // A delta of 64 tokens (256 characters), not pi-ai's 3 to 5: an answer streams as long,
+        // but a long one is a few timers and deltas, not hundreds. With small deltas, the two
+        // 4,000-character arguments of `subagent_reply_escalate_reason_bounded` were 500 timers in
+        // a row, each late on a loaded machine, and that line went past the mutation check's
+        // timeout; no scenario judges a delta.
+        tokensPerDelta: 64,
         // No provider retries (a failed answer would take the next scripted one), and a
         // compaction keeps only the newest context, so a short thread has something to compact.
         settings: {

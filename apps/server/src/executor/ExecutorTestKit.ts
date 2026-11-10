@@ -4,13 +4,13 @@
 import type { ApprovalStatus } from "@cairn/protocol/Policy";
 import { Duration, Effect, Layer, Option } from "effect";
 
-import { UNDECIDED } from "../brain/CairnDocs.ts";
 import type {
-  ApprovalLedger,
-  ApprovalRecord,
   ApprovalRequest,
   ApprovalSettlement,
-} from "../brain/CairnDocs.ts";
+  ApprovalLedger,
+} from "../approvals/ApprovalLedger.ts";
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
+import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { ServerConfig } from "../Config.ts";
 import { ExecutorGrant } from "./ExecutorGrant.ts";
 import {

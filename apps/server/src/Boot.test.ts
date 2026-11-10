@@ -1,6 +1,5 @@
 // Boot: its order (repairs, resume, reconcile, then ready), the serving gate on a real socket (`/ws`
-// answers 503 until boot is done, then upgrades), the repair that retries parked approval waits,
-// and the one number that matters from the 300-conversation scale probe (plan D1): under 3 s from
+// answers 503 until boot is done, then upgrades), and the one number that matters from the 300-conversation scale probe (plan D1): under 3 s from
 // opening the stores to ready over a brain of 300 threads.
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -8,13 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  ApprovalId,
-  ConversationId,
-  ProjectId,
-  RunId,
-  TaskId,
-} from "@cairn/protocol/Ids";
+import { ProjectId, RunId } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it, layer } from "@effect/vitest";
@@ -29,7 +22,6 @@ import {
   Ref,
   References,
   Schema,
-  Stream,
 } from "effect";
 import { HttpServer } from "effect/http";
 import { TestClock } from "effect/testing";
@@ -37,18 +29,19 @@ import { TestClock } from "effect/testing";
 import {
   HarnessBoot,
   PiDurableBrain,
-  ScriptedBrain,
   ThreadsLive,
   withCatalog,
+  HandlersLayer,
 } from "./AppLayer.ts";
-import { retryParkedApprovalWaits, runBoot } from "./Boot.ts";
+import { runBoot } from "./Boot.ts";
+import { endCrashLoopedTasks } from "./brain/CrashLimit.ts";
+import { FauxModels, FAUX_MODEL } from "./brain/FauxModels.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
-import type { LiveThreadState } from "./brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./brain/ModelSource.ts";
-import { Parked } from "./brain/Parked.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
+import { ScriptedBrain } from "./DevLayer.ts";
+import { eventuallyTrue, testLimit } from "./EventuallyTestKit.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Diffs } from "./git/Diffs.ts";
 import { Health } from "./http/Health.ts";
@@ -57,15 +50,12 @@ import { Identity, IdentityRefused, USER_HEADER } from "./http/Identity.ts";
 import { BootJson } from "./http/Static.ts";
 import { PeerPath } from "./load/PeerPath.ts";
 import { ModelHealth } from "./models/ModelHealth.ts";
+import { isolatePiSetup } from "./models/PiConfigTestKit.ts";
 import { SettingsStore } from "./models/SettingsStore.ts";
 import { PiHost } from "./pi-host/PiHost.ts";
 import { PushLayer } from "./push/PushLayer.ts";
-import {
-  ReachMachine,
-  ReachServices,
-  ReachServicesTest,
-} from "./reach/ReachLayer.ts";
-import { HandlersLayer } from "./rpc/Handlers.ts";
+import { ReachServices } from "./reach/ReachLayer.ts";
+import { ReachMachine, ReachServicesTest } from "./reach/ReachTestKit.ts";
 import { SessionHello } from "./rpc/SessionHandlers.ts";
 import { EventSink } from "./shell/EventSink.ts";
 import { ProjectorSignals } from "./shell/ProjectorSignals.ts";
@@ -84,37 +74,11 @@ import {
 import { ThreadRows } from "./shell/ThreadRows.ts";
 import { Shutdown } from "./Shutdown.ts";
 import { shutdownHooks } from "./ShutdownHooks.ts";
-import { START_TASK } from "./subagents/SubagentTasks.ts";
+import { BudgetGuard } from "./usage/BudgetGuard.ts";
 import { SpendLedger } from "./usage/SpendLedger.ts";
 
-const unsupported = (operation: string) =>
-  Effect.die(`the fake harness does not ${operation}`);
-
-/** A harness that answers `inspect` from a list and records `retry`. */
-const fakeHarness = (
-  live: ReadonlyArray<LiveThreadState>,
-  retried: Ref.Ref<ReadonlyArray<TaskId>>
-) =>
-  HarnessSeam.of({
-    ensureThread: () => unsupported("ensure threads"),
-    configure: () => unsupported("configure"),
-    submit: () => unsupported("submit"),
-    stop: () => unsupported("stop"),
-    withdraw: () => unsupported("withdraw"),
-    respond: () => unsupported("respond"),
-    write: () => unsupported("write"),
-    compact: () => unsupported("compact"),
-    watch: () => Stream.die("the fake harness does not watch"),
-    whenEnsured: () => unsupported("wait for threads"),
-    document: () => unsupported("read documents"),
-    history: () => unsupported("page history"),
-    entry: () => unsupported("read entries"),
-    entryImage: () => unsupported("read images"),
-    events: Stream.never,
-    inspect: Effect.succeed(live),
-    retry: (taskId) => Ref.update(retried, (tasks) => [...tasks, taskId]),
-    capabilities: { durable: false, live: false },
-  });
+// The pi-durable brains below build the brain's own pi setup: an empty one, never the user's.
+isolatePiSetup();
 
 describe("boot", () => {
   it.effect(
@@ -131,7 +95,6 @@ describe("boot", () => {
           reconcile: record("reconcile").pipe(
             Effect.as({ threads: 2, live: 1, patched: 1 })
           ),
-          refresh: () => Effect.void,
           flushAll: Effect.void,
         });
 
@@ -188,7 +151,6 @@ describe("boot", () => {
 
       const projector = ShellProjector.of({
         reconcile: Effect.succeed({ threads: 0, live: 0, patched: 0 }),
-        refresh: () => Effect.void,
         flushAll: Effect.void,
       });
 
@@ -212,96 +174,6 @@ describe("boot", () => {
       yield* TestClock.adjust("1 minute");
       assert.deepStrictEqual(slow, ["resume"], "the reconcile was quick");
     }).pipe(Effect.provide(Health.layer))
-  );
-
-  it.effect(
-    "the repair retries every parked task of a thread waiting on an approval, and no other",
-    () =>
-      Effect.gen(function* () {
-        const retried = yield* Ref.make<ReadonlyArray<TaskId>>([]);
-
-        const live: ReadonlyArray<LiveThreadState> = [
-          {
-            threadId: testThreadId(1),
-            conversationId: ConversationId.make(1),
-            runId: Option.some(RunId.make(3)),
-            queueLength: 0,
-            parkedTaskIds: [TaskId.make(4), TaskId.make(5)],
-            pendingApprovals: [
-              {
-                id: ApprovalId.make("apr_pending"),
-                kind: "tool-call",
-                askedAt: 0,
-                route: "user",
-                origin: Option.none(),
-              },
-            ],
-          },
-          {
-            threadId: testThreadId(2),
-            conversationId: ConversationId.make(2),
-            runId: Option.some(RunId.make(6)),
-            queueLength: 0,
-            parkedTaskIds: [TaskId.make(7)],
-            pendingApprovals: [],
-          },
-        ];
-
-        yield* retryParkedApprovalWaits.repair.pipe(
-          Effect.provideService(HarnessSeam, fakeHarness(live, retried))
-        );
-
-        assert.deepStrictEqual(yield* Ref.get(retried), [
-          TaskId.make(4),
-          TaskId.make(5),
-        ]);
-      })
-  );
-
-  it.effect(
-    "the repair leaves a parked start task for a human Retry, even beside a pending approval",
-    () =>
-      Effect.gen(function* () {
-        const retried = yield* Ref.make<ReadonlyArray<TaskId>>([]);
-        const parked = yield* Parked;
-
-        // A parent with a second brief pending, whose Go'd start the guard parked (ADR 0030).
-        yield* parked.add({
-          taskId: TaskId.make(4),
-          conversationId: ConversationId.make(1),
-          kind: "pi.tool",
-        });
-        yield* parked.add({
-          taskId: TaskId.make(5),
-          conversationId: ConversationId.make(1),
-          kind: START_TASK,
-        });
-
-        const live: ReadonlyArray<LiveThreadState> = [
-          {
-            threadId: testThreadId(1),
-            conversationId: ConversationId.make(1),
-            runId: Option.none(),
-            queueLength: 0,
-            parkedTaskIds: [TaskId.make(4), TaskId.make(5)],
-            pendingApprovals: [
-              {
-                id: ApprovalId.make("apr_second_brief"),
-                kind: "brief",
-                askedAt: 0,
-                route: "user",
-                origin: Option.none(),
-              },
-            ],
-          },
-        ];
-
-        yield* retryParkedApprovalWaits.repair.pipe(
-          Effect.provideService(HarnessSeam, fakeHarness(live, retried))
-        );
-
-        assert.deepStrictEqual(yield* Ref.get(retried), [TaskId.make(4)]);
-      }).pipe(Effect.provide(Parked.layer))
   );
 });
 
@@ -347,7 +219,8 @@ const GatedApp = Layer.mergeAll(
   )
 ).pipe(
   Layer.provide(HandlersLayer),
-  Layer.provide(Diffs.layer),
+  // With `budget.declare`'s guard: this test declares no budget.
+  Layer.provide(Layer.merge(Diffs.layer, Layer.mock(BudgetGuard)({}))),
   Layer.provide(SessionHello.layer),
   Layer.provide(BootJson.layerNone),
   Layer.provide(PeerPath.fixed(new Map())),
@@ -406,7 +279,7 @@ const upgradeStatus = Effect.gen(function* () {
     const request = http.request({
       host: "127.0.0.1",
       port,
-      path: "/ws?protocol=2",
+      path: "/ws?protocol=3",
       headers: {
         connection: "Upgrade",
         upgrade: "websocket",
@@ -472,15 +345,7 @@ layer(GatedApp, { excludeTestServices: true })("the serving gate", (gated) => {
 
       yield* Deferred.succeed(resumeGate, true);
 
-      for (
-        let attempt = 0;
-        attempt < 100 && !(yield* healthReady);
-        attempt += 1
-      ) {
-        yield* Effect.sleep("20 millis");
-      }
-
-      assert.isTrue(yield* healthReady);
+      assert.isTrue(yield* eventuallyTrue(healthReady, "/health says ready"));
       assert.strictEqual(yield* upgradeStatus, 101);
     })
   );
@@ -498,7 +363,7 @@ const PROJECT = createProject(1);
 const brainFor = (dataDir: string) =>
   PiDurableBrain({
     models: withCatalog(
-      ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} })
+      FauxModels.layer({ tokensPerSecond: 2000, settings: {} })
     ),
   }).pipe(
     Layer.provideMerge(ExecutorLink.layerDisabled),
@@ -576,7 +441,9 @@ const bootBrain = (dataDir: string) =>
     );
 
     const report = yield* runBoot({
-      repairs: retryParkedApprovalWaits.repair,
+      repairs: endCrashLoopedTasks({ kinds: new Set(), tools: new Set() }).pipe(
+        Effect.orDie
+      ),
       resume: HarnessBoot.use((boot) => boot.resume),
     }).pipe(Effect.provideContext(context));
 
@@ -617,6 +484,6 @@ describe("boot over a brain of 300 threads", () => {
             rmSync(dataDir, { recursive: true, force: true });
           })
       ),
-    60_000
+    testLimit(60_000)
   );
 });

@@ -18,7 +18,7 @@
 // a live one its progress, and a group's span from its first start to its last end. Changed: the
 // states are Cairn's: a brief waiting for Go and a brief that never started come before any child,
 // and a started child reads its live state from its own shell row (approval, input, a question to
-// its parent, working, waiting on its own children, parked, limited, failed) and, at rest, how its
+// its parent, working, waiting on its own children, limited, failed) and, at rest, how its
 // latest settlement ended. A spawn call is linked to its brief by the brief's summary, which is the
 // call's `description`, newest first, since older calls may not be loaded yet. Not ported: workflow
 // coordinators and members (5E's `WorkflowSteps.ts`), provider avatars, model labels, workspaces,
@@ -48,22 +48,20 @@ import type { ThreadShell } from "@cairn/protocol/Shell";
 import {
   BRIEF_ANSWER_ENTRY,
   CHILD_DOCUMENT,
+  ChildDocument,
   SettlementOutcome,
   SUBAGENT_RESULT_ENTRY,
+  SubagentRecord,
   SUBAGENTS_DOCUMENT,
-  SubagentStatus,
 } from "@cairn/protocol/Subagents";
+import type { SubagentStatus } from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
-import { Option, Predicate, Schema } from "effect";
+import { Option, Predicate, Schema, Struct } from "effect";
 
 import { approvalRecordsOf } from "./PendingRequests.ts";
 import type { SubagentRequest } from "./SubagentRollup.ts";
-import type {
-  ThreadStateRow,
-  ThreadStatus,
-  ThreadTone,
-} from "./ThreadState.ts";
-import { THREAD_LABELS, threadStatus } from "./ThreadState.ts";
+import type { StateLook, ThreadStateRow, ThreadStatus } from "./ThreadState.ts";
+import { STATE_LOOKS, THREAD_LABELS, threadStatus } from "./ThreadState.ts";
 
 /** The tool a parent proposes a subagent with. */
 export const SPAWN_TOOL = "subagent_spawn";
@@ -88,36 +86,31 @@ export type SubagentState =
   | "asking-parent"
   | "working"
   | "waiting"
-  | "parked"
   | "limited"
   | "done"
   | "failed"
   | "stopped";
 
-/** A state's words and tone, in the thread labels' vocabulary. */
-export interface SubagentLabel {
-  readonly word: string;
-  readonly tone: ThreadTone;
-}
+/** A state's word, tone and mark, from the one state table (`STATE_LOOKS`). */
+export type SubagentLabel = StateLook;
 
-/** Every state's words and tone; a started child's live states say what its own row says. */
+/** Every state's look; a started child's live states say what its own row says. */
 export const SUBAGENT_LABELS: Readonly<Record<SubagentState, SubagentLabel>> = {
-  go: { word: "Waiting for Go", tone: "attention" },
-  declined: { word: "Declined", tone: "muted" },
-  "sent-back": { word: "Sent back", tone: "muted" },
-  expired: { word: "Expired", tone: "muted" },
-  cancelled: { word: "Cancelled", tone: "muted" },
-  unstarted: { word: "Not started", tone: "error" },
+  go: THREAD_LABELS.go,
+  declined: STATE_LOOKS.declined,
+  "sent-back": STATE_LOOKS["sent-back"],
+  expired: STATE_LOOKS.expired,
+  cancelled: STATE_LOOKS.cancelled,
+  unstarted: STATE_LOOKS.unstarted,
   approval: THREAD_LABELS.approval,
   input: THREAD_LABELS.input,
   "asking-parent": THREAD_LABELS["asking-parent"],
   working: THREAD_LABELS.working,
   waiting: THREAD_LABELS.waiting,
-  parked: THREAD_LABELS.parked,
   limited: THREAD_LABELS.limited,
   done: THREAD_LABELS.done,
   failed: THREAD_LABELS.failed,
-  stopped: { word: "Stopped", tone: "muted" },
+  stopped: STATE_LOOKS.stopped,
 };
 
 const TERMINAL: ReadonlySet<SubagentState> = new Set<SubagentState>([
@@ -232,7 +225,6 @@ const TALLY_OF: Readonly<Record<SubagentState, TallyKey>> = {
   "asking-parent": "asking",
   working: "working",
   waiting: "working",
-  parked: "held",
   limited: "held",
   done: "done",
   failed: "failed",
@@ -416,15 +408,24 @@ export interface RegistryChild {
   }>;
 }
 
-const RegistryItem = Schema.Struct({
-  threadId: ThreadId,
-  briefApprovalId: Schema.String,
-  status: SubagentStatus,
-  dispatch: Schema.Struct({ dispatchedAt: Schema.Finite }),
-  settlements: Schema.Array(
-    Schema.Struct({ outcome: SettlementOutcome, reportedAt: Schema.Finite })
-  ),
-});
+/**
+ * What a client reads of one registry item, as the protocol's `SubagentRecord` has it: of its
+ * dispatch, only when, so a resolved model no spec may name (an OpenRouter `~` alias a parent ran
+ * on) does not hide the child.
+ */
+const RegistryItem = SubagentRecord.mapFields(
+  Struct.pick([
+    "threadId",
+    "briefApprovalId",
+    "status",
+    "dispatch",
+    "settlements",
+  ])
+).mapFields(
+  Struct.evolve({
+    dispatch: (dispatch) => dispatch.mapFields(Struct.pick(["dispatchedAt"])),
+  })
+);
 
 const decodeRegistry = Schema.decodeUnknownOption(
   Schema.Struct({ items: Schema.Record(Schema.String, Schema.Json) })
@@ -672,7 +673,8 @@ export const subagentLinksOf = (
   });
 };
 
-const ChildLink = Schema.Struct({ parentThreadId: ThreadId });
+/** What a client reads of a `cairn.child` document, as the protocol's `ChildDocument` has it. */
+const ChildLink = ChildDocument.mapFields(Struct.pick(["parentThreadId"]));
 
 const decodeChildLink = Schema.decodeUnknownOption(ChildLink);
 
@@ -768,7 +770,6 @@ const LIVE_STATE: Readonly<
   "asking-parent": "asking-parent",
   working: "working",
   waiting: "waiting",
-  parked: "parked",
   failed: "failed",
   limited: "limited",
 };

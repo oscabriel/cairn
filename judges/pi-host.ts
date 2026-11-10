@@ -4,6 +4,11 @@
 // `pi-web-access` and `@ff-labs/pi-fff` beside the `pi-host-counter` fixture) is `kill -9`ed while
 // two fixture calls run, then reopened.
 //
+// This judge reads the user's real pi install (`~/.pi/agent`, or `--user-agent`), read only, which
+// is why it is not in the gate: the gate's tests load fixture packages from a temporary agent dir.
+// It is the check to run after `pi update` moves a package: a version the allowlist does not admit
+// fails here by name (vet the new minor, then add its range to `PiHostPolicy.ts`).
+//
 //   node judges/pi-host.ts [--case kills|control]... [--kills N] [--user-agent <dir>] [--no-real]
 //                          [--keep]
 //
@@ -22,8 +27,9 @@
 // Passes when: the safe call ran once per life that reached it (1 + kills) and committed exactly
 // one result, "counter_safe ran N times", not an error; the unsafe call ran once and committed
 // exactly one result, pi-durable's "interrupted"; both threads finished; the read-back equals what
-// the resuming life saw; and, with the real packages, both loaded with their tools and answered
-// from their own code before and after the kill. The pi home (`~/.pi`) must be identical before and
+// the resuming life saw; and, with the real packages, both are installed at a version the
+// allowlist admits, both loaded with their tools (`web_enable` dropped), and both answered from
+// their own code before and after the kill. The pi home (`~/.pi`) must be identical before and
 // after but for `exa-usage.json`, the Exa counter Cairn shares with the TUI (ADR 0039): the scratch
 // agent dir's `npm` is a symlink to the user's installed packages, read only.
 //
@@ -50,6 +56,15 @@ import { parseArgs } from "node:util";
 import { NodeRuntime } from "@effect/platform-node";
 import type { Duration } from "effect";
 import { Console, Effect, Option, Result, Schema } from "effect";
+
+import {
+  decidePackage,
+  PackageDecision,
+  PI_HOST_POLICY,
+} from "../apps/server/src/pi-host/PiHostPolicy.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const root = path.join(import.meta.dirname, "..");
 
@@ -361,7 +376,34 @@ const other = (text: string): Failure => ({ kind: "other", text });
 
 const replay = (text: string): Failure => ({ kind: "replay", text });
 
-/** The real packages loaded with their tools and answered from their own code in `call`. */
+const Manifest = Schema.Struct({ version: Schema.String });
+
+const decodeManifest = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Manifest)
+);
+
+/** The version of `name` the user's pi installed; none when it is missing or unreadable. */
+const installedVersion = (name: string) => {
+  const file = path.join(
+    userAgent,
+    "npm",
+    "node_modules",
+    name,
+    "package.json"
+  );
+
+  return existsSync(file)
+    ? Option.map(
+        decodeManifest(readFileSync(file, "utf-8")),
+        (manifest) => manifest.version
+      )
+    : Option.none();
+};
+
+/**
+ * The real packages installed at a version the allowlist admits, loaded with their tools, and
+ * answering from their own code in `call`.
+ */
 const checkReal = (
   loaded: typeof Loaded.Type | undefined,
   call: Report | undefined,
@@ -370,8 +412,37 @@ const checkReal = (
   const failures: Array<Failure> = [];
   const tools = new Set(loaded?.packages.flatMap((each) => each.tools));
 
+  for (const { name } of PI_HOST_POLICY.packages) {
+    const notLoaded = () =>
+      (loaded?.packages.some((each) => each.name === name) ?? false)
+        ? Option.none()
+        : Option.some(other(`the host did not load ${name}`));
+
+    const version = installedVersion(name);
+
+    const verdict = Option.isNone(version)
+      ? Option.some(
+          other(
+            `${name} is not installed under ${path.join(userAgent, "npm", "node_modules")} (or its package.json is unreadable)`
+          )
+        )
+      : PackageDecision.$match(decidePackage(PI_HOST_POLICY, name, version), {
+          Allowed: notLoaded,
+          NotAllowed: notLoaded,
+          OutOfRange: ({ policy, version: found }) =>
+            Option.some(
+              other(
+                `${name} ${found} is installed, but the allowlist admits ${policy.versions.join(", ")}: vet that version, then add its range to PiHostPolicy.ts`
+              )
+            ),
+        });
+
+    failures.push(...Option.toArray(verdict));
+  }
+
   for (const tool of [
     "web_search",
+    "source_check",
     "fetch_content",
     "get_search_content",
     "ffgrep",
@@ -380,6 +451,11 @@ const checkReal = (
     if (!tools.has(tool)) {
       failures.push(other(`the host did not offer ${tool}`));
     }
+  }
+
+  // The policy drops it: it only calls `setActiveTools`, and the brain's tool set is fixed.
+  if (tools.has("web_enable")) {
+    failures.push(other("the host offered web_enable, which the policy drops"));
   }
 
   const answered = (report: Report | undefined, thread: string) =>

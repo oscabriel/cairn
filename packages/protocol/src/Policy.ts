@@ -33,9 +33,9 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./Ids.ts";
-import { ModelRef, ThinkingLevel } from "./Models.ts";
+import { ThinkingLevel } from "./Models.ts";
 import { ModelSpec } from "./ModelSpecs.ts";
-import { Budget } from "./Spend.ts";
+import { Budget, Micros } from "./Spend.ts";
 
 /**
  * A thread's permission mode: which tool calls need an approval (ADR 0031). Full access asks for
@@ -192,7 +192,7 @@ export const JudgeRef = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("user") }),
   Schema.Struct({
     kind: Schema.Literal("model"),
-    /** Null for the goal thread's model; a judge recorded before ADR 0043 may hold `@judge`. */
+    /** Null for the goal thread's model (refused for a goal's criterion, ADR 0055). */
     spec: Schema.NullOr(ModelSpec),
     rubric: DisplayText,
   }),
@@ -279,11 +279,10 @@ export const Brief = Schema.Struct({
   writes: Schema.Array(TrimmedNonEmptyString),
   /**
    * The model the child runs on, `provider/modelId[:level]`, checked at dispatch; null for its
-   * parent's model and level (ADR 0043). The wire name `role` is kept for briefs recorded before
-   * ADR 0043, whose role name (`@worker`) reads as null.
+   * parent's model and level (ADR 0043).
    */
-  role: Schema.NullOr(ModelSpec),
-  model: Schema.NullOr(ModelRef),
+  model: Schema.NullOr(ModelSpec),
+  /** A workflow node's effort, when it named a thinking level; null otherwise. */
   thinking: Schema.NullOr(ThinkingLevel),
   /** Never wider than the parent's. */
   mode: RuntimeMode,
@@ -304,11 +303,7 @@ export const NodeArms = Schema.Literals(["host", "stone"]);
 
 export type NodeArms = typeof NodeArms.Type;
 
-/**
- * One model an envelope lets nodes run on (ADR 0043), and whether they may write. An envelope
- * recorded before ADR 0043 holds a role name here (`@worker`), which reads as the launching
- * thread's model.
- */
+/** One model an envelope lets nodes run on (ADR 0043), and whether they may write. */
 export const EnvelopeModel = Schema.Struct({
   spec: ModelSpec,
   readonly: Schema.Boolean,
@@ -327,8 +322,8 @@ export const Envelope = Schema.Struct({
   scriptHash: Schema.NullOr(TrimmedNonEmptyString),
   maxNodes: PositiveInt.check(Schema.isLessThanOrEqualTo(1000)),
   maxConcurrent: PositiveInt.check(Schema.isLessThanOrEqualTo(32)),
-  /** The models nodes may run on; the wire name `roles` is kept for envelopes recorded before ADR 0043. */
-  roles: Schema.Array(EnvelopeModel),
+  /** The models nodes may run on. */
+  models: Schema.Array(EnvelopeModel),
   modes: Schema.Array(RuntimeMode),
   writes: Schema.Array(TrimmedNonEmptyString),
   budget: Budget,
@@ -372,10 +367,7 @@ export const WorkflowPhase = Schema.Struct({
 
 export type WorkflowPhase = typeof WorkflowPhase.Type;
 
-/**
- * A workflow's launch approval payload (kind `brief`): the plan the user says Go to. A payload
- * frozen before ADR 0043 also holds `roleOverrides`, which decoding ignores.
- */
+/** A workflow's launch approval payload (kind `brief`): the plan the user says Go to. */
 export const WorkflowLaunch = Schema.Struct({
   type: Schema.Literal("workflow"),
   workflowId: TrimmedNonEmptyString,
@@ -396,10 +388,10 @@ export const WorkflowLaunch = Schema.Struct({
 export type WorkflowLaunch = typeof WorkflowLaunch.Type;
 
 /**
- * What the user changed on a workflow's launch card before Go: the budget, replacing the
- * payload's. Carried in the answer, so the frozen payload stays what the model proposed and the
- * record still shows both. Only a launch approval takes one. Answers recorded before ADR 0043 also
- * hold `roleOverrides`, which decoding ignores.
+ * What the user changed on a Go card before Go: the budget, replacing the payload's. Carried in the
+ * answer, so the frozen payload stays what the model proposed and the record still shows both. A
+ * workflow's launch approval takes one with Go or Run on 1 first, and a subagent's brief with Go
+ * (ADR 0047); nothing else does.
  */
 export const LaunchEdits = Schema.Struct({
   budget: Budget,
@@ -440,8 +432,20 @@ export type CriteriaPayload = typeof CriteriaPayload.Type;
  */
 export const BudgetRaisePayload = Schema.Struct({
   type: Schema.Literal("budget-raise"),
-  /** `thread`, `goal` or a workflow id: the scope whose budget is reached. */
+  /** The thread id heading the scope, or a workflow id: the scope whose budget is reached. */
   scope: TrimmedNonEmptyString,
+  /**
+   * What the card names the scope by: the thread's title or the workflow's name (ADR 0047). Absent
+   * on raises asked before it existed.
+   */
+  title: Schema.optionalKey(DisplayText),
+  /**
+   * What the scope had spent when the raise was asked, against `from` (ADR 0047): every token, and
+   * priced tokens at list price. Absent on raises asked before it existed.
+   */
+  spent: Schema.optionalKey(
+    Schema.Struct({ tokens: NonNegativeInt, listMicros: Micros })
+  ),
   from: Budget,
   to: Budget,
 });
@@ -509,8 +513,9 @@ export const ApprovalPayload = Schema.Union([
 export type ApprovalPayload = typeof ApprovalPayload.Type;
 
 /**
- * What the decider answered. `launch` is set only on Go (`accept` or `accept_sample`) for a
- * workflow's launch approval when the user edited the card; null runs the payload as proposed.
+ * What the decider answered. `launch` is set only on Go (`accept`, or `accept_sample` for a
+ * workflow's launch) when the user edited the card's budget (`LaunchEdits`); null runs the payload
+ * as proposed.
  */
 export const ApprovalAnswer = Schema.Struct({
   decision: ApprovalDecision,
@@ -524,11 +529,14 @@ export type ApprovalAnswer = typeof ApprovalAnswer.Type;
 /** The document kind of a conversation's decision records. */
 export const APPROVALS_DOCUMENT = "cairn.approvals";
 
-/** The current version of `cairn.approvals`; version 1 records migrate with nulls. */
-export const APPROVALS_VERSION = 2;
+/**
+ * The current version of `cairn.approvals`: version 1 records migrate with nulls, version 2 ones
+ * with their role names gone (ADR 0052).
+ */
+export const APPROVALS_VERSION = 3;
 
 /**
- * One decision record in a conversation's `cairn.approvals` (version 2, ADR 0029): a gated tool
+ * One decision record in a conversation's `cairn.approvals` (version 3, ADR 0029): a gated tool
  * call, a question, a brief or proposed criteria, and who decided it and why. `payload` never
  * changes after the ask; `status` leaves `pending` once.
  */
@@ -596,7 +604,7 @@ export type PermissionsDocument = typeof PermissionsDocument.Type;
 export const GOAL_DOCUMENT = "cairn.goal";
 
 /**
- * `cairn.goal` (version 1): a goal is a thread with criteria (ADR 0026), so "is a goal" is
+ * `cairn.goal` (version 2): a goal is a thread with criteria (ADR 0026), so "is a goal" is
  * `criteria.length > 0`. A criterion's `state` and `verdict` are written only by the verdict writer.
  */
 export const GoalDocument = Schema.Struct({

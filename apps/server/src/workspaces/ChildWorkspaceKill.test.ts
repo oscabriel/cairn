@@ -19,7 +19,9 @@ import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Layer, Option, Schema } from "effect";
 
+import { testLimit, slackened } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { childBranchName, ChildWorkspaces } from "./ChildWorkspaces.ts";
 import {
   cairnWorktrees,
@@ -30,6 +32,8 @@ import {
   thread,
   workspacesAt,
 } from "./ChildWorkspacesTestKit.ts";
+
+isolateGitEnvironment();
 
 const fixture = path.join(
   import.meta.dirname,
@@ -95,7 +99,7 @@ const runFixture = (
     return Effect.sync(() => {
       run.kill("SIGKILL");
     });
-  }).pipe(Effect.timeout(Duration.seconds(30)), Effect.orDie);
+  }).pipe(Effect.timeout(slackened(Duration.seconds(30))), Effect.orDie);
 
 const setup = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -165,7 +169,7 @@ describe("kill -9 inside the workspace step", () => {
             assert.deepStrictEqual(yield* orphansOf(repo, data), []);
           }).pipe(Effect.provide(workspacesAt(data)));
         }).pipe(Effect.scoped, Effect.provide(Platform)),
-      60_000
+      testLimit(60_000)
     );
   }
 
@@ -195,6 +199,6 @@ describe("kill -9 inside the workspace step", () => {
           ]);
         }).pipe(Effect.provide(workspacesAt(data)));
       }).pipe(Effect.scoped, Effect.provide(Platform)),
-    60_000
+    testLimit(60_000)
   );
 });

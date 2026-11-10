@@ -42,6 +42,7 @@ import { NodeRuntime } from "@effect/platform-node";
 import { Console, Duration, Effect, Option, Schema } from "effect";
 
 import { AddReceipt } from "../apps/server/src/reach/PorchClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
 import {
   adaptIn,
   checkCloseDelay,
@@ -51,6 +52,8 @@ import {
   startCaddy,
   ThrowawayCaddyError,
 } from "./lib/ThrowawayCaddy.ts";
+
+recordOnExit(import.meta);
 
 const decodeAddReceipt = Schema.decodeOption(Schema.fromJsonString(AddReceipt));
 

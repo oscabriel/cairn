@@ -4,8 +4,7 @@
 // takes. Pure, so the card's view draws only what this decides and its tests judge the words.
 //
 // - A child that names no model runs on its parent's model and level, so nothing is asked about
-//   it. A role name (`@worker`) in a brief or a launch recorded before ADR 0043 removed roles reads
-//   the same way: the brain runs it on the parent's model, so the card neither asks nor blocks.
+//   it.
 // - A named model that does not resolve blocks Go (and Run on 1 first): a spec that is not
 //   `provider/modelId[:level]`, or a model that is not in the catalog, has no usable credential, is
 //   at its plan limit or whose provider is failing. Go would start nothing then (the brain checks
@@ -15,6 +14,7 @@
 //   revise it (the record refuses it).
 // - Run on 1 first is a workflow's launch's only (ADR 0032), and only when there is more than one
 //   node to run: with one node it is Go.
+// - A changed budget travels with Go on a subagent's brief or a workflow's launch (ADR 0047).
 
 import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { ModelCheck } from "@cairn/protocol/ModelSpecs";
@@ -23,6 +23,7 @@ import type {
   Brief,
   WorkflowLaunch,
 } from "@cairn/protocol/Policy";
+import type { Budget } from "@cairn/protocol/Spend";
 import { Match, Option, Schema } from "effect";
 
 import { RequestBody } from "./PendingRequests.ts";
@@ -35,18 +36,11 @@ export const modelText = (model: ModelRef): string =>
   `${model.provider}/${model.modelId}`;
 
 /**
- * Whether a spec is a role name (`@worker`, `@scout:high`), which only records from before ADR 0043
- * hold: it reads as no model named, the parent's.
- */
-export const isRoleName = (spec: string): boolean =>
-  spec.trim().startsWith("@");
-
-/**
  * The model a goal's model judge runs on, in words: the spec it names, or "this thread's" when it
- * names none or names a role from before ADR 0043, either of which runs on the goal thread's model.
+ * names none and runs on the goal thread's model.
  */
 export const judgeModelText = (spec: string | null): string =>
-  spec === null || isRoleName(spec) ? "this thread's" : spec;
+  spec ?? "this thread's";
 
 /** The levels a spec may end in. */
 const LEVELS: ReadonlySet<string> = new Set([
@@ -72,9 +66,9 @@ export interface ModelQuestion {
   readonly specs: ReadonlyArray<string>;
 }
 
-/** The named specs among `specs`, each once: role names and blanks dropped. */
+/** The named specs among `specs`, each once: blanks dropped. */
 const namedSpecs = (specs: ReadonlyArray<string>): ReadonlyArray<string> => [
-  ...new Set(specs.filter((spec) => spec.trim() !== "" && !isRoleName(spec))),
+  ...new Set(specs.filter((spec) => spec.trim() !== "")),
 ];
 
 const questionOf = (
@@ -86,20 +80,13 @@ const questionOf = (
 };
 
 /** The spec a brief's child runs on: the model it names; none for the parent's. */
-export const briefSpec = (brief: Brief): Option.Option<string> => {
-  if (brief.role !== null) {
-    return isRoleName(brief.role) ? Option.none() : Option.some(brief.role);
-  }
-
-  return brief.model === null
-    ? Option.none()
-    : Option.some(modelText(brief.model));
-};
+export const briefSpec = (brief: Brief): Option.Option<string> =>
+  Option.fromNullOr(brief.model);
 
 const launchQuestion = (launch: WorkflowLaunch): Option.Option<ModelQuestion> =>
   questionOf([
     ...launch.callSites.map((site) => site.spec),
-    ...launch.envelope.roles.map((entry) => entry.spec),
+    ...launch.envelope.models.map((entry) => entry.spec),
   ]);
 
 /** The tools whose briefs are a workflow node's own (raised when it falls outside its envelope). */
@@ -108,10 +95,7 @@ export const NODE_BRIEF_TOOLS: ReadonlySet<string> = new Set([
   "verify",
 ]);
 
-/**
- * What to ask `models.check` for a request; none when it names no model (it runs on its parent's)
- * or names only role names from before ADR 0043, which run on the parent's too.
- */
+/** What to ask `models.check` for a request; none when it names no model (it runs on its parent's). */
 export const modelQuestionOf = (
   record: Pick<ApprovalRecord, "tool">,
   body: RequestBody
@@ -150,6 +134,22 @@ export const takesRunOnOne = (body: RequestBody): boolean =>
   body.payload.type === "workflow" &&
   (body.payload.nodes.unbounded || body.payload.nodes.count > 1);
 
+/**
+ * Whether a request's Go may carry a changed budget (ADR 0047): a subagent's brief or a workflow's
+ * launch. A node's own brief is bounded by its workflow's budget.
+ */
+export const takesBudgetEdit = (
+  record: Pick<ApprovalRecord, "kind" | "tool">,
+  body: RequestBody
+): boolean =>
+  record.kind === "brief" &&
+  RequestBody.$is("Brief")(body) &&
+  (body.payload.type === "workflow" || record.tool === SPAWN_TOOL);
+
+/** The budget a brief or a launch proposes: the brief's own, or the launch's envelope's. */
+export const proposedBudgetOf = (payload: Brief | WorkflowLaunch): Budget =>
+  payload.type === "workflow" ? payload.envelope.budget : payload.budget;
+
 /** Why Go is blocked, in the card's words. */
 export interface GoBlock {
   /** The spec that blocks it. */
@@ -170,7 +170,7 @@ type Unresolved = Extract<
 
 /** Why a named model is not ready, in the words the card ends its title with. */
 const NOT_READY_WORDS: Readonly<
-  Record<Exclude<Unresolved["reason"], "invalid_spec" | "role_removed">, string>
+  Record<Exclude<Unresolved["reason"], "invalid_spec">, string>
 > = {
   unknown_model: "it is not in the model catalog",
   missing_credential: "its provider has no usable credential",
@@ -184,11 +184,6 @@ const blockOf = (spec: string, unresolved: Unresolved): GoBlock =>
     Match.when("invalid_spec", () => ({
       spec,
       title: `Go is blocked: ${spec} is not a model (provider/modelId).`,
-      detail: "Send it back for one that names a model, or none.",
-    })),
-    Match.when("role_removed", () => ({
-      spec,
-      title: `Go is blocked: ${spec} is a role, and roles were removed.`,
       detail: "Send it back for one that names a model, or none.",
     })),
     Match.orElse((reason) => ({
@@ -213,7 +208,6 @@ export const goBlockOf = (
 
 const UNRESOLVED_WORDS: Readonly<Record<Unresolved["reason"], string>> = {
   invalid_spec: "not a model",
-  role_removed: "a role, which were removed",
   unknown_model: "not in the catalog",
   missing_credential: "no usable credential",
   limited: "at its plan limit",

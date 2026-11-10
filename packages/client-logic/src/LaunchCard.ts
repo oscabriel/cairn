@@ -7,9 +7,7 @@
 //   "$0.00": no estimate yet, no tokens in it, or a model with no list price (ADR 0036).
 // - A call site reads "opencode-go/gpt-6-luna at high · reads only · up to 4", or "depends on the
 //   data" when the dry run could not count it; its phase leads when it has one. A call site the
-//   script names no model for runs on the launching thread's model, which the dry run wrote in. A
-//   role name (`@scout`) in a launch recorded before ADR 0043 removed roles reads "this thread's
-//   model", as the brain runs it.
+//   script names no model for runs on the launching thread's model, which the dry run wrote in.
 // - What Go covers is the envelope: the node cap, how many run at once, and the models granted with
 //   whether they may write (ADR 0043). A node outside it asks again with its own card.
 
@@ -21,7 +19,7 @@ import type {
 } from "@cairn/protocol/Policy";
 import { Option, Predicate } from "effect";
 
-import { isRoleName, namedSpecText } from "./BriefGo.ts";
+import { namedSpecText } from "./BriefGo.ts";
 import { dollarsText, tokensShort } from "./Meters.ts";
 import { budgetText } from "./PendingCard.ts";
 import type { CardLine } from "./PendingCard.ts";
@@ -89,25 +87,25 @@ export const estimateText = (
 export const coversText = (envelope: Envelope): string =>
   `Up to ${String(envelope.maxNodes)} node${envelope.maxNodes === 1 ? "" : "s"}, ${String(envelope.maxConcurrent)} at once`;
 
-/** What a role name from before ADR 0043 runs on: the thread that launched the workflow's model. */
-export const LAUNCHING_MODEL_TEXT = "this thread's model";
-
 /**
  * A spec as the card names its model: "opencode-go/gpt-6-luna at high" for
- * `opencode-go/gpt-6-luna:high`, and a role name from before ADR 0043 as this thread's model.
+ * `opencode-go/gpt-6-luna:high`.
  */
-export const specText = (spec: string): string =>
-  isRoleName(spec) ? LAUNCHING_MODEL_TEXT : namedSpecText(spec);
+export const specText = (spec: string): string => namedSpecText(spec);
 
 /** A model's grant in words: "opencode-go/gpt-6-luna, reads only". */
-const grantText = (entry: Envelope["roles"][number]): string =>
+const grantText = (entry: Envelope["models"][number]): string =>
   `${specText(entry.spec)}, ${entry.readonly ? "reads only" : "may write"}`;
 
-/** The models the envelope grants, in words; "No models" for an envelope that grants none. */
+/**
+ * The models the envelope grants, in words, per model and to any node, whichever call site showed
+ * it (ADR 0043 as amended): "Any node may run on opencode-go/gpt-6-luna, reads only". "No models"
+ * for an envelope that grants none.
+ */
 export const grantsText = (envelope: Envelope): string =>
-  envelope.roles.length === 0
+  envelope.models.length === 0
     ? "No models"
-    : envelope.roles.map(grantText).join("; ");
+    : `Any node may run on ${envelope.models.map(grantText).join("; ")}`;
 
 /**
  * The launch's numbers in reading order, as the card's first lines: nodes, the estimate, the

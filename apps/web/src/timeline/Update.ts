@@ -9,7 +9,7 @@
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
 import type { EntryId } from "@cairn/protocol/Ids";
 import { ThreadId } from "@cairn/protocol/Ids";
-import { Array, Equivalence, Option, Record, Schema } from "effect";
+import { Option, Record, Schema } from "effect";
 import type { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
@@ -23,8 +23,14 @@ import {
 import type * as ListModel from "./list/Model.ts";
 import * as List from "./list/Update.ts";
 import { Message, OutMessage } from "./Message.ts";
-import type { Model, ThreadUi } from "./Model.ts";
-import { freshUi, promptKey, SAVED_THREAD_LIMIT } from "./Model.ts";
+import type { Model, QueuedSend, ThreadUi } from "./Model.ts";
+import {
+  freshUi,
+  isQueuedPrompt,
+  promptKey,
+  sameSends,
+  SAVED_THREAD_LIMIT,
+} from "./Model.ts";
 import { itemKeys, transcriptForKeys } from "./Rows.ts";
 import { subagentKeysOf } from "./Subagents.ts";
 
@@ -159,7 +165,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         onSome: (id) =>
           !isCurrent(model, threadId) ||
           Option.contains(model.ui.retriedTurnId, turnId) ||
-          model.queuedPrompts.includes(promptKey(text, attachments, skillRefs))
+          isQueuedPrompt(
+            model.queuedSends,
+            promptKey(text, attachments, skillRefs)
+          )
             ? { model }
             : {
                 model: modifyFields(model, {
@@ -224,17 +233,14 @@ const saveCurrent = (model: Model): Pick<Model, "saved" | "savedOrder"> => {
   };
 };
 
-/** The transcript told which prompts wait in the outbox for the shown thread. */
+/** The transcript told which sends wait in the outbox for the shown thread. */
 export const informQueued = (
   model: Model,
-  queuedPrompts: ReadonlyArray<string>
+  queuedSends: ReadonlyArray<QueuedSend>
 ): Model =>
-  Array.makeEquivalence(Equivalence.strictEqual<string>())(
-    model.queuedPrompts,
-    queuedPrompts
-  )
+  sameSends(model.queuedSends, queuedSends)
     ? model
-    : modifyFields(model, { queuedPrompts: () => queuedPrompts });
+    : modifyFields(model, { queuedSends: () => queuedSends });
 
 /**
  * Shows `threadId`: the current thread's list and open folds are saved, and the new thread's saved
@@ -293,8 +299,7 @@ export const afterView = (
     return { model };
   }
 
-  // The subagent items' keys too, which only the `next` views draw: a key not in the list keeps
-  // nothing, so classic loses nothing by them.
+  // The subagent items' keys too, so their rows keep their heights.
   const keys = new Set([
     ...itemKeys(transcriptForKeys(model.threadId.value, after, model.ui)),
     ...subagentKeysOf(after),

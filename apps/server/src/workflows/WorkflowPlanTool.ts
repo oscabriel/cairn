@@ -4,9 +4,11 @@
 //
 // The tool is replay-safe and its task is the wait (ADR 0013). It parses and dry-runs the script
 // (`WorkflowPlan`, no model called) with the thread's own model and level as what a call that names
-// no model runs on (ADR 0043), estimates it from the thread's own past nodes on each model, and in
+// no model runs on (ADR 0043) and the budget the call asks over the server's default (ADR 0047),
+// estimates it from the thread's own past nodes on each model, and in
 // one commit writes the `proposed` ledger row, the launch approval (a
-// `brief` record whose frozen payload is the plan and its envelope, id `call-<task id>`) and the
+// `brief` record whose frozen payload is the plan and its envelope, id `call-<task id>`), the run
+// it was proposed in (`LaunchRunsDoc`: the gate runs it from that run only) and the
 // `workflow.proposed` event. Then it waits for the answer like any gated call; boot retries a task
 // whose approval is pending. A rerun after `kill -9` finds its row and record and waits again
 // without dry-running twice.
@@ -15,46 +17,51 @@
 // ends, and a stop (or the boot repair after one a crash cut off) declines it in the commit that
 // cancels the record (`heldByRun` counts a launch as its task's), so a row never stays `proposed`
 // after its record settled. Go tells the model to call `codemode` with exactly the same script: the
-// gate runs only the hash the user approved.
+// gate runs only the row the user approved, from the run that proposed it.
 
 import type { ThinkingLevel } from "@cairn/protocol/Models";
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
-import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
-import type { Budget } from "@cairn/protocol/Spend";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ToolExecutionApi,
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
-import { defineTool } from "@earendil-works/pi-durable";
+import { defineTool, LiveDoc } from "@earendil-works/pi-durable";
 import { Effect, Option, Result, Schema } from "effect";
+import { Type } from "typebox";
 
 import {
-  approvalIdOf,
-  approvalLedger,
-  Approvals,
   copyRecord,
   UNDECIDED,
-} from "../brain/CairnDocs.ts";
+  approvalIdOf,
+  approvalLedger,
+} from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { emit } from "../brain/Events.ts";
 import { cutSummary, readPermissions } from "../brain/Permissions.ts";
-import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { plainCopy } from "../brain/SubagentDocs.ts";
+import type {
+  WorkflowItemState,
+  WorkflowsState,
+} from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
+import { budgetAsked, MAX_TOKENS, MAX_USD } from "../usage/DefaultBudget.ts";
+import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import {
   BUILT_IN_RECIPES,
   recipeReferenceOf,
 } from "./recipes/BuiltInRecipes.ts";
 import { PROJECT_RECIPES_DIR } from "./recipes/Recipes.ts";
 import {
+  LaunchRunsDoc,
   proposedRecord,
   resultRefOf,
   workflowIdOf,
   WorkflowSourcesDoc,
-  WorkflowsDoc,
 } from "./WorkflowDocs.ts";
-import type { WorkflowItemState, WorkflowsState } from "./WorkflowDocs.ts";
 import {
   applyLaunchAnswer,
   LAUNCH_TOOL,
@@ -84,6 +91,8 @@ export interface PlanAccess {
     root: string,
     name: string
   ) => Promise<Option.Option<string>>;
+  /** The server's default budget a proposal starts from (ADR 0047). */
+  readonly defaults: DefaultBudgetAccess;
 }
 
 /** For a brain with no project recipes: every reference names a built-in or nothing. */
@@ -112,17 +121,6 @@ export const PLAN_DESCRIPTION = [
 const decodeLaunch = Schema.decodeUnknownOption(WorkflowLaunch);
 
 const encodeLaunch = Schema.encodeSync(WorkflowLaunch);
-
-/** The budget a proposal asks for: tokens and list-price dollars, the rest the default's. */
-const budgetFrom = (
-  maxTokens: number | undefined,
-  maxUsd: number | undefined
-): Budget => ({
-  ...DEFAULT_BUDGET,
-  maxTokens: maxTokens ?? null,
-  maxListMicros:
-    maxUsd === undefined ? null : Micros.make(Math.round(maxUsd * 1_000_000)),
-});
 
 /**
  * The settled nodes of the thread's past workflows the estimate rests on, each with the model it
@@ -182,7 +180,7 @@ const launchRecord = (
     run: null,
     executorRequestId: null,
     ...UNDECIDED,
-    payload: jsonRecordOf(encodeLaunch(launch)),
+    payload: plainCopy(encodeLaunch(launch)),
   };
 };
 
@@ -244,8 +242,32 @@ const settle = async (api: ToolExecutionApi, context: ChordContext) =>
       : Option.some({ row: copyRow(row), record: copyRecord(record) });
   }, context);
 
+/**
+ * Binds the launch `workflowId` to the live run when nothing bound it yet (a row proposed before
+ * launches were bound to runs); nothing when it is bound or no run is live.
+ */
+const bindToLiveRun = async (
+  api: ToolExecutionApi,
+  workflowId: string,
+  context: ChordContext
+): Promise<void> => {
+  const bound = await api.snapshot(LaunchRunsDoc, api.conversationId, context);
+  const live = await api.snapshot(LiveDoc, api.conversationId, context);
+  const first = live?.run?.first;
+
+  if (bound?.items[workflowId] !== undefined || first === undefined) {
+    return;
+  }
+
+  await api.commit(async (tx) => {
+    const runs = await tx.doc(LaunchRunsDoc, api.conversationId);
+
+    runs.items[workflowId] ??= { run: first };
+  }, context);
+};
+
 /** `workflow_plan`, over the dry run. */
-export const planTool = (plan: PlanAccess) => {
+export const planTool = (plan: PlanAccess, runner: DurableRunner) => {
   /** Dry-runs, then writes the row, the record and the event once; the refusal's words otherwise. */
   const propose = async (
     api: ToolExecutionApi,
@@ -266,13 +288,35 @@ export const planTool = (plan: PlanAccess) => {
       context
     );
 
-    // A rerun finds what its first attempt proposed, and dry-runs nothing again.
+    // A rerun finds what its first attempt proposed, and dry-runs nothing again. A launch proposed
+    // before launches were bound to runs (a card that waited across the deploy) is bound here: the
+    // rerun is inside the run that proposed it.
     if (ledger?.items[workflowId] !== undefined) {
+      await bindToLiveRun(api, workflowId, context);
+
       return Option.none();
     }
 
     const launchArgs: Schema.Json = args.args ?? {};
-    const budget = budgetFrom(args.max_tokens, args.max_usd);
+
+    // The tokens and list-price dollars the call asks, the server's default for the rest; the
+    // launch approval freezes it, and a rerun that found its row returned above.
+    const fallback = await plan.defaults.read();
+
+    if (Result.isFailure(fallback)) {
+      return Option.some(fallback.failure);
+    }
+
+    const asked = budgetAsked(fallback.success, {
+      maxTokens: Option.fromUndefinedOr(args.max_tokens),
+      maxUsd: Option.fromUndefinedOr(args.max_usd),
+    });
+
+    if (Result.isFailure(asked)) {
+      return Option.some(asked.failure);
+    }
+
+    const budget = asked.success;
 
     // A reference to a project recipe proposes the recipe's own script, kept for the gate; one to a
     // built-in is resolved by the dry run and the gate alike.
@@ -312,6 +356,17 @@ export const planTool = (plan: PlanAccess) => {
     const history = historyOf(ledger);
     const { mode } = await readPermissions(api, context);
 
+    // The run this call is part of, by its first entry, which every tool round of the run keeps:
+    // the gate runs the launch only from this run.
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    const proposingRun = live?.run?.first;
+
+    if (proposingRun === undefined) {
+      return Option.some(
+        "workflow_plan runs only inside a run of this thread, and none is live. Nothing was proposed."
+      );
+    }
+
     const launch = toLaunch(run.success, {
       workflowId,
       // The script stays in this call's own arguments.
@@ -327,6 +382,7 @@ export const planTool = (plan: PlanAccess) => {
     await api.commit(async (tx) => {
       const rows = await tx.doc(WorkflowsDoc, api.conversationId);
       const approvals = await tx.doc(Approvals, api.conversationId);
+      const runs = await tx.doc(LaunchRunsDoc, api.conversationId);
       const record = launchRecord(api, launch);
 
       if (rows.items[workflowId] !== undefined) {
@@ -338,6 +394,7 @@ export const planTool = (plan: PlanAccess) => {
         approvalId: record.id,
         sample: Option.none(),
       });
+      runs.items[workflowId] = { run: proposingRun };
       approvals.items[record.id] = record;
 
       if (Option.isSome(named)) {
@@ -378,13 +435,17 @@ export const planTool = (plan: PlanAccess) => {
       max_tokens: Type.Optional(
         Type.Integer({
           minimum: 1,
-          description: "A token budget for the whole workflow.",
+          maximum: MAX_TOKENS,
+          description:
+            "A token budget for the whole workflow; leave it out for the user's default.",
         })
       ),
       max_usd: Type.Optional(
         Type.Number({
-          exclusiveMinimum: 0,
-          description: "A list-price dollar budget for the whole workflow.",
+          minimum: 1e-6,
+          maximum: MAX_USD,
+          description:
+            "A list-price dollar budget for the whole workflow; leave it out for the user's default.",
         })
       ),
       max_nodes: Type.Optional(
@@ -408,7 +469,7 @@ export const planTool = (plan: PlanAccess) => {
         return refused(problem.value);
       }
 
-      const settlement = await Effect.runPromise(
+      const settlement = await runner.promise(
         approvalLedger(api).awaitSettlement.pipe(Effect.result),
         { signal: context.abortSignal }
       );

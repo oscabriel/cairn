@@ -19,13 +19,14 @@ import {
   Option,
   Ref,
   References,
-  Schedule,
 } from "effect";
 import type { Layer } from "effect";
 import type { SqlClient } from "effect/sql";
 
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
+import { eventually } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { Projects } from "../projects/Projects.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
 import {
@@ -52,6 +53,8 @@ import {
 } from "./ThreadsTestKit.ts";
 import { TurnContent, TurnContentError, textStage } from "./TurnContent.ts";
 import { TurnContentLive } from "./TurnContentStages.ts";
+
+isolateGitEnvironment();
 
 const rootWorkspace = RootWorkspace.make({ branch: Option.none() });
 
@@ -108,19 +111,6 @@ const row = Effect.fn("test.row")(function* (threadId: ThreadId) {
 
   return Option.getOrThrow(found).shell;
 });
-
-/** Polls `check` until it holds, for up to five seconds. */
-const eventually = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  check: (value: A) => boolean
-) =>
-  read.pipe(
-    Effect.repeat({
-      until: check,
-      schedule: Schedule.spaced(Duration.millis(20)),
-    }),
-    Effect.timeout(Duration.seconds(5))
-  );
 
 const branchesOf = Effect.fn("test.branchesOf")(function* (repo: string) {
   const out = yield* (yield* Git).stdout("test", repo, [
@@ -480,7 +470,11 @@ describe("launching threads", () => {
             "Help with the shared work"
           );
 
-          yield* launcher.launch(second, "owner@test");
+          // The second top-level launch in the project is a refresh, so it names the first.
+          yield* launcher.launch(
+            { ...second, replaces: first.threadId },
+            "owner@test"
+          );
           yield* eventually(row(second.threadId), (shell) =>
             Option.isSome(shell.worktreePath)
           );

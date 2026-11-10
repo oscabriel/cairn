@@ -2,8 +2,10 @@
 // the seam, the spend feed and ledger, the shell store, and the budgets (book, sources, `Budgets`,
 // the guard and the `cairn.budgets` gate), over a scratch directory, never the deployed unit's.
 //
-// One scope thread (thread 1) declares a `stop` budget of `--budget-children` children's worth of
-// list price; `--children` subagent threads under it (lineage parent thread 1) each get one input
+// One scope thread (thread 1) is given a `stop` budget of `--budget-children` children's worth of
+// list price, as the user sets one from the usage page: through `budget.declare`'s handler
+// (`declareBudget`, ADR 0047), not straight on `Budgets`; `--children` subagent threads under it
+// (lineage parent thread 1) each get one input
 // and answer from pi-ai's faux provider: `--steps - 1` calls of the `tick` tool, then a final text.
 // Only output tokens are priced, so every tool-calling response costs the same.
 //
@@ -11,8 +13,8 @@
 //
 // Each life boots in the order the brain's boot repairs must: the ledger's reconcile, the budget
 // guard's boot repair (halt a stopped scope before anything can start scheduling; under `--control
-// no-boot` earlier lives only read the book and the last life has no repair), then the repairs that retry parked tasks (pi-durable's `retryTask` resumes
-// scheduling), the budget declared in the first life only, then the Harness resumes
+// no-boot` earlier lives only read the book and the last life has no repair), then the crash
+// accounting (`CrashLimit.ts`, ADR 0046), the budget declared in the first life only, then the Harness resumes
 // and every child's input is submitted (request id `work-<n>`, so a killed life's input lands
 // once). A life that boots with the scope past its line prints `exhausted` before the Harness
 // resumes. The guard's first stop prints `stopping`; each later stop in that pass waits
@@ -40,7 +42,7 @@ import { DEFAULT_BUDGET, Micros, SpendScope } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
 import { ThreadLineage } from "@cairn/protocol/Subagents";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import type { TranscriptContext } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
@@ -61,15 +63,15 @@ import {
   Schema,
 } from "effect";
 import { SqlClient } from "effect/sql";
+import { Type } from "typebox";
 
-import { retryParkedApprovalWaits } from "../../../apps/server/src/Boot.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
-import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
+import { brainExtensions } from "../../../apps/server/src/brain/BrainTestKit.ts";
 import { ThreadReceipt } from "../../../apps/server/src/brain/CairnDocs.ts";
+import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
 import type { CairnExtension } from "../../../apps/server/src/brain/Extensions.ts";
-import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import {
   BASE_HARNESS_SETTINGS,
@@ -80,13 +82,7 @@ import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { SpendFeed } from "../../../apps/server/src/brain/SpendFeed.ts";
 import { Database } from "../../../apps/server/src/db/Database.ts";
 import { migrations } from "../../../apps/server/src/db/Migrations.ts";
-import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
-import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
-import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
-import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
-import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import { Notifier } from "../../../apps/server/src/push/Notifier.ts";
-import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import { ShellStoreLayer } from "../../../apps/server/src/shell/ShellLayer.ts";
 import {
@@ -95,11 +91,16 @@ import {
   testThreadId,
 } from "../../../apps/server/src/shell/ShellTestKit.ts";
 import { ThreadRows } from "../../../apps/server/src/shell/ThreadRows.ts";
-import { retryParkedSubagentTasks } from "../../../apps/server/src/subagents/SubagentRepairs.ts";
-import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
+import { SUBAGENT_WAIT_TASKS } from "../../../apps/server/src/subagents/SubagentTasks.ts";
+import { SUBAGENT_STATUS_TOOL } from "../../../apps/server/src/subagents/SubagentTools.ts";
 import { BudgetBook } from "../../../apps/server/src/usage/BudgetBook.ts";
 import { BudgetGuard } from "../../../apps/server/src/usage/BudgetGuard.ts";
 import { Budgets } from "../../../apps/server/src/usage/Budgets.ts";
+import {
+  BudgetSources,
+  raiseIdOf,
+} from "../../../apps/server/src/usage/BudgetSources.ts";
+import { declareBudget } from "../../../apps/server/src/usage/SpendHandlers.ts";
 import { SpendLedger } from "../../../apps/server/src/usage/SpendLedger.ts";
 
 const { values } = parseArgs({
@@ -180,7 +181,12 @@ const Models = Layer.succeed(
   ModelSource,
   ModelSource.of({
     models: () => models,
-    settings: () => ({ ...BASE_HARNESS_SETTINGS, retry: { enabled: false } }),
+    // pi-durable 1.5 charges a request a kill cut off as a failed attempt instead of resending it;
+    // the brain retries as pi's default policy does, here with a short backoff.
+    settings: () => ({
+      ...BASE_HARNESS_SETTINGS,
+      retry: { enabled: true, maxRetries: 10, baseDelayMs: 50 },
+    }),
     completeSimple: () => Effect.die("the budget judge makes no direct calls"),
   })
 );
@@ -204,15 +210,7 @@ const tickExtension: CairnExtension = {
  * The extension set: production, which carries the budget gate over the judge's `BudgetBook` (one
  * book, by reference, as in `AppLayer`), and `tick`.
  */
-const Extensions = ExtensionSet.withExtra([tickExtension]).pipe(
-  Layer.provide(ExecutorLink.layerDisabled),
-  Layer.provide(PiHost.layerEmpty),
-  Layer.provide(ModelHealth.layerTest),
-  Layer.provide(SettingsStore.layerTest),
-  Layer.provide(ReachServicesTest),
-  Layer.provide(Subagents.layerTest),
-  Layer.provide(PiModelSource.layerFromModelSource)
-);
+const Extensions = brainExtensions({ extra: [tickExtension] });
 
 const DatabaseLive = Database.layer({
   filename: path.join(dir, "cairn.sqlite"),
@@ -228,6 +226,7 @@ const NotifierToFile = Layer.mock(Notifier)({
 
       return ["delivered" as const];
     }),
+  badge: Effect.succeed(0),
 });
 
 /** The guard's seam: its first stop says `stopping`, each later one waits a stagger more. */
@@ -526,18 +525,19 @@ const program = Effect.gen(function* () {
     yield* (yield* BudgetGuard).boot;
   }
 
-  // After the budget repair, as in the brain's boot: these may resume scheduling.
-  yield* retryParkedApprovalWaits.repair;
-  yield* retryParkedSubagentTasks.pipe(Effect.orDie);
+  // After the budget repair, as in the brain's boot.
+  yield* endCrashLoopedTasks({
+    kinds: SUBAGENT_WAIT_TASKS,
+    tools: new Set([SUBAGENT_STATUS_TOOL]),
+  }).pipe(Effect.orDie);
 
   // Declared once, in the first life; later lives read it from the documents through the guard's
   // boot repair, as the brain does, so a brain without the repair has an empty book after a restart.
   if (Option.isNone(yield* (yield* BudgetSources).scopeOf(SCOPE))) {
-    yield* budgets.declare(
-      SCOPE,
-      budgetOf(Number(values["budget-children"])),
-      "stop"
-    );
+    yield* declareBudget(yield* BudgetGuard, yield* ThreadRows, {
+      threadId: SCOPE,
+      budget: budgetOf(Number(values["budget-children"])),
+    }).pipe(Effect.orDie);
   }
 
   const atBoot = yield* responseCounts;
@@ -583,8 +583,9 @@ const program = Effect.gen(function* () {
   const seam = yield* HarnessSeam;
 
   // A guard that never reached the line asked no raise: the report says so through `admitted`.
+  // The declare is the scope's first epoch (ADR 0047), so its raise is asked at epoch 1.
   yield* seam
-    .respond(SCOPE, ApprovalId.make("budget-raise-0"), {
+    .respond(SCOPE, ApprovalId.make(raiseIdOf(1)), {
       decision: "accept",
       reason: Option.none(),
       answers: Option.none(),

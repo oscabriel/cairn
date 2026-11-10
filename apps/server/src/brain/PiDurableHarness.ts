@@ -11,10 +11,13 @@
 //   the next note on an idle thread place them first, keeping notes in the order they were written
 //   (ADR 0028). Queued inputs stay queued, and nothing here starts a run.
 // - watch: a fresh projected snapshot, then ops; after a reopen of the Session the stream carries
-//   on with a new snapshot of the new Session, because a snapshot is legal at any point.
+//   on with a new snapshot of the new Session, because a snapshot is legal at any point. The
+//   conversation watch is asked for a window (`STREAM_WINDOW`) that starts with as many entries as
+//   the thread window can hold and never slides, so appends stay appends for the subscription's
+//   life (pi-durable 1.5 otherwise drops the oldest 50 past 100 entries).
 // - whenEnsured: subscribes to this process's ensures, then reads the receipt, so an ensure that
 //   lands in between is not missed. Only `ensureThread` writes receipts, and only in this process.
-// - events: the commit feed, plus parked tasks from the Harness's reports.
+// - events: the commit feed.
 //
 // The submit, watch and abort wrappers follow cairn-v1, apps/server/src/Harnesses.ts at 1a5cd4a.
 
@@ -27,7 +30,6 @@ import {
   EntryId,
   RunId,
   SubmissionId,
-  TaskId,
   ThreadId,
 } from "@cairn/protocol/Ids";
 import {
@@ -41,11 +43,13 @@ import type {
   ConversationDocToken,
   ConversationId as PiConversationId,
   ConversationView as PiConversationView,
+  ConversationWindow,
   Cursor,
   InputSubmissionDraft,
   JsonObject,
   LiveState,
   TaskId as PiTaskId,
+  WatchCall,
 } from "@earendil-works/pi-durable";
 import {
   ConversationBusy,
@@ -54,6 +58,8 @@ import {
   LiveDoc,
 } from "@earendil-works/pi-durable";
 import {
+  Cause,
+  Context,
   Duration,
   Effect,
   Fiber,
@@ -65,44 +71,36 @@ import {
   Ref,
   Result,
   Schema,
+  Semaphore,
   Stream,
 } from "effect";
 
-import { BriefFaults } from "../subagents/BriefFaults.ts";
 import {
-  ChildDoc,
-  EscalationsDoc,
-  SubagentsDoc,
-} from "../subagents/SubagentDocs.ts";
-import { answerBrief, steerReporter } from "../subagents/Subagents.ts";
-import { GoalDoc } from "../verdicts/GoalDocs.ts";
-import { criteriaAnswered } from "../verdicts/Verdicts.ts";
-import { WorkflowsDoc } from "../workflows/WorkflowDocs.ts";
-import { launchAnswered } from "../workflows/WorkflowLaunch.ts";
+  refusalText,
+  relayedQuestion,
+  cancelStoppedApprovals,
+  answerApproval,
+} from "../approvals/ApprovalLedger.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession, BrainUnavailable } from "./Brain.ts";
 import { BrainStore } from "./BrainStore.ts";
 import {
-  answerApproval,
   Approvals,
   Permissions,
-  cancelStoppedApprovals,
-  refusalText,
-  relayedQuestion,
   ThreadMeta,
   ThreadReceipt,
   writeMode,
 } from "./CairnDocs.ts";
-import type { AnsweredHook, ApprovalRecord } from "./CairnDocs.ts";
-import { CommitFeed, RUN_TASK } from "./CommitFeed.ts";
-import { durable, errorText, handOff } from "./Durable.ts";
+import type { ApprovalRecord } from "./CairnDocs.ts";
+import { CommitFeed, documentValue, RUN_TASK } from "./CommitFeed.ts";
+import { documentCall, durable, handOff } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
-import { HarnessError, HarnessSeam, TaskParked } from "./HarnessSeam.ts";
+import { Extensions } from "./Extensions.ts";
+import { HarnessError, HarnessSeam } from "./HarnessSeam.ts";
 import type {
   ApprovalAnswerInput,
   EnsureThread,
-  HarnessEvent,
   HarnessTurnInput,
   HistoryQuery,
   LiveThreadState,
@@ -113,16 +111,16 @@ import type {
   ThreadFrame,
 } from "./HarnessSeam.ts";
 import { admitNote, placeQueuedWrites } from "./NoteAdmission.ts";
-import { Parked } from "./Parked.ts";
+import { PendingApprovals } from "./PendingApprovals.ts";
 import { parentCeiling } from "./Permissions.ts";
-import {
-  piConversationId,
-  piEntryId,
-  piSubmissionId,
-  piTaskId,
-} from "./PiIds.ts";
+import { piConversationId, piEntryId, piSubmissionId } from "./PiIds.ts";
+import { EscalationsDoc, SubagentsDoc } from "./SubagentDocs.ts";
 import { SubagentCrashes, SubagentFaults } from "./SubagentFaults.ts";
-import { WindowFrame, windowedProjector } from "./ThreadWindow.ts";
+import {
+  WINDOW_POLICY,
+  WindowFrame,
+  windowedProjector,
+} from "./ThreadWindow.ts";
 import type { WindowedView } from "./ThreadWindow.ts";
 import {
   entryImages,
@@ -134,22 +132,40 @@ import type { ThreadWireError } from "./ThreadWire.ts";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
+/** What `PendingApprovals` keeps between calls. */
+interface PendingIndex {
+  /** The conversations holding a pending record, once the scan ran. */
+  known: Option.Option<Set<PiConversationId>>;
+  /** The Session the scan read. */
+  session: Option.Option<BrainSession>;
+  /** Changes committed while no scan is known, which win over what the scan read. */
+  readonly during: Map<PiConversationId, boolean>;
+}
+
+/** Whether a `cairn.approvals` value, as a commit published it, holds a pending record. */
+const holdsPending = (value: JsonObject | null): boolean => {
+  const items = value?.items;
+
+  return (
+    Predicate.isObject(items) &&
+    !Array.isArray(items) &&
+    Object.values(items).some(
+      (item) =>
+        Predicate.isObject(item) &&
+        !Array.isArray(item) &&
+        item.status === "pending"
+    )
+  );
+};
+
 type Writable<A> = { -readonly [K in keyof A]: A[K] };
 
 /**
- * The `cairn.*` documents the thread stream carries beside pi-durable's own view documents: every
- * `cairn.*` kind of `VISIBLE_DOCUMENTS` that a token exists for. A package that defines another
- * visible document adds its token here, and the stream watches it with no other edit.
+ * The thread's own `cairn.*` documents, which the thread stream always carries first: its approval
+ * records and its permission mode. The installed features' follow (`Extensions.documents`).
  */
-const STREAM_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> = [
-  Approvals,
-  Permissions,
-  SubagentsDoc,
-  ChildDoc,
-  EscalationsDoc,
-  WorkflowsDoc,
-  GoalDoc,
-];
+export const THREAD_DOCUMENTS: ReadonlyArray<ConversationDocToken<JsonObject>> =
+  [Approvals, Permissions];
 
 const encoder = new TextEncoder();
 
@@ -193,10 +209,6 @@ const fromDurable =
       cause: error.cause,
     });
   };
-
-/** pi-durable's rejection of `retryTask` for a task it does not have (scheduler.js, `retry`). */
-const isMissingTask = (cause: unknown) =>
-  /^Task \S+ does not exist$/u.test(errorText(cause));
 
 const fromUnavailable =
   (threadId: Option.Option<ThreadId>) => (error: BrainUnavailable) =>
@@ -243,29 +255,36 @@ const call = <A>(
   run: Parameters<typeof durable<A>>[1]
 ) => durable(operation, run).pipe(Effect.mapError(fromDurable(threadId)));
 
-/** Whether entries exist before the first one the view holds. */
-const hasOlder = (
-  threadId: ThreadId,
-  conversation: Conversation,
-  view: PiConversationView
-) => {
-  const [first] = view.entries;
-
-  if (first === undefined || first.id <= 1) {
-    return Effect.succeed(false);
-  }
-
-  return call(Option.some(threadId), "entries", async (context) => {
-    const page = await conversation.entries(
-      { maxEntryId: piEntryId(EntryId.make(first.id - 1)) },
-      1,
-      undefined,
-      context
-    );
-
-    return page.items.length > 0;
-  });
+/**
+ * The conversation watch's window (pi-durable 1.5, `ConversationWindow`): its first value holds the
+ * newest entries the thread window can start with, and it never drops its oldest, so for the life of
+ * one subscription every entry is an append and the thread window's prefix holds (ThreadWindow.ts).
+ */
+const STREAM_WINDOW: ConversationWindow = {
+  min: WINDOW_POLICY.maxEntries,
+  max: Number.MAX_SAFE_INTEGER,
 };
+
+/**
+ * A snapshot frame of a window. The thread window (ThreadWindow.ts) leaves older entries out; with
+ * none left out, pi-durable's own window may still start after the first entry (`before`).
+ */
+const snapshotItem = (
+  seq: Ref.Ref<number>,
+  windowed: WindowedView,
+  current: PiConversationView
+) =>
+  Effect.gen(function* () {
+    const hasMoreHistory =
+      windowed.entriesOffset > 0 || current.before !== undefined;
+
+    return ThreadSnapshotItem.make({
+      seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
+      view: windowed.view,
+      entriesOffset: windowed.entriesOffset,
+      hasMoreHistory,
+    });
+  });
 
 /** The agent a new thread starts with. */
 const firstAgent = (input: EnsureThread) => {
@@ -301,25 +320,39 @@ const agentChange = (change: ThreadAgentChange) => {
   return agent;
 };
 
-const layerNoDeps = Layer.effect(
-  HarnessSeam,
+/**
+ * The journal's map from a thread to its conversation, once per thread a process binds: the brain's
+ * lifecycle lines name the conversation, the user sees the thread (coding standard S57).
+ */
+const bound = (
+  threadId: ThreadId,
+  conversationId: number,
+  how: "created" | "ensured" | "found"
+) =>
+  Effect.logInfo("thread bound to its conversation").pipe(
+    Effect.annotateLogs({
+      event: "thread_bound",
+      threadId,
+      conversationId,
+      how,
+    })
+  );
+
+const layerNoDeps = Layer.effectContext(
   Effect.gen(function* () {
     const brain = yield* Brain;
     const feed = yield* CommitFeed;
     const crashes = yield* SubagentCrashes;
     const faults = yield* SubagentFaults;
-    const parked = yield* Parked;
-    // Where a judge brain kills itself inside a brief's Go commit; none elsewhere.
-    const briefAnswered = answerBrief(yield* BriefFaults);
 
-    // What an answer does in its own commit: a workflow launch's row takes it (ADR 0032), a
-    // subagent's brief starts its child or tells its parent (ADR 0030), and an accepted criteria
-    // proposal binds its criteria (ADR 0026).
-    const answered: AnsweredHook = async (tx, conversationId, record) => {
-      await launchAnswered(tx, conversationId, record);
-      await briefAnswered(tx, conversationId, record);
-      await criteriaAnswered(tx, conversationId, record);
-    };
+    // The features' part of the seam, from the installed set: what an answer does in its own
+    // commit (a workflow launch's row takes it, ADR 0032; a subagent's brief starts its child or
+    // tells its parent, ADR 0030; accepted criteria bind, ADR 0026), a submit's reporter for a
+    // subagent's input, a Stop all's hold on wakes, and the `cairn.*` documents the thread stream
+    // watches beside pi-durable's own view documents (each visible `cairn.*` kind,
+    // `StreamDocuments.test.ts`).
+    const { answered, steer, holdWakes, documents } = yield* Extensions;
+    const streamDocuments = [...THREAD_DOCUMENTS, ...documents];
 
     // A stop finishes here once it started aborting, whatever happens to its caller.
     const layerScope = yield* Effect.scope;
@@ -361,6 +394,7 @@ const layerNoDeps = Layer.effect(
         );
 
         conversations.set(threadId, id);
+        yield* bound(threadId, id, "found");
 
         return id;
       }
@@ -452,6 +486,11 @@ const layerNoDeps = Layer.effect(
       const conversationId = ConversationId.make(result.id);
 
       conversations.set(input.threadId, piConversationId(conversationId));
+      yield* bound(
+        input.threadId,
+        conversationId,
+        result.created ? "created" : "ensured"
+      );
       yield* PubSub.publish(ensured, input.threadId);
 
       return {
@@ -574,7 +613,7 @@ const layerNoDeps = Layer.effect(
       });
 
       // A user's input to a subagent gets its reporter first, so its result reaches the parent.
-      const reported = yield* steerReporter(
+      const reported = yield* steer(
         session.harness,
         conversation.id,
         draft
@@ -691,7 +730,12 @@ const layerNoDeps = Layer.effect(
       );
     });
 
-    /** The stop's aborts, then the cancellation of what the run held. */
+    /**
+     * The stop's aborts, then the cancellation of what the run held. Returns the run task a wake
+     * hold names (`holdWakes`): the last generation the stop aborted or followed; none when it found
+     * no run live, or when it cleared the queue, as nothing queued can then start a run after the
+     * stop and the newest run is the stopped one's last generation.
+     */
     const abortAndCancel = Effect.fn("PiDurableHarness.abortAndCancel")(
       function* (
         session: BrainSession,
@@ -706,12 +750,14 @@ const layerNoDeps = Layer.effect(
             await conversation.abort(context);
           });
 
-          return yield* cancelHeld(
+          yield* cancelHeld(
             session,
             threadId,
             conversation.id,
             Option.toArray(Option.map(run, (stopped) => stopped.taskId))
           );
+
+          return Option.none<PiTaskId>();
         }
 
         const stopped: Array<PiTaskId> = [];
@@ -744,7 +790,12 @@ const layerNoDeps = Layer.effect(
           );
         }
 
-        return yield* cancelHeld(session, threadId, conversation.id, stopped);
+        yield* cancelHeld(session, threadId, conversation.id, stopped);
+
+        return Option.orElse(
+          Option.map(run, (outran) => outran.taskId),
+          () => Option.fromUndefinedOr(stopped.at(-1))
+        );
       }
     );
 
@@ -799,17 +850,31 @@ const layerNoDeps = Layer.effect(
           Predicate.isTagged(event, "RunTerminal") &&
           event.status !== "completed"
       ),
-      Stream.runForEach((event) => placeAfterRun(event.threadId)),
+      // A defect placing one thread's notes is logged and the loop goes on.
+      Stream.runForEach((event) =>
+        placeAfterRun(event.threadId).pipe(
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logError("queued notes not placed").pipe(
+                Effect.annotateLogs({
+                  event: "place_writes_defect",
+                  threadId: event.threadId,
+                  cause: Cause.pretty(cause),
+                })
+              )
+          )
+        )
+      ),
       Effect.forkIn(layerScope)
     );
 
     /**
      * One thread's stop, in the caller's fiber: its aborts and cancellations, the notes its run left
-     * queued, then with `subagents: "stop"` each child its registry names as working, queue
-     * cleared, and theirs in turn (ADR 0028). `keep` leaves them working. A settled child is left as
-     * it is, its warm session kept, and so is anything under it: reaching a working grandchild
-     * through it would wake it with that grandchild's stopped result, since its last run completed
-     * and it is not halted. The descendants it stopped, nearest first.
+     * queued, then with `subagents: "stop"` a hold on its wakes (`holdWakes`) and each child its
+     * registry names as working or whose run is live, queue cleared, and theirs in turn (ADR 0028).
+     * `keep` leaves them working. A settled child with no run is left as it is, its warm session
+     * kept, and so is anything under it. The descendants it stopped, nearest first.
      */
     const stopTree = (
       threadId: ThreadId,
@@ -819,13 +884,29 @@ const layerNoDeps = Layer.effect(
         const session = yield* open(Option.some(threadId));
         const conversation = yield* conversationOf(session, threadId);
 
-        yield* abortAndCancel(session, threadId, conversation, options);
+        // The run the stop ended: a run its end starts for a queued input comes after the stop, and
+        // the wake hold must not name it (`holdWakes`).
+        const ended = yield* abortAndCancel(
+          session,
+          threadId,
+          conversation,
+          options
+        );
+
         // The notes the stopped run left queued enter the transcript now (ADR 0028).
         yield* placeAfterRun(threadId);
 
         if (options.subagents !== "stop") {
           return [];
         }
+
+        // Before any child stops: their stopped results must not wake this thread, even when its
+        // last run had completed (ADR 0028).
+        yield* call(Option.some(threadId), "wake-hold", async (context) => {
+          await session.harness.commit(async (tx) => {
+            await holdWakes(tx, conversation.id, ended);
+          }, context);
+        });
 
         const registry = yield* call(
           Option.some(threadId),
@@ -843,7 +924,20 @@ const layerNoDeps = Layer.effect(
         for (const item of Object.values(registry?.items ?? {})) {
           const child = decodeThreadId(item.threadId);
 
-          if (item.status !== "settled" && Option.isSome(child)) {
+          // A settled child whose run still goes on is stopped too: its reporter threw before the
+          // run ended (O-3), so nothing else follows that run.
+          const working =
+            item.status !== "settled" ||
+            (Option.isSome(child) &&
+              Option.isSome(
+                yield* liveRun(
+                  session,
+                  child.value,
+                  piConversationId(ConversationId.make(item.conversationId))
+                )
+              ));
+
+          if (working && Option.isSome(child)) {
             stopped.push(
               child.value,
               ...(yield* stopTree(child.value, {
@@ -1030,7 +1124,8 @@ const layerNoDeps = Layer.effect(
               call(
                 Option.some(threadId),
                 "watch",
-                async (context) => await conversation.watch(context)
+                async (context) =>
+                  await conversation.watch(context, STREAM_WINDOW)
               ),
               (handle) =>
                 Effect.promise(async () => {
@@ -1040,30 +1135,28 @@ const layerNoDeps = Layer.effect(
 
             // The `cairn.*` documents are not among pi-durable's built-in view documents; the
             // stream watches each one beside the conversation and adds it to the view.
-            const docWatches = yield* Effect.forEach(
-              STREAM_DOCUMENTS,
-              (token) =>
-                Effect.acquireRelease(
-                  call(
-                    Option.some(threadId),
-                    `watch-${token.definition.kind}`,
-                    async (context) =>
-                      await session.harness.watchDoc(
-                        token,
-                        conversation.id,
-                        context
-                      )
-                  ),
-                  (handle) =>
-                    Effect.promise(async () => {
-                      await handle?.stop();
-                    })
-                ).pipe(
-                  Effect.map((handle) => ({
-                    kind: token.definition.kind,
-                    handle: Option.fromUndefinedOr(handle),
-                  }))
-                )
+            const docWatches = yield* Effect.forEach(streamDocuments, (token) =>
+              Effect.acquireRelease(
+                call(
+                  Option.some(threadId),
+                  `watch-${token.definition.kind}`,
+                  async (context) =>
+                    await session.harness.watchDoc(
+                      token,
+                      conversation.id,
+                      context
+                    )
+                ),
+                (handle) =>
+                  Effect.promise(async () => {
+                    await handle?.stop();
+                  })
+              ).pipe(
+                Effect.map((handle) => ({
+                  kind: token.definition.kind,
+                  handle: Option.fromUndefinedOr(handle),
+                }))
+              )
             );
 
             const projector = windowedProjector();
@@ -1075,9 +1168,7 @@ const layerNoDeps = Layer.effect(
 
             for (const { kind, handle } of docWatches) {
               for (const value of Option.toArray(handle)) {
-                if (value.value !== null) {
-                  latestDocs.set(kind, value.value);
-                }
+                latestDocs.set(kind, value.value);
               }
             }
 
@@ -1089,53 +1180,42 @@ const layerNoDeps = Layer.effect(
                     docs: { ...latest.docs, ...Object.fromEntries(latestDocs) },
                   };
 
-            // A window (ThreadWindow.ts) leaves older entries out; with none left out, pi-durable
-            // may still hold entries before the view (a compaction moved its start).
-            const snapshotItem = (
-              windowed: WindowedView,
-              current: PiConversationView
-            ) =>
-              Effect.gen(function* () {
-                const hasMoreHistory =
-                  windowed.entriesOffset > 0 ||
-                  (yield* hasOlder(threadId, conversation, current));
-
-                return ThreadSnapshotItem.make({
-                  seq: yield* Ref.getAndUpdate(seq, (n) => n + 1),
-                  view: windowed.view,
-                  entriesOffset: windowed.entriesOffset,
-                  hasMoreHistory,
-                });
-              });
-
             const first = yield* Effect.fromResult(
               projector.snapshot(withDocs())
             ).pipe(Effect.mapError(fromWire(Option.some(threadId))));
 
-            yield* Queue.offer(queue, yield* snapshotItem(first, watch.value));
+            yield* Queue.offer(
+              queue,
+              yield* snapshotItem(seq, first, watch.value)
+            );
 
             // The listeners only record the newest revision and ring; with the one-frame output
             // buffer below, a slow subscriber gets one larger diff instead of a backlog.
             const ticks = yield* Queue.sliding<true>(1);
 
             watch.start(
-              handOff((value: PiConversationView) => {
-                latest = value;
-                Queue.offerUnsafe(ticks, true);
+              handOff((change: WatchCall<PiConversationView>) => {
+                if (change.kind === "value") {
+                  latest = change.value;
+                  Queue.offerUnsafe(ticks, true);
+                }
               })
             );
 
             for (const { kind, handle } of docWatches) {
               for (const docWatch of Option.toArray(handle)) {
                 docWatch.start(
-                  handOff((value: Readonly<JsonObject> | null) => {
-                    if (value === null) {
-                      latestDocs.delete(kind);
-                    } else {
-                      latestDocs.set(kind, value);
-                    }
+                  handOff((change: WatchCall<Readonly<JsonObject>>) => {
+                    // A retired document keeps its last value on the watch; the view drops it.
+                    for (const value of Option.toArray(documentCall(change))) {
+                      if (value === null) {
+                        latestDocs.delete(kind);
+                      } else {
+                        latestDocs.set(kind, value);
+                      }
 
-                    Queue.offerUnsafe(ticks, true);
+                      Queue.offerUnsafe(ticks, true);
+                    }
                   })
                 );
               }
@@ -1152,8 +1232,9 @@ const layerNoDeps = Layer.effect(
 
                   yield* WindowFrame.$match(frame, {
                     Snapshot: (windowed) =>
-                      Effect.flatMap(snapshotItem(windowed, current), (item) =>
-                        Queue.offer(queue, item)
+                      Effect.flatMap(
+                        snapshotItem(seq, windowed, current),
+                        (item) => Queue.offer(queue, item)
                       ),
                     Ops: ({ ops }) =>
                       ops.length === 0
@@ -1176,7 +1257,7 @@ const layerNoDeps = Layer.effect(
 
             yield* Effect.promise(async () => await watch.closed).pipe(
               Effect.flatMap((end) =>
-                end.reason === "listener_error"
+                end.kind === "listener_error"
                   ? Queue.fail(
                       queue,
                       failure(
@@ -1231,7 +1312,7 @@ const layerNoDeps = Layer.effect(
       const session = yield* open(Option.some(threadId));
       const conversationId = yield* conversationIdOf(session, threadId);
 
-      const token = STREAM_DOCUMENTS.find(
+      const token = streamDocuments.find(
         (candidate) => candidate.definition.kind === kind
       );
 
@@ -1387,23 +1468,125 @@ const layerNoDeps = Layer.effect(
       };
     });
 
-    const parkedEvents = parked.parked.pipe(
-      Stream.mapEffect((task) =>
-        Effect.gen(function* () {
-          const session = yield* brain.session;
+    // Which conversations hold a pending approval record: one scan of every conversation,
+    // the first time it is asked, then kept by every commit's `cairn.approvals` changes. A change
+    // that lands while the scan runs wins over what the scan read; a Session the supervisor
+    // reopened is scanned again, since a commit stored as the old one failed may never have been
+    // published.
+    const pendingIndex: PendingIndex = {
+      known: Option.none(),
+      session: Option.none(),
+      during: new Map(),
+    };
 
-          const threadId = yield* threadOf(
-            session,
-            piConversationId(task.conversationId)
+    yield* brain.subscribeCommits((session, publication) => {
+      if (
+        Option.isSome(pendingIndex.session) &&
+        pendingIndex.session.value !== session
+      ) {
+        pendingIndex.known = Option.none();
+        pendingIndex.session = Option.none();
+      }
+
+      for (const change of publication.changes) {
+        if (
+          change.type === "document" &&
+          change.record.kind === Approvals.definition.kind &&
+          change.conversationId !== undefined
+        ) {
+          const holds = holdsPending(documentValue(change));
+
+          if (Option.isSome(pendingIndex.known)) {
+            if (holds) {
+              pendingIndex.known.value.add(change.conversationId);
+            } else {
+              pendingIndex.known.value.delete(change.conversationId);
+            }
+          } else {
+            pendingIndex.during.set(change.conversationId, holds);
+          }
+        }
+      }
+    });
+
+    const scanLock = yield* Semaphore.make(1);
+
+    const pendingConversations = scanLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (Option.isSome(pendingIndex.known)) {
+          return new Set(pendingIndex.known.value);
+        }
+
+        const session = yield* open(Option.none());
+        const found = new Set<PiConversationId>();
+        let cursor: Option.Option<Cursor> = Option.none();
+        let scanned = 0;
+
+        pendingIndex.during.clear();
+
+        do {
+          const after = Option.getOrUndefined(cursor);
+
+          const page = yield* call(
+            Option.none(),
+            "conversations.scan",
+            async (context) =>
+              await session.storage.scanConversations(
+                {},
+                INSPECT_SCAN_PAGE,
+                after,
+                context
+              )
           );
 
-          return Option.map(threadId, (found) =>
-            TaskParked.make({ threadId: found, taskId: task.taskId })
-          );
-        }).pipe(Effect.orElseSucceed(() => Option.none<HarnessEvent>()))
-      ),
-      Stream.filter(Option.isSome),
-      Stream.map((event) => event.value)
+          for (const conversation of page.items) {
+            const approvals = yield* call(
+              Option.none(),
+              "approvals.read",
+              async (context) =>
+                await session.harness.snapshot(
+                  Approvals,
+                  conversation.id,
+                  context
+                )
+            );
+
+            scanned += 1;
+
+            if (
+              Object.values(approvals?.items ?? {}).some(
+                (item) => item.status === "pending"
+              )
+            ) {
+              found.add(conversation.id);
+            }
+          }
+
+          cursor = Option.fromUndefinedOr(page.next);
+        } while (Option.isSome(cursor));
+
+        for (const [conversationId, holds] of pendingIndex.during) {
+          if (holds) {
+            found.add(conversationId);
+          } else {
+            found.delete(conversationId);
+          }
+        }
+
+        pendingIndex.during.clear();
+        pendingIndex.known = Option.some(found);
+        pendingIndex.session = Option.some(session);
+
+        yield* Effect.logInfo("approvals scanned").pipe(
+          Effect.annotateLogs({
+            event: "approvals_scanned",
+            conversations: scanned,
+            pending: found.size,
+          })
+        );
+
+        return new Set(found);
+      })
     );
 
     const inspect = Effect.gen(function* () {
@@ -1420,7 +1603,6 @@ const layerNoDeps = Layer.effect(
         {
           runId: Option.Option<RunId>;
           queueLength: number;
-          parkedTaskIds: Array<TaskId>;
         }
       >();
 
@@ -1434,7 +1616,6 @@ const layerNoDeps = Layer.effect(
         const created = {
           runId: Option.none<RunId>(),
           queueLength: 0,
-          parkedTaskIds: [],
         };
 
         byConversation.set(id, created);
@@ -1442,33 +1623,15 @@ const layerNoDeps = Layer.effect(
         return created;
       };
 
+      // Only a run makes a thread live: a thread whose only tasks are Cairn's own (a subagent's, a
+      // workflow's, a judge run) has nothing running, queued or pending, so the seam leaves it out.
       for (const task of inspection.tasks) {
-        const { record, state } = task;
-        const target = slot(record.conversationId);
+        const { record } = task;
 
         if (record.kind === RUN_TASK) {
-          target.runId = Option.some(RunId.make(record.id));
-        }
-
-        if (state.kind === "blocked" && state.reason === "restart_limit") {
-          target.parkedTaskIds.push(TaskId.make(record.id));
-          yield* parked.add({
-            taskId: TaskId.make(record.id),
-            conversationId: ConversationId.make(record.conversationId),
-            kind: record.kind,
-          });
-        }
-      }
-
-      // A task that ended without a retry (a stop that cleared the queue, a deleted thread) is no
-      // longer parked: forget it, so the list matches what pi-durable reports (T39).
-      const stillParked = new Set(
-        [...byConversation.values()].flatMap((found) => found.parkedTaskIds)
-      );
-
-      for (const known of yield* parked.list) {
-        if (!stillParked.has(known.taskId)) {
-          yield* parked.remove(known.taskId);
+          slot(record.conversationId).runId = Option.some(
+            RunId.make(record.id)
+          );
         }
       }
 
@@ -1479,50 +1642,27 @@ const layerNoDeps = Layer.effect(
       }
 
       // `inspect()` reports live work only, so a thread waiting on the user with nothing running
-      // (a criteria proposal, a halted scope's raise) is found by its records: every conversation
-      // is read, as the boot repairs read them.
+      // (a criteria proposal, a halted scope's raise) is found by its records: the records of
+      // every conversation that holds a pending one (`PendingApprovals`).
       const pendingOf = new Map<PiConversationId, Array<ApprovalRecord>>();
-      let cursor: Option.Option<Cursor> = Option.none();
 
-      do {
-        const after = Option.getOrUndefined(cursor);
-
-        const page = yield* call(
+      for (const conversationId of yield* pendingConversations) {
+        const approvals = yield* call(
           Option.none(),
-          "conversations.scan",
+          "approvals.read",
           async (context) =>
-            await session.storage.scanConversations(
-              {},
-              INSPECT_SCAN_PAGE,
-              after,
-              context
-            )
+            await session.harness.snapshot(Approvals, conversationId, context)
         );
 
-        for (const conversation of page.items) {
-          const approvals = yield* call(
-            Option.none(),
-            "approvals.read",
-            async (context) =>
-              await session.harness.snapshot(
-                Approvals,
-                conversation.id,
-                context
-              )
-          );
+        const pending = Object.values(approvals?.items ?? {}).filter(
+          (item) => item.status === "pending"
+        );
 
-          const pending = Object.values(approvals?.items ?? {}).filter(
-            (item) => item.status === "pending"
-          );
-
-          if (pending.length > 0) {
-            pendingOf.set(conversation.id, pending);
-            slot(conversation.id);
-          }
+        if (pending.length > 0) {
+          pendingOf.set(conversationId, pending);
+          slot(conversationId);
         }
-
-        cursor = Option.fromUndefinedOr(page.next);
-      } while (Option.isSome(cursor));
+      }
 
       const states: Array<LiveThreadState> = [];
 
@@ -1545,7 +1685,6 @@ const layerNoDeps = Layer.effect(
             conversationId: ConversationId.make(conversationId),
             runId: found.runId,
             queueLength: found.queueLength,
-            parkedTaskIds: found.parkedTaskIds,
             pendingApprovals: pending,
           });
         }
@@ -1554,36 +1693,7 @@ const layerNoDeps = Layer.effect(
       return states;
     });
 
-    const retry = Effect.fn("PiDurableHarness.retry")(function* (
-      taskId: TaskId
-    ) {
-      const session = yield* open(Option.none());
-
-      yield* durable("retry-task", async (context) => {
-        await session.harness.retryTask(piTaskId(taskId), context);
-      }).pipe(
-        // pi-durable rejects an unknown task with "Task <id> does not exist" and does nothing for one
-        // that is not parked; every other rejection keeps its own classification and cause.
-        Effect.mapError((error) =>
-          !error.closed && isMissingTask(error.cause)
-            ? failure(
-                "task_not_found",
-                Option.none(),
-                `Task ${taskId} is not in the brain. Refresh the thread.`
-              )
-            : fromDurable(Option.none())(error)
-        ),
-        // A task the brain no longer has cannot stay parked either.
-        Effect.tapError((error) =>
-          error.reason === "task_not_found"
-            ? parked.remove(taskId)
-            : Effect.void
-        )
-      );
-      yield* parked.remove(taskId);
-    });
-
-    return HarnessSeam.of({
+    const seam = HarnessSeam.of({
       ensureThread,
       configure: configureThread,
       submit,
@@ -1598,18 +1708,24 @@ const layerNoDeps = Layer.effect(
       history,
       entry,
       entryImage,
-      events: Stream.merge(feed.events, parkedEvents),
+      events: feed.events,
       inspect,
-      retry,
       capabilities: { durable: true, live: true },
     });
+
+    return Context.make(HarnessSeam, seam).pipe(
+      Context.add(
+        PendingApprovals,
+        PendingApprovals.of({ conversations: pendingConversations })
+      )
+    );
   })
 );
 
 /**
- * The seam over pi-durable. `layer` puts the brain under it and also exposes `Brain` (boot resumes
- * it after its repairs) and `Parked`; it needs the models, the extension set and the brain's
- * directory from the composition root.
+ * The seam over pi-durable, and `PendingApprovals` beside it. `layer` puts the brain under it and
+ * also exposes `Brain` (boot resumes it after its repairs); it needs the models, the extension set
+ * and the brain's directory from the composition root.
  */
 export const PiDurableHarness = {
   layerNoDeps,
@@ -1620,7 +1736,6 @@ export const PiDurableHarness = {
         Layer.provide(BrainStore.layer),
         Layer.provide(Arms.layer)
       )
-    ),
-    Layer.provideMerge(Parked.layer)
+    )
   ),
 };

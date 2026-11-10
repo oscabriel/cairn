@@ -4,9 +4,18 @@ import {
   SHELL_COMMAND_RESEND_WINDOW,
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
-import { DateTime, Duration, Effect, Option, Predicate, Ref } from "effect";
+import {
+  DateTime,
+  Duration,
+  Effect,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+} from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { TestClock } from "effect/testing";
+import { Url } from "foldkit";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
@@ -24,8 +33,8 @@ import { SaveDrafts } from "../composer/Command.ts";
 import { Message as ComposerMessage } from "../composer/Message.ts";
 import { Message } from "../Message.ts";
 import type { Model } from "../Model.ts";
-import { Message as NextShellMessage } from "../next/shell/Message.ts";
 import { AppRoute } from "../Route.ts";
+import { Message as NextShellMessage } from "../shell/Message.ts";
 import {
   connectingModel,
   hello,
@@ -33,17 +42,20 @@ import {
   liveModel,
   sendItem,
 } from "../TestFixtures.ts";
-import { update } from "../Update.ts";
+import { init, UNREAD_STORED_NOTICE, update } from "../Update.ts";
 import { CairnConnection } from "./Connection.ts";
 import {
   enqueue,
   enqueueDispatch,
-  loadOutbox,
   OUTBOX_STORAGE_KEY,
   OutboxItem,
   outboxKey,
+  readOutbox,
   saveOutbox,
 } from "./Outbox.ts";
+
+/** The saved outbox's items this build can decode. */
+const storedOutbox = Effect.map(readOutbox, ({ value }) => value);
 
 const first = sendItem("request-1");
 
@@ -76,6 +88,174 @@ const visit = (commandId: string, at: string) =>
     at: DateTime.makeUnsafe(at),
   });
 
+/** `item` as a build whose `whenBusy` has a value this build does not know saved it. */
+const fromNewerBuild = (item: OutboxItem) =>
+  Effect.map(
+    Schema.encodeEffect(Schema.toCodecJson(OutboxItem))(item),
+    (json) =>
+      JSON.stringify(json).replace(
+        '"whenBusy":"followUp"',
+        '"whenBusy":"sideways"'
+      )
+  );
+
+/** The thread `sendItem` and `visit` name. */
+const THREAD = "01890a5d-ac96-774b-bcce-b302099a8057";
+
+const OTHER_THREAD = "01890a5d-ac96-774b-bcce-b302099a9999";
+
+/** A send of `requestId` to the thread `threadId`. */
+const sendTo = (threadId: string, requestId: string): OutboxItem =>
+  OutboxItem.match(sendItem(requestId), {
+    Send: ({ input }) =>
+      OutboxItem.Send({
+        input: { ...input, threadId: ThreadId.make(threadId) },
+      }),
+    Dispatch: (item) => OutboxItem.Dispatch(item),
+    Launch: (item) => OutboxItem.Launch(item),
+  });
+
+describe("the outbox's lanes", () => {
+  const held = launchItem(OTHER_THREAD);
+
+  const heldKey = outboxKey(held);
+
+  it("sends to another thread while a launch is held, and keeps one item in flight per thread", () => {
+    const later = sendTo(OTHER_THREAD, "request-9");
+
+    const queued = update(
+      {
+        ...liveModel(0),
+        outbox: [held],
+        outboxStored: [held],
+        outboxInFlight: [heldKey],
+      },
+      Message.QueuedOutboxItem({ item: first })
+    );
+
+    // A send to the held thread waits behind its launch.
+    const behind = update(
+      queued.model,
+      Message.QueuedOutboxItem({ item: later })
+    );
+
+    const acknowledged = update(
+      behind.model,
+      Message.AcknowledgedOutboxItem({ epoch: 0, key: heldKey })
+    );
+
+    expect({
+      queued: names(queued),
+      queuedInFlight: queued.model.outboxInFlight,
+      behind: names(behind),
+      acknowledged: names(acknowledged),
+      acknowledgedInFlight: acknowledged.model.outboxInFlight,
+    }).toStrictEqual({
+      queued: [SaveOutbox.name, SendOutboxItem.name],
+      queuedInFlight: [heldKey, "request-1"],
+      behind: [SaveOutbox.name],
+      acknowledged: [SaveOutbox.name, SendOutboxItem.name],
+      acknowledgedInFlight: ["request-1", "request-9"],
+    });
+  });
+
+  it("sends a shell command beside a thread's send, and holds one naming a launching thread behind its launch", () => {
+    const launching = launchItem(THREAD);
+
+    const visitIt = OutboxItem.Dispatch({
+      command: visit(
+        "01890a5d-ac96-774b-bcce-b302099a0000",
+        "2026-10-24T10:00:00Z"
+      ),
+    });
+
+    const elsewhere = OutboxItem.Dispatch({
+      command: ThreadVisit.make({
+        commandId: CommandId.make("01890a5d-ac96-774b-bcce-b302099a0001"),
+        threadId: ThreadId.make(OTHER_THREAD),
+        at: DateTime.makeUnsafe("2026-10-24T10:00:01Z"),
+      }),
+    });
+
+    // The shell stream's item gives the outbox its turn to send.
+    const woken = update(
+      {
+        ...liveModel(0),
+        outbox: [launching, visitIt, elsewhere],
+        outboxStored: [launching, visitIt, elsewhere],
+        outboxInFlight: [outboxKey(launching)],
+      },
+      Message.ReceivedShellItem({ epoch: 0, item: synchronizedItem })
+    );
+
+    expect(woken.model.outboxInFlight).toStrictEqual([
+      outboxKey(launching),
+      outboxKey(elsewhere),
+    ]);
+
+    const acknowledged = update(
+      woken.model,
+      Message.AcknowledgedOutboxItem({ epoch: 0, key: outboxKey(launching) })
+    );
+
+    // The launch is in: the visit joins the shell's lane, behind the command in flight there.
+    expect(acknowledged.model.outboxInFlight).toStrictEqual([
+      outboxKey(elsewhere),
+    ]);
+
+    const next = update(
+      acknowledged.model,
+      Message.AcknowledgedOutboxItem({ epoch: 0, key: outboxKey(elsewhere) })
+    );
+
+    expect(next.model.outboxInFlight).toStrictEqual([outboxKey(visitIt)]);
+  });
+
+  it("holds only the lane the brain answered 'not now' in, while its resend waits", () => {
+    const failed = update(
+      {
+        ...liveModel(0),
+        outbox: [first],
+        outboxStored: [first],
+        outboxInFlight: ["request-1"],
+      },
+      Message.FailedOutboxItem({
+        epoch: 0,
+        key: "request-1",
+        retryable: true,
+        transport: false,
+        message: "The brain is starting.",
+      })
+    );
+
+    const other = sendTo(OTHER_THREAD, "request-9");
+
+    const queued = update(
+      failed.model,
+      Message.QueuedOutboxItem({ item: other })
+    );
+
+    const same = update(
+      queued.model,
+      Message.QueuedOutboxItem({ item: second })
+    );
+
+    expect({
+      failed: names(failed),
+      queued: names(queued),
+      same: names(same),
+      inFlight: same.model.outboxInFlight,
+      resend: same.model.outboxResend,
+    }).toStrictEqual({
+      failed: [WaitToResend.name],
+      queued: [SaveOutbox.name, SendOutboxItem.name],
+      same: [SaveOutbox.name],
+      inFlight: ["request-9"],
+      resend: ["request-1"],
+    });
+  });
+});
+
 describe("the outbox", () => {
   it("sends a queued item while live, and drops it when the brain acknowledges it", () => {
     story(
@@ -84,7 +264,7 @@ describe("the outbox", () => {
       message(Message.QueuedOutboxItem({ item: first })),
       model((current) => {
         expect(current.outbox).toStrictEqual([first]);
-        expect(current.outboxInFlight).toStrictEqual(Option.some("request-1"));
+        expect(current.outboxInFlight).toStrictEqual(["request-1"]);
       }),
       Command.expectExact(
         SaveOutbox({ base: [], outbox: [first] }),
@@ -97,7 +277,7 @@ describe("the outbox", () => {
       ),
       model((current) => {
         expect(current.outbox).toStrictEqual([]);
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       }),
       Command.expectExact(SaveOutbox({ base: [first], outbox: [] })),
       Command.resolve(SaveOutbox, savedAs([]))
@@ -111,7 +291,7 @@ describe("the outbox", () => {
         ...liveModel(0),
         outbox: [first],
         outboxStored: [first],
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       }),
       message(Message.QueuedOutboxItem({ item: second })),
       Command.expectExact(
@@ -145,7 +325,7 @@ describe("the outbox", () => {
       message(Message.AcquiredConnection()),
       Command.resolve(SayHello, Message.SucceededHello({ epoch: 0, hello })),
       model((current) => {
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       })
     );
   });
@@ -175,7 +355,7 @@ describe("the outbox", () => {
       ),
       model((current) => {
         expect(current.outbox).toStrictEqual([first]);
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       }),
       message(Message.AcquiredConnection()),
       Command.resolve(SayHello, Message.SucceededHello({ epoch: 1, hello })),
@@ -200,7 +380,7 @@ describe("the outbox", () => {
         ...liveModel(0),
         outbox: [first, second],
         outboxStored: [first, second],
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       }),
       message(
         Message.FailedOutboxItem({
@@ -234,7 +414,7 @@ describe("the outbox", () => {
       ),
       model((current) => {
         expect(current.outbox).toStrictEqual([second]);
-        expect(Option.isNone(current.outboxInFlight)).toBeTruthy();
+        expect(current.outboxInFlight).toStrictEqual([]);
       }),
       // Nothing else is queued and the socket stays up: the item is sent again on its own.
       Command.expectExact(
@@ -250,7 +430,7 @@ describe("the outbox", () => {
         Message.AcknowledgedOutboxItem({ epoch: 0, key: "request-2" })
       ),
       model((current) => {
-        expect([current.outbox, current.outboxAttempt]).toStrictEqual([[], 0]);
+        expect([current.outbox, current.outboxAttempt]).toStrictEqual([[], {}]);
       }),
       Command.resolve(SaveOutbox, savedAs([]))
     );
@@ -262,7 +442,7 @@ describe("the outbox", () => {
         ...liveModel(0),
         outbox: [first],
         outboxStored: [first],
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       },
       Message.FailedOutboxItem({
         epoch: 0,
@@ -301,14 +481,14 @@ describe("the outbox", () => {
       given({
         ...liveModel(0),
         outbox: [second],
-        outboxInFlight: Option.some("request-2"),
+        outboxInFlight: ["request-2"],
       }),
       message(Message.ElapsedResend({ epoch: 0, key: "request-1" })),
       Command.expectNone(),
       message(Message.ElapsedResend({ epoch: 0, key: "request-2" })),
       Command.expectNone(),
       model((current) => {
-        expect(current.outboxInFlight).toStrictEqual(Option.some("request-2"));
+        expect(current.outboxInFlight).toStrictEqual(["request-2"]);
       })
     );
   });
@@ -329,10 +509,10 @@ describe("the outbox", () => {
       "2026-10-24T10:00:08Z"
     );
 
-    const inFlight = Option.some<string>(sent.commandId);
+    const inFlight: ReadonlyArray<string> = [sent.commandId];
 
     const queued = enqueueDispatch(
-      enqueueDispatch([first], sent, Option.none()),
+      enqueueDispatch([first], sent, []),
       stale,
       inFlight
     );
@@ -415,12 +595,12 @@ describe("the outbox", () => {
   it("survives a reload through storage, and reads unreadable storage as empty", async () => {
     const roundTrip = Effect.gen(function* () {
       const saved = yield* saveOutbox([], [first, second]);
-      const loaded = yield* loadOutbox;
+      const loaded = yield* storedOutbox;
       const store = yield* KeyValueStore.KeyValueStore;
 
       yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
 
-      const broken = yield* loadOutbox;
+      const broken = yield* storedOutbox;
 
       return { saved, loaded, broken };
     }).pipe(Effect.provide(KeyValueStore.layerMemory));
@@ -430,6 +610,141 @@ describe("the outbox", () => {
     expect(Option.isSome(saved)).toBeTruthy();
     expect(loaded).toStrictEqual([first, second]);
     expect(broken).toStrictEqual([]);
+  });
+
+  it("keeps an item it cannot read beside the ones it can, and writes it back on the next save", async () => {
+    const { after, loaded, stored } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        yield* saveOutbox([], [first]);
+
+        // A send from a build whose `whenBusy` has a value this build does not know.
+        const newer = JSON.stringify(
+          yield* Schema.encodeEffect(Schema.toCodecJson(OutboxItem))(second)
+        ).replace('"whenBusy":"followUp"', '"whenBusy":"sideways"');
+
+        const text = yield* store.get(OUTBOX_STORAGE_KEY);
+
+        yield* store.set(
+          OUTBOX_STORAGE_KEY,
+          `${(text ?? "[]").slice(0, -1)},${newer}]`
+        );
+
+        const read = yield* readOutbox;
+        const third = sendItem("request-3");
+
+        yield* saveOutbox(read.value, [...read.value, third]);
+
+        return {
+          loaded: read,
+          after: yield* storedOutbox,
+          stored: yield* store.get(OUTBOX_STORAGE_KEY),
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loaded).toStrictEqual({ value: [first], tell: true });
+    expect(after.map(outboxKey)).toStrictEqual(["request-1", "request-3"]);
+    expect(stored).toContain('"whenBusy":"sideways"');
+  });
+
+  it("says once that storage holds an item it cannot read, and again only for another such item", async () => {
+    const loads = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        const append = (json: string) =>
+          Effect.flatMap(store.get(OUTBOX_STORAGE_KEY), (text) =>
+            store.set(
+              OUTBOX_STORAGE_KEY,
+              text === undefined || text === "[]"
+                ? `[${json}]`
+                : `${text.slice(0, -1)},${json}]`
+            )
+          );
+
+        yield* saveOutbox([], [first]);
+        yield* append(yield* fromNewerBuild(second));
+
+        const told = yield* readOutbox;
+        const third = sendItem("request-3");
+
+        // This tab queues a send and the brain settles it: storage is written twice.
+        yield* saveOutbox(told.value, [...told.value, third]);
+        yield* saveOutbox([...told.value, third], told.value);
+
+        const again = yield* readOutbox;
+
+        yield* append(yield* fromNewerBuild(sendItem("request-4")));
+
+        const another = yield* readOutbox;
+
+        return { told, again, another };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loads).toStrictEqual({
+      told: { value: [first], tell: true },
+      again: { value: [first], tell: false },
+      another: { value: [first], tell: true },
+    });
+  });
+
+  it("says so when the copy it kept while storage was unreadable is left behind", async () => {
+    const loaded = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        // Storage is unreadable as a whole, so the send goes to the recovery copy.
+        yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
+        yield* saveOutbox([], [first]);
+
+        // A newer build writes a value this build reads, without the send.
+        yield* store.set(OUTBOX_STORAGE_KEY, "[]");
+
+        return yield* readOutbox;
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loaded).toStrictEqual({ value: [], tell: true });
+  });
+
+  it("says at start that storage holds sends this build cannot read", () => {
+    const url = Option.getOrThrow(Url.fromString("https://code.gneiss.run/"));
+
+    const notice = (outboxUnread: boolean) =>
+      init({ boot: Option.none(), outbox: [first], outboxUnread }, url).model
+        .notice;
+
+    expect(notice(true)).toStrictEqual(Option.some(UNREAD_STORED_NOTICE));
+    expect(notice(false)).toStrictEqual(Option.none());
+  });
+
+  it("never writes over an outbox it cannot read at all", async () => {
+    const { kept, loaded, saved } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
+
+        const read = yield* readOutbox;
+        const stored = yield* saveOutbox(read.value, [first]);
+
+        return {
+          loaded: read,
+          saved: { stored, reread: yield* storedOutbox },
+          kept: yield* store.get(OUTBOX_STORAGE_KEY),
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loaded).toStrictEqual({ value: [], tell: true });
+    expect(saved).toStrictEqual({
+      stored: Option.some([first]),
+      reread: [first],
+    });
+    expect(kept).toBe("{not json");
   });
 });
 
@@ -456,7 +771,7 @@ describe("the outbox in two tabs", () => {
           update(connectingModel, Message.QueuedOutboxItem({ item: second }))
         );
 
-        return yield* loadOutbox;
+        return yield* storedOutbox;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
@@ -501,7 +816,7 @@ describe("the outbox in two tabs", () => {
 
         const heardAgain = yield* hear({
           ...heard.model,
-          outboxInFlight: Option.none(),
+          outboxInFlight: [],
         });
 
         return {
@@ -550,7 +865,7 @@ describe("the outbox in two tabs", () => {
 
         return {
           outbox: heard.outbox.map(outboxKey),
-          stored: (yield* loadOutbox).map(outboxKey),
+          stored: (yield* storedOutbox).map(outboxKey),
         };
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
@@ -649,7 +964,7 @@ describe("this tab's turns in two tabs", () => {
           sentAgain: names(refused).filter(
             (name) => name === SendOutboxItem.name
           ),
-          stored: (yield* loadOutbox).map(outboxKey),
+          stored: (yield* storedOutbox).map(outboxKey),
         };
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
@@ -688,7 +1003,7 @@ describe("this tab's turns in two tabs", () => {
           })
         );
 
-        return refused.model.thread.timeline.queuedPrompts;
+        return refused.model.thread.timeline.queuedSends;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
@@ -748,6 +1063,7 @@ describe("a turn the brain refuses", () => {
         [
           SaveReady,
           AttachmentsMessage.CompletedSave({
+            base: {},
             written: { [threadKey]: [ref] },
             stored: Option.some({ [threadKey]: [ref] }),
           }),
@@ -826,6 +1142,7 @@ describe("a turn the brain refuses", () => {
         [
           SaveReady,
           AttachmentsMessage.CompletedSave({
+            base: {},
             written: { [threadKey]: [ref] },
             stored: Option.some({ [threadKey]: [ref] }),
           }),
@@ -847,11 +1164,12 @@ describe("a turn the brain refuses", () => {
     );
   });
 
-  it("goes back into the scratch overlay when it was a scratch turn", () => {
+  it("goes back into the scratch overlay's draft when the overlay's composer sent it (U-16)", () => {
     const scratchId = ThreadId.make("01890a5d-ac96-774b-bcce-b302099a8057");
     const live = liveModel(0);
 
-    const sent = update(
+    // The overlay is shown, so the one composer serves it from the next update on.
+    const shown = update(
       {
         ...live,
         nextShell: {
@@ -864,9 +1182,18 @@ describe("a turn the brain refuses", () => {
         },
       },
       Message.GotNextShellMessage({
-        message: NextShellMessage.PreparedScratchTurn({
+        message: NextShellMessage.SettledOverlay(),
+      })
+    ).model;
+
+    const sent = update(
+      shown,
+      Message.GotComposerMessage({
+        message: ComposerMessage.PreparedTurn({
+          draftKey: "scratch",
           item: first,
-          threadId: scratchId,
+          navigateTo: Option.none(),
+          attachments: [],
         }),
       })
     ).model;
@@ -883,12 +1210,16 @@ describe("a turn the brain refuses", () => {
     ).model;
 
     expect({
-      scratch: refused.nextShell.scratch.draft,
-      composer: refused.composer.drafts[`thread:${scratchId}`]?.text,
+      target: shown.composer.context.target._tag,
+      recorded: Object.values(sent.sentTurns).map((turn) => turn.fromScratch),
+      scratch: refused.composer.drafts.scratch?.text,
+      thread: refused.composer.drafts[`thread:${scratchId}`]?.text,
       sent: refused.sentTurns,
     }).toStrictEqual({
+      target: "Scratch",
+      recorded: [true],
       scratch: "message request-1",
-      composer: undefined,
+      thread: undefined,
       sent: {},
     });
   });
@@ -903,7 +1234,7 @@ describe("a turn the brain refuses", () => {
         ...liveModel(0),
         outbox: [first],
         outboxStored: [first],
-        outboxInFlight: Option.some("request-1"),
+        outboxInFlight: ["request-1"],
       }),
       message(
         Message.FailedOutboxItem({

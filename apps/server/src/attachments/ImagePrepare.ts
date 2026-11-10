@@ -105,8 +105,14 @@ export class ImagePrepare extends Context.Service<
       ) {
         const ready = yield* acquire;
 
+        // A copy in its own buffer. pi-durable's worker path transfers `bytes.slice()` to its thread,
+        // and a Node `Buffer`'s `slice` is a view: for an upload small enough to sit in Node's Buffer
+        // pool, the view's buffer is the shared pool, which cannot be transferred, so every image
+        // under the pool's size failed to prepare.
+        const own = Uint8Array.from(bytes);
+
         const prepared = yield* Effect.tryPromise({
-          try: async () => await ready.prepare(bytes, mimeType, LIMITS),
+          try: async () => await ready.prepare(own, mimeType, LIMITS),
           catch: (cause) =>
             new ImagePrepareError({
               message:

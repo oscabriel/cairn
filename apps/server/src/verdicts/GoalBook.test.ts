@@ -1,7 +1,8 @@
 // The user's side of a goal (`goal.setCriteria` and the user's mark) over a real Harness: the user
 // binds criteria in one host commit, the rules `goal_criteria` keeps hold (a subagent's thread, a
 // model judge on the Claude bridge, a verification judge), a model judge may be of the thread's
-// own family or name no model at all (ADR 0043), a mark lands only on a criterion the user judges,
+// own family, or the thread's own model when the user names it, but never names no model (ADR
+// 0055), a mark lands only on a criterion the user judges,
 // and each refusal reaches the client as the public error it can act on.
 
 import {
@@ -17,11 +18,11 @@ import { Context, Effect, Layer, Option, Result } from "effect";
 
 import { Brain } from "../brain/Brain.ts";
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
+import { ChildDoc } from "../brain/SubagentDocs.ts";
 import { ModelSpecError, ModelSpecs } from "../models/ModelSpecs.ts";
-import { goalErrorOf } from "../rpc/GoalHandlers.ts";
-import { ChildDoc } from "../subagents/SubagentDocs.ts";
 import { GoalBook } from "./GoalBook.ts";
 import { GoalDoc } from "./GoalDocs.ts";
+import { goalErrorOf } from "./GoalHandlers.ts";
 import { openGoalKit } from "./GoalTestKit.ts";
 import type { GoalKit } from "./GoalTestKit.ts";
 import { NO_JUDGE_FAULTS } from "./JudgeRun.ts";
@@ -128,9 +129,6 @@ const kitScope = Effect.acquireRelease(
               await Promise.resolve(Result.fail("No model judges here.")),
             ask: async () =>
               await Promise.resolve(Result.fail("No model judges here.")),
-            roleNameRead: async () => {
-              await Promise.resolve();
-            },
           },
           faults: NO_JUDGE_FAULTS,
         },
@@ -167,8 +165,9 @@ describe("the user's side of a goal", () => {
               judge: modelJudge("opencode-go/gpt-6-luna"),
             },
             {
+              // The user may name the thread's own model for a judge: that is their pick.
               text: "The tone is calm",
-              judge: modelJudge(null),
+              judge: modelJudge("anthropic/claude-test"),
             },
             {
               text: "Names match",
@@ -228,6 +227,19 @@ describe("the user's side of a goal", () => {
         });
 
         assert.include(verification.message, "phase 4");
+
+        // A judge that names no model would run on the thread's own and grade its own work.
+        const unnamed = yield* refused({
+          threadId: GOAL,
+          objective: Option.none(),
+          criteria: [{ text: "Reads well", judge: modelJudge(null) }],
+        });
+
+        assert.include(
+          unnamed.message,
+          "anthropic/claude-test is this thread's own model, so a judge on it would grade its own work"
+        );
+        assert.deepStrictEqual(unnamed.field, Option.some("criteria[0].judge"));
 
         const child = yield* refused({
           threadId: CHILD,

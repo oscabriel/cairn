@@ -13,12 +13,30 @@ import type { Brief } from "@cairn/protocol/Policy";
 import type { SubagentSettlement } from "@cairn/protocol/Subagents";
 import { Match, Option } from "effect";
 
-/** The first input a child receives: its brief's title and task, then why and how it is judged. */
+/**
+ * The first input a child receives: its brief's title and task, then why, and the command its
+ * parent named for when the work is done (ADR 0055), which the child is asked to run.
+ */
 export const renderBrief = (brief: Brief): string => {
   const lines = [brief.title, "", brief.task];
 
   if (brief.why.trim() !== "") {
     lines.push("", `Why: ${brief.why}`);
+  }
+
+  const commands = brief.doneWhen.flatMap((criterion) =>
+    criterion.judge.kind === "command"
+      ? [
+          `\`${criterion.judge.argv.join(" ")}\` exits ${String(criterion.judge.expectExit)}`,
+        ]
+      : []
+  );
+
+  if (commands.length > 0) {
+    lines.push(
+      "",
+      `Done when: ${commands.join("; ")}. Run it in your workspace before you report, and say what it printed.`
+    );
   }
 
   if (brief.resultSchema !== null) {
@@ -119,7 +137,9 @@ export type BriefAnswer =
   /** Accepted, but the brain already had its most children live at Go (`live`), so nothing started. */
   | { readonly kind: "noRoom"; readonly live: number }
   /** Accepted, but a budget covering the parent was at its line at Go (`why`), so nothing started. */
-  | { readonly kind: "noBudget"; readonly why: string };
+  | { readonly kind: "noBudget"; readonly why: string }
+  /** Accepted, but starting the child failed (`why`, the start task's throw), so nothing started. */
+  | { readonly kind: "startFailed"; readonly why: string };
 
 /** `: <reason>` after an answer's verb, or nothing without one. */
 const withReason = (reason: Option.Option<string>) =>
@@ -147,8 +167,24 @@ export const renderBriefAnswer = (title: string, answer: BriefAnswer): string =>
         `The user approved the brief "${title}", but a budget is reached, so nothing started: ${found.why}`,
       noRoom: (found) =>
         `The user approved the brief "${title}", but the brain already has ${found.live} subagents working or waiting for Go across all threads, the most it may have, so nothing started. Spawn it again once one reports.`,
+      startFailed: (found) =>
+        `The user approved the brief "${title}", but starting its subagent failed, so nothing started: ${found.why} Spawn it again to retry.`,
     })
   );
+
+/**
+ * The error of a settlement a reporter recorded when one of its phases threw (`why`): the child's
+ * result for the input was not read, and the parent can send the child its work again.
+ */
+export const reporterFailedText = (why: string): string =>
+  `Cairn could not follow this input to its end, so the child's result for it was not read: ${why} Ask the child with subagent_send to report again.`;
+
+/**
+ * Why a child's relayed question was cancelled when the reporter following it threw (O-3): the
+ * child's answer that asked it is reported as the run's result instead.
+ */
+export const questionFailedText = (why: string): string =>
+  `Cairn could not follow this question to its end, so the child's answer is reported as its result: ${why}`;
 
 /** What `subagent_spawn` returns: the brief waits for the user, and the tool does not. */
 export const SPAWN_WAITING =
@@ -237,9 +273,9 @@ export const SubagentToolText = {
   /** `subagent_spawn` whose `model` is not `provider/modelId[:level]`. */
   modelInvalid: (model: string) =>
     `subagent_spawn's model "${model}" is not provider/modelId[:level]. Call models to see what a child can run on, then call it again with one, or leave model out to run the child on your own model.`,
-  /** `subagent_spawn` whose `model` is a role name: roles were removed (ADR 0043). */
-  roleRemoved: (role: string) =>
-    `subagent_spawn's model "${role}" is a role, and roles were removed. Pass model as provider/modelId[:level] (call models to see what a child can run on), or leave it out to run the child on your own model and level.`,
+  /** `subagent_spawn` whose `done_when` is not a command as an argv list. */
+  doneWhenInvalid:
+    'subagent_spawn\'s done_when must be a command as an argv list of non-empty strings, run without a shell, for example ["npm", "test"]. Pass one, or leave it out when you will judge the result yourself.',
   /** `subagent_spawn` whose `result_schema` is not a JSON object. */
   resultSchemaNotObject:
     "subagent_spawn's result_schema must be a JSON Schema object. Pass an object, or leave it out for a text result.",
@@ -264,8 +300,6 @@ export const EscalationWhy = {
   parentRunEnded: "The parent's run ended without answering.",
   /** The parent is stopped or failed, so no run of its own will read the question. */
   parentStopped: "The parent is stopped.",
-  /** The crash-loop guard parked the parent's run, which waits for a Retry. */
-  parentParked: "The parent's run is parked.",
   /** The user archived the parent thread. */
   parentArchived: "The parent thread was archived.",
   /** The user deleted the parent thread. */

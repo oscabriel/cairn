@@ -17,6 +17,7 @@ import {
   Schema,
 } from "effect";
 
+import { durableRunner } from "../brain/Durable.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { ModelSource } from "../brain/ModelSource.ts";
 import { ModelSpecs } from "../models/ModelSpecs.ts";
@@ -146,15 +147,7 @@ const judgeModels = Effect.gen(function* () {
       )
     );
 
-  const roleNameRead: JudgeModels["roleNameRead"] = async (spec, runId) => {
-    await run(
-      Effect.logInfo(
-        "a model judge recorded before roles were removed names a role; it runs on the goal thread's model"
-      ).pipe(Effect.annotateLogs({ event: "legacy_role_read", spec, runId }))
-    );
-  };
-
-  return { resolve, ask, roleNameRead } satisfies JudgeModels;
+  return { resolve, ask } satisfies JudgeModels;
 });
 
 /** The goals extension, for the installed set. */
@@ -165,17 +158,29 @@ export class Goals extends Context.Service<
   /** Over the root's `ModelSpecs` and `ModelSource`, and its `SpendLedger` when it has one. */
   static readonly layer = Layer.effect(
     Goals,
-    Effect.map(judgeModels, (models) =>
-      Goals.of({ extension: goalsExtension(models, NO_JUDGE_FAULTS) })
-    )
+    Effect.gen(function* () {
+      const models = yield* judgeModels;
+
+      return Goals.of({
+        extension: goalsExtension(
+          models,
+          NO_JUDGE_FAULTS,
+          yield* durableRunner
+        ),
+      });
+    })
   );
 
   /** As `layer`, with planted faults: a judge brain's kill points. */
   static readonly layerWith = (faults: JudgeFaults) =>
     Layer.effect(
       Goals,
-      Effect.map(judgeModels, (models) =>
-        Goals.of({ extension: goalsExtension(models, faults) })
-      )
+      Effect.gen(function* () {
+        const models = yield* judgeModels;
+
+        return Goals.of({
+          extension: goalsExtension(models, faults, yield* durableRunner),
+        });
+      })
     );
 }

@@ -31,8 +31,9 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result } from "effect";
 
 import { projectView, wireProjector } from "../brain/ThreadWire.ts";
-import { WorkflowsDoc } from "./WorkflowDocs.ts";
-import type { WorkflowsState } from "./WorkflowDocs.ts";
+import type { WorkflowsState } from "../brain/WorkflowsDoc.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import {
   KitLayer,
   kitParts,
@@ -147,15 +148,21 @@ const playSteps = (source: string) =>
 
       const seen: Array<Revision> = [merged()];
 
-      watch.start(async (value) => {
-        latest = value;
-        seen.push(merged());
+      watch.start(async (call) => {
+        if (call.kind === "value") {
+          latest = call.value;
+          seen.push(merged());
+        }
+
         await Promise.resolve();
       });
 
-      docWatch.start(async (value) => {
-        ledger = value;
-        seen.push(merged());
+      docWatch.start(async (call) => {
+        if (call.kind === "value") {
+          ledger = call.value;
+          seen.push(merged());
+        }
+
         await Promise.resolve();
       });
 
@@ -163,7 +170,7 @@ const playSteps = (source: string) =>
       await brain.harness.waitForIdle(context);
 
       // The node watcher may end the row after the thread is idle; wait for it.
-      const until = performance.now() + 5000;
+      const until = performance.now() + testLimit(5000);
 
       while (performance.now() < until) {
         // oxlint-disable-next-line no-await-in-loop

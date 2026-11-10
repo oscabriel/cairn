@@ -364,6 +364,28 @@ const oneLine = (text: string) => text.trim().replaceAll(/\s+/gu, " ");
 const capitalize = (text: string) =>
   `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 
+/**
+ * Cairn's own tools in words, the verbs a user most needs to read (the brain's tool names:
+ * `SubagentTools.ts`, `AskUser.ts`, `WorkflowLaunch.ts`, `GoalCriteria.ts`, `ResultTool.ts`,
+ * `BudgetSources.ts`, `ModelsExtension.ts`). Any other tool shows its name.
+ */
+const CAIRN_TOOL_LABELS = new Map([
+  ["workflow_plan", "Planned a workflow"],
+  ["ask_user", "Asked you"],
+  ["ask_parent", "Asked the parent"],
+  ["subagent_spawn", "Proposed a subagent"],
+  ["subagent_send", "Messaged a subagent"],
+  ["subagent_stop", "Stopped a subagent"],
+  ["subagent_reply", "Answered a subagent"],
+  ["subagent_status", "Checked on subagents"],
+  ["report", "Reported back"],
+  ["submit_result", "Handed in the result"],
+  ["goal_criteria", "Set the goal's criteria"],
+  ["goal_check", "Checked a criterion"],
+  ["budget_raise", "Asked to raise the budget"],
+  ["models", "Listed the models"],
+]);
+
 /** The label of a settled work entry. */
 export const workEntryDisplayLabel = (
   entry: WorkEntry,
@@ -423,7 +445,9 @@ export const workEntryDisplayLabel = (
     return "Ran a script";
   }
 
-  return capitalize(normalizeCompactToolLabel(name));
+  return (
+    CAIRN_TOOL_LABELS.get(name) ?? capitalize(normalizeCompactToolLabel(name))
+  );
 };
 
 /** The label of a group of one call: an edit names its group summary, other calls their own label. */

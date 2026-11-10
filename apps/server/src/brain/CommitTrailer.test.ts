@@ -6,17 +6,16 @@
 // trailer, which the same check must reject).
 //
 // The gate may run inside a Cairn thread, whose `bash` hands git its own trailer hook through
-// `GIT_CONFIG_*`. Every git this file starts inherits the brain's environment, so the file sets
-// those variables aside while it runs; otherwise the control commit carries the outer thread's id.
+// `GIT_CONFIG_*`. Every git this file starts inherits the brain's environment, so the file isolates
+// it first (`isolateGitEnvironment`, which `BrainTestKit` runs on import); otherwise the control
+// commit carries the outer thread's id.
 
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ProjectId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { NodeServices } from "@effect/platform-node";
-import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import {
   Effect,
   Fiber,
@@ -27,72 +26,22 @@ import {
   Stream,
 } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { Git, GIT_DEFAULTS } from "../git/Git.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
+import { GIT_DEFAULTS, Git } from "../git/Git.ts";
 import { COMMIT_OPTIONS } from "../threads/ThreadsTestKit.ts";
-import { BrainConfig } from "./BrainConfig.ts";
+import { testBrain } from "./BrainTestKit.ts";
 import {
   parseGitVersion,
   supportsTrailer,
   trailerCommand,
   withTrailerHook,
 } from "./CommitTrailer.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
 
-const harness = PiDurableHarness.layer.pipe(
-  Layer.provideMerge(
-    ExtensionSet.layer.pipe(
-      Layer.provide(ExecutorLink.layerDisabled),
-      Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest),
-      Layer.provide(SettingsStore.layerTest),
-      Layer.provide(ReachServicesTest),
-      Layer.provide(Subagents.layerTest),
-      Layer.provide(PiModelSource.layerFromModelSource)
-    )
-  ),
-  Layer.provideMerge(
-    ModelSource.layerFaux({
-      tokensPerSecond: 4000,
-      settings: { retry: { enabled: false } },
-    })
-  ),
-  Layer.provide(
-    BrainConfig.layerFrom(mkdtempSync(path.join(tmpdir(), "cairn-trailer-")))
-  )
-);
+const harness = testBrain();
 
 const Platform = Layer.mergeAll(Git.layer, NodeServices.layer);
-
-/** The `GIT_CONFIG_*` variables this process inherited, set aside while a block runs. */
-const setAsideInheritedGitConfig = () => {
-  const inherited = new Map<string, string>();
-
-  beforeAll(() => {
-    for (const [name, value] of Object.entries(process.env)) {
-      if (name.startsWith("GIT_CONFIG_") && value !== undefined) {
-        inherited.set(name, value);
-        Reflect.deleteProperty(process.env, name);
-      }
-    }
-  });
-
-  afterAll(() => {
-    for (const [name, value] of inherited) {
-      process.env[name] = value;
-    }
-  });
-};
 
 const THREAD = ThreadId.make("0190f0c0-0000-7000-8000-000000000301");
 
@@ -143,8 +92,6 @@ const commitWith = (
   );
 
 describe("the commit trailer hook", () => {
-  setAsideInheritedGitConfig();
-
   it("reads git's version and needs 2.54 or later", () => {
     assert.deepStrictEqual(
       parseGitVersion("git version 2.56.0\n"),
@@ -223,8 +170,6 @@ describe("the commit trailer hook", () => {
 });
 
 describe("a thread's bash", () => {
-  setAsideInheritedGitConfig();
-
   it.live(
     "commits with Cairn-Thread naming the thread",
     () =>
@@ -276,6 +221,6 @@ describe("a thread's bash", () => {
 
         assert.deepStrictEqual(yield* trailersOf(repo, "HEAD"), [THREAD]);
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(harness, Platform))),
-    30_000
+    testLimit(30_000)
   );
 });

@@ -6,7 +6,8 @@
 // - `subagent_spawn` records a brief (kind `brief`, its payload frozen) and its brief task (the
 //   brief's expiry) in one commit, and returns at once; Go's commit creates the start. It refuses
 //   past the caps: 8 children working or waiting for Go per parent, 32 across the brain
-//   (BrainCap.ts), and depth 2.
+//   (BrainCap.ts), and depth 2. Its brief's budget is the call's `max_tokens` and `max_usd` over
+//   the server's default (ADR 0047).
 // - `subagent_send` gives a child one more input through its own reporter.
 // - `subagent_status` lists each child's status, never its result (that arrives once, as a note),
 //   and with `wait_seconds` waits, bounded, until one reports or asks.
@@ -26,14 +27,14 @@
 // `modelTools`, is offered them; the same change takes the parent's five away.
 
 import { ThreadId } from "@cairn/protocol/Ids";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import {
   MAX_LIVE_CHILDREN,
   MAX_LIVE_CHILDREN_PER_BRAIN,
   MAX_SUBAGENT_DEPTH,
 } from "@cairn/protocol/Subagents";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   AgentChange,
   ToolExecutionApi,
@@ -41,34 +42,34 @@ import type {
 } from "@earendil-works/pi-durable";
 import { defineTool } from "@earendil-works/pi-durable";
 import { Duration, Effect, Function, Option, Result } from "effect";
+import { Type } from "typebox";
 
+import type { ApprovalSettlement } from "../approvals/ApprovalLedger.ts";
 import {
-  endUnanswered,
-  escalateIn,
-  MAX_ESCALATE_REASON,
-  MAX_QUESTION_LENGTH,
-  MAX_QUESTION_OPTIONS,
-  placedMemoOf,
-  QUESTION_WINDOW_MILLIS,
-  questionRecord,
-  routeQuestion,
-} from "../approvals/QuestionRoute.ts";
-import type { RouteIo } from "../approvals/QuestionRoute.ts";
-import { BRIEF_TTL_MILLIS } from "../brain/BriefTtl.ts";
-import {
-  applyAnswer,
+  UNDECIDED,
   approvalIdOf,
   approvalLedger,
-  Approvals,
+  applyAnswer,
   cancelAbandonedApprovals,
-  ThreadMeta,
-  UNDECIDED,
-} from "../brain/CairnDocs.ts";
-import type { ApprovalSettlement } from "../brain/CairnDocs.ts";
+} from "../approvals/ApprovalLedger.ts";
+import { BRIEF_TTL_MILLIS } from "../brain/BriefTtl.ts";
+import { Approvals, ThreadMeta } from "../brain/CairnDocs.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import {
   GATED_APPROVAL_TTL_MILLIS,
   readPermissions,
 } from "../brain/Permissions.ts";
+import {
+  ChildDoc,
+  isLinked,
+  markQuestion,
+  SubagentsDoc,
+} from "../brain/SubagentDocs.ts";
+import type {
+  ChildState,
+  JsonRecord,
+  SubagentItemState,
+} from "../brain/SubagentDocs.ts";
 import type {
   SubagentCrashPoint,
   SubagentFaultSet,
@@ -80,6 +81,12 @@ import {
 } from "../brain/SubagentText.ts";
 import { offerResultTool } from "../models/ResultTool.ts";
 import {
+  MAX_TOKENS,
+  MAX_USD,
+  NO_DEFAULT_BUDGET,
+} from "../usage/DefaultBudget.ts";
+import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
+import {
   countLive,
   dropIdle,
   isSpawnBrief,
@@ -89,19 +96,26 @@ import {
 import { briefOf, briefPayload } from "./Briefs.ts";
 import { conversationOf, setStatus } from "./Delivery.ts";
 import {
-  ChildDoc,
-  isLinked,
-  markQuestion,
-  SubagentsDoc,
-} from "./SubagentDocs.ts";
-import type {
-  ChildState,
-  JsonRecord,
-  SubagentItemState,
-} from "./SubagentDocs.ts";
+  endUnanswered,
+  escalateIn,
+  MAX_ESCALATE_REASON,
+  MAX_QUESTION_LENGTH,
+  MAX_QUESTION_OPTIONS,
+  placedMemoOf,
+  QUESTION_WINDOW_MILLIS,
+  questionRecord,
+  routeQuestion,
+} from "./QuestionRoute.ts";
+import type { RouteIo } from "./QuestionRoute.ts";
 import { START_TASK } from "./SubagentTasks.ts";
 import type { ModelAccess, SubagentTasks } from "./SubagentTasks.ts";
 import { awaitDoc, runWait } from "./Waits.ts";
+
+/**
+ * `subagent_status`: with `wait_seconds` it waits on its children and holds no record, so boot's
+ * crash accounting keeps it by name (`CrashLimit.ts`, `BootRepairs.ts`).
+ */
+export const SUBAGENT_STATUS_TOOL = "subagent_status";
 
 /** The longest bounded wait `subagent_status` takes. */
 const MAX_WAIT_SECONDS = 600;
@@ -246,8 +260,10 @@ type CapRefusal =
 export const routeIo = (
   api: ToolExecutionApi,
   context: ChordContext,
+  run: DurableRunner,
   offered: () => void = Function.constVoid
 ): RouteIo => ({
+  run,
   observer: api,
   now: () => api.now(),
   placedAt: async (approvalId, candidate) =>
@@ -285,13 +301,18 @@ const answerOf = async (
   );
 };
 
-/** The tools, closed over the extension's faults, tasks and options. */
+/**
+ * The tools, closed over the extension's faults, tasks and options, and the server's default
+ * budget a spawn's brief starts from (ADR 0047).
+ */
 export const subagentToolSet = (
   faults: SubagentFaultSet,
   tasks: SubagentTasks,
   models: ModelAccess,
+  run: DurableRunner,
   tuning: SubagentToolOptions = DEFAULT_TOOL_OPTIONS,
-  crashAt: (point: SubagentCrashPoint) => void = Function.constVoid
+  crashAt: (point: SubagentCrashPoint) => void = Function.constVoid,
+  defaults: DefaultBudgetAccess = NO_DEFAULT_BUDGET
 ) => {
   const spawn = defineTool({
     name: "subagent_spawn",
@@ -304,7 +325,7 @@ export const subagentToolSet = (
       }),
       brief: Type.String({
         description:
-          "What to do, why, and how the result will be judged. The child sees only this.",
+          "What to do and why. The child sees only this, and done_when.",
       }),
       why: Type.Optional(Type.String()),
       isolation: Type.Optional(
@@ -332,6 +353,28 @@ export const subagentToolSet = (
             "The model the child runs on, provider/modelId[:level]; call models to see what is available. Leave it out to run the child on your own model and level; name another only when the user asks.",
         })
       ),
+      done_when: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            'The command, as an argv list run without a shell in the child\'s workspace, that exits 0 once the work is done, e.g. ["npm", "test"]. The user sees it on the brief before Go and the child is told to run it; Cairn does not run it yet, so you still judge the result. Leave it out when no command can tell.',
+        })
+      ),
+      max_tokens: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_TOKENS,
+          description:
+            "A token budget for the child; leave it out for the user's default. The child stops at it.",
+        })
+      ),
+      max_usd: Type.Optional(
+        Type.Number({
+          minimum: 1e-6,
+          maximum: MAX_USD,
+          description:
+            "A list-price dollar budget for the child; leave it out for the user's default. The child stops at it.",
+        })
+      ),
     }),
     replay: "safe",
     execute: async (args, api, context) => {
@@ -349,6 +392,21 @@ export const subagentToolSet = (
       }
 
       const permissions = await readPermissions(api, context);
+      const approvalId = approvalIdOf(api.taskId);
+
+      const asked = await api.snapshot(Approvals, api.conversationId, context);
+
+      // The default fills each limit the call does not name, read only while the brief is not
+      // asked yet: the brief freezes the result, so a rerun that finds its brief keeps what was
+      // frozen, whatever the default is now.
+      const fallback =
+        asked?.items[approvalId] === undefined
+          ? await defaults.read()
+          : Result.succeed(DEFAULT_BUDGET);
+
+      if (Result.isFailure(fallback)) {
+        return refused(fallback.failure);
+      }
 
       const brief = briefOf(
         {
@@ -359,26 +417,26 @@ export const subagentToolSet = (
           resultSchema: Option.fromUndefinedOr(args.result_schema),
           wake: textOf(args.wake),
           model: textOf(args.model),
+          doneWhen: Option.fromUndefinedOr(args.done_when),
+          maxTokens: Option.fromUndefinedOr(args.max_tokens),
+          maxUsd: Option.fromUndefinedOr(args.max_usd),
         },
-        permissions.mode
+        permissions.mode,
+        fallback.success
       );
 
       if (Result.isFailure(brief)) {
         return refused(brief.failure);
       }
 
-      const approvalId = approvalIdOf(api.taskId);
-
-      const asked = await api.snapshot(Approvals, api.conversationId, context);
-
       // A named model is checked at the ask, so the card never offers Go on one that is not
       // ready; it is checked again at Go, which decides (ADR 0043). A replayed call that already
       // asked is not checked again: its brief is pending whatever the model's readiness is now.
       if (
-        brief.success.role !== null &&
+        brief.success.model !== null &&
         asked?.items[approvalId] === undefined
       ) {
-        const resolved = await models.resolve(brief.success.role);
+        const resolved = await models.resolve(brief.success.model);
 
         if (Result.isFailure(resolved)) {
           return refused(
@@ -522,7 +580,7 @@ export const subagentToolSet = (
   });
 
   const status = defineTool({
-    name: "subagent_status",
+    name: SUBAGENT_STATUS_TOOL,
     description:
       "List your subagents and what each is doing, or one of them. With wait_seconds, wait (up to 600) until one reports or asks. The result itself arrives as a note, never here.",
     parameters: Type.Object({
@@ -559,6 +617,7 @@ export const subagentToolSet = (
       const before = settledCount(now);
 
       const later = await runWait(
+        run,
         awaitDoc(api, SubagentsDoc, api.conversationId, (value) => {
           const items = chosen(Object.values(value?.items ?? {}));
 
@@ -596,12 +655,14 @@ export const subagentToolSet = (
       await conversation?.abort(context);
 
       // The stopped run's held records can never be answered now (ADR 0029).
-      await Effect.runPromise(
+      await run.promise(
         cancelAbandonedApprovals(api, child, api.now(), "run-stopped").pipe(
           Effect.catchTag("DurableCallError", (failure) =>
             Effect.logWarning("stopped subagent left approvals pending").pipe(
               Effect.annotateLogs({
                 event: "subagent_stop_cancel_failed",
+                conversationId: api.conversationId,
+                childThreadId: named.value.threadId,
                 cause: failure.message,
               })
             )
@@ -609,6 +670,13 @@ export const subagentToolSet = (
         ),
         { signal: context.abortSignal }
       );
+
+      run.line("subagent stopped", {
+        event: "subagent_stopped",
+        conversationId: api.conversationId,
+        childThreadId: named.value.threadId,
+        by: "parent",
+      });
 
       return said(SubagentToolText.stopped(named.value.threadId));
     },
@@ -845,6 +913,7 @@ export const subagentToolSet = (
       crashAt("question-recorded");
 
       const settled = runWait(
+        run,
         approvalLedger(api).awaitSettlement.pipe(
           Effect.catchTag("ApprovalLedgerError", (failure) =>
             Effect.succeed({
@@ -858,7 +927,7 @@ export const subagentToolSet = (
       );
 
       await routeQuestion(
-        routeIo(api, context, () => {
+        routeIo(api, context, run, () => {
           crashAt("question-routed");
         }),
         {

@@ -17,10 +17,7 @@
 // `layerOff` is for the scripted brain, which has no pi-durable store and records no spend.
 
 import { ConversationId, ThreadId } from "@cairn/protocol/Ids";
-import {
-  WORKFLOWS_DOCUMENT,
-  WorkflowsDocument,
-} from "@cairn/protocol/Workflows";
+import { NodeRecord } from "@cairn/protocol/Workflows";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import type {
   CommitPublication,
@@ -38,6 +35,8 @@ import type { BrainSession } from "./Brain.ts";
 import { ThreadMeta, ThreadReceipt } from "./CairnDocs.ts";
 import { durable } from "./Durable.ts";
 import { piConversationId } from "./PiIds.ts";
+import { WorkflowsDoc } from "./WorkflowsDoc.ts";
+import type { WorkflowsState } from "./WorkflowsDoc.ts";
 
 /** How many records one page of a scan reads. */
 const SCAN_PAGE = 200;
@@ -119,7 +118,39 @@ const decodeUsageDoc = Schema.decodeUnknownOption(UsageDocJson);
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
-const decodeWorkflows = Schema.decodeUnknownOption(WorkflowsDocument);
+/**
+ * The leaves of a `cairn.workflows` ledger the feed reads: each node's child thread. Nothing else
+ * is decoded, so a field it never reads (a node's asked model, written unchecked from the launching
+ * thread's) cannot hide a run's children from the spend ledger.
+ */
+const WorkflowChildren = Schema.Struct({
+  items: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      nodes: Schema.Record(
+        Schema.String,
+        Schema.Struct({ childThreadId: NodeRecord.fields.childThreadId })
+      ),
+    })
+  ),
+});
+
+const decodeWorkflows = Schema.decodeUnknownOption(WorkflowChildren);
+
+/** The child threads of workflow `workflowId`'s nodes in a `cairn.workflows` ledger. */
+export const workflowChildThreads = (
+  ledger: Readonly<WorkflowsState> | undefined,
+  workflowId: string
+): Option.Option<ReadonlyArray<ThreadId>> =>
+  Option.map(
+    Option.flatMap(decodeWorkflows(ledger), (doc) =>
+      Option.fromUndefinedOr(doc.items[workflowId])
+    ),
+    (found) =>
+      Object.values(found.nodes).flatMap((node) =>
+        node.childThreadId === null ? [] : [node.childThreadId]
+      )
+  );
 
 const recorded = (usage: typeof UsageJson.Type): RecordedUsage => ({
   input: usage.input,
@@ -213,7 +244,7 @@ const pendingOf = (publication: CommitPublication): Array<Pending> => {
       change.type === "document" &&
       change.record.kind === usageKind &&
       change.conversationId !== undefined &&
-      change.value !== null
+      change.kind === "change"
     ) {
       const totals = totalsOf(change.value);
 
@@ -241,7 +272,9 @@ const threadsNamedIn = (publication: CommitPublication) => {
       change.record.kind === ThreadMeta.definition.kind &&
       change.conversationId !== undefined
     ) {
-      const threadId = decodeThreadId(change.value?.threadId);
+      const threadId = decodeThreadId(
+        change.kind === "change" ? change.value.threadId : undefined
+      );
 
       if (Option.isSome(threadId)) {
         named.set(change.conversationId, threadId.value);
@@ -525,39 +558,15 @@ export class SpendFeed extends Context.Service<
             ConversationId.make(receipt.conversationId)
           );
 
-          const record = yield* durable(
-            "workflows.find",
-            async (context) =>
-              await open.storage.findDocument(
-                {
-                  kind: WORKFLOWS_DOCUMENT,
-                  scope: { kind: "conversation", conversationId },
-                },
-                "current",
-                context
-              )
-          );
-
-          if (record === undefined) {
-            return Option.none<ReadonlyArray<ThreadId>>();
-          }
-
-          const stored = yield* durable(
+          // Through the document's token, so a ledger stored at an older version is migrated
+          // (ADR 0052) before it is decoded.
+          const ledger = yield* durable(
             "workflows.read",
             async (context) =>
-              await open.storage.document(record.id, "current", context)
+              await open.harness.snapshot(WorkflowsDoc, conversationId, context)
           );
 
-          const workflow = Option.flatMap(
-            decodeWorkflows(stored?.value),
-            (doc) => Option.fromUndefinedOr(doc.items[workflowId])
-          );
-
-          return Option.map(workflow, (found) =>
-            Object.values(found.nodes).flatMap((node) =>
-              node.childThreadId === null ? [] : [node.childThreadId]
-            )
-          );
+          return workflowChildThreads(ledger, workflowId);
         },
         (effect, threadId) =>
           effect.pipe(

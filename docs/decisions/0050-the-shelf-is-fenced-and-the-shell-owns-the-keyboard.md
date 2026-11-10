@@ -1,0 +1,20 @@
+---
+status: accepted
+gate: none; a record of what the tree does after the review fix package D2. Bringing an inbox back is a later decision for the user.
+---
+
+# The shelf is fenced, and the shell owns the keyboard
+
+Amends ADR 0040's last sentence, which kept the classic sidebar's state "for its clock, key bindings and visits". With that state came the phase 1 inbox model: settle, snooze, pin and auto-settle kept running under a shell that draws "no Active, Settled, Pinned or Snoozed groups and no inbox" (the user, 2026-10-29). `mod+shift+s` settled the open thread and moved the user to "the next row" of a list nobody drew (for the review's two projects, the other project's thread), `mod+shift+p` pinned, `mod+z` unsettled, `mod+b` toggled a model nothing read, and `mod+shift+[` and `]` walked the classic shelf order, which holds threads no list shows and none the managed list does. Settings offered Auto-settle ("Quiet threads move to the settled shelf"), and the brain's sweep settled quiet threads every five minutes: on the live store both project threads were settled, by the sweep or a shortcut, with nothing on screen to say so (review findings C-3, V-10, U-11, W-6).
+
+## Decisions
+
+1. **The shelf is fenced, not removed and not redrawn.** No key, view or setting settles, snoozes, pins or undoes. The brain's auto-settle sweep is not started (`Settlement.layerNoDeps` runs only the snooze timer), so no thread is settled while nothing shows it. A thread already settled, snoozed or pinned is not hidden, dimmed or sorted differently anywhere in the `next` shell because of it: the shell's lists never read those fields, the needs-you count never did, and the state table no longer lets a settle hide a "Woke" label (`isThreadWoke`).
+2. **The shelf stays dormant and tested.** The shell commands (`ThreadSettle`, `ThreadUnsettle`, `ThreadSnooze`, `ThreadUnsnooze`, `ThreadPin`, `ThreadUnpin`) and the brain's own `ThreadAutoSettle` and `ThreadSnoozeExpire`, the stored fields on every row, the server's command handlers and the sweep itself (`Settlement.sweep`, run by its tests) stay, and so do the snooze timer, which only ends snoozes made before the cutover, and the client's shelf partition, which the thread-state judge reads. A message the user sends still clears a manual settle or a snooze. The classic sidebar's menus, snooze presets, pin-order planners, search, paging and its undo notice are deleted.
+3. **The key binding table holds what the shell answers, and the shell answers it.** The table (`@cairn/client-logic/Keybindings`) is New thread (`mod+n`, `mod+shift+o`; ADR 0048), Previous thread (`mod+shift+[`) and Next thread (`mod+shift+]`). Previous and Next walk the rows the sidebar list draws, in its order, and open a row as a click would. `next/shell` binds and handles them beside its own Cmd+J or Ctrl+J and Escape, and the settings page's Keyboard section lists every one of them. The `when` language, user rules and every other command (`sidebar.toggle`, `thread.settle`, `thread.pin`, `thread.undo`, `diff.toggle`, `commandPalette.toggle`, `modelPicker.toggle`, `chat.newLocal`, `chat.newWithoutProject`) are gone.
+4. **A setting whose feature has no surface is hidden while that is so.** Confirm thread deletion (no view deletes a thread), Auto-settle (decision 1) and Diff layout (the diff panel is off behind `DIFF_PANEL_ENABLED`) are not drawn; their stored values stay, and each comes back with its feature.
+5. **The classic sidebar's state is gone.** Its clock, the platform it read, the visits it sent and the favicon badge are the `next` shell's own (`next/shell/Visits.ts`, `Keys.ts`), and `apps/web/src/sidebar/` is deleted.
+
+Decided by the user on 2026-11-09, adopting the product review's recommendations, with the shelf fenced rather than removed or redrawn.
+
+Amended 2026-11-10: with `next/` folded into the feature folders (ADR 0040), the shell that binds the keys and owns the clock, visits and badge is `apps/web/src/shell/` (`Keys.ts`, `Visits.ts`).

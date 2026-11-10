@@ -8,14 +8,16 @@
 
 import type { CodemodeRunOptions } from "@earendil-works/pi-codemode";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Function, Option } from "effect";
+import { Duration, Effect, Function, Option } from "effect";
 
 import {
   MAX_WORKFLOW_WORKERS,
   ScriptSlots,
   WaitingSandbox,
+  isRewrittenWorkflow,
 } from "../brain/CodeMode.ts";
-import { isRewrittenWorkflow, rewriteScript } from "./Prelude.ts";
+import { slackened } from "../EventuallyTestKit.ts";
+import { rewriteScript } from "./Prelude.ts";
 import { parseWorkflowScript } from "./WorkflowScript.ts";
 
 const SANDBOX = {
@@ -76,7 +78,7 @@ const quickFinishes = Effect.fn("WorkflowSlots.quickFinishes")(function* (
 
   const run = start(sandbox, quick, stop.signal);
 
-  yield* Effect.sleep(400);
+  yield* Effect.sleep(slackened(Duration.millis(400)));
 
   const holdersFinished = held.some((each) => each.finished);
   const { finished } = run;

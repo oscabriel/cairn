@@ -12,6 +12,16 @@
 # worse hang than the memory. The brain logs `brain memory peak` (MemoryWatch.ts) to time a peak.
 # PATH here is a floor for a machine without brain.env: install.sh writes the user's login PATH there,
 # and EnvironmentFile comes after Environment, so thread tools see the user's toolchains (T28).
+# CAIRN_BACKUP_COPY_DIR, unset by default, is set in brain.env when wanted: a second copy folder off
+# the NVMe that each daily rolling copy of brain.sqlite and cairn.sqlite is also written to, newest
+# three kept (ADR 0016). Name a subfolder inside the NAS share, never the share's mount point: the
+# brain never makes the folder, so while the share is not mounted the subfolder is missing and the
+# write fails, where an empty mount point would take the copies onto the NVMe. The copies hold the
+# sign-in tokens (Claude, Codex, the Executor grant), so the brain writes them 0600 and the folder
+# must be readable by the owner only; many NAS shares ignore file modes, so set it on the share.
+# Only copies go there, never a live store. A failed write is logged at warning and tried again
+# within the hour; a write that hangs is left to finish in the background, logged each hour it
+# still runs, and never holds the brain or its local copies.
 [Unit]
 Description=Cairn brain
 After=network-online.target executor.service

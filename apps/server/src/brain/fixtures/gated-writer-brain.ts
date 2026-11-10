@@ -34,15 +34,15 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
-import { Clock, Effect, Option, Predicate, Schema } from "effect";
+import { Clock, Context, Effect, Option, Predicate, Schema } from "effect";
 
 import {
-  answerApproval,
   approvalLedger,
-  Approvals,
-  writeMode,
-} from "../CairnDocs.ts";
+  answerApproval,
+} from "../../approvals/ApprovalLedger.ts";
+import { Approvals, writeMode } from "../CairnDocs.ts";
 import { gatedBash } from "../CodingTools.ts";
+import { runnerOf } from "../Durable.ts";
 import {
   callAsks,
   GATED_APPROVAL_TTL_MILLIS,
@@ -143,7 +143,9 @@ const registry = createRegistry();
 registry.install(
   defineExtension({
     name: "gated-writer",
-    tools: [control ? unmarkedBash() : gatedBash()],
+    // This script is its own entry point, with no app layer: its gated `bash` runs on Effect's
+    // defaults, as the script's own `Effect.runPromise` calls do.
+    tools: [control ? unmarkedBash() : gatedBash(runnerOf(Context.empty()))],
   })
 );
 

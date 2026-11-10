@@ -21,16 +21,26 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import {
+  defaultProjectOf,
+  folderProjectsByRecent,
+  projectThreadToOpen,
+} from "@cairn/client-logic/ProjectThread";
+import type { ThreadId } from "@cairn/protocol/Ids";
+import type { RuntimeMode } from "@cairn/protocol/Policy";
 import type { ProjectShell } from "@cairn/protocol/Shell";
-import { Array, DateTime, Effect, Option, Order, Record, Schema } from "effect";
+import { Array, Effect, Option, Predicate, Record, Schema } from "effect";
 import { KeyValueStore } from "effect/persistence";
 
 import {
   applyRecordChanges,
   mergeRecord,
   mergeStored,
+  readShared,
   recordChanges,
+  persistedRecord,
 } from "../storage/TabChanges.ts";
+import type { Loaded } from "../storage/TabChanges.ts";
 import {
   ComposerSettings,
   ComposerTarget,
@@ -39,7 +49,12 @@ import {
 } from "./Model.ts";
 import type { Model } from "./Model.ts";
 
-/** The localStorage key every draft is saved under, as one JSON object. */
+/**
+ * The localStorage key every draft is saved under, as one JSON object of `Draft`s by draft key. Add
+ * a field to `Draft` as optional, or a literal, and an older build keeps the drafts it cannot decode
+ * as stored (`TabChanges.ts`); change what a stored field means, or the object's outer shape, and
+ * bump the version.
+ */
 export const DRAFTS_STORAGE_KEY = "cairn:composer-drafts:v1";
 
 /** The localStorage key of the composer's settings. */
@@ -48,6 +63,12 @@ export const SETTINGS_STORAGE_KEY = "cairn:composer-settings:v1";
 /** How long typing must pause before drafts are written. */
 export const DRAFT_SAVE_DEBOUNCE_MS = 300;
 
+/**
+ * The scratch overlay's draft key: one key, whichever scratch thread it holds, so a draft typed
+ * before the first message, or kept across a clear, stays the overlay's (U-16).
+ */
+export const SCRATCH_DRAFT_KEY = "scratch";
+
 /** The key of the draft the composer edits now, or none when it has no target yet. */
 export const draftKey = (model: Model): Option.Option<string> =>
   ComposerTarget.match(model.context.target, {
@@ -55,7 +76,12 @@ export const draftKey = (model: Model): Option.Option<string> =>
     Home: () => Option.map(model.homeDraftId, (id) => `draft:${id}`),
     Draft: ({ draftId }) => Option.some(`draft:${draftId}`),
     Thread: ({ threadId }) => Option.some(`thread:${threadId}`),
+    Scratch: () => Option.some(SCRATCH_DRAFT_KEY),
   });
+
+/** True while the composer serves the scratch overlay. */
+export const isScratchTarget = (model: Model): boolean =>
+  Predicate.isTagged(model.context.target, "Scratch");
 
 /** The notice to show now: one about the open draft, or one about no one draft. */
 export const shownNotice = (model: Model): Option.Option<string> =>
@@ -76,15 +102,17 @@ export const draftThreadId = (model: Model): Option.Option<string> =>
     Home: () => model.homeDraftId,
     Draft: ({ draftId }) => Option.some(draftId),
     Thread: () => Option.none(),
+    Scratch: () => Option.none(),
   });
 
-/** True when the composer writes a thread that does not exist yet. */
+/** True when the composer writes a thread that does not exist yet, the scratch thread's included. */
 export const isDraftTarget = (model: Model): boolean =>
   ComposerTarget.match(model.context.target, {
     None: () => false,
     Home: () => true,
     Draft: () => true,
     Thread: () => false,
+    Scratch: ({ threadId }) => Option.isNone(threadId),
   });
 
 /** The draft the composer edits now; an untouched draft is empty. */
@@ -93,6 +121,26 @@ export const activeDraft = (model: Model): Draft =>
     Option.flatMap(draftKey(model), (key) => Record.get(model.drafts, key)),
     () => emptyDraft
   );
+
+/**
+ * True when the open draft's runtime mode can be picked: a draft's can, an open thread's cannot,
+ * and neither can the scratch thread's, which always launches with full access (`runtimeModeOf`).
+ */
+export const canPickRuntimeMode = (model: Model): boolean =>
+  isDraftTarget(model) && !isScratchTarget(model);
+
+/**
+ * The runtime mode the composer's target runs in: the draft's own, the open thread's, or full
+ * access. The scratch thread always runs with full access: the overlay has nothing to answer an
+ * approval with, since the request card serves the routed page's thread.
+ */
+export const runtimeModeOf = (model: Model): RuntimeMode =>
+  canPickRuntimeMode(model)
+    ? activeDraft(model).runtimeMode
+    : Option.match(model.context.thread, {
+        onNone: () => "full-access",
+        onSome: (thread) => thread.runtimeMode,
+      });
 
 const isEmpty = (draft: Draft): boolean =>
   draft.text.length === 0 &&
@@ -122,34 +170,41 @@ export const modifyActiveDraft = (
     },
   });
 
-const byRecentUpdate = Order.mapInput(
-  Order.flip(DateTime.Order),
-  (project: ProjectShell) => project.updatedAt
-);
-
 /** The folder projects the hero offers, most recently updated first. */
 export const pickableProjects = (model: Model): ReadonlyArray<ProjectShell> =>
-  Array.sort(
-    Array.filter(
-      model.context.projects,
-      (project) => project.kind === "folder"
-    ),
-    byRecentUpdate
-  );
+  folderProjectsByRecent(model.context.projects);
 
 /**
- * The project a new thread launches in: the one the draft chose, else the most recently updated
- * folder project. None when there is no project (the hero then offers to start without one).
+ * The project a new thread launches in: the one the draft chose while it still exists, else the
+ * hero's default (the most recently updated folder project), so a draft whose project was removed
+ * names and launches in the default rather than quietly in the scratch project. None when there is
+ * no project (the hero then offers to start without one).
  */
 export const draftProject = (model: Model): Option.Option<ProjectShell> => {
+  // The scratch thread's first message launches in the scratch project, made for it.
+  if (isScratchTarget(model)) {
+    return Option.none();
+  }
+
   const draft = activeDraft(model);
 
-  return Option.match(draft.projectId, {
-    onNone: () => Array.head(pickableProjects(model)),
-    onSome: (id) =>
-      Array.findFirst(model.context.projects, (project) => project.id === id),
-  });
+  return Option.orElse(
+    Option.flatMap(draft.projectId, (id) =>
+      Array.findFirst(model.context.projects, (project) => project.id === id)
+    ),
+    () => defaultProjectOf(model.context.projects)
+  );
 };
+
+/**
+ * The live project thread a draft's send opens instead of launching (ADR 0048): its project's,
+ * while the composer writes a draft. None outside a draft, in the scratch project, or in a folder
+ * project with no project thread yet, where the send launches the first one.
+ */
+export const draftProjectThread = (model: Model): Option.Option<ThreadId> =>
+  isDraftTarget(model)
+    ? Option.flatMap(draftProject(model), projectThreadToOpen)
+    : Option.none();
 
 /** The project of the composer's target: a draft's project or the open thread's. */
 export const targetProject = (model: Model): Option.Option<ProjectShell> =>
@@ -162,13 +217,7 @@ export const targetProject = (model: Model): Option.Option<ProjectShell> =>
         )
       );
 
-const DraftsJson = Schema.fromJsonString(
-  Schema.toCodecJson(Schema.Record(Schema.String, Draft))
-);
-
-const decodeDrafts = Schema.decodeEffect(DraftsJson);
-
-const encodeDrafts = Schema.encodeEffect(DraftsJson);
+const persistedDrafts = persistedRecord(Schema.toCodecJson(Draft));
 
 const SettingsJson = Schema.fromJsonString(
   Schema.toCodecJson(ComposerSettings)
@@ -178,20 +227,17 @@ const decodeSettings = Schema.decodeEffect(SettingsJson);
 
 const encodeSettings = Schema.encodeEffect(SettingsJson);
 
-/** Reads every saved draft. Missing or unreadable storage is no drafts: typing must never wait on it. */
-export const loadDrafts: Effect.Effect<
-  Record<string, Draft>,
+/**
+ * Reads every saved draft this build can decode, and whether to tell the user storage holds drafts it
+ * cannot (once for each, `readShared`). Missing storage is no drafts: typing must never wait on it.
+ * A draft this build cannot decode, or a value it cannot read at all, is left as stored; a draft this
+ * tab then writes in the same thread replaces it.
+ */
+export const readDrafts: Effect.Effect<
+  Loaded<Record<string, Draft>>,
   never,
   KeyValueStore.KeyValueStore
-> = Effect.gen(function* () {
-  const store = yield* KeyValueStore.KeyValueStore;
-  const saved = yield* store.get(DRAFTS_STORAGE_KEY);
-
-  return yield* Option.match(Option.fromUndefinedOr(saved), {
-    onNone: () => Effect.succeed({}),
-    onSome: decodeDrafts,
-  });
-}).pipe(Effect.orElseSucceed(() => ({})));
+> = readShared(DRAFTS_STORAGE_KEY, persistedDrafts);
 
 const draftEquivalence = Schema.toEquivalence(Draft);
 
@@ -213,14 +259,8 @@ export const saveDrafts = (
 > =>
   mergeStored(
     DRAFTS_STORAGE_KEY,
-    loadDrafts,
-    mergeRecord(draftEquivalence)(base, drafts),
-    (next) =>
-      Effect.gen(function* () {
-        const store = yield* KeyValueStore.KeyValueStore;
-
-        yield* store.set(DRAFTS_STORAGE_KEY, yield* encodeDrafts(next));
-      })
+    persistedDrafts,
+    mergeRecord(draftEquivalence)(base, drafts)
   );
 
 /**

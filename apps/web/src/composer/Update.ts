@@ -16,12 +16,11 @@ import {
 } from "@cairn/client-logic/ComposerTrigger";
 import { resolveRestingComposerControlsLayout } from "@cairn/client-logic/FooterLayout";
 import type { AttachmentRef } from "@cairn/protocol/Attachments";
-import type { ProjectId } from "@cairn/protocol/Ids";
+import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { Array, Equal, Option, Predicate, Record } from "effect";
 import type { Schema } from "effect";
-import { Command } from "foldkit";
-import type { Update } from "foldkit";
+import { Command, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import { OutMessage as TrayOutMessage } from "../attachments/Message.ts";
@@ -37,6 +36,7 @@ import {
   LoadDrafts,
   LoadSettings,
   MoveHeroToDraftUrl,
+  OpenProjectThread,
   PrepareLaunch,
   PrepareSend,
   SaveDrafts,
@@ -49,18 +49,22 @@ import {
   activeDraft,
   draftKey,
   draftProject,
+  draftProjectThread,
   draftThreadId,
   isDraftTarget,
+  isScratchTarget,
   modifyActiveDraft,
+  SCRATCH_DRAFT_KEY,
   rebaseDrafts,
+  runtimeModeOf,
   shownNotice,
   targetProject,
 } from "./Drafts.ts";
-import { FocusEditor, SetEditorValue } from "./Editor.ts";
+import { FocusEditor, ReturnFocusToEditor, SetEditorValue } from "./Editor.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { SubmitIntent } from "./Message.ts";
-import { emptyDraft, initial, Popover } from "./Model.ts";
-import type { ComposerContext, Draft, Model, ComposerTarget } from "./Model.ts";
+import { ComposerTarget, emptyDraft, initial, Popover } from "./Model.ts";
+import type { ComposerContext, Draft, Model } from "./Model.ts";
 import {
   clampThinking,
   findListing,
@@ -85,7 +89,7 @@ const toTray = (message: TrayMessage): Message =>
   Message.GotAttachmentsMessage({ message });
 
 /**
- * Gives the draft `/new/<draftId>` the project its first message launches in (the `next` shell's
+ * Gives the draft `/new/<draftId>` the project its first message launches in (the shell's
  * rail, for a project with no project thread yet). An empty draft starts over with that project's
  * default model, as the hero's project menu does. The debounced saver writes the change.
  */
@@ -246,6 +250,45 @@ export const restoreTurn = (
     Dispatch: () => ({ model }),
   });
 
+/**
+ * Puts a scratch turn the brain refused, or a scratch launch that failed, back in the scratch
+ * overlay's draft (`SCRATCH_DRAFT_KEY`): its text below what is typed there now, and its
+ * attachments; a launch's model and thinking too, while the draft is empty.
+ */
+export const restoreScratchTurn = (
+  model: Model,
+  item: OutboxItem,
+  attachments: ReadonlyArray<AttachmentRef>
+): Update.Return<Model, Message, Services> =>
+  OutboxItem.match(item, {
+    Send: ({ input }) =>
+      restoreDraft(
+        model,
+        SCRATCH_DRAFT_KEY,
+        {
+          ...emptyDraft,
+          text: input.input.text,
+          attachments: input.input.attachments,
+        },
+        attachments
+      ),
+    Launch: ({ input }) =>
+      restoreDraft(
+        model,
+        SCRATCH_DRAFT_KEY,
+        {
+          ...emptyDraft,
+          text: input.initialMessage.text,
+          attachments: input.initialMessage.attachments,
+          model: Option.some(input.model),
+          thinking: Option.some(input.thinkingLevel),
+          runtimeMode: input.runtimeMode,
+        },
+        attachments
+      ),
+    Dispatch: () => ({ model }),
+  });
+
 /** The composer's first Model and the reads it starts with. */
 export const init = (): Update.Return<Model, Message, Services> => ({
   model: initial,
@@ -344,16 +387,41 @@ const moveHeroToDraftUrl = (model: Model) =>
       })
     : [];
 
+/** True for a target whose page draws the composer's editor. */
+const drawsEditor = (target: ComposerTarget): boolean =>
+  ComposerTarget.match(target, {
+    None: () => false,
+    Home: () => true,
+    Draft: () => true,
+    Thread: () => true,
+    Scratch: () => false,
+  });
+
 /**
  * Brings the composer in line with the app: the route's target, the connection, the shell and the
  * open thread's view. A new target closes every menu and puts the caret at the end of its draft.
+ * The scratch overlay shown takes the page's editor away; hidden again, the keyboard goes back to
+ * that editor when it held it before.
  */
 export const inform = (
   model: Model,
   context: ComposerContext
 ): Update.Return<Model, Message, Services> => {
   const retargeted = !sameTarget(model.context.target, context.target);
-  const informed = modifyFields(model, { context: () => context });
+  const wasScratch = Predicate.isTagged(model.context.target, "Scratch");
+  const isScratch = Predicate.isTagged(context.target, "Scratch");
+
+  // The overlay, as it opens, notes whether the page's editor held the keyboard, and keeps that
+  // while it shows.
+  const refocusAfterScratch =
+    isScratch && !wasScratch
+      ? model.focused
+      : isScratch && model.refocusAfterScratch;
+
+  const informed = modifyFields(model, {
+    context: () => context,
+    refocusAfterScratch: () => refocusAfterScratch,
+  });
 
   const next = retargeted
     ? resetTransient(informed, draftKey(model))
@@ -361,11 +429,19 @@ export const inform = (
 
   const end = activeDraft(next).text.length;
 
+  const refocus =
+    wasScratch &&
+    !isScratch &&
+    model.refocusAfterScratch &&
+    drawsEditor(context.target);
+
+  const moved = retargeted ? moveHeroToDraftUrl(next) : [];
+
   return {
     model: retargeted
       ? modifyFields(next, { selection: () => ({ start: end, end }) })
       : next,
-    commands: retargeted ? moveHeroToDraftUrl(next) : [],
+    commands: refocus ? Array.append(moved, ReturnFocusToEditor()) : moved,
   };
 };
 
@@ -541,6 +617,15 @@ const dispatchTurn = (
     );
   }
 
+  // One scratch thread at a time: a second first message waits until the first one's launch is in
+  // the outbox, and so the overlay's thread, after which it is a send to that thread.
+  if (isScratchTarget(model) && Record.has(model.sending, SCRATCH_DRAFT_KEY)) {
+    return notice(
+      model,
+      "The scratch thread is still starting. Send again in a moment."
+    );
+  }
+
   return Option.match(
     Option.all([resolvedModel(model), resolvedThinking(model)]),
     {
@@ -548,7 +633,8 @@ const dispatchTurn = (
         notice(model, "The models are still loading. Send again in a moment."),
       onSome: ([chosen, thinkingLevel]) => {
         const project = draftProject(model);
-        const stay = intent === "background";
+        // The scratch thread's first message launches it where it is, in the overlay.
+        const stay = intent === "background" || isScratchTarget(model);
         const launched = clearSentDraft(model);
 
         return {
@@ -572,7 +658,8 @@ const dispatchTurn = (
               projectId: Option.map(project, ({ id }) => id),
               model: chosen,
               thinkingLevel,
-              runtimeMode: draft.runtimeMode,
+              // The draft's mode, or full access for the scratch thread (`runtimeModeOf`).
+              runtimeMode: runtimeModeOf(model),
               envMode: draft.envMode,
               baseBranch: draft.baseBranch,
               currentBranch: Option.flatMap(
@@ -713,14 +800,77 @@ const applyTray = (model: Model, result: Tray.UpdateReturn): TrayApplied => {
 };
 
 /**
+ * A draft whose project has a live project thread is not launched (ADR 0048): its words and its
+ * attachments move into the project thread's draft, unsent, and the project thread opens. Only the
+ * header's Refresh replaces a project thread.
+ */
+const openProjectThread = (model: Model, threadId: ThreadId): UpdateReturn => {
+  const from = Option.getOrElse(draftKey(model), () => "");
+  const to = `thread:${threadId}`;
+  const draft = activeDraft(model);
+  const refs = Tray.readyRefs(model.attachments, from);
+
+  const title = Option.match(draftProject(model), {
+    onNone: () => "This project",
+    onSome: (project) => project.title,
+  });
+
+  const left = modifyFields(clearSentDraft(model), {
+    drafts: (drafts) => Record.remove(drafts, from),
+    homeDraftId: (id) =>
+      Predicate.isTagged(model.context.target, "Home") ||
+      Option.exists(id, (home) => Option.contains(draftThreadId(model), home))
+        ? Option.none()
+        : id,
+  });
+
+  // The tray drops the draft's items first: it holds one item per attachment.
+  const cleared = applyTray(left, Tray.clearSent(left.attachments, from));
+
+  const moved = restoreDraft(
+    cleared.model,
+    to,
+    { ...emptyDraft, text: draft.text },
+    refs
+  );
+
+  const told = modifyFields(moved.model, {
+    notice: () =>
+      Option.some({
+        draftKey: Option.some(to),
+        text: `Not sent yet: ${title} already has a project thread, so your message moved here. Send it to go on here, or use Refresh in the header to start a new project thread.`,
+      }),
+  });
+
+  const restored = moved.commands ?? [];
+
+  return {
+    model: told,
+    commands: [
+      ...cleared.commands,
+      ...restored,
+      saveDraftsCommand(told),
+      OpenProjectThread({ threadId }),
+    ],
+  };
+};
+
+/**
  * Sends the turn, and lets the tray forget the attachments it carried. The draft as sent is kept in
- * `sending` until the outbox holds its turn, so a save in between still writes its words.
+ * `sending` until the outbox holds its turn, so a save in between still writes its words. A draft
+ * whose project has a live project thread opens it instead (ADR 0048).
  */
 const dispatch = (
   model: Model,
   intent: SubmitIntent,
   text: string
 ): UpdateReturn => {
+  const opened = draftProjectThread(model);
+
+  if (Option.isSome(opened)) {
+    return openProjectThread(model, opened.value);
+  }
+
   const key = draftKey(model);
   const sent = dispatchTurn(model, intent, text);
 
@@ -846,6 +996,7 @@ const chooseModel = (
           threadId: thread.id,
           model: Option.some(chosen),
           thinkingLevel: Option.none(),
+          draftKey: draftKey(model),
         }),
       ],
     }),
@@ -1115,12 +1266,14 @@ const answersPathSearch = (
 
 const step = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    // Typing dismisses the notice shown on this draft, not one waiting on another draft.
+    // Typing dismisses the notice shown on this draft, not one waiting on another draft. Focus and
+    // keystrokes are reported to the root for the request card's typing guard.
     ChangedDraft: ({ value }) => ({
       model: modifyFields(setText(model, value), {
         notice: (current) =>
           Option.isSome(shownNotice(model)) ? Option.none() : current,
       }),
+      outMessage: OutMessage.Typed(),
     }),
     ChangedSelection: ({ end, start }) =>
       refreshTriggerMenu(
@@ -1128,10 +1281,13 @@ const step = (model: Model, message: Message): UpdateReturn =>
       ),
     FocusedEditor: () => ({
       model: modifyFields(model, { focused: () => true }),
+      outMessage: OutMessage.Focused(),
     }),
     BlurredEditor: () => ({
       model: modifyFields(model, { focused: () => false }),
+      outMessage: OutMessage.Blurred(),
     }),
+    StartedHeroDrawerRoom: () => ({ model }),
     PressedSubmitKey: ({ intent }) => submit(model, intent),
     PressedMenuKey: ({ key }) => menuKey(model, key),
     PressedHistoryKey: ({ direction }) => recallHistory(model, direction),
@@ -1143,6 +1299,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
           selection: () => ({ start: next.length, end: next.length }),
         }),
         commands: [SetEditorValue({ value: next, cursor: next.length })],
+        outMessage: OutMessage.Typed(),
       };
     },
     ClickedSend: ({ alternate }) =>
@@ -1152,7 +1309,13 @@ const step = (model: Model, message: Message): UpdateReturn =>
         onNone: () => keep(model),
         onSome: (thread) => ({
           model,
-          commands: [StopThread({ threadId: thread.id, clearQueue })],
+          commands: [
+            StopThread({
+              threadId: thread.id,
+              clearQueue,
+              draftKey: draftKey(model),
+            }),
+          ],
         }),
       }),
     ClickedWithdraw: ({ submissionId }) =>
@@ -1160,7 +1323,13 @@ const step = (model: Model, message: Message): UpdateReturn =>
         onNone: () => keep(model),
         onSome: (thread) => ({
           model,
-          commands: [WithdrawQueued({ threadId: thread.id, submissionId })],
+          commands: [
+            WithdrawQueued({
+              threadId: thread.id,
+              submissionId,
+              draftKey: draftKey(model),
+            }),
+          ],
         }),
       }),
 
@@ -1255,6 +1424,7 @@ const step = (model: Model, message: Message): UpdateReturn =>
                   threadId: thread.id,
                   model: Option.none(),
                   thinkingLevel: Option.some(level),
+                  draftKey: draftKey(model),
                 }),
               ],
             }),
@@ -1335,19 +1505,24 @@ const step = (model: Model, message: Message): UpdateReturn =>
     DetectedPlatform: ({ isMac }) => ({
       model: modifyFields(model, { isMac: () => isMac }),
     }),
-    LoadedDrafts: ({ drafts }) => {
+    LoadedDrafts: ({ drafts, tell }) => {
       // Edits made before storage answered win over what was saved.
       const loaded = modifyFields(
         syncDrafts(model, model.storedDrafts, drafts),
         { draftsLoaded: () => true }
       );
 
-      return {
-        model:
-          !model.draftsLoaded && model.attachments.loaded
-            ? reconcileAttachments(loaded)
-            : loaded,
-      };
+      // The root's notice says so: the composer's own closes when its target changes, as a load of
+      // `/` changes it at once (the hero's new draft moves the URL).
+      return Update.withOutMessage(
+        {
+          model:
+            !model.draftsLoaded && model.attachments.loaded
+              ? reconcileAttachments(loaded)
+              : loaded,
+        },
+        tell ? OutMessage.FoundUnreadDrafts() : undefined
+      );
     },
     LoadedSettings: ({ settings }) => ({
       model: modifyFields(model, { settings: () => settings }),
@@ -1454,7 +1629,12 @@ const step = (model: Model, message: Message): UpdateReturn =>
       return {
         model: sent,
         commands: [saveDraftsCommand(sent)],
-        outMessage: OutMessage.Submitted({ item, navigateTo, attachments }),
+        outMessage: OutMessage.Submitted({
+          draftKey: key,
+          item,
+          navigateTo,
+          attachments,
+        }),
       };
     },
     FailedPrepareTurn: ({

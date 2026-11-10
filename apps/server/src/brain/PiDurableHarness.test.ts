@@ -13,7 +13,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import type { Harness } from "@earendil-works/pi-durable";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import {
   Array as Arr,
   Context,
@@ -29,39 +29,26 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
-import { escalateIn, mirrorIdOf } from "../approvals/QuestionRoute.ts";
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import {
-  ChildDoc,
-  EscalationsDoc,
-  SubagentsDoc,
-} from "../subagents/SubagentDocs.ts";
-import { Subagents } from "../subagents/Subagents.ts";
-import { Brain } from "./Brain.ts";
-import { BrainConfig } from "./BrainConfig.ts";
-import {
-  Approvals,
+  UNDECIDED,
+  expirePending,
   cancelAbandonedApprovalsAtBoot,
   expireLapsedApprovalsAtBoot,
-  expirePending,
-  ThreadMeta,
-  ThreadReceipt,
-  UNDECIDED,
-} from "./CairnDocs.ts";
+} from "../approvals/ApprovalLedger.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
+import { parentHalted } from "../subagents/Delivery.ts";
+import { escalateIn, mirrorIdOf } from "../subagents/QuestionRoute.ts";
+import { Brain } from "./Brain.ts";
+import { testBrain } from "./BrainTestKit.ts";
+import { Approvals, ThreadMeta, ThreadReceipt } from "./CairnDocs.ts";
 import type { ApprovalRecord } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
+import { PendingApprovals } from "./PendingApprovals.ts";
 import { piConversationId } from "./PiIds.ts";
+import { ChildDoc, EscalationsDoc, SubagentsDoc } from "./SubagentDocs.ts";
 
 const THREAD_ID = ThreadId.make("0190f0c0-0000-7000-8000-0000000000c1");
 
@@ -73,41 +60,10 @@ type FauxMessage = ReturnType<typeof fauxAssistantMessage>;
 type AbortContext = Parameters<Harness["abortTask"]>[1];
 
 const harnessLayer = (dataDir: string) =>
-  PiDurableHarness.layer.pipe(
-    Layer.provide(
-      ExtensionSet.withExtra([conformanceTools]).pipe(
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(Subagents.layerTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
-    ),
-    Layer.provideMerge(
-      ModelSource.layerFaux({
-        tokensPerSecond: 2000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
-    Layer.provide(BrainConfig.layerFrom(dataDir))
-  );
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A, E>(find: Effect.Effect<Option.Option<A>, E>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
+  testBrain({
+    dataDir,
+    extra: [conformanceTools],
+    model: { tokensPerSecond: 2000, settings: { retry: { enabled: false } } },
   });
 
 /** Waits until at least `count` events tagged `tag` arrived for the thread; returns them all. */
@@ -154,6 +110,9 @@ const answerUnlessAborted = (
 
 interface Fixture {
   readonly seam: HarnessSeam["Service"];
+  readonly brain: Brain["Service"];
+  /** The ensured thread's pi-durable conversation. */
+  readonly conversationId: ReturnType<typeof piConversationId>;
   readonly faux: FauxModels["Service"]["faux"];
   readonly events: Ref.Ref<ReadonlyArray<HarnessEvent>>;
   /** Runs an Effect from a faux response. */
@@ -239,7 +198,15 @@ const withHarness = <A, E>(
             return held;
           });
 
-          return yield* body({ seam, faux, events, run, holdNextAbort });
+          return yield* body({
+            seam,
+            brain,
+            conversationId: piConversationId(conversationId),
+            faux,
+            events,
+            run,
+            holdNextAbort,
+          });
         })
       ).pipe(Effect.orDie),
     (dataDir) =>
@@ -310,7 +277,7 @@ describe("PiDurableHarness stop", () => {
           assert.strictEqual(terminal.status, "interrupted");
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -372,7 +339,184 @@ describe("PiDurableHarness stop", () => {
           assert.deepStrictEqual(answers, ["one done", "two done"]);
         })
       ),
-    30_000
+    testLimit(30_000)
+  );
+
+  // A Stop all holds the thread's wakes until a run starts after the one it stopped (ADR 0028).
+  it.live(
+    "a Stop all that keeps the queue holds the stopped run's wakes, not those of the follow-up's run that started as it stopped",
+    () =>
+      withHarness(
+        ({ seam, brain, conversationId, faux, events, run, holdNextAbort }) =>
+          Effect.gen(function* () {
+            const firstAnswer = yield* Latch.make(false);
+
+            faux.setResponses([
+              async () =>
+                await run(
+                  Effect.as(firstAnswer.await, fauxAssistantMessage("one done"))
+                ),
+              async (_request, options) =>
+                await run(
+                  answerUnlessAborted(
+                    options?.signal,
+                    Duration.seconds(1),
+                    fauxAssistantMessage("two done")
+                  )
+                ),
+            ]);
+
+            yield* seam.submit(THREAD_ID, {
+              requestId: "held-1",
+              content: [{ type: "text", text: "one" }],
+              entry: Option.none(),
+              whenBusy: "followUp",
+            });
+            yield* waitForEvents(events, "RunStarted", 1);
+            yield* seam.submit(THREAD_ID, {
+              requestId: "held-2",
+              content: [{ type: "text", text: "two" }],
+              entry: Option.none(),
+              whenBusy: "followUp",
+            });
+
+            // The stop has read the first run's task; before its abort lands, that run answers and
+            // a run starts for the queued follow-up, before the stop writes its wake hold.
+            yield* holdNextAbort(firstAnswer.open);
+            yield* seam.stop(THREAD_ID, {
+              clearQueue: false,
+              subagents: "stop",
+            });
+
+            const [terminal] = yield* waitForEvents(events, "RunTerminal", 1);
+            const { harness } = yield* Effect.orDie(brain.session);
+
+            const halted = yield* Effect.promise(
+              async () =>
+                await harness.commit(
+                  async (tx) => await parentHalted(tx, conversationId),
+                  BACKGROUND_CONTEXT
+                )
+            );
+
+            assert.strictEqual(terminal.status, "completed");
+            assert.isFalse(
+              halted,
+              "the follow-up's run, started after the stopped one, is held"
+            );
+          })
+      ),
+    testLimit(30_000)
+  );
+
+  it.live(
+    "a Stop all whose run handed over and whose last generation completed before its abort landed holds that run's wakes",
+    () =>
+      withHarness(
+        ({ seam, brain, conversationId, faux, events, run, holdNextAbort }) =>
+          Effect.gen(function* () {
+            const nextAnswer = yield* Latch.make(false);
+
+            // The first generation calls `gate`; the next one answers once released.
+            faux.setResponses([
+              async () =>
+                await Promise.resolve(
+                  fauxAssistantMessage([fauxToolCall("gate", {})], {
+                    stopReason: "toolUse",
+                  })
+                ),
+              async () =>
+                await run(
+                  Effect.as(
+                    nextAnswer.await,
+                    fauxAssistantMessage("carried on")
+                  )
+                ),
+            ]);
+
+            yield* seam.submit(THREAD_ID, {
+              requestId: "hold-handover-1",
+              content: [{ type: "text", text: "open the gate" }],
+              entry: Option.none(),
+              whenBusy: "followUp",
+            });
+
+            const [asked] = yield* waitForEvents(
+              events,
+              "RuntimeRequestUpdated",
+              1
+            );
+
+            // Before the first abort lands, the approval ends the tool round and the run hands over.
+            yield* holdNextAbort(
+              seam
+                .respond(THREAD_ID, asked.id, {
+                  decision: "accept",
+                  reason: Option.none(),
+                  answers: Option.none(),
+                  launch: Option.none(),
+                })
+                .pipe(Effect.orDie)
+            );
+
+            // The stop follows the handover; before that abort lands, the next generation answers
+            // and the run completes.
+            const { harness } = yield* Effect.orDie(brain.session);
+            const abortTask = harness.abortTask.bind(harness);
+            const calls = yield* Ref.make(0);
+
+            harness.abortTask = async (taskId, abortContext) => {
+              if ((await run(Ref.getAndUpdate(calls, (n) => n + 1))) === 1) {
+                await run(
+                  Effect.andThen(
+                    nextAnswer.open,
+                    waitFor(
+                      Effect.map(
+                        Effect.promise(
+                          async () =>
+                            await harness.snapshot(
+                              LiveDoc,
+                              conversationId,
+                              abortContext
+                            )
+                        ),
+                        (live) =>
+                          live?.run === undefined
+                            ? Option.some(true)
+                            : Option.none()
+                      )
+                    )
+                  )
+                );
+              }
+
+              return await abortTask(taskId, abortContext);
+            };
+
+            yield* seam.stop(THREAD_ID, {
+              clearQueue: false,
+              subagents: "stop",
+            });
+
+            const [terminal] = yield* waitForEvents(events, "RunTerminal", 1);
+
+            const halted = yield* Effect.promise(
+              async () =>
+                await harness.commit(
+                  async (tx) => await parentHalted(tx, conversationId),
+                  BACKGROUND_CONTEXT
+                )
+            );
+
+            assert.strictEqual(yield* Ref.get(calls), 2, "the stop followed");
+            assert.strictEqual(terminal.status, "completed");
+            assert.isTrue(
+              halted,
+              "the stopped run's last generation is not held"
+            );
+          })
+      ),
+    testLimit(30_000)
   );
 });
 
@@ -382,6 +526,7 @@ const openBrain = (dataDir: string) =>
     const context = yield* Layer.build(harnessLayer(dataDir));
     const seam = Context.get(context, HarnessSeam);
     const brain = Context.get(context, Brain);
+    const pending = Context.get(context, PendingApprovals);
     const { faux } = Context.get(context, FauxModels);
     const run = Effect.runPromiseWith(yield* Effect.context());
     const events = yield* Ref.make<ReadonlyArray<HarnessEvent>>([]);
@@ -393,7 +538,7 @@ const openBrain = (dataDir: string) =>
       Effect.forkScoped
     );
 
-    return { seam, brain, faux, run, events };
+    return { seam, brain, pending, faux, run, events };
   });
 
 /** Ensures the thread and returns its pi-durable conversation id. */
@@ -552,7 +697,7 @@ describe("PiDurableHarness stop, cut off between its abort and its cancellation"
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -607,7 +752,7 @@ describe("PiDurableHarness stop, cut off between its abort and its cancellation"
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 
@@ -661,7 +806,7 @@ describe("PiDurableHarness answer during a stop", () => {
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 
@@ -720,7 +865,7 @@ describe("PiDurableHarness inspect", () => {
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -769,7 +914,7 @@ describe("PiDurableHarness inspect", () => {
           })
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -811,7 +956,17 @@ describe("PiDurableHarness inspect", () => {
                     anchorTaskId: 1,
                     briefApprovalId: "brief-1",
                     description: "a child",
-                    dispatch: {},
+                    dispatch: {
+                      spec: null,
+                      resolved: {
+                        spec: "faux/scripted",
+                        model: { provider: "faux", modelId: "scripted" },
+                        thinkingLevel: null,
+                        priced: false,
+                      },
+                      previewed: null,
+                      dispatchedAt: 1,
+                    },
                     isolation: "shared",
                     worktree: null,
                     status: "working",
@@ -895,6 +1050,91 @@ describe("PiDurableHarness inspect", () => {
           })
         )
       ),
-    30_000
+    testLimit(30_000)
+  );
+});
+
+describe("the boot's approval reads", () => {
+  it.live(
+    "one scan of every conversation serves both boot sweeps and every inspect; a record committed after it is still found",
+    () =>
+      withDataDir((dataDir) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const THREADS = 40;
+            const { seam, brain, pending } = yield* openBrain(dataDir);
+
+            const conversations = yield* Effect.forEach(
+              Arr.range(1, THREADS),
+              (n) =>
+                Effect.map(
+                  seam.ensureThread({
+                    threadId: ThreadId.make(
+                      `0190f0c0-0000-7000-8000-${String(n).padStart(12, "0")}`
+                    ),
+                    projectId: ProjectId.make("boot-reads-test"),
+                    model: FAUX_MODEL,
+                    thinkingLevel: "off",
+                    cwd: process.cwd(),
+                    instructions: Option.none(),
+                    runtimeMode: "full-access",
+                  }),
+                  ({ conversationId }) => piConversationId(conversationId)
+                )
+            );
+
+            const { harness } = yield* Effect.orDie(brain.session);
+
+            // Every read of `cairn.approvals`, whoever reads it.
+            const reads = vi.spyOn(harness, "snapshot");
+
+            const approvalReads = () =>
+              reads.mock.calls.filter(([token]) => Object.is(token, Approvals))
+                .length;
+
+            yield* Effect.gen(function* () {
+              yield* cancelAbandonedApprovalsAtBoot;
+              yield* expireLapsedApprovalsAtBoot;
+            }).pipe(
+              Effect.provideService(Brain, brain),
+              Effect.provideService(PendingApprovals, pending)
+            );
+            yield* brain.resume;
+            yield* seam.inspect;
+            yield* seam.inspect;
+
+            const afterBoot = approvalReads();
+
+            // A record that lands after the scan, in an idle thread: the commits keep the scan.
+            const target = conversations.at(-1);
+
+            assert.isDefined(target);
+
+            yield* Effect.promise(async () => {
+              await harness.commit(async (tx) => {
+                const { items } = await tx.doc(Approvals, target);
+
+                items["criteria-late"] = proposedCriteria(
+                  "criteria-late",
+                  Number.MAX_SAFE_INTEGER
+                );
+              }, BACKGROUND_CONTEXT);
+            });
+
+            const states = yield* seam.inspect;
+
+            assert.deepStrictEqual(
+              [
+                afterBoot,
+                states.flatMap((state) =>
+                  state.pendingApprovals.map((record) => record.id)
+                ),
+              ],
+              [THREADS, ["criteria-late"]]
+            );
+          })
+        )
+      ),
+    testLimit(60_000)
   );
 });

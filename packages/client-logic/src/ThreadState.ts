@@ -7,8 +7,10 @@
 // descendant's request shown on its ancestors, a finished run whose children still work reading
 // "Waiting", and the top label falling back to "Woke", then "Done". Changed: one function over
 // Cairn's shell row gives the state, its category from docs/golden/thread-states.md, the word and
-// its tone, and the hold the banner shows; Cairn adds parked, a brief ("Go"), a child that asked its
-// parent and queued input, and holds for a parked task, a spent plan window and a Claude slot.
+// its tone, and the hold the banner shows; Cairn adds a brief ("Waiting for Go"), a child that
+// asked its parent and queued input, and holds for a spent plan window and a Claude slot. Added: the
+// one table of state to word, tone and mark every surface reads (`STATE_LOOKS`, U-14), and whether
+// a run is live (`isRunLive`, C-11).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -27,9 +29,9 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import type { TaskId, ThreadId } from "@cairn/protocol/Ids";
-import type { ThreadShell } from "@cairn/protocol/Shell";
-import { Array, Data, DateTime, Option } from "effect";
+import type { ThreadId } from "@cairn/protocol/Ids";
+import type { ThreadActivity, ThreadShell } from "@cairn/protocol/Shell";
+import { Data, DateTime, Option } from "effect";
 
 import { hasUnseenCompletion } from "./PresentThreadShell.ts";
 import type { SubagentRequest } from "./SubagentRollup.ts";
@@ -43,7 +45,6 @@ export type ThreadStatus =
   | "asking-parent"
   | "working"
   | "waiting"
-  | "parked"
   | "failed"
   | "limited"
   | "ready";
@@ -77,35 +78,114 @@ export type ThreadTone =
   | "error"
   | "success";
 
-/** A label: what it stands for, its words and its tone. */
-export interface ThreadLabel {
-  readonly kind: ThreadLabelKind;
+/**
+ * A state's mark: the glyph beside its word (the web's `StatusMark`). `needs` is the needs-you
+ * dot, kept for the states that wait on the user, so nothing else reads as asking.
+ */
+export type StateMark =
+  | "busy"
+  | "needs"
+  | "done"
+  | "failed"
+  | "todo"
+  | "idle"
+  | "info"
+  | "warning";
+
+/** A state as every surface draws it: its word, its tone and its mark. */
+export interface StateLook {
   readonly word: string;
   readonly tone: ThreadTone;
+  readonly mark: StateMark;
 }
 
-/** Every label's words and tone. No status reaches the UI without one (invariant 16). */
-export const THREAD_LABELS: Readonly<Record<ThreadLabelKind, ThreadLabel>> = {
-  approval: { kind: "approval", word: "Approval", tone: "attention" },
-  go: { kind: "go", word: "Go", tone: "attention" },
-  input: { kind: "input", word: "Input", tone: "question" },
-  "asking-parent": {
-    kind: "asking-parent",
-    word: "Asked its parent",
-    tone: "muted",
+/**
+ * Every state a surface names: a thread's labels, then a child at rest or never started, a brief
+ * that ended without Go, a stop on its way, a hold, a subagent's step and a workflow node.
+ */
+export type StateName =
+  | ThreadLabelKind
+  | "idle"
+  | "stopped"
+  | "stopping"
+  | "declined"
+  | "sent-back"
+  | "expired"
+  | "cancelled"
+  | "unstarted"
+  | "waiting-for-slot"
+  | "now"
+  | "todo"
+  | "queued"
+  | "held"
+  | "unknown"
+  | "refused";
+
+/**
+ * The one table of state to word, tone and mark (U-14): the sidebar's rows, the chat header, the
+ * hold banner, the parent banner, the work panel and the transcript's subagent rows all read it, so
+ * one state has one name and one mark on a screen. Words are sentence case. A running workflow
+ * node and a working child are one state, "Working".
+ */
+export const STATE_LOOKS: Readonly<Record<StateName, StateLook>> = {
+  approval: { word: "Approval", tone: "attention", mark: "needs" },
+  go: { word: "Waiting for Go", tone: "attention", mark: "needs" },
+  input: { word: "Input", tone: "question", mark: "needs" },
+  "asking-parent": { word: "Asked its parent", tone: "muted", mark: "idle" },
+  working: { word: "Working", tone: "info", mark: "busy" },
+  waiting: { word: "Waiting", tone: "muted", mark: "idle" },
+  failed: { word: "Failed", tone: "error", mark: "failed" },
+  // A spent plan window asks nothing of the user: its mark is the warning, not the needs-you dot.
+  limited: { word: "Limited", tone: "warning", mark: "warning" },
+  woke: { word: "Woke", tone: "warning", mark: "info" },
+  done: { word: "Done", tone: "success", mark: "done" },
+  idle: { word: "Idle", tone: "muted", mark: "idle" },
+  stopped: { word: "Stopped", tone: "muted", mark: "idle" },
+  stopping: { word: "Stopping", tone: "info", mark: "busy" },
+  declined: { word: "Declined", tone: "muted", mark: "idle" },
+  "sent-back": { word: "Sent back", tone: "muted", mark: "idle" },
+  expired: { word: "Expired", tone: "muted", mark: "idle" },
+  cancelled: { word: "Cancelled", tone: "muted", mark: "idle" },
+  unstarted: { word: "Not started", tone: "error", mark: "failed" },
+  "waiting-for-slot": {
+    word: "Waiting for a Claude slot",
+    tone: "info",
+    mark: "busy",
   },
-  working: { kind: "working", word: "Working", tone: "info" },
-  waiting: { kind: "waiting", word: "Waiting", tone: "muted" },
-  parked: { kind: "parked", word: "Parked", tone: "warning" },
-  failed: { kind: "failed", word: "Failed", tone: "error" },
-  limited: { kind: "limited", word: "Limited", tone: "warning" },
-  woke: { kind: "woke", word: "Woke", tone: "warning" },
-  done: { kind: "done", word: "Done", tone: "success" },
+  now: { word: "Now", tone: "info", mark: "busy" },
+  todo: { word: "To do", tone: "muted", mark: "todo" },
+  queued: { word: "Queued", tone: "muted", mark: "todo" },
+  held: { word: "Held", tone: "warning", mark: "warning" },
+  unknown: { word: "Unknown", tone: "warning", mark: "warning" },
+  refused: { word: "Refused", tone: "muted", mark: "idle" },
+};
+
+/** A label: what it stands for, and its look from `STATE_LOOKS`. */
+export interface ThreadLabel extends StateLook {
+  readonly kind: ThreadLabelKind;
+}
+
+const labelOfKind = (kind: ThreadLabelKind): ThreadLabel => ({
+  kind,
+  ...STATE_LOOKS[kind],
+});
+
+/** Every label's look. No status reaches the UI without one (invariant 16). */
+export const THREAD_LABELS: Readonly<Record<ThreadLabelKind, ThreadLabel>> = {
+  approval: labelOfKind("approval"),
+  go: labelOfKind("go"),
+  input: labelOfKind("input"),
+  "asking-parent": labelOfKind("asking-parent"),
+  working: labelOfKind("working"),
+  waiting: labelOfKind("waiting"),
+  failed: labelOfKind("failed"),
+  limited: labelOfKind("limited"),
+  woke: labelOfKind("woke"),
+  done: labelOfKind("done"),
 };
 
 /** What holds the thread up beyond the user, most urgent first: the banner above an open thread. */
 export type ThreadHold = Data.TaggedEnum<{
-  Parked: { readonly taskId: TaskId };
   Limited: { readonly resetsAt: ThreadShell["usageLimitResetAt"] };
   WaitingForSlot: { readonly threadId: ThreadId };
 }>;
@@ -113,16 +193,10 @@ export type ThreadHold = Data.TaggedEnum<{
 /** The holds' constructors and matcher. */
 export const ThreadHold = Data.taggedEnum<ThreadHold>();
 
-/** A hold's badge: its word and tone. */
-export const HOLD_LABELS: Readonly<
-  Record<
-    ThreadHold["_tag"],
-    { readonly word: string; readonly tone: ThreadTone }
-  >
-> = {
-  Parked: { word: "Parked", tone: "warning" },
-  Limited: { word: "Limited", tone: "warning" },
-  WaitingForSlot: { word: "Waiting", tone: "info" },
+/** A hold's look, from `STATE_LOOKS`: a spent window is the same "Limited" its row says. */
+export const HOLD_LABELS: Readonly<Record<ThreadHold["_tag"], StateLook>> = {
+  Limited: STATE_LOOKS.limited,
+  WaitingForSlot: STATE_LOOKS["waiting-for-slot"],
 };
 
 /** The fields of a row the state reads. */
@@ -135,9 +209,22 @@ export type ThreadStateRow = Pick<
   | "usageLimitResetAt"
   | "waitingFor"
   | "pendingRuntimeRequest"
-  | "parkedTaskIds"
   | "subagents"
 >;
+
+/** Whether each activity has a run live; a new `ThreadActivity` literal fails the typecheck here. */
+const RUN_LIVE: Readonly<Record<ThreadActivity, boolean>> = {
+  idle: false,
+  preparing: true,
+  running: true,
+  waiting: true,
+  failed: false,
+};
+
+/** True while the thread's run is live: it holds an active run, or its activity is busy (C-11). */
+export const isRunLive = (
+  thread: Pick<ThreadShell, "activeRunId" | "activity">
+): boolean => Option.isSome(thread.activeRunId) || RUN_LIVE[thread.activity];
 
 const isUsageLimited = (
   thread: Pick<ThreadShell, "activity" | "lastErrorClass">
@@ -145,24 +232,13 @@ const isUsageLimited = (
   thread.activity === "failed" &&
   Option.contains(thread.lastErrorClass, "usage_limit");
 
-/** What holds `thread` up beyond the user, if anything: a parked task, a spent window, a slot. */
+/** What holds `thread` up beyond the user, if anything: a spent window, a slot. */
 export const threadHold = (
   thread: Pick<
     ThreadShell,
-    | "id"
-    | "activity"
-    | "lastErrorClass"
-    | "usageLimitResetAt"
-    | "waitingFor"
-    | "parkedTaskIds"
+    "id" | "activity" | "lastErrorClass" | "usageLimitResetAt" | "waitingFor"
   >
 ): Option.Option<ThreadHold> => {
-  const parked = Array.head(thread.parkedTaskIds);
-
-  if (Option.isSome(parked)) {
-    return Option.some(ThreadHold.Parked({ taskId: parked.value }));
-  }
-
   if (isUsageLimited(thread)) {
     return Option.some(
       ThreadHold.Limited({ resetsAt: thread.usageLimitResetAt })
@@ -181,10 +257,10 @@ const hasChildrenAtWork = (thread: Pick<ThreadShell, "subagents">): boolean =>
   thread.subagents.working + thread.subagents.asking > 0;
 
 /**
- * A thread's status. A request for the user first, its own (approval, a brief's Go, then a
- * question) or a descendant's (`subagentRequest`, approval over input); then a child waiting on
- * its parent's answer; then busy work; then a parked task; then the latest run's failure (a spent
- * plan window reads as limited); then a finished run whose children still work, "Waiting".
+ * A thread's status. A request for the user first, its own or a descendant's (`subagentRequest`):
+ * approval, then a brief's Go, then a question; then a child waiting on its parent's answer; then
+ * busy work; then the latest run's failure (a spent plan window reads as limited); then a finished
+ * run whose children still work, "Waiting".
  */
 export const threadStatus = (
   thread: ThreadStateRow,
@@ -203,7 +279,7 @@ export const threadStatus = (
     return "approval";
   }
 
-  if (Option.contains(own, "brief")) {
+  if (Option.contains(own, "brief") || Option.contains(subagentRequest, "go")) {
     return "go";
   }
 
@@ -227,10 +303,6 @@ export const threadStatus = (
     return "waiting";
   }
 
-  if (thread.activity === "parked" || thread.parkedTaskIds.length > 0) {
-    return "parked";
-  }
-
   if (thread.activity === "failed") {
     return Option.contains(thread.lastErrorClass, "usage_limit")
       ? "limited"
@@ -247,7 +319,6 @@ const STATUS_CATEGORIES: Readonly<Record<ThreadStatus, ThreadCategory>> = {
   "asking-parent": "held",
   working: "active",
   waiting: "active",
-  parked: "held",
   failed: "failed",
   limited: "held",
   ready: "resting",
@@ -264,11 +335,10 @@ const categoryOf = (
 };
 
 /**
- * True when a snooze ended (early or on time) after the user last looked, and the thread was not
- * settled since: the row says "Woke".
+ * True when a snooze ended (early or on time) after the user last looked: the row says "Woke". A
+ * settle does not hide it: nothing draws the settled shelf since the 7A cutover (ADR 0050).
  */
 export const isThreadWoke = (thread: ThreadShell, now: DateTime.Utc): boolean =>
-  !Option.contains(thread.settledOverride, "settled") &&
   Option.exists(threadWokeAt(thread, now), (wokeAt) =>
     Option.match(thread.lastVisitedAt, {
       onNone: () => true,

@@ -1,0 +1,12 @@
+{"type":"transcript_start","scenario":"entry_image_read","version":1}
+{"type":"model","label":"m1","text":"hello"}
+{"type":"model","label":"m2","text":"a single pixel"}
+{"type":"input","step":"ensure"}
+{"type":"input","step":"message","requestId":"r1","text":"hi"}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"input","step":"message","requestId":"r2","text":"what is this","image":true}
+{"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
+{"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"hi","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"hello","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"what is this","images":1,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"a single pixel","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
+{"type":"expect_entry","at":2,"equals":{"kind":"pi.user","role":"user","text":"what is this","images":1,"toolCalls":[],"toolName":null,"isError":null},"truncated":false}
+{"type":"expect_entry_image","at":2,"index":0,"mimeType":"image/png","base64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}
+{"type":"expect_history","before":3,"limit":100,"entries":[{"kind":"pi.user","role":"user","text":"hi","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"hello","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.user","role":"user","text":"what is this","images":1,"toolCalls":[],"toolName":null,"isError":null}],"hasMore":false}

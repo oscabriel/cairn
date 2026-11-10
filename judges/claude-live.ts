@@ -61,7 +61,7 @@ import { stampOf } from "@cairn/bridge/ClaudeStamp";
 import { ClaudeUsage } from "@cairn/bridge/ClaudeUsage";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -86,9 +86,10 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { Type } from "typebox";
 
-import { BridgeCwd } from "../apps/server/src/brain/BridgeCwdExtension.ts";
 import { CodeMode } from "../apps/server/src/brain/CodeMode.ts";
+import { BridgeCwd } from "../apps/server/src/models/BridgeCwdExtension.ts";
 import { BridgeProvider } from "../apps/server/src/models/BridgeProvider.ts";
 
 const CASES = [

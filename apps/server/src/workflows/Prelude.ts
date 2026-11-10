@@ -25,6 +25,7 @@ import { NonNegativeInt } from "@cairn/protocol/Ids";
 import { MAX_ITEMS_PER_CALL } from "@cairn/protocol/Workflows";
 import { Option, Schema } from "effect";
 
+import { PRELUDE_MARK } from "../brain/CodeMode.ts";
 import type { WorkflowScript } from "./WorkflowScript.ts";
 
 /**
@@ -32,17 +33,16 @@ import type { WorkflowScript } from "./WorkflowScript.ts";
  * `BAKE_CLOSING`); bump it with any change to any of them. A test pins their hash to this number,
  * so an edit without a bump fails the gate.
  */
-export const PRELUDE_VERSION = 3;
+export const PRELUDE_VERSION = 4;
 
 /**
- * Every prelude version this brain still runs: version 2 (before ADR 0043) sent the script's
- * `opts.role` in the node calls' `role` field and named no `model`. A workflow that started before
- * an upgrade replays the prelude its call stored, so `workflow_begin` takes either.
+ * Every prelude version this brain still runs. A workflow that started before an upgrade replays
+ * the prelude its call stored, so `workflow_begin` takes each of these. Version 3 also sent a
+ * `role` field, always null for a script its dry run passed, which the node tools no longer read:
+ * a shim for runs started before ADR 0052, which goes after 2026-12-01 (by then no run that began
+ * on version 3 is still going). Version 2 (before ADR 0043) is retired.
  */
-export const RUNNABLE_PRELUDE_VERSIONS: ReadonlySet<number> = new Set([2, 3]);
-
-/** The comment that opens `PRELUDE_SOURCE`: what marks a rewritten script. */
-export const PRELUDE_MARK = "/* Cairn workflow prelude v";
+export const RUNNABLE_PRELUDE_VERSIONS: ReadonlySet<number> = new Set([3, 4]);
 
 /** The nested tools the prelude calls, all `callers: ["tools"]`. */
 export const NODE_TOOLS = [
@@ -57,14 +57,6 @@ export const NODE_TOOLS = [
 
 /** The start of the error `parallel` and `pipeline` throw past `MAX_ITEMS_PER_CALL` items. */
 export const TOO_MANY_ITEMS = "Too many items";
-
-/**
- * The option roles were named by before ADR 0043. The prelude still passes it on, in the call's
- * `role` field, and `agent` reports it in `unknownOptions`: the dry run refuses a new script that
- * passes it, so only a script approved before the change reaches a node with it, and that node
- * reads it as no model named when it holds a role name, or as the model spec it holds.
- */
-export const ROLE_OPTION = "role";
 
 /** `agent` options the prelude passes on; any other key is reported in `unknownOptions`. */
 export const AGENT_OPTIONS: ReadonlyArray<string> = [
@@ -94,19 +86,17 @@ export type BeginCall = typeof BeginCall.Type;
 export const AgentCall = Schema.Struct({
   workflowId: Schema.String,
   prompt: Schema.String,
-  /** `line:column` of the script's call, or null when the stack showed none. */
+  /**
+   * `line:column` of the script's call, or null when the stack showed none. The dry run keys its
+   * call-site table by it; a live node does not check it, since the envelope grants per model,
+   * not per call site (ADR 0043 as amended).
+   */
   site: Schema.OptionFromNullOr(Schema.String),
   label: Schema.OptionFromNullOr(Schema.String),
   /** `opts.phase`, else the title of the last `phase()` call. */
   phase: Schema.OptionFromNullOr(Schema.String),
-  /** `opts.model`, the model spec the node runs on; absent from prelude version 2's calls. */
-  model: Schema.OptionFromOptionalNullOr(Schema.String),
-  /**
-   * `opts.role`, from a script written before ADR 0043: a role name (`@worker`) or a model spec.
-   * Prelude version 2 sent every script's option here; version 3 passes it on only so a script
-   * approved before the change still runs (see `ROLE_OPTION`).
-   */
-  role: Schema.OptionFromNullOr(Schema.String),
+  /** `opts.model`, the model spec the node runs on. */
+  model: Schema.OptionFromNullOr(Schema.String),
   schema: Schema.OptionFromNullOr(Schema.Json),
   key: Schema.OptionFromNullOr(Schema.String),
   readonly: Schema.Boolean,
@@ -127,10 +117,8 @@ export const VerifyCall = Schema.Struct({
   site: Schema.OptionFromNullOr(Schema.String),
   label: Schema.OptionFromNullOr(Schema.String),
   phase: Schema.OptionFromNullOr(Schema.String),
-  /** `opts.model`; absent from prelude version 2's calls. */
-  model: Schema.OptionFromOptionalNullOr(Schema.String),
-  /** `opts.role`, as `AgentCall.role` keeps it. */
-  role: Schema.OptionFromNullOr(Schema.String),
+  /** `opts.model`. */
+  model: Schema.OptionFromNullOr(Schema.String),
 });
 
 export type VerifyCall = typeof VerifyCall.Type;
@@ -258,7 +246,6 @@ async function __cairnAgentFull(prompt, opts) {
     label: __cairnText(o.label),
     phase: o.phase === undefined || o.phase === null ? __cairnPhase : String(o.phase),
     model: __cairnText(o.model),
-    role: __cairnText(o.role),
     schema: o.schema === undefined ? null : o.schema,
     key: __cairnText(o.key),
     readonly: o.readonly === true,
@@ -287,8 +274,7 @@ async function verify(result, opts) {
       site: __cairnSite(),
       label: __cairnText(o.label),
       phase: o.phase === undefined || o.phase === null ? __cairnPhase : String(o.phase),
-      model: __cairnText(o.model),
-      role: __cairnText(o.role)
+      model: __cairnText(o.model)
     });
     if (outcome && outcome.status === "ok") return outcome.value;
     return { verdict: "unverified", reason: outcome ? outcome.reason : null };
@@ -378,14 +364,6 @@ export interface PreludeBake {
  */
 export const PRELUDE_OPENING =
   "const __cairnBaked = __cairnBake(), WORKFLOW = __cairnBaked.workflowId, SAMPLE = __cairnBaked.sample, __cairnPreludeLine = __cairnBaked.preludeLine, __cairnPending = [], args = __cairnFreeze(__cairnBaked.args), budget = __cairnBudget(__cairnBaked.budgetTokens); let __cairnPhase = null; agent.full = __cairnAgentFull; await tools.workflow_begin(__cairnBaked.begin); return await __cairnRun(async () => {";
-
-/**
- * True when `source` looks like a script `rewriteScript` produced, the prelude appended. A substring
- * test, so a raw script holding that text in a string passes too: it picks a slot pool and guards
- * nothing. The gate decides by the approved row's hash, never by this.
- */
-export const isRewrittenWorkflow = (source: string): boolean =>
-  source.includes(`\n});\n${PRELUDE_MARK}`);
 
 /** The number of line breaks in `text`. */
 const breaks = (text: string) => text.split("\n").length - 1;

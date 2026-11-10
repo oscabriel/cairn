@@ -32,9 +32,9 @@ import {
   DisplayText,
   EntryId,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   RunId,
-  TaskId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./Ids.ts";
@@ -83,17 +83,21 @@ export const ThreadActivity = Schema.Literals([
   "preparing",
   "running",
   "waiting",
-  "parked",
   "failed",
 ]);
 
 export type ThreadActivity = typeof ThreadActivity.Type;
 
-/** How the last failed run failed, so the sidebar can say "usage limit" instead of an error. */
+/**
+ * How the last failed run failed, so the sidebar can say "usage limit" instead of an error.
+ * `brain_restart`: the brain restarted while the model answered and no retry was left (pi-durable's
+ * `interrupted`), or crashes cut the run off too often (`restart_limit`).
+ */
 export const RunFailureClass = Schema.Literals([
   "usage_limit",
   "provider_error",
   "transport_error",
+  "brain_restart",
   "unknown",
 ]);
 
@@ -188,8 +192,6 @@ export const ThreadShell = Schema.Struct({
   activeOrderKey: Schema.OptionFromNullOr(TrimmedNonEmptyString),
   autoSettleDisabledAt: OptionalTime,
   lastVisitedAt: OptionalTime,
-  /** Tasks pi-durable stopped retrying after repeated crashes; each can be retried. */
-  parkedTaskIds: Schema.Array(TaskId),
   /** A subagent's place under its parent (ADR 0028); a row with one is hidden from the sidebar. */
   lineage: added(Schema.OptionFromNullOr(ThreadLineage), null),
   /** This thread's own children by what they are doing; zeros when it has none. */
@@ -280,6 +282,49 @@ export type ShellDelta = Exclude<
   ShellStreamItem,
   { readonly _tag: "Snapshot" } | { readonly _tag: "Synchronized" }
 >;
+
+/** Where a page of earlier project threads ends: the last row's archive time and id. */
+export const PreviousThreadsCursor = Schema.Struct({
+  archivedAt: Schema.DateTimeUtc,
+  threadId: ThreadId,
+});
+
+export type PreviousThreadsCursor = typeof PreviousThreadsCursor.Type;
+
+/** The most rows one page of earlier project threads holds. */
+export const PREVIOUS_THREADS_PAGE_MAX = 50;
+
+/**
+ * `shell.previousThreads` input (ADR 0048): one page of a project's earlier project threads, the
+ * archived top-level threads a refresh replaced, newest first. They stay out of the shell stream.
+ */
+export const PreviousThreadsInput = Schema.Struct({
+  projectId: ProjectId,
+  /** The page after this cursor (the `next` of the page before); none for the newest. */
+  after: Schema.OptionFromNullOr(PreviousThreadsCursor),
+  limit: PositiveInt.check(
+    Schema.isLessThanOrEqualTo(PREVIOUS_THREADS_PAGE_MAX)
+  ),
+});
+
+export type PreviousThreadsInput = typeof PreviousThreadsInput.Type;
+
+/** `shell.previousThreads` result: the rows as archived, and the cursor of the next page if any. */
+export const PreviousThreadsPage = Schema.Struct({
+  threads: Schema.Array(ThreadShell),
+  next: Schema.OptionFromNullOr(PreviousThreadsCursor),
+});
+
+export type PreviousThreadsPage = typeof PreviousThreadsPage.Type;
+
+/**
+ * `shell.earlierThread` input (ADR 0048): a thread a page was opened on directly (a reload, a link,
+ * the browser's Back) that the shell does not hold, asked for to learn whether it is an earlier
+ * project thread.
+ */
+export const EarlierThreadInput = Schema.Struct({ threadId: ThreadId });
+
+export type EarlierThreadInput = typeof EarlierThreadInput.Type;
 
 /** `shell.subscribe` input. */
 export const SubscribeShellInput = Schema.Struct({

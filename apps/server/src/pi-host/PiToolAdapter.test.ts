@@ -1,19 +1,9 @@
 // Judges the mapping from a pi TUI extension's tool to a pi-durable tool (ADR 0039): the mapping
 // table on hand-built definitions and on the fixture extension loaded through pi's own loader, the
 // running output and result shapes, and that a tool calling what the host does not support fails
-// with the API named while a tool that asks the user is told no. The last case loads the user's
-// real pi-web-access and pi-fff when they are installed, so a pi or package change that breaks the
-// host fails here.
+// with the API named while a tool that asks the user is told no. Fixture packages only: the user's
+// real pi-web-access and pi-fff are loaded by `judges/pi-host.ts`, which reads the real install.
 
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 import { ThreadId } from "@cairn/protocol/Ids";
@@ -22,11 +12,10 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Effect, Function, Layer, Option } from "effect";
+import { Effect, Function, Option } from "effect";
 
-import { PiConfig } from "../models/PiConfig.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import { PiHost, PI_TOOLS_SECTION } from "./PiHost.ts";
-import { PI_HOST_POLICY } from "./PiHostPolicy.ts";
 import {
   brainLayer,
   callTool,
@@ -190,7 +179,7 @@ layer(
     hostLayer(fixture, fixturePolicy(fixture, { scope: "folder" })),
     path.join(fixture.root, "brain")
   ),
-  { timeout: 60_000, excludeTestServices: true }
+  { timeout: testLimit(60_000), excludeTestServices: true }
 )("the fixture extension through the host", (live) => {
   live.effect("installs each tool with its callers and replay", () =>
     Effect.gen(function* () {
@@ -290,91 +279,5 @@ layer(
       assert.include(renamed, '"isError":true');
       assert.include(renamed, "does not support setSessionName");
     })
-  );
-});
-
-// The user's real packages, read in place (never written): only where they are installed.
-const realAgentDir = path.join(homedir(), ".pi", "agent");
-
-const realPackages = ["pi-web-access", path.join("@ff-labs", "pi-fff")].every(
-  (name) => existsSync(path.join(realAgentDir, "npm", "node_modules", name))
-);
-
-/** Every path under `dir` with its size and mtime, what loading must not change. */
-const listing = (dir: string): ReadonlyArray<string> =>
-  existsSync(dir)
-    ? readdirSync(dir, { recursive: true, withFileTypes: true })
-        .map((entry) => {
-          const file = path.join(entry.parentPath, entry.name);
-          const stat = statSync(file);
-
-          return `${file} ${String(stat.size)} ${String(stat.mtimeMs)}`;
-        })
-        .toSorted()
-    : [];
-
-describe("the user's real pi packages", () => {
-  it.live.skipIf(!realPackages)(
-    "loads pi-web-access and pi-fff as tools-only, and ffgrep searches the thread's folder",
-    () =>
-      Effect.gen(function* () {
-        const root = mkdtempSync(path.join(tmpdir(), "cairn-pi-host-real-"));
-        const repo = path.join(root, "repo");
-        const token = `cairnprobe${String(process.pid)}`;
-        const fffBefore = listing(path.join(realAgentDir, "fff"));
-
-        yield* Effect.sync(() => {
-          mkdirSync(repo);
-          writeFileSync(path.join(repo, "probe.txt"), `${token}\n`);
-        });
-
-        const host = PiHost.layerWith({
-          policy: PI_HOST_POLICY,
-          root: path.join(root, "host"),
-        }).pipe(
-          Layer.provide(
-            PiConfig.layerWith({
-              agentDir: realAgentDir,
-              cwd: path.join(root, "pi-cwd"),
-              home: homedir(),
-            })
-          )
-        );
-
-        const [names, result = ""] = yield* Effect.gen(function* () {
-          const loaded = yield* PiHost;
-
-          const [grep] = yield* callTool(
-            [{ threadId: thread(10), cwd: repo }],
-            "ffgrep",
-            { pattern: token }
-          );
-
-          return [
-            (loaded.extension.extension.tools ?? []).map((tool) => tool.name),
-            grep,
-          ] as const;
-        }).pipe(Effect.provide(brainLayer(host, path.join(root, "brain"))));
-
-        for (const name of [
-          "web_search",
-          "source_check",
-          "fetch_content",
-          "get_search_content",
-          "ffgrep",
-          "fffind",
-        ]) {
-          assert.include(names, name);
-        }
-
-        assert.notInclude(names, "web_enable");
-        assert.include(result, "probe.txt");
-        assert.deepStrictEqual(
-          listing(path.join(realAgentDir, "fff")),
-          fffBefore,
-          "pi-fff's databases in the agent dir are untouched"
-        );
-      }),
-    60_000
   );
 });

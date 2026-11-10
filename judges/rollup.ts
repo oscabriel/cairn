@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one step after another, on purpose */
 // The rollup judge (plan 6D, the behaviour script `rollup`; surfaces note "Judges", S6; ADR 0027's
-// gate played through the page): the real web client on the `next` views over a real
+// gate played through the page): the real web client over a real
 // in-process brain on the scripted harness (judges/fixtures/parity/CairnApp.ts with the delegating
 // model of judges/fixtures/subagents/RollupBrain.ts), its seeded thread the project thread, at
 // 390 px as a phone (touch, coarse pointer) and at 1,440 px, each width on a fresh brain. No model
@@ -11,11 +11,11 @@
 //
 // One run per width, in order, each step judged on what the page shows. Each child is spawned by a
 // message to the parent and started by Go through the protocol, as the brief card will send it.
-//   approval      a child's gated tool call lights its ancestors: the parent's page says "Subagent
-//                 needs approval" in the banner above the composer, naming the child as a link, the
+//   approval      a child's gated tool call lights its ancestors: the parent's page says "Subagent ·
+//                 Approval" in the banner above the composer, naming the child as a link, the
 //                 parent's header says "Approval" (and at 1,440 its sidebar row and the child's
 //                 row do too), and the parent shows no card of its own; the page does not scroll
-//                 sideways, and on the phone "Open approval" is at least 44 px tall; it opens the
+//                 sideways, and on the phone its Open is at least 44 px tall; it opens the
 //                 child, whose card Approve answers once; back on the parent the banner is gone;
 //   parent-first  a child's question goes to the parent's model first: while the parent holds it,
 //                 the parent's page never shows the banner, a card or "Input", and the child's row
@@ -66,6 +66,9 @@ import {
 import { chromium } from "./lib/Browser.ts";
 import type { Browser, BrowserContext, Locator, Page } from "./lib/Browser.ts";
 import * as ProtocolClient from "./lib/ProtocolClient.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 const BROKEN_CONTROLS = ["banner", "lit"] as const;
 
@@ -623,7 +626,7 @@ const runWidth = async (browser: Browser, width: number) => {
       );
 
       expect(
-        title === "Subagent needs approval",
+        title === "Subagent · Approval",
         `the banner reads ${JSON.stringify(title)}`
       );
       expect(kind === "approval", `the banner asks for ${kind ?? "nothing"}`);
@@ -632,8 +635,8 @@ const runWidth = async (browser: Browser, width: number) => {
         `the banner names ${JSON.stringify(named)}`
       );
       expect(
-        ((await opens.textContent()) ?? "").trim() === "Open approval",
-        "the banner's action is not Open approval"
+        ((await opens.textContent()) ?? "").trim() === "Open",
+        "the banner's action is not Open"
       );
       expect(
         header === "Approval",
@@ -666,7 +669,7 @@ const runWidth = async (browser: Browser, width: number) => {
         const box = await opens.boundingBox();
         const height = box?.height ?? 0;
 
-        expect(height >= 43.5, `Open approval is ${height} px tall`);
+        expect(height >= 43.5, `Open is ${height} px tall`);
       }
 
       expect(
@@ -676,7 +679,7 @@ const runWidth = async (browser: Browser, width: number) => {
 
       await shot(page, "banner", width);
 
-      // Open approval: the child's own card answers it.
+      // Open: the child's own card answers it.
       const before = responds.length;
 
       await press(opens, width);
@@ -719,7 +722,7 @@ const runWidth = async (browser: Browser, width: number) => {
       );
       expect(after !== "Approval", `the parent's header still says ${after}`);
 
-      return `"${title}" (${rows}, header "${header}"), Open approval opened the child, one Approve, the banner left`;
+      return `"${title}" (${rows}, header "${header}"), Open opened the child, one Approve, the banner left`;
     });
 
     await step("parent-first", async () => {

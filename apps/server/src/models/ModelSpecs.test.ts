@@ -1,8 +1,8 @@
 // Model specs (ADR 0043), the pure half over a world built from pi-ai's faux providers: parsing a
-// spec (a model with or without a level, a model id holding `@`, a role name from before roles were
-// removed, junk); a named model resolving when it is ready, its level held to the levels the model
-// takes and priced from the catalog; each reason a model is not ready refusing it; a role name
-// refused as removed. Then the `models` listing: the caller's own model first, a short list per
+// spec (a model with or without a level, a model id holding `@`, junk, a role name among it); a
+// named model resolving when it is ready, its level held to the levels the model takes and priced
+// from the catalog; each reason a model is not ready refusing it; a role name refused as no spec.
+// Then the `models` listing: the caller's own model first, a short list per
 // provider that always keeps the caller's model, a search by provider id or by model words, an
 // unready provider said. Then the service over a migrated in-memory `cairn.sqlite`, real
 // `ModelHealth` and the picker's catalog: a health limit refuses with a message that says what to
@@ -13,10 +13,14 @@
 
 import { ClaudeUsage, INITIAL_READING } from "@cairn/bridge/ClaudeUsage";
 import type { UsageWindow } from "@cairn/bridge/ClaudeUsage";
-import type { ModelRef } from "@cairn/protocol/Models";
+import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { ModelCheck } from "@cairn/protocol/ModelSpecs";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
+import {
+  getBuiltinModels,
+  getBuiltinProviders,
+} from "@earendil-works/pi-ai/providers/all";
 import { assert, describe, it } from "@effect/vitest";
 import {
   DateTime,
@@ -42,15 +46,14 @@ import type { HealthState } from "./ModelHealth.ts";
 import type { ModelWorld } from "./ModelSpecs.ts";
 import {
   checkIn,
-  isRoleName,
   LISTED_MODEL_LIMIT,
   listIn,
   ModelSpecError,
   ModelSpecs,
   modelsText,
   parseModelSpec,
-  ParsedSpec,
   resolveIn,
+  specOf,
   unreadyOf,
 } from "./ModelSpecs.ts";
 import { PiModelSource } from "./PiModelSource.ts";
@@ -171,7 +174,7 @@ const Resolution = ModelCheck.fields.resolution.pipe(
 const LUNA_ON_GO = ref("opencode-go", "gpt-6-luna");
 
 describe("parsing a model spec", () => {
-  it("reads models with and without a level, and role names", () => {
+  it("reads models with and without a level", () => {
     const cases: ReadonlyArray<readonly [string, string]> = [
       ["opencode-go/gpt-6-luna", "Named opencode-go/gpt-6-luna -"],
       ["opencode-go/gpt-6-luna:high", "Named opencode-go/gpt-6-luna high"],
@@ -184,40 +187,60 @@ describe("parsing a model spec", () => {
         "cloudflare-workers-ai/@cf/meta/llama-4-scout",
         "Named cloudflare-workers-ai/@cf/meta/llama-4-scout -",
       ],
-      ["@worker", "Role @worker"],
-      ["@scout:high", "Role @scout:high"],
     ];
 
     for (const [spec, expected] of cases) {
       const text = Option.match(parseModelSpec(spec), {
         onNone: () => "none",
-        onSome: (found) =>
-          ParsedSpec.$match(found, {
-            Role: ({ spec: named }) => `Role ${named}`,
-            Named: ({ model, level }) =>
-              `Named ${key(model)} ${Option.getOrElse(level, () => "-")}`,
-          }),
+        onSome: ({ model, level }) =>
+          `Named ${key(model)} ${Option.getOrElse(level, () => "-")}`,
       });
 
       assert.strictEqual(text, expected, spec);
     }
   });
 
-  it("refuses what is neither provider/modelId nor a role name", () => {
-    for (const spec of ["worker", "@Worker", "@", "/model", "@worker/x", ""]) {
-      assert.isTrue(Option.isNone(parseModelSpec(spec)), spec);
-    }
+  it("reads back every model of pi-ai's catalog, with and without a level", () => {
+    // Each model id pi-ai lists (OpenRouter's `~` aliases and `:free` ids, Bedrock's `:0`, Workers
+    // AI's `@cf/...`): the first `/` ends the provider, and a trailing `:level` is the level, which
+    // no listed id ends in.
+    const unread = getBuiltinProviders().flatMap((provider) =>
+      getBuiltinModels(provider).flatMap((model) => {
+        const named = ref(provider, model.id);
+
+        return [
+          Option.none<ThinkingLevel>(),
+          Option.some<ThinkingLevel>("high"),
+        ].flatMap((level) => {
+          const spec = specOf(named, level);
+
+          const readBack = Option.exists(
+            parseModelSpec(spec),
+            (parsed) =>
+              key(parsed.model) === key(named) &&
+              Option.getOrNull(parsed.level) === Option.getOrNull(level)
+          );
+
+          return readBack ? [] : [spec];
+        });
+      })
+    );
+
+    assert.deepStrictEqual(unread, []);
   });
 
-  it("tells a role name from a model id that holds @", () => {
-    assert.deepStrictEqual(
-      [
-        "@worker",
-        " @judge:high",
-        "cloudflare-workers-ai/@cf/meta/llama-4-scout",
-      ].map(isRoleName),
-      [true, true, false]
-    );
+  it("refuses what is not provider/modelId, a role name among it", () => {
+    for (const spec of [
+      "worker",
+      "@worker",
+      "@scout:high",
+      "@",
+      "/model",
+      "@worker/x",
+      "",
+    ]) {
+      assert.isTrue(Option.isNone(parseModelSpec(spec)), spec);
+    }
   });
 });
 
@@ -315,9 +338,9 @@ describe("resolving against a world", () => {
     }
   });
 
-  it("refuses a role name as removed and junk as no spec", () => {
-    assert.strictEqual(failureOf(worldOf(), "@worker"), "role_removed");
-    assert.strictEqual(failureOf(worldOf(), "@judge:high"), "role_removed");
+  it("refuses junk as no spec, a role name among it", () => {
+    assert.strictEqual(failureOf(worldOf(), "@worker"), "invalid_spec");
+    assert.strictEqual(failureOf(worldOf(), "@judge:high"), "invalid_spec");
     assert.strictEqual(failureOf(worldOf(), "gpt-6-luna"), "invalid_spec");
   });
 });
@@ -344,7 +367,7 @@ describe("checking specs for the brief card", () => {
       [
         ["opencode-go/gpt-6-luna:low", "opencode-go/gpt-6-luna low"],
         ["anthropic/claude-opus-5-5", "failing"],
-        ["@worker", "role_removed"],
+        ["@worker", "invalid_spec"],
         ["(empty)", "invalid_spec"],
       ]
     );
@@ -532,15 +555,14 @@ describe("the model spec service", () => {
       }).pipe(Effect.provide(ServiceLayer))
   );
 
-  it.effect("refuses a role name as removed", () =>
+  it.effect("refuses a role name as no spec", () =>
     Effect.gen(function* () {
       const specs = yield* ModelSpecs;
 
       const failure = yield* Effect.flip(specs.resolve("@worker"));
 
       assert.instanceOf(failure, ModelSpecError);
-      assert.strictEqual(failure.reason, "role_removed");
-      assert.include(failure.message, "roles");
+      assert.strictEqual(failure.reason, "invalid_spec");
       assert.include(failure.message, "provider/modelId[:level]");
     }).pipe(Effect.provide(ServiceLayer))
   );

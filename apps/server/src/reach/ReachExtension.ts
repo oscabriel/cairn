@@ -3,30 +3,38 @@
 // `artifact_list` and `artifact_revoke`, over `Artifacts`, and the portal tools (`PortalTools`:
 // `portal_open`, `portal_close`, `portal_list`), so the installed set gains one name for both.
 //
+// Reach is off until the user runs the wizard's reach stage (ADR 0038, `ReachStatus.ts`): the layer
+// asks porch for its list once, when the set is built at boot, and records the answer as the reach
+// state. Only when porch is ready does the extension carry the six tools; otherwise it carries none,
+// so no model is offered a tool that cannot work. The set is built once per process (footgun
+// "moving default selections"), so the tools appear on the first boot after the wizard.
+//
 // Each tool reads its thread from `cairn.thread-meta` and its folder from the conversation's
 // `pi.agent` cwd, and answers the model in words while the transcript gets `ArtifactDetails`. All
 // three are `replay: "safe"`: publishing is idempotent per thread and name, listing reads, and
-// revoking repeats harmlessly. A refusal or a porch that is not set up is a tool error the model
-// reads, never a thrown one. Effects run through one runtime made from the layer's scope (S43).
+// revoking repeats harmlessly. A refusal, or a porch that has gone since boot, is a tool error the
+// model reads, never a thrown one. Effects run through one runtime made from the layer's scope (S43).
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import { ArtifactDetails, ArtifactId } from "@cairn/protocol/Reach";
 import type { ArtifactRow } from "@cairn/protocol/Reach";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ToolExecutionApi,
   ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Context, Effect, FiberSet, Layer, Option, Schema } from "effect";
+import { Type } from "typebox";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
 import { artifactIdOf } from "./ArtifactPublisher.ts";
 import { Artifacts, outcomeOf } from "./Artifacts.ts";
+import { PorchClient } from "./PorchClient.ts";
 import { PortalTools } from "./PortalTools.ts";
+import { ReachStatus, unlessPorchNotSetUp } from "./ReachStatus.ts";
 
 /** The extension's name in pi-durable's registry. */
 export const REACH_EXTENSION = "cairn.reach";
@@ -101,7 +109,8 @@ export class ReachTools extends Context.Service<
   }
 >()("cairn/server/reach/ReachExtension/ReachTools") {
   /**
-   * Over `Artifacts` and `PortalTools`. Installs at `order`; production passes
+   * Over `Artifacts` and `PortalTools`, with the six tools only when `PorchClient` lists its
+   * porches at build time (recorded on `ReachStatus`). Installs at `order`; production passes
    * `ExtensionOrder.reach`.
    */
   static readonly layerAt = (order: number) =>
@@ -110,7 +119,40 @@ export class ReachTools extends Context.Service<
       Effect.gen(function* () {
         const artifacts = yield* Artifacts;
         const portals = yield* PortalTools;
+        const porch = yield* PorchClient;
+        const status = yield* ReachStatus;
         const run = yield* FiberSet.makeRuntimePromise();
+
+        const ready = yield* Effect.gen(function* () {
+          // `None` when porch is not set up, which `unlessPorchNotSetUp` records and logs once.
+          const listed = yield* unlessPorchNotSetUp(
+            status,
+            "reach tools",
+            porch.list
+          );
+
+          if (Option.isNone(listed)) {
+            return false;
+          }
+
+          yield* status.porchReady;
+
+          return true;
+        }).pipe(
+          Effect.catchTag("PorchError", (failure) =>
+            Effect.logWarning(
+              "reach tools left out: porch failed when the brain asked for its list"
+            ).pipe(
+              Effect.annotateLogs({
+                event: "reach_tools_left_out",
+                operation: failure.operation,
+                reason: failure.reason,
+                error: failure.message,
+              }),
+              Effect.as(false)
+            )
+          )
+        );
 
         const publish = defineTool({
           name: ARTIFACT_PUBLISH_TOOL,
@@ -277,7 +319,7 @@ export class ReachTools extends Context.Service<
             order,
             extension: defineExtension({
               name: REACH_EXTENSION,
-              tools: [publish, list, revoke, ...portals.tools],
+              tools: ready ? [publish, list, revoke, ...portals.tools] : [],
             }),
           },
         });

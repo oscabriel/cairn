@@ -25,6 +25,7 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { TestClock } from "effect/testing";
 
 import { Brain } from "../brain/Brain.ts";
 import {
@@ -33,6 +34,7 @@ import {
   ThreadEnsured,
 } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
+import { eventually } from "../EventuallyTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
   createProject,
@@ -223,7 +225,6 @@ const harnessWith = (events: Stream.Stream<HarnessEvent>) =>
     entryImage: () => unsupported("entryImage"),
     events,
     inspect: Effect.succeed([]),
-    retry: () => unsupported("retry"),
     capabilities: { durable: true, live: true },
   });
 
@@ -284,9 +285,13 @@ describe("the subagent row fiber's end", () => {
   );
 });
 
+/** The model a scripted child's dispatch resolved to, unless a test names another. */
+const SCRIPTED_MODEL = { provider: "scripted", modelId: "echo" };
+
 /** The documents a scripted child and its parent project, as `HarnessSeam.document` reads them. */
 const scriptedDocuments =
-  (parent: ThreadId) => (threadId: ThreadId, kind: string) => {
+  (parent: ThreadId, model = SCRIPTED_MODEL) =>
+  (threadId: ThreadId, kind: string) => {
     if (threadId === CHILD && kind === "cairn.child") {
       return Effect.succeedSome({
         key: "call-7",
@@ -310,7 +315,12 @@ const scriptedDocuments =
             description: "Count the files",
             dispatch: {
               spec: null,
-              resolved: { model: { provider: "scripted", modelId: "echo" } },
+              resolved: {
+                spec: `${model.provider}/${model.modelId}`,
+                model,
+                thinkingLevel: null,
+                priced: false,
+              },
               previewed: null,
               dispatchedAt: 5,
             },
@@ -393,12 +403,9 @@ const rowThroughSeam = (
       })
     );
 
-    let row = yield* rows.get(CHILD);
-
-    for (let tries = 0; Option.isNone(row) && tries < 50; tries += 1) {
-      yield* Effect.sleep("10 millis");
-      row = yield* rows.get(CHILD);
-    }
+    const row = yield* TestClock.withLive(
+      eventually(rows.get(CHILD), Option.isSome, "the child's row")
+    );
 
     yield* Scope.close(scope, Exit.void);
 
@@ -436,12 +443,9 @@ describe("a scripted subagent's shell row", () => {
         );
 
         // The fiber runs on its own; wait for its one row.
-        let row = yield* rows.get(CHILD);
-
-        for (let tries = 0; Option.isNone(row) && tries < 50; tries += 1) {
-          yield* Effect.sleep("10 millis");
-          row = yield* rows.get(CHILD);
-        }
+        const row = yield* TestClock.withLive(
+          eventually(rows.get(CHILD), Option.isSome, "the child's row")
+        );
 
         yield* Scope.close(scope, Exit.void);
 
@@ -459,6 +463,34 @@ describe("a scripted subagent's shell row", () => {
         assert.strictEqual(shell.provider, "scripted");
         assert.strictEqual(shell.modelId, "echo");
         assert.strictEqual(shell.runtimeMode, "auto-accept-edits");
+      }).pipe(Effect.provide(RowsTestLayer))
+  );
+
+  it.effect(
+    "takes its title and model when it runs on a parent's OpenRouter alias",
+    () =>
+      Effect.gen(function* () {
+        const sink = yield* EventSink;
+        const project = createProject(1);
+        const parent = testThreadId(1);
+
+        yield* sink.commitCommand(project.command);
+        yield* sink.commitCommand(createThread(project.projectId, 1));
+
+        // An OpenRouter alias, `~` and all: the dispatch records the parent's model unchecked when
+        // the brief names none. The row reads only the resolved model.
+        const shell = yield* rowThroughSeam(
+          parent,
+          scriptedDocuments(parent, {
+            provider: "openrouter",
+            modelId: "~anthropic/claude-sonnet-latest",
+          })
+        );
+
+        assert.deepStrictEqual(
+          [shell.title, shell.provider, shell.modelId],
+          ["Count the files", "openrouter", "~anthropic/claude-sonnet-latest"]
+        );
       }).pipe(Effect.provide(RowsTestLayer))
   );
 
@@ -540,26 +572,19 @@ const BRIEF_TEXT =
 const NODE_PROMPT =
   "Read the council question and argue for the cheapest path, with one risk.";
 
-/** `CHILD`'s row title once `check` holds of it, or after a second without. */
+/** `CHILD`'s row title once `check` holds of it. */
 const titleWhen = (check: (title: string) => boolean) =>
   Effect.gen(function* () {
     const rows = yield* ThreadRows;
-    let title = "";
 
-    for (let tries = 0; tries < 100; tries += 1) {
-      title = Option.match(yield* rows.get(CHILD), {
-        onNone: () => "",
-        onSome: (row) => row.shell.title,
-      });
-
-      if (check(title)) {
-        return title;
-      }
-
-      yield* Effect.sleep("10 millis");
-    }
-
-    return title;
+    return yield* eventually(
+      Effect.map(
+        rows.get(CHILD),
+        Option.match({ onNone: () => "", onSome: (row) => row.shell.title })
+      ),
+      check,
+      "the child's title"
+    );
   });
 
 /** Runs the fiber over `CHILD`'s creation and first input, then `body`, then closes it. */
@@ -689,13 +714,11 @@ describe("a subagent's title", () => {
         workflowDocuments(parent, null, null, "Advisor 1 report"),
         NODE_PROMPT,
         Effect.gen(function* () {
-          for (
-            let tries = 0;
-            (yield* Ref.get(script.prompts)).length === 0 && tries < 100;
-            tries += 1
-          ) {
-            yield* Effect.sleep("10 millis");
-          }
+          yield* eventually(
+            Ref.get(script.prompts),
+            (prompts) => prompts.length > 0,
+            "the title model's prompt"
+          );
 
           yield* Effect.sleep("20 millis");
 

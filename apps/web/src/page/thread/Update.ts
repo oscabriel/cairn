@@ -20,12 +20,13 @@ import { isOpen as isDiffOpen } from "../../diff/Model.ts";
 import * as DiffUpdate from "../../diff/Update.ts";
 import { OutMessage as TimelineOutMessage } from "../../timeline/Message.ts";
 import type { Message as TimelineMessage } from "../../timeline/Message.ts";
+import type { QueuedSend } from "../../timeline/Model.ts";
 import * as Timeline from "../../timeline/Update.ts";
 import { WaitToResubscribe } from "./Command.ts";
 import { LoadDiffPanel } from "./DiffPanel.ts";
 import { Message, OutMessage } from "./Message.ts";
 import type { Model } from "./Model.ts";
-import { ThreadStatus } from "./Model.ts";
+import { PARKED_VIEW_LIMIT, ThreadStatus } from "./Model.ts";
 
 type InformReturn = Update.Return<Model, Message, CairnConnectionService>;
 
@@ -87,6 +88,42 @@ const timelineStep = (
     toParentMessage: toGotTimelineMessage,
   });
 
+/**
+ * The parked views once the page leaves its thread: that thread's view joins them, last, when it
+ * holds paged-in history; the least recently left go past `PARKED_VIEW_LIMIT`.
+ */
+const park = (model: Model): Model["parked"] => {
+  const others = Array.filter(
+    model.parked,
+    (parked) => !Option.contains(model.threadId, parked.threadId)
+  );
+
+  const leaving = Option.flatMap(
+    Option.all([model.threadId, model.view]),
+    ([threadId, state]) =>
+      state.older.length > 0 ? Option.some({ threadId, state }) : Option.none()
+  );
+
+  return Option.match(leaving, {
+    onNone: () => others,
+    onSome: (parked) => [...others, parked].slice(-PARKED_VIEW_LIMIT),
+  });
+};
+
+/**
+ * What a snapshot is applied over: the view on screen, or, right after coming back to a thread, the
+ * view it was left with, so the pages it held can be kept.
+ */
+const snapshotBase = (model: Model): Model["view"] =>
+  Option.orElse(model.view, () =>
+    Option.map(
+      Array.findFirst(model.parked, (parked) =>
+        Option.contains(model.threadId, parked.threadId)
+      ),
+      (parked) => parked.state
+    )
+  );
+
 /** What the root tells the page: the routed thread and the connection streams may use. */
 export interface PageContext {
   readonly threadId: Option.Option<ThreadId>;
@@ -94,17 +131,18 @@ export interface PageContext {
   readonly hasClient: boolean;
   /** The routed thread's launch is on its way (queued in the outbox, or its row is `preparing`). */
   readonly launching: boolean;
-  /** The prompts (`promptKey`) of the sends to the routed thread waiting in the outbox. */
-  readonly queuedPrompts: ReadonlyArray<string>;
+  /** The sends to the routed thread waiting in the outbox. */
+  readonly queuedSends: ReadonlyArray<QueuedSend>;
 }
 
 /**
  * Brings the page in line with the route and the connection. A different thread starts from
- * nothing; a new connection keeps the view on screen until its fresh snapshot replaces it. A thread
+ * nothing but the history paged into it when it was last shown (`park`); a new connection keeps the
+ * view on screen until its fresh snapshot replaces it. A thread
  * shown as Missing is subscribed again once its launch is known to be on its way.
  */
 export const inform = (page: Model, context: PageContext): InformReturn => {
-  const told = Timeline.informQueued(page.timeline, context.queuedPrompts);
+  const told = Timeline.informQueued(page.timeline, context.queuedSends);
 
   const model =
     told === page.timeline
@@ -123,6 +161,7 @@ export const inform = (page: Model, context: PageContext): InformReturn => {
         retries: () => 0,
         status: () => ThreadStatus.Loading(),
         view: () => Option.none(),
+        parked: () => park(model),
       })
     );
 
@@ -193,26 +232,42 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         return { model };
       }
 
-      return Result.match(applyThreadStreamItem(model.view, received.item), {
-        onSuccess: (view) =>
-          timelineStep((timeline) =>
-            Timeline.afterView(timeline, model.view, Option.some(view))
-          )(
-            modifyFields(model, {
-              view: () => Option.some(view),
-              status: () => ThreadStatus.Ready(),
-              retries: (retries) =>
-                Predicate.isTagged(received.item, "Snapshot") ? 0 : retries,
-            })
-          ),
-        // The item could not be applied: resubscribe for a fresh snapshot.
-        onFailure: () => ({
-          model: modifyFields(model, {
-            watch: (watch) => watch + 1,
-            status: () => ThreadStatus.Loading(),
+      const snapshot = Predicate.isTagged(received.item, "Snapshot");
+
+      return Result.match(
+        applyThreadStreamItem(
+          snapshot ? snapshotBase(model) : model.view,
+          received.item
+        ),
+        {
+          onSuccess: (view) =>
+            timelineStep((timeline) =>
+              Timeline.afterView(timeline, model.view, Option.some(view))
+            )(
+              modifyFields(model, {
+                view: () => Option.some(view),
+                status: () => ThreadStatus.Ready(),
+                retries: (retries) => (snapshot ? 0 : retries),
+                // The thread is on screen again: its parked view is the view now.
+                parked: (parked) =>
+                  snapshot
+                    ? Array.filter(
+                        parked,
+                        (entry) =>
+                          !Option.contains(model.threadId, entry.threadId)
+                      )
+                    : parked,
+              })
+            ),
+          // The item could not be applied: resubscribe for a fresh snapshot.
+          onFailure: () => ({
+            model: modifyFields(model, {
+              watch: (watch) => watch + 1,
+              status: () => ThreadStatus.Loading(),
+            }),
           }),
-        }),
-      });
+        }
+      );
     },
     EndedThreadStream: (ended) => {
       if (!isCurrent(model, ended)) {

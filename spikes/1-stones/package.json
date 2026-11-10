@@ -12,14 +12,18 @@
     "just-bash": "3.6.0"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare": "2.0.0-beta.85",
     "@cloudflare/workers-types": "5.20261021.1",
-    "alchemy": "2.0.0-beta.83",
-    "effect": "4.0.5",
+    "@effect/platform-node": "4.1.2",
+    "alchemy": "2.0.0-beta.85",
+    "effect": "4.1.2",
     "vitest": "5.0.5"
   },
   "pnpm": {
     "overrides": {
-      "effect": "4.0.5"
+      "effect": "4.1.2",
+      "@effect/platform-node": "4.1.2",
+      "@effect/platform-node-shared": "4.1.2"
     }
   }
 }

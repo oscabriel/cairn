@@ -28,12 +28,12 @@ import { X } from "lucide";
 import { icon } from "../composer/Icon.ts";
 import { cachedTokensOf, languageOf } from "../timeline/markdown/Highlight.ts";
 import type { TokenLines } from "../timeline/markdown/Highlight.ts";
-import { button, buttonDefaults } from "../ui/Button.ts";
 import { diffStatLabel, hasNonZeroStat } from "./Card.ts";
 import { fileElementId, LoadDiffHighlighting } from "./Command.ts";
 import { Message } from "./Message.ts";
 import { DiffLoad } from "./Model.ts";
 import type { DiffScope, Model } from "./Model.ts";
+import { button, buttonDefaults } from "./PanelButton.ts";
 
 type H = HtmlBuilder<Message>;
 

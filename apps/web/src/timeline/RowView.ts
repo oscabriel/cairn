@@ -1,34 +1,20 @@
-// Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/MessagesTimeline.tsx and
-// WorkLog.tsx at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92 (classes and structure of the rows Cairn
-// keeps). Kept: t3code's row frame (the full-width frame, the centred `chat-content-lane`, and the
-// row element carrying `data-timeline-row-kind`, `data-message-role` and the bottom padding per
-// kind), the user bubble (right-aligned, 80% wide, collapsed past 8 lines or 600 characters with
-// "Show more", attachment chips above the text, time and copy below on hover), the assistant's
-// markdown with the turn's changed-files card inside it and its copy and time on the terminal
-// answer, the work log (`WorkLogBlock`, `WorkLogLine`, the icon well, the hover timestamp), the
-// grouped tool calls behind a summary toggle, the live activity row with its shine, the working
-// header, turn folds ("Worked for", "You stopped after"), the compaction divider and the history
-// divider. Changed: Foldkit views over client-logic's rows; a call's output opens in a native
-// <details>; the timer is a Mount that writes its own text once a second, so it never re-renders
-// the list; a failed turn is a work-log line with Retry. Removed: subagents, plans, worktree setup,
-// MCP apps, citations, forks, prompt links and the minimap.
+// The transcript's rows (plan look track L7, surfaces note S12), in the Stone look round 1
+// drew: the user's words in a raised bubble with its time, the model's answer as plain prose, the
+// work as quiet lines in the faint ink with their glyphs, an input the brain wrote (a wake, a
+// subagent's question) as one more quiet line, never a bubble, a send whose own row has not come
+// yet as the user's bubble marked "Not sent yet" (or "Sent", once the brain has it), and a settled
+// turn folded behind one line that says how
+// long it worked and what it did ("Worked for 3m 41s · 4 edits · 9 reads · 2 commands"). Colour
+// is left to status: a failed call's glyph and words take the failed tone, and nothing else has a
+// hue. The rows are classic's (a port of t3code's
+// `MessagesTimeline.tsx` and `WorkLog.tsx`): the same items, Messages and hooks
+// (`data-timeline-row-kind`, `data-message-role`, the test ids), so the list, the judges and the
+// update read them unchanged.
 //
-// MIT License. Copyright (c) 2026 T3 Tools Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
-// associated documentation files (the "Software"), to deal in the Software without restriction,
-// including without limitation the rights to use, copy, modify, merge, publish, distribute,
-// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all copies or
-// substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
-// NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
-// OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// Every control in a row (a fold, a tool group, a call with output, copy, Retry) is at least
+// `--hit-target` tall on a coarse pointer and shows the `--stroke-focus` ring on keyboard focus
+// only. A row is drawn twice, in the list and in its off-screen measuring box (ADR 0041), so it
+// keeps no state of its own.
 
 import { formatDuration } from "@cairn/client-logic/Time";
 import type {
@@ -44,28 +30,18 @@ import {
   workEntryIndicatesToolFailure,
 } from "@cairn/client-logic/ToolSummary";
 import type { ToolGroupSummaryKind } from "@cairn/client-logic/ToolSummary";
-import type { EntryId } from "@cairn/protocol/Ids";
-import {
-  Clock,
-  Duration,
-  Effect,
-  Match,
-  Option,
-  Schedule,
-  Schema,
-} from "effect";
+import { Match, Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
-import * as Mount from "foldkit/mount";
 import {
   Brain,
   Check,
-  ChevronDown,
   ChevronRight,
   CircleAlert,
   Copy,
   Eye,
   FilePen,
   Globe,
+  Info,
   Minimize2,
   Paperclip,
   RotateCcw,
@@ -77,70 +53,38 @@ import {
 
 import { icon } from "../composer/Icon.ts";
 import type { IconNode } from "../composer/Icon.ts";
-import { changedFilesCard } from "../diff/Card.ts";
-import { buttonClass } from "../ui/Button.ts";
+import { changedFilesCard } from "../diff/CardView.ts";
+import {
+  FEEDBACK_MOTION,
+  FOCUS_RING,
+  FOCUS_RING_INSET,
+  HIT_HEIGHT,
+  HIT_TARGET,
+  TYPE,
+  WEIGHT_MEDIUM,
+} from "../ui/Classes.ts";
+import { classNames } from "../ui/ClassNames.ts";
+import { statusGlyph } from "../ui/Glyph.ts";
 import { markdownView } from "./markdown/View.ts";
 import { Message } from "./Message.ts";
 import type { HistoryState } from "./Model.ts";
+import type { RowContext } from "./RowContext.ts";
+import { WorkingTimer } from "./RowContext.ts";
 import type { ChangedFilesRow, ListItem, MessageItem } from "./Rows.ts";
 import { subagentRowViews } from "./Subagents.ts";
-import type { SubagentShells } from "./Subagents.ts";
 import { formatClock, formatFull } from "./Time.ts";
 
-type H = HtmlBuilder<Message>;
-
-/** What a row's view reads besides the row. Every field is compared by the row's keyed lazy. */
-export interface RowContext {
-  readonly threadId: string;
-  readonly workspaceRoot: Option.Option<string>;
-  readonly highlightedLanguages: ReadonlyArray<string>;
-  /** Changes when a long code block's tokens are ready, so the row redraws with them. */
-  readonly highlightedCode: number;
-  readonly copiedRowId: Option.Option<string>;
-  readonly expanded: boolean;
-  /** For an error row: the prompt Retry sends again. */
-  readonly retryPrompt: Option.Option<TimelineMessage>;
-  /** For the history control. */
-  readonly history: HistoryState;
-  readonly historyCursor: Option.Option<EntryId>;
-  /** For a subagent group and the way back, on the `next` views: the shell rows they read. */
-  readonly subagents: Option.Option<SubagentShells>;
-}
-
-/** Writes "<duration>" into its element once a second, from `startedAt`. */
-export const WorkingTimer = Mount.define("WorkingTimer", {
-  args: { startedAt: Schema.Finite },
-  messages: [Message.MountedTimer],
-  execute: ({ element, startedAt }) =>
-    Effect.gen(function* () {
-      const write = Effect.flatMap(Clock.currentTimeMillis, (now) =>
-        Effect.sync(() => {
-          element.textContent = formatDuration(Math.max(0, now - startedAt));
-        })
-      );
-
-      yield* Effect.forkScoped(
-        Effect.repeat(write, Schedule.spaced(Duration.seconds(1)))
-      );
-
-      return Message.MountedTimer();
-    }),
-});
+import "./timeline.css";
 
 /**
- * The row frame, carrying the chat canvas's lane inset itself: t3code pads its scroller
- * (`[data-chat-canvas] .messages-timeline-scroll`), but the measured list writes `padding: 0` on
- * its own scroller, so each frame takes the same inset inside the scroller's gutters.
+ * The row frame: the full-width frame inset like the chat canvas, the centred lane (classic's
+ * `chat-content-lane`, so the chat width setting holds), and the row element with its hooks.
  */
 const FRAME_CLASS =
-  "messages-timeline-row-frame px-[calc(0.75rem-var(--chat-timeline-gutter,0px))] sm:px-[calc(3rem-var(--chat-timeline-gutter,0px))]";
+  "messages-timeline-row-frame px-[calc(var(--space-3)-var(--chat-timeline-gutter,0px))] sm:px-[calc(var(--space-12)-var(--chat-timeline-gutter,0px))]";
 
-/**
- * One transcript row in t3code's frame: the full-width frame, the centred chat lane, and the row
- * element carrying the row kind (and a message's role) with the row's bottom padding.
- */
 const frame = (
-  h: H,
+  h: HtmlBuilder<Message>,
   kind: string,
   className: string,
   children: ReadonlyArray<Html>,
@@ -152,7 +96,7 @@ const frame = (
       h.div(
         [
           h.DataAttribute("timeline-root", "true"),
-          h.Class("@container/chat-lane chat-content-lane overflow-x-clip"),
+          h.Class("chat-content-lane overflow-x-clip"),
         ],
         [
           h.div(
@@ -171,61 +115,72 @@ const frame = (
     ]
   );
 
-const TIMESTAMP_CLASS =
-  "pointer-events-none absolute me-1 shrink-0 whitespace-nowrap rounded-md text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:pointer-events-auto group-hover/timeline-row:static group-hover/timeline-row:opacity-100 group-focus-within/timeline-row:pointer-events-auto group-focus-within/timeline-row:static group-focus-within/timeline-row:opacity-100";
-
-const timestamp = (
-  h: H,
-  at: number,
-  className = "",
-  alwaysVisible = false
-): Html =>
+/** A line's time, in the faint ink and tabular figures; its full date on hover. */
+const time = (h: HtmlBuilder<Message>, at: number, className = ""): Html =>
   h.span(
     [
       h.Title(formatFull(at)),
       h.Class(
-        `${TIMESTAMP_CLASS} ${alwaysVisible ? "pointer-events-auto static opacity-100" : ""} ${className}`
+        classNames(
+          "shrink-0 whitespace-nowrap text-ink-3 tabular-nums",
+          TYPE.micro,
+          className
+        )
       ),
     ],
     [formatClock(at)]
   );
 
-const copyButton = (h: H, rowId: string, text: string, copied: boolean): Html =>
+const ICON_BUTTON_CLASS = classNames(
+  "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-(--radius-small) text-ink-3 hover:bg-select-1 hover:text-ink-1 [&_svg]:size-3.5",
+  HIT_TARGET,
+  FOCUS_RING,
+  FEEDBACK_MOTION
+);
+
+const copyButton = (
+  h: HtmlBuilder<Message>,
+  rowId: string,
+  text: string,
+  copied: boolean
+): Html =>
   h.button(
     [
       h.Type("button"),
       h.AriaLabel(copied ? "Copied" : "Copy message"),
       h.DataAttribute("testid", "message-copy"),
       h.OnClick(Message.ClickedCopy({ rowId, text })),
-      h.Class(buttonClass("ghost-muted", "xs")),
+      h.Class(ICON_BUTTON_CLASS),
     ],
-    [
-      copied
-        ? icon(h, Check, "check", "size-3")
-        : icon(h, Copy, "copy", "size-3"),
-    ]
+    [copied ? icon(h, Check, "check", "") : icon(h, Copy, "copy", "")]
   );
 
-const chevron = (h: H, expanded: boolean): Html =>
-  expanded
-    ? icon(h, ChevronDown, "chevron-down", "size-3.5")
-    : icon(h, ChevronRight, "chevron-right", "size-3.5");
-
-const chip = (h: H, glyph: IconNode, name: string, label: string): Html =>
+const chip = (
+  h: HtmlBuilder<Message>,
+  glyph: IconNode,
+  name: string,
+  label: string
+): Html =>
   h.span(
     [
       h.DataAttribute("testid", "user-message-chip"),
       h.Class(
-        "inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-background/60 px-2 py-1 text-xs"
+        classNames(
+          "inline-flex max-w-full items-center gap-(--space-1-5) rounded-(--radius-small) border border-stroke-1 bg-surface-sunken px-(--space-2) py-(--space-0-5) text-ink-2",
+          TYPE.small
+        )
       ),
     ],
     [
-      icon(h, glyph, name, "size-3.5 shrink-0 text-muted-foreground"),
+      icon(h, glyph, name, "size-3.5 shrink-0 text-ink-3"),
       h.span([h.Class("min-w-0 truncate")], [label]),
     ]
   );
 
-const userChips = (h: H, message: TimelineMessage): ReadonlyArray<Html> => [
+const userChips = (
+  h: HtmlBuilder<Message>,
+  message: TimelineMessage
+): ReadonlyArray<Html> => [
   ...message.attachments.map((attachment) =>
     chip(h, Paperclip, "paperclip", attachment.name)
   ),
@@ -238,40 +193,78 @@ const userChips = (h: H, message: TimelineMessage): ReadonlyArray<Html> => [
   ...message.skills.map((skill) => chip(h, Sparkles, "sparkles", skill)),
 ];
 
-/** A screen-reader heading naming who wrote a message, as t3code's `MessageAuthorHeading`. */
-const author = (h: H, name: string): Html =>
+/** A screen-reader heading naming who wrote a message. */
+const author = (h: HtmlBuilder<Message>, name: string): Html =>
   h.h3([h.Class("sr-only select-none")], [name]);
 
+const TEXT_BUTTON_CLASS = classNames(
+  "inline-flex cursor-pointer items-center rounded-(--radius-small) text-ink-2 hover:text-ink-1",
+  TYPE.small,
+  WEIGHT_MEDIUM,
+  HIT_HEIGHT,
+  FOCUS_RING
+);
+
+/** Under a send still in the outbox, in place of its time and copy button. */
+const NOT_SENT = "Not sent yet";
+
+/** Under a send the brain acknowledged whose own row has not come yet. */
+const SENT = "Sent";
+
+/**
+ * The user's message in its bubble, with its time and copy button below; a send whose own row has
+ * not come yet draws the same bubble, dimmed, with `pendingLabel` ("Not sent yet" while it waits in
+ * the outbox, "Sent" once the brain has it) in their place.
+ */
 const userMessageView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   rowId: string,
   message: TimelineMessage,
-  context: RowContext
+  context: RowContext,
+  pendingLabel: Option.Option<string> = Option.none()
 ): Html => {
+  const pending = Option.isSome(pendingLabel);
   const collapsible = shouldCollapseUserMessage(message.text);
   const collapsed = collapsible && !context.expanded;
   const chips = userChips(h, message);
 
   return frame(
     h,
-    "message",
-    "pb-4",
+    pending ? "pending" : "message",
+    "pb-(--space-4)",
     [
       h.div(
-        [h.Class("group flex flex-col items-end gap-1")],
+        [
+          h.Class(
+            classNames(
+              "group flex flex-col items-end gap-(--space-1)",
+              pending ? "opacity-60" : ""
+            )
+          ),
+        ],
         [
           h.div(
             [
-              h.DataAttribute("testid", "user-message"),
+              h.DataAttribute(
+                "testid",
+                pending ? "pending-message" : "user-message"
+              ),
               h.Class(
-                "relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground"
+                "relative max-w-[85%] rounded-(--radius-large) border border-stroke-1 bg-surface-raised px-(--space-3) py-(--space-2) text-ink-1 sm:max-w-[78%]"
               ),
             ],
             [
               author(h, "You"),
               chips.length === 0
                 ? h.empty
-                : h.div([h.Class("mb-2 flex flex-wrap gap-1.5")], chips),
+                : h.div(
+                    [
+                      h.Class(
+                        "mb-(--space-2) flex flex-wrap gap-(--space-1-5)"
+                      ),
+                    ],
+                    chips
+                  ),
               h.div(
                 [
                   h.DataAttribute("user-message-body", "true"),
@@ -285,7 +278,13 @@ const userMessageView = (
                   h.div(
                     [
                       h.Class(
-                        `chat-markdown w-full min-w-0 [overflow-wrap:anywhere] [word-break:break-word] whitespace-pre-wrap text-sm leading-relaxed text-foreground ${collapsed ? "max-h-[11rem] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]" : ""}`
+                        classNames(
+                          "chat-markdown w-full min-w-0 [overflow-wrap:anywhere] [word-break:break-word] whitespace-pre-wrap text-ink-1",
+                          TYPE.body,
+                          collapsed
+                            ? "max-h-[11rem] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]"
+                            : ""
+                        )
                       ),
                     ],
                     [message.text]
@@ -298,9 +297,7 @@ const userMessageView = (
                       h.Type("button"),
                       h.AriaExpanded(!collapsed),
                       h.OnClick(Message.ToggledUserMessage({ rowId })),
-                      h.Class(
-                        "mt-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-                      ),
+                      h.Class(`mt-(--space-1) ${TEXT_BUTTON_CLASS}`),
                     ],
                     [collapsed ? "Show more" : "Show less"]
                   )
@@ -310,57 +307,49 @@ const userMessageView = (
           h.div(
             [
               h.Class(
-                "flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100"
+                "flex items-center justify-end gap-(--space-1) pe-(--space-1)"
               ),
             ],
-            [
-              h.div(
-                [h.Class("flex shrink-0 items-center gap-2")],
-                [
-                  h.p(
+            pending
+              ? [
+                  h.span(
                     [
-                      h.Title(formatFull(message.createdAt)),
-                      h.Class("text-muted-foreground text-xs tabular-nums"),
+                      h.DataAttribute("testid", "pending-state"),
+                      h.Class(classNames("text-ink-3", TYPE.micro)),
                     ],
-                    [formatClock(message.createdAt)]
-                  ),
-                  h.div(
-                    [h.Class("flex items-center gap-0.5")],
-                    [
-                      copyButton(
-                        h,
-                        rowId,
-                        message.text,
-                        Option.contains(context.copiedRowId, rowId)
-                      ),
-                    ]
+                    [Option.getOrElse(pendingLabel, () => NOT_SENT)]
                   ),
                 ]
-              ),
-            ]
+              : [
+                  time(h, message.createdAt),
+                  copyButton(
+                    h,
+                    rowId,
+                    message.text,
+                    Option.contains(context.copiedRowId, rowId)
+                  ),
+                ]
           ),
         ]
       ),
     ],
-    Option.some("user")
+    // A pending send is not yet the thread's: the judges' user rows are the ones the brain echoed.
+    pending ? Option.none() : Option.some("user")
   );
 };
 
-/** The copy button and time under an answer: on hover inside it, always on its own meta row. */
+/** The copy button and time under an answer. */
 const metaView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   rowId: string,
   message: TimelineMessage,
   copy: boolean,
-  context: RowContext,
-  placement: "inline" | "row"
+  context: RowContext
 ): Html =>
   h.div(
     [
       h.DataAttribute("testid", "assistant-meta"),
-      h.Class(
-        `flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200 ${placement === "row" ? "mt-0.5 opacity-100" : "mt-1.5 opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100"}`
-      ),
+      h.Class("mt-(--space-1) flex items-center gap-(--space-1)"),
     ],
     [
       copy
@@ -371,28 +360,28 @@ const metaView = (
             Option.contains(context.copiedRowId, rowId)
           )
         : h.empty,
-      message.streaming
-        ? h.empty
-        : h.p(
-            [
-              h.Title(formatFull(message.updatedAt)),
-              h.Class("text-muted-foreground text-xs tabular-nums"),
-            ],
-            [formatClock(message.updatedAt)]
-          ),
+      message.streaming ? h.empty : time(h, message.updatedAt),
     ]
   );
 
-const filesCard = (h: H, files: ChangedFilesRow): Html =>
+/** A turn's changed-files card; `rowId` is the row it sits in, which keeps it open or folded. */
+const filesCard = (
+  h: HtmlBuilder<Message>,
+  rowId: string,
+  files: ChangedFilesRow,
+  context: RowContext
+): Html =>
   changedFilesCard(h, {
     turn: files.turn,
     files: files.files,
     moreFiles: files.moreFiles,
     onOpen: (path) => Message.ClickedOpenDiff({ turn: files.turn, path }),
+    expanded: context.expanded,
+    onToggle: Message.ToggledChangedFiles({ rowId }),
   });
 
 const assistantMessageView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: MessageItem,
   context: RowContext
 ): Html =>
@@ -400,11 +389,11 @@ const assistantMessageView = (
     h,
     "message",
     row.showAssistantMeta || Option.isSome(row.changedFiles)
-      ? "pb-4 group/assistant"
-      : "pb-2 group/assistant",
+      ? "pb-(--space-4)"
+      : "pb-(--space-2)",
     [
       h.div(
-        [h.Class("relative min-w-0 px-1 py-0.5")],
+        [h.Class("relative min-w-0 text-ink-1")],
         [
           author(h, "Assistant"),
           markdownView(
@@ -419,7 +408,7 @@ const assistantMessageView = (
           ),
           Option.match(row.changedFiles, {
             onNone: () => h.empty,
-            onSome: (files) => filesCard(h, files),
+            onSome: (files) => filesCard(h, row.id, files, context),
           }),
           row.showAssistantMeta
             ? metaView(
@@ -427,8 +416,7 @@ const assistantMessageView = (
                 row.id,
                 row.message,
                 row.showAssistantCopyButton && !row.assistantCopyStreaming,
-                context,
-                "inline"
+                context
               )
             : h.empty,
         ]
@@ -457,10 +445,6 @@ const SUMMARY_ICONS: Readonly<
   mixed: [Wrench, "wrench"],
 };
 
-/** A work-log icon as t3code's muted `ToolActivityIconView` draws it. */
-const TOOL_ICON_CLASS =
-  "block size-4 shrink-0 stroke-2 opacity-70 light:brightness-60";
-
 const entryGlyph = (entry: WorkEntry): readonly [IconNode, string] => {
   if (entry.kind === "reasoning") {
     return [Brain, "brain"];
@@ -473,187 +457,166 @@ const entryGlyph = (entry: WorkEntry): readonly [IconNode, string] => {
   return ACTION_ICONS[entry.action];
 };
 
-const toolIcon = (
-  h: H,
-  [glyph, name]: readonly [IconNode, string],
-  tone: string
+/** A work line's glyph: the faint ink, or the failed tone for a call that failed. */
+const glyph = (
+  h: HtmlBuilder<Message>,
+  [node, name]: readonly [IconNode, string],
+  failed: boolean
 ): Html =>
   h.span(
-    [h.Class(`flex size-4 items-center justify-center ${tone}`)],
-    [icon(h, glyph, name, TOOL_ICON_CLASS)]
-  );
-
-/** t3code's `WorkLogLine`: the icon well, the one-line label and what trails it. */
-const workLogLine = (
-  h: H,
-  glyph: Html,
-  label: Html,
-  trailing: ReadonlyArray<Html>,
-  wrapLabel = false
-): Html =>
-  h.div(
     [
       h.Class(
-        `flex min-h-6 min-w-0 gap-1.5 text-sm leading-relaxed select-none [&_*]:select-none ${wrapLabel ? "items-start" : "items-center"}`
+        `flex size-4 shrink-0 items-center justify-center ${failed ? "text-tone-failed" : "text-ink-3"}`
+      ),
+    ],
+    [icon(h, node, name, "size-3.5 shrink-0")]
+  );
+
+/** One work line: the glyph, the one-line label, and what trails it. */
+const workLine = (
+  h: HtmlBuilder<Message>,
+  mark: Html,
+  label: Html,
+  trailing: ReadonlyArray<Html>,
+  wrap = false
+): Html =>
+  h.span(
+    [
+      h.Class(
+        classNames(
+          "flex min-h-6 w-full min-w-0 gap-(--space-2) text-ink-2",
+          TYPE.ui,
+          wrap ? "items-start" : "items-center"
+        )
       ),
     ],
     [
-      h.div(
-        [h.Class("flex min-w-0 flex-1 items-baseline gap-1.5")],
+      mark,
+      h.span(
         [
-          h.span(
-            [h.Class("relative w-6 shrink-0 leading-0")],
-            [
-              h.span(
-                [
-                  h.Class(
-                    "inline-block size-6 overflow-hidden align-[calc(0.5cap_-_0.75rem)]"
-                  ),
-                ],
-                [
-                  h.span(
-                    [h.Class("flex size-full items-center justify-center")],
-                    [glyph]
-                  ),
-                ]
-              ),
-            ]
+          h.Class(
+            `min-w-0 flex-1 text-left ${wrap ? "[overflow-wrap:anywhere]" : "truncate"}`
           ),
-          h.div(
-            [
-              h.Class(
-                `min-w-0 flex-1 text-secondary-label ${wrapLabel ? "" : "truncate [&_*]:whitespace-nowrap"}`
-              ),
-            ],
-            [label]
-          ),
-        ]
+        ],
+        [label]
       ),
       ...trailing,
     ]
   );
 
-const INTERACTIVE_CLASS =
-  "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70";
+/** A row that opens or folds something: a work line as a control, a finger tall on a phone. */
+const INTERACTIVE_CLASS = classNames(
+  "flex w-full min-w-0 cursor-pointer items-center rounded-(--radius-small) px-(--space-1) hover:bg-select-1 [&:hover_*]:text-ink-1",
+  HIT_HEIGHT,
+  FOCUS_RING_INSET,
+  FEEDBACK_MOTION
+);
 
-/** t3code's work-log row box: tighter inside an opened group. */
-const workRowClass = (grouped: boolean, interactive: boolean): string =>
-  `group/timeline-row relative w-full min-w-0 rounded-md px-0.5 text-left transition-colors ${grouped ? "py-0" : "py-0.5"} ${interactive ? INTERACTIVE_CLASS : ""}`;
+const STILL_CLASS =
+  "flex w-full min-w-0 items-center rounded-(--radius-small) px-(--space-1)";
 
 type WorkLogLayout = "standalone" | "group-header" | "group-content";
 
 const WORK_LOG_PADDING: Readonly<Record<WorkLogLayout, string>> = {
-  standalone: "pb-2",
+  standalone: "pb-(--space-2)",
   "group-header": "pb-0",
-  "group-content": "pb-1",
+  "group-content": "pb-(--space-1)",
 };
 
-/** t3code's `WorkLogBlock`: each part of a work log owns its trailing space. */
+/** Each part of a work log owns its trailing space, so a log that continues runs on unbroken. */
 const workLogBlock = (
-  h: H,
+  h: HtmlBuilder<Message>,
   layout: WorkLogLayout,
   continues: boolean,
   children: ReadonlyArray<Html>
 ): Html =>
   h.div([h.Class(continues ? "pb-0" : WORK_LOG_PADDING[layout])], children);
 
-const entryLabel = (h: H, label: string, failed: boolean): Html =>
-  h.div(
-    [h.Class("min-w-0 flex-1 overflow-hidden")],
-    [
-      h.p(
-        [
-          h.Class(
-            "flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed"
-          ),
-        ],
-        [
-          h.span(
-            [
-              h.Class(
-                `min-w-0 flex-1 truncate ${failed ? "font-medium text-destructive" : "text-secondary-label"}`
-              ),
-            ],
-            [label]
-          ),
-        ]
-      ),
-    ]
-  );
+const entryLabel = (
+  h: HtmlBuilder<Message>,
+  label: string,
+  failed: boolean
+): Html => h.span([h.Class(failed ? "text-tone-failed" : "")], [label]);
 
-const disclosureChevron = (h: H, visible: boolean): Html =>
+const disclosureChevron = (h: HtmlBuilder<Message>): Html =>
   h.span(
     [
       h.AriaHidden(true),
       h.Class(
-        `flex size-4 shrink-0 items-center justify-center ${visible ? "" : "invisible"}`
+        "flex size-4 shrink-0 items-center justify-center text-ink-3 transition-transform duration-(--duration-feedback) group-open/details:rotate-90"
       ),
     ],
-    [
-      icon(
-        h,
-        ChevronRight,
-        "chevron-right",
-        "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200 group-open/details:rotate-90"
-      ),
-    ]
+    [icon(h, ChevronRight, "chevron-right", "size-3")]
   );
 
-/**
- * One work entry, as t3code's `WorkEntryLogRow`: a call with output opens it in place (a native
- * `<details>`, so the row needs no state), one without is a plain line.
- */
+/** A fold's or a group's chevron: right while folded, down while open. */
+const chevron = (h: HtmlBuilder<Message>, expanded: boolean): Html =>
+  h.span(
+    [
+      h.AriaHidden(true),
+      h.Class(
+        `flex size-4 shrink-0 items-center justify-center text-ink-3 transition-transform duration-(--duration-feedback) ${expanded ? "rotate-90" : ""}`
+      ),
+    ],
+    [icon(h, ChevronRight, "chevron-right", "size-3")]
+  );
+
+/** One work entry: a call with output opens it in place (a native `<details>`), else a line. */
 const workEntryRow = (
-  h: H,
+  h: HtmlBuilder<Message>,
   entry: WorkEntry,
-  context: RowContext,
-  grouped: boolean
+  context: RowContext
 ): Html => {
   const label = workEntryDisplayLabel(entry, context.workspaceRoot);
   const failed = workEntryIndicatesToolFailure(entry);
-
-  const glyph = toolIcon(
-    h,
-    entryGlyph(entry),
-    failed ? "text-destructive" : "text-icon-muted"
-  );
+  const mark = glyph(h, entryGlyph(entry), failed);
 
   const body = Option.orElse(entry.output, () =>
     entry.kind === "reasoning" ? entry.detail : Option.none()
   );
 
-  const line = (expandable: boolean) =>
-    workLogLine(h, glyph, entryLabel(h, label, failed), [
-      timestamp(h, entry.createdAt),
-      disclosureChevron(h, expandable),
-    ]);
-
   return Option.match(body, {
-    onNone: () => h.div([h.Class(workRowClass(grouped, false))], [line(false)]),
+    onNone: () =>
+      h.div(
+        [h.Class(STILL_CLASS)],
+        [
+          workLine(h, mark, entryLabel(h, label, failed), [
+            time(h, entry.createdAt),
+          ]),
+        ]
+      ),
     onSome: (text) =>
       h.details(
-        [h.Class(`group/details ${workRowClass(grouped, true)}`)],
+        [h.Class("group/details w-full min-w-0")],
         [
           h.summary(
             [
               h.AriaLabel(failed ? `${label}, tool call failed` : label),
               h.Class(
-                "list-none focus-visible:outline-none [&::-webkit-details-marker]:hidden"
+                `${INTERACTIVE_CLASS} list-none [&::-webkit-details-marker]:hidden`
               ),
             ],
-            [line(true)]
+            [
+              workLine(h, mark, entryLabel(h, label, failed), [
+                time(h, entry.createdAt),
+                disclosureChevron(h),
+              ]),
+            ]
           ),
           h.div(
             [
               h.Class(
-                "ms-7 flex max-h-96 cursor-auto flex-col gap-3 overflow-auto px-0.5 py-1 select-text"
+                "ms-(--space-6) mt-(--space-1) max-h-96 cursor-auto overflow-auto rounded-(--radius-small) border border-stroke-1 bg-surface-sunken px-(--space-2) py-(--space-1-5) select-text"
               ),
             ],
             [
               h.pre(
                 [
                   h.Class(
-                    "font-mono text-xs text-muted-foreground whitespace-pre-wrap [overflow-wrap:anywhere]"
+                    classNames(
+                      "font-(family-name:--font-code) whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]",
+                      TYPE.small
+                    )
                   ),
                 ],
                 [text]
@@ -666,7 +629,7 @@ const workEntryRow = (
 };
 
 const workRowView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: Extract<TimelineRow, { readonly kind: "work" }>,
   context: RowContext
 ): Html => {
@@ -674,22 +637,15 @@ const workRowView = (
     return frame(h, "work", "", [
       workLogBlock(h, "group-content", row.continuesWorkLog, [
         h.div(
-          [h.Class("flex min-w-0 flex-col")],
           [
-            h.div(
-              [
-                h.Role("region"),
-                h.AriaLabel("Tool calls"),
-                h.DataAttribute("testid", "work-group-details"),
-                h.Class(
-                  "scrollbar-gutter-stable max-h-[min(18rem,50dvh)] scroll-py-6 overflow-x-hidden overflow-y-auto rounded-md"
-                ),
-              ],
-              row.groupedEntries.map((entry) =>
-                workEntryRow(h, entry, context, true)
-              )
+            h.Role("region"),
+            h.AriaLabel("Tool calls"),
+            h.DataAttribute("testid", "work-group-details"),
+            h.Class(
+              "ms-(--space-2) flex max-h-[min(18rem,50dvh)] flex-col overflow-x-hidden overflow-y-auto border-l border-stroke-2 ps-(--space-2)"
             ),
-          ]
+          ],
+          row.groupedEntries.map((entry) => workEntryRow(h, entry, context))
         ),
       ]),
     ]);
@@ -698,17 +654,15 @@ const workRowView = (
   return frame(h, "work", "", [
     workLogBlock(h, "standalone", row.continuesWorkLog, [
       h.section(
-        [h.AriaLabel("Activity")],
-        row.groupedEntries.map((entry) =>
-          workEntryRow(h, entry, context, false)
-        )
+        [h.AriaLabel("Activity"), h.Class("flex flex-col")],
+        row.groupedEntries.map((entry) => workEntryRow(h, entry, context))
       ),
     ]),
   ]);
 };
 
 const toggleView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: Extract<TimelineRow, { readonly kind: "work-toggle" }>
 ): Html =>
   frame(h, "work-toggle", "", [
@@ -726,18 +680,14 @@ const toggleView = (
             ),
             h.DataAttribute("testid", "work-toggle"),
             h.OnClick(Message.ToggledWorkGroup({ groupId: row.groupId })),
-            h.Class(workRowClass(false, true)),
+            h.Class(INTERACTIVE_CLASS),
           ],
           [
-            workLogLine(
+            workLine(
               h,
-              toolIcon(
-                h,
-                SUMMARY_ICONS[row.summaryKind],
-                row.hasFailure ? "text-destructive" : "text-icon-muted"
-              ),
-              h.span([h.Class("block truncate")], [row.summary]),
-              [timestamp(h, row.createdAt)]
+              glyph(h, SUMMARY_ICONS[row.summaryKind], row.hasFailure),
+              h.span([], [row.summary]),
+              [time(h, row.createdAt), chevron(h, row.expanded)]
             ),
           ]
         ),
@@ -747,40 +697,28 @@ const toggleView = (
 
 const SHINE = "live-tool-shine [--visible-animation-state:running]";
 
-/** t3code's `LiveActivityRow`: one work-log line sized to its text, with the shine while active. */
+/** The live activity: one work line sized to its words, with the shine while it works. */
 const liveActivity = (
-  h: H,
-  glyph: readonly [IconNode, string],
+  h: HtmlBuilder<Message>,
+  mark: readonly [IconNode, string],
   label: string,
   shine: boolean,
   failed: boolean
 ): Html =>
-  h.div(
+  h.span(
+    [h.Class("flex w-fit max-w-full min-w-0")],
     [
-      h.Class(
-        "relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed"
-      ),
-    ],
-    [
-      h.div(
-        [h.Class(workRowClass(false, false))],
-        [
-          workLogLine(
-            h,
-            toolIcon(h, glyph, failed ? "text-destructive" : "text-icon-muted"),
-            h.span(
-              [h.Class(`block truncate ${shine && !failed ? SHINE : ""}`)],
-              [label]
-            ),
-            []
-          ),
-        ]
+      workLine(
+        h,
+        glyph(h, mark, failed),
+        h.span([h.Class(shine && !failed ? SHINE : "")], [label]),
+        []
       ),
     ]
   );
 
 const liveView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: Extract<TimelineRow, { readonly kind: "work-live" }>,
   context: RowContext
 ): Html => {
@@ -805,23 +743,18 @@ const liveView = (
             h.DataAttribute("testid", "work-live"),
             h.OnClick(Message.ToggledWorkGroup({ groupId: row.groupId })),
             h.Class(
-              `group/live-work flex w-full max-w-full cursor-pointer rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 ${thought === "" ? "min-h-6 items-center" : "flex-col items-start"}`
+              `${INTERACTIVE_CLASS} ${thought === "" ? "" : "flex-col items-start gap-(--space-1) py-(--space-1)"}`
             ),
           ],
           [
             thought === ""
               ? h.empty
-              : h.div(
-                  [h.Class(workRowClass(false, false))],
-                  [
-                    workLogLine(
-                      h,
-                      toolIcon(h, [Brain, "brain"], "text-icon-muted"),
-                      h.span([h.Class("line-clamp-4")], [thought]),
-                      [],
-                      true
-                    ),
-                  ]
+              : workLine(
+                  h,
+                  glyph(h, [Brain, "brain"], false),
+                  h.span([h.Class("line-clamp-4")], [thought]),
+                  [],
+                  true
                 ),
             liveActivity(
               h,
@@ -838,7 +771,7 @@ const liveView = (
 };
 
 const thinkingView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: Extract<TimelineRow, { readonly kind: "thinking" }>
 ): Html => {
   const activity = liveActivity(h, [Brain, "brain"], "Thinking", true, false);
@@ -851,7 +784,10 @@ const thinkingView = (
       [
         Option.match(row.groupId, {
           onNone: () =>
-            h.div([h.DataAttribute("testid", "thinking")], [activity]),
+            h.div(
+              [h.DataAttribute("testid", "thinking"), h.Class(STILL_CLASS)],
+              [activity]
+            ),
           onSome: (groupId) =>
             h.button(
               [
@@ -859,9 +795,7 @@ const thinkingView = (
                 h.AriaExpanded(row.expanded),
                 h.DataAttribute("testid", "thinking"),
                 h.OnClick(Message.ToggledWorkGroup({ groupId })),
-                h.Class(
-                  "group/live-work flex min-h-6 w-full max-w-full cursor-pointer items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-                ),
+                h.Class(INTERACTIVE_CLASS),
               ],
               [activity]
             ),
@@ -871,54 +805,55 @@ const thinkingView = (
   ]);
 };
 
+/** The working line: the working glyph and how long the turn has run, ticking each second. */
 const workingView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: Extract<TimelineRow, { readonly kind: "working" }>
 ): Html =>
-  frame(h, "working", "pb-1.5", [
+  frame(h, "working", "pb-(--space-1-5)", [
     h.div(
       [
         h.DataAttribute("testid", "working"),
-        h.Class("border-b border-border/60 pb-2 pt-1"),
+        h.Class(
+          classNames(
+            "flex h-6 min-w-0 items-center gap-(--space-1-5) px-(--space-1) text-ink-2 tabular-nums",
+            TYPE.small
+          )
+        ),
       ],
       [
-        h.div(
-          [
-            h.Class(
-              "flex h-6 min-w-0 items-baseline gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums"
-            ),
-          ],
-          [
-            h.span(
-              [h.Class("relative shrink-0 overflow-hidden whitespace-nowrap")],
-              Option.match(row.createdAt, {
-                onNone: () => ["Working..."],
-                onSome: (startedAt) => [
-                  "Working for ",
-                  h.span(
-                    [h.OnMount(WorkingTimer({ startedAt }))],
-                    [formatDuration(0)]
-                  ),
-                ],
-              })
-            ),
-          ]
+        h.span(
+          [h.Class("flex size-4 shrink-0 text-tone-working")],
+          [statusGlyph(h, "busy", "small")]
+        ),
+        h.span(
+          [h.Class("whitespace-nowrap")],
+          Option.match(row.createdAt, {
+            onNone: () => ["Working..."],
+            onSome: (startedAt) => [
+              "Working for ",
+              h.span(
+                [h.OnMount(WorkingTimer({ startedAt }))],
+                [formatDuration(0)]
+              ),
+            ],
+          })
         ),
       ]
     ),
   ]);
 
+/**
+ * A settled turn's fold line: the chevron, how long it worked, then what the hidden work was (its
+ * tally), and the turn's time at the end. One line: on a phone the tally truncates from the right.
+ */
 const foldView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: Extract<TimelineRow, { readonly kind: "turn-fold" }>
 ): Html =>
-  frame(h, "turn-fold", "pb-1.5", [
+  frame(h, "turn-fold", "pb-(--space-2)", [
     h.div(
-      [
-        h.Class(
-          "group/timeline-row relative flex items-center gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1"
-        ),
-      ],
+      [h.Class("flex min-w-0 items-center gap-(--space-2)")],
       [
         h.button(
           [
@@ -928,48 +863,145 @@ const foldView = (
             h.DataAttribute("scroll-anchor-ignore", "true"),
             h.OnClick(Message.ToggledTurnFold({ turnId: row.turnId })),
             h.Class(
-              "flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+              classNames(
+                INTERACTIVE_CLASS,
+                "min-h-7 gap-(--space-1-5) text-ink-3",
+                TYPE.small
+              )
             ),
           ],
-          [h.span([], [row.label]), chevron(h, row.expanded)]
+          [
+            chevron(h, row.expanded),
+            h.span(
+              [h.Class("shrink-0 whitespace-nowrap tabular-nums")],
+              [row.label]
+            ),
+            row.tally.length === 0
+              ? h.empty
+              : h.span(
+                  [
+                    h.DataAttribute("testid", "fold-tally"),
+                    h.Class("min-w-0 flex-1 truncate text-left tabular-nums"),
+                  ],
+                  [
+                    row.tally
+                      .map((part) => ` · ${String(part.count)} ${part.word}`)
+                      .join(""),
+                  ]
+                ),
+            time(h, row.createdAt, "ms-auto ps-(--space-2)"),
+          ]
         ),
-        timestamp(h, row.createdAt, "ms-auto"),
       ]
     ),
   ]);
 
 const compactionView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: Extract<TimelineRow, { readonly kind: "context-compaction" }>
 ): Html =>
-  frame(h, "context-compaction", "pb-4", [
+  frame(h, "context-compaction", "pb-(--space-4)", [
     h.div(
       [
         h.Role("separator"),
         h.AriaLabel(row.label),
         h.Class(
-          "mx-auto flex w-full max-w-(--chat-content-max-width) items-center gap-3 py-1 text-muted-foreground text-xs"
+          classNames(
+            "flex w-full items-center gap-(--space-3) py-(--space-1) text-ink-3",
+            TYPE.small
+          )
         ),
       ],
       [
-        h.span([h.Class("h-px flex-1 bg-border/70")], []),
+        h.span([h.Class("h-px flex-1 bg-stroke-1")]),
         h.span(
-          [h.Class("relative shrink-0 overflow-hidden")],
-          [
-            h.span(
-              [h.Class("flex items-center gap-1.5")],
-              [icon(h, Minimize2, "minimize-2", "size-3"), row.label]
-            ),
-          ]
+          [h.Class("flex shrink-0 items-center gap-(--space-1-5)")],
+          [icon(h, Minimize2, "minimize-2", "size-3"), row.label]
         ),
-        h.span([h.Class("h-px flex-1 bg-border/70")], []),
+        h.span([h.Class("h-px flex-1 bg-stroke-1")]),
       ]
     ),
   ]);
 
-/** A failed turn, drawn as t3code draws a failed item: a work-log line, then Retry. */
+/**
+ * An input the brain wrote on its own (a wake, a subagent's question, a brief): a quiet line in
+ * the notice row's frame, with its time and no copy button, never the user's bubble. A long one
+ * folds as a long user message does.
+ */
+const brainInputView = (
+  h: HtmlBuilder<Message>,
+  row: Extract<TimelineRow, { readonly kind: "brain-input" }>,
+  context: RowContext
+): Html => {
+  const collapsible = shouldCollapseUserMessage(row.message.text);
+  const collapsed = collapsible && !context.expanded;
+
+  return frame(h, "brain-input", "", [
+    workLogBlock(h, "standalone", false, [
+      h.div(
+        [
+          h.DataAttribute("testid", "brain-input"),
+          h.Class("flex flex-col gap-(--space-1)"),
+        ],
+        [
+          h.div(
+            [h.Class(STILL_CLASS)],
+            [
+              workLine(
+                h,
+                glyph(h, [Info, "info"], false),
+                h.span(
+                  [
+                    h.Class(
+                      classNames(
+                        "block whitespace-pre-wrap text-ink-3",
+                        collapsed
+                          ? "max-h-[8rem] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]"
+                          : ""
+                      )
+                    ),
+                  ],
+                  [row.message.text]
+                ),
+                [time(h, row.createdAt)],
+                true
+              ),
+            ]
+          ),
+          collapsible
+            ? h.div(
+                [h.Class("ms-(--space-6)")],
+                [
+                  h.button(
+                    [
+                      h.Type("button"),
+                      h.AriaExpanded(!collapsed),
+                      h.OnClick(Message.ToggledUserMessage({ rowId: row.id })),
+                      h.Class(TEXT_BUTTON_CLASS),
+                    ],
+                    [collapsed ? "Show more" : "Show less"]
+                  ),
+                ]
+              )
+            : h.empty,
+        ]
+      ),
+    ]),
+  ]);
+};
+
+const RETRY_CLASS = classNames(
+  "inline-flex h-7 cursor-pointer items-center gap-(--space-1-5) rounded-(--radius-small) border border-stroke-2 bg-select-1 px-(--space-2) text-ink-1 hover:bg-select-2 [&_svg]:size-3.5",
+  TYPE.small,
+  WEIGHT_MEDIUM,
+  HIT_TARGET,
+  FOCUS_RING,
+  FEEDBACK_MOTION
+);
+
+/** A failed turn: a work line in the failed tone, then Retry. */
 const errorView = (
-  h: H,
+  h: HtmlBuilder<Message>,
   row: Extract<TimelineRow, { readonly kind: "error" }>,
   context: RowContext
 ): Html =>
@@ -982,22 +1014,28 @@ const errorView = (
             [
               h.DataAttribute("testid", "error-row"),
               h.Role("alert"),
-              h.Class(workRowClass(false, false)),
+              h.Class("flex flex-col gap-(--space-1)"),
             ],
             [
-              workLogLine(
-                h,
-                toolIcon(h, [CircleAlert, "circle-alert"], "text-destructive"),
-                h.span(
-                  [
-                    h.Class(
-                      "whitespace-pre-wrap wrap-break-word text-sm font-medium text-destructive"
+              h.div(
+                [h.Class(STILL_CLASS)],
+                [
+                  workLine(
+                    h,
+                    glyph(h, [CircleAlert, "circle-alert"], true),
+                    h.span(
+                      [h.Class("whitespace-pre-wrap text-tone-failed")],
+                      [
+                        Option.getOrElse(
+                          row.entry.detail,
+                          () => "The turn failed."
+                        ),
+                      ]
                     ),
-                  ],
-                  [Option.getOrElse(row.entry.detail, () => "The turn failed.")]
-                ),
-                [timestamp(h, row.createdAt, "", true)],
-                true
+                    [time(h, row.createdAt)],
+                    true
+                  ),
+                ]
               ),
               Option.match(
                 row.retryable ? context.retryPrompt : Option.none(),
@@ -1005,7 +1043,7 @@ const errorView = (
                   onNone: () => h.empty,
                   onSome: (prompt) =>
                     h.div(
-                      [h.Class("ms-7 pb-1")],
+                      [h.Class("ms-(--space-6) pb-(--space-1)")],
                       [
                         h.button(
                           [
@@ -1022,12 +1060,9 @@ const errorView = (
                                 skillRefs: prompt.skills,
                               })
                             ),
-                            h.Class(buttonClass("outline", "xs")),
+                            h.Class(RETRY_CLASS),
                           ],
-                          [
-                            icon(h, RotateCcw, "rotate-ccw", "size-3.5"),
-                            "Retry",
-                          ]
+                          [icon(h, RotateCcw, "rotate-ccw", ""), "Retry"]
                         ),
                       ]
                     ),
@@ -1046,13 +1081,13 @@ const HISTORY_LABEL: Readonly<Record<HistoryState, string>> = {
   failed: "Could not load earlier turns. Try again",
 };
 
-/** t3code's `TimelineHistoryControl`: a divider with the label in its middle. */
-const historyView = (h: H, context: RowContext): Html =>
+/** The history control: a hairline with its words in the middle. */
+const historyView = (h: HtmlBuilder<Message>, context: RowContext): Html =>
   h.div(
     [h.Class(FRAME_CLASS)],
     [
       h.div(
-        [h.Class("chat-content-lane flex flex-col gap-1.5 pb-2")],
+        [h.Class("chat-content-lane flex flex-col pb-(--space-2)")],
         [
           h.button(
             [
@@ -1075,19 +1110,18 @@ const historyView = (h: H, context: RowContext): Html =>
                 ],
               }),
               h.Class(
-                "flex w-full cursor-pointer items-center gap-3 py-1.5 text-muted-foreground text-xs hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60"
+                classNames(
+                  "flex w-full cursor-pointer items-center gap-(--space-3) rounded-(--radius-small) py-(--space-1-5) text-ink-3 hover:text-ink-1 disabled:cursor-default disabled:opacity-60",
+                  TYPE.small,
+                  HIT_HEIGHT,
+                  FOCUS_RING
+                )
               ),
             ],
             [
-              h.span(
-                [h.AriaHidden(true), h.Class("h-px flex-1 bg-border/70")],
-                []
-              ),
+              h.span([h.AriaHidden(true), h.Class("h-px flex-1 bg-stroke-1")]),
               h.span([h.Class("shrink-0")], [HISTORY_LABEL[context.history]]),
-              h.span(
-                [h.AriaHidden(true), h.Class("h-px flex-1 bg-border/70")],
-                []
-              ),
+              h.span([h.AriaHidden(true), h.Class("h-px flex-1 bg-stroke-1")]),
             ]
           ),
         ]
@@ -1096,7 +1130,11 @@ const historyView = (h: H, context: RowContext): Html =>
   );
 
 /** One item of the transcript. */
-export const rowView = (h: H, item: ListItem, context: RowContext): Html =>
+export const rowView = (
+  h: HtmlBuilder<Message>,
+  item: ListItem,
+  context: RowContext
+): Html =>
   Match.value(item).pipe(
     Match.discriminatorsExhaustive("kind")({
       history: () => historyView(h, context),
@@ -1104,20 +1142,23 @@ export const rowView = (h: H, item: ListItem, context: RowContext): Html =>
         row.message.role === "user"
           ? userMessageView(h, row.id, row.message, context)
           : assistantMessageView(h, row, context),
+      "brain-input": (row) => brainInputView(h, row, context),
+      pending: (row) =>
+        userMessageView(
+          h,
+          row.id,
+          row.message,
+          context,
+          Option.some(row.sent ? SENT : NOT_SENT)
+        ),
       "assistant-meta": (row) =>
-        frame(h, "assistant-meta", "pb-4 group/assistant", [
-          h.div(
-            [h.Class("px-1")],
-            [
-              metaView(
-                h,
-                row.id,
-                row.message,
-                row.showAssistantCopyButton && !row.assistantCopyStreaming,
-                context,
-                "row"
-              ),
-            ]
+        frame(h, "assistant-meta", "pb-(--space-4)", [
+          metaView(
+            h,
+            row.id,
+            row.message,
+            row.showAssistantCopyButton && !row.assistantCopyStreaming,
+            context
           ),
         ]),
       work: (row) => workRowView(h, row, context),
@@ -1129,10 +1170,11 @@ export const rowView = (h: H, item: ListItem, context: RowContext): Html =>
       "context-compaction": (row) => compactionView(h, row),
       error: (row) => errorView(h, row, context),
       "changed-files": (row) =>
-        frame(h, "changed-files", "pb-4", [filesCard(h, row)]),
-      // Only the `next` views make these two items, and its chunk draws them (`Subagents.ts`).
+        frame(h, "changed-files", "pb-(--space-4)", [
+          filesCard(h, row.id, row, context),
+        ]),
       subagents: (row) =>
-        frame(h, "subagents", "pb-2", [
+        frame(h, "subagents", "pb-(--space-2)", [
           Option.match(Option.all([subagentRowViews(), context.subagents]), {
             onNone: () => h.empty,
             onSome: ([views, shells]) =>
@@ -1145,7 +1187,7 @@ export const rowView = (h: H, item: ListItem, context: RowContext): Html =>
           }),
         ]),
       "parent-link": (row) =>
-        frame(h, "parent-link", "pt-1 pb-2", [
+        frame(h, "parent-link", "pt-(--space-1) pb-(--space-2)", [
           Option.match(Option.all([subagentRowViews(), context.subagents]), {
             onNone: () => h.empty,
             onSome: ([views, shells]) => views.parentLink(h, row, shells),

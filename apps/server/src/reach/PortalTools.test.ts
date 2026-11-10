@@ -37,21 +37,23 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import {
-  answerApproval,
-  Approvals,
-  ThreadMeta,
-  writeMode,
-} from "../brain/CairnDocs.ts";
+import { answerApproval } from "../approvals/ApprovalLedger.ts";
+import { Approvals, ThreadMeta, writeMode } from "../brain/CairnDocs.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
+import { testLimit, slackened } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
+import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
-import { makeFakePorch, PorchClient } from "./PorchClient.ts";
+import { makeFakePorch } from "./FakePorch.ts";
+import { makeFakeUnits } from "./FakePortalUnits.ts";
+import { PorchClient } from "./PorchClient.ts";
 import { isPortalName, PortalFaults, Portals } from "./Portals.ts";
 import type { PortalFaultHooks } from "./Portals.ts";
 import { PortalTools } from "./PortalTools.ts";
-import { makeFakeUnits, PortalUnits } from "./PortalUnits.ts";
+import { PortalUnits } from "./PortalUnits.ts";
+
+isolateGitEnvironment();
 
 const context = BACKGROUND_CONTEXT;
 
@@ -216,7 +218,7 @@ const pendingApproval = (
 
       yield* Effect.sleep(Duration.millis(20));
     }
-  }).pipe(Effect.timeout(Duration.seconds(10)), Effect.orDie);
+  }).pipe(Effect.timeout(slackened(Duration.seconds(10))), Effect.orDie);
 
 /** The user's answer to one approval. */
 const answer = (
@@ -322,7 +324,7 @@ describe("the portal tools", () => {
           ]);
         }).pipe(Effect.provide(layer));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live("refuses a conversation that is not a Cairn thread", () =>
@@ -428,7 +430,7 @@ describe("the portal tools", () => {
           assert.deepStrictEqual(yield* units.running, []);
         }).pipe(Effect.provide(layer));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -476,7 +478,7 @@ describe("the portal tools", () => {
           assert.deepStrictEqual(yield* rowStates, []);
         }).pipe(Effect.provide(layer));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live("full access opens at once and writes no approval record", () =>
@@ -585,6 +587,6 @@ describe("the portal tools", () => {
           );
         }).pipe(Effect.provide(layer));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000
+    testLimit(30_000)
   );
 });

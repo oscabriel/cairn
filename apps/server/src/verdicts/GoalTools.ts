@@ -5,31 +5,30 @@
 // - `goal_criteria` writes a `criteria` approval (`call-<task id>`, so a rerun finds it) and returns
 //   at once: the user binds the criteria by accepting it, in the answering commit
 //   (`Verdicts.criteriaAnswered`), never the model. It refuses a model judge that cannot run: a
-//   named model that is not ready, or the Claude bridge, named or as the thread's own model, which
-//   a judge naming none runs on (ADR 0043). It always asks, whatever the thread's mode.
+//   named model that is not ready, or the Claude bridge, and a judge on the thread's own model,
+//   named or by naming none, which only the user may pick (ADR 0055). It always asks, whatever the
+//   thread's mode.
 // - `goal_check {criterion}` creates the judge run in one commit that also indexes it under the
 //   tool's task in `cairn.judge-runs`, so a rerun of the tool finds its run, and a criterion whose
 //   run is still going is not queued again. It returns "queued", never a verdict. Without a
 //   criterion it lists the goal. A `user` judge is the user's to mark; nothing is queued.
 //
-// A subagent's work is judged by its brief's `doneWhen`, so both tools refuse in a child: goals
+// A subagent's result goes to its parent, which accepts it (its brief's `done_when` command is shown
+// and given to the child, not run, ADR 0055), so both tools refuse in a child: goals
 // live on the threads the user talks to, the project thread first among them (2026-10-29).
 
 import type { ModelRef } from "@cairn/protocol/Models";
-import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionApi, Tx } from "@earendil-works/pi-durable";
-import {
-  DEFAULT_RESTART_LIMIT,
-  defineExtension,
-  defineTool,
-} from "@earendil-works/pi-durable";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Effect, Option, Result } from "effect";
+import { Type } from "typebox";
 
-import { approvalLedger } from "../brain/CairnDocs.ts";
+import { approvalLedger } from "../approvals/ApprovalLedger.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
+import { ChildDoc, isLinked } from "../brain/SubagentDocs.ts";
 import { taskOf } from "../subagents/Delivery.ts";
-import { ChildDoc, isLinked } from "../subagents/SubagentDocs.ts";
 import {
   CRITERIA_TTL_MILLIS,
   criteriaSummary,
@@ -63,7 +62,7 @@ const text = (value: string, isError = false) => ({
 });
 
 const IN_A_CHILD =
-  "Goals live on the threads the user talks to. A subagent's result is judged by its brief's done-when criteria; report your result instead.";
+  "Goals live on the threads the user talks to. A subagent's result goes to its parent, which accepts it; report your result instead.";
 
 const checkParameters = Type.Object({
   criterion: Type.Optional(
@@ -140,8 +139,8 @@ const inChild = async (
 
 /**
  * The first of `items` (unsettled index items of one criterion) whose judge run can still settle
- * it. An item whose task is gone, ended without its completing commit (a fault), or parked by the
- * crash-loop guard can never settle on its own: it is settled here at `now`, in the asking commit,
+ * it. An item whose task is gone, or ended without its completing commit (a fault, or boot's crash
+ * accounting, `CrashLimit.ts`), can never settle on its own: it is settled here at `now`, in the asking commit,
  * so the criterion is queued afresh rather than waiting on it for good. Table reads: call it
  * before the commit's first table write.
  */
@@ -157,8 +156,7 @@ const liveRunOf = async (
     const live =
       task !== undefined &&
       task.state.status !== "completing" &&
-      task.state.status !== "terminal" &&
-      (task.restarts ?? 0) < DEFAULT_RESTART_LIMIT;
+      task.state.status !== "terminal";
 
     if (live) {
       return Option.some(item);
@@ -170,21 +168,27 @@ const liveRunOf = async (
   return Option.none();
 };
 
-/** The goals extension over `models` (the model judge's resolver and caller) and `faults`. */
+/**
+ * The goals extension over `models` (the model judge's resolver and caller) and `faults`, running
+ * its Effects through `run`.
+ */
 export const goalsExtension = (
   models: JudgeModels,
-  faults: JudgeFaults
+  faults: JudgeFaults,
+  run: DurableRunner
 ): CairnExtension => {
-  const JudgeRun = judgeRunTask(models, faults);
+  const JudgeRun = judgeRunTask(models, faults, run);
 
   /**
    * Why a model judge cannot run on a thread on `threadModel`; none when it can. A named model must
-   * be ready; one naming none (or a role, recorded before ADR 0043) runs on the thread's own model.
-   * Neither may be the Claude bridge.
+   * be ready and may not be the Claude bridge; one naming none would run on the thread's own and is
+   * refused (ADR 0055). `by` says who named the model:
+   * the thread's model may not propose itself, while a bound criterion's model is the user's pick.
    */
   const judgeCannotRun = async (
     spec: string | null,
-    threadModel: Option.Option<ModelRef>
+    threadModel: Option.Option<ModelRef>,
+    by: "proposed" | "user"
   ): Promise<Option.Option<string>> => {
     const named = judgeSpecOf(spec);
 
@@ -204,7 +208,12 @@ export const goalsExtension = (
 
     return Result.match(resolved, {
       onFailure: (why) => Option.some(why),
-      onSuccess: (model) => judgeModelRefusal(model, Option.isSome(named)),
+      onSuccess: (model) =>
+        judgeModelRefusal(
+          model,
+          Option.isSome(named) ? by : "none",
+          threadModel
+        ),
     });
   };
 
@@ -259,7 +268,8 @@ export const goalsExtension = (
 
         const refusal = await judgeCannotRun(
           criterion.judge.spec,
-          Option.fromUndefinedOr(agent.model)
+          Option.fromUndefinedOr(agent.model),
+          "user"
         );
 
         if (Option.isSome(refusal)) {
@@ -362,7 +372,8 @@ export const goalsExtension = (
         // oxlint-disable-next-line no-await-in-loop -- one judge at a time, refusing at the first
         const refusal = await judgeCannotRun(
           proposal.judge.spec,
-          Option.fromUndefinedOr(agent.model)
+          Option.fromUndefinedOr(agent.model),
+          "proposed"
         );
 
         if (Option.isSome(refusal)) {
@@ -375,7 +386,7 @@ export const goalsExtension = (
 
       const ledger = approvalLedger(api);
 
-      const asked = await Effect.runPromise(
+      const asked = await run.promise(
         ledger
           .ask({
             tool: GOAL_CRITERIA_TOOL,

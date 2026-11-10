@@ -34,7 +34,10 @@ const App = Layer.mergeAll(
   HttpRouter.add("POST", "/api/thing", ok),
   HttpRouter.add("DELETE", "/api/thing", ok),
   HttpRouter.add("GET", "/_cairn/auth", ok),
-  HttpRouter.add("GET", "/_cairn/health", ok)
+  HttpRouter.add("GET", "/_cairn/health", ok),
+  HttpRouter.add("POST", "/_cairn/notify/nightly-failed", ok),
+  HttpRouter.add("GET", "/_cairn/notify/nightly-failed", ok),
+  HttpRouter.add("POST", "/_cairn/notify/other", ok)
 ).pipe(
   Layer.provide(Identity.layerNoDeps),
   Layer.provide(Tailscale.fixed(new Map())),
@@ -279,6 +282,28 @@ describe("the guard", () => {
         assert.strictEqual(auth.status, 200);
         assert.strictEqual(health.status, 200);
         assert.strictEqual(postAuth.status, 421);
+      })
+  );
+
+  it.effect(
+    "leaves the nightly's failure notice to its own rules, for POST only",
+    () =>
+      Effect.gen(function* () {
+        const notice = yield* send("POST", "/_cairn/notify/nightly-failed", {
+          host: "127.0.0.1:3774",
+        });
+
+        const getNotice = yield* send("GET", "/_cairn/notify/nightly-failed", {
+          host: "127.0.0.1:3774",
+        });
+
+        const elsewhere = yield* send("POST", "/_cairn/notify/other", {
+          host: "127.0.0.1:3774",
+        });
+
+        assert.strictEqual(notice.status, 200);
+        assert.strictEqual(getNotice.status, 421);
+        assert.strictEqual(elsewhere.status, 421);
       })
   );
 });

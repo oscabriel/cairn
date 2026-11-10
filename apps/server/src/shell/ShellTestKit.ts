@@ -61,7 +61,7 @@ export const createThread = (projectId: ProjectId, n: number) =>
 /** A project id that no command made. */
 export const unknownProjectId = ProjectId.make("prj_missing");
 
-/** The RPC group with only the shell's two procedures, for clients that test them alone. */
+/** The RPC group with only the shell's procedures, for clients that test them alone. */
 export const ShellRpcs = CairnRpcs.omit(
   "session.hello",
   "thread.launch",
@@ -70,7 +70,6 @@ export const ShellRpcs = CairnRpcs.omit(
   "thread.withdraw",
   "thread.configure",
   "thread.respond",
-  "thread.retryTask",
   "thread.subscribe",
   "thread.history",
   "thread.entry",
@@ -96,6 +95,8 @@ export const ShellRpcs = CairnRpcs.omit(
   "settings.update",
   "models.check",
   "spend.get",
+  "budget.declare",
+  "budget.get",
   "providers.login.start",
   "providers.login.cancel",
   "providers.logout",

@@ -13,12 +13,8 @@ import type {
   SubagentStatus,
   SubagentTally,
 } from "@cairn/protocol/Subagents";
-import {
-  NO_SUBAGENTS,
-  SettlementOutcome as SettlementOutcomeSchema,
-  SubagentStatus as SubagentStatusSchema,
-} from "@cairn/protocol/Subagents";
-import { Option, Schema } from "effect";
+import { NO_SUBAGENTS, SubagentRecord } from "@cairn/protocol/Subagents";
+import { Option, Schema, Struct } from "effect";
 
 /**
  * What the tally reads of one child: its status, how its latest settlement ended, and whether a
@@ -56,14 +52,10 @@ export const tallyOf = (children: Iterable<TallyChild>): SubagentTally => {
 export const hasLiveChildren = (tally: SubagentTally): boolean =>
   tally.working + tally.asking > 0;
 
-/** What the tally reads of one stored registry item; other fields are left alone. */
-const TallyItem = Schema.Struct({
-  status: SubagentStatusSchema,
-  settlements: Schema.Array(
-    Schema.Struct({ outcome: SettlementOutcomeSchema })
-  ),
-  delivered: Schema.Int,
-});
+/** What the tally reads of one stored registry item, as the protocol's `SubagentRecord` has it. */
+const TallyItem = SubagentRecord.mapFields(
+  Struct.pick(["status", "settlements", "delivered"])
+);
 
 const decodeItem = Schema.decodeUnknownOption(TallyItem);
 

@@ -2,7 +2,8 @@
 // file search, branches, the scratch project), the thread controls that are not turn input (stop,
 // withdraw, configure), and the two that turn a draft into a turn: each mints the ids the brain
 // dedupes on, so a resend after a reconnect lands once. Turn input itself goes through the root's
-// outbox, never straight to the socket.
+// outbox, never straight to the socket. A draft in a project with a live project thread is not
+// launched: it opens that thread (ADR 0048).
 
 import { AttachmentRef } from "@cairn/protocol/Attachments";
 import { ProjectId, SubmissionId, ThreadId } from "@cairn/protocol/Ids";
@@ -14,7 +15,7 @@ import { SendInput, TurnInput, WhenBusy } from "@cairn/protocol/Thread";
 import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import { focus } from "foldkit/dom";
-import { replaceUrl } from "foldkit/navigation";
+import { pushUrl, replaceUrl } from "foldkit/navigation";
 
 import { CairnConnection, withBoundary } from "../connection/Connection.ts";
 import { failureMessageOrTag } from "../connection/Failure.ts";
@@ -22,8 +23,8 @@ import { OutboxItem } from "../connection/Outbox.ts";
 import { workspaceStrategy, EnvMode } from "../hero/ContextStrip.ts";
 import { draftRouter, threadRouter } from "../Route.ts";
 import {
-  loadDrafts,
   loadSettings,
+  readDrafts,
   saveDrafts,
   saveSettings,
 } from "./Drafts.ts";
@@ -39,10 +40,6 @@ import { ComposerSettings, defaultSettings, Draft } from "./Model.ts";
 const failed =
   (draftKey: Option.Option<string>) => (failure: { readonly _tag: string }) =>
     Message.FailedRequest({ draftKey, message: failureMessageOrTag(failure) });
-
-/** A thread's request fails into that thread's composer. */
-const failedIn = (threadId: ThreadId) =>
-  failed(Option.some(`thread:${threadId}`));
 
 /**
  * Puts the keyboard in an opened picker's search field (T30), so typing filters, Enter picks and
@@ -72,7 +69,9 @@ export const DetectPlatform = Command.define("DetectPlatform", {
 /** Reads the drafts saved on this device. */
 export const LoadDrafts = Command.define("LoadDrafts", {
   messages: [Message.LoadedDrafts],
-  execute: Effect.map(loadDrafts, (drafts) => Message.LoadedDrafts({ drafts })),
+  execute: Effect.map(readDrafts, ({ tell, value }) =>
+    Message.LoadedDrafts({ drafts: value, tell })
+  ),
 });
 
 /** Writes the drafts this tab changed since `base`, the drafts as it last read or wrote them. */
@@ -128,6 +127,19 @@ export const MoveHeroToDraftUrl = Command.define("MoveHeroToDraftUrl", {
         replaceUrl(`${draftRouter({ draftId })}${suffix}`)
       ),
       Effect.as(Message.MovedHeroToDraftUrl())
+    ),
+});
+
+/**
+ * Opens the project thread a draft's send went to instead of launching (ADR 0048), as a launch
+ * opens its new thread: the draft's words and attachments are already in its composer, unsent.
+ */
+export const OpenProjectThread = Command.define("OpenProjectThread", {
+  args: { threadId: ThreadId },
+  messages: [Message.CompletedRequest],
+  execute: ({ threadId }) =>
+    pushUrl(threadRouter({ threadId })).pipe(
+      Effect.as(Message.CompletedRequest())
     ),
 });
 
@@ -220,30 +232,50 @@ export const EnsureScratch = Command.define("EnsureScratch", {
     ),
 });
 
+/**
+ * The draft a thread control was used from, whose composer shows why it failed: the thread's own
+ * on its page, the scratch overlay's while it serves the scratch thread.
+ */
+const ThreadControlDraft = Schema.Option(Schema.String);
+
 /** Stops the thread's run; with `clearQueue`, its queued inputs go too. */
 export const StopThread = Command.define("StopThread", {
-  args: { threadId: ThreadId, clearQueue: Schema.Boolean },
+  args: {
+    threadId: ThreadId,
+    clearQueue: Schema.Boolean,
+    draftKey: ThreadControlDraft,
+  },
   messages: [Message.CompletedRequest, Message.FailedRequest],
-  execute: (input) =>
+  execute: ({ clearQueue, draftKey, threadId }) =>
     onClient((client) =>
-      client["thread.stop"]({ ...input, subagents: Option.none() })
+      client["thread.stop"]({
+        threadId,
+        clearQueue,
+        subagents: Option.none(),
+      })
     ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failedIn(input.threadId),
+        onFailure: failed(draftKey),
       })
     ),
 });
 
 /** Takes back one queued input. */
 export const WithdrawQueued = Command.define("WithdrawQueued", {
-  args: { threadId: ThreadId, submissionId: SubmissionId },
+  args: {
+    threadId: ThreadId,
+    submissionId: SubmissionId,
+    draftKey: ThreadControlDraft,
+  },
   messages: [Message.CompletedRequest, Message.FailedRequest],
-  execute: (input) =>
-    onClient((client) => client["thread.withdraw"](input)).pipe(
+  execute: ({ draftKey, submissionId, threadId }) =>
+    onClient((client) =>
+      client["thread.withdraw"]({ threadId, submissionId })
+    ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failedIn(input.threadId),
+        onFailure: failed(draftKey),
       })
     ),
 });
@@ -254,15 +286,21 @@ export const ConfigureThread = Command.define("ConfigureThread", {
     threadId: ThreadId,
     model: Schema.Option(ModelRef),
     thinkingLevel: Schema.Option(ThinkingLevel),
+    draftKey: ThreadControlDraft,
   },
   messages: [Message.CompletedRequest, Message.FailedRequest],
-  execute: (input) =>
+  execute: ({ draftKey, model, thinkingLevel, threadId }) =>
     onClient((client) =>
-      client["thread.configure"]({ ...input, runtimeMode: Option.none() })
+      client["thread.configure"]({
+        threadId,
+        model,
+        thinkingLevel,
+        runtimeMode: Option.none(),
+      })
     ).pipe(
       Effect.match({
         onSuccess: () => Message.CompletedRequest(),
-        onFailure: failedIn(input.threadId),
+        onFailure: failed(draftKey),
       })
     ),
 });

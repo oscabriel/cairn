@@ -63,6 +63,9 @@ import {
   touchRule,
 } from "./lib/LookRules.ts";
 import type { Violation } from "./lib/LookRules.ts";
+import { recordOnExit } from "./lib/Record.ts";
+
+recordOnExit(import.meta);
 
 /* oxlint-disable no-await-in-loop -- a judge drives one browser page after another, on purpose */
 
@@ -208,7 +211,7 @@ const plantFocus = (): boolean => {
 /** A block 600 px wide inside a specimen. */
 const plantWide = (): boolean => {
   const into = document.querySelector<HTMLElement>(
-    '[data-look-state="divider/horizontal"] > div'
+    '[data-look-state="kbd/key"] > div'
   );
 
   if (into === null) {
@@ -219,6 +222,9 @@ const plantWide = (): boolean => {
 
   wide.dataset.planted = "";
   wide.style.setProperty("width", "600px");
+  // Unshrinkable: the key hint's specimen is a wrapping flex row, which would shrink an empty block
+  // 600 px wide to fit (its min-content width is 0), and the page would not scroll.
+  wide.style.setProperty("min-width", "600px");
   wide.style.setProperty("height", "4px");
   into.append(wide);
 

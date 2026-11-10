@@ -4,10 +4,13 @@
 // - cwd isolation: two threads in two folders calling at once each see the folder their own
 //   instance started in. The mutation control runs the same calls on a host that shares one
 //   instance between folders and must fail them, which proves the judge can fail.
-// - the allowlist: a package no policy names never runs its code, one outside its version range
-//   loads nothing, and one that registers a provider is dropped while boot goes on.
+// - the allowlist: a package no policy names never runs its code, one outside its version ranges
+//   loads nothing, one inside any of them loads, and one that registers a provider is dropped
+//   while boot goes on.
 // - the pool: concurrent first calls in one folder share one start, the least recently used idle
 //   folder is shut down past the limit, and closing the host shuts every instance down.
+//
+// The user's real pi packages are judged by `judges/pi-host.ts`, outside the gate.
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -16,6 +19,7 @@ import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
+import { testLimit } from "../EventuallyTestKit.ts";
 import { PiHost } from "./PiHost.ts";
 import {
   brainLayer,
@@ -68,7 +72,7 @@ layer(
     hostLayer(isolated, fixturePolicy(isolated, { scope: "folder" })),
     path.join(isolated.root, "brain")
   ),
-  { timeout: 60_000, excludeTestServices: true }
+  { timeout: testLimit(60_000), excludeTestServices: true }
 )("one instance per folder", (live) => {
   live.effect("each folder's calls see their own session_start", () =>
     Effect.gen(function* () {
@@ -135,7 +139,7 @@ layer(
     hostLayer(shared, fixturePolicy(shared, { scope: "brain" })),
     path.join(shared.root, "brain")
   ),
-  { timeout: 60_000, excludeTestServices: true }
+  { timeout: testLimit(60_000), excludeTestServices: true }
 )("one instance shared between folders (mutation control)", (live) => {
   live.effect("fails the isolation check", () =>
     Effect.gen(function* () {
@@ -159,7 +163,7 @@ layer(
     ),
     path.join(pooled.root, "brain")
   ),
-  { timeout: 60_000, excludeTestServices: true }
+  { timeout: testLimit(60_000), excludeTestServices: true }
 )("the folder pool", (live) => {
   live.effect(
     "shuts the least recently used idle folder down past its limit",
@@ -242,7 +246,10 @@ describe("the host's lifecycle and allowlist", () => {
         Effect.provide(
           hostLayer(
             fixture,
-            fixturePolicy(fixture, { scope: "brain", versions: "2.0.x" })
+            fixturePolicy(fixture, {
+              scope: "brain",
+              versions: ["1.1.x", "2.0.x"],
+            })
           )
         )
       );
@@ -250,6 +257,29 @@ describe("the host's lifecycle and allowlist", () => {
       assert.deepStrictEqual(host.packages, []);
       assert.deepStrictEqual(host.extension.extension.tools, []);
       assert.deepStrictEqual(logLines(fixture), [], "its code never started");
+    })
+  );
+
+  it.live("a package inside any one of its vetted ranges loads", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture(["pi-host-fixture"]);
+
+      const host = yield* PiHost.pipe(
+        Effect.provide(
+          hostLayer(
+            fixture,
+            fixturePolicy(fixture, {
+              scope: "brain",
+              versions: ["1.1.x", "1.2.x"],
+            })
+          )
+        )
+      );
+
+      assert.deepStrictEqual(
+        host.packages.map((loaded) => `${loaded.name}@${loaded.version}`),
+        ["pi-host-fixture@1.2.3"]
+      );
     })
   );
 });

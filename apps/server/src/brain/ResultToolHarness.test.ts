@@ -4,14 +4,16 @@
 // any call uses the first attempt, a thread with no schema is never offered the tool, a nested call
 // (another tool relaying through `executeTool`, as code mode does) is refused with the words that
 // send it to a direct call, keeping nothing and using no attempt, the first of two valid calls in
-// one round stands, and a call after the accepted one is told so, not refused. Kept
+// one round stands, and a call after the accepted one is told so, not refused. What the tool
+// commits decodes with the protocol's `ResultDocument`. Kept
 // under `brain/`, where pi-durable may be imported in a test (S42).
 
 import type { JsonObject } from "@cairn/protocol/Policy";
-import type { JsonValue } from "@earendil-works/chord";
+import { ResultDocument } from "@cairn/protocol/Subagents";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -28,7 +30,8 @@ import {
   MemoryStorage,
 } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Type } from "typebox";
 
 import {
   CAP_TEXT,
@@ -40,9 +43,11 @@ import {
   ResultToolText,
   returnedModelOf,
 } from "../models/ResultTool.ts";
-import { ChildDoc, jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { ChildDoc, jsonRecordOf } from "./SubagentDocs.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+const decodeResultDocument = Schema.decodeUnknownOption(ResultDocument);
 
 /** The probe task's schema: a flat result with an array of objects, a string array and a range. */
 const REPORT: JsonObject = {
@@ -315,6 +320,10 @@ describe("the results extension under a Harness", () => {
           attempts,
         })),
         Option.some({ result: valid, divergence: "None", attempts: 2 })
+      );
+      // What the tool committed is the protocol's `cairn.result`, as a client would read it.
+      assert.isTrue(
+        Option.isSome(Option.flatMap(stored, decodeResultDocument))
       );
 
       const [first] = submitText(messages);

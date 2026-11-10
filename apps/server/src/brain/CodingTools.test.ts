@@ -21,14 +21,8 @@ import {
   Stream,
 } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
-import { BrainConfig } from "./BrainConfig.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
+import { brainExtensions, testBrain } from "./BrainTestKit.ts";
 import {
   ScriptSlots,
   setsOwnDeadline,
@@ -41,34 +35,10 @@ import {
   bashTimeoutSeconds,
 } from "./CodingTools.ts";
 import { Extensions } from "./Extensions.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
 
-const harness = PiDurableHarness.layer.pipe(
-  Layer.provideMerge(
-    ExtensionSet.layer.pipe(
-      Layer.provide(ExecutorLink.layerDisabled),
-      Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest),
-      Layer.provide(SettingsStore.layerTest),
-      Layer.provide(ReachServicesTest),
-      Layer.provide(Subagents.layerTest),
-      Layer.provide(PiModelSource.layerFromModelSource)
-    )
-  ),
-  Layer.provideMerge(
-    ModelSource.layerFaux({
-      tokensPerSecond: 4000,
-      settings: { retry: { enabled: false } },
-    })
-  ),
-  Layer.provide(
-    BrainConfig.layerFrom(mkdtempSync(path.join(tmpdir(), "cairn-tools-")))
-  )
-);
+const harness = testBrain();
 
 const isRunEnd = Predicate.isTagged("RunTerminal");
 
@@ -294,16 +264,9 @@ describe("coding tools", () => {
         );
       }).pipe(
         Effect.provide(
-          ExtensionSet.layer.pipe(
-            Layer.provide(ExecutorLink.layerDisabled),
-            Layer.provide(PiHost.layerEmpty),
-            Layer.provide(ModelHealth.layerTest),
-            Layer.provide(SettingsStore.layerTest),
-            Layer.provide(ReachServicesTest),
-            Layer.provide(Subagents.layerTest),
-            Layer.provide(PiModelSource.layerFromModelSource),
+          brainExtensions().pipe(
             Layer.provide(
-              ModelSource.layerFaux({ tokensPerSecond: 4000, settings: {} })
+              FauxModels.layer({ tokensPerSecond: 4000, settings: {} })
             )
           )
         )
@@ -360,7 +323,7 @@ describe("coding tools", () => {
 
         assert.include(plain, "ran plainly");
       }).pipe(Effect.provide(harness)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -409,6 +372,6 @@ describe("coding tools", () => {
         ),
         Effect.provide(harness)
       ),
-    30_000
+    testLimit(30_000)
   );
 });

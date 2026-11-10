@@ -5,7 +5,11 @@
 // The faux model plays every part from what it is sent:
 //
 // - The launching thread's model is sent `RUN:` and a script; it calls `codemode` with that script
-//   once, then answers `done` with the tool's result.
+//   once, then answers `done` with the tool's result. Sent `PLAN:` it proposes the script with
+//   `workflow_plan` first and runs it on Go; `PLAN ONLY:` proposes and answers without running it;
+//   `PLAN TWICE:` proposes it twice in one message, with arguments `{ question: "first" }` and
+//   `{ question: "second" }`, then runs it once per Go, one call per round; `PLAN TWICE TOGETHER:`
+//   proposes it the same way, then runs both launches with two `codemode` calls in one message.
 // - A node's child is sent a prompt that opens `node:<label>` with flags: it first calls the judge's
 //   `work` tool (one effect, logged once per child, `ms=` long, deaf to an abort for `deaf=` ms),
 //   then answers. `typed` answers with `submit_result`, `lazy` ends without it the first time (so
@@ -28,14 +32,14 @@ import { WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { Envelope, RuntimeMode } from "@cairn/protocol/Policy";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import type { Budget } from "@cairn/protocol/Spend";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   AssistantMessage,
   Message,
   Context as ModelContext,
 } from "@earendil-works/pi-ai";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -63,11 +67,14 @@ import {
   Result,
   Schema,
 } from "effect";
+import { Type } from "typebox";
 
-import { Approvals, UNDECIDED } from "../brain/CairnDocs.ts";
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
+import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { CodeMode } from "../brain/CodeMode.ts";
 import { messageText } from "../brain/CommitFeed.ts";
+import { durableRunner, errorText } from "../brain/Durable.ts";
 import {
   EVENT_KIND_PREFIX,
   EventsDoc,
@@ -78,19 +85,21 @@ import {
 } from "../brain/Events.ts";
 import type { Reactor } from "../brain/Events.ts";
 import { piConversationId } from "../brain/PiIds.ts";
-import {
-  FAILURE_WORDS,
-  isRoleName,
-  ParsedSpec,
-  parseModelSpec,
-} from "../models/ModelSpecs.ts";
+import { plainCopy } from "../brain/SubagentDocs.ts";
+import { WorkflowsDoc } from "../brain/WorkflowsDoc.ts";
+import { FAILURE_WORDS, parseModelSpec } from "../models/ModelSpecs.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../models/ResultTool.ts";
-import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { fixedDefaultBudget } from "../usage/DefaultBudget.ts";
 import { NO_BUDGET_PUSH } from "./WorkflowBudget.ts";
 import type { BudgetPushSink } from "./WorkflowBudget.ts";
-import { approveRecord, proposedRecord, WorkflowsDoc } from "./WorkflowDocs.ts";
+import {
+  approveRecord,
+  LaunchRunsDoc,
+  proposedRecord,
+} from "./WorkflowDocs.ts";
 import { LAUNCH_TOOL } from "./WorkflowLaunch.ts";
 import { toLaunch, WorkflowPlan } from "./WorkflowPlan.ts";
+import type { ThreadModel } from "./WorkflowPlan.ts";
 import { planAccess } from "./Workflows.ts";
 import { parseWorkflowScript } from "./WorkflowScript.ts";
 import { workflowExtension } from "./WorkflowTools.ts";
@@ -134,6 +143,24 @@ export const RUN_PREFIX = "RUN:\n";
  */
 export const PLAN_PREFIX = "PLAN:\n";
 
+/** What opens an input whose model proposes its script and, on Go, answers without running it. */
+export const PLAN_ONLY_PREFIX = "PLAN ONLY:\n";
+
+/**
+ * What opens an input whose model proposes its script twice in one message, with different
+ * arguments (`TWICE_ARGS`), then runs it with `codemode` once per Go, one call per round.
+ */
+export const PLAN_TWICE_PREFIX = "PLAN TWICE:\n";
+
+/**
+ * What opens an input whose model proposes its script twice in one message, as `PLAN_TWICE_PREFIX`
+ * does, then, after both Goes, runs it with two `codemode` calls in one message (one tool round).
+ */
+export const PLAN_TWICE_TOGETHER_PREFIX = "PLAN TWICE TOGETHER:\n";
+
+/** The arguments of the two proposals a `PLAN_TWICE_PREFIX` input makes, in call order. */
+export const TWICE_ARGS = [{ question: "first" }, { question: "second" }];
+
 /** The judge tool every node's child calls first. */
 export const WORK_TOOL = "work";
 
@@ -141,18 +168,11 @@ export const WORK_TOOL = "work";
 export const PAUSE_TOOL = "pause";
 
 /**
- * Resolves a spec as `Workflows.ts` does over `ModelSpecs`, with no catalog: a role name to none
- * (the launching thread's model), `UNREADY_MODEL` to its refusal, any other spec to the model and
- * level it names.
+ * Resolves a spec as `Workflows.ts` does over `ModelSpecs`, with no catalog: `UNREADY_MODEL` to its
+ * refusal, any other spec to the model and level it names.
  */
 export const kitResolver: ModelResolver = async (spec) => {
-  if (isRoleName(spec)) {
-    return await Promise.resolve(Result.succeed(Option.none()));
-  }
-
-  const named = Option.flatMap(parseModelSpec(spec), (parsed) =>
-    ParsedSpec.$is("Named")(parsed) ? Option.some(parsed) : Option.none()
-  );
+  const named = parseModelSpec(spec);
 
   if (spec === UNREADY_MODEL || Option.isNone(named)) {
     return await Promise.resolve(
@@ -163,14 +183,12 @@ export const kitResolver: ModelResolver = async (spec) => {
   }
 
   return await Promise.resolve(
-    Result.succeed(
-      Option.some({
-        spec,
-        provider: named.value.model.provider,
-        modelId: named.value.model.modelId,
-        thinkingLevel: named.value.level,
-      })
-    )
+    Result.succeed({
+      spec,
+      provider: named.value.model.provider,
+      modelId: named.value.model.modelId,
+      thinkingLevel: named.value.level,
+    })
   );
 };
 
@@ -191,6 +209,8 @@ export interface KitOptions {
   readonly push?: BudgetPushSink;
   /** Project recipes a reference may name, source by name; none when absent. */
   readonly projectRecipes?: Readonly<Record<string, string>>;
+  /** The server's default budget a proposal starts from; no limit when absent. */
+  readonly defaultBudget?: Budget;
 }
 
 /** The flags of a node prompt: `node:<label> typed ms=200`. */
@@ -246,11 +266,23 @@ const call = (name: string, args: { [key: string]: JsonValue }, id: string) =>
     stopReason: "toolUse",
   });
 
-/** The launching model's next step when it proposes its script first (`PLAN_PREFIX`). */
+/** How a `PLAN` input's model proposes and runs its script. */
+type PlanMode = "plan" | "plan-only" | "plan-twice" | "plan-twice-together";
+
+/** Each proposing input's prefix and how its model proposes. */
+const PLAN_MODES: ReadonlyArray<readonly [string, PlanMode]> = [
+  [PLAN_PREFIX, "plan"],
+  [PLAN_ONLY_PREFIX, "plan-only"],
+  [PLAN_TWICE_PREFIX, "plan-twice"],
+  [PLAN_TWICE_TOGETHER_PREFIX, "plan-twice-together"],
+];
+
+/** The launching model's next step when it proposes its script first (`PLAN_PREFIX` and kin). */
 const planned = (
   script: string,
   tools: ReadonlyArray<Message>,
-  last: Message | undefined
+  last: Message | undefined,
+  mode: PlanMode
 ): AssistantMessage => {
   const named = (name: string) =>
     tools.filter(
@@ -268,6 +300,21 @@ const planned = (
   const sampled =
     go && toolResultText(lastPlan).includes("run on 1 item first");
 
+  const twice = mode === "plan-twice" || mode === "plan-twice-together";
+
+  if (twice && plans.length === 0) {
+    return fauxAssistantMessage(
+      TWICE_ARGS.map((args, index) =>
+        fauxToolCall(
+          LAUNCH_TOOL,
+          { script, args },
+          { id: `plan-${String(index + 1)}` }
+        )
+      ),
+      { stopReason: "toolUse" }
+    );
+  }
+
   if (
     plans.length === 0 ||
     (sampled && runs.length === plans.length && plans.length < 2)
@@ -275,7 +322,26 @@ const planned = (
     return call(LAUNCH_TOOL, { script }, `plan-${String(plans.length + 1)}`);
   }
 
-  if (go && runs.length < plans.length) {
+  // Every Go, in a two-proposal message, is a run of its own.
+  const goes = twice
+    ? plans.filter((plan) => toolResultText(plan).startsWith("Go:")).length
+    : plans.length;
+
+  // Both Goes run in one tool round, as a model issues the calls after two proposals.
+  if (mode === "plan-twice-together" && goes === 2 && runs.length === 0) {
+    return fauxAssistantMessage(
+      [1, 2].map((n) =>
+        fauxToolCall(
+          CODEMODE_TOOL_NAME,
+          { code: script },
+          { id: `run-${String(n)}` }
+        )
+      ),
+      { stopReason: "toolUse" }
+    );
+  }
+
+  if (mode !== "plan-only" && go && runs.length < goes) {
     return call(
       CODEMODE_TOOL_NAME,
       { code: script },
@@ -333,6 +399,31 @@ const limitOf = (
   );
 };
 
+/**
+ * A proposing thread's next step, when its latest input opens a `PLAN` prefix: it acts on that
+ * input and the tool results since, as an earlier run's proposals are that run's.
+ */
+const proposing = (context: ModelContext): Option.Option<AssistantMessage> => {
+  const inputAt = context.messages.findLastIndex(
+    (message) => message.role === "user"
+  );
+
+  const latest = inputAt === -1 ? undefined : context.messages[inputAt];
+  const input = latest === undefined ? "" : messageText(latest);
+
+  const since = context.messages
+    .slice(inputAt + 1)
+    .filter((message) => message.role === "toolResult");
+
+  return Option.map(
+    Option.fromUndefinedOr(
+      PLAN_MODES.find(([prefix]) => input.startsWith(prefix))
+    ),
+    ([prefix, mode]) =>
+      planned(input.slice(prefix.length), since, context.messages.at(-1), mode)
+  );
+};
+
 /** The kit's faux model: what each conversation answers next. */
 export const respond = (context: ModelContext): AssistantMessage => {
   const first = textOfUser(context);
@@ -342,8 +433,10 @@ export const respond = (context: ModelContext): AssistantMessage => {
     (message) => message.role === "toolResult"
   );
 
-  if (first.startsWith(PLAN_PREFIX)) {
-    return planned(first.slice(PLAN_PREFIX.length), tools, last);
+  const proposed = proposing(context);
+
+  if (Option.isSome(proposed)) {
+    return proposed.value;
   }
 
   if (first.startsWith(RUN_PREFIX)) {
@@ -526,11 +619,13 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
   registry.install(codemode.extension.extension);
   registry.install(
     workflowExtension({
+      run: yield* durableRunner,
       resolveModel: kitResolver,
       plan: {
         ...planAccess(
           yield* WorkflowPlan,
           Option.none(),
+          fixedDefaultBudget(options.defaultBudget ?? DEFAULT_BUDGET),
           yield* Effect.context()
         ),
         projectRecipe: async (_root, name) =>
@@ -550,7 +645,10 @@ export const kitParts = Effect.fn("WorkflowTestKit.parts")(function* (
   return { models, registry, faux };
 });
 
-/** Opens a Harness over `storage` with `parts`, and its root thread. */
+/**
+ * Opens a Harness over `storage` with `parts`, and its root thread. Crashes end no task, as in the
+ * brain (`RestartLimit.ts`, ADR 0046), unless `restartLimit` says otherwise.
+ */
 export const openKit = async (
   storage: Storage,
   parts: Pick<
@@ -558,16 +656,17 @@ export const openKit = async (
     "models" | "registry"
   >,
   context: ChordContext,
-  report: (text: string) => void = Function.constVoid
+  report: (text: string) => void = Function.constVoid,
+  restartLimit = Number.POSITIVE_INFINITY
 ): Promise<KitBrain> => {
   const harness = await DurableHarness.open(
     storage,
     {
       models: parts.models,
       registry: parts.registry,
-      settings: { retry: { enabled: false } },
-      onReport: (error) => {
-        report(String(error));
+      settings: { retry: { enabled: false }, restartLimit },
+      onReport: (found) => {
+        report(`${found.kind}: ${errorText(found.error)}`);
       },
     },
     context
@@ -592,9 +691,19 @@ export interface PlantInput {
   readonly status: ApprovalRecord["status"];
   /** Edits the granted envelope before it is frozen (a case that narrows the grant). */
   readonly envelope: (granted: Envelope) => Envelope;
+  /**
+   * The run the launch is bound to, by its first entry (`LaunchRunsDoc`); none plants it for any
+   * run, since a planted launch comes before the run that runs it.
+   */
+  readonly run: Option.Option<number>;
+  /**
+   * The model and level of the thread the launch runs on, which the dry run grants to nodes that
+   * name none (ADR 0043): the kit's root thread unless a brain roots its thread on another.
+   */
+  readonly threadModel: ThreadModel;
 }
 
-/** The defaults: an accepted launch of the dry run's plan, run on all. */
+/** The defaults: an accepted launch of the dry run's plan, run on all, from any run. */
 export const plantDefaults = (workflowId: string): PlantInput => ({
   workflowId,
   args: {},
@@ -603,6 +712,8 @@ export const plantDefaults = (workflowId: string): PlantInput => ({
   maxNodes: Option.none(),
   status: "accepted",
   envelope: (granted) => granted,
+  run: Option.none(),
+  threadModel: { model: KIT_MODEL, thinkingLevel: Option.some(KIT_LEVEL) },
 });
 
 // The kit thread runs in the default mode, full access, which the plan grants as `workflow_plan` does.
@@ -616,7 +727,8 @@ const encodeLaunch = Schema.encodeSync(WorkflowLaunch);
 
 /**
  * Plants an approved launch of `source` on the kit's root thread, as 5A's answer path will: the
- * dry run's plan frozen in an accepted `brief` record, and the row `approved`.
+ * dry run's plan frozen in an accepted `brief` record, the row `approved`, and its run binding
+ * (`input.run`, any run by default).
  */
 export const plant = Effect.fn("WorkflowTestKit.plant")(function* (
   brain: KitBrain,
@@ -631,10 +743,7 @@ export const plant = Effect.fn("WorkflowTestKit.plant")(function* (
     args: input.args,
     budget: input.budget,
     sample: input.sample,
-    threadModel: Option.some({
-      model: KIT_MODEL,
-      thinkingLevel: Option.some(KIT_LEVEL),
-    }),
+    threadModel: Option.some(input.threadModel),
   });
 
   const launch = toLaunch(run, {
@@ -650,7 +759,7 @@ export const plant = Effect.fn("WorkflowTestKit.plant")(function* (
 
   const approvalId = launchApprovalIdOf(input.workflowId);
 
-  const payload = jsonRecordOf(
+  const payload = plainCopy(
     encodeLaunch({ ...launch, envelope: input.envelope(launch.envelope) })
   );
 
@@ -658,7 +767,9 @@ export const plant = Effect.fn("WorkflowTestKit.plant")(function* (
     await brain.harness.commit(async (tx) => {
       const approvals = await tx.doc(Approvals, brain.root);
       const ledger = await tx.doc(WorkflowsDoc, brain.root);
+      const runs = await tx.doc(LaunchRunsDoc, brain.root);
 
+      runs.items[input.workflowId] = { run: Option.getOrNull(input.run) };
       approvals.items[approvalId] = {
         id: approvalId,
         toolTaskId: 0,

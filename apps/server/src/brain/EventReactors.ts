@@ -8,14 +8,22 @@
 //   reactor records the failure and retries on its timer (100 ms doubling to 30 s). Wakes during
 //   the backoff are coalesced into the retry, never acted on sooner, so a poison event cannot spin.
 //   A closed Harness is not a failure: the next Session wakes it.
+// - Poison (ADR 0033 as amended): after `DEAD_LETTER_AFTER` failed steps in a row on one event, or
+//   at once when the step threw `UnreadableEvent` (no retry can read it), the host passes the event
+//   in one commit that moves the cursor and writes a dead letter with the error (`deadLetter`), and
+//   the reactor goes on to the next event. Each dead letter is logged (`event_dead_lettered`),
+//   shows in the status as the reactor's last failure (read back from the letters after a
+//   restart), and is pushed through `push` (the outbox gathers a run of them into one push). The
+//   pass, its log line and its push are one uninterruptible piece, as a step is.
 // - Lifetime: nothing runs before `start`, which boot calls after its other repairs and before the
 //   brain is ready. It first gives every reactor without a cursor one in the current log, at its
 //   tail or its start as the reactor's `from` says (`registerCursors`), so a reactor misses nothing
 //   emitted from its first boot on. `stop` runs among
 //   the close hooks, before the Harness closes, and waits for the step in flight (each step is
 //   uninterruptible: it is one commit).
-// - Status: per reactor, the events after its cursor (counted in a read-only commit), and the last
-//   success and failure this process saw. A reactor that fails `FAILING_AFTER` times in a row logs
+// - Status: per reactor, the events after its cursor (counted in a read-only commit), the last
+//   success this process saw, and the last failure: this process's, or the reactor's last dead
+//   letter when that is newer. A reactor that fails `FAILING_AFTER` times in a row logs
 //   `event_reactor_failing`.
 
 import { EntryId } from "@cairn/protocol/Ids";
@@ -33,24 +41,43 @@ import {
   Stream,
 } from "effect";
 
-import type { BootRepair } from "../BootRepairs.ts";
+import type { BootRepair } from "../BootRepair.ts";
 import { shutdownHook } from "../Shutdown.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainUnavailable } from "./Brain.ts";
 import { durable } from "./Durable.ts";
 import type { DurableCallError } from "./Durable.ts";
-import type { EventRecord, Reactor } from "./Events.ts";
+import type { DeadLetterState, EventRecord, Reactor } from "./Events.ts";
 import {
+  deadLetter,
+  DeadLettersDoc,
   isLogEntryKind,
   lagOf,
   reactOnce,
   registerCursors,
   reactorKinds,
+  UnreadableEvent,
   wakesFor,
 } from "./Events.ts";
 
 /** Failures in a row after which a reactor logs `event_reactor_failing`. */
 export const FAILING_AFTER = 3;
+
+/**
+ * Failed steps on one event after which the host dead-letters it: five tries over about 1.5 s of
+ * backoff (100, 200, 400 and 800 ms between them). A handler reads only `tx` and the event, so its
+ * throw repeats unless a commit in between changed what it reads, and such a commit lands in that
+ * window or not at all; a storage failure closes the Session and is not counted. Every try past
+ * that only holds back each later event of the reactor (for the budget reactor, the stop and raise
+ * of every workflow at its line). The count is this process's: a restart gives an event five more.
+ */
+export const DEAD_LETTER_AFTER = 5;
+
+/** Where the host hands a dead letter for its push; never fails, never waits for delivery. */
+export type DeadLetterPush = (letter: DeadLetterState) => Effect.Effect<void>;
+
+/** A push that sends nothing: a brain with no notifier, and tests. */
+export const NO_DEAD_LETTER_PUSH: DeadLetterPush = () => Effect.void;
 
 /** Events counted per reactor for its lag; a lag this large means "at least". */
 export const LAG_LIMIT = 100_000;
@@ -77,14 +104,58 @@ const retryAfter = (failures: number) =>
     RETRY_MAX
   );
 
+/** A dead letter's status line: which event was passed, after how many failed steps, and why. */
+const letterLine = (letter: DeadLetterState) =>
+  boundedMessage(
+    `Dead-lettered event ${String(letter.eventId)} (${letter.kind}) after ${String(letter.failures)} failed step${letter.failures === 1 ? "" : "s"}: ${letter.error}`
+  );
+
+/** The newest dead letter of `reactorName` among `letters`; none when it has none. */
+const lastLetterOf = (
+  letters: ReadonlyArray<DeadLetterState>,
+  reactorName: string
+): Option.Option<DeadLetterState> => {
+  let newest: DeadLetterState | undefined;
+
+  for (const letter of letters) {
+    if (
+      letter.reactor === reactorName &&
+      (newest === undefined || letter.at >= newest.at)
+    ) {
+      newest = letter;
+    }
+  }
+
+  return Option.fromUndefinedOr(newest);
+};
+
+interface Failure {
+  readonly at: number;
+  readonly message: string;
+}
+
+/** The newer of two failures; a tie goes to this process's own. */
+const newerFailure = (
+  own: Option.Option<Failure>,
+  letter: Option.Option<Failure>
+): Option.Option<Failure> =>
+  Option.isSome(own) && Option.isSome(letter) && letter.value.at > own.value.at
+    ? letter
+    : Option.orElse(own, () => letter);
+
 /** One reactor step's commit failed; it rolled back, cursor and all. */
 export class ReactorStepFailed extends Schema.TaggedError<ReactorStepFailed>()(
   "ReactorStepFailed",
   {
     message: Schema.String,
     reactor: Schema.String,
-    /** The event the handler was given, when the step got that far. */
+    /**
+     * The event the step failed on: the one the handler was given, or the entry `UnreadableEvent`
+     * names when the step could not read it; none when it failed before any event.
+     */
     eventId: Schema.Option(EntryId),
+    /** The step threw `UnreadableEvent`: no retry can read the event. */
+    unreadable: Schema.Boolean,
     /** The Harness was closing: not the reactor's failure. */
     closed: Schema.Boolean,
     cause: Schema.Defect(),
@@ -99,10 +170,19 @@ interface ReactorState {
   lastHandledAt: Option.Option<number>;
   lastFailure: Option.Option<{ readonly at: number; readonly message: string }>;
   failuresInARow: number;
+  /** The event the failures in a row are on, and how many there were on it. */
+  poison: Option.Option<{
+    readonly eventId: EntryId;
+    readonly failures: number;
+  }>;
 }
 
 /** How one step or a drain ended. */
 type StepEnd = "handled" | "idle" | "failed";
+
+/** The `UnreadableEvent` a failed commit threw, if that is what it threw. */
+const unreadableOf = (cause: unknown): Option.Option<UnreadableEvent> =>
+  cause instanceof UnreadableEvent ? Option.some(cause) : Option.none();
 
 /**
  * Durable event reactors over the brain's event log. Needs `Brain`; `layerOff` is for brains with
@@ -123,17 +203,22 @@ export class EventReactors extends Context.Service<
   }
 >()("cairn/server/brain/EventReactors") {
   /**
-   * The host over the reactors `sources` build. An empty, padded or repeated reactor name is a
-   * wiring bug, so the layer dies naming it.
+   * The host over the reactors `sources` build, pushing each dead letter through the sink `push`
+   * builds (none by default). An empty, padded or repeated reactor name is a wiring bug, so the
+   * layer dies naming it.
    */
-  static readonly fromSources = <E, R>(
-    sources: ReadonlyArray<Effect.Effect<Reactor, E, R>>
+  static readonly fromSources = <E, R, R2 = never>(
+    sources: ReadonlyArray<Effect.Effect<Reactor, E, R>>,
+    push: Effect.Effect<DeadLetterPush, never, R2> = Effect.succeed(
+      NO_DEAD_LETTER_PUSH
+    )
   ) =>
     Layer.effect(
       EventReactors,
       Effect.gen(function* () {
         const brain = yield* Brain;
         const reactors = yield* Effect.all(sources);
+        const pushLetter = yield* push;
         const names = new Set<string>();
 
         for (const { name } of reactors) {
@@ -156,6 +241,7 @@ export class EventReactors extends Context.Service<
               lastHandledAt: Option.none(),
               lastFailure: Option.none(),
               failuresInARow: 0,
+              poison: Option.none(),
             }))
         );
 
@@ -198,22 +284,34 @@ export class EventReactors extends Context.Service<
                   context
                 )
             ).pipe(
-              Effect.mapError(
-                (failure) =>
-                  new ReactorStepFailed({
-                    message: failure.message,
-                    reactor: state.reactor.name,
-                    eventId: Option.map(attempted.event, (event) => event.id),
-                    closed: failure.closed,
-                    cause: failure.cause,
-                  })
-              )
+              Effect.mapError((failure) => {
+                const unreadable = unreadableOf(failure.cause);
+
+                return new ReactorStepFailed({
+                  message: failure.message,
+                  reactor: state.reactor.name,
+                  eventId: Option.orElse(
+                    Option.map(attempted.event, (event) => event.id),
+                    () => Option.map(unreadable, (found) => found.eventId)
+                  ),
+                  unreadable: Option.isSome(unreadable),
+                  closed: failure.closed,
+                  cause: failure.cause,
+                });
+              })
             );
           }).pipe(Effect.uninterruptible);
 
         const recordFailure = Effect.fn("EventReactors.recordFailure")(
           function* (state: ReactorState, failed: ReactorStepFailed) {
             state.failuresInARow += 1;
+            state.poison = Option.map(failed.eventId, (eventId) => ({
+              eventId,
+              failures: Option.match(
+                Option.filter(state.poison, (on) => on.eventId === eventId),
+                { onNone: () => 1, onSome: (on) => on.failures + 1 }
+              ),
+            }));
             state.lastFailure = Option.some({
               at: brain.now(),
               message: boundedMessage(failed.message),
@@ -245,6 +343,106 @@ export class EventReactors extends Context.Service<
           }
         );
 
+        /**
+         * Passes the event the reactor keeps failing on, in one commit (`deadLetter`), then logs,
+         * records and pushes the letter, all uninterruptible as a step is, so a stop never leaves a
+         * letter written without its log line and push. "handled" either way, so the reactor goes
+         * on at once: the event was passed, or the cursor had already left it.
+         */
+        const passPoison = Effect.fn("EventReactors.passPoison")(function* (
+          state: ReactorState,
+          eventId: EntryId,
+          failures: number,
+          error: string
+        ) {
+          const session = yield* brain.session;
+          const passedAt = brain.now();
+
+          const passed = yield* durable(
+            "events.dead-letter",
+            async (context) =>
+              await session.harness.commit(
+                async (tx) =>
+                  await deadLetter(tx, state.reactor, state.kinds, {
+                    eventId,
+                    error: boundedMessage(error),
+                    failures,
+                    at: passedAt,
+                  }),
+                context
+              )
+          );
+
+          state.poison = Option.none();
+
+          for (const letter of Option.toArray(passed)) {
+            state.failuresInARow = 0;
+            state.lastFailure = Option.some({
+              at: passedAt,
+              message: letterLine(letter),
+            });
+
+            yield* Effect.logError("event reactor dead-lettered an event").pipe(
+              Effect.annotateLogs({
+                event: "event_dead_lettered",
+                reactor: state.reactor.name,
+                eventId: letter.eventId,
+                kind: letter.kind,
+                failures,
+                error: letter.error,
+              })
+            );
+
+            yield* pushLetter(letter);
+          }
+
+          return "handled" as const;
+        }, Effect.uninterruptible);
+
+        /**
+         * After a failed step: the event dead-lettered when it is poison, else a failed end. When
+         * the dead letter's own commit fails, the event stays pending and the next try counts on
+         * from here; a closing Harness is not a failure.
+         */
+        const afterFailure = Effect.fn("EventReactors.afterFailure")(
+          function* (state: ReactorState, failed: ReactorStepFailed) {
+            yield* recordFailure(state, failed);
+
+            const poison = Option.filter(
+              state.poison,
+              (on) => failed.unreadable || on.failures >= DEAD_LETTER_AFTER
+            );
+
+            if (Option.isNone(poison)) {
+              return "failed" as const;
+            }
+
+            return yield* passPoison(
+              state,
+              poison.value.eventId,
+              poison.value.failures,
+              failed.message
+            );
+          },
+          Effect.catchTags({
+            BrainUnavailable: () => Effect.succeed<StepEnd>("idle"),
+            DurableCallError: (failure) =>
+              failure.closed
+                ? Effect.succeed<StepEnd>("idle")
+                : Effect.as(
+                    Effect.logWarning(
+                      "event reactor could not dead-letter an event"
+                    ).pipe(
+                      Effect.annotateLogs({
+                        event: "event_dead_letter_failed",
+                        error: failure.message,
+                      })
+                    ),
+                    "failed" as const
+                  ),
+          })
+        );
+
         /** One step, its outcome recorded. */
         const stepOnce = (state: ReactorState) =>
           step(state).pipe(
@@ -255,6 +453,7 @@ export class EventReactors extends Context.Service<
 
               state.lastHandledAt = Option.some(brain.now());
               state.failuresInARow = 0;
+              state.poison = Option.none();
 
               return "handled";
             }),
@@ -264,7 +463,7 @@ export class EventReactors extends Context.Service<
               ReactorStepFailed: (failed) =>
                 failed.closed
                   ? Effect.succeed<StepEnd>("idle")
-                  : Effect.as(recordFailure(state, failed), "failed" as const),
+                  : afterFailure(state, failed),
             })
           );
 
@@ -376,16 +575,39 @@ export class EventReactors extends Context.Service<
               }, context)
           );
 
-          const reactorsStatus = states.map((state, index): ReactorStatus => ({
-            reactor: state.reactor.name,
-            lag: lags[index] ?? 0,
-            lastHandledAt: Option.map(state.lastHandledAt, at),
-            lastFailure: Option.map(state.lastFailure, (failure) => ({
-              at: at(failure.at),
-              message: failure.message,
-            })),
-            failuresInARow: state.failuresInARow,
-          }));
+          // The dead letters, so a reactor's last one shows after a restart too.
+          const letters = yield* durable(
+            "events.dead-letters",
+            async (context) => {
+              const held = await session.harness.snapshot(
+                DeadLettersDoc,
+                context
+              );
+
+              return Object.values(held?.items ?? {});
+            }
+          );
+
+          const reactorsStatus = states.map((state, index): ReactorStatus => {
+            const failure = newerFailure(
+              state.lastFailure,
+              Option.map(
+                lastLetterOf(letters, state.reactor.name),
+                (letter) => ({ at: letter.at, message: letterLine(letter) })
+              )
+            );
+
+            return {
+              reactor: state.reactor.name,
+              lag: lags[index] ?? 0,
+              lastHandledAt: Option.map(state.lastHandledAt, at),
+              lastFailure: Option.map(failure, (each) => ({
+                at: at(each.at),
+                message: each.message,
+              })),
+              failuresInARow: state.failuresInARow,
+            };
+          });
 
           return { reactors: reactorsStatus };
         }).pipe(Effect.withSpan("EventReactors.status"));

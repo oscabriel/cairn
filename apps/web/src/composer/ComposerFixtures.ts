@@ -1,5 +1,6 @@
 // Values the composer's tests share: a project, a thread row, a model catalog and a Model informed
-// with them. Only tests import this module.
+// with them. Only tests and the dev-only look catalogue (its scratch overlay specimens) import this
+// module.
 
 import { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { ModelCatalog } from "@cairn/protocol/Models";
@@ -76,7 +77,6 @@ export const thread = (id: ThreadId = threadId): ThreadShell =>
     activeOrderKey: Option.none(),
     autoSettleDisabledAt: Option.none(),
     lastVisitedAt: Option.none(),
-    parkedTaskIds: [],
     ...BARE_ROW_FIELDS,
   });
 
@@ -136,6 +136,7 @@ export const contextFor = (target: ComposerTarget): ComposerContext => ({
     Home: () => Option.none(),
     Draft: () => Option.none(),
     Thread: ({ threadId: id }) => Option.some(thread(id)),
+    Scratch: ({ threadId: id }) => Option.map(id, (each) => thread(each)),
   }),
   inbox: Option.none(),
   prompts: [],

@@ -1,7 +1,5 @@
 // The launch approval's pure rules (ADR 0032): what the envelope covers (`briefWithin`, keyed by
-// model per ADR 0043, a role name an envelope recorded before it reading as the launching thread's
-// model), how a
-// launch's answer moves its row (`applyLaunchAnswer`), the brief a node is dispatched under, and
+// model per ADR 0043), how a launch's answer moves its row (`applyLaunchAnswer`), the brief a node is dispatched under, and
 // the ledger check's envelope rule (a brief its envelope accepted names this workflow's accepted
 // launch).
 
@@ -14,15 +12,16 @@ import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema } from "effect";
 
-import { UNDECIDED } from "../brain/CairnDocs.ts";
+import { UNDECIDED } from "../approvals/ApprovalLedger.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
-import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { plainCopy } from "../brain/SubagentDocs.ts";
+import type { WorkflowItemState } from "../brain/WorkflowsDoc.ts";
 import {
   ledgerProblems,
   nodeRequestIdOf,
   proposedRecord,
 } from "./WorkflowDocs.ts";
-import type { NodeItemState, WorkflowItemState } from "./WorkflowDocs.ts";
+import type { NodeItemState } from "./WorkflowDocs.ts";
 import {
   applyLaunchAnswer,
   briefWithin,
@@ -35,7 +34,7 @@ const envelope: Envelope = {
   scriptHash: "sha256-abc",
   maxNodes: 3,
   maxConcurrent: 2,
-  roles: [
+  models: [
     {
       spec: ModelSpec.make("opencode-go/gpt-6-luna"),
       readonly: true,
@@ -78,7 +77,7 @@ const launchRecord = (
   run: null,
   executorRequestId: null,
   ...UNDECIDED,
-  payload: jsonRecordOf(Schema.encodeSync(WorkflowLaunch)(launch)),
+  payload: plainCopy(Schema.encodeSync(WorkflowLaunch)(launch)),
   ...fields,
 });
 
@@ -95,7 +94,6 @@ const ask = (fields: Partial<Parameters<typeof briefWithin>[1]> = {}) => ({
   readonly: false,
   mode: "auto-accept-edits" as const,
   dispatched: 0,
-  threadModel: Option.some(THREAD),
   ...fields,
 });
 
@@ -148,33 +146,6 @@ describe("the envelope", () => {
       Option.some("the launch did not show model anthropic/claude-x")
     );
   });
-
-  it("reads a role name an envelope recorded before ADR 0043 as the launching thread's model", () => {
-    const recorded: Envelope = {
-      ...envelope,
-      roles: [
-        { spec: ModelSpec.make("@scout"), readonly: true, arms: "host" },
-        { spec: ModelSpec.make("@worker:high"), readonly: false, arms: "host" },
-      ],
-    };
-
-    assert.isTrue(Option.isNone(briefWithin(recorded, ask())));
-    assert.isTrue(
-      Option.isNone(briefWithin(recorded, ask({ readonly: true })))
-    );
-    assert.deepStrictEqual(
-      Option.map(briefWithin(recorded, ask({ model: LUNA })), (o) => o.refusal),
-      Option.some("outside_grant")
-    );
-    // With no thread model to read them as, the role names grant nothing.
-    assert.deepStrictEqual(
-      Option.map(
-        briefWithin(recorded, ask({ threadModel: Option.none() })),
-        (o) => o.refusal
-      ),
-      Option.some("outside_grant")
-    );
-  });
 });
 
 describe("a launch's answer", () => {
@@ -206,11 +177,7 @@ describe("a launch's answer", () => {
         decision: "accept_sample",
         answers: null,
         note: null,
-        // An answer recorded before ADR 0043 also carried role overrides; they are ignored.
-        launch: {
-          budget: { ...DEFAULT_BUDGET, maxTokens: 4000 },
-          roleOverrides: { "@scout": { model: LUNA } },
-        },
+        launch: { budget: { ...DEFAULT_BUDGET, maxTokens: 4000 } },
       },
     });
 
@@ -263,7 +230,7 @@ describe("a node's brief", () => {
     const brief = Schema.decodeUnknownSync(Brief)(payload);
 
     // The named model travels in the node's brief, so the card checks it.
-    assert.strictEqual(brief.role, "opencode-go/gpt-6-luna");
+    assert.strictEqual(brief.model, "opencode-go/gpt-6-luna");
 
     assert.strictEqual(brief.title, "Read a.ts");
     assert.strictEqual(brief.thinking, "high");
@@ -299,7 +266,7 @@ const node = (id: string, briefId: string | null): NodeItemState => ({
   index: 0,
   requestId: nodeRequestIdOf("wf-7", id),
   briefId,
-  role: "@worker",
+  model: "faux/kit",
   provider: "faux",
   modelId: "kit",
   effort: null,

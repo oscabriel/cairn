@@ -1,5 +1,5 @@
-// The settings page's Messages: what the user changed, what the brain answered, the plan windows'
-// stream, and the `next` views' chunk.
+// The settings page's Messages: what the user changed, what the brain answered, and the plan
+// windows' stream.
 
 import { ExecutorStatus } from "@cairn/protocol/Executor";
 import { ProjectId } from "@cairn/protocol/Ids";

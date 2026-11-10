@@ -12,6 +12,11 @@
 //   records one and adds it to RunFailure.test.ts;
 // - OpenCode Go answers with `GoUsageLimitError` (or `FreeUsageLimitError`), "Monthly usage limit
 //   reached" or a request to enable "available balance" (pi-ai `utils/retry.ts`), with no reset.
+//
+// A run a brain restart ended is told by its reason, not its words (`BRAIN_RESTART_REASONS`):
+// pi-durable 1.5 charges a request a crash cut off as a failed attempt and, with no retry left,
+// ends the run `interrupted` ("The host stopped while the model was answering, on attempt N"); a
+// generation crashes cut off `restartLimit` times ends `restart_limit`.
 
 import { DateTime, Duration, Option } from "effect";
 
@@ -48,6 +53,12 @@ const TRANSPORT_PATTERN =
 /** Provider answers that will fail the same way again: bad request, auth, unknown model. */
 const PERMANENT_PATTERN =
   /\b(?:400|401|403|404|422)\b|invalid[_ ]api[_ ]key|unauthori[sz]ed|not[_ ]found|invalid[_ ]request/iu;
+
+/** pi-durable's reasons for a run a brain restart ended (module header). */
+const BRAIN_RESTART_REASONS: ReadonlySet<string> = new Set([
+  "interrupted",
+  "restart_limit",
+]);
 
 /** What a failed run task recorded. */
 export interface RunFailureInput {
@@ -100,11 +111,24 @@ export const usageLimitOf = (
 
 /**
  * Classifies a failed run: `usage_limit` for a Claude, Codex or OpenCode Go plan limit (with its
- * reset when the text names one), `transport_error` for a network failure, `provider_error` for any
- * other provider or model failure, `unknown` when nothing was recorded.
+ * reset when the text names one), `brain_restart` for a run a brain restart ended (worth sending
+ * again), `transport_error` for a network failure, `provider_error` for any other provider or model
+ * failure, `unknown` when nothing was recorded.
  */
 export const classifyRunFailure = (input: RunFailureInput): RunFailureInfo => {
   const message = input.message.trim();
+
+  if (
+    Option.exists(input.reason, (reason) => BRAIN_RESTART_REASONS.has(reason))
+  ) {
+    return {
+      class: "brain_restart",
+      retryable: true,
+      resetAt: Option.none(),
+      plan: Option.none(),
+    };
+  }
+
   const limit = usageLimitOf(message, input.at);
 
   if (Option.isSome(limit)) {

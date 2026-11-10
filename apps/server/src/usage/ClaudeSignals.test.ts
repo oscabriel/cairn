@@ -11,9 +11,9 @@
 import { claudeModels, DEFAULT_LONG_CONTEXT } from "@cairn/bridge/ClaudeModels";
 import { providerContext } from "@cairn/bridge/ClaudeProvider";
 import {
+  textTurn,
   initEvent,
   SCRIPT_SESSION,
-  textTurn,
 } from "@cairn/bridge/ClaudeScriptKit";
 import type { FakeScript } from "@cairn/bridge/ClaudeSdk";
 import { ClaudeSdkScripts } from "@cairn/bridge/ClaudeSdk";
@@ -24,7 +24,6 @@ import type { ThreadId } from "@cairn/protocol/Ids";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { assert, describe, it } from "@effect/vitest";
 import {
-  Clock,
   Context,
   DateTime,
   Duration,
@@ -39,6 +38,7 @@ import {
 
 import { HarnessSeam, RunStarted, RunTerminal } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
+import { eventually } from "../EventuallyTestKit.ts";
 import { BridgeProvider } from "../models/BridgeProvider.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import { ShellProjector } from "../shell/ShellProjector.ts";
@@ -145,7 +145,6 @@ const FakeHarness = Layer.effectContext(
           entryImage: unsupported,
           events: Stream.fromPubSub(pubsub),
           inspect: Effect.succeed([]),
-          retry: unsupported,
           capabilities: { durable: false, live: false },
         })
       )
@@ -230,23 +229,6 @@ const waitingRows = Effect.gen(function* () {
     .filter((row) => row.waitingFor === "claude_slot")
     .map((row) => row.id);
 });
-
-/** Polls `check` every 20 ms until it holds, for at most 3 s. */
-const eventually = <A, E>(
-  read: Effect.Effect<A, E, ThreadRows>,
-  check: (value: A) => boolean
-) =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + 3000;
-    let value = yield* read;
-
-    while (!check(value) && (yield* Clock.currentTimeMillis) < deadline) {
-      yield* Effect.sleep(Duration.millis(20));
-      value = yield* read;
-    }
-
-    return value;
-  });
 
 /** One bridge call for `threadId`, as the brain makes it after the `bridge-cwd` hook noted it. */
 const call = (threadId: ThreadId) =>

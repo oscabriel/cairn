@@ -1,6 +1,6 @@
 // Budgets (ADR 0036, models note section 4): where each scope stands against its budget, the
 // admission check a delegating tool runs before it creates work, the text the `beforeTool` gate
-// blocks with, and per-role estimates from past children.
+// blocks with, and per-model estimates from past children.
 //
 // - A budget binds what it can see. A dollar limit (`maxListMicros`) counts priced tokens only, at
 //   list price; a token limit (`maxTokens`) counts every token. `maxTurns`, `maxMinutes` and
@@ -15,7 +15,7 @@
 //   already spent). Spend lands only when a response completes, so a scope passes its line by at
 //   most one response per running conversation before the gate and the guard stop it.
 // - An estimate is the median and 90th percentile of the spend of completed children dispatched as
-//   one role (`resolved.role` of their dispatch record), and none below five samples: "no estimate
+//   one model spec (`resolved.spec` of their dispatch record), and none below five samples: "no estimate
 //   yet" is never a made-up figure.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
@@ -23,8 +23,6 @@ import { Micros, SpendScope } from "@cairn/protocol/Spend";
 import type { Budget, BudgetState, Spend } from "@cairn/protocol/Spend";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
-import { BudgetSources } from "../brain/BudgetSources.ts";
-import type { BudgetSourceError } from "../brain/BudgetSources.ts";
 import { BudgetBook, DELEGATING_TOOLS, WIND_DOWN_TOOLS } from "./BudgetBook.ts";
 import type {
   BudgetLimit,
@@ -34,10 +32,12 @@ import type {
   ScopeSpent,
   ScopeStanding,
 } from "./BudgetBook.ts";
+import { BudgetSources } from "./BudgetSources.ts";
+import type { BudgetSourceError } from "./BudgetSources.ts";
 import { SpendLedger, tokenTotal } from "./SpendLedger.ts";
 import type { SpendLedgerError } from "./SpendLedger.ts";
 
-/** Below this many completed children of a role, there is no estimate. */
+/** Below this many completed children of a model spec, there is no estimate. */
 export const ESTIMATE_MIN_SAMPLES = 5;
 
 /** The scope a delegating tool would add work to is at its line. Nothing was created. */
@@ -234,8 +234,8 @@ export interface EstimateSample {
   readonly tokens: number;
 }
 
-/** A role's estimate: its median and 90th percentile, over at least five completed children. */
-export interface RoleEstimate {
+/** A model spec's estimate: its median and 90th percentile, over at least five completed children. */
+export interface ModelEstimate {
   readonly samples: number;
   readonly tokensMedian: number;
   readonly tokensHigh: number;
@@ -250,7 +250,7 @@ const percentile = (sorted: ReadonlyArray<number>, fraction: number) =>
 /** The estimate over `samples`; none below `ESTIMATE_MIN_SAMPLES`. */
 export const estimateOf = (
   samples: ReadonlyArray<EstimateSample>
-): Option.Option<RoleEstimate> => {
+): Option.Option<ModelEstimate> => {
   if (samples.length < ESTIMATE_MIN_SAMPLES) {
     return Option.none();
   }
@@ -367,11 +367,11 @@ export class Budgets extends Context.Service<
       tool: string,
       target: Option.Option<ThreadId>
     ): Effect.Effect<Option.Option<string>>;
-    /** A role's estimate from its completed children (by role name); none below five. */
+    /** A model spec's estimate from its completed children; none below five. */
     estimate(
-      role: string
+      spec: string
     ): Effect.Effect<
-      Option.Option<RoleEstimate>,
+      Option.Option<ModelEstimate>,
       BudgetSourceError | SpendLedgerError
     >;
   }
@@ -483,6 +483,8 @@ export class Budgets extends Context.Service<
 
         if (Option.isNone(found)) {
           yield* book.remove(threadId);
+          // A budget removed (a declare with no limit) leaves the row's word to say so.
+          yield* ledger.touch([threadId]);
 
           return [];
         }
@@ -542,9 +544,9 @@ export class Budgets extends Context.Service<
         );
       });
 
-      const estimate = Effect.fn("Budgets.estimate")(function* (role: string) {
+      const estimate = Effect.fn("Budgets.estimate")(function* (spec: string) {
         const children = (yield* sources.samples).filter(
-          (sample) => sample.role === role
+          (sample) => sample.spec === spec
         );
 
         const samples: Array<{ listMicros: number; tokens: number }> = [];

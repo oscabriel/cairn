@@ -8,9 +8,10 @@
 // - `command` runs `argv` (no shell) in the goal thread's folder, through the thread's own arms,
 //   with the judge's timeout, and records the exit code, the output's tail and `HEAD`'s sha; met
 //   when the exit code is the one expected.
-// - `model` runs on the model it names, checked now, or on the goal thread's own model when it names
-//   none (ADR 0043); it refuses the Claude bridge (`ModelJudge.ts`), and asks the model once over
-//   the transcript's end; it records the model and reply.
+// - `model` runs on the model it names, checked now. It refuses the Claude bridge, and the goal
+//   thread's own model unless the user named it, so one that names none records no verdict and says
+//   why (`ModelJudge.ts`, ADR 0055). It asks the model once over the transcript's end, each message
+//   a fenced turn, and records the model and reply.
 // - `user` and `verification` never run here: a user's mark is the user's (`Goals.ts`), and a
 //   verification recipe waits for phase 4.
 //
@@ -22,9 +23,8 @@
 
 import { ThreadId } from "@cairn/protocol/Ids";
 import type { ModelRef } from "@cairn/protocol/Models";
-import type { JsonValue } from "@earendil-works/chord";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
-import type { Message } from "@earendil-works/pi-ai";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type {
   ConversationId,
   NextTaskState,
@@ -36,8 +36,8 @@ import { Data, Effect, Match, Option, Predicate, Result, Schema } from "effect";
 
 import { ThreadMeta } from "../brain/CairnDocs.ts";
 import { errorText } from "../brain/Durable.ts";
+import type { DurableRunner } from "../brain/Durable.ts";
 import { applyNote, noteEntry, readNote } from "../brain/NoteAdmission.ts";
-import { isRoleName } from "../models/ModelSpecs.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
 import type {
   CriterionStateDoc,
@@ -48,6 +48,7 @@ import type {
 import {
   judgeModelRefusal,
   judgeSpecOf,
+  judgeTurnOf,
   MODEL_JUDGE_SYSTEM,
   modelJudgePrompt,
   modelText,
@@ -72,9 +73,6 @@ const NOTE_TAIL_LIMIT = 1500;
 const SHA_TIMEOUT_SEC = 10;
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
-
-/** How much of one message the model judge reads. */
-const MESSAGE_LIMIT = 2000;
 
 /** The run id of the task `taskId`. */
 export const judgeRunId = (taskId: number): string => `judge-${String(taskId)}`;
@@ -116,11 +114,6 @@ export type JudgeModelCall = (
 export interface JudgeModels {
   readonly resolve: JudgeModelResolver;
   readonly ask: JudgeModelCall;
-  /**
-   * Logs that a judge recorded before ADR 0043 names a role (`spec`), which reads as no model
-   * named: it runs on the goal thread's model.
-   */
-  readonly roleNameRead: (spec: string, runId: string) => Promise<void>;
 }
 
 /**
@@ -188,43 +181,6 @@ const tailOf = (text: string, limit: number): string =>
 
 /** `argv` as one line for a note. */
 const argvText = (argv: ReadonlyArray<string>): string => argv.join(" ");
-
-/** A message as one block of transcript text. */
-const messageText = (message: Message): string => {
-  if (message.role === "user") {
-    const text = Array.isArray(message.content)
-      ? message.content
-          .map((part) => (part.type === "text" ? part.text : "[image]"))
-          .join("")
-      : message.content;
-
-    return `user: ${text.slice(0, MESSAGE_LIMIT)}`;
-  }
-
-  if (message.role === "assistant") {
-    const parts = message.content.map((part) => {
-      if (part.type === "text") {
-        return part.text;
-      }
-
-      return part.type === "toolCall"
-        ? `[tool ${part.name} ${JSON.stringify(part.arguments).slice(0, 300)}]`
-        : "";
-    });
-
-    return `assistant: ${parts.join("").slice(0, MESSAGE_LIMIT)}`;
-  }
-
-  if (message.role !== "toolResult") {
-    return "";
-  }
-
-  const output = message.content
-    .map((part) => (part.type === "text" ? part.text : "[image]"))
-    .join("");
-
-  return `tool result (${message.toolName}): ${tailOf(output, MESSAGE_LIMIT)}`;
-};
 
 /** The verdict a command's run made. */
 const commandVerdict = (
@@ -304,10 +260,14 @@ const criterionOf = (
   );
 
 /**
- * The judge-run task over `models` and `faults`. Defined per extension so its model calls run
- * through the layer's context; pi-durable runs a task by its registered name.
+ * The judge-run task over `models` and `faults`. Defined per extension so its model calls and its
+ * own Effects run through the layer's context (`run`); pi-durable runs a task by its registered name.
  */
-export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
+export const judgeRunTask = (
+  models: JudgeModels,
+  faults: JudgeFaults,
+  run: DurableRunner
+) => {
   type Runtime = TaskRuntime<JudgeRunInput, JudgeRunState, null, object>;
 
   const runCommand = async (
@@ -407,25 +367,29 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
     runId: string,
     context: ChordContext
   ): Promise<Judged> => {
-    if (judge.spec !== null && isRoleName(judge.spec)) {
-      await models.roleNameRead(judge.spec, runId);
-    }
-
     const named = judgeSpecOf(judge.spec);
     const agent = await runtime.agent(context);
 
-    // A judge that names no model runs on the goal thread's own, as it is now (ADR 0043).
+    const threadModel = Option.map(
+      Option.fromUndefinedOr(agent.model),
+      (found): ModelRef => ({
+        provider: found.provider,
+        modelId: found.modelId,
+      })
+    );
+
+    // A judge that names no model would run on the goal thread's own, as it is now (ADR 0043),
+    // which the refusal below turns down (ADR 0055).
     const resolved = await Option.match(named, {
       onNone: async () =>
         await Promise.resolve(
-          agent.model === undefined
-            ? Result.fail(
+          Option.match(threadModel, {
+            onNone: () =>
+              Result.fail(
                 "The goal thread runs on no model a judge can use. Name the judge's model as provider/modelId."
-              )
-            : Result.succeed<ModelRef>({
-                provider: agent.model.provider,
-                modelId: agent.model.modelId,
-              })
+              ),
+            onSome: (found) => Result.succeed(found),
+          })
         ),
       onSome: async (spec) => await models.resolve(spec),
     });
@@ -434,7 +398,13 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
       return Judged.None({ why: resolved.failure });
     }
 
-    const refusal = judgeModelRefusal(resolved.success, Option.isSome(named));
+    // A bound criterion's named model is the user's pick: the user set it, or accepted the
+    // proposal that named it.
+    const refusal = judgeModelRefusal(
+      resolved.success,
+      Option.isSome(named) ? "user" : "none",
+      threadModel
+    );
 
     if (Option.isSome(refusal)) {
       return Judged.None({ why: refusal.value });
@@ -455,10 +425,9 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
         objective: goal.objective,
         criterion: criterion.text,
         rubric: judge.rubric,
-        transcript: view.messages
-          .map(messageText)
-          .filter((block) => block !== "")
-          .join("\n\n"),
+        turns: view.messages.flatMap((message) =>
+          Option.toArray(judgeTurnOf(message))
+        ),
       }),
       {
         runId,
@@ -633,7 +602,7 @@ export const judgeRunTask = (models: JudgeModels, faults: JudgeFaults) => {
         // the task with its index item unsettled, and goal_check would wait on it for good: the
         // run completes instead, with no verdict and a note that says why. An abort rethrows, so
         // the abort handler settles the item and a rerun judges again.
-        const attempt = await Effect.runPromise(
+        const attempt = await run.promise(
           Effect.result(
             Effect.tryPromise({
               try: judging,

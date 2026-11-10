@@ -1,7 +1,8 @@
 // Durable events and the reactor host over a real pi-durable store (ADR 0033): an event exists
 // exactly when the commit that emitted it does; a reactor handles each of its events once, oldest
 // first, skipping other kinds; a throwing handler rolls back its writes with its cursor and is
-// retried; the log rotates monthly and a reactor follows the marker into the next log; a task a
+// retried; an event a handler keeps failing on, or cannot read, is dead-lettered once, pushed, and
+// the reactor goes on (the 7B incident replayed on the production budget reactor); the log rotates monthly and a reactor follows the marker into the next log, and `cairn.events` decodes with the protocol's `EventsDocument`; a task a
 // handler creates runs once; the status counts what is pending; an entry is the protocol's
 // envelope; a new reactor starts where its `from` says; a Session reopen wakes the reactors; `stop`
 // waits for the step in flight; and a bad reactor name kills the layer. The kill -9 half of the
@@ -12,8 +13,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ConversationId } from "@cairn/protocol/Ids";
-import { EventEnvelope } from "@cairn/protocol/Workflows";
-import type { JsonValue } from "@earendil-works/chord";
+import { DEFAULT_BUDGET, Budget } from "@cairn/protocol/Spend";
+import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
+import { EventEnvelope, EventsDocument } from "@cairn/protocol/Workflows";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { SessionDocToken, Storage, Tx } from "@earendil-works/pi-durable";
 import {
   defineDoc,
@@ -35,17 +38,43 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import {
+  eventuallyTrue as eventually,
+  testLimit,
+} from "../EventuallyTestKit.ts";
+import {
+  budgetPushTask,
+  NO_BUDGET_PUSH,
+  workflowBudgetReactor,
+} from "../workflows/WorkflowBudget.ts";
 import { Arms } from "./Arms.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { BrainStore } from "./BrainStore.ts";
 import { durable } from "./Durable.ts";
-import { EventReactors } from "./EventReactors.ts";
-import type { EventDraft, EventsState, Reactor } from "./Events.ts";
-import { emit, EventsDoc, monthOf, reactor } from "./Events.ts";
+import {
+  DEAD_LETTER_AFTER,
+  EventReactors,
+  NO_DEAD_LETTER_PUSH,
+} from "./EventReactors.ts";
+import type { DeadLetterPush } from "./EventReactors.ts";
+import type {
+  DeadLettersState,
+  EventDraft,
+  EventsState,
+  Reactor,
+} from "./Events.ts";
+import {
+  DeadLettersDoc,
+  deadLetterKey,
+  emit,
+  EventsDoc,
+  isEventObject,
+  monthOf,
+  reactor,
+} from "./Events.ts";
 import { Extensions } from "./Extensions.ts";
-import { ModelSource } from "./ModelSource.ts";
-import { Parked } from "./Parked.ts";
+import { FauxModels } from "./FauxModels.ts";
 import { piConversationId, piEntryId } from "./PiIds.ts";
 
 /** What the test reactors write, through `tx` only. */
@@ -104,7 +133,8 @@ const RecordRun = defineTask<
 
 const TestTasks = defineExtension({
   name: "cairn.test-events",
-  tasks: [RecordRun],
+  // The budget reactor's soft line creates its push task, which the workflows extension carries.
+  tasks: [RecordRun, budgetPushTask(NO_BUDGET_PUSH)],
 });
 
 const epoch = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
@@ -169,14 +199,14 @@ const failNext = { value: false };
 const failing = (storage: Storage): Storage => {
   const commitWrites = storage.commit.bind(storage);
 
-  storage.commit = async (writes, context) => {
+  storage.commit = async (batches, receive, context) => {
     if (failNext.value) {
       failNext.value = false;
 
       throw new Error("storage reset (test)");
     }
 
-    return await commitWrites(writes, context);
+    return await commitWrites(batches, receive, context);
   };
 
   return storage;
@@ -189,23 +219,27 @@ const failingStore = Layer.effect(
   )
 ).pipe(Layer.provide(BrainStore.layer));
 
-const brainLayer = (dataDir: string, reactors: ReadonlyArray<Reactor>) =>
-  EventReactors.fromSources(reactors.map((each) => Effect.succeed(each))).pipe(
+const brainLayer = (
+  dataDir: string,
+  reactors: ReadonlyArray<Reactor>,
+  push: DeadLetterPush = NO_DEAD_LETTER_PUSH
+) =>
+  EventReactors.fromSources(
+    reactors.map((each) => Effect.succeed(each)),
+    Effect.succeed(push)
+  ).pipe(
     Layer.provideMerge(
       Brain.layerNoDeps.pipe(
         Layer.provide(failingStore),
         Layer.provide(Arms.layer)
       )
     ),
-    Layer.provide(Parked.layer),
     Layer.provide(
       Extensions.fromSources([
         Effect.succeed({ order: 900, extension: TestTasks }),
       ])
     ),
-    Layer.provide(
-      ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} })
-    ),
+    Layer.provide(FauxModels.layer({ tokensPerSecond: 2000, settings: {} })),
     Layer.provide(BrainConfig.layerFrom(dataDir))
   );
 
@@ -213,13 +247,14 @@ const withBrain = <A, E>(
   reactors: ReadonlyArray<Reactor>,
   use: (
     context: Context.Context<EventReactors | Brain>
-  ) => Effect.Effect<A, E, Scope.Scope>
+  ) => Effect.Effect<A, E, Scope.Scope>,
+  push: DeadLetterPush = NO_DEAD_LETTER_PUSH
 ) =>
   Effect.acquireUseRelease(
     Effect.sync(() => mkdtempSync(path.join(tmpdir(), "cairn-events-test-"))),
     (dataDir) =>
       Effect.scoped(
-        Effect.flatMap(Layer.build(brainLayer(dataDir, reactors)), use)
+        Effect.flatMap(Layer.build(brainLayer(dataDir, reactors, push)), use)
       ).pipe(Effect.orDie),
     (dataDir) =>
       Effect.sync(() => {
@@ -278,19 +313,26 @@ const readEvents = (brain: Brain["Service"]) =>
     cursors: {},
   });
 
-/** Polls until `done` holds, for up to ten seconds. */
-const eventually = <E, R>(done: Effect.Effect<boolean, E, R>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (yield* done) {
-        return true;
-      }
+const readLetters = (brain: Brain["Service"]) =>
+  Effect.flatMap(brain.session, (session) =>
+    durable(
+      "test.snapshot",
+      async (context): Promise<DeadLettersState> =>
+        (await session.harness.snapshot(DeadLettersDoc, context)) ?? {
+          items: {},
+        }
+    )
+  );
 
-      yield* Effect.sleep(Duration.millis(50));
-    }
+/** A push sink that keeps what it is handed. */
+const pushesInto =
+  (kept: Array<string>): DeadLetterPush =>
+  (letter) =>
+    Effect.sync(() => {
+      kept.push(deadLetterKey(letter.reactor, letter.eventId));
+    });
 
-    return false;
-  });
+const encodeBudget = Schema.encodeSync(Budget);
 
 /** True once every reactor has nothing pending. */
 const caughtUp = (reactors: EventReactors["Service"]) =>
@@ -367,7 +409,7 @@ describe("durable events", () => {
             );
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live("an event exists only when the commit that emitted it does", () =>
@@ -439,7 +481,232 @@ describe("durable events", () => {
           assert.strictEqual(after.reactors[0]?.failuresInARow, 0);
         })
       ),
-    20_000
+    testLimit(20_000)
+  );
+
+  it.live(
+    "an event its handler never passes is dead-lettered after the limit, pushed, and the next is handled",
+    () => {
+      const pushed: Array<string> = [];
+
+      return withBrain(
+        [
+          reactor(
+            "stuck",
+            { events: ["workflow.node.settled"], from: "start" },
+            async (tx, event) => {
+              await record(tx, "stuck", event.id);
+
+              if (isEventObject(event.data) && event.data.n === 1) {
+                throw new Error(`no handling ${String(event.id)}`);
+              }
+            }
+          ),
+        ],
+        (context) =>
+          Effect.gen(function* () {
+            const brain = Context.get(context, Brain);
+            const reactors = Context.get(context, EventReactors);
+
+            yield* reactors.start;
+
+            const bad = yield* emitOne(brain, settled(OCTOBER, 1));
+            const next = yield* emitOne(brain, settled(OCTOBER, 2));
+
+            assert.isTrue(
+              yield* eventually(caughtUp(reactors)),
+              "the reactor got past the event it never handles"
+            );
+
+            const seen = yield* readSeen(brain);
+            const letters = yield* readLetters(brain);
+            const status = yield* reactors.status;
+            const letter = letters.items[deadLetterKey("stuck", bad)];
+
+            assert.deepStrictEqual(seen.handled.stuck, [next]);
+            assert.strictEqual(letter?.failures, DEAD_LETTER_AFTER);
+            assert.strictEqual(letter?.kind, "event.workflow.node.settled");
+            assert.include(letter?.error ?? "", `no handling ${String(bad)}`);
+            assert.deepStrictEqual(pushed, [deadLetterKey("stuck", bad)]);
+            assert.strictEqual(status.reactors[0]?.failuresInARow, 0);
+            assert.include(
+              Option.getOrThrow(
+                status.reactors[0]?.lastFailure ?? Option.none()
+              ).message,
+              `Dead-lettered event ${String(bad)}`
+            );
+          }),
+        pushesInto(pushed)
+      );
+    },
+    testLimit(20_000)
+  );
+
+  it.live(
+    "7B replayed: the budget reactor passes 50 events it cannot read at once, and handles the next line",
+    () => {
+      const pushed: Array<string> = [];
+
+      return withBrain(
+        [workflowBudgetReactor],
+        (context) =>
+          Effect.gen(function* () {
+            const brain = Context.get(context, Brain);
+            const reactors = Context.get(context, EventReactors);
+
+            yield* reactors.start;
+
+            // The events judge's producer before 7B: `workflow.budget.soft` with its own data,
+            // not the meter's. Each held the budget reactor for ever, at lag 50.
+            const bad: Array<number> = [];
+
+            for (let n = 1; n <= 50; n += 1) {
+              bad.push(
+                yield* emitOne(brain, {
+                  name: "workflow.budget.soft",
+                  data: { n },
+                  at: OCTOBER,
+                  context: Option.none(),
+                })
+              );
+            }
+
+            // Then a real soft line, in a thread of its own.
+            const thread = yield* commit(brain, async (tx) => {
+              const created = await tx.createConversation({
+                ownership: { kind: "ownerless" },
+              });
+
+              return created.id;
+            });
+
+            yield* emitOne(brain, {
+              name: "workflow.budget.soft",
+              data: {
+                workflowId: "wf-line",
+                conversationId: thread,
+                epoch: 0,
+                limit: "tokens",
+                spent: {
+                  tokens: 900,
+                  listMicros: 0,
+                  unpricedTokens: 0,
+                  turns: 1,
+                },
+                budget: encodeBudget({ ...DEFAULT_BUDGET, maxTokens: 1000 }),
+              },
+              at: OCTOBER,
+              context: Option.none(),
+            });
+
+            assert.isTrue(
+              yield* eventually(caughtUp(reactors)),
+              "the budget reactor got past the 50 events it cannot read"
+            );
+
+            const letters = yield* readLetters(brain);
+            const status = yield* reactors.status;
+
+            const notices = yield* commit(brain, async (tx) => {
+              const page = await tx.scanEntries(
+                { conversationId: thread, order: "ascending" },
+                10
+              );
+
+              return page.items.filter(
+                (entry) => entry.kind === NOTICE_ENTRY_KIND
+              ).length;
+            });
+
+            assert.deepStrictEqual(
+              Object.values(letters.items).map((letter) => [
+                letter.eventId,
+                letter.failures,
+              ]),
+              bad.map((id) => [id, 1]),
+              "each passed on its first failure, never retried"
+            );
+            assert.strictEqual(notices, 1, "the next line was handled");
+            assert.strictEqual(status.reactors[0]?.lag, 0);
+            assert.strictEqual(status.reactors[0]?.failuresInARow, 0);
+            // Every letter is handed to the outbox, which gathers the run into one push
+            // (WorkflowPushes.test.ts).
+            assert.deepStrictEqual(
+              pushed,
+              bad.map((id) => deadLetterKey(workflowBudgetReactor.name, id))
+            );
+          }),
+        pushesInto(pushed)
+      );
+    },
+    testLimit(20_000)
+  );
+
+  it.live(
+    "a reactor's last dead letter shows in the status after a restart",
+    () =>
+      Effect.gen(function* () {
+        const dataDir = mkdtempSync(path.join(tmpdir(), "cairn-events-test-"));
+
+        const life = <A, E>(
+          use: (
+            context: Context.Context<EventReactors | Brain>
+          ) => Effect.Effect<A, E, Scope.Scope>
+        ) =>
+          Effect.scoped(
+            Effect.flatMap(
+              Layer.build(brainLayer(dataDir, [workflowBudgetReactor])),
+              use
+            )
+          ).pipe(Effect.orDie);
+
+        const lines = yield* Effect.gen(function* () {
+          const bad = yield* life((context) =>
+            Effect.gen(function* () {
+              const brain = Context.get(context, Brain);
+              const reactors = Context.get(context, EventReactors);
+
+              yield* reactors.start;
+
+              const id = yield* emitOne(brain, {
+                name: "workflow.budget.soft",
+                data: { n: 1 },
+                at: OCTOBER,
+                context: Option.none(),
+              });
+
+              assert.isTrue(yield* eventually(caughtUp(reactors)));
+
+              return id;
+            })
+          );
+
+          // The next life has seen no failure of its own.
+          const status = yield* life(
+            (context) => Context.get(context, EventReactors).status
+          );
+
+          return {
+            bad,
+            line: Option.map(
+              status.reactors[0]?.lastFailure ?? Option.none(),
+              (failure) => failure.message
+            ),
+          };
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              rmSync(dataDir, { recursive: true, force: true });
+            })
+          )
+        );
+
+        assert.include(
+          Option.getOrElse(lines.line, () => ""),
+          `Dead-lettered event ${String(lines.bad)}`
+        );
+      }),
+    testLimit(20_000)
   );
 
   it.live(
@@ -495,9 +762,13 @@ describe("durable events", () => {
               logConversationId: second.logConversationId ?? 0,
               entryId: late,
             });
+            // What the host committed is the protocol's `cairn.events`.
+            assert.isTrue(
+              Option.isSome(Schema.decodeOption(EventsDocument)(state))
+            );
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -567,7 +838,7 @@ describe("durable events", () => {
             }
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -629,7 +900,7 @@ describe("durable events", () => {
           });
         })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -711,7 +982,7 @@ describe("durable events", () => {
           seen.after,
         ]);
       }),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -770,7 +1041,7 @@ describe("durable events", () => {
             assert.deepStrictEqual(seen.handled.reopen, [cut, after]);
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -828,7 +1099,7 @@ describe("durable events", () => {
           })
       );
     },
-    20_000
+    testLimit(20_000)
   );
 
   it.live("an empty, padded or repeated reactor name makes the layer die", () =>

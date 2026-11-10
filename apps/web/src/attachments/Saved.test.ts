@@ -31,6 +31,54 @@ const ref = (id: string) => ({
 });
 
 describe("saved attachments", () => {
+  it.effect(
+    "keep one this build cannot read, write it back, and let this build remove it by its id",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        yield* saveSaved({}, { "thread:t1": [ref("att_a"), ref("att_b")] });
+
+        // `att_b` as a build with another kind of attachment saved it.
+        const text = (yield* store.get(SAVED_ATTACHMENTS_KEY)) ?? "";
+
+        const newer = text.replace(
+          /(?<head>"id":"att_b"[^}]*"kind":)"image"/u,
+          '$<head>"video"'
+        );
+
+        yield* store.set(SAVED_ATTACHMENTS_KEY, newer);
+
+        const read = yield* loadSaved;
+
+        yield* saveSaved(read, { ...read, "thread:t2": [ref("att_c")] });
+
+        const kept = yield* store.get(SAVED_ATTACHMENTS_KEY);
+
+        // A removal by id takes it out, though this build cannot decode it.
+        yield* saveSaved(
+          { ...read, "thread:t1": [ref("att_a"), ref("att_b")] },
+          read
+        );
+
+        const removed = yield* store.get(SAVED_ATTACHMENTS_KEY);
+
+        expect({
+          changed: newer !== text,
+          read: read["thread:t1"]?.map(({ id }) => id),
+          kept: kept?.includes('"kind":"video"'),
+          keptC: kept?.includes("att_c"),
+          removed: removed?.includes("att_b"),
+        }).toStrictEqual({
+          changed: true,
+          read: ["att_a"],
+          kept: true,
+          keptC: true,
+          removed: false,
+        });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
+
   it.effect("are not restored once the brain's sweep has passed", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(1_760_000_000_000);

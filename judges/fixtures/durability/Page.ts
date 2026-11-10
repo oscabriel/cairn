@@ -79,7 +79,10 @@ export const same = (left: PageText, right: PageText) =>
   left.rows.length === right.rows.length &&
   left.rows.every((row, index) => row === right.rows[index]);
 
-/** The connection pill's state (`Live`, `Connecting`, ...), or `missing`. */
+/**
+ * The chat header's connection mark's state (`Live`, `Connecting`, `Syncing`, `Backoff`), or
+ * `missing`. The mark stays in the document, visually hidden, while Live (`next/shell/ConnectionMark.ts`).
+ */
 export const connection = async (thread: ThreadPage) =>
   (await thread.page
     .locator(CONNECTION)

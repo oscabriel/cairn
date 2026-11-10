@@ -21,6 +21,7 @@ import { UrlRequest } from "foldkit/navigation";
 import { modifyFields } from "foldkit/struct";
 
 import {
+  CheckServerBuild,
   LoadExternal,
   NavigateInternal,
   SaveOutbox,
@@ -46,6 +47,7 @@ import {
 } from "./connection/Outbox.ts";
 import {
   acquired,
+  checksBuild,
   elapsed,
   hasClient,
   initialConnection,
@@ -279,7 +281,11 @@ const enterBackoff: Step = (model) => {
     }),
     commands: Option.match(next.wait, {
       onNone: () => [],
-      onSome: (wait) => [WaitForBackoff(wait)],
+      // Dials refused a few times in a row may be a server that moved to another protocol.
+      onSome: (wait) =>
+        checksBuild(wait.attempt)
+          ? [WaitForBackoff(wait), CheckServerBuild()]
+          : [WaitForBackoff(wait)],
     }),
   };
 };
@@ -578,7 +584,14 @@ const followDraftProject = (projectId: ProjectId): Step =>
     toParentMessage: toGotNextShellMessage,
   });
 
-/** What the composer hands up: a turn for the outbox (and where to go), a request for the add-project picker, or the draft's chosen project. */
+/**
+ * The notice raised when storage holds drafts or outbox items this build cannot decode (another
+ * build saved them), once for each (`readShared` in `storage/TabChanges.ts`).
+ */
+export const UNREAD_STORED_NOTICE =
+  "Some drafts or unsent changes were saved by another version of Cairn and cannot be used here. They stay on this device, though writing in one of those threads replaces its old draft.";
+
+/** What the composer hands up: a turn for the outbox (and where to go), a request for the add-project picker, the draft's chosen project, or saved drafts it cannot show. */
 const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
   ComposerOutMessage.match<Step>(outMessage, {
     Submitted:
@@ -612,6 +625,11 @@ const foldComposerOutMessage = (outMessage: ComposerOutMessage): Step =>
     // The shell owns the add-project picker, and its rail follows the draft's project.
     RequestedAddProject: () => openShellAddProject,
     ChoseDraftProject: ({ projectId }) => followDraftProject(projectId),
+    FoundUnreadDrafts: () => (model) => ({
+      model: modifyFields(model, {
+        notice: () => Option.some(UNREAD_STORED_NOTICE),
+      }),
+    }),
   });
 
 const foldComposerMessage = Update.foldChild({
@@ -1112,6 +1130,7 @@ const step = (received: Message): Step =>
           connection: (connection) => elapsed(connection, epoch, attempt),
         }),
       }),
+    CheckedServerBuild: () => (model) => ({ model }),
     WokeUp: () => (model) => ({
       model: modifyFields(model, { connection: woke }),
     }),
@@ -1366,7 +1385,9 @@ export const init: Runtime.RoutingApplicationInit<
       sentTurns: {},
       outboxAdopted: [],
       outboxLeft: [],
-      notice: Option.none(),
+      notice: flags.outboxUnread
+        ? Option.some(UNREAD_STORED_NOTICE)
+        : Option.none(),
       thread: Thread.Model.initial,
       sidebar: initialSidebar,
       composer,

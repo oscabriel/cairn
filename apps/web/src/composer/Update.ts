@@ -20,8 +20,7 @@ import type { ProjectId } from "@cairn/protocol/Ids";
 import type { ThreadLaunchInput } from "@cairn/protocol/Launch";
 import { Array, Equal, Option, Predicate, Record } from "effect";
 import type { Schema } from "effect";
-import { Command } from "foldkit";
-import type { Update } from "foldkit";
+import { Command, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
 import { OutMessage as TrayOutMessage } from "../attachments/Message.ts";
@@ -1335,19 +1334,24 @@ const step = (model: Model, message: Message): UpdateReturn =>
     DetectedPlatform: ({ isMac }) => ({
       model: modifyFields(model, { isMac: () => isMac }),
     }),
-    LoadedDrafts: ({ drafts }) => {
+    LoadedDrafts: ({ drafts, tell }) => {
       // Edits made before storage answered win over what was saved.
       const loaded = modifyFields(
         syncDrafts(model, model.storedDrafts, drafts),
         { draftsLoaded: () => true }
       );
 
-      return {
-        model:
-          !model.draftsLoaded && model.attachments.loaded
-            ? reconcileAttachments(loaded)
-            : loaded,
-      };
+      // The root's notice says so: the composer's own closes when its target changes, as a load of
+      // `/` changes it at once (the hero's new draft moves the URL).
+      return Update.withOutMessage(
+        {
+          model:
+            !model.draftsLoaded && model.attachments.loaded
+              ? reconcileAttachments(loaded)
+              : loaded,
+        },
+        tell ? OutMessage.FoundUnreadDrafts() : undefined
+      );
     },
     LoadedSettings: ({ settings }) => ({
       model: modifyFields(model, { settings: () => settings }),

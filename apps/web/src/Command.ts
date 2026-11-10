@@ -24,7 +24,7 @@ import {
   saveOutbox,
 } from "./connection/Outbox.ts";
 import { backoffDelayMs } from "./connection/Reconnect.ts";
-import { reloadIfStale } from "./load/StaleBuild.ts";
+import { checkServerBuild, reloadIfStale } from "./load/StaleBuild.ts";
 import { Message } from "./Message.ts";
 
 /** Every service a root Command or Subscription may read. */
@@ -58,6 +58,12 @@ export const WaitForBackoff = Command.define("WaitForBackoff", {
 
       return Message.ElapsedBackoff({ epoch, attempt });
     }),
+});
+
+/** Asks the server over HTTP which build it serves, and reloads the page for a new one. */
+export const CheckServerBuild = Command.define("CheckServerBuild", {
+  messages: [Message.CheckedServerBuild],
+  execute: Effect.as(checkServerBuild, Message.CheckedServerBuild()),
 });
 
 /** Waits before sending the outbox's head again after a retryable failure, with jitter drawn here. */

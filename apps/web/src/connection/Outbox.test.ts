@@ -4,9 +4,18 @@ import {
   SHELL_COMMAND_RESEND_WINDOW,
   ThreadVisit,
 } from "@cairn/protocol/ShellCommands";
-import { DateTime, Duration, Effect, Option, Predicate, Ref } from "effect";
+import {
+  DateTime,
+  Duration,
+  Effect,
+  Option,
+  Predicate,
+  Ref,
+  Schema,
+} from "effect";
 import { KeyValueStore } from "effect/persistence";
 import { TestClock } from "effect/testing";
+import { Url } from "foldkit";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
@@ -33,17 +42,20 @@ import {
   liveModel,
   sendItem,
 } from "../TestFixtures.ts";
-import { update } from "../Update.ts";
+import { init, UNREAD_STORED_NOTICE, update } from "../Update.ts";
 import { CairnConnection } from "./Connection.ts";
 import {
   enqueue,
   enqueueDispatch,
-  loadOutbox,
   OUTBOX_STORAGE_KEY,
   OutboxItem,
   outboxKey,
+  readOutbox,
   saveOutbox,
 } from "./Outbox.ts";
+
+/** The saved outbox's items this build can decode. */
+const storedOutbox = Effect.map(readOutbox, ({ value }) => value);
 
 const first = sendItem("request-1");
 
@@ -75,6 +87,17 @@ const visit = (commandId: string, at: string) =>
     threadId: ThreadId.make("01890a5d-ac96-774b-bcce-b302099a8057"),
     at: DateTime.makeUnsafe(at),
   });
+
+/** `item` as a build whose `whenBusy` has a value this build does not know saved it. */
+const fromNewerBuild = (item: OutboxItem) =>
+  Effect.map(
+    Schema.encodeEffect(Schema.toCodecJson(OutboxItem))(item),
+    (json) =>
+      JSON.stringify(json).replace(
+        '"whenBusy":"followUp"',
+        '"whenBusy":"sideways"'
+      )
+  );
 
 describe("the outbox", () => {
   it("sends a queued item while live, and drops it when the brain acknowledges it", () => {
@@ -415,12 +438,12 @@ describe("the outbox", () => {
   it("survives a reload through storage, and reads unreadable storage as empty", async () => {
     const roundTrip = Effect.gen(function* () {
       const saved = yield* saveOutbox([], [first, second]);
-      const loaded = yield* loadOutbox;
+      const loaded = yield* storedOutbox;
       const store = yield* KeyValueStore.KeyValueStore;
 
       yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
 
-      const broken = yield* loadOutbox;
+      const broken = yield* storedOutbox;
 
       return { saved, loaded, broken };
     }).pipe(Effect.provide(KeyValueStore.layerMemory));
@@ -430,6 +453,141 @@ describe("the outbox", () => {
     expect(Option.isSome(saved)).toBeTruthy();
     expect(loaded).toStrictEqual([first, second]);
     expect(broken).toStrictEqual([]);
+  });
+
+  it("keeps an item it cannot read beside the ones it can, and writes it back on the next save", async () => {
+    const { after, loaded, stored } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        yield* saveOutbox([], [first]);
+
+        // A send from a build whose `whenBusy` has a value this build does not know.
+        const newer = JSON.stringify(
+          yield* Schema.encodeEffect(Schema.toCodecJson(OutboxItem))(second)
+        ).replace('"whenBusy":"followUp"', '"whenBusy":"sideways"');
+
+        const text = yield* store.get(OUTBOX_STORAGE_KEY);
+
+        yield* store.set(
+          OUTBOX_STORAGE_KEY,
+          `${(text ?? "[]").slice(0, -1)},${newer}]`
+        );
+
+        const read = yield* readOutbox;
+        const third = sendItem("request-3");
+
+        yield* saveOutbox(read.value, [...read.value, third]);
+
+        return {
+          loaded: read,
+          after: yield* storedOutbox,
+          stored: yield* store.get(OUTBOX_STORAGE_KEY),
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loaded).toStrictEqual({ value: [first], tell: true });
+    expect(after.map(outboxKey)).toStrictEqual(["request-1", "request-3"]);
+    expect(stored).toContain('"whenBusy":"sideways"');
+  });
+
+  it("says once that storage holds an item it cannot read, and again only for another such item", async () => {
+    const loads = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        const append = (json: string) =>
+          Effect.flatMap(store.get(OUTBOX_STORAGE_KEY), (text) =>
+            store.set(
+              OUTBOX_STORAGE_KEY,
+              text === undefined || text === "[]"
+                ? `[${json}]`
+                : `${text.slice(0, -1)},${json}]`
+            )
+          );
+
+        yield* saveOutbox([], [first]);
+        yield* append(yield* fromNewerBuild(second));
+
+        const told = yield* readOutbox;
+        const third = sendItem("request-3");
+
+        // This tab queues a send and the brain settles it: storage is written twice.
+        yield* saveOutbox(told.value, [...told.value, third]);
+        yield* saveOutbox([...told.value, third], told.value);
+
+        const again = yield* readOutbox;
+
+        yield* append(yield* fromNewerBuild(sendItem("request-4")));
+
+        const another = yield* readOutbox;
+
+        return { told, again, another };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loads).toStrictEqual({
+      told: { value: [first], tell: true },
+      again: { value: [first], tell: false },
+      another: { value: [first], tell: true },
+    });
+  });
+
+  it("says so when the copy it kept while storage was unreadable is left behind", async () => {
+    const loaded = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        // Storage is unreadable as a whole, so the send goes to the recovery copy.
+        yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
+        yield* saveOutbox([], [first]);
+
+        // A newer build writes a value this build reads, without the send.
+        yield* store.set(OUTBOX_STORAGE_KEY, "[]");
+
+        return yield* readOutbox;
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loaded).toStrictEqual({ value: [], tell: true });
+  });
+
+  it("says at start that storage holds sends this build cannot read", () => {
+    const url = Option.getOrThrow(Url.fromString("https://code.gneiss.run/"));
+
+    const notice = (outboxUnread: boolean) =>
+      init({ boot: Option.none(), outbox: [first], outboxUnread }, url).model
+        .notice;
+
+    expect(notice(true)).toStrictEqual(Option.some(UNREAD_STORED_NOTICE));
+    expect(notice(false)).toStrictEqual(Option.none());
+  });
+
+  it("never writes over an outbox it cannot read at all", async () => {
+    const { kept, loaded, saved } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        yield* store.set(OUTBOX_STORAGE_KEY, "{not json");
+
+        const read = yield* readOutbox;
+        const stored = yield* saveOutbox(read.value, [first]);
+
+        return {
+          loaded: read,
+          saved: { stored, reread: yield* storedOutbox },
+          kept: yield* store.get(OUTBOX_STORAGE_KEY),
+        };
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+    );
+
+    expect(loaded).toStrictEqual({ value: [], tell: true });
+    expect(saved).toStrictEqual({
+      stored: Option.some([first]),
+      reread: [first],
+    });
+    expect(kept).toBe("{not json");
   });
 });
 
@@ -456,7 +614,7 @@ describe("the outbox in two tabs", () => {
           update(connectingModel, Message.QueuedOutboxItem({ item: second }))
         );
 
-        return yield* loadOutbox;
+        return yield* storedOutbox;
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
 
@@ -550,7 +708,7 @@ describe("the outbox in two tabs", () => {
 
         return {
           outbox: heard.outbox.map(outboxKey),
-          stored: (yield* loadOutbox).map(outboxKey),
+          stored: (yield* storedOutbox).map(outboxKey),
         };
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );
@@ -649,7 +807,7 @@ describe("this tab's turns in two tabs", () => {
           sentAgain: names(refused).filter(
             (name) => name === SendOutboxItem.name
           ),
-          stored: (yield* loadOutbox).map(outboxKey),
+          stored: (yield* storedOutbox).map(outboxKey),
         };
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
     );

@@ -29,8 +29,11 @@ import {
   applyRecordChanges,
   mergeRecord,
   mergeStored,
+  readShared,
   recordChanges,
+  persistedRecord,
 } from "../storage/TabChanges.ts";
+import type { Loaded } from "../storage/TabChanges.ts";
 import {
   ComposerSettings,
   ComposerTarget,
@@ -39,7 +42,12 @@ import {
 } from "./Model.ts";
 import type { Model } from "./Model.ts";
 
-/** The localStorage key every draft is saved under, as one JSON object. */
+/**
+ * The localStorage key every draft is saved under, as one JSON object of `Draft`s by draft key. Add
+ * a field to `Draft` as optional, or a literal, and an older build keeps the drafts it cannot decode
+ * as stored (`TabChanges.ts`); change what a stored field means, or the object's outer shape, and
+ * bump the version.
+ */
 export const DRAFTS_STORAGE_KEY = "cairn:composer-drafts:v1";
 
 /** The localStorage key of the composer's settings. */
@@ -162,13 +170,7 @@ export const targetProject = (model: Model): Option.Option<ProjectShell> =>
         )
       );
 
-const DraftsJson = Schema.fromJsonString(
-  Schema.toCodecJson(Schema.Record(Schema.String, Draft))
-);
-
-const decodeDrafts = Schema.decodeEffect(DraftsJson);
-
-const encodeDrafts = Schema.encodeEffect(DraftsJson);
+const persistedDrafts = persistedRecord(Schema.toCodecJson(Draft));
 
 const SettingsJson = Schema.fromJsonString(
   Schema.toCodecJson(ComposerSettings)
@@ -178,20 +180,17 @@ const decodeSettings = Schema.decodeEffect(SettingsJson);
 
 const encodeSettings = Schema.encodeEffect(SettingsJson);
 
-/** Reads every saved draft. Missing or unreadable storage is no drafts: typing must never wait on it. */
-export const loadDrafts: Effect.Effect<
-  Record<string, Draft>,
+/**
+ * Reads every saved draft this build can decode, and whether to tell the user storage holds drafts it
+ * cannot (once for each, `readShared`). Missing storage is no drafts: typing must never wait on it.
+ * A draft this build cannot decode, or a value it cannot read at all, is left as stored; a draft this
+ * tab then writes in the same thread replaces it.
+ */
+export const readDrafts: Effect.Effect<
+  Loaded<Record<string, Draft>>,
   never,
   KeyValueStore.KeyValueStore
-> = Effect.gen(function* () {
-  const store = yield* KeyValueStore.KeyValueStore;
-  const saved = yield* store.get(DRAFTS_STORAGE_KEY);
-
-  return yield* Option.match(Option.fromUndefinedOr(saved), {
-    onNone: () => Effect.succeed({}),
-    onSome: decodeDrafts,
-  });
-}).pipe(Effect.orElseSucceed(() => ({})));
+> = readShared(DRAFTS_STORAGE_KEY, persistedDrafts);
 
 const draftEquivalence = Schema.toEquivalence(Draft);
 
@@ -213,14 +212,8 @@ export const saveDrafts = (
 > =>
   mergeStored(
     DRAFTS_STORAGE_KEY,
-    loadDrafts,
-    mergeRecord(draftEquivalence)(base, drafts),
-    (next) =>
-      Effect.gen(function* () {
-        const store = yield* KeyValueStore.KeyValueStore;
-
-        yield* store.set(DRAFTS_STORAGE_KEY, yield* encodeDrafts(next));
-      })
+    persistedDrafts,
+    mergeRecord(draftEquivalence)(base, drafts)
   );
 
 /**

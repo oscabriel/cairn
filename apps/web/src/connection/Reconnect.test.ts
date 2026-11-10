@@ -6,8 +6,9 @@ import { Option } from "effect";
 import { Command, given, message, model, story } from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
-import { SayHello, WaitForBackoff } from "../Command.ts";
+import { CheckServerBuild, SayHello, WaitForBackoff } from "../Command.ts";
 import { Message } from "../Message.ts";
+import type { Model } from "../Model.ts";
 import {
   backingOff,
   connectingModel,
@@ -16,7 +17,7 @@ import {
   liveModel,
 } from "../TestFixtures.ts";
 import { update } from "../Update.ts";
-import { backoffDelayMs, ConnectionState } from "./Reconnect.ts";
+import { backoffDelayMs, checksBuild, ConnectionState } from "./Reconnect.ts";
 
 const snapshot = ShellSnapshotItem.make({ snapshot: emptySnapshot });
 
@@ -121,6 +122,8 @@ describe("the connection state machine", () => {
           state: ConnectionState.Backoff({ attempt: 3 }),
         });
       }),
+      // A third failure in a row also asks the server which build it serves.
+      Command.resolve(CheckServerBuild, Message.CheckedServerBuild()),
       Command.resolve(
         WaitForBackoff,
         Message.ElapsedBackoff({ epoch: 2, attempt: 3 })
@@ -214,6 +217,57 @@ describe("the connection state machine", () => {
         WaitForBackoff,
         Message.ElapsedBackoff({ epoch: 1, attempt: 1 })
       )
+    );
+  });
+});
+
+/** A page dialling attempt `attempt`, on epoch `attempt`, after as many refusals. */
+const refused = (attempt: number): Model => ({
+  ...connectingModel,
+  connection: {
+    epoch: attempt,
+    state: ConnectionState.Connecting({ attempt }),
+  },
+});
+
+describe("a dial refused again and again", () => {
+  it("asks the server's build over HTTP at the third failure in a row, then every tenth", () => {
+    expect(
+      Array.from({ length: 30 }, (_, index) => index + 1).filter(checksBuild)
+    ).toStrictEqual([3, 13, 23]);
+  });
+
+  it("checks the build beside the wait once the failures pile up", () => {
+    story(
+      update,
+      given(refused(1)),
+      message(Message.FailedAcquireConnection({ reason: "426" })),
+      Command.expectExact(WaitForBackoff({ epoch: 1, attempt: 2 })),
+      Command.resolve(
+        WaitForBackoff,
+        Message.ElapsedBackoff({ epoch: 1, attempt: 2 })
+      )
+    );
+
+    story(
+      update,
+      given(refused(2)),
+      message(Message.FailedAcquireConnection({ reason: "426" })),
+      Command.expectExact(
+        WaitForBackoff({ epoch: 2, attempt: 3 }),
+        CheckServerBuild()
+      ),
+      Command.resolve(CheckServerBuild, Message.CheckedServerBuild()),
+      Command.resolve(
+        WaitForBackoff,
+        Message.ElapsedBackoff({ epoch: 2, attempt: 3 })
+      ),
+      model((current) => {
+        expect(current.connection).toStrictEqual({
+          epoch: 3,
+          state: ConnectionState.Connecting({ attempt: 3 }),
+        });
+      })
     );
   });
 });

@@ -5,7 +5,7 @@ import { BrowserKeyValueStore } from "@effect/platform-browser";
 import { Effect } from "effect";
 import { Runtime } from "foldkit";
 
-import { loadOutbox } from "./connection/Outbox.ts";
+import { readOutbox } from "./connection/Outbox.ts";
 import { openEarlySocket } from "./load/EarlySocket.ts";
 import { markInteractive } from "./load/LoadMark.ts";
 import { Message } from "./Message.ts";
@@ -19,9 +19,9 @@ openEarlySocket();
 
 const flags = Effect.gen(function* () {
   const boot = yield* readBootData;
-  const outbox = yield* loadOutbox;
+  const outbox = yield* readOutbox;
 
-  return { boot, outbox };
+  return { boot, outbox: outbox.value, outboxUnread: outbox.tell };
 });
 
 const application = Runtime.makeApplication({

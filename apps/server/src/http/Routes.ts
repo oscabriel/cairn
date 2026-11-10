@@ -12,6 +12,7 @@ import { LoadRoute } from "../load/LoadRoute.ts";
 import { ProjectFaviconRoute } from "../projects/ProjectFaviconRoute.ts";
 import { NightlyFailedRoute } from "../push/NightlyFailedRoute.ts";
 import { ShellSnapshotRoute } from "../shell/ShellSnapshotRoute.ts";
+import { BuildRoute } from "./Build.ts";
 import { Guard } from "./Guard.ts";
 import { HealthRoute } from "./Health.ts";
 import { AuthRoute } from "./Identity.ts";
@@ -31,6 +32,7 @@ export const Routes = Layer.mergeAll(
   AttachmentRoute,
   ExecutorCallbackRoute,
   LoadRoute,
+  BuildRoute,
   ProjectFaviconRoute,
   StaticRoutes
 );

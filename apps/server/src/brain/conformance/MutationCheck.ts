@@ -1,9 +1,11 @@
 // The conformance suite's mutation check (ADR 0024): it wraps each harness in a broken seam and
 // requires the suite to fail at least five scenarios on each side, both with every seam mutation
 // at once and with each mutation alone. The subagent mutations break delivery inside the harness
-// and must each fail at least two subagent scenarios (ADR 0028). The check runs at a shorter
-// timeout than the suite, so it also runs each side's unmutated control at that timeout and
-// requires zero failures: a timeout alone must not count as a caught mutation.
+// and must each fail at least two subagent scenarios (ADR 0028); the read mutations break
+// `history`, `entry` and `entryImage`, or `inspect`, and must each fail at least two of the
+// scenarios that make that read. The check runs at a shorter timeout than the suite, so it also
+// runs each side's unmutated control at that timeout and requires zero failures: a timeout alone
+// must not count as a caught mutation.
 //
 // The check is spread over `mutation-check/`, one file per side and mutation set plus one per side
 // for the control, so Vitest runs them on separate workers: a broken pass mostly waits out its
@@ -27,8 +29,13 @@ import {
 } from "./ConformanceSuite.ts";
 import type { Runner, Side } from "./ConformanceSuite.ts";
 import { runScenario } from "./HarnessConformance.ts";
-import { MUTATIONS, SUBAGENT_MUTATIONS } from "./Mutations.ts";
-import type { Mutation, SubagentMutation } from "./Mutations.ts";
+import {
+  MUTATIONS,
+  READ_LINES,
+  READ_MUTATIONS,
+  SUBAGENT_MUTATIONS,
+} from "./Mutations.ts";
+import type { Mutation, ReadMutation, SubagentMutation } from "./Mutations.ts";
 import type { MakeTarget } from "./Targets.ts";
 import type { Scenario } from "./Transcript.ts";
 
@@ -47,6 +54,9 @@ const GATE = 5;
 /** Subagent scenarios each subagent mutation must fail alone (ADR 0028). */
 const SUBAGENT_GATE = 2;
 
+/** Scenarios making the broken read that each read mutation must fail alone. */
+const READ_GATE = 2;
+
 /** Scenarios a pass runs at once; see the header. */
 const PASS_CONCURRENCY = 6;
 
@@ -61,10 +71,42 @@ const MUTATION_SETS: ReadonlyArray<MutationSet> = [
   "all",
   ...MUTATIONS,
   ...SUBAGENT_MUTATIONS,
+  ...READ_MUTATIONS,
 ];
 
 const isSubagentMutation = (set: MutationSet): set is SubagentMutation =>
   SUBAGENT_MUTATIONS.some((mutation) => mutation === set);
+
+const isReadMutation = (set: MutationSet): set is ReadMutation =>
+  READ_MUTATIONS.some((mutation) => mutation === set);
+
+/** Whether a scenario makes the read a read mutation breaks. */
+const makesRead = (mutation: ReadMutation) => (scenario: Scenario) =>
+  scenario.lines.some((line) => READ_LINES[mutation].includes(line.type));
+
+/**
+ * What one set is judged on and how many failures it must reach: a subagent mutation the subagent
+ * scenarios, a read mutation the scenarios making its read, any other set every scenario.
+ */
+const judgedOn = (side: Side, set: Exclude<MutationSet, "control">) => {
+  if (isSubagentMutation(set)) {
+    return {
+      among: passingOn(side).filter(isSubagentScenario),
+      gate: SUBAGENT_GATE,
+      kind: "subagent scenarios",
+    };
+  }
+
+  if (isReadMutation(set)) {
+    return {
+      among: passingOn(side).filter(makesRead(set)),
+      gate: READ_GATE,
+      kind: "scenarios making that read",
+    };
+  }
+
+  return { among: passingOn(side), gate: GATE, kind: "scenarios" };
+};
 
 /** The names of the scenarios among `among` that fail on `target` broken by `mutations`. */
 const failures = (
@@ -156,18 +198,12 @@ export const registerMutationCheck = (
   }
 
   const subagent = isSubagentMutation(set);
-
-  const among = subagent
-    ? passingOn(side).filter(isSubagentScenario)
-    : passingOn(side);
-
-  const gate = subagent ? SUBAGENT_GATE : GATE;
-  const scenarioKind = subagent ? "subagent scenarios" : "scenarios";
+  const { among, gate, kind: scenarioKind } = judgedOn(side, set);
   const broken = set === "all" ? "every seam mutation at once" : `${set} alone`;
 
   runner.describe("harness conformance mutation check", () => {
     // With no subagent scenario passing on a side yet there is nothing to judge a subagent
-    // mutation on; a seam set always has scenarios, and fails its gate if it has none.
+    // mutation on; any other set always has scenarios, and fails its gate if it has none.
     runner.it.live.skipIf(subagent && among.length === 0)(
       `a ${side} harness broken by ${broken} fails at least ${gate} ${scenarioKind}`,
       () =>

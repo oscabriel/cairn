@@ -6,8 +6,10 @@
 {"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"pending","kind":"tool-call"}}
 {"type":"expect_view","path":["pendingApprovals"],"equals":1}
 {"type":"expect_view","path":["running"],"equals":true}
+{"type":"expect_inspect","threads":[{"thread":"parent","running":true,"queueLength":0,"pending":[{"kind":"tool-call","route":"user","origin":null}]}]}
 {"type":"input","step":"respond","decision":"accept"}
 {"type":"expect_event","event":{"_tag":"RuntimeRequestUpdated","status":"accepted"}}
 {"type":"expect_event","event":{"_tag":"RunTerminal","status":"completed"}}
 {"type":"expect_view","path":["transcript"],"equals":[{"kind":"pi.user","role":"user","text":"open the gate","images":0,"toolCalls":[],"toolName":null,"isError":null},{"kind":"pi.assistant","role":"assistant","text":"","images":0,"toolCalls":["gate"],"toolName":null,"isError":null},{"kind":"pi.tool-result","role":"toolResult","text":"accepted","images":0,"toolCalls":[],"toolName":"gate","isError":false},{"kind":"pi.assistant","role":"assistant","text":"the gate opened","images":0,"toolCalls":[],"toolName":null,"isError":null}]}
 {"type":"expect_view","path":["approvals"],"equals":[{"status":"accepted","tool":"gate"}]}
+{"type":"expect_inspect","threads":[]}

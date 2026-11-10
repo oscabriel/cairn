@@ -27,6 +27,19 @@
 //   requests its model saw: pi-durable's faux provider its context, the scripted model its
 //   request.
 //
+// The seam's reads (T-5 of the 2026-11-09 review), each waited for as an expectation is. An entry is
+// named by `at`, its position among the visible entries the thread's client holds (hidden
+// placeholders left out; negative counts from the end), and read entries are normalized as the
+// view's `transcript` is:
+// - `expect_history {before, limit, entries, hasMore}`: `history` up to `limit` entries before the
+//   one at `before` reads `entries` (hidden placeholders left out, as each harness writes its own
+//   prompt deltas; `limit` counts them) and `hasMore`.
+// - `expect_entry {at, equals, truncated}`: `entry` reads the entry at `at` whole.
+// - `expect_entry_image {at, index, mimeType, base64}`: `entryImage` reads that image's bytes.
+// - `expect_inspect {threads}`: `inspect` lists exactly `threads`, in alias order, each as
+//   `{thread, running, queueLength, pending}`, its pending records oldest first as
+//   `{kind, route, origin}` (`origin` an alias or null).
+//
 // Threads (subagents, ADR 0028): `model`, `input`, `expect_view` and `expect_request` lines take an
 // optional `thread` alias (`parent`, the default, or `child1`, `child2`, ... in the order the
 // harness reports children; see ThreadAliases). Expected events and tool arguments write
@@ -176,6 +189,33 @@ export const TranscriptLine = Schema.Union([
     excludesTools: Schema.optionalKey(Schema.Array(Schema.String)),
     firstInput: Schema.optionalKey(Schema.String),
   }),
+  Schema.Struct({
+    type: Schema.Literal("expect_history"),
+    thread: Schema.optionalKey(Schema.String),
+    before: Schema.Int,
+    limit: Schema.Int,
+    entries: Json,
+    hasMore: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("expect_entry"),
+    thread: Schema.optionalKey(Schema.String),
+    at: Schema.Int,
+    equals: Json,
+    truncated: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("expect_entry_image"),
+    thread: Schema.optionalKey(Schema.String),
+    at: Schema.Int,
+    index: Schema.Int,
+    mimeType: Schema.String,
+    base64: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("expect_inspect"),
+    threads: Json,
+  }),
 ]);
 
 export type TranscriptLine = typeof TranscriptLine.Type;
@@ -185,6 +225,32 @@ export type ModelLine = Extract<TranscriptLine, { readonly type: "model" }>;
 
 /** An input line. */
 export type InputLine = Extract<TranscriptLine, { readonly type: "input" }>;
+
+/** An `expect_history` line. */
+export type HistoryLine = Extract<
+  TranscriptLine,
+  { readonly type: "expect_history" }
+>;
+
+/** An `expect_entry` line. */
+export type EntryLine = Extract<
+  TranscriptLine,
+  { readonly type: "expect_entry" }
+>;
+
+/** An `expect_entry_image` line. */
+export type EntryImageLine = Extract<
+  TranscriptLine,
+  { readonly type: "expect_entry_image" }
+>;
+
+/** Every line type that reads the seam's history, entries or inspection. */
+export const READ_LINE_TYPES = [
+  "expect_history",
+  "expect_entry",
+  "expect_entry_image",
+  "expect_inspect",
+] as const satisfies ReadonlyArray<TranscriptLine["type"]>;
 
 /** A parsed scenario. */
 export interface Scenario {

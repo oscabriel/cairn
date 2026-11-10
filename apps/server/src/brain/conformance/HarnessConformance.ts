@@ -8,11 +8,12 @@
 // client does (a refused frame means a fresh subscription): the scenario's own thread from its
 // ensure, and each subagent from the event that first names it (ThreadAliases). Expectations wait
 // up to a timeout for the log or a client's normalized view to show what the line says, so the
-// suite judges what a client would see, not internal state. For the drift goldens, once the lines
-// have held the run waits for every thread to be at rest (no run live, and the log and each client
-// agree on the last message and on every approval record and child) before it records the events
-// and views: the lines need not wait for a run's last steps, and on a loaded machine either feed
-// lags the other.
+// suite judges what a client would see, not internal state. The seam's reads (`history`, `entry`,
+// `entryImage`, `inspect`) are judged by their own expectation lines, each called through the seam
+// until it reads what the line says. For the drift goldens, once the lines have held the run waits
+// for every thread to be at rest (no run live, and the log and each client agree on the last
+// message and on every approval record and child) before it records the events and views: the
+// lines need not wait for a run's last steps, and on a loaded machine either feed lags the other.
 
 import { applyThreadStreamItem } from "@cairn/client-logic/ThreadView";
 import type { ThreadViewState } from "@cairn/client-logic/ThreadView";
@@ -52,10 +53,14 @@ import {
   jsonContains,
   jsonEquals,
   normalizeDeviceView,
+  normalizeEntries,
+  normalizeEntry,
+  normalizeInspection,
   normalizeView,
   pendingApprovalIds,
   statusesIn,
   valueAt,
+  visibleEntries,
 } from "./Normalize.ts";
 import { responseScript } from "./ResponseScript.ts";
 import type { MakeTarget } from "./Targets.ts";
@@ -66,6 +71,9 @@ import {
   resolveAliases,
 } from "./ThreadAliases.ts";
 import type {
+  EntryImageLine,
+  EntryLine,
+  HistoryLine,
   InputLine,
   ModelLine,
   Scenario,
@@ -293,6 +301,10 @@ const holds = (complaint: Option.Option<string>) =>
     onNone: () => Result.succeedNone,
     onSome: (text) => Result.fail(text),
   });
+
+/** A read the seam refused, as a complaint. */
+const refused = (call: string, failure: HarnessError) =>
+  Result.fail(`${call} failed with ${failure.reason}: ${failure.message}`);
 
 const fromSeam = (where: string) => (failure: HarnessError) =>
   new ScenarioFailure({ message: `${where}: ${failure.message}` });
@@ -1050,6 +1062,161 @@ export const runScenario = (
           return Result.succeedNone;
         });
 
+      const aliasOf = (threadId: ThreadId) =>
+        Option.getOrElse(aliases.aliasOf(threadId), () => "unknown");
+
+      /** The thread an alias names and the id of the visible entry at `at` in its client's view. */
+      const entryAt = (alias: string | undefined, at: number) =>
+        Effect.gen(function* () {
+          const threadId = aliases.idOf(alias ?? PARENT_ALIAS);
+
+          if (Option.isNone(threadId)) {
+            return Result.fail(
+              `no thread is known as ${alias ?? PARENT_ALIAS}`
+            );
+          }
+
+          const client = views.get(threadId.value);
+
+          const state =
+            client === undefined
+              ? Option.none<ThreadViewState>()
+              : yield* Ref.get(client);
+
+          if (Option.isNone(state)) {
+            return Result.fail("the client has no snapshot");
+          }
+
+          const found = visibleEntries(state.value.view.entries).at(at);
+
+          if (found === undefined) {
+            return Result.fail(`the client holds no visible entry ${at}`);
+          }
+
+          return Result.succeed({
+            threadId: threadId.value,
+            entryId: found.id,
+          });
+        });
+
+      /** A read's result against what the line wants. */
+      const compared = (read: Json, wanted: Json) =>
+        jsonEquals(read, resolveAliases(wanted, aliases))
+          ? Result.succeedNone
+          : Result.fail(`read ${JSON.stringify(read)}`);
+
+      const historyAt = (line: HistoryLine) =>
+        Effect.gen(function* () {
+          const located = yield* entryAt(line.thread, line.before);
+
+          if (Result.isFailure(located)) {
+            return Result.fail(located.failure);
+          }
+
+          const seam = yield* seamNow;
+
+          const page = yield* Effect.result(
+            seam.history(located.success.threadId, {
+              before: located.success.entryId,
+              limit: line.limit,
+            })
+          );
+
+          if (Result.isFailure(page)) {
+            return refused("history", page.failure);
+          }
+
+          return compared(
+            {
+              entries: normalizeEntries(page.success.entries),
+              hasMore: page.success.hasMore,
+            },
+            { entries: line.entries, hasMore: line.hasMore }
+          );
+        });
+
+      const entryRead = (line: EntryLine) =>
+        Effect.gen(function* () {
+          const located = yield* entryAt(line.thread, line.at);
+
+          if (Result.isFailure(located)) {
+            return Result.fail(located.failure);
+          }
+
+          const seam = yield* seamNow;
+
+          const read = yield* Effect.result(
+            seam.entry(located.success.threadId, located.success.entryId)
+          );
+
+          if (Result.isFailure(read)) {
+            return refused("entry", read.failure);
+          }
+
+          return compared(
+            {
+              entry: normalizeEntry(read.success.entry),
+              truncated: read.success.truncated,
+            },
+            { entry: line.equals, truncated: line.truncated }
+          );
+        });
+
+      const imageRead = (line: EntryImageLine) =>
+        Effect.gen(function* () {
+          const located = yield* entryAt(line.thread, line.at);
+
+          if (Result.isFailure(located)) {
+            return Result.fail(located.failure);
+          }
+
+          const seam = yield* seamNow;
+
+          const read = yield* Effect.result(
+            seam.entryImage(
+              located.success.threadId,
+              located.success.entryId,
+              line.index
+            )
+          );
+
+          if (Result.isFailure(read)) {
+            return refused("entryImage", read.failure);
+          }
+
+          return compared(
+            {
+              mimeType: read.success.mimeType,
+              base64: Buffer.from(read.success.bytes).toString("base64"),
+            },
+            { mimeType: line.mimeType, base64: line.base64 }
+          );
+        });
+
+      const inspection = (threads: Json) =>
+        Effect.gen(function* () {
+          const seam = yield* seamNow;
+          const read = yield* Effect.result(seam.inspect);
+
+          if (Result.isFailure(read)) {
+            return refused("inspect", read.failure);
+          }
+
+          const order = aliases.threads();
+
+          // A thread the scenario never met sorts last, as `unknown`.
+          const rank = (threadId: ThreadId) => {
+            const at = order.indexOf(threadId);
+
+            return at === -1 ? order.length : at;
+          };
+
+          return compared(
+            normalizeInspection(read.success, aliasOf, rank),
+            threads
+          );
+        });
+
       const play = (where: string, line: TranscriptLine) =>
         Match.value(line).pipe(
           Match.discriminatorsExhaustive("type")({
@@ -1085,6 +1252,14 @@ export const runScenario = (
                 where,
                 requestAt(found.thread, found.index, found)
               ),
+            expect_history: (found) =>
+              eventually(options.timeout, where, historyAt(found)),
+            expect_entry: (found) =>
+              eventually(options.timeout, where, entryRead(found)),
+            expect_entry_image: (found) =>
+              eventually(options.timeout, where, imageRead(found)),
+            expect_inspect: (found) =>
+              eventually(options.timeout, where, inspection(found.threads)),
           })
         );
 
@@ -1126,9 +1301,6 @@ export const runScenario = (
 
           return Result.succeedNone;
         });
-
-      const aliasOf = (threadId: ThreadId) =>
-        Option.getOrElse(aliases.aliasOf(threadId), () => "unknown");
 
       /**
        * Where the events and a thread's client disagree, or a run is still live: none once both

@@ -48,7 +48,6 @@ import { AgentDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import {
   Context,
-  Duration,
   Effect,
   Layer,
   Option,
@@ -60,6 +59,7 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
@@ -107,22 +107,6 @@ const QUESTION_TTL_MILLIS = 2000;
 
 /** The entry a user's attachment input is placed as. */
 const STEER_ENTRY = { kind: "cairn.test-attachment", data: { by: "user" } };
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A, E, R>(find: Effect.Effect<Option.Option<A>, E, R>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
-  });
 
 /** The first event `pick` accepts, waited for. */
 const eventWhere = <A>(
@@ -450,7 +434,7 @@ describe("subagents over a pi-durable brain", () => {
   it.live(
     "the SubagentRows fiber makes the child's row as it is created",
     () => withChild(true, assertChildRow),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -514,7 +498,7 @@ describe("subagents over a pi-durable brain", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -579,7 +563,7 @@ describe("subagents over a pi-durable brain", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -697,7 +681,7 @@ describe("subagents over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -793,7 +777,7 @@ describe("subagents over a pi-durable brain", () => {
             rmSync(dir, { recursive: true, force: true });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a worktree brief whose parent is outside any repository starts nothing, and says so",
@@ -895,6 +879,6 @@ describe("subagents over a pi-durable brain", () => {
             rmSync(outside, { recursive: true, force: true });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

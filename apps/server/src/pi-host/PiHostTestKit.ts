@@ -13,19 +13,11 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { Effect, Fiber, Layer, Option, Predicate, Stream } from "effect";
 
-import { BrainConfig } from "../brain/BrainConfig.ts";
-import { ExtensionSet } from "../brain/ExtensionSet.ts";
+import { testBrain } from "../brain/BrainTestKit.ts";
 import { FauxModels } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
-import { PiDurableHarness } from "../brain/PiDurableHarness.ts";
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
+import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { PiConfig } from "../models/PiConfig.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
 import { PiHost } from "./PiHost.ts";
 import type { InstanceScope, PiHostPolicy } from "./PiHostPolicy.ts";
 
@@ -148,31 +140,8 @@ export const hostLayer = (fixture: HostFixture, policy: PiHostPolicy) =>
  * A brain on the faux model with the production set, whose `cairn.pi-tools` extension comes from
  * `host`, and the host itself.
  */
-export const brainLayer = <E>(
-  host: Layer.Layer<PiHost, E>,
-  dataDir: string
-) => {
-  const extensions = ExtensionSet.layer.pipe(
-    Layer.provide(ExecutorLink.layerDisabled),
-    Layer.provide(ModelHealth.layerTest),
-    Layer.provide(SettingsStore.layerTest),
-    Layer.provide(ReachServicesTest),
-    Layer.provide(Subagents.layerTest),
-    Layer.provide(PiModelSource.layerFromModelSource)
-  );
-
-  return PiDurableHarness.layer.pipe(
-    Layer.provideMerge(extensions),
-    Layer.provideMerge(
-      ModelSource.layerFaux({
-        tokensPerSecond: 4000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
-    Layer.provide(BrainConfig.layerFrom(dataDir)),
-    Layer.provideMerge(host)
-  );
-};
+export const brainLayer = <E>(host: Layer.Layer<PiHost, E>, dataDir: string) =>
+  testBrain({ piHost: host, dataDir }).pipe(Layer.provideMerge(host));
 
 const isRunEnd = Predicate.isTagged("RunTerminal");
 

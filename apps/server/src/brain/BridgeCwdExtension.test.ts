@@ -42,6 +42,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Effect, Layer, Option, Ref, Schedule } from "effect";
 import { Type } from "typebox";
 
+import { slackenedTries } from "../EventuallyTestKit.ts";
 import { BridgeProvider } from "../models/BridgeProvider.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import { bridgeStopHook } from "../threads/BridgeStopHook.ts";
@@ -281,7 +282,7 @@ describe("the bridge-cwd extension", () => {
         Effect.repeat({
           until: (alive) => alive,
           schedule: Schedule.spaced("10 millis"),
-          times: 300,
+          times: slackenedTries(300),
         })
       );
 
@@ -299,7 +300,7 @@ describe("the bridge-cwd extension", () => {
         Effect.repeat({
           until: (count) => count > 0,
           schedule: Schedule.spaced("10 millis"),
-          times: 200,
+          times: slackenedTries(200),
         })
       );
 

@@ -11,6 +11,8 @@ import path from "node:path";
 
 import { afterAll, afterEach, assert, describe, it } from "@effect/vitest";
 
+import { slackenedTries } from "../../apps/server/src/EventuallyTestKit.ts";
+
 const helper = path.join(import.meta.dirname, "lock-held-by-caller.sh");
 
 const root = mkdtempSync(path.join(tmpdir(), "cairn-lock-caller-"));
@@ -35,7 +37,11 @@ describe("lock-held-by-caller.sh", () => {
     holder?.kill();
     holder = undefined;
 
-    for (let tries = 0; tries < 200 && lockIsHeld(); tries += 1) {
+    for (
+      let tries = 0;
+      tries < slackenedTries(200) && lockIsHeld();
+      tries += 1
+    ) {
       spawnSync("sleep", ["0.05"]);
     }
   });
@@ -79,7 +85,11 @@ describe("lock-held-by-caller.sh", () => {
       { stdio: "ignore" }
     );
 
-    for (let tries = 0; tries < 200 && !lockIsHeld(); tries += 1) {
+    for (
+      let tries = 0;
+      tries < slackenedTries(200) && !lockIsHeld();
+      tries += 1
+    ) {
       spawnSync("sleep", ["0.05"]);
     }
 

@@ -12,6 +12,7 @@ import { TestClock } from "effect/testing";
 
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
+import { slackenedTries } from "../EventuallyTestKit.ts";
 import { attachmentMigrations } from "./AttachmentsTestLayer.ts";
 import { AttachmentStore } from "./AttachmentStore.ts";
 
@@ -41,11 +42,11 @@ describe("attachment sweep", () => {
 
       /**
        * Waits, in real time, for the sweep count to reach `count`: a sweep reads real folders,
-       * which the `TestClock` does not wait for. Answers the count then, or after two seconds.
+       * which the `TestClock` does not wait for. Answers the count then, or after two seconds times the test slack.
        */
       const sweptBecomes = (count: number) =>
         Effect.gen(function* () {
-          for (let attempt = 0; attempt < 200; attempt += 1) {
+          for (let attempt = 0; attempt < slackenedTries(200); attempt += 1) {
             if (swept >= count) {
               break;
             }

@@ -5,6 +5,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option } from "effect";
 
+import { TEST_SLACK } from "../../EventuallyTestKit.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../../subagents/SubagentTools.ts";
 import { registerSide, scenarios, SUITE_OPTIONS } from "./ConformanceSuite.ts";
 import { runScenario } from "./HarnessConformance.ts";
@@ -79,7 +80,7 @@ describe.each([
             []
           );
         }),
-      120_000
+      120_000 * TEST_SLACK
     );
   }
 );

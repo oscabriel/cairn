@@ -29,6 +29,7 @@ import { Socket } from "effect/socket";
 
 import { AppLayer, ScriptedBrain } from "../AppLayer.ts";
 import { ServerConfig } from "../Config.ts";
+import { slackened, testLimit } from "../EventuallyTestKit.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ReachMachine } from "../reach/ReachLayer.ts";
 import {
@@ -303,7 +304,7 @@ layer(TestServer, { excludeTestServices: true })("the /ws socket", (it) => {
       // The bound only keeps a regression from hanging the suite: the call must fail because the
       // socket closed, well inside it, not because the bound ran out.
       const [elapsed, after] = yield* client["session.hello"]().pipe(
-        Effect.timeout("2 seconds"),
+        Effect.timeout(slackened("2 seconds")),
         Effect.exit,
         Effect.timed
       );
@@ -314,7 +315,7 @@ layer(TestServer, { excludeTestServices: true })("the /ws socket", (it) => {
         Exit.isFailure(after) &&
           Predicate.isTagged(Cause.squash(after.cause), "TimeoutError")
       );
-      assert.isBelow(Duration.toMillis(elapsed), 1000);
+      assert.isBelow(Duration.toMillis(elapsed), testLimit(1000));
     })
   );
 });

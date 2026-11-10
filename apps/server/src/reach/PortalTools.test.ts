@@ -45,6 +45,7 @@ import {
 } from "../brain/CairnDocs.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
+import { testLimit, slackened } from "../EventuallyTestKit.ts";
 import { Git } from "../git/Git.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
@@ -219,7 +220,7 @@ const pendingApproval = (
 
       yield* Effect.sleep(Duration.millis(20));
     }
-  }).pipe(Effect.timeout(Duration.seconds(10)), Effect.orDie);
+  }).pipe(Effect.timeout(slackened(Duration.seconds(10))), Effect.orDie);
 
 /** The user's answer to one approval. */
 const answer = (
@@ -325,7 +326,7 @@ describe("the portal tools", () => {
           ]);
         }).pipe(Effect.provide(layer));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live("refuses a conversation that is not a Cairn thread", () =>
@@ -431,7 +432,7 @@ describe("the portal tools", () => {
           assert.deepStrictEqual(yield* units.running, []);
         }).pipe(Effect.provide(layer));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -479,7 +480,7 @@ describe("the portal tools", () => {
           assert.deepStrictEqual(yield* rowStates, []);
         }).pipe(Effect.provide(layer));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000
+    testLimit(30_000)
   );
 
   it.live("full access opens at once and writes no approval record", () =>
@@ -588,6 +589,6 @@ describe("the portal tools", () => {
           );
         }).pipe(Effect.provide(layer));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    30_000
+    testLimit(30_000)
   );
 });

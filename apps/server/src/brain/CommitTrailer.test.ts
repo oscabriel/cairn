@@ -7,10 +7,9 @@
 //
 // The gate may run inside a Cairn thread, whose `bash` hands git its own trailer hook through
 // `GIT_CONFIG_*`. Every git this file starts inherits the brain's environment, so the file isolates
-// it first (`isolateGitEnvironment`); otherwise the control commit carries the outer thread's id.
+// it first (`isolateGitEnvironment`, which `BrainTestKit` runs on import); otherwise the control
+// commit carries the outer thread's id.
 
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ProjectId, RequestId, ThreadId } from "@cairn/protocol/Ids";
@@ -27,53 +26,21 @@ import {
   Stream,
 } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { Git, GIT_DEFAULTS } from "../git/Git.ts";
-import { isolateGitEnvironment } from "../git/GitTestKit.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
+import { GIT_DEFAULTS, Git } from "../git/Git.ts";
 import { COMMIT_OPTIONS } from "../threads/ThreadsTestKit.ts";
-import { BrainConfig } from "./BrainConfig.ts";
+import { testBrain } from "./BrainTestKit.ts";
 import {
   parseGitVersion,
   supportsTrailer,
   trailerCommand,
   withTrailerHook,
 } from "./CommitTrailer.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
+import { FAUX_MODEL } from "./ModelSource.ts";
 
-isolateGitEnvironment();
-
-const harness = PiDurableHarness.layer.pipe(
-  Layer.provideMerge(
-    ExtensionSet.layer.pipe(
-      Layer.provide(ExecutorLink.layerDisabled),
-      Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest),
-      Layer.provide(SettingsStore.layerTest),
-      Layer.provide(ReachServicesTest),
-      Layer.provide(Subagents.layerTest),
-      Layer.provide(PiModelSource.layerFromModelSource)
-    )
-  ),
-  Layer.provideMerge(
-    ModelSource.layerFaux({
-      tokensPerSecond: 4000,
-      settings: { retry: { enabled: false } },
-    })
-  ),
-  Layer.provide(
-    BrainConfig.layerFrom(mkdtempSync(path.join(tmpdir(), "cairn-trailer-")))
-  )
-);
+const harness = testBrain();
 
 const Platform = Layer.mergeAll(Git.layer, NodeServices.layer);
 
@@ -255,6 +222,6 @@ describe("a thread's bash", () => {
 
         assert.deepStrictEqual(yield* trailersOf(repo, "HEAD"), [THREAD]);
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(harness, Platform))),
-    30_000
+    testLimit(30_000)
   );
 });

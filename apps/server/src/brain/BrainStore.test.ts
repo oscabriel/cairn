@@ -23,6 +23,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Duration, Effect, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
+import { slackenedTries } from "../EventuallyTestKit.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { BrainStore, SIDECAR_FILE } from "./BrainStore.ts";
 
@@ -88,11 +89,11 @@ const storeWithoutCopies = () => {
 
 /**
  * Waits, in real time, for the daily copies to be `expected`: a copy is a real SQLite backup, which
- * the `TestClock` does not wait for. Answers what is there when they match or after two seconds.
+ * the `TestClock` does not wait for. Answers what is there when they match or after two seconds times the test slack.
  */
 const dailiesBecome = (dataDir: string, expected: ReadonlyArray<string>) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
+    for (let attempt = 0; attempt < slackenedTries(200); attempt += 1) {
       const found = dailies(dataDir);
 
       if (found.join("\n") === expected.join("\n")) {

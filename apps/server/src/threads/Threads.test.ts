@@ -19,7 +19,6 @@ import {
   Option,
   Predicate,
   Ref,
-  Schedule,
   Stream,
 } from "effect";
 import type { Layer } from "effect";
@@ -27,6 +26,7 @@ import type { Layer } from "effect";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
+import { eventually, testLimit } from "../EventuallyTestKit.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { ScratchProject } from "../projects/ScratchProject.ts";
 import { EventSink } from "../shell/EventSink.ts";
@@ -233,18 +233,6 @@ const liveState = Effect.fn("test.liveState")(function* (threadId: ThreadId) {
   );
 });
 
-const eventually = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  check: (value: A) => boolean
-) =>
-  read.pipe(
-    Effect.repeat({
-      until: check,
-      schedule: Schedule.spaced(Duration.millis(10)),
-    }),
-    Effect.timeout(Duration.seconds(5))
-  );
-
 const isRunning = (
   state: Option.Option<{ readonly runId: Option.Option<unknown> }>
 ) => Option.exists(state, (live) => Option.isSome(live.runId));
@@ -362,17 +350,12 @@ describe("thread commands", () => {
 
           const hooked = yield* eventually(Ref.get(stopped), (all) =>
             all.includes(threadId)
-          ).pipe(
-            Effect.asSome,
-            Effect.catchTag("TimeoutError", () =>
-              Effect.succeed(Option.none<ReadonlyArray<ThreadId>>())
-            )
-          );
+          ).pipe(Effect.asSome);
 
           assert.deepStrictEqual(hooked, Option.some([threadId]));
         })
       ),
-    15_000
+    testLimit(15_000)
   );
 
   it.live(

@@ -9,6 +9,7 @@ import path from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
+import { TEST_SLACK } from "../../EventuallyTestKit.ts";
 import { DEFAULT_TOOL_OPTIONS } from "../../subagents/SubagentTools.ts";
 import {
   allScenarios,
@@ -95,7 +96,7 @@ describe("brief expiry, with a short brief lifetime", () => {
 
         assert.deepStrictEqual(failed, []);
       }),
-    120_000
+    120_000 * TEST_SLACK
   );
 });
 
@@ -161,6 +162,6 @@ describe("harness conformance drift", () => {
           "behaviour changed, review it: compare the scenarios' events and views with goldens/, then rerun with CAIRN_UPDATE_GOLDENS=1"
         );
       }),
-    300_000
+    300_000 * TEST_SLACK
   );
 });

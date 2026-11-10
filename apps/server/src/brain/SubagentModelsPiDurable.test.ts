@@ -37,12 +37,9 @@ import {
   Stream,
 } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { HealthOutcome, ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
 import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { testThreadId } from "../shell/ShellTestKit.ts";
 import { SubagentsDoc } from "../subagents/SubagentDocs.ts";
 import { Subagents } from "../subagents/Subagents.ts";
@@ -51,11 +48,11 @@ import type { SubagentToolOptions } from "../subagents/SubagentTools.ts";
 import { BudgetBook } from "../usage/BudgetBook.ts";
 import { Brain } from "./Brain.ts";
 import { BrainConfig } from "./BrainConfig.ts";
+import { brainExtensions } from "./BrainTestKit.ts";
 import { Approvals } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
 import { childWorkspacesAt } from "./conformance/Targets.ts";
 import { durable } from "./Durable.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
@@ -80,13 +77,10 @@ const OTHER_PARENT = testThreadId(2);
 const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
   PiDurableHarness.layer.pipe(
     Layer.provide(
-      ExtensionSet.withExtra([conformanceTools]).pipe(
-        Layer.provide(Subagents.layerWith(NO_SUBAGENT_FAULTS, tuning)),
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
+      brainExtensions({
+        extra: [conformanceTools],
+        subagents: Subagents.layerWith(NO_SUBAGENT_FAULTS, tuning),
+      })
     ),
     // The book the production set's gate and Go's start task read (one, by the memo map).
     Layer.provideMerge(BudgetBook.layer),
@@ -103,22 +97,6 @@ const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
   );
 
 type Services = Layer.Success<ReturnType<typeof brainLayer>>;
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A, E, R>(find: Effect.Effect<Option.Option<A>, E, R>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
-  });
 
 /** What a test body gets: the brain's events so far and the parent's conversation. */
 interface Running {
@@ -387,7 +365,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -423,7 +401,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -490,7 +468,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             });
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -532,7 +510,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             assert.deepStrictEqual(yield* pendingBriefs(events, PARENT), []);
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -598,7 +576,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -641,7 +619,7 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a budget at its line when the user says Go starts nothing, and the parent is told once",
@@ -702,6 +680,6 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
             );
           })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

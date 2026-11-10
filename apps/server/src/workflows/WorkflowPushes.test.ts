@@ -53,7 +53,7 @@ describe("workflow budget pushes", () => {
     assert.strictEqual(unknown.url, "/");
   });
 
-  it.live(
+  it.effect(
     "sends each push handed to the outbox through the notifier, once",
     () =>
       Effect.gen(function* () {
@@ -78,7 +78,8 @@ describe("workflow budget pushes", () => {
 
           yield* outbox.send({ threadId: "", workflowId: "wf-1", text: "a" });
           yield* outbox.send({ threadId: "", workflowId: "wf-2", text: "b" });
-          yield* Effect.sleep("30 millis");
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust("30 millis");
         }).pipe(
           Effect.provide(
             WorkflowBudgetPush.pipe(

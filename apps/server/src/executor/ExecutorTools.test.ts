@@ -10,6 +10,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Layer, Option, Result } from "effect";
 
 import { ApprovalLedgerError } from "../brain/CairnDocs.ts";
+import { eventuallyTrue, slackened } from "../EventuallyTestKit.ts";
 import { ExecutorGrant, ExecutorGrantError } from "./ExecutorGrant.ts";
 import { ExecutorLink } from "./ExecutorLink.ts";
 import { INTERRUPTED, REFUSED, RERUN_AFTER_START } from "./ExecutorReply.ts";
@@ -318,7 +319,7 @@ describe("the link", () => {
             fake.restart();
 
             const outcome = yield* Fiber.join(running).pipe(
-              Effect.timeout(Duration.seconds(3))
+              Effect.timeout(slackened(Duration.seconds(3)))
             );
 
             assert.isTrue(outcome.isError);
@@ -506,7 +507,7 @@ describe("the link under a failing Executor or store", () => {
                 Effect.flip(link.call("search", { query: "mark" })),
               ],
               { concurrency: "unbounded" }
-            ).pipe(Effect.timeout(Duration.seconds(3)));
+            ).pipe(Effect.timeout(slackened(Duration.seconds(3))));
 
             assert.strictEqual(first.reason, "unreachable");
             assert.strictEqual(second.reason, "unreachable");
@@ -541,16 +542,6 @@ describe("the link under a failing Executor or store", () => {
       )
   );
 });
-
-/** Polls `done` every 10 ms until it holds, for up to five seconds. */
-const eventually = (done: () => boolean) =>
-  Effect.gen(function* () {
-    for (let tries = 0; tries < 500 && !done(); tries += 1) {
-      yield* Effect.sleep("10 millis");
-    }
-
-    assert.isTrue(done(), "the condition never held");
-  });
 
 /** Consents on `page` as the user's browser would, then answers Cairn's callback. */
 const consentAndCallBack = (fake: FakeExecutorHandle, page: string) =>
@@ -596,7 +587,9 @@ describe("a sign-in beside other flows", () => {
 
           const signingIn = yield* Effect.forkChild(link.signIn);
 
-          yield* eventually(() => fake.state.registersHeld === 1);
+          yield* eventuallyTrue(
+            Effect.sync(() => fake.state.registersHeld === 1)
+          );
 
           const calling = yield* Effect.forkChild(
             link.call("skills", {}).pipe(Effect.result)
@@ -642,7 +635,7 @@ describe("a sign-in beside other flows", () => {
             const [failedSignIn, failedCall] = yield* Effect.all(
               [Fiber.join(signingIn), Effect.flip(link.call("skills", {}))],
               { concurrency: "unbounded" }
-            ).pipe(Effect.timeout(Duration.seconds(3)));
+            ).pipe(Effect.timeout(slackened(Duration.seconds(3))));
 
             assert.strictEqual(failedSignIn.reason, "failed");
             assert.isFalse(failedCall.sent);
@@ -685,14 +678,14 @@ describe("a sign-in beside other flows", () => {
             fake.state.hangToken = true;
 
             const answered = yield* consentAndCallBack(fake, page).pipe(
-              Effect.timeout(Duration.seconds(3))
+              Effect.timeout(slackened(Duration.seconds(3)))
             );
 
             assert.isTrue(Result.isFailure(answered));
             assert.strictEqual((yield* link.status).state, "needs-sign-in");
 
             const failedCall = yield* Effect.flip(link.call("skills", {})).pipe(
-              Effect.timeout(Duration.seconds(3))
+              Effect.timeout(slackened(Duration.seconds(3)))
             );
 
             assert.isFalse(failedCall.sent);

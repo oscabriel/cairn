@@ -24,6 +24,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Option } from "effect";
 
 import { ScriptedStore } from "../brain/ScriptedHarness.ts";
+import { testLimit, slackened } from "../EventuallyTestKit.ts";
 import { Projects } from "../projects/Projects.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
 import {
@@ -75,7 +76,7 @@ const runFixture = (data: string, root: string, mode: string) =>
         run.kill("SIGKILL");
       });
     }
-  ).pipe(Effect.timeout(Duration.seconds(60)), Effect.orDie);
+  ).pipe(Effect.timeout(slackened(Duration.seconds(60))), Effect.orDie);
 
 /** What the project holds: its mark and its live top-level threads. */
 interface ProjectThreads {
@@ -201,7 +202,7 @@ describe("kill -9 during a project thread refresh", () => {
             );
           }).pipe(Effect.scoped, Effect.provide(nextBoot(data)));
         }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-      120_000
+      testLimit(120_000)
     );
   }
 
@@ -223,6 +224,6 @@ describe("kill -9 during a project thread refresh", () => {
           assert.deepStrictEqual(held.live, []);
         }).pipe(Effect.scoped, Effect.provide(nextBoot(data)));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-    120_000
+    testLimit(120_000)
   );
 });

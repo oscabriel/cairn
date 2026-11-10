@@ -2,8 +2,6 @@
 // `cairn.thread` receipt (its spawn landed) is left alone, and a plan whose child has none (the
 // spawn died before its commit) loses its worktree, branch and row.
 
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ProjectId } from "@cairn/protocol/Ids";
@@ -11,14 +9,7 @@ import { NodeServices } from "@effect/platform-node";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Option } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { Git } from "../git/Git.ts";
-import { isolateGitEnvironment } from "../git/GitTestKit.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
 import { Subagents } from "../subagents/Subagents.ts";
 import { ChildWorkspaces } from "../workspaces/ChildWorkspaces.ts";
 import {
@@ -29,42 +20,17 @@ import {
   thread,
   workspacesAt,
 } from "../workspaces/ChildWorkspacesTestKit.ts";
-import { BrainConfig } from "./BrainConfig.ts";
+import { testBrain } from "./BrainTestKit.ts";
 import { repairChildWorkspacesAtBoot } from "./ChildWorkspaceRepair.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
-
-isolateGitEnvironment();
+import { FAUX_MODEL } from "./ModelSource.ts";
 
 /**
  * The brain over the children's workspaces `workspaces`, which its subagents extension makes
  * children in too.
  */
 const harnessOver = (workspaces: ReturnType<typeof workspacesAt>) =>
-  PiDurableHarness.layer.pipe(
-    Layer.provideMerge(
-      ExtensionSet.layer.pipe(
-        Layer.provide(Subagents.layer.pipe(Layer.provide(workspaces))),
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
-    ),
-    Layer.provideMerge(
-      ModelSource.layerFaux({
-        tokensPerSecond: 4000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
-    Layer.provide(
-      BrainConfig.layerFrom(mkdtempSync(path.join(tmpdir(), "cairn-repair-")))
-    )
-  );
+  testBrain({ subagents: Subagents.layer.pipe(Layer.provide(workspaces)) });
 
 const Platform = Layer.mergeAll(Git.layer, NodeServices.layer);
 

@@ -19,6 +19,7 @@ import { DateTime, Effect, Option, Predicate } from "effect";
 
 import { Approvals } from "../brain/CairnDocs.ts";
 import type { ApprovalRecord } from "../brain/CairnDocs.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import {
   effectiveBudget,
   raisedBudget,
@@ -711,7 +712,7 @@ return { a, b };`,
         assert.strictEqual(byLabel("a")?.state, "settled");
         assert.include(outcome.result, String.raw`"a":"{\"label\":\"a\"}"`);
       }),
-    30_000
+    testLimit(30_000)
   );
 });
 

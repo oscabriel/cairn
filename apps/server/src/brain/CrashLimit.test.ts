@@ -7,7 +7,6 @@ import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
@@ -31,6 +30,7 @@ import { Effect, Function, Option, Schema } from "effect";
 import { Type } from "typebox";
 
 import { KEPT_WAITS } from "../BootRepairs.ts";
+import { eventuallyTrue, testLimit } from "../EventuallyTestKit.ts";
 import { conversationOf, taskOf } from "../subagents/Delivery.ts";
 import { Approvals, approvalIdOf } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
@@ -311,19 +311,9 @@ const toolOf = (input: JsonValue): string =>
     onSome: ({ callId }) => CALL_OF.get(callId) ?? callId,
   });
 
-/** Polls `done` until it holds, or fails with `what`. */
+/** Polls `done` until it holds, or dies naming `what` once `eventually`'s deadline passes. */
 const until = async (what: string, done: () => Promise<boolean>) => {
-  for (let waited = 0; waited < 400; waited += 1) {
-    // oxlint-disable-next-line no-await-in-loop -- polling a running Harness
-    if (await done()) {
-      return;
-    }
-
-    // oxlint-disable-next-line no-await-in-loop
-    await sleep(10);
-  }
-
-  throw new Error(what);
+  await Effect.runPromise(eventuallyTrue(Effect.promise(done), what));
 };
 
 /** The names of the running tool calls, sorted. */
@@ -500,6 +490,6 @@ describe("the crash accounting on a real store", () => {
           rmSync(dir, { recursive: true, force: true });
         }
       }),
-    30_000
+    testLimit(30_000)
   );
 });

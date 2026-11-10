@@ -37,6 +37,7 @@ import { Approvals } from "../../brain/CairnDocs.ts";
 import { CodeMode } from "../../brain/CodeMode.ts";
 import { messageText } from "../../brain/CommitFeed.ts";
 import { durableRunner } from "../../brain/Durable.ts";
+import { testLimit } from "../../EventuallyTestKit.ts";
 import { RESULT_TOOL_NAME, ResultTool } from "../../models/ResultTool.ts";
 import { taskOf } from "../../subagents/Delivery.ts";
 import { NO_DEFAULT_BUDGET } from "../../usage/DefaultBudget.ts";
@@ -287,12 +288,12 @@ const resultOf = (run: Run): CouncilResult =>
     () => new Error(`not a council result: ${run.resultText}`)
   );
 
-/** Waits until the row has ended (its watcher wrote it), at most `ms`. */
+/** Waits until the row has ended (its watcher wrote it), at most `ms` scaled by the slack. */
 const endedRow = async (
   brain: KitBrain,
   ms: number
 ): Promise<Readonly<WorkflowsState> | undefined> => {
-  const until = performance.now() + ms;
+  const until = performance.now() + testLimit(ms);
 
   for (;;) {
     // oxlint-disable-next-line no-await-in-loop

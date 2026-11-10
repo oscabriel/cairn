@@ -36,6 +36,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Result, Schema } from "effect";
 
 import { answerApproval, Approvals } from "../brain/CairnDocs.ts";
+import { testLimit } from "../EventuallyTestKit.ts";
 import { isolateGitEnvironment } from "../git/GitTestKit.ts";
 import { taskOf } from "../subagents/Delivery.ts";
 import { ChildDoc } from "../subagents/SubagentDocs.ts";
@@ -656,7 +657,7 @@ describe("the goal tools under a Harness", () => {
         assert.strictEqual(goal?.criteria[0]?.state, "met");
         assert.isAtLeast(notes.length, 1);
       }).pipe(Effect.scoped),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -725,7 +726,7 @@ describe("the goal tools under a Harness", () => {
           "the dead item is settled"
         );
       }).pipe(Effect.scoped),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -806,7 +807,7 @@ describe("the goal tools under a Harness", () => {
 
         assert.include(results.get("t2") ?? "", "Queued judge run judge-");
       }).pipe(Effect.scoped),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -902,6 +903,6 @@ describe("the goal tools under a Harness", () => {
         assert.strictEqual(goal?.criteria[0]?.tries, 1);
         assert.strictEqual(notes.length, 1);
       }).pipe(Effect.scoped),
-    30_000
+    testLimit(30_000)
   );
 });

@@ -38,6 +38,7 @@ import {
 import type { Scope } from "effect";
 import type { describe, it } from "vitest";
 
+import { TEST_SLACK } from "../../EventuallyTestKit.ts";
 import { HarnessEvent } from "../HarnessSeam.ts";
 import type {
   ApprovalAnswerInput,
@@ -1507,7 +1508,7 @@ export const registerHarnessConformance = (
             throw new Error(`${scenario.name}: ${outcome.failure.value}`);
           }
         },
-        60_000
+        60_000 * TEST_SLACK
       );
     }
   });

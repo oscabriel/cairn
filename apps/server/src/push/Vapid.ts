@@ -1,9 +1,13 @@
 // Ported from cairn-v1, apps/server/src/Push.ts (`loadVapid`) at 1a5cd4a. Kept: the VAPID key pair is
-// made once into `push.json` beside `cairn.json` (created with `wx` at 0600, so a second process
-// racing the first reads the winner's key), a file found with group or world bits is narrowed to
-// 0600, and the subject is `mailto:admin@gneiss.run`. Changed: an Effect service over `FileSystem`
-// and `ServerConfig.configDir`; the file is decoded with a schema; the private key never reaches a
-// log or an error message.
+// made once into `push.json` beside `cairn.json` at 0600, and only one process's key is ever kept,
+// so a second process racing the first reads the winner's key; a file found with group or world
+// bits is narrowed to 0600, and the subject is `mailto:admin@gneiss.run`. Changed: an Effect service
+// over `FileSystem` and `ServerConfig.configDir`; the file is decoded with a schema; the private key
+// never reaches a log or an error message; instead of v1's `wx` create, which makes the file empty
+// before the key is written so a racing process could read it in that gap, the file is written
+// whole in a staging folder beside it and linked into place (a link refuses an existing file). A
+// process killed between the staged write and the scope's close leaves that staging folder (0700,
+// its file 0600) behind; nothing removes it, since a racing process's staging folder looks the same.
 
 import path from "node:path";
 
@@ -151,8 +155,20 @@ export class Vapid extends Context.Service<
 
       const json = `${JSON.stringify(pair, null, 2)}\n`;
 
-      // `wx` refuses an existing file: a racing process's key wins and is read back below.
-      yield* fs.writeFileString(file, json, { flag: "wx", mode: 0o600 }).pipe(
+      // Written whole in a staging folder beside it, then linked into place: a link refuses an
+      // existing file, so a racing process's key wins and is read back below, and no reader ever
+      // sees the file before its key is in it (`wx` on the file itself creates it empty first).
+      yield* Effect.gen(function* () {
+        const staging = yield* fs.makeTempDirectoryScoped({
+          directory: config.configDir,
+        });
+
+        const staged = path.join(staging, VAPID_FILE);
+
+        yield* fs.writeFileString(staged, json, { flag: "wx", mode: 0o600 });
+        yield* fs.link(staged, file);
+      }).pipe(
+        Effect.scoped,
         Effect.andThen(
           Effect.logInfo("made a VAPID key pair").pipe(
             Effect.annotateLogs({ event: "vapid_created", file })

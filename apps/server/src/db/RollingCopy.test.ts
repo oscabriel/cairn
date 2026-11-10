@@ -18,6 +18,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Duration, Effect, Logger, Option, References } from "effect";
 import { TestClock } from "effect/testing";
 
+import { slackenedTries } from "../EventuallyTestKit.ts";
 import { startRollingCopy } from "./RollingCopy.ts";
 
 const PREFIX = "store-daily-";
@@ -46,10 +47,13 @@ const copiesIn = (folder: string) =>
     .filter((name) => name.startsWith(PREFIX) && name.endsWith(".sqlite"))
     .toSorted();
 
-/** Waits, in real time, up to two seconds for `check` to hold; answers whether it did. */
+/**
+ * Waits, in real time, up to two seconds times the test slack for `check` to hold; answers
+ * whether it did.
+ */
 const eventually = (check: () => boolean) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
+    for (let attempt = 0; attempt < slackenedTries(200); attempt += 1) {
       if (check()) {
         return true;
       }

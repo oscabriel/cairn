@@ -33,24 +33,20 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
-import { ExecutorLink } from "../executor/ExecutorLink.ts";
-import { ModelHealth } from "../models/ModelHealth.ts";
-import { PiModelSource } from "../models/PiModelSource.ts";
-import { SettingsStore } from "../models/SettingsStore.ts";
-import { PiHost } from "../pi-host/PiHost.ts";
-import { ReachServicesTest } from "../reach/ReachLayer.ts";
-import { Subagents } from "../subagents/Subagents.ts";
+import {
+  eventuallySome as waitFor,
+  testLimit,
+  slackened,
+} from "../EventuallyTestKit.ts";
 import { bindCriteria, markByUser } from "../verdicts/Verdicts.ts";
 import { Brain } from "./Brain.ts";
-import { BrainConfig } from "./BrainConfig.ts";
-import { Approvals, ThreadMeta, UNDECIDED } from "./CairnDocs.ts";
+import { testBrain } from "./BrainTestKit.ts";
+import { UNDECIDED, Approvals, ThreadMeta } from "./CairnDocs.ts";
 import { messageText } from "./CommitFeed.ts";
-import { ExtensionSet } from "./ExtensionSet.ts";
 import { FauxModels } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
-import { PiDurableHarness } from "./PiDurableHarness.ts";
+import { FAUX_MODEL } from "./ModelSource.ts";
 import { piConversationId } from "./PiIds.ts";
 
 const PARENT = ThreadId.make("0190f0c0-0000-7000-8000-0000000000d1");
@@ -94,41 +90,9 @@ const SubagentsDoc = defineDoc<SubagentsState>({
 });
 
 const harnessLayer = (dataDir: string) =>
-  PiDurableHarness.layer.pipe(
-    Layer.provide(
-      ExtensionSet.layer.pipe(
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest),
-        Layer.provide(ReachServicesTest),
-        Layer.provide(Subagents.layerTest),
-        Layer.provide(PiModelSource.layerFromModelSource)
-      )
-    ),
-    Layer.provideMerge(
-      ModelSource.layerFaux({
-        tokensPerSecond: 2000,
-        settings: { retry: { enabled: false } },
-      })
-    ),
-    Layer.provide(BrainConfig.layerFrom(dataDir))
-  );
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A>(find: Effect.Effect<Option.Option<A>>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
+  testBrain({
+    dataDir,
+    model: { tokensPerSecond: 2000, settings: { retry: { enabled: false } } },
   });
 
 interface Fixture {
@@ -380,7 +344,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -419,7 +383,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -484,7 +448,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -579,7 +543,7 @@ describe("CommitFeed subagent events", () => {
           assert.isBelow(read.indexOf("NOTE child done"), read.indexOf("two"));
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -642,7 +606,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a note queued during a run that is stopped is placed by the stop, ahead of a later note, its follow-up still queued",
@@ -712,7 +676,7 @@ describe("CommitFeed subagent events", () => {
           assert.strictEqual(yield* count("RunStarted"), 1);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
   it.live(
     "a note queued during a run that fails is placed once the run ends, its follow-up still queued",
@@ -768,7 +732,7 @@ describe("CommitFeed subagent events", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -827,7 +791,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -895,7 +859,7 @@ describe("CommitFeed subagent events", () => {
               Effect.map(updates, (found) =>
                 found.length >= count ? Option.some(true) : Option.none()
               )
-            ).pipe(Effect.timeoutOption(Duration.seconds(2)));
+            ).pipe(Effect.timeoutOption(slackened(Duration.seconds(2))));
 
           yield* ask(parentConversation);
           yield* reach(1);
@@ -914,7 +878,7 @@ describe("CommitFeed subagent events", () => {
           ]);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 
@@ -979,6 +943,6 @@ describe("CommitFeed with a value that fits no event", () => {
           );
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 });

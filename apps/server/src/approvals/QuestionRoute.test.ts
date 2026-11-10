@@ -55,6 +55,7 @@ import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { piConversationId } from "../brain/PiIds.ts";
 import { NO_SUBAGENT_FAULTS } from "../brain/SubagentFaults.ts";
 import { EscalationWhy } from "../brain/SubagentText.ts";
+import { eventuallySome as waitFor, testLimit } from "../EventuallyTestKit.ts";
 import { EventSink } from "../shell/EventSink.ts";
 import {
   createProject,
@@ -77,22 +78,6 @@ const PARENT = testThreadId(1);
 
 /** A window long enough for the other triggers to come first. */
 const LONG_WINDOW = DEFAULT_TOOL_OPTIONS;
-
-/** Polls `find` until it finds something, for up to ten seconds. */
-const waitFor = <A, E, R>(find: Effect.Effect<Option.Option<A>, E, R>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const found = yield* find;
-
-      if (Option.isSome(found)) {
-        return found.value;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return yield* Effect.die("waited ten seconds for nothing");
-  });
 
 /** The parent's registry, as committed. */
 const registryOf = (parent: ConversationId) =>
@@ -459,7 +444,7 @@ describe("question routing's automatic escalations", () => {
         "none",
         ({ parent }) => answeredInParent(parent, EscalationWhy.parentSlow(300))
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -481,7 +466,7 @@ describe("question routing's automatic escalations", () => {
           yield* answeredInParent(parent, EscalationWhy.parentArchived);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -493,7 +478,7 @@ describe("question routing's automatic escalations", () => {
         ({ parent }) => answeredInParent(parent, EscalationWhy.parentArchived),
         "archive-then-ask"
       ),
-    30_000
+    testLimit(30_000)
   );
 
   it.live(
@@ -519,7 +504,7 @@ describe("question routing's automatic escalations", () => {
           yield* answeredInParent(parent, EscalationWhy.parentDeleted);
         })
       ),
-    30_000
+    testLimit(30_000)
   );
 });
 

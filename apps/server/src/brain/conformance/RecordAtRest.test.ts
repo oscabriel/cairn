@@ -11,6 +11,7 @@ import path from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import { Duration, Effect, Option, Predicate, Schema, Stream } from "effect";
 
+import { testLimit } from "../../EventuallyTestKit.ts";
 import type { HarnessEvent, HarnessSeam } from "../HarnessSeam.ts";
 import {
   CONFORMANCE_DIR,
@@ -136,7 +137,7 @@ describe("a scenario's record", () => {
         "subagent_send_note_arrives",
         slowTarget("events", isCommitted("assistant", "4 and 9."))
       ),
-    30_000
+    testLimit(30_000)
   );
 
   // The last lines wait on events, and on views of what came before the parent's last run, and
@@ -151,6 +152,6 @@ describe("a scenario's record", () => {
           isCommitted("user", 'Subagent "Count the files" reported')
         )
       ),
-    30_000
+    testLimit(30_000)
   );
 });

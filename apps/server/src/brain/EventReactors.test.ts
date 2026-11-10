@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ConversationId } from "@cairn/protocol/Ids";
-import { Budget, DEFAULT_BUDGET } from "@cairn/protocol/Spend";
+import { DEFAULT_BUDGET, Budget } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
 import { EventEnvelope, EventsDocument } from "@cairn/protocol/Workflows";
 import type { JsonValue } from "@earendil-works/chord/json";
@@ -38,6 +38,10 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import {
+  eventuallyTrue as eventually,
+  testLimit,
+} from "../EventuallyTestKit.ts";
 import {
   budgetPushTask,
   NO_BUDGET_PUSH,
@@ -332,20 +336,6 @@ const pushesInto =
 
 const encodeBudget = Schema.encodeSync(Budget);
 
-/** Polls until `done` holds, for up to ten seconds. */
-const eventually = <E, R>(done: Effect.Effect<boolean, E, R>) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (yield* done) {
-        return true;
-      }
-
-      yield* Effect.sleep(Duration.millis(50));
-    }
-
-    return false;
-  });
-
 /** True once every reactor has nothing pending. */
 const caughtUp = (reactors: EventReactors["Service"]) =>
   Effect.map(reactors.status, (status) =>
@@ -421,7 +411,7 @@ describe("durable events", () => {
             );
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live("an event exists only when the commit that emitted it does", () =>
@@ -493,7 +483,7 @@ describe("durable events", () => {
           assert.strictEqual(after.reactors[0]?.failuresInARow, 0);
         })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -551,7 +541,7 @@ describe("durable events", () => {
         pushesInto(pushed)
       );
     },
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -651,7 +641,7 @@ describe("durable events", () => {
         pushesInto(pushed)
       );
     },
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -718,7 +708,7 @@ describe("durable events", () => {
           `Dead-lettered event ${String(lines.bad)}`
         );
       }),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -780,7 +770,7 @@ describe("durable events", () => {
             );
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -850,7 +840,7 @@ describe("durable events", () => {
             }
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -912,7 +902,7 @@ describe("durable events", () => {
           });
         })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -994,7 +984,7 @@ describe("durable events", () => {
           seen.after,
         ]);
       }),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -1053,7 +1043,7 @@ describe("durable events", () => {
             assert.deepStrictEqual(seen.handled.reopen, [cut, after]);
           })
       ),
-    20_000
+    testLimit(20_000)
   );
 
   it.live(
@@ -1111,7 +1101,7 @@ describe("durable events", () => {
           })
       );
     },
-    20_000
+    testLimit(20_000)
   );
 
   it.live("an empty, padded or repeated reactor name makes the layer die", () =>

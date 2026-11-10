@@ -10,10 +10,11 @@ import { ThreadId } from "@cairn/protocol/Ids";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Predicate, Result } from "effect";
+import { Effect, Option, Predicate, Result } from "effect";
 
 import { ThreadReceipt } from "../brain/CairnDocs.ts";
 import { durableRunner } from "../brain/Durable.ts";
+import { eventuallySome, testLimit } from "../EventuallyTestKit.ts";
 import {
   isWorkflowEnded,
   settledTokens,
@@ -135,28 +136,19 @@ const rowOf = async (
   return ledger.items[WF];
 };
 
-/** Waits until `found` answers something for the ledger, at most `ms`. */
+/** Waits until `found` answers something for the ledger, within `eventually`'s deadline. */
 const waitFor = async <A>(
   brain: KitBrain,
-  found: (row: Readonly<WorkflowItemState> | undefined) => A | undefined,
-  ms = 10_000
-): Promise<A> => {
-  const until = performance.now() + ms;
-
-  while (performance.now() < until) {
-    // oxlint-disable-next-line no-await-in-loop
-    const value = found(await rowOf(brain));
-
-    if (value !== undefined) {
-      return value;
-    }
-
-    // oxlint-disable-next-line no-await-in-loop
-    await pause(20);
-  }
-
-  throw new Error("timed out waiting on the ledger");
-};
+  found: (row: Readonly<WorkflowItemState> | undefined) => A | undefined
+): Promise<A> =>
+  await Effect.runPromise(
+    eventuallySome(
+      Effect.promise(async () =>
+        Option.fromUndefinedOr(found(await rowOf(brain)))
+      ),
+      "the ledger"
+    )
+  );
 
 const nodeNamed = (
   row: Readonly<WorkflowItemState> | undefined,
@@ -538,7 +530,7 @@ describe("abort polling in the node tools", () => {
         assert.isAtLeast(outcome.tookMs, HOLD_MS - 500);
         assert.strictEqual(nodeNamed(outcome.row, "b")?.state, "stopped");
       }),
-    20_000
+    testLimit(20_000)
   );
 });
 

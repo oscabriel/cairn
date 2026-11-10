@@ -26,7 +26,9 @@
 //                 started done, working now, the answer to do. Released, the child answers: the
 //                 steps turn done and the button "4/4 steps", and while they change, sampled every
 //                 frame, no step row and not the transcript's box moves by more than 1 px. The
-//                 failed child's page marks its work failed (2/4), the done child's reads 4/4.
+//                 failed child's page marks its work failed (2/4); the done child, whose brief
+//                 names `done_when: ["true"]`, reads 5/5, its last step checked by an outside
+//                 judge (ADR 0055).
 //
 // Broken controls, each planted in the page by this judge (never in the app), each of which must
 // make the step it names fail:
@@ -952,16 +954,26 @@ const runWidth = async (browser: Browser, width: number) => {
 
       const doneCount = await checkChild(
         DONE_CHILD.description,
-        "go:done,started:done,working:done,reported:done"
+        "go:done,started:done,working:done,reported:done,checked:done"
       );
 
       expect(
-        doneCount === "4/4 steps",
+        doneCount === "5/5 steps",
         `the done child's button reads ${JSON.stringify(doneCount)}`
+      );
+
+      const checkedTitle = await textOf(
+        page,
+        '[data-testid="work-step"][data-step="checked"]'
+      );
+
+      expect(
+        checkedTitle.includes("Checked by an outside judge"),
+        `the done child's checked step reads ${JSON.stringify(checkedTitle)}`
       );
       expect(!(await overflows(page)), "a child's page scrolls sideways");
 
-      return `2/4 while working, then 4/4 with every step done; over ${moved.frames} frames no step moved more than ${moved.steps.toFixed(1)} px, the transcript's box ${moved.box.toFixed(1)} px; failed child 2/4 with its work failed, done child 4/4`;
+      return `2/4 while working, then 4/4 with every step done; over ${moved.frames} frames no step moved more than ${moved.steps.toFixed(1)} px, the transcript's box ${moved.box.toFixed(1)} px; failed child 2/4 with its work failed, done child 5/5 checked by an outside judge`;
     });
   } finally {
     await context.close();

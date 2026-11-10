@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 
 import { ConversationId, TaskId, ThreadId } from "@cairn/protocol/Ids";
+import { SubagentCheck } from "@cairn/protocol/Subagents";
 import type {
   SubagentSettlement,
   SubagentStatus,
@@ -17,7 +18,7 @@ import type {
   ConversationId as PiConversationId,
   Tx,
 } from "@earendil-works/pi-durable";
-import { Option } from "effect";
+import { Option, Schema } from "effect";
 
 import { RUN_TASK } from "../brain/CommitFeed.ts";
 import { piConversationId, piTaskId } from "../brain/PiIds.ts";
@@ -128,6 +129,8 @@ export const childThreadIdOf = (
 /** A settlement as a reporter's checkpoint and a note's `data` hold it: the protocol's. */
 export type SettlementState = DocumentState<typeof SubagentSettlement>;
 
+const decodeCheck = Schema.decodeUnknownOption(SubagentCheck);
+
 /** The protocol's settlement of a stored one. */
 export const settlementOf = (state: SettlementState): SubagentSettlement => ({
   subagent: ThreadId.make(state.subagent),
@@ -141,6 +144,11 @@ export const settlementOf = (state: SettlementState): SubagentSettlement => ({
   turns: { thisRun: state.turns.thisRun, total: state.turns.total },
   error: state.error,
   usageLimit: state.usageLimit,
+  // A stored check is the protocol's (the check task and the reporter write it).
+  ...Option.match(decodeCheck(state.check), {
+    onNone: () => ({}),
+    onSome: (check) => ({ check }),
+  }),
 });
 
 /** A child's item in its parent's registry, found by the child's thread id. */

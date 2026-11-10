@@ -106,6 +106,65 @@ export const SettlementOutcome = Schema.Literals([
 
 export type SettlementOutcome = typeof SettlementOutcome.Type;
 
+/** A brief's `done_when` command (ADR 0055): its argv, run with no shell, and the exit code that means done. */
+const CheckCommand = {
+  argv: Schema.NonEmptyArray(Schema.String),
+  expectExit: NonNegativeInt,
+};
+
+/**
+ * A check Cairn ran: met when the command exited with the code it expects. `exit` is null when it
+ * timed out or could not start, and `note` says which; `tail` is the end of its output and `sha`
+ * the workspace's `HEAD` when it ran, as a goal's command judge records them.
+ */
+export const CheckRan = Schema.Struct({
+  verdict: Schema.Literals(["met", "notMet"]),
+  ...CheckCommand,
+  exit: Schema.NullOr(Schema.Int),
+  tail: Schema.NullOr(Schema.String),
+  sha: Schema.NullOr(TrimmedNonEmptyString),
+  note: Schema.NullOr(DisplayText),
+  at: EpochMillis,
+});
+
+export type CheckRan = typeof CheckRan.Type;
+
+/**
+ * A check Cairn did not run, and why: the child's run did not complete, its mode asks before a
+ * command, it has no folder, or the brain restarted while the command ran (Cairn never runs it twice).
+ */
+export const CheckNotRun = Schema.Struct({
+  verdict: Schema.Literal("notRun"),
+  ...CheckCommand,
+  why: DisplayText,
+  at: EpochMillis,
+});
+
+export type CheckNotRun = typeof CheckNotRun.Type;
+
+/**
+ * How a brief's `done_when` command judged one settlement (ADR 0055): an outside judge, run by
+ * Cairn in the child's workspace once the child's run completed.
+ */
+export const SubagentCheck = Schema.Union([CheckRan, CheckNotRun]);
+
+export type SubagentCheck = typeof SubagentCheck.Type;
+
+/**
+ * A child's check as its `cairn.child` holds it for the work panel: `pending` from its start until
+ * a run completes, `running` while Cairn runs the command, then its latest settlement's check.
+ */
+export const ChildCheck = Schema.Union([
+  Schema.Struct({
+    verdict: Schema.Literals(["pending", "running"]),
+    ...CheckCommand,
+  }),
+  CheckRan,
+  CheckNotRun,
+]);
+
+export type ChildCheck = typeof ChildCheck.Type;
+
 /**
  * A child's result for one input, closed (ADR 0028). `seq` is 1 for the brief's run, then one per
  * later input that produced an answer. `error` is set exactly when the outcome is `failed`; a
@@ -125,6 +184,11 @@ export const SubagentSettlement = Schema.Struct({
   turns: Schema.Struct({ thisRun: NonNegativeInt, total: NonNegativeInt }),
   error: Schema.NullOr(DisplayText),
   usageLimit: Schema.Boolean,
+  /**
+   * How the brief's `done_when` command judged this result (ADR 0055); absent when the brief names
+   * none, and on a settlement written before Cairn ran it.
+   */
+  check: Schema.optionalKey(SubagentCheck),
 });
 
 export type SubagentSettlement = typeof SubagentSettlement.Type;
@@ -305,6 +369,11 @@ export const ChildDocument = Schema.Struct({
   attempts: NonNegativeInt,
   report: Schema.NullOr(ChildReport),
   permissionMode: RuntimeMode,
+  /**
+   * The brief's `done_when` check, for the work panel (ADR 0055); absent when the brief names no
+   * command, and on a child started before Cairn ran it.
+   */
+  check: Schema.optionalKey(ChildCheck),
 });
 
 export type ChildDocument = typeof ChildDocument.Type;

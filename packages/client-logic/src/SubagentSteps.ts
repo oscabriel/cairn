@@ -4,11 +4,15 @@
 // works, and says what it did. Pure, so the panel, the header's pill and the judges read a row
 // alike.
 //
-// The sketch's two further steps, "Checked by an outside judge" and "Leave the merge to you", have
-// no record on a child yet (a brief's `done_when` command is frozen and shown but not run yet, ADR
-// 0055, and integration is phase 3), so they are not shown rather than shown as never done.
+// When its brief names a `done_when` command, a fifth step follows the answer: "Checked by an
+// outside judge", read from the check its `cairn.child` holds (ADR 0055). Cairn runs the command
+// once the child's run completes; the step is done when it was met, failed when it was not, and
+// stopped when Cairn did not run it. A brief with no command has no such step, rather than one
+// never done. The sketch's last step, "Leave the merge to you", has no record yet (integration is
+// phase 3), so it is not shown.
 
 import type { ThreadShell } from "@cairn/protocol/Shell";
+import type { ChildCheck } from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
 import { Array, DateTime, Option, Schema } from "effect";
 
@@ -16,8 +20,13 @@ import type { SubagentRequest } from "./SubagentRollup.ts";
 import type { ThreadStateRow, ThreadStatus } from "./ThreadState.ts";
 import { THREAD_LABELS, threadStatus } from "./ThreadState.ts";
 
-/** Which step: Go, the start, the work, the answer. */
-export type ChildStepKind = "go" | "started" | "working" | "reported";
+/** Which step: Go, the start, the work, the answer, and the outside judge's check. */
+export type ChildStepKind =
+  | "go"
+  | "started"
+  | "working"
+  | "reported"
+  | "checked";
 
 /**
  * Where one step stands: `done`; `now` while the child is on it; `todo` before it; `failed` when the
@@ -51,7 +60,60 @@ export interface ChildStepsContext {
    * (`lastRunAnsweredIn`); none while the transcript is not at hand.
    */
   readonly answered: Option.Option<boolean>;
+  /** The brief's `done_when` check (its `cairn.child` holds it); none when it names no command. */
+  readonly check: Option.Option<ChildCheck>;
 }
+
+/** The checked step's words, by what the outside judge found. */
+export const CheckStepText = {
+  checked: "Checked by an outside judge",
+  notMet: "Not met by an outside judge",
+  notRun: "Not checked by an outside judge",
+} as const;
+
+/** The checked step, once the child said what it did (`reported`); to do until then. */
+const checkedStep = (
+  check: ChildCheck,
+  reported: ChildStepState
+): ChildStep => {
+  const step = {
+    kind: "checked",
+    title: CheckStepText.checked,
+    state: "todo",
+    meta: Option.none(),
+  } satisfies ChildStep;
+
+  if (reported !== "done") {
+    return step;
+  }
+
+  if (check.verdict === "running") {
+    return { ...step, state: "now" };
+  }
+
+  if (check.verdict === "met") {
+    return { ...step, state: "done" };
+  }
+
+  if (check.verdict === "notMet") {
+    return {
+      ...step,
+      title: CheckStepText.notMet,
+      state: "failed",
+      meta: Option.some(
+        check.note ??
+          (check.exit === null ? "No exit code" : `Exit ${String(check.exit)}`)
+      ),
+    };
+  }
+
+  if (check.verdict === "notRun") {
+    return { ...step, title: CheckStepText.notRun, state: "stopped" };
+  }
+
+  // `pending`: nothing has been checked yet.
+  return step;
+};
 
 /** The fields of a committed model message the answer reads. */
 const ModelMessage = Schema.Struct({
@@ -152,6 +214,8 @@ export const childStepsOf = (
     started = "now";
   }
 
+  const reported: ChildStepState = working === "done" ? "done" : "todo";
+
   return [
     {
       kind: "go",
@@ -176,9 +240,12 @@ export const childStepsOf = (
     {
       kind: "reported",
       title: "Said what it did",
-      state: working === "done" ? "done" : "todo",
+      state: reported,
       meta: Option.none(),
     },
+    ...Option.toArray(
+      Option.map(context.check, (check) => checkedStep(check, reported))
+    ),
   ];
 };
 

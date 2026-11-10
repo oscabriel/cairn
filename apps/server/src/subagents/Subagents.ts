@@ -235,6 +235,7 @@ const build = (
         tasks.StartChild,
         tasks.BriefTell,
         tasks.Reporter,
+        tasks.Check,
       ],
     }),
   };

@@ -7,6 +7,7 @@ import {
   RunId,
 } from "@cairn/protocol/Ids";
 import type { ThreadShell } from "@cairn/protocol/Shell";
+import type { ChildCheck } from "@cairn/protocol/Subagents";
 import type { Entry } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { Option } from "effect";
@@ -66,6 +67,7 @@ const NO_CONTEXT = {
   request: Option.none(),
   hasReport: false,
   answered: Option.none(),
+  check: Option.none(),
 } as const;
 
 /** Each step as `kind:state`, with its meta when it has one. */
@@ -215,6 +217,113 @@ describe("a subagent's steps", () => {
 
     assert.strictEqual(inCheckout?.title, "Started, in the project's checkout");
     assert.strictEqual(inWorktree?.title, "Started, in a worktree");
+  });
+});
+
+/** Each step as `kind:state(meta)` and the checked step's title, for `check` on `row`. */
+const checked = (row: ThreadShell, check: ChildCheck) => {
+  const steps = childStepsOf(row, {
+    ...NO_CONTEXT,
+    answered: Option.some(true),
+    check: Option.some(check),
+  });
+
+  return {
+    steps: steps.map((step) =>
+      Option.match(step.meta, {
+        onNone: () => `${step.kind}:${step.state}`,
+        onSome: (meta) => `${step.kind}:${step.state}(${meta})`,
+      })
+    ),
+    title: steps.at(-1)?.title,
+    done: doneStepCount(steps),
+  };
+};
+
+describe("a subagent's checked step (ADR 0055)", () => {
+  const command = { argv: ["pnpm", "test"] as const, expectExit: 0 };
+
+  const ran = {
+    ...command,
+    tail: null,
+    sha: null,
+    note: null,
+    at: 1,
+  };
+
+  it("has no checked step when the brief names no command", () => {
+    assert.isFalse(
+      childStepsOf(child(answered), NO_CONTEXT).some(
+        (step) => step.kind === "checked"
+      )
+    );
+  });
+
+  it("waits to be checked while the child works, and while the command runs", () => {
+    assert.deepStrictEqual(
+      checked(child(running), { verdict: "pending", ...command }).steps.at(-1),
+      "checked:todo"
+    );
+    assert.deepStrictEqual(
+      checked(child(running), { ...ran, verdict: "met", exit: 0 }).steps.at(-1),
+      "checked:todo"
+    );
+    assert.deepStrictEqual(
+      checked(child(answered), { verdict: "running", ...command }).steps.at(-1),
+      "checked:now"
+    );
+  });
+
+  it("is done when an outside judge found the command met", () => {
+    assert.deepStrictEqual(
+      checked(child(answered), { ...ran, verdict: "met", exit: 0 }),
+      {
+        steps: [
+          "go:done",
+          "started:done",
+          "working:done",
+          "reported:done",
+          "checked:done",
+        ],
+        title: "Checked by an outside judge",
+        done: 5,
+      }
+    );
+  });
+
+  it("fails with the exit code, or the timeout, when it was not met", () => {
+    assert.deepStrictEqual(
+      [
+        checked(child(answered), { ...ran, verdict: "notMet", exit: 1 }),
+        checked(child(answered), {
+          ...ran,
+          verdict: "notMet",
+          exit: null,
+          note: "timed out after 600 s",
+        }),
+      ].map(({ steps, title }) => [steps.at(-1), title]),
+      [
+        ["checked:failed(Exit 1)", "Not met by an outside judge"],
+        [
+          "checked:failed(timed out after 600 s)",
+          "Not met by an outside judge",
+        ],
+      ]
+    );
+  });
+
+  it("is stopped when Cairn did not run the command", () => {
+    const seen = checked(child(answered), {
+      ...command,
+      verdict: "notRun",
+      why: "the child runs in Supervised mode, where a command asks first",
+      at: 1,
+    });
+
+    assert.deepStrictEqual(
+      [seen.steps.at(-1), seen.title, seen.done],
+      ["checked:stopped", "Not checked by an outside judge", 4]
+    );
   });
 });
 

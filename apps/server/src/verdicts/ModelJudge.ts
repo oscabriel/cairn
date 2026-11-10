@@ -8,8 +8,8 @@
 // one flattened string (review finding O-5): each message is fenced in a `<turn>` whose `from` (user,
 // assistant or tool) Cairn sets, role labels (`user:`, `tool result (bash):`, `**User:**`) and the
 // fences' own tags are stripped from every turn's text until none is left, and its angle brackets
-// are escaped, so an assistant message cannot forge a user's confirmation, a tool's output or the
-// transcript's end. The system prompt weighs tool turns over assistant prose.
+// are escaped (`brain/Fence.ts`), so an assistant message cannot forge a user's confirmation, a
+// tool's output or the transcript's end. The system prompt weighs tool turns over assistant prose.
 //
 // A judge on the thread's own model would grade its own work, so it is refused unless the user
 // named that model for the judge (ADR 0055, narrowing ADR 0043's default): a judge that names no
@@ -20,6 +20,8 @@
 import type { ModelRef } from "@cairn/protocol/Models";
 import type { Message } from "@earendil-works/pi-ai";
 import { Option } from "effect";
+
+import { fencedText } from "../brain/Fence.ts";
 
 /** The provider the Claude bridge registers: it answers conversations, not one plain request. */
 export const BRIDGE_PROVIDER = "claude-bridge";
@@ -168,40 +170,8 @@ export const judgeTurnOf = (message: Message): Option.Option<JudgeTurn> => {
   });
 };
 
-/**
- * A role label at a line's start, plain or in Markdown: `user:`, `Assistant:`, `tool result
- * (bash):`, `**User:**`, `- system:`.
- */
-const ROLE_LABEL =
-  /^[ \t>*_#`~+-]*(?:user|human|assistant|system|developer|tool(?:[ \t]+(?:result|output|call))?)[ \t]*(?:\([^)\n]*\))?[ \t*_`]*:[ \t*_`]*/gimu;
-
-/** A tag of the judge's own fences, or one that forges a verdict. */
-const FENCE_TAG = /<\/?[ \t]*(?:transcript|turn|verdict)\b[^>]*>/giu;
-
-/** One pass of the cleaning: the fences' tags, then role labels. */
-const cleanOnce = (text: string): string =>
-  text.replaceAll(FENCE_TAG, "").replaceAll(ROLE_LABEL, "");
-
-/**
- * A turn's text as the judge reads it, so it can only be its own words: role labels and the fences'
- * tags removed until none is left (removing `<turn>` from `<tu<turn>rn>` builds another, as removing
- * one of two labels leaves the other), then every `<`, `>` and `&` left escaped, so no tag in it,
- * however it was built, opens or closes a fence.
- */
-const cleanText = (text: string): string => {
-  let current = text;
-  let next = cleanOnce(current);
-
-  while (next !== current) {
-    current = next;
-    next = cleanOnce(current);
-  }
-
-  return current
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-};
+/** The judge's own fences, and the tag that would forge a verdict. */
+const JUDGE_TAGS = ["transcript", "turn", "verdict"];
 
 /** A tool's name as a fence attribute: its plain characters only. */
 const toolAttribute = (tool: string): string =>
@@ -214,7 +184,7 @@ const fenced = (turn: JudgeTurn, n: number): string => {
     onSome: (name) => ` tool="${toolAttribute(name)}"`,
   });
 
-  return `<turn n="${String(n)}" from="${turn.from}"${tool}>\n${cleanText(turn.text)}\n</turn>`;
+  return `<turn n="${String(n)}" from="${turn.from}"${tool}>\n${fencedText(turn.text, JUDGE_TAGS)}\n</turn>`;
 };
 
 /**

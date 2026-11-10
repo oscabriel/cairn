@@ -60,7 +60,11 @@
 //   nothing yet. Its commit writes a question record (`source: "answer"`, route parent) in the
 //   child's ledger and the same kind of run mark, and `ask` routes it (QuestionRoute.ts):
 //   answered, `answer` gives the child the answer as the run's next input, whose run settles them
-//   all; declined, expired or cancelled, the run's own answer settles as its result after all. `report` writes the
+//   all; declined, expired or cancelled, the run's own answer settles as its result after all.
+//   A brief that names a `done_when` command (ADR 0055) has a completed run checked first: the
+//   settling commit creates the check task in the child's conversation (DoneWhenCheck.ts), and
+//   `check` waits on it and puts its verdict on the settlement and the child's `cairn.child`. A run
+//   that did not complete is not checked, and its settlement says why. `report` writes the
 //   settlement's note and decides the wake by the parent's state; `wake` submits the wake and marks
 //   the settlement delivered. Nudge, note and wake request ids derive from the child and the
 //   settlement's `seq`, so a rerun after `kill -9` lands each once.
@@ -196,6 +200,14 @@ import {
   taskOf,
 } from "./Delivery.ts";
 import type { SettlementState } from "./Delivery.ts";
+import {
+  CheckWhy,
+  checkNotRun,
+  checkOfOutcome,
+  checkTaskWith,
+  doneWhenCommandOf,
+} from "./DoneWhenCheck.ts";
+import type { CheckCommand, CheckTaskDefinition } from "./DoneWhenCheck.ts";
 import { needsDecision } from "./NeedsDecision.ts";
 import {
   endUnanswered,
@@ -1044,6 +1056,14 @@ type ReporterState =
       quiet: boolean;
     }
   | { phase: "answer"; seq: number; text: string }
+  | {
+      phase: "check";
+      settlement: SettlementState;
+      quiet: boolean;
+      /** The brief's `done_when` command, and the check task running it in the child. */
+      command: CheckCommand;
+      checkTask: number;
+    }
   | { phase: "report"; settlement: SettlementState; quiet: boolean }
   | { phase: "wake"; settlement: SettlementState; wakes: Array<WakeState> };
 
@@ -1837,6 +1857,89 @@ const firstReason = (
   reasons: ReadonlyArray<readonly [applies: boolean, why: string]>
 ): string => reasons.find(([applies]) => applies)?.[1] ?? "none";
 
+/**
+ * Whether `seq` is `item`'s latest settlement, the one whose check `cairn.child` shows (ADR 0055):
+ * an earlier settlement's check, ending later, never overwrites a later run's.
+ */
+const isLatest = (item: Readonly<SubagentItemState>, seq: number): boolean =>
+  item.settlements.at(-1)?.seq === seq;
+
+/**
+ * What follows a settled run, in the commit that settled it (ADR 0055). A brief that names a
+ * `done_when` command and a run that completed: the check task, created in the child's
+ * conversation so the command runs in the child's folder through its arms, and the `check`
+ * phase that waits on it. A run that did not complete is not checked, and its settlement says
+ * why. A brief that names no command goes straight to `report`, its settlement with no check.
+ * Writes only, after the settling commit's table reads.
+ */
+const afterSettled = async (
+  tx: Tx,
+  checkDefinition: CheckTaskDefinition,
+  parent: ConversationId,
+  item: SubagentItemState,
+  child: ConversationId,
+  settlement: SettlementState,
+  quiet: boolean,
+  now: number
+): Promise<NextTaskState<ReporterState, null>> => {
+  const approvals = await tx.doc(Approvals, parent);
+
+  const command = Option.flatMap(
+    briefOfPayload(approvals.items[item.briefApprovalId]?.payload ?? null),
+    doneWhenCommandOf
+  );
+
+  if (Option.isNone(command)) {
+    return {
+      status: "running",
+      checkpoint: { phase: "report", settlement, quiet },
+    };
+  }
+
+  const link = await tx.doc(ChildDoc, child);
+
+  if (settlement.outcome !== "completed") {
+    const check = checkNotRun(
+      command.value,
+      CheckWhy.outcome(settlement.outcome),
+      now
+    );
+
+    link.check = check;
+
+    return {
+      status: "running",
+      checkpoint: {
+        phase: "report",
+        settlement: { ...settlement, check },
+        quiet,
+      },
+    };
+  }
+
+  const checkTask = await tx.createTask(checkDefinition, command.value, {
+    ...BACKGROUND,
+    conversationId: child,
+  });
+
+  link.check = {
+    verdict: "running",
+    argv: [...command.value.argv],
+    expectExit: command.value.expectExit,
+  };
+
+  return {
+    status: "running",
+    checkpoint: {
+      phase: "check",
+      settlement,
+      quiet,
+      command: command.value,
+      checkTask: Number(checkTask),
+    },
+  };
+};
+
 /** The task definitions, closed over the extension's faults and the child's agent change. */
 export const subagentTaskSet = (dependencies: TaskDependencies) => {
   const {
@@ -1850,6 +1953,9 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     questionTtlMillis,
     questionWindowMillis,
   } = dependencies;
+
+  /** The `done_when` check task, crashing where `crashAt` plants (ADR 0055). */
+  const Check = checkTaskWith(crashAt);
 
   /**
    * A submit's request id: `requestId` itself, or with `freshIds` planted one minted again on every
@@ -2306,10 +2412,16 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     link.report = null;
     settleUnlessWorking(item, running, ahead);
 
-    return {
-      status: "running",
-      checkpoint: { phase: "report", settlement, quiet: run.quiet },
-    };
+    return await afterSettled(
+      tx,
+      Check,
+      parent,
+      item,
+      child,
+      settlement,
+      run.quiet,
+      now
+    );
   };
 
   /**
@@ -2408,14 +2520,16 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     item.runs.push({ run: mark.run, phase: "settled", seq: next });
     settleUnlessWorking(item, live.run !== undefined, ahead);
 
-    return {
-      status: "running",
-      checkpoint: {
-        phase: "report",
-        settlement: settling,
-        quiet: asked.quiet,
-      },
-    };
+    return await afterSettled(
+      tx,
+      Check,
+      parent,
+      item,
+      child,
+      settling,
+      asked.quiet,
+      now
+    );
   };
 
   /**
@@ -2476,10 +2590,17 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
       return await askFailed(tx, failed, checkpoint);
     }
 
-    const decided =
-      checkpoint.phase === "report" || checkpoint.phase === "wake"
-        ? Option.some(checkpoint.settlement)
-        : Option.none<SettlementState>();
+    let decided = Option.none<SettlementState>();
+
+    if (checkpoint.phase === "report" || checkpoint.phase === "wake") {
+      decided = Option.some(checkpoint.settlement);
+    } else if (checkpoint.phase === "check") {
+      // The run settled and its check was under way: the result is reported, its check not run.
+      decided = Option.some({
+        ...checkpoint.settlement,
+        check: checkNotRun(checkpoint.command, CheckWhy.threw(why), at),
+      });
+    }
 
     // Table reads first.
     const registry = await tx.doc(SubagentsDoc, parent);
@@ -2544,6 +2665,16 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     );
 
     item.delivered = Math.max(item.delivered, seq);
+
+    if (
+      checkpoint.phase === "check" &&
+      settlement.check !== undefined &&
+      isLatest(item, seq)
+    ) {
+      const link = await tx.doc(ChildDoc, child);
+
+      link.check = settlement.check;
+    }
 
     return completed();
   };
@@ -2770,6 +2901,53 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
           context,
           Option.some(seq)
         );
+      }),
+      check: reporterPhase(async (task, runtime, context) => {
+        const { input } = task;
+        const { settlement, quiet, command, checkTask } = task.state.checkpoint;
+        const parent = runtime.conversationId;
+
+        crashAt("reporter-checking");
+
+        // The check task runs the command in the child once; a rerun of this phase waits on it
+        // again (`DoneWhenCheck.ts`).
+        const settled = await runtime.waitForTask(taskOf(checkTask), context);
+
+        const check = checkOfOutcome(
+          settled.state.outcome,
+          command,
+          runtime.now()
+        );
+
+        await runtime.commit(async (tx) => {
+          const registry = await tx.doc(SubagentsDoc, parent);
+          const item = registry.items[input.key];
+
+          // The work panel shows the latest run's check, never an earlier one ending later.
+          if (item !== undefined && isLatest(item, settlement.seq)) {
+            const link = await tx.doc(ChildDoc, conversationOf(input.child));
+
+            link.check = check;
+          }
+
+          return {
+            status: "running",
+            checkpoint: {
+              phase: "report",
+              settlement: { ...settlement, check },
+              quiet,
+            },
+          };
+        }, context);
+
+        runner.line(`subagent result checked: ${check.verdict}`, {
+          event: "subagent_checked",
+          conversationId: parent,
+          taskId: runtime.taskId,
+          childThreadId: input.childThreadId,
+          seq: settlement.seq,
+          verdict: check.verdict,
+        });
       }),
       report: reporterPhase(async (task, runtime, context) => {
         const { input } = task;
@@ -3156,6 +3334,15 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
         ? null
         : jsonRecordOf(brief.value.resultSchema);
     link.permissionMode = mode;
+
+    // The brief's `done_when` command, checked once a run of the child completes (ADR 0055).
+    for (const command of Option.toArray(doneWhenCommandOf(brief.value))) {
+      link.check = {
+        verdict: "pending",
+        argv: [...command.argv],
+        expectExit: command.expectExit,
+      };
+    }
 
     const registry = await tx.doc(SubagentsDoc, parent);
 
@@ -3716,6 +3903,7 @@ export const subagentTaskSet = (dependencies: TaskDependencies) => {
     StartChild,
     BriefTell,
     Reporter,
+    Check,
     newReporter,
     briefAnswered,
   };

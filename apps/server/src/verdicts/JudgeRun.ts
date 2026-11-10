@@ -7,7 +7,7 @@
 // Judges:
 // - `command` runs `argv` (no shell) in the goal thread's folder, through the thread's own arms,
 //   with the judge's timeout, and records the exit code, the output's tail and `HEAD`'s sha; met
-//   when the exit code is the one expected.
+//   when the exit code is the one expected (`CommandRun.ts`, which a brief's check runs too).
 // - `model` runs on the model it names, checked now. It refuses the Claude bridge, and the goal
 //   thread's own model unless the user named it, so one that names none records no verdict and says
 //   why (`ModelJudge.ts`, ADR 0055). It asks the model once over the transcript's end, each message
@@ -38,6 +38,7 @@ import { ThreadMeta } from "../brain/CairnDocs.ts";
 import { errorText } from "../brain/Durable.ts";
 import type { DurableRunner } from "../brain/Durable.ts";
 import { applyNote, noteEntry, readNote } from "../brain/NoteAdmission.ts";
+import { runCommand, tailOf } from "./CommandRun.ts";
 import { GoalDoc, JudgeRunsDoc } from "./GoalDocs.ts";
 import type {
   CriterionStateDoc,
@@ -63,14 +64,8 @@ export const JUDGE_RUN_TASK = "cairn.judge-run";
 /** The entry kind of the note a run leaves for the thread's model. */
 export const VERDICT_NOTE = "cairn.verdict";
 
-/** How much of a command's output a verdict keeps, from its end. */
-export const TAIL_LIMIT = 4000;
-
-/** How much of that tail the note quotes to the model. */
+/** How much of a verdict's tail the note quotes to the model. */
 const NOTE_TAIL_LIMIT = 1500;
-
-/** How long reading `HEAD` may take. */
-const SHA_TIMEOUT_SEC = 10;
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
@@ -175,13 +170,6 @@ const completed = <S>(): NextTaskState<S, null> => ({
   outcome: { status: "completed", result: null },
 });
 
-/** The end of `text`, cut to `limit` characters. */
-const tailOf = (text: string, limit: number): string =>
-  text.length > limit ? text.slice(-limit) : text;
-
-/** `argv` as one line for a note. */
-const argvText = (argv: ReadonlyArray<string>): string => argv.join(" ");
-
 /** The verdict a command's run made. */
 const commandVerdict = (
   judge: Extract<JudgeRefState, { kind: "command" }>,
@@ -270,92 +258,31 @@ export const judgeRunTask = (
 ) => {
   type Runtime = TaskRuntime<JudgeRunInput, JudgeRunState, null, object>;
 
-  const runCommand = async (
+  const runJudgeCommand = async (
     runtime: Runtime,
     judge: Extract<JudgeRefState, { kind: "command" }>,
     runId: string,
     context: ChordContext
   ): Promise<Judged> => {
-    const agent = await runtime.agent(context);
-    const env = await runtime.env(context);
+    const ran = await runCommand(runtime, judge, context);
 
-    if (env === undefined || agent.cwd === undefined) {
-      return Judged.None({
-        why: "the thread has no folder to run the command in.",
-      });
-    }
-
-    let output = "";
-
-    const result = await env.exec(
-      judge.argv,
-      {
-        cwd: agent.cwd,
-        timeout: judge.timeoutSec,
-        onOutput: (text) => {
-          output = tailOf(output + text, TAIL_LIMIT);
-        },
-      },
-      context
-    );
-
-    if (!result.ok && result.error.code === "aborted") {
-      // The run is being aborted or the brain is closing: nothing is recorded, and a rerun judges
-      // again.
-      throw result.error;
-    }
-
-    let head = "";
-
-    const sha = await env.exec(
-      ["git", "rev-parse", "HEAD"],
-      {
-        cwd: agent.cwd,
-        timeout: SHA_TIMEOUT_SEC,
-        onOutput: (text, _context, info) => {
-          if (info.stream === "stdout") {
-            head += text;
-          }
-        },
-      },
-      context
-    );
-
-    const headSha = Option.filter(Option.some(head.trim()), (found) =>
-      sha.ok && sha.value.exitCode === 0
-        ? /^[0-9a-f]{7,64}$/u.test(found)
-        : false
-    );
-
-    if (result.ok) {
-      return Judged.Verdict({
-        verdict: commandVerdict(
-          judge,
-          runId,
-          runtime.now(),
-          result.value.exitCode,
-          output,
-          headSha,
-          Option.none()
-        ),
-      });
-    }
-
-    const note =
-      result.error.code === "timeout"
-        ? `timed out after ${String(judge.timeoutSec)} s`
-        : `${argvText(judge.argv)} could not run: ${result.error.message}`;
-
-    return Judged.Verdict({
-      verdict: commandVerdict(
-        judge,
-        runId,
-        runtime.now(),
-        null,
-        output,
-        headSha,
-        Option.some(note)
-      ),
+    return Option.match(ran, {
+      onNone: () =>
+        Judged.None({
+          why: "the thread has no folder to run the command in.",
+        }),
+      onSome: (found) =>
+        Judged.Verdict({
+          verdict: commandVerdict(
+            judge,
+            runId,
+            runtime.now(),
+            found.exit,
+            found.tail,
+            found.sha,
+            found.note
+          ),
+        }),
     });
   };
 
@@ -475,7 +402,7 @@ export const judgeRunTask = (
     return await Match.value(judge).pipe(
       Match.discriminatorsExhaustive("kind")({
         command: async (found) =>
-          await runCommand(runtime, found, runId, context),
+          await runJudgeCommand(runtime, found, runId, context),
         model: async (found) =>
           await runModel(runtime, found, goal, criterion, runId, context),
         user: async () =>

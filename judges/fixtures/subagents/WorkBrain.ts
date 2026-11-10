@@ -8,9 +8,11 @@
 // - The parent (the seeded thread): a message containing "delegate" is answered with four
 //   `subagent_spawn` calls in one step (`SPAWNED`); once a tool answered it says "Waiting for Go.",
 //   and anything else (a child's wake) is answered "Noted.".
-// - A child, by its brief's first line: "Count the files" answers at once; "Probe the bridge" fails
-//   its run (a model error); "Read the README" and "List the docs" keep working until the judge
-//   calls `release` with their description (a stopped one never answers).
+// - A child, by its brief's first line: "Count the files" answers at once, and its brief names
+//   `done_when: ["true"]`, which the scripted brain runs once it answered (ADR 0055), so its steps
+//   end with the outside judge's check; "Probe the bridge" fails its run (a model error); "Read the
+//   README" and "List the docs" keep working until the judge calls `release` with their description
+//   (a stopped one never answers).
 
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { Message } from "@earendil-works/pi-ai";
@@ -28,10 +30,10 @@ import { PARITY_THREAD_ID } from "../parity/CairnApp.ts";
 
 /** The four children the parent spawns, in order: each one's description and how its run ends. */
 export const SPAWNED = [
-  { description: "Count the files", ends: "done" },
-  { description: "Probe the bridge", ends: "failed" },
-  { description: "Read the README", ends: "held" },
-  { description: "List the docs", ends: "held" },
+  { description: "Count the files", ends: "done", doneWhen: ["true"] },
+  { description: "Probe the bridge", ends: "failed", doneWhen: null },
+  { description: "Read the README", ends: "held", doneWhen: null },
+  { description: "List the docs", ends: "held", doneWhen: null },
 ] as const;
 
 /** A child's description. */
@@ -63,6 +65,16 @@ const firstUserText = (messages: ReadonlyArray<Message>): string => {
   return first === undefined ? "" : messageText(first);
 };
 
+/** A spawn's arguments: the child's description and brief, and its `done_when` when it names one. */
+const spawnArguments = (
+  description: string,
+  doneWhen: ReadonlyArray<string> | null
+) => {
+  const named = { description, brief: `${description} in the project root.` };
+
+  return doneWhen === null ? named : { ...named, done_when: [...doneWhen] };
+};
+
 const parentAnswer = (messages: ReadonlyArray<Message>, now: number) => {
   const last = messages.at(-1);
 
@@ -72,12 +84,10 @@ const parentAnswer = (messages: ReadonlyArray<Message>, now: number) => {
 
   if (last !== undefined && messageText(last).includes("delegate")) {
     return fauxAssistantMessage(
-      SPAWNED.map(({ description }, index) =>
-        fauxToolCall(
-          "subagent_spawn",
-          { description, brief: `${description} in the project root.` },
-          { id: `spawn-${String(index)}-${String(now)}` }
-        )
+      SPAWNED.map(({ description, doneWhen }, index) =>
+        fauxToolCall("subagent_spawn", spawnArguments(description, doneWhen), {
+          id: `spawn-${String(index)}-${String(now)}`,
+        })
       ),
       { stopReason: "toolUse" }
     );

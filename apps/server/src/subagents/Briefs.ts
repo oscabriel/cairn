@@ -10,8 +10,8 @@
 //
 // How the result will be judged (`doneWhen`, ADR 0055): the command the parent names in
 // `done_when`, frozen as a command criterion the card shows before Go and the child is told to run,
-// or, without one, the parent accepting the result, which is no outside judge. Cairn does not run
-// the command yet.
+// which Cairn runs as an outside judge once the child's run completes (DoneWhenCheck.ts), or,
+// without one, the parent accepting the result, which is no outside judge.
 
 import { ModelSpec } from "@cairn/protocol/ModelSpecs";
 import { Brief } from "@cairn/protocol/Policy";
@@ -44,14 +44,14 @@ export interface SpawnArguments {
   readonly maxUsd: Option.Option<number>;
 }
 
-/** How long a brief's `done_when` command may run, when something runs it. */
+/** How long a brief's `done_when` command may run when Cairn checks it; longer is not met. */
 export const DONE_WHEN_TIMEOUT_SEC = 600;
 
 /** What a brief says when the parent named no command: it accepts the result itself. */
 export const PARENT_ACCEPTS = "The parent accepts the result.";
 
 /** A brief's `doneWhen` from `done_when`; fails when it is not a command. */
-const doneWhenOf = (
+export const doneWhenOf = (
   argv: Option.Option<ReadonlyArray<string>>
 ): Result.Result<Brief["doneWhen"], string> => {
   if (Option.isNone(argv)) {

@@ -95,6 +95,7 @@ import {
 } from "./BrainCap.ts";
 import { briefOf, briefPayload } from "./Briefs.ts";
 import { conversationOf, setStatus } from "./Delivery.ts";
+import { stopChecks } from "./DoneWhenCheck.ts";
 import {
   endUnanswered,
   escalateIn,
@@ -169,26 +170,70 @@ interface ReportVerdict {
   terminate: boolean;
 }
 
-/** One line per child, or the bare word when there are none. */
-const statusText = (items: ReadonlyArray<SubagentItemState>) =>
-  items.length === 0
-    ? SubagentToolText.noSubagents
-    : items
-        .map((item) =>
-          SubagentToolText.statusLine(
-            item.threadId,
-            item.description,
-            item.status,
-            Object.values(item.questions).some(
-              (question) => question.state === "pending"
-            )
-          )
-        )
-        .join("\n");
+/**
+ * What a child is doing, as its parent reads it: its registry status, except that a settled child
+ * whose brief's `done_when` command Cairn is running (ADR 0055) is `checking`, naming the command,
+ * since its result's note has not reached the parent yet. The work panel's check (`cairn.child`)
+ * is its latest run's.
+ */
+const statusOf = async (
+  api: ToolExecutionApi,
+  item: Readonly<SubagentItemState>,
+  context: ChordContext
+): Promise<string> => {
+  if (item.status !== "settled") {
+    return item.status;
+  }
 
-/** How many settlements `items` have had. */
-const settledCount = (items: ReadonlyArray<SubagentItemState>) =>
-  items.reduce((sum, item) => sum + item.settlements.length, 0);
+  const link = await api.snapshot(
+    ChildDoc,
+    conversationOf(item.conversationId),
+    context
+  );
+
+  const check = link?.check;
+
+  return check?.verdict === "running"
+    ? SubagentToolText.checking(check.argv)
+    : item.status;
+};
+
+/** One line per child, or the bare word when there are none. */
+const statusText = async (
+  api: ToolExecutionApi,
+  items: ReadonlyArray<SubagentItemState>,
+  context: ChordContext
+): Promise<string> => {
+  if (items.length === 0) {
+    return SubagentToolText.noSubagents;
+  }
+
+  const lines: Array<string> = [];
+
+  for (const item of items) {
+    lines.push(
+      SubagentToolText.statusLine(
+        item.threadId,
+        item.description,
+        // oxlint-disable-next-line no-await-in-loop -- one snapshot per settled child, in order
+        await statusOf(api, item, context),
+        Object.values(item.questions).some(
+          (question) => question.state === "pending"
+        )
+      )
+    );
+  }
+
+  return lines.join("\n");
+};
+
+/**
+ * Where `items`' delivered results stand: the sum of each child's last settlement whose note
+ * reached its parent. It grows when a result's note lands, its check's verdict included, never
+ * when a run merely settles.
+ */
+const deliveredMark = (items: ReadonlyArray<SubagentItemState>) =>
+  items.reduce((sum, item) => sum + item.delivered, 0);
 
 /** Whether any of `items` waits on a question to its parent. */
 const asking = (items: ReadonlyArray<SubagentItemState>) =>
@@ -356,7 +401,7 @@ export const subagentToolSet = (
       done_when: Type.Optional(
         Type.Array(Type.String(), {
           description:
-            'The command, as an argv list run without a shell in the child\'s workspace, that exits 0 once the work is done, e.g. ["npm", "test"]. The user sees it on the brief before Go and the child is told to run it; Cairn does not run it yet, so you still judge the result. Leave it out when no command can tell.',
+            "The command, as an argv list run without a shell in the child's workspace, that exits 0 once the work is done, e.g. [\"npm\", \"test\"]. The user sees it on the brief before Go and the child is told to run it. Once the child's run completes, Cairn runs it in the child's workspace and the result's note says whether it was met; in a mode where a command asks first Cairn does not run it, and you judge the result. Leave it out when no command can tell.",
         })
       ),
       max_tokens: Type.Optional(
@@ -582,7 +627,7 @@ export const subagentToolSet = (
   const status = defineTool({
     name: SUBAGENT_STATUS_TOOL,
     description:
-      "List your subagents and what each is doing, or one of them. With wait_seconds, wait (up to 600) until one reports or asks. The result itself arrives as a note, never here.",
+      "List your subagents and what each is doing, or one of them. With wait_seconds, wait (up to 600) until one's result note arrives or one asks. The result itself arrives as a note, never here.",
     parameters: Type.Object({
       subagent: Type.Optional(Type.String()),
       wait_seconds: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -609,19 +654,19 @@ export const subagentToolSet = (
       const seconds = Math.min(MAX_WAIT_SECONDS, args.wait_seconds ?? 0);
 
       if (seconds === 0 || now.length === 0 || asking(now)) {
-        return said(statusText(now));
+        return said(await statusText(api, now, context));
       }
 
-      // A bounded wait that ends early when a child settles again or asks; a restart reruns it
-      // with a fresh bound.
-      const before = settledCount(now);
+      // A bounded wait that ends early when a child's result note lands (after its `done_when`
+      // check, when its brief names one) or a child asks; a restart reruns it with a fresh bound.
+      const before = deliveredMark(now);
 
       const later = await runWait(
         run,
         awaitDoc(api, SubagentsDoc, api.conversationId, (value) => {
           const items = chosen(Object.values(value?.items ?? {}));
 
-          return settledCount(items) > before || asking(items)
+          return deliveredMark(items) > before || asking(items)
             ? Option.some(items)
             : Option.none();
         }).pipe(
@@ -631,7 +676,13 @@ export const subagentToolSet = (
         context
       );
 
-      return said(statusText(Option.getOrElse(later, () => now)));
+      return said(
+        await statusText(
+          api,
+          Option.getOrElse(later, () => now),
+          context
+        )
+      );
     },
   });
 
@@ -653,6 +704,12 @@ export const subagentToolSet = (
       const conversation = await api.conversation(child, context);
 
       await conversation?.abort(context);
+
+      // A `done_when` check of the child that is running stops too, and reads "not run" (ADR 0055);
+      // before the held records are cancelled, whose ends may settle a run and start a new check.
+      await api.commit(async (tx) => {
+        await stopChecks(tx, child);
+      }, context);
 
       // The stopped run's held records can never be answered now (ADR 0029).
       await run.promise(

@@ -5,9 +5,8 @@
 // The `/`, `@` and `$` menu's drawer opens over the headline here rather than in the page's flow,
 // so the centred block keeps its height and the box being typed in never moves, and its list is
 // never taller than the space above the box, so a short page never hides its first rows (U-21).
-// While it is open the headline keeps its place but is not drawn: the drawer's height follows its
-// rows, so its top edge would otherwise land anywhere in the question or the project picker and
-// leave a sliver of either showing above it.
+// The headline stays drawn behind an open drawer (the user, 2026-11-10): the drawer covers what it
+// lies over, and whatever its rows leave above it of the question and the picker still shows.
 
 import { Option } from "effect";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -19,7 +18,6 @@ import { draftProject } from "../composer/Drafts.ts";
 import { KeepDrawerRoom } from "../composer/HeroDrawerRoom.ts";
 import type { Message } from "../composer/Message.ts";
 import type { Model } from "../composer/Model.ts";
-import { menuContents } from "../composer/TriggerMenu.ts";
 import { hasNoProjects, headlineView, noProjectsView } from "./Headline.ts";
 
 /**
@@ -82,12 +80,7 @@ export const heroView = (model: Model, h: HtmlBuilder<Message>): Html => {
             h.div(
               [
                 h.DataAttribute("hero-headline-block", ""),
-                // Not drawn under an open menu's drawer, but kept in the flow (see the header).
-                h.Class(
-                  Option.isSome(menuContents(model))
-                    ? "invisible pb-(--space-6)"
-                    : "pb-(--space-6)"
-                ),
+                h.Class("pb-(--space-6)"),
               ],
               [headlineView(model, h)]
             ),

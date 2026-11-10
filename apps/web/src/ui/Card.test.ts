@@ -51,6 +51,18 @@ const app = appOf((h) => [
     },
     [h.DataAttribute("testid", "note")]
   ),
+  card(
+    h,
+    {
+      tone: "waiting",
+      rule: false,
+      title: "Request",
+      aside: [],
+      body: [cardText(h, "Approve this?")],
+      actions: [],
+    },
+    [h.DataAttribute("testid", "request")]
+  ),
   banner(
     h,
     {
@@ -111,6 +123,22 @@ describe("the card", () => {
         Scene.expect(Scene.selector("footer")).not.toExist()
       ),
       Scene.expect(Scene.testId("note")).toHaveClass("border-l-stroke-2"),
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
+  it("draws no left rule when told not to, and keeps its tone", () => {
+    Scene.scene(
+      app,
+      given,
+      Scene.expect(Scene.testId("request")).not.toHaveClass("border-l-3"),
+      Scene.expect(Scene.testId("request")).not.toHaveClass(
+        "border-l-tone-waiting"
+      ),
+      Scene.expect(Scene.testId("request")).toHaveClass("border-stroke-1"),
+      Scene.expect(Scene.testId("request")).toHaveAttr("data-tone", "waiting"),
       Scene.tap(({ commands }) => {
         assert.lengthOf(commands, 0);
       })

@@ -1,7 +1,8 @@
 // The card (the surfaces note's Card: a header line, a body and a semantic left rule): the
 // frame a brief, a question, a launch approval, a subagent and an artifact are drawn in. The rule's
 // tone says what the card is waiting on; the header carries the same meaning in words (a status
-// chip), so the rule is never the only sign.
+// chip), so the rule is never the only sign. A card can go without the rule (`rule: false`): the
+// request card does (the user, 2026-11-10), and its status chip says what it waits on.
 
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 
@@ -14,6 +15,8 @@ import { TONE_RULE } from "./Tone.ts";
 export interface CardContent {
   /** The rule's tone; `neutral` for a card that waits on nothing. */
   readonly tone: Tone;
+  /** Whether the tone's left rule is drawn; drawn unless `false`. */
+  readonly rule?: boolean;
   readonly title: string;
   /** Beside the title: a status chip, a time, a menu button. */
   readonly aside: ReadonlyArray<Html>;
@@ -22,11 +25,11 @@ export interface CardContent {
   readonly actions: ReadonlyArray<Html>;
 }
 
-/** The class string of a card with a `tone` rule. */
-export const cardClass = (tone: Tone): string =>
+/** The class string of a card with a `tone` rule, or with none when `rule` is false. */
+export const cardClass = (tone: Tone, rule = true): string =>
   classNames(
-    "flex w-full min-w-0 flex-col gap-(--space-3) rounded-(--radius-medium) border border-stroke-1 border-l-3 bg-surface-raised p-(--space-4) text-ink-1 shadow-(--elevation-1)",
-    TONE_RULE[tone]
+    "flex w-full min-w-0 flex-col gap-(--space-3) rounded-(--radius-medium) border border-stroke-1 bg-surface-raised p-(--space-4) text-ink-1 shadow-(--elevation-1)",
+    rule ? `border-l-3 ${TONE_RULE[tone]}` : ""
   );
 
 /** A card: header line, body and actions, with its tone's left rule. */
@@ -40,7 +43,7 @@ export const card = <Message>(
       h.DataAttribute("slot", "card"),
       h.DataAttribute("tone", content.tone),
       ...attributes,
-      h.Class(cardClass(content.tone)),
+      h.Class(cardClass(content.tone, content.rule ?? true)),
     ],
     [
       h.header(

@@ -1290,6 +1290,8 @@ const requestCard = (model: Model, h: H, request: PendingRequest): Html => {
     h,
     {
       tone: "waiting",
+      // No left rule on a request (the user, 2026-11-10); the status chip says it waits.
+      rule: false,
       title: requestTitle(request.record, request.body),
       aside: [
         statusChip(h, {

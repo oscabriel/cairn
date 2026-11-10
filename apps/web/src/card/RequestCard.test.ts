@@ -167,6 +167,8 @@ describe("the request card", () => {
         "data-request-kind",
         "tool-call"
       ),
+      // No left rule on a request (the user, 2026-11-10).
+      Scene.expect(Scene.testId("request-card")).not.toHaveClass("border-l-3"),
       Scene.expect(Scene.testId("request-card-position")).toHaveText("1/2"),
       Scene.expect(Scene.testId("request-card-tool")).toContainText("gate"),
       Scene.expect(Scene.testId("request-card-detail")).toHaveText(

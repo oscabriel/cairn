@@ -2167,7 +2167,7 @@ describe("the new-thread hero", () => {
     );
   });
 
-  it("hides the headline while a menu's drawer lies over it, so the drawer never cuts a control (U-21)", () => {
+  it("keeps the headline drawn behind a menu's drawer (U-21; the user, 2026-11-10)", () => {
     const headline = Scene.selector("[data-hero-headline-block]");
 
     Scene.scene(
@@ -2178,14 +2178,12 @@ describe("the new-thread hero", () => {
       Scene.expect(headline).not.toHaveClass("invisible"),
       ...typeWithCaret("/"),
       Scene.expect(menu).toExist(),
-      // Kept in the flow, so the box stays where it was; not drawn, so the drawer's top edge
-      // lands on nothing whatever its height, and the picker cannot be reached under it.
-      Scene.expect(headline).toHaveClass("invisible"),
+      // The drawer lies over the headline; the headline is not hidden for it.
+      Scene.expect(headline).not.toHaveClass("invisible"),
       Scene.expect(headline).toContainText("What should we build"),
       ...typeWithCaret(""),
       Scene.expect(menu).not.toExist(),
       Scene.expect(headline).not.toHaveClass("invisible"),
-      // Hiding it is the view's alone: no command runs for it.
       Scene.tap((simulation) => {
         assert.lengthOf(simulation.commands, 0);
       })

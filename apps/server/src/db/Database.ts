@@ -20,7 +20,7 @@ import {
 } from "effect";
 import type { SqlClient, SqlError } from "effect/sql";
 
-import { startRollingCopy } from "./RollingCopy.ts";
+import { foldIntoOneFile, startRollingCopy } from "./RollingCopy.ts";
 
 /** The migrations `cairn.sqlite` runs, keyed `<NNNN>_<Name>` (`db/Migrations.ts` owns the list). */
 export type MigrationRecord = Readonly<
@@ -188,10 +188,10 @@ export class Database extends Context.Service<
 
   /**
    * The daily rolling copy of the open file (`cairn-daily-<time>.sqlite` under `backups/`, newest
-   * three kept) through SQLite's online backup, for the life of the layer; each copy also goes to
-   * `mirror` when one is set. Nothing for an in-memory database.
+   * three kept) through SQLite's online backup, folded into one file, for the life of the layer;
+   * each copy also goes to `copyDir` when one is set. Nothing for an in-memory database.
    */
-  static readonly layerRollingCopy = (mirror: Option.Option<string>) =>
+  static readonly layerRollingCopy = (copyDir: Option.Option<string>) =>
     Layer.effectDiscard(
       Effect.gen(function* () {
         const database = yield* Database;
@@ -204,8 +204,11 @@ export class Database extends Context.Service<
           source: database.filename,
           prefix: "cairn-daily-",
           directory: path.join(path.dirname(database.filename), "backups"),
-          mirror,
-          copy: (target) => database.backup(target),
+          copyDir,
+          copy: (target) =>
+            database
+              .backup(target)
+              .pipe(Effect.andThen(foldIntoOneFile(target))),
         });
       })
     );

@@ -6,7 +6,7 @@
 // either differs from what is installed, `backups/brain-<version>-<time>.sqlite` is written first
 // with SQLite's online backup. The daily rolling copy (`db/RollingCopy.ts`:
 // `brain-daily-<time>.sqlite`, newest three kept, decided from the files on disk at boot and every
-// hour, and written to the mirror folder too when one is set) guards against everything else.
+// hour, and written to the second copy folder too when one is set) guards against everything else.
 
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -114,7 +114,7 @@ const copyStore = (source: string, target: string) =>
   Effect.gen(function* () {
     yield* Effect.acquireUseRelease(
       Effect.try({
-        try: () => new DatabaseSync(source, { readOnly: true }),
+        try: () => new DatabaseSync(source, { readOnly: true, timeout: 5000 }),
         catch: fail("backup", source),
       }),
       (database) =>
@@ -157,7 +157,7 @@ export class BrainStore extends Context.Service<
   static readonly layerNoDeps = Layer.effect(
     BrainStore,
     Effect.gen(function* () {
-      const { dataDir, backupMirror } = yield* BrainConfig;
+      const { dataDir, backupCopyDir } = yield* BrainConfig;
       const storePath = path.join(dataDir, STORE_FILE);
       const sidecarPath = path.join(dataDir, SIDECAR_FILE);
       const backups = path.join(dataDir, "backups");
@@ -228,7 +228,7 @@ export class BrainStore extends Context.Service<
         source: storePath,
         prefix: DAILY_PREFIX,
         directory: backups,
-        mirror: backupMirror,
+        copyDir: backupCopyDir,
         copy: (target) => copyStore(storePath, target),
       });
 

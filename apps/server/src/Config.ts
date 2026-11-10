@@ -60,10 +60,11 @@ export interface ServerSettings {
   /** The NVMe directory holding `cairn.sqlite`, `brain.sqlite` and attachments. */
   readonly dataDir: string;
   /**
-   * A second folder for the daily rolling copies of both stores, off the NVMe (the NAS, say):
-   * `CAIRN_BACKUP_MIRROR`, unset by default. Copies only; the live stores stay in `dataDir`.
+   * A second folder for the daily rolling copies of both stores, off the NVMe (a folder inside a
+   * NAS share, say): `CAIRN_BACKUP_COPY_DIR`, unset by default. Copies only; the live stores stay
+   * in `dataDir`. The copies hold sign-in tokens, so the folder must be readable by the owner only.
    */
-  readonly backupMirror: Option.Option<string>;
+  readonly backupCopyDir: Option.Option<string>;
   /** The directory holding `cairn.json`, signing keys and `brain.env`. */
   readonly configDir: string;
   /** The user's state directory (`$XDG_STATE_HOME`, else `~/.local/state`): the Executor lock. */
@@ -257,7 +258,7 @@ const readSettings = Effect.fn("ServerConfig.readSettings")(
         yield* optionalString("CAIRN_DATA_DIR"),
         () => file.dataDir ?? defaults.dataDir
       ),
-      backupMirror: (yield* optionalString("CAIRN_BACKUP_MIRROR")).pipe(
+      backupCopyDir: (yield* optionalString("CAIRN_BACKUP_COPY_DIR")).pipe(
         Option.filter((dir) => dir.trim() !== "")
       ),
       configDir,
@@ -288,7 +289,7 @@ export class ServerConfig extends Context.Service<
   /**
    * The deployed brain's settings: `$CAIRN_CONFIG_DIR/cairn.json` (default `~/.config/cairn`), then
    * `CAIRN_HOST`, `CAIRN_ORIGIN`, `CAIRN_OWNER`, `CAIRN_LISTEN_HOST`, `CAIRN_PORT`,
-   * `CAIRN_DATA_DIR`, `CAIRN_BACKUP_MIRROR`, `CAIRN_WEB_ROOT`. Port 3774, origin
+   * `CAIRN_DATA_DIR`, `CAIRN_BACKUP_COPY_DIR`, `CAIRN_WEB_ROOT`. Port 3774, origin
    * `https://code.gneiss.run`, the host from the origin. Fails with `ServerConfigError` when no
    * owner is set or a value is unusable.
    */
@@ -312,7 +313,7 @@ export class ServerConfig extends Context.Service<
         listenHost: "127.0.0.1",
         port: 0,
         dataDir: path.join(os.tmpdir(), "cairn-test"),
-        backupMirror: Option.none(),
+        backupCopyDir: Option.none(),
         configDir: path.join(os.tmpdir(), "cairn-test-config"),
         stateDir: path.join(os.tmpdir(), "cairn-test-state"),
         webRoot: defaultWebRoot,

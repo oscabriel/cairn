@@ -1,6 +1,6 @@
 // Judges `cairn.sqlite`'s open: migrations, the backup before a pending migration, a first boot's
-// missing folder, and the daily rolling copy (through SQLite's online backup, with a mirror folder
-// that gets each copy and whose failure never stops the brain).
+// missing folder, and the daily rolling copy (through SQLite's online backup, with a second copy
+// folder that gets each copy owner-only and whose failure never stops the brain).
 
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -49,9 +49,9 @@ const tableNames = Effect.gen(function* () {
   )).map((row) => row.name);
 });
 
-/** `cairn.sqlite` at `filename` with its rolling copy, mirrored to `mirror`. */
-const withRollingCopy = (filename: string, mirror: Option.Option<string>) =>
-  Database.layerRollingCopy(mirror).pipe(
+/** `cairn.sqlite` at `filename` with its rolling copy, also written to `copyDir`. */
+const withRollingCopy = (filename: string, copyDir: Option.Option<string>) =>
+  Database.layerRollingCopy(copyDir).pipe(
     Layer.provideMerge(Database.layer({ filename, migrations: shellOnly }))
   );
 
@@ -143,34 +143,46 @@ describe(Database, () => {
   );
 
   it.live(
-    "copies cairn.sqlite at boot through the online backup, into the mirror too",
+    "copies cairn.sqlite at boot through the online backup, into the second folder too, owner-only",
     () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const directory = yield* fileSystem.makeTempDirectoryScoped();
         const filename = path.join(directory, "data", "cairn.sqlite");
-        const mirror = path.join(directory, "nas", "cairn-copies");
+        const secondFolder = path.join(directory, "nas", "cairn-copies");
 
-        // The user makes the mirror folder; the brain never does.
-        yield* fileSystem.makeDirectory(mirror, { recursive: true });
+        // The user makes the second copy folder; the brain never does.
+        yield* fileSystem.makeDirectory(secondFolder, { recursive: true });
 
-        const [copies, mirrored] = yield* Effect.gen(function* () {
+        const [copies, copiedOut] = yield* Effect.gen(function* () {
           return [
             yield* dailyCopiesIn(path.join(directory, "data", "backups")),
-            yield* dailyCopiesIn(mirror),
+            yield* dailyCopiesIn(secondFolder),
           ] as const;
-        }).pipe(Effect.provide(withRollingCopy(filename, Option.some(mirror))));
+        }).pipe(
+          Effect.provide(withRollingCopy(filename, Option.some(secondFolder)))
+        );
 
         assert.strictEqual(copies.length, 1, "one copy at the first boot");
         assert.deepStrictEqual(
-          mirrored,
+          copiedOut,
           copies,
-          "the mirror holds the same copy"
+          "the second folder holds the same copy"
+        );
+
+        const info = yield* fileSystem.stat(
+          path.join(secondFolder, copiedOut[0] ?? "")
+        );
+
+        assert.strictEqual(
+          info.mode.toString(8).slice(-3),
+          "600",
+          "the copy holds sign-in tokens, so only the owner may read it"
         );
 
         for (const file of [
           path.join(directory, "data", "backups", copies[0] ?? ""),
-          path.join(mirror, mirrored[0] ?? ""),
+          path.join(secondFolder, copiedOut[0] ?? ""),
         ]) {
           const copy = new DatabaseSync(file, { readOnly: true });
           const integrity = copy.prepare("PRAGMA integrity_check").get();
@@ -190,51 +202,59 @@ describe(Database, () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   );
 
-  it.live("a mirror that cannot be written is logged and stops nothing", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const directory = yield* fileSystem.makeTempDirectoryScoped();
-      const filename = path.join(directory, "cairn.sqlite");
-      // A file where the mirror's parent folder should be, like a share that is not mounted: every
-      // write there fails, and nothing is made in its place.
-      const blocked = path.join(directory, "not-a-folder");
-      const events: Array<unknown> = [];
+  it.live(
+    "a second folder that cannot be written is logged and stops nothing",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const directory = yield* fileSystem.makeTempDirectoryScoped();
+        const filename = path.join(directory, "cairn.sqlite");
+        // A file where the second folder's parent should be, like a share that is not mounted: every
+        // write there fails, and nothing is made in its place.
+        const blocked = path.join(directory, "not-a-folder");
+        const events: Array<unknown> = [];
 
-      const capture = Logger.make((options) => {
-        events.push(
-          options.fiber.getRef(References.CurrentLogAnnotations).event
-        );
-      });
+        const capture = Logger.make((options) => {
+          events.push(
+            options.fiber.getRef(References.CurrentLogAnnotations).event
+          );
+        });
 
-      yield* fileSystem.writeFileString(blocked, "");
+        yield* fileSystem.writeFileString(blocked, "");
 
-      const [copies, tables] = yield* Effect.gen(function* () {
-        const made = yield* dailyCopiesIn(path.join(directory, "backups"));
+        const [copies, tables] = yield* Effect.gen(function* () {
+          const made = yield* dailyCopiesIn(path.join(directory, "backups"));
 
-        for (let attempt = 0; attempt < 200; attempt += 1) {
-          if (events.includes("rolling_copy_mirror_failed")) {
-            break;
+          for (let attempt = 0; attempt < 200; attempt += 1) {
+            if (events.includes("rolling_copy_second_folder_failed")) {
+              break;
+            }
+
+            yield* Effect.sleep("10 millis");
           }
 
-          yield* Effect.sleep("10 millis");
-        }
-
-        return [made, yield* tableNames] as const;
-      }).pipe(
-        Effect.provide(
-          withRollingCopy(
-            filename,
-            Option.some(path.join(blocked, "cairn-copies"))
-          ).pipe(
-            Layer.provide(Logger.layer([capture], { mergeWithExisting: true }))
+          return [made, yield* tableNames] as const;
+        }).pipe(
+          Effect.provide(
+            withRollingCopy(
+              filename,
+              Option.some(path.join(blocked, "cairn-copies"))
+            ).pipe(
+              Layer.provide(
+                Logger.layer([capture], { mergeWithExisting: true })
+              )
+            )
           )
-        )
-      );
+        );
 
-      assert.strictEqual(copies.length, 1, "the copy beside the store is made");
-      assert.include(tables, "threads", "the database still answers");
-      assert.include(events, "rolling_copy_mirror_failed");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+        assert.strictEqual(
+          copies.length,
+          1,
+          "the copy beside the store is made"
+        );
+        assert.include(tables, "threads", "the database still answers");
+        assert.include(events, "rolling_copy_second_folder_failed");
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   );
 
   it.live("an in-memory database has no rolling copy", () =>

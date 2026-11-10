@@ -28,6 +28,8 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Server settings**: The settings the brain owns and every device shares (auto-settle days, the title model, whether Claude is offered through the bridge, the bridge's generation cap and the default budget), kept in `cairn.sqlite`.
 
+**Rolling copy**: A store's daily backup: `brain.sqlite` and `cairn.sqlite` each keep their newest three copies under `<dataDir>/backups` (`brain-daily-<time>.sqlite`, `cairn-daily-<time>.sqlite`), made through SQLite's online backup when the newest on disk is a day old (ADR 0016). The second copy folder (`CAIRN_BACKUP_COPY_DIR`, off the NVMe) gets each one too. _Avoid_: mirror (that is an escalated question's record), snapshot.
+
 ## Conversations
 
 **Thread**: One conversation in the sidebar. Its arms are the project's checkout or its own git worktree on the Beelink.

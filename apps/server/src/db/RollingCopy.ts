@@ -4,15 +4,21 @@
 // Whether a copy is due is read from the files on disk, never from a timer that starts at boot: at
 // boot and then every hour the newest copy's time (from its name) is compared with the clock, and a
 // copy is made when it is a day old or there is none. So a brain restarted many times a day still
-// copies once a day, and one that was down for a day copies as it comes up. Each copy is written to
-// `<name>.part` by the store's own consistent copy (SQLite's online backup, never a file copy of the
-// live file), folded into one self-contained file, then renamed, so a copy cut off midway is never
-// counted.
+// copies once a day, and one that was down for a day copies as it comes up. A copy stamped after
+// the clock (made while the clock ran ahead) counts as the oldest, so it never holds the next one
+// back. Each copy is written to `<name>.part` by the store's own consistent copy (SQLite's online
+// backup, never a file copy of the live file, folded into one self-contained file by the caller),
+// then renamed, so a copy cut off midway is never counted.
 //
-// A mirror folder (`CAIRN_BACKUP_MIRROR`, off the NVMe) gets a file copy of each finished copy, with
-// the same retention. The brain never creates that folder, so a share that is not mounted is a
-// failure rather than copies landing on the local disk under its mount point. Writing there is best
-// effort: a failure is logged at warning and retried on the next tick, and never fails the brain.
+// A second copy folder (`CAIRN_BACKUP_COPY_DIR`, off the NVMe, say a folder inside a NAS share)
+// gets a file copy of each finished copy, owner-only (0600) since `cairn.sqlite` holds sign-in
+// tokens, with the same retention. The brain never creates that folder, so an unmounted share's
+// subfolder is a failure rather than copies landing on the local disk. Writing there is best
+// effort and never holds the brain: every call that touches it is asynchronous and runs in its own
+// fiber, so a share that hangs instead of failing ties up one of libuv's threads, never the event
+// loop or the local copy. A file call cannot be cancelled, so a write that has not finished is left
+// to finish while each later tick logs it at warning and starts none beside it; a failed write is
+// logged at warning and tried again on the next tick.
 
 import {
   existsSync,
@@ -21,18 +27,32 @@ import {
   renameSync,
   rmSync,
 } from "node:fs";
-import { copyFile, rename } from "node:fs/promises";
+import { chmod, copyFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { DateTime, Duration, Effect, Option, Schedule, Schema } from "effect";
+import {
+  DateTime,
+  Duration,
+  Effect,
+  FiberHandle,
+  Option,
+  Schedule,
+  Schema,
+} from "effect";
 
 /** A step of a rolling copy failed; logged, and tried again on the next tick. */
 export class RollingCopyError extends Schema.TaggedError<RollingCopyError>()(
   "RollingCopyError",
   {
     message: Schema.String,
-    operation: Schema.Literals(["list", "fold", "rename", "prune", "mirror"]),
+    operation: Schema.Literals([
+      "list",
+      "fold",
+      "rename",
+      "prune",
+      "second-folder",
+    ]),
     path: Schema.String,
     cause: Schema.Defect(),
   }
@@ -44,7 +64,7 @@ export const COPY_EVERY = Duration.hours(24);
 /** How often the files are looked at. */
 export const COPY_TICK = Duration.hours(1);
 
-/** Copies kept, in the backups folder and in the mirror alike. */
+/** Copies kept, in the backups folder and in the second copy folder alike. */
 export const COPIES_KEPT = 3;
 
 // A tick that lands a moment early (the previous one ran late) still copies, so the cadence stays a
@@ -57,6 +77,9 @@ const DUE_AFTER = Duration.subtract(
 const SUFFIX = ".sqlite";
 
 const PART = ".part";
+
+// Copies in the second folder hold what the stores hold, sign-in tokens included: owner-only.
+const OWNER_ONLY = 0o600;
 
 // The time at the end of a copy's name: `2026-11-09T05-01-10Z.sqlite`. Copies made before the
 // rolling copy moved here carried the date twice (`brain-daily-<date>-<time>.sqlite`); the end
@@ -76,12 +99,17 @@ interface Copy {
   readonly madeAt: DateTime.Utc;
 }
 
-/** The copies under `prefix` among `names`, newest first; other files are left out. */
+/**
+ * The copies under `prefix` among `names`, newest first; other files are left out. A copy stamped
+ * after `now` was made while the clock ran ahead, so it is really older than any made since: it
+ * sorts last, where it is the first to be pruned and never counts as the newest.
+ */
 const copiesIn = (
   names: ReadonlyArray<string>,
-  prefix: string
-): ReadonlyArray<Copy> =>
-  names
+  prefix: string,
+  now: DateTime.Utc
+): ReadonlyArray<Copy> => {
+  const copies = names
     .flatMap((name): ReadonlyArray<Copy> => {
       if (!name.startsWith(prefix) || !name.endsWith(SUFFIX)) {
         return [];
@@ -105,11 +133,24 @@ const copiesIn = (
     })
     .toSorted((a, b) => DateTime.Order(b.madeAt, a.madeAt));
 
-/** Whether a copy is due at `now`, given the newest one. */
-const isDue = (newest: Option.Option<Copy>, now: DateTime.Utc) =>
-  Option.match(newest, {
+  const ahead = copies.filter((copy) =>
+    DateTime.isGreaterThan(copy.madeAt, now)
+  );
+
+  return [
+    ...copies.filter((copy) => !DateTime.isGreaterThan(copy.madeAt, now)),
+    ...ahead,
+  ];
+};
+
+/** Whether a copy is due at `now`, given the copies newest first. */
+const isDue = (copies: ReadonlyArray<Copy>, now: DateTime.Utc) =>
+  Option.match(Option.fromNullishOr(copies[0]), {
     onNone: () => true,
     onSome: (copy) =>
+      // A copy stamped after the clock sorts last, so the newest here is never ahead of `now`
+      // unless it is the only kind there is; then no copy made under this clock exists yet.
+      DateTime.isGreaterThan(copy.madeAt, now) ||
       Duration.isGreaterThanOrEqualTo(
         Duration.millis(
           DateTime.toEpochMillis(now) - DateTime.toEpochMillis(copy.madeAt)
@@ -127,8 +168,12 @@ export interface RollingCopyOptions<E extends { readonly message: string }> {
   /** The folder the copies live in, beside the store. */
   readonly directory: string;
   /** A second folder each copy is also written to, off the NVMe. */
-  readonly mirror: Option.Option<string>;
-  /** Writes a consistent copy of the live store to `target`, which does not exist yet. */
+  readonly copyDir: Option.Option<string>;
+  /**
+   * Writes a consistent, self-contained copy of the live store to `target`, which does not exist
+   * yet: SQLite's online backup, folded out of WAL mode (`foldIntoOneFile`). The rolling copy
+   * does not fold it again.
+   */
   copy(target: string): Effect.Effect<void, E>;
 }
 
@@ -148,20 +193,43 @@ const syncStep = <A>(
       }),
   });
 
-/** The names in `directory`, made first when `make` (the backups folder, never the mirror). */
-const namesIn = (directory: string, make: boolean) =>
+// The second copy folder may sit on a share that hangs, so every call there is asynchronous.
+const secondFolderStep = <A>(file: string, run: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) =>
+      new RollingCopyError({
+        message: `The rolling copy's second-folder step failed at ${file}: ${String(cause)}`,
+        operation: "second-folder",
+        path: file,
+        cause,
+      }),
+  });
+
+/**
+ * The copy inherits the store's WAL mode; this folds it into one self-contained file. A store's
+ * `copy` calls it after its online backup.
+ */
+export const foldIntoOneFile = (file: string) =>
+  syncStep("fold", file, () => {
+    const copy = new DatabaseSync(file);
+
+    copy.exec("PRAGMA journal_mode = DELETE");
+    copy.close();
+  });
+
+/** The names in the backups folder, which is made first. */
+const namesInBackups = (directory: string) =>
   syncStep("list", directory, () => {
-    if (make) {
-      mkdirSync(directory, { recursive: true });
-    }
+    mkdirSync(directory, { recursive: true });
 
     return readdirSync(directory);
   });
 
-/** Removes every copy under `prefix` in `directory` past the newest `COPIES_KEPT`. */
-const prune = (directory: string, prefix: string) =>
+/** Removes every copy under `prefix` in the backups folder past the newest `COPIES_KEPT`. */
+const prune = (directory: string, prefix: string, now: DateTime.Utc) =>
   Effect.gen(function* () {
-    const copies = copiesIn(yield* namesIn(directory, false), prefix);
+    const copies = copiesIn(yield* namesInBackups(directory), prefix, now);
 
     for (const copy of copies.slice(COPIES_KEPT)) {
       const file = path.join(directory, copy.name);
@@ -170,30 +238,6 @@ const prune = (directory: string, prefix: string) =>
         rmSync(file, { force: true });
       });
     }
-  });
-
-/** Clears `.part` files a copy cut off midway left behind. */
-const clearParts = (
-  directory: string,
-  prefix: string,
-  names: ReadonlyArray<string>
-) =>
-  Effect.forEach(
-    names.filter((name) => name.startsWith(prefix) && name.endsWith(PART)),
-    (name) =>
-      syncStep("prune", path.join(directory, name), () => {
-        rmSync(path.join(directory, name), { force: true });
-      }),
-    { discard: true }
-  );
-
-/** The copy inherits the store's WAL mode; fold it into one self-contained file. */
-const fold = (file: string) =>
-  syncStep("fold", file, () => {
-    const copy = new DatabaseSync(file);
-
-    copy.exec("PRAGMA journal_mode = DELETE");
-    copy.close();
   });
 
 /** Makes a copy when one is due. */
@@ -210,14 +254,22 @@ const copyWhenDue = <E extends { readonly message: string }>(
     }
 
     const now = yield* DateTime.now;
-    const names = yield* namesIn(options.directory, true);
-    const newest = Option.fromNullishOr(copiesIn(names, options.prefix)[0]);
+    const names = yield* namesInBackups(options.directory);
 
-    if (!isDue(newest, now)) {
+    if (!isDue(copiesIn(names, options.prefix, now), now)) {
       return;
     }
 
-    yield* clearParts(options.directory, options.prefix, names);
+    // Clears `.part` files a copy cut off midway left behind.
+    for (const name of names) {
+      if (name.startsWith(options.prefix) && name.endsWith(PART)) {
+        const file = path.join(options.directory, name);
+
+        yield* syncStep("prune", file, () => {
+          rmSync(file, { force: true });
+        });
+      }
+    }
 
     const target = path.join(
       options.directory,
@@ -227,11 +279,10 @@ const copyWhenDue = <E extends { readonly message: string }>(
     const part = `${target}${PART}`;
 
     yield* options.copy(part);
-    yield* fold(part);
     yield* syncStep("rename", target, () => {
       renameSync(part, target);
     });
-    yield* prune(options.directory, options.prefix);
+    yield* prune(options.directory, options.prefix, now);
     yield* Effect.logInfo("rolling copy made").pipe(
       Effect.annotateLogs({
         event: "rolling_copy",
@@ -241,54 +292,79 @@ const copyWhenDue = <E extends { readonly message: string }>(
     );
   });
 
-/** Writes the newest copy into `mirror` when it is not there yet, then prunes the mirror. */
-const mirrorNewest = (directory: string, prefix: string, mirror: string) =>
+/**
+ * Writes the newest copy into the second copy folder when it is not there yet, owner-only, then
+ * prunes that folder. Every call there is asynchronous.
+ */
+const copyNewestToSecondFolder = (
+  directory: string,
+  prefix: string,
+  copyDir: string
+) =>
   Effect.gen(function* () {
-    const [newest] = copiesIn(yield* namesIn(directory, true), prefix);
+    const now = yield* DateTime.now;
+    const [newest] = copiesIn(yield* namesInBackups(directory), prefix, now);
 
     if (newest === undefined) {
       return;
     }
 
-    const mirrored = yield* namesIn(mirror, false);
+    const present = yield* secondFolderStep(
+      copyDir,
+      async () => await readdir(copyDir)
+    );
 
-    if (mirrored.includes(newest.name)) {
+    if (present.includes(newest.name)) {
       return;
     }
 
-    yield* clearParts(mirror, prefix, mirrored);
+    for (const name of present) {
+      if (name.startsWith(prefix) && name.endsWith(PART)) {
+        const file = path.join(copyDir, name);
 
-    const target = path.join(mirror, newest.name);
+        yield* secondFolderStep(file, async () => {
+          await rm(file, { force: true });
+        });
+      }
+    }
+
+    const target = path.join(copyDir, newest.name);
     const part = `${target}${PART}`;
 
-    // The newest copy is a finished, closed file, so a plain file copy is sound here.
-    yield* Effect.tryPromise({
-      try: async () => {
-        await copyFile(path.join(directory, newest.name), part);
-        await rename(part, target);
-      },
-      catch: (cause) =>
-        new RollingCopyError({
-          message: `The rolling copy's mirror step failed at ${target}: ${String(cause)}`,
-          operation: "mirror",
-          path: target,
-          cause,
-        }),
+    // The newest copy is a finished, closed file, so a plain file copy is sound here. The mode is
+    // set before the rename, so the copy is never readable by others under its final name.
+    yield* secondFolderStep(target, async () => {
+      await copyFile(path.join(directory, newest.name), part);
+      await chmod(part, OWNER_ONLY);
+      await rename(part, target);
     });
-    yield* prune(mirror, prefix);
-    yield* Effect.logInfo("rolling copy mirrored").pipe(
-      Effect.annotateLogs({ event: "rolling_copy_mirrored", target })
+
+    const kept = copiesIn([...present, newest.name], prefix, now);
+
+    for (const copy of kept.slice(COPIES_KEPT)) {
+      const file = path.join(copyDir, copy.name);
+
+      yield* secondFolderStep(file, async () => {
+        await rm(file, { force: true });
+      });
+    }
+
+    yield* Effect.logInfo("rolling copy written to the second folder").pipe(
+      Effect.annotateLogs({ event: "rolling_copy_second_folder", target })
     );
   });
 
 /**
- * One look at the files: a copy when one is due, then the mirror brought up to date. Failures are
- * logged at warning; the next tick tries again.
+ * Starts the rolling copy for the life of the scope: a look at boot, then one every `COPY_TICK`.
+ * Never fails; a failed step is logged and tried again on the next tick.
  */
-const tick = <E extends { readonly message: string }>(
-  options: RollingCopyOptions<E>
-) =>
-  Effect.gen(function* () {
+export const startRollingCopy = Effect.fnUntraced(function* <
+  E extends { readonly message: string },
+>(options: RollingCopyOptions<E>) {
+  // The second folder's write in flight, if any: it outlives the tick that started it.
+  const writing = yield* FiberHandle.make();
+
+  const tick = Effect.gen(function* () {
     yield* copyWhenDue(options).pipe(
       Effect.catch((error) =>
         Effect.logWarning("rolling copy failed").pipe(
@@ -301,34 +377,44 @@ const tick = <E extends { readonly message: string }>(
       )
     );
 
-    if (Option.isSome(options.mirror)) {
-      yield* mirrorNewest(
-        options.directory,
-        options.prefix,
-        options.mirror.value
-      ).pipe(
-        Effect.catchTag("RollingCopyError", (failure) =>
-          Effect.logWarning("rolling copy not mirrored").pipe(
-            Effect.annotateLogs({
-              event: "rolling_copy_mirror_failed",
-              store: options.source,
-              error: failure.message,
-            })
-          )
-        )
-      );
+    if (Option.isNone(options.copyDir)) {
+      return;
     }
+
+    if (Option.isSome(yield* FiberHandle.get(writing))) {
+      yield* Effect.logWarning(
+        "rolling copy: the second folder's last write has not finished"
+      ).pipe(
+        Effect.annotateLogs({
+          event: "rolling_copy_second_folder_busy",
+          store: options.source,
+          folder: options.copyDir.value,
+        })
+      );
+
+      return;
+    }
+
+    yield* copyNewestToSecondFolder(
+      options.directory,
+      options.prefix,
+      options.copyDir.value
+    ).pipe(
+      Effect.catchTag("RollingCopyError", (failure) =>
+        Effect.logWarning("rolling copy not written to the second folder").pipe(
+          Effect.annotateLogs({
+            event: "rolling_copy_second_folder_failed",
+            store: options.source,
+            error: failure.message,
+          })
+        )
+      ),
+      FiberHandle.run(writing, { onlyIfMissing: true })
+    );
   });
 
-/**
- * Starts the rolling copy for the life of the scope: a look at boot, then one every `COPY_TICK`.
- * Never fails; a failed step is logged and tried again on the next tick.
- */
-export const startRollingCopy = <E extends { readonly message: string }>(
-  options: RollingCopyOptions<E>
-) =>
-  tick(options).pipe(
+  yield* tick.pipe(
     Effect.repeat(Schedule.spaced(COPY_TICK)),
-    Effect.forkScoped,
-    Effect.asVoid
+    Effect.forkScoped
   );
+});

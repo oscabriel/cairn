@@ -115,7 +115,7 @@ export const DatabaseLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
 
-    return Database.layerRollingCopy(config.backupMirror).pipe(
+    return Database.layerRollingCopy(config.backupCopyDir).pipe(
       Layer.provideMerge(
         Database.layer({
           filename: path.join(config.dataDir, "cairn.sqlite"),
@@ -212,7 +212,7 @@ const BrainConfigLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
 
-    return BrainConfig.layerFrom(config.dataDir, config.backupMirror);
+    return BrainConfig.layerFrom(config.dataDir, config.backupCopyDir);
   })
 );
 

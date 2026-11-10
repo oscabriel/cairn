@@ -90,7 +90,8 @@ export const Model = Schema.Struct({
   outboxEchoes: Schema.Array(AwaitedSend),
   /**
    * Keys of the items another tab queued, folded in from storage after this page started. This tab
-   * sends them too, but a refused turn is the queuing tab's to put back: it alone has the record.
+   * sends them too, but a refused turn is the queuing tab's to put back, so it comes back once, in
+   * the tab it was written in.
    */
   outboxAdopted: Schema.Array(Schema.String),
   /**

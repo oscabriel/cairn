@@ -106,7 +106,7 @@ import type {
 } from "./shell/Model.ts";
 import { isCurrent } from "./shell/ShellStore.ts";
 import * as NextShell from "./shell/Update.ts";
-import { laterRead } from "./storage/TabChanges.ts";
+import { clearedSince, laterRead } from "./storage/TabChanges.ts";
 import { threadRowOf } from "./ThreadRow.ts";
 import type { QueuedSend } from "./timeline/Model.ts";
 import { promptKey, sameSends } from "./timeline/Model.ts";
@@ -1079,6 +1079,14 @@ const UNSAVED_NOTICE =
   "Unsent changes could not be saved on this device. Keep this page open until they are sent.";
 
 /**
+ * The notice raised when site data was cleared before the brain acknowledged a turn this tab held:
+ * the clear stands, and the turn goes back to the composer. One sent on a connection that dropped
+ * before its answer may have reached the brain, and the tab cannot tell.
+ */
+export const CLEARED_NOTICE =
+  "Site data was cleared, so your message may not have been sent. It is back in the composer: check the thread before sending it again.";
+
+/**
  * Restores the turn `key` names and forgets it. A refused launch the user is waiting on, on its
  * thread's page, opens its draft again. A turn with no record (the page reloaded since it was
  * queued, and records live in memory) comes back from `refused`, the outbox item itself, which
@@ -1511,7 +1519,7 @@ const step = (received: Message): Step =>
           (item) => outboxKey(item) === key
         );
 
-        // Another tab's turn stays queued for that tab, which puts it back with its attachments.
+        // Another tab's turn stays queued for that tab, to put back in the tab it was written in.
         if (
           model.outboxAdopted.includes(key) &&
           Option.exists(
@@ -1570,11 +1578,50 @@ const step = (received: Message): Step =>
             }),
           }),
           onSome: (saved) => {
-            const outbox = rebaseOutbox(written, model.outbox, saved);
+            const cleared = clearedSince(model.outboxRead, read);
+            const rebased = rebaseOutbox(written, model.outbox, saved);
+
+            // Storage was cleared under this tab. An item in flight has left the browser: it stays,
+            // the head of its lane, for its own answer to settle or resend it with the same id (a
+            // turn sent again from its draft would get new ids, and the brain would admit it twice).
+            const inFlight = cleared
+              ? Array.filter(
+                  model.outbox,
+                  (item) =>
+                    model.outboxInFlight.includes(outboxKey(item)) &&
+                    !rebased.some(
+                      (other) => outboxKey(other) === outboxKey(item)
+                    )
+                )
+              : [];
+
+            const outbox = [...inFlight, ...rebased];
             const keys = outbox.map(outboxKey);
             const held = model.outbox.map(outboxKey);
-            const settled = Array.filter(held, (key) => !keys.includes(key));
+            const gone = Array.filter(held, (key) => !keys.includes(key));
             const adopting = Array.filter(keys, (key) => !held.includes(key));
+
+            // Every other turn this tab holds and the brain has not acknowledged was taken by the
+            // clear, not settled by another tab, so it goes back to its draft, unsent: from its
+            // record, or from the item itself when the page reloaded since (records live in memory).
+            // Another tab's turn is that tab's to put back.
+            const taken = cleared
+              ? Array.filter(
+                  model.outbox,
+                  (item) =>
+                    gone.includes(outboxKey(item)) &&
+                    !Predicate.isTagged(item, "Dispatch") &&
+                    !model.outboxAdopted.includes(outboxKey(item)) &&
+                    !Option.exists(
+                      Record.get(model.sentTurns, outboxKey(item)),
+                      (sent) => sent.acknowledged
+                    )
+                )
+              : [];
+
+            const takenKeys = new Set(taken.map(outboxKey));
+
+            const settled = Array.filter(gone, (key) => !takenKeys.has(key));
 
             return Update.combine(
               modifyFields(model, {
@@ -1591,9 +1638,17 @@ const step = (received: Message): Step =>
                 sentTurns: (turns) =>
                   Array.reduce(settled, turns, settleAcknowledged),
                 notice: (notice) =>
-                  Option.filter(notice, (text) => text !== UNSAVED_NOTICE),
+                  taken.length > 0
+                    ? Option.some(CLEARED_NOTICE)
+                    : Option.filter(notice, (text) => text !== UNSAVED_NOTICE),
               }),
-              [sendNext, followLaunches]
+              [
+                ...taken.map((item) =>
+                  restoreSent(outboxKey(item), Option.some(item))
+                ),
+                sendNext,
+                followLaunches,
+              ]
             );
           },
         }),

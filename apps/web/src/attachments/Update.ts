@@ -489,9 +489,10 @@ const isIn = (saved: SavedAttachments, item: Item, ref: AttachmentRef) =>
   );
 
 /**
- * The tray once storage holds `stored`: it becomes the base of the next save, and the ready items
- * follow every attachment this tab did not add or remove since `written`, so one another tab
- * removed goes and one it added comes in. Items still on their way stay.
+ * The tray once storage holds `stored`: the base of the next save becomes `stored` with what this
+ * tab asked for in the saves still on their way since `written`, and the ready items follow every
+ * attachment this tab did not add or remove since `written`, so one another tab removed goes and
+ * one it added comes in. Items still on their way stay.
  */
 const syncSaved = (
   model: Model,
@@ -644,22 +645,29 @@ export const update = (
     },
     // Saving merges into what the other tab wrote, and its answer brings those attachments here.
     ChangedStoredAttachments: () => save(model),
-    CompletedSave: ({ stored, written }) =>
+    CompletedSave: ({ base, stored, written }) =>
       Option.match(stored, {
         onSome: (saved) => syncSaved(model, written, saved),
-        onNone: () =>
-          Option.match(context.draftKey, {
-            onNone: () => ({ model }),
+        onNone: () => {
+          // Nothing was written: the base goes back to `base`, with what this tab asked for in
+          // the saves still on their way since, so the next save writes this one's changes again.
+          const unsaved = modifyFields(model, {
+            stored: () => rebaseSaved(written, model.stored, base),
+          });
+
+          return Option.match(context.draftKey, {
+            onNone: () => ({ model: unsaved }),
             onSome: (draftKey) => ({
               model: setNotice(
-                model,
+                unsaved,
                 draftKey,
                 Option.some(
                   "Attachments could not be saved on this device. Send before you reload this page."
                 )
               ),
             }),
-          }),
+          });
+        },
       }),
   });
 

@@ -11,8 +11,12 @@
     />
     <title>Look catalogue</title>
     <style>
-      /* catalogue.css's own classes rank below every layer of styles.css. */
-      @layer catalogue;
+      /*
+       * The full layer order, declared before styles.css's own: catalogue.css's classes rank above
+       * preflight (`base`), so its margins and padding hold, and below the client's utilities, so a
+       * plain one built here again never beats a variant the client built.
+       */
+      @layer theme, base, components, catalogue, utilities;
 
       html,
       body {

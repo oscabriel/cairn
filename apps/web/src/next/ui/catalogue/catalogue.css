@@ -3,9 +3,10 @@
  * specimens draw. The client's utilities, the primitives' and the shell's among them, come from
  * styles.css, which index.html loads first and which leaves this folder and the fixtures out, so
  * production never carries a class only the catalogue uses. These sit in the `catalogue` layer,
- * which index.html ranks below the client's layers: a plain utility built here again (`.h-9`) can
- * never beat a variant the client built (`pointer-coarse:h-(--hit-target)`), so every specimen
- * measures as the client draws it.
+ * which index.html ranks above preflight (`base`) and below the client's utilities: a margin or
+ * padding built only here holds, and a plain utility built here again (`.h-9`) can never beat a
+ * variant the client built (`pointer-coarse:h-(--hit-target)`), so every specimen measures as the
+ * client draws it.
  */
 @reference "tailwindcss";
 @import "tailwindcss/utilities.css" layer(catalogue) source(none);

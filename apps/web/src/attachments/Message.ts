@@ -49,10 +49,12 @@ export const Message = defineMessageUnion({
     drafts: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
   },
   /**
-   * The ready attachments were written as `written`; `stored` is what storage held afterwards, with
-   * other tabs' attachments, or none when storage refused.
+   * The ready attachments were written as `written`, over `base` (the changes since it are what the
+   * save wrote); `stored` is what storage held afterwards, with other tabs' attachments, or none
+   * when storage refused.
    */
   CompletedSave: {
+    base: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
     written: Schema.Record(Schema.String, Schema.Array(AttachmentRef)),
     stored: Schema.Option(
       Schema.Record(Schema.String, Schema.Array(AttachmentRef))

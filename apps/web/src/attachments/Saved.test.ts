@@ -274,6 +274,77 @@ describe("saved attachments in one tab", () => {
         }).toStrictEqual({ tray: [], stored: [] });
       }).pipe(Effect.provide(KeyValueStore.layerMemory))
   );
+
+  /** The tray without its one attachment: sent, or removed with its x. */
+  const leaves = {
+    sent: (tab: Model) => clearSent(tab, "thread:a"),
+    removed: (tab: Model) =>
+      update(
+        tab,
+        Message.ClickedRemove({ localId: tab.items[0]?.localId ?? "" }),
+        { draftKey: Option.some("thread:a") }
+      ),
+  };
+
+  it.effect.each(["sent", "removed"] as const)(
+    "stay gone once storage refused the save that took one out (%s)",
+    (how) =>
+      Effect.gen(function* () {
+        const inA = { draftKey: Option.some("thread:a") };
+        const store = yield* KeyValueStore.KeyValueStore;
+
+        /** Storage that refuses every write, as a full localStorage does. */
+        const full = KeyValueStore.make({
+          ...store,
+          set: (key) =>
+            Effect.fail(
+              new KeyValueStore.KeyValueStoreError({
+                message: "quota exceeded",
+                method: "set",
+                key,
+              })
+            ),
+        });
+
+        /** `tab` once `answers` arrived, in order. */
+        const answered = (tab: Model, answers: ReadonlyArray<Message>) => {
+          let model = tab;
+
+          for (const answer of answers) {
+            ({ model } = update(model, answer, inA));
+          }
+
+          return model;
+        };
+
+        // One attachment ready and saved: the tab and storage agree.
+        const first = restore({ ...initial, loaded: true }, "thread:a", [
+          ref("att_a"),
+        ]);
+
+        const saved = answered(first.model, yield* runSaves(first));
+
+        // The save that takes it out is refused.
+        const left = leaves[how](saved);
+
+        const refused = answered(
+          left.model,
+          yield* runSaves(left).pipe(
+            Effect.provideService(KeyValueStore.KeyValueStore, full)
+          )
+        );
+
+        // Any later save, here one asked because another tab wrote, writes the removal again.
+        const told = update(refused, Message.ChangedStoredAttachments(), inA);
+        const tab = answered(told.model, yield* runSaves(told));
+        const stored = yield* loadSaved;
+
+        expect({
+          tray: readyIds(tab, "thread:a"),
+          stored: stored["thread:a"]?.map(({ id }) => id) ?? [],
+        }).toStrictEqual({ tray: [], stored: [] });
+      }).pipe(Effect.provide(KeyValueStore.layerMemory))
+  );
 });
 
 describe("an upload answer", () => {

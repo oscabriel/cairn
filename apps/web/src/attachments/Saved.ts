@@ -286,7 +286,7 @@ export const loadSaved: Effect.Effect<
 
 /**
  * Writes the attachments this tab added or removed since `base` (the saved attachments as it last
- * read or wrote them) into what storage holds now, so another tab's are kept, and writes back one of
+ * asked for them to be written, or read them) into what storage holds now, so another tab's are kept, and writes back one of
  * this tab's that another tab's write dropped without removing it. One past the brain's sweep is
  * left out, as a read leaves it out, so it is never written back. Answers what storage holds
  * afterwards, or none when storage refused.

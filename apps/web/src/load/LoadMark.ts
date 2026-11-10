@@ -18,7 +18,7 @@ export const LOAD_REPORT_PATH = "/api/load-report";
 
 /**
  * The shell list's project thread, or its word for having none: either means the thread list has
- * rendered. The desktop column holds them on a phone too, hidden (`next/shell/View.ts`).
+ * rendered. The desktop column holds them on a phone too, hidden (`shell/View.ts`).
  */
 export const READY_SELECTOR = [
   '[data-testid="shell-project-thread"]',

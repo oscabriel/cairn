@@ -103,7 +103,7 @@ describe("a header's t3code citations", () => {
   });
 
   // The prose forms below are copied from real headers (ThreadWindow.ts, Http.ts, TimelineEntries.ts,
-  // composer/Classes.ts, ThreadWire.ts): a citation need not start with a URL or "t3code at".
+  // composer/PopoverClasses.ts, ThreadWire.ts): a citation need not start with a URL or "t3code at".
   it("reads a possessive citation that ends at Changed:", () => {
     const header = headerOf(
       [

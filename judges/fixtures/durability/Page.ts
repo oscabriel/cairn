@@ -81,7 +81,7 @@ export const same = (left: PageText, right: PageText) =>
 
 /**
  * The chat header's connection mark's state (`Live`, `Connecting`, `Syncing`, `Backoff`), or
- * `missing`. The mark stays in the document, visually hidden, while Live (`next/shell/ConnectionMark.ts`).
+ * `missing`. The mark stays in the document, visually hidden, while Live (`shell/ConnectionMark.ts`).
  */
 export const connection = async (thread: ThreadPage) =>
   (await thread.page

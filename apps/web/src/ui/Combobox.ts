@@ -2,8 +2,8 @@
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the popup, list, item and search-input class
 // strings (the picker t3code's project filter and model picker use). Changed: @foldkit/ui's
 // combobox Submodel owns the state, filtering input and keyboard; this module supplies t3code's
-// classes for its view inputs and an item renderer. Their colours are the `next` tokens (U-13), as
-// the composer's popovers' are (`composer/Classes.ts`): an opaque overlay ground where t3code's was
+// classes for its view inputs and an item renderer. Their colours are the tokens (U-13), as
+// the composer's popovers' are (`composer/PopoverClasses.ts`): an opaque overlay ground where t3code's was
 // a translucent glass, and the ink, select ladder and strokes for its classic colour names.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.

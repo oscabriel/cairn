@@ -316,7 +316,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(cairn-mo
   --color-foreground: var(--contrast-foreground);
   --color-background: var(--background);
   --color-surface-raised: var(--surface-raised);
-  /* The next views' design tokens (next/tokens.css), as Tailwind colour names
+  /* The views' design tokens (tokens.css), as Tailwind colour names
      (text-ink-2, bg-select-1, border-stroke-1). They resolve only under
      [data-ui="next"]; surface-raised above serves both. */
   --color-ink-1: var(--ink-1);
@@ -2463,13 +2463,13 @@ code {
  * apps/web/src/projectIconColors.ts at fe27e8e3. */
 @source inline("text-{amber,blue,cyan,emerald,fuchsia,gray,green,indigo,lime,orange,pink,purple,red,rose,sky,teal,violet,yellow}-600 dark:text-{amber,blue,cyan,emerald,fuchsia,gray,green,indigo,lime,orange,pink,purple,red,rose,sky,teal,violet,yellow}-400");
 
-/* Cairn: one Tailwind build for the whole client, the `next` views included. Each `next` folder once
+/* Cairn: one Tailwind build for the whole client. Each folder of the forked views (ADR 0040) once
  * built its own utilities into its own stylesheet; Vite merges every stylesheet into one file and keeps
  * the last copy of a repeated rule, so a later folder's plain `.flex` or `.w-full` landed after an
  * earlier folder's width and container variants and beat them (the settings rows never went two
  * columns). One build puts every plain utility before every variant. Left out: the dev-only look
- * catalogue, which builds its own page (next/ui/catalogue/catalogue.css), tests and fixtures. */
-@source not "./next/ui/catalogue";
+ * catalogue, which builds its own page (ui/catalogue/catalogue.css), tests and fixtures. */
+@source not "./ui/catalogue";
 @source not "./**/*.test.ts";
-@source not "./next/ui/SceneFixture.ts";
-@source not "./next/shell/ShellFixtures.ts";
+@source not "./ui/SceneFixture.ts";
+@source not "./shell/ShellFixtures.ts";

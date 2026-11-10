@@ -16,3 +16,5 @@ Amends ADR 0040's last sentence, which kept the classic sidebar's state "for its
 5. **The classic sidebar's state is gone.** Its clock, the platform it read, the visits it sent and the favicon badge are the `next` shell's own (`next/shell/Visits.ts`, `Keys.ts`), and `apps/web/src/sidebar/` is deleted.
 
 Decided by the user on 2026-11-09, adopting the product review's recommendations, with the shelf fenced rather than removed or redrawn.
+
+Amended 2026-11-10: with `next/` folded into the feature folders (ADR 0040), the shell that binds the keys and owns the clock, visits and badge is `apps/web/src/shell/` (`Keys.ts`, `Visits.ts`).

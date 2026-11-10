@@ -111,7 +111,7 @@ let lastText: string | null = null;
 try {
   await page.goto(origin);
 
-  // The connection mark is visually hidden while Live (`next/shell/ConnectionMark.ts`).
+  // The connection mark is visually hidden while Live (`shell/ConnectionMark.ts`).
   await page.waitForSelector(
     '[data-testid="connection-state"][data-state="Live"]',
     { state: "attached", timeout: 30_000 }

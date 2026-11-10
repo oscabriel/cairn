@@ -1,7 +1,7 @@
 // Ported from github.com/pingdotgg/t3code, packages/shared/src/keybindings.ts (shortcut parsing and
 // the defaults) and apps/web/src/keybindings.ts (labels) at fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92.
 // Kept: the `mod+shift+[` grammar, t3code's keys for the commands kept, and the macOS and
-// other-platform labels. Changed: the table holds only the commands the `next` shell answers (ADR
+// other-platform labels. Changed: the table holds only the commands the shell answers (ADR
 // 0050), and each fires while the user types; a parse failure is `Option.none()`; key events are
 // matched by Foldkit's `streamFromKeyBindings`, so this module turns a shortcut into Foldkit's key
 // grammar instead of matching events itself (the physical-key fallbacks for other layouts are not
@@ -30,7 +30,7 @@ import { Array, Option } from "effect";
 
 import { onlyIf } from "./OnlyIf.ts";
 
-/** The commands Cairn binds to keys: the ones the `next` shell answers. */
+/** The commands Cairn binds to keys: the ones the shell answers. */
 export type KeybindingCommand = "chat.new" | "thread.previous" | "thread.next";
 
 /** A parsed key chord. `modKey` is Meta on macOS and Control elsewhere. */

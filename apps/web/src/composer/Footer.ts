@@ -10,7 +10,7 @@
 // layout; t3code's traits become one thinking select (pi exposes thinking levels), and the mode
 // select lists the four modes with every one but full access marked as applying later. The classic
 // footer view went with the classic views (W-6): what is left is the measuring Mount and the menus'
-// rows, which the `next` footer (`next/composer/Footer.ts`) draws.
+// rows, which the footer's view (`FooterView.ts`) draws.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -41,12 +41,12 @@ import { Mount } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { Check } from "lucide";
 
-import { MENU_ITEM_CLASS } from "./Classes.ts";
 import { canPickRuntimeMode, runtimeModeOf } from "./Drafts.ts";
 import { icon } from "./Icon.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
 import { resolvedThinking, thinkingLabel, thinkingLevels } from "./Models.ts";
+import { MENU_ITEM_CLASS } from "./PopoverClasses.ts";
 
 const parseWidth = (value: string): number => {
   const parsed = Number(value.replace(/px$/u, ""));

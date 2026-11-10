@@ -6,18 +6,18 @@ import { Hello } from "@cairn/protocol/Rpc";
 import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { Schema } from "effect";
 
+import { Model as RequestCardModel } from "./card/Model.ts";
 import * as Composer from "./composer/Model.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import { Connection } from "./connection/Reconnect.ts";
-import { Model as RequestCardModel } from "./next/card/Model.ts";
-import { Model as MetersModel } from "./next/meters/Model.ts";
-import { Model as ChunksModel } from "./next/page/Chunks.ts";
-import { Model as HoldModel } from "./next/shell/Hold.ts";
-import { Model as NextShellModel } from "./next/shell/Model.ts";
+import { Model as MetersModel } from "./meters/Model.ts";
+import { Model as ChunksModel } from "./page/Chunks.ts";
 import * as Thread from "./page/thread/index.ts";
 import { Model as PushModel } from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
 import { Model as SettingsModel } from "./settings/Model.ts";
+import { Model as HoldModel } from "./shell/Hold.ts";
+import { Model as NextShellModel } from "./shell/Model.ts";
 import { BootData } from "./shell/ShellStore.ts";
 import { QueuedSend } from "./timeline/Model.ts";
 
@@ -104,15 +104,15 @@ export const Model = Schema.Struct({
   push: PushModel,
   settings: SettingsModel,
   hold: HoldModel,
-  /** The `next` views' shell: the rail, the project's list, the scratch overlay (ADR 0040). */
+  /** The views' shell: the rail, the project's list, the scratch overlay (ADR 0040). */
   nextShell: NextShellModel,
-  /** The scratch thread's page, for the `next` shell's overlay; no thread while it is hidden. */
+  /** The scratch thread's page, for the shell's overlay; no thread while it is hidden. */
   scratchThread: Thread.Model.Model,
-  /** The request card the `next` views draw in the composer's lane (plan 6A). */
+  /** The request card the views draw in the composer's lane (plan 6A). */
   requestCard: RequestCardModel,
-  /** The usage page the `next` views draw (plan 6G). */
+  /** The usage page the views draw (plan 6G). */
   meters: MetersModel,
-  /** The views a cold load never draws, fetched as chunks on demand (`next/page/Chunks.ts`). */
+  /** The views a cold load never draws, fetched as chunks on demand (`page/Chunks.ts`). */
   chunks: ChunksModel,
 });
 

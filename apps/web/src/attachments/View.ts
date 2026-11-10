@@ -384,7 +384,7 @@ export const attachButtonView = <ParentMessage>(
     ]
   );
 
-/** The Message a pick of `files` in a file input sends (the `next` composer's paperclip). */
+/** The Message a pick of `files` in a file input sends (the composer's paperclip). */
 export const pickedFiles = (files: ReadonlyArray<File>): Message =>
   Message.PickedFiles({ files });
 

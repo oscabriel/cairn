@@ -390,7 +390,7 @@ const sidebarOf = (page: Page, width: number) =>
     ? page.getByTestId("sidebar-sheet")
     : page.getByTestId("shell-column");
 
-/** The `next` shell's checks (look track L6), at 1,440 and 390 px. */
+/** The shell's checks (look track L6), at 1,440 and 390 px. */
 const shellChecks = async (browser: Browser, hero: string) => {
   const projectThreadUrl = threadUrl;
 
@@ -1658,7 +1658,7 @@ const lessFoldedFits = async (
   });
 
 /**
- * The `next` composer's footer at one width (look track L7). Its pills are drawn in the Stone look
+ * The composer's footer at one width (look track L7). Its pills are drawn in the Stone look
  * and are a finger tall on a phone, so they fold at other widths than t3code's; what must hold is
  * the fold rule itself: nothing in the left cluster is cut off, a later block is folded at least as
  * far as an earlier one, the overflow button shows exactly when a block is hidden, at 1,180 px and

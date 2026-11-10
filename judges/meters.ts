@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 /* oxlint-disable no-await-in-loop -- a judge drives one check after another, on purpose */
 // The meters judge (plan wave 6, 6G; surfaces note S9, models note M10): behaviour scripts played
-// in the real web client on the `next` views over a real in-process brain on the
+// in the real web client over a real in-process brain on the
 // scripted harness (judges/fixtures/meters/MetersApp.ts, seeded with spend, budgets and plan
 // windows, each with a known truth), at 390 px as a phone (touch, coarse
 // pointer) and at 1,440 px. Each check prints one line; the run ends with one JSON line. No model

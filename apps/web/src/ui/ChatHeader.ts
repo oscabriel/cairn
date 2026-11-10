@@ -1,7 +1,7 @@
 // Ported from github.com/pingdotgg/t3code, apps/web/src/components/chat/ChatHeader.tsx at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the titlebar's ghost icon button class, which the
 // diff toggle draws. The classic page header and its breadcrumb were deleted with the classic views
-// (W-6); the `next` shell draws the chat header (`next/shell/Header.ts`).
+// (W-6); the shell draws the chat header (`shell/Header.ts`).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //

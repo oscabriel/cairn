@@ -237,7 +237,7 @@ stateDiagram-v2
 
 ## Label map
 
-What the web client shows for each status today. One function gives a thread's state, its category, its row label's words and tone, and its hold: `threadState` in `packages/client-logic/src/ThreadState.ts` (package 1E), with a descendant's request rolled up to its ancestors by `pendingSubagentRequests` (`packages/client-logic/src/SubagentRollup.ts`). The sidebar row (`apps/web/src/next/shell/Derived.ts` (`rowStatusOf`), drawn by `apps/web/src/next/shell/Sidebar.ts`) shows its status mark with the label's word as its title, and "Idle" or "Done" when the function gives no label; the hold banner above an open thread (`apps/web/src/next/shell/Hold.ts`) adds its sentences. The sidebar has no Active, Settled, Pinned or Snoozed groups (the user, 2026-10-29): the shelf is computed (`packages/client-logic/src/Sidebar.ts` (`sectionOf`)) but drawn nowhere. `judges/thread-state-rows.test.ts` checks every row of the status tables above against the function, and the words below against it.
+What the web client shows for each status today. One function gives a thread's state, its category, its row label's words and tone, and its hold: `threadState` in `packages/client-logic/src/ThreadState.ts` (package 1E), with a descendant's request rolled up to its ancestors by `pendingSubagentRequests` (`packages/client-logic/src/SubagentRollup.ts`). The sidebar row (`apps/web/src/shell/Derived.ts` (`rowStatusOf`), drawn by `apps/web/src/shell/Sidebar.ts`) shows its status mark with the label's word as its title, and "Idle" or "Done" when the function gives no label; the hold banner above an open thread (`apps/web/src/shell/Hold.ts`) adds its sentences. The sidebar has no Active, Settled, Pinned or Snoozed groups (the user, 2026-10-29): the shelf is computed (`packages/client-logic/src/Sidebar.ts` (`sectionOf`)) but drawn nowhere. `judges/thread-state-rows.test.ts` checks every row of the status tables above against the function, and the words below against it.
 
 | Schema | Value | The UI shows | Where |
 | --- | --- | --- | --- |
@@ -268,15 +268,15 @@ What the web client shows for each status today. One function gives a thread's s
 | `ApprovalStatus` | `expired` | The settled-record line: "Expired". | Transcript |
 | `ApprovalStatus` | `cancelled` | The settled-record line: "Stopped", or "Cancelled at restart" when boot cancelled it. | Transcript |
 | `ApprovalStatus` | `revised` | The settled-record line: "Sent back", with ": <reason>". | Transcript |
-| `ExecutorStatus.state` | `connected` | "Connected". | Settings, Executor (`apps/web/src/next/settings/View.ts` (`EXECUTOR_STATUS`)) |
+| `ExecutorStatus.state` | `connected` | "Connected". | Settings, Executor (`apps/web/src/settings/View.ts` (`EXECUTOR_STATUS`)) |
 | `ExecutorStatus.state` | `needs-sign-in` | "Needs sign-in", with the sign-in button. | Settings, Executor |
 | `ExecutorStatus.state` | `unreachable` | "Unreachable". | Settings, Executor |
 | `ExecutorStatus.state` | `disabled` | "Off". | Settings, Executor |
-| `ProviderStatus.state` | `ready` | "Ready". | Settings, providers (`apps/web/src/next/settings/View.ts` (`STATE_LABEL`)) |
+| `ProviderStatus.state` | `ready` | "Ready". | Settings, providers (`apps/web/src/settings/View.ts` (`STATE_LABEL`)) |
 | `ProviderStatus.state` | `missing` | "No credential". | Settings, providers |
 | `ProviderStatus.state` | `refused` | "Refused". | Settings, providers |
 | `ProviderStatus.state` | `unknown` | "Unknown". | Settings, providers |
-| `UsageReading` | `read` | The plan's windows, or "Read, but it reported no windows." | Usage page (`apps/web/src/next/meters/UsageView.ts` (`planBody`)) |
+| `UsageReading` | `read` | The plan's windows, or "Read, but it reported no windows." | Usage page (`apps/web/src/meters/UsageView.ts` (`planBody`)) |
 | `UsageReading` | `unreadable` | "Unknown: the last reading failed or changed shape, so its windows are not shown." Never zero. | Usage page |
 | `UsageReading` | `unsupported` | "This plan publishes no windows Cairn can read." | Usage page |
 | `BudgetState` | `none` | Nothing: no budget line. | None |
@@ -305,7 +305,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `WorkflowState` | `failed` | No word of its own: a node still live under it reads "failed". | Work panel |
 | `WorkflowState` | `stopped` | No word of its own: a node still live under it reads "stopped". | Work panel |
 | `WorkflowState` | `declined` | No word of its own: the launch card's settled-record line says "Declined by you", and a node under it would read "stopped". | Transcript, work panel |
-| `NodeState` | `reserved` | "queued" in the steps panel (`apps/web/src/next/shell/WorkPanel.ts`), with Stop while its workflow runs. | Work panel |
+| `NodeState` | `reserved` | "queued" in the steps panel (`apps/web/src/shell/WorkPanel.ts`), with Stop while its workflow runs. | Work panel |
 | `NodeState` | `running` | "running", with Stop. | Work panel |
 | `NodeState` | `held` | "held", with Stop. | Work panel |
 | `NodeState` | `settled` | "done", with what it used and its result's summary. | Work panel |
@@ -331,4 +331,4 @@ No status is shown raw but a node's. Only portals (`PortalState`, 6I) are "Not s
 - Approval ledger: `apps/server/src/approvals/ApprovalLedger.ts` (`approvalLedger`).
 - Crash accounting: `apps/server/src/brain/CrashLimit.ts`, `apps/server/src/BootRepairs.ts`.
 - Client presentation: `packages/client-logic/src/ThreadState.ts` (`threadState`, `THREAD_LABELS`, `HOLD_LABELS`), `packages/client-logic/src/PresentThreadShell.ts` (`hasUnseenCompletion`), `packages/client-logic/src/Sidebar.ts` (`partitionSidebarThreads`, `sectionOf`), `packages/client-logic/src/ThreadSettled.ts` (`effectiveSnoozed`), `packages/client-logic/src/PendingRequests.ts` (`settledLineOf`), `packages/client-logic/src/ThreadLineage.ts` (`CHILD_LABELS`, `childStatusOf`), `packages/client-logic/src/WorkflowSteps.ts` (`workflowGroupsOf`, `workflowHeadline`), `packages/client-logic/src/Meters.ts` (`budgetWordOf`), `packages/client-logic/src/GoalProgress.ts` (`criterionStateLabel`).
-- Words: `apps/web/src/next/shell/Derived.ts` (`rowStatusOf`), `apps/web/src/next/shell/Hold.ts`, `apps/web/src/next/shell/WorkPanel.ts`, `apps/web/src/next/settings/View.ts` (`STATE_LABEL`, `EXECUTOR_STATUS`), `apps/web/src/next/meters/UsageView.ts` (`planBody`).
+- Words: `apps/web/src/shell/Derived.ts` (`rowStatusOf`), `apps/web/src/shell/Hold.ts`, `apps/web/src/shell/WorkPanel.ts`, `apps/web/src/settings/View.ts` (`STATE_LABEL`, `EXECUTOR_STATUS`), `apps/web/src/meters/UsageView.ts` (`planBody`).

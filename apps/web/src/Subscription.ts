@@ -19,11 +19,11 @@ import { OUTBOX_STORAGE_KEY } from "./connection/Outbox.ts";
 import { hasClient, isBackingOff } from "./connection/Reconnect.ts";
 import { Message } from "./Message.ts";
 import type { Model } from "./Model.ts";
-import { subscriptions as nextShellSubscriptions } from "./next/shell/Subscription.ts";
 import * as Thread from "./page/thread/index.ts";
 import { subscriptions as pushSubscriptions } from "./push/Subscription.ts";
 import { subscriptions as settingsSubscriptions } from "./settings/Subscription.ts";
 import { subscribeShell } from "./shell/ShellStore.ts";
+import { subscriptions as nextShellSubscriptions } from "./shell/Subscription.ts";
 import { storageChanges } from "./storage/TabChanges.ts";
 
 const describe = (cause: Cause.Cause<unknown>): string =>
@@ -161,7 +161,7 @@ const liftedSettingsSubscriptions = Subscription.lift(settingsSubscriptions)<
   toParentMessage: (message) => Message.GotSettingsMessage({ message }),
 });
 
-// The `next` shell's clock and keys (the key binding table, the scratch thread's Cmd+J or Ctrl+J).
+// The shell's clock and keys (the key binding table, the scratch thread's Cmd+J or Ctrl+J).
 const liftedNextShellSubscriptions = Subscription.lift(nextShellSubscriptions)<
   Model,
   Message

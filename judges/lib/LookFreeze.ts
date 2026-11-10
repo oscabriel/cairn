@@ -2,7 +2,7 @@
 // the user approves round <n>, and how `judges/look.ts check` judges today's client against it.
 //
 // A frozen round is one checked-in manifest, `judges/look/frozen/round-<n>.json`: the hash of
-// `apps/web/src/next/tokens.css` as the round drew it, and for each shot (a state at a width in a
+// `apps/web/src/tokens.css` as the round drew it, and for each shot (a state at a width in a
 // theme) the SHA-256 of its PNG and a fingerprint, the mean colour of each cell of the screenshot.
 // The screenshots themselves stay on the round's page, out of the repository; the fingerprint is
 // what lets a drift be measured instead of only noticed.

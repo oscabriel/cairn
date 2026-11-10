@@ -299,7 +299,7 @@ export const afterView = (
     return { model };
   }
 
-  // The subagent items' keys too, which only the `next` views draw: a key not in the list keeps
+  // The subagent items' keys too, which only the views draw: a key not in the list keeps
   // nothing, so classic loses nothing by them.
   const keys = new Set([
     ...itemKeys(transcriptForKeys(model.threadId.value, after, model.ui)),

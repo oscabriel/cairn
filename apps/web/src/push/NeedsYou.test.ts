@@ -19,10 +19,10 @@ import type {
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
-import { projectMarkOf, requestsOf } from "../next/shell/Derived.ts";
-import { initial as initialShell } from "../next/shell/Model.ts";
-import { syncVisits } from "../next/shell/Visits.ts";
 import { AppRoute } from "../Route.ts";
+import { projectMarkOf, requestsOf } from "../shell/Derived.ts";
+import { initial as initialShell } from "../shell/Model.ts";
+import { syncVisits } from "../shell/Visits.ts";
 import { pushContextOf } from "./Context.ts";
 
 const PROJECT = ProjectId.make("prj_1");

@@ -89,7 +89,7 @@ const toTray = (message: TrayMessage): Message =>
   Message.GotAttachmentsMessage({ message });
 
 /**
- * Gives the draft `/new/<draftId>` the project its first message launches in (the `next` shell's
+ * Gives the draft `/new/<draftId>` the project its first message launches in (the shell's
  * rail, for a project with no project thread yet). An empty draft starts over with that project's
  * default model, as the hero's project menu does. The debounced saver writes the change.
  */

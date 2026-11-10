@@ -130,7 +130,7 @@ export interface ProjectSeed {
 }
 
 /**
- * The `next` shell's seed (look track L6): the seeded thread made its project's project thread,
+ * The shell's seed (look track L6): the seeded thread made its project's project thread,
  * the threads it manages, and more projects for the rail. Classic judges pass none, so what they
  * capture is unchanged.
  */
@@ -156,7 +156,7 @@ export const MANAGED_SEED: ShellSeed["managed"] = [
   },
 ];
 
-/** The `next` shell's seed: managed threads and two more rail projects, one with a favicon. */
+/** The shell's seed: managed threads and two more rail projects, one with a favicon. */
 export const SHELL_SEED: ShellSeed = {
   managed: MANAGED_SEED,
   projects: [
@@ -584,7 +584,7 @@ const seedLayer = (
 export interface CairnOptions {
   /** The scripted model and tools; "Noted." and the echo tool when absent. */
   readonly brain?: CairnBrain;
-  /** The `next` shell's seed; none when absent, so classic judges capture what they did. */
+  /** The shell's seed; none when absent, so classic judges capture what they did. */
   readonly shell?: ShellSeed;
   /**
    * Listings the model picker shows after the faux model's, as if more providers were signed in
@@ -613,7 +613,7 @@ const withPickerModels = (extra: ReadonlyArray<ModelListing>) =>
 
 /**
  * Starts the brain and Vite, seeded; nothing listens outside loopback. A shell seed adds the
- * project thread's managed threads and more rail projects (the `next` shell's judges).
+ * project thread's managed threads and more rail projects (the shell's judges).
  */
 export const startCairn = async (
   seed: CairnSeed,

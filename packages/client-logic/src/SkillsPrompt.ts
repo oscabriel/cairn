@@ -1,5 +1,5 @@
 // How much the skills add to the model's system prompt, as the settings page reports it (moved from
-// apps/web's classic settings view, look track L7, so the `next` page reads it without that view).
+// apps/web's classic settings view, look track L7, so the page reads it without that view).
 
 import type { SkillSummary } from "@cairn/protocol/Skills";
 

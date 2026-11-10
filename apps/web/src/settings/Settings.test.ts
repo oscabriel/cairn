@@ -14,7 +14,6 @@ import * as Scene from "foldkit/scene";
 import { Message as ComposerMessage } from "../composer/Message.ts";
 import { defaultSettings as defaultComposerSettings } from "../composer/Model.ts";
 import { Message as RootMessage } from "../Message.ts";
-import { view } from "../next/settings/View.ts";
 import { liveModel } from "../TestFixtures.ts";
 import { update as rootUpdate } from "../Update.ts";
 import {
@@ -37,6 +36,7 @@ import { Message } from "./Message.ts";
 import { initial } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import { inform, update } from "./Update.ts";
+import { view } from "./View.ts";
 
 const projectId = ProjectId.make("prj_cairn");
 

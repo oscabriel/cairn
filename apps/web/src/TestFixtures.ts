@@ -7,19 +7,19 @@ import { ShellSnapshot } from "@cairn/protocol/Shell";
 import { SendInput } from "@cairn/protocol/Thread";
 import { Option, Schema } from "effect";
 
+import * as RequestCard from "./card/Model.ts";
 import * as Composer from "./composer/Model.ts";
 import { OutboxItem } from "./connection/Outbox.ts";
 import { ConnectionState } from "./connection/Reconnect.ts";
+import * as Meters from "./meters/Model.ts";
 import type { Model } from "./Model.ts";
-import * as RequestCard from "./next/card/Model.ts";
-import * as Meters from "./next/meters/Model.ts";
-import * as Chunks from "./next/page/Chunks.ts";
-import * as Hold from "./next/shell/Hold.ts";
-import * as NextShell from "./next/shell/Model.ts";
+import * as Chunks from "./page/Chunks.ts";
 import * as Thread from "./page/thread/index.ts";
 import * as Push from "./push/Model.ts";
 import { AppRoute } from "./Route.ts";
 import * as Settings from "./settings/Model.ts";
+import * as Hold from "./shell/Hold.ts";
+import * as NextShell from "./shell/Model.ts";
 
 /** An empty shell at sequence 0. */
 export const emptySnapshot: ShellSnapshot = Schema.decodeSync(ShellSnapshot)({

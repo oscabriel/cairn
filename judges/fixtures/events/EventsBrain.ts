@@ -60,7 +60,7 @@ import {
   ExtensionOrder,
   Extensions,
 } from "../../../apps/server/src/brain/Extensions.ts";
-import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
+import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { ReactorSet } from "../../../apps/server/src/brain/ReactorSet.ts";
 
@@ -271,7 +271,7 @@ const JudgeLayer = hostLayer.pipe(
     ])
   ),
   Layer.provide(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 2000,
       settings: { retry: { enabled: false } },
     })

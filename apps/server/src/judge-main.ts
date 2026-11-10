@@ -22,7 +22,7 @@ import {
   SubagentFaults,
 } from "./brain/SubagentFaults.ts";
 import { ServerConfig } from "./Config.ts";
-import { ExecutorLink } from "./executor/ExecutorLink.ts";
+import { FakeExecutorLink } from "./executor/FakeExecutor.ts";
 import { Identity } from "./http/Identity.ts";
 import { Tailscale } from "./http/Tailscale.ts";
 import {
@@ -148,7 +148,7 @@ const JudgeLayer = AppLayer.pipe(
   Layer.provide(JudgeSubagents),
   Layer.provide(PiHost.layerEmpty),
   Layer.provide(real ? BridgeProvider.layer : BridgeProvider.layerOff),
-  Layer.provide(ExecutorLink.layerFake),
+  Layer.provide(FakeExecutorLink),
   Layer.provide(Identity.layerNoDeps),
   Layer.provide(JudgeTailnet),
   Layer.provide(ServerConfig.layerLocal),

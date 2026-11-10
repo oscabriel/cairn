@@ -27,8 +27,9 @@ import { HttpServer } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { Socket } from "effect/socket";
 
-import { AppLayer, ScriptedBrain } from "../AppLayer.ts";
+import { AppLayer } from "../AppLayer.ts";
 import { ServerConfig } from "../Config.ts";
+import { ScriptedBrain } from "../DevLayer.ts";
 import { slackened, testLimit } from "../EventuallyTestKit.ts";
 import { ExecutorLink } from "../executor/ExecutorLink.ts";
 import { ReachMachine } from "../reach/ReachLayer.ts";

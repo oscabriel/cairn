@@ -35,9 +35,8 @@ import {
   bashTimeoutSeconds,
 } from "./CodingTools.ts";
 import { Extensions } from "./Extensions.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 
 const harness = testBrain();
 
@@ -267,7 +266,7 @@ describe("coding tools", () => {
         Effect.provide(
           brainExtensions().pipe(
             Layer.provide(
-              ModelSource.layerFaux({ tokensPerSecond: 4000, settings: {} })
+              FauxModels.layer({ tokensPerSecond: 4000, settings: {} })
             )
           )
         )

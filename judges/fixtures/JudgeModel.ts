@@ -33,7 +33,6 @@ import type { FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { Effect, Layer, Option, Predicate, Schema } from "effect";
 
 import { FauxModels } from "../../apps/server/src/brain/FauxModels.ts";
-import { ModelSource } from "../../apps/server/src/brain/ModelSource.ts";
 
 /** What a scripted message starts with. */
 export const SCRIPT_PREFIX = "judge:";
@@ -233,8 +232,6 @@ export const JudgeModel = {
         faux.setResponses([step]);
       })
     ).pipe(
-      Layer.provideMerge(
-        ModelSource.layerFaux({ tokensPerSecond, settings: {} })
-      )
+      Layer.provideMerge(FauxModels.layer({ tokensPerSecond, settings: {} }))
     ),
 };

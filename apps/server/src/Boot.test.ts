@@ -29,17 +29,17 @@ import { TestClock } from "effect/testing";
 import {
   HarnessBoot,
   PiDurableBrain,
-  ScriptedBrain,
   ThreadsLive,
   withCatalog,
 } from "./AppLayer.ts";
 import { runBoot } from "./Boot.ts";
 import { endCrashLoopedTasks } from "./brain/CrashLimit.ts";
+import { FauxModels, FAUX_MODEL } from "./brain/FauxModels.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
 import { Database } from "./db/Database.ts";
 import { migrations } from "./db/Migrations.ts";
+import { ScriptedBrain } from "./DevLayer.ts";
 import { eventuallyTrue, testLimit } from "./EventuallyTestKit.ts";
 import { ExecutorLink } from "./executor/ExecutorLink.ts";
 import { Diffs } from "./git/Diffs.ts";
@@ -366,7 +366,7 @@ const PROJECT = createProject(1);
 const brainFor = (dataDir: string) =>
   PiDurableBrain({
     models: withCatalog(
-      ModelSource.layerFaux({ tokensPerSecond: 2000, settings: {} })
+      FauxModels.layer({ tokensPerSecond: 2000, settings: {} })
     ),
   }).pipe(
     Layer.provideMerge(ExecutorLink.layerDisabled),

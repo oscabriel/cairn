@@ -19,7 +19,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { Clock, Effect, Layer } from "effect";
 
 import { messageText } from "../../../apps/server/src/brain/CommitFeed.ts";
-import { FAUX_MODEL } from "../../../apps/server/src/brain/ModelSource.ts";
+import { FAUX_MODEL } from "../../../apps/server/src/brain/FauxModels.ts";
 import {
   ScriptedModel,
   ScriptedTools,

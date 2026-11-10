@@ -10,7 +10,7 @@ import { Effect, Layer, Schema } from "effect";
 import type { Scope } from "effect";
 import { RpcTest } from "effect/rpc";
 
-import { ModelSource } from "../brain/ModelSource.ts";
+import { FauxModels } from "../brain/FauxModels.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { ModelHealth } from "../models/ModelHealth.ts";
@@ -25,7 +25,7 @@ const Specs = ModelSpecs.layerNoDeps.pipe(
   Layer.provide(SettingsStore.layerNoDeps),
   Layer.provide(ModelHealth.layerNoDeps),
   Layer.provide(PiModelSource.layerFromModelSource),
-  Layer.provide(ModelSource.layerFaux({ tokensPerSecond: 1000, settings: {} })),
+  Layer.provide(FauxModels.layer({ tokensPerSecond: 1000, settings: {} })),
   Layer.provide(Database.layerTest(migrations)),
   Layer.orDie
 );

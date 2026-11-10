@@ -1,7 +1,7 @@
 // The brain's layer graph: each package's layer is added here. Each entry point provides what it
 // chooses itself: the identity rules, the settings source, logging, the harness behind the seam
-// (`PiDurableBrain` or `ScriptedBrain`) and the Executor link (`ExecutorLink.layer` or
-// `layerDisabled`).
+// (`PiDurableBrain`, or `ScriptedBrain` from `DevLayer.ts`) and the Executor link
+// (`ExecutorLink.layer`, `FakeExecutorLink` or `layerDisabled`).
 // Build order is shutdown order reversed: whatever the close hooks need is built before
 // `Shutdown`, and the HTTP server after it, so on SIGTERM the sockets close first, then the hooks
 // run, then the stores and the Harness close.
@@ -17,14 +17,12 @@ import { Brain } from "./brain/Brain.ts";
 import { BrainConfig } from "./brain/BrainConfig.ts";
 import { BridgeCwd } from "./brain/BridgeCwdExtension.ts";
 import { BudgetSources } from "./brain/BudgetSources.ts";
-import { EventReactors } from "./brain/EventReactors.ts";
 import type { CairnExtension } from "./brain/Extensions.ts";
 import { ExtensionSet } from "./brain/ExtensionSet.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
-import { ModelSource } from "./brain/ModelSource.ts";
+import type { ModelSource } from "./brain/ModelSource.ts";
 import { PiDurableHarness } from "./brain/PiDurableHarness.ts";
 import { ReactorSet } from "./brain/ReactorSet.ts";
-import { ScriptedHarness } from "./brain/ScriptedHarness.ts";
 import { SpendFeed } from "./brain/SpendFeed.ts";
 import { ServerConfig } from "./Config.ts";
 import { DatabaseLive } from "./db/DatabaseLive.ts";
@@ -216,25 +214,6 @@ export const PiDurableBrain = <Models = never>(options: {
     Layer.provide(BrainConfigLive)
   );
 };
-
-/**
- * The scripted harness (echoing model, in-memory store) behind the seam: the dev default. The
- * picker's catalog and the title model see the faux model.
- */
-export const ScriptedBrain = Layer.mergeAll(
-  Layer.succeed(HarnessBoot, HarnessBoot.of({ resume: Effect.void })),
-  EventReactors.layerOff,
-  SpendFeed.layerOff,
-  BudgetSources.layerNone,
-  WorkflowStops.layerOff,
-  GoalBook.layerOff
-).pipe(
-  Layer.provideMerge(ScriptedHarness.layer),
-  Layer.provideMerge(Skills.local),
-  Layer.provideMerge(
-    withCatalog(ModelSource.layerFaux({ tokensPerSecond: 50, settings: {} }))
-  )
-);
 
 /** Checkpoint entries written through the harness as passive `cairn.checkpoint` entries. */
 const CheckpointEntriesLive = Layer.effect(

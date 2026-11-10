@@ -22,8 +22,8 @@ import {
 } from "../workspaces/ChildWorkspacesTestKit.ts";
 import { testBrain } from "./BrainTestKit.ts";
 import { repairChildWorkspacesAtBoot } from "./ChildWorkspaceRepair.ts";
+import { FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
-import { FAUX_MODEL } from "./ModelSource.ts";
 
 /**
  * The brain over the children's workspaces `workspaces`, which its subagents extension makes

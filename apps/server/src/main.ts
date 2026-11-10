@@ -28,8 +28,9 @@ import { PortalUnits } from "./reach/PortalUnits.ts";
 // Cairn's own OAuth store (Codex sign-in, ADR 0037) over the same `cairn.sqlite`, holding the
 // OAuth lock. One reference, given to the models and the app alike, so the memo map builds one
 // store and one flock: a second instance would find the lock taken. Only the deployed brain holds
-// it; judge and dev brains go without, so they never take the real lock.
-const OAuth = OAuthStore.layer.pipe(Layer.provide(DatabaseLive), Layer.orDie);
+// it; judge and dev brains go without, so they never take the real lock. A lock that cannot be
+// taken leaves sign-ins unavailable; it never stops the brain from booting.
+const OAuth = OAuthStore.layer.pipe(Layer.provide(DatabaseLive));
 
 // The user's API models through pi's model runtime, read-only over `~/.pi/agent`. One reference,
 // so the harness, the picker and the title model share one runtime.

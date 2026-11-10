@@ -25,7 +25,7 @@ import { Subagents } from "../subagents/Subagents.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import type { CairnExtension } from "./Extensions.ts";
 import { ExtensionSet } from "./ExtensionSet.ts";
-import { ModelSource } from "./ModelSource.ts";
+import { FauxModels } from "./FauxModels.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 
 if (process.env.VITEST !== undefined) {
@@ -33,8 +33,8 @@ if (process.env.VITEST !== undefined) {
   isolateGitEnvironment();
 }
 
-/** What the faux model is built with (`ModelSource.layerFaux`). */
-export type FauxModelOptions = Parameters<typeof ModelSource.layerFaux>[0];
+/** What the faux model is built with (`FauxModels.layer`). */
+export type FauxModelOptions = Parameters<typeof FauxModels.layer>[0];
 
 /** The faux model most brain tests stream from: 4,000 tokens a second, no provider retries. */
 export const FAUX_MODEL_OPTIONS: FauxModelOptions = {
@@ -109,9 +109,7 @@ export const testBrain = <SE = never, SR = never, HE = never, HR = never>(
 ) =>
   PiDurableHarness.layer.pipe(
     Layer.provideMerge(brainExtensions(options)),
-    Layer.provideMerge(
-      ModelSource.layerFaux(options.model ?? FAUX_MODEL_OPTIONS)
-    ),
+    Layer.provideMerge(FauxModels.layer(options.model ?? FAUX_MODEL_OPTIONS)),
     Layer.provide(
       BrainConfig.layerFrom(
         options.dataDir ?? mkdtempSync(path.join(tmpdir(), "cairn-brain-"))

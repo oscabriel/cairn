@@ -1,5 +1,5 @@
 // Only one process may hold the Executor grant, so only the deployed brain composes the real link:
-// `main.ts` never composes `ExecutorLink.layerFake`, and no other file composes `ExecutorLink.layer`.
+// `main.ts` never composes `FakeExecutorLink`, and no other file composes `ExecutorLink.layer`.
 // A grep over the server, the judges, the tools and the ops scripts, comments left out.
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -33,7 +33,7 @@ const code = (file: string) =>
 
 const REAL_LINK = /\bExecutorLink\.layer(?![A-Za-z])/u;
 
-const FAKE_LINK = /\bExecutorLink\.layerFake\b/u;
+const FAKE_LINK = /\bFakeExecutorLink\b/u;
 
 const MAIN = path.join(server, "main.ts");
 

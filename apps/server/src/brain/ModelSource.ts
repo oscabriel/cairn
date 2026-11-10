@@ -1,7 +1,8 @@
 // Where the brain's models and run settings come from. The production layer (pi's model runtime,
 // read-only over `~/.pi/agent`, with the Claude bridge registered) is built in `models/`; this module
-// owns the service and its faux layer, which runs pi-ai's scripted provider for tests, judges and
-// the dev server. Both are read at each use, so a credential or settings change needs no reopen.
+// owns the service. The faux layer, pi-ai's scripted provider for tests, judges and the dev server,
+// is `FauxModels.layer`, in its own file. Both are read at each use, so a credential or settings
+// change needs no reopen.
 
 import type { ModelRef } from "@cairn/protocol/Models";
 import type {
@@ -10,17 +11,9 @@ import type {
   Models,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
-import type {
-  FauxModelDefinition,
-  RegisterFauxProviderOptions,
-} from "@earendil-works/pi-ai/providers/faux";
 import type { HarnessSettings } from "@earendil-works/pi-durable";
-import { Context, Effect, Layer, Schema } from "effect";
-
-import { errorText } from "./Durable.ts";
-import { FauxModels } from "./FauxModels.ts";
+import type { Effect } from "effect";
+import { Context, Schema } from "effect";
 
 /** A direct model call (a title, a branch name) failed. */
 export class ModelCallError extends Schema.TaggedError<ModelCallError>()(
@@ -41,9 +34,6 @@ export const BASE_HARNESS_SETTINGS: HarnessSettings = {
   afterFailedRun: "keep",
 };
 
-/** The provider and model the faux layer serves. */
-export const FAUX_MODEL: ModelRef = { provider: "faux", modelId: "scripted" };
-
 /** The brain's models and run settings. */
 export class ModelSource extends Context.Service<
   ModelSource,
@@ -59,98 +49,4 @@ export class ModelSource extends Context.Service<
       options: SimpleStreamOptions
     ): Effect.Effect<AssistantMessage, ModelCallError>;
   }
->()("cairn/server/brain/ModelSource") {
-  /**
-   * pi-ai's faux provider as the only model, `faux/scripted`, streaming at `tokensPerSecond`. Its
-   * handle is `FauxModels`, so a test scripts the answers.
-   */
-  static readonly layerFaux = (options: {
-    readonly tokensPerSecond: number;
-    readonly settings: HarnessSettings;
-    /** The model's display name; pi-ai shows the id when it is absent. */
-    readonly name?: string;
-    /**
-     * The tokens each streamed delta carries; pi-ai's default is 3 to 5. A long answer then takes
-     * as long to stream but in fewer, larger deltas.
-     */
-    readonly tokensPerDelta?: number;
-  }) =>
-    Layer.effectContext(
-      Effect.sync(() => {
-        const definition: FauxModelDefinition = {
-          id: FAUX_MODEL.modelId,
-          input: ["text", "image"],
-          contextWindow: 200_000,
-          reasoning: true,
-        };
-
-        if (options.name !== undefined) {
-          definition.name = options.name;
-        }
-
-        const fauxOptions: RegisterFauxProviderOptions = {
-          provider: FAUX_MODEL.provider,
-          models: [definition],
-          tokensPerSecond: options.tokensPerSecond,
-        };
-
-        if (options.tokensPerDelta !== undefined) {
-          fauxOptions.tokenSize = {
-            min: options.tokensPerDelta,
-            max: options.tokensPerDelta,
-          };
-        }
-
-        const faux = fauxProvider(fauxOptions);
-
-        const models = createModels();
-
-        models.setProvider(faux.provider);
-
-        const settings = { ...BASE_HARNESS_SETTINGS, ...options.settings };
-
-        const completeSimple = Effect.fn("ModelSource.completeSimple")(
-          function* (
-            model: ModelRef,
-            context: ModelContext,
-            streamOptions: SimpleStreamOptions
-          ) {
-            const found = models.getModel(model.provider, model.modelId);
-
-            if (found === undefined) {
-              return yield* new ModelCallError({
-                message: `The model ${model.provider}/${model.modelId} is not known. Pick another model.`,
-                provider: model.provider,
-                modelId: model.modelId,
-                reason: "unknown_model",
-              });
-            }
-
-            return yield* Effect.tryPromise({
-              try: async (signal) =>
-                await models.completeSimple(found, context, {
-                  ...streamOptions,
-                  signal,
-                }),
-              catch: (cause) =>
-                new ModelCallError({
-                  message: `The request to ${model.provider}/${model.modelId} failed: ${errorText(cause)}`,
-                  provider: model.provider,
-                  modelId: model.modelId,
-                  reason: "request_failed",
-                }),
-            });
-          }
-        );
-
-        return Context.make(
-          ModelSource,
-          ModelSource.of({
-            models: () => models,
-            settings: () => settings,
-            completeSimple,
-          })
-        ).pipe(Context.add(FauxModels, FauxModels.of({ faux })));
-      })
-    );
-}
+>()("cairn/server/brain/ModelSource") {}

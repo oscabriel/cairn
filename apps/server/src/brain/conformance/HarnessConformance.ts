@@ -39,6 +39,7 @@ import type { Scope } from "effect";
 import type { describe, it } from "vitest";
 
 import { TEST_SLACK } from "../../EventuallyTestKit.ts";
+import { FAUX_MODEL } from "../FauxModels.ts";
 import { HarnessEvent } from "../HarnessSeam.ts";
 import type {
   ApprovalAnswerInput,
@@ -46,7 +47,6 @@ import type {
   HarnessSeam,
   HarnessTurnInput,
 } from "../HarnessSeam.ts";
-import { FAUX_MODEL } from "../ModelSource.ts";
 import type { Mutation, MutationState } from "./Mutations.ts";
 import { breakSeam, faultsOf } from "./Mutations.ts";
 import {

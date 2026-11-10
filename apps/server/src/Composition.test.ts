@@ -20,6 +20,7 @@ import { Brain } from "./brain/Brain.ts";
 import { BridgeCwd } from "./brain/BridgeCwdExtension.ts";
 import { EventReactors } from "./brain/EventReactors.ts";
 import { Extensions } from "./brain/Extensions.ts";
+import { FauxModels } from "./brain/FauxModels.ts";
 import { HarnessSeam } from "./brain/HarnessSeam.ts";
 import { ModelSource } from "./brain/ModelSource.ts";
 import { ServerConfig } from "./Config.ts";
@@ -86,7 +87,7 @@ const dataDir = mkdtempSync(path.join(os.tmpdir(), "cairn-composition-"));
 // Executor, the identity rules and the settings. The models are the faux model behind the
 // picker's catalog, as a judge brain runs them.
 const Composed = MainLayer(
-  withCatalog(ModelSource.layerFaux({ tokensPerSecond: 50, settings: {} }))
+  withCatalog(FauxModels.layer({ tokensPerSecond: 50, settings: {} }))
 ).pipe(
   Layer.provide(ReachMachine.layerTest),
   Layer.provide(

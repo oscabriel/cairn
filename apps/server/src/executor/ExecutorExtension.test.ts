@@ -26,9 +26,8 @@ import { CodeMode } from "../brain/CodeMode.ts";
 import { CodingTools } from "../brain/CodingTools.ts";
 import { Extensions } from "../brain/Extensions.ts";
 import type { CairnExtension } from "../brain/Extensions.ts";
-import { FauxModels } from "../brain/FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam, RuntimeRequestUpdated } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { PiDurableHarness } from "../brain/PiDurableHarness.ts";
 import { testLimit } from "../EventuallyTestKit.ts";
 import {
@@ -72,7 +71,7 @@ const ExtensionsLive = Extensions.fromSources(sources).pipe(
 const harness = PiDurableHarness.layer.pipe(
   Layer.provideMerge(ExtensionsLive),
   Layer.provideMerge(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 4000,
       settings: { retry: { enabled: false } },
     })

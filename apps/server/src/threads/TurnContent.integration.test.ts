@@ -37,9 +37,8 @@ import {
 } from "../attachments/AttachmentsTestLayer.ts";
 import { AttachmentStore } from "../attachments/AttachmentStore.ts";
 import { UploadTokens } from "../attachments/UploadTokens.ts";
-import { FauxModels } from "../brain/FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
 import { ServerConfig } from "../Config.ts";
 import { Database } from "../db/Database.ts";
 import { testLimit, slackened } from "../EventuallyTestKit.ts";
@@ -91,7 +90,7 @@ const stack = (dir: string, userSkills: string) =>
       PiDurableBrain({
         models: PiModelSource.layerFromModelSource.pipe(
           Layer.provideMerge(
-            ModelSource.layerFaux({ tokensPerSecond: 5000, settings: {} })
+            FauxModels.layer({ tokensPerSecond: 5000, settings: {} })
           )
         ),
       }).pipe(

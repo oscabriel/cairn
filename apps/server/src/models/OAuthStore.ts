@@ -9,7 +9,9 @@
 //   pipe from the brain, as the Executor grant does with its own lock file (`ExecutorGrant.ts`):
 //   when the brain exits, even by `kill -9`, the pipe closes, the child exits and the lock is free.
 //   A brain that finds the lock taken never reads or writes a credential: its providers read as
-//   unavailable, and every write is refused.
+//   unavailable, and every write is refused. A lock that cannot be taken at all (no `flock`, a state
+//   or data directory it cannot write) leaves the store the same way, unavailable, with an error
+//   line: like the Executor grant, it never stops the brain from booting.
 // - One write at a time. `modify` runs its update and the row's write under one permit, and a
 //   `read` waits for that permit, so a rotated refresh token is on disk before anyone reads the
 //   provider again. Once an update has started it runs to its write uninterrupted: the provider
@@ -51,6 +53,8 @@ export class OAuthStoreError extends Schema.TaggedError<OAuthStoreError>()(
     reason: Schema.Literals([
       /** Another process holds the OAuth lock; this one never touches a credential. */
       "not_holder",
+      /** The OAuth lock could not be taken at boot; this brain keeps no sign-ins until it restarts. */
+      "unavailable",
       /** `cairn.sqlite` could not be read or written. */
       "storage",
       /** A stored row or a credential to store is not an OAuth credential. */
@@ -114,16 +118,28 @@ const storageFailure =
       cause,
     });
 
-const notHolder = (
+/** Where the lock stands: this process holds it, another does, or it could not be taken. */
+type LockState = "held" | "busy" | OAuthStoreError;
+
+/** Why a store that does not hold the lock refuses `operation`. */
+const refusal = (
+  lock: LockState,
   operation: OAuthStoreError["operation"],
   provider: string
 ): OAuthStoreError =>
-  new OAuthStoreError({
-    message: `OAuth store ${operation} refused for ${provider}: another Cairn brain holds the OAuth lock, so this one never reads or writes sign-ins. Use the brain that holds it, or stop that brain and restart this one.`,
-    operation,
-    reason: "not_holder",
-    provider,
-  });
+  lock instanceof OAuthStoreError
+    ? new OAuthStoreError({
+        message: `OAuth store ${operation} refused for ${provider}: the OAuth lock could not be taken when the brain started (${lock.message}), so this brain keeps no sign-ins. Fix that, then restart the brain.`,
+        operation,
+        reason: "unavailable",
+        provider,
+      })
+    : new OAuthStoreError({
+        message: `OAuth store ${operation} refused for ${provider}: another Cairn brain holds the OAuth lock, so this one never reads or writes sign-ins. Use the brain that holds it, or stop that brain and restart this one.`,
+        operation,
+        reason: "not_holder",
+        provider,
+      });
 
 /** Holds the OAuth lock until the scope closes. True when this process holds it. */
 const holdLock = (lockFile: string) =>
@@ -213,6 +229,33 @@ const piUpdate = (
     return Option.some(next);
   });
 
+/**
+ * Where the lock stands once `take` ran. A lock that could not be taken is logged and kept as the
+ * reason this brain's store refuses, never as a boot failure.
+ */
+const lockState = <R>(take: Effect.Effect<boolean, OAuthStoreError, R>) =>
+  take.pipe(
+    Effect.map((held): LockState => (held ? "held" : "busy")),
+    Effect.tap((state) =>
+      state === "busy"
+        ? Effect.logWarning(
+            "another process holds the OAuth lock; this brain will not use its sign-ins"
+          ).pipe(Effect.annotateLogs({ event: "oauth_lock_busy" }))
+        : Effect.void
+    ),
+    Effect.catchTag("OAuthStoreError", (failure) =>
+      Effect.logError(
+        "the OAuth lock could not be taken; this brain keeps no sign-ins"
+      ).pipe(
+        Effect.annotateLogs({
+          event: "oauth_lock_failed",
+          cause: failure.message,
+        }),
+        Effect.as<LockState>(failure)
+      )
+    )
+  );
+
 /** Cairn's own OAuth credentials: kept in `cairn.sqlite`, written by one process at a time. */
 export class OAuthStore extends Context.Service<
   OAuthStore,
@@ -250,35 +293,34 @@ export class OAuthStore extends Context.Service<
     readonly source: OAuthCredentialSource;
   }
 >()("cairn/server/models/OAuthStore") {
-  /**
-   * The store in `cairn.sqlite` (`oauth_credentials`, migration 0007), behind the lock at
-   * `lockFile`. Needs `SqlClient`, `FileSystem` and `ChildProcessSpawner`.
-   */
-  static readonly layerWith = (lockFile: string) =>
+  /** The store over the lock `takeLock` takes. Needs `SqlClient` and what `takeLock` needs. */
+  private static readonly storeOver = <R>(
+    takeLock: Effect.Effect<LockState, never, R>
+  ) =>
     Layer.effect(
       OAuthStore,
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const clock = yield* Clock.Clock;
-        const held = yield* holdLock(lockFile);
+        const lock = yield* takeLock;
+        const held = lock === "held";
         const permit = yield* Semaphore.make(1);
         const run = yield* FiberSet.makeRuntimePromise();
 
         const now = () => clock.currentTimeMillisUnsafe();
 
-        if (!held) {
-          yield* Effect.logWarning(
-            "another process holds the OAuth lock; this brain will not use its sign-ins"
-          ).pipe(Effect.annotateLogs({ event: "oauth_lock_busy" }));
-        }
+        const notHolder = (
+          operation: OAuthStoreError["operation"],
+          provider: string
+        ) => refusal(lock, operation, provider);
 
         const readRow = Effect.fn("OAuthStore.readRow")(function* (
           provider: string
         ) {
           const rows = yield* sql`
-            SELECT credential_json, signed_in_at, refreshed_at FROM oauth_credentials
-            WHERE provider_id = ${provider}
-          `.pipe(
+              SELECT credential_json, signed_in_at, refreshed_at FROM oauth_credentials
+              WHERE provider_id = ${provider}
+            `.pipe(
             Effect.flatMap(decodeCredentialRows),
             Effect.mapError(
               storageFailure("read", provider, "the row could not be read")
@@ -350,15 +392,15 @@ export class OAuthStore extends Context.Service<
           const at = now();
 
           yield* sql`
-            INSERT INTO oauth_credentials
-              (provider_id, credential_json, signed_in_at, refreshed_at, updated_at)
-            VALUES (${provider}, ${json}, ${at}, NULL, ${at})
-            ON CONFLICT (provider_id) DO UPDATE SET
-              credential_json = excluded.credential_json,
-              signed_in_at = excluded.signed_in_at,
-              refreshed_at = NULL,
-              updated_at = excluded.updated_at
-          `.pipe(
+              INSERT INTO oauth_credentials
+                (provider_id, credential_json, signed_in_at, refreshed_at, updated_at)
+              VALUES (${provider}, ${json}, ${at}, NULL, ${at})
+              ON CONFLICT (provider_id) DO UPDATE SET
+                credential_json = excluded.credential_json,
+                signed_in_at = excluded.signed_in_at,
+                refreshed_at = NULL,
+                updated_at = excluded.updated_at
+            `.pipe(
             Effect.mapError(
               storageFailure("write", provider, "the row could not be written")
             )
@@ -373,10 +415,10 @@ export class OAuthStore extends Context.Service<
           const at = now();
 
           yield* sql`
-            UPDATE oauth_credentials
-            SET credential_json = ${json}, refreshed_at = ${at}, updated_at = ${at}
-            WHERE provider_id = ${provider}
-          `.pipe(
+              UPDATE oauth_credentials
+              SET credential_json = ${json}, refreshed_at = ${at}, updated_at = ${at}
+              WHERE provider_id = ${provider}
+            `.pipe(
             Effect.mapError(
               storageFailure("write", provider, "the row could not be written")
             )
@@ -452,8 +494,8 @@ export class OAuthStore extends Context.Service<
               const row = yield* readRow(provider);
 
               yield* sql`
-                DELETE FROM oauth_credentials WHERE provider_id = ${provider}
-              `.pipe(
+                  DELETE FROM oauth_credentials WHERE provider_id = ${provider}
+                `.pipe(
                 Effect.mapError(
                   storageFailure(
                     "remove",
@@ -520,29 +562,44 @@ export class OAuthStore extends Context.Service<
     );
 
   /**
+   * The store in `cairn.sqlite` (`oauth_credentials`, migration 0007), behind the lock at
+   * `lockFile`. Needs `SqlClient`, `FileSystem` and `ChildProcessSpawner`.
+   */
+  static readonly layerWith = (lockFile: string) =>
+    OAuthStore.storeOver(lockState(holdLock(lockFile)));
+
+  /**
    * The deployed store: `cairn.sqlite`'s table behind `oauth.lock` in the state directory. The
-   * data directory is kept owner-only (0700), since the database and its backups hold tokens.
+   * data directory is kept owner-only (0700), since the database and its backups hold tokens; a
+   * data directory that cannot be made owner-only leaves the store unavailable, as a lock that
+   * cannot be taken does.
    */
   static readonly layer = Layer.unwrap(
     Effect.gen(function* () {
       const config = yield* ServerConfig;
       const fs = yield* FileSystem.FileSystem;
 
-      yield* fs.makeDirectory(config.dataDir, { recursive: true });
-      yield* fs.chmod(config.dataDir, 0o700);
+      const ownerOnly = Effect.gen(function* () {
+        yield* fs.makeDirectory(config.dataDir, { recursive: true });
+        yield* fs.chmod(config.dataDir, 0o700);
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OAuthStoreError({
+              message:
+                "OAuth store setup failed: the data directory could not be made owner-only. Check its owner and permissions",
+              operation: "lock",
+              reason: "storage",
+              cause,
+            })
+        )
+      );
 
-      return OAuthStore.layerWith(defaultOAuthLock(config.stateDir));
-    }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new OAuthStoreError({
-            message:
-              "OAuth store setup failed: the data directory could not be made owner-only. Check its owner and permissions, then restart.",
-            operation: "lock",
-            reason: "storage",
-            cause,
-          })
-      )
-    )
+      return OAuthStore.storeOver(
+        lockState(
+          Effect.andThen(ownerOnly, holdLock(defaultOAuthLock(config.stateDir)))
+        )
+      );
+    })
   );
 }

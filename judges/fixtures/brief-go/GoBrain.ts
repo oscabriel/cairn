@@ -64,12 +64,11 @@ import { messageText } from "../../../apps/server/src/brain/CommitFeed.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
 import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
-import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
-import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import {
+  FauxModels,
   FAUX_MODEL,
-  ModelSource,
-} from "../../../apps/server/src/brain/ModelSource.ts";
+} from "../../../apps/server/src/brain/FauxModels.ts";
+import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import { PiDurableHarness } from "../../../apps/server/src/brain/PiDurableHarness.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { BRIEF_ANSWER_ENTRY } from "../../../apps/server/src/brain/SubagentText.ts";
@@ -246,7 +245,7 @@ const brain = PiDurableHarness.layer.pipe(
     )
   ),
   Layer.provideMerge(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 4000,
       settings: { retry: { enabled: false } },
     })

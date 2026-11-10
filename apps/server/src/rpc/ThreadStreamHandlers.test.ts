@@ -23,8 +23,8 @@ import {
 import { HttpRouter } from "effect/http";
 
 import { EntryImageRoute } from "../brain/EntryImageRoute.ts";
+import { FAUX_MODEL } from "../brain/FauxModels.ts";
 import { HarnessSeam } from "../brain/HarnessSeam.ts";
-import { FAUX_MODEL } from "../brain/ModelSource.ts";
 import { ScriptedHarness } from "../brain/ScriptedHarness.ts";
 import { Database } from "../db/Database.ts";
 import { Launches0002 } from "../db/migrations/0002Launches.ts";

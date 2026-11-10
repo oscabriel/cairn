@@ -1,5 +1,5 @@
 // `goal.setCriteria` and `goal.mark` over the stubs, as `Handlers.ts` layers them, with the goal
-// service over the scripted harness's goals (`GoalBook.layerScripted`): the user binds a goal, marks
+// service over the scripted harness's goals (`ScriptedGoalBook`): the user binds a goal, marks
 // the criterion a user judge decides, and the thread's `cairn.goal` and its GoalUpdated tally follow
 // from the verdict writer; a mark on a criterion a command decides, on one the goal does not hold,
 // or on a thread the brain does not hold, is refused with the public error a client acts on, and
@@ -20,13 +20,13 @@ import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type { GoalUpdated, HarnessEvent } from "../brain/HarnessSeam.ts";
 import { ScriptedHarness } from "../brain/ScriptedHarness.ts";
 import { ViewerTest } from "../shell/ShellTestKit.ts";
-import { GoalBook } from "../verdicts/GoalBook.ts";
+import { ScriptedGoalBook } from "../verdicts/ScriptedGoalBook.ts";
 import { GoalHandlers } from "./GoalHandlers.ts";
 import { StubHandlers } from "./StubHandlersTestKit.ts";
 
 const Services = Layer.mergeAll(
   StubHandlers,
-  GoalHandlers.pipe(Layer.provide(GoalBook.layerScripted))
+  GoalHandlers.pipe(Layer.provide(ScriptedGoalBook))
 ).pipe(
   Layer.provideMerge(ViewerTest),
   Layer.provideMerge(ScriptedHarness.layer)

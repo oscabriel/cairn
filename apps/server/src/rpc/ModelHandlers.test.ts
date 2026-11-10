@@ -8,7 +8,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import { RpcTest } from "effect/rpc";
 
-import { FAUX_MODEL, ModelSource } from "../brain/ModelSource.ts";
+import { FauxModels, FAUX_MODEL } from "../brain/FauxModels.ts";
 import { Database } from "../db/Database.ts";
 import { migrations } from "../db/Migrations.ts";
 import { PiModelSource } from "../models/PiModelSource.ts";
@@ -35,9 +35,7 @@ const TestLayer = SessionHelloWithModels.pipe(
   Layer.provide(BaseHello),
   Layer.provide(
     PiModelSource.layerFromModelSource.pipe(
-      Layer.provide(
-        ModelSource.layerFaux({ tokensPerSecond: 1000, settings: {} })
-      )
+      Layer.provide(FauxModels.layer({ tokensPerSecond: 1000, settings: {} }))
     )
   ),
   Layer.provide(

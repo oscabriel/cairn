@@ -53,10 +53,9 @@ import { Approvals } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
 import { childWorkspacesAt } from "./conformance/Targets.ts";
 import { durable } from "./Durable.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
@@ -87,7 +86,7 @@ const brainLayer = (dataDir: string, tuning: SubagentToolOptions) =>
     Layer.provideMerge(ModelHealth.layerTest),
     Layer.provideMerge(SettingsStore.layerTest),
     Layer.provideMerge(
-      ModelSource.layerFaux({
+      FauxModels.layer({
         tokensPerSecond: 2000,
         settings: { retry: { enabled: false } },
       })

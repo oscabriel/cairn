@@ -68,10 +68,9 @@ import { BrainConfig } from "./BrainConfig.ts";
 import { brainExtensions } from "./BrainTestKit.ts";
 import { repairChildWorkspacesAtBoot } from "./ChildWorkspaceRepair.ts";
 import { durable, durableRunner } from "./Durable.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL, ModelSource } from "./ModelSource.ts";
 import { PiDurableHarness } from "./PiDurableHarness.ts";
 import { piConversationId } from "./PiIds.ts";
 import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
@@ -146,7 +145,7 @@ const brainAt = (
       })
     ),
     Layer.provideMerge(
-      ModelSource.layerFaux({
+      FauxModels.layer({
         tokensPerSecond: 4000,
         settings: { retry: { enabled: false } },
       })

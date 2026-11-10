@@ -59,11 +59,10 @@ import {
   Extensions,
 } from "../../../apps/server/src/brain/Extensions.ts";
 import type { CairnExtension } from "../../../apps/server/src/brain/Extensions.ts";
-import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
 import {
+  FauxModels,
   FAUX_MODEL,
-  ModelSource,
-} from "../../../apps/server/src/brain/ModelSource.ts";
+} from "../../../apps/server/src/brain/FauxModels.ts";
 import { ResultTool } from "../../../apps/server/src/models/ResultTool.ts";
 import { ChildDoc } from "../../../apps/server/src/subagents/SubagentDocs.ts";
 import { NO_DEFAULT_BUDGET } from "../../../apps/server/src/usage/DefaultBudget.ts";
@@ -245,7 +244,7 @@ const JudgeLayer = EventReactors.fromSources(reactorSources).pipe(
   ),
   Layer.provide(Extensions.fromSources(extensionSources)),
   Layer.provideMerge(
-    ModelSource.layerFaux({
+    FauxModels.layer({
       tokensPerSecond: 50_000,
       settings: { retry: { enabled: false } },
     })

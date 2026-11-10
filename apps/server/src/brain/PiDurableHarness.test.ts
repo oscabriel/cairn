@@ -49,10 +49,9 @@ import {
 } from "./CairnDocs.ts";
 import type { ApprovalRecord } from "./CairnDocs.ts";
 import { conformanceTools } from "./conformance/ConformanceTools.ts";
-import { FauxModels } from "./FauxModels.ts";
+import { FauxModels, FAUX_MODEL } from "./FauxModels.ts";
 import { HarnessSeam } from "./HarnessSeam.ts";
 import type { HarnessEvent } from "./HarnessSeam.ts";
-import { FAUX_MODEL } from "./ModelSource.ts";
 import { PendingApprovals } from "./PendingApprovals.ts";
 import { piConversationId } from "./PiIds.ts";
 

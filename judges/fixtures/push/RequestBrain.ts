@@ -19,7 +19,7 @@ import {
 } from "../../../apps/server/src/AppLayer.ts";
 import { BudgetSources } from "../../../apps/server/src/brain/BudgetSources.ts";
 import { EventReactors } from "../../../apps/server/src/brain/EventReactors.ts";
-import { ModelSource } from "../../../apps/server/src/brain/ModelSource.ts";
+import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
 import {
   ScriptedBoot,
   ScriptedHarness,
@@ -32,7 +32,7 @@ import type { ScriptedRequest } from "../../../apps/server/src/brain/ScriptedHar
 import { SpendFeed } from "../../../apps/server/src/brain/SpendFeed.ts";
 import { ServerConfig } from "../../../apps/server/src/Config.ts";
 import type { ServerSettings } from "../../../apps/server/src/Config.ts";
-import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
+import { FakeExecutorLink } from "../../../apps/server/src/executor/FakeExecutor.ts";
 import { Identity } from "../../../apps/server/src/http/Identity.ts";
 import { ModelHealthLive } from "../../../apps/server/src/models/ModelHealth.ts";
 import { SettingsLive } from "../../../apps/server/src/models/SettingsStore.ts";
@@ -164,7 +164,7 @@ const Harness = Layer.mergeAll(
   ),
   Layer.provideMerge(Skills.local),
   Layer.provideMerge(
-    withCatalog(ModelSource.layerFaux({ tokensPerSecond: 200, settings: {} }))
+    withCatalog(FauxModels.layer({ tokensPerSecond: 200, settings: {} }))
   )
 );
 
@@ -190,7 +190,7 @@ export const requestBrain = (options: RequestBrainOptions) =>
         process.env.PATH ?? "/usr/bin:/bin"
       )
     ),
-    Layer.provide(ExecutorLink.layerFake),
+    Layer.provide(FakeExecutorLink),
     Layer.provide(Identity.layerLoopbackOwner),
     Layer.provide(Layer.succeed(NotifierSettings, options.notifier)),
     Layer.provide(ServerConfig.layerWith(options.config)),

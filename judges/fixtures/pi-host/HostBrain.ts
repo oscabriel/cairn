@@ -47,9 +47,11 @@ import {
 } from "effect";
 
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
-import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
+import {
+  FauxModels,
+  FAUX_MODEL,
+} from "../../../apps/server/src/brain/FauxModels.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
-import { FAUX_MODEL } from "../../../apps/server/src/brain/ModelSource.ts";
 import { PiConfig } from "../../../apps/server/src/models/PiConfig.ts";
 import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import type {

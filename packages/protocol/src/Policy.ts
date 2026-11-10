@@ -35,7 +35,7 @@ import {
 } from "./Ids.ts";
 import { ModelRef, ThinkingLevel } from "./Models.ts";
 import { ModelSpec } from "./ModelSpecs.ts";
-import { Budget } from "./Spend.ts";
+import { Budget, Micros } from "./Spend.ts";
 
 /**
  * A thread's permission mode: which tool calls need an approval (ADR 0031). Full access asks for
@@ -396,10 +396,11 @@ export const WorkflowLaunch = Schema.Struct({
 export type WorkflowLaunch = typeof WorkflowLaunch.Type;
 
 /**
- * What the user changed on a workflow's launch card before Go: the budget, replacing the
- * payload's. Carried in the answer, so the frozen payload stays what the model proposed and the
- * record still shows both. Only a launch approval takes one. Answers recorded before ADR 0043 also
- * hold `roleOverrides`, which decoding ignores.
+ * What the user changed on a Go card before Go: the budget, replacing the payload's. Carried in the
+ * answer, so the frozen payload stays what the model proposed and the record still shows both. A
+ * workflow's launch approval takes one with Go or Run on 1 first, and a subagent's brief with Go
+ * (ADR 0047); nothing else does. Answers recorded before ADR 0043 also hold `roleOverrides`, which
+ * decoding ignores.
  */
 export const LaunchEdits = Schema.Struct({
   budget: Budget,
@@ -440,8 +441,20 @@ export type CriteriaPayload = typeof CriteriaPayload.Type;
  */
 export const BudgetRaisePayload = Schema.Struct({
   type: Schema.Literal("budget-raise"),
-  /** `thread`, `goal` or a workflow id: the scope whose budget is reached. */
+  /** The thread id heading the scope, or a workflow id: the scope whose budget is reached. */
   scope: TrimmedNonEmptyString,
+  /**
+   * What the card names the scope by: the thread's title or the workflow's name (ADR 0047). Absent
+   * on raises asked before it existed.
+   */
+  title: Schema.optionalKey(DisplayText),
+  /**
+   * What the scope had spent when the raise was asked, against `from` (ADR 0047): every token, and
+   * priced tokens at list price. Absent on raises asked before it existed.
+   */
+  spent: Schema.optionalKey(
+    Schema.Struct({ tokens: NonNegativeInt, listMicros: Micros })
+  ),
   from: Budget,
   to: Budget,
 });
@@ -509,8 +522,9 @@ export const ApprovalPayload = Schema.Union([
 export type ApprovalPayload = typeof ApprovalPayload.Type;
 
 /**
- * What the decider answered. `launch` is set only on Go (`accept` or `accept_sample`) for a
- * workflow's launch approval when the user edited the card; null runs the payload as proposed.
+ * What the decider answered. `launch` is set only on Go (`accept`, or `accept_sample` for a
+ * workflow's launch) when the user edited the card's budget (`LaunchEdits`); null runs the payload
+ * as proposed.
  */
 export const ApprovalAnswer = Schema.Struct({
   decision: ApprovalDecision,

@@ -232,6 +232,7 @@ describe("the brief card", () => {
           decision: "accept",
           reason: Option.none(),
           answers: Option.none(),
+          launch: Option.none(),
         })
       ),
       Scene.Command.resolve(
@@ -430,6 +431,7 @@ describe("the brief card", () => {
           decision: "revise",
           reason: Option.some("two nodes, not five"),
           answers: Option.none(),
+          launch: Option.none(),
         })
       ),
       Scene.Command.resolve(
@@ -487,6 +489,7 @@ describe("the brief card", () => {
           decision: "accept",
           reason: Option.none(),
           answers: Option.none(),
+          launch: Option.none(),
         })
       ),
       Scene.Command.resolve(
@@ -512,6 +515,7 @@ describe("the brief card", () => {
           decision: "revise",
           reason: Option.some("only src/next"),
           answers: Option.none(),
+          launch: Option.none(),
         })
       ),
       Scene.Command.resolve(
@@ -583,6 +587,7 @@ describe("the brief card", () => {
           decision: "accept_sample",
           reason: Option.none(),
           answers: Option.none(),
+          launch: Option.none(),
         })
       ),
       // One answer in flight: Go waits for it.

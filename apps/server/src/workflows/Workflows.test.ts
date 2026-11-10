@@ -7,6 +7,7 @@ import { Effect, Layer } from "effect";
 
 import { ExtensionOrder } from "../brain/Extensions.ts";
 import { ModelSpecs } from "../models/ModelSpecs.ts";
+import { SettingsStore } from "../models/SettingsStore.ts";
 import { NODE_TOOLS } from "./Prelude.ts";
 import { PUSH_TASK, STOPPER_TASK } from "./WorkflowBudget.ts";
 import { LAUNCH_TOOL, LAUNCH_WATCH_TASK } from "./WorkflowLaunch.ts";
@@ -53,6 +54,13 @@ describe("the workflows extension", () => {
           extension.extension.tasks?.map((task) => task.definition.name),
           [WATCH_TASK, STOPPER_TASK, LAUNCH_WATCH_TASK, PUSH_TASK]
         );
-      }).pipe(Effect.provide(Workflows.layer.pipe(Layer.provide(NoModels))))
+      }).pipe(
+        Effect.provide(
+          Workflows.layer.pipe(
+            Layer.provide(NoModels),
+            Layer.provide(SettingsStore.layerTest)
+          )
+        )
+      )
   );
 });

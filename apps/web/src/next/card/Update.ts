@@ -19,6 +19,10 @@
 //   model does not resolve; a check that could not be made holds nothing, since the brain checks
 //   again at Go. A request that names no model runs on its parent's and is not checked. Send back (a subagent's brief only) opens a notes field and needs notes; Run on 1 first
 //   (a launch of more than one node only) answers `accept_sample`.
+// - A subagent's brief or a workflow's launch takes a changed budget (ADR 0047): Change budget
+//   opens dollars and tokens fields from the proposal's budget, and Go (or Run on 1 first) sends
+//   the changed budget as the answer's `launch`; a field that is not a budget sends nothing and
+//   says why. Keep proposed closes the fields.
 // - One answer in flight at a time. An answer the brain took is hidden at once and stays hidden
 //   until the stream shows it settled, so a slow stream never shows it twice.
 // - A request that leaves the card without this device answering it (another device, the parent,
@@ -30,9 +34,13 @@
 import {
   goBlockOf,
   modelQuestionOf,
+  proposedBudgetOf,
+  takesBudgetEdit,
   takesRunOnOne,
   takesSendBack,
 } from "@cairn/client-logic/BriefGo";
+import { budgetDraftOf, budgetEditOf } from "@cairn/client-logic/Meters";
+import type { BudgetDraft } from "@cairn/client-logic/Meters";
 import {
   answersProblem,
   approvalRecordsOf,
@@ -52,8 +60,14 @@ import {
 } from "@cairn/client-logic/PendingUserInput";
 import type { DraftAnswers } from "@cairn/client-logic/PendingUserInput";
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
-import type { ApprovalRecord, Question } from "@cairn/protocol/Policy";
-import { ApprovalDecision } from "@cairn/protocol/Policy";
+import type {
+  ApprovalRecord,
+  Brief,
+  Question,
+  WorkflowLaunch,
+} from "@cairn/protocol/Policy";
+import { ApprovalDecision, LaunchEdits } from "@cairn/protocol/Policy";
+import type { Budget } from "@cairn/protocol/Spend";
 import {
   Array,
   Duration,
@@ -61,6 +75,7 @@ import {
   Equal,
   Option,
   Predicate,
+  Result,
   Schema,
 } from "effect";
 import { Command, Update } from "foldkit";
@@ -213,12 +228,14 @@ export const RespondToRequest = Command.define("RespondToRequest", {
     decision: ApprovalDecision,
     reason: Schema.Option(Schema.String),
     answers: Schema.Option(Schema.Array(CardAnswer)),
+    /** The budget the user set on a brief's or a launch's card, with Go (ADR 0047). */
+    launch: Schema.Option(LaunchEdits),
   },
   messages: [Message.SucceededRespond, Message.FailedRespond],
   execute: (input) =>
     withBoundary(
       Effect.flatMap(CairnConnection.get, (client) =>
-        client["thread.respond"]({ ...input, launch: Option.none() })
+        client["thread.respond"](input)
       )
     ).pipe(
       Effect.match({
@@ -301,6 +318,7 @@ interface Answer {
   readonly decision: ApprovalDecision;
   readonly reason: Option.Option<string>;
   readonly answers: Option.Option<ReadonlyArray<CardAnswer>>;
+  readonly launch: Option.Option<LaunchEdits>;
 }
 
 /**
@@ -337,6 +355,7 @@ const respond = (model: Model, answer: Answer): UpdateReturn => {
                 decision: answer.decision,
                 reason: answer.reason,
                 answers: answer.answers,
+                launch: answer.launch,
               }),
             ],
           }
@@ -384,6 +403,7 @@ const sendDue = (model: Model): UpdateReturn =>
           decision: "accept",
           reason: Option.none(),
           answers: Option.some(undo.answers),
+          launch: Option.none(),
         }),
     }
   );
@@ -607,7 +627,39 @@ const settleCheck = (
     : { model };
 };
 
-/** Go, Run on 1 first, Approve or Allow for this thread, when the shown request takes it now. */
+/** A brief's or a launch's payload; none for any other body. */
+const briefPayloadOf = (
+  body: RequestBody
+): Option.Option<Brief | WorkflowLaunch> =>
+  RequestBody.$is("Brief")(body) ? Option.some(body.payload) : Option.none();
+
+/**
+ * What the budget field of `request` says Go sends: none when it has no field, the field is closed
+ * or says what was proposed; the changed budget; or why the field is not a budget (ADR 0047).
+ */
+export const budgetEdit = (
+  model: Pick<Model, "budgets">,
+  request: PendingRequest
+): Result.Result<Option.Option<Budget>, string> =>
+  Option.match(
+    Option.filter(briefPayloadOf(request.body), () =>
+      takesBudgetEdit(request.record, request.body)
+    ),
+    {
+      onNone: () => Result.succeed(Option.none()),
+      onSome: (payload) =>
+        budgetEditOf(
+          proposedBudgetOf(payload),
+          Option.fromUndefinedOr(model.budgets[request.record.id])
+        ),
+    }
+  );
+
+/**
+ * Go, Run on 1 first, Approve or Allow for this thread, when the shown request takes it now. Go
+ * carries the budget field's budget when it changed; a field that is not a budget sends nothing
+ * and says why.
+ */
 const accept = (
   model: Model,
   approvalId: ApprovalId,
@@ -623,14 +675,43 @@ const accept = (
         return { model };
       }
 
+      const edit = budgetEdit(model, request);
+
+      if (Result.isFailure(edit)) {
+        return {
+          model: modifyFields(model, {
+            failure: () => Option.some(`Not sent: ${edit.failure}`),
+          }),
+        };
+      }
+
       return respond(model, {
         approvalId,
         decision,
         reason: Option.none(),
         answers: Option.none(),
+        launch: Option.map(edit.success, (budget) => ({ budget })),
       });
     },
   });
+
+/** Changes one field of a request's open budget field. */
+const typeBudget = (
+  model: Model,
+  approvalId: ApprovalId,
+  change: (draft: BudgetDraft) => BudgetDraft
+): UpdateReturn => {
+  const draft = model.budgets[approvalId];
+
+  return draft === undefined || !isAnswerable(model, approvalId)
+    ? { model }
+    : {
+        model: modifyFields(model, {
+          budgets: (budgets) => ({ ...budgets, [approvalId]: change(draft) }),
+          failure: () => Option.none(),
+        }),
+      };
+};
 
 /** Sends a brief back with the notes typed; refuses without notes, as the brain does. */
 const sendBack = (model: Model, approvalId: ApprovalId): UpdateReturn => {
@@ -650,6 +731,7 @@ const sendBack = (model: Model, approvalId: ApprovalId): UpdateReturn => {
     decision: "revise",
     reason: Option.some(notes),
     answers: Option.none(),
+    launch: Option.none(),
   });
 };
 
@@ -756,6 +838,43 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
     ClickedConfirmSendBack: ({ approvalId }) => sendBack(model, approvalId),
+    ClickedChangeBudget: ({ approvalId }) =>
+      Option.match(
+        Option.flatMap(
+          Option.filter(
+            requestById(model, approvalId),
+            (request) =>
+              isAnswerable(model, approvalId) &&
+              model.budgets[approvalId] === undefined &&
+              takesBudgetEdit(request.record, request.body)
+          ),
+          (request) => briefPayloadOf(request.body)
+        ),
+        {
+          onNone: () => ({ model }),
+          onSome: (payload) => ({
+            model: modifyFields(model, {
+              budgets: (budgets) => ({
+                ...budgets,
+                [approvalId]: budgetDraftOf(proposedBudgetOf(payload)),
+              }),
+            }),
+          }),
+        }
+      ),
+    ChangedBudgetDollars: ({ approvalId, value }) =>
+      typeBudget(model, approvalId, (draft) => ({ ...draft, dollars: value })),
+    ChangedBudgetTokens: ({ approvalId, value }) =>
+      typeBudget(model, approvalId, (draft) => ({ ...draft, tokens: value })),
+    ClickedKeepBudget: ({ approvalId }) => ({
+      model: modifyFields(model, {
+        budgets: (budgets) =>
+          Object.fromEntries(
+            Object.entries(budgets).filter(([id]) => id !== approvalId)
+          ),
+        failure: () => Option.none(),
+      }),
+    }),
     ClickedCheckModels: ({ approvalId }) =>
       Option.match(requestById(model, approvalId), {
         onNone: () => ({ model }),
@@ -791,6 +910,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         decision: "decline",
         reason: reason === "" ? Option.none() : Option.some(reason),
         answers: Option.none(),
+        launch: Option.none(),
       });
     },
     // An answer settles only the request in flight: one for a request the card let go of (another
@@ -933,6 +1053,7 @@ export const inform = (model: Model, context: CardContext): InformReturn => {
         ...Option.toArray(base.sending),
       ]),
     notes: (notes) => pruneResolvedDrafts(notes, pendingIds),
+    budgets: (budgets) => pruneResolvedDrafts(budgets, pendingIds),
     modelChecks: (checks) => pruneResolvedDrafts(checks, pendingIds),
     declining: (declining) => Option.filter(declining, isPending),
     sendingBack: (sendingBack) => Option.filter(sendingBack, isPending),

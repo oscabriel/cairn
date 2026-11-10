@@ -11,7 +11,8 @@
 import { ConversationId } from "@cairn/protocol/Ids";
 import { Brief, WorkflowLaunch } from "@cairn/protocol/Policy";
 import type { ApprovalDecision, LaunchEdits } from "@cairn/protocol/Policy";
-import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
+import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
+import type { Budget } from "@cairn/protocol/Spend";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
@@ -171,6 +172,8 @@ const flow = (
     readonly stopAt?: "launch" | "card";
     /** Project recipes a reference may name, source by name. */
     readonly projectRecipes?: Readonly<Record<string, string>>;
+    /** The server's default budget; no limit when absent. */
+    readonly defaultBudget?: Budget;
     /** What the thread holds before the model proposes: launches planted on its ledger. */
     readonly before?: (
       brain: KitBrain
@@ -189,6 +192,7 @@ const flow = (
 
     const parts = yield* kitParts({
       projectRecipes: options.projectRecipes ?? {},
+      defaultBudget: options.defaultBudget ?? DEFAULT_BUDGET,
       faults: options.faults ?? NO_WORKFLOW_FAULTS,
       hold: async () => {},
       effect: (line) => {
@@ -801,6 +805,36 @@ return { a, args, total: budget.total };`);
 
         assert.deepStrictEqual([e?.provider, e?.modelId], ["faux", "kit-alt"]);
         assert.deepStrictEqual(outcome.problems, []);
+      }),
+    30_000
+  );
+
+  it.live(
+    "a launch its model gives no budget carries the server's default, frozen in its payload and row",
+    () =>
+      Effect.gen(function* () {
+        const fallback: Budget = {
+          ...DEFAULT_BUDGET,
+          maxListMicros: Micros.make(3_000_000),
+          maxTokens: 700_000,
+        };
+
+        const outcome = yield* flow(
+          workflow(`const a = await agent("node:a", { label: "a" });
+return { a, total: budget.total };`),
+          { launches: [GO], defaultBudget: fallback }
+        );
+
+        const [row] = outcome.rows;
+        const launch = outcome.records[row?.approvalId ?? ""];
+
+        assert.deepStrictEqual(
+          decodeLaunch(launch?.payload).envelope.budget,
+          fallback
+        );
+        assert.strictEqual(row?.budget.maxTokens, 700_000);
+        assert.strictEqual(row?.budget.maxListMicros, 3_000_000);
+        assert.include(outcome.reply, '"total":700000');
       }),
     30_000
   );

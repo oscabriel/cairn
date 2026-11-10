@@ -39,7 +39,7 @@ import {
   testThreadId,
 } from "../shell/ShellTestKit.ts";
 import { ThreadRows } from "../shell/ThreadRows.ts";
-import { BudgetBook } from "./BudgetBook.ts";
+import { BudgetBook, hasLimits } from "./BudgetBook.ts";
 import type { BudgetMode, ScopeLimit } from "./BudgetBook.ts";
 import { BudgetGuard } from "./BudgetGuard.ts";
 import { Budgets } from "./Budgets.ts";
@@ -122,13 +122,23 @@ export const SourcesMemory = Layer.effectContext(
             });
           }
 
-          return Option.fromUndefinedOr(
-            (yield* Ref.get(record.scopes)).get(threadId)
+          // A budget with no enforced limit is no scope, as the documents read it.
+          return Option.filter(
+            Option.fromUndefinedOr(
+              (yield* Ref.get(record.scopes)).get(threadId)
+            ),
+            (scope) => hasLimits(scope.budget)
           );
         }),
+      // A declare starts an epoch of its own, as the documents count it (`BudgetSources`).
       declare: (threadId: ThreadId, budget: Budget, mode: BudgetMode) =>
         Ref.update(record.scopes, (map) =>
-          new Map(map).set(threadId, { threadId, budget, mode, epoch: 0 })
+          new Map(map).set(threadId, {
+            threadId,
+            budget,
+            mode,
+            epoch: (map.get(threadId)?.epoch ?? 0) + 1,
+          })
         ),
       askRaise: (limit, to) =>
         once(record.raises, `${limit.threadId} ${limit.epoch}`, to),

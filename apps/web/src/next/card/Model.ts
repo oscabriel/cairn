@@ -1,7 +1,8 @@
 // The request card's state (plan wave 6, 6A and 6B; surfaces note S3 and W1; briefs note section
 // 4): the open thread's `cairn.approvals` document as its stream holds it, and what the user has
 // started on the card: a question's drafts and the question they are on, a Decline's reason, a
-// Send back's notes, an answer waiting out its undo window, an answer in flight, what the models a
+// Send back's notes, a brief's or a launch's budget field, an answer waiting out its undo window,
+// an answer in flight, what the models a
 // brief names resolve to now, and a request that closed under them because it was answered somewhere
 // else. The document comes from the thread page's view, never from the card.
 //
@@ -30,6 +31,12 @@ export const CardAnswer = Schema.Struct({
 });
 
 export type CardAnswer = typeof CardAnswer.Type;
+
+/** A budget field as typed: client-logic's `BudgetDraft` (`PendingCard.ts`) as a schema. */
+export const CardBudgetDraft = Schema.Struct({
+  dollars: Schema.String,
+  tokens: Schema.String,
+});
 
 /** A question card's answers, sent once its undo window ends unless the user takes them back. */
 export const PendingSend = Schema.Struct({
@@ -87,6 +94,11 @@ export const Model = Schema.Struct({
   notes: Schema.Record(Schema.String, Schema.String),
   /** The brief whose Send back notes field is open (6B). */
   sendingBack: Schema.Option(ApprovalId),
+  /**
+   * The budget field of a brief or a launch the user opened, as typed, by approval id (ADR 0047):
+   * Go sends its budget when it differs from the proposal's.
+   */
+  budgets: Schema.Record(Schema.String, CardBudgetDraft),
   /** What the models each shown brief or launch names resolve to now, by approval id (6B). */
   modelChecks: Schema.Record(Schema.String, ModelCheckState),
   /** Bumped by every model check asked, so an answer to an earlier one does nothing. */
@@ -126,6 +138,7 @@ export const initial: Model = {
   declining: Option.none(),
   notes: {},
   sendingBack: Option.none(),
+  budgets: {},
   modelChecks: {},
   checkGeneration: 0,
   sending: Option.none(),

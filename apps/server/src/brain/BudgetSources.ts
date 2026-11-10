@@ -2,15 +2,21 @@
 // authority), and the two writes the budget guard makes there.
 //
 // A scope's base budget is, first, one declared on its thread (`cairn.budget`, written by
-// `declare`, for a goal), else its brief's: a subagent's `cairn.child` names the brief's approval
-// in its parent's `cairn.approvals`, whose frozen payload carries the budget. Each accepted
-// `budget_raise` record in the scope's own `cairn.approvals` replaces it with its `to`, oldest
-// first; the count of accepted raises is the scope's epoch. A brief's budget stops (`stop`); a
-// declared one keeps its mode. A budget with no enforced limit is no scope.
+// `declare`: `budget.declare` from the usage page, ADR 0047), else its brief's: a subagent's
+// `cairn.child` names the brief's approval in its parent's `cairn.approvals`, whose answer carries
+// the budget the user set on the card with Go, else its frozen payload the budget the brief asked.
+// Each accepted `budget_raise` record in the scope's own `cairn.approvals` replaces it with its
+// `to`, oldest first; the count of accepted raises plus the count of declares is the scope's epoch.
+// A declare replaces the raises accepted before it and declines one still pending, in its commit.
+// A brief's budget stops (`stop`); a declared one keeps its mode. A budget with no enforced limit is
+// no scope. A declared budget with no limit is still the thread's declared budget: it stands over
+// the brief's too, so a subagent whose budget the user removes on the usage page (which showed
+// the line it removes) runs with no line of its own, its parent's scope still binding it.
 //
 // The guard asks a raise as a pending record of its own (`toolTaskId` 0, tool `budget_raise`, kind
-// `tool-call`), keyed `budget-raise-<epoch>`, so asking again after a crash finds it. No run holds
-// it, so a stop or the boot repair never cancels it; the user answers it like any approval.
+// `tool-call`), keyed `budget-raise-<epoch>`, so asking again after a crash finds it; its payload
+// names the scope's title and what it had spent, for the card. No run holds it, so a stop or the
+// boot repair never cancels it; the user answers it like any approval.
 //
 // `notice` writes a display-only notice (`cairn.notice`) under a request id, once, in a host commit
 // that never starts a run. Nothing the model reads changes, so it lands at once, mid-run too, as
@@ -28,7 +34,7 @@ import {
   ConversationId as StoredConversationId,
   ThreadId,
 } from "@cairn/protocol/Ids";
-import { Brief, BudgetRaisePayload } from "@cairn/protocol/Policy";
+import { Brief, BudgetRaisePayload, LaunchEdits } from "@cairn/protocol/Policy";
 import { Budget } from "@cairn/protocol/Spend";
 import { NOTICE_ENTRY_KIND } from "@cairn/protocol/Thread";
 import type { NoticeEntryData } from "@cairn/protocol/Thread";
@@ -53,8 +59,10 @@ import type { BudgetMode, ScopeLimit } from "../usage/BudgetBook.ts";
 import { Brain } from "./Brain.ts";
 import type { BrainSession } from "./Brain.ts";
 import {
+  applyAnswer,
   Approvals,
   cancelAbandonedApprovals,
+  emitAnswered,
   ThreadMeta,
   ThreadReceipt,
   UNDECIDED,
@@ -85,20 +93,35 @@ export class BudgetSourceError extends Schema.TaggedError<BudgetSourceError>()(
   }
 ) {}
 
+/**
+ * What a raise's card reads beside its two budgets (ADR 0047): the scope's thread by its title, and
+ * what the scope had spent when the raise was asked.
+ */
+export interface RaiseFacts {
+  readonly title: Option.Option<string>;
+  readonly spent: { readonly tokens: number; readonly listMicros: number };
+}
+
 /** A completed child and the role name its dispatch resolved, for estimates. */
 export interface ChildSample {
   readonly role: string;
   readonly threadId: ThreadId;
 }
 
-/** `cairn.budget` state: a budget declared on a thread's subtree, null until one is. */
+/**
+ * `cairn.budget` state: a budget declared on a thread's subtree, null until one is. `declares`
+ * counts the declares, and `raisesBefore` the thread's accepted raises when the last one landed,
+ * which that declare replaced; both are null on a document written before they existed (read as 0).
+ */
 interface DeclaredState {
   [key: string]: JsonValue;
   budget: JsonRecord | null;
   mode: BudgetMode;
+  declares: number | null;
+  raisesBefore: number | null;
 }
 
-/** `cairn.budget`: a budget declared on a thread (a goal's), never on the wire. */
+/** `cairn.budget`: a budget declared on a thread (`budget.declare`), never on the wire. */
 const BudgetDoc = defineDoc<DeclaredState>({
   kind: "cairn.budget",
   version: 1,
@@ -106,15 +129,26 @@ const BudgetDoc = defineDoc<DeclaredState>({
   history: "latest",
   // A fork is another thread, with no budget of its own.
   fork: "initial",
-  initial: () => ({ budget: null, mode: "drain" }),
+  initial: () => ({
+    budget: null,
+    mode: "drain",
+    declares: null,
+    raisesBefore: null,
+  }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
+
+/** The reason a raise pending when a new budget is declared is declined with. */
+export const RAISE_REPLACED =
+  "A new budget was set for this thread, so this raise no longer applies.";
 
 const decodeBudget = Schema.decodeUnknownOption(Budget);
 
 const decodeBrief = Schema.decodeUnknownOption(Brief);
 
 const decodeRaise = Schema.decodeUnknownOption(BudgetRaisePayload);
+
+const decodeEdits = Schema.decodeUnknownOption(LaunchEdits);
 
 const encodeBudget = Schema.encodeSync(Budget);
 
@@ -200,8 +234,17 @@ const scopeIn = (harness: Harness, conversationId: ConversationId) =>
 
         const record = parent?.items[child.briefApprovalId];
 
+        // The budget the user set on the card with Go, else the one the brief froze (ADR 0047).
+        const edited = Option.flatMap(
+          Option.fromNullishOr(record?.answer?.launch),
+          decodeEdits
+        );
+
         base = Option.map(decodeBrief(record?.payload ?? null), (brief) => ({
-          budget: brief.budget,
+          budget: Option.match(edited, {
+            onNone: () => brief.budget,
+            onSome: (edits) => edits.budget,
+          }),
           mode: "stop" as const,
         }));
       }
@@ -209,7 +252,14 @@ const scopeIn = (harness: Harness, conversationId: ConversationId) =>
 
     const own = await harness.snapshot(Approvals, conversationId, context);
     const raises = acceptedRaises(Object.values(own?.items ?? {}));
-    const last = raises.at(-1);
+
+    // A declare replaces the raises accepted before it, and counts an epoch of its own, so the
+    // raise asked after it has an id none asked before it had.
+    const replaced = Option.isSome(decodeBudget(declared?.budget ?? null))
+      ? (declared?.raisesBefore ?? 0)
+      : 0;
+
+    const last = raises.slice(replaced).at(-1);
 
     return Option.flatMap(base, ({ budget, mode }) => {
       const raised = last === undefined ? budget : last.to;
@@ -219,7 +269,7 @@ const scopeIn = (harness: Harness, conversationId: ConversationId) =>
             threadId: threadId.value,
             budget: raised,
             mode,
-            epoch: raises.length,
+            epoch: raises.length + (declared?.declares ?? 0),
           })
         : Option.none();
     });
@@ -271,12 +321,14 @@ export class BudgetSources extends Context.Service<
     ): Effect.Effect<void, BudgetSourceError>;
     /**
      * Asks the user to raise `limit`'s budget to `to`, once per epoch: true when this call asked,
-     * false when the raise for this epoch was asked before.
+     * false when the raise for this epoch was asked before. `facts` is what its card reads beside
+     * the two budgets.
      */
     askRaise(
       limit: ScopeLimit,
       to: Budget,
-      summary: string
+      summary: string,
+      facts: RaiseFacts
     ): Effect.Effect<boolean, BudgetSourceError>;
     /**
      * Writes a notice into `threadId`'s transcript under `requestId`, once: true when this call
@@ -373,13 +425,52 @@ export class BudgetSources extends Context.Service<
         }
 
         const id = conversation.value;
+        const now = brain.now();
 
+        // One commit: the budget, the raises it replaces, and the decline of a raise still pending
+        // for the scope (a workflow's raise is the run's, and stays), so the card never offers a
+        // raise of a line that no longer holds. The user set the new line, so the decline is the
+        // user's answer, and carries the answer's event (`emitAnswered`, ADR 0033).
         return yield* durable("budget.declare", async (context) => {
           await open.harness.commit(async (tx) => {
             const doc = await tx.doc(BudgetDoc, id);
+            const approvals = await tx.doc(Approvals, id);
+            const records = Object.values(approvals.items);
+            const declined: Array<ApprovalRecord> = [];
+
+            for (const record of records) {
+              if (
+                record.tool === RAISE_TOOL &&
+                record.status === "pending" &&
+                Option.exists(
+                  decodeRaise(record.payload),
+                  (raise) => !raise.scope.startsWith("wf-")
+                ) &&
+                applyAnswer(
+                  record,
+                  {
+                    decision: "decline",
+                    by: { kind: "user" },
+                    reason: Option.some(RAISE_REPLACED),
+                    answers: Option.none(),
+                    launch: Option.none(),
+                  },
+                  now
+                ) === "answered"
+              ) {
+                declined.push(record);
+              }
+            }
 
             doc.budget = budgetJson(budget);
             doc.mode = mode;
+            doc.declares = (doc.declares ?? 0) + 1;
+            doc.raisesBefore = acceptedRaises(records).length;
+
+            for (const record of declined) {
+              // oxlint-disable-next-line no-await-in-loop -- one event per record, in order
+              await emitAnswered(tx, id, record, now);
+            }
           }, context);
         }).pipe(Effect.mapError(failed("BudgetSources.declare")));
       });
@@ -387,7 +478,8 @@ export class BudgetSources extends Context.Service<
       const askRaise = Effect.fn("BudgetSources.askRaise")(function* (
         limit: ScopeLimit,
         to: Budget,
-        summary: string
+        summary: string,
+        facts: RaiseFacts
       ) {
         const open = yield* session;
 
@@ -406,6 +498,14 @@ export class BudgetSources extends Context.Service<
         const payload: JsonObject = {
           type: "budget-raise",
           scope: limit.threadId,
+          ...Option.match(facts.title, {
+            onNone: () => ({}),
+            onSome: (title) => ({ title }),
+          }),
+          spent: {
+            tokens: facts.spent.tokens,
+            listMicros: facts.spent.listMicros,
+          },
           from: budgetJson(limit.budget),
           to: budgetJson(to),
         };

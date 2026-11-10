@@ -130,9 +130,11 @@ export type PlanGuard = typeof PlanGuard.Type;
 
 /**
  * A budget, carried by a brief and by a workflow's launch approval; the approval document is the
- * authority. A dollar limit binds priced tokens only, so a plan-billed role is bound by `maxTokens`
- * and `planGuard`. Overshoot is at most one response per running child. Plain JSON: it lives in
- * documents.
+ * authority. A dollar limit binds priced tokens only, so a plan-billed model is bound by
+ * `maxTokens`. Overshoot is at most one response per running child. Plain JSON: it lives in
+ * documents. Only `maxListMicros` and `maxTokens` are offered (ADR 0047): nothing in production sets
+ * `maxTurns`, `maxMinutes` or `planGuard` (a workflow's meter enforces the first two when a launch
+ * carries them, and nothing enforces `planGuard`), so no card or meter shows them.
  */
 export const Budget = Schema.Struct({
   maxListMicros: Schema.NullOr(Micros),
@@ -146,7 +148,10 @@ export const Budget = Schema.Struct({
 
 export type Budget = typeof Budget.Type;
 
-/** The budget a brief or launch carries when it names none. */
+/**
+ * A budget with no limit: the server's default budget until the user sets one, and what a brief or
+ * launch carries when neither it nor that default sets a limit.
+ */
 export const DEFAULT_BUDGET: Budget = {
   maxListMicros: null,
   maxTokens: null,
@@ -155,3 +160,35 @@ export const DEFAULT_BUDGET: Budget = {
   planGuard: null,
   warnAt: 0.8,
 };
+
+/**
+ * `budget.declare` input: a budget of the thread's own over it and its lineage subtree, replacing
+ * the line it stood at (ADR 0047): one declared before, or a subagent's brief budget, raises
+ * included. It is a `stop` scope: at its line every thread in it stops. A budget with no limit
+ * leaves the thread no line of its own (a subagent's brief budget included); a parent's scope
+ * still binds it.
+ */
+export const BudgetDeclareInput = Schema.Struct({
+  threadId: ThreadId,
+  budget: Budget,
+});
+
+export type BudgetDeclareInput = typeof BudgetDeclareInput.Type;
+
+/** `budget.get` input: the thread whose own line is read. */
+export const BudgetGetInput = Schema.Struct({
+  threadId: ThreadId,
+});
+
+export type BudgetGetInput = typeof BudgetGetInput.Type;
+
+/**
+ * `budget.get`'s answer: the line a thread's own scope stands at now (declared, else a subagent's
+ * brief budget, as raised), none when it has no line of its own. The usage page fills its budget
+ * form from it, so a save never drops a limit the user did not see.
+ */
+export const ThreadBudget = Schema.Struct({
+  budget: Schema.OptionFromNullOr(Budget),
+});
+
+export type ThreadBudget = typeof ThreadBudget.Type;

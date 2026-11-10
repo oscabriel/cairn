@@ -15,6 +15,7 @@
 //   revise it (the record refuses it).
 // - Run on 1 first is a workflow's launch's only (ADR 0032), and only when there is more than one
 //   node to run: with one node it is Go.
+// - A changed budget travels with Go on a subagent's brief or a workflow's launch (ADR 0047).
 
 import type { ModelRef, ThinkingLevel } from "@cairn/protocol/Models";
 import { ModelCheck } from "@cairn/protocol/ModelSpecs";
@@ -23,6 +24,7 @@ import type {
   Brief,
   WorkflowLaunch,
 } from "@cairn/protocol/Policy";
+import type { Budget } from "@cairn/protocol/Spend";
 import { Match, Option, Schema } from "effect";
 
 import { RequestBody } from "./PendingRequests.ts";
@@ -149,6 +151,22 @@ export const takesRunOnOne = (body: RequestBody): boolean =>
   RequestBody.$is("Brief")(body) &&
   body.payload.type === "workflow" &&
   (body.payload.nodes.unbounded || body.payload.nodes.count > 1);
+
+/**
+ * Whether a request's Go may carry a changed budget (ADR 0047): a subagent's brief or a workflow's
+ * launch. A node's own brief is bounded by its workflow's budget.
+ */
+export const takesBudgetEdit = (
+  record: Pick<ApprovalRecord, "kind" | "tool">,
+  body: RequestBody
+): boolean =>
+  record.kind === "brief" &&
+  RequestBody.$is("Brief")(body) &&
+  (body.payload.type === "workflow" || record.tool === SPAWN_TOOL);
+
+/** The budget a brief or a launch proposes: the brief's own, or the launch's envelope's. */
+export const proposedBudgetOf = (payload: Brief | WorkflowLaunch): Budget =>
+  payload.type === "workflow" ? payload.envelope.budget : payload.budget;
 
 /** Why Go is blocked, in the card's words. */
 export interface GoBlock {

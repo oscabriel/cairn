@@ -5,10 +5,13 @@ import type { ModelSpend, Spend } from "@cairn/protocol/Spend";
 import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import type { PlanWindow, UsageSnapshot } from "@cairn/protocol/Usage";
 import { assert, describe, it } from "@effect/vitest";
-import { Option } from "effect";
+import { Option, Result } from "effect";
 
 import {
+  budgetDraftOf,
+  budgetEditOf,
   budgetLinesOf,
+  budgetOfDraft,
   budgetWordOf,
   CODEX_PROVIDER,
   dollarsText,
@@ -181,11 +184,71 @@ describe("budgets", () => {
     assert.strictEqual(lines.get("Warns at"), "80% of a limit");
   });
 
+  it("shows only the limits Cairn offers, never one nothing sets", () => {
+    assert.deepStrictEqual(
+      budgetLinesOf({
+        ...DEFAULT_BUDGET,
+        maxTurns: 40,
+        maxMinutes: 30,
+        planGuard: {
+          provider: "claude-bridge",
+          windowId: "five_hour",
+          maxUsedFraction: 0.5,
+        },
+      }).map(([label]) => label),
+      ["Dollars", "Tokens", "Warns at"]
+    );
+  });
+
   it("words each state, and leaves a thread without a budget out", () => {
     assert.isTrue(Option.isNone(budgetWordOf("none")));
     assert.deepStrictEqual(
       Option.map(budgetWordOf("exhausted"), (word) => word.tone),
       Option.some("failed")
+    );
+  });
+});
+
+describe("a budget field (ADR 0047)", () => {
+  it("returns its failure for a dollar amount too large to hold, never throws", () => {
+    for (const dollars of ["10000000000", "9007199254.740993", "1e400"]) {
+      const read = budgetOfDraft(DEFAULT_BUDGET, { dollars, tokens: "" });
+
+      assert.isTrue(Result.isFailure(read), dollars);
+    }
+
+    assert.deepStrictEqual(
+      budgetOfDraft(DEFAULT_BUDGET, { dollars: "9000", tokens: "" }),
+      Result.succeed({
+        ...DEFAULT_BUDGET,
+        maxListMicros: Micros.make(9_000_000_000),
+      })
+    );
+  });
+
+  it("starts from the budget to the micro, so opening the field changes nothing", () => {
+    for (const micros of [125_000, 4000, 1, 2_500_000, 3_000_000, 1_234_567]) {
+      const proposed = {
+        ...DEFAULT_BUDGET,
+        maxListMicros: Micros.make(micros),
+      };
+
+      assert.deepStrictEqual(
+        budgetEditOf(proposed, Option.some(budgetDraftOf(proposed))),
+        Result.succeed(Option.none()),
+        String(micros)
+      );
+    }
+
+    assert.deepStrictEqual(
+      [125_000, 4000, 2_500_000, 3_000_000].map(
+        (micros) =>
+          budgetDraftOf({
+            ...DEFAULT_BUDGET,
+            maxListMicros: Micros.make(micros),
+          }).dollars
+      ),
+      ["0.125", "0.004", "2.50", "3.00"]
     );
   });
 });

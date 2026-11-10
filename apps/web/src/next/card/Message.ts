@@ -40,7 +40,7 @@ export const Message = defineMessageUnion({
   ClickedSend: { approvalId: ApprovalId },
   ClickedUndo: {},
   ElapsedUndo: { approvalId: ApprovalId, timer: Schema.Int },
-  /** Approve, Allow for this thread, Go, or Run on 1 first. */
+  /** Approve, Allow for this thread, Go, or Run on 1 first (with the budget field's budget). */
   ClickedAccept: { approvalId: ApprovalId, decision: Decision },
   /** Opens the Decline reason field. */
   ClickedDecline: { approvalId: ApprovalId },
@@ -54,6 +54,12 @@ export const Message = defineMessageUnion({
   ClickedCancelSendBack: {},
   /** Send back, with the notes typed (required: the parent writes a new brief from them). */
   ClickedConfirmSendBack: { approvalId: ApprovalId },
+  /** Opens a brief's or a launch's budget field, starting from the proposal's budget (ADR 0047). */
+  ClickedChangeBudget: { approvalId: ApprovalId },
+  ChangedBudgetDollars: { approvalId: ApprovalId, value: Schema.String },
+  ChangedBudgetTokens: { approvalId: ApprovalId, value: Schema.String },
+  /** Closes the budget field: Go sends the proposal's budget. */
+  ClickedKeepBudget: { approvalId: ApprovalId },
   /** Asks `models.check` again about the models a brief or a launch names. */
   ClickedCheckModels: { approvalId: ApprovalId },
   ReceivedModelChecks: {

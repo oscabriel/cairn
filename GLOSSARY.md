@@ -142,7 +142,7 @@ _Avoid_: pipeline, DAG, job
 
 **Node**: One `agent()` call of a workflow script, recorded as a row of the dispatch ledger: a child thread on the model its call names (none: the launching thread's), with no subagent tools of its own and no sidebar row.
 
-**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Send back returns it to its model with notes, and nothing runs; Decline ends it. The card reads numbers first (nodes, the estimate, whose unknown cost is never $0.00, the budget, what Go covers), then the model each call site runs on, then its arguments, folded. The card's budget edits travel in the answer, never in the frozen plan. A launch belongs to the run that proposed it: the model runs it with `codemode` in that same run, and if the run ends first the row is declined (`run-stopped`), so Go is never a standing grant. Two Goes on one script in one run are two launches.
+**Launch approval**: The brief a workflow's `workflow_plan` call raises: the dry run's plan (call sites, node count, estimate, budget) frozen with its envelope. Go approves the ledger row in the answering commit; Run on 1 first approves it to run with `pipeline()` taking one item, a separate run with nothing carried over; Send back returns it to its model with notes, and nothing runs; Decline ends it. The card reads numbers first (nodes, the estimate, whose unknown cost is never $0.00, the budget, what Go covers), then the model each call site runs on, then its arguments, folded. The budget is what the call asked (`max_usd`, `max_tokens`) over the default budget; the user may change it on the card (Change budget), and the change travels in the answer with Go or Run on 1 first, never in the frozen plan (ADR 0047). A launch belongs to the run that proposed it: the model runs it with `codemode` in that same run, and if the run ends first the row is declined (`run-stopped`), so Go is never a standing grant. Two Goes on one script in one run are two launches.
 
 _Avoid_: launch brief, plan approval
 
@@ -294,7 +294,7 @@ _Avoid_: plugin
 
 **Scratch overlay**: The floating panel over any page that holds the scratch thread: Cmd+J or Ctrl+J shows and hides it without losing it (a header button on a phone), and shown, it takes the keyboard; its first message launches the scratch thread, and Clear deletes the thread and its folder.
 
-**Usage page**: `/usage`, opened from the shell's foot (`next/meters`): the spend ledger with each figure's basis, the model plans' windows (an unknown share reads Unknown, never zero) and the budgets.
+**Usage page**: `/usage`, opened from the shell's foot (`next/meters`): the spend ledger with each figure's basis, the model plans' windows (an unknown share reads Unknown, never zero) and the budgets. The default budget changes there, and each thread with spend recorded takes a budget of its own from its row (Set budget, ADR 0047).
 
 **Measured list**: The transcript's own scroll list (`timeline/list`, ADR 0041). A row counts in the scroll range only once it has been measured (history it never drew is measured off-screen first), parked rows keep frozen heights, the first visible row keeps its offset through any change above it, and a glyph bookmark keeps the reader's place through width changes. _Avoid_: virtual list (that was `@foldkit/ui`'s, which estimated heights).
 
@@ -332,7 +332,7 @@ _Avoid_: permission request, prompt (for the record)
 
 _Avoid_: task, spec, ticket
 
-**Go**: The user's yes to a brief or a workflow's launch. It starts the child (or the workflow) in the same commit that accepts the record. On a launch card, the user may edit the budget before Go; the edit travels with the answer and the proposal stays as the model wrote it. The card offers Go only once every model the brief or launch names is ready; while one is not, Go is blocked with the reason.
+**Go**: The user's yes to a brief or a workflow's launch. It starts the child (or the workflow) in the same commit that accepts the record. On a subagent's brief card or a launch card, the user may change the budget before Go (dollars at list price and tokens, ADR 0047); the change travels with the answer and the proposal stays as the model wrote it. Go approves the budget the card shows, which reads "No limit" only when no limit will run. The card offers Go only once every model the brief or launch names is ready; while one is not, Go is blocked with the reason.
 
 _Avoid_: approve (for a brief), run
 
@@ -380,15 +380,17 @@ _Avoid_: cost (for a plan's figure)
 
 **Provider health**: Whether a provider is answering: ok, limited (under a plan's usage limit, until its reset or the next success) or failing (its login broke, or three transient failures came inside five minutes with no success between; such a streak lapses fifteen minutes after its newest failure, so one request can find out). Each request counts once, by its last attempt, and a login or logout starts the provider over: the outcome of a request made before it is ignored. A child named onto a limited or failing provider's model is refused.
 
-**Budget**: The limits a brief or a workflow's launch carries (list-price dollars, tokens, turns, minutes, a plan window guard), with a warning line at 80% by default. Reaching it stops new work and asks for a raise.
+**Budget**: The limits a brief, a workflow's launch or a thread carries: list-price dollars and tokens, with a warning line at 80% by default (ADR 0047). A model's call names them (`max_usd`, `max_tokens` on `subagent_spawn` and `workflow_plan`) or the default budget fills them, and the proposal freezes the result; the user may change it on the card before Go. Reaching it stops new work and asks for a raise. Turns, minutes and a plan window guard stay in the schema and are offered by nothing.
 
-**Budget scope**: A thread and its lineage subtree under one budget. A subagent's comes from its brief; a goal's is declared.
+**Default budget**: The server setting a brief or a workflow's launch starts from for each limit its model's call does not name, changed on the usage page. A proposal freezes what it started from, so a later change moves no budget already asked.
+
+**Budget scope**: A thread and its lineage subtree under one budget. A subagent's comes from its brief, as the user set it at Go; a thread's own is declared from the usage page (`budget.declare`, a `stop` scope), whose form opens filled with the line the thread stands at (`budget.get`). A declare replaces that line whole, raises included; one with no limit removes it, a subagent's brief budget too. A goal's `drain` scope has no caller yet.
 
 **Budget mode**: How a scope acts at its limit: `stop` (every thread of the scope stops, overshooting by at most one response per running child) or `drain` (no new subagent work starts; running children finish under their own budgets).
 
 **Budget guard**: What acts once per epoch when a scope crosses its warning line or its limit: a notice, a push, the stop or drain, and the raise.
 
-**Raise**: A `budget_raise` approval proposing the larger of double the line and the spend plus one line. Each accepted raise starts a new epoch. A workflow's raise names the run (its scope is the workflow id) and raises that run only.
+**Raise**: A `budget_raise` approval proposing the larger of double the line and the spend plus one line. Each accepted raise starts a new epoch, as does each declare. A workflow's raise names the run (its scope is the workflow id) and raises that run only. Its card names the scope by its title, reads what it spent against its line and the line proposed, and offers Decline and Approve only. A thread's raise still pending when a new budget is declared is declined, as the user's answer, in the declare's commit.
 
 **Workflow meter**: What a workflow run spent, summed over its nodes' children (tokens, list-price dollars priced one response at a time, model turns) and written into its ledger row in the commit that reserves a node, the one that settles a node, and, while a node runs, at most once a second. The first commit that reaches the warning line or the limit marks it and emits `workflow.budget.soft` or `workflow.budget.spent`, once per epoch.
 

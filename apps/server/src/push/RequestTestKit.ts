@@ -4,6 +4,7 @@
 import { ApprovalId } from "@cairn/protocol/Ids";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ApprovalRecord, Question } from "@cairn/protocol/Policy";
+import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { Option, Result } from "effect";
 
 import { briefOf } from "../subagents/Briefs.ts";
@@ -59,8 +60,11 @@ export const pendingBrief = (
           wake: Option.none(),
           model: Option.none(),
           doneWhen: Option.none(),
+          maxTokens: Option.none(),
+          maxUsd: Option.none(),
         },
-        "full-access"
+        "full-access",
+        DEFAULT_BUDGET
       )
     ),
   });

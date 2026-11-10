@@ -4,7 +4,8 @@
 //
 // The tool is replay-safe and its task is the wait (ADR 0013). It parses and dry-runs the script
 // (`WorkflowPlan`, no model called) with the thread's own model and level as what a call that names
-// no model runs on (ADR 0043), estimates it from the thread's own past nodes on each model, and in
+// no model runs on (ADR 0043) and the budget the call asks over the server's default (ADR 0047),
+// estimates it from the thread's own past nodes on each model, and in
 // one commit writes the `proposed` ledger row, the launch approval (a
 // `brief` record whose frozen payload is the plan and its envelope, id `call-<task id>`), the run
 // it was proposed in (`LaunchRunsDoc`: the gate runs it from that run only) and the
@@ -20,8 +21,6 @@
 
 import type { ThinkingLevel } from "@cairn/protocol/Models";
 import { WorkflowLaunch } from "@cairn/protocol/Policy";
-import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
-import type { Budget } from "@cairn/protocol/Spend";
 import type { Context as ChordContext } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type {
@@ -43,6 +42,8 @@ import type { ApprovalRecord } from "../brain/CairnDocs.ts";
 import { emit } from "../brain/Events.ts";
 import { cutSummary, readPermissions } from "../brain/Permissions.ts";
 import { jsonRecordOf } from "../subagents/SubagentDocs.ts";
+import { budgetAsked, MAX_TOKENS, MAX_USD } from "../usage/DefaultBudget.ts";
+import type { DefaultBudgetAccess } from "../usage/DefaultBudget.ts";
 import {
   BUILT_IN_RECIPES,
   recipeReferenceOf,
@@ -86,6 +87,8 @@ export interface PlanAccess {
     root: string,
     name: string
   ) => Promise<Option.Option<string>>;
+  /** The server's default budget a proposal starts from (ADR 0047). */
+  readonly defaults: DefaultBudgetAccess;
 }
 
 /** For a brain with no project recipes: every reference names a built-in or nothing. */
@@ -114,17 +117,6 @@ export const PLAN_DESCRIPTION = [
 const decodeLaunch = Schema.decodeUnknownOption(WorkflowLaunch);
 
 const encodeLaunch = Schema.encodeSync(WorkflowLaunch);
-
-/** The budget a proposal asks for: tokens and list-price dollars, the rest the default's. */
-const budgetFrom = (
-  maxTokens: number | undefined,
-  maxUsd: number | undefined
-): Budget => ({
-  ...DEFAULT_BUDGET,
-  maxTokens: maxTokens ?? null,
-  maxListMicros:
-    maxUsd === undefined ? null : Micros.make(Math.round(maxUsd * 1_000_000)),
-});
 
 /**
  * The settled nodes of the thread's past workflows the estimate rests on, each with the model it
@@ -302,7 +294,25 @@ export const planTool = (plan: PlanAccess) => {
     }
 
     const launchArgs: Schema.Json = args.args ?? {};
-    const budget = budgetFrom(args.max_tokens, args.max_usd);
+
+    // The tokens and list-price dollars the call asks, the server's default for the rest; the
+    // launch approval freezes it, and a rerun that found its row returned above.
+    const fallback = await plan.defaults.read();
+
+    if (Result.isFailure(fallback)) {
+      return Option.some(fallback.failure);
+    }
+
+    const asked = budgetAsked(fallback.success, {
+      maxTokens: Option.fromUndefinedOr(args.max_tokens),
+      maxUsd: Option.fromUndefinedOr(args.max_usd),
+    });
+
+    if (Result.isFailure(asked)) {
+      return Option.some(asked.failure);
+    }
+
+    const budget = asked.success;
 
     // A reference to a project recipe proposes the recipe's own script, kept for the gate; one to a
     // built-in is resolved by the dry run and the gate alike.
@@ -421,13 +431,17 @@ export const planTool = (plan: PlanAccess) => {
       max_tokens: Type.Optional(
         Type.Integer({
           minimum: 1,
-          description: "A token budget for the whole workflow.",
+          maximum: MAX_TOKENS,
+          description:
+            "A token budget for the whole workflow; leave it out for the user's default.",
         })
       ),
       max_usd: Type.Optional(
         Type.Number({
-          exclusiveMinimum: 0,
-          description: "A list-price dollar budget for the whole workflow.",
+          minimum: 1e-6,
+          maximum: MAX_USD,
+          description:
+            "A list-price dollar budget for the whole workflow; leave it out for the user's default.",
         })
       ),
       max_nodes: Type.Optional(

@@ -2,6 +2,10 @@
 // spend ledger (the whole roll-up by model, then each thread with spend recorded), the plan windows
 // of each plan Cairn knows (Claude on the bridge, Codex, OpenCode Go, and any other the brain
 // reads), and the budgets (the default a brief or launch starts from, then each thread with one).
+// The default changes in place (Change default budget), and each thread with spend recorded takes a
+// budget of its own from its row (Set budget, `budget.declare`; ADR 0047), both in dollars at list
+// price and tokens. A thread's form opens filled with the line the thread stands at, and takes no
+// typing or save until that line is read.
 // Unknown is never drawn as zero: an unpriced model reads "No price" with its tokens, an unread
 // window reads Unknown on a hatched track, Codex with no login says so in place of its windows,
 // and a thread with no spend recorded is not listed. Every reading carries `data-known`, which the
@@ -21,7 +25,7 @@ import {
 import type { PlanState, SpendFigure } from "@cairn/client-logic/Meters";
 import type { Spend } from "@cairn/protocol/Spend";
 import type { PlanWindow } from "@cairn/protocol/Usage";
-import { Match, Option } from "effect";
+import { Match, Option, Predicate } from "effect";
 import { Submodel } from "foldkit";
 import * as AsyncData from "foldkit/asyncData";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -32,13 +36,18 @@ import { classNames } from "../../ui/ClassNames.ts";
 import { button, buttonDefaults } from "../ui/Button.ts";
 import { card, recordLines } from "../ui/Card.ts";
 import { TYPE, WEIGHT_MEDIUM, WEIGHT_STRONG } from "../ui/Classes.ts";
+import { fieldDefaults, inputField } from "../ui/Field.ts";
 import { markOfTone } from "../ui/Glyph.ts";
 import { meter } from "../ui/Meter.ts";
 import { statusChip } from "../ui/StatusChip.ts";
 import { Message } from "./Message.ts";
-import type { MeteredThread, Model } from "./Model.ts";
+import { BudgetTarget } from "./Model.ts";
+import type { BudgetForm, MeteredThread, Model } from "./Model.ts";
 
 type H = HtmlBuilder<Message>;
+
+/** The default budget's form target. */
+const DEFAULT_TARGET = BudgetTarget.members[0].make({});
 
 /** A reading's words, marked known or unknown for the judge. */
 const reading = (h: H, known: boolean, text: string, extra = ""): Html =>
@@ -163,7 +172,143 @@ const ledgerBody = (h: H, spend: Spend): ReadonlyArray<Html> => {
   ];
 };
 
+/** A target's key: `default`, or `thread-<id>`. */
+const targetKey = (target: BudgetTarget): string =>
+  Predicate.isTagged(target, "Thread")
+    ? `thread-${target.threadId}`
+    : "default";
+
+/** Whether the open form sets `target`. */
+const formIsFor = (model: Model, target: BudgetTarget): boolean =>
+  Option.exists(
+    model.form,
+    (form) => targetKey(form.target) === targetKey(target)
+  );
+
+/** A form's hint: while its line is read, what it is waiting for; otherwise `hint`. */
+const formHint = (form: BudgetForm, hint: string): string =>
+  form.line === "reading" ? "Reading this thread's budget..." : hint;
+
+/**
+ * A budget form (ADR 0047): dollars at list price and tokens, both empty for no limit, then Save
+ * and Cancel; the last save's error in place of its hint. Only a form filled from its line takes
+ * typing or a save.
+ */
+const budgetFormView = (h: H, form: BudgetForm, hint: string): Html => {
+  const id = targetKey(form.target);
+  const closed = form.saving || form.line !== "read";
+
+  return h.div(
+    [
+      h.DataAttribute("testid", "usage-budget-form"),
+      h.Class(
+        "flex min-w-0 flex-col gap-(--space-2) rounded-(--radius-small) border border-stroke-1 bg-surface-sunken p-(--space-3)"
+      ),
+    ],
+    [
+      h.div(
+        [h.Class("grid min-w-0 gap-(--space-2) sm:grid-cols-2")],
+        [
+          inputField(
+            h,
+            {
+              ...fieldDefaults<Message>(
+                `usage-budget-dollars-${id}`,
+                "Dollars at API list price"
+              ),
+              isDisabled: closed,
+            },
+            {
+              value: form.dollars,
+              placeholder: Option.some("No limit"),
+              onInput: Option.some((value: string) =>
+                Message.ChangedBudgetDollars({ value })
+              ),
+            }
+          ),
+          inputField(
+            h,
+            {
+              ...fieldDefaults<Message>(`usage-budget-tokens-${id}`, "Tokens"),
+              isDisabled: closed,
+            },
+            {
+              value: form.tokens,
+              placeholder: Option.some("No limit"),
+              onInput: Option.some((value: string) =>
+                Message.ChangedBudgetTokens({ value })
+              ),
+            }
+          ),
+        ]
+      ),
+      h.p(
+        [
+          h.DataAttribute("testid", "usage-budget-form-hint"),
+          h.Class(
+            classNames(
+              Option.isSome(form.error) ? "text-tone-failed" : "text-ink-2",
+              TYPE.small
+            )
+          ),
+        ],
+        [Option.getOrElse(form.error, () => formHint(form, hint))]
+      ),
+      h.div(
+        [h.Class("flex flex-wrap justify-end gap-(--space-2)")],
+        [
+          button(
+            h,
+            {
+              ...buttonDefaults<Message>(),
+              variant: "ghost",
+              size: "small",
+              onClick: Option.some(Message.ClickedCancelBudget()),
+              isDisabled: form.saving,
+              attributes: [h.DataAttribute("action", "cancel-budget")],
+            },
+            ["Cancel"]
+          ),
+          button(
+            h,
+            {
+              ...buttonDefaults<Message>(),
+              variant: "primary",
+              size: "small",
+              onClick: Option.some(Message.ClickedSaveBudget()),
+              isDisabled: form.line !== "read",
+              isBusy: form.saving,
+              attributes: [h.DataAttribute("action", "save-budget")],
+            },
+            ["Save budget"]
+          ),
+        ]
+      ),
+    ]
+  );
+};
+
+/** The button that opens a budget form, while no form is open for its target. */
+const editBudgetButton = (
+  h: H,
+  target: BudgetTarget,
+  action: string,
+  label: string
+): Html =>
+  button(
+    h,
+    {
+      ...buttonDefaults<Message>(),
+      variant: "ghost",
+      size: "small",
+      onClick: Option.some(Message.ClickedEditBudget({ target })),
+      attributes: [h.DataAttribute("action", action)],
+    },
+    [label]
+  );
+
 const threadLedger = (
+  model: Model,
   h: H,
   threads: ReadonlyArray<MeteredThread>
 ): ReadonlyArray<Html> =>
@@ -172,29 +317,71 @@ const threadLedger = (
     : [
         h.ul(
           [h.AriaLabel("Spend by thread"), h.Class("flex flex-col")],
-          threads.map((thread) =>
-            listRow(
-              h,
-              [
-                h.DataAttribute("testid", "usage-thread"),
-                h.DataAttribute("thread-id", thread.threadId),
-              ],
-              h.a(
+          threads.flatMap((thread) => {
+            const target = BudgetTarget.members[1].make({
+              threadId: thread.threadId,
+              title: thread.title,
+            });
+
+            const open = Option.filter(model.form, () =>
+              formIsFor(model, target)
+            );
+
+            return [
+              listRow(
+                h,
                 [
-                  h.Href(threadRouter({ threadId: thread.threadId })),
-                  h.Class(
-                    classNames(
-                      "min-w-0 break-words text-ink-1 underline-offset-4 hover:underline",
-                      TYPE.ui,
-                      WEIGHT_MEDIUM
-                    )
-                  ),
+                  h.DataAttribute("testid", "usage-thread"),
+                  h.DataAttribute("thread-id", thread.threadId),
                 ],
-                [thread.title]
+                h.a(
+                  [
+                    h.Href(threadRouter({ threadId: thread.threadId })),
+                    h.Class(
+                      classNames(
+                        "min-w-0 break-words text-ink-1 underline-offset-4 hover:underline",
+                        TYPE.ui,
+                        WEIGHT_MEDIUM
+                      )
+                    ),
+                  ],
+                  [thread.title]
+                ),
+                h.span(
+                  [
+                    h.Class(
+                      "flex min-w-0 flex-wrap items-center gap-(--space-2) sm:justify-end"
+                    ),
+                  ],
+                  [
+                    figureLine(h, summaryFigureOf(thread.spend)),
+                    Option.isSome(open)
+                      ? h.empty
+                      : editBudgetButton(
+                          h,
+                          target,
+                          "set-thread-budget",
+                          "Set budget"
+                        ),
+                  ]
+                )
               ),
-              figureLine(h, summaryFigureOf(thread.spend))
-            )
-          )
+              ...Option.toArray(
+                Option.map(open, (form) =>
+                  h.li(
+                    [h.Class("pb-(--space-2)")],
+                    [
+                      budgetFormView(
+                        h,
+                        form,
+                        "This thread's own budget, filled with the line it stands at: at its line it and its subagents stop, and a raise is asked. Leave both empty to remove it."
+                      ),
+                    ]
+                  )
+                )
+              ),
+            ];
+          })
         ),
       ];
 
@@ -222,7 +409,7 @@ const spendSection = (model: Model, h: H): Html =>
               [h.Class(classNames("text-ink-1", TYPE.ui, WEIGHT_STRONG))],
               ["By thread"]
             ),
-            ...threadLedger(h, model.context.threads),
+            ...threadLedger(model, h, model.context.threads),
           ]
         ),
       ],
@@ -397,7 +584,44 @@ const budgetsSection = (model: Model, h: H): Html =>
                 [h.DataAttribute("testid", "usage-default-budget")],
                 [recordLines(h, budgetLinesOf(settings.defaultBudget))]
               ),
+              Option.match(
+                Option.filter(model.form, () =>
+                  formIsFor(model, DEFAULT_TARGET)
+                ),
+                {
+                  onNone: () =>
+                    h.div(
+                      [h.Class("flex")],
+                      [
+                        editBudgetButton(
+                          h,
+                          DEFAULT_TARGET,
+                          "change-default-budget",
+                          "Change default budget"
+                        ),
+                      ]
+                    ),
+                  onSome: (form) =>
+                    budgetFormView(
+                      h,
+                      form,
+                      "A brief or workflow whose model names no budget starts from this one; the card shows it before Go. Leave both empty for no limit."
+                    ),
+                }
+              ),
             ]),
+            ...Option.toArray(
+              Option.map(model.saved, (text) =>
+                h.p(
+                  [
+                    h.DataAttribute("testid", "usage-budget-saved"),
+                    h.Role("status"),
+                    h.Class(classNames("text-ink-2", TYPE.small)),
+                  ],
+                  [text]
+                )
+              )
+            ),
             h.h4(
               [h.Class(classNames("text-ink-1", TYPE.ui, WEIGHT_STRONG))],
               ["Threads with a budget"]

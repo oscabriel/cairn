@@ -22,7 +22,7 @@ import path from "node:path";
 
 import { ApprovalId, ProjectId } from "@cairn/protocol/Ids";
 import type { ConversationId, ThreadId } from "@cairn/protocol/Ids";
-import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
+import { DEFAULT_BUDGET, Micros } from "@cairn/protocol/Spend";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
@@ -67,6 +67,13 @@ import { NO_SUBAGENT_FAULTS } from "./SubagentFaults.ts";
 import { renderBriefAnswer, SubagentToolText } from "./SubagentText.ts";
 
 const PARENT = testThreadId(1);
+
+/** A default budget set in the server settings: a dollar line and a token line. */
+const SET_DEFAULT = {
+  ...DEFAULT_BUDGET,
+  maxListMicros: Micros.make(1_000_000),
+  maxTokens: 300_000,
+};
 
 const OTHER_PARENT = testThreadId(2);
 
@@ -414,6 +421,68 @@ describe("brief models and the brain's cap over a pi-durable brain", () => {
               spec: "faux/scripted:high",
               model: FAUX_MODEL,
               thinkingLevel: "high",
+            });
+          })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a spawn's brief freezes the server's default budget, and each limit the call asks over it",
+    () =>
+      withBrain(
+        DEFAULT_TOOL_OPTIONS,
+        [
+          fauxAssistantMessage(
+            [
+              fauxToolCall(
+                "subagent_spawn",
+                { description: "Count the files", brief: "Count them." },
+                { id: "c1" }
+              ),
+              fauxToolCall(
+                "subagent_spawn",
+                {
+                  description: "Count the lines",
+                  brief: "Count them.",
+                  max_usd: 0.25,
+                },
+                { id: "c2" }
+              ),
+            ],
+            { stopReason: "toolUse" }
+          ),
+          fauxAssistantMessage("Waiting for Go."),
+        ],
+        ({ events, parent }) =>
+          Effect.gen(function* () {
+            const settings = yield* SettingsStore;
+
+            yield* settings.update({
+              autoSettleDays: Option.none(),
+              titleModel: Option.none(),
+              bridgeEnabled: Option.none(),
+              bridgeGenerationCap: Option.none(),
+              defaultBudget: Option.some(SET_DEFAULT),
+            });
+            yield* ask(PARENT, "r1");
+            yield* runsEnded(events, PARENT, 1);
+
+            const budgets = yield* read("test.briefs", async (harness, at) => {
+              const approvals = await harness.snapshot(
+                Approvals,
+                piConversationId(parent),
+                at
+              );
+
+              return Object.values(approvals?.items ?? {})
+                .filter((record) => record.tool === "subagent_spawn")
+                .map((record) => [record.summary, record.payload?.budget]);
+            });
+
+            assert.deepStrictEqual(Object.fromEntries(budgets), {
+              "Count the files": { ...SET_DEFAULT },
+              "Count the lines": { ...SET_DEFAULT, maxListMicros: 250_000 },
             });
           })
       ),

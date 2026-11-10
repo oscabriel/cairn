@@ -60,6 +60,8 @@ describe(rpcJsonSchemas, () => {
       "artifact.revoke",
       "attachments.createUploadUrl",
       "attachments.discard",
+      "budget.declare",
+      "budget.get",
       "diff.full",
       "diff.turn",
       "executor.signIn",

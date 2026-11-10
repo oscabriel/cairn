@@ -4,8 +4,10 @@
 // request shows (`card.css`), and its body scrolls inside the card so its actions stay in
 // reach. Bodies:
 //
-// - Approval: the tool, the call's detail in a mono block (an Executor program whole, a budget
-//   raise as its two budgets), then Decline and Approve, with Allow for this thread beside them.
+// - Approval: the tool, the call's detail in a mono block (an Executor program whole), then Decline
+//   and Approve, with Allow for this thread beside them. A budget raise has a body of its own
+//   (ADR 0047): the scope by its title, what it spent against its line and the line proposed, then
+//   Decline and Approve only.
 // - Question: one question at a time with "i/N", options as buttons with their digit (1 to 9; the
 //   digits work while focus is in the options and not in a text field), "Something else" when
 //   the question takes the user's own words, then Back, Decline, and Next or Send. Send opens the
@@ -13,7 +15,8 @@
 // - Brief (a subagent's brief or a workflow's launch; 6B): its fields in reading order and what the
 //   models it names run on now, then Send back (a subagent's brief or a launch), Run on 1 first (a
 //   launch of more than one node), Decline and Go. While a named model does not resolve, Go is
-//   blocked with a plain reason and Check again; Send back opens a notes field first. A launch (6F)
+//   blocked with a plain reason and Check again; Send back opens a notes field first. Change budget
+//   opens dollars and tokens fields, and the Budget line reads what Go will send. A launch (6F)
 //   leads with its numbers (`LaunchCard.ts`: nodes, the estimate, which is never a zero for an
 //   unknown, the budget, what Go covers), then the model each call site runs on and its arguments,
 //   folded.
@@ -28,7 +31,9 @@ import "./card.css";
 import {
   goBlockOf,
   modelQuestionOf,
+  proposedBudgetOf,
   runsOnLine,
+  takesBudgetEdit,
   takesRunOnOne,
   takesSendBack,
 } from "@cairn/client-logic/BriefGo";
@@ -41,6 +46,7 @@ import {
   approvalDetail,
   briefLines,
   budgetRaiseLines,
+  budgetText,
   criterionText,
   requestKindWord,
   requestTitle,
@@ -51,8 +57,13 @@ import { RequestBody } from "@cairn/client-logic/PendingRequests";
 import { deriveProgress } from "@cairn/client-logic/PendingUserInput";
 import type { Progress } from "@cairn/client-logic/PendingUserInput";
 import type { ApprovalId } from "@cairn/protocol/Ids";
-import type { Brief, Question, WorkflowLaunch } from "@cairn/protocol/Policy";
-import { Option } from "effect";
+import type {
+  Brief,
+  BudgetRaisePayload,
+  Question,
+  WorkflowLaunch,
+} from "@cairn/protocol/Policy";
+import { Option, Result } from "effect";
 import { Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
@@ -79,6 +90,7 @@ import { Message } from "./Message.ts";
 import { ModelCheckState } from "./Model.ts";
 import type { Model } from "./Model.ts";
 import {
+  budgetEdit,
   draftsOf,
   goHeld,
   isAnswerable,
@@ -228,6 +240,36 @@ const acceptButton = (
     label
   );
 
+/**
+ * A budget raise (ADR 0047): the scope by its title, what it spent against its line and the line
+ * proposed, then Decline and Approve. A raise is not a tool the thread runs, so it names no tool and
+ * offers no standing yes.
+ */
+const raiseBody = (
+  model: Model,
+  h: H,
+  approvalId: ApprovalId,
+  raise: BudgetRaisePayload
+): CardParts => {
+  const decline = declineControls(
+    model,
+    h,
+    approvalId,
+    acceptButton(model, h, approvalId, "approve", "Approve")
+  );
+
+  return {
+    body: [
+      h.div(
+        [h.DataAttribute("testid", "request-card-raise")],
+        [recordLines(h, budgetRaiseLines(raise))]
+      ),
+      ...decline.body,
+    ],
+    actions: decline.actions,
+  };
+};
+
 const approvalBody = (
   model: Model,
   h: H,
@@ -235,6 +277,14 @@ const approvalBody = (
   body: Extract<RequestBody, { readonly _tag: "Approval" }>
 ) => {
   const approvalId = request.record.id;
+
+  const raise = Option.flatMap(body.payload, (payload) =>
+    payload.type === "budget-raise" ? Option.some(payload) : Option.none()
+  );
+
+  if (Option.isSome(raise)) {
+    return raiseBody(model, h, approvalId, raise.value);
+  }
 
   const detail = Option.match(
     approvalDetail(request.record.summary, body.payload),
@@ -248,17 +298,6 @@ const approvalBody = (
           ],
           [text]
         ),
-    }
-  );
-
-  const raise = Option.match(
-    Option.filter(body.payload, (payload) => payload.type === "budget-raise"),
-    {
-      onNone: () => h.empty,
-      onSome: (payload) =>
-        payload.type === "budget-raise"
-          ? recordLines(h, budgetRaiseLines(payload))
-          : h.empty,
     }
   );
 
@@ -276,7 +315,6 @@ const approvalBody = (
         [`${request.record.tool} asks to run:`]
       ),
       detail,
-      raise,
       ...decline.body,
     ],
     actions: Option.isSome(model.declining)
@@ -714,7 +752,10 @@ const goButton = (
       isBusy:
         Option.contains(model.sending, approvalId) &&
         model.sent[approvalId] === decision,
-      isDisabled: Option.isSome(model.sending) || goHeld(model, request),
+      isDisabled:
+        Option.isSome(model.sending) ||
+        goHeld(model, request) ||
+        Result.isFailure(budgetEdit(model, request)),
     },
     decision === "accept" ? "Go" : "Run on 1 first"
   );
@@ -787,24 +828,189 @@ const argsBlock = (h: H, launch: WorkflowLaunch): Html =>
       ),
   });
 
+/**
+ * The Budget line's value: what Go will send, the proposal's budget or the one the user set
+ * (ADR 0047), so "No limit" shows only when no limit is what will run.
+ */
+const budgetLineText = (
+  model: Model,
+  request: PendingRequest,
+  payload: Brief | WorkflowLaunch
+): string => {
+  const proposed = proposedBudgetOf(payload);
+
+  return Option.match(
+    Result.getOrElse(budgetEdit(model, request), Option.none),
+    {
+      onNone: () => budgetText(proposed),
+      onSome: (edited) =>
+        `${budgetText(edited)} (changed from ${budgetText(proposed)})`,
+    }
+  );
+};
+
+/** A card's lines with its Budget line reading `text`. */
+const withBudgetLine = (
+  lines: ReadonlyArray<CardLine>,
+  text: string
+): ReadonlyArray<CardLine> =>
+  lines.map((line) => (line[0] === "Budget" ? ["Budget", text] : line));
+
+/**
+ * The budget field of a subagent's brief or a workflow's launch (ADR 0047): Change budget opens
+ * dollars and tokens fields from the proposal's budget, and Keep proposed closes them. Go sends
+ * what they say; the proposal stays as its model wrote it.
+ */
+const budgetControls = (model: Model, h: H, request: PendingRequest): Html => {
+  const approvalId = request.record.id;
+
+  // Decline and Send back send no budget, so their fields take the field's place.
+  if (
+    !takesBudgetEdit(request.record, request.body) ||
+    Option.contains(model.declining, approvalId) ||
+    Option.contains(model.sendingBack, approvalId)
+  ) {
+    return h.empty;
+  }
+
+  const draft = model.budgets[approvalId];
+  const busy = !isAnswerable(model, approvalId);
+
+  if (draft === undefined) {
+    return h.div(
+      [h.Class("flex")],
+      [
+        actionButton(
+          h,
+          "change-budget",
+          {
+            variant: "ghost",
+            size: "small",
+            onClick: Option.some(Message.ClickedChangeBudget({ approvalId })),
+            isDisabled: busy,
+          },
+          "Change budget"
+        ),
+      ]
+    );
+  }
+
+  const problem = Result.match(budgetEdit(model, request), {
+    onSuccess: () => Option.none<string>(),
+    onFailure: Option.some,
+  });
+
+  return h.div(
+    [
+      h.DataAttribute("testid", "request-card-budget"),
+      h.Class("flex min-w-0 flex-col gap-(--space-2)"),
+    ],
+    [
+      h.div(
+        [h.Class("grid min-w-0 gap-(--space-2) sm:grid-cols-2")],
+        [
+          inputField(
+            h,
+            {
+              ...fieldDefaults<Message>(
+                `request-card-budget-dollars-${approvalId}`,
+                "Dollars at API list price"
+              ),
+              isDisabled: busy,
+            },
+            {
+              value: draft.dollars,
+              placeholder: Option.some("No limit"),
+              onInput: Option.some((value: string) =>
+                Message.ChangedBudgetDollars({ approvalId, value })
+              ),
+            }
+          ),
+          inputField(
+            h,
+            {
+              ...fieldDefaults<Message>(
+                `request-card-budget-tokens-${approvalId}`,
+                "Tokens"
+              ),
+              isDisabled: busy,
+            },
+            {
+              value: draft.tokens,
+              placeholder: Option.some("No limit"),
+              onInput: Option.some((value: string) =>
+                Message.ChangedBudgetTokens({ approvalId, value })
+              ),
+            }
+          ),
+        ]
+      ),
+      h.p(
+        [
+          h.DataAttribute("testid", "request-card-budget-hint"),
+          h.Class(
+            classNames(
+              Option.isSome(problem) ? "text-tone-failed" : "text-ink-2",
+              TYPE.small
+            )
+          ),
+        ],
+        [
+          Option.getOrElse(
+            problem,
+            () =>
+              "Go sends this budget; at its line the work stops. Leave both empty for no limit."
+          ),
+        ]
+      ),
+      h.div(
+        [h.Class("flex")],
+        [
+          actionButton(
+            h,
+            "keep-budget",
+            {
+              variant: "ghost",
+              size: "small",
+              onClick: Option.some(Message.ClickedKeepBudget({ approvalId })),
+              isDisabled: busy,
+            },
+            "Keep proposed budget"
+          ),
+        ]
+      ),
+    ]
+  );
+};
+
 /** What the card shows of a brief or a launch before its block bar and its answer fields. */
 const briefFields = (
   model: Model,
   h: H,
   request: PendingRequest,
   payload: Brief | WorkflowLaunch
-): ReadonlyArray<Html> =>
-  payload.type === "workflow"
+): ReadonlyArray<Html> => {
+  const budget = budgetLineText(model, request, payload);
+
+  return payload.type === "workflow"
     ? [
         recordLines(h, [
-          ...launchNumbers(payload),
+          ...withBudgetLine(launchNumbers(payload), budget),
           ...runsOn(model, request),
           ["Does", payload.description],
         ]),
+        budgetControls(model, h, request),
         callSitesList(h, payload),
         argsBlock(h, payload),
       ]
-    : [recordLines(h, [...briefLines(payload), ...runsOn(model, request)])];
+    : [
+        recordLines(h, [
+          ...withBudgetLine(briefLines(payload), budget),
+          ...runsOn(model, request),
+        ]),
+        budgetControls(model, h, request),
+      ];
+};
 
 const briefBody = (
   model: Model,

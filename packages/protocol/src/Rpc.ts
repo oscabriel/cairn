@@ -66,7 +66,13 @@ import {
 } from "./Shell.ts";
 import { DispatchResult, ShellCommand } from "./ShellCommands.ts";
 import { SkillList, SkillsInput } from "./Skills.ts";
-import { Spend, SpendGetInput } from "./Spend.ts";
+import {
+  BudgetDeclareInput,
+  BudgetGetInput,
+  Spend,
+  SpendGetInput,
+  ThreadBudget,
+} from "./Spend.ts";
 import {
   ConfigureInput,
   EntryInput,
@@ -303,6 +309,14 @@ export const CairnRpcs = RpcGroup.make(
   Rpc.make("spend.get", {
     payload: SpendGetInput,
     success: Spend,
+    error: Lookup,
+  }),
+  // A thread's own budget, a `stop` scope over its lineage subtree (ADR 0047).
+  Rpc.make("budget.declare", { payload: BudgetDeclareInput, error: Change }),
+  // The line a thread's own scope stands at, for the form that changes it (ADR 0047).
+  Rpc.make("budget.get", {
+    payload: BudgetGetInput,
+    success: ThreadBudget,
     error: Lookup,
   }),
   Rpc.make("providers.login.start", {

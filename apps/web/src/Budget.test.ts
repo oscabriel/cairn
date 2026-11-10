@@ -36,9 +36,12 @@ import type { Rolldown } from "vite";
  * nothing of them could load later: 326,040 B, and the ceiling moved two more KiB. Its review fixes
  * (a pending row kept until its own row comes, in the root's update that runs on every message)
  * came to 327,076 B, and the ceiling moved half a KiB more.
- * Integrating both: see the number below.
+ * Package C6 (one state table, one "needs you" count, the worded row Stop, the folded managed list
+ * and the header's tooltips) added about 3 KB on its own. Integrated, the three came to 332,947 B,
+ * and the ceiling is 326 KiB: about 17 KB above the cutover's entry, all of it drawn on a first
+ * page. W-8's package has to bring this down by deferring what a cold load never draws.
  */
-export const ENTRY_JS_BUDGET = 340_000;
+export const ENTRY_JS_BUDGET = 333_824;
 
 /**
  * The plan's entry target (D46: 200 KB gzip). Not met by wave 3's client: effect, foldkit and

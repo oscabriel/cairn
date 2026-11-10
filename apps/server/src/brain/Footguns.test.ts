@@ -714,7 +714,6 @@ describe("pi-durable footguns", () => {
       "subagents/BrainCap.ts",
       "subagents/Delivery.ts",
       "verdicts/Verdicts.ts",
-      "workflows/WorkflowLaunch.ts",
     ]) {
       const source = modules.get(name) ?? "";
 

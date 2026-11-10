@@ -55,3 +55,5 @@ Then the phase 2 gate.
 ## Later
 
 Ultimate's lander as phase 3's integrate node. A restart tool that memoizes its result, plus booting the next brain beside the old (ADR 0022). Retest the Worker Loader shell and Durable Object residency against spike 1. Hands-off goals (ADR 0026).
+
+The attachment tray's saves track what each save still on its way removes (after-review package E, 2026-11-10). Without that, two cases stay open, both needing storage to refuse some saves and take others: two refusals in a row (a send's save, then its put-back's) leave a sent turn's chip in storage, restored on a reload; and an attachment removed between a refused add's answer and a later taken save's answer comes back. A first fix (keeping every refused removal in the base) was reverted in `e8794bb` because it made a put-back attachment vanish. A removal refused by storage is also held in memory only, so a reload restores its chip.

@@ -1322,6 +1322,67 @@ describe("the shell projector", () => {
   );
 
   it.effect(
+    "the boot reconcile ends a row idle when the kept failure is older than the row's own run",
+    () =>
+      run(
+        Effect.gen(function* () {
+          yield* seedThreads();
+
+          const fake = yield* FakeHarness;
+          const sink = yield* EventSink;
+          const projector = yield* ShellProjector;
+          const reconciled = yield* ReconciledEnds;
+
+          yield* sink.commitCommand(
+            ThreadActivityUpdate.make({
+              commandId: testCommandId(902),
+              threadId: THREAD,
+              patch: {
+                ...emptyActivityPatch,
+                activity: Option.some("running"),
+                activeRunId: Option.some(Option.some(run7)),
+                latestRunStartedAt: Option.some(Option.some(at(60))),
+              },
+            })
+          );
+
+          // A failure kept from a run before this one (as under `afterFailedRun: "continue"`).
+          yield* Ref.set(fake.live, [
+            {
+              threadId: THREAD,
+              conversationId: ConversationId.make(1),
+              runId: Option.none(),
+              queueLength: 0,
+              pendingApprovals: [],
+              lastRunFailure: Option.some<LastRunFailure>({
+                failure: {
+                  class: "provider_error",
+                  retryable: true,
+                  resetAt: Option.none(),
+                  plan: Option.none(),
+                },
+                at: Option.some(at(30)),
+              }),
+            },
+          ]);
+
+          yield* TestClock.setTime(DateTime.toEpochMillis(at(3600)));
+          yield* projector.reconcile;
+
+          const row = yield* shellOf(THREAD);
+
+          assert.strictEqual(row.activity, "idle");
+          assert.deepStrictEqual(row.lastErrorClass, Option.none());
+          assert.deepStrictEqual(
+            row.latestRunCompletedAt,
+            Option.some(at(3600))
+          );
+          assert.isTrue(yield* reconciled.has(THREAD, at(3600)));
+        })
+      )
+  );
+
+  it.effect(
     "the boot reconcile dates an unseen end that did not fail itself, and says so",
     () =>
       run(

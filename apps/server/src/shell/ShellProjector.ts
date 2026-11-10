@@ -67,6 +67,7 @@ import { HarnessSeam } from "../brain/HarnessSeam.ts";
 import type {
   HarnessError,
   HarnessEvent,
+  LastRunFailure,
   LiveThreadState,
   PendingApproval,
   RunFailureInfo,
@@ -425,18 +426,38 @@ export const endedUnseen = (
     Option.isSome(projection.fields.activeRunId));
 
 /**
- * When the boot reconcile ends a run nobody saw end: when it failed, if the harness kept that
- * time; otherwise now, the reconcile's own time (`ReconciledEnds`). Only an ended-unseen row has one.
+ * The failure the boot reconcile ends an ended-unseen row with: the harness's kept failure of the
+ * newest run, unless it is dated before the row's own run started. Such a failure is an older run's,
+ * which pi-durable would keep past a later run only under `afterFailedRun: "continue"` (Cairn sets
+ * "keep", `RunFailure.ts`); the row then ends `idle` as before, so the setting is not relied on.
+ */
+export const unseenFailureOf = (
+  projection: ThreadProjection,
+  live: Option.Option<LiveThreadState>
+): Option.Option<LastRunFailure> =>
+  endedUnseen(projection, live)
+    ? Option.filter(
+        Option.flatMap(live, (state) => state.lastRunFailure),
+        (found) =>
+          !Option.exists(found.at, (at) =>
+            Option.exists(projection.fields.latestRunStartedAt, (started) =>
+              DateTime.isLessThan(at, started)
+            )
+          )
+      )
+    : Option.none();
+
+/**
+ * When the boot reconcile ends a run nobody saw end: when it failed (`unseenFailureOf`), if the
+ * harness kept that time; otherwise now, the reconcile's own time (`ReconciledEnds`). Only an
+ * ended-unseen row has one.
  */
 export const reconciledEndOf = (
-  live: Option.Option<LiveThreadState>,
+  failure: Option.Option<LastRunFailure>,
   now: DateTime.Utc
 ): { readonly at: DateTime.Utc; readonly dated: "run" | "reconcile" } =>
   Option.match(
-    Option.flatMap(
-      Option.flatMap(live, (state) => state.lastRunFailure),
-      (failure) => failure.at
-    ),
+    Option.flatMap(failure, (found) => found.at),
     {
       onNone: () => ({ at: now, dated: "reconcile" as const }),
       onSome: (at) => ({ at, dated: "run" as const }),
@@ -448,7 +469,9 @@ export const reconciledEndOf = (
  * `inspect()`; none means no run, no queue, no approval and no failure kept. A row that was busy
  * with no live run left ends: the run ended while nothing watched it. It ends `failed`, with the
  * failure's class and words, when the harness kept the newest run's failure (server-edges.V5), and
- * `idle` otherwise; it is dated by `reconciledEndOf`. An approval the row does not name yet (its
+ * `idle` otherwise; it is dated by `reconciledEndOf`. A run that started and failed inside one
+ * projector window, with the kill in that window too, left the row idle, so it stays idle though the
+ * harness kept the failure: the same gap as a goal's within one window. An approval the row does not name yet (its
  * event was lost to a crash) is named from `inspect()`'s record: its kind and when it was asked.
  */
 export const reconcileProjection = (
@@ -485,9 +508,7 @@ export const reconcileProjection = (
 
   const ended = endedUnseen(projection, live);
 
-  const failure = ended
-    ? Option.flatMap(live, (state) => state.lastRunFailure)
-    : Option.none();
+  const failure = unseenFailureOf(projection, live);
 
   const kept: Partial<DerivedFields> = {
     activeRunId: runId,
@@ -497,7 +518,7 @@ export const reconcileProjection = (
     }),
     waitingFor: asking ? "parent" : "none",
     latestRunCompletedAt: ended
-      ? Option.some(reconciledEndOf(live, now).at)
+      ? Option.some(reconciledEndOf(failure, now).at)
       : fields.latestRunCompletedAt,
   };
 
@@ -1154,7 +1175,8 @@ export class ShellProjector extends Context.Service<
           // Recorded before the end is committed, so the notifier never reads it unrecorded.
           if (
             endedUnseen(before, state) &&
-            reconciledEndOf(state, now).dated === "reconcile"
+            reconciledEndOf(unseenFailureOf(before, state), now).dated ===
+              "reconcile"
           ) {
             yield* reconciled.record(threadId, now);
           }

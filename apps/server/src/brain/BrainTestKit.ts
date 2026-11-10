@@ -3,9 +3,10 @@
 // the extension set gains is added here once, not in each test's stack. Importing the kit in a
 // Vitest worker empties the process's pi setup and git environment first (`isolatePiSetup`,
 // `isolateGitEnvironment`), so no brain test reads the user's `~/.pi/agent` or an outer thread's
-// git hooks. The judge brains under `judges/fixtures/` reach the kit through `PiHostTestKit.ts` and
-// the conformance `Targets.ts` and read the real setup on purpose, so outside Vitest (no `VITEST`
-// in the environment) it leaves the process alone. Never imported by production code.
+// git hooks. The judge brains under `judges/fixtures/` use the kit too (directly, or through
+// `PiHostTestKit.ts` and the conformance `Targets.ts`) and read the real setup on purpose, so
+// outside Vitest (no `VITEST` in the environment) it leaves the process alone. Never imported by
+// production code.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,25 +43,49 @@ export const FAUX_MODEL_OPTIONS: FauxModelOptions = {
   settings: { retry: { enabled: false } },
 };
 
+/**
+ * What the extension set needs that a test stands in for: Executor disabled, an in-memory model
+ * health and settings, and the test reach services. `brainExtensions` provides them; a judge over
+ * the production brain (`PiDurableBrain`) provides them with `PiHost.layerEmpty`.
+ */
+export const extensionTestServices = Layer.mergeAll(
+  ExecutorLink.layerDisabled,
+  ModelHealth.layerTest,
+  SettingsStore.layerTest,
+  ReachServicesTest
+);
+
 /** What a test changes in the extension set's dependencies; everything else is the test default. */
-export interface ExtensionOptions<SE, SR, HE, HR> {
+export interface ExtensionOptions<SE, SR, HE, HR, CE = never, CR = never> {
   /** Extensions installed after the production set (the conformance tools, a judge's tool). */
   readonly extra?: ReadonlyArray<CairnExtension>;
   /** The subagents extension: `Subagents.layerTest` unless a test plants faults or tunes it. */
   readonly subagents?: Layer.Layer<Subagents, SE, SR>;
   /** The `cairn.pi-tools` host: the empty one unless a test loads pi packages. */
   readonly piHost?: Layer.Layer<PiHost, HE, HR>;
+  /**
+   * The model catalog: over the ambient `ModelSource` unless a judge brain reads pi's real model
+   * runtime (`PiModelSource.layer`), whose catalog also lists its extra providers.
+   */
+  readonly catalog?: Layer.Layer<PiModelSource, CE, CR>;
 }
 
 /**
- * The production extension set over its test dependencies: Executor disabled, an in-memory model
- * health and settings, the test reach services and the catalog over the ambient `ModelSource`.
- * Leaves `ModelSource` (and what `subagents` or `piHost` need) to the caller. `ModelHealth.layerTest`
- * and `SettingsStore.layerTest` are the references `Subagents.layerTest` uses, so a test that also
- * provides them outside gets the same instance from the memo map.
+ * The production extension set over its test dependencies (`extensionTestServices`) and the
+ * catalog over the ambient `ModelSource`. Leaves `ModelSource` (and what `subagents`, `piHost` or
+ * `catalog` need) to the caller. `ModelHealth.layerTest` and `SettingsStore.layerTest` are the
+ * references `Subagents.layerTest` uses, so a test that also provides them outside gets the same
+ * instance from the memo map.
  */
-export const brainExtensions = <SE = never, SR = never, HE = never, HR = never>(
-  options: ExtensionOptions<SE, SR, HE, HR> = {}
+export const brainExtensions = <
+  SE = never,
+  SR = never,
+  HE = never,
+  HR = never,
+  CE = never,
+  CR = never,
+>(
+  options: ExtensionOptions<SE, SR, HE, HR, CE, CR> = {}
 ) => {
   const subagents: Layer.Layer<
     Subagents,
@@ -71,18 +96,21 @@ export const brainExtensions = <SE = never, SR = never, HE = never, HR = never>(
   const piHost: Layer.Layer<PiHost, HE, HR> =
     options.piHost ?? PiHost.layerEmpty;
 
+  const catalog: Layer.Layer<
+    PiModelSource,
+    CE,
+    CR | Layer.Services<typeof PiModelSource.layerFromModelSource>
+  > = options.catalog ?? PiModelSource.layerFromModelSource;
+
   return (
     options.extra === undefined
       ? ExtensionSet.layer
       : ExtensionSet.withExtra(options.extra)
   ).pipe(
     Layer.provide(subagents),
-    Layer.provide(ExecutorLink.layerDisabled),
     Layer.provide(piHost),
-    Layer.provide(ModelHealth.layerTest),
-    Layer.provide(SettingsStore.layerTest),
-    Layer.provide(ReachServicesTest),
-    Layer.provide(PiModelSource.layerFromModelSource)
+    Layer.provide(extensionTestServices),
+    Layer.provide(catalog)
   );
 };
 

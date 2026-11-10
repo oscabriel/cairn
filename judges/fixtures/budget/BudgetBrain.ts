@@ -67,6 +67,7 @@ import { Type } from "typebox";
 
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
+import { brainExtensions } from "../../../apps/server/src/brain/BrainTestKit.ts";
 import {
   BudgetSources,
   raiseIdOf,
@@ -75,7 +76,6 @@ import { ThreadReceipt } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
 import type { CairnExtension } from "../../../apps/server/src/brain/Extensions.ts";
-import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
 import {
   BASE_HARNESS_SETTINGS,
@@ -86,13 +86,7 @@ import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { SpendFeed } from "../../../apps/server/src/brain/SpendFeed.ts";
 import { Database } from "../../../apps/server/src/db/Database.ts";
 import { migrations } from "../../../apps/server/src/db/Migrations.ts";
-import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
-import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
-import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
-import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
-import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
 import { Notifier } from "../../../apps/server/src/push/Notifier.ts";
-import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
 import { declareBudget } from "../../../apps/server/src/rpc/SpendHandlers.ts";
 import { EventSink } from "../../../apps/server/src/shell/EventSink.ts";
 import { ShellStoreLayer } from "../../../apps/server/src/shell/ShellLayer.ts";
@@ -102,7 +96,6 @@ import {
   testThreadId,
 } from "../../../apps/server/src/shell/ShellTestKit.ts";
 import { ThreadRows } from "../../../apps/server/src/shell/ThreadRows.ts";
-import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
 import { SUBAGENT_WAIT_TASKS } from "../../../apps/server/src/subagents/SubagentTasks.ts";
 import { SUBAGENT_STATUS_TOOL } from "../../../apps/server/src/subagents/SubagentTools.ts";
 import { BudgetBook } from "../../../apps/server/src/usage/BudgetBook.ts";
@@ -217,15 +210,7 @@ const tickExtension: CairnExtension = {
  * The extension set: production, which carries the budget gate over the judge's `BudgetBook` (one
  * book, by reference, as in `AppLayer`), and `tick`.
  */
-const Extensions = ExtensionSet.withExtra([tickExtension]).pipe(
-  Layer.provide(ExecutorLink.layerDisabled),
-  Layer.provide(PiHost.layerEmpty),
-  Layer.provide(ModelHealth.layerTest),
-  Layer.provide(SettingsStore.layerTest),
-  Layer.provide(ReachServicesTest),
-  Layer.provide(Subagents.layerTest),
-  Layer.provide(PiModelSource.layerFromModelSource)
-);
+const Extensions = brainExtensions({ extra: [tickExtension] });
 
 const DatabaseLive = Database.layer({
   filename: path.join(dir, "cairn.sqlite"),

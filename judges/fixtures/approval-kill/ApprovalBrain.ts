@@ -36,7 +36,7 @@ import { Console, Duration, Effect, Layer, Option } from "effect";
 
 import { KEPT_WAITS } from "../../../apps/server/src/BootRepairs.ts";
 import { Brain } from "../../../apps/server/src/brain/Brain.ts";
-import { BrainConfig } from "../../../apps/server/src/brain/BrainConfig.ts";
+import { testBrain } from "../../../apps/server/src/brain/BrainTestKit.ts";
 import {
   answerApproval,
   Approvals,
@@ -45,23 +45,12 @@ import {
 } from "../../../apps/server/src/brain/CairnDocs.ts";
 import { endCrashLoopedTasks } from "../../../apps/server/src/brain/CrashLimit.ts";
 import { durable } from "../../../apps/server/src/brain/Durable.ts";
-import { ExtensionSet } from "../../../apps/server/src/brain/ExtensionSet.ts";
 import { FauxModels } from "../../../apps/server/src/brain/FauxModels.ts";
 import { HarnessSeam } from "../../../apps/server/src/brain/HarnessSeam.ts";
-import {
-  FAUX_MODEL,
-  ModelSource,
-} from "../../../apps/server/src/brain/ModelSource.ts";
-import { PiDurableHarness } from "../../../apps/server/src/brain/PiDurableHarness.ts";
+import { FAUX_MODEL } from "../../../apps/server/src/brain/ModelSource.ts";
 import { piConversationId } from "../../../apps/server/src/brain/PiIds.ts";
 import { RestartLimit } from "../../../apps/server/src/brain/RestartLimit.ts";
-import { ExecutorLink } from "../../../apps/server/src/executor/ExecutorLink.ts";
 import { Git } from "../../../apps/server/src/git/Git.ts";
-import { ModelHealth } from "../../../apps/server/src/models/ModelHealth.ts";
-import { PiModelSource } from "../../../apps/server/src/models/PiModelSource.ts";
-import { SettingsStore } from "../../../apps/server/src/models/SettingsStore.ts";
-import { PiHost } from "../../../apps/server/src/pi-host/PiHost.ts";
-import { ReachServicesTest } from "../../../apps/server/src/reach/ReachLayer.ts";
 import { Subagents } from "../../../apps/server/src/subagents/Subagents.ts";
 import { workspacesAt } from "../../../apps/server/src/workspaces/ChildWorkspacesTestKit.ts";
 
@@ -97,26 +86,8 @@ const answer = (request: { readonly messages: ReadonlyArray<Message> }) =>
 
 // ── The brain ────────────────────────────────────────────────────────────────────────────────────
 
-const brain = PiDurableHarness.layer.pipe(
-  Layer.provide(
-    ExtensionSet.layer.pipe(
-      Layer.provide(Subagents.layer),
-      Layer.provide(ExecutorLink.layerDisabled),
-      Layer.provide(PiHost.layerEmpty),
-      Layer.provide(ModelHealth.layerTest),
-      Layer.provide(SettingsStore.layerTest),
-      Layer.provide(ReachServicesTest),
-      Layer.provide(PiModelSource.layerFromModelSource)
-    )
-  ),
-  Layer.provideMerge(
-    ModelSource.layerFaux({
-      tokensPerSecond: 4000,
-      settings: { retry: { enabled: false } },
-    })
-  ),
+const brain = testBrain({ subagents: Subagents.layer, dataDir }).pipe(
   Layer.provideMerge(workspacesAt(dataDir)),
-  Layer.provide(BrainConfig.layerFrom(dataDir)),
   Layer.provide(
     values.control
       ? Layer.succeed(RestartLimit, DEFAULT_RESTART_LIMIT)

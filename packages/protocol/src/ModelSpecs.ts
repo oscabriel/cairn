@@ -10,12 +10,16 @@ import { TrimmedNonEmptyString } from "./Ids.ts";
 import { ModelRef, ThinkingLevel } from "./Models.ts";
 
 /**
- * A model spec, `provider/modelId[:level]`; a model id may hold `@` and `/` (a Workers AI id such as
- * `@cf/meta/...`).
+ * A model spec, `provider/modelId[:level]`. A model id holds what pi-ai's catalog ids hold: letters,
+ * digits, `.`, `_`, `-`, and `/`, `:`, `@` and `~` (OpenRouter's `anthropic/claude-x:free` and
+ * `~anthropic/claude-haiku-latest`, Bedrock's `...-v1:0`, Workers AI's `@cf/meta/...`). A provider
+ * holds no `/`, so the first `/` ends it and any later one is the model id's. A trailing `:` and a
+ * level's name is always the level, so a model id that itself ends in one cannot be named; no
+ * catalog id does.
  */
 export const ModelSpec = Schema.String.check(
   Schema.isPattern(
-    /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/@-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$/u
+    /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/@~-]+?(?::(?:off|minimal|low|medium|high|xhigh|max))?$/u
   )
 ).pipe(Schema.brand("ModelSpec"));
 

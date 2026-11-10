@@ -46,9 +46,9 @@ import {
 
 import { Brain } from "../../apps/server/src/brain/Brain.ts";
 import { BrainConfig } from "../../apps/server/src/brain/BrainConfig.ts";
+import { brainExtensions } from "../../apps/server/src/brain/BrainTestKit.ts";
 import { childWorkspacesAt } from "../../apps/server/src/brain/conformance/Targets.ts";
 import { durable } from "../../apps/server/src/brain/Durable.ts";
-import { ExtensionSet } from "../../apps/server/src/brain/ExtensionSet.ts";
 import { HarnessSeam } from "../../apps/server/src/brain/HarnessSeam.ts";
 import type { HarnessEvent } from "../../apps/server/src/brain/HarnessSeam.ts";
 import { FAUX_MODEL } from "../../apps/server/src/brain/ModelSource.ts";
@@ -56,17 +56,12 @@ import { PiDurableHarness } from "../../apps/server/src/brain/PiDurableHarness.t
 import { piConversationId } from "../../apps/server/src/brain/PiIds.ts";
 import { NO_SUBAGENT_FAULTS } from "../../apps/server/src/brain/SubagentFaults.ts";
 import { ServerConfig } from "../../apps/server/src/Config.ts";
-import { ExecutorLink } from "../../apps/server/src/executor/ExecutorLink.ts";
 import { BridgeProvider } from "../../apps/server/src/models/BridgeProvider.ts";
-import { ModelHealth } from "../../apps/server/src/models/ModelHealth.ts";
 import {
   ExtraProviders,
   PiModelSource,
 } from "../../apps/server/src/models/PiModelSource.ts";
 import { readResult } from "../../apps/server/src/models/ResultTool.ts";
-import { SettingsStore } from "../../apps/server/src/models/SettingsStore.ts";
-import { PiHost } from "../../apps/server/src/pi-host/PiHost.ts";
-import { ReachServicesTest } from "../../apps/server/src/reach/ReachLayer.ts";
 import {
   createProject,
   testThreadId,
@@ -128,38 +123,35 @@ export const scriptParents = (parent: FauxProviderHandle, parents: number) => {
  * over `~/.pi/agent` with `parent` registered beside the bridge when `BridgeProvider` has one, and
  * children's workspaces under `dataDir`. Needs `BridgeProvider`.
  */
-export const childBrain = (dataDir: string, parent: Provider) =>
-  PiDurableHarness.layer.pipe(
+export const childBrain = (dataDir: string, parent: Provider) => {
+  const models = PiModelSource.layer.pipe(
     Layer.provide(
-      ExtensionSet.layer.pipe(
-        Layer.provide(Subagents.layerWith(NO_SUBAGENT_FAULTS)),
-        Layer.provide(ExecutorLink.layerDisabled),
-        Layer.provide(PiHost.layerEmpty),
-        Layer.provide(ModelHealth.layerTest),
-        Layer.provide(SettingsStore.layerTest),
-        Layer.provide(ReachServicesTest)
+      Layer.effect(
+        ExtraProviders,
+        BridgeProvider.useSync((bridge) => [
+          ...Option.toArray(
+            Option.map(bridge.claude, (claude) => claude.provider)
+          ),
+          parent,
+        ])
       )
     ),
-    Layer.provideMerge(
-      PiModelSource.layer.pipe(
-        Layer.provide(
-          Layer.effect(
-            ExtraProviders,
-            BridgeProvider.useSync((bridge) => [
-              ...Option.toArray(
-                Option.map(bridge.claude, (claude) => claude.provider)
-              ),
-              parent,
-            ])
-          )
-        ),
-        Layer.provide(ServerConfig.layerWith({ dataDir })),
-        Layer.orDie
-      )
+    Layer.provide(ServerConfig.layerWith({ dataDir })),
+    Layer.orDie
+  );
+
+  return PiDurableHarness.layer.pipe(
+    Layer.provide(
+      brainExtensions({
+        subagents: Subagents.layerWith(NO_SUBAGENT_FAULTS),
+        catalog: models,
+      })
     ),
+    Layer.provideMerge(models),
     Layer.provideMerge(childWorkspacesAt(dataDir)),
     Layer.provide(BrainConfig.layerFrom(dataDir))
   );
+};
 
 /** The trial did not reach its end. */
 class ChildTrialStuck extends Schema.TaggedError<ChildTrialStuck>()(

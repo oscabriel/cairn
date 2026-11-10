@@ -6,6 +6,7 @@ import { EntryId, RequestId, ThreadId } from "@cairn/protocol/Ids";
 import { ConversationView, Entry, SendInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
 import { Option, Schema } from "effect";
+import { Url } from "foldkit";
 
 import coding from "../../../../judges/fixtures/transcripts/coding.json" with { type: "json" };
 import { OutboxItem, outboxKey } from "../connection/Outbox.ts";
@@ -15,7 +16,7 @@ import type { Model as RootModel } from "../Model.ts";
 import { Message as ThreadMessage } from "../page/thread/Message.ts";
 import { AppRoute } from "../Route.ts";
 import { connectingModel, launchItem } from "../TestFixtures.ts";
-import { update as rootUpdate } from "../Update.ts";
+import { init, update as rootUpdate } from "../Update.ts";
 import { growReply, startReply, syntheticThread } from "./harness/Fixture.ts";
 import { Message as ListMessage } from "./list/Message.ts";
 import { Message } from "./Message.ts";
@@ -542,6 +543,70 @@ describe("a send waiting in the outbox", () => {
     );
 
     assert.deepStrictEqual(sendsOf(started), []);
+  });
+
+  /** The user rows of `model`'s transcript, pending ones too, that carry the send's words. */
+  const rowsOfSend = (model: RootModel): number =>
+    withPendingSends(
+      transcriptOf(threadId, model.thread.view, initial.ui, Option.none()),
+      model.thread.timeline.queuedSends
+    ).items.filter(
+      (item) =>
+        (item.kind === "message" || item.kind === "pending") &&
+        item.message.role === "user" &&
+        item.message.text === "keep the budget under $5"
+    ).length;
+
+  it("shows once after a reload when its acknowledgement was lost and the brain already wrote its row", () => {
+    // Sent, its row written as entry 60, the acknowledgement lost: the page reloads with the send
+    // still in the saved outbox.
+    const url = Option.getOrThrow(
+      Url.fromString(`https://code.gneiss.run/t/${threadId}`)
+    );
+
+    const reloaded = init(
+      { boot: Option.none(), outbox: [queued], outboxUnread: false },
+      url
+    ).model;
+
+    // The view arrives holding the row.
+    const viewed = showing(
+      {
+        ...reloaded,
+        thread: {
+          ...reloaded.thread,
+          threadId: Option.some(ThreadId.make(threadId)),
+        },
+      },
+      viewWith(sentBefore, echo)
+    );
+
+    // Resent, the brain answers that it already has it.
+    const acknowledged = acknowledge(viewed, "req-pending-1");
+
+    assert.deepStrictEqual(sendsOf(acknowledged), []);
+    assert.deepStrictEqual(acknowledged.outboxEchoes, []);
+    assert.strictEqual(rowsOfSend(acknowledged), 2, "entries 55 and 60 only");
+  });
+
+  it("shows once when another tab queued it, its row came, and this tab's resend is acknowledged", () => {
+    const viewed = showing(onThread(Option.none()), viewWith(sentBefore, echo));
+
+    // Another tab writes the send into storage after this page started; this tab adopts it.
+    const adopted = rootUpdate(
+      { ...viewed, outbox: [], outboxStored: [], outboxSince: {} },
+      RootMessage.CompletedSaveOutbox({
+        written: [],
+        stored: Option.some([queued]),
+      })
+    ).model;
+
+    assert.deepStrictEqual(adopted.outboxAdopted, ["req-pending-1"]);
+
+    const acknowledged = acknowledge(adopted, "req-pending-1");
+
+    assert.deepStrictEqual(sendsOf(acknowledged), []);
+    assert.deepStrictEqual(acknowledged.outboxEchoes, []);
   });
 
   it("is forgotten once acknowledged when the page leaves its thread", () => {

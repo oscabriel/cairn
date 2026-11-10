@@ -79,9 +79,11 @@ export const Model = Schema.Struct({
   /**
    * The newest entry id each queued send's thread showed when this tab first saw the send queued, by
    * outbox key: its own row is a user row past it, so an earlier row with the same words is not it.
+   * None for an item this page did not queue (read from storage at start, or adopted from another
+   * tab): its row may already be there, so once acknowledged it is matched against any row.
    * Kept in memory only.
    */
-  outboxSince: Schema.Record(Schema.String, Schema.Int),
+  outboxSince: Schema.Record(Schema.String, Schema.Option(Schema.Int)),
   /** Acknowledged sends still drawn as pending rows, oldest first. Kept in memory only. */
   outboxEchoes: Schema.Array(AwaitedSend),
   /**

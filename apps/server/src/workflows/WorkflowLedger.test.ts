@@ -5,9 +5,11 @@
 // row, and a node's tool result never carrying usage.
 
 import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
+import type { ModelRef } from "@cairn/protocol/Models";
 import { DEFAULT_BUDGET } from "@cairn/protocol/Spend";
 import { WorkflowsDocument } from "@cairn/protocol/Workflows";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { AgentDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
@@ -36,6 +38,7 @@ import {
   pause,
   plant,
   plantDefaults,
+  respond,
   runScript,
   ALT_MODEL,
   KIT_LEVEL,
@@ -245,6 +248,11 @@ const scenario = (
     readonly answer?: "accepted" | "declined";
     /** Answers every node's own pending brief so, through the host's answer path. */
     readonly briefs?: "accept" | "decline";
+    /**
+     * The root thread's model in place of the kit's, served by a faux provider of its own that
+     * answers as the kit's does.
+     */
+    readonly rootModel?: ModelRef;
   } = {}
 ) =>
   Effect.gen(function* () {
@@ -268,6 +276,25 @@ const scenario = (
           await open.harness.close(context);
         })
     );
+
+    for (const model of Option.toArray(
+      Option.fromUndefinedOr(options.rootModel)
+    )) {
+      const own = fauxProvider({
+        provider: model.provider,
+        models: [{ id: model.modelId }],
+        tokensPerSecond: 50_000,
+      });
+
+      own.setResponses(Array.from({ length: 5000 }, () => respond));
+      parts.models.setProvider(own.provider);
+
+      yield* Effect.promise(async () => {
+        const root = await brain.harness.conversation(brain.root, context);
+
+        await root?.configure({ model: { ...model } }, context);
+      });
+    }
 
     const planted = options.planted ?? Option.some({});
 
@@ -933,6 +960,29 @@ return [a, b];`)
           ]
         );
         assert.deepStrictEqual(starts(outcome.effects), ["a", "b"]);
+      })
+  );
+
+  it.live(
+    "runs a node that names no model on a launching thread's model whose id holds ~ and /, and the ledger decodes",
+    () =>
+      Effect.gen(function* () {
+        // An OpenRouter alias as pi-ai lists it; the launch did not show it, so the node asks first.
+        const alias = { provider: "openrouter", modelId: "~kit/kit-latest" };
+
+        const outcome = yield* scenario(
+          workflow(`return await agent("node:a", { label: "a" });`),
+          { rootModel: alias, briefs: "accept" }
+        );
+
+        assert.deepStrictEqual(outcome.problems, []);
+        assert.deepStrictEqual(
+          Object.values(Option.getOrThrow(outcome.row).nodes).map((node) => [
+            node.model,
+            node.state,
+          ]),
+          [[`openrouter/~kit/kit-latest:${KIT_LEVEL}`, "settled"]]
+        );
       })
   );
 

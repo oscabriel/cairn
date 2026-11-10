@@ -95,8 +95,8 @@ const nonEmpty = (value: string | undefined): Option.Option<string> =>
 
 /**
  * The part of a registry item's `dispatch` record a row reads: the protocol's `DispatchRecord`'s
- * resolved model, and only that, so a resolved spec no `ModelSpec` may name (an OpenRouter `~`
- * alias a parent ran on, recorded unchecked) still gives the row its model.
+ * resolved model, and only that, so a record whose other fields a client could not read still
+ * gives the row its model.
  */
 const DispatchedModel = DispatchRecord.mapFields(
   Struct.pick(["resolved"])

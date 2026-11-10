@@ -251,7 +251,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `RunFailureClass` | `transport_error` | "Failed", and `lastError`: "The model provider could not be reached. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `brain_restart` | "Failed", and `lastError`: "The brain restarted while the model was answering. Send again to retry." | Sidebar row, thread page |
 | `RunFailureClass` | `unknown` | "Failed", and `lastError`: "The run failed. Send again to retry.", or a launch's own message. | Sidebar row, thread page |
-| `WaitingFor` | `claude_slot` | Banner "Waiting": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
+| `WaitingFor` | `claude_slot` | Banner "Waiting for a Claude slot": "This thread is waiting for a Claude slot." The sidebar row keeps "Working". | Hold banner |
 | `WaitingFor` | `parent` | The child's managed row in the `next` sidebar says "Asked its parent"; its ancestors are not lit and show no parent banner, since the user is not asked yet (6D). The classic sidebar hides a child's row. | Sidebar row (`next`) |
 | `WaitingFor` | `none` | Nothing. | None |
 | `SettledOverride` | `settled` | The row sits under the "Settled" shelf header ("Settled (<n>)" when folded); its menu offers "Unsettle". The undo notice after settling says "Settled <n> thread" or "threads", with Undo. | Sidebar |
@@ -260,7 +260,7 @@ What the web client shows for each status today. One function gives a thread's s
 | `RuntimeRequestKind` | `tool-call` | "Approval". | Sidebar row |
 | `RuntimeRequestKind` | `user-input` | "Input". | Sidebar row |
 | `RuntimeRequestKind` | `sign-in` | "Input". | Sidebar row |
-| `RuntimeRequestKind` | `brief` | "Go", in the approval colour. A child's brief shows on its ancestors as "Approval". | Sidebar row |
+| `RuntimeRequestKind` | `brief` | "Waiting for Go", in the approval colour. A child's brief shows on its ancestors as "Approval". | Sidebar row |
 | `RuntimeRequestKind` | `criteria` | "Approval". | Sidebar row |
 | `ApprovalStatus` | `pending` | Only through the thread's row ("Approval" or "Input"). There is no approval card yet. | Sidebar row |
 | `ApprovalStatus` | `accepted` | Not shown. | None |

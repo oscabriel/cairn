@@ -5,7 +5,12 @@
 // hero's project (U-21), the "Previous" fold reads and opens earlier project threads read only
 // (ADR 0048), and the menus rename and remove (U-10).
 
-import { NOW, rowId, shellRow } from "@cairn/client-logic/ShellRowTestKit";
+import {
+  asking,
+  NOW,
+  rowId,
+  shellRow,
+} from "@cairn/client-logic/ShellRowTestKit";
 import { RequestId } from "@cairn/protocol/Ids";
 import { SendInput } from "@cairn/protocol/Thread";
 import { assert, describe, it } from "@effect/vitest";
@@ -64,6 +69,10 @@ const threadOf = (id: string) => {
 
   return found;
 };
+
+/** Each managed row's status word, the first part of its quiet line. */
+const words = (rows: ReadonlyArray<{ readonly meta: string }>) =>
+  rows.map(({ meta }) => meta.split(" · ")[0]);
 
 /** Runs the Command a step asked for, which needs no service, to its Message. */
 const runOnly = (
@@ -149,12 +158,105 @@ describe("the rail and the project's list", () => {
     );
   });
 
+  it("lists asking and live rows first, folds the resting ones behind a count, and says each row's word (U-9)", () => {
+    const content = sidebarContentOf(onProjectThread);
+
+    assert.deepStrictEqual(
+      {
+        live: words(content.managed.live.visibleRows),
+        resting: words(content.managed.resting.visibleRows),
+        restingCount: content.managed.restingCount,
+        isRestingOpen: content.managed.isRestingOpen,
+      },
+      {
+        live: ["Approval", "Working", "Limited"],
+        resting: ["Failed", "Done", "Idle"],
+        restingCount: 3,
+        isRestingOpen: false,
+      }
+    );
+
+    // A child that asks is lifted above newer live ones.
+    const older = shellModelOn(AppRoute.Thread({ threadId: PROJECT_THREAD }));
+    const shell = Option.getOrThrow(older.context.shell);
+
+    const lifted = {
+      ...older,
+      context: {
+        ...older.context,
+        shell: Option.some({
+          ...shell,
+          threads: shell.threads.map((thread) =>
+            thread.id === rowId(5) ? { ...thread, ...asking("q-5") } : thread
+          ),
+        }),
+      },
+    };
+
+    assert.deepStrictEqual(
+      sidebarContentOf(lifted).managed.live.visibleRows.map(
+        ({ thread }) => thread.id
+      ),
+      [rowId(2), rowId(5), rowId(3)]
+    );
+
+    // Bounded: each group shows six rows, then twelve more per Show more.
+    const many = {
+      ...older,
+      context: {
+        ...older.context,
+        shell: Option.some({
+          ...shell,
+          threads: [
+            ...shell.threads,
+            ...Array.from({ length: 30 }, (_, index) =>
+              shellRow(200 + index, {
+                projectId: CAIRN,
+                lineage: Option.some({
+                  parentThreadId: PROJECT_THREAD,
+                  relationshipToParent: "subagent" as const,
+                  rootThreadId: PROJECT_THREAD,
+                }),
+                latestRunCompletedAt: Option.some(NOW),
+                lastVisitedAt: Option.some(NOW),
+              })
+            ),
+          ],
+        }),
+      },
+    };
+
+    const folded = sidebarContentOf(many).managed;
+
+    assert.deepStrictEqual(
+      [
+        folded.restingCount,
+        folded.resting.visibleRows.length,
+        folded.resting.hiddenCount,
+      ],
+      [33, 6, 27]
+    );
+
+    const more = update(
+      update(many, Message.ClickedRestingThreads()).model,
+      Message.ClickedMoreManaged({ group: "resting" })
+    ).model;
+
+    const grown = sidebarContentOf(more).managed;
+
+    assert.isTrue(grown.isRestingOpen);
+    assert.strictEqual(grown.resting.visibleRows.length, 18);
+  });
+
   it("draws the project thread's row as open and counts its managed threads", () => {
     const content = sidebarContentOf(onProjectThread);
 
     assert.isTrue(Option.getOrThrow(content.projectThread).isOpen);
-    assert.strictEqual(content.managed.length, MANAGED.length);
-    assert.strictEqual(content.managed[0]?.meta, "subagent · asks you");
+    assert.strictEqual(content.managed.count, MANAGED.length);
+    assert.deepStrictEqual(
+      railBubblesOf(onProjectThread).map((bubble) => bubble.mark),
+      ["needs", "none", "none"]
+    );
     assert.deepStrictEqual(
       railBubblesOf(onProjectThread).map((bubble) => [
         bubble.project.title,

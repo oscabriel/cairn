@@ -971,7 +971,20 @@ const runWidth = async (browser: Browser, width: number) => {
         `the panel's row for the child says ${JSON.stringify(before)}`
       );
 
-      await press(childRow.locator('[data-testid="work-child-stop"]'), width);
+      // A row's Stop asks "Stop?" on its first press and stops on the second (U-3).
+      const rowStop = childRow.locator('[data-testid="work-child-stop"]');
+
+      await press(rowStop, width);
+      await until(
+        async () => {
+          const text = await rowStop.textContent();
+
+          return text?.trim() ?? "";
+        },
+        (text) => text === "Stop?",
+        5000
+      );
+      await press(rowStop, width);
 
       const moved = await until(
         async () =>

@@ -2,6 +2,9 @@
 // repeats a name the control already has (an icon button's `aria-label`) and never holds the only
 // copy of anything, since a phone has no hover. @foldkit/ui's tooltip owns the delay, the anchoring
 // and visibility through `tooltipToView`; `tooltipBubble` draws the bubble alone, for the catalogue.
+// `withTooltip` is the live views' form (U-15): the same bubble under a control, shown by CSS from
+// `md` while the pointer rests on it or it has keyboard focus, so a header or a row needs no state
+// per control.
 
 import type { RenderInfo } from "@foldkit/ui/tooltip";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
@@ -56,3 +59,59 @@ export const tooltipToView =
           : h.empty,
       ]
     );
+
+/**
+ * Where a hover tooltip sits: under its control or over it (for a control at the foot of the
+ * screen), lined up with the control's start edge, its centre or its end edge, so it stays on
+ * screen at either end.
+ */
+export type TooltipAlign =
+  | "start"
+  | "center"
+  | "end"
+  | "above-center"
+  | "above-end";
+
+const ALIGN: Readonly<Record<TooltipAlign, string>> = {
+  start: "top-full mt-(--space-1) start-0",
+  center: "top-full mt-(--space-1) start-1/2 -translate-x-1/2",
+  end: "top-full mt-(--space-1) end-0",
+  "above-center": "bottom-full mb-(--space-1) start-1/2 -translate-x-1/2",
+  "above-end": "bottom-full mb-(--space-1) end-0",
+};
+
+/**
+ * `control` with its tooltip under it (or over it, `align`): from `md`, the bubble shows while the pointer rests on the
+ * control or the control has keyboard focus, and never on a phone or while the menu the control
+ * opens is open. It repeats the control's own accessible name, so it is hidden from assistive
+ * technology, which already hears the name.
+ */
+export const withTooltip = <Message>(
+  h: HtmlBuilder<Message>,
+  control: Html,
+  text: string,
+  align: TooltipAlign = "center"
+): Html =>
+  h.span(
+    [
+      h.DataAttribute("slot", "tooltip-anchor"),
+      h.Class("group/tooltip relative inline-flex shrink-0"),
+    ],
+    [
+      control,
+      h.span(
+        [
+          h.DataAttribute("slot", "tooltip"),
+          h.AriaHidden(true),
+          h.Class(
+            classNames(
+              TOOLTIP_CLASS,
+              "pointer-events-none absolute z-(--layer-tooltip) hidden md:group-hover/tooltip:block md:group-has-[:focus-visible]/tooltip:block group-has-[[aria-expanded=true]]/tooltip:invisible",
+              ALIGN[align]
+            )
+          ),
+        ],
+        [text]
+      ),
+    ]
+  );

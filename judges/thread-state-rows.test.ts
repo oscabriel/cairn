@@ -242,7 +242,11 @@ const CASES = {
   }),
   "WaitingFor claude_slot": row(
     { ...running, waitingFor: "claude_slot" },
-    { category: "held", word: word("Working"), hold: "Waiting" }
+    {
+      category: "held",
+      word: word("Working"),
+      hold: "Waiting for a Claude slot",
+    }
   ),
   "WaitingFor parent": row(child({ waitingFor: "parent" }), {
     category: "held",
@@ -275,7 +279,7 @@ const CASES = {
   }),
   "RuntimeRequestKind brief": row(asking("brief"), {
     category: "waiting-on-you",
-    word: word("Go"),
+    word: word("Waiting for Go"),
   }),
   "RuntimeRequestKind criteria": row(asking("criteria"), {
     category: "waiting-on-you",
@@ -502,7 +506,11 @@ const CASES = {
   ),
   "state: Hold": row(
     { ...running, waitingFor: "claude_slot" },
-    { category: "held", word: word("Working"), hold: "Waiting" }
+    {
+      category: "held",
+      word: word("Working"),
+      hold: "Waiting for a Claude slot",
+    }
   ),
   "state: Unseen": row(
     {
@@ -788,7 +796,7 @@ describe("thread-state rows", () => {
     );
 
     const wrongWord = doc.replace(
-      '| `RuntimeRequestKind` | `brief` | "Go"',
+      '| `RuntimeRequestKind` | `brief` | "Waiting for Go"',
       '| `RuntimeRequestKind` | `brief` | "Approval"'
     );
 
@@ -799,7 +807,7 @@ describe("thread-state rows", () => {
       "RuntimeRequestKind brief: the state is waiting-on-you, the doc says Held",
     ]);
     assert.deepStrictEqual(judge(wrongWord), [
-      'RuntimeRequestKind brief: the label map does not quote "Go"',
+      'RuntimeRequestKind brief: the label map does not quote "Waiting for Go"',
     ]);
   });
 });

@@ -40,7 +40,7 @@ _Avoid_: workspace, repo (for the Cairn concept)
 
 **Earlier project thread**: A project thread a refresh replaced: archived, out of the shell stream, and listed newest first under the sidebar's "Previous (n)" fold, read a page at a time from `shell.previousThreads` (ADR 0048). It opens read only however its page is reached (the fold, Back, a reload, a link, answered by `shell.earlierThread` when the fold does not hold it): its transcript, its subagent rows and its work panel, with a bar in place of the composer that leads to the current project thread. _Avoid_: the archive.
 
-**Managed thread**: A thread whose lineage roots at a project thread (a subagent, a brief's child, a workflow node), listed under the project thread with its status. It can be opened and used fully (read, message, steer, stop, answer), though the default flow goes through the project thread. One managed by an earlier project thread leaves the sidebar's list and is reached from that thread's transcript and work panel.
+**Managed thread**: A thread whose lineage roots at a project thread (a subagent, a brief's child, a workflow node), listed under the project thread with its status word: the ones that ask the user first, then the other live ones, and the resting and failed ones folded under "Resting (n)", each group six rows then twelve more at a time. It can be opened and used fully (read, message, steer, stop, answer), though the default flow goes through the project thread. One managed by an earlier project thread leaves the sidebar's list and is reached from that thread's transcript and work panel.
 
 **Scratch thread**: A thread in the scratch project, for a one-off question: it runs in a throwaway folder of its own under the data directory. Clearing it stops its run and its subagents', deletes them from the shell and removes its folder; a boot repair removes any scratch folder whose thread is gone.
 
@@ -82,11 +82,11 @@ _Avoid_: orb, cloud thread, sandbox
 
 **Way back**: The "Subagent of <parent>" link at the top of a child's transcript, back to the parent thread.
 
-**Parent banner**: The line above a thread's composer while one of its subagents asks the user; it names each asking child and opens the first. It hides while the thread asks the user itself.
+**Parent banner**: The line above a thread's composer while one of its subagents asks the user, in the rows' own words ("Subagent · Approval", "2 subagents · Waiting for Go"); it names each asking child and its Open opens the first. It hides while the thread asks the user itself.
 
-**Work panel**: The panel a thread in a tree opens from its chat header (`next` only): its parent chain, its children with their states (live ones with Stop, resting ones under "Previous", folded, six then twelve more at a time), a subagent's own steps, and the thread's workflows from the steps panel's data, with Stop on the whole workflow while it may run nodes and on each live node of a running one. A column beside the chat column from 1,024 px, a bottom sheet below.
+**Work panel**: The panel a thread in a tree opens from its chat header (`next` only): its parent chain, its children with their states (live ones with Stop, the word beside the composer's Stop glyph, whose first press asks "Stop?" in place since nothing undoes a stop; resting ones under "Previous", folded, six then twelve more at a time), a subagent's own steps, and the thread's workflows from the steps panel's data, with Stop on the whole workflow while it may run nodes and on each live node of a running one. A column beside the chat column from 1,024 px, a bottom sheet below.
 
-**Subagent steps**: A child's steps in the work panel, read from its own row and records, never model text: "You said go", "Started" (in a worktree or the project's checkout), "Working on it", "Said what it did", each done, now, to do, failed or stopped. The header's button counts them ("2/4 steps").
+**Subagent steps**: A child's steps in the work panel, read from its own row and records, never model text: "You said go", "Started" (in a worktree or the project's checkout), "Working on it", "Said what it did", each Done, Now, To do, Failed or Stopped. The header's button counts them ("2/4 steps").
 
 **Goal chip**: The chat header's button on a goal thread (`next` only), counting its criteria as the verdict writer left them ("2 of 4 met, 1 not met"; "2/4" on the phone). It opens the goal panel. The project thread's sidebar row carries the same tally ("2/4 met").
 
@@ -150,7 +150,7 @@ _Avoid_: launch brief, plan approval
 
 _Avoid_: grant (in prose), allowance
 
-**Steps panel**: What a client shows of a thread's workflows, read from the dispatch ledger on the thread stream (`WorkflowSteps.ts`): each workflow's heading and node tally, its phases with their nodes, its totals and its log. A node reads as queued, running, held, unknown, done, failed, stopped or refused; a phase is pending with no nodes, running while one is live, else done. Phases only grow.
+**Steps panel**: What a client shows of a thread's workflows, read from the dispatch ledger on the thread stream (`WorkflowSteps.ts`): each workflow's heading and node tally, its phases with their nodes, its totals and its log. A node's record is queued, running, held, unknown, done, failed, stopped or refused, which the work panel words from the state table (a running node reads "Working", as a working child does); a phase is pending with no nodes, running while one is live, else done. Phases only grow.
 
 **Phase**: A named stage of a workflow, declared in its `meta` or reached at run time with `phase()`. The ledger lists phases append-only by title, and each node records the phase it ran in.
 
@@ -319,6 +319,10 @@ _Avoid_: plugin
 **Presence**: A device telling the brain whether Cairn is on screen and which thread it shows, so a push waits while the user is looking at that thread or one above it.
 
 **Approval push**: The push for a request waiting on a thread, in the request's own words, one notification per thread; held back while a page shows it, sent late once it has waited a minute unseen, and reminded once 15 minutes after the last push. A subagent's request pushes under its project thread (the root of its lineage), with the root's tag and link and a "<child> asks:" prefix.
+
+**Needs you**: A thread the user talks to (a folder project's project thread, or the scratch thread this device holds) with a request waiting anywhere in its tree, or a result of its own the user has not seen. A subagent's result reaches its parent, so only its requests count, and they count once, on the root. One predicate and one count in `client-logic/Badge.ts` give the favicon, the app icon's badge, every push's number and the rail's mark. The scratch thread's identity is in the page's localStorage, so the brain's count, the push's number, leaves a scratch thread out. An old top-level thread no list shows never counts.
+
+**State table**: The one table of state to word, tone and mark (`STATE_LOOKS` in `client-logic/ThreadState.ts`) that the sidebar's rows, the chat header, the hold banner, the parent banner, the work panel and the transcript's subagent rows read, so one state has one name and one mark on a screen. Words are sentence case ("Waiting for Go", "To do"); only the states that wait on the user carry the needs-you dot.
 
 ## Asking the user
 

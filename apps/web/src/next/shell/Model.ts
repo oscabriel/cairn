@@ -3,7 +3,8 @@
 // sheet, which project favicons loaded, the refresh confirm, the scratch thread's overlay, and the
 // work panel's open state. The rail, the project's sidebar list, the chat header, the scratch
 // overlay and the work panel all draw from it, and so does the goal panel (plan 6H): the open
-// thread's criteria and the user's marks on its own. The rail's + bubble opens the add-project
+// thread's criteria and the user's marks on its own. The sidebar's managed list folds its resting
+// rows and pages both groups, as the work panel does (U-9). The rail's + bubble opens the add-project
 // picker, whose folder, once added, the rail selects when the shell shows its project. The
 // selected project's earlier project threads (its "Previous" fold, ADR 0048), the project and
 // thread menus and the rename and remove dialogs they open are the shell's too.
@@ -84,13 +85,20 @@ export type ChildGroup = typeof ChildGroup.Type;
 
 /**
  * The work panel (lineage and steps): shown or hidden, the "Previous" group open, how many rows
- * each child group shows, and the children whose Stop was asked and has not yet shown on their row.
+ * each child group shows, the row Stop pressed once and asking "Stop?", and the children whose
+ * Stop was asked and has not yet shown on their row.
  */
 export const WorkState = Schema.Struct({
   isOpen: Schema.Boolean,
   isPreviousOpen: Schema.Boolean,
   shownActive: Schema.Int,
   shownPrevious: Schema.Int,
+  /**
+   * The row whose Stop was pressed once and now asks "Stop?" (U-3): a child's thread id, or a
+   * node's `stopKeyOf`. A second press stops it; pressing another row's Stop, leaving the control
+   * or closing the panel lets it go.
+   */
+  armedStop: Schema.Option(Schema.String),
   stopping: Schema.Array(ThreadId),
   /** Workflows and nodes a Stop was asked of and not yet answered, by `stopKeyOf`. */
   stoppingWork: Schema.Array(Schema.String),
@@ -109,9 +117,34 @@ export const initialWork: WorkState = {
   isPreviousOpen: false,
   shownActive: FIRST_CHILD_ROWS,
   shownPrevious: FIRST_CHILD_ROWS,
+  armedStop: Option.none(),
   stopping: [],
   stoppingWork: [],
   failure: Option.none(),
+};
+
+/** Which of the sidebar's two managed groups a "Show more" grows. */
+export const ManagedGroup = Schema.Literals(["live", "resting"]);
+
+export type ManagedGroup = typeof ManagedGroup.Type;
+
+/**
+ * The sidebar's list of the threads the project thread manages, in the work panel's shape (U-9):
+ * the resting fold open, and how many rows each group shows (six, then twelve more a press).
+ */
+export const ManagedListState = Schema.Struct({
+  isRestingOpen: Schema.Boolean,
+  shownLive: Schema.Int,
+  shownResting: Schema.Int,
+});
+
+export type ManagedListState = typeof ManagedListState.Type;
+
+/** The managed list at its first page, its resting fold closed. */
+export const initialManagedList: ManagedListState = {
+  isRestingOpen: false,
+  shownLive: FIRST_CHILD_ROWS,
+  shownResting: FIRST_CHILD_ROWS,
 };
 
 /** The work panel's Stopping key of a whole workflow, or of one of its nodes. */
@@ -267,6 +300,7 @@ export const Model = Schema.Struct({
   refresh: Schema.Option(RefreshConfirm),
   scratch: ScratchState,
   work: WorkState,
+  managedList: ManagedListState,
   goal: GoalPanelState,
   /** Why the last scratch turn could not be prepared; drawn in the scratch overlay's foot only. */
   failure: Schema.Option(Schema.String),
@@ -309,6 +343,7 @@ export const initial: Model = {
     sentDraft: Option.none(),
   },
   work: initialWork,
+  managedList: initialManagedList,
   goal: initialGoalPanel,
   failure: Option.none(),
   addProject: Option.none(),

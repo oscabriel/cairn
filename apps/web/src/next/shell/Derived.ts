@@ -6,6 +6,7 @@
 // "Previous" fold or the brain's answer for it, since archived rows are not in the shell (ADR 0048). Pure, so the views, the
 // catalogue and the tests read the same answers.
 
+import { rootsNeedingYou } from "@cairn/client-logic/Badge";
 import {
   defaultProjectOf,
   listedThreadsOf,
@@ -17,7 +18,7 @@ import {
   subagentRequestFor,
 } from "@cairn/client-logic/SubagentRollup";
 import type { SubagentRequest } from "@cairn/client-logic/SubagentRollup";
-import { THREAD_LABELS, threadState } from "@cairn/client-logic/ThreadState";
+import { STATE_LOOKS, threadState } from "@cairn/client-logic/ThreadState";
 import type { ThreadCategory } from "@cairn/client-logic/ThreadState";
 import { formatSidebarAge } from "@cairn/client-logic/Time";
 import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
@@ -188,13 +189,13 @@ export interface RowStatus {
   readonly category: ThreadCategory;
 }
 
-const IDLE: Status = { tone: "neutral", mark: "idle", word: "Idle" };
+const IDLE: Status = statusOfLabel(STATE_LOOKS.idle);
 
-const DONE: Status = statusOfLabel(THREAD_LABELS.done);
+const DONE: Status = statusOfLabel(STATE_LOOKS.done);
 
 /**
- * A thread's status, from the one thread-state function: its label when it has one; else Done
- * once a run has finished, Idle before any has.
+ * A thread's status, from the one thread-state function in the one state table's word, tone and
+ * mark (U-14): its label when it has one; else Done once a run has finished, Idle before any has.
  */
 export const rowStatusOf = (
   thread: ThreadShell,
@@ -209,12 +210,7 @@ export const rowStatusOf = (
   return {
     category: state.category,
     status: Option.match(state.label, {
-      // A limited thread is not asking anything: its mark is the warning, so it does not read as
-      // the needs-you dot it shares a tone with.
-      onSome: (label) =>
-        state.status === "limited"
-          ? { ...statusOfLabel(label), mark: "warning" as const }
-          : statusOfLabel(label),
+      onSome: statusOfLabel,
       onNone: () => (Option.isSome(thread.latestRunCompletedAt) ? DONE : IDLE),
     }),
   };
@@ -226,28 +222,33 @@ export const requestsOf = (
 ): ReadonlyMap<ThreadId, SubagentRequest> =>
   pendingSubagentRequests(threadsOf(model));
 
-/** What a rail bubble's mark says: a thread in the project needs the user, or one is working. */
+/** What a rail bubble's mark says: the project's thread needs the user, or one is working. */
 export type ProjectMark = "needs" | "working" | "none";
 
-/** The mark of `project`'s bubble, from its project thread and the threads it manages. */
+/**
+ * The mark of `project`'s bubble: "needs" exactly when the one counting rule counts its project
+ * thread (`rootsNeedingYou`, the favicon's and the push's rule, C-4), else "working" while a thread
+ * it lists is at work.
+ */
 export const projectMarkOf = (
   model: Model,
   project: ProjectShell,
   requests: ReadonlyMap<ThreadId, SubagentRequest>
 ): ProjectMark => {
-  const threads = listedThreadsOf(project, threadsOf(model));
+  const threads = threadsOf(model);
 
-  const categories = new Set(
-    threads.map(
-      (thread) => rowStatusOf(thread, requests, model.context.nowMs).category
-    )
-  );
-
-  if (categories.has("waiting-on-you")) {
+  if (
+    rootsNeedingYou({ projects: [project], threads }, Option.none()).size > 0
+  ) {
     return "needs";
   }
 
-  return categories.has("active") ? "working" : "none";
+  return listedThreadsOf(project, threads).some(
+    (thread) =>
+      rowStatusOf(thread, requests, model.context.nowMs).category === "active"
+  )
+    ? "working"
+    : "none";
 };
 
 /** The letter a bubble shows when its project has no favicon. */
@@ -257,22 +258,21 @@ export const projectLetterOf = (project: ProjectShell): string =>
     () => "?"
   ).toUpperCase();
 
-/** A managed row's quiet line: what it is and its age, or that it asks the user. */
+/**
+ * A managed row's quiet line: its status word, the same word its mark and the header say (U-9,
+ * U-14), and its age, so a phone with no hover tells Failed, Done and Idle apart.
+ */
 export const managedMetaOf = (
   thread: ThreadShell,
   row: RowStatus,
   nowMs: number
 ): string => {
-  if (row.category === "waiting-on-you") {
-    return "subagent · asks you";
-  }
-
   const at = Option.getOrElse(
     Option.orElse(thread.latestRunStartedAt, () => thread.latestRunCompletedAt),
     () => thread.createdAt
   );
 
-  return `subagent · ${formatSidebarAge(at, nowMs)}`;
+  return `${row.status.word} · ${formatSidebarAge(at, nowMs)}`;
 };
 
 /** The project thread's age, from its latest run or its creation. */

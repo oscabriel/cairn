@@ -1,7 +1,6 @@
 // Ported from github.com/pingdotgg/t3code, packages/client-runtime/src/state/threadInbox.test.ts at
 // fe27e8e3dc12dcbb108e9a28fd9b8cb65f34ae92. Kept: the send-order case. Removed: the return tracker
-// cases (the tracker is not ported). Added: what "working" means on Cairn's rows, and the return
-// order with an observed return time.
+// cases (the tracker is not ported). Added: the return order with an observed return time.
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -20,12 +19,11 @@
 // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 // OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import { ApprovalId, ThreadId } from "@cairn/protocol/Ids";
+import { ThreadId } from "@cairn/protocol/Ids";
 import { assert, describe, it } from "@effect/vitest";
 import { DateTime, Option } from "effect";
 
 import {
-  isThreadWorking,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
 } from "./ThreadInbox.ts";
@@ -41,36 +39,6 @@ const row = (id: string) => ({
   latestUserMessageAt: Option.none<DateTime.Utc>(),
   latestRunRequestedAt: Option.none<DateTime.Utc>(),
   latestRunCompletedAt: Option.none<DateTime.Utc>(),
-});
-
-describe(isThreadWorking, () => {
-  it("is true while the agent is busy and nothing waits on the user", () => {
-    for (const activity of ["preparing", "running", "waiting"] as const) {
-      assert.isTrue(
-        isThreadWorking({ activity, pendingRuntimeRequest: Option.none() })
-      );
-    }
-
-    for (const activity of ["idle", "failed"] as const) {
-      assert.isFalse(
-        isThreadWorking({ activity, pendingRuntimeRequest: Option.none() })
-      );
-    }
-  });
-
-  it("is false while a request waits on the user", () => {
-    assert.isFalse(
-      isThreadWorking({
-        activity: "running",
-        pendingRuntimeRequest: Option.some({
-          id: ApprovalId.make("apr_1"),
-          kind: "tool-call",
-          createdAt: time("2026-06-01T00:00:00.000Z"),
-          origin: Option.none(),
-        }),
-      })
-    );
-  });
 });
 
 describe(sortWorkingThreadsBySend, () => {

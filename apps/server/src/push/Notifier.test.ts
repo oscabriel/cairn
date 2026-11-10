@@ -7,7 +7,7 @@
 // apps/server/test/push.test.ts at 1a5cd4a (the retry and removal cases).
 
 import { EntryId, RunId } from "@cairn/protocol/Ids";
-import type { ThreadId } from "@cairn/protocol/Ids";
+import type { ProjectId, ThreadId } from "@cairn/protocol/Ids";
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
 import { ThreadRename } from "@cairn/protocol/ShellCommands";
 import { assert, describe, it } from "@effect/vitest";
@@ -60,6 +60,13 @@ import { WebPush } from "./WebPush.ts";
 
 /** 2026-10-22T12:00:00Z. */
 const NOW = 1_792_670_400_000;
+
+/** Creates thread `n` in `projectId` as its project thread, a root the badge counts. */
+const projectThreadIn = (projectId: ProjectId, n: number) =>
+  ThreadCreate.make({
+    ...createThread(projectId, n),
+    projectThread: { replaces: Option.none() },
+  });
 
 const decodeMessage = Schema.decodeUnknownSync(
   Schema.fromJsonString(PushMessage)
@@ -169,14 +176,14 @@ const nextCommandId = () => {
   return testCommandId(50_000 + commandCounter);
 };
 
-/** Makes thread `n` in a fresh project; its title is `title`. */
+/** Makes thread `n` in a fresh project `n`, as its project thread, so the badge counts it. */
 const makeThread = (n: number) =>
   Effect.gen(function* () {
     const sink = yield* EventSink;
     const project = createProject(n);
 
     yield* sink.commitCommand(project.command);
-    yield* sink.commitCommand(createThread(project.projectId, n));
+    yield* sink.commitCommand(projectThreadIn(project.projectId, n));
 
     return testThreadId(n);
   });
@@ -326,7 +333,7 @@ describe(Notifier, () => {
           const child = testThreadId(2);
 
           yield* sink.commitCommand(project.command);
-          yield* sink.commitCommand(createThread(project.projectId, 1));
+          yield* sink.commitCommand(projectThreadIn(project.projectId, 1));
           yield* sink.commitCommand(
             ThreadCreate.make({
               ...createThread(project.projectId, 2),
@@ -358,6 +365,40 @@ describe(Notifier, () => {
         })
       );
     }
+  );
+
+  it.effect(
+    "badges only threads a list shows: an old top-level thread's unseen result never counts (C-4)",
+    () =>
+      withNotifier(
+        fakePushService(() => 201),
+        Effect.gen(function* () {
+          const sink = yield* EventSink;
+          const project = createProject(1);
+
+          const unseen = {
+            latestRunCompletedAt: Option.some(
+              Option.some(DateTime.makeUnsafe(NOW))
+            ),
+          };
+
+          yield* sink.commitCommand(project.command);
+          yield* sink.commitCommand(projectThreadIn(project.projectId, 1));
+          yield* sink.commitCommand(createThread(project.projectId, 2));
+          yield* patchThread(testThreadId(2), unseen);
+
+          const unlisted = yield* Notifier.use((notifier) => notifier.badge);
+
+          yield* patchThread(testThreadId(1), unseen);
+
+          const listed = yield* Notifier.use((notifier) => notifier.badge);
+
+          assert.deepStrictEqual(
+            { unlisted, listed },
+            { unlisted: 0, listed: 1 }
+          );
+        })
+      )
   );
 
   it.effect("pushes a run that ran over 20 s once to every device", () => {

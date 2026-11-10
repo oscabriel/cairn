@@ -35,7 +35,6 @@
 // approvals they held, without starting scheduling, so a guard killed while stopping does not let
 // a stopped child run again after the restart, and the gate has a full book from the first call.
 
-import { badgeOf } from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { Budget } from "@cairn/protocol/Spend";
 import {
@@ -221,10 +220,7 @@ export class BudgetGuard extends Context.Service<
         }
       });
 
-      const badge = threadRows.listLive.pipe(
-        Effect.map((rows) => badgeOf(rows.map((row) => row.shell))),
-        Effect.orElseSucceed(() => 0)
-      );
+      const { badge } = notifier;
 
       const push = Effect.fnUntraced(function* (
         threadId: ThreadId,

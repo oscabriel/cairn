@@ -17,9 +17,10 @@
 // a subagent's request goes under its root thread, prefixed "<child> asks:"), worded from the
 // thread's records (`RequestRecords`); a sweep every 30 seconds pushes a request whose
 // first push was suppressed or missed once it is 60 seconds old and unwatched, and reminds once 15
-// minutes after its last push. The badge is `@cairn/client-logic/Badge`'s, the count the page shows.
+// minutes after its last push. The badge is `@cairn/client-logic/Badge`'s one counting rule, the count
+// the page shows (`badge`; BudgetGuard and the workflow budget pushes read it too).
 
-import { badgeOf, hasPendingRequest } from "@cairn/client-logic/Badge";
+import { hasPendingRequest, needsYouCount } from "@cairn/client-logic/Badge";
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type { ApprovalRecord } from "@cairn/protocol/Policy";
 import type { PushSubscriptionInput } from "@cairn/protocol/Push";
@@ -40,6 +41,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { Projects } from "../projects/Projects.ts";
 import { EventStore } from "../shell/EventStore.ts";
 import type { StoredShellEvent } from "../shell/EventStore.ts";
 import { isLiveThread, ThreadRows } from "../shell/ThreadRows.ts";
@@ -400,11 +402,17 @@ export class Notifier extends Context.Service<
     readonly nightlyFailed: Effect.Effect<ReadonlyArray<DeliveryOutcome>>;
     /** Waits until every push started so far has been delivered or given up. */
     readonly settle: Effect.Effect<void>;
+    /**
+     * The app icon's badge every push carries: client-logic's one counting rule over the live
+     * projects and threads (`needsYouCount`), 0 when the store cannot be read. The brain cannot
+     * see the scratch thread a page holds, so a scratch thread that needs the user is not in it.
+     */
+    readonly badge: Effect.Effect<number>;
   }
 >()("cairn/server/push/Notifier") {
   /**
    * The notifier and its event loop, which starts with the layer and stops with its scope. Needs
-   * the shell store (`EventStore`, `ThreadRows`), `SqlClient`, `PushSubscriptions`, `WebPush`,
+   * the shell store (`EventStore`, `ThreadRows`, `Projects`), `SqlClient`, `PushSubscriptions`, `WebPush`,
    * `Presence` and `RequestRecords`.
    */
   static readonly layerNoDeps = Layer.effect(
@@ -413,6 +421,7 @@ export class Notifier extends Context.Service<
       const sql = yield* SqlClient.SqlClient;
       const events = yield* EventStore;
       const threads = yield* ThreadRows;
+      const projects = yield* Projects;
       const subscriptions = yield* PushSubscriptions;
       const webPush = yield* WebPush;
       const presence = yield* Presence;
@@ -546,9 +555,21 @@ export class Notifier extends Context.Service<
           return rows.length > 0;
         });
 
-      // A subagent's row is hidden and its result reaches its parent: it never counts.
-      const badgeCount = threads.listLive.pipe(
-        Effect.map((rows) => badgeOf(rows.map((row) => row.shell))),
+      // The page's rule (C-4): a subagent's request counts on its root, its result never does, and
+      // only a project thread the sidebar lists counts. No scratch thread: the brain cannot see it.
+      const badgeCount = Effect.all({
+        projects: projects.listActive,
+        threads: threads.listLive,
+      }).pipe(
+        Effect.map((live) =>
+          needsYouCount(
+            {
+              projects: live.projects,
+              threads: live.threads.map((row) => row.shell),
+            },
+            Option.none()
+          )
+        ),
         Effect.orElseSucceed(() => 0)
       );
 
@@ -1009,6 +1030,7 @@ export class Notifier extends Context.Service<
         executorSignedIn,
         nightlyFailed,
         settle,
+        badge: badgeCount,
       });
     })
   );

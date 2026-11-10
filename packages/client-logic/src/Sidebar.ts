@@ -8,7 +8,8 @@
 // of the shelves. Changed: Cairn's shell rows, one environment, an `Option` where t3code returns
 // `null`; a row's status, top label and words come from `ThreadState.ts` (package 1E). Not ported:
 // drag and drop, sweep gestures, multi-select, pull requests, forks and the Working shelf (plan
-// D27), and React hooks.
+// D27), and React hooks. Added: the `next` sidebar's managed list in the work panel's shape, asking
+// rows first and the resting ones apart (`managedGroupsOf`, U-9).
 //
 // MIT License. Copyright (c) 2026 T3 Tools Inc.
 //
@@ -38,7 +39,7 @@ import {
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "./ThreadSort.ts";
-import type { ThreadStatus } from "./ThreadState.ts";
+import type { ThreadCategory, ThreadStatus } from "./ThreadState.ts";
 
 /** The shelves of the sidebar, top to bottom. */
 export type SidebarSection = "pinned" | "active" | "snoozed" | "settled";
@@ -530,4 +531,38 @@ export const searchExcerpt = (
   const inPair = low >= 0xdc_00 && low <= 0xdf_ff;
 
   return Option.some(`…${text.slice(inPair ? start + 1 : start)}`);
+};
+
+/** A `next` sidebar's managed list in the work panel's shape (U-9). */
+export interface ManagedGroups<Row> {
+  /** Rows that ask the user first, then the other live ones (working, waiting, held). */
+  readonly live: ReadonlyArray<Row>;
+  /** Rows at rest or failed, folded behind their count. */
+  readonly resting: ReadonlyArray<Row>;
+}
+
+/**
+ * The project thread's managed rows (given newest first) as the sidebar lists them: the ones that
+ * ask the user lifted to the top, the rest of the live ones under them, each group keeping its
+ * order, and the resting and failed ones apart, as the work panel folds its resting children.
+ */
+export const managedGroupsOf = <Row>(
+  rows: ReadonlyArray<Row>,
+  categoryOf: (row: Row) => ThreadCategory
+): ManagedGroups<Row> => {
+  const isResting = (row: Row) => {
+    const category = categoryOf(row);
+
+    return category === "resting" || category === "failed";
+  };
+
+  const live = rows.filter((row) => !isResting(row));
+
+  return {
+    live: [
+      ...live.filter((row) => categoryOf(row) === "waiting-on-you"),
+      ...live.filter((row) => categoryOf(row) !== "waiting-on-you"),
+    ],
+    resting: rows.filter(isResting),
+  };
 };

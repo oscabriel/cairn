@@ -55,6 +55,7 @@ describe("workflow budget pushes", () => {
               Ref.update(sent, (all) => [...all, message]).pipe(
                 Effect.as(["delivered" as const])
               ),
+            badge: Effect.succeed(0),
           }),
           Layer.mock(ThreadRows)({
             get: () => Effect.succeedNone,

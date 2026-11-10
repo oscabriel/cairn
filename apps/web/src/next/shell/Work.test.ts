@@ -294,6 +294,44 @@ describe("the work panel on a parent", () => {
     );
   });
 
+  it("says Stop in words with the composer's Stop glyph, and Stop? once pressed (U-3)", () => {
+    const stop = Scene.selector(
+      `[data-testid="work-child"][data-thread-id="${rowId(2)}"] [data-testid="work-child-stop"]`
+    );
+
+    Scene.scene(
+      appFor(inputs),
+      givenWork(),
+      Scene.expect(stop).toHaveText("Stop"),
+      Scene.expect(
+        Scene.selector(
+          `[data-thread-id="${rowId(2)}"] [data-testid="work-child-stop"] [data-glyph="stop"]`
+        )
+      ).toExist(),
+      Scene.expect(stop).not.toHaveAttr("data-armed", "true")
+    );
+
+    Scene.scene(
+      appFor(inputs),
+      givenWork({ armedStop: Option.some(rowId(2)) }),
+      Scene.expect(stop).toHaveText("Stop?"),
+      Scene.expect(stop).toHaveAttr("data-armed", "true"),
+      Scene.expect(
+        Scene.role("button", {
+          name: "Stop Count the files? Press again to stop it",
+        })
+      ).toExist(),
+      // Only the pressed row asks.
+      Scene.expect(
+        Scene.role("button", { name: "Stop Read the README" })
+      ).toHaveText("Stop"),
+      // Drawing the question sends nothing; only the second press stops (the update's test).
+      Scene.tap(({ commands }) => {
+        assert.lengthOf(commands, 0);
+      })
+    );
+  });
+
   it("says Stopping in place of Stop once asked", () => {
     Scene.scene(
       appFor(inputs),
@@ -614,7 +652,7 @@ describe("the work panel's workflows", () => {
       ).toContainText("1/2"),
       Scene.expect(
         Scene.selector('[data-testid="work-phase"][data-phase-state="pending"]')
-      ).toContainText("not started"),
+      ).toContainText("To do"),
       Scene.expectAll(
         Scene.all.selector('[data-testid="work-node"]')
       ).toHaveCount(2),
@@ -652,7 +690,7 @@ describe("the work panel's workflows", () => {
       appFor(inputs),
       givenWork({ stoppingWork: ["wf-1/n-2"] }),
       Scene.expect(Scene.selector(live)).toHaveAttr("data-stopping", "true"),
-      Scene.expect(Scene.selector(live)).toContainText("stopping"),
+      Scene.expect(Scene.selector(live)).toContainText("Stopping"),
       Scene.expect(Scene.testId("work-node-stop")).not.toExist()
     );
 
@@ -715,11 +753,72 @@ describe("the shell's update for the work panel", () => {
     work: { ...initialWork, isOpen: true },
   };
 
-  it("asks Stop once and remembers it until the child rests", () => {
-    const first = update(
+  /** A child's row Stop pressed twice: "Stop?", then the stop. */
+  const stopTwice = (model: typeof onParent, threadId: ThreadId) =>
+    update(
+      update(model, Message.ClickedStopChild({ threadId })).model,
+      Message.ClickedStopChild({ threadId })
+    );
+
+  it("asks Stop? on a row's first press and stops only on the second (U-3)", () => {
+    const armed = update(
       onParent,
       Message.ClickedStopChild({ threadId: rowId(2) })
     );
+
+    assert.deepStrictEqual(
+      {
+        commands: armed.commands?.length ?? 0,
+        stopping: armed.model.work.stopping,
+        armed: armed.model.work.armedStop,
+      },
+      { commands: 0, stopping: [], armed: Option.some<string>(rowId(2)) }
+    );
+
+    // Another row's Stop moves the question there; leaving the control lets it go.
+    const moved = update(
+      armed.model,
+      Message.ClickedStopChild({ threadId: rowId(3) })
+    );
+
+    assert.deepStrictEqual(
+      moved.model.work.armedStop,
+      Option.some<string>(rowId(3))
+    );
+    assert.isTrue(
+      Option.isNone(
+        update(moved.model, Message.BlurredStop()).model.work.armedStop
+      )
+    );
+
+    const stopped = update(
+      armed.model,
+      Message.ClickedStopChild({ threadId: rowId(2) })
+    );
+
+    assert.strictEqual(stopped.commands?.length, 1);
+    assert.deepStrictEqual(stopped.model.work.stopping, [rowId(2)]);
+    assert.isTrue(Option.isNone(stopped.model.work.armedStop));
+
+    // A node's Stop asks the same way; the whole workflow's worded Stop does not.
+    const nodeStop = Message.ClickedStopWorkflow({
+      threadId: rowId(9),
+      workflowId: "wf-1",
+      nodeId: Option.some("n-2"),
+    });
+
+    const nodeArmed = update(onParent, nodeStop);
+
+    assert.strictEqual(nodeArmed.commands?.length ?? 0, 0);
+    assert.deepStrictEqual(
+      nodeArmed.model.work.armedStop,
+      Option.some("wf-1/n-2")
+    );
+    assert.strictEqual(update(nodeArmed.model, nodeStop).commands?.length, 1);
+  });
+
+  it("asks Stop once and remembers it until the child rests", () => {
+    const first = stopTwice(onParent, rowId(2));
 
     assert.deepStrictEqual(first.model.work.stopping, [rowId(2)]);
     assert.strictEqual(first.commands?.length, 1);
@@ -767,15 +866,9 @@ describe("the shell's update for the work panel", () => {
       shell: Option.some(shellOf([shellRow(PARENT), waiting, restarted])),
     };
 
-    const askedOne = update(
-      inform(onParent, context).model,
-      Message.ClickedStopChild({ threadId: rowId(2) })
-    ).model;
+    const askedOne = stopTwice(inform(onParent, context).model, rowId(2)).model;
 
-    const asked = update(
-      askedOne,
-      Message.ClickedStopChild({ threadId: rowId(3) })
-    ).model;
+    const asked = stopTwice(askedOne, rowId(3)).model;
 
     assert.deepStrictEqual(asked.work.stopping, [rowId(2), rowId(3)]);
 
@@ -807,10 +900,7 @@ describe("the shell's update for the work panel", () => {
   });
 
   it("says why a Stop failed and offers it again", () => {
-    const asked = update(
-      onParent,
-      Message.ClickedStopChild({ threadId: rowId(2) })
-    ).model;
+    const asked = stopTwice(onParent, rowId(2)).model;
 
     const failed = update(
       asked,

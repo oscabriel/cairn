@@ -245,12 +245,28 @@ describe("subagent request rollup", () => {
       asking.map((thread) => thread.id),
       [grandchild.id]
     );
-    assert.strictEqual(childInputsTitle(asking), "Subagent needs approval");
+    assert.strictEqual(childInputsTitle(asking), "Subagent · Approval");
     assert.strictEqual(
       childInputsTitle([approving, sibling]),
       "2 subagents need you"
     );
-    assert.strictEqual(childInputsTitle([sibling]), "Subagent needs input");
+    assert.strictEqual(childInputsTitle([sibling]), "Subagent · Input");
+  });
+
+  it("names a child's brief in the rows' word, Waiting for Go, never Approval (U-14)", () => {
+    const briefing = {
+      ...subagentOf("subagent", id("root")),
+      pendingRuntimeRequest: request("brief"),
+    };
+
+    assert.strictEqual(
+      childInputsTitle([briefing]),
+      "Subagent · Waiting for Go"
+    );
+    assert.strictEqual(
+      childInputsTitle([briefing, briefing]),
+      "2 subagents · Waiting for Go"
+    );
   });
 
   it("stops walking a lineage that loops or leaves the shell", () => {
@@ -311,7 +327,7 @@ describe("the parent banner", () => {
         found.title,
         found.request,
       ]),
-      Option.some(["Subagent needs approval", "approval"])
+      Option.some(["Subagent · Approval", "approval"])
     );
   });
 

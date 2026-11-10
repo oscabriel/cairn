@@ -27,6 +27,7 @@ const countingNotifier = (
       Effect.as(outcomes)
     ),
     settle: Effect.void,
+    badge: Effect.succeed(0),
   });
 
 const post = Effect.fnUntraced(function* (

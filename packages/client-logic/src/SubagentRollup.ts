@@ -33,6 +33,9 @@ import type { RuntimeRequestKind } from "@cairn/protocol/Policy";
 import type { ThreadShell } from "@cairn/protocol/Shell";
 import { Option } from "effect";
 
+import type { ThreadLabel } from "./ThreadState.ts";
+import { isRunLive, THREAD_LABELS } from "./ThreadState.ts";
+
 /** What a descendant's pending request asks of the user, as its ancestors show it. */
 export type SubagentRequest = "approval" | "input";
 
@@ -71,13 +74,6 @@ const HELD_BY_NO_RUN: ReadonlySet<RuntimeRequestKind> = new Set([
   "brief",
   "criteria",
 ]);
-
-/** A run holds the request only while it is live: a stopped run's request no longer counts. */
-const isRunLive = (thread: RollupRow): boolean =>
-  Option.isSome(thread.activeRunId) ||
-  thread.activity === "preparing" ||
-  thread.activity === "running" ||
-  thread.activity === "waiting";
 
 /** Approvals of every kind but a question or a sign-in, which ask for input. */
 export const requestOfKind = (kind: RuntimeRequestKind): SubagentRequest =>
@@ -193,7 +189,7 @@ export const subagentDescendants = <
 
 /**
  * The descendants of `threadId` whose requests count, nearest first: what the parent's banner
- * lists ("Subagent needs approval").
+ * lists ("Subagent · Approval").
  */
 export const childrenAsking = <T extends RollupRow>(
   threadId: ThreadId,
@@ -203,25 +199,51 @@ export const childrenAsking = <T extends RollupRow>(
     Option.isSome(subagentRequestOf(child))
   );
 
-/** The banner's title over the asking children: approval when all ask for one, else input or you. */
+/**
+ * What an asking child's own row says, from the one state table: "Waiting for Go" for a brief,
+ * "Input" for a question or a sign-in, else "Approval" (`threadStatus`'s own-request order).
+ */
+export const askingLabelOf = (child: RollupRow): ThreadLabel =>
+  Option.match(child.pendingRuntimeRequest, {
+    onNone: () => THREAD_LABELS.approval,
+    onSome: ({ kind }) => {
+      if (kind === "brief") {
+        return THREAD_LABELS.go;
+      }
+
+      return requestOfKind(kind) === "input"
+        ? THREAD_LABELS.input
+        : THREAD_LABELS.approval;
+    },
+  });
+
+/** The one label every asking child shares, if they share one. */
+export const sharedAskingLabel = (
+  children: ReadonlyArray<RollupRow>
+): Option.Option<ThreadLabel> => {
+  const kinds = new Set(children.map((child) => askingLabelOf(child).kind));
+  const [first] = children;
+
+  return kinds.size === 1 && first !== undefined
+    ? Option.some(askingLabelOf(first))
+    : Option.none();
+};
+
+/**
+ * The banner's title over the asking children, in the rows' own words (U-14): "Subagent ·
+ * Approval", "2 subagents · Waiting for Go", and "3 subagents need you" when they ask for
+ * different things (each child's word then follows its name).
+ */
 export const childInputsTitle = (
   children: ReadonlyArray<RollupRow>
 ): string => {
-  const approvals = children.filter((child) =>
-    Option.contains(subagentRequestOf(child), "approval")
-  ).length;
+  const subject =
+    children.length === 1 ? "Subagent" : `${children.length} subagents`;
 
-  let need = "you";
-
-  if (approvals === 0) {
-    need = "input";
-  } else if (approvals === children.length) {
-    need = "approval";
-  }
-
-  return children.length === 1
-    ? `Subagent needs ${need}`
-    : `${children.length} subagents need ${need}`;
+  return Option.match(sharedAskingLabel(children), {
+    onNone: () => `${subject} need you`,
+    onSome: (label) => `${subject} · ${label.word}`,
+  });
 };
 
 /**
@@ -257,14 +279,16 @@ export const sidebarRowThreadId = (
 
 /** The banner over a parent's composer while its descendants ask the user. */
 export interface ParentBanner<T> {
-  /** "Subagent needs approval", "2 subagents need input". */
+  /** "Subagent · Approval", "2 subagents · Input", "2 subagents need you". */
   readonly title: string;
   /** Every descendant asking, nearest first; each is named, and opens its thread. */
   readonly children: ReadonlyArray<T>;
-  /** The first of them, which the banner's action opens. */
+  /** The first of them, which the banner's action (Open) opens. */
   readonly first: T;
-  /** What the first asks for, which names the action ("Open approval" or "Open question"). */
+  /** What the first asks for, as its ancestors' rows roll it up. */
   readonly request: SubagentRequest;
+  /** The label every asking child shares; none when they ask for different things. */
+  readonly label: Option.Option<ThreadLabel>;
 }
 
 /**
@@ -294,5 +318,6 @@ export const parentBannerOf = <T extends RollupRow>(
     children,
     first,
     request,
+    label: sharedAskingLabel(children),
   }));
 };

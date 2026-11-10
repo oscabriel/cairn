@@ -421,6 +421,7 @@ const syncPush: Step = (model) => {
     hello: model.hello,
     shell: model.shell,
     openThreadId: routedThreadId(model.route),
+    scratchThreadId: model.nextShell.scratch.threadId,
   });
 
   return samePushContext(model.push.context, context)

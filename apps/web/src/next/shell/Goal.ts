@@ -47,7 +47,7 @@ import { button, buttonClass, buttonDefaults } from "../ui/Button.ts";
 import { TYPE, WEIGHT_MEDIUM, WEIGHT_STRONG } from "../ui/Classes.ts";
 import type { StatusMark } from "../ui/Glyph.ts";
 import { glyph, statusGlyph } from "../ui/Glyph.ts";
-import { iconButton } from "../ui/IconButton.ts";
+import { iconButtonWithTooltip } from "../ui/IconButton.ts";
 import type { Tone } from "../ui/Tone.ts";
 import { TONE_TEXT } from "../ui/Tone.ts";
 import type { Message } from "./Message.ts";
@@ -484,7 +484,7 @@ export const goalPanelView = Submodel.defineView<
                 ],
                 ["Goal"]
               ),
-              iconButton(
+              iconButtonWithTooltip(
                 h,
                 {
                   ...buttonDefaults<Message>(),
@@ -493,7 +493,8 @@ export const goalPanelView = Submodel.defineView<
                   onClick: Option.some(ShellMessage.ClickedCloseGoal()),
                   attributes: [h.DataAttribute("testid", "goal-close")],
                 },
-                glyph(h, X, "x", "regular")
+                glyph(h, X, "x", "regular"),
+                "end"
               ),
             ]
           ),

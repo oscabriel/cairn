@@ -58,12 +58,8 @@ import { Option, Predicate, Schema } from "effect";
 
 import { approvalRecordsOf } from "./PendingRequests.ts";
 import type { SubagentRequest } from "./SubagentRollup.ts";
-import type {
-  ThreadStateRow,
-  ThreadStatus,
-  ThreadTone,
-} from "./ThreadState.ts";
-import { THREAD_LABELS, threadStatus } from "./ThreadState.ts";
+import type { StateLook, ThreadStateRow, ThreadStatus } from "./ThreadState.ts";
+import { STATE_LOOKS, THREAD_LABELS, threadStatus } from "./ThreadState.ts";
 
 /** The tool a parent proposes a subagent with. */
 export const SPAWN_TOOL = "subagent_spawn";
@@ -93,20 +89,17 @@ export type SubagentState =
   | "failed"
   | "stopped";
 
-/** A state's words and tone, in the thread labels' vocabulary. */
-export interface SubagentLabel {
-  readonly word: string;
-  readonly tone: ThreadTone;
-}
+/** A state's word, tone and mark, from the one state table (`STATE_LOOKS`). */
+export type SubagentLabel = StateLook;
 
-/** Every state's words and tone; a started child's live states say what its own row says. */
+/** Every state's look; a started child's live states say what its own row says. */
 export const SUBAGENT_LABELS: Readonly<Record<SubagentState, SubagentLabel>> = {
-  go: { word: "Waiting for Go", tone: "attention" },
-  declined: { word: "Declined", tone: "muted" },
-  "sent-back": { word: "Sent back", tone: "muted" },
-  expired: { word: "Expired", tone: "muted" },
-  cancelled: { word: "Cancelled", tone: "muted" },
-  unstarted: { word: "Not started", tone: "error" },
+  go: THREAD_LABELS.go,
+  declined: STATE_LOOKS.declined,
+  "sent-back": STATE_LOOKS["sent-back"],
+  expired: STATE_LOOKS.expired,
+  cancelled: STATE_LOOKS.cancelled,
+  unstarted: STATE_LOOKS.unstarted,
   approval: THREAD_LABELS.approval,
   input: THREAD_LABELS.input,
   "asking-parent": THREAD_LABELS["asking-parent"],
@@ -115,7 +108,7 @@ export const SUBAGENT_LABELS: Readonly<Record<SubagentState, SubagentLabel>> = {
   limited: THREAD_LABELS.limited,
   done: THREAD_LABELS.done,
   failed: THREAD_LABELS.failed,
-  stopped: { word: "Stopped", tone: "muted" },
+  stopped: STATE_LOOKS.stopped,
 };
 
 const TERMINAL: ReadonlySet<SubagentState> = new Set<SubagentState>([

@@ -1,15 +1,15 @@
 // The status chip: one state as its mark, its word and its tone, never colour alone (surfaces
-// note, StatusMark and StateWord). A thread's state reaches it through `labelChip`, from the one
-// thread-state function's `THREAD_LABELS` and `HOLD_LABELS`, so a row, a banner and a header say
-// the same word in the same tone.
+// note, StatusMark and StateWord). A thread's state reaches it through `statusOfLabel`, from the one
+// state table (`STATE_LOOKS`, which `THREAD_LABELS` and `HOLD_LABELS` read), so a row, a banner
+// and a header say the same word in the same tone with the same mark.
 
-import type { ThreadTone } from "@cairn/client-logic/ThreadState";
+import type { StateLook } from "@cairn/client-logic/ThreadState";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 
 import { classNames } from "../../ui/ClassNames.ts";
 import { TYPE, WEIGHT_MEDIUM } from "./Classes.ts";
 import type { StatusMark } from "./Glyph.ts";
-import { markOfTone, statusGlyph } from "./Glyph.ts";
+import { statusGlyph } from "./Glyph.ts";
 import type { Tone } from "./Tone.ts";
 import { TONE_TEXT, TONE_WASH, toneOfThreadTone } from "./Tone.ts";
 
@@ -46,12 +46,9 @@ export const statusChip = <Message>(
     [statusGlyph(h, status.mark, "small"), h.span([], [status.word])]
   );
 
-/** The status a thread label draws as: its word, its tone, and that tone's mark. */
-export const statusOfLabel = (label: {
-  readonly word: string;
-  readonly tone: ThreadTone;
-}): Status => {
-  const tone = toneOfThreadTone(label.tone);
-
-  return { tone, mark: markOfTone(tone), word: label.word };
-};
+/** The status a state draws as: its word, its tone and its mark, all from the one state table. */
+export const statusOfLabel = (label: StateLook): Status => ({
+  tone: toneOfThreadTone(label.tone),
+  mark: label.mark,
+  word: label.word,
+});

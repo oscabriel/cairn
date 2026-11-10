@@ -1,6 +1,7 @@
-// Scene tests for the parent banner (plan 6D): a child's approval shows on its parent's page with the
-// child named and "Open approval" linking to it; two asking children are both named; the banner
-// hides while the parent asks the user itself, on a child's own page, and when no child asks.
+// Scene tests for the parent banner (plan 6D): a child's approval shows on its parent's page in the
+// rows' word ("Subagent · Approval"), the child named and Open linking to it; two children asking
+// for different things are both named, each with its word; the banner hides while the parent asks
+// the user itself, on a child's own page, and when no child asks.
 
 import {
   asking,
@@ -69,7 +70,7 @@ describe("the parent banner", () => {
         "approval"
       ),
       Scene.expect(Scene.testId("parent-banner")).toContainText(
-        "Subagent needs approval"
+        "Subagent · Approval"
       ),
       Scene.expect(Scene.testId("parent-banner-child")).toHaveText(
         "Fetch the page"
@@ -81,9 +82,7 @@ describe("the parent banner", () => {
       Scene.expect(Scene.testId("parent-banner-child")).toHaveClass(
         "pointer-coarse:min-h-(--hit-target)"
       ),
-      Scene.expect(Scene.testId("parent-banner-open")).toHaveText(
-        "Open approval"
-      ),
+      Scene.expect(Scene.testId("parent-banner-open")).toHaveText("Open"),
       Scene.expect(Scene.testId("parent-banner-open")).toHaveAttr(
         "href",
         threadRouter({ threadId: rowId(2) })
@@ -121,11 +120,9 @@ describe("the parent banner", () => {
       sceneOf(PARENT, threads),
       given,
       Scene.expect(Scene.testId("parent-banner")).toContainText(
-        "Pick a folder, Fetch the page"
+        "Pick a folder (Input), Fetch the page (Approval)"
       ),
-      Scene.expect(Scene.testId("parent-banner-open")).toHaveText(
-        "Open question"
-      )
+      Scene.expect(Scene.testId("parent-banner-open")).toHaveText("Open")
     );
   });
 

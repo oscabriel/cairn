@@ -458,7 +458,7 @@ describe("the shell projector", () => {
   );
 
   it.effect(
-    "an event the projector cannot apply is skipped, and the rows still update after it (T-4)",
+    "an event the projector cannot apply is skipped, and the rows still update after it",
     () =>
       Effect.gen(function* () {
         yield* seedThreads(3);
@@ -1471,7 +1471,7 @@ describe("a goal thread's tally of its criteria", () => {
   );
 });
 
-describe("the boot reconcile's reads (T-6)", () => {
+describe("the boot reconcile's reads", () => {
   it.effect(
     "read nothing of an idle thread with no goal, and one document per goal or parent row, a view only for a thread that can have changed",
     () =>

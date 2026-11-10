@@ -347,7 +347,7 @@ describe("thread commands", () => {
   );
 
   it.live(
-    "a stop that does not go through Threads.stop (the budget stopper's seam.stop) still runs the stop hooks (T-2)",
+    "a stop that does not go through Threads.stop (the budget stopper's seam.stop) still runs the stop hooks",
     () =>
       withThread((threadId) =>
         Effect.gen(function* () {

@@ -28,7 +28,7 @@ export interface ClaudeSettingsValue {
   /**
    * How long a child held on a tool call, with no provider call open, keeps living. Past it the
    * child is killed and its session is resumed from the stamp at the next call, so a stop that
-   * never reached the bridge cannot keep a child for Claude Code's four-hour tool timeout (T-2).
+   * never reached the bridge cannot keep a child for Claude Code's four-hour tool timeout.
    */
   readonly heldTimeToLive: Duration.Duration;
 }

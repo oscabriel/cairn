@@ -346,7 +346,7 @@ describe("aborts", () => {
 
 describe("a silent one-shot", () => {
   it.effect(
-    "fails at the stall limit when its child never takes the prompt (T-8)",
+    "fails at the stall limit when its child never takes the prompt",
     () =>
       Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(call([summarizer, user("text")]));
@@ -399,7 +399,7 @@ const gated =
       );
     });
 
-describe("one-shot permits (T-8)", () => {
+describe("one-shot permits", () => {
   it.effect(
     `run at most ${ONE_SHOT_SLOTS} one-shot children at once, beside the conversations' generation permits`,
     () => {

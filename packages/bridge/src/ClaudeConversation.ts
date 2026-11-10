@@ -127,6 +127,14 @@ export interface ConversationDeps {
   onRateLimit(info: RateLimitInfo): Effect.Effect<void>;
   /** Runs an Effect from a platform callback (an abort signal's listener). */
   runCallback(effect: Effect.Effect<void>): void;
+  /**
+   * Records tool calls the bridge answered itself instead of pi (a killed child's calls). A killed
+   * child can write that answer into its transcript, and a resume must not take it for pi's. The
+   * bridge keeps them, not the conversation, which may be let go before pi answers.
+   */
+  release(toolUseIds: ReadonlyArray<string>): Effect.Effect<void>;
+  /** The tool calls the bridge answered itself, newest kept. */
+  readonly released: Effect.Effect<ReadonlySet<string>>;
 }
 
 /** One pi conversation's side of Claude Code. */
@@ -136,13 +144,12 @@ export interface ClaudeConversation {
    * it also waits until the held query is answered or dies, so the conversation stays alive.
    */
   call(call: ConversationCall): Effect.Effect<void>;
-  /** Kills the conversation's child, if it has one. */
-  kill(kind: Exclude<KillKind, "failed">): Effect.Effect<void>;
   /**
-   * Kills the child for a stopped thread, unless a provider call is open on it: that call ends by
-   * its own abort signal, and one that opened after the stop belongs to a later run (T-2).
+   * Kills the child for a run stopped at `stoppedAt` (clock millis), unless a later run has it: a
+   * provider call is open on it (that call ends by its own abort signal), or it has been held on a
+   * tool call since after the stop.
    */
-  readonly stop: Effect.Effect<void>;
+  stop(stoppedAt: number): Effect.Effect<void>;
   /** Whether a child is alive now. */
   readonly alive: Effect.Effect<boolean>;
 }
@@ -494,6 +501,10 @@ export const openConversation = Effect.fnUntraced(function* (
         yield* Deferred.succeed(waiting, releasedResult("Operation aborted"));
       }
 
+      if (child.pendingCalls.size > 0) {
+        yield* deps.release([...child.pendingCalls.keys()]);
+      }
+
       child.pendingCalls.clear();
       child.pendingResults.clear();
 
@@ -658,6 +669,8 @@ export const openConversation = Effect.fnUntraced(function* (
 
             // A call to a child that is gone, or going, is answered at once: nothing will deliver it.
             if (child === undefined || Option.isSome(child.killed)) {
+              yield* deps.release([request.toolUseId]);
+
               return Option.none<ParkedCall>();
             }
 
@@ -702,17 +715,20 @@ export const openConversation = Effect.fnUntraced(function* (
         const { child, deferred } = waiting.value;
 
         // Claude Code cancels a call it stopped waiting for (its MCP timeout); forget it, so it
-        // neither silences the watchdog nor waits for a result nobody reads.
+        // neither silences the watchdog nor waits for a result nobody reads. What Claude Code
+        // records for it is not pi's result either.
         const cancelled = Effect.as(
           abortOf(request.signal),
           releasedResult("Tool call cancelled by Claude Code")
         ).pipe(
           Effect.tap(() =>
             locked(
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 if (child.pendingCalls.get(request.toolUseId) === deferred) {
                   child.pendingCalls.delete(request.toolUseId);
                 }
+
+                yield* deps.release([request.toolUseId]);
               })
             )
           )
@@ -751,7 +767,7 @@ export const openConversation = Effect.fnUntraced(function* (
 
             // A child held on a tool call with no provider call open waits on pi alone. Its own
             // deadline frees it if nothing ever delivers (a stop that missed the bridge); the next
-            // call resumes the session from the stamp (T-2).
+            // call resumes the session from the stamp.
             const heldTooLong =
               Option.isNone(child.killed) &&
               Option.isSome(child.heldWait) &&
@@ -959,17 +975,21 @@ export const openConversation = Effect.fnUntraced(function* (
       }
 
       const pending = resultsAfter(messages, found.index);
+      const released = yield* deps.released;
 
       // Claude Code may already hold the results it got over MCP before the kill (E2): cut after
-      // its own tool_result entry and only ask it to go on.
-      const answered = entries
-        .slice(at + 1)
-        .find(
-          (entry) =>
-            entry.role === "user" &&
-            pending.length > 0 &&
-            pending.every((id) => entry.toolResultIds.includes(id))
-        );
+      // its own tool_result entry and only ask it to go on. A result the bridge gave a killed
+      // child in pi's place is not pi's, so then the cut stays at the stamp and pi's are carried.
+      const answered = pending.some((id) => released.has(id))
+        ? undefined
+        : entries
+            .slice(at + 1)
+            .find(
+              (entry) =>
+                entry.role === "user" &&
+                pending.length > 0 &&
+                pending.every((id) => entry.toolResultIds.includes(id))
+            );
 
       const carried =
         answered === undefined
@@ -1419,14 +1439,24 @@ export const openConversation = Effect.fnUntraced(function* (
 
   return {
     call,
-    kill: (kind) => locked(killCurrent(kind)),
-    stop: locked(
-      Effect.gen(function* () {
-        if (Option.isSome(current) && !current.value.stream.open) {
-          yield* killChild(current.value, "abort", "Operation aborted");
-        }
-      })
-    ),
+    stop: (stoppedAt) =>
+      locked(
+        Effect.gen(function* () {
+          if (Option.isNone(current)) {
+            return;
+          }
+
+          const child = current.value;
+
+          const later =
+            child.stream.open ||
+            (Option.isSome(child.heldWait) && child.heldSince > stoppedAt);
+
+          if (!later) {
+            yield* killChild(child, "abort", "Operation aborted");
+          }
+        })
+      ),
     alive: locked(Effect.sync(() => Option.isSome(current))),
   } satisfies ClaudeConversation;
 });

@@ -12,6 +12,7 @@ import type {
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  Clock,
   Duration,
   Effect,
   Fiber,
@@ -911,7 +912,20 @@ describe("held rounds pi is not in", () => {
   });
 });
 
-describe("a held child with no provider call open (T-2)", () => {
+/** Calls `mark` as chain entry u1, then waits on pi for good. */
+const holdsMark: FakeScript = (io) =>
+  Effect.gen(function* () {
+    yield* io.nextPrompt;
+    yield* io.emit(
+      initEvent(SCRIPT_SESSION, ["mark"]),
+      ...toolTurn("m1", "u1", "toolu_1", "mark")
+    );
+    yield* io.callTool("mark", "toolu_1");
+
+    return yield* Effect.never;
+  });
+
+describe("a held child with no provider call open", () => {
   it.effect(
     "is killed once it has waited the held time to live, and its handler is released",
     () => {
@@ -964,6 +978,101 @@ describe("a held child with no provider call open (T-2)", () => {
   );
 
   it.effect(
+    "a result pi delivers after the held time to live reaches the resumed session, though Claude Code wrote the bridge's release and its conversation was let go",
+    () => {
+      const prompts: Array<string> = [];
+
+      const second: FakeScript = (io) =>
+        Effect.gen(function* () {
+          prompts.push(textOf(yield* io.nextPrompt));
+          yield* io.emit(
+            initEvent(SCRIPT_SESSION, ["mark"]),
+            ...textTurn("m2", "u2", "done")
+          );
+
+          return yield* Effect.never;
+        });
+
+      return Effect.gen(function* () {
+        const claude = yield* Claude;
+        const fake = yield* ClaudeSdkScripts;
+        const held = yield* call([system, user("mark it")]);
+
+        yield* settle;
+
+        for (let step = 0; step < 31; step += 1) {
+          yield* TestClock.adjust("1 minute");
+          yield* settle;
+        }
+
+        const killed = !(yield* claude.hasChild("conv-1"));
+
+        // The killed child flushed the bridge's own answer to the call into its transcript.
+        yield* Ref.update(fake.sessions, (all) =>
+          new Map(all).set(SCRIPT_SESSION, [
+            entry("u1", "assistant", { uses: ["toolu_1"] }),
+            entry("r1", "user", { results: ["toolu_1"] }),
+          ])
+        );
+
+        // Past the idle time to live: the conversation itself is let go before pi answers.
+        for (let step = 0; step < 11; step += 1) {
+          yield* TestClock.adjust("1 minute");
+          yield* settle;
+        }
+
+        yield* call([
+          system,
+          user("mark it"),
+          held,
+          toolResult("toolu_1", "marked"),
+        ]);
+
+        expect([
+          killed,
+          Option.map(
+            Option.fromUndefinedOr((yield* runs)[1]?.options.session),
+            (session) => (session.kind === "resume" ? session.at : "new")
+          ),
+          prompts[0]?.includes(
+            '<tool-result id="toolu_1">\nmarked\n</tool-result>'
+          ),
+        ]).toStrictEqual([true, Option.some(Option.some("u1")), true]);
+      }).pipe(Effect.provide(bridge([holdsMark, second])));
+    }
+  );
+
+  it.effect(
+    "a stop that reaches the bridge late leaves a child held since then alone: that hold is a later run's",
+    () =>
+      Effect.gen(function* () {
+        const claude = yield* Claude;
+
+        yield* TestClock.adjust("1 minute");
+
+        const stoppedAt = (yield* Clock.currentTimeMillis) - 1;
+
+        yield* TestClock.adjust("1 second");
+        yield* call([system, user("mark it")]);
+        yield* settle;
+        yield* claude.abortConversation("conv-1", stoppedAt);
+        yield* settle;
+
+        const afterLateStop = yield* claude.hasChild("conv-1");
+
+        yield* claude.abortConversation(
+          "conv-1",
+          yield* Clock.currentTimeMillis
+        );
+        yield* settle;
+
+        expect([afterLateStop, yield* claude.hasChild("conv-1")]).toStrictEqual(
+          [true, false]
+        );
+      }).pipe(Effect.provide(bridge([holdsMark])))
+  );
+
+  it.effect(
     "a stop's abort leaves a child alone while a provider call is open on it: that call ends by its own signal",
     () =>
       Effect.gen(function* () {
@@ -972,7 +1081,10 @@ describe("a held child with no provider call open (T-2)", () => {
 
         yield* until(Effect.map(runs, (started) => started.length === 1));
         yield* settle;
-        yield* claude.abortConversation("conv-1");
+        yield* claude.abortConversation(
+          "conv-1",
+          yield* Clock.currentTimeMillis
+        );
         yield* settle;
 
         expect([
@@ -1024,7 +1136,10 @@ describe("aborts", () => {
         const held = yield* call([system, user("hi"), hello, user("mark it")]);
 
         yield* settle;
-        yield* claude.abortConversation("conv-1");
+        yield* claude.abortConversation(
+          "conv-1",
+          yield* Clock.currentTimeMillis
+        );
         yield* settle;
 
         const killed = yield* runs;

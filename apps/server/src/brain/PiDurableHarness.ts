@@ -139,7 +139,7 @@ import type { ThreadWireError } from "./ThreadWire.ts";
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
-/** What `PendingApprovals` keeps between calls (T-6). */
+/** What `PendingApprovals` keeps between calls. */
 interface PendingIndex {
   /** The conversations holding a pending record, once the scan ran. */
   known: Option.Option<Set<PiConversationId>>;
@@ -831,7 +831,7 @@ const layerNoDeps = Layer.effectContext(
           Predicate.isTagged(event, "RunTerminal") &&
           event.status !== "completed"
       ),
-      // A defect placing one thread's notes is logged and the loop goes on (T-4).
+      // A defect placing one thread's notes is logged and the loop goes on.
       Stream.runForEach((event) =>
         placeAfterRun(event.threadId).pipe(
           Effect.catchCauseIf(
@@ -1423,7 +1423,7 @@ const layerNoDeps = Layer.effectContext(
       };
     });
 
-    // Which conversations hold a pending approval record (T-6): one scan of every conversation,
+    // Which conversations hold a pending approval record: one scan of every conversation,
     // the first time it is asked, then kept by every commit's `cairn.approvals` changes. A change
     // that lands while the scan runs wins over what the scan read; a Session the supervisor
     // reopened is scanned again, since a commit stored as the old one failed may never have been
@@ -1595,7 +1595,7 @@ const layerNoDeps = Layer.effectContext(
 
       // `inspect()` reports live work only, so a thread waiting on the user with nothing running
       // (a criteria proposal, a halted scope's raise) is found by its records: the records of
-      // every conversation that holds a pending one (`PendingApprovals`, T-6).
+      // every conversation that holds a pending one (`PendingApprovals`).
       const pendingOf = new Map<PiConversationId, Array<ApprovalRecord>>();
 
       for (const conversationId of yield* pendingConversations) {

@@ -7,7 +7,7 @@
 // The stop hooks run from the one place every stop passes: each RunTerminal that ends a run
 // `interrupted`. A stop that never comes through here (the budget stopper's `seam.stop`, a
 // workflow's stop, the model's `subagent_stop`, a stop whose caller went away before it finished)
-// still reaches the bridge that way, and so does every descendant a Stop all stopped (T-2).
+// still reaches the bridge that way, and so does every descendant a Stop all stopped.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
 import type {
@@ -28,6 +28,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Result,
   Schema,
   Stream,
 } from "effect";
@@ -346,13 +347,14 @@ export class Threads extends Context.Service<
       // A hook's failure is logged by `StopHooks`; a defect here is logged too, and the loop goes
       // on, so one bad stop cannot leave every later held child alive.
       yield* seam.events.pipe(
-        Stream.filter(
-          (event) =>
-            Predicate.isTagged(event, "RunTerminal") &&
-            event.status === "interrupted"
+        Stream.filterMap((event) =>
+          Predicate.isTagged(event, "RunTerminal") &&
+          event.status === "interrupted"
+            ? Result.succeed(event)
+            : Result.failVoid
         ),
         Stream.runForEach((event) =>
-          stopHooks.run(event.threadId).pipe(
+          stopHooks.run(event.threadId, event.at).pipe(
             Effect.catchCauseIf(
               (cause) => !Cause.hasInterruptsOnly(cause),
               (cause) =>

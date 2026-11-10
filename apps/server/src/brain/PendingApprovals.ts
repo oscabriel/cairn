@@ -1,4 +1,4 @@
-// Which conversations hold a pending record in `cairn.approvals` (T-6). Conversations are never
+// Which conversations hold a pending record in `cairn.approvals`. Conversations are never
 // deleted (ADR 0016), so reading every one's records is the cost that grows with the store: the
 // boot sweeps (`cancelAbandonedApprovalsAtBoot`, `expireLapsedApprovalsAtBoot`) and every
 // `inspect()` (the boot reconcile, each thread refresh) want only the conversations that hold a

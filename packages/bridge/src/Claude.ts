@@ -49,6 +49,9 @@ import { emptyUsage } from "./ClaudeTokens.ts";
 /** How many conversations' working folders are remembered; older notes are dropped first. */
 export const PLACES_KEPT = 500;
 
+/** How many tool calls the bridge answered itself are remembered; older ones are dropped first. */
+const RELEASED_KEPT = 500;
+
 export interface ConversationNote {
   /** The conversation's working directory; the bridge resolves it to its realpath. */
   readonly cwd: string;
@@ -77,12 +80,16 @@ export class Claude extends Context.Service<
       note: ConversationNote
     ): Effect.Effect<void>;
     /**
-     * Kills the child of `sessionId` for a stopped thread, unless a provider call is open on it
-     * (that call ends by its own abort signal; one opened after the stop belongs to a later run).
-     * A held tool call outlives its generation, so a stop reaches a held child only this way, or
-     * by the held time to live. The session is forked on its next call.
+     * Kills the child of `sessionId` for a run stopped at `stoppedAt` (epoch millis), unless a
+     * later run has it: a provider call is open on it (that call ends by its own abort signal), or
+     * it has been held on a tool call since after the stop. A held tool call outlives its
+     * generation, so a stop reaches a held child only this way, or by the held time to live. The
+     * session is forked on its next call.
      */
-    abortConversation(sessionId: string): Effect.Effect<void>;
+    abortConversation(
+      sessionId: string,
+      stoppedAt: number
+    ): Effect.Effect<void>;
     /** Shutdown has begun: an `AbortError` from now on means close, leaving sessions resumable. */
     readonly beginClosing: Effect.Effect<void>;
     /** Every plan-window reading a child reports; `ClaudeUsage` merges them. */
@@ -110,6 +117,9 @@ export class Claude extends Context.Service<
         new Map()
       );
 
+      // Tool calls the bridge answered in pi's place, kept here so they outlive their conversation.
+      const released = yield* Ref.make<ReadonlySet<string>>(new Set());
+
       const closing = yield* Ref.make(false);
       const readings = yield* PubSub.unbounded<RateLimitInfo>();
       const run = yield* FiberSet.makeRuntime();
@@ -134,6 +144,13 @@ export class Claude extends Context.Service<
             runCallback: (effect) => {
               run(effect);
             },
+            release: (toolUseIds) =>
+              Ref.update(released, (all) => {
+                const next = [...all, ...toolUseIds];
+
+                return new Set(next.slice(-RELEASED_KEPT));
+              }),
+            released: Ref.get(released),
           }),
         idleTimeToLive: settings.idleTimeToLive,
         capacity: settings.liveChildren,
@@ -259,7 +276,7 @@ export class Claude extends Context.Service<
           const sessionId = options?.sessionId;
 
           // Summarizer calls, and calls with no session to join, are one-shots in their own child.
-          // Each holds a one-shot permit while it runs (`ClaudeSlots`, T-8); a stop while it waits
+          // Each holds a one-shot permit while it runs (`ClaudeSlots`); a stop while it waits
           // for one ends it at once, with no child started.
           if (options?.cacheRetention === "none" || sessionId === undefined) {
             const place = yield* placeOf(sessionId ?? "");
@@ -376,14 +393,14 @@ export class Claude extends Context.Service<
       });
 
       const abortConversation = Effect.fn("Claude.abortConversation")(
-        function* (sessionId: string) {
+        function* (sessionId: string, stoppedAt: number) {
           const known = yield* RcMap.has(conversations, sessionId);
 
           if (known) {
             yield* Effect.scoped(
               Effect.flatMap(
                 RcMap.get(conversations, sessionId),
-                (conversation) => conversation.stop
+                (conversation) => conversation.stop(stoppedAt)
               )
             ).pipe(Effect.ignore);
           }

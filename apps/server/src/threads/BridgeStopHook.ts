@@ -3,11 +3,11 @@
 // result, and holds its conversation so it is never evicted), so without this the child would keep
 // its session and its memory until the bridge's held time to live. The killed sessions are forked
 // on their next call, so the thread resumes natively. Runs for every interrupted run, whoever
-// stopped it; a thread with no live child is a no-op, and a child with a provider call open (a
-// later run's) is left to its own abort signal.
+// stopped it; a thread with no live child is a no-op, and a later run's child (a provider call
+// open on it, or held since the run ended) is left alone.
 
 import type { ThreadId } from "@cairn/protocol/Ids";
-import { Effect, Option } from "effect";
+import { DateTime, Effect, Option } from "effect";
 
 import { BridgeCwd } from "../brain/BridgeCwdExtension.ts";
 import { BridgeProvider } from "../models/BridgeProvider.ts";
@@ -16,7 +16,10 @@ import type { StopHook } from "./StopHooks.ts";
 /** Kills the Claude Code children of every provider session the thread used since boot. */
 export const bridgeStopHook: StopHook<never, BridgeCwd> = {
   name: "claude-bridge abort",
-  run: Effect.fn("BridgeStopHook.run")(function* (threadId: ThreadId) {
+  run: Effect.fn("BridgeStopHook.run")(function* (
+    threadId: ThreadId,
+    stoppedAt: DateTime.Utc
+  ) {
     const bridge = yield* BridgeProvider;
 
     if (Option.isNone(bridge.claude)) {
@@ -27,7 +30,7 @@ export const bridgeStopHook: StopHook<never, BridgeCwd> = {
     const sessions = yield* BridgeCwd.use((cwd) => cwd.sessionsOf(threadId));
 
     yield* Effect.forEach(sessions, (sessionId) =>
-      claude.abortConversation(sessionId)
+      claude.abortConversation(sessionId, DateTime.toEpochMillis(stoppedAt))
     );
 
     if (sessions.length > 0) {

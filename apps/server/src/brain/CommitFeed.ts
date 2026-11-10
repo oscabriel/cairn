@@ -171,7 +171,7 @@ interface FeedState {
   readonly tallies: Map<PiConversationId, string>;
   /** Each goal thread's last goal tally, as JSON. */
   readonly goals: Map<PiConversationId, string>;
-  /** What the publication being read carried that fits no event, for its log line (T-4). */
+  /** What the publication being read carried that fits no event, for its log line. */
   readonly rejected: Array<string>;
 }
 
@@ -209,7 +209,7 @@ const timeOf = (millis: number) => DateTime.make(millis);
 /**
  * An event decoded from what a commit carried. A value that fits no event (a fractional token
  * count, a time that is not one) is noted in `state.rejected` and makes no event: a validating
- * `.make` would throw there and end the feed's fiber, and every thread's events with it (T-4).
+ * `.make` would throw there and end the feed's fiber, and every thread's events with it.
  */
 const fitted = <A>(
   state: FeedState,
@@ -886,7 +886,7 @@ export class CommitFeed extends Context.Service<
       });
 
       // Supervised per commit: whatever one commit throws is logged with its sequence and the
-      // loop takes the next, so one bad value cannot silence every thread until a restart (T-4).
+      // loop takes the next, so one bad value cannot silence every thread until a restart.
       yield* Queue.take(inbox).pipe(
         Effect.flatMap(({ session, publication }) =>
           consume(session, publication).pipe(

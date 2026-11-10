@@ -22,8 +22,7 @@
 // for every row with no lineage (a subagent holds no goal; ADR 0026) whose goal can have moved: one
 // running at the crash or named by `inspect()`, or one that holds a goal already (a judge or a
 // user's mark changes it while the thread is idle). Those reads are one document each
-// (`seam.document`); only a row that can have changed mounts its view, for its newest message
-// (T-6).
+// (`seam.document`); only a row that can have changed mounts its view, for its newest message.
 //
 // For the durability judge only: `CAIRN_JUDGE_HOLD_PROJECTOR_MS` makes the projector log
 // `projector_holding` and wait that long before committing a run's end, so a `kill -9` can land
@@ -691,7 +690,7 @@ const emptyReport: ReconcileReport = { threads: 0, live: 0, patched: 0 };
 
 /**
  * One event or signal the projector cannot apply (a defect) is logged and skipped, so the loop goes
- * on and every other row keeps updating (T-4); the boot reconcile repairs the row.
+ * on and every other row keeps updating; the boot reconcile repairs the row.
  */
 const skipDefect =
   (tag: string, threadId: ThreadId) =>
@@ -1108,7 +1107,9 @@ export class ShellProjector extends Context.Service<
               !sameTally(row.shell.subagents, NO_SUBAGENTS));
 
           // A goal a crash cut off from its row: only a thread with no lineage holds one, and only
-          // one that ran, or holds a goal a judge or a mark can move, can have changed.
+          // one that ran, or holds a goal a judge or a mark can move, can have changed. Accepted
+          // gap: a goal first set on an idle thread with none, then cut off by a crash inside the
+          // projector's flush delay, shows on the row only when the goal next moves.
           const readGoal =
             boot &&
             Option.isNone(row.shell.lineage) &&

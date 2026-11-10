@@ -3,7 +3,7 @@
 // its child needs. The usage service resizes it (2F, in its own layer); the shell reads who waits.
 //
 // One-shot children (compaction summaries, titles, branch names, any sessionless call) take a
-// permit of a second, smaller semaphore (T-8): at most `ONE_SHOT_SLOTS`, and never more than
+// permit of a second, smaller semaphore: at most `ONE_SHOT_SLOTS`, and never more than
 // `size`, so a resize that protects the plan windows reaches them too. They do not share the
 // conversations' permits, so a burst of launches naming a Claude title model never starves a turn.
 

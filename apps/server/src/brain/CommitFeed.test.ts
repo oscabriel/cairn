@@ -907,7 +907,7 @@ describe("CommitFeed subagent events", () => {
   );
 });
 
-describe("CommitFeed with a value that fits no event (T-4)", () => {
+describe("CommitFeed with a value that fits no event", () => {
   it.live(
     "drops the value, and the commits after it still become events",
     () =>

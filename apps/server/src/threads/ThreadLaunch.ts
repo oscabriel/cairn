@@ -971,7 +971,7 @@ export class ThreadLaunch extends Context.Service<
             return;
           }
 
-          // Its interrupted runs reach the stop hooks through `Threads` (T-2).
+          // Its interrupted runs reach the stop hooks through `Threads`.
           yield* seam.stop(threadId, {
             clearQueue: true,
             subagents: "stop",

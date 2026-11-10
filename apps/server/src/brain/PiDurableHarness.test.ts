@@ -901,7 +901,7 @@ describe("PiDurableHarness inspect", () => {
   );
 });
 
-describe("the boot's approval reads (T-6)", () => {
+describe("the boot's approval reads", () => {
   it.live(
     "one scan of every conversation serves both boot sweeps and every inspect; a record committed after it is still found",
     () =>

@@ -332,7 +332,7 @@ const layerNoDeps = Layer.effect(
           // The conversation's watchdog, for one-shots (T13): a child silent for `stallAfter`
           // fails, unless Claude Code said it is waiting out an API retry. It watches the whole of
           // the start, the prompt's write and the read, so a child that never drains its stdin
-          // fails too (T-8).
+          // fails too.
           let lastEventAt = clock.currentTimeMillisUnsafe();
           let quietUntil = 0;
 

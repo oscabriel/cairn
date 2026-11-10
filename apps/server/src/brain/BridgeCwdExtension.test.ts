@@ -39,7 +39,7 @@ import {
 import type { ModelRef } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Option, Ref, Schedule } from "effect";
+import { DateTime, Effect, Layer, Option, Ref, Schedule } from "effect";
 import { Type } from "typebox";
 
 import { BridgeProvider } from "../models/BridgeProvider.ts";
@@ -287,7 +287,7 @@ describe("the bridge-cwd extension", () => {
 
       const held = (yield* runsOf).length;
 
-      yield* bridgeStopHook.run(thread);
+      yield* bridgeStopHook.run(thread, yield* DateTime.now);
 
       const after = yield* claude.hasChild(sessionId);
 

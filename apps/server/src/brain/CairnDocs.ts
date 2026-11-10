@@ -1694,7 +1694,7 @@ const SCAN_PAGE = 200;
  * Visits every conversation's `cairn.approvals` that holds a pending record (every one, not only
  * those with live tasks) with `visit`, which returns how many records it changed. Returns the
  * total. The boot repairs read records this way before the Harness resumes. With
- * `PendingApprovals` (the brain's one scan per boot, T-6) only those conversations are read;
+ * `PendingApprovals` (the brain's one scan per boot) only those conversations are read;
  * without it, every conversation is.
  */
 const sweepApprovals = (

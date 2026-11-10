@@ -12,6 +12,11 @@
 # worse hang than the memory. The brain logs `brain memory peak` (MemoryWatch.ts) to time a peak.
 # PATH here is a floor for a machine without brain.env: install.sh writes the user's login PATH there,
 # and EnvironmentFile comes after Environment, so thread tools see the user's toolchains (T28).
+# CAIRN_BACKUP_MIRROR, unset by default, is set in brain.env when wanted: a folder off the NVMe (the
+# NAS, say) that each daily rolling copy of brain.sqlite and cairn.sqlite is also written to, newest
+# three kept (ADR 0016). The folder must exist; the brain never makes it, so a share that is not
+# mounted fails instead of filling its mount point. Only copies go there, never a live store; a
+# failed write there is logged at warning, tried again within the hour, and never stops the brain.
 [Unit]
 Description=Cairn brain
 After=network-online.target executor.service

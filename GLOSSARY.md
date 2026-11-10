@@ -398,7 +398,7 @@ _Avoid_: page, report (for the published thing)
 
 **Porch**: The user's tool (porchlight) that names private `gneiss.run` URLs and renders them into Caddy. Cairn publishes artifacts and opens portals by calling it.
 
-**Reach state**: What the brain knows of porch: unknown, ready, or not set up (the porch binary is missing or has no machine config). The portal reconcile and sweep record it and log it once at info; it is not a boot failure.
+**Reach state**: What the brain knows of porch: unknown, ready, or not set up (the porch binary is missing or has no machine config). The portal reconcile and sweep record it and log it once at info; it is not a boot failure. The brain also asks as it builds its extension set at boot, and offers models the artifact and portal tools only when porch is ready (ADR 0038).
 
 _Avoid_: preview, tunnel
 

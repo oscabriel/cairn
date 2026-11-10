@@ -4,17 +4,11 @@
 // so the store is copied before the first open under a new pi-durable version or schema. The
 // sidecar `brain.meta.json` records the version and schema the store was last opened with; when
 // either differs from what is installed, `backups/brain-<version>-<time>.sqlite` is written first
-// with SQLite's online backup. A daily rolling copy (`brain-daily-<date>.sqlite`, newest three kept)
-// guards against everything else.
+// with SQLite's online backup. The daily rolling copy (`db/RollingCopy.ts`:
+// `brain-daily-<time>.sqlite`, newest three kept, decided from the files on disk at boot and every
+// hour, and written to the mirror folder too when one is set) guards against everything else.
 
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -22,18 +16,9 @@ import { fileURLToPath } from "node:url";
 import type { Storage } from "@earendil-works/pi-durable";
 import { CURRENT_SQLITE_SCHEMA_VERSION } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import {
-  Clock,
-  Context,
-  DateTime,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Schedule,
-  Schema,
-} from "effect";
+import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";
 
+import { startRollingCopy } from "../db/RollingCopy.ts";
 import { BrainConfig } from "./BrainConfig.ts";
 import { errorText } from "./Durable.ts";
 
@@ -42,13 +27,7 @@ export class BrainStoreError extends Schema.TaggedError<BrainStoreError>()(
   "BrainStoreError",
   {
     message: Schema.String,
-    operation: Schema.Literals([
-      "version",
-      "sidecar",
-      "backup",
-      "open",
-      "prune",
-    ]),
+    operation: Schema.Literals(["version", "sidecar", "backup", "open"]),
     path: Schema.String,
     cause: Schema.Defect(),
   }
@@ -81,9 +60,7 @@ export const SIDECAR_FILE = "brain.meta.json";
 /** Pages copied per backup step: enough to copy a store in one step, so writes never restart it. */
 const ONE_STEP_PAGES = 1_000_000_000;
 
-/** Daily copies kept. */
-const DAILY_KEPT = 3;
-
+/** The daily rolling copies' name prefix. */
 const DAILY_PREFIX = "brain-daily-";
 
 const fail =
@@ -180,7 +157,7 @@ export class BrainStore extends Context.Service<
   static readonly layerNoDeps = Layer.effect(
     BrainStore,
     Effect.gen(function* () {
-      const { dataDir } = yield* BrainConfig;
+      const { dataDir, backupMirror } = yield* BrainConfig;
       const storePath = path.join(dataDir, STORE_FILE);
       const sidecarPath = path.join(dataDir, SIDECAR_FILE);
       const backups = path.join(dataDir, "backups");
@@ -247,55 +224,13 @@ export class BrainStore extends Context.Service<
         catch: fail("open", storePath),
       });
 
-      // Keeps the newest DAILY_KEPT daily copies.
-      const prune = Effect.gen(function* () {
-        const names = yield* Effect.tryPromise({
-          try: async () => await readdir(backups),
-          catch: fail("prune", backups),
-        });
-
-        const dailies = names
-          .filter(
-            (name) => name.startsWith(DAILY_PREFIX) && name.endsWith(".sqlite")
-          )
-          .toSorted()
-          .toReversed();
-
-        yield* Effect.forEach(
-          dailies.slice(DAILY_KEPT),
-          (name) =>
-            Effect.tryPromise({
-              try: async () => {
-                await rm(path.join(backups, name), { force: true });
-              },
-              catch: fail("prune", path.join(backups, name)),
-            }),
-          { discard: true }
-        );
+      yield* startRollingCopy({
+        source: storePath,
+        prefix: DAILY_PREFIX,
+        directory: backups,
+        mirror: backupMirror,
+        copy: (target) => copyStore(storePath, target),
       });
-
-      const daily = Effect.gen(function* () {
-        if (yield* exists(storePath)) {
-          const now = yield* Clock.currentTimeMillis;
-
-          yield* backupTo(
-            `${DAILY_PREFIX}${stamp(DateTime.makeUnsafe(now)).slice(0, 10)}`
-          );
-          yield* prune;
-        }
-      }).pipe(
-        Effect.catchTag("BrainStoreError", (failure) =>
-          Effect.logWarning("daily brain store copy failed").pipe(
-            Effect.annotateLogs({ error: failure.message })
-          )
-        )
-      );
-
-      yield* daily.pipe(
-        Effect.delay(Duration.hours(24)),
-        Effect.repeat(Schedule.spaced(Duration.hours(24))),
-        Effect.forkScoped
-      );
 
       return BrainStore.of({
         path: storePath,
